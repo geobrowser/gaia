@@ -2,7 +2,7 @@
 //!
 //! Consumes HermesScoresBatch messages and forwards score events to the ingest.
 
-use hermes_kafka::get_topic_prefix;
+use hermes_instrumentation::{debug, error, info, info_span, instrument, warn, Instrument};
 use prost::Message;
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
@@ -12,7 +12,6 @@ use rdkafka::{
 use std::env;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use hermes_instrumentation::{debug, error, info, info_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::consumer::messages::{ScoreEvent, StreamMessage};
@@ -39,7 +38,7 @@ impl ScoresConsumer {
     const SCORES_TOPIC: &'static str = "curation.scores";
 
     /// Default batch size for Kafka message batching.
-    const DEFAULT_BATCH_SIZE: usize = 50;
+    const DEFAULT_BATCH_SIZE: usize = 10;
 
     /// Default batch timeout in milliseconds.
     const DEFAULT_BATCH_TIMEOUT_MS: u64 = 1000;
@@ -57,10 +56,13 @@ impl ScoresConsumer {
     /// * `brokers` - Kafka broker addresses (comma-separated)
     /// * `group_id` - Consumer group ID (will append "-scores" suffix)
     pub fn new(brokers: &str, group_id: &str) -> Result<Self, IngestError> {
-        let prefix = get_topic_prefix();
+        // Scores are produced by the Python scoring cron which uses "{environment}."
+        // as the topic prefix (e.g. "production.curation.scores", "staging.curation.scores").
+        let environment = env::var("ENVIRONMENT")
+            .expect("ENVIRONMENT variable must be set to 'staging' or 'production'");
         let base_topic =
             env::var("SCORES_KAFKA_TOPIC").unwrap_or_else(|_| Self::SCORES_TOPIC.to_string());
-        let topic = format!("{}{}", prefix, base_topic);
+        let topic = format!("{}.{}", environment, base_topic);
 
         let batch_size = env::var("SCORES_BATCH_SIZE")
             .ok()
@@ -83,7 +85,10 @@ impl ScoresConsumer {
         batch_size: usize,
         batch_timeout_ms: u64,
     ) -> Result<Self, IngestError> {
-        let client_config = super::kafka_config::create_client_config(brokers, group_id);
+        let mut client_config = super::kafka_config::create_client_config(brokers, group_id);
+        // Score updates use update_by_query which can take minutes for large batches.
+        // Default 300s is too short — use 30 minutes to avoid MAXPOLL group kicks.
+        client_config.set("max.poll.interval.ms", "1800000");
 
         info!(
             brokers = %brokers,
@@ -143,17 +148,27 @@ impl ScoresConsumer {
                     match ack_msg {
                         Some(StreamMessage::Acknowledgment { offsets, success, error }) => {
                             if success {
+                                let max_offset = offsets.iter().map(|(_, _, o)| *o).max().unwrap_or(0);
                                 if let Err(e) = self.commit_offsets(&offsets).await {
-                                    error!(error = %e, "Failed to commit scores offsets");
+                                    error!(error = %e, offset_count = offsets.len(), max_offset, "Failed to commit scores offsets after ACK");
                                 } else {
-                                    debug!(offset_count = offsets.len(), "Committed scores offsets");
+                                    debug!(
+                                        offset_count = offsets.len(),
+                                        max_offset,
+                                        "ACK: committed scores offsets"
+                                    );
                                 }
                             } else {
+                                let max_offset = offsets.iter().map(|(_, _, o)| *o).max().unwrap_or(0);
                                 error!(
                                     offset_count = offsets.len(),
+                                    max_offset,
                                     error = error.as_deref().unwrap_or("Unknown error"),
-                                    "Not committing scores offsets due to processing failure"
+                                    "NACK: shutting down consumer to prevent data loss"
                                 );
+                                return Err(IngestError::LoaderError(
+                                    format!("Batch processing failed: {}", error.as_deref().unwrap_or("Unknown error"))
+                                ));
                             }
                         }
                         Some(StreamMessage::End) | None => {
@@ -429,7 +444,7 @@ mod tests {
     #[test]
     fn test_constants() {
         assert_eq!(ScoresConsumer::SCORES_TOPIC, "curation.scores");
-        assert_eq!(ScoresConsumer::DEFAULT_BATCH_SIZE, 50);
+        assert_eq!(ScoresConsumer::DEFAULT_BATCH_SIZE, 10);
         assert_eq!(ScoresConsumer::DEFAULT_BATCH_TIMEOUT_MS, 1000);
     }
 }

@@ -134,7 +134,7 @@ kubectl logs -n search-staging -f job/opensearch-delete-index
 
 The full-migration job will:
 1. Create the new index (e.g., `entities_v3` or `staging_entities_v3`)
-2. Scale down the search-indexer to 0 replicas (stops indexing)
+2. Scale down the search-indexer StatefulSet to 0 replicas (stops indexing)
 3. Reindex all data from source → target version
 4. Update the alias to point to the new index
 5. Scale up the search-indexer with the new `ENTITIES_INDEX_VERSION`
@@ -143,8 +143,8 @@ The full-migration job will:
 
 **Production:**
 ```bash
-# Check the deployment version
-kubectl get deployment search-indexer -n search -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="ENTITIES_INDEX_VERSION")].value}'
+# Check the index version
+kubectl get statefulset search-indexer -n search -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="ENTITIES_INDEX_VERSION")].value}'
 
 # List indices and aliases
 kubectl delete job opensearch-list-indices -n search 2>/dev/null || true
@@ -154,8 +154,8 @@ kubectl logs -n search -f job/opensearch-list-indices
 
 **Staging:**
 ```bash
-# Check the deployment version
-kubectl get deployment search-indexer -n search-staging -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="ENTITIES_INDEX_VERSION")].value}'
+# Check the index version
+kubectl get statefulset search-indexer -n search-staging -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="ENTITIES_INDEX_VERSION")].value}'
 
 # List indices and aliases
 kubectl delete job opensearch-list-indices -n search-staging 2>/dev/null || true
@@ -217,6 +217,34 @@ kubectl logs -n <namespace> -f job/opensearch-update-alias
 
 **Warning**: This switches which index is actively used by the search API. Ensure the target index exists and is properly populated before running this.
 
+### Backfill name_raw Field
+
+Backfill the `name_raw` keyword field for existing documents. This copies each document's `name` value into a separate `name_raw` keyword field, which is needed for exact name matching (`search_as_you_type` silently ignores custom subfields, so `name.raw` does not work).
+
+The command:
+- Adds the `name_raw` mapping to the index if it doesn't exist
+- Uses `_update_by_query` to copy `name` → `name_raw` for all docs missing `name_raw`
+- Skips documents that have no `name` field
+- Is idempotent — safe to run multiple times
+
+Edit `<env>/jobs/backfill-name-raw-job.yaml` to set:
+- `INDEX_VERSION` — index version to target (default: `0`)
+- `DRY_RUN` — `"true"` to count docs needing backfill without making changes, `"false"` to execute
+
+**Recommended: dry run first**, then run for real:
+
+```bash
+# 1. Dry run — edit DRY_RUN to "true" in the yaml, then:
+kubectl delete job opensearch-backfill-name-raw -n <namespace> 2>/dev/null || true
+kubectl apply -f <env>/jobs/backfill-name-raw-job.yaml
+kubectl logs -n <namespace> -f job/opensearch-backfill-name-raw
+
+# 2. Run for real — edit DRY_RUN back to "false", then:
+kubectl delete job opensearch-backfill-name-raw -n <namespace> 2>/dev/null || true
+kubectl apply -f <env>/jobs/backfill-name-raw-job.yaml
+kubectl logs -n <namespace> -f job/opensearch-backfill-name-raw
+```
+
 ### Delete an Index
 
 Edit `<env>/jobs/delete-index-job.yaml` to set:
@@ -245,6 +273,7 @@ The jobs support these environment variables:
 | `SOURCE_VERSION` | Source index version (full-migration only) | Required (set in job YAML) |
 | `TARGET_VERSION` | Target index version (full-migration only) | Required (set in job YAML) |
 | `INDEX_VERSION` | Index version (individual jobs) | Required (set in job YAML) |
+| `DRY_RUN` | Preview without changes (backfill-name-raw only) | `false` |
 | `NAMESPACE` | Kubernetes namespace (full-migration only) | Set in job YAML |
 | `RUST_LOG` | Log level (debug, info, warn, error) | `info` |
 

@@ -4,7 +4,7 @@ A transformer binary that consumes space-related events from `hermes-substream` 
 
 ## Overview
 
-This transformer is part of the Hermes architecture (see `docs/hermes-architecture.md`). It:
+This transformer is part of the Hermes architecture (see `docs/architecture.md`). It:
 
 1. Connects to the blockchain data source via `hermes-relay`
 2. Subscribes to `HermesModule::Actions` to receive all raw actions
@@ -27,7 +27,9 @@ This transformer is part of the Hermes architecture (see `docs/hermes-architectu
 | `SUBSPACE_VERIFIED` | Verified trust extensions | `space.trust.extensions` |
 | `SUBSPACE_RELATED` | Related trust extensions | `space.trust.extensions` |
 | `SUBSPACE_TOPIC_DECLARED` | Topic-based trust extensions | `space.trust.extensions` |
-| `SUBSPACE_REMOVED` | Trust revocations | `space.trust.extensions` |
+| `SUBSPACE_UNVERIFIED` | Verified trust removals | `space.trust.extensions` |
+| `SUBSPACE_UNRELATED` | Related trust removals | `space.trust.extensions` |
+| `SUBSPACE_TOPIC_REMOVED` | Topic trust removals | `space.trust.extensions` |
 
 ### Membership
 
@@ -115,8 +117,8 @@ If `SENTRY_DSN` is set, telemetry is exported to Sentry. Otherwise, logs are wri
 ### Local Development (Live Data)
 
 ```bash
-# Start local Kafka (see hermes/docker-compose.yaml)
-docker-compose -f hermes/docker-compose.yaml up -d
+# Start infrastructure (see docker-compose.yml at repo root)
+docker compose --profile infra up -d
 
 # Run with live substreams data (default)
 SUBSTREAMS_API_TOKEN=your-token \
@@ -150,41 +152,41 @@ docker run \
 ## Architecture
 
 ```
-┌─────────────────┐     ┌──────────────┐     ┌─────────────────┐
-│ hermes-substream│────▶│ hermes-relay │────▶│ hermes-pipeline │
-│  (blockchain)   │     │   (stream)   │     │  (transformer)  │
-└─────────────────┘     └──────────────┘     └────────┬────────┘
-                                                      │
-                                                      ▼
-                                             ┌─────────────────┐
-                                             │      Kafka      │
-                                             │  ┌───────────┐  │
-                                             │  │ space.    │  │
-                                             │  │ creations │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │membership │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │ trust.    │  │
-                                             │  │extensions │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │moderation │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │  topics   │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │governance │  │
-                                             │  ├───────────┤  │
-                                             │  │ curation. │  │
-                                             │  │  votes    │  │
-                                             │  ├───────────┤  │
-                                             │  │knowledge. │  │
-                                             │  │  edits    │  │
-                                             │  └───────────┘  │
-                                             └─────────────────┘
++-----------------+     +--------------+     +-----------------+
+| hermes-substream|--->| hermes-relay  |--->| hermes-pipeline  |
+|  (blockchain)   |     |   (stream)   |     |  (transformer)  |
++-----------------+     +--------------+     +--------+--------+
+                                                      |
+                                                      v
+                                             +-----------------+
+                                             |      Kafka      |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  | creations |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  |membership |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  | trust.    |  |
+                                             |  |extensions |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  |moderation |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  |  topics   |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  |governance |  |
+                                             |  +-----------+  |
+                                             |  | curation. |  |
+                                             |  |  votes    |  |
+                                             |  +-----------+  |
+                                             |  |knowledge. |  |
+                                             |  |  edits    |  |
+                                             |  +-----------+  |
+                                             +-----------------+
 ```
 
 ## Pipeline Modules
@@ -260,7 +262,7 @@ cargo bench -p hermes-pipeline -- 'decode_proposal_created'
 | `decode_address_arg` | ~18 ns | Slice extraction |
 | `decode_proposal_voted` | ~32 ns | Fixed tuple decode |
 | `decode_vote_data` | ~37 ns | Fixed tuple decode |
-| `decode_topic_declared` | ~18 ns | Fixed bytes16 decode |
+| `decode_topic_declared` | ~18 ns | Slice extraction from topic field |
 | `decode_flag_data` | ~68 ns | String decode + UTF-8 validation |
 | `decode_proposal_created` (1 action) | ~204 ns | Dynamic array decode |
 | `decode_proposal_created` (50 actions) | ~5.7 µs | ~113 ns/action linear scaling |
@@ -291,6 +293,21 @@ cargo bench -p hermes-pipeline -- 'decode_proposal_created'
    - Large block (150 actions): ~19 µs
 
 The pipeline transform is not a bottleneck. Network I/O (substreams, Kafka, IPFS) dominates real-world latency.
+
+## Delivery Semantics
+
+- Hermes pipeline now waits for Kafka broker delivery reports before treating an emit as successful.
+- Producer defaults prioritize durability and ordering (`acks=all`, idempotence enabled, single in-flight request).
+- Timeouts are configurable:
+  - `KAFKA_MESSAGE_TIMEOUT_MS` (producer delivery timeout, default `30000`)
+  - `KAFKA_SEND_TIMEOUT_MS` (send queue timeout, defaults to `KAFKA_MESSAGE_TIMEOUT_MS`)
+
+### Duplicate and Replay Behavior
+
+- The system remains at-least-once at block level.
+- If a block partially emits and then fails, a retry can re-emit previously delivered events from that block.
+- Consumers should treat `event-id` as an idempotency key and deduplicate accordingly.
+- Reorg undo handling and persistent cursor recovery are still future work.
 
 ## Future Work
 

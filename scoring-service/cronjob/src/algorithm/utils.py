@@ -1,6 +1,11 @@
 """Utility functions for scoring algorithm."""
 
+import logging
+import time
+
 from .models import Space
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_space_distances(
@@ -26,6 +31,9 @@ def calculate_space_distances(
             adjacency[space.parent_space_id].append(space.id)
             adjacency[space.id].append(space.parent_space_id)
 
+    logger.info("Calculating space distances (%d spaces, max_distance=%d)", len(spaces), max_distance)
+    t0 = time.monotonic()
+
     # Calculate distances using BFS from each space
     distances: dict[tuple[str, str], int] = {}
 
@@ -50,4 +58,5 @@ def calculate_space_distances(
                         visited.add(neighbor_id)
                         queue.append((neighbor_id, current_distance + 1))
 
+    logger.info("Space distances calculated in %.1fs (%d pairs)", time.monotonic() - t0, len(distances))
     return distances

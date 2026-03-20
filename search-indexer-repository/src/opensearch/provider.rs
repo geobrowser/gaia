@@ -3,14 +3,15 @@
 //! This module provides the concrete implementation of `SearchIndexProvider`
 //! using the OpenSearch crate.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use opensearch::{
     http::transport::{SingleNodeConnectionPool, TransportBuilder},
-    params::Conflicts,
-    BulkOperation, DeleteParts, OpenSearch, UpdateByQueryParts, UpdateParts,
+    BulkOperation, DeleteParts, OpenSearch, SearchParts, UpdateByQueryParts, UpdateParts,
 };
 use serde_json::{json, Value};
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -19,9 +20,11 @@ use crate::interfaces::SearchIndexProvider;
 use crate::opensearch::bulk::{execute_bulk, BulkAction, BulkOperationMeta};
 use crate::opensearch::index_config::IndexConfig;
 use crate::opensearch::index_management;
+use crate::opensearch::retry::{self, RetryConfig};
 use crate::opensearch::scripts::{
-    ADD_TYPE_RELATION_SCRIPT, REMOVE_TYPE_RELATION_SCRIPT, UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
+    ADD_RELATION_SCRIPT, REMOVE_RELATION_SCRIPT, UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
 };
+
 use crate::opensearch::unset_document_properties::create_unset_properties_script;
 use crate::types::{
     BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
@@ -29,12 +32,28 @@ use crate::types::{
 };
 use crate::utils;
 
-/// Macro to flush pending bulk operations before executing update_by_query.
+/// Default maximum number of operations per bulk HTTP request.
+/// Prevents 413 Payload Too Large errors from OpenSearch.
+/// Override with the `OPENSEARCH_MAX_BULK_SIZE` environment variable.
+const DEFAULT_OPENSEARCH_MAX_BULK_SIZE: usize = 1000;
+
+fn opensearch_max_bulk_size() -> usize {
+    std::env::var("OPENSEARCH_MAX_BULK_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_OPENSEARCH_MAX_BULK_SIZE)
+}
+
+/// Macro to flush pending bulk operations and refresh before update_by_query.
 /// This ensures ordering is preserved when mixing bulk and update_by_query operations.
+/// When there are pending ops, they are flushed with `Refresh::True`. When the pending
+/// queue is empty, an explicit index refresh is performed so that writes from earlier
+/// batches (which may have been flushed without refresh) are visible to the subsequent
+/// update_by_query's search phase.
 /// A macro is used instead of a function because this code mutates multiple local variables
 /// and uses `await?`, which would require passing many `&mut` references to a function.
 macro_rules! flush_pending_bulk {
-    ($self:expr, $bulk_ops:expr, $metas:expr, $total_succeeded:expr, $total_failed:expr, $all_results:expr) => {
+    ($self:expr, $bulk_ops:expr, $metas:expr, $total_succeeded:expr, $total_failed:expr, $all_results:expr, $total_wall_ms:expr, $total_took_ms:expr, $bulk_call_count:expr) => {
         if !$bulk_ops.is_empty() {
             let batch_ops = std::mem::take(&mut $bulk_ops);
             let batch_metas = std::mem::take(&mut $metas);
@@ -44,14 +63,68 @@ macro_rules! flush_pending_bulk {
                 batch_ops,
                 &batch_metas,
                 BulkAction::Update,
-                true, // refresh before update_by_query
+                true, // refresh so update_by_query sees latest data
+                &$self.retry_config,
             )
             .await?;
             $total_succeeded += summary.succeeded;
             $total_failed += summary.failed;
+            $total_wall_ms += summary.wall_ms;
+            $total_took_ms += summary.took_ms;
+            $bulk_call_count += 1u64;
+            $all_results.extend(summary.results);
+        } else {
+            // No pending ops, but prior batches may have written without
+            // refresh. Force a refresh so update_by_query sees all data.
+            debug!("No pending bulk ops; issuing explicit index refresh before update_by_query");
+            $self
+                .client
+                .indices()
+                .refresh(opensearch::indices::IndicesRefreshParts::Index(&[&$self
+                    .index_config
+                    .alias]))
+                .send()
+                .await
+                .map_err(|e| SearchIndexError::update(e.to_string()))?;
+        }
+    };
+}
+
+/// Macro to flush the bulk buffer when it reaches the configured chunk size.
+/// Prevents 413 Payload Too Large errors by chunking large batches.
+macro_rules! flush_bulk_if_full {
+    ($self:expr, $bulk_ops:expr, $metas:expr, $total_succeeded:expr, $total_failed:expr, $all_results:expr, $total_wall_ms:expr, $total_took_ms:expr, $bulk_call_count:expr) => {
+        if $bulk_ops.len() >= opensearch_max_bulk_size() {
+            let chunk_size = $bulk_ops.len();
+            debug!(chunk_size, max_bulk_size = opensearch_max_bulk_size(), "Flushing bulk chunk (size limit reached)");
+            let batch_ops = std::mem::take(&mut $bulk_ops);
+            let batch_metas = std::mem::take(&mut $metas);
+            let summary = execute_bulk(
+                &$self.client,
+                &$self.index_config.alias,
+                batch_ops,
+                &batch_metas,
+                BulkAction::Update,
+                false,
+                &$self.retry_config,
+            )
+            .await?;
+            $total_succeeded += summary.succeeded;
+            $total_failed += summary.failed;
+            $total_wall_ms += summary.wall_ms;
+            $total_took_ms += summary.took_ms;
+            $bulk_call_count += 1u64;
             $all_results.extend(summary.results);
         }
     };
+}
+
+/// Outcome of an `update_by_query` call with retry.
+enum UpdateByQueryOutcome {
+    /// The query succeeded. Contains response stats and timing.
+    Success { updated: u64, total: u64, conflicts: u64, took_ms: u64, wall_ms: u64 },
+    /// The query failed after all retries. Contains the error body.
+    Failed(String),
 }
 
 /// OpenSearch provider implementation.
@@ -79,6 +152,7 @@ macro_rules! flush_pending_bulk {
 pub struct OpenSearchProvider {
     client: OpenSearch,
     index_config: IndexConfig,
+    retry_config: RetryConfig,
 }
 
 impl OpenSearchProvider {
@@ -105,12 +179,116 @@ impl OpenSearchProvider {
         Ok(Self {
             client,
             index_config,
+            retry_config: RetryConfig::default(),
         })
     }
 
     /// Generate document ID as `{entity_id}_{space_id}`.
     fn document_id(entity_id: &Uuid, space_id: &Uuid) -> String {
         format!("{}_{}", entity_id, space_id)
+    }
+
+    /// Execute an `update_by_query` with retry on transient errors.
+    ///
+    /// Retries on transport errors, HTTP 409 (version conflict), 429, 502, 503, 504
+    /// using exponential backoff from `self.retry_config`.
+    ///
+    /// Returns `UpdateByQueryOutcome::Success` on success with response stats,
+    /// or `UpdateByQueryOutcome::Failed` on non-retryable failure with the error body.
+    /// The `operation_name` is used in log messages for diagnostics.
+    async fn update_by_query_with_retry(
+        &self,
+        body: Value,
+        operation_name: &str,
+    ) -> Result<UpdateByQueryOutcome, SearchIndexError> {
+        let mut attempt = 0u32;
+
+        loop {
+            let start = std::time::Instant::now();
+            let result = self
+                .client
+                .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
+                .body(body.clone())
+                .send()
+                .await;
+            let wall_ms = start.elapsed().as_millis() as u64;
+
+            let response = match result {
+                Ok(resp) => resp,
+                Err(e) => {
+                    // Transport/network error — retryable
+                    if attempt < self.retry_config.max_retries {
+                        attempt += 1;
+                        retry::backoff_sleep(
+                            attempt,
+                            &self.retry_config,
+                            &format!("update_by_query {operation_name} transport error: {e}"),
+                        )
+                        .await;
+                        continue;
+                    }
+                    return Err(SearchIndexError::update(e.to_string()));
+                }
+            };
+
+            let status = response.status_code();
+            if status.is_success() {
+                let response_body: Value = response.json().await.unwrap_or_default();
+                let updated = response_body
+                    .get("updated")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let total = response_body
+                    .get("total")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let conflicts = response_body
+                    .get("version_conflicts")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let took_ms = response_body
+                    .get("took")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+
+                debug!(
+                    operation = operation_name,
+                    attempt = attempt,
+                    updated = updated,
+                    total = total,
+                    version_conflicts = conflicts,
+                    "update_by_query completed"
+                );
+
+                return Ok(UpdateByQueryOutcome::Success { updated, total, conflicts, took_ms, wall_ms });
+            }
+
+            let status_code = status.as_u16();
+            let is_retryable = status_code == 409
+                || retry::is_retryable_status(status_code);
+
+            if is_retryable && attempt < self.retry_config.max_retries {
+                let error_body = response.text().await.unwrap_or_default();
+                attempt += 1;
+                retry::backoff_sleep(
+                    attempt,
+                    &self.retry_config,
+                    &format!("update_by_query {operation_name} HTTP {status}: {error_body}"),
+                )
+                .await;
+                continue;
+            }
+
+            let error_body = response.text().await.unwrap_or_default();
+            error!(
+                operation = operation_name,
+                status = %status,
+                body = %error_body,
+                attempt = attempt,
+                "update_by_query failed"
+            );
+            return Ok(UpdateByQueryOutcome::Failed(error_body));
+        }
     }
 
     /// Build a document map from an UpdateEntityRequest with only the provided fields.
@@ -121,6 +299,7 @@ impl OpenSearchProvider {
         doc.insert("space_id".to_string(), json!(request.space_id));
         if let Some(ref name) = request.name {
             doc.insert("name".to_string(), json!(name));
+            doc.insert("name_raw".to_string(), json!(name));
         }
         if let Some(ref description) = request.description {
             doc.insert("description".to_string(), json!(description));
@@ -130,6 +309,9 @@ impl OpenSearchProvider {
         }
         if let Some(ref cover) = request.cover {
             doc.insert("cover".to_string(), json!(cover));
+        }
+        if let Some(ref image_url) = request.image_url {
+            doc.insert("image_url".to_string(), json!(image_url));
         }
         if let Some(entity_global_score) = request.entity_global_score {
             doc.insert(
@@ -146,7 +328,131 @@ impl OpenSearchProvider {
         if let Some(deleted) = request.deleted {
             doc.insert("deleted".to_string(), json!(deleted));
         }
+        if let Some(ref space_topic_entity_id) = request.space_topic_entity_id {
+            doc.insert(
+                "space_topic_entity_id".to_string(),
+                json!(space_topic_entity_id),
+            );
+        }
+        if let Some(in_canonical_graph) = request.in_canonical_graph {
+            doc.insert("in_canonical_graph".to_string(), json!(in_canonical_graph));
+        }
         doc
+    }
+
+    /// Fetch all space_id → space_topic_entity_id mappings from the index.
+    ///
+    /// Uses a composite aggregation to paginate through all spaces that have
+    /// a `space_topic_entity_id` set, returning a map of space_id to topic_entity_id.
+    /// This is used to warm the in-memory cache at startup.
+    ///
+    /// Each page fetches up to 10,000 unique space_ids, so for n unique spaces
+    /// with a topic, the loop runs ⌈n / 10,000⌉ iterations (+ 1 final empty page).
+    pub async fn get_space_topic_mappings(&self) -> Result<HashMap<Uuid, Uuid>, SearchIndexError> {
+        let mut mappings = HashMap::new();
+        let mut after_key: Option<Value> = None;
+
+        loop {
+            let mut composite_source = json!({
+                "size": 10000,
+                "sources": [
+                    {
+                        "space": {
+                            "terms": {
+                                "field": "space_id"
+                            }
+                        }
+                    }
+                ]
+            });
+
+            if let Some(ref after) = after_key {
+                composite_source["after"] = after.clone();
+            }
+
+            let body = json!({
+                "size": 0,
+                "query": {
+                    "exists": {
+                        "field": "space_topic_entity_id"
+                    }
+                },
+                "aggs": {
+                    "spaces": {
+                        "composite": composite_source,
+                        "aggs": {
+                            "topic": {
+                                "terms": {
+                                    "field": "space_topic_entity_id",
+                                    "size": 1
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            let response = self
+                .client
+                .search(SearchParts::Index(&[&self.index_config.alias]))
+                .body(body)
+                .send()
+                .await
+                .map_err(|e| SearchIndexError::connection(e.to_string()))?;
+
+            let status = response.status_code();
+            if !status.is_success() {
+                let error_body = response.text().await.unwrap_or_default();
+                return Err(SearchIndexError::connection(format!(
+                    "Space topic mappings query failed with status {}: {}",
+                    status, error_body
+                )));
+            }
+
+            let response_body: Value = response
+                .json()
+                .await
+                .map_err(|e| SearchIndexError::connection(e.to_string()))?;
+
+            let buckets = match response_body["aggregations"]["spaces"]["buckets"].as_array() {
+                Some(b) if !b.is_empty() => b,
+                _ => break,
+            };
+
+            for bucket in buckets {
+                let space_id_str = bucket["key"]["space"].as_str().unwrap_or_default();
+                let topic_buckets = bucket["topic"]["buckets"].as_array();
+
+                if let Some(topic_buckets) = topic_buckets {
+                    if let Some(first_topic) = topic_buckets.first() {
+                        let topic_id_str = first_topic["key"].as_str().unwrap_or_default();
+
+                        match (Uuid::parse_str(space_id_str), Uuid::parse_str(topic_id_str)) {
+                            (Ok(space_id), Ok(topic_id)) => {
+                                mappings.insert(space_id, topic_id);
+                            }
+                            _ => {
+                                warn!(
+                                    space_id = %space_id_str,
+                                    topic_id = %topic_id_str,
+                                    "Skipping invalid UUID in space topic mapping"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check for after_key for pagination
+            after_key = response_body["aggregations"]["spaces"]["after_key"]
+                .clone()
+                .into();
+            if after_key.as_ref().is_none_or(|v| v.is_null()) {
+                break;
+            }
+        }
+
+        Ok(mappings)
     }
 }
 
@@ -175,7 +481,7 @@ impl SearchIndexProvider for OpenSearchProvider {
     /// with the provided fields. Fields that are `None` in the request will be left unchanged
     /// (for existing documents) or omitted (for new documents).
     ///
-    /// Also supports atomic type relation addition via `add_type_relation` field.
+    /// Also supports atomic relation addition via `add_relation` field.
     async fn update_document(&self, request: &UpdateEntityRequest) -> Result<(), SearchIndexError> {
         // Validate UUIDs
         let (entity_id, space_id) =
@@ -183,42 +489,47 @@ impl SearchIndexProvider for OpenSearchProvider {
 
         let doc_id = Self::document_id(&entity_id, &space_id);
 
-        // Handle add_type_relation - use script for atomic addition to type_relations array
-        if let Some(ref relation_data) = request.add_type_relation {
+        // Handle add_relation - use script for atomic addition to relations array
+        if let Some(ref relation_data) = request.add_relation {
             let relation_id = uuid::Uuid::parse_str(&relation_data.relation_id).map_err(|_| {
                 SearchIndexError::validation(format!(
                     "Invalid relation_id: {}",
                     relation_data.relation_id
                 ))
             })?;
-            let entity_to_id =
-                uuid::Uuid::parse_str(&relation_data.entity_to_id).map_err(|_| {
+            let to_entity_id =
+                uuid::Uuid::parse_str(&relation_data.to_entity_id).map_err(|_| {
                     SearchIndexError::validation(format!(
-                        "Invalid entity_to_id: {}",
-                        relation_data.entity_to_id
+                        "Invalid to_entity_id: {}",
+                        relation_data.to_entity_id
                     ))
                 })?;
+
+            let params = json!({
+                "relation_id": relation_id.to_string(),
+                "relation_type": relation_data.relation_type.clone(),
+                "to_entity_id": to_entity_id.to_string()
+            });
+
+            let upsert_relation = json!({
+                "relation_id": relation_id.to_string(),
+                "relation_type": relation_data.relation_type.clone(),
+                "to_entity_id": to_entity_id.to_string()
+            });
 
             let response = self
                 .client
                 .update(UpdateParts::IndexId(&self.index_config.alias, &doc_id))
                 .body(json!({
                     "script": {
-                        "source": ADD_TYPE_RELATION_SCRIPT,
+                        "source": ADD_RELATION_SCRIPT,
                         "lang": "painless",
-                        "params": {
-                            "relation_id": relation_id.to_string(),
-                            "entity_to_id": entity_to_id.to_string()
-                        }
+                        "params": params
                     },
-                    // If the document doesn't exist, create it with required fields
                     "upsert": {
                         "entity_id": entity_id.to_string(),
                         "space_id": space_id.to_string(),
-                        "type_relations": [{
-                            "relation_id": relation_id.to_string(),
-                            "entity_to_id": entity_to_id.to_string()
-                        }]
+                        "relations": [upsert_relation]
                     }
                 }))
                 .send()
@@ -228,14 +539,14 @@ impl SearchIndexProvider for OpenSearchProvider {
             let status = response.status_code();
             if !status.is_success() {
                 let error_body = response.text().await.unwrap_or_default();
-                error!(status = %status, body = %error_body, "Add type relation request failed");
+                error!(status = %status, body = %error_body, "Add relation request failed");
                 return Err(SearchIndexError::update(format!(
-                    "Add type relation failed with status {}: {}",
+                    "Add relation failed with status {}: {}",
                     status, error_body
                 )));
             }
 
-            debug!(doc_id = %doc_id, relation_id = %relation_id, "Type relation added");
+            debug!(doc_id = %doc_id, relation_id = %relation_id, "Relation added");
             return Ok(());
         }
 
@@ -321,7 +632,7 @@ impl SearchIndexProvider for OpenSearchProvider {
 
     /// Unset (remove) specific properties from a document.
     ///
-    /// Note: To remove type relations, use `EntityOperation::RemoveTypeRelationById` via `bulk_operations`.
+    /// Note: To remove relations, use `EntityOperation::RemoveRelationById` via `bulk_operations`.
     async fn unset_document_properties(
         &self,
         request: &UnsetEntityPropertiesRequest,
@@ -376,13 +687,16 @@ impl SearchIndexProvider for OpenSearchProvider {
 
     /// Execute multiple operations in bulk, processing them IN ORDER.
     ///
-    /// This method handles all operation types (Update, Delete, Unset, RemoveTypeRelationById)
+    /// This method handles all operation types (Update, Delete, Unset, RemoveRelationById)
     /// while maintaining the order of operations for consistency.
     ///
     /// For bulk-compatible operations (Update, Delete, Unset), we batch them together.
-    /// When we encounter a RemoveTypeRelationById (which requires update_by_query),
+    /// When we encounter a RemoveRelationById (which requires update_by_query),
     /// we first flush the pending batch, then execute the update_by_query, then continue.
     /// This ensures ordering is preserved.
+    ///
+    /// Bulk batches are automatically flushed when they reach `MAX_BULK_CHUNK_SIZE`
+    /// to avoid exceeding OpenSearch's HTTP payload limits.
     #[instrument(skip(self, operations), fields(count = operations.len()))]
     async fn bulk_operations(
         &self,
@@ -396,6 +710,9 @@ impl SearchIndexProvider for OpenSearchProvider {
         let mut all_results: Vec<BatchOperationResult> = Vec::new();
         let mut total_succeeded = 0usize;
         let mut total_failed = 0usize;
+        let mut total_wall_ms = 0u64;
+        let mut total_took_ms = 0u64;
+        let mut _bulk_call_count = 0u64;
 
         // Current batch of bulk-compatible operations
         let mut bulk_ops: Vec<BulkOperation<Value>> = Vec::new();
@@ -403,7 +720,13 @@ impl SearchIndexProvider for OpenSearchProvider {
 
         for op in operations {
             match op {
-                EntityOperation::RemoveTypeRelationById(request) => {
+                EntityOperation::RemoveRelationById(request) => {
+                    debug!(
+                        relation_id = %request.relation_id,
+                        pending_bulk_ops = bulk_ops.len(),
+                        "RemoveRelationById starting — flushing pending bulk ops"
+                    );
+
                     // Flush before executing the update_by_query to maintain ordering
                     flush_pending_bulk!(
                         self,
@@ -411,10 +734,12 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
-                    // Now execute the update_by_query
                     let relation_uuid =
                         uuid::Uuid::parse_str(&request.relation_id).map_err(|_| {
                             SearchIndexError::validation(format!(
@@ -423,64 +748,61 @@ impl SearchIndexProvider for OpenSearchProvider {
                             ))
                         })?;
 
-                    // Use Conflicts::Proceed to ignore version conflicts - within a batch,
-                    // a relation can be created then deleted, and the bulk update changes the
-                    // document's seq_no before this update_by_query runs.
-                    let response = self
-                        .client
-                        .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
-                        .conflicts(Conflicts::Proceed)
-                        .body(json!({
-                            "query": {
-                                "nested": {
-                                    "path": "type_relations",
-                                    "query": {
-                                        "term": {
-                                            "type_relations.relation_id": relation_uuid.to_string()
-                                        }
+                    let body = json!({
+                        "query": {
+                            "nested": {
+                                "path": "relations",
+                                "query": {
+                                    "term": {
+                                        "relations.relation_id": relation_uuid.to_string()
                                     }
                                 }
-                            },
-                            "script": {
-                                "source": REMOVE_TYPE_RELATION_SCRIPT,
-                                "lang": "painless",
-                                "params": {
-                                    "relation_id": relation_uuid.to_string()
-                                }
                             }
-                        }))
-                        .send()
-                        .await
-                        .map_err(|e| SearchIndexError::update(e.to_string()))?;
+                        },
+                        "script": {
+                            "source": REMOVE_RELATION_SCRIPT,
+                            "lang": "painless",
+                            "params": {
+                                "relation_id": relation_uuid.to_string()
+                            }
+                        }
+                    });
 
-                    let status = response.status_code();
-                    if status.is_success() {
-                        total_succeeded += 1;
-                        all_results.push(BatchOperationResult {
-                            entity_id: String::new(),
-                            space_id: String::new(),
-                            operation_type: "RemoveTypeRelation".to_string(),
-                            success: true,
-                            error: None,
-                        });
-                        debug!(
-                            relation_id = %relation_uuid,
-                            "Removed type relation by ID via update_by_query"
-                        );
-                    } else {
-                        let error_body = response.text().await.unwrap_or_default();
-                        error!(status = %status, body = %error_body, "Remove type relation by ID failed");
-                        total_failed += 1;
-                        all_results.push(BatchOperationResult {
-                            entity_id: String::new(),
-                            space_id: String::new(),
-                            operation_type: "RemoveTypeRelation".to_string(),
-                            success: false,
-                            error: Some(SearchIndexError::update(format!(
-                                "Remove type relation by ID failed: {}",
-                                error_body
-                            ))),
-                        });
+                    match self.update_by_query_with_retry(body, "RemoveRelationById").await? {
+                        UpdateByQueryOutcome::Success { updated, total, conflicts, took_ms, wall_ms } => {
+                            if updated == 0 {
+                                warn!(
+                                    relation_id = %relation_uuid,
+                                    total = total,
+                                    version_conflicts = conflicts,
+                                    "RemoveRelationById matched 0 documents"
+                                );
+                            }
+                            total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: String::new(),
+                                operation_type: "RemoveRelation".to_string(),
+                                success: true,
+                                error: None,
+                            });
+                        }
+                        UpdateByQueryOutcome::Failed(error_body) => {
+                            total_failed += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: String::new(),
+                                operation_type: "RemoveRelation".to_string(),
+                                success: false,
+                                error: Some(SearchIndexError::update(format!(
+                                    "Remove relation by ID failed: {}",
+                                    error_body
+                                ))),
+                            });
+                        }
                     }
                 }
                 EntityOperation::Update(request) => {
@@ -490,7 +812,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                     let mut has_operation = false;
 
                     // Handle add_relation
-                    if let Some(ref relation_data) = request.add_type_relation {
+                    if let Some(ref relation_data) = request.add_relation {
                         let relation_id = uuid::Uuid::parse_str(&relation_data.relation_id)
                             .map_err(|_| {
                                 SearchIndexError::validation(format!(
@@ -498,38 +820,54 @@ impl SearchIndexProvider for OpenSearchProvider {
                                     relation_data.relation_id
                                 ))
                             })?;
-                        let entity_to_id = uuid::Uuid::parse_str(&relation_data.entity_to_id)
+                        let to_entity_id = uuid::Uuid::parse_str(&relation_data.to_entity_id)
                             .map_err(|_| {
                                 SearchIndexError::validation(format!(
-                                    "Invalid entity_to_id: {}",
-                                    relation_data.entity_to_id
+                                    "Invalid to_entity_id: {}",
+                                    relation_data.to_entity_id
                                 ))
                             })?;
 
+                        let params = json!({
+                            "relation_id": relation_id.to_string(),
+                            "relation_type": relation_data.relation_type.clone(),
+                            "to_entity_id": to_entity_id.to_string()
+                        });
+
+                        let upsert_relation = json!({
+                            "relation_id": relation_id.to_string(),
+                            "relation_type": relation_data.relation_type.clone(),
+                            "to_entity_id": to_entity_id.to_string()
+                        });
+
                         let body = json!({
                             "script": {
-                                "source": ADD_TYPE_RELATION_SCRIPT,
+                                "source": ADD_RELATION_SCRIPT,
                                 "lang": "painless",
-                                "params": {
-                                    "relation_id": relation_id.to_string(),
-                                    "entity_to_id": entity_to_id.to_string()
-                                }
+                                "params": params
                             },
                             "upsert": {
                                 "entity_id": entity_id.to_string(),
                                 "space_id": space_id.to_string(),
-                                "type_relations": [{
-                                    "relation_id": relation_id.to_string(),
-                                    "entity_to_id": entity_to_id.to_string()
-                                }]
+                                "relations": [upsert_relation]
                             }
                         });
+                        debug!(
+                            relation_id = %relation_id,
+                            relation_type = %relation_data.relation_type,
+                            entity_id = %entity_id,
+                            space_id = %space_id,
+                            to_entity_id = %to_entity_id,
+                            pending_bulk_ops = bulk_ops.len(),
+                            "Queuing AddRelation bulk op"
+                        );
                         bulk_ops.push(BulkOperation::update(doc_id.clone(), body).into());
                         metas.push(BulkOperationMeta {
                             entity_id: request.entity_id.clone(),
                             space_id: request.space_id.clone(),
-                            operation_type: "AddTypeRelation".to_string(),
+                            operation_type: "AddRelation".to_string(),
                         });
+                        flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
                         has_operation = true;
                     }
 
@@ -560,6 +898,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                             space_id: request.space_id.clone(),
                             operation_type: "Update".to_string(),
                         });
+                        flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
                         has_operation = true;
                     }
 
@@ -586,6 +925,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: request.space_id.clone(),
                         operation_type: "Delete".to_string(),
                     });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
                 }
                 EntityOperation::Unset(request) => {
                     if request.property_keys.is_empty() {
@@ -608,7 +948,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
                     let (entity_id, space_id) =
@@ -634,6 +977,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: request.space_id.clone(),
                         operation_type: "Unset".to_string(),
                     });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
 
                     // Flush immediately after unset to ensure it's processed before any subsequent
                     // updates to the same document. Multiple updates to the same document in one
@@ -644,7 +988,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
                 }
                 EntityOperation::UpdateEntityGlobalScore(request) => {
@@ -655,7 +1002,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
                     let entity_uuid = uuid::Uuid::parse_str(&request.entity_id).map_err(|_| {
@@ -665,58 +1015,48 @@ impl SearchIndexProvider for OpenSearchProvider {
                         ))
                     })?;
 
-                    // Update all documents with this entity_id
-                    let response = self
-                        .client
-                        .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
-                        .conflicts(Conflicts::Proceed)
-                        .body(json!({
-                            "query": {
-                                "term": {
-                                    "entity_id": entity_uuid.to_string()
-                                }
-                            },
-                            "script": {
-                                "source": "ctx._source.entity_global_score = params.score",
-                                "lang": "painless",
-                                "params": {
-                                    "score": request.score
-                                }
+                    let body = json!({
+                        "query": {
+                            "term": {
+                                "entity_id": entity_uuid.to_string()
                             }
-                        }))
-                        .send()
-                        .await
-                        .map_err(|e| SearchIndexError::update(e.to_string()))?;
+                        },
+                        "script": {
+                            "source": "ctx._source.entity_global_score = params.score",
+                            "lang": "painless",
+                            "params": {
+                                "score": request.score
+                            }
+                        }
+                    });
 
-                    let status = response.status_code();
-                    if status.is_success() {
-                        total_succeeded += 1;
-                        all_results.push(BatchOperationResult {
-                            entity_id: request.entity_id.clone(),
-                            space_id: String::new(),
-                            operation_type: "UpdateEntityGlobalScore".to_string(),
-                            success: true,
-                            error: None,
-                        });
-                        debug!(
-                            entity_id = %entity_uuid,
-                            score = request.score,
-                            "Updated entity global score"
-                        );
-                    } else {
-                        let error_body = response.text().await.unwrap_or_default();
-                        error!(status = %status, body = %error_body, "Update entity global score failed");
-                        total_failed += 1;
-                        all_results.push(BatchOperationResult {
-                            entity_id: request.entity_id.clone(),
-                            space_id: String::new(),
-                            operation_type: "UpdateEntityGlobalScore".to_string(),
-                            success: false,
-                            error: Some(SearchIndexError::update(format!(
-                                "Update entity global score failed: {}",
-                                error_body
-                            ))),
-                        });
+                    match self.update_by_query_with_retry(body, "UpdateEntityGlobalScore").await? {
+                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
+                            total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: request.entity_id.clone(),
+                                space_id: String::new(),
+                                operation_type: "UpdateEntityGlobalScore".to_string(),
+                                success: true,
+                                error: None,
+                            });
+                        }
+                        UpdateByQueryOutcome::Failed(error_body) => {
+                            total_failed += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: request.entity_id.clone(),
+                                space_id: String::new(),
+                                operation_type: "UpdateEntityGlobalScore".to_string(),
+                                success: false,
+                                error: Some(SearchIndexError::update(format!(
+                                    "Update entity global score failed: {}",
+                                    error_body
+                                ))),
+                            });
+                        }
                     }
                 }
                 EntityOperation::UpdateSpaceScore(request) => {
@@ -727,7 +1067,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
                     let space_uuid = uuid::Uuid::parse_str(&request.space_id).map_err(|_| {
@@ -737,58 +1080,48 @@ impl SearchIndexProvider for OpenSearchProvider {
                         ))
                     })?;
 
-                    // Update all documents in this space
-                    let response = self
-                        .client
-                        .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
-                        .conflicts(Conflicts::Proceed)
-                        .body(json!({
-                            "query": {
-                                "term": {
-                                    "space_id": space_uuid.to_string()
-                                }
-                            },
-                            "script": {
-                                "source": "ctx._source.space_score = params.score",
-                                "lang": "painless",
-                                "params": {
-                                    "score": request.score
-                                }
+                    let body = json!({
+                        "query": {
+                            "term": {
+                                "space_id": space_uuid.to_string()
                             }
-                        }))
-                        .send()
-                        .await
-                        .map_err(|e| SearchIndexError::update(e.to_string()))?;
+                        },
+                        "script": {
+                            "source": "ctx._source.space_score = params.score",
+                            "lang": "painless",
+                            "params": {
+                                "score": request.score
+                            }
+                        }
+                    });
 
-                    let status = response.status_code();
-                    if status.is_success() {
-                        total_succeeded += 1;
-                        all_results.push(BatchOperationResult {
-                            entity_id: String::new(),
-                            space_id: request.space_id.clone(),
-                            operation_type: "UpdateSpaceScore".to_string(),
-                            success: true,
-                            error: None,
-                        });
-                        debug!(
-                            space_id = %space_uuid,
-                            score = request.score,
-                            "Updated space score"
-                        );
-                    } else {
-                        let error_body = response.text().await.unwrap_or_default();
-                        error!(status = %status, body = %error_body, "Update space score failed");
-                        total_failed += 1;
-                        all_results.push(BatchOperationResult {
-                            entity_id: String::new(),
-                            space_id: request.space_id.clone(),
-                            operation_type: "UpdateSpaceScore".to_string(),
-                            success: false,
-                            error: Some(SearchIndexError::update(format!(
-                                "Update space score failed: {}",
-                                error_body
-                            ))),
-                        });
+                    match self.update_by_query_with_retry(body, "UpdateSpaceScore").await? {
+                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
+                            total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "UpdateSpaceScore".to_string(),
+                                success: true,
+                                error: None,
+                            });
+                        }
+                        UpdateByQueryOutcome::Failed(error_body) => {
+                            total_failed += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "UpdateSpaceScore".to_string(),
+                                success: false,
+                                error: Some(SearchIndexError::update(format!(
+                                    "Update space score failed: {}",
+                                    error_body
+                                ))),
+                            });
+                        }
                     }
                 }
                 EntityOperation::UpdateEntitySpaceScore(request) => {
@@ -811,6 +1144,145 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: request.space_id.clone(),
                         operation_type: "UpdateEntitySpaceScore".to_string(),
                     });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                }
+                EntityOperation::UpdateSpaceTopicEntityId(request) => {
+                    // Flush before executing the update_by_query to maintain ordering
+                    flush_pending_bulk!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
+
+                    let space_uuid = uuid::Uuid::parse_str(&request.space_id).map_err(|_| {
+                        SearchIndexError::validation(format!(
+                            "Invalid space_id: {}",
+                            request.space_id
+                        ))
+                    })?;
+
+                    let topic_entity_uuid = uuid::Uuid::parse_str(&request.topic_entity_id)
+                        .map_err(|_| {
+                            SearchIndexError::validation(format!(
+                                "Invalid topic_entity_id: {}",
+                                request.topic_entity_id
+                            ))
+                        })?;
+
+                    let body = json!({
+                        "query": {
+                            "term": {
+                                "space_id": space_uuid.to_string()
+                            }
+                        },
+                        "script": {
+                            "source": "ctx._source.space_topic_entity_id = params.topic_entity_id",
+                            "lang": "painless",
+                            "params": {
+                                "topic_entity_id": topic_entity_uuid.to_string()
+                            }
+                        }
+                    });
+
+                    match self.update_by_query_with_retry(body, "UpdateSpaceTopicEntityId").await? {
+                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
+                            total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "UpdateSpaceTopicEntityId".to_string(),
+                                success: true,
+                                error: None,
+                            });
+                        }
+                        UpdateByQueryOutcome::Failed(error_body) => {
+                            total_failed += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "UpdateSpaceTopicEntityId".to_string(),
+                                success: false,
+                                error: Some(SearchIndexError::update(format!(
+                                    "Update space topic entity ID failed: {}",
+                                    error_body
+                                ))),
+                            });
+                        }
+                    }
+                }
+                EntityOperation::UpdateInCanonicalGraph(request) => {
+                    // Flush before executing the update_by_query to maintain ordering
+                    flush_pending_bulk!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
+
+                    let space_uuid = uuid::Uuid::parse_str(&request.space_id).map_err(|_| {
+                        SearchIndexError::validation(format!(
+                            "Invalid space_id: {}",
+                            request.space_id
+                        ))
+                    })?;
+
+                    let body = json!({
+                        "query": {
+                            "term": {
+                                "space_id": space_uuid.to_string()
+                            }
+                        },
+                        "script": {
+                            "source": "ctx._source.in_canonical_graph = params.value",
+                            "lang": "painless",
+                            "params": {
+                                "value": request.in_canonical_graph
+                            }
+                        }
+                    });
+
+                    match self.update_by_query_with_retry(body, "UpdateInCanonicalGraph").await? {
+                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
+                            total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "UpdateInCanonicalGraph".to_string(),
+                                success: true,
+                                error: None,
+                            });
+                        }
+                        UpdateByQueryOutcome::Failed(error_body) => {
+                            total_failed += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "UpdateInCanonicalGraph".to_string(),
+                                success: false,
+                                error: Some(SearchIndexError::update(format!(
+                                    "Update in_canonical_graph failed: {}",
+                                    error_body
+                                ))),
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -824,10 +1296,14 @@ impl SearchIndexProvider for OpenSearchProvider {
                 &metas,
                 BulkAction::Update,
                 false, // no need to refresh for final batch
+                &self.retry_config,
             )
             .await?;
             total_succeeded += summary.succeeded;
             total_failed += summary.failed;
+            total_wall_ms += summary.wall_ms;
+            total_took_ms += summary.took_ms;
+            _bulk_call_count += 1;
             all_results.extend(summary.results);
         }
 
@@ -836,6 +1312,8 @@ impl SearchIndexProvider for OpenSearchProvider {
             succeeded: total_succeeded,
             failed: total_failed,
             results: all_results,
+            wall_ms: total_wall_ms,
+            took_ms: total_took_ms,
         })
     }
 }
@@ -866,11 +1344,14 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
-            add_type_relation: None,
+            image_url: None,
+            add_relation: None,
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
             deleted: None,
+            space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
@@ -888,11 +1369,14 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
-            add_type_relation: None, // add_type_relation is handled separately, not by build_update_doc
+            image_url: None,
+            add_relation: None,
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
             deleted: None,
+            space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
@@ -906,10 +1390,10 @@ mod tests {
     }
 
     #[test]
-    fn test_build_update_doc_ignores_add_type_relation() {
-        use crate::types::TypeRelationData;
+    fn test_build_update_doc_ignores_add_relation() {
+        use crate::types::RelationData;
 
-        // add_type_relation is handled separately via script, not included in doc
+        // add_relation is handled separately via script, not included in doc
         let request = UpdateEntityRequest {
             entity_id: "entity-1".to_string(),
             space_id: "space-1".to_string(),
@@ -917,22 +1401,26 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
-            add_type_relation: Some(TypeRelationData {
+            image_url: None,
+            add_relation: Some(RelationData {
                 relation_id: "rel-1".to_string(),
-                entity_to_id: "type-id-1".to_string(),
+                relation_type: "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1".to_string(),
+                to_entity_id: "type-id-1".to_string(),
             }),
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
             deleted: None,
+            space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
-        // Doc should contain name but NOT add_type_relation (that's handled via script)
+        // Doc should contain name but NOT add_relation (that's handled via script)
         assert!(!doc.is_empty());
         assert_eq!(doc.get("name"), Some(&json!("Test Name")));
-        // add_type_relation should NOT be in the doc - it's handled separately
-        assert!(doc.get("add_type_relation").is_none());
-        assert!(doc.get("type_relations").is_none());
+        // add_relation should NOT be in the doc - it's handled separately
+        assert!(doc.get("add_relation").is_none());
+        assert!(doc.get("relations").is_none());
     }
 }

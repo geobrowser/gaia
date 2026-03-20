@@ -5,9 +5,11 @@
 //! - `TransitiveGraph`: Result of transitive closure computation
 //! - `CanonicalGraph`: Result of canonical graph computation from a root
 //! - `GraphState`: In-memory representation of the topology graph
+//! - `DiffTracker`: Computes incremental diffs between canonical graphs
 //! - `memory`: Functions for estimating heap memory usage
 
 mod canonical;
+mod diff;
 mod hash;
 pub mod memory;
 mod state;
@@ -15,7 +17,8 @@ mod transitive;
 mod tree;
 
 pub use canonical::{CanonicalGraph, CanonicalProcessor};
-pub use hash::{hash_tree, DefaultTreeHasher, TreeHasher};
+pub use diff::{ChangeType, DiffTracker, GraphDiff, NodeChange, Position};
+pub use hash::hash_tree;
 pub use state::GraphState;
-pub use transitive::{TransitiveCache, TransitiveGraph, TransitiveProcessor};
+pub use transitive::{TransitiveGraph, TransitiveProcessor};
 pub use tree::{EdgeType, TreeNode};

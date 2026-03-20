@@ -309,6 +309,55 @@
       "when": 1771004354519,
       "tag": "0043_real_psylocke",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1772135257640,
+      "tag": "0044_sweet_photon",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1772558926359,
+      "tag": "0045_hard_annihilus",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1772653570054,
+      "tag": "0046_lame_agent_brand",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1772813198990,
+      "tag": "0047_absent_crusher_hogan",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1773256034643,
+      "tag": "0048_needy_typhoid_mary",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1773430958000,
+      "tag": "0049_scoring_topology_distances",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1773936521562,
+      "tag": "0050_little_hellfire_club",
+      "breakpoints": true
     }
   ]
 }

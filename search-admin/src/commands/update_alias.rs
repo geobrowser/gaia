@@ -49,9 +49,9 @@ impl UpdateAliasCommand {
         // Get current alias mapping (if any)
         let alias_response = client
             .indices()
-            .get_alias(
-                opensearch::indices::IndicesGetAliasParts::Name(&[index_alias]),
-            )
+            .get_alias(opensearch::indices::IndicesGetAliasParts::Name(&[
+                index_alias,
+            ]))
             .send()
             .await;
 
@@ -71,10 +71,16 @@ impl UpdateAliasCommand {
         }
 
         if let Some(ref current_index) = old_index {
-            println!("Current alias mapping: {} -> {}", index_alias, current_index);
+            println!(
+                "Current alias mapping: {} -> {}",
+                index_alias, current_index
+            );
 
             if current_index == &versioned_index_name {
-                warn!("Alias already points to {}. Nothing to do.", versioned_index_name);
+                warn!(
+                    "Alias already points to {}. Nothing to do.",
+                    versioned_index_name
+                );
                 return Ok(());
             }
         } else {

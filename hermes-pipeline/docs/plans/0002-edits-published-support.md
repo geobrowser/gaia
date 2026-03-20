@@ -39,12 +39,12 @@ Add `EDITS_PUBLISHED` support to `hermes-pipeline` as another data pipeline.
 Each pipeline converts Actions into Kafka events:
 
 ```
-Action ──────────────────────────────────────────────────────▶ Kafka Event
+Action ------------------------------------------------------------> Kafka Event
 
-SPACE_REGISTERED ──[ convert ]──────────────────────────────▶ space.creations
-SUBSPACE_ADDED   ──[ convert ]──────────────────────────────▶ space.trust.extensions  
-SUBSPACE_REMOVED ──[ convert ]──────────────────────────────▶ space.trust.extensions
-EDITS_PUBLISHED  ──[ convert + IPFS cache lookup ]──────────▶ knowledge.edits
+SPACE_REGISTERED --[ convert ]--------------------------------------> space.creations
+SUBSPACE_ADDED   --[ convert ]--------------------------------------> space.trust.extensions
+SUBSPACE_REMOVED --[ convert ]--------------------------------------> space.trust.extensions
+EDITS_PUBLISHED  --[ convert + IPFS cache lookup ]------------------> knowledge.edits
 ```
 
 Most pipelines are simple: extract fields from Action, build proto, emit to Kafka.
@@ -70,16 +70,16 @@ Organize pipelines into separate modules. Each pipeline is a simple function:
 
 ```
 hermes-pipeline/src/
-├── main.rs                      # Runs all pipelines per action
-├── pipelines/
-│   ├── mod.rs                   # Re-exports all pipelines
-│   ├── spaces.rs                # SPACE_REGISTERED → space.creations
-│   ├── trust.rs                 # SUBSPACE_ADDED/REMOVED → space.trust.extensions
-│   └── edits.rs                 # EDITS_PUBLISHED → knowledge.edits (+ cache)
-├── cache/
-│   ├── mod.rs                   # Cache trait
-│   └── mock.rs                  # Mock IPFS cache for testing
-└── shared.rs                    # Shared utilities (block metadata conversion)
++-- main.rs                      # Runs all pipelines per action
++-- pipelines/
+|   +-- mod.rs                   # Re-exports all pipelines
+|   +-- spaces.rs                # SPACE_REGISTERED -> space.creations
+|   +-- trust.rs                 # SUBSPACE_ADDED/REMOVED -> space.trust.extensions
+|   +-- edits.rs                 # EDITS_PUBLISHED -> knowledge.edits (+ cache)
++-- cache/
+|   +-- mod.rs                   # Cache trait
+|   +-- mock.rs                  # Mock IPFS cache for testing
++-- shared.rs                    # Shared utilities (block metadata conversion)
 ```
 
 ### Phase 1: Restructure into Pipelines
@@ -483,7 +483,7 @@ This will require:
 
 ### Architecture Doc Update
 
-After implementation, update `docs/hermes-architecture.md` to:
+After implementation, update `docs/architecture.md` to:
 1. Remove the separate `edits` binary from the architecture
 2. Show edits processing happening in `hermes-pipeline`
 3. Update the diagram to show IPFS cache integration within hermes-pipeline
@@ -511,5 +511,5 @@ After implementation, update `docs/hermes-architecture.md` to:
 - `hermes-relay/src/source/mock_events.rs` - Mock edit events source
 - `hermes-processor/src/main.rs` - Reference implementation for edit conversion
 - `hermes-ipfs-cache/src/cache.rs` - Live cache implementation (future)
-- `docs/hermes-architecture.md` - Overall system architecture
+- `docs/architecture.md` - Overall system architecture
 - `0001-complete-action-support.md` - Original action support plan

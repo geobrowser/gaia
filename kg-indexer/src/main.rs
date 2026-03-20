@@ -43,11 +43,11 @@ struct BufferedEvent {
 struct BlockBuffer {
     /// Events grouped by block number.
     events: HashMap<u64, Vec<BufferedEvent>>,
-    /// When each block was first seen.
+    /// When each block was first observed.
     first_seen: HashMap<u64, Instant>,
     /// Block summaries keyed by block number.
     summaries: HashMap<u64, BlockSummaryInfo>,
-    /// Timeout for waiting for is_last event.
+    /// Timeout before force-processing an incomplete block.
     stale_timeout: Duration,
 }
 
@@ -79,8 +79,8 @@ impl BlockBuffer {
             block_number,
             BlockSummaryInfo {
                 summary,
-                received_at: Instant::now(),
                 expected_count,
+                received_at: Instant::now(),
             },
         );
     }
@@ -131,8 +131,8 @@ impl BlockBuffer {
 #[derive(Clone)]
 struct BlockSummaryInfo {
     summary: hermes_schema::pb::block_summary::HermesBlockSummary,
-    received_at: Instant,
     expected_count: usize,
+    received_at: Instant,
 }
 
 fn build_telemetry_config() -> hermes_instrumentation::Config {
@@ -203,6 +203,12 @@ async fn async_main() -> Result<(), IndexerError> {
     let stale_timeout_ms: u64 = env::var("BLOCK_STALE_TIMEOUT_MS")
         .ok()
         .and_then(|s| s.parse().ok())
+        .or_else(|| {
+            env::var("BLOCK_STALE_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(|secs| secs * 1000)
+        })
         .unwrap_or(1000);
 
     // Initialize storage
@@ -302,16 +308,13 @@ async fn async_main() -> Result<(), IndexerError> {
 
     // Main processing loop
     //
-    // Events are buffered by block number and processed together when `is_last=true`
-    // arrives, ensuring correct ordering within a block. However, we can't rely solely
-    // on `is_last` because:
-    //   1. It may arrive on a topic we don't subscribe to (e.g., curation.votes)
-    //   2. The producer may crash before sending it
-    //   3. Network issues may cause it to be lost
+    // Events are buffered by block number and normally flushed only once we have the
+    // block summary and the expected number of events for the topics kg-indexer consumes.
+    // Timeout is the fallback when the summary never arrives or delivery stays incomplete.
     //
     // To handle these cases, we use `tokio::select!` with a periodic tick that checks
     // for stale blocks (buffered longer than `stale_timeout`). The tick runs independently
-    // of the Kafka stream, so even if no messages arrive, stale blocks get processed.
+    // of the Kafka stream, so even if no messages arrive, timed out blocks get processed.
     let mut stream = consumer.stream();
     let stale_timeout = Duration::from_millis(stale_timeout_ms);
     let mut buffer = BlockBuffer::new(stale_timeout);
@@ -590,40 +593,16 @@ async fn async_main() -> Result<(), IndexerError> {
                                 }
                             }
 
-                            // If this is the last event in the block, process all buffered events
+                            // `is_last` is assigned by the producer, but Kafka can still deliver
+                            // that event before lower-sequence messages from other topics in the
+                            // same block. Treat it as a hint only; summary completion or idle
+                            // timeout are the safe completion signals.
                             if is_last {
-                                let events = buffer.take_block(block_number);
-                                let event_count = events.len();
-
                                 debug!(
                                     block_number = block_number,
-                                    event_count = event_count,
-                                    "Processing block"
+                                    buffered_event_count = buffer.buffered_count(block_number),
+                                    "Received is_last marker; waiting for block summary or stale timeout"
                                 );
-
-                                let summary = buffer.take_summary(block_number);
-                                let result = process_buffered_block(
-                                    events,
-                                    &storage,
-                                    &consumer,
-                                    summary,
-                                    BlockProcessReason::IsLast,
-                                )
-                                .await;
-                                if let Some((processed, errors)) = result {
-                                    processed_count += processed;
-                                    error_count += errors;
-                                    blocks_processed += 1;
-                                }
-
-                                if blocks_processed.is_multiple_of(10) && blocks_processed > 0 {
-                                    info!(
-                                        blocks = blocks_processed,
-                                        messages = processed_count,
-                                        errors = error_count,
-                                        "Progress update"
-                                    );
-                                }
                             }
                         };
                         fut.instrument(span).await;
@@ -693,6 +672,7 @@ const INDEXER_TOPICS: &[&str] = &[
     "space.creations",
     "space.membership",
     "space.trust.extensions",
+    "space.topics",
     "space.governance",
 ];
 
@@ -702,6 +682,7 @@ const EXPECTED_EVENT_TYPES: &[&str] = &[
     "ROLE_GRANTED",
     "ROLE_REVOKED",
     "TRUST_EXTENSION",
+    "TOPIC_DECLARED",
     "PROPOSAL_CREATED",
     "PROPOSAL_UPDATED",
     "PROPOSAL_VOTED",
@@ -720,7 +701,6 @@ fn expected_count_for_indexer(
 
 enum BlockProcessReason {
     Summary,
-    IsLast,
     Stale,
 }
 
@@ -728,7 +708,6 @@ impl BlockProcessReason {
     fn as_str(&self) -> &'static str {
         match self {
             BlockProcessReason::Summary => "summary",
-            BlockProcessReason::IsLast => "is_last",
             BlockProcessReason::Stale => "stale",
         }
     }
@@ -745,12 +724,46 @@ fn event_type_label(event: &BufferedEvent) -> String {
         KgMessage::RoleGranted(_) => "ROLE_GRANTED".to_string(),
         KgMessage::RoleRevoked(_) => "ROLE_REVOKED".to_string(),
         KgMessage::TrustExtension(_) => "TRUST_EXTENSION".to_string(),
+        KgMessage::TopicDeclared(_) => "TOPIC_DECLARED".to_string(),
         KgMessage::ProposalCreated(_) => "PROPOSAL_CREATED".to_string(),
         KgMessage::ProposalUpdated(_) => "PROPOSAL_UPDATED".to_string(),
         KgMessage::ProposalVoted(_) => "PROPOSAL_VOTED".to_string(),
         KgMessage::ProposalExecuted(_) => "PROPOSAL_EXECUTED".to_string(),
         KgMessage::ProposalSettingsUpdated(_) => "PROPOSAL_SETTINGS_UPDATED".to_string(),
         KgMessage::BlockSummary(_) => "BLOCK_SUMMARY".to_string(),
+    }
+}
+
+fn blockchain_metadata_to_strings(
+    meta: Option<&hermes_schema::pb::blockchain_metadata::BlockchainMetadata>,
+) -> (String, String) {
+    meta.map_or_else(
+        || ("0".to_string(), "0".to_string()),
+        |m| (m.created_at.to_string(), m.block_number.to_string()),
+    )
+}
+
+fn make_topic_entity(
+    topic_id: uuid::Uuid,
+    meta: Option<&hermes_schema::pb::blockchain_metadata::BlockchainMetadata>,
+) -> models::entities::EntityItem {
+    let (created_at, created_at_block) = blockchain_metadata_to_strings(meta);
+
+    models::entities::EntityItem {
+        id: topic_id,
+        created_at: created_at.clone(),
+        created_at_block: created_at_block.clone(),
+        updated_at: created_at,
+        updated_at_block: created_at_block,
+    }
+}
+
+fn apply_pending_space_topic(
+    space: &mut models::spaces::SpaceItem,
+    pending_space_topics: &HashMap<uuid::Uuid, uuid::Uuid>,
+) {
+    if let Some(topic_id) = pending_space_topics.get(&space.id).copied() {
+        space.topic_id = Some(topic_id);
     }
 }
 
@@ -1081,12 +1094,34 @@ async fn process_message(
             1
         }
         KgMessage::TrustExtension(event) => {
-            if let Some(subspace) = handlers::subspaces::handle_trust_extension(&event)? {
-                storage.insert_subspaces(&[subspace], &mut tx).await?;
-                1
-            } else {
-                0
+            match handlers::subspaces::handle_trust_extension(&event)? {
+                Some(models::subspaces::SubspaceChange::InsertExplicit(item)) => {
+                    storage.insert_subspaces(&[item], &mut tx).await?;
+                    1
+                }
+                Some(models::subspaces::SubspaceChange::RemoveExplicit(item)) => {
+                    storage.remove_subspaces(&[item], &mut tx).await?;
+                    1
+                }
+                Some(models::subspaces::SubspaceChange::InsertTopic(item)) => {
+                    storage.insert_subspace_topics(&[item], &mut tx).await?;
+                    1
+                }
+                Some(models::subspaces::SubspaceChange::RemoveTopic(item)) => {
+                    storage.remove_subspace_topics(&[item], &mut tx).await?;
+                    1
+                }
+                None => 0,
             }
+        }
+        KgMessage::TopicDeclared(event) => {
+            let assignment = handlers::topics::handle_topic_declared(&event)?;
+            let topic_entity = make_topic_entity(assignment.topic_id, event.meta.as_ref());
+            storage.insert_entities(&[topic_entity], &mut tx).await?;
+            storage
+                .update_space_topic(assignment.space_id, assignment.topic_id, &mut tx)
+                .await?;
+            2
         }
         KgMessage::ProposalCreated(event) => {
             let result = handlers::governance::handle_proposal_created(&event)?;
@@ -1210,6 +1245,7 @@ async fn process_block(
         .await?;
     let mut total_ops = 0;
     let tx_start = Instant::now();
+    let mut pending_space_topics: HashMap<uuid::Uuid, uuid::Uuid> = HashMap::new();
 
     // Process each message in sequence order
     for event in &events {
@@ -1248,6 +1284,14 @@ async fn process_block(
                 extension_type = tracing::field::Empty,
                 parent_space_id = tracing::field::Empty,
                 child_space_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::TopicDeclared(_) => info_span!(
+                "kg_indexer.handle_topic_declared",
+                event_id = event_id,
+                space_id = tracing::field::Empty,
+                topic_id = tracing::field::Empty,
                 "otel.status_code" = tracing::field::Empty,
                 "otel.status_message" = tracing::field::Empty
             ),
@@ -1384,7 +1428,8 @@ async fn process_block(
                     ops
                 }
                 KgMessage::CreateSpace(space) => {
-                    let space_item = handlers::spaces::handle_create_space(space)?;
+                    let mut space_item = handlers::spaces::handle_create_space(space)?;
+                    apply_pending_space_topic(&mut space_item, &pending_space_topics);
 
                     // Record trace context
                     event_span.record("space_id", display(space_item.id));
@@ -1449,20 +1494,65 @@ async fn process_block(
                         Some(TrustExtensionType::Verified(_)) => "verified",
                         Some(TrustExtensionType::Related(_)) => "related",
                         Some(TrustExtensionType::Subtopic(_)) => "subtopic",
+                        Some(TrustExtensionType::VerifiedRemoval(_)) => "verified_removal",
+                        Some(TrustExtensionType::RelatedRemoval(_)) => "related_removal",
+                        Some(TrustExtensionType::SubtopicRemoval(_)) => "subtopic_removal",
                         None => "unknown",
                     };
                     event_span.record("extension_type", extension_type);
 
-                    if let Some(subspace) =
-                        handlers::subspaces::handle_trust_extension(trust_event)?
-                    {
-                        event_span.record("parent_space_id", display(subspace.parent_space_id));
-                        event_span.record("child_space_id", display(subspace.subspace_id));
-                        storage.insert_subspaces(&[subspace], &mut tx).await?;
-                        1
-                    } else {
-                        0
+                    match handlers::subspaces::handle_trust_extension(trust_event)? {
+                        Some(models::subspaces::SubspaceChange::InsertExplicit(item)) => {
+                            event_span.record("parent_space_id", display(item.parent_space_id));
+                            event_span.record("child_space_id", display(item.subspace_id));
+                            storage.insert_subspaces(&[item], &mut tx).await?;
+                            1
+                        }
+                        Some(models::subspaces::SubspaceChange::RemoveExplicit(item)) => {
+                            event_span.record("parent_space_id", display(item.parent_space_id));
+                            event_span.record("child_space_id", display(item.subspace_id));
+                            storage.remove_subspaces(&[item], &mut tx).await?;
+                            1
+                        }
+                        Some(models::subspaces::SubspaceChange::InsertTopic(item)) => {
+                            event_span.record("space_id", display(item.space_id));
+                            event_span.record("topic_id", display(item.topic_id));
+                            let (created_at, created_at_block) =
+                                blockchain_metadata_to_strings(trust_event.meta.as_ref());
+                            let topic_entity = models::entities::EntityItem {
+                                id: item.topic_id,
+                                created_at: created_at.clone(),
+                                created_at_block: created_at_block.clone(),
+                                updated_at: created_at,
+                                updated_at_block: created_at_block,
+                            };
+                            storage.insert_entities(&[topic_entity], &mut tx).await?;
+                            storage.insert_subspace_topics(&[item], &mut tx).await?;
+                            1
+                        }
+                        Some(models::subspaces::SubspaceChange::RemoveTopic(item)) => {
+                            event_span.record("space_id", display(item.space_id));
+                            event_span.record("topic_id", display(item.topic_id));
+                            storage.remove_subspace_topics(&[item], &mut tx).await?;
+                            1
+                        }
+                        None => 0,
                     }
+                }
+                KgMessage::TopicDeclared(topic_event) => {
+                    let assignment = handlers::topics::handle_topic_declared(topic_event)?;
+
+                    event_span.record("space_id", display(assignment.space_id));
+                    event_span.record("topic_id", display(assignment.topic_id));
+
+                    let topic_entity =
+                        make_topic_entity(assignment.topic_id, topic_event.meta.as_ref());
+                    storage.insert_entities(&[topic_entity], &mut tx).await?;
+                    storage
+                        .update_space_topic(assignment.space_id, assignment.topic_id, &mut tx)
+                        .await?;
+                    pending_space_topics.insert(assignment.space_id, assignment.topic_id);
+                    2
                 }
                 KgMessage::ProposalCreated(proposal_event) => {
                     let result = handlers::governance::handle_proposal_created(proposal_event)?;
@@ -1626,4 +1716,102 @@ async fn process_block(
         commit_failures,
         db_tx_duration_ms,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::consumer::KgMessage;
+    use crate::models::spaces::{SpaceItem, SpaceType};
+
+    #[test]
+    fn test_apply_pending_space_topic_sets_topic_id() {
+        let space_id = uuid::Uuid::new_v4();
+        let topic_id = uuid::Uuid::new_v4();
+        let mut pending = HashMap::new();
+        pending.insert(space_id, topic_id);
+
+        let mut space = SpaceItem {
+            id: space_id,
+            space_type: SpaceType::Dao,
+            address: "0x123".to_string(),
+            topic_id: None,
+        };
+
+        apply_pending_space_topic(&mut space, &pending);
+
+        assert_eq!(space.topic_id, Some(topic_id));
+    }
+
+    #[test]
+    fn test_stale_blocks_use_fixed_deadline_from_first_seen() {
+        let mut buffer = BlockBuffer::new(Duration::from_millis(10));
+        let block_number = 42;
+
+        buffer.push(
+            block_number,
+            BufferedEvent {
+                msg: KgMessage::CreateSpace(hermes_schema::pb::space::HermesCreateSpace {
+                    meta: Some(BlockchainMetadata {
+                        created_at: 0,
+                        created_by: vec![],
+                        block_number,
+                        cursor: "cursor".to_string(),
+                        sequence: 0,
+                        is_last: false,
+                    }),
+                    space_id: vec![0; 16],
+                    payload: None,
+                }),
+                topic: "space.creations".to_string(),
+                partition: 0,
+                offset: 0,
+                event_type: Some("SPACE_REGISTERED".to_string()),
+                event_id: None,
+            },
+        );
+
+        std::thread::sleep(Duration::from_millis(7));
+        buffer.insert_summary(
+            block_number,
+            hermes_schema::pb::block_summary::HermesBlockSummary {
+                block_number,
+                cursor: "cursor".to_string(),
+                created_at: 0,
+                total_events: 1,
+                counts_by_topic: HashMap::new(),
+                counts_by_event_type: HashMap::new(),
+            },
+            1,
+        );
+
+        std::thread::sleep(Duration::from_millis(7));
+        assert_eq!(
+            buffer.stale_blocks(),
+            vec![block_number],
+            "timeout should be measured from first block sighting, not reset by later summary arrival"
+        );
+    }
+
+    #[test]
+    fn test_stale_blocks_when_summary_arrives_before_events() {
+        let mut buffer = BlockBuffer::new(Duration::from_millis(10));
+        let block_number = 7;
+
+        buffer.insert_summary(
+            block_number,
+            hermes_schema::pb::block_summary::HermesBlockSummary {
+                block_number,
+                cursor: "cursor".to_string(),
+                created_at: 0,
+                total_events: 1,
+                counts_by_topic: HashMap::new(),
+                counts_by_event_type: HashMap::new(),
+            },
+            1,
+        );
+
+        std::thread::sleep(Duration::from_millis(11));
+        assert_eq!(buffer.stale_blocks(), vec![block_number]);
+    }
 }

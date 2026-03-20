@@ -67,10 +67,27 @@ pub struct TrustExtended {
 /// The type of trust extension
 #[derive(Debug, Clone)]
 pub enum TrustExtension {
+    // --- Additions ---
     /// Explicit edge granting canonical trust (verified)
     Verified { target_space_id: SpaceId },
     /// Explicit edge for related spaces
     Related { target_space_id: SpaceId },
     /// Topic edge pointing to a topic
     Subtopic { target_topic_id: TopicId },
+    /// Editor added to a DAO space (canonical-granting)
+    EditorAdded { member_space_id: SpaceId },
+    /// Member added to a DAO space (canonical-granting)
+    MemberAdded { member_space_id: SpaceId },
+
+    // --- Removals ---
+    /// Verified edge removed
+    VerifiedRemoved { target_space_id: SpaceId },
+    /// Related edge removed
+    RelatedRemoved { target_space_id: SpaceId },
+    /// Editor removed from a DAO space
+    EditorRemoved { member_space_id: SpaceId },
+    /// Member removed from a DAO space
+    MemberRemoved { member_space_id: SpaceId },
+    /// Subtopic edge removed
+    SubtopicRemoved { target_topic_id: TopicId },
 }

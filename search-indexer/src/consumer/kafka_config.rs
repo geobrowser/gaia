@@ -2,9 +2,9 @@
 //!
 //! Provides common configuration for Kafka consumers.
 
+use hermes_instrumentation::info;
 use rdkafka::config::ClientConfig;
 use std::env;
-use hermes_instrumentation::info;
 
 /// Create a base Kafka client configuration with common settings.
 ///
@@ -29,7 +29,9 @@ pub fn create_client_config(brokers: &str, group_id: &str) -> ClientConfig {
         .set("group.id", group_id)
         .set("enable.auto.commit", "false") // Manual commit for at-least-once delivery
         .set("auto.offset.reset", "earliest") // Start from beginning if no committed offset
-        .set("session.timeout.ms", "6000");
+        .set("session.timeout.ms", "6000")
+        .set("fetch.message.max.bytes", "20971520") // 20MB — match hermes producer message.max.bytes
+        .set("max.partition.fetch.bytes", "20971520");
 
     // Configure SASL/SSL if credentials are provided
     let username = env::var("KAFKA_USERNAME").ok();

@@ -71,13 +71,6 @@ All action identifiers are `keccak256` hashes of their string names.
 | `UNVOTED` | `keccak256('PERMISSIONLESS.UNVOTED')` | No fetch/write, direct emit |
 | `COMMENTED` | `keccak256('PERMISSIONLESS.COMMENTED')` | No fetch/write, direct emit |
 
-### Subspace Actions (Legacy)
-
-| Action | Hash | Notes |
-|--------|------|-------|
-| `SUBSPACE_ADDED` | `keccak256('GOVERNANCE.SUBSPACE_ADDED')` | Legacy |
-| `SUBSPACE_REMOVED` | `keccak256('GOVERNANCE.SUBSPACE_REMOVED')` | Legacy |
-
 ---
 
 ## Action Field Mappings

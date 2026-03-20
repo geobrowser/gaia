@@ -28,11 +28,11 @@ pub struct CanonicalTreeNode {
     #[prost(bytes = "vec", tag = "1")]
     pub space_id: ::prost::alloc::vec::Vec<u8>,
     /// Children of this node in the traversal
-    #[prost(message, repeated, tag = "6")]
+    #[prost(message, repeated, tag = "8")]
     pub children: ::prost::alloc::vec::Vec<CanonicalTreeNode>,
     /// How this node was reached from its parent.
     /// Uses oneof to enforce that topic_id is only present for topic edges.
-    #[prost(oneof = "canonical_tree_node::Edge", tags = "2, 3, 4, 5")]
+    #[prost(oneof = "canonical_tree_node::Edge", tags = "2, 3, 4, 5, 6, 7")]
     pub edge: ::core::option::Option<canonical_tree_node::Edge>,
 }
 /// Nested message and enum types in `CanonicalTreeNode`.
@@ -53,6 +53,12 @@ pub mod canonical_tree_node {
         /// Topic-based membership (resolved from SubtopicExtension)
         #[prost(message, tag = "5")]
         Topic(super::TopicEdge),
+        /// Editor membership in a DAO (canonical-granting)
+        #[prost(message, tag = "6")]
+        Editor(super::EditorEdge),
+        /// Member membership in a DAO (canonical-granting)
+        #[prost(message, tag = "7")]
+        Member(super::MemberEdge),
     }
 }
 /// Root node edge - no additional data needed
@@ -70,4 +76,85 @@ pub struct TopicEdge {
     /// The topic through which this space was reached
     #[prost(bytes = "vec", tag = "1")]
     pub topic_id: ::prost::alloc::vec::Vec<u8>,
+}
+/// Editor membership edge - no additional data needed
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct EditorEdge {}
+/// Member membership edge - no additional data needed
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct MemberEdge {}
+
+// =============================================================================
+// Graph Diff Messages (RFC 0002)
+// =============================================================================
+
+/// Incremental diff for canonical graph changes.
+/// Replaces full CanonicalGraphUpdated snapshots with efficient diffs.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CanonicalGraphDiff {
+    /// Root space this diff applies to
+    #[prost(bytes = "vec", tag = "1")]
+    pub root_id: ::prost::alloc::vec::Vec<u8>,
+    /// List of node changes (ADDED, REMOVED, MOVED)
+    #[prost(message, repeated, tag = "2")]
+    pub changes: ::prost::alloc::vec::Vec<NodeChange>,
+    /// Block metadata from the event that triggered this diff
+    #[prost(message, optional, tag = "3")]
+    pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
+}
+
+/// A single node change in a diff
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NodeChange {
+    /// The space that changed
+    #[prost(bytes = "vec", tag = "1")]
+    pub space_id: ::prost::alloc::vec::Vec<u8>,
+    /// Type of change
+    #[prost(enumeration = "ChangeType", tag = "2")]
+    pub change_type: i32,
+    /// Distance from root (present for ADDED/MOVED)
+    #[prost(uint32, optional, tag = "3")]
+    pub distance: ::core::option::Option<u32>,
+    /// Information about the edge used to reach this node (present for ADDED/MOVED)
+    #[prost(message, optional, tag = "4")]
+    pub parent_edge: ::core::option::Option<EdgeInfo>,
+}
+
+/// Information about the edge connecting a node to its parent
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeInfo {
+    /// Parent node's space_id
+    #[prost(bytes = "vec", tag = "1")]
+    pub parent_id: ::prost::alloc::vec::Vec<u8>,
+    /// Type of edge used to reach the node
+    #[prost(oneof = "edge_info::EdgeType", tags = "2, 3, 4, 5, 6")]
+    pub edge_type: ::core::option::Option<edge_info::EdgeType>,
+}
+
+/// Nested message and enum types in `EdgeInfo`.
+pub mod edge_info {
+    /// Type of edge used to reach the node
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum EdgeType {
+        #[prost(message, tag = "2")]
+        Verified(super::VerifiedEdge),
+        #[prost(message, tag = "3")]
+        Related(super::RelatedEdge),
+        #[prost(message, tag = "4")]
+        Topic(super::TopicEdge),
+        #[prost(message, tag = "5")]
+        Editor(super::EditorEdge),
+        #[prost(message, tag = "6")]
+        Member(super::MemberEdge),
+    }
+}
+
+/// Type of change in a diff
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ChangeType {
+    Unspecified = 0,
+    Added = 1,
+    Removed = 2,
+    Moved = 3,
 }

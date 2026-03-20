@@ -69,7 +69,7 @@ impl AtlasProducer {
             .set("client.id", "atlas-producer")
             .set("compression.type", "zstd")
             .set("message.timeout.ms", "5000")
-            .set("message.max.bytes", "10485760") // 10MB to match broker config
+            .set("message.max.bytes", "20971520") // 20MB to match broker config
             .set("queue.buffering.max.messages", "100000")
             .set("queue.buffering.max.kbytes", "1048576") // 1GB buffer
             .set("batch.num.messages", "10000");

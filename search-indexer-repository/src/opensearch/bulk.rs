@@ -3,13 +3,16 @@
 //! This module provides functions for executing and parsing bulk operations
 //! with OpenSearch.
 
+use bytes::Bytes;
+use opensearch::http::request::Body;
 use opensearch::params::Refresh;
 use opensearch::{BulkOperation, BulkParts, OpenSearch};
 use serde::Serialize;
 use serde_json::Value;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::errors::SearchIndexError;
+use crate::opensearch::retry::{self, RetryConfig};
 use crate::types::{BatchOperationResult, BatchOperationSummary};
 
 /// Wrapper for bulk update operations with doc_as_upsert support.
@@ -40,6 +43,8 @@ impl BatchOperationSummary {
             succeeded: 0,
             failed: 0,
             results: Vec::new(),
+            wall_ms: 0,
+            took_ms: 0,
         }
     }
 }
@@ -71,7 +76,27 @@ impl BulkAction {
     }
 }
 
+/// Pre-serialize a `Vec<BulkOperation<B>>` into NDJSON `Bytes` so the body
+/// can be re-sent across retry attempts (the original `Vec` is consumed on first use).
+fn serialize_bulk_operations<B: Serialize>(
+    operations: Vec<BulkOperation<B>>,
+) -> Result<Bytes, SearchIndexError> {
+    let mut buf = bytes::BytesMut::new();
+    for op in &operations {
+        Body::write(op, &mut buf)
+            .map_err(|e| SearchIndexError::bulk_index(format!("Failed to serialize bulk op: {e}")))?;
+        // BulkOperation::write already appends newlines, but guard against missing trailing newline
+        if buf.last() != Some(&b'\n') {
+            buf.extend_from_slice(b"\n");
+        }
+    }
+    Ok(buf.freeze())
+}
+
 /// Execute a bulk request and parse the response into a BatchOperationSummary.
+///
+/// The operations are pre-serialized to bytes so they can be retried on transient
+/// failures (transport errors, 429, 502, 503, 504) with exponential backoff.
 ///
 /// If `refresh` is true, the index will be refreshed after the bulk operation,
 /// making all changes immediately visible for search. This is useful when
@@ -83,43 +108,113 @@ pub async fn execute_bulk<B: Serialize>(
     metas: &[BulkOperationMeta],
     action: BulkAction,
     refresh: bool,
+    retry_config: &RetryConfig,
 ) -> Result<BatchOperationSummary, SearchIndexError> {
     let action_str = action.as_str();
-    let mut bulk_request = client.bulk(BulkParts::Index(alias)).body(operations);
-    if refresh {
-        bulk_request = bulk_request.refresh(Refresh::True);
-    }
-    let response = bulk_request
-        .send()
-        .await
-        .map_err(|e| SearchIndexError::bulk_index(e.to_string()))?;
 
-    let status = response.status_code();
-    if !status.is_success() {
+    // Pre-serialize so we can retry with the same bytes
+    let body_bytes = serialize_bulk_operations(operations)?;
+
+    let mut attempt = 0u32;
+    loop {
+        let mut bulk_request = client
+            .bulk(BulkParts::Index(alias))
+            .body(vec![body_bytes.clone()]);
+        if refresh {
+            bulk_request = bulk_request.refresh(Refresh::True);
+        }
+
+        let start = std::time::Instant::now();
+        let result = bulk_request.send().await;
+        let wall_ms = start.elapsed().as_millis() as u64;
+
+        let response = match result {
+            Ok(resp) => resp,
+            Err(e) => {
+                // Transport/network error — retryable
+                if attempt < retry_config.max_retries {
+                    attempt += 1;
+                    retry::backoff_sleep(
+                        attempt,
+                        retry_config,
+                        &format!("bulk {action_str} transport error: {e}"),
+                    )
+                    .await;
+                    continue;
+                }
+                return Err(SearchIndexError::bulk_index(e.to_string()));
+            }
+        };
+
+        let status = response.status_code();
+        if status.is_success() {
+            let response_body: Value = response
+                .json()
+                .await
+                .map_err(|e| SearchIndexError::parse(e.to_string()))?;
+
+            let took_ms = response_body.get("took").and_then(|v| v.as_u64()).unwrap_or(0);
+            let mut summary = parse_bulk_response(&response_body, metas, action);
+            summary.wall_ms = wall_ms;
+            summary.took_ms = took_ms;
+
+            if summary.failed > 0 && attempt < retry_config.max_retries {
+                // Item-level failures — retry the whole batch
+                attempt += 1;
+                retry::backoff_sleep(
+                    attempt,
+                    retry_config,
+                    &format!(
+                        "bulk {action_str} {}/{} items failed",
+                        summary.failed, summary.total
+                    ),
+                )
+                .await;
+                continue;
+            }
+
+            if summary.failed > 0 {
+                warn!(
+                    total = summary.total,
+                    succeeded = summary.succeeded,
+                    failed = summary.failed,
+                    attempts = attempt + 1,
+                    "Bulk {} completed with failures (retries exhausted)",
+                    action_str
+                );
+            } else {
+                debug!(
+                    total = summary.total,
+                    succeeded = summary.succeeded,
+                    "Bulk {} indexed successfully",
+                    action_str
+                );
+            }
+
+            return Ok(summary);
+        }
+
+        // Retryable HTTP status (429, 502, 503, 504)
+        if retry::is_retryable_status(status.as_u16()) && attempt < retry_config.max_retries {
+            let error_body = response.text().await.unwrap_or_default();
+            attempt += 1;
+            retry::backoff_sleep(
+                attempt,
+                retry_config,
+                &format!("bulk {action_str} HTTP {status}: {error_body}"),
+            )
+            .await;
+            continue;
+        }
+
+        // Non-retryable HTTP status or exhausted retries
         let error_body = response.text().await.unwrap_or_default();
-        error!(status = %status, body = %error_body, "Bulk {} request failed", action_str);
+        error!(status = %status, body = %error_body, attempt = attempt, "Bulk {} request failed", action_str);
         return Err(SearchIndexError::bulk_index(format!(
             "Bulk {} failed with status {}: {}",
             action_str, status, error_body
         )));
     }
-
-    let response_body: Value = response
-        .json()
-        .await
-        .map_err(|e| SearchIndexError::parse(e.to_string()))?;
-
-    let summary = parse_bulk_response(&response_body, metas, action);
-
-    debug!(
-        total = summary.total,
-        succeeded = summary.succeeded,
-        failed = summary.failed,
-        "Bulk {} completed",
-        action_str
-    );
-
-    Ok(summary)
 }
 
 /// Parse the bulk API response and build a BatchOperationSummary.
@@ -196,5 +291,7 @@ pub fn parse_bulk_response(
         succeeded,
         failed,
         results,
+        wall_ms: 0,
+        took_ms: 0,
     }
 }

@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use clap::Args;
-use k8s_openapi::api::apps::v1::Deployment;
+use k8s_openapi::api::apps::v1::StatefulSet;
 use kube::{
-    api::{Api, Patch, PatchParams},
     Client,
+    api::{Api, Patch, PatchParams},
 };
 use opensearch::OpenSearch;
 use serde_json::json;
@@ -30,9 +30,9 @@ pub struct FullMigrationCommand {
     #[arg(long, default_value = "search")]
     namespace: String,
 
-    /// Search indexer deployment name (default: search-indexer)
+    /// Search indexer StatefulSet name (default: search-indexer)
     #[arg(long, default_value = "search-indexer")]
-    deployment_name: String,
+    statefulset_name: String,
 }
 
 impl FullMigrationCommand {
@@ -42,7 +42,10 @@ impl FullMigrationCommand {
         let target_index = format!("{}_v{}", index_alias, self.target_version);
 
         println!("\n════════════════════════════════════════════════");
-        println!("Full Index Migration: v{} → v{}", self.source_version, self.target_version);
+        println!(
+            "Full Index Migration: v{} → v{}",
+            self.source_version, self.target_version
+        );
         println!("════════════════════════════════════════════════\n");
 
         info!(
@@ -52,7 +55,7 @@ impl FullMigrationCommand {
             source_index = %source_index,
             target_index = %target_index,
             namespace = %self.namespace,
-            deployment = %self.deployment_name,
+            statefulset = %self.statefulset_name,
             "Starting full migration"
         );
 
@@ -80,13 +83,13 @@ impl FullMigrationCommand {
             .await
             .context("Failed to initialize Kubernetes client. Ensure KUBECONFIG is set or running in-cluster.")?;
 
-        let deployments: Api<Deployment> = Api::namespaced(k8s_client.clone(), &self.namespace);
+        let statefulsets: Api<StatefulSet> = Api::namespaced(k8s_client.clone(), &self.namespace);
 
         // Step 1: Create new index
         self.step_create_index(&client, index_alias).await?;
 
         // Step 2: Stop search-indexer
-        self.step_stop_indexer(&deployments).await?;
+        self.step_stop_indexer(&statefulsets).await?;
 
         // Step 3: Reindex data
         self.step_reindex(&client, index_alias, &source_index, &target_index)
@@ -96,7 +99,7 @@ impl FullMigrationCommand {
         self.step_update_alias(&client, index_alias).await?;
 
         // Step 5: Start search-indexer with new version
-        self.step_start_indexer(&deployments).await?;
+        self.step_start_indexer(&statefulsets).await?;
 
         println!("\n════════════════════════════════════════════════");
         println!("✓ Migration Complete!");
@@ -105,15 +108,24 @@ impl FullMigrationCommand {
         println!();
         println!("Next steps:");
         println!("  1. Monitor the search-indexer logs for any issues:");
-        println!("     kubectl logs -n {} -l app={} -f", self.namespace, self.deployment_name);
+        println!("     kubectl logs -n {} -l app={} -f", self.namespace, self.statefulset_name);
         println!();
         println!("  2. Verify search functionality in your application");
         println!();
         println!("  3. After a few days of stable operation, delete the old index:");
-        println!("     Edit delete-index-job.yaml (set INDEX_VERSION={}, CONFIRM_DELETE=true)", self.source_version);
-        println!("     kubectl delete job opensearch-delete-index -n {} 2>/dev/null || true", self.namespace);
+        println!(
+            "     Edit delete-index-job.yaml (set INDEX_VERSION={}, CONFIRM_DELETE=true)",
+            self.source_version
+        );
+        println!(
+            "     kubectl delete job opensearch-delete-index -n {} 2>/dev/null || true",
+            self.namespace
+        );
         println!("     kubectl apply -f delete-index-job.yaml");
-        println!("     kubectl logs -n {} -f job/opensearch-delete-index", self.namespace);
+        println!(
+            "     kubectl logs -n {} -f job/opensearch-delete-index",
+            self.namespace
+        );
         println!();
 
         Ok(())
@@ -142,7 +154,10 @@ impl FullMigrationCommand {
                 index = %versioned_index_name,
                 "Index already exists, skipping creation"
             );
-            println!("✓ Index {} already exists, skipping creation\n", versioned_index_name);
+            println!(
+                "✓ Index {} already exists, skipping creation\n",
+                versioned_index_name
+            );
             return Ok(());
         }
 
@@ -175,12 +190,12 @@ impl FullMigrationCommand {
         Ok(())
     }
 
-    async fn step_stop_indexer(&self, deployments: &Api<Deployment>) -> Result<()> {
+    async fn step_stop_indexer(&self, statefulsets: &Api<StatefulSet>) -> Result<()> {
         println!("────────────────────────────────────────────────");
         println!("Step 2/5: Stopping Search Indexer");
         println!("────────────────────────────────────────────────\n");
 
-        info!("Scaling down {} deployment to 0 replicas", self.deployment_name);
+        info!("Scaling down {} to 0 replicas", self.statefulset_name);
 
         // Scale to 0 replicas
         let patch = json!({
@@ -189,18 +204,18 @@ impl FullMigrationCommand {
             }
         });
 
-        deployments
+        statefulsets
             .patch(
-                &self.deployment_name,
+                &self.statefulset_name,
                 &PatchParams::default(),
                 &Patch::Strategic(patch),
             )
             .await
-            .context("Failed to scale down deployment")?;
+            .context("Failed to scale down statefulset")?;
 
-        println!("✓ Scaled down {} to 0 replicas", self.deployment_name);
+        println!("✓ Scaled down {} to 0 replicas", self.statefulset_name);
 
-        // Wait for pods to terminate by polling deployment status
+        // Wait for pods to terminate by polling statefulset status
         info!("Waiting for pods to terminate...");
         println!("  Waiting for pods to terminate...");
 
@@ -212,19 +227,19 @@ impl FullMigrationCommand {
         loop {
             if start.elapsed() > timeout {
                 anyhow::bail!(
-                    "Timeout waiting for {} deployment to scale down to 0 replicas after {} seconds",
-                    self.deployment_name,
+                    "Timeout waiting for {} to scale down to 0 replicas after {} seconds",
+                    self.statefulset_name,
                     timeout.as_secs()
                 );
             }
 
-            // Get current deployment status
-            let deployment = deployments
-                .get(&self.deployment_name)
+            // Get current statefulset status
+            let sts = statefulsets
+                .get(&self.statefulset_name)
                 .await
-                .context("Failed to get deployment status")?;
+                .context("Failed to get statefulset status")?;
 
-            if let Some(status) = deployment.status {
+            if let Some(status) = sts.status {
                 let ready_replicas = status.ready_replicas.or(status.available_replicas).unwrap_or(0);
 
                 if ready_replicas == 0 {
@@ -372,10 +387,7 @@ impl FullMigrationCommand {
                             println!("  Task ID: {}", task_id);
                             println!();
                             println!("Reindex statistics:");
-                            println!(
-                                "  Total: {}",
-                                response_data["total"].as_u64().unwrap_or(0)
-                            );
+                            println!("  Total: {}", response_data["total"].as_u64().unwrap_or(0));
                             println!(
                                 "  Created: {}",
                                 response_data["created"].as_u64().unwrap_or(0)
@@ -404,13 +416,15 @@ impl FullMigrationCommand {
                     }
 
                     // Show progress
-                    if let Some(status_obj) = task_json.get("task").and_then(|t| t.get("status"))
-                    {
+                    if let Some(status_obj) = task_json.get("task").and_then(|t| t.get("status")) {
                         if let Some(created) = status_obj.get("created").and_then(|v| v.as_u64()) {
                             if let Some(total) = status_obj.get("total").and_then(|v| v.as_u64()) {
                                 if total > 0 {
                                     let percentage = (created as f64 / total as f64) * 100.0;
-                                    print!("\r  Progress: {:.1}% ({}/{})", percentage, created, total);
+                                    print!(
+                                        "\r  Progress: {:.1}% ({}/{})",
+                                        percentage, created, total
+                                    );
                                     std::io::Write::flush(&mut std::io::stdout()).ok();
                                 }
                             }
@@ -541,7 +555,7 @@ impl FullMigrationCommand {
         Ok(())
     }
 
-    async fn step_start_indexer(&self, deployments: &Api<Deployment>) -> Result<()> {
+    async fn step_start_indexer(&self, statefulsets: &Api<StatefulSet>) -> Result<()> {
         println!("────────────────────────────────────────────────");
         println!("Step 5/5: Starting Search Indexer");
         println!("────────────────────────────────────────────────\n");
@@ -569,17 +583,17 @@ impl FullMigrationCommand {
             }
         });
 
-        deployments
+        statefulsets
             .patch(
-                &self.deployment_name,
+                &self.statefulset_name,
                 &PatchParams::default(),
                 &Patch::Strategic(patch),
             )
             .await
-            .context("Failed to update deployment")?;
+            .context("Failed to update statefulset")?;
 
         println!("✓ Updated ENTITIES_INDEX_VERSION to {}", self.target_version);
-        println!("✓ Scaled up {} to 1 replica", self.deployment_name);
+        println!("✓ Scaled up {} to 1 replica", self.statefulset_name);
         println!();
         println!("⏳ Waiting for pod to be ready...");
 
@@ -591,18 +605,18 @@ impl FullMigrationCommand {
         loop {
             if start.elapsed() > timeout {
                 anyhow::bail!(
-                    "Timeout waiting for {} deployment to become ready after {} seconds",
-                    self.deployment_name,
+                    "Timeout waiting for {} to become ready after {} seconds",
+                    self.statefulset_name,
                     timeout.as_secs()
                 );
             }
 
-            let deployment = deployments
-                .get(&self.deployment_name)
+            let sts = statefulsets
+                .get(&self.statefulset_name)
                 .await
-                .context("Failed to get deployment status")?;
+                .context("Failed to get statefulset status")?;
 
-            if let Some(status) = deployment.status {
+            if let Some(status) = sts.status {
                 let ready_replicas = status.ready_replicas.unwrap_or(0);
                 if ready_replicas >= 1 {
                     info!("Search indexer is ready");

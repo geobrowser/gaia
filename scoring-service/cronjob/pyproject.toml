@@ -11,6 +11,7 @@ dependencies = [
     "psycopg[binary]==3.3.2",
     "python-dotenv==1.2.1",
     "sentry-sdk==2.50.0",
+    "psutil==7.0.0",
 ]
 
 [project.optional-dependencies]

@@ -22,7 +22,13 @@ import {isValidUuid} from "../utils/uuid"
 /**
  * Valid search scope values.
  */
-const VALID_SCOPES: Set<SearchScope> = new Set(["GLOBAL", "GLOBAL_BY_SPACE_SCORE", "SPACE_SINGLE", "SPACE"])
+const VALID_SCOPES: Set<SearchScope> = new Set([
+	"GLOBAL",
+	"GLOBAL_BY_SPACE_SCORE",
+	"GLOBAL_BY_ENTITY_SPACE_SCORE",
+	"SPACE_SINGLE",
+	"SPACE",
+])
 
 /**
  * Default limit for search results.
@@ -40,7 +46,7 @@ const MAX_LIMIT = 100
 const MAX_QUERY_LENGTH = 500
 
 /**
- * Maximum length for space_id parameter (UUID format).
+ * Maximum length for space_id parameter (UUID format: 36 dashed, 32 dashless).
  */
 const MAX_SPACE_ID_LENGTH = 36
 
@@ -124,7 +130,13 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					required: false,
 					schema: {
 						type: "string",
-						enum: ["GLOBAL", "GLOBAL_BY_SPACE_SCORE", "SPACE_SINGLE", "SPACE"],
+						enum: [
+							"GLOBAL",
+							"GLOBAL_BY_SPACE_SCORE",
+							"GLOBAL_BY_ENTITY_SPACE_SCORE",
+							"SPACE_SINGLE",
+							"SPACE",
+						],
 						default: "GLOBAL",
 					},
 				},
@@ -170,16 +182,58 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 										items: {
 											type: "object",
 											properties: {
-												id: {type: "string", format: "uuid"},
+												entityId: {type: "string", format: "uuid"},
+												space: {
+													type: "object",
+													description:
+														"The space this entity belongs to, with optional metadata",
+													properties: {
+														id: {type: "string", format: "uuid"},
+														name: {type: "string"},
+														description: {type: "string"},
+														avatar: {type: "string"},
+														cover: {type: "string"},
+													},
+													required: ["id"],
+												},
 												name: {type: "string"},
 												description: {type: "string"},
-												types: {type: "array", items: {type: "string"}},
-												spaces: {type: "array", items: {type: "string", format: "uuid"}},
-												score: {type: "number"},
+												avatar: {type: "string"},
+												cover: {type: "string"},
+												types: {
+													type: "array",
+													items: {
+														type: "object",
+														properties: {
+															id: {type: "string", format: "uuid"},
+															name: {type: "string"},
+														},
+														required: ["id"],
+													},
+													description:
+														"Types associated with this entity, with optional names",
+												},
+												entityGlobalScore: {type: "number", description: "Global entity score"},
+												spaceScore: {type: "number", description: "Space score"},
+												entitySpaceScore: {type: "number", description: "Entity-space score"},
+												relevanceScore: {
+													type: "number",
+													description:
+														"Final relevance score after all boosts including entity/space score factors",
+												},
+												textMatchScore: {
+													type: "number",
+													description:
+														"Text matching score without score field boosts, reflecting pure query relevance",
+												},
 											},
 										},
 									},
-									total: {type: "integer"},
+									total: {type: "integer", description: "Total number of matching documents"},
+									tookMs: {
+										type: "number",
+										description: "Time taken to execute the search in milliseconds",
+									},
 								},
 							},
 						},

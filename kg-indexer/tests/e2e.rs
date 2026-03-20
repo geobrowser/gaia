@@ -54,6 +54,32 @@ mod expected {
     pub const PROPOSAL_5: [u8; 16] = make_id(0xA5);
     pub const PROPOSAL_6: [u8; 16] = make_id(0xA6);
     pub const PROPOSAL_7: [u8; 16] = make_id(0xA7);
+    // Subspace proposal IDs
+    pub const PROPOSAL_8: [u8; 16] = make_id(0xA8);
+    pub const PROPOSAL_9: [u8; 16] = make_id(0xA9);
+    pub const PROPOSAL_10: [u8; 16] = make_id(0xAA);
+    pub const PROPOSAL_11: [u8; 16] = make_id(0xAB);
+    pub const PROPOSAL_12: [u8; 16] = make_id(0xAC);
+    pub const PROPOSAL_13: [u8; 16] = make_id(0xAD);
+    pub const PROPOSAL_14: [u8; 16] = make_id(0xAE);
+    pub const PROPOSAL_15: [u8; 16] = make_id(0xAF);
+
+    // Subspace proposal targets
+    pub const SUBSPACE_TARGET_VERIFIED: [u8; 16] = make_id(0xC1);
+    pub const SUBSPACE_TARGET_UNVERIFIED: [u8; 16] = make_id(0xC2);
+    pub const SUBSPACE_TARGET_RELATED: [u8; 16] = make_id(0xC3);
+    pub const SUBSPACE_TARGET_UNRELATED: [u8; 16] = make_id(0xC4);
+    pub const SUBSPACE_TARGET_TOPIC_DECLARED: [u8; 16] = make_id(0xC5);
+    pub const SUBSPACE_TARGET_TOPIC_REMOVED: [u8; 16] = make_id(0xC6);
+    pub const SPACE_TARGET_TOPIC_SET: [u8; 16] = make_id(0xD1);
+
+    // Topic IDs for trust pipeline subtopic tests
+    pub const TOPIC_H: [u8; 16] = make_id(0x91);
+    pub const TOPIC_E: [u8; 16] = make_id(0x8E);
+    pub const TOPIC_SHARED: [u8; 16] = make_id(0xF0);
+    pub const TOPIC_A: [u8; 16] = make_id(0x8A);
+    pub const TOPIC_Q: [u8; 16] = make_id(0xB1);
+    pub const TOPIC_REMOVED: [u8; 16] = make_id(0x92);
 
     /// All 18 space IDs that should be created
     pub fn all_space_ids() -> Vec<Uuid> {
@@ -79,7 +105,7 @@ mod expected {
         ]
     }
 
-    /// Expected subspace relationships (parent, child) from subspace_verified calls
+    /// Expected subspace relationships (parent, child) from subspace_verified + subspace_related calls
     pub fn subspace_relationships() -> Vec<(Uuid, Uuid)> {
         vec![
             (uuid_from_bytes(ROOT_SPACE_ID), uuid_from_bytes(SPACE_A)),
@@ -92,10 +118,15 @@ mod expected {
             (uuid_from_bytes(SPACE_X), uuid_from_bytes(SPACE_Y)),
             (uuid_from_bytes(SPACE_Y), uuid_from_bytes(SPACE_Z)),
             (uuid_from_bytes(SPACE_P), uuid_from_bytes(SPACE_Q)),
+            // Related subspaces
+            (uuid_from_bytes(ROOT_SPACE_ID), uuid_from_bytes(SPACE_H)),
+            (uuid_from_bytes(SPACE_A), uuid_from_bytes(SPACE_D)),
+            (uuid_from_bytes(SPACE_C), uuid_from_bytes(SPACE_G)),
+            (uuid_from_bytes(SPACE_X), uuid_from_bytes(SPACE_W)),
         ]
     }
 
-    /// All 7 proposal IDs
+    /// All 15 proposal IDs (7 original + 6 subspace proposals + 2 space-topic proposals)
     pub fn all_proposal_ids() -> Vec<Uuid> {
         vec![
             uuid_from_bytes(PROPOSAL_1),
@@ -105,6 +136,85 @@ mod expected {
             uuid_from_bytes(PROPOSAL_5),
             uuid_from_bytes(PROPOSAL_6),
             uuid_from_bytes(PROPOSAL_7),
+            uuid_from_bytes(PROPOSAL_8),
+            uuid_from_bytes(PROPOSAL_9),
+            uuid_from_bytes(PROPOSAL_10),
+            uuid_from_bytes(PROPOSAL_11),
+            uuid_from_bytes(PROPOSAL_12),
+            uuid_from_bytes(PROPOSAL_13),
+            uuid_from_bytes(PROPOSAL_14),
+            uuid_from_bytes(PROPOSAL_15),
+        ]
+    }
+
+    /// Expected subspace topic entries (space_id, topic_id) from trust pipeline.
+    ///
+    /// The trust pipeline stores (source_space_id, topic_id) where source_space_id
+    /// is the parent space (from_id), not the subspace. So for:
+    ///   subspace_topic_declared(SPACE_B, SPACE_H, TOPIC_H)
+    /// the stored row is (SPACE_B, TOPIC_H), not (SPACE_H, TOPIC_H).
+    ///
+    /// 6 declared via subspace_topic_declared, 1 declared then removed (TOPIC_REMOVED).
+    /// Net result: 5 rows in subspace_topics (the removed one shouldn't be there).
+    pub fn subspace_topics() -> Vec<(Uuid, Uuid)> {
+        vec![
+            (uuid_from_bytes(SPACE_B), uuid_from_bytes(TOPIC_H)), // subspace_topic_declared(SPACE_B, SPACE_H, TOPIC_H)
+            (uuid_from_bytes(ROOT_SPACE_ID), uuid_from_bytes(TOPIC_E)), // subspace_topic_declared(ROOT, SPACE_E, TOPIC_E)
+            (uuid_from_bytes(SPACE_A), uuid_from_bytes(TOPIC_SHARED)), // subspace_topic_declared(SPACE_A, SPACE_A, TOPIC_SHARED)
+            (uuid_from_bytes(SPACE_X), uuid_from_bytes(TOPIC_A)), // subspace_topic_declared(SPACE_X, SPACE_A, TOPIC_A)
+            (uuid_from_bytes(SPACE_P), uuid_from_bytes(TOPIC_Q)), // subspace_topic_declared(SPACE_P, SPACE_Q, TOPIC_Q)
+        ]
+    }
+
+    /// Expected proposal action types: (proposal_id, action_type, optional target_id)
+    pub fn proposal_action_types() -> Vec<(Uuid, &'static str, Option<Uuid>)> {
+        vec![
+            // Original proposals 1-7
+            (uuid_from_bytes(PROPOSAL_1), "AddMember", None), // target is make_id(0x11), not a known space
+            (uuid_from_bytes(PROPOSAL_2), "RemoveMember", None), // target is make_id(0x12)
+            (uuid_from_bytes(PROPOSAL_3), "AddEditor", None), // target is make_id(0x50)
+            (uuid_from_bytes(PROPOSAL_4), "RemoveEditor", None), // target is make_id(0x51)
+            (uuid_from_bytes(PROPOSAL_5), "Flag", None),
+            (uuid_from_bytes(PROPOSAL_6), "Unflag", None),
+            // Proposal 7 (Publish) - content_uri is present but target_id is null
+            (uuid_from_bytes(PROPOSAL_7), "Publish", None),
+            // Subspace proposals 8-13
+            (
+                uuid_from_bytes(PROPOSAL_8),
+                "SubspaceVerified",
+                Some(uuid_from_bytes(SUBSPACE_TARGET_VERIFIED)),
+            ),
+            (
+                uuid_from_bytes(PROPOSAL_9),
+                "SubspaceUnverified",
+                Some(uuid_from_bytes(SUBSPACE_TARGET_UNVERIFIED)),
+            ),
+            (
+                uuid_from_bytes(PROPOSAL_10),
+                "SubspaceRelated",
+                Some(uuid_from_bytes(SUBSPACE_TARGET_RELATED)),
+            ),
+            (
+                uuid_from_bytes(PROPOSAL_11),
+                "SubspaceUnrelated",
+                Some(uuid_from_bytes(SUBSPACE_TARGET_UNRELATED)),
+            ),
+            (
+                uuid_from_bytes(PROPOSAL_12),
+                "SubspaceTopicDeclared",
+                Some(uuid_from_bytes(SUBSPACE_TARGET_TOPIC_DECLARED)),
+            ),
+            (
+                uuid_from_bytes(PROPOSAL_13),
+                "SubspaceTopicRemoved",
+                Some(uuid_from_bytes(SUBSPACE_TARGET_TOPIC_REMOVED)),
+            ),
+            (
+                uuid_from_bytes(PROPOSAL_14),
+                "SetTopic",
+                Some(uuid_from_bytes(SPACE_TARGET_TOPIC_SET)),
+            ),
+            (uuid_from_bytes(PROPOSAL_15), "UnsetTopic", None),
         ]
     }
 }
@@ -172,7 +282,11 @@ async fn test_subspace_relationships() {
         .await
         .expect("Failed to count subspaces");
 
-    assert_eq!(count.0, 10, "Expected 10 subspaces, found {}", count.0);
+    assert_eq!(
+        count.0, 14,
+        "Expected 14 subspaces (10 verified + 4 related), found {}",
+        count.0
+    );
 }
 
 #[tokio::test]
@@ -200,7 +314,7 @@ async fn test_all_proposals_exist() {
         .await
         .expect("Failed to count proposals");
 
-    assert_eq!(count.0, 7, "Expected 7 proposals, found {}", count.0);
+    assert_eq!(count.0, 15, "Expected 15 proposals, found {}", count.0);
 }
 
 #[tokio::test]
@@ -350,7 +464,7 @@ async fn test_dao_space_p_has_editor() {
 async fn test_executed_proposals() {
     let pool = get_pool().await;
 
-    // All 7 proposals should be executed (have executed_at set)
+    // All 15 proposals should be executed (have executed_at set)
     let executed_count: (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM proposals WHERE executed_at IS NOT NULL")
             .fetch_one(&pool)
@@ -358,8 +472,109 @@ async fn test_executed_proposals() {
             .expect("Failed to count executed proposals");
 
     assert_eq!(
-        executed_count.0, 7,
-        "All 7 proposals should be executed, found {} executed",
+        executed_count.0, 15,
+        "All 15 proposals should be executed, found {} executed",
         executed_count.0
     );
+}
+
+/// Verify subspace_topics rows from the trust pipeline (SUBSPACE_TOPIC_DECLARED events).
+///
+/// The topology declares 6 subtopics but removes 1 (TOPIC_REMOVED), leaving 5.
+#[tokio::test]
+async fn test_subspace_topics() {
+    let pool = get_pool().await;
+
+    for (space_id, topic_id) in expected::subspace_topics() {
+        let exists: (bool,) = sqlx::query_as(
+            "SELECT EXISTS(SELECT 1 FROM subspace_topics WHERE space_id = $1 AND topic_id = $2)",
+        )
+        .bind(space_id)
+        .bind(topic_id)
+        .fetch_one(&pool)
+        .await
+        .expect("Failed to query subspace_topics");
+
+        assert!(
+            exists.0,
+            "Subspace topic ({}, {}) should exist",
+            space_id, topic_id
+        );
+    }
+
+    // The removed topic should NOT be present
+    // The parent space is SPACE_A (from_id in the subspace_topic_removed call),
+    // not SPACE_C (the subspace).
+    let removed_space = uuid_from_bytes(expected::SPACE_A);
+    let removed_topic = uuid_from_bytes(expected::TOPIC_REMOVED);
+    let exists: (bool,) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM subspace_topics WHERE space_id = $1 AND topic_id = $2)",
+    )
+    .bind(removed_space)
+    .bind(removed_topic)
+    .fetch_one(&pool)
+    .await
+    .expect("Failed to query removed topic");
+
+    assert!(
+        !exists.0,
+        "Removed topic ({}, {}) should NOT exist",
+        removed_space, removed_topic
+    );
+
+    // Verify total count: 5 declared (TOPIC_REMOVED was declared then removed)
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM subspace_topics")
+        .fetch_one(&pool)
+        .await
+        .expect("Failed to count subspace_topics");
+
+    assert_eq!(
+        count.0, 5,
+        "Expected 5 subspace_topics (6 declared - 1 removed), found {}",
+        count.0
+    );
+}
+
+/// Verify proposal action types and target IDs for all 15 proposals.
+///
+/// This covers both the original proposal action types (AddMember, RemoveMember, etc.)
+/// and the new ping-based proposal actions decoded from calldata.
+#[tokio::test]
+async fn test_proposal_action_types() {
+    let pool = get_pool().await;
+
+    for (proposal_id, expected_type, expected_target) in expected::proposal_action_types() {
+        // Each proposal has exactly 1 action
+        let row: Option<(String, Option<Uuid>)> = sqlx::query_as(
+            "SELECT action_type::text, target_id FROM proposal_actions WHERE proposal_id = $1",
+        )
+        .bind(proposal_id)
+        .fetch_optional(&pool)
+        .await
+        .expect("Failed to query proposal_actions");
+
+        let (action_type, target_id) = row.unwrap_or_else(|| {
+            panic!(
+                "Proposal {} should have an action but none found",
+                proposal_id
+            )
+        });
+
+        assert_eq!(
+            action_type, expected_type,
+            "Proposal {} action_type: expected '{}', got '{}'",
+            proposal_id, expected_type, action_type
+        );
+
+        if let Some(expected) = expected_target {
+            assert_eq!(
+                target_id,
+                Some(expected),
+                "Proposal {} target_id: expected Some({}), got {:?}",
+                proposal_id,
+                expected,
+                target_id
+            );
+        }
+    }
 }

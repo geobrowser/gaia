@@ -331,24 +331,6 @@ pub struct UnflaggedList {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SubspaceRemoved {
-    /// 16 bytes - parent space
-    #[prost(bytes="vec", tag="1")]
-    pub parent_space_id: ::prost::alloc::vec::Vec<u8>,
-    /// 16 bytes - from topic field
-    #[prost(bytes="vec", tag="2")]
-    pub subspace_id: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes="vec", tag="3")]
-    pub data: ::prost::alloc::vec::Vec<u8>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SubspaceRemovedList {
-    #[prost(message, repeated, tag="1")]
-    pub subspaces: ::prost::alloc::vec::Vec<SubspaceRemoved>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SubspaceVerified {
     /// 16 bytes - parent space
     #[prost(bytes="vec", tag="1")]

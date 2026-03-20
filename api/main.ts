@@ -4,7 +4,7 @@ import {Hono} from "hono"
 import {cors} from "hono/cors"
 import {describeRoute, openAPISpecs} from "hono-openapi"
 import {health} from "./src/health"
-import {graphqlServer} from "./src/kg/postgraphile"
+import {getGraphqlPoolPressure, graphqlServer} from "./src/kg/postgraphile"
 import {canonicalRequestLogging, requestId} from "./src/middleware/requestLogging"
 import {createProfileRouter} from "./src/profile"
 import {createProposalsRouter} from "./src/proposals"
@@ -68,6 +68,7 @@ if (opensearchUrl) {
 	const indexName = environment === "staging" ? `staging_${baseIndexAlias}` : baseIndexAlias
 
 	const searchClient = new OpenSearchClient(opensearchUrl, indexName)
+	await searchClient.init()
 	app.route("/search", createSearchRouter(searchClient, runtime))
 	log.info("Search routes enabled", {url: opensearchUrl, indexName, environment: environment ?? "production"})
 } else {
@@ -90,6 +91,7 @@ app.get("/", swaggerUI({url: "/openapi"}))
 
 app.use("/graphql", async (c) => {
 	const requestId = c.get("requestId") || "unknown"
+
 	try {
 		return await graphqlServer.fetch(c.req.raw, {
 			traceContext: c.get("traceContext"),
@@ -100,10 +102,12 @@ app.use("/graphql", async (c) => {
 		})
 	} catch (error) {
 		if (isPoolConnectTimeout(error)) {
+			const freshPoolPressure = getGraphqlPoolPressure()
 			log.warn("GraphQL overloaded: pool checkout timeout", {
 				requestId,
 				path: c.req.path,
 				method: c.req.method,
+				poolPressure: freshPoolPressure,
 			})
 
 			const headers = new Headers({

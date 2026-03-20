@@ -381,7 +381,12 @@ impl Pipeline {
             "SUBSPACE_TOPIC_DECLARED".to_string(),
             trust.topic_declared as u64,
         );
-        counts_by_event_type.insert("SUBSPACE_REMOVED".to_string(), trust.removed as u64);
+        counts_by_event_type.insert("SUBSPACE_UNVERIFIED".to_string(), trust.unverified as u64);
+        counts_by_event_type.insert("SUBSPACE_UNRELATED".to_string(), trust.unrelated as u64);
+        counts_by_event_type.insert(
+            "SUBSPACE_TOPIC_REMOVED".to_string(),
+            trust.topic_removed as u64,
+        );
         counts_by_event_type.insert(
             "EDITOR_FLAGGED".to_string(),
             moderation.editors_flagged.len() as u64,
@@ -445,13 +450,10 @@ impl Pipeline {
                 "Emit start"
             );
 
-            let _emit_span = info_span!("emit", total_events = total).entered();
-
             // 1. Emit spaces
             if !spaces.events.is_empty() {
-                let _span = info_span!("emit.spaces", count = spaces.events.len()).entered();
                 for event in &spaces.events {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
                         "Space registered"
@@ -461,9 +463,8 @@ impl Pipeline {
 
             // 2. Emit membership events
             if membership.total() > 0 {
-                let _span = info_span!("emit.membership", count = membership.total()).entered();
                 for event in &membership.roles_granted {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
                         member_space_id = %hex::encode(&event.member_space_id),
@@ -471,7 +472,7 @@ impl Pipeline {
                     );
                 }
                 for event in &membership.roles_revoked {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
                         member_space_id = %hex::encode(&event.member_space_id),
@@ -479,7 +480,7 @@ impl Pipeline {
                     );
                 }
                 for event in &membership.spaces_left {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         member_id = %hex::encode(&event.member_id),
                         space_id = %hex::encode(&event.space_id),
@@ -490,13 +491,11 @@ impl Pipeline {
 
             // 3. Emit trust events
             if trust.total() > 0 {
-                let _span = info_span!("emit.trust", count = trust.total()).entered();
-                for trust_event in &trust.events {
-                    self.emitter.emit(&trust_event.event)?;
+                for event in &trust.events {
+                    self.emitter.emit(event).await?;
                     debug!(
-                        source = %hex::encode(&trust_event.event.source_space_id),
-                        extension_type = get_extension_type(&trust_event.event),
-                        is_removal = trust_event.is_removal,
+                        source = %hex::encode(&event.source_space_id),
+                        extension_type = get_extension_type(event),
                         "Trust event emitted"
                     );
                 }
@@ -504,9 +503,8 @@ impl Pipeline {
 
             // 4. Emit moderation events
             if moderation.total() > 0 {
-                let _span = info_span!("emit.moderation", count = moderation.total()).entered();
                 for event in &moderation.editors_flagged {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
                         editor = %hex::encode(&event.editor_account),
@@ -514,7 +512,7 @@ impl Pipeline {
                     );
                 }
                 for event in &moderation.editors_unflagged {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
                         editor = %hex::encode(&event.editor_account),
@@ -522,7 +520,7 @@ impl Pipeline {
                     );
                 }
                 for event in &moderation.content_flagged {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         flagger_id = %hex::encode(&event.flagger_id),
                         target_space_id = %hex::encode(&event.target_space_id),
@@ -530,7 +528,7 @@ impl Pipeline {
                     );
                 }
                 for event in &moderation.content_unflagged {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         unflagger_id = %hex::encode(&event.unflagger_id),
                         target_space_id = %hex::encode(&event.target_space_id),
@@ -541,9 +539,8 @@ impl Pipeline {
 
             // 5. Emit topic declarations
             if topics.total() > 0 {
-                let _span = info_span!("emit.topics", count = topics.total()).entered();
                 for event in &topics.topics_declared {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
                         topic_id = %hex::encode(&event.topic_id),
@@ -554,9 +551,8 @@ impl Pipeline {
 
             // 6. Emit governance events
             if governance.total() > 0 {
-                let _span = info_span!("emit.governance", count = governance.total()).entered();
                 for event in &governance.proposals_created {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
                         proposal_id = %hex::encode(&event.proposal_id),
@@ -564,7 +560,7 @@ impl Pipeline {
                     );
                 }
                 for event in &governance.proposals_updated {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
                         proposal_id = %hex::encode(&event.proposal_id),
@@ -572,7 +568,7 @@ impl Pipeline {
                     );
                 }
                 for event in &governance.proposals_voted {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         voter_id = %hex::encode(&event.voter_id),
                         space_id = %hex::encode(&event.space_id),
@@ -581,7 +577,7 @@ impl Pipeline {
                     );
                 }
                 for event in &governance.proposals_executed {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
                         proposal_id = %hex::encode(&event.proposal_id),
@@ -589,7 +585,7 @@ impl Pipeline {
                     );
                 }
                 for event in &governance.proposals_settings_updated {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
                         proposal_id = %hex::encode(&event.proposal_id),
@@ -600,9 +596,8 @@ impl Pipeline {
 
             // 7. Emit voting events
             if voting.total() > 0 {
-                let _span = info_span!("emit.voting", count = voting.total()).entered();
                 for event in &voting.votes {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     debug!(
                         voter_id = %hex::encode(&event.voter_id),
                         object_id = %hex::encode(&event.object_id),
@@ -614,9 +609,8 @@ impl Pipeline {
 
             // 8. Emit edits
             if !edits.events.is_empty() {
-                let _span = info_span!("emit.edits", count = edits.events.len()).entered();
                 for event in &edits.events {
-                    self.emitter.emit(event)?;
+                    self.emitter.emit(event).await?;
                     let space_id_display = if event.space_id.len() == 16 {
                         uuid::Uuid::from_bytes(
                             event.space_id.as_slice().try_into().unwrap_or([0; 16]),
@@ -663,9 +657,10 @@ impl Pipeline {
         let total_fetch_failures = prefetch_result.fetch_failures;
 
         if total_cache_misses > 0 {
-            warn!(
+            error!(
+                block_number = meta.block_number,
                 count = total_cache_misses,
-                "Cache misses (retries exhausted)"
+                "Cache misses (retries exhausted) — edits dropped"
             );
         }
         if total_errored_entries > 0 {
@@ -685,7 +680,7 @@ impl Pipeline {
             counts_by_topic,
             counts_by_event_type,
         };
-        self.emitter.emit(&summary)?;
+        self.emitter.emit(&summary).await?;
 
         // Log block summary
         if total > 0 || total_cache_misses > 0 || total_errored_entries > 0 {
@@ -695,7 +690,9 @@ impl Pipeline {
                 trust_verified = trust.verified,
                 trust_related = trust.related,
                 trust_topic = trust.topic_declared,
-                trust_removed = trust.removed,
+                trust_unverified = trust.unverified,
+                trust_unrelated = trust.unrelated,
+                trust_topic_removed = trust.topic_removed,
                 moderation = moderation_count,
                 topics = topics_count,
                 governance = governance_count,

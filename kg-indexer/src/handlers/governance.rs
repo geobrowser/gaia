@@ -177,6 +177,14 @@ fn derive_proposal_name(
             Some(Action::Flag(_)) => "Flag",
             Some(Action::Unflag(_)) => "Unflag",
             Some(Action::UpdateVotingSettings(_)) => "Update Voting Settings",
+            Some(Action::SubspaceVerified(_)) => "Add Verified Space",
+            Some(Action::SubspaceUnverified(_)) => "Remove Verified Space",
+            Some(Action::SubspaceRelated(_)) => "Add Related Space",
+            Some(Action::SubspaceUnrelated(_)) => "Remove Related Space",
+            Some(Action::SubspaceTopicDeclared(_)) => "Add subtopic",
+            Some(Action::SubspaceTopicRemoved(_)) => "Remove subtopic",
+            Some(Action::SetTopic(_)) => "Set Topic",
+            Some(Action::UnsetTopic(_)) => "Unset Topic",
             None => "Unknown Action",
         })
         .collect();
@@ -328,6 +336,49 @@ fn map_proposal_action(
             slow_threshold: a.slow_threshold,
             duration: a.duration,
         },
+        Some(Action::SubspaceVerified(a)) => match bytes_to_uuid(&a.target_space_id) {
+            Some(id) => ProposalActionPayload::SubspaceVerified {
+                target_space_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
+        },
+        Some(Action::SubspaceUnverified(a)) => match bytes_to_uuid(&a.target_space_id) {
+            Some(id) => ProposalActionPayload::SubspaceUnverified {
+                target_space_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
+        },
+        Some(Action::SubspaceRelated(a)) => match bytes_to_uuid(&a.target_space_id) {
+            Some(id) => ProposalActionPayload::SubspaceRelated {
+                target_space_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
+        },
+        Some(Action::SubspaceUnrelated(a)) => match bytes_to_uuid(&a.target_space_id) {
+            Some(id) => ProposalActionPayload::SubspaceUnrelated {
+                target_space_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
+        },
+        Some(Action::SubspaceTopicDeclared(a)) => match bytes_to_uuid(&a.target_topic_id) {
+            Some(id) => ProposalActionPayload::SubspaceTopicDeclared {
+                target_topic_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
+        },
+        Some(Action::SubspaceTopicRemoved(a)) => match bytes_to_uuid(&a.target_topic_id) {
+            Some(id) => ProposalActionPayload::SubspaceTopicRemoved {
+                target_topic_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
+        },
+        Some(Action::SetTopic(a)) => match bytes_to_uuid(&a.target_topic_id) {
+            Some(id) => ProposalActionPayload::SetTopic {
+                target_topic_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
+        },
+        Some(Action::UnsetTopic(_)) => ProposalActionPayload::UnsetTopic,
         None => ProposalActionPayload::Unknown,
     };
 

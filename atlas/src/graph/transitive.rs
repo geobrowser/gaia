@@ -18,8 +18,8 @@ pub struct TransitiveGraph {
     /// Tree representation with edge metadata
     pub tree: TreeNode,
 
-    /// Flat set of all reachable spaces
-    pub flat: HashSet<SpaceId>,
+    /// Set of all reachable space IDs (the "membership" set)
+    pub members: HashSet<SpaceId>,
 
     /// Hash for change detection
     pub hash: u64,
@@ -27,35 +27,34 @@ pub struct TransitiveGraph {
 
 impl TransitiveGraph {
     /// Create a new transitive graph
-    pub fn new(root: SpaceId, tree: TreeNode, flat: HashSet<SpaceId>) -> Self {
+    pub fn new(root: SpaceId, tree: TreeNode, members: HashSet<SpaceId>) -> Self {
         let hash = hash_tree(&tree);
         Self {
             root,
             tree,
-            flat,
+            members,
             hash,
         }
     }
 
     /// Check if a space is reachable
     pub fn contains(&self, space_id: &SpaceId) -> bool {
-        self.flat.contains(space_id)
+        self.members.contains(space_id)
     }
 
-    /// Get the number of reachable spaces
+    /// Get the number of reachable spaces.
+    ///
+    /// A transitive graph always contains at least the root, so `is_empty`
+    /// is intentionally omitted — it would always return false.
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
-        self.flat.len()
-    }
-
-    /// Check if the graph is empty (only contains root)
-    pub fn is_empty(&self) -> bool {
-        self.flat.len() <= 1
+        self.members.len()
     }
 }
 
 /// Cache of pre-computed transitive graphs
 #[derive(Debug, Default, Clone)]
-pub struct TransitiveCache {
+pub(crate) struct TransitiveCache {
     /// Full transitive graphs (explicit + topic edges)
     full: HashMap<SpaceId, TransitiveGraph>,
 
@@ -68,11 +67,6 @@ pub struct TransitiveCache {
 }
 
 impl TransitiveCache {
-    /// Create a new empty cache
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Get a cached full transitive graph
     pub fn get_full(&self, space: &SpaceId) -> Option<&TransitiveGraph> {
         self.full.get(space)
@@ -97,7 +91,7 @@ impl TransitiveCache {
 
     /// Update reverse dependency index
     fn update_reverse_deps(&mut self, graph: &TransitiveGraph) {
-        for space in &graph.flat {
+        for space in &graph.members {
             self.reverse_deps
                 .entry(*space)
                 .or_default()
@@ -107,16 +101,35 @@ impl TransitiveCache {
 
     /// Invalidate all cached graphs affected by a space change
     pub fn invalidate(&mut self, space: &SpaceId) {
-        // Remove this space's own graphs
-        self.full.remove(space);
-        self.explicit_only.remove(space);
-
-        // Remove all graphs that contained this space
+        // Collect all graph roots to evict: this space's own graphs + dependents
+        let mut to_evict: Vec<SpaceId> = vec![*space];
         if let Some(dependents) = self.reverse_deps.remove(space) {
-            for dep in dependents {
-                self.full.remove(&dep);
-                self.explicit_only.remove(&dep);
+            to_evict.extend(dependents);
+        }
+
+        // For each evicted graph, clean up its reverse_deps entries using
+        // the graph's flat set before removing it from cache
+        for root in &to_evict {
+            // Collect flat sets from both caches before mutating reverse_deps
+            let flat_members: Vec<SpaceId> = self
+                .full
+                .get(root)
+                .into_iter()
+                .chain(self.explicit_only.get(root))
+                .flat_map(|g| g.members.iter().copied())
+                .collect();
+
+            for member in flat_members {
+                if let Some(deps) = self.reverse_deps.get_mut(&member) {
+                    deps.remove(root);
+                    if deps.is_empty() {
+                        self.reverse_deps.remove(&member);
+                    }
+                }
             }
+
+            self.full.remove(root);
+            self.explicit_only.remove(root);
         }
     }
 
@@ -233,12 +246,25 @@ impl TransitiveProcessor {
                 self.cache.invalidate(&extended.source_space_id);
 
                 match &extended.extension {
+                    // Explicit edges: invalidate target
                     TrustExtension::Verified { target_space_id }
-                    | TrustExtension::Related { target_space_id } => {
+                    | TrustExtension::Related { target_space_id }
+                    | TrustExtension::VerifiedRemoved { target_space_id }
+                    | TrustExtension::RelatedRemoved { target_space_id } => {
                         self.cache.invalidate(target_space_id);
                     }
-                    TrustExtension::Subtopic { target_topic_id } => {
-                        // Invalidate all spaces that announced this topic
+
+                    // Membership edges: invalidate member space
+                    TrustExtension::EditorAdded { member_space_id }
+                    | TrustExtension::MemberAdded { member_space_id }
+                    | TrustExtension::EditorRemoved { member_space_id }
+                    | TrustExtension::MemberRemoved { member_space_id } => {
+                        self.cache.invalidate(member_space_id);
+                    }
+
+                    // Topic edges: invalidate all spaces that announced this topic
+                    TrustExtension::Subtopic { target_topic_id }
+                    | TrustExtension::SubtopicRemoved { target_topic_id } => {
                         if let Some(members) = state.get_topic_members(target_topic_id) {
                             for member in members {
                                 self.cache.invalidate(member);
@@ -260,20 +286,19 @@ impl TransitiveProcessor {
         let mut visited: HashSet<SpaceId> = HashSet::new();
         let mut queue: VecDeque<SpaceId> = VecDeque::new();
 
-        // Track node metadata (edge_type, topic_id) - no TreeNode allocation yet
-        let mut node_metadata: HashMap<SpaceId, (EdgeType, Option<crate::events::TopicId>)> =
-            HashMap::new();
+        // Track node metadata (edge_type) - no TreeNode allocation yet
+        let mut node_metadata: HashMap<SpaceId, EdgeType> = HashMap::new();
 
         // Build children index directly: parent -> [children] (O(1) lookup)
         let mut children_index: HashMap<SpaceId, Vec<SpaceId>> = HashMap::new();
 
         // Reusable edge buffer to avoid allocations in the loop
-        let mut edges: Vec<(SpaceId, EdgeType, Option<crate::events::TopicId>)> = Vec::new();
+        let mut edges: Vec<(SpaceId, EdgeType)> = Vec::new();
 
         // Initialize with root
         visited.insert(root);
         queue.push_back(root);
-        node_metadata.insert(root, (EdgeType::Root, None));
+        node_metadata.insert(root, EdgeType::Root);
 
         while let Some(current) = queue.pop_front() {
             // Clear and reuse the edges buffer
@@ -282,7 +307,7 @@ impl TransitiveProcessor {
             // Collect explicit edges
             if let Some(explicit) = state.get_explicit_edges(&current) {
                 for (target, edge_type) in explicit {
-                    edges.push((*target, *edge_type, None));
+                    edges.push((*target, *edge_type));
                 }
             }
 
@@ -292,7 +317,12 @@ impl TransitiveProcessor {
                     for topic_id in topics {
                         if let Some(members) = state.get_topic_members(topic_id) {
                             for member in members {
-                                edges.push((*member, EdgeType::Topic, Some(*topic_id)));
+                                edges.push((
+                                    *member,
+                                    EdgeType::Topic {
+                                        topic_id: *topic_id,
+                                    },
+                                ));
                             }
                         }
                     }
@@ -300,13 +330,13 @@ impl TransitiveProcessor {
             }
 
             // Sort for deterministic ordering
-            edges.sort_unstable_by_key(|(id, _, _)| *id);
+            edges.sort_unstable_by_key(|(id, _)| *id);
 
             // Process edges and build children index
-            for (target, edge_type, topic_id) in &edges {
+            for (target, edge_type) in &edges {
                 if visited.insert(*target) {
                     queue.push_back(*target);
-                    node_metadata.insert(*target, (*edge_type, *topic_id));
+                    node_metadata.insert(*target, *edge_type);
 
                     // Add to children index (O(1) amortized)
                     children_index.entry(current).or_default().push(*target);
@@ -314,34 +344,7 @@ impl TransitiveProcessor {
             }
         }
 
-        // Build tree structure using children index (O(n) total)
-        fn build_tree(
-            node_id: SpaceId,
-            node_metadata: &HashMap<SpaceId, (EdgeType, Option<crate::events::TopicId>)>,
-            children_index: &HashMap<SpaceId, Vec<SpaceId>>,
-        ) -> TreeNode {
-            let (edge_type, topic_id) = node_metadata.get(&node_id).copied().unwrap();
-
-            let mut node = match topic_id {
-                Some(tid) => TreeNode::new_with_topic(node_id, tid),
-                None if edge_type == EdgeType::Root => TreeNode::new_root(node_id),
-                None => TreeNode::new(node_id, edge_type),
-            };
-
-            // Children are already collected - just iterate (O(1) lookup)
-            if let Some(children) = children_index.get(&node_id) {
-                // Reserve capacity to avoid reallocations
-                node.children.reserve(children.len());
-                for child_id in children {
-                    node.children
-                        .push(build_tree(*child_id, node_metadata, children_index));
-                }
-            }
-
-            node
-        }
-
-        let tree = build_tree(root, &node_metadata, &children_index);
+        let tree = build_tree_iterative(root, &node_metadata, &children_index);
 
         TransitiveGraph::new(root, tree, visited)
     }
@@ -357,77 +360,78 @@ impl TransitiveProcessor {
     }
 }
 
+/// Build a tree from a children index iteratively.
+///
+/// Simulates recursive tree construction by maintaining an explicit stack
+/// of (partially-built TreeNode, remaining child IDs). When all children
+/// of a node are processed, it's pushed onto its parent's children vec.
+fn build_tree_iterative(
+    root: SpaceId,
+    node_metadata: &HashMap<SpaceId, EdgeType>,
+    children_index: &HashMap<SpaceId, Vec<SpaceId>>,
+) -> TreeNode {
+    let root_edge = node_metadata.get(&root).copied().unwrap();
+    let mut root_node = TreeNode::new(root, root_edge);
+
+    let root_children = match children_index.get(&root) {
+        Some(ids) => ids,
+        None => return root_node, // Leaf root
+    };
+
+    // Stack item: (node being built, index of next child to process)
+    // Using index instead of iterator avoids lifetime issues.
+    root_node.children.reserve(root_children.len());
+    let mut stack: Vec<(TreeNode, usize)> = vec![(root_node, 0)];
+
+    loop {
+        // Get the next child to process for the top-of-stack node
+        let next_child_id = {
+            let (ref node, ref mut idx) = stack.last_mut().unwrap();
+            children_index.get(&node.space_id).and_then(|child_ids| {
+                if *idx < child_ids.len() {
+                    let id = child_ids[*idx];
+                    *idx += 1;
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+        };
+
+        match next_child_id {
+            Some(child_id) => {
+                let edge_type = node_metadata.get(&child_id).copied().unwrap();
+                let mut child_node = TreeNode::new(child_id, edge_type);
+
+                if let Some(grandchild_ids) = children_index.get(&child_id) {
+                    // Has children — push onto stack to process
+                    child_node.children.reserve(grandchild_ids.len());
+                    stack.push((child_node, 0));
+                } else {
+                    // Leaf — attach directly to parent
+                    stack.last_mut().unwrap().0.children.push(child_node);
+                }
+            }
+            None => {
+                // All children processed — pop and attach to parent
+                let (completed, _) = stack.pop().unwrap();
+                if let Some(parent) = stack.last_mut() {
+                    parent.0.children.push(completed);
+                } else {
+                    return completed; // Root is complete
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{
-        BlockMetadata, SpaceCreated, SpaceTopologyPayload, SpaceType, TrustExtended,
+    use crate::events::TrustExtended;
+    use crate::test_utils::{
+        add_topic_edge, add_verified_edge, create_space, make_block_meta, make_topic_id,
     };
-
-    fn make_space_id(n: u8) -> SpaceId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
-
-    fn make_topic_id(n: u8) -> crate::events::TopicId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
-
-    fn make_block_meta() -> BlockMetadata {
-        BlockMetadata {
-            block_number: 1,
-            block_timestamp: 12,
-            tx_hash: "0x1".to_string(),
-            cursor: "cursor_1".to_string(),
-        }
-    }
-
-    fn create_space(state: &mut GraphState, n: u8) -> SpaceId {
-        let space = make_space_id(n);
-        let topic = make_topic_id(n);
-        let event = SpaceTopologyEvent {
-            meta: make_block_meta(),
-            payload: SpaceTopologyPayload::SpaceCreated(SpaceCreated {
-                space_id: space,
-                topic_id: topic,
-                space_type: SpaceType::Dao {
-                    initial_editors: vec![],
-                    initial_members: vec![],
-                },
-            }),
-        };
-        state.apply_event(&event);
-        space
-    }
-
-    fn add_verified_edge(state: &mut GraphState, source: SpaceId, target: SpaceId) {
-        let event = SpaceTopologyEvent {
-            meta: make_block_meta(),
-            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
-                source_space_id: source,
-                extension: TrustExtension::Verified {
-                    target_space_id: target,
-                },
-            }),
-        };
-        state.apply_event(&event);
-    }
-
-    fn add_topic_edge(state: &mut GraphState, source: SpaceId, topic: crate::events::TopicId) {
-        let event = SpaceTopologyEvent {
-            meta: make_block_meta(),
-            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
-                source_space_id: source,
-                extension: TrustExtension::Subtopic {
-                    target_topic_id: topic,
-                },
-            }),
-        };
-        state.apply_event(&event);
-    }
 
     #[test]
     fn test_single_space_transitive() {
@@ -579,5 +583,38 @@ mod tests {
         // Should handle cycle gracefully - each node appears once
         assert_eq!(graph.len(), 3);
         assert_eq!(graph.tree.node_count(), 3);
+    }
+
+    #[test]
+    fn test_invalidation_cleans_up_stale_reverse_deps() {
+        // Build: A -> B -> C
+        // Cache A's graph (contains A, B, C)
+        // Invalidate B — should remove A's graph AND clean up reverse_deps
+        let mut state = GraphState::new();
+        let a = create_space(&mut state, 1);
+        let b = create_space(&mut state, 2);
+        let c = create_space(&mut state, 3);
+        add_verified_edge(&mut state, a, b);
+        add_verified_edge(&mut state, b, c);
+
+        let mut processor = TransitiveProcessor::new();
+        let _ = processor.get_full(a, &state);
+
+        // reverse_deps should have entries for A, B, C (all pointing back to A)
+        let stats_before = processor.cache_stats();
+        assert_eq!(stats_before.full_count, 1);
+        assert!(stats_before.reverse_deps_count > 0);
+
+        // Invalidate B — should cascade to A's graph and clean stale refs
+        processor.cache.invalidate(&b);
+
+        // After invalidation, reverse_deps should not have stale entries
+        // for spaces whose graphs no longer exist
+        let stats_after = processor.cache_stats();
+        assert_eq!(stats_after.full_count, 0);
+        assert_eq!(
+            stats_after.reverse_deps_count, 0,
+            "stale reverse_deps should be cleaned up"
+        );
     }
 }

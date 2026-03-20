@@ -14,8 +14,12 @@ pub enum EdgeType {
     Verified,
     /// Related trust relationship
     Related,
-    /// Topic-based membership
-    Topic,
+    /// Topic-based membership — carries the topic that created this edge
+    Topic { topic_id: TopicId },
+    /// Editor membership (canonical-granting)
+    Editor,
+    /// Member membership (canonical-granting)
+    Member,
 }
 
 /// A node in the traversal tree
@@ -27,9 +31,6 @@ pub struct TreeNode {
     /// How this node was reached from its parent
     pub edge_type: EdgeType,
 
-    /// If reached via topic edge, which topic
-    pub topic_id: Option<TopicId>,
-
     /// Children of this node in the traversal
     pub children: Vec<TreeNode>,
 }
@@ -40,7 +41,6 @@ impl TreeNode {
         Self {
             space_id,
             edge_type: EdgeType::Root,
-            topic_id: None,
             children: Vec::new(),
         }
     }
@@ -50,7 +50,6 @@ impl TreeNode {
         Self {
             space_id,
             edge_type,
-            topic_id: None,
             children: Vec::new(),
         }
     }
@@ -59,8 +58,7 @@ impl TreeNode {
     pub fn new_with_topic(space_id: SpaceId, topic_id: TopicId) -> Self {
         Self {
             space_id,
-            edge_type: EdgeType::Topic,
-            topic_id: Some(topic_id),
+            edge_type: EdgeType::Topic { topic_id },
             children: Vec::new(),
         }
     }
@@ -72,25 +70,20 @@ impl TreeNode {
 
     /// Count total nodes in this subtree (including self)
     pub fn node_count(&self) -> usize {
-        1 + self.children.iter().map(|c| c.node_count()).sum::<usize>()
+        let mut count = 0;
+        let mut stack = vec![self];
+        while let Some(node) = stack.pop() {
+            count += 1;
+            stack.extend(node.children.iter());
+        }
+        count
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn make_space_id(n: u8) -> SpaceId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
-
-    fn make_topic_id(n: u8) -> TopicId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
+    use crate::test_utils::{make_space_id, make_topic_id};
 
     #[test]
     fn test_new_root() {
@@ -99,7 +92,6 @@ mod tests {
 
         assert_eq!(node.space_id, space);
         assert_eq!(node.edge_type, EdgeType::Root);
-        assert!(node.topic_id.is_none());
         assert!(node.children.is_empty());
     }
 
@@ -110,8 +102,7 @@ mod tests {
         let node = TreeNode::new_with_topic(space, topic);
 
         assert_eq!(node.space_id, space);
-        assert_eq!(node.edge_type, EdgeType::Topic);
-        assert_eq!(node.topic_id, Some(topic));
+        assert_eq!(node.edge_type, EdgeType::Topic { topic_id: topic });
     }
 
     #[test]

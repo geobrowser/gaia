@@ -25,11 +25,20 @@ use crate::events::{
     BlockMetadata, SpaceCreated, SpaceTopologyEvent, SpaceTopologyPayload, SpaceType,
     TrustExtended, TrustExtension,
 };
+use hermes_instrumentation::warn;
 use hermes_relay::{actions, Action};
 
 /// Convert a slice to a fixed-size array, returning None if length doesn't match.
 fn to_array<const N: usize>(slice: &[u8]) -> Option<[u8; N]> {
     slice.try_into().ok()
+}
+
+/// Log a warning when a required field is missing or malformed during action conversion.
+fn warn_missing_field(action_type: &str, field: &str, actual_len: usize, expected_len: usize) {
+    warn!(
+        action_type,
+        field, actual_len, expected_len, "malformed action: field missing or wrong length"
+    );
 }
 
 /// Convert an Action to a SpaceTopologyEvent, if it's a topology-relevant action.
@@ -39,19 +48,45 @@ fn to_array<const N: usize>(slice: &[u8]) -> Option<[u8; N]> {
 /// - `SUBSPACE_VERIFIED` actions → TrustExtended (Verified)
 /// - `SUBSPACE_RELATED` actions → TrustExtended (Related)
 /// - `SUBSPACE_TOPIC_DECLARED` actions → TrustExtended (Subtopic)
+/// - `EDITOR_ADDED` actions → TrustExtended (EditorAdded)
+/// - `MEMBER_ADDED` actions → TrustExtended (MemberAdded)
+/// - `SUBSPACE_UNVERIFIED` actions → TrustExtended (VerifiedRemoved)
+/// - `SUBSPACE_UNRELATED` actions → TrustExtended (RelatedRemoved)
+/// - `EDITOR_REMOVED` actions → TrustExtended (EditorRemoved)
+/// - `MEMBER_REMOVED` actions → TrustExtended (MemberRemoved)
+/// - `SUBSPACE_TOPIC_REMOVED` actions → TrustExtended (SubtopicRemoved)
 ///
 /// Returns `None` for other action types (edits, proposals, etc.)
 pub fn convert_action(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
     let action_type = action.action.as_slice();
 
+    // Space creation
     if actions::matches(action_type, &actions::SPACE_REGISTERED) {
         convert_space_registered(action, meta)
-    } else if actions::matches(action_type, &actions::SUBSPACE_VERIFIED) {
+    }
+    // Edge additions
+    else if actions::matches(action_type, &actions::SUBSPACE_VERIFIED) {
         convert_subspace_verified(action, meta)
     } else if actions::matches(action_type, &actions::SUBSPACE_RELATED) {
         convert_subspace_related(action, meta)
     } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_DECLARED) {
         convert_subspace_topic_declared(action, meta)
+    } else if actions::matches(action_type, &actions::EDITOR_ADDED) {
+        convert_editor_added(action, meta)
+    } else if actions::matches(action_type, &actions::MEMBER_ADDED) {
+        convert_member_added(action, meta)
+    }
+    // Edge removals
+    else if actions::matches(action_type, &actions::SUBSPACE_UNVERIFIED) {
+        convert_subspace_unverified(action, meta)
+    } else if actions::matches(action_type, &actions::SUBSPACE_UNRELATED) {
+        convert_subspace_unrelated(action, meta)
+    } else if actions::matches(action_type, &actions::EDITOR_REMOVED) {
+        convert_editor_removed(action, meta)
+    } else if actions::matches(action_type, &actions::MEMBER_REMOVED) {
+        convert_member_removed(action, meta)
+    } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_REMOVED) {
+        convert_subspace_topic_removed(action, meta)
     } else {
         None
     }
@@ -71,10 +106,16 @@ pub fn convert_action(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopo
 /// event, not from this event. We default to Personal with the registrar as owner.
 fn convert_space_registered(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
     // Space ID is now in to_id (from_id is zeros in new format)
-    let space_id = to_array::<16>(&action.to_id)?;
+    let Some(space_id) = to_array::<16>(&action.to_id) else {
+        warn_missing_field("SpaceRegistered", "to_id", action.to_id.len(), 16);
+        return None;
+    };
 
     // Registrar address is in topic - this is the owner for personal spaces
-    let owner = to_array::<32>(&action.topic)?;
+    let Some(owner) = to_array::<32>(&action.topic) else {
+        warn_missing_field("SpaceRegistered", "topic", action.topic.len(), 32);
+        return None;
+    };
     let space_type = SpaceType::Personal { owner };
 
     // Topic ID defaults to zeros - spaces can declare topics separately
@@ -90,77 +131,208 @@ fn convert_space_registered(action: &Action, meta: &BlockMetadata) -> Option<Spa
     })
 }
 
-/// Convert a SUBSPACE_VERIFIED action to TrustExtended event.
+/// Parse `from_id` as source (16 bytes) and `topic[0..16]` as target (16 bytes).
 ///
-/// Action format:
-/// - `from_id`: source_space_id (16 bytes)
-/// - `topic[0..16]`: padding (zeros)
-/// - `topic[16..32]`: target_space_id (16 bytes)
+/// ZC16: Solidity `bytes32(bytes16)` right-pads, so the bytes16 value is in [0..16].
+///
+/// Used by: SubspaceVerified, SubspaceRelated, SubspaceUnverified, SubspaceUnrelated
+/// (edge actions where the topic is `bytes32(targetSpaceId)`).
+fn parse_source_and_edge_target(
+    action: &Action,
+    action_type: &str,
+) -> Option<([u8; 16], [u8; 16])> {
+    let Some(source) = to_array::<16>(&action.from_id) else {
+        warn_missing_field(action_type, "from_id", action.from_id.len(), 16);
+        return None;
+    };
+    if action.topic.len() < 16 {
+        warn_missing_field(action_type, "topic", action.topic.len(), 16);
+        return None;
+    }
+    let Some(target) = to_array::<16>(&action.topic[0..16]) else {
+        warn_missing_field(action_type, "topic[0..16]", action.topic[0..16].len(), 16);
+        return None;
+    };
+    Some((source, target))
+}
+
+/// Parse `from_id` as source (16 bytes) and `topic[16..32]` as target (16 bytes).
+///
+/// Used by: SubspaceTopicDeclared, SubspaceTopicRemoved
+/// (topic actions where the layout is [subspace_id: 16 | topic_id: 16]).
+fn parse_source_and_topic_high(action: &Action, action_type: &str) -> Option<([u8; 16], [u8; 16])> {
+    let Some(source) = to_array::<16>(&action.from_id) else {
+        warn_missing_field(action_type, "from_id", action.from_id.len(), 16);
+        return None;
+    };
+    if action.topic.len() < 32 {
+        warn_missing_field(action_type, "topic", action.topic.len(), 32);
+        return None;
+    }
+    let Some(target) = to_array::<16>(&action.topic[16..32]) else {
+        warn_missing_field(action_type, "topic[16..32]", action.topic[16..32].len(), 16);
+        return None;
+    };
+    Some((source, target))
+}
+
+/// Parse `from_id` as source (16 bytes) and `topic[0..16]` as member (16 bytes).
+///
+/// Used by: EditorAdded, MemberAdded, EditorRemoved, MemberRemoved.
+fn parse_source_and_topic_low(action: &Action, action_type: &str) -> Option<([u8; 16], [u8; 16])> {
+    let Some(source) = to_array::<16>(&action.from_id) else {
+        warn_missing_field(action_type, "from_id", action.from_id.len(), 16);
+        return None;
+    };
+    if action.topic.len() < 16 {
+        warn_missing_field(action_type, "topic", action.topic.len(), 16);
+        return None;
+    }
+    let Some(member) = to_array::<16>(&action.topic[0..16]) else {
+        warn_missing_field(action_type, "topic[0..16]", action.topic[0..16].len(), 16);
+        return None;
+    };
+    Some((source, member))
+}
+
+/// Build a TrustExtended event from parsed source and extension.
+fn trust_event(
+    meta: &BlockMetadata,
+    source_space_id: [u8; 16],
+    extension: TrustExtension,
+) -> SpaceTopologyEvent {
+    SpaceTopologyEvent {
+        meta: meta.clone(),
+        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+            source_space_id,
+            extension,
+        }),
+    }
+}
+
+// --- Edge converters using topic[0..16] (ZC16: bytes32(bytes16) right-pads) ---
+
 fn convert_subspace_verified(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    let source_space_id = to_array::<16>(&action.from_id)?;
-
-    if action.topic.len() < 32 {
-        return None;
-    }
-    let target_space_id = to_array::<16>(&action.topic[16..32])?;
-
-    Some(SpaceTopologyEvent {
-        meta: meta.clone(),
-        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
-            source_space_id,
-            extension: TrustExtension::Verified { target_space_id },
-        }),
-    })
+    let (source, target) = parse_source_and_edge_target(action, "SubspaceVerified")?;
+    Some(trust_event(
+        meta,
+        source,
+        TrustExtension::Verified {
+            target_space_id: target,
+        },
+    ))
 }
 
-/// Convert a SUBSPACE_RELATED action to TrustExtended event.
-///
-/// Action format:
-/// - `from_id`: source_space_id (16 bytes)
-/// - `topic[0..16]`: padding (zeros)
-/// - `topic[16..32]`: target_space_id (16 bytes)
 fn convert_subspace_related(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    let source_space_id = to_array::<16>(&action.from_id)?;
-
-    if action.topic.len() < 32 {
-        return None;
-    }
-    let target_space_id = to_array::<16>(&action.topic[16..32])?;
-
-    Some(SpaceTopologyEvent {
-        meta: meta.clone(),
-        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
-            source_space_id,
-            extension: TrustExtension::Related { target_space_id },
-        }),
-    })
+    let (source, target) = parse_source_and_edge_target(action, "SubspaceRelated")?;
+    Some(trust_event(
+        meta,
+        source,
+        TrustExtension::Related {
+            target_space_id: target,
+        },
+    ))
 }
 
-/// Convert a SUBSPACE_TOPIC_DECLARED action to TrustExtended event.
-///
-/// Action format:
-/// - `from_id`: source_space_id (16 bytes)
-/// - `topic[0..16]`: subspace_id (16 bytes)
-/// - `topic[16..32]`: topic_id (16 bytes)
+fn convert_subspace_unverified(
+    action: &Action,
+    meta: &BlockMetadata,
+) -> Option<SpaceTopologyEvent> {
+    let (source, target) = parse_source_and_edge_target(action, "SubspaceUnverified")?;
+    Some(trust_event(
+        meta,
+        source,
+        TrustExtension::VerifiedRemoved {
+            target_space_id: target,
+        },
+    ))
+}
+
+fn convert_subspace_unrelated(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
+    let (source, target) = parse_source_and_edge_target(action, "SubspaceUnrelated")?;
+    Some(trust_event(
+        meta,
+        source,
+        TrustExtension::RelatedRemoved {
+            target_space_id: target,
+        },
+    ))
+}
+
+// --- Topic converters using topic[16..32] ([subspace_id: 16 | topic_id: 16]) ---
+
 fn convert_subspace_topic_declared(
     action: &Action,
     meta: &BlockMetadata,
 ) -> Option<SpaceTopologyEvent> {
-    let source_space_id = to_array::<16>(&action.from_id)?;
+    let (source, topic_id) = parse_source_and_topic_high(action, "SubspaceTopicDeclared")?;
+    Some(trust_event(
+        meta,
+        source,
+        TrustExtension::Subtopic {
+            target_topic_id: topic_id,
+        },
+    ))
+}
 
-    if action.topic.len() < 32 {
-        return None;
-    }
-    // Topic ID is in the last 16 bytes
-    let target_topic_id = to_array::<16>(&action.topic[16..32])?;
+fn convert_subspace_topic_removed(
+    action: &Action,
+    meta: &BlockMetadata,
+) -> Option<SpaceTopologyEvent> {
+    let (source, topic_id) = parse_source_and_topic_high(action, "SubspaceTopicRemoved")?;
+    Some(trust_event(
+        meta,
+        source,
+        TrustExtension::SubtopicRemoved {
+            target_topic_id: topic_id,
+        },
+    ))
+}
 
-    Some(SpaceTopologyEvent {
-        meta: meta.clone(),
-        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
-            source_space_id,
-            extension: TrustExtension::Subtopic { target_topic_id },
-        }),
-    })
+// --- Converters using topic[0..16] ---
+
+fn convert_editor_added(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
+    let (source, member) = parse_source_and_topic_low(action, "EditorAdded")?;
+    Some(trust_event(
+        meta,
+        source,
+        TrustExtension::EditorAdded {
+            member_space_id: member,
+        },
+    ))
+}
+
+fn convert_member_added(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
+    let (source, member) = parse_source_and_topic_low(action, "MemberAdded")?;
+    Some(trust_event(
+        meta,
+        source,
+        TrustExtension::MemberAdded {
+            member_space_id: member,
+        },
+    ))
+}
+
+fn convert_editor_removed(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
+    let (source, member) = parse_source_and_topic_low(action, "EditorRemoved")?;
+    Some(trust_event(
+        meta,
+        source,
+        TrustExtension::EditorRemoved {
+            member_space_id: member,
+        },
+    ))
+}
+
+fn convert_member_removed(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
+    let (source, member) = parse_source_and_topic_low(action, "MemberRemoved")?;
+    Some(trust_event(
+        meta,
+        source,
+        TrustExtension::MemberRemoved {
+            member_space_id: member,
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -292,9 +464,10 @@ mod tests {
 
         // 18 spaces: 11 canonical + 7 non-canonical
         assert_eq!(space_count, 18);
-        // 10 verified + 4 related + 5 topic declarations = 19 trust extensions
-        assert_eq!(trust_count, 19);
+        // 10 verified + 4 related + 6 topic declarations + 1 topic removal
+        // + 3 editor_added + 2 member_added + 1 editor_removed + 1 member_removed = 28
+        assert_eq!(trust_count, 28);
         // Total topology events (edits, proposals, flagging, voting filtered out)
-        assert_eq!(events.len(), 37);
+        assert_eq!(events.len(), 46);
     }
 }

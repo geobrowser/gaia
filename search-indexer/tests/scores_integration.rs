@@ -14,7 +14,8 @@ use search_indexer::errors::IngestError;
 use search_indexer::loader::SearchLoader;
 use search_indexer::orchestrator::{
     EntitiesConsumerTrait, EntityProcessingBatch, Orchestrator, ScoreProcessingBatch,
-    ScoresConsumerTrait,
+    ScoresConsumerTrait, SpaceTopicProcessingBatch, SpaceTopicsConsumerTrait,
+    TopologyConsumerTrait, TopologyProcessingBatch,
 };
 use search_indexer::processor::Processor;
 use search_indexer_repository::{
@@ -100,6 +101,46 @@ impl ScoresConsumerTrait for MockScoresConsumer {
             }
         }
 
+        Ok(())
+    }
+}
+
+/// Mock space topics consumer that does nothing - we're testing scores
+struct MockSpaceTopicsConsumer;
+
+#[async_trait::async_trait]
+impl SpaceTopicsConsumerTrait for MockSpaceTopicsConsumer {
+    fn subscribe(&self) -> Result<(), IngestError> {
+        Ok(())
+    }
+
+    async fn run(
+        &self,
+        _processor_tx: mpsc::Sender<SpaceTopicProcessingBatch>,
+        _ack_receiver: mpsc::Receiver<StreamMessage>,
+        mut shutdown: broadcast::Receiver<()>,
+    ) -> Result<(), IngestError> {
+        let _ = shutdown.recv().await;
+        Ok(())
+    }
+}
+
+/// Mock topology consumer that does nothing - we're testing scores
+struct MockTopologyConsumer;
+
+#[async_trait::async_trait]
+impl TopologyConsumerTrait for MockTopologyConsumer {
+    fn subscribe(&self) -> Result<(), IngestError> {
+        Ok(())
+    }
+
+    async fn run(
+        &self,
+        _processor_tx: mpsc::Sender<TopologyProcessingBatch>,
+        _ack_receiver: mpsc::Receiver<StreamMessage>,
+        mut shutdown: broadcast::Receiver<()>,
+    ) -> Result<(), IngestError> {
+        let _ = shutdown.recv().await;
         Ok(())
     }
 }
@@ -224,6 +265,8 @@ impl SearchIndexProvider for MockSearchProvider {
             succeeded: operations.len(),
             failed: 0,
             results,
+            wall_ms: 0,
+            took_ms: 0,
         })
     }
 }
@@ -245,10 +288,14 @@ fn create_scores_test_orchestrator(
 
     let mock_entities_consumer = Arc::new(MockEntitiesConsumer);
     let mock_scores_consumer = Arc::new(MockScoresConsumer::new(events));
+    let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_entities_consumer,
         mock_scores_consumer.clone(),
+        mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
     );

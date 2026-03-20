@@ -9,7 +9,7 @@ pub mod pipelines;
 
 // Re-export commonly used types
 pub use decode::{
-    FlagArgs, ProposalActionType, PublishArgs, VotingSettingsArgs, decode_flag_args,
-    decode_publish_args, decode_space_id_arg, decode_voting_settings_args,
+    FlagArgs, PingArgs, ProposalActionType, PublishArgs, VotingSettingsArgs, decode_flag_args,
+    decode_ping_args, decode_publish_args, decode_space_id_arg, decode_voting_settings_args,
 };
 pub use pipelines::BlockMetadata;

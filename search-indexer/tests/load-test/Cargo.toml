@@ -1,0 +1,43 @@
+[package]
+name = "load-test"
+version = "0.1.0"
+edition = "2024"
+
+# Not part of the workspace - this is a standalone test tool
+[workspace]
+
+[[bin]]
+name = "load-test"
+path = "src/main.rs"
+
+[dependencies]
+# Kafka client
+rdkafka = { version = "0.37", features = ["cmake-build", "ssl", "sasl"] }
+
+# Protobuf
+prost = "0.13.5"
+hermes-schema = { path = "../../../hermes-schema" }
+wire = { path = "../../../wire" }
+
+# GRC-20 encoding
+grc-20 = "0.4.1"
+
+# Core dependencies
+tokio = { version = "1.44", features = ["full"] }
+uuid = { version = "1.11", features = ["v4"] }
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# SDK for constants
+sdk = { path = "../../../sdk" }
+
+# Load test specific
+rand = { version = "0.8", features = ["small_rng"] }
+indicatif = "0.17"
+reqwest = { version = "0.12", features = ["json"] }
+url = "2.5"

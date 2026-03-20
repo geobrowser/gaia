@@ -7,6 +7,7 @@ metadata:
     environment: staging
 spec:
   schedule: "0 3 * * *"  # Run at 3am every day
+  failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       template:
@@ -57,10 +58,12 @@ spec:
                   value: "curation.scores"
                 - name: SCORE_BATCH_SIZE
                   value: "1000"
+                - name: NORMALIZATION_METHOD
+                  value: "z_score_sigmoid"
               resources:
                 requests:
-                  memory: "1024Mi"
+                  memory: "2048Mi"
                   cpu: "1000m"
                 limits:
-                  memory: "2048Mi"
+                  memory: "4096Mi"
                   cpu: "2000m"

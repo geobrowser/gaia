@@ -1,6 +1,6 @@
-import {beforeEach, describe, expect, it} from "vitest"
+import {afterEach, beforeEach, describe, expect, it, vi} from "vitest"
 
-import {OpenSearchClient, SCORE_BOOST} from "./opensearch"
+import {DEFAULT_AVERAGE_SCORE, MIN_SCORE_THRESHOLD, OpenSearchClient, SCORE_BOOST, SCORE_SHIFT} from "./opensearch"
 
 describe("OpenSearchClient", () => {
 	let client: OpenSearchClient
@@ -32,52 +32,89 @@ describe("OpenSearchClient", () => {
 	})
 
 	describe("buildUuidQuery", () => {
-		const testUuid = "123e4567-e89b-12d3-a456-426614174000"
+		const testUuidDashed = "123e4567-e89b-12d3-a456-426614174000"
+		const testUuidDashless = "123e4567e89b12d3a456426614174000"
 
-		it("should build a simple term query for GLOBAL scope", () => {
-			const query = client.buildUuidQuery(testUuid, "GLOBAL")
+		it("should include both dashed and dashless UUID variants in terms query", async () => {
+			const query = await client.buildUuidQuery(testUuidDashed, "GLOBAL")
 			const queryStr = JSON.stringify(query)
 
-			expect(queryStr).toContain(testUuid)
+			expect(queryStr).toContain(testUuidDashed)
+			expect(queryStr).toContain(testUuidDashless)
 			expect(queryStr).toContain("entity_id")
-			expect(queryStr).toContain("term")
+			expect(queryStr).toContain("terms")
 		})
 
-		it("should build a simple term query for GLOBAL_BY_SPACE_SCORE scope", () => {
-			const query = client.buildUuidQuery(testUuid, "GLOBAL_BY_SPACE_SCORE")
+		it("should include both variants when given a dashless UUID", async () => {
+			const query = await client.buildUuidQuery(testUuidDashless, "GLOBAL")
 			const queryStr = JSON.stringify(query)
 
-			expect(queryStr).toContain(testUuid)
-			expect(queryStr).toContain("entity_id")
-			expect(queryStr).toContain("term")
-		})
-
-		it("should build query with space filter for SPACE_SINGLE scope", () => {
-			const spaceId = "space-123"
-			const query = client.buildUuidQuery(testUuid, "SPACE_SINGLE", spaceId)
-			const queryStr = JSON.stringify(query)
-
-			expect(queryStr).toContain(testUuid)
-			expect(queryStr).toContain(spaceId)
+			expect(queryStr).toContain(testUuidDashed)
+			expect(queryStr).toContain(testUuidDashless)
 			expect(queryStr).toContain("entity_id")
 		})
 
-		it("should build simple query for SPACE_SINGLE scope without space_id", () => {
-			const query = client.buildUuidQuery(testUuid, "SPACE_SINGLE")
+		it("should build terms query for GLOBAL_BY_SPACE_SCORE scope", async () => {
+			const query = await client.buildUuidQuery(testUuidDashed, "GLOBAL_BY_SPACE_SCORE")
 			const queryStr = JSON.stringify(query)
 
-			expect(queryStr).toContain(testUuid)
+			expect(queryStr).toContain(testUuidDashed)
+			expect(queryStr).toContain(testUuidDashless)
 			expect(queryStr).toContain("entity_id")
 		})
 
-		it("should build query with space filter for SPACE scope", () => {
-			const spaceId = "space-456"
-			const query = client.buildUuidQuery(testUuid, "SPACE", spaceId)
+		it("should build terms query for GLOBAL_BY_ENTITY_SPACE_SCORE scope", async () => {
+			const query = await client.buildUuidQuery(testUuidDashed, "GLOBAL_BY_ENTITY_SPACE_SCORE")
 			const queryStr = JSON.stringify(query)
 
-			expect(queryStr).toContain(testUuid)
-			expect(queryStr).toContain(spaceId)
+			expect(queryStr).toContain(testUuidDashed)
+			expect(queryStr).toContain(testUuidDashless)
 			expect(queryStr).toContain("entity_id")
+		})
+
+		it("should include both space_id variants in SPACE_SINGLE filter", async () => {
+			const dashedSpaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
+			const dashlessSpaceId = "abcd1234abcd1234abcd1234abcd5678"
+			const query = await client.buildUuidQuery(testUuidDashed, "SPACE_SINGLE", dashedSpaceId)
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain(dashedSpaceId)
+			expect(queryStr).toContain(dashlessSpaceId)
+			expect(queryStr).toContain("entity_id")
+		})
+
+		it("should include both space_id variants when given dashless space_id", async () => {
+			const dashlessSpaceId = "abcd1234abcd1234abcd1234abcd5678"
+			const dashedSpaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
+			const query = await client.buildUuidQuery(testUuidDashed, "SPACE_SINGLE", dashlessSpaceId)
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain(dashedSpaceId)
+			expect(queryStr).toContain(dashlessSpaceId)
+		})
+
+		it("should build query for SPACE_SINGLE scope without space_id", async () => {
+			const query = await client.buildUuidQuery(testUuidDashed, "SPACE_SINGLE")
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain(testUuidDashed)
+			expect(queryStr).toContain("entity_id")
+		})
+
+		it("should include both space_id variants in SPACE filter", async () => {
+			const dashedSpaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
+			const dashlessSpaceId = "abcd1234abcd1234abcd1234abcd5678"
+			const query = await client.buildUuidQuery(testUuidDashed, "SPACE", dashedSpaceId)
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain(dashedSpaceId)
+			expect(queryStr).toContain(dashlessSpaceId)
+			expect(queryStr).toContain("entity_id")
+		})
+
+		it("should not include script_fields", async () => {
+			const query = (await client.buildUuidQuery(testUuidDashed, "GLOBAL")) as Record<string, unknown>
+			expect(query).not.toHaveProperty("script_fields")
 		})
 	})
 
@@ -92,6 +129,16 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("function_score")
 			expect(queryStr).toContain("script_score")
 			expect(queryStr).toContain("test")
+		})
+
+		it("should include script_fields for score_boost", () => {
+			const baseQuery = client.buildBaseTextQuery("test")
+			const query = client.buildGlobalQuery(baseQuery) as Record<string, unknown>
+
+			expect(query).toHaveProperty("script_fields")
+			const queryStr = JSON.stringify(query.script_fields)
+			expect(queryStr).toContain("score_boost")
+			expect(queryStr).toContain("entity_global_score")
 		})
 	})
 
@@ -109,24 +156,79 @@ describe("OpenSearchClient", () => {
 		})
 	})
 
-	describe("buildSingleSpaceQuery", () => {
-		it("should filter by space_id and boost by entity_space_score", () => {
+	describe("buildGlobalByEntitySpaceScoreQuery", () => {
+		it("should wrap base text query with entity_space_score boost", () => {
 			const baseQuery = client.buildBaseTextQuery("test")
-			const spaceId = "space-789"
-			const query = client.buildSingleSpaceQuery(baseQuery, spaceId)
+			const query = client.buildGlobalByEntitySpaceScoreQuery(baseQuery)
 			const queryStr = JSON.stringify(query)
 
-			expect(queryStr).toContain(spaceId)
 			expect(queryStr).toContain("entity_space_score")
 			expect(queryStr).toContain(`* ${SCORE_BOOST}`)
+			expect(queryStr).toContain("function_score")
+			expect(queryStr).toContain("script_score")
 			expect(queryStr).toContain("test")
 		})
 	})
 
+	describe("buildSingleSpaceQuery", () => {
+		it("should include both space_id variants and boost by entity_space_score", () => {
+			const baseQuery = client.buildBaseTextQuery("test")
+			const dashedSpaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
+			const dashlessSpaceId = "abcd1234abcd1234abcd1234abcd5678"
+			const query = client.buildSingleSpaceQuery(baseQuery, dashedSpaceId)
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain(dashedSpaceId)
+			expect(queryStr).toContain(dashlessSpaceId)
+			expect(queryStr).toContain("entity_space_score")
+			expect(queryStr).toContain(`* ${SCORE_BOOST}`)
+			expect(queryStr).toContain("test")
+		})
+
+		it("should include both space_id variants when given dashless input", () => {
+			const baseQuery = client.buildBaseTextQuery("test")
+			const dashlessSpaceId = "abcd1234abcd1234abcd1234abcd5678"
+			const dashedSpaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
+			const query = client.buildSingleSpaceQuery(baseQuery, dashlessSpaceId)
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain(dashedSpaceId)
+			expect(queryStr).toContain(dashlessSpaceId)
+			expect(queryStr).toContain("entity_space_score")
+		})
+
+		it("should include script_fields for score_boost", () => {
+			const baseQuery = client.buildBaseTextQuery("test")
+			const query = client.buildSingleSpaceQuery(baseQuery, "abcd1234-abcd-1234-abcd-1234abcd5678") as Record<
+				string,
+				unknown
+			>
+
+			expect(query).toHaveProperty("script_fields")
+			const queryStr = JSON.stringify(query.script_fields)
+			expect(queryStr).toContain("score_boost")
+			expect(queryStr).toContain("entity_space_score")
+		})
+	})
+
+	describe("buildTopRankedQuery", () => {
+		it("should include script_fields for score_boost", async () => {
+			const query = (await client.buildSearchBody({
+				query: "",
+				scope: "GLOBAL",
+			})) as Record<string, unknown>
+
+			expect(query).toHaveProperty("script_fields")
+			const queryStr = JSON.stringify(query.script_fields)
+			expect(queryStr).toContain("score_boost")
+			expect(queryStr).toContain("entity_global_score")
+		})
+	})
+
 	describe("buildSearchBody with type_ids filtering", () => {
-		it("should build UUID query when query is a UUID", () => {
+		it("should build UUID query when query is a dashed UUID", async () => {
 			const uuid = "123e4567-e89b-12d3-a456-426614174000"
-			const query = client.buildSearchBody({
+			const query = await client.buildSearchBody({
 				query: uuid,
 				scope: "GLOBAL",
 			})
@@ -136,10 +238,25 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("entity_id")
 		})
 
-		it("should build UUID query with type_ids filtering for GLOBAL scope", () => {
+		it("should build UUID query when query is a dashless UUID", async () => {
+			const dashlessUuid = "123e4567e89b12d3a456426614174000"
+			const dashedUuid = "123e4567-e89b-12d3-a456-426614174000"
+			const query = await client.buildSearchBody({
+				query: dashlessUuid,
+				scope: "GLOBAL",
+			})
+
+			const queryStr = JSON.stringify(query)
+			// Should contain both variants (index may have either format)
+			expect(queryStr).toContain(dashedUuid)
+			expect(queryStr).toContain(dashlessUuid)
+			expect(queryStr).toContain("entity_id")
+		})
+
+		it("should build UUID query with type_ids filtering for GLOBAL scope", async () => {
 			const uuid = "123e4567-e89b-12d3-a456-426614174000"
-			const typeIds = ["type-1", "type-2"]
-			const query = client.buildSearchBody({
+			const typeIds = ["abcd1234-abcd-1234-abcd-1234abcd0001", "abcd1234-abcd-1234-abcd-1234abcd0002"]
+			const query = await client.buildSearchBody({
 				query: uuid,
 				scope: "GLOBAL",
 				type_ids: typeIds,
@@ -148,16 +265,35 @@ describe("OpenSearchClient", () => {
 			const queryStr = JSON.stringify(query)
 			expect(queryStr).toContain(uuid)
 			expect(queryStr).toContain("entity_id")
-			expect(queryStr).toContain("type_relations.entity_to_id")
-			expect(queryStr).toContain("type-1")
-			expect(queryStr).toContain("type-2")
+			expect(queryStr).toContain("relations.to_entity_id")
+			expect(queryStr).toContain(typeIds[0])
+			expect(queryStr).toContain(typeIds[1])
 		})
 
-		it("should build UUID query with type_ids and space filtering for SPACE_SINGLE scope", () => {
+		it("should include both dashed and dashless type_id variants in filter", async () => {
 			const uuid = "123e4567-e89b-12d3-a456-426614174000"
-			const spaceId = "space-123"
-			const typeIds = ["type-1"]
-			const query = client.buildSearchBody({
+			const dashlessTypeIds = ["abcd1234abcd1234abcd1234abcd0001", "abcd1234abcd1234abcd1234abcd0002"]
+			const dashedTypeIds = ["abcd1234-abcd-1234-abcd-1234abcd0001", "abcd1234-abcd-1234-abcd-1234abcd0002"]
+			const query = await client.buildSearchBody({
+				query: uuid,
+				scope: "GLOBAL",
+				type_ids: dashlessTypeIds,
+			})
+
+			const queryStr = JSON.stringify(query)
+			expect(queryStr).toContain("relations.to_entity_id")
+			// Both formats should be present for each type ID
+			expect(queryStr).toContain(dashedTypeIds[0])
+			expect(queryStr).toContain(dashedTypeIds[1])
+			expect(queryStr).toContain(dashlessTypeIds[0])
+			expect(queryStr).toContain(dashlessTypeIds[1])
+		})
+
+		it("should build UUID query with type_ids and space filtering for SPACE_SINGLE scope", async () => {
+			const uuid = "123e4567-e89b-12d3-a456-426614174000"
+			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
+			const typeIds = ["abcd1234-abcd-1234-abcd-1234abcd0001"]
+			const query = await client.buildSearchBody({
 				query: uuid,
 				scope: "SPACE_SINGLE",
 				space_id: spaceId,
@@ -168,12 +304,12 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain(uuid)
 			expect(queryStr).toContain(spaceId)
 			expect(queryStr).toContain("entity_id")
-			expect(queryStr).toContain("type_relations.entity_to_id")
-			expect(queryStr).toContain("type-1")
+			expect(queryStr).toContain("relations.to_entity_id")
+			expect(queryStr).toContain(typeIds[0])
 		})
 
-		it("should build global query for GLOBAL scope", () => {
-			const query = client.buildSearchBody({
+		it("should build global query for GLOBAL scope", async () => {
+			const query = await client.buildSearchBody({
 				query: "blockchain",
 				scope: "GLOBAL",
 			})
@@ -183,9 +319,13 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("blockchain")
 		})
 
-		it("should build global query with type_ids filtering", () => {
-			const typeIds = ["type-1", "type-2", "type-3"]
-			const query = client.buildSearchBody({
+		it("should build global query with type_ids filtering", async () => {
+			const typeIds = [
+				"abcd1234-abcd-1234-abcd-1234abcd0001",
+				"abcd1234-abcd-1234-abcd-1234abcd0002",
+				"abcd1234-abcd-1234-abcd-1234abcd0003",
+			]
+			const query = await client.buildSearchBody({
 				query: "blockchain",
 				scope: "GLOBAL",
 				type_ids: typeIds,
@@ -194,14 +334,14 @@ describe("OpenSearchClient", () => {
 			const queryStr = JSON.stringify(query)
 			expect(queryStr).toContain("entity_global_score")
 			expect(queryStr).toContain("blockchain")
-			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("relations.to_entity_id")
 			typeIds.forEach((typeId) => {
 				expect(queryStr).toContain(typeId)
 			})
 		})
 
-		it("should build global by space score query for GLOBAL_BY_SPACE_SCORE scope", () => {
-			const query = client.buildSearchBody({
+		it("should build global by space score query for GLOBAL_BY_SPACE_SCORE scope", async () => {
+			const query = await client.buildSearchBody({
 				query: "blockchain",
 				scope: "GLOBAL_BY_SPACE_SCORE",
 			})
@@ -211,9 +351,9 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("blockchain")
 		})
 
-		it("should build global by space score query with type_ids filtering", () => {
-			const typeIds = ["type-1"]
-			const query = client.buildSearchBody({
+		it("should build global by space score query with type_ids filtering", async () => {
+			const typeIds = ["abcd1234-abcd-1234-abcd-1234abcd0001"]
+			const query = await client.buildSearchBody({
 				query: "blockchain",
 				scope: "GLOBAL_BY_SPACE_SCORE",
 				type_ids: typeIds,
@@ -222,74 +362,508 @@ describe("OpenSearchClient", () => {
 			const queryStr = JSON.stringify(query)
 			expect(queryStr).toContain("space_score")
 			expect(queryStr).toContain("blockchain")
-			expect(queryStr).toContain("type_relations.entity_to_id")
-			expect(queryStr).toContain("type-1")
+			expect(queryStr).toContain("relations.to_entity_id")
+			expect(queryStr).toContain(typeIds[0])
 		})
 
-		it("should build single space query for SPACE_SINGLE scope", () => {
-			const query = client.buildSearchBody({
+		it("should build global by entity space score query for GLOBAL_BY_ENTITY_SPACE_SCORE scope", async () => {
+			const query = await client.buildSearchBody({
 				query: "blockchain",
-				scope: "SPACE_SINGLE",
-				space_id: "space-123",
+				scope: "GLOBAL_BY_ENTITY_SPACE_SCORE",
 			})
 
 			const queryStr = JSON.stringify(query)
-			expect(queryStr).toContain("space-123")
 			expect(queryStr).toContain("entity_space_score")
 			expect(queryStr).toContain("blockchain")
 		})
 
-		it("should build single space query with type_ids filtering", () => {
-			const typeIds = ["type-1", "type-2"]
-			const query = client.buildSearchBody({
+		it("should build global by entity space score query with type_ids filtering", async () => {
+			const typeIds = ["abcd1234-abcd-1234-abcd-1234abcd0001"]
+			const query = await client.buildSearchBody({
 				query: "blockchain",
-				scope: "SPACE_SINGLE",
-				space_id: "space-123",
+				scope: "GLOBAL_BY_ENTITY_SPACE_SCORE",
 				type_ids: typeIds,
 			})
 
 			const queryStr = JSON.stringify(query)
-			expect(queryStr).toContain("space-123")
 			expect(queryStr).toContain("entity_space_score")
 			expect(queryStr).toContain("blockchain")
-			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("relations.to_entity_id")
+			expect(queryStr).toContain(typeIds[0])
+		})
+
+		it("should build single space query for SPACE_SINGLE scope", async () => {
+			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
+			const query = await client.buildSearchBody({
+				query: "blockchain",
+				scope: "SPACE_SINGLE",
+				space_id: spaceId,
+			})
+
+			const queryStr = JSON.stringify(query)
+			expect(queryStr).toContain(spaceId)
+			expect(queryStr).toContain("entity_space_score")
+			expect(queryStr).toContain("blockchain")
+		})
+
+		it("should include both space_id variants in SPACE_SINGLE query", async () => {
+			const dashlessSpaceId = "abcd1234abcd1234abcd1234abcd5678"
+			const dashedSpaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
+			const query = await client.buildSearchBody({
+				query: "blockchain",
+				scope: "SPACE_SINGLE",
+				space_id: dashlessSpaceId,
+			})
+
+			const queryStr = JSON.stringify(query)
+			expect(queryStr).toContain(dashedSpaceId)
+			expect(queryStr).toContain(dashlessSpaceId)
+			expect(queryStr).toContain("entity_space_score")
+		})
+
+		it("should build single space query with type_ids filtering", async () => {
+			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
+			const typeIds = ["abcd1234-abcd-1234-abcd-1234abcd0001", "abcd1234-abcd-1234-abcd-1234abcd0002"]
+			const query = await client.buildSearchBody({
+				query: "blockchain",
+				scope: "SPACE_SINGLE",
+				space_id: spaceId,
+				type_ids: typeIds,
+			})
+
+			const queryStr = JSON.stringify(query)
+			expect(queryStr).toContain(spaceId)
+			expect(queryStr).toContain("entity_space_score")
+			expect(queryStr).toContain("blockchain")
+			expect(queryStr).toContain("relations.to_entity_id")
 			typeIds.forEach((typeId) => {
 				expect(queryStr).toContain(typeId)
 			})
 		})
 
-		it("should build single space query for SPACE scope with type_ids filtering", () => {
-			const typeIds = ["type-1"]
-			const query = client.buildSearchBody({
+		it("should build single space query for SPACE scope with type_ids filtering", async () => {
+			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd9012"
+			const typeIds = ["abcd1234-abcd-1234-abcd-1234abcd0001"]
+			const query = await client.buildSearchBody({
 				query: "blockchain",
 				scope: "SPACE",
-				space_id: "space-456",
+				space_id: spaceId,
 				type_ids: typeIds,
 			})
 
 			const queryStr = JSON.stringify(query)
-			expect(queryStr).toContain("space-456")
+			expect(queryStr).toContain(spaceId)
 			expect(queryStr).toContain("blockchain")
-			expect(queryStr).toContain("type_relations.entity_to_id")
-			expect(queryStr).toContain("type-1")
+			expect(queryStr).toContain("relations.to_entity_id")
+			expect(queryStr).toContain(typeIds[0])
 		})
 
-		it("should throw error for SPACE_SINGLE scope without space_id", () => {
-			expect(() => {
+		it("throws error for SPACE_SINGLE scope without space_id", async () => {
+			await expect(
 				client.buildSearchBody({
 					query: "blockchain",
 					scope: "SPACE_SINGLE",
-				})
-			}).toThrow("SPACE_SINGLE scope requires space_id")
+				}),
+			).rejects.toThrow("SPACE_SINGLE scope requires space_id")
 		})
 
-		it("should throw error for SPACE scope without space_id", () => {
-			expect(() => {
+		it("throws error for SPACE scope without space_id", async () => {
+			await expect(
 				client.buildSearchBody({
 					query: "blockchain",
 					scope: "SPACE",
-				})
-			}).toThrow("SPACE scope requires space_id")
+				}),
+			).rejects.toThrow("SPACE scope requires space_id")
+		})
+	})
+
+	describe("buildMultiSpaceQuery", () => {
+		it("filters by space_id terms when isRoot is false", () => {
+			const baseQuery = client.buildBaseTextQuery("test")
+			const spaceIds = ["abcd1234-abcd-1234-abcd-1234abcd0001", "abcd1234-abcd-1234-abcd-1234abcd0002"]
+			const query = client.buildMultiSpaceQuery(baseQuery, spaceIds, undefined, false, false)
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain("space_id")
+			expect(queryStr).toContain(spaceIds[0])
+			expect(queryStr).toContain(spaceIds[1])
+			expect(queryStr).not.toContain("in_canonical_graph")
+		})
+
+		it("uses in_canonical_graph filter when isRoot is true", () => {
+			const baseQuery = client.buildBaseTextQuery("test")
+			const spaceIds = ["abcd1234-abcd-1234-abcd-1234abcd0001"]
+			const query = client.buildMultiSpaceQuery(baseQuery, spaceIds, undefined, false, true)
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain("in_canonical_graph")
+			expect(queryStr).not.toContain(spaceIds[0])
+		})
+	})
+
+	describe("fetchSubspaces", () => {
+		const topologyUrl = "http://localhost:9090"
+		let topologyClient: OpenSearchClient
+
+		beforeEach(() => {
+			topologyClient = new OpenSearchClient("http://localhost:9200", "test-index", topologyUrl)
+		})
+
+		afterEach(() => {
+			vi.restoreAllMocks()
+		})
+
+		it("returns isRoot true when topology response has is_root true", async () => {
+			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0001"
+			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+				new Response(JSON.stringify({subspaces: [spaceId, "child-1", "child-2"], is_root: true}), {
+					status: 200,
+					headers: {"Content-Type": "application/json"},
+				}),
+			)
+
+			const result = await topologyClient.fetchSubspaces(spaceId)
+			expect(result.isRoot).toBe(true)
+			expect(result.subspaces).toEqual([spaceId, "child-1", "child-2"])
+		})
+
+		it("returns isRoot false when is_root is missing from response", async () => {
+			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0002"
+			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+				new Response(JSON.stringify({subspaces: [spaceId]}), {
+					status: 200,
+					headers: {"Content-Type": "application/json"},
+				}),
+			)
+
+			const result = await topologyClient.fetchSubspaces(spaceId)
+			expect(result.isRoot).toBe(false)
+			expect(result.subspaces).toEqual([spaceId])
+		})
+
+		it("returns isRoot false on 404", async () => {
+			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0003"
+			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+				new Response(JSON.stringify({error: "not found"}), {status: 404}),
+			)
+
+			const result = await topologyClient.fetchSubspaces(spaceId)
+			expect(result.isRoot).toBe(false)
+			expect(result.subspaces).toEqual([spaceId])
+		})
+
+		it("throws on network error", async () => {
+			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0004"
+			vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("network error"))
+
+			await expect(topologyClient.fetchSubspaces(spaceId)).rejects.toThrow("network error")
+		})
+
+		it("caches results and does not re-fetch", async () => {
+			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0005"
+			const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+				new Response(JSON.stringify({subspaces: [spaceId], is_root: true}), {
+					status: 200,
+					headers: {"Content-Type": "application/json"},
+				}),
+			)
+
+			const result1 = await topologyClient.fetchSubspaces(spaceId)
+			const result2 = await topologyClient.fetchSubspaces(spaceId)
+
+			expect(fetchSpy).toHaveBeenCalledTimes(1)
+			expect(result1).toEqual(result2)
+		})
+	})
+
+	describe("SPACE scope with canonical root", () => {
+		const topologyUrl = "http://localhost:9090"
+		let topologyClient: OpenSearchClient
+
+		beforeEach(() => {
+			topologyClient = new OpenSearchClient("http://localhost:9200", "test-index", topologyUrl)
+		})
+
+		afterEach(() => {
+			vi.restoreAllMocks()
+		})
+
+		it("uses in_canonical_graph filter when space is root", async () => {
+			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0001"
+			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+				new Response(JSON.stringify({subspaces: [spaceId, "child-1"], is_root: true}), {
+					status: 200,
+					headers: {"Content-Type": "application/json"},
+				}),
+			)
+
+			const query = await topologyClient.buildSearchBody({
+				query: "blockchain",
+				scope: "SPACE",
+				space_id: spaceId,
+			})
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain("in_canonical_graph")
+			expect(queryStr).not.toContain(spaceId)
+		})
+
+		it("uses space_id terms filter when space is not root", async () => {
+			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0002"
+			const childId = "abcd1234-abcd-1234-abcd-1234abcd0003"
+			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+				new Response(JSON.stringify({subspaces: [spaceId, childId]}), {
+					status: 200,
+					headers: {"Content-Type": "application/json"},
+				}),
+			)
+
+			const query = await topologyClient.buildSearchBody({
+				query: "blockchain",
+				scope: "SPACE",
+				space_id: spaceId,
+			})
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).not.toContain("in_canonical_graph")
+			expect(queryStr).toContain(spaceId)
+		})
+	})
+
+	describe("init() root space caching", () => {
+		const topologyUrl = "http://localhost:9090"
+		let topologyClient: OpenSearchClient
+
+		beforeEach(() => {
+			topologyClient = new OpenSearchClient("http://localhost:9200", "test-index", topologyUrl)
+		})
+
+		afterEach(() => {
+			vi.restoreAllMocks()
+		})
+
+		it("fetches and caches root space ID on init", async () => {
+			const rootId = "root1234-abcd-1234-abcd-1234abcd0001"
+			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+				new Response(JSON.stringify({root_id: rootId}), {
+					status: 200,
+					headers: {"Content-Type": "application/json"},
+				}),
+			)
+
+			await topologyClient.init()
+
+			// Verify root was fetched from /topology/root
+			expect(globalThis.fetch).toHaveBeenCalledWith(
+				`${topologyUrl}/topology/root`,
+				expect.objectContaining({signal: expect.any(AbortSignal)}),
+			)
+		})
+
+		it("does not crash when init fails with network error", async () => {
+			vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("connection refused"))
+
+			// Should not throw
+			await topologyClient.init()
+		})
+
+		it("does not crash when init returns non-200", async () => {
+			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("not found", {status: 404}))
+
+			// Should not throw
+			await topologyClient.init()
+		})
+
+		it("skips init when no topology URL is configured", async () => {
+			const noTopologyClient = new OpenSearchClient("http://localhost:9200", "test-index")
+			const fetchSpy = vi.spyOn(globalThis, "fetch")
+
+			await noTopologyClient.init()
+
+			expect(fetchSpy).not.toHaveBeenCalled()
+		})
+
+		it("short-circuits fetchSubspaces when space is cached root", async () => {
+			const rootId = "root1234-abcd-1234-abcd-1234abcd0001"
+			// Mock init response
+			const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+				new Response(JSON.stringify({root_id: rootId}), {
+					status: 200,
+					headers: {"Content-Type": "application/json"},
+				}),
+			)
+
+			await topologyClient.init()
+			fetchSpy.mockClear()
+
+			// Now query with the root space — should NOT call fetch
+			const query = await topologyClient.buildSearchBody({
+				query: "blockchain",
+				scope: "SPACE",
+				space_id: rootId,
+			})
+			const queryStr = JSON.stringify(query)
+
+			expect(fetchSpy).not.toHaveBeenCalled()
+			expect(queryStr).toContain("in_canonical_graph")
+		})
+
+		it("calls fetchSubspaces for non-root spaces after init", async () => {
+			const rootId = "root1234-abcd-1234-abcd-1234abcd0001"
+			const otherSpaceId = "abcd1234-abcd-1234-abcd-1234abcd9999"
+			const fetchSpy = vi
+				.spyOn(globalThis, "fetch")
+				// init response
+				.mockResolvedValueOnce(
+					new Response(JSON.stringify({root_id: rootId}), {
+						status: 200,
+						headers: {"Content-Type": "application/json"},
+					}),
+				)
+				// fetchSubspaces response for the non-root space
+				.mockResolvedValueOnce(
+					new Response(JSON.stringify({subspaces: [otherSpaceId]}), {
+						status: 200,
+						headers: {"Content-Type": "application/json"},
+					}),
+				)
+
+			await topologyClient.init()
+
+			const query = await topologyClient.buildSearchBody({
+				query: "blockchain",
+				scope: "SPACE",
+				space_id: otherSpaceId,
+			})
+			const queryStr = JSON.stringify(query)
+
+			// Should have called fetch for subspaces (2nd call after init)
+			expect(fetchSpy).toHaveBeenCalledTimes(2)
+			expect(queryStr).not.toContain("in_canonical_graph")
+			expect(queryStr).toContain(otherSpaceId)
+		})
+
+		it("lazily backfills rootSpaceId when fetchSubspaces discovers root", async () => {
+			const rootId = "root1234-abcd-1234-abcd-1234abcd0001"
+			const fetchSpy = vi
+				.spyOn(globalThis, "fetch")
+				// init fails
+				.mockRejectedValueOnce(new Error("connection refused"))
+				// fetchSubspaces discovers root
+				.mockResolvedValueOnce(
+					new Response(JSON.stringify({subspaces: [rootId, "child-1"], is_root: true}), {
+						status: 200,
+						headers: {"Content-Type": "application/json"},
+					}),
+				)
+
+			await topologyClient.init()
+
+			// First query — fetchSubspaces discovers root
+			const query1 = await topologyClient.buildSearchBody({
+				query: "test",
+				scope: "SPACE",
+				space_id: rootId,
+			})
+			expect(JSON.stringify(query1)).toContain("in_canonical_graph")
+
+			fetchSpy.mockClear()
+
+			// Second query — should short-circuit, no fetch
+			const query2 = await topologyClient.buildSearchBody({
+				query: "test2",
+				scope: "SPACE",
+				space_id: rootId,
+			})
+			expect(JSON.stringify(query2)).toContain("in_canonical_graph")
+			expect(fetchSpy).not.toHaveBeenCalled()
+		})
+
+		it("short-circuits root space in buildUuidQuery SPACE scope", async () => {
+			const rootId = "root1234-abcd-1234-abcd-1234abcd0001"
+			const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+				new Response(JSON.stringify({root_id: rootId}), {
+					status: 200,
+					headers: {"Content-Type": "application/json"},
+				}),
+			)
+
+			await topologyClient.init()
+			fetchSpy.mockClear()
+
+			const uuid = "123e4567-e89b-12d3-a456-426614174000"
+			const query = await topologyClient.buildUuidQuery(uuid, "SPACE", rootId)
+			const queryStr = JSON.stringify(query)
+
+			expect(fetchSpy).not.toHaveBeenCalled()
+			expect(queryStr).toContain("in_canonical_graph")
+			expect(queryStr).toContain("entity_id")
+		})
+
+		it("short-circuits root space in buildTopRankedQuery SPACE scope", async () => {
+			const rootId = "root1234-abcd-1234-abcd-1234abcd0001"
+			const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+				new Response(JSON.stringify({root_id: rootId}), {
+					status: 200,
+					headers: {"Content-Type": "application/json"},
+				}),
+			)
+
+			await topologyClient.init()
+			fetchSpy.mockClear()
+
+			const query = await topologyClient.buildTopRankedQuery("SPACE", rootId)
+			const queryStr = JSON.stringify(query)
+
+			expect(fetchSpy).not.toHaveBeenCalled()
+			expect(queryStr).toContain("in_canonical_graph")
+		})
+	})
+
+	describe("score boost ranking: Geo root space vs other Geo entity", () => {
+		/**
+		 * Regression test for score boost tuning.
+		 *
+		 * Entity A: name="Geo", desc="The root space for the global decentralized knowledge graph."
+		 *           entity_global_score=1.2
+		 * Entity B: name="Geo", desc="Geo is a network for organizing knowledge that we can collectively govern and trust."
+		 *           entity_global_score=0.4
+		 *
+		 * Entity A (the root space) must always rank higher than Entity B in global search,
+		 * even though Entity B has a richer description containing the query term "Geo".
+		 */
+
+		function computeScoreBoost(score: number): number {
+			const clamped = Math.max(score, MIN_SCORE_THRESHOLD)
+			return (clamped + SCORE_SHIFT) * SCORE_BOOST
+		}
+
+		it("should produce a higher score boost for entity_global_score=1.2 than 0.4", () => {
+			const boostA = computeScoreBoost(1.2)
+			const boostB = computeScoreBoost(0.4)
+
+			expect(boostA).toBeGreaterThan(boostB)
+		})
+
+		it("should produce a score boost gap large enough to overcome description text match advantage", () => {
+			const boostA = computeScoreBoost(1.2)
+			const boostB = computeScoreBoost(0.4)
+			const boostGap = boostA - boostB
+
+			// Entity B's description contains "Geo" which adds ~3-5 extra text match points
+			// from match_phrase_prefix, bool_prefix, and fuzzy matches on description.
+			// The score boost gap must exceed this text match advantage.
+			const estimatedDescriptionAdvantage = 5.0
+			expect(boostGap).toBeGreaterThan(estimatedDescriptionAdvantage)
+		})
+
+		it("should include entity_global_score in the global query boost script", () => {
+			const baseQuery = client.buildBaseTextQuery("Geo")
+			const query = client.buildGlobalQuery(baseQuery)
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain("entity_global_score")
+			expect(queryStr).toContain(`* ${SCORE_BOOST}`)
 		})
 	})
 })

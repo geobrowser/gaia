@@ -20,7 +20,7 @@ hermes-schema = { path = "../../../hermes-schema" }
 wire = { path = "../../../wire" }
 
 # GRC-20 encoding
-grc-20 = "0.4.0"
+grc-20 = "0.4.1"
 
 # Core dependencies
 tokio = { version = "1.44", features = ["full"] }

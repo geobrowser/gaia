@@ -1,0 +1,140 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: atlas-alerts
+  namespace: knowledge
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: atlas.production.rules
+      rules:
+        - alert: AtlasDeploymentUnavailable
+          expr: kube_deployment_status_replicas_available{namespace="knowledge",deployment="atlas"} < 1
+          for: 5m
+          labels:
+            severity: critical
+            service: atlas
+            environment: production
+          annotations:
+            summary: Atlas deployment unavailable (production)
+            description: Atlas has no available replicas in knowledge for 5 minutes.
+
+        - alert: AtlasCrashLoopBackOff
+          expr: max_over_time(kube_pod_container_status_waiting_reason{namespace="knowledge",pod=~"atlas-.*",container="atlas",reason="CrashLoopBackOff"}[10m]) >= 1
+          for: 10m
+          labels:
+            severity: critical
+            service: atlas
+            environment: production
+          annotations:
+            summary: Atlas container crash looping (production)
+            description: Atlas pod has been in CrashLoopBackOff in knowledge.
+
+        - alert: AtlasRestartSpike
+          expr: increase(kube_pod_container_status_restarts_total{namespace="knowledge",pod=~"atlas-.*",container="atlas"}[15m]) > 3
+          for: 5m
+          labels:
+            severity: warning
+            service: atlas
+            environment: production
+          annotations:
+            summary: Atlas restart spike (production)
+            description: Atlas restarted more than 3 times in 15 minutes.
+
+        - alert: AtlasMemoryHigh
+          expr: |
+            (
+              container_memory_working_set_bytes{namespace="knowledge",pod=~"atlas-.*",container="atlas"}
+              /
+              on(namespace,pod,container)
+              kube_pod_container_resource_limits{namespace="knowledge",pod=~"atlas-.*",container="atlas",resource="memory",unit="byte"}
+            ) > 0.90
+          for: 15m
+          labels:
+            severity: warning
+            service: atlas
+            environment: production
+          annotations:
+            summary: Atlas memory usage above 90% (production)
+            description: Atlas memory working set has exceeded 90% of configured limit for 15 minutes.
+
+        - alert: AtlasCpuThrottlingHigh
+          expr: |
+            (
+              rate(container_cpu_cfs_throttled_seconds_total{namespace="knowledge",pod=~"atlas-.*",container="atlas"}[5m])
+              /
+              rate(container_cpu_cfs_periods_total{namespace="knowledge",pod=~"atlas-.*",container="atlas"}[5m])
+            ) > 0.25
+          for: 15m
+          labels:
+            severity: warning
+            service: atlas
+            environment: production
+          annotations:
+            summary: Atlas CPU throttling high (production)
+            description: Atlas CPU throttling ratio has been above 25% for 15 minutes.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: atlas-grafana-dashboard-production
+  namespace: knowledge
+  labels:
+    grafana_dashboard: "1"
+data:
+  atlas-overview-production.json: |
+    {
+      "uid": "atlas-production-overview",
+      "title": "Atlas Overview (Production)",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "15s",
+      "time": { "from": "now-6h", "to": "now" },
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Available Replicas",
+          "id": 1,
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "targets": [{ "expr": "kube_deployment_status_replicas_available{namespace=\"knowledge\",deployment=\"atlas\"}", "refId": "A" }]
+        },
+        {
+          "type": "stat",
+          "title": "Desired Replicas",
+          "id": 2,
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "targets": [{ "expr": "kube_deployment_spec_replicas{namespace=\"knowledge\",deployment=\"atlas\"}", "refId": "A" }]
+        },
+        {
+          "type": "timeseries",
+          "title": "CPU Usage Cores",
+          "id": 3,
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+          "targets": [{ "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",pod=~\"atlas-.*\",container=\"atlas\"}[5m]))", "legendFormat": "atlas cpu", "refId": "A" }]
+        },
+        {
+          "type": "timeseries",
+          "title": "Memory Working Set",
+          "id": 4,
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+          "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+          "targets": [{ "expr": "sum(container_memory_working_set_bytes{namespace=\"knowledge\",pod=~\"atlas-.*\",container=\"atlas\"})", "legendFormat": "atlas memory", "refId": "A" }]
+        },
+        {
+          "type": "timeseries",
+          "title": "Restarts (5m increase)",
+          "id": 5,
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+          "targets": [{ "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"knowledge\",pod=~\"atlas-.*\",container=\"atlas\"}[5m]))", "legendFormat": "restarts", "refId": "A" }]
+        },
+        {
+          "type": "timeseries",
+          "title": "CPU Throttling Ratio",
+          "id": 6,
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+          "targets": [{ "expr": "sum(rate(container_cpu_cfs_throttled_seconds_total{namespace=\"knowledge\",pod=~\"atlas-.*\",container=\"atlas\"}[5m])) / sum(rate(container_cpu_cfs_periods_total{namespace=\"knowledge\",pod=~\"atlas-.*\",container=\"atlas\"}[5m]))", "legendFormat": "throttling", "refId": "A" }]
+        }
+      ],
+      "templating": { "list": [] }
+    }

@@ -6,16 +6,16 @@ use hermes_schema::pb::knowledge::HermesEdit;
 use grc_20::{encode_edit, CreateEntity, DeleteEntity, Edit as Grc20Edit, Op as Grc20Op, PropertyValue, UnsetLanguage, UnsetValue, UpdateEntity, Value as Grc20Value};
 use grc_20::model::RestoreEntity;
 
-use sdk::core::ids::{AVATAR_PROPERTY_ID, DESCRIPTION_PROPERTY_ID, NAME_PROPERTY_ID};
+use sdk::core::ids::{DESCRIPTION_PROPERTY_ID, IMAGE_URL_PROPERTY_ID, NAME_PROPERTY_ID};
 
-/// Generate an UpdateEntity operation with name and description
+/// Generate an UpdateEntity operation with name, description, and optional image_url
 pub fn create_entity_edit(
     edit_name: &str,
     space_id: Uuid,
     entity_id: Uuid,
     name: Option<&str>,
     description: Option<&str>,
-    avatar: Option<&str>,
+    image_url: Option<&str>,
 ) -> Result<Vec<u8>> {
     let mut set_properties = Vec::new();
 
@@ -41,12 +41,12 @@ pub fn create_entity_edit(
         });
     }
 
-    // Add avatar if provided
-    if let Some(avatar_value) = avatar {
+    // Add image_url if provided
+    if let Some(image_url_value) = image_url {
         set_properties.push(PropertyValue {
-            property: *Uuid::parse_str(AVATAR_PROPERTY_ID)?.as_bytes(),
+            property: *Uuid::parse_str(IMAGE_URL_PROPERTY_ID)?.as_bytes(),
             value: Grc20Value::Text {
-                value: avatar_value.into(),
+                value: image_url_value.into(),
                 language: None,
             },
         });
@@ -148,7 +148,7 @@ pub fn update_entity_with_set_and_unset(
     entity_id: Uuid,
     set_name: Option<&str>,
     set_description: Option<&str>,
-    set_avatar: Option<&str>,
+    set_image_url: Option<&str>,
     unset_property_ids: Vec<&str>,
 ) -> Result<Vec<u8>> {
     let mut set_properties = Vec::new();
@@ -175,12 +175,12 @@ pub fn update_entity_with_set_and_unset(
         });
     }
 
-    // Add avatar if provided
-    if let Some(avatar_value) = set_avatar {
+    // Add image_url if provided
+    if let Some(image_url_value) = set_image_url {
         set_properties.push(PropertyValue {
-            property: *Uuid::parse_str(AVATAR_PROPERTY_ID)?.as_bytes(),
+            property: *Uuid::parse_str(IMAGE_URL_PROPERTY_ID)?.as_bytes(),
             value: Grc20Value::Text {
-                value: avatar_value.into(),
+                value: image_url_value.into(),
                 language: None,
             },
         });
@@ -241,7 +241,7 @@ pub fn create_entity_grc20_op(
     entity_id: Uuid,
     name: Option<&str>,
     description: Option<&str>,
-    avatar: Option<&str>,
+    image_url: Option<&str>,
 ) -> Result<Vec<u8>> {
     let mut values = Vec::new();
 
@@ -267,12 +267,12 @@ pub fn create_entity_grc20_op(
         });
     }
 
-    // Add avatar if provided
-    if let Some(avatar_value) = avatar {
+    // Add image_url if provided
+    if let Some(image_url_value) = image_url {
         values.push(PropertyValue {
-            property: *Uuid::parse_str(AVATAR_PROPERTY_ID)?.as_bytes(),
+            property: *Uuid::parse_str(IMAGE_URL_PROPERTY_ID)?.as_bytes(),
             value: Grc20Value::Text {
-                value: avatar_value.into(),
+                value: image_url_value.into(),
                 language: None,
             },
         });

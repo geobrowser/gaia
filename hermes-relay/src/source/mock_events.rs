@@ -4,7 +4,6 @@
 //! the action types from the Space Registry contract:
 //!
 //! - `personal_space_registered` → `SPACE_ID_REGISTERED` + `SPACE_TYPE_DECLARED` actions
-//! - `subspace_added` → `GOVERNANCE.SUBSPACE_ADDED` action
 //! - `subspace_verified` → `GOVERNANCE.SUBSPACE_VERIFIED` action
 //! - `subspace_related` → `GOVERNANCE.SUBSPACE_RELATED` action
 //! - `subspace_topic_declared` → `GOVERNANCE.SUBSPACE_TOPIC_DECLARED` action
@@ -28,6 +27,8 @@
 use alloy::primitives::U256;
 use alloy::sol;
 use alloy::sol_types::SolType;
+use ethabi::Token;
+use ethabi::ethereum_types::U256 as EthU256;
 
 use crate::actions;
 use hermes_substream::pb::hermes::Action;
@@ -156,47 +157,14 @@ pub fn space_migrated(space_id: SpaceId, new_space_address: Address) -> Action {
 // Subspace Actions
 // =============================================================================
 
-/// Create a SUBSPACE_ADDED action.
-///
-/// - `parent_space_id`: The parent space adding the subspace
-/// - `subspace_id`: The subspace being added
-pub fn subspace_added(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
-    let mut topic = vec![0u8; 16];
-    topic.extend_from_slice(&subspace_id);
-
-    Action {
-        from_id: parent_space_id.to_vec(),
-        to_id: vec![0u8; 16],
-        action: actions::SUBSPACE_ADDED.to_vec(),
-        topic,
-        data: vec![],
-    }
-}
-
-/// Create a SUBSPACE_REMOVED action.
-///
-/// - `parent_space_id`: The parent space removing the subspace
-/// - `subspace_id`: The subspace being removed
-pub fn subspace_removed(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
-    let mut topic = vec![0u8; 16];
-    topic.extend_from_slice(&subspace_id);
-
-    Action {
-        from_id: parent_space_id.to_vec(),
-        to_id: vec![0u8; 16],
-        action: actions::SUBSPACE_REMOVED.to_vec(),
-        topic,
-        data: vec![],
-    }
-}
-
 /// Create a SUBSPACE_VERIFIED action.
 ///
 /// - `parent_space_id`: The space verifying the subspace
 /// - `subspace_id`: The verified subspace
 pub fn subspace_verified(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
-    let mut topic = vec![0u8; 16];
-    topic.extend_from_slice(&subspace_id);
+    // ZC16: bytes32(bytes16) right-pads — subspace_id in [0..16], zeros in [16..32]
+    let mut topic = subspace_id.to_vec();
+    topic.extend_from_slice(&[0u8; 16]);
 
     Action {
         from_id: parent_space_id.to_vec(),
@@ -212,13 +180,50 @@ pub fn subspace_verified(parent_space_id: SpaceId, subspace_id: SpaceId) -> Acti
 /// - `parent_space_id`: The space marking another as related
 /// - `subspace_id`: The related subspace
 pub fn subspace_related(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
-    let mut topic = vec![0u8; 16];
-    topic.extend_from_slice(&subspace_id);
+    // ZC16: bytes32(bytes16) right-pads — subspace_id in [0..16], zeros in [16..32]
+    let mut topic = subspace_id.to_vec();
+    topic.extend_from_slice(&[0u8; 16]);
 
     Action {
         from_id: parent_space_id.to_vec(),
         to_id: vec![0u8; 16],
         action: actions::SUBSPACE_RELATED.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
+/// Create a SUBSPACE_UNVERIFIED action (removes a verified edge).
+///
+/// - `parent_space_id`: The space removing verification
+/// - `subspace_id`: The subspace being unverified
+pub fn subspace_unverified(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
+    // ZC16: bytes32(bytes16) right-pads — subspace_id in [0..16], zeros in [16..32]
+    let mut topic = subspace_id.to_vec();
+    topic.extend_from_slice(&[0u8; 16]);
+
+    Action {
+        from_id: parent_space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::SUBSPACE_UNVERIFIED.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
+/// Create a SUBSPACE_UNRELATED action (removes a related edge).
+///
+/// - `parent_space_id`: The space removing the related link
+/// - `subspace_id`: The subspace being unrelated
+pub fn subspace_unrelated(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
+    // ZC16: bytes32(bytes16) right-pads — subspace_id in [0..16], zeros in [16..32]
+    let mut topic = subspace_id.to_vec();
+    topic.extend_from_slice(&[0u8; 16]);
+
+    Action {
+        from_id: parent_space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::SUBSPACE_UNRELATED.to_vec(),
         topic,
         data: vec![],
     }
@@ -241,6 +246,28 @@ pub fn subspace_topic_declared(
         from_id: parent_space_id.to_vec(),
         to_id: vec![0u8; 16],
         action: actions::SUBSPACE_TOPIC_DECLARED.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
+/// Create a SUBSPACE_TOPIC_REMOVED action.
+///
+/// - `parent_space_id`: The parent space removing the topic
+/// - `subspace_id`: The subspace (first 16 bytes of topic field)
+/// - `topic_id`: The topic ID (last 16 bytes of topic field)
+pub fn subspace_topic_removed(
+    parent_space_id: SpaceId,
+    subspace_id: SpaceId,
+    topic_id: TopicId,
+) -> Action {
+    let mut topic = subspace_id.to_vec();
+    topic.extend_from_slice(&topic_id);
+
+    Action {
+        from_id: parent_space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::SUBSPACE_TOPIC_REMOVED.to_vec(),
         topic,
         data: vec![],
     }
@@ -287,6 +314,8 @@ pub mod selectors {
     pub const FLAG: [u8; 4] = [0xfe, 0x1e, 0x30, 0x42];
     /// unflag(bytes32,bytes)
     pub const UNFLAG: [u8; 4] = [0xc6, 0x96, 0x84, 0x0f];
+    /// ping(bytes32,bytes32,bytes)
+    pub const PING: [u8; 4] = [0xc7, 0x0d, 0x82, 0x82];
 }
 
 /// A proposal action (to, value, data).
@@ -356,11 +385,17 @@ impl ProposalAction {
 
     /// Create a publish action.
     pub fn publish(topic: [u8; 32], content_uri: &[u8], metadata: &[u8]) -> Self {
+        // ABI-encode (bytes32, bytes, bytes)
+        use alloy::primitives::{Bytes, FixedBytes};
+        type PublishArgsType = sol! { (bytes32, bytes, bytes) };
+        let encoded = PublishArgsType::abi_encode(&(
+            FixedBytes::<32>::from(topic),
+            Bytes::copy_from_slice(content_uri),
+            Bytes::copy_from_slice(metadata),
+        ));
+
         let mut data = selectors::PUBLISH.to_vec();
-        // Simplified encoding - just append the topic and content
-        data.extend_from_slice(&topic);
-        data.extend_from_slice(content_uri);
-        data.extend_from_slice(metadata);
+        data.extend_from_slice(&encoded);
         Self {
             to: [0u8; 20],
             value: [0u8; 32],
@@ -405,6 +440,71 @@ impl ProposalAction {
             data,
         }
     }
+
+    /// Create a ping action for subspace operations.
+    ///
+    /// The ping function signature is `ping(bytes32 action, bytes32 topic, bytes data)`.
+    /// - `action_hash`: keccak256 of the subspace action name
+    /// - `topic`: packed field — target ID in bytes [16..32]
+    /// - `ping_data`: additional data (always empty for subspace actions)
+    ///
+    /// Uses `abi_encode_params` to produce raw function parameters (no outer
+    /// tuple wrapping), matching what viem's `encodeFunctionData` produces.
+    pub fn ping(action_hash: [u8; 32], topic: [u8; 32], ping_data: &[u8]) -> Self {
+        use alloy::primitives::{Bytes as PrimBytes, FixedBytes};
+        type PingArgsType = sol! { (bytes32, bytes32, bytes) };
+        let encoded = PingArgsType::abi_encode_params(&(
+            FixedBytes::<32>::from(action_hash),
+            FixedBytes::<32>::from(topic),
+            PrimBytes::copy_from_slice(ping_data),
+        ));
+
+        let mut data = selectors::PING.to_vec();
+        data.extend_from_slice(&encoded);
+        Self {
+            to: [0u8; 20],
+            value: [0u8; 32],
+            data,
+        }
+    }
+
+    /// Create a ping action for subspace edge operations (verified, unverified, related, unrelated).
+    ///
+    /// Convenience wrapper that packs the target space ID into the topic field.
+    pub fn ping_subspace_edge(action_hash: [u8; 32], target_space_id: SpaceId) -> Self {
+        let mut topic = [0u8; 32];
+        // ZC16: bytes32(bytes16) right-pads — target occupies [0..16]
+        topic[0..16].copy_from_slice(&target_space_id);
+        Self::ping(action_hash, topic, &[])
+    }
+
+    /// Create a ping action for subspace topic operations (topic declared, topic removed).
+    ///
+    /// Convenience wrapper that packs the target topic ID into the topic field.
+    pub fn ping_subspace_topic(action_hash: [u8; 32], target_topic_id: TopicId) -> Self {
+        let mut topic = [0u8; 32];
+        topic[16..32].copy_from_slice(&target_topic_id);
+        Self::ping(action_hash, topic, &[])
+    }
+
+    /// Create a set-topic proposal action using the DAO ping entrypoint.
+    ///
+    /// The topic ID is packed as `bytes32(bytes16(topicId))`, so the target
+    /// occupies bytes [0..16] and the rest is zero padding.
+    pub fn set_topic(target_topic_id: TopicId, topic_data: &[u8]) -> Self {
+        let mut topic = [0u8; 32];
+        topic[0..16].copy_from_slice(&target_topic_id);
+        Self::ping(actions::TOPIC_DECLARED, topic, topic_data)
+    }
+
+    /// Create an unset-topic proposal action using the DAO ping entrypoint.
+    ///
+    /// The removed topic ID is carried in the first 16 bytes of the ping topic.
+    pub fn unset_topic(target_topic_id: TopicId, topic_data: &[u8]) -> Self {
+        let mut topic = [0u8; 32];
+        topic[0..16].copy_from_slice(&target_topic_id);
+        Self::ping(actions::TOPIC_REMOVED, topic, topic_data)
+    }
 }
 
 /// ABI-encode proposal data: (bytes16 proposalId, uint8 votingMode, Action[])
@@ -413,8 +513,6 @@ fn encode_proposal_data(
     voting_mode: VotingMode,
     actions: &[ProposalAction],
 ) -> Vec<u8> {
-    use ethabi::{Token, ethereum_types::U256 as EthU256};
-
     // Convert actions to ethabi tokens
     let action_tokens: Vec<Token> = actions
         .iter()
@@ -786,21 +884,20 @@ pub fn membership_requested(
 // Content Actions
 // =============================================================================
 
-// Solidity type for topic declared data: bytes16
-type TopicDeclaredDataType = sol! { bytes16 };
-
 /// Create a TOPIC_DECLARED action.
 ///
 /// - `space_id`: The space declaring the topic
-/// - `topic_id`: The 16-byte topic UUID
+/// - `topic_id`: The 16-byte topic UUID stored in the first 16 bytes of `topic`
 pub fn topic_declared(space_id: SpaceId, topic_id: TopicId) -> Action {
-    use alloy::primitives::FixedBytes;
+    let mut topic = topic_id.to_vec();
+    topic.extend_from_slice(&[0u8; 16]);
+
     Action {
         from_id: space_id.to_vec(),
         to_id: vec![0u8; 16],
         action: actions::TOPIC_DECLARED.to_vec(),
-        topic: vec![0u8; 32], // Empty topic field
-        data: TopicDeclaredDataType::abi_encode(&FixedBytes::<16>::from_slice(&topic_id)),
+        topic,
+        data: vec![],
     }
 }
 
@@ -1025,6 +1122,28 @@ pub mod test_topology {
     pub const PROPOSAL_5: ProposalId = make_proposal_id(0xA5);
     pub const PROPOSAL_6: ProposalId = make_proposal_id(0xA6);
     pub const PROPOSAL_7: ProposalId = make_proposal_id(0xA7);
+    // Subspace proposal IDs (proposals whose action is a ping-based subspace operation)
+    pub const PROPOSAL_8: ProposalId = make_proposal_id(0xA8);
+    pub const PROPOSAL_9: ProposalId = make_proposal_id(0xA9);
+    pub const PROPOSAL_10: ProposalId = make_proposal_id(0xAA);
+    pub const PROPOSAL_11: ProposalId = make_proposal_id(0xAB);
+    pub const PROPOSAL_12: ProposalId = make_proposal_id(0xAC);
+    pub const PROPOSAL_13: ProposalId = make_proposal_id(0xAD);
+    pub const PROPOSAL_14: ProposalId = make_proposal_id(0xAE);
+    pub const PROPOSAL_15: ProposalId = make_proposal_id(0xAF);
+
+    // Target IDs for subspace proposal actions (distinct from trust pipeline targets)
+    pub const SUBSPACE_TARGET_VERIFIED: SpaceId = make_id(0xC1);
+    pub const SUBSPACE_TARGET_UNVERIFIED: SpaceId = make_id(0xC2);
+    pub const SUBSPACE_TARGET_RELATED: SpaceId = make_id(0xC3);
+    pub const SUBSPACE_TARGET_UNRELATED: SpaceId = make_id(0xC4);
+    pub const SUBSPACE_TARGET_TOPIC_DECLARED: TopicId = make_id(0xC5);
+    pub const SUBSPACE_TARGET_TOPIC_REMOVED: TopicId = make_id(0xC6);
+    pub const SPACE_TARGET_TOPIC_SET: TopicId = make_id(0xD1);
+    pub const SPACE_TARGET_TOPIC_REMOVED: TopicId = make_id(0xD2);
+
+    // Topic for trust pipeline topic removal testing
+    pub const TOPIC_REMOVED: TopicId = make_id(0x92);
 
     // Object types for voting
     pub const OBJECT_TYPE_ENTITY: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
@@ -1037,7 +1156,7 @@ pub mod test_topology {
     ///
     /// Returns actions for:
     /// - Space registrations (personal and DAO)
-    /// - Subspace operations (added, removed, verified, related, topic declared)
+    /// - Subspace operations (verified, related, topic declared)
     /// - Editor/member management
     /// - Proposals (created, voted, executed)
     /// - Content operations (edits, flagging)
@@ -1105,6 +1224,10 @@ pub mod test_topology {
         actions.push(subspace_topic_declared(SPACE_A, SPACE_A, TOPIC_SHARED));
         actions.push(subspace_topic_declared(SPACE_X, SPACE_A, TOPIC_A));
         actions.push(subspace_topic_declared(SPACE_P, SPACE_Q, TOPIC_Q));
+
+        // Phase 4b: Subspace topic removal (declare then remove to test both paths)
+        actions.push(subspace_topic_declared(SPACE_A, SPACE_C, TOPIC_REMOVED));
+        actions.push(subspace_topic_removed(SPACE_A, SPACE_C, TOPIC_REMOVED));
 
         // Phase 5: Editor/member operations
         actions.push(editor_added(SPACE_A, SPACE_B));
@@ -1179,11 +1302,12 @@ pub mod test_topology {
         actions.push(member_removed(SPACE_A, make_id(0x12)));
 
         // Proposal 3: Add editor
+        // Note: Using 0x50 to avoid collision with SPACE_Z (0x22) which is in the non-canonical island
         actions.push(proposal_created(
             SPACE_B,
             PROPOSAL_3,
             VotingMode::Fast,
-            vec![ProposalAction::add_editor(make_id(0x22))],
+            vec![ProposalAction::add_editor(make_id(0x50))],
         ));
         actions.push(proposal_settings_selected(
             SPACE_B,
@@ -1213,14 +1337,15 @@ pub mod test_topology {
             VoteOption::Abstain,
         ));
         actions.push(proposal_executed(SPACE_B, PROPOSAL_3));
-        actions.push(editor_added(SPACE_B, make_id(0x22)));
+        actions.push(editor_added(SPACE_B, make_id(0x50)));
 
         // Proposal 4: Remove editor
+        // Note: Using 0x51 to avoid collision with SPACE_W (0x23) which is in the non-canonical island
         actions.push(proposal_created(
             SPACE_B,
             PROPOSAL_4,
             VotingMode::Slow,
-            vec![ProposalAction::remove_editor(make_id(0x23))],
+            vec![ProposalAction::remove_editor(make_id(0x51))],
         ));
         actions.push(proposal_settings_selected(
             SPACE_B,
@@ -1251,7 +1376,7 @@ pub mod test_topology {
             VoteOption::Yes,
         ));
         actions.push(proposal_executed(SPACE_B, PROPOSAL_4));
-        actions.push(editor_removed(SPACE_B, make_id(0x23)));
+        actions.push(editor_removed(SPACE_B, make_id(0x51)));
 
         // Proposal 5: Flag content
         let mut flag_target = [0u8; 32];
@@ -1367,6 +1492,273 @@ pub mod test_topology {
             VoteOption::Yes,
         ));
         actions.push(proposal_executed(SPACE_B, PROPOSAL_7));
+
+        // Proposals 8-15: Ping-based proposal actions
+        // Each proposal has a single ping action targeting a unique space/topic ID.
+
+        // Proposal 8: SubspaceVerified
+        actions.push(proposal_created(
+            SPACE_A,
+            PROPOSAL_8,
+            VotingMode::Fast,
+            vec![ProposalAction::ping_subspace_edge(
+                actions::SUBSPACE_VERIFIED,
+                SUBSPACE_TARGET_VERIFIED,
+            )],
+        ));
+        actions.push(proposal_settings_selected(
+            SPACE_A,
+            PROPOSAL_8,
+            VotingMode::Fast,
+            0,
+            86400,
+            50,
+            60,
+        ));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_A,
+            PROPOSAL_8,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_A,
+            PROPOSAL_8,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_executed(SPACE_A, PROPOSAL_8));
+
+        // Proposal 9: SubspaceUnverified
+        actions.push(proposal_created(
+            SPACE_A,
+            PROPOSAL_9,
+            VotingMode::Fast,
+            vec![ProposalAction::ping_subspace_edge(
+                actions::SUBSPACE_UNVERIFIED,
+                SUBSPACE_TARGET_UNVERIFIED,
+            )],
+        ));
+        actions.push(proposal_settings_selected(
+            SPACE_A,
+            PROPOSAL_9,
+            VotingMode::Fast,
+            0,
+            86400,
+            50,
+            60,
+        ));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_A,
+            PROPOSAL_9,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_A,
+            PROPOSAL_9,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_executed(SPACE_A, PROPOSAL_9));
+
+        // Proposal 10: SubspaceRelated
+        actions.push(proposal_created(
+            SPACE_B,
+            PROPOSAL_10,
+            VotingMode::Fast,
+            vec![ProposalAction::ping_subspace_edge(
+                actions::SUBSPACE_RELATED,
+                SUBSPACE_TARGET_RELATED,
+            )],
+        ));
+        actions.push(proposal_settings_selected(
+            SPACE_B,
+            PROPOSAL_10,
+            VotingMode::Fast,
+            0,
+            86400,
+            50,
+            60,
+        ));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_B,
+            PROPOSAL_10,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_B,
+            PROPOSAL_10,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_executed(SPACE_B, PROPOSAL_10));
+
+        // Proposal 11: SubspaceUnrelated
+        actions.push(proposal_created(
+            SPACE_B,
+            PROPOSAL_11,
+            VotingMode::Fast,
+            vec![ProposalAction::ping_subspace_edge(
+                actions::SUBSPACE_UNRELATED,
+                SUBSPACE_TARGET_UNRELATED,
+            )],
+        ));
+        actions.push(proposal_settings_selected(
+            SPACE_B,
+            PROPOSAL_11,
+            VotingMode::Fast,
+            0,
+            86400,
+            50,
+            60,
+        ));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_B,
+            PROPOSAL_11,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_B,
+            PROPOSAL_11,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_executed(SPACE_B, PROPOSAL_11));
+
+        // Proposal 12: SubspaceTopicDeclared
+        actions.push(proposal_created(
+            SPACE_C,
+            PROPOSAL_12,
+            VotingMode::Fast,
+            vec![ProposalAction::ping_subspace_topic(
+                actions::SUBSPACE_TOPIC_DECLARED,
+                SUBSPACE_TARGET_TOPIC_DECLARED,
+            )],
+        ));
+        actions.push(proposal_settings_selected(
+            SPACE_C,
+            PROPOSAL_12,
+            VotingMode::Fast,
+            0,
+            86400,
+            50,
+            60,
+        ));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_C,
+            PROPOSAL_12,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_C,
+            PROPOSAL_12,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_executed(SPACE_C, PROPOSAL_12));
+
+        // Proposal 13: SubspaceTopicRemoved
+        actions.push(proposal_created(
+            SPACE_C,
+            PROPOSAL_13,
+            VotingMode::Fast,
+            vec![ProposalAction::ping_subspace_topic(
+                actions::SUBSPACE_TOPIC_REMOVED,
+                SUBSPACE_TARGET_TOPIC_REMOVED,
+            )],
+        ));
+        actions.push(proposal_settings_selected(
+            SPACE_C,
+            PROPOSAL_13,
+            VotingMode::Fast,
+            0,
+            86400,
+            50,
+            60,
+        ));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_C,
+            PROPOSAL_13,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_C,
+            PROPOSAL_13,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_executed(SPACE_C, PROPOSAL_13));
+
+        // Proposal 14: SetTopic
+        actions.push(proposal_created(
+            SPACE_A,
+            PROPOSAL_14,
+            VotingMode::Fast,
+            vec![ProposalAction::set_topic(
+                SPACE_TARGET_TOPIC_SET,
+                b"topic-metadata",
+            )],
+        ));
+        actions.push(proposal_settings_selected(
+            SPACE_A,
+            PROPOSAL_14,
+            VotingMode::Fast,
+            0,
+            86400,
+            50,
+            60,
+        ));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_A,
+            PROPOSAL_14,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_A,
+            PROPOSAL_14,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_executed(SPACE_A, PROPOSAL_14));
+
+        // Proposal 15: UnsetTopic
+        actions.push(proposal_created(
+            SPACE_A,
+            PROPOSAL_15,
+            VotingMode::Fast,
+            vec![ProposalAction::unset_topic(
+                SPACE_TARGET_TOPIC_REMOVED,
+                b"topic-metadata",
+            )],
+        ));
+        actions.push(proposal_settings_selected(
+            SPACE_A,
+            PROPOSAL_15,
+            VotingMode::Fast,
+            0,
+            86400,
+            50,
+            60,
+        ));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_A,
+            PROPOSAL_15,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_A,
+            PROPOSAL_15,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_executed(SPACE_A, PROPOSAL_15));
 
         // Phase 7: Edits
         actions.push(edit_published(ROOT_SPACE_ID, "QmRootEdit1CreatePersons"));
@@ -1504,7 +1896,7 @@ mod tests {
 
         assert_eq!(action.from_id, parent.to_vec());
         assert_eq!(action.action, actions::SUBSPACE_VERIFIED.to_vec());
-        assert_eq!(&action.topic[16..32], &subspace);
+        assert_eq!(&action.topic[0..16], &subspace);
     }
 
     #[test]
@@ -1515,7 +1907,7 @@ mod tests {
 
         assert_eq!(action.from_id, parent.to_vec());
         assert_eq!(action.action, actions::SUBSPACE_RELATED.to_vec());
-        assert_eq!(&action.topic[16..32], &related);
+        assert_eq!(&action.topic[0..16], &related);
     }
 
     #[test]
@@ -1529,6 +1921,19 @@ mod tests {
         assert_eq!(action.action, actions::SUBSPACE_TOPIC_DECLARED.to_vec());
         assert_eq!(&action.topic[0..16], &subspace);
         assert_eq!(&action.topic[16..32], &topic);
+    }
+
+    #[test]
+    fn test_topic_declared_format() {
+        let space_id = make_id(0x01);
+        let topic_id = make_id(0x02);
+        let action = topic_declared(space_id, topic_id);
+
+        assert_eq!(action.from_id, space_id.to_vec());
+        assert_eq!(action.action, actions::TOPIC_DECLARED.to_vec());
+        assert_eq!(&action.topic[0..16], &topic_id);
+        assert_eq!(&action.topic[16..32], &[0u8; 16]);
+        assert!(action.data.is_empty());
     }
 
     #[test]
@@ -1597,6 +2002,10 @@ mod tests {
             .iter()
             .filter(|a| a.action == actions::SUBSPACE_TOPIC_DECLARED.to_vec())
             .count();
+        let topic_removed_count = actions
+            .iter()
+            .filter(|a| a.action == actions::SUBSPACE_TOPIC_REMOVED.to_vec())
+            .count();
         let edit_count = actions
             .iter()
             .filter(|a| a.action == actions::EDITS_PUBLISHED.to_vec())
@@ -1613,12 +2022,14 @@ mod tests {
         assert_eq!(verified_count, 10);
         // 4 related subspaces
         assert_eq!(related_count, 4);
-        // 5 topic declarations
-        assert_eq!(topic_declared_count, 5);
+        // 6 topic declarations (5 original + 1 declared-then-removed)
+        assert_eq!(topic_declared_count, 6);
+        // 1 topic removal
+        assert_eq!(topic_removed_count, 1);
         // 9 edits (6 original + 3 type-related for search indexer testing)
         assert_eq!(edit_count, 9);
-        // 7 proposals with settings (one for each proposal: add_member, remove_member, add_editor, remove_editor, flag, unflag, publish)
-        assert_eq!(proposal_settings_count, 7);
+        // 15 proposals with settings (7 original + 6 subspace + 2 space-topic proposals)
+        assert_eq!(proposal_settings_count, 15);
     }
 
     #[test]

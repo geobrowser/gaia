@@ -50,11 +50,14 @@ use uuid::Uuid;
 ///     description: None,
 ///     avatar: None,
 ///     cover: None,
-///     add_type_relation: None,
+///     image_url: None,
+///     add_relation: None,
 ///     entity_global_score: None,
 ///     space_score: None,
 ///     entity_space_score: None,
 ///     deleted: None,
+///     space_topic_entity_id: None,
+///     in_canonical_graph: None,
 /// };
 ///
 /// // This will create the document if it doesn't exist, or update it if it does
@@ -271,6 +274,8 @@ impl SearchIndexService {
                 succeeded: 0,
                 failed: 0,
                 results: vec![],
+                wall_ms: 0,
+                took_ms: 0,
             });
         }
 
@@ -283,8 +288,10 @@ impl SearchIndexService {
         }
 
         // Convert to EntityOperations for bulk_operations
-        let operations: Vec<EntityOperation> =
-            requests.into_iter().map(EntityOperation::Update).collect();
+        let operations: Vec<EntityOperation> = requests
+            .into_iter()
+            .map(|r| EntityOperation::Update(Box::new(r)))
+            .collect();
 
         self.provider.bulk_operations(&operations).await
     }
@@ -321,6 +328,8 @@ impl SearchIndexService {
                 succeeded: 0,
                 failed: 0,
                 results: vec![],
+                wall_ms: 0,
+                took_ms: 0,
             });
         }
 
@@ -370,6 +379,8 @@ impl SearchIndexService {
                 succeeded: 0,
                 failed: 0,
                 results: vec![],
+                wall_ms: 0,
+                took_ms: 0,
             });
         }
 
@@ -483,6 +494,8 @@ mod tests {
                 succeeded: operations.len(),
                 failed: 0,
                 results,
+                wall_ms: 0,
+                took_ms: 0,
             })
         }
     }
@@ -495,11 +508,14 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
-            add_type_relation: None,
+            image_url: None,
+            add_relation: None,
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
             deleted: None,
+            space_topic_entity_id: None,
+            in_canonical_graph: None,
         }
     }
 
@@ -623,11 +639,14 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
-            add_type_relation: None,
+            image_url: None,
+            add_relation: None,
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
             deleted: None,
+            space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
         assert!(service.update(request).await.is_err());
 
@@ -639,11 +658,14 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
-            add_type_relation: None,
+            image_url: None,
+            add_relation: None,
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
             deleted: None,
+            space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
         assert!(service.update(request).await.is_err());
     }
@@ -683,11 +705,14 @@ mod tests {
                 description: None,
                 avatar: None,
                 cover: None,
-                add_type_relation: None,
+                image_url: None,
+                add_relation: None,
                 entity_global_score: None,
                 space_score: None,
                 entity_space_score: None,
                 deleted: None,
+                space_topic_entity_id: None,
+                in_canonical_graph: None,
             })
             .collect();
 

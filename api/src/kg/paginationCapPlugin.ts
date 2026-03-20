@@ -20,44 +20,32 @@
  * relationsList) don't typically accept user-controlled `first` arguments.
  */
 
-import { makeWrapResolversPlugin } from "graphile-utils";
+import {makeWrapResolversPlugin} from "graphile-utils"
 
-const MAX_PAGINATION_LIMIT = 1000;
+const MAX_PAGINATION_LIMIT = 1000
 
 const PaginationCapPlugin = makeWrapResolversPlugin(
-  (context) => {
-    if (
-      context.scope.isPgFieldConnection ||
-      context.scope.isPgFieldSimpleCollection
-    ) {
-      return {};
-    }
-    return null;
-  },
-  () => (resolve, source, args, context, resolveInfo) => {
-    const clampedArgs = { ...args };
+	(context) => {
+		if (context.scope.isPgFieldConnection || context.scope.isPgFieldSimpleCollection) {
+			return {}
+		}
+		return null
+	},
+	() => (resolve, source, args, context, resolveInfo) => {
+		const clampedArgs = {...args}
 
-    if (
-      typeof clampedArgs.first === "number" &&
-      clampedArgs.first > MAX_PAGINATION_LIMIT
-    ) {
-      clampedArgs.first = MAX_PAGINATION_LIMIT;
-    }
-    if (
-      typeof clampedArgs.last === "number" &&
-      clampedArgs.last > MAX_PAGINATION_LIMIT
-    ) {
-      clampedArgs.last = MAX_PAGINATION_LIMIT;
-    }
-    if (
-      typeof clampedArgs.offset === "number" &&
-      clampedArgs.offset > MAX_PAGINATION_LIMIT
-    ) {
-      clampedArgs.offset = MAX_PAGINATION_LIMIT;
-    }
+		if (typeof clampedArgs.first === "number" && clampedArgs.first > MAX_PAGINATION_LIMIT) {
+			clampedArgs.first = MAX_PAGINATION_LIMIT
+		}
+		if (typeof clampedArgs.last === "number" && clampedArgs.last > MAX_PAGINATION_LIMIT) {
+			clampedArgs.last = MAX_PAGINATION_LIMIT
+		}
+		if (typeof clampedArgs.offset === "number" && clampedArgs.offset > MAX_PAGINATION_LIMIT) {
+			clampedArgs.offset = MAX_PAGINATION_LIMIT
+		}
 
-    return resolve(source, clampedArgs, context, resolveInfo);
-  },
-);
+		return resolve(source, clampedArgs, context, resolveInfo)
+	},
+)
 
-export default PaginationCapPlugin;
+export default PaginationCapPlugin

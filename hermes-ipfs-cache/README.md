@@ -92,8 +92,8 @@ This starts:
 If you prefer to run outside Docker:
 
 ```bash
-# Start postgres (via docker-compose or locally)
-cd hermes && docker-compose up ipfs-cache-postgres
+# Start infrastructure (from repo root)
+docker compose --profile infra up -d
 
 # Run the service
 DATABASE_URL=postgres://postgres:postgres@localhost:5433/ipfs_cache \

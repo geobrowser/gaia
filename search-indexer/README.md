@@ -5,15 +5,14 @@ Main binary for the Geo Knowledge Graph search indexer. Creates an orchestrator 
 ## Quick Start
 
 ```bash
-# 1. Start Kafka
-cd ../hermes && docker-compose up -d kafka
+# 1. Start infrastructure (from repo root)
+docker compose --profile infra up -d
 
 # 2. Run the indexer (with auto index creation for local dev)
-cd ../search-indexer
-ENVIRONMENT=staging \
+ENVIRONMENT=production \
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_BROKER=localhost:9092 \
-cargo run --features search-indexer-repository/auto_index_creation
+cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
 ```
 
 Or use the full docker-compose stack:
@@ -80,9 +79,11 @@ See the [search-admin documentation](../search-admin/README.md) for manual index
 | `KAFKA_GROUP_EDITS_ID` | Consumer group ID for entity events | `search-indexer-group-edits` |
 | `KAFKA_GROUP_SCORES_ID` | Consumer group ID for score events | `search-indexer-group-scores` |
 | `KAFKA_TOPIC` | Kafka topic to consume | `knowledge.edits` |
-| `KAFKA_BATCH_SIZE` | Messages to batch before sending | `10` |
-| `KAFKA_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (ms) | `1000` |
-| `CHANNEL_BUFFER_SIZE` | Max batches in flight per channel | `10` |
+| `KAFKA_BATCH_SIZE` | Messages to batch before sending (entities consumer) | `10` |
+| `KAFKA_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (entities consumer, ms) | `1000` |
+| `SCORES_BATCH_SIZE` | Messages to batch before sending (scores consumer) | `10` |
+| `SCORES_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (scores consumer, ms) | `1000` |
+| `CHANNEL_BUFFER_SIZE` | Max batches in flight per channel | `2` |
 | `KAFKA_USERNAME` | SASL username for managed Kafka (optional, enables SASL/SSL if set) | - |
 | `KAFKA_PASSWORD` | SASL password for managed Kafka (required if username is set) | - |
 | `KAFKA_SSL_CA_PEM` | Custom CA certificate in PEM format (optional) | - |
@@ -252,12 +253,11 @@ docker-compose up -d
 docker-compose logs -f search-indexer
 ```
 
-**Note**: The docker-compose setup connects to the Kafka broker from the `hermes` docker-compose network. Make sure the hermes Kafka broker is running:
+**Note**: The docker-compose setup connects to the Kafka broker via the `hermes_default` network. Make sure infrastructure is running:
 
 ```bash
-# Start Kafka broker
-cd ../hermes
-docker-compose up -d kafka
+# Start infrastructure (from repo root)
+docker compose --profile infra up -d
 ```
 
 #### Running standalone
@@ -302,11 +302,11 @@ See [TESTING.md](TESTING.md) for comprehensive end-to-end testing documentation.
 ### Running locally
 
 ```bash
-# Start dependencies
-docker-compose -f ../hermes/docker-compose.yml up -d
+# Start dependencies (from repo root)
+docker compose --profile infra up -d
 
 # Run the indexer (with auto index creation for local dev)
-ENVIRONMENT=staging cargo run --features search-indexer-repository/auto_index_creation
+ENVIRONMENT=production cargo run --features search-indexer-repository/auto_index_creation
 ```
 
 ## Verifying the Indexer
@@ -424,10 +424,11 @@ Kafka Broker
 | Channel | Contents | Max Items | Memory Formula |
 |---------|----------|-----------|----------------|
 | `entities_processor` | `EntityProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `KAFKA_BATCH_SIZE` × avg_msg_size |
-| `scores_processor` | `ScoreProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `KAFKA_BATCH_SIZE` × avg_msg_size |
-| `loader` | `ProcessedBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `KAFKA_BATCH_SIZE` × avg_processed_size |
-| `entities_ack` | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE` | Negligible (~1 KiB total) |
-| `scores_ack` | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE` | Negligible (~1 KiB total) |
+| `scores_processor` | `ScoreProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `SCORES_BATCH_SIZE` × avg_msg_size |
+| `space_topics_processor` | `SpaceTopicProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `SPACE_TOPICS_BATCH_SIZE` × avg_msg_size |
+| `topology_processor` | `TopologyProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `TOPOLOGY_BATCH_SIZE` × avg_msg_size |
+| `loader` | `ProcessedBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × max(`KAFKA_BATCH_SIZE`, `SCORES_BATCH_SIZE`) × avg_processed_size |
+| `*_ack` channels | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE × 20` | Negligible (~1 KiB each) |
 
 ### rdkafka Internal Queue Memory
 
@@ -435,31 +436,82 @@ Kafka Broker
 |-------|--------|
 | entities consumer | 64 MiB |
 | scores consumer | 64 MiB |
-| **Total** | **128 MiB** |
+| space_topics consumer | 64 MiB |
+| topology consumer | 64 MiB |
+| **Total** | **256 MiB** |
 
 This is controlled by rdkafka's `queued.max.messages.kbytes` default (65,536 KiB per consumer).
+
+### Topology State Memory
+
+The canonical graph is held entirely in memory for O(1) lookups. It uses four data structures (`HashSet` for membership, two `HashMap`s for parent/distance, and nested `HashMap<HashSet>` for children). Per canonical space, this costs ~300 bytes due to hash table overhead.
+
+| Canonical Spaces | Topology Memory |
+|------------------|-----------------|
+| 10,000 | ~3 MiB |
+| 100,000 | ~30 MiB |
+| 500,000 | ~150 MiB |
+
+The topology state is also persisted to disk as JSON (see `TOPOLOGY_STATE_PATH`). During persistence, `snapshot()` temporarily allocates a copy of the node list (~36 bytes/node).
+
+### Disk Storage
+
+The topology state is persisted to a JSON file at `TOPOLOGY_STATE_PATH` (default `/data/topology_state.json`). Each node stores two hex-encoded UUIDs (space_id, parent_id) and a distance value, costing ~130 bytes per node on disk.
+
+| Canonical Spaces | File Size |
+|------------------|-----------|
+| 10,000 | ~1.3 MB |
+| 100,000 | ~13 MB |
+| 500,000 | ~65 MB |
+| ~8,000,000 | ~1 Gi |
+
+The Kubernetes StatefulSet provisions a 1 Gi PersistentVolumeClaim at `/data`, which is sufficient for millions of spaces.
 
 ### Total Memory Formula
 
 ```
 Total Memory ≈
-    128 MiB                                                            # rdkafka queues (fixed)
-  + (3 × CHANNEL_BUFFER_SIZE × KAFKA_BATCH_SIZE × avg_msg_size)        # data channels
-  + overhead                                                            # ~50-100 MiB
+    256 MiB                                                                          # rdkafka queues (4 consumers, fixed)
+  + (CHANNEL_BUFFER_SIZE × KAFKA_BATCH_SIZE × avg_msg_size)                          # entities_processor
+  + (CHANNEL_BUFFER_SIZE × SCORES_BATCH_SIZE × avg_msg_size)                         # scores_processor
+  + (CHANNEL_BUFFER_SIZE × max(KAFKA_BATCH_SIZE, SCORES_BATCH_SIZE) × avg_proc_size) # loader
+  + topology_state                                                                   # ~300 bytes × canonical_spaces
+  + overhead                                                                         # ~100 MiB
 ```
 
-### Example Calculation
+### Example: Typical Case
 
-With production settings (`CHANNEL_BUFFER_SIZE=10`, `KAFKA_BATCH_SIZE=10`, avg message ~500 KiB):
+With production settings (`CHANNEL_BUFFER_SIZE=2`, `KAFKA_BATCH_SIZE=10`, `SCORES_BATCH_SIZE=10`, avg entity message ~500 KiB, 500K canonical spaces):
 
 | Component | Calculation | Memory |
 |-----------|-------------|--------|
-| rdkafka queues | 64 MiB × 2 consumers | 128 MiB |
-| entities_processor | 10 batches × 10 msgs × 500 KiB | 50 MiB |
-| scores_processor | 10 batches × 10 msgs × 500 KiB | 50 MiB |
-| loader | 10 batches × 10 msgs × 300 KiB (processed) | 30 MiB |
-| Overhead | Runtime, heap fragmentation | 80 MiB |
-| **Total** | | **~338 MiB** |
+| rdkafka queues | 64 MiB × 4 consumers | 256 MiB |
+| entities_processor | 2 batches × 10 msgs × 500 KiB | 10 MiB |
+| scores_processor | 2 batches × 10 msgs × 50 bytes | <1 MiB |
+| space_topics_processor | 2 batches × 10 msgs × 32 bytes | <1 MiB |
+| topology_processor | 2 batches × 10 msgs × 40 KiB | <1 MiB |
+| loader | 2 batches × 10 msgs × 300 KiB (processed) | 6 MiB |
+| Topology state | 500K spaces × ~300 bytes | 150 MiB |
+| Overhead | Runtime, heap fragmentation | 100 MiB |
+| **Total** | | **~525 MiB** |
+
+### Example: Worst Case
+
+With worst-case entity messages at 20 MB (matching hermes producer `message.max.bytes`), topology diffs with 1,000 changes each, 500K canonical spaces:
+
+| Component | Calculation | Memory |
+|-----------|-------------|--------|
+| rdkafka queues | 64 MiB × 4 consumers | 256 MiB |
+| entities_processor | 2 batches × 10 msgs × 20 MB | 400 MiB |
+| scores_processor | 2 batches × 10 msgs × 50 bytes | <1 MiB |
+| space_topics_processor | 2 batches × 10 msgs × 32 bytes | <1 MiB |
+| topology_processor | 2 batches × 10 msgs × 40 KiB | <1 MiB |
+| loader | 2 batches × 10 msgs × 20 MB | 400 MiB |
+| Topology state | 500K spaces × ~300 bytes | 150 MiB |
+| Overhead | Runtime, heap fragmentation | 100 MiB |
+| **Total** | | **~1,310 MiB** |
+
+Note: This absolute worst case (all 10 messages at 20 MB each across all 2 channel slots) is unrealistic in practice. The consumer's `EVENTS_FLUSH_THRESHOLD=1000` causes early batch flushes when large messages arrive (a 20 MB message typically contains 100K+ events, triggering flush after 1 message). Combined with rdkafka's 64 MiB per-consumer queue limit throttling intake, realistic peak is closer to ~600–800 MiB.
 ## Error Recovery
 
 ### Reprocessing All Events
@@ -482,6 +534,55 @@ cargo run --features search-indexer-repository/auto_index_creation
 - A new consumer group has no committed offsets, so `auto.offset.reset=earliest` starts from offset 0
 - Update consumer group IDs once (e.g., `...-v2` → `...-v3`), then keep using those values
 - Consider incrementing `ENTITIES_INDEX_VERSION` to index into a fresh index (use `search-admin` to create the new index first)
+
+## Operational Observability (Structured Logs)
+
+The indexer emits a structured `indexer.stats` log line every 10 seconds with fields that let you diagnose performance and health from logs alone, without Prometheus or Grafana.
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `events_processed` | cumulative | Total Kafka events consumed since startup |
+| `documents_indexed` | cumulative | Total documents successfully indexed |
+| `events_per_sec` | rate | Kafka events consumed per second (this interval) |
+| `docs_per_sec` | rate | Documents indexed per second (this interval) |
+| `ops_per_sec` | rate | Individual OpenSearch operations per second |
+| `bulk_calls_per_sec` | rate | OpenSearch HTTP bulk/update_by_query calls per second |
+| `avg_bulk_ms` | rate | Average wall-clock ms per OpenSearch call (this interval) |
+| `failed_ops` | delta | Failed operations in this interval |
+| `updates` | cumulative | Upsert operations (entity index + add relation) |
+| `deletes` | cumulative | Delete operations |
+| `unsets` | cumulative | Unset-property operations |
+| `remove_relations` | cumulative | Remove-relation-by-ID operations |
+| `score_updates` | cumulative | Score updates (entity global + space + entity-space) |
+| `topic_updates` | cumulative | Space topic entity ID updates |
+| `rss_mb` | snapshot | Process resident memory in MB (Linux only, `n/a` on macOS) |
+
+### Diagnosing Common Issues
+
+**"Where is the bottleneck?"**
+- Low `events_per_sec` with idle `ops_per_sec` → Kafka consumption is the bottleneck (consumer lag, slow network, large messages).
+- High `events_per_sec` but high `avg_bulk_ms` (>200ms) → OpenSearch is slow. Check cluster health, disk I/O, or index shard count.
+- `events_per_sec` and `ops_per_sec` are both healthy but `docs_per_sec` is low → most events are score/topic updates (not document indexes).
+
+**"What's the error rate?"**
+- `failed_ops > 0` in an interval means OpenSearch rejected some operations. Check the error-level logs above the stats line for details (entity_id, operation_type, error message).
+
+**"Is memory growing?"**
+- Watch `rss_mb` over time. Steady growth suggests a leak or unbounded cache. Flat is healthy. See the Memory section above for expected baseline.
+
+**"What kind of work is the indexer doing?"**
+- Compare `updates` vs `score_updates` vs `topic_updates`. During a score backfill, `score_updates` will dominate. During normal entity ingestion, `updates` will dominate.
+
+**"Is OpenSearch keeping up?"**
+- `bulk_calls_per_sec` × `avg_bulk_ms` gives total ms spent in OpenSearch per second. If this approaches 1000ms, OpenSearch is saturated and you may need to scale it or reduce batch frequency.
+
+### Example Log Line
+
+```
+INFO indexer.stats events_processed=152340 documents_indexed=148200 events_per_sec=1520.3 docs_per_sec=1480.1 ops_per_sec=1520.3 bulk_calls_per_sec=15.2 avg_bulk_ms=42.3 failed_ops=0 updates=148200 deletes=12 unsets=340 remove_relations=5 score_updates=3780 topic_updates=3 rss_mb=285
+```
 
 ## Troubleshooting
 

@@ -19,9 +19,9 @@ pub enum EntityEventType {
     Restore,
     /// Properties were unset from an entity.
     UnsetProperties,
-    /// Relation was created, which may affect entity's type_relations.
+    /// Relation was created, which may affect entity's relations.
     CreateRelation,
-    /// Relation was deleted, which may affect entity's type_relations.
+    /// Relation was deleted, which may affect entity's relations.
     DeleteRelation,
 }
 
@@ -38,10 +38,12 @@ pub struct EntityEvent {
     pub name: Option<String>,
     /// The entity's description (for upsert events).
     pub description: Option<String>,
-    /// Avatar URL (for upsert events).
+    /// Avatar URL (for upsert events, resolved from avatar relation).
     pub avatar: Option<String>,
-    /// Cover image URL (for upsert events).
+    /// Cover image URL (for upsert events, resolved from cover relation).
     pub cover: Option<String>,
+    /// Image URL property value (from IMAGE_URL_PROPERTY on this entity).
+    pub image_url: Option<String>,
     /// Property keys to unset (for unset_properties events).
     pub unset_property_keys: Vec<String>,
     /// Relation ID (for relation events).
@@ -60,6 +62,8 @@ impl EntityEvent {
         name: Option<String>,
         description: Option<String>,
         avatar: Option<String>,
+        cover: Option<String>,
+        image_url: Option<String>,
     ) -> Self {
         Self {
             event_type: EntityEventType::Upsert,
@@ -68,7 +72,8 @@ impl EntityEvent {
             name,
             description,
             avatar,
-            cover: None, // Cover will be used in the future
+            cover,
+            image_url,
             unset_property_keys: Vec::new(),
             relation_id: None,
             relation_type: None,
@@ -85,7 +90,8 @@ impl EntityEvent {
             name: None,
             description: None,
             avatar: None,
-            cover: None, // Cover will be used in the future
+            cover: None,
+            image_url: None,
             unset_property_keys: Vec::new(),
             relation_id: None,
             relation_type: None,
@@ -103,6 +109,7 @@ impl EntityEvent {
             description: None,
             avatar: None,
             cover: None,
+            image_url: None,
             unset_property_keys: Vec::new(),
             relation_id: None,
             relation_type: None,
@@ -119,7 +126,8 @@ impl EntityEvent {
             name: None,
             description: None,
             avatar: None,
-            cover: None, // Cover will be used in the future
+            cover: None,
+            image_url: None,
             unset_property_keys: property_keys,
             relation_id: None,
             relation_type: None,
@@ -137,12 +145,13 @@ impl EntityEvent {
     ) -> Self {
         Self {
             event_type: EntityEventType::CreateRelation,
-            entity_id, // The entity whose type_relations may be affected
+            entity_id, // The entity whose relations may be affected
             space_id,
             name: None,
             description: None,
             avatar: None,
             cover: None,
+            image_url: None,
             unset_property_keys: Vec::new(),
             relation_id: Some(relation_id),
             relation_type: Some(relation_type),
@@ -163,6 +172,7 @@ impl EntityEvent {
             description: None,
             avatar: None,
             cover: None,
+            image_url: None,
             unset_property_keys: Vec::new(),
             relation_id: Some(relation_id),
             relation_type: None, // No relation type info available
@@ -239,6 +249,22 @@ impl ScoreEvent {
             updated_at,
         }
     }
+}
+
+// ============================================================================
+// Space Topic Events - from space.topics Kafka topic
+// ============================================================================
+
+/// A space topic event received from the space.topics Kafka topic.
+///
+/// When a space declares a topic, the topic entity ID serves as the
+/// representative entity for the space (containing its name, description, etc.).
+#[derive(Debug, Clone)]
+pub struct SpaceTopicEvent {
+    /// The space that declared the topic.
+    pub space_id: Uuid,
+    /// The topic entity ID (represents the space in the entity index).
+    pub topic_entity_id: Uuid,
 }
 
 // ============================================================================

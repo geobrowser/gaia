@@ -58,7 +58,6 @@ fn is_space_event(action_bytes: &[u8]) -> bool {
         || actions::matches(action_bytes, &actions::SUBSPACE_VERIFIED)
         || actions::matches(action_bytes, &actions::SUBSPACE_RELATED)
         || actions::matches(action_bytes, &actions::SUBSPACE_TOPIC_DECLARED)
-        || actions::matches(action_bytes, &actions::SUBSPACE_REMOVED)
 }
 ```
 

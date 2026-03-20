@@ -128,6 +128,29 @@ function mapToActionResponse(action: ProposalWithVotes["actions"][number]): Acti
 				slowThreshold: action.slowThreshold,
 				duration: action.duration,
 			}
+		case "SubspaceVerified":
+			if (!action.targetId) return {actionType: "UNKNOWN"}
+			return {actionType: "SUBSPACE_VERIFIED", targetSpaceId: action.targetId}
+		case "SubspaceUnverified":
+			if (!action.targetId) return {actionType: "UNKNOWN"}
+			return {actionType: "SUBSPACE_UNVERIFIED", targetSpaceId: action.targetId}
+		case "SubspaceRelated":
+			if (!action.targetId) return {actionType: "UNKNOWN"}
+			return {actionType: "SUBSPACE_RELATED", targetSpaceId: action.targetId}
+		case "SubspaceUnrelated":
+			if (!action.targetId) return {actionType: "UNKNOWN"}
+			return {actionType: "SUBSPACE_UNRELATED", targetSpaceId: action.targetId}
+		case "SubspaceTopicDeclared":
+			if (!action.targetId) return {actionType: "UNKNOWN"}
+			return {actionType: "SUBSPACE_TOPIC_DECLARED", targetTopicId: action.targetId}
+		case "SubspaceTopicRemoved":
+			if (!action.targetId) return {actionType: "UNKNOWN"}
+			return {actionType: "SUBSPACE_TOPIC_REMOVED", targetTopicId: action.targetId}
+		case "SetTopic":
+			if (!action.targetId) return {actionType: "UNKNOWN"}
+			return {actionType: "SET_TOPIC", targetTopicId: action.targetId}
+		case "UnsetTopic":
+			return {actionType: "UNSET_TOPIC"}
 		default:
 			return {actionType: "UNKNOWN"}
 	}

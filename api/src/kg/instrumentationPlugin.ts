@@ -2,6 +2,7 @@ import {ROOT_CONTEXT, SpanStatusCode, trace} from "@opentelemetry/api"
 import * as Sentry from "@sentry/node"
 import {type FieldNode, Kind, type OperationDefinitionNode, print} from "graphql"
 import type {Plugin} from "graphql-yoga"
+import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 
 type TraceContext = {
 	traceId: string
@@ -82,6 +83,7 @@ export function useGraphQLInstrumentation(): Plugin {
 			const ctxWithSetter = args.contextValue as {setGraphqlOperationName?: (operationName: string) => void}
 			ctxWithSetter.setGraphqlOperationName?.(operationLabel)
 			const query = print(args.document)
+			const queryFingerprint = graphqlQueryFingerprint(query)
 			const variables = args.variableValues ? JSON.stringify(args.variableValues).slice(0, 2000) : undefined
 
 			// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
@@ -105,6 +107,7 @@ export function useGraphQLInstrumentation(): Plugin {
 				{
 					attributes: {
 						"graphql.operation_name": operationLabel,
+						"graphql.query_fingerprint": queryFingerprint,
 						"graphql.document": query.slice(0, 2000),
 						...(variables && {"graphql.variables": variables}),
 						"http.request_id": requestId,
@@ -126,9 +129,11 @@ export function useGraphQLInstrumentation(): Plugin {
 							Sentry.captureException(error.originalError || error, {
 								tags: {
 									"graphql.operation_name": operationLabel,
+									"graphql.query_fingerprint": queryFingerprint,
 									request_id: requestId,
 								},
 								extra: {
+									queryFingerprint,
 									query: query.slice(0, 2000),
 									variables: args.variableValues,
 									path: error.path,

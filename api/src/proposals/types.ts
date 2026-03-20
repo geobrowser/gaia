@@ -25,6 +25,15 @@ export const PROPOSAL_ACTION_TYPES = [
 	"Unflag",
 	"UpdateVotingSettings",
 	"Unknown",
+	// Subspace proposal actions
+	"SubspaceVerified",
+	"SubspaceUnverified",
+	"SubspaceRelated",
+	"SubspaceUnrelated",
+	"SubspaceTopicDeclared",
+	"SubspaceTopicRemoved",
+	"SetTopic",
+	"UnsetTopic",
 ] as const
 export type ProposalActionType = (typeof PROPOSAL_ACTION_TYPES)[number]
 
@@ -223,6 +232,42 @@ export interface UpdateVotingSettingsAction {
 }
 
 /**
+ * Action to add/remove a verified or related subspace edge.
+ * The `actionType` discriminates the specific operation.
+ */
+export interface SubspaceEdgeAction {
+	actionType: "SUBSPACE_VERIFIED" | "SUBSPACE_UNVERIFIED" | "SUBSPACE_RELATED" | "SUBSPACE_UNRELATED"
+	/** Target child space ID */
+	targetSpaceId: string
+}
+
+/**
+ * Action to declare or remove a topic on a subspace.
+ * The `actionType` discriminates the specific operation.
+ */
+export interface SubspaceTopicAction {
+	actionType: "SUBSPACE_TOPIC_DECLARED" | "SUBSPACE_TOPIC_REMOVED"
+	/** Topic entity ID */
+	targetTopicId: string
+}
+
+/**
+ * Action to set the current space topic.
+ */
+export interface SetTopicAction {
+	actionType: "SET_TOPIC"
+	/** Topic entity ID */
+	targetTopicId: string
+}
+
+/**
+ * Action to unset the current space topic.
+ */
+export interface UnsetTopicAction {
+	actionType: "UNSET_TOPIC"
+}
+
+/**
  * Unknown action type - used for forward compatibility.
  */
 export interface UnknownAction {
@@ -258,6 +303,10 @@ export type ActionResponse =
 	| FlagAction
 	| UnflagAction
 	| UpdateVotingSettingsAction
+	| SubspaceEdgeAction
+	| SubspaceTopicAction
+	| SetTopicAction
+	| UnsetTopicAction
 	| UnknownAction
 
 /**

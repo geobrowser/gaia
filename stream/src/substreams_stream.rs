@@ -9,6 +9,7 @@ use std::{
 };
 use tokio::time::sleep;
 use tokio_retry::strategy::ExponentialBackoff;
+use tracing::{error, info, warn};
 
 use crate::pb::sf::substreams::rpc::v2::{
     BlockScopedData, BlockUndoSignal, Request, Response, response::Message,
@@ -126,6 +127,20 @@ fn stream_blocks(
                                     return Err(anyhow::Error::new(status.clone()))?;
                                 }
 
+                                if is_concurrent_stream_limit(&status) {
+                                    error!(
+                                        event = "substreams.concurrent_stream_limit_exceeded",
+                                        endpoint = %endpoint,
+                                        output_module = %output_module_name,
+                                        start_block = start_block_num,
+                                        stop_block = stop_block_num,
+                                        cursor = %latest_cursor,
+                                        status_code = %status.code(),
+                                        error = %status,
+                                        "Substreams stream rejected due to concurrent stream limit"
+                                    );
+                                }
+
                                 println!("Received tonic error {:#}", status);
                                 encountered_error = true;
                                 break;
@@ -144,6 +159,16 @@ fn stream_blocks(
                     // having connection errors.
 
                     println!("Unable to connect to endpoint: {:#}", e);
+                    warn!(
+                        event = "substreams.connection_failed",
+                        endpoint = %endpoint,
+                        output_module = %output_module_name,
+                        start_block = start_block_num,
+                        stop_block = stop_block_num,
+                        cursor = %latest_cursor,
+                        error = %e,
+                        "Unable to connect to substreams endpoint"
+                    );
                 }
             }
 
@@ -155,6 +180,13 @@ fn stream_blocks(
             }
         }
     }
+}
+
+fn is_concurrent_stream_limit(status: &tonic::Status) -> bool {
+    status.code() == tonic::Code::ResourceExhausted
+        && status
+            .message()
+            .contains("Concurrent stream limit exceeded")
 }
 
 enum BlockProcessedResult {
@@ -178,6 +210,12 @@ async fn process_substreams_response(
             println!(
                 "Received session message (Workers {}, Trace ID {})",
                 session.max_parallel_workers, &session.trace_id
+            );
+            info!(
+                event = "substreams.session_started",
+                max_parallel_workers = session.max_parallel_workers,
+                trace_id = %session.trace_id,
+                "Substreams session started"
             );
             BlockProcessedResult::Skip()
         }

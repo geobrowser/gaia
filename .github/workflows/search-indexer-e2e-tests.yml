@@ -10,6 +10,7 @@ on:
       - 'hermes-kafka/**'
       - 'wire/**'
       - 'api/**'
+      - 'search-indexer/tests/load-test/**'
       - '.github/workflows/search-indexer-e2e-tests.yml'
   pull_request:
     branches: [main, dev]
@@ -20,6 +21,7 @@ on:
       - 'hermes-kafka/**'
       - 'wire/**'
       - 'api/**'
+      - 'search-indexer/tests/load-test/**'
       - '.github/workflows/search-indexer-e2e-tests.yml'
   workflow_dispatch:
 
@@ -63,6 +65,7 @@ jobs:
           KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
           KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
           KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+          KAFKA_MESSAGE_MAX_BYTES: 10485760
           CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
         ports:
           - 9092:9092
@@ -110,6 +113,7 @@ jobs:
           workspaces: |
             ./search-indexer
             ./search-indexer-repository
+            ./search-indexer/tests/load-test
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -215,6 +219,7 @@ jobs:
           ENVIRONMENT: staging
           IPFS_KEY: dummy-key-for-e2e-tests
           IPFS_GATEWAY_WRITE: http://localhost:5001
+          TOPOLOGY_SERVICE_URL: http://localhost:8080
 
       - name: Run search-indexer in background
         run: |
@@ -223,9 +228,12 @@ jobs:
           OPENSEARCH_URL=http://localhost:9200 \
           KAFKA_GROUP_EDITS_ID=search-indexer-group-edits-e2e \
           KAFKA_GROUP_SCORES_ID=search-indexer-group-scores-e2e \
+          KAFKA_GROUP_SPACE_TOPICS_ID=search-indexer-group-space-topics-e2e \
+          KAFKA_GROUP_TOPOLOGY_ID=search-indexer-group-topology-e2e \
+          TOPOLOGY_STATE_PATH=/tmp/topology_state.json \
           HEALTH_PORT=8080 \
-          RUST_LOG=search_indexer=info \
-          ./target/release/search-indexer &
+          RUST_LOG=search_indexer=info,search_indexer_repository=debug \
+          ./target/release/search-indexer > /tmp/search-indexer.log 2>&1 &
           echo $! > /tmp/search-indexer.pid
 
           echo "Waiting for search-indexer to be ready..."
@@ -257,6 +265,128 @@ jobs:
           ENVIRONMENT: staging
           KAFKA_BROKER: localhost:9092
           SEARCH_API_URL: http://localhost:3000
+          INDEXER_URL: http://localhost:8080
+
+      - name: Stop indexer for NACK crash test
+        run: |
+          if [ -f /tmp/search-indexer.pid ]; then
+            kill $(cat /tmp/search-indexer.pid) 2>/dev/null || true
+            sleep 2
+          fi
+          # Also stop the API — NACK test doesn't need it
+          if [ -f /tmp/api.pid ]; then
+            kill $(cat /tmp/api.pid) 2>/dev/null || true
+          fi
+
+      - name: Run NACK crash test
+        working-directory: ./search-indexer/tests/e2e-nack-crash
+        run: |
+          KAFKA_CONTAINER=$(docker ps --format '{{.Names}}' | grep -i kafka | grep -v ui | head -1)
+          echo "Using Kafka container: $KAFKA_CONTAINER"
+          KAFKA_CONTAINER="$KAFKA_CONTAINER" ./run-test.sh
+        env:
+          ENVIRONMENT: staging
+          KAFKA_BROKER: localhost:9092
+          OPENSEARCH_URL: http://localhost:9200
+
+      - name: Upload NACK crash test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nack-crash-test-logs
+          path: /tmp/e2e-nack-crash.*/
+          retention-days: 3
+
+      - name: Run topology restart test
+        working-directory: ./search-indexer/tests/e2e-topology-restart
+        run: |
+          KAFKA_CONTAINER=$(docker ps --format '{{.Names}}' | grep -i kafka | grep -v ui | head -1)
+          KAFKA_CONTAINER="$KAFKA_CONTAINER" ./run-test.sh
+        env:
+          ENVIRONMENT: staging
+          KAFKA_BROKER: localhost:9092
+          OPENSEARCH_URL: http://localhost:9200
+
+      - name: Upload topology restart test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: topology-restart-test-logs
+          path: /tmp/e2e-topology-restart.*/
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Clean OpenSearch for load test
+        run: |
+          CONCRETE=$(curl -sf "$OPENSEARCH_URL/_alias/staging_entities" \
+            | python3 -c "import sys,json; print(' '.join(json.load(sys.stdin).keys()))" 2>/dev/null || true)
+          if [ -n "$CONCRETE" ]; then
+            for idx in $CONCRETE; do
+              echo "Deleting index: $idx"
+              curl -sf -X DELETE "$OPENSEARCH_URL/$idx"
+            done
+          else
+            echo "No existing index to clean"
+          fi
+
+      - name: Start indexer for load test
+        run: |
+          ENVIRONMENT=staging \
+          KAFKA_BROKER=localhost:9092 \
+          OPENSEARCH_URL=http://localhost:9200 \
+          OPENSEARCH_MAX_BULK_SIZE=10 \
+          KAFKA_GROUP_EDITS_ID=search-indexer-group-edits-load \
+          KAFKA_GROUP_SCORES_ID=search-indexer-group-scores-load \
+          KAFKA_GROUP_SPACE_TOPICS_ID=search-indexer-group-space-topics-load \
+          KAFKA_GROUP_TOPOLOGY_ID=search-indexer-group-topology-load \
+          TOPOLOGY_STATE_PATH=/tmp/topology_state_load.json \
+          HEALTH_PORT=8081 \
+          RUST_LOG=search_indexer=info,search_indexer_repository=info \
+          ./target/release/search-indexer > /tmp/search-indexer-load.log 2>&1 &
+          echo $! > /tmp/search-indexer-load.pid
+
+          echo "Waiting for search-indexer to be ready..."
+          for i in {1..30}; do
+            if ! kill -0 $(cat /tmp/search-indexer-load.pid) 2>/dev/null; then
+              echo "ERROR: search-indexer process exited unexpectedly"
+              cat /tmp/search-indexer-load.log
+              exit 1
+            fi
+            if curl -s http://localhost:8081/readyz | grep -q "ready"; then
+              echo "search-indexer is ready"
+              exit 0
+            fi
+            echo "Waiting for search-indexer... ($i/30)"
+            sleep 2
+          done
+          echo "ERROR: search-indexer failed to become ready"
+          cat /tmp/search-indexer-load.log
+          exit 1
+
+      - name: Build load test
+        working-directory: ./search-indexer/tests/load-test
+        run: cargo +nightly build --release
+
+      - name: Run load test
+        working-directory: ./search-indexer/tests/load-test
+        run: |
+          set -o pipefail
+          ENVIRONMENT=staging \
+          cargo +nightly run --release -- \
+            --seed 42 --scale 0.05 --timeout 300 \
+            --scores-group-id search-indexer-group-scores-load \
+            2>&1 | tee /tmp/load-test.log
+
+      - name: Upload search-indexer logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-indexer-logs
+          path: |
+            /tmp/search-indexer.log
+            /tmp/search-indexer-load.log
+            /tmp/load-test.log
+          retention-days: 3
 
       - name: Cleanup
         if: always()
@@ -266,4 +396,7 @@ jobs:
           fi
           if [ -f /tmp/search-indexer.pid ]; then
             kill $(cat /tmp/search-indexer.pid) 2>/dev/null || true
+          fi
+          if [ -f /tmp/search-indexer-load.pid ]; then
+            kill $(cat /tmp/search-indexer-load.pid) 2>/dev/null || true
           fi

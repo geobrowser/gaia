@@ -14,7 +14,8 @@ use search_indexer::errors::IngestError;
 use search_indexer::loader::SearchLoader;
 use search_indexer::orchestrator::{
     EntitiesConsumerTrait, EntityProcessingBatch, Orchestrator, OrchestratorConfig,
-    ScoreProcessingBatch, ScoresConsumerTrait,
+    ScoreProcessingBatch, ScoresConsumerTrait, SpaceTopicProcessingBatch, SpaceTopicsConsumerTrait,
+    TopologyConsumerTrait, TopologyProcessingBatch,
 };
 use search_indexer::processor::Processor;
 use search_indexer_repository::{
@@ -99,10 +100,11 @@ impl EntitiesConsumerTrait for MockConsumer {
                 match msg {
                     Some(StreamMessage::Acknowledgment { success, .. }) => {
                         *self.last_acknowledgment.lock().unwrap() = Some(success);
-                        // For tests: we just record whether ACK or NACK was received.
-                        // The test can check get_last_acknowledgment() to verify.
-                        // We don't return an error on NACK since the mock's job is just
-                        // to record what happened, not to simulate real retry behavior.
+                        if !success {
+                            return Err(IngestError::LoaderError(
+                                "Batch processing failed (NACK received)".to_string()
+                            ));
+                        }
                     }
                     Some(_) | None => {
                         // Channel closed or unexpected message, exit
@@ -131,6 +133,47 @@ impl ScoresConsumerTrait for MockScoresConsumer {
         mut shutdown: broadcast::Receiver<()>,
     ) -> Result<(), IngestError> {
         // Just wait for shutdown - no score events in these tests
+        let _ = shutdown.recv().await;
+        Ok(())
+    }
+}
+
+// Mock Space Topics Consumer for testing - does nothing, just waits for shutdown
+struct MockSpaceTopicsConsumer;
+
+#[async_trait::async_trait]
+impl SpaceTopicsConsumerTrait for MockSpaceTopicsConsumer {
+    fn subscribe(&self) -> Result<(), IngestError> {
+        Ok(())
+    }
+
+    async fn run(
+        &self,
+        _processor_tx: mpsc::Sender<SpaceTopicProcessingBatch>,
+        _ack_receiver: mpsc::Receiver<StreamMessage>,
+        mut shutdown: broadcast::Receiver<()>,
+    ) -> Result<(), IngestError> {
+        // Just wait for shutdown - no space topic events in these tests
+        let _ = shutdown.recv().await;
+        Ok(())
+    }
+}
+
+// Mock Topology Consumer for testing - does nothing, just waits for shutdown
+struct MockTopologyConsumer;
+
+#[async_trait::async_trait]
+impl TopologyConsumerTrait for MockTopologyConsumer {
+    fn subscribe(&self) -> Result<(), IngestError> {
+        Ok(())
+    }
+
+    async fn run(
+        &self,
+        _processor_tx: mpsc::Sender<TopologyProcessingBatch>,
+        _ack_receiver: mpsc::Receiver<StreamMessage>,
+        mut shutdown: broadcast::Receiver<()>,
+    ) -> Result<(), IngestError> {
         let _ = shutdown.recv().await;
         Ok(())
     }
@@ -190,25 +233,25 @@ impl MockSearchProvider {
         self.unset_properties_calls.lock().unwrap().len()
     }
 
-    /// Get update requests that have add_type_relation set (type relation upserts).
-    fn get_add_type_relation_requests(&self) -> Vec<UpdateEntityRequest> {
+    /// Get update requests that have add_relation set (type relation upserts).
+    fn get_add_relation_requests(&self) -> Vec<UpdateEntityRequest> {
         self.updated_documents
             .lock()
             .unwrap()
             .iter()
-            .filter(|r| r.add_type_relation.is_some())
+            .filter(|r| r.add_relation.is_some())
             .cloned()
             .collect()
     }
 
-    /// Get relation IDs removed via RemoveTypeRelationById operations.
+    /// Get relation IDs removed via RemoveRelationById operations.
     fn get_removed_relation_ids(&self) -> Vec<String> {
         self.all_operations
             .lock()
             .unwrap()
             .iter()
             .filter_map(|op| {
-                if let EntityOperation::RemoveTypeRelationById(r) = op {
+                if let EntityOperation::RemoveRelationById(r) = op {
                     Some(r.relation_id.clone())
                 } else {
                     None
@@ -234,7 +277,10 @@ impl SearchIndexProvider for MockSearchProvider {
         Ok(())
     }
 
-    async fn delete_document(&self, _request: &DeleteEntityRequest) -> Result<(), SearchIndexError> {
+    async fn delete_document(
+        &self,
+        _request: &DeleteEntityRequest,
+    ) -> Result<(), SearchIndexError> {
         // Hard deletes not used - soft delete goes through update_document
         Ok(())
     }
@@ -267,11 +313,13 @@ impl SearchIndexProvider for MockSearchProvider {
                 EntityOperation::Update(_) => self.fail_bulk_updates && i >= operations.len() / 2,
                 EntityOperation::Delete(_) => false, // Hard deletes not used (soft delete via Update)
                 EntityOperation::Unset(_) => self.fail_bulk_unsets && i >= operations.len() / 2,
-                EntityOperation::RemoveTypeRelationById(_) => false, // Never fails in mock
-                // Score operations never fail in mock
+                EntityOperation::RemoveRelationById(_) => false, // Never fails in mock
+                // Score, space topic, and topology operations never fail in mock
                 EntityOperation::UpdateEntityGlobalScore(_)
                 | EntityOperation::UpdateSpaceScore(_)
-                | EntityOperation::UpdateEntitySpaceScore(_) => false,
+                | EntityOperation::UpdateEntitySpaceScore(_)
+                | EntityOperation::UpdateSpaceTopicEntityId(_)
+                | EntityOperation::UpdateInCanonicalGraph(_) => false,
             };
 
             if should_fail {
@@ -289,7 +337,7 @@ impl SearchIndexProvider for MockSearchProvider {
                 // Track the operation in type-specific vectors
                 match op {
                     EntityOperation::Update(req) => {
-                        self.updated_documents.lock().unwrap().push(req.clone());
+                        self.updated_documents.lock().unwrap().push(*req.clone());
                     }
                     EntityOperation::Delete(_) => {
                         // Hard deletes not used - soft delete goes through Update
@@ -300,13 +348,15 @@ impl SearchIndexProvider for MockSearchProvider {
                             .unwrap()
                             .push(req.clone());
                     }
-                    EntityOperation::RemoveTypeRelationById(_) => {
+                    EntityOperation::RemoveRelationById(_) => {
                         // Tracked via all_operations
                     }
-                    // Score operations are tracked via all_operations only
+                    // Score, space topic, and topology operations are tracked via all_operations only
                     EntityOperation::UpdateEntityGlobalScore(_)
                     | EntityOperation::UpdateSpaceScore(_)
-                    | EntityOperation::UpdateEntitySpaceScore(_) => {
+                    | EntityOperation::UpdateEntitySpaceScore(_)
+                    | EntityOperation::UpdateSpaceTopicEntityId(_)
+                    | EntityOperation::UpdateInCanonicalGraph(_) => {
                         // Tracked via all_operations
                     }
                 }
@@ -329,6 +379,8 @@ impl SearchIndexProvider for MockSearchProvider {
             succeeded,
             failed,
             results,
+            wall_ms: 0,
+            took_ms: 0,
         })
     }
 }
@@ -341,8 +393,17 @@ fn create_test_orchestrator(events: Vec<EntityEvent>) -> (Orchestrator, Arc<Mock
 
     let mock_consumer = Arc::new(MockConsumer::new(events));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, processor, loader);
+    let orchestrator = Orchestrator::new(
+        mock_consumer,
+        mock_scores_consumer,
+        mock_space_topics_consumer,
+        mock_topology_consumer,
+        processor,
+        loader,
+    );
 
     (orchestrator, mock_provider)
 }
@@ -357,10 +418,14 @@ fn create_test_orchestrator_with_consumer(
 
     let mock_consumer = Arc::new(MockConsumer::new(events));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer.clone(),
         mock_scores_consumer,
+        mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
     );
@@ -378,8 +443,17 @@ fn create_error_test_orchestrator(
 
     let mock_consumer = Arc::new(MockConsumer::with_subscribe_error(events));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, processor, loader);
+    let orchestrator = Orchestrator::new(
+        mock_consumer,
+        mock_scores_consumer,
+        mock_space_topics_consumer,
+        mock_topology_consumer,
+        processor,
+        loader,
+    );
 
     (orchestrator, mock_provider)
 }
@@ -394,10 +468,14 @@ fn create_bulk_update_failure_orchestrator(
 
     let mock_consumer = Arc::new(MockConsumer::new(events.clone()));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer.clone(),
         mock_scores_consumer,
+        mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
     );
@@ -415,10 +493,14 @@ fn create_bulk_unset_failure_orchestrator(
 
     let mock_consumer = Arc::new(MockConsumer::new(events.clone()));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer.clone(),
         mock_scores_consumer,
+        mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
     );
@@ -436,11 +518,15 @@ async fn test_orchestrator_full_integration() {
             Some("Test Entity".to_string()),
             Some("Description".to_string()),
             None,
+            None,
+            None,
         ),
         EntityEvent::upsert(
             Uuid::new_v4(),
             Uuid::new_v4(),
             Some("Another Entity".to_string()),
+            None,
+            None,
             None,
             None,
         ),
@@ -506,6 +592,8 @@ async fn test_orchestrator_configuration() {
     let loader = SearchLoader::new(mock_provider.clone());
     let mock_consumer = Arc::new(MockConsumer::new(vec![]));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let config = OrchestratorConfig {
         channel_buffer_size: 2000,
@@ -514,6 +602,8 @@ async fn test_orchestrator_configuration() {
     let _orchestrator = Orchestrator::with_config(
         mock_consumer,
         mock_scores_consumer,
+        mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
         config,
@@ -547,6 +637,8 @@ async fn test_orchestrator_shutdown() {
         Uuid::new_v4(),
         Some("Test Entity".to_string()),
         Some("Description".to_string()),
+        None,
+        None,
         None,
     )];
 
@@ -582,6 +674,8 @@ async fn test_orchestrator_error_handling() {
         Some("Test Entity".to_string()),
         Some("Description".to_string()),
         None,
+        None,
+        None,
     )];
 
     let (orchestrator, _mock_provider) = create_error_test_orchestrator(events);
@@ -615,12 +709,16 @@ async fn test_orchestrator_bulk_update_failure_nack() {
             Some("Entity 1".to_string()),
             Some("Description 1".to_string()),
             None,
+            None,
+            None,
         ),
         EntityEvent::upsert(
             Uuid::new_v4(),
             Uuid::new_v4(),
             Some("Entity 2".to_string()),
             Some("Description 2".to_string()),
+            None,
+            None,
             None,
         ),
         EntityEvent::upsert(
@@ -629,12 +727,16 @@ async fn test_orchestrator_bulk_update_failure_nack() {
             Some("Entity 3".to_string()),
             Some("Description 3".to_string()),
             None,
+            None,
+            None,
         ),
         EntityEvent::upsert(
             Uuid::new_v4(),
             Uuid::new_v4(),
             Some("Entity 4".to_string()),
             Some("Description 4".to_string()),
+            None,
+            None,
             None,
         ),
     ];
@@ -647,10 +749,10 @@ async fn test_orchestrator_bulk_update_failure_nack() {
     assert!(result.is_ok(), "Orchestrator should complete");
 
     let run_result = result.unwrap();
-    // The orchestrator should fail due to bulk operation failures
+    // The orchestrator should fail because NACK causes consumer to return Err
     assert!(
-        run_result.is_ok(),
-        "Orchestrator run should succeed (error is handled via NACK)"
+        run_result.is_err(),
+        "Orchestrator run should fail (NACK causes consumer error to prevent data loss)"
     );
 
     // Verify that NACK was sent (not ACK)
@@ -680,10 +782,10 @@ async fn test_orchestrator_bulk_soft_delete_failure_nack() {
     assert!(result.is_ok(), "Orchestrator should complete");
 
     let run_result = result.unwrap();
-    // The orchestrator should fail due to bulk operation failures
+    // The orchestrator should fail because NACK causes consumer to return Err
     assert!(
-        run_result.is_ok(),
-        "Orchestrator run should succeed (error is handled via NACK)"
+        run_result.is_err(),
+        "Orchestrator run should fail (NACK causes consumer error to prevent data loss)"
     );
 
     // Verify that NACK was sent (not ACK)
@@ -696,6 +798,110 @@ async fn test_orchestrator_bulk_soft_delete_failure_nack() {
 }
 
 #[tokio::test]
+async fn test_nack_stops_then_restart_replays() {
+    // Simulate the full NACK → stop → restart → replay → success lifecycle.
+    // This validates that NACKs prevent data loss by stopping the consumer,
+    // and that replaying the same events after recovery succeeds.
+
+    let events = vec![
+        EntityEvent::upsert(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Some("Entity 1".to_string()),
+            Some("Description 1".to_string()),
+            None,
+            None,
+            None,
+        ),
+        EntityEvent::upsert(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Some("Entity 2".to_string()),
+            Some("Description 2".to_string()),
+            None,
+            None,
+            None,
+        ),
+        EntityEvent::upsert(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Some("Entity 3".to_string()),
+            Some("Description 3".to_string()),
+            None,
+            None,
+            None,
+        ),
+        EntityEvent::upsert(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Some("Entity 4".to_string()),
+            Some("Description 4".to_string()),
+            None,
+            None,
+            None,
+        ),
+    ];
+
+    // === Run 1: OpenSearch failing → NACK → orchestrator returns Err ===
+    let fail_provider = Arc::new(MockSearchProvider::with_bulk_update_failures());
+    let consumer1 = Arc::new(MockConsumer::new(events.clone()));
+    let mock_scores_consumer1 = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer1 = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer1 = Arc::new(MockTopologyConsumer);
+    let orch1 = Orchestrator::new(
+        consumer1.clone(),
+        mock_scores_consumer1,
+        mock_space_topics_consumer1,
+        mock_topology_consumer1,
+        Processor::new(),
+        SearchLoader::new(fail_provider.clone()),
+    );
+
+    let result1 = timeout(Duration::from_secs(5), orch1.run()).await;
+    assert!(result1.is_ok(), "Run 1 should not timeout");
+    assert!(
+        result1.expect("Run 1 should not timeout").is_err(),
+        "Run 1 should fail (NACK causes consumer error)"
+    );
+    assert_eq!(
+        consumer1.get_last_acknowledgment(),
+        Some(false),
+        "Run 1 should receive NACK"
+    );
+
+    // === Run 2: OpenSearch recovered → same events replayed → ACK ===
+    let ok_provider = Arc::new(MockSearchProvider::new());
+    let consumer2 = Arc::new(MockConsumer::new(events.clone())); // same events = Kafka replay
+    let mock_scores_consumer2 = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer2 = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer2 = Arc::new(MockTopologyConsumer);
+    let orch2 = Orchestrator::new(
+        consumer2.clone(),
+        mock_scores_consumer2,
+        mock_space_topics_consumer2,
+        mock_topology_consumer2,
+        Processor::new(),
+        SearchLoader::new(ok_provider.clone()),
+    );
+
+    let result2 = timeout(Duration::from_secs(5), orch2.run()).await;
+    assert!(result2.is_ok(), "Run 2 should not timeout");
+    assert!(
+        result2.expect("Run 2 should not timeout").is_ok(),
+        "Run 2 should succeed"
+    );
+    assert_eq!(
+        consumer2.get_last_acknowledgment(),
+        Some(true),
+        "Run 2 should receive ACK"
+    );
+    assert!(
+        ok_provider.get_updated_count() > 0,
+        "Documents should be indexed on replay"
+    );
+}
+
+#[tokio::test]
 async fn test_orchestrator_successful_bulk_operations_ack() {
     // Test that successful bulk operations still send ACK
     let events = vec![
@@ -704,6 +910,8 @@ async fn test_orchestrator_successful_bulk_operations_ack() {
             Uuid::new_v4(),
             Some("Entity 1".to_string()),
             Some("Description 1".to_string()),
+            None,
+            None,
             None,
         ),
         EntityEvent::delete(Uuid::new_v4(), Uuid::new_v4()),
@@ -742,12 +950,16 @@ async fn test_bulk_update_success() {
             Some("Entity 1".to_string()),
             Some("Description 1".to_string()),
             None,
+            None,
+            None,
         ),
         EntityEvent::upsert(
             Uuid::new_v4(),
             Uuid::new_v4(),
             Some("Entity 2".to_string()),
             Some("Description 2".to_string()),
+            None,
+            None,
             None,
         ),
     ];
@@ -782,12 +994,16 @@ async fn test_bulk_update_partial_failure() {
             Some("Entity 1".to_string()),
             Some("Description 1".to_string()),
             None,
+            None,
+            None,
         ),
         EntityEvent::upsert(
             Uuid::new_v4(),
             Uuid::new_v4(),
             Some("Entity 2".to_string()),
             Some("Description 2".to_string()),
+            None,
+            None,
             None,
         ),
     ];
@@ -800,10 +1016,10 @@ async fn test_bulk_update_partial_failure() {
     assert!(result.is_ok(), "Orchestrator should complete");
 
     let run_result = result.unwrap();
-    // The orchestrator should succeed (error is handled via NACK)
+    // The orchestrator should fail because NACK causes consumer to return Err
     assert!(
-        run_result.is_ok(),
-        "Orchestrator run should succeed (error is handled via NACK)"
+        run_result.is_err(),
+        "Orchestrator run should fail (NACK causes consumer error to prevent data loss)"
     );
 
     // Verify that NACK was sent (not ACK) - if one fails, whole batch is a failure
@@ -863,10 +1079,10 @@ async fn test_bulk_soft_delete_partial_failure() {
     assert!(result.is_ok(), "Orchestrator should complete");
 
     let run_result = result.unwrap();
-    // The orchestrator should succeed (error is handled via NACK)
+    // The orchestrator should fail because NACK causes consumer to return Err
     assert!(
-        run_result.is_ok(),
-        "Orchestrator run should succeed (error is handled via NACK)"
+        run_result.is_err(),
+        "Orchestrator run should fail (NACK causes consumer error to prevent data loss)"
     );
 
     // Verify that NACK was sent (not ACK) - if one fails, whole batch is a failure
@@ -943,10 +1159,10 @@ async fn test_bulk_unset_partial_failure() {
     assert!(result.is_ok(), "Orchestrator should complete");
 
     let run_result = result.unwrap();
-    // The orchestrator should succeed (error is handled via NACK)
+    // The orchestrator should fail because NACK causes consumer to return Err
     assert!(
-        run_result.is_ok(),
-        "Orchestrator run should succeed (error is handled via NACK)"
+        run_result.is_err(),
+        "Orchestrator run should fail (NACK causes consumer error to prevent data loss)"
     );
 
     // Verify that NACK was sent (not ACK) - if one fails, whole batch is a failure
@@ -998,20 +1214,20 @@ async fn test_upsert_type_relation_adds_type_id() {
         "Expected ACK for successful operation"
     );
 
-    // Verify the add_type_relation request was created
-    let add_type_relation_requests = mock_provider.get_add_type_relation_requests();
+    // Verify the add_relation request was created
+    let add_relation_requests = mock_provider.get_add_relation_requests();
     assert_eq!(
-        add_type_relation_requests.len(),
+        add_relation_requests.len(),
         1,
-        "Expected 1 add_type_relation request"
+        "Expected 1 add_relation request"
     );
 
-    let request = &add_type_relation_requests[0];
+    let request = &add_relation_requests[0];
     assert_eq!(request.entity_id, entity_id.to_string());
     assert_eq!(request.space_id, space_id.to_string());
-    assert!(request.add_type_relation.is_some());
-    let rel = request.add_type_relation.as_ref().unwrap();
-    assert_eq!(rel.entity_to_id, type_id.to_string());
+    assert!(request.add_relation.is_some());
+    let rel = request.add_relation.as_ref().unwrap();
+    assert_eq!(rel.to_entity_id, type_id.to_string());
 }
 
 #[tokio::test]
@@ -1037,12 +1253,12 @@ async fn test_delete_type_relation_removes_type_id() {
         "Expected ACK for successful operation"
     );
 
-    // Verify RemoveTypeRelationById operation was processed
+    // Verify RemoveRelationById operation was processed
     let removed_relation_ids = mock_provider.get_removed_relation_ids();
     assert_eq!(
         removed_relation_ids.len(),
         1,
-        "Expected 1 RemoveTypeRelationById operation"
+        "Expected 1 RemoveRelationById operation"
     );
     assert_eq!(removed_relation_ids[0], relation_id.to_string());
 }
@@ -1076,12 +1292,12 @@ async fn test_non_type_relation_is_skipped() {
     let last_ack = mock_consumer.get_last_acknowledgment();
     assert_eq!(last_ack, Some(true), "Expected ACK");
 
-    // Verify NO add_type_relation requests were created
-    let add_type_relation_requests = mock_provider.get_add_type_relation_requests();
+    // Verify NO add_relation requests were created
+    let add_relation_requests = mock_provider.get_add_relation_requests();
     assert_eq!(
-        add_type_relation_requests.len(),
+        add_relation_requests.len(),
         0,
-        "Expected no add_type_relation requests for non-type relation"
+        "Expected no add_relation requests for non-type relation"
     );
 }
 
@@ -1102,6 +1318,8 @@ async fn test_mixed_entity_and_type_relation_events() {
             Some("Test Entity".to_string()),
             Some("Description".to_string()),
             None,
+            None,
+            None,
         ),
         // Second: add a type via relation
         EntityEvent::create_relation(relation_id, relation_type, entity_id, type_id, space_id),
@@ -1121,23 +1339,23 @@ async fn test_mixed_entity_and_type_relation_events() {
 
     // Should have 2 update operations total:
     // 1. The entity upsert
-    // 2. The add_type_relation operation
+    // 2. The add_relation operation
     assert_eq!(
         mock_provider.get_updated_count(),
         2,
         "Expected 2 update operations"
     );
 
-    // Verify the add_type_relation request
-    let add_type_relation_requests = mock_provider.get_add_type_relation_requests();
-    assert_eq!(add_type_relation_requests.len(), 1);
-    assert!(add_type_relation_requests[0].add_type_relation.is_some());
+    // Verify the add_relation request
+    let add_relation_requests = mock_provider.get_add_relation_requests();
+    assert_eq!(add_relation_requests.len(), 1);
+    assert!(add_relation_requests[0].add_relation.is_some());
     assert_eq!(
-        add_type_relation_requests[0]
-            .add_type_relation
+        add_relation_requests[0]
+            .add_relation
             .as_ref()
             .unwrap()
-            .entity_to_id,
+            .to_entity_id,
         type_id.to_string()
     );
 }
@@ -1170,38 +1388,26 @@ async fn test_add_then_remove_relation() {
     let last_ack = mock_consumer.get_last_acknowledgment();
     assert_eq!(last_ack, Some(true), "Expected ACK");
 
-    // Should have 1 add_type_relation via bulk operations
-    let add_requests = mock_provider.get_add_type_relation_requests();
-    assert_eq!(
-        add_requests.len(),
-        1,
-        "Expected 1 add_type_relation request"
-    );
+    // Should have 1 add_relation via bulk operations
+    let add_requests = mock_provider.get_add_relation_requests();
+    assert_eq!(add_requests.len(), 1, "Expected 1 add_relation request");
 
-    // Should have 1 RemoveTypeRelationById operation
+    // Should have 1 RemoveRelationById operation
     let removed_relation_ids = mock_provider.get_removed_relation_ids();
     assert_eq!(
         removed_relation_ids.len(),
         1,
-        "Expected 1 RemoveTypeRelationById operation"
+        "Expected 1 RemoveRelationById operation"
     );
 
     // Verify they're for the same relation
-    assert!(add_requests[0].add_type_relation.is_some());
+    assert!(add_requests[0].add_relation.is_some());
     assert_eq!(
-        add_requests[0]
-            .add_type_relation
-            .as_ref()
-            .unwrap()
-            .entity_to_id,
+        add_requests[0].add_relation.as_ref().unwrap().to_entity_id,
         type_id.to_string()
     );
     assert_eq!(
-        add_requests[0]
-            .add_type_relation
-            .as_ref()
-            .unwrap()
-            .relation_id,
+        add_requests[0].add_relation.as_ref().unwrap().relation_id,
         relation_id.to_string()
     );
     assert_eq!(removed_relation_ids[0], relation_id.to_string());
@@ -1210,31 +1416,31 @@ async fn test_add_then_remove_relation() {
     let all_ops = mock_provider.get_all_operations_in_order();
     assert_eq!(all_ops.len(), 2, "Expected 2 operations");
 
-    // First operation should be an Update with add_type_relation
+    // First operation should be an Update with add_relation
     match &all_ops[0] {
         EntityOperation::Update(req) => {
             assert!(
-                req.add_type_relation.is_some(),
-                "First operation should be add_type_relation"
+                req.add_relation.is_some(),
+                "First operation should be add_relation"
             );
             assert_eq!(
-                req.add_type_relation.as_ref().unwrap().entity_to_id,
+                req.add_relation.as_ref().unwrap().to_entity_id,
                 type_id.to_string()
             );
         }
         _ => panic!(
-            "First operation should be Update (add_type_relation), got {:?}",
+            "First operation should be Update (add_relation), got {:?}",
             all_ops[0]
         ),
     }
 
-    // Second operation should be RemoveTypeRelationById
+    // Second operation should be RemoveRelationById
     match &all_ops[1] {
-        EntityOperation::RemoveTypeRelationById(req) => {
+        EntityOperation::RemoveRelationById(req) => {
             assert_eq!(req.relation_id, relation_id.to_string());
         }
         _ => panic!(
-            "Second operation should be RemoveTypeRelationById, got {:?}",
+            "Second operation should be RemoveRelationById, got {:?}",
             all_ops[1]
         ),
     }
@@ -1286,13 +1492,9 @@ async fn test_multiple_types_for_same_entity() {
     let last_ack = mock_consumer.get_last_acknowledgment();
     assert_eq!(last_ack, Some(true), "Expected ACK");
 
-    // Should have 3 add_type_relation operations
-    let add_requests = mock_provider.get_add_type_relation_requests();
-    assert_eq!(
-        add_requests.len(),
-        3,
-        "Expected 3 add_type_relation requests"
-    );
+    // Should have 3 add_relation operations
+    let add_requests = mock_provider.get_add_relation_requests();
+    assert_eq!(add_requests.len(), 3, "Expected 3 add_relation requests");
 
     // Verify all are for the same entity
     for request in &add_requests {
@@ -1303,11 +1505,7 @@ async fn test_multiple_types_for_same_entity() {
     // Verify all three types are represented
     let added_types: Vec<_> = add_requests
         .iter()
-        .filter_map(|r| {
-            r.add_type_relation
-                .as_ref()
-                .map(|rel| rel.entity_to_id.clone())
-        })
+        .filter_map(|r| r.add_relation.as_ref().map(|rel| rel.to_entity_id.clone()))
         .collect();
     assert!(added_types.contains(&type_id_1.to_string()));
     assert!(added_types.contains(&type_id_2.to_string()));
@@ -1362,13 +1560,9 @@ async fn test_create_relations_for_multiple_entities() {
     let last_ack = mock_consumer.get_last_acknowledgment();
     assert_eq!(last_ack, Some(true), "Expected ACK");
 
-    // Should have 3 add_type_relation operations
-    let add_requests = mock_provider.get_add_type_relation_requests();
-    assert_eq!(
-        add_requests.len(),
-        3,
-        "Expected 3 add_type_relation requests"
-    );
+    // Should have 3 add_relation operations
+    let add_requests = mock_provider.get_add_relation_requests();
+    assert_eq!(add_requests.len(), 3, "Expected 3 add_relation requests");
 
     // Verify each entity got its correct type
     let entity_type_pairs: Vec<_> = add_requests
@@ -1376,9 +1570,9 @@ async fn test_create_relations_for_multiple_entities() {
         .map(|r| {
             (
                 r.entity_id.clone(),
-                r.add_type_relation
+                r.add_relation
                     .as_ref()
-                    .map(|rel| rel.entity_to_id.clone())
+                    .map(|rel| rel.to_entity_id.clone())
                     .unwrap(),
             )
         })
@@ -1414,12 +1608,12 @@ async fn test_delete_multiple_relations() {
     let last_ack = mock_consumer.get_last_acknowledgment();
     assert_eq!(last_ack, Some(true), "Expected ACK");
 
-    // Verify all 3 RemoveTypeRelationById operations were processed
+    // Verify all 3 RemoveRelationById operations were processed
     let removed_relation_ids = mock_provider.get_removed_relation_ids();
     assert_eq!(
         removed_relation_ids.len(),
         3,
-        "Expected 3 RemoveTypeRelationById operations"
+        "Expected 3 RemoveRelationById operations"
     );
 
     // Verify all relation IDs are present
@@ -1475,20 +1669,16 @@ async fn test_mixed_create_and_delete_relations_different_entities() {
     let last_ack = mock_consumer.get_last_acknowledgment();
     assert_eq!(last_ack, Some(true), "Expected ACK");
 
-    // Verify 2 add_type_relation operations
-    let add_requests = mock_provider.get_add_type_relation_requests();
-    assert_eq!(
-        add_requests.len(),
-        2,
-        "Expected 2 add_type_relation requests"
-    );
+    // Verify 2 add_relation operations
+    let add_requests = mock_provider.get_add_relation_requests();
+    assert_eq!(add_requests.len(), 2, "Expected 2 add_relation requests");
 
-    // Verify 2 RemoveTypeRelationById operations
+    // Verify 2 RemoveRelationById operations
     let removed_relation_ids = mock_provider.get_removed_relation_ids();
     assert_eq!(
         removed_relation_ids.len(),
         2,
-        "Expected 2 RemoveTypeRelationById operations"
+        "Expected 2 RemoveRelationById operations"
     );
 
     // Verify correct relation IDs were removed
@@ -1521,6 +1711,8 @@ async fn test_interleaved_entity_and_relation_operations() {
             Some("Entity One".to_string()),
             Some("Description one".to_string()),
             None,
+            None,
+            None,
         ),
         // Create type relation for entity 1
         EntityEvent::create_relation(relation_id_1, relation_type, entity_id_1, type_id, space_id),
@@ -1529,6 +1721,8 @@ async fn test_interleaved_entity_and_relation_operations() {
             entity_id_2,
             space_id,
             Some("Entity Two".to_string()),
+            None,
+            None,
             None,
             None,
         ),
@@ -1551,29 +1745,33 @@ async fn test_interleaved_entity_and_relation_operations() {
     assert_eq!(last_ack, Some(true), "Expected ACK");
 
     // Verify counts:
-    // - 2 entity upserts + 1 add_type_relation + 1 soft delete = 4 updates
-    // - 1 relation delete (RemoveTypeRelationById)
-    assert_eq!(mock_provider.get_updated_count(), 4, "Expected 4 updates (including soft delete)");
-    assert_eq!(mock_provider.get_soft_deleted_count(), 1, "Expected 1 soft delete");
+    // - 2 entity upserts + 1 add_relation + 1 soft delete = 4 updates
+    // - 1 relation delete (RemoveRelationById)
+    assert_eq!(
+        mock_provider.get_updated_count(),
+        4,
+        "Expected 4 updates (including soft delete)"
+    );
+    assert_eq!(
+        mock_provider.get_soft_deleted_count(),
+        1,
+        "Expected 1 soft delete"
+    );
 
     let removed_relation_ids = mock_provider.get_removed_relation_ids();
     assert_eq!(
         removed_relation_ids.len(),
         1,
-        "Expected 1 RemoveTypeRelationById operation"
+        "Expected 1 RemoveRelationById operation"
     );
     assert_eq!(removed_relation_ids[0], relation_id_2.to_string());
 
-    // Verify the add_type_relation was for entity 1
-    let add_requests = mock_provider.get_add_type_relation_requests();
-    assert_eq!(add_requests.len(), 1, "Expected 1 add_type_relation");
+    // Verify the add_relation was for entity 1
+    let add_requests = mock_provider.get_add_relation_requests();
+    assert_eq!(add_requests.len(), 1, "Expected 1 add_relation");
     assert_eq!(add_requests[0].entity_id, entity_id_1.to_string());
     assert_eq!(
-        add_requests[0]
-            .add_type_relation
-            .as_ref()
-            .unwrap()
-            .relation_id,
+        add_requests[0].add_relation.as_ref().unwrap().relation_id,
         relation_id_1.to_string()
     );
 }
@@ -1620,10 +1818,10 @@ async fn test_relation_operations_preserve_order() {
     // Operation 0: Create relation 1 (add type_id_1)
     match &all_ops[0] {
         EntityOperation::Update(req) => {
-            assert!(req.add_type_relation.is_some());
-            let rel = req.add_type_relation.as_ref().unwrap();
+            assert!(req.add_relation.is_some());
+            let rel = req.add_relation.as_ref().unwrap();
             assert_eq!(rel.relation_id, relation_id_1.to_string());
-            assert_eq!(rel.entity_to_id, type_id_1.to_string());
+            assert_eq!(rel.to_entity_id, type_id_1.to_string());
         }
         _ => panic!("Expected Update operation at index 0, got {:?}", all_ops[0]),
     }
@@ -1631,32 +1829,32 @@ async fn test_relation_operations_preserve_order() {
     // Operation 1: Create relation 2 (add type_id_2)
     match &all_ops[1] {
         EntityOperation::Update(req) => {
-            assert!(req.add_type_relation.is_some());
-            let rel = req.add_type_relation.as_ref().unwrap();
+            assert!(req.add_relation.is_some());
+            let rel = req.add_relation.as_ref().unwrap();
             assert_eq!(rel.relation_id, relation_id_2.to_string());
-            assert_eq!(rel.entity_to_id, type_id_2.to_string());
+            assert_eq!(rel.to_entity_id, type_id_2.to_string());
         }
         _ => panic!("Expected Update operation at index 1, got {:?}", all_ops[1]),
     }
 
     // Operation 2: Delete relation 1
     match &all_ops[2] {
-        EntityOperation::RemoveTypeRelationById(req) => {
+        EntityOperation::RemoveRelationById(req) => {
             assert_eq!(req.relation_id, relation_id_1.to_string());
         }
         _ => panic!(
-            "Expected RemoveTypeRelationById operation at index 2, got {:?}",
+            "Expected RemoveRelationById operation at index 2, got {:?}",
             all_ops[2]
         ),
     }
 
     // Operation 3: Delete relation 3
     match &all_ops[3] {
-        EntityOperation::RemoveTypeRelationById(req) => {
+        EntityOperation::RemoveRelationById(req) => {
             assert_eq!(req.relation_id, relation_id_3.to_string());
         }
         _ => panic!(
-            "Expected RemoveTypeRelationById operation at index 3, got {:?}",
+            "Expected RemoveRelationById operation at index 3, got {:?}",
             all_ops[3]
         ),
     }
@@ -1680,6 +1878,8 @@ async fn test_create_relation_with_upsert_for_same_entity() {
             Some("My Entity".to_string()),
             Some("A description".to_string()),
             Some("https://example.com/avatar.png".to_string()),
+            None,
+            None,
         ),
         // Add a type to the same entity
         EntityEvent::create_relation(relation_id, relation_type, entity_id, type_id, space_id),
@@ -1711,8 +1911,8 @@ async fn test_create_relation_with_upsert_for_same_entity() {
             assert_eq!(req.name, Some("My Entity".to_string()));
             assert_eq!(req.description, Some("A description".to_string()));
             assert!(
-                req.add_type_relation.is_none(),
-                "First update should not have add_type_relation"
+                req.add_relation.is_none(),
+                "First update should not have add_relation"
             );
         }
         _ => panic!("Expected Update operation at index 0, got {:?}", all_ops[0]),
@@ -1722,10 +1922,10 @@ async fn test_create_relation_with_upsert_for_same_entity() {
     match &all_ops[1] {
         EntityOperation::Update(req) => {
             assert_eq!(req.entity_id, entity_id.to_string());
-            assert!(req.add_type_relation.is_some());
-            let rel = req.add_type_relation.as_ref().unwrap();
+            assert!(req.add_relation.is_some());
+            let rel = req.add_relation.as_ref().unwrap();
             assert_eq!(rel.relation_id, relation_id.to_string());
-            assert_eq!(rel.entity_to_id, type_id.to_string());
+            assert_eq!(rel.to_entity_id, type_id.to_string());
         }
         _ => panic!("Expected Update operation at index 1, got {:?}", all_ops[1]),
     }

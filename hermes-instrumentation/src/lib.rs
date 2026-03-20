@@ -41,10 +41,13 @@ pub use config::{AxiomConfig, Backend, Config};
 
 // Re-export initialization
 #[allow(deprecated)]
-pub use init::{init, shutdown, Error, TelemetryGuard};
+pub use init::{Error, TelemetryGuard, init, shutdown};
 
 // Re-export tracing macros for convenience
 pub use tracing::{
+    Instrument,
+    Level,
+    Span,
     // Event macros
     debug,
     // Span macros
@@ -59,7 +62,4 @@ pub use tracing::{
     trace_span,
     warn,
     warn_span,
-    Instrument,
-    Level,
-    Span,
 };
