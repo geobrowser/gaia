@@ -125,16 +125,25 @@ fn make_system_value_integer(
     }
 }
 
+/// Derive the relation row ID (distinct from the reified entity ID).
+fn derive_system_relation_row_id(type_name: &str, entity_id: &Uuid) -> Uuid {
+    Uuid::new_v5(
+        &geo_system_namespace(),
+        format!("geo:system:rel_id:{}:{}", type_name, entity_id).as_bytes(),
+    )
+}
+
 fn make_system_type_relation(
     entity_id: &Uuid,
     type_entity_id: &Uuid,
     type_name: &str,
     space_id: &Uuid,
 ) -> SetRelationItem {
-    let relation_id = derive_system_relation_id(type_name, entity_id);
+    let reified_entity_id = derive_system_relation_id(type_name, entity_id);
+    let relation_row_id = derive_system_relation_row_id(type_name, entity_id);
     SetRelationItem {
-        id: relation_id,
-        entity_id: relation_id,
+        id: relation_row_id,
+        entity_id: reified_entity_id,
         type_id: Uuid::parse_str(SYSTEM_TYPES_RELATION_TYPE_ID)
             .expect("SYSTEM_TYPES_RELATION_TYPE_ID is a valid UUID constant"),
         from_id: *entity_id,
@@ -354,12 +363,21 @@ mod tests {
         for rel in &relations {
             assert_ne!(
                 rel.id, entity_id,
-                "Relation ID should not collide with entity ID"
+                "Relation row ID should not collide with system entity ID"
+            );
+            assert_ne!(
+                rel.entity_id, entity_id,
+                "Relation entity ID should not collide with system entity ID"
+            );
+            assert_ne!(
+                rel.id, rel.entity_id,
+                "Relation row ID should differ from its reified entity ID"
             );
         }
 
         // Relation IDs should also be distinct from each other
         assert_ne!(relations[0].id, relations[1].id);
+        assert_ne!(relations[0].entity_id, relations[1].entity_id);
     }
 
     #[test]
