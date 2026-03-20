@@ -224,6 +224,8 @@ jobs:
       - name: Run search-indexer in background
         run: |
           ENVIRONMENT=staging \
+          DATABASE_URL=${{ env.DATABASE_URL }} \
+          DATABASE_MAX_CONNECTIONS=5 \
           KAFKA_BROKER=localhost:9092 \
           OPENSEARCH_URL=http://localhost:9200 \
           KAFKA_GROUP_EDITS_ID=search-indexer-group-edits-e2e \
@@ -332,6 +334,8 @@ jobs:
       - name: Start indexer for load test
         run: |
           ENVIRONMENT=staging \
+          DATABASE_URL=${{ env.DATABASE_URL }} \
+          DATABASE_MAX_CONNECTIONS=5 \
           KAFKA_BROKER=localhost:9092 \
           OPENSEARCH_URL=http://localhost:9200 \
           OPENSEARCH_MAX_BULK_SIZE=10 \
