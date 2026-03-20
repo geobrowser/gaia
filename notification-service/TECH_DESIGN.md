@@ -78,7 +78,9 @@ flowchart LR
 7. Staging and production environments are fully isolated (separate databases).
 8. Support extensibility — adding new event types should only require new Kafka handlers.
 
-## v1 Supported Event Types (Governance)
+## v1 Supported Event Types
+
+### Governance
 
 | Kafka Event | Webhook `event_type` | Source |
 |---|---|---|
@@ -89,7 +91,142 @@ flowchart LR
 | `PROPOSAL_SETTINGS_UPDATED` | `proposal_settings_updated` | `space.governance` topic |
 | *(expired proposals)* | `proposal_rejected` | Periodic DB poll (every 60s) |
 
-Future versions may add events from other topics such as `knowledge.edits`, `space.membership`, and `space.moderation`.
+### Bounty Lifecycle
+
+| Kafka Event | Webhook `event_type` | Source |
+|---|---|---|
+| `EDITS_PUBLISHED` (interest relation created) | `bounty_interest` | `knowledge.edits` topic |
+| `PROPOSAL_EXECUTED` (allocation relation created) | `bounty_allocated` | `space.governance` topic |
+| `PROPOSAL_EXECUTED` (payout relation created) | `bounty_payout` | `space.governance` topic |
+
+Bounty events require consuming the `knowledge.edits` Kafka topic in addition to `space.governance`. The notification-indexer must decode the GRC-20 payload from `HermesEdit` messages and inspect the relation `type_id` to identify bounty-specific relations. Well-known relation type UUIDs for bounty interest, allocation, and payout will be defined in the protocol and configured via environment variables (e.g. `BOUNTY_INTEREST_RELATION_TYPE_ID`, `BOUNTY_ALLOCATED_RELATION_TYPE_ID`, `BOUNTY_PAYOUT_RELATION_TYPE_ID`).
+
+#### Resolving entity_id → user_space_id
+
+Bounty relations reference users by their **entity ID** (`from_id` or `to_id` in the relation). The notification service needs the user's **`user_space_id`** (their personal space UUID) to address notifications. There is no direct entity→space mapping table — instead, the resolution uses the "front page entity" pattern from the knowledge graph:
+
+```sql
+-- Given a user entity_id, find their personal space
+SELECT r.space_id AS user_space_id
+FROM relations r
+JOIN spaces s ON s.id = r.space_id
+WHERE r.from_entity_id = $1             -- the user's entity_id
+  AND r.type_id = '8f151ba4-...'        -- SystemIds.TYPES relation
+  AND r.to_entity_id = '362c1dbd-...'   -- SystemIds.SPACE_TYPE
+  AND s.type = 'Personal'
+LIMIT 1
+```
+
+Every personal space has a "front page entity" linked via a `TYPES → SPACE_TYPE` relation. This query finds the personal space that claims the given entity as its front page entity.
+
+**Shortcut for bounty interest:** The `HermesEdit.space_id` is the curator's personal space (since they published from their personal space), so no DB lookup is needed — the `space_id` on the Kafka message *is* the curator's `user_space_id`.
+
+**For allocation/payout:** The relation's `to_id` is the curator entity. The `to_space_id` field on the relation may also be populated (if the app set it), providing the curator's space directly. If absent, the DB lookup above is used as a fallback.
+
+#### Bounty Interest
+
+A curator expresses interest in a bounty by creating a relation in their **personal space** pointing from their user entity to the bounty entity. The notification service detects this relation and notifies the editors of the space that owns the bounty.
+
+**Who gets notified:** Editors of the bounty's space (the maintainers who can allocate the bounty).
+
+**How the recipient space is resolved:** The `to_id` (bounty entity) is looked up in the `relations` table to find which space(s) it belongs to. The editors of that space are the recipients.
+
+**How the curator's space is resolved:** The `HermesEdit.space_id` is the curator's personal space (since they published the edit from their personal space). No additional DB lookup is needed.
+
+```mermaid
+sequenceDiagram
+    participant Curator as Curator (Personal Space)
+    participant Chain as On-Chain
+    participant K as Kafka (knowledge.edits)
+    participant NI as Notification Indexer
+    participant DB as Postgres
+
+    Curator->>Chain: publish(CreateRelation)
+    Note over Chain: from: curator entity<br/>to: bounty entity<br/>type: INTERESTED_IN<br/>space: curator's personal space
+
+    Chain->>K: HermesEdit (GRC-20 payload)
+    Note over K: space_id = curator's personal space
+    K->>NI: Consume message
+    NI->>NI: Decode GRC-20 payload
+    NI->>NI: Find CreateRelation with type_id = INTERESTED_IN
+    NI->>NI: curator_space_id = HermesEdit.space_id
+    NI->>DB: Look up bounty entity (to_id) → resolve owning space
+    NI->>DB: Query editors of bounty's space
+    NI->>DB: Write outbox rows (bounty_interest)
+    Note over NI: Payload includes:<br/>bounty_entity_id, curator_space_id,<br/>bounty_space_id, relation_id
+```
+
+#### Bounty Allocation
+
+An editor of the bounty's space creates a governance proposal that, when executed, creates a relation from the bounty entity to the allocated curator. The `proposal_executed` event already flows through `space.governance`. The notification-indexer inspects the proposal's executed actions (via `knowledge.edits`) to detect the allocation relation and emits a `bounty_allocated` notification to the allocated curator.
+
+**Who gets notified:** The curator who was allocated (identified by the `to_id` of the allocation relation).
+
+**How the curator's space is resolved:** Use the relation's `to_space_id` if populated; otherwise fall back to the entity→space DB lookup (see [Resolving entity_id → user_space_id](#resolving-entity_id--user_space_id)).
+
+```mermaid
+sequenceDiagram
+    participant Editor as Bounty Editor
+    participant Chain as On-Chain
+    participant KG as Kafka (space.governance)
+    participant KE as Kafka (knowledge.edits)
+    participant NI as Notification Indexer
+    participant DB as Postgres
+
+    Editor->>Chain: createProposal(CreateRelation)
+    Note over Chain: from: bounty entity<br/>to: curator entity<br/>type: ALLOCATED_TO<br/>space: bounty's public space
+
+    Chain->>KG: PROPOSAL_CREATED
+    KG->>NI: Consume → proposal_created notifications (to space editors)
+
+    Note over Chain: Proposal passes vote / executes immediately
+
+    Chain->>KG: PROPOSAL_EXECUTED
+    Chain->>KE: HermesEdit (GRC-20 payload with allocation relation)
+    KE->>NI: Consume message
+    NI->>NI: Decode GRC-20, find ALLOCATED_TO relation
+    NI->>NI: Extract to_id → curator entity
+    NI->>DB: Resolve curator entity_id → curator's user_space_id
+    NI->>DB: Write outbox row (bounty_allocated)
+    Note over NI: Payload includes:<br/>bounty_entity_id, curator_space_id,<br/>bounty_space_id, proposal_id
+```
+
+#### Bounty Payout
+
+After work is completed, an editor creates a governance proposal that, when executed, creates a payout relation. The notification-indexer detects the payout relation type in the executed edit and notifies the curator that they have been paid.
+
+**Who gets notified:** The curator who received the payout (identified by the `to_id` of the payout relation).
+
+**How the curator's space is resolved:** Same as allocation — use `to_space_id` if available, otherwise DB lookup.
+
+```mermaid
+sequenceDiagram
+    participant Editor as Bounty Editor
+    participant Chain as On-Chain
+    participant KG as Kafka (space.governance)
+    participant KE as Kafka (knowledge.edits)
+    participant NI as Notification Indexer
+    participant DB as Postgres
+
+    Editor->>Chain: createProposal(payout relation)
+    Note over Chain: from: bounty entity<br/>to: curator entity<br/>type: PAYOUT<br/>space: bounty's public space
+
+    Chain->>KG: PROPOSAL_CREATED
+    Chain->>KG: PROPOSAL_EXECUTED
+    Chain->>KE: HermesEdit (GRC-20 payload with payout relation)
+    KE->>NI: Consume message
+    NI->>NI: Decode GRC-20, find PAYOUT relation
+    NI->>NI: Extract to_id → curator entity
+    NI->>DB: Resolve curator entity_id → curator's user_space_id
+    NI->>DB: Write outbox row (bounty_payout)
+    Note over NI: Payload includes:<br/>bounty_entity_id, curator_space_id,<br/>bounty_space_id, proposal_id
+```
+
+#### Deduplication: Governance vs. Bounty Notifications
+
+A single `PROPOSAL_EXECUTED` event for a bounty allocation will generate both a generic `proposal_executed` notification (to all space editors) and a targeted `bounty_allocated` notification (to the allocated curator). This is intentional — they serve different audiences and purposes. The app server can deduplicate or merge these on its end if desired.
+
+Future versions may add events from other topics such as `space.membership` and `space.moderation`.
 
 # In-Depth
 
@@ -146,11 +283,11 @@ One row per outbox entry per webhook. Written by the notification-indexer, updat
 
 **Crate:** `notification-service/notification-indexer/`
 
-The notification-indexer runs two concurrent tasks:
+The notification-indexer runs three concurrent tasks:
 
-### Task 1: Kafka Consumer
+### Task 1: Governance Consumer
 
-Subscribes to Kafka topics for on-chain events (v1: `space.governance`, with environment-based topic prefix via `hermes-kafka`). For each message:
+Subscribes to `space.governance` (with environment-based topic prefix via `hermes-kafka`). For each message:
 
 1. Reads the `event-type` header to determine the governance event type
 2. Decodes the protobuf payload (`HermesProposalCreated`, `HermesProposalVoted`, etc.)
@@ -162,7 +299,27 @@ Subscribes to Kafka topics for on-chain events (v1: `space.governance`, with env
 
 If the user lookup fails (DB error), the Kafka offset is **not** committed — the message will be reprocessed on restart. If the space has zero relevant users, the event is acknowledged and skipped.
 
-### Task 2: Rejection Poller
+### Task 2: Knowledge Edits Consumer
+
+Subscribes to `knowledge.edits` (with environment-based topic prefix). For each `HermesEdit` message:
+
+1. Decodes the protobuf `HermesEdit` envelope to extract `space_id` and `payload` (GRC-20 bytes)
+2. Decodes the GRC-20 payload using the `grc-20` crate (`grc_20::decode_edit()`)
+3. Iterates over `CreateRelation` operations in the edit
+4. Checks each relation's `type_id` against the configured bounty relation type UUIDs:
+   - **`BOUNTY_INTEREST_RELATION_TYPE_ID`** → `bounty_interest` notification
+   - **`BOUNTY_ALLOCATED_RELATION_TYPE_ID`** → `bounty_allocated` notification
+   - **`BOUNTY_PAYOUT_RELATION_TYPE_ID`** → `bounty_payout` notification
+5. Relations with unrecognized `type_id` values are skipped (no notification)
+6. For matched relations, resolves recipients and the curator's identity:
+   - `bounty_interest`: `curator_space_id` = `HermesEdit.space_id` (no DB lookup needed). Look up the bounty entity (`to_id`) in the `relations` table → find its owning space → query editors of that space as recipients
+   - `bounty_allocated` / `bounty_payout`: `curator_space_id` = relation's `to_space_id` if present, otherwise resolve `to_id` (curator entity) → `user_space_id` via the front-page-entity DB lookup. The curator is the sole recipient
+7. Inserts outbox rows and fans out delivery rows
+8. Commits the Kafka offset
+
+**GRC-20 decoding:** The `HermesEdit.payload` field contains raw GRC-20 (or GRC2Z compressed) bytes. Each edit contains a list of operations (`CreateEntity`, `CreateRelation`, `SetTriple`, etc.). The notification-indexer only inspects `CreateRelation` operations and ignores all others. The `grc-20` crate is already used by the kg-indexer for the same purpose.
+
+### Task 3: Rejection Poller
 
 Runs every `REJECTION_POLL_INTERVAL_SECS` (default 60s):
 
@@ -190,6 +347,8 @@ idempotency_key = SHA-256(block_number + ":" + sequence + ":" + event_type + ":"
 The `block_number` and `sequence` together uniquely identify an on-chain event (sequence handles multiple events within the same block), so they would be sufficient on their own. The `event_type` and `user_space_id` are included defensively to ensure per-user uniqueness.
 
 For `proposal_rejected` (off-chain, no block/sequence), the input is `{proposal_id}:proposal_rejected:{user_space_id}` since a proposal can only be rejected once.
+
+For bounty events (`bounty_interest`, `bounty_allocated`, `bounty_payout`), the same `block_number:sequence:event_type:user_space_id` formula applies since these originate from on-chain `HermesEdit` messages with full `BlockchainMetadata`.
 
 The `ON CONFLICT (idempotency_key) DO NOTHING` clause prevents duplicate outbox rows if the same event is processed twice (e.g. after a restart).
 
@@ -249,19 +408,37 @@ Every webhook POST body follows this JSON schema:
 
 ### Fields
 
+#### Common (all event types)
+
 | Field | Type | Presence | Description |
 |---|---|---|---|
 | `version` | number | Always | Payload schema version (currently `1`) |
-| `event_type` | string | Always | One of the 6 event types |
+| `event_type` | string | Always | Event type identifier |
 | `space_id` | UUID string | Always | Space where the event occurred |
-| `proposal_id` | UUID string | Always | Proposal involved |
 | `user_space_id` | UUID string | Always | The user this notification is addressed to |
 | `idempotency_key` | string | Always | Unique deduplication key |
+| `block_number` | number | All except `rejected` | On-chain block number |
+| `timestamp` | number | Always | Unix timestamp in seconds |
+
+#### Governance fields
+
+| Field | Type | Presence | Description |
+|---|---|---|---|
+| `proposal_id` | UUID string | All governance events | Proposal involved |
 | `proposer_id` | UUID string | `created`, `updated`, `rejected` | Who created/updated the proposal |
 | `voter_id` | UUID string | `voted` only | Who cast the vote |
 | `vote` | string | `voted` only | `yes`, `no`, or `abstain` |
-| `block_number` | number | All except `rejected` | On-chain block number |
-| `timestamp` | number | Always | Unix timestamp in seconds |
+
+#### Bounty fields
+
+| Field | Type | Presence | Description |
+|---|---|---|---|
+| `bounty_entity_id` | UUID string | All bounty events | The bounty entity |
+| `relation_id` | UUID string | All bounty events | The relation that triggered the notification |
+| `curator_space_id` | UUID string | All bounty events | The curator's personal space (resolved from `HermesEdit.space_id` for interest, or entity→space lookup for allocation/payout) |
+| `bounty_space_id` | UUID string | All bounty events | The space that owns the bounty |
+| `interested_user_space_id` | UUID string | `bounty_interest` only | The personal space of the user who expressed interest (same as `curator_space_id` — included explicitly so app servers can identify the interested user without extra lookups) |
+| `proposal_id` | UUID string | `bounty_allocated`, `bounty_payout` | The governance proposal (absent for `bounty_interest` since no proposal is involved) |
 
 ## Deployment
 
