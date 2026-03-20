@@ -40,7 +40,7 @@ impl SystemEntityResult {
 }
 
 fn geo_system_namespace() -> Uuid {
-    Uuid::parse_str(GEO_SYSTEM_NAMESPACE).unwrap()
+    Uuid::parse_str(GEO_SYSTEM_NAMESPACE).expect("GEO_SYSTEM_NAMESPACE is a valid UUID constant")
 }
 
 fn derive_system_entity_id(event_type: &str, unique_data: &str) -> Uuid {
@@ -135,7 +135,8 @@ fn make_system_type_relation(
     SetRelationItem {
         id: relation_id,
         entity_id: relation_id,
-        type_id: Uuid::parse_str(SYSTEM_TYPES_RELATION_TYPE_ID).unwrap(),
+        type_id: Uuid::parse_str(SYSTEM_TYPES_RELATION_TYPE_ID)
+            .expect("SYSTEM_TYPES_RELATION_TYPE_ID is a valid UUID constant"),
         from_id: *entity_id,
         to_id: *type_entity_id,
         space_id: *space_id,
@@ -180,9 +181,12 @@ pub fn map_space_registered(
         updated_at_block: block,
     };
 
-    let space_address_pid = Uuid::parse_str(SPACE_ADDRESS_PROPERTY_ID).unwrap();
-    let created_by_pid = Uuid::parse_str(CREATED_BY_PROPERTY_ID).unwrap();
-    let created_at_block_pid = Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID).unwrap();
+    let space_address_pid =
+        Uuid::parse_str(SPACE_ADDRESS_PROPERTY_ID).expect("SPACE_ADDRESS_PROPERTY_ID is a valid UUID constant");
+    let created_by_pid =
+        Uuid::parse_str(CREATED_BY_PROPERTY_ID).expect("CREATED_BY_PROPERTY_ID is a valid UUID constant");
+    let created_at_block_pid =
+        Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID).expect("CREATED_AT_BLOCK_PROPERTY_ID is a valid UUID constant");
 
     let values = vec![
         make_system_value_bytes(&entity_id, &space_address_pid, &space_id, &address),
@@ -195,8 +199,10 @@ pub fn map_space_registered(
         ),
     ];
 
-    let system_type_uuid = Uuid::parse_str(SYSTEM_TYPE_ID).unwrap();
-    let space_type_uuid = Uuid::parse_str(SPACE_TYPE_ID).unwrap();
+    let system_type_uuid =
+        Uuid::parse_str(SYSTEM_TYPE_ID).expect("SYSTEM_TYPE_ID is a valid UUID constant");
+    let space_type_uuid =
+        Uuid::parse_str(SPACE_TYPE_ID).expect("SPACE_TYPE_ID is a valid UUID constant");
 
     let relations = vec![
         RelationOp::Create(make_system_type_relation(
