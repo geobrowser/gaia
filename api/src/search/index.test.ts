@@ -1,9 +1,17 @@
+import {SystemIds} from "@graphprotocol/grc-20"
 import {Hono} from "hono"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {runtime} from "../services/runtime"
 import type {SearchClient, SearchResponse} from "../services/search"
 
 import {createSearchRouter} from "./index"
+
+const DEFAULT_EXCLUDED_TYPE_IDS = [
+	SystemIds.TEXT_BLOCK,
+	SystemIds.IMAGE_BLOCK,
+	SystemIds.DATA_BLOCK,
+	SystemIds.IMAGE_TYPE,
+]
 
 describe("Search Router - Integration Tests", () => {
 	let mockSearchClient: SearchClient
@@ -54,6 +62,7 @@ describe("Search Router - Integration Tests", () => {
 				scope: "GLOBAL",
 				limit: 20,
 				offset: 0,
+				exclude_type_ids: DEFAULT_EXCLUDED_TYPE_IDS,
 			})
 		})
 
@@ -69,6 +78,7 @@ describe("Search Router - Integration Tests", () => {
 				scope: "GLOBAL",
 				limit: 20,
 				offset: 0,
+				exclude_type_ids: DEFAULT_EXCLUDED_TYPE_IDS,
 			})
 		})
 
@@ -83,6 +93,7 @@ describe("Search Router - Integration Tests", () => {
 				scope: "GLOBAL",
 				limit: 50,
 				offset: 10,
+				exclude_type_ids: DEFAULT_EXCLUDED_TYPE_IDS,
 			})
 		})
 
@@ -98,6 +109,7 @@ describe("Search Router - Integration Tests", () => {
 				limit: 20,
 				offset: 0,
 				space_id: spaceId,
+				exclude_type_ids: DEFAULT_EXCLUDED_TYPE_IDS,
 			})
 		})
 
@@ -113,6 +125,7 @@ describe("Search Router - Integration Tests", () => {
 				limit: 20,
 				offset: 0,
 				space_id: spaceId,
+				exclude_type_ids: DEFAULT_EXCLUDED_TYPE_IDS,
 			})
 		})
 
@@ -128,6 +141,7 @@ describe("Search Router - Integration Tests", () => {
 				limit: 20,
 				offset: 0,
 				space_id: spaceId,
+				exclude_type_ids: DEFAULT_EXCLUDED_TYPE_IDS,
 			})
 		})
 
@@ -141,6 +155,7 @@ describe("Search Router - Integration Tests", () => {
 				scope: "GLOBAL_BY_SPACE_SCORE",
 				limit: 20,
 				offset: 0,
+				exclude_type_ids: DEFAULT_EXCLUDED_TYPE_IDS,
 			})
 		})
 
@@ -154,6 +169,7 @@ describe("Search Router - Integration Tests", () => {
 				scope: "GLOBAL_BY_ENTITY_SPACE_SCORE",
 				limit: 20,
 				offset: 0,
+				exclude_type_ids: DEFAULT_EXCLUDED_TYPE_IDS,
 			})
 		})
 
@@ -170,6 +186,7 @@ describe("Search Router - Integration Tests", () => {
 				scope: "GLOBAL",
 				limit: 20,
 				offset: 0,
+				exclude_type_ids: DEFAULT_EXCLUDED_TYPE_IDS,
 			})
 		})
 
@@ -185,6 +202,7 @@ describe("Search Router - Integration Tests", () => {
 				scope: "GLOBAL",
 				limit: 20,
 				offset: 0,
+				exclude_type_ids: DEFAULT_EXCLUDED_TYPE_IDS,
 			})
 		})
 
@@ -200,6 +218,7 @@ describe("Search Router - Integration Tests", () => {
 				scope: "GLOBAL",
 				limit: 20,
 				offset: 0,
+				exclude_type_ids: DEFAULT_EXCLUDED_TYPE_IDS,
 			})
 		})
 
@@ -286,6 +305,7 @@ describe("Search Router - Integration Tests", () => {
 				scope: "GLOBAL",
 				limit: 100, // clamped
 				offset: 0,
+				exclude_type_ids: DEFAULT_EXCLUDED_TYPE_IDS,
 			})
 		})
 
@@ -361,6 +381,88 @@ describe("Search Router - Integration Tests", () => {
 
 			expect(response.status).toBe(500)
 			expect(result.message).toBe("Custom error message")
+		})
+	})
+
+	describe("exclude_type_ids", () => {
+		it("applies default excluded type IDs when param is not provided", async () => {
+			const request = new Request("http://localhost/search?query=test")
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					exclude_type_ids: DEFAULT_EXCLUDED_TYPE_IDS,
+				}),
+			)
+		})
+
+		it("disables default exclusions when exclude_type_ids is empty string", async () => {
+			const request = new Request("http://localhost/search?query=test&exclude_type_ids=")
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith({
+				query: "test",
+				scope: "GLOBAL",
+				limit: 20,
+				offset: 0,
+			})
+			// Ensure exclude_type_ids is NOT in the call (empty array is not spread)
+			const callArg = (mockSearchClient.search as ReturnType<typeof vi.fn>).mock.calls[0][0]
+			expect(callArg).not.toHaveProperty("exclude_type_ids")
+		})
+
+		it("passes user-supplied exclude_type_ids to search client", async () => {
+			const customExcludeId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+			const request = new Request(`http://localhost/search?query=test&exclude_type_ids=${customExcludeId}`)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith({
+				query: "test",
+				scope: "GLOBAL",
+				limit: 20,
+				offset: 0,
+				exclude_type_ids: [customExcludeId],
+			})
+		})
+
+		it("passes multiple user-supplied exclude_type_ids", async () => {
+			const id1 = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+			const id2 = "11111111-2222-3333-4444-555555555555"
+			const request = new Request(`http://localhost/search?query=test&exclude_type_ids=${id1},${id2}`)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith({
+				query: "test",
+				scope: "GLOBAL",
+				limit: 20,
+				offset: 0,
+				exclude_type_ids: [id1, id2],
+			})
+		})
+
+		it("returns 400 for invalid UUID in exclude_type_ids", async () => {
+			const request = new Request("http://localhost/search?query=test&exclude_type_ids=not-a-uuid")
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.error).toBe("Invalid parameter")
+			expect(result.message).toContain("exclude_type_ids must contain valid UUIDs")
+		})
+
+		it("returns 400 when exclude_type_ids exceeds maximum count", async () => {
+			const ids = Array.from({length: 11}, (_, i) => `aaaaaaaa-bbbb-cccc-dddd-${String(i).padStart(12, "0")}`)
+			const request = new Request(`http://localhost/search?query=test&exclude_type_ids=${ids.join(",")}`)
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.error).toBe("Invalid parameter")
+			expect(result.message).toContain("exclude_type_ids must not contain more than 10 IDs")
 		})
 	})
 

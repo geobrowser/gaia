@@ -4,6 +4,7 @@
  * Provides HTTP endpoints for full-text search across the Knowledge Graph.
  */
 
+import {SystemIds} from "@graphprotocol/grc-20"
 import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
@@ -61,6 +62,18 @@ const MAX_OFFSET = 1000
 const MAX_TYPE_IDS = 10
 
 /**
+ * Entity types excluded from search results by default.
+ * These are block/media types that are not useful as standalone search results.
+ * Users can override this by passing an explicit `exclude_type_ids` parameter.
+ */
+const DEFAULT_EXCLUDED_TYPE_IDS: string[] = [
+	SystemIds.TEXT_BLOCK,
+	SystemIds.IMAGE_BLOCK,
+	SystemIds.DATA_BLOCK,
+	SystemIds.IMAGE_TYPE,
+]
+
+/**
  * Valid query parameter names for the search endpoint.
  */
 const VALID_PARAMS: Set<string> = new Set([
@@ -69,6 +82,7 @@ const VALID_PARAMS: Set<string> = new Set([
 	"scope",
 	"space_id",
 	"type_ids",
+	"exclude_type_ids",
 	"limit",
 	"offset",
 	"include_deleted",
@@ -151,6 +165,14 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					name: "type_ids",
 					in: "query",
 					description: "Comma-separated list of type UUIDs to filter by (max 10)",
+					required: false,
+					schema: {type: "string"},
+				},
+				{
+					name: "exclude_type_ids",
+					in: "query",
+					description:
+						"Comma-separated list of type UUIDs to exclude from results (max 10). When omitted, default block/media types are excluded. Pass an empty string to disable default exclusions.",
 					required: false,
 					schema: {type: "string"},
 				},
@@ -290,6 +312,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 				const scopeParam = c.req.query("scope") ?? "GLOBAL"
 				const spaceId = c.req.query("space_id")
 				const typeIdsParam = c.req.query("type_ids")
+				const excludeTypeIdsParam = c.req.query("exclude_type_ids")
 				const limitParam = c.req.query("limit")
 				const offsetParam = c.req.query("offset")
 				const includeDeletedParam = c.req.query("include_deleted")
@@ -413,6 +436,46 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					}
 				}
 
+				// Parse and validate excludeTypeIds
+				// - undefined (param not provided): use default exclusions
+				// - empty string (param provided with no value): no exclusions
+				// - comma-separated IDs: exclude those specific types
+				let excludeTypeIds: string[] | undefined
+				if (excludeTypeIdsParam !== undefined) {
+					if (excludeTypeIdsParam === "") {
+						// Explicitly empty — disable default exclusions
+						excludeTypeIds = []
+					} else {
+						excludeTypeIds = excludeTypeIdsParam
+							.split(",")
+							.map((id) => id.trim())
+							.filter((id) => id.length > 0)
+
+						if (excludeTypeIds.length > MAX_TYPE_IDS) {
+							return yield* Effect.fail(
+								new SearchValidationError({
+									message: `exclude_type_ids must not contain more than ${MAX_TYPE_IDS} IDs`,
+									status: 400,
+								}),
+							)
+						}
+
+						for (const typeId of excludeTypeIds) {
+							if (!isValidUuid(typeId)) {
+								return yield* Effect.fail(
+									new SearchValidationError({
+										message: `exclude_type_ids must contain valid UUIDs, got invalid ID: ${typeId}`,
+										status: 400,
+									}),
+								)
+							}
+						}
+					}
+				} else {
+					// Default: exclude block/media types
+					excludeTypeIds = DEFAULT_EXCLUDED_TYPE_IDS
+				}
+
 				// Parse include_deleted flag (default: false)
 				const includeDeleted = includeDeletedParam === "true"
 
@@ -424,6 +487,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					offset,
 					...(spaceId && {space_id: spaceId}),
 					...(typeIds && {type_ids: typeIds}),
+					...(excludeTypeIds && excludeTypeIds.length > 0 && {exclude_type_ids: excludeTypeIds}),
 					...(includeDeleted && {include_deleted: true}),
 				}
 

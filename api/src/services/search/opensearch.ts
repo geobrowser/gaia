@@ -520,14 +520,15 @@ export class OpenSearchClient implements SearchClient {
 
 		// Check if the query is empty or whitespace-only
 		const trimmedQuery = query.query.trim()
+		const excludeTypeIds = query.exclude_type_ids
 		if (trimmedQuery.length === 0) {
 			// For empty queries, return top ranked results based on scope
-			return await this.buildTopRankedQuery(query.scope, query.space_id, query.type_ids, includeDeleted)
+			return await this.buildTopRankedQuery(query.scope, query.space_id, query.type_ids, includeDeleted, excludeTypeIds)
 		}
 
 		// Check if the query is a UUID for direct ID lookup (dashed or dashless)
 		if (UUID_DASHED_PATTERN.test(trimmedQuery) || UUID_DASHLESS_PATTERN.test(trimmedQuery)) {
-			return await this.buildUuidQuery(trimmedQuery, query.scope, query.space_id, query.type_ids, includeDeleted)
+			return await this.buildUuidQuery(trimmedQuery, query.scope, query.space_id, query.type_ids, includeDeleted, excludeTypeIds)
 		}
 
 		// Build base text search query
@@ -536,19 +537,19 @@ export class OpenSearchClient implements SearchClient {
 		// Apply scope-specific query building
 		switch (query.scope) {
 			case "GLOBAL":
-				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted)
+				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds)
 
 			case "GLOBAL_BY_SPACE_SCORE":
-				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.type_ids, includeDeleted)
+				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds)
 
 			case "GLOBAL_BY_ENTITY_SPACE_SCORE":
-				return this.buildGlobalByEntitySpaceScoreQuery(baseTextQuery, query.type_ids, includeDeleted)
+				return this.buildGlobalByEntitySpaceScoreQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds)
 
 			case "SPACE_SINGLE": {
 				if (!query.space_id) {
 					throw SearchError.validationError("SPACE_SINGLE scope requires space_id")
 				}
-				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.type_ids, includeDeleted)
+				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.type_ids, includeDeleted, excludeTypeIds)
 			}
 
 			case "SPACE": {
@@ -557,14 +558,14 @@ export class OpenSearchClient implements SearchClient {
 				}
 				// Short-circuit for cached root space — no subspace fetch needed
 				if (this.isRootSpace(query.space_id)) {
-					return this.buildMultiSpaceQuery(baseTextQuery, [], query.type_ids, includeDeleted, true)
+					return this.buildMultiSpaceQuery(baseTextQuery, [], query.type_ids, includeDeleted, true, excludeTypeIds)
 				}
 				const {subspaces, isRoot} = await this.fetchSubspaces(query.space_id)
-				return this.buildMultiSpaceQuery(baseTextQuery, subspaces, query.type_ids, includeDeleted, isRoot)
+				return this.buildMultiSpaceQuery(baseTextQuery, subspaces, query.type_ids, includeDeleted, isRoot, excludeTypeIds)
 			}
 
 			default:
-				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted)
+				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds)
 		}
 	}
 
@@ -582,6 +583,7 @@ export class OpenSearchClient implements SearchClient {
 		space_id?: string,
 		typeIds?: string[],
 		includeDeleted: boolean = false,
+		excludeTypeIds?: string[],
 	): Promise<object> {
 		// Match both dashed and dashless forms (index may contain either during migration)
 		const baseUuidQuery = {
@@ -589,36 +591,35 @@ export class OpenSearchClient implements SearchClient {
 		}
 
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
+		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
+
+		const buildBoolQuery = () => ({
+			query: {
+				bool: {
+					must: [baseUuidQuery],
+					filter: filters,
+					...(mustNot.length > 0 && {must_not: mustNot}),
+				},
+			},
+		})
 
 		// Apply scope-specific filtering
 		switch (scope) {
 			case "GLOBAL":
 			case "GLOBAL_BY_SPACE_SCORE":
 			case "GLOBAL_BY_ENTITY_SPACE_SCORE":
-				return {
-					query: {
-						bool: {
-							must: [baseUuidQuery],
-							filter: filters,
-						},
-					},
-				}
+				return buildBoolQuery()
 
 			case "SPACE_SINGLE":
 				if (space_id) {
 					filters.push({terms: {space_id: uuidTermVariants(space_id)}})
 				}
-				return {
-					query: {
-						bool: {
-							must: [baseUuidQuery],
-							filter: filters,
-						},
-					},
-				}
+				return buildBoolQuery()
 
 			case "SPACE":
 				if (space_id) {
@@ -633,24 +634,10 @@ export class OpenSearchClient implements SearchClient {
 						}
 					}
 				}
-				return {
-					query: {
-						bool: {
-							must: [baseUuidQuery],
-							filter: filters,
-						},
-					},
-				}
+				return buildBoolQuery()
 
 			default:
-				return {
-					query: {
-						bool: {
-							must: [baseUuidQuery],
-							filter: filters,
-						},
-					},
-				}
+				return buildBoolQuery()
 		}
 	}
 
@@ -663,11 +650,21 @@ export class OpenSearchClient implements SearchClient {
 		space_id?: string,
 		typeIds?: string[],
 		includeDeleted: boolean = false,
+		excludeTypeIds?: string[],
 	): Promise<object> {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
+		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
+
+		const buildBoolClause = () => ({
+			must: [{match_all: {}}],
+			filter: filters,
+			...(mustNot.length > 0 && {must_not: mustNot}),
+		})
 
 		// Apply scope-specific filtering and sorting
 		switch (scope) {
@@ -676,10 +673,7 @@ export class OpenSearchClient implements SearchClient {
 					query: {
 						function_score: {
 							query: {
-								bool: {
-									must: [{match_all: {}}],
-									filter: filters,
-								},
+								bool: buildBoolClause(),
 							},
 							functions: [this.buildScoreBoostFunction("entity_global_score")],
 							boost_mode: "replace",
@@ -694,10 +688,7 @@ export class OpenSearchClient implements SearchClient {
 					query: {
 						function_score: {
 							query: {
-								bool: {
-									must: [{match_all: {}}],
-									filter: filters,
-								},
+								bool: buildBoolClause(),
 							},
 							functions: [this.buildScoreBoostFunction("space_score")],
 							boost_mode: "replace",
@@ -712,10 +703,7 @@ export class OpenSearchClient implements SearchClient {
 					query: {
 						function_score: {
 							query: {
-								bool: {
-									must: [{match_all: {}}],
-									filter: filters,
-								},
+								bool: buildBoolClause(),
 							},
 							functions: [this.buildGlobalByEntitySpaceBoost()],
 							boost_mode: "replace",
@@ -732,10 +720,7 @@ export class OpenSearchClient implements SearchClient {
 					query: {
 						function_score: {
 							query: {
-								bool: {
-									must: [{match_all: {}}],
-									filter: filters,
-								},
+								bool: buildBoolClause(),
 							},
 							functions: [this.buildScoreBoostFunction("entity_space_score")],
 							boost_mode: "replace",
@@ -762,10 +747,7 @@ export class OpenSearchClient implements SearchClient {
 					query: {
 						function_score: {
 							query: {
-								bool: {
-									must: [{match_all: {}}],
-									filter: filters,
-								},
+								bool: buildBoolClause(),
 							},
 							functions: [this.buildScoreBoostFunction("entity_space_score")],
 							boost_mode: "replace",
@@ -780,10 +762,7 @@ export class OpenSearchClient implements SearchClient {
 					query: {
 						function_score: {
 							query: {
-								bool: {
-									must: [{match_all: {}}],
-									filter: filters,
-								},
+								bool: buildBoolClause(),
 							},
 							functions: [this.buildScoreBoostFunction("entity_global_score")],
 							boost_mode: "replace",
@@ -964,11 +943,14 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a global search query.
 	 * Boosts results by entity_global_score using function_score.
 	 */
-	buildGlobalQuery(baseTextQuery: object, typeIds?: string[], includeDeleted: boolean = false): object {
+	buildGlobalQuery(baseTextQuery: object, typeIds?: string[], includeDeleted: boolean = false, excludeTypeIds?: string[]): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
+		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
 			query: {
@@ -977,6 +959,7 @@ export class OpenSearchClient implements SearchClient {
 						bool: {
 							must: [baseTextQuery],
 							filter: filters,
+							...(mustNot.length > 0 && {must_not: mustNot}),
 						},
 					},
 					functions: [this.buildScoreBoostFunction("entity_global_score")],
@@ -992,11 +975,14 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a global search query ranked by space score.
 	 * Boosts results by space_score using function_score.
 	 */
-	buildGlobalBySpaceScoreQuery(baseTextQuery: object, typeIds?: string[], includeDeleted: boolean = false): object {
+	buildGlobalBySpaceScoreQuery(baseTextQuery: object, typeIds?: string[], includeDeleted: boolean = false, excludeTypeIds?: string[]): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
+		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
 			query: {
@@ -1005,6 +991,7 @@ export class OpenSearchClient implements SearchClient {
 						bool: {
 							must: [baseTextQuery],
 							filter: filters,
+							...(mustNot.length > 0 && {must_not: mustNot}),
 						},
 					},
 					functions: [this.buildScoreBoostFunction("space_score")],
@@ -1024,11 +1011,15 @@ export class OpenSearchClient implements SearchClient {
 		baseTextQuery: object,
 		typeIds?: string[],
 		includeDeleted: boolean = false,
+		excludeTypeIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
+		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
 			query: {
@@ -1037,6 +1028,7 @@ export class OpenSearchClient implements SearchClient {
 						bool: {
 							must: [baseTextQuery],
 							filter: filters,
+							...(mustNot.length > 0 && {must_not: mustNot}),
 						},
 					},
 					functions: [this.buildGlobalByEntitySpaceBoost()],
@@ -1056,11 +1048,15 @@ export class OpenSearchClient implements SearchClient {
 		spaceId: string,
 		typeIds?: string[],
 		includeDeleted: boolean = false,
+		excludeTypeIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = [{terms: {space_id: uuidTermVariants(spaceId)}}]
+		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
 			query: {
@@ -1069,6 +1065,7 @@ export class OpenSearchClient implements SearchClient {
 						bool: {
 							must: [baseTextQuery],
 							filter: filters,
+							...(mustNot.length > 0 && {must_not: mustNot}),
 						},
 					},
 					functions: [this.buildScoreBoostFunction("entity_space_score")],
@@ -1090,14 +1087,18 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 		isRoot: boolean = false,
+		excludeTypeIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const spaceFilter = isRoot
 			? {term: {in_canonical_graph: true}}
 			: {terms: {space_id: spaceIds.flatMap(uuidTermVariants)}}
 		const filters: object[] = [spaceFilter]
+		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
 			query: {
@@ -1106,6 +1107,7 @@ export class OpenSearchClient implements SearchClient {
 						bool: {
 							must: [baseTextQuery],
 							filter: filters,
+							...(mustNot.length > 0 && {must_not: mustNot}),
 						},
 					},
 					functions: [this.buildScoreBoostFunction("entity_space_score")],
@@ -1178,6 +1180,29 @@ export class OpenSearchClient implements SearchClient {
 
 		// Include both dashed and dashless forms (index may contain either during migration)
 		const allVariants = typeIds.flatMap((id) => uuidTermVariants(id))
+
+		return {
+			nested: {
+				path: "relations",
+				query: {
+					terms: {
+						"relations.to_entity_id": allVariants,
+					},
+				},
+			},
+		}
+	}
+
+	/**
+	 * Build a type exclusion filter that removes entities with any of the specified types.
+	 * Returns null if no excludeTypeIds are provided.
+	 */
+	buildTypeExclusionFilter(excludeTypeIds?: string[]): object | null {
+		if (!excludeTypeIds || excludeTypeIds.length === 0) {
+			return null
+		}
+
+		const allVariants = excludeTypeIds.flatMap((id) => uuidTermVariants(id))
 
 		return {
 			nested: {
