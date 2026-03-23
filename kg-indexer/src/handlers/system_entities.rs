@@ -2,9 +2,10 @@ use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::governance::{HermesProposalCreated, VotingMode as ProtoVotingMode};
 use hermes_schema::pb::space::{hermes_create_space::Payload, HermesCreateSpace};
 use sdk::core::ids::{
-    CREATED_AT_BLOCK_PROPERTY_ID, CREATED_BY_PROPERTY_ID, GEO_SYSTEM_NAMESPACE,
-    PROPOSAL_ID_PROPERTY_ID, PROPOSAL_TYPE_ID, SPACE_ADDRESS_PROPERTY_ID, SPACE_TYPE_ID,
-    SYSTEM_TYPES_RELATION_TYPE_ID, SYSTEM_TYPE_ID, VOTING_MODE_PROPERTY_ID,
+    CREATED_AT_BLOCK_PROPERTY_ID, CREATED_BY_PROPERTY_ID, DESCRIPTION_PROPERTY_ID,
+    GEO_SYSTEM_NAMESPACE, NAME_PROPERTY_ID, PROPOSAL_ID_PROPERTY_ID, PROPOSAL_TYPE_ID,
+    SPACE_ADDRESS_PROPERTY_ID, SPACE_TYPE_ID, SYSTEM_TYPES_RELATION_TYPE_ID, SYSTEM_TYPE_ID,
+    VOTING_MODE_PROPERTY_ID,
 };
 use uuid::Uuid;
 
@@ -127,6 +128,40 @@ fn make_system_value_integer(
     }
 }
 
+fn make_system_value_text(
+    entity_id: &Uuid,
+    property_id: &Uuid,
+    space_id: &Uuid,
+    value: &str,
+) -> ValueOp {
+    ValueOp {
+        id: derive_value_id(entity_id, property_id, space_id),
+        change_type: ValueChangeType::Set,
+        entity_id: *entity_id,
+        property_id: *property_id,
+        space_id: *space_id,
+        text: Some(value.to_string()),
+        language: None,
+        unit: None,
+        bytes: None,
+        decimal: None,
+        boolean: None,
+        time: None,
+        point: None,
+        rect: None,
+        integer: None,
+        float: None,
+        date: None,
+        datetime: None,
+        schedule: None,
+        embedding: None,
+        time_utc: None,
+        datetime_utc: None,
+        context_root_id: None,
+        context_edge_type_id: None,
+    }
+}
+
 /// Derive the relation row ID (distinct from the reified entity ID).
 fn derive_system_relation_row_id(type_name: &str, entity_id: &Uuid) -> Uuid {
     Uuid::new_v5(
@@ -199,6 +234,11 @@ pub fn map_space_registered(
     let created_at_block_pid =
         Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID).expect("CREATED_AT_BLOCK_PROPERTY_ID is a valid UUID constant");
 
+    let name_pid =
+        Uuid::parse_str(NAME_PROPERTY_ID).expect("NAME_PROPERTY_ID is a valid UUID constant");
+    let description_pid = Uuid::parse_str(DESCRIPTION_PROPERTY_ID)
+        .expect("DESCRIPTION_PROPERTY_ID is a valid UUID constant");
+
     let values = vec![
         make_system_value_bytes(&entity_id, &space_address_pid, &space_id, &address),
         make_system_value_bytes(&entity_id, &created_by_pid, &space_id, space_id.as_bytes()),
@@ -207,6 +247,18 @@ pub fn map_space_registered(
             &created_at_block_pid,
             &space_id,
             meta.block_number as i64,
+        ),
+        make_system_value_text(
+            &entity_id,
+            &name_pid,
+            &space_id,
+            &format!("Space {}", space_id),
+        ),
+        make_system_value_text(
+            &entity_id,
+            &description_pid,
+            &space_id,
+            &format!("System entity for space {}", space_id),
         ),
     ];
 
@@ -276,6 +328,11 @@ pub fn map_proposal_created(
         Ok(ProtoVotingMode::Slow) | Err(_) => 1i64,
     };
 
+    let name_pid =
+        Uuid::parse_str(NAME_PROPERTY_ID).expect("NAME_PROPERTY_ID is a valid UUID constant");
+    let description_pid = Uuid::parse_str(DESCRIPTION_PROPERTY_ID)
+        .expect("DESCRIPTION_PROPERTY_ID is a valid UUID constant");
+
     let values = vec![
         make_system_value_bytes(&entity_id, &proposal_id_pid, &space_id, &msg.proposal_id),
         make_system_value_integer(
@@ -290,6 +347,18 @@ pub fn map_proposal_created(
             &created_at_block_pid,
             &space_id,
             meta.block_number as i64,
+        ),
+        make_system_value_text(
+            &entity_id,
+            &name_pid,
+            &space_id,
+            &format!("Proposal {}", proposal_id),
+        ),
+        make_system_value_text(
+            &entity_id,
+            &description_pid,
+            &space_id,
+            &format!("System entity for proposal {} in space {}", proposal_id, space_id),
         ),
     ];
 
@@ -377,7 +446,7 @@ mod tests {
         let meta = test_meta();
 
         let result = map_space_registered(&space, &meta).unwrap();
-        assert_eq!(result.values.len(), 3);
+        assert_eq!(result.values.len(), 5);
 
         let space_address_pid = Uuid::parse_str(SPACE_ADDRESS_PROPERTY_ID).unwrap();
         let created_by_pid = Uuid::parse_str(CREATED_BY_PROPERTY_ID).unwrap();
@@ -499,6 +568,28 @@ mod tests {
     }
 
     #[test]
+    fn space_name_and_description_contain_space_id() {
+        let space_id_bytes: [u8; 16] = [6; 16];
+        let space = make_test_space(&space_id_bytes, vec![0xFF; 20]);
+        let meta = test_meta();
+
+        let result = map_space_registered(&space, &meta).unwrap();
+        let space_id = Uuid::from_bytes(space_id_bytes);
+
+        let name_pid = Uuid::parse_str(NAME_PROPERTY_ID).unwrap();
+        let desc_pid = Uuid::parse_str(DESCRIPTION_PROPERTY_ID).unwrap();
+
+        let name_val = result.values.iter().find(|v| v.property_id == name_pid).unwrap();
+        assert_eq!(name_val.text.as_ref().unwrap(), &format!("Space {}", space_id));
+
+        let desc_val = result.values.iter().find(|v| v.property_id == desc_pid).unwrap();
+        assert_eq!(
+            desc_val.text.as_ref().unwrap(),
+            &format!("System entity for space {}", space_id),
+        );
+    }
+
+    #[test]
     fn proposal_entity_id_is_deterministic() {
         let space_id: [u8; 16] = [10; 16];
         let proposal_id: [u8; 16] = [20; 16];
@@ -529,7 +620,7 @@ mod tests {
         let meta = test_meta();
 
         let result = map_proposal_created(&msg, &meta).unwrap();
-        assert_eq!(result.values.len(), 4);
+        assert_eq!(result.values.len(), 6);
 
         let proposal_id_pid = Uuid::parse_str(PROPOSAL_ID_PROPERTY_ID).unwrap();
         let voting_mode_pid = Uuid::parse_str(VOTING_MODE_PROPERTY_ID).unwrap();
@@ -578,6 +669,31 @@ mod tests {
         let to_ids: Vec<Uuid> = relations.iter().map(|r| r.to_id).collect();
         assert!(to_ids.contains(&system_type_eid));
         assert!(to_ids.contains(&proposal_type_eid));
+    }
+
+    #[test]
+    fn proposal_name_and_description_contain_ids() {
+        let space_id_bytes: [u8; 16] = [14; 16];
+        let proposal_id_bytes: [u8; 16] = [24; 16];
+        let proposer_id: [u8; 16] = [34; 16];
+        let msg = make_test_proposal(&space_id_bytes, &proposal_id_bytes, &proposer_id, 0);
+        let meta = test_meta();
+
+        let result = map_proposal_created(&msg, &meta).unwrap();
+        let space_id = Uuid::from_bytes(space_id_bytes);
+        let proposal_id = Uuid::from_bytes(proposal_id_bytes);
+
+        let name_pid = Uuid::parse_str(NAME_PROPERTY_ID).unwrap();
+        let desc_pid = Uuid::parse_str(DESCRIPTION_PROPERTY_ID).unwrap();
+
+        let name_val = result.values.iter().find(|v| v.property_id == name_pid).unwrap();
+        assert_eq!(name_val.text.as_ref().unwrap(), &format!("Proposal {}", proposal_id));
+
+        let desc_val = result.values.iter().find(|v| v.property_id == desc_pid).unwrap();
+        assert_eq!(
+            desc_val.text.as_ref().unwrap(),
+            &format!("System entity for proposal {} in space {}", proposal_id, space_id),
+        );
     }
 
     #[test]
