@@ -119,7 +119,7 @@ class SearchValidator {
     this.indexerUrl = indexerUrl;
   }
 
-  private async search(query: Partial<SearchQuery>): Promise<SearchResponse> {
+  private async search(query: Partial<SearchQuery> & { exclude_type_ids?: string[] }): Promise<SearchResponse> {
     const params = new URLSearchParams();
 
     if (query.query) params.append('query', query.query);
@@ -129,6 +129,13 @@ class SearchValidator {
     if (query.limit) params.append('limit', query.limit.toString());
     if (query.offset) params.append('offset', query.offset.toString());
     if (query.include_deleted) params.append('include_deleted', 'true');
+    // Pass exclude_type_ids if provided; default to empty (disable default exclusions)
+    // so existing e2e tests are unaffected by the new default filtering behavior.
+    if (query.exclude_type_ids !== undefined) {
+      params.append('exclude_type_ids', query.exclude_type_ids.join(','));
+    } else {
+      params.append('exclude_type_ids', '');
+    }
 
     const url = `${this.baseUrl}/search?${params.toString()}`;
     const response = await fetch(url, {
@@ -2887,6 +2894,123 @@ class SearchValidator {
     }
   }
 
+  /** Verifies that default exclude_type_ids filters work when param is omitted. */
+  async test47_DefaultExcludeTypeIds(): Promise<void> {
+    console.log(`\n${BLUE}Test 47: Default exclude_type_ids filters block/media types when param is omitted${NC}`);
+
+    // Make a raw fetch WITHOUT exclude_type_ids param at all (defaults apply).
+    // Our test entities are Person/Org types — NOT block types — so they should
+    // still appear. This proves the default exclusion doesn't break normal queries.
+    const params = new URLSearchParams();
+    params.append('query', 'alice');
+    params.append('scope', 'GLOBAL');
+    // Intentionally NOT appending exclude_type_ids — server defaults apply.
+
+    const url = `${this.baseUrl}/search?${params.toString()}`;
+    const response = await fetch(url, {
+      headers: { 'Accept-Encoding': 'gzip, deflate' },
+    });
+
+    if (!response.ok) {
+      this.addResult('test47_default_exclude', false,
+        `API returned ${response.status} when exclude_type_ids is omitted`);
+      return;
+    }
+
+    const data = await response.json() as SearchResponse;
+
+    // Alice entities are Person type — should NOT be excluded by defaults.
+    const aliceCount = data.results.filter(r => r.name === 'Alice').length;
+    if (aliceCount === 7) {
+      this.addResult('test47_default_exclude', true,
+        `Default exclusions correctly keep non-block entities (found ${aliceCount} Alice entities)`);
+    } else {
+      this.addResult('test47_default_exclude', false,
+        `Expected 7 Alice entities with default exclusions, got ${aliceCount}`);
+    }
+  }
+
+  /** Verifies user-supplied exclude_type_ids filters out entities with those types. */
+  async test48_UserSuppliedExcludeTypeIds(): Promise<void> {
+    console.log(`\n${BLUE}Test 48: User-supplied exclude_type_ids filters entities with those types${NC}`);
+
+    // Search for 'alice' but exclude PERSON_TYPE_ID — should filter out all
+    // Alice entities that only have the Person type, keeping only those that
+    // also have Org type (Alice High has both Person + Org).
+    const response = await this.search({
+      query: 'alice',
+      scope: 'GLOBAL',
+      exclude_type_ids: [TEST_ENTITIES.PERSON_TYPE_ID],
+    });
+
+    // All Alice entities have Person type, so they should all be excluded.
+    const aliceCount = response.results.filter(r => r.name === 'Alice').length;
+    if (aliceCount === 0) {
+      this.addResult('test48_user_exclude', true,
+        `User-supplied exclude_type_ids correctly filtered out all Alice entities (Person type excluded)`);
+    } else {
+      this.addResult('test48_user_exclude', false,
+        `Expected 0 Alice entities when Person type excluded, got ${aliceCount}`);
+    }
+  }
+
+  /** Verifies that conflicting type_ids and exclude_type_ids returns 400. */
+  async test49_ConflictingIncludeExcludeReturns400(): Promise<void> {
+    console.log(`\n${BLUE}Test 49: Conflicting type_ids and exclude_type_ids returns 400${NC}`);
+
+    const sharedId = TEST_ENTITIES.PERSON_TYPE_ID;
+    const params = new URLSearchParams();
+    params.append('query', 'alice');
+    params.append('scope', 'GLOBAL');
+    params.append('type_ids', sharedId);
+    params.append('exclude_type_ids', sharedId);
+
+    const url = `${this.baseUrl}/search?${params.toString()}`;
+    const response = await fetch(url, {
+      headers: { 'Accept-Encoding': 'gzip, deflate' },
+    });
+
+    if (response.status === 400) {
+      const body = await response.json() as { error: string; message: string };
+      if (body.message.includes('must not contain the same IDs')) {
+        this.addResult('test49_conflict_error', true,
+          `Conflicting type_ids and exclude_type_ids correctly returns 400`);
+      } else {
+        this.addResult('test49_conflict_error', false,
+          `Got 400 but unexpected message: ${body.message}`);
+      }
+    } else {
+      this.addResult('test49_conflict_error', false,
+        `Expected 400 for conflicting IDs, got ${response.status}`);
+    }
+  }
+
+  /** Verifies that explicit type_ids overrides default exclusions (e.g. requesting IMAGE_TYPE works). */
+  async test50_ExplicitIncludeOverridesDefaultExclusion(): Promise<void> {
+    console.log(`\n${BLUE}Test 50: Explicit type_ids overrides default exclusions${NC}`);
+
+    // IMAGE_TYPE is in the default exclusion list, but explicitly requesting it
+    // via type_ids should succeed (not 400) — the default exclusion is stripped.
+    const params = new URLSearchParams();
+    params.append('query', '');
+    params.append('scope', 'GLOBAL');
+    params.append('type_ids', 'ba4e4146-0010-499d-a0a3-caaa7f579d0e'); // SystemIds.IMAGE_TYPE
+
+    const url = `${this.baseUrl}/search?${params.toString()}`;
+    const response = await fetch(url, {
+      headers: { 'Accept-Encoding': 'gzip, deflate' },
+    });
+
+    if (response.status === 200) {
+      this.addResult('test50_include_overrides_default', true,
+        `Explicit type_ids for a default-excluded type returns 200 (default exclusion stripped)`);
+    } else {
+      const body = await response.text();
+      this.addResult('test50_include_overrides_default', false,
+        `Expected 200 when type_ids overrides default exclusion, got ${response.status}: ${body}`);
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -2996,6 +3120,10 @@ async function main() {
     await validator.test44_TopologyPersistenceAndFinalState();
     await validator.test45_SpaceScopeLeafSpaceReturnsOnlyOwnEntities();
     await validator.test46_InCanonicalGraphFieldReturned();
+    await validator.test47_DefaultExcludeTypeIds();
+    await validator.test48_UserSuppliedExcludeTypeIds();
+    await validator.test49_ConflictingIncludeExcludeReturns400();
+    await validator.test50_ExplicitIncludeOverridesDefaultExclusion();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);
