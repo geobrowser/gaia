@@ -411,7 +411,7 @@ describe("Search Router - Integration Tests", () => {
 				offset: 0,
 			})
 			// Ensure exclude_type_ids is NOT in the call (empty array is not spread)
-			const callArg = (mockSearchClient.search as ReturnType<typeof vi.fn>).mock.calls[0][0]
+			const callArg = (mockSearchClient.search as ReturnType<typeof vi.fn>).mock.calls[0]![0]
 			expect(callArg).not.toHaveProperty("exclude_type_ids")
 		})
 
@@ -487,7 +487,7 @@ describe("Search Router - Integration Tests", () => {
 			const response = await app.fetch(request)
 
 			expect(response.status).toBe(200)
-			const callArg = (mockSearchClient.search as ReturnType<typeof vi.fn>).mock.calls[0][0]
+			const callArg = (mockSearchClient.search as ReturnType<typeof vi.fn>).mock.calls[0]![0]
 			expect(callArg.type_ids).toEqual([SystemIds.TEXT_BLOCK])
 			// TEXT_BLOCK should be stripped from the default exclusion list
 			if (callArg.exclude_type_ids) {
