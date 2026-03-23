@@ -65,6 +65,12 @@ The grouped contract should accept:
 
 The public v1 API should accept **proposal IDs only**.
 
+The contract should also enforce these validation rules:
+
+- duplicate `proposalIds` are rejected
+- proposals without a `Publish` action / `content_uri` are rejected for grouped diff requests
+- the request must not exceed a server-defined maximum group size
+
 ### Why Proposal IDs, Not Edit IDs
 
 Grouped diff semantics depend on proposal metadata, not just edit payloads:
@@ -78,9 +84,14 @@ An internal edit-level primitive may still be useful later, but it should not be
 
 ### Ordering
 
-Grouped proposals are applied in ascending order by the edit timestamp recorded in `edit_versions.created_at`.
+Grouped proposals are applied in ascending order by the edit timestamp recorded in `edit_versions.created_at`, with a stable secondary sort key to make the order total and reproducible.
 
-This makes the grouped diff reflect the real change chronology of the underlying edits rather than client-supplied order or proposal lifecycle timestamps such as `start_time` or `created_at`.
+The canonical ordering rule is:
+
+1. `edit_versions.created_at` ascending
+2. `proposal_id` ascending as the tie-breaker
+
+This makes the grouped diff reflect the real change chronology of the underlying edits rather than client-supplied order or proposal lifecycle timestamps such as `start_time` or `created_at`, while still guaranteeing deterministic replay when multiple grouped edits share the same timestamp.
 
 ### Base-State Semantics
 
@@ -99,6 +110,8 @@ This matches the current single-proposal meaning of "what would change if these 
 If all proposals in the group are closed or executed, compute the base from the versioned KG state immediately before the **earliest grouped edit timestamp**, then apply all grouped edits in edit-timestamp order.
 
 This shows the cumulative change introduced by the proposal group across time.
+
+Historical grouped diffs inherit the current proposal diff engine's restore-op limitations. Until `restoreEntity` and `restoreRelation` are fully supported in the shared diff path, grouped historical diffs should be documented as incomplete for those op types rather than presented as lossless history reconstruction.
 
 #### Mixed Active + Historical Groups
 
@@ -139,8 +152,11 @@ Flow:
    - all proposal IDs exist
    - all belong to the requested `spaceId`
    - all are in a compatible mode (`active` or `historical`)
+   - no proposal ID appears more than once
+   - every proposal has a `Publish` action with a resolvable `content_uri`
+   - the group does not exceed the server maximum size
 3. Resolve each proposal's edit timestamp
-4. Sort proposals by edit timestamp
+4. Sort proposals by the canonical total order (`created_at`, then `proposal_id`)
 5. Fetch all edit blobs from `ipfs_cache`
 6. Decode all edits
 7. Concatenate ops into one ordered op stream
@@ -206,7 +222,7 @@ The semantics are ambiguous and likely to surprise callers. We should add this o
 
 1. Add the grouped diff API contract
 2. Implement request-time squashing on top of the existing proposal diff engine
-3. Add validation for homogeneous group mode and single-space scope
+3. Add validation for homogeneous group mode, single-space scope, duplicate proposal rejection, missing publish rejection, and maximum group size
 4. Reuse current pagination and entity diff response shape
 5. Measure latency and memory behavior with multi-proposal groups
 6. Add indexed proposal ops later only if request-time squashing is too expensive
@@ -214,5 +230,5 @@ The semantics are ambiguous and likely to surprise callers. We should add this o
 ## Open Questions
 
 - Should the grouped route return only `mode`, or also per-proposal metadata such as status and edit timestamp?
-- Do we want to cap group size in v1 to protect handler latency?
+- What should the exact v1 maximum group size be?
 - For the indexed-op path, is a normalized op table enough, or do we also want pre-indexed affected entity rows?
