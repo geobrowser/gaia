@@ -483,9 +483,7 @@ describe("Search Router - Integration Tests", () => {
 
 		it("explicit type_ids overrides default exclusions without error", async () => {
 			// Request a type that is in the default exclusion list — should succeed, not 400
-			const request = new Request(
-				`http://localhost/search?query=test&type_ids=${SystemIds.TEXT_BLOCK}`,
-			)
+			const request = new Request(`http://localhost/search?query=test&type_ids=${SystemIds.TEXT_BLOCK}`)
 			const response = await app.fetch(request)
 
 			expect(response.status).toBe(200)

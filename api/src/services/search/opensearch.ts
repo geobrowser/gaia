@@ -523,12 +523,25 @@ export class OpenSearchClient implements SearchClient {
 		const excludeTypeIds = query.exclude_type_ids
 		if (trimmedQuery.length === 0) {
 			// For empty queries, return top ranked results based on scope
-			return await this.buildTopRankedQuery(query.scope, query.space_id, query.type_ids, includeDeleted, excludeTypeIds)
+			return await this.buildTopRankedQuery(
+				query.scope,
+				query.space_id,
+				query.type_ids,
+				includeDeleted,
+				excludeTypeIds,
+			)
 		}
 
 		// Check if the query is a UUID for direct ID lookup (dashed or dashless)
 		if (UUID_DASHED_PATTERN.test(trimmedQuery) || UUID_DASHLESS_PATTERN.test(trimmedQuery)) {
-			return await this.buildUuidQuery(trimmedQuery, query.scope, query.space_id, query.type_ids, includeDeleted, excludeTypeIds)
+			return await this.buildUuidQuery(
+				trimmedQuery,
+				query.scope,
+				query.space_id,
+				query.type_ids,
+				includeDeleted,
+				excludeTypeIds,
+			)
 		}
 
 		// Build base text search query
@@ -543,13 +556,24 @@ export class OpenSearchClient implements SearchClient {
 				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds)
 
 			case "GLOBAL_BY_ENTITY_SPACE_SCORE":
-				return this.buildGlobalByEntitySpaceScoreQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds)
+				return this.buildGlobalByEntitySpaceScoreQuery(
+					baseTextQuery,
+					query.type_ids,
+					includeDeleted,
+					excludeTypeIds,
+				)
 
 			case "SPACE_SINGLE": {
 				if (!query.space_id) {
 					throw SearchError.validationError("SPACE_SINGLE scope requires space_id")
 				}
-				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.type_ids, includeDeleted, excludeTypeIds)
+				return this.buildSingleSpaceQuery(
+					baseTextQuery,
+					query.space_id,
+					query.type_ids,
+					includeDeleted,
+					excludeTypeIds,
+				)
 			}
 
 			case "SPACE": {
@@ -558,10 +582,24 @@ export class OpenSearchClient implements SearchClient {
 				}
 				// Short-circuit for cached root space — no subspace fetch needed
 				if (this.isRootSpace(query.space_id)) {
-					return this.buildMultiSpaceQuery(baseTextQuery, [], query.type_ids, includeDeleted, true, excludeTypeIds)
+					return this.buildMultiSpaceQuery(
+						baseTextQuery,
+						[],
+						query.type_ids,
+						includeDeleted,
+						true,
+						excludeTypeIds,
+					)
 				}
 				const {subspaces, isRoot} = await this.fetchSubspaces(query.space_id)
-				return this.buildMultiSpaceQuery(baseTextQuery, subspaces, query.type_ids, includeDeleted, isRoot, excludeTypeIds)
+				return this.buildMultiSpaceQuery(
+					baseTextQuery,
+					subspaces,
+					query.type_ids,
+					includeDeleted,
+					isRoot,
+					excludeTypeIds,
+				)
 			}
 
 			default:
@@ -943,7 +981,12 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a global search query.
 	 * Boosts results by entity_global_score using function_score.
 	 */
-	buildGlobalQuery(baseTextQuery: object, typeIds?: string[], includeDeleted: boolean = false, excludeTypeIds?: string[]): object {
+	buildGlobalQuery(
+		baseTextQuery: object,
+		typeIds?: string[],
+		includeDeleted: boolean = false,
+		excludeTypeIds?: string[],
+	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
@@ -975,7 +1018,12 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a global search query ranked by space score.
 	 * Boosts results by space_score using function_score.
 	 */
-	buildGlobalBySpaceScoreQuery(baseTextQuery: object, typeIds?: string[], includeDeleted: boolean = false, excludeTypeIds?: string[]): object {
+	buildGlobalBySpaceScoreQuery(
+		baseTextQuery: object,
+		typeIds?: string[],
+		includeDeleted: boolean = false,
+		excludeTypeIds?: string[],
+	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
