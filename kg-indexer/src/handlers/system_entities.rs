@@ -2,10 +2,10 @@ use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::governance::{HermesProposalCreated, VotingMode as ProtoVotingMode};
 use hermes_schema::pb::space::{hermes_create_space::Payload, HermesCreateSpace};
 use sdk::core::ids::{
-    CREATED_AT_BLOCK_PROPERTY_ID, CREATED_BY_PROPERTY_ID, DESCRIPTION_PROPERTY_ID,
+    CREATED_AT_BLOCK_PROPERTY_ID, DESCRIPTION_PROPERTY_ID,
     GEO_SYSTEM_NAMESPACE, NAME_PROPERTY_ID, PROPOSAL_ID_PROPERTY_ID, PROPOSAL_TYPE_ID,
-    SPACE_ADDRESS_PROPERTY_ID, SPACE_TYPE_ID, SYSTEM_TYPES_RELATION_TYPE_ID, SYSTEM_TYPE_ID,
-    VOTING_MODE_PROPERTY_ID,
+    SPACE_ADDRESS_PROPERTY_ID, SPACE_ID_PROPERTY_ID, SPACE_TYPE_ID,
+    SYSTEM_TYPES_RELATION_TYPE_ID, SYSTEM_TYPE_ID, VOTING_MODE_PROPERTY_ID,
 };
 use uuid::Uuid;
 
@@ -229,8 +229,8 @@ pub fn map_space_registered(
 
     let space_address_pid =
         Uuid::parse_str(SPACE_ADDRESS_PROPERTY_ID).expect("SPACE_ADDRESS_PROPERTY_ID is a valid UUID constant");
-    let created_by_pid =
-        Uuid::parse_str(CREATED_BY_PROPERTY_ID).expect("CREATED_BY_PROPERTY_ID is a valid UUID constant");
+    let space_id_property_pid =
+        Uuid::parse_str(SPACE_ID_PROPERTY_ID).expect("SPACE_ID_PROPERTY_ID is a valid UUID constant");
     let created_at_block_pid =
         Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID).expect("CREATED_AT_BLOCK_PROPERTY_ID is a valid UUID constant");
 
@@ -241,7 +241,7 @@ pub fn map_space_registered(
 
     let values = vec![
         make_system_value_bytes(&entity_id, &space_address_pid, &space_id, &address),
-        make_system_value_bytes(&entity_id, &created_by_pid, &space_id, space_id.as_bytes()),
+        make_system_value_bytes(&entity_id, &space_id_property_pid, &space_id, space_id.as_bytes()),
         make_system_value_integer(
             &entity_id,
             &created_at_block_pid,
@@ -317,8 +317,8 @@ pub fn map_proposal_created(
         .expect("PROPOSAL_ID_PROPERTY_ID is a valid UUID constant");
     let voting_mode_pid = Uuid::parse_str(VOTING_MODE_PROPERTY_ID)
         .expect("VOTING_MODE_PROPERTY_ID is a valid UUID constant");
-    let created_by_pid =
-        Uuid::parse_str(CREATED_BY_PROPERTY_ID).expect("CREATED_BY_PROPERTY_ID is a valid UUID constant");
+    let space_id_property_pid =
+        Uuid::parse_str(SPACE_ID_PROPERTY_ID).expect("SPACE_ID_PROPERTY_ID is a valid UUID constant");
     let created_at_block_pid = Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID)
         .expect("CREATED_AT_BLOCK_PROPERTY_ID is a valid UUID constant");
 
@@ -341,7 +341,7 @@ pub fn map_proposal_created(
             &space_id,
             voting_mode_value,
         ),
-        make_system_value_bytes(&entity_id, &created_by_pid, &space_id, &msg.proposer_id),
+        make_system_value_bytes(&entity_id, &space_id_property_pid, &space_id, &msg.proposer_id),
         make_system_value_integer(
             &entity_id,
             &created_at_block_pid,
@@ -449,7 +449,7 @@ mod tests {
         assert_eq!(result.values.len(), 5);
 
         let space_address_pid = Uuid::parse_str(SPACE_ADDRESS_PROPERTY_ID).unwrap();
-        let created_by_pid = Uuid::parse_str(CREATED_BY_PROPERTY_ID).unwrap();
+        let space_id_property_pid = Uuid::parse_str(SPACE_ID_PROPERTY_ID).unwrap();
         let created_at_block_pid = Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID).unwrap();
 
         // SpaceAddress — bytes
@@ -461,11 +461,11 @@ mod tests {
         assert_eq!(addr_val.bytes.as_ref().unwrap(), &address);
         assert!(addr_val.integer.is_none());
 
-        // CreatedBy — bytes
+        // SpaceId — bytes
         let by_val = result
             .values
             .iter()
-            .find(|v| v.property_id == created_by_pid)
+            .find(|v| v.property_id == space_id_property_pid)
             .unwrap();
         assert_eq!(by_val.bytes.as_ref().unwrap(), &space_id_bytes.to_vec());
 
@@ -624,7 +624,7 @@ mod tests {
 
         let proposal_id_pid = Uuid::parse_str(PROPOSAL_ID_PROPERTY_ID).unwrap();
         let voting_mode_pid = Uuid::parse_str(VOTING_MODE_PROPERTY_ID).unwrap();
-        let created_by_pid = Uuid::parse_str(CREATED_BY_PROPERTY_ID).unwrap();
+        let space_id_property_pid = Uuid::parse_str(SPACE_ID_PROPERTY_ID).unwrap();
         let created_at_block_pid = Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID).unwrap();
 
         // ProposalId — bytes
@@ -636,8 +636,8 @@ mod tests {
         assert_eq!(vm_val.integer, Some(1));
         assert!(vm_val.bytes.is_none());
 
-        // CreatedBy — bytes (proposer space_id)
-        let by_val = result.values.iter().find(|v| v.property_id == created_by_pid).unwrap();
+        // SpaceId — bytes (proposer space_id)
+        let by_val = result.values.iter().find(|v| v.property_id == space_id_property_pid).unwrap();
         assert_eq!(by_val.bytes.as_ref().unwrap(), &proposer_id.to_vec());
 
         // CreatedAtBlock — integer

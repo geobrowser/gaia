@@ -1353,7 +1353,7 @@ mod tests {
 
     #[test]
     fn filter_relations_drops_protected_to_id() {
-        let protected_entity = Uuid::parse_str(sdk::core::ids::CREATED_BY_PROPERTY_ID).unwrap();
+        let protected_entity = Uuid::parse_str(sdk::core::ids::SPACE_ID_PROPERTY_ID).unwrap();
         let ops = vec![RelationOp::Create(make_create_relation_with_ids(
             Uuid::new_v4(), Uuid::new_v4(), protected_entity,
         ))];
