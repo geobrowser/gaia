@@ -130,6 +130,28 @@ pub struct UpdateEntitySpaceScoreRequest {
     pub score: f64,
 }
 
+/// Request to update an entity's global score by direct doc ID.
+///
+/// Uses the bulk API instead of update_by_query — resolved via Postgres lookup.
+#[derive(Debug, Clone)]
+pub struct UpdateEntityGlobalScoreByDocRequest {
+    /// The document ID (`{entity_id}_{space_id}`).
+    pub doc_id: String,
+    /// The new global score value.
+    pub score: f64,
+}
+
+/// Request to update a space's score by direct doc ID.
+///
+/// Uses the bulk API instead of update_by_query — resolved via Postgres lookup.
+#[derive(Debug, Clone)]
+pub struct UpdateSpaceScoreByDocRequest {
+    /// The document ID (`{entity_id}_{space_id}`).
+    pub doc_id: String,
+    /// The new space score value.
+    pub score: f64,
+}
+
 /// Request to update the space_topic_entity_id for all entities in a space.
 ///
 /// This will set the `space_topic_entity_id` field for ALL documents
@@ -178,6 +200,12 @@ pub enum EntityOperation {
     /// Update an entity's score within a specific space.
     /// Uses a targeted update for the specific entity+space document.
     UpdateEntitySpaceScore(UpdateEntitySpaceScoreRequest),
+    /// Update an entity's global score by direct doc ID (resolved via Postgres lookup).
+    /// Uses the bulk API instead of update_by_query.
+    UpdateEntityGlobalScoreByDoc(UpdateEntityGlobalScoreByDocRequest),
+    /// Update a space's score by direct doc ID (resolved via Postgres lookup).
+    /// Uses the bulk API instead of update_by_query.
+    UpdateSpaceScoreByDoc(UpdateSpaceScoreByDocRequest),
     /// Update the space_topic_entity_id for all entities in a space.
     /// Uses update_by_query to set the topic entity ID on all documents in the space.
     UpdateSpaceTopicEntityId(UpdateSpaceTopicEntityIdRequest),
@@ -198,6 +226,8 @@ impl EntityOperation {
             EntityOperation::UpdateEntityGlobalScore(r) => &r.entity_id,
             EntityOperation::UpdateSpaceScore(_) => "",
             EntityOperation::UpdateEntitySpaceScore(r) => &r.entity_id,
+            EntityOperation::UpdateEntityGlobalScoreByDoc(_) => "",
+            EntityOperation::UpdateSpaceScoreByDoc(_) => "",
             EntityOperation::UpdateSpaceTopicEntityId(_) => "",
             EntityOperation::UpdateInCanonicalGraph(_) => "",
         }
@@ -214,6 +244,8 @@ impl EntityOperation {
             EntityOperation::UpdateEntityGlobalScore(_) => "",
             EntityOperation::UpdateSpaceScore(r) => &r.space_id,
             EntityOperation::UpdateEntitySpaceScore(r) => &r.space_id,
+            EntityOperation::UpdateEntityGlobalScoreByDoc(_) => "",
+            EntityOperation::UpdateSpaceScoreByDoc(_) => "",
             EntityOperation::UpdateSpaceTopicEntityId(r) => &r.space_id,
             EntityOperation::UpdateInCanonicalGraph(r) => &r.space_id,
         }
@@ -229,6 +261,8 @@ impl EntityOperation {
             EntityOperation::UpdateEntityGlobalScore(_) => "UpdateEntityGlobalScore",
             EntityOperation::UpdateSpaceScore(_) => "UpdateSpaceScore",
             EntityOperation::UpdateEntitySpaceScore(_) => "UpdateEntitySpaceScore",
+            EntityOperation::UpdateEntityGlobalScoreByDoc(_) => "UpdateEntityGlobalScoreByDoc",
+            EntityOperation::UpdateSpaceScoreByDoc(_) => "UpdateSpaceScoreByDoc",
             EntityOperation::UpdateSpaceTopicEntityId(_) => "UpdateSpaceTopicEntityId",
             EntityOperation::UpdateInCanonicalGraph(_) => "UpdateInCanonicalGraph",
         }

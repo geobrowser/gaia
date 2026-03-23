@@ -15,8 +15,9 @@ use crate::orchestrator::{BatchSource, ProcessedBatch};
 use crate::processor::ProcessedEvent;
 use search_indexer_repository::{
     EntityOperation, RelationData, RemoveRelationData, SearchIndexProvider,
-    UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreRequest, UpdateEntityRequest,
-    UpdateEntitySpaceScoreRequest, UpdateInCanonicalGraphRequest, UpdateSpaceScoreRequest,
+    UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreByDocRequest,
+    UpdateEntityGlobalScoreRequest, UpdateEntityRequest, UpdateEntitySpaceScoreRequest,
+    UpdateInCanonicalGraphRequest, UpdateSpaceScoreByDocRequest, UpdateSpaceScoreRequest,
     UpdateSpaceTopicEntityIdRequest,
 };
 
@@ -154,6 +155,18 @@ impl SearchLoader {
                             },
                         ));
                 }
+                ProcessedEvent::UpdateEntityGlobalScoreByDoc { doc_id, score } => {
+                    self.pending_operations
+                        .push(EntityOperation::UpdateEntityGlobalScoreByDoc(
+                            UpdateEntityGlobalScoreByDocRequest { doc_id, score },
+                        ));
+                }
+                ProcessedEvent::UpdateSpaceScoreByDoc { doc_id, score } => {
+                    self.pending_operations
+                        .push(EntityOperation::UpdateSpaceScoreByDoc(
+                            UpdateSpaceScoreByDocRequest { doc_id, score },
+                        ));
+                }
                 ProcessedEvent::UpdateSpaceTopicEntityId {
                     space_id,
                     topic_entity_id,
@@ -286,7 +299,9 @@ impl SearchLoader {
                         }
                         ProcessedEvent::UpdateEntityGlobalScore { .. }
                         | ProcessedEvent::UpdateSpaceScore { .. }
-                        | ProcessedEvent::UpdateEntitySpaceScore { .. } => {
+                        | ProcessedEvent::UpdateEntitySpaceScore { .. }
+                        | ProcessedEvent::UpdateEntityGlobalScoreByDoc { .. }
+                        | ProcessedEvent::UpdateSpaceScoreByDoc { .. } => {
                             metrics.total_score_updates.fetch_add(1, Ordering::Relaxed);
                         }
                         ProcessedEvent::UpdateSpaceTopicEntityId { .. } => {
@@ -504,6 +519,8 @@ mod tests {
                     EntityOperation::UpdateEntityGlobalScore(_)
                     | EntityOperation::UpdateSpaceScore(_)
                     | EntityOperation::UpdateEntitySpaceScore(_)
+                    | EntityOperation::UpdateEntityGlobalScoreByDoc(_)
+                    | EntityOperation::UpdateSpaceScoreByDoc(_)
                     | EntityOperation::UpdateSpaceTopicEntityId(_)
                     | EntityOperation::UpdateInCanonicalGraph(_) => {
                         // Score, space topic, and topology updates pass through - no special tracking needed

@@ -313,7 +313,7 @@ fn create_topology_test_orchestrator_with_state(
     Arc<MockSearchProvider>,
     Arc<MockTopologyConsumer>,
 ) {
-    let processor = Processor::with_config(std::collections::HashMap::new(), topology_state, 0);
+    let processor = Processor::with_config(std::collections::HashMap::new(), topology_state, 0, None);
     let mock_provider = Arc::new(MockSearchProvider::new());
     let loader = SearchLoader::new(mock_provider.clone());
 
@@ -691,7 +691,7 @@ async fn test_topology_entities_get_canonical_flag() {
     assert!(!topology_state.is_canonical(&non_canonical_space));
 
     // Test via processor directly (simpler and avoids concurrent timing issues)
-    let processor = Processor::with_config(std::collections::HashMap::new(), topology_state, 0);
+    let processor = Processor::with_config(std::collections::HashMap::new(), topology_state, 0, None);
 
     use search_indexer::consumer::{EntityEvent, EntityEventType};
 
