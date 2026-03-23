@@ -34,7 +34,7 @@ pub const PROPOSAL_TYPE_ID: &str = "1cb9d5ba-c730-52a7-bc73-1f2c3ff5a330";
 pub const SPACE_ADDRESS_PROPERTY_ID: &str = "8f65b58c-d001-5bac-b1d3-3a66ae23193c";
 pub const PROPOSAL_ID_PROPERTY_ID: &str = "6db3cfce-1941-57cc-8ac0-125b5c3669a1";
 pub const VOTING_MODE_PROPERTY_ID: &str = "af26ed41-de0f-5b4f-a093-e9d3f683db07";
-pub const CREATED_BY_PROPERTY_ID: &str = "461da316-3bb9-59b3-ad0e-b2ba2741bc2e";
+pub const SPACE_ID_PROPERTY_ID: &str = "712adc1f-e950-5d14-bbd8-bf2166fe59c1";
 pub const CREATED_AT_BLOCK_PROPERTY_ID: &str = "da2952fb-17d6-53f3-b521-52e254106e0b";
 
 // Protected relation type IDs
@@ -45,7 +45,7 @@ pub const PROTECTED_PROPERTY_IDS: &[&str] = &[
     SPACE_ADDRESS_PROPERTY_ID,
     PROPOSAL_ID_PROPERTY_ID,
     VOTING_MODE_PROPERTY_ID,
-    CREATED_BY_PROPERTY_ID,
+    SPACE_ID_PROPERTY_ID,
     CREATED_AT_BLOCK_PROPERTY_ID,
 ];
 
@@ -73,7 +73,7 @@ mod tests {
             (SPACE_ADDRESS_PROPERTY_ID, "property:SpaceAddress"),
             (PROPOSAL_ID_PROPERTY_ID, "property:ProposalId"),
             (VOTING_MODE_PROPERTY_ID, "property:VotingMode"),
-            (CREATED_BY_PROPERTY_ID, "property:CreatedBy"),
+            (SPACE_ID_PROPERTY_ID, "property:SpaceId"),
             (CREATED_AT_BLOCK_PROPERTY_ID, "property:CreatedAtBlock"),
             (SYSTEM_TYPES_RELATION_TYPE_ID, "relation_type:SystemTypes"),
         ];
@@ -95,7 +95,7 @@ mod tests {
             SPACE_ADDRESS_PROPERTY_ID,
             PROPOSAL_ID_PROPERTY_ID,
             VOTING_MODE_PROPERTY_ID,
-            CREATED_BY_PROPERTY_ID,
+            SPACE_ID_PROPERTY_ID,
             CREATED_AT_BLOCK_PROPERTY_ID,
         ];
         assert_eq!(PROTECTED_PROPERTY_IDS.len(), expected.len());
