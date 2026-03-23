@@ -60,40 +60,6 @@ fn derive_system_relation_id(type_name: &str, entity_id: &Uuid) -> Uuid {
     )
 }
 
-fn make_system_value_bytes(
-    entity_id: &Uuid,
-    property_id: &Uuid,
-    space_id: &Uuid,
-    data: &[u8],
-) -> ValueOp {
-    ValueOp {
-        id: derive_value_id(entity_id, property_id, space_id),
-        change_type: ValueChangeType::Set,
-        entity_id: *entity_id,
-        property_id: *property_id,
-        space_id: *space_id,
-        bytes: Some(data.to_vec()),
-        language: None,
-        unit: None,
-        text: None,
-        decimal: None,
-        boolean: None,
-        time: None,
-        point: None,
-        rect: None,
-        integer: None,
-        float: None,
-        date: None,
-        datetime: None,
-        schedule: None,
-        embedding: None,
-        time_utc: None,
-        datetime_utc: None,
-        context_root_id: None,
-        context_edge_type_id: None,
-    }
-}
-
 fn make_system_value_integer(
     entity_id: &Uuid,
     property_id: &Uuid,
@@ -240,8 +206,8 @@ pub fn map_space_registered(
         .expect("DESCRIPTION_PROPERTY_ID is a valid UUID constant");
 
     let values = vec![
-        make_system_value_bytes(&entity_id, &space_address_pid, &space_id, &address),
-        make_system_value_bytes(&entity_id, &space_id_property_pid, &space_id, space_id.as_bytes()),
+        make_system_value_text(&entity_id, &space_address_pid, &space_id, &format!("0x{}", hex::encode(&address))),
+        make_system_value_text(&entity_id, &space_id_property_pid, &space_id, &format!("0x{}", hex::encode(space_id.as_bytes()))),
         make_system_value_integer(
             &entity_id,
             &created_at_block_pid,
@@ -334,14 +300,14 @@ pub fn map_proposal_created(
         .expect("DESCRIPTION_PROPERTY_ID is a valid UUID constant");
 
     let values = vec![
-        make_system_value_bytes(&entity_id, &proposal_id_pid, &space_id, &msg.proposal_id),
+        make_system_value_text(&entity_id, &proposal_id_pid, &space_id, &format!("0x{}", hex::encode(&msg.proposal_id))),
         make_system_value_integer(
             &entity_id,
             &voting_mode_pid,
             &space_id,
             voting_mode_value,
         ),
-        make_system_value_bytes(&entity_id, &space_id_property_pid, &space_id, &msg.proposer_id),
+        make_system_value_text(&entity_id, &space_id_property_pid, &space_id, &format!("0x{}", hex::encode(&msg.proposer_id))),
         make_system_value_integer(
             &entity_id,
             &created_at_block_pid,
@@ -452,22 +418,30 @@ mod tests {
         let space_id_property_pid = Uuid::parse_str(SPACE_ID_PROPERTY_ID).unwrap();
         let created_at_block_pid = Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID).unwrap();
 
-        // SpaceAddress — bytes
+        // SpaceAddress — hex string
         let addr_val = result
             .values
             .iter()
             .find(|v| v.property_id == space_address_pid)
             .unwrap();
-        assert_eq!(addr_val.bytes.as_ref().unwrap(), &address);
+        assert_eq!(
+            addr_val.text.as_ref().unwrap(),
+            &format!("0x{}", hex::encode(&address)),
+        );
+        assert!(addr_val.bytes.is_none());
         assert!(addr_val.integer.is_none());
 
-        // SpaceId — bytes
+        // SpaceId — hex string
         let by_val = result
             .values
             .iter()
             .find(|v| v.property_id == space_id_property_pid)
             .unwrap();
-        assert_eq!(by_val.bytes.as_ref().unwrap(), &space_id_bytes.to_vec());
+        assert_eq!(
+            by_val.text.as_ref().unwrap(),
+            &format!("0x{}", hex::encode(space_id_bytes)),
+        );
+        assert!(by_val.bytes.is_none());
 
         // CreatedAtBlock — integer
         let block_val = result
@@ -627,18 +601,26 @@ mod tests {
         let space_id_property_pid = Uuid::parse_str(SPACE_ID_PROPERTY_ID).unwrap();
         let created_at_block_pid = Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID).unwrap();
 
-        // ProposalId — bytes
+        // ProposalId — hex string
         let pid_val = result.values.iter().find(|v| v.property_id == proposal_id_pid).unwrap();
-        assert_eq!(pid_val.bytes.as_ref().unwrap(), &proposal_id.to_vec());
+        assert_eq!(
+            pid_val.text.as_ref().unwrap(),
+            &format!("0x{}", hex::encode(proposal_id)),
+        );
+        assert!(pid_val.bytes.is_none());
 
         // VotingMode — integer (Slow = 1)
         let vm_val = result.values.iter().find(|v| v.property_id == voting_mode_pid).unwrap();
         assert_eq!(vm_val.integer, Some(1));
         assert!(vm_val.bytes.is_none());
 
-        // SpaceId — bytes (proposer space_id)
+        // SpaceId — hex string (proposer space_id)
         let by_val = result.values.iter().find(|v| v.property_id == space_id_property_pid).unwrap();
-        assert_eq!(by_val.bytes.as_ref().unwrap(), &proposer_id.to_vec());
+        assert_eq!(
+            by_val.text.as_ref().unwrap(),
+            &format!("0x{}", hex::encode(proposer_id)),
+        );
+        assert!(by_val.bytes.is_none());
 
         // CreatedAtBlock — integer
         let block_val = result.values.iter().find(|v| v.property_id == created_at_block_pid).unwrap();
