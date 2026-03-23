@@ -249,7 +249,7 @@ impl Processor {
 
                         // Replace resolved events (iterate in reverse to maintain indices)
                         let mut resolved = 0usize;
-                        let mut fallback = 0usize;
+                        let mut skipped = 0usize;
                         for (idx, relation_id) in relation_events.into_iter().rev() {
                             if let Some(docs) = relation_map.get(&relation_id) {
                                 processed.remove(idx);
@@ -264,15 +264,22 @@ impl Processor {
                                     resolved += 1;
                                 }
                             } else {
-                                // Not found in Postgres — keep as update_by_query fallback
-                                fallback += 1;
+                                // Not found in Postgres — relation was likely already
+                                // deleted or never written. Remove the event entirely
+                                // rather than falling back to an expensive full-index scan.
+                                warn!(
+                                    relation_id = %relation_id,
+                                    "Relation not found in Postgres — skipping removal (already deleted or not yet indexed)"
+                                );
+                                processed.remove(idx);
+                                skipped += 1;
                             }
                         }
 
-                        if resolved > 0 || fallback > 0 {
+                        if resolved > 0 || skipped > 0 {
                             info!(
                                 resolved = resolved,
-                                fallback = fallback,
+                                skipped = skipped,
                                 "RemoveRelationById batch resolved via Postgres"
                             );
                         }
