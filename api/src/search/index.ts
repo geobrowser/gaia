@@ -478,6 +478,26 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					excludeTypeIds = DEFAULT_EXCLUDED_TYPE_IDS
 				}
 
+				// Resolve conflicts between type_ids and exclude_type_ids
+				if (typeIds && excludeTypeIds && excludeTypeIds.length > 0) {
+					const includeSet = new Set(typeIds)
+					if (excludeTypeIdsParam === undefined) {
+						// Default exclusions: explicit type_ids take priority — strip overlaps
+						excludeTypeIds = excludeTypeIds.filter((id) => !includeSet.has(id))
+					} else {
+						// User-supplied exclusions: conflicting with type_ids is an error
+						const conflicting = excludeTypeIds.filter((id) => includeSet.has(id))
+						if (conflicting.length > 0) {
+							return yield* Effect.fail(
+								new SearchValidationError({
+									message: `type_ids and exclude_type_ids must not contain the same IDs: ${conflicting.join(", ")}`,
+									status: 400,
+								}),
+							)
+						}
+					}
+				}
+
 				// Parse include_deleted flag (default: false)
 				const includeDeleted = includeDeletedParam === "true"
 

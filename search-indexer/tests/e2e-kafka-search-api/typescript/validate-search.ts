@@ -2954,6 +2954,63 @@ class SearchValidator {
     }
   }
 
+  /** Verifies that conflicting type_ids and exclude_type_ids returns 400. */
+  async test49_ConflictingIncludeExcludeReturns400(): Promise<void> {
+    console.log(`\n${BLUE}Test 49: Conflicting type_ids and exclude_type_ids returns 400${NC}`);
+
+    const sharedId = TEST_ENTITIES.PERSON_TYPE_ID;
+    const params = new URLSearchParams();
+    params.append('query', 'alice');
+    params.append('scope', 'GLOBAL');
+    params.append('type_ids', sharedId);
+    params.append('exclude_type_ids', sharedId);
+
+    const url = `${this.baseUrl}/search?${params.toString()}`;
+    const response = await fetch(url, {
+      headers: { 'Accept-Encoding': 'gzip, deflate' },
+    });
+
+    if (response.status === 400) {
+      const body = await response.json() as { error: string; message: string };
+      if (body.message.includes('must not contain the same IDs')) {
+        this.addResult('test49_conflict_error', true,
+          `Conflicting type_ids and exclude_type_ids correctly returns 400`);
+      } else {
+        this.addResult('test49_conflict_error', false,
+          `Got 400 but unexpected message: ${body.message}`);
+      }
+    } else {
+      this.addResult('test49_conflict_error', false,
+        `Expected 400 for conflicting IDs, got ${response.status}`);
+    }
+  }
+
+  /** Verifies that explicit type_ids overrides default exclusions (e.g. requesting IMAGE_TYPE works). */
+  async test50_ExplicitIncludeOverridesDefaultExclusion(): Promise<void> {
+    console.log(`\n${BLUE}Test 50: Explicit type_ids overrides default exclusions${NC}`);
+
+    // IMAGE_TYPE is in the default exclusion list, but explicitly requesting it
+    // via type_ids should succeed (not 400) — the default exclusion is stripped.
+    const params = new URLSearchParams();
+    params.append('query', '');
+    params.append('scope', 'GLOBAL');
+    params.append('type_ids', 'ba4e4146-0010-499d-a0a3-caaa7f579d0e'); // SystemIds.IMAGE_TYPE
+
+    const url = `${this.baseUrl}/search?${params.toString()}`;
+    const response = await fetch(url, {
+      headers: { 'Accept-Encoding': 'gzip, deflate' },
+    });
+
+    if (response.status === 200) {
+      this.addResult('test50_include_overrides_default', true,
+        `Explicit type_ids for a default-excluded type returns 200 (default exclusion stripped)`);
+    } else {
+      const body = await response.text();
+      this.addResult('test50_include_overrides_default', false,
+        `Expected 200 when type_ids overrides default exclusion, got ${response.status}: ${body}`);
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -3065,6 +3122,8 @@ async function main() {
     await validator.test46_InCanonicalGraphFieldReturned();
     await validator.test47_DefaultExcludeTypeIds();
     await validator.test48_UserSuppliedExcludeTypeIds();
+    await validator.test49_ConflictingIncludeExcludeReturns400();
+    await validator.test50_ExplicitIncludeOverridesDefaultExclusion();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

@@ -466,6 +466,36 @@ describe("Search Router - Integration Tests", () => {
 			expect(result.error).toBe("Invalid parameter")
 			expect(result.message).toContain("exclude_type_ids must not contain more than 10 IDs")
 		})
+
+		it("returns 400 when user-supplied exclude_type_ids conflicts with type_ids", async () => {
+			const sharedId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+			const request = new Request(
+				`http://localhost/search?query=test&type_ids=${sharedId}&exclude_type_ids=${sharedId}`,
+			)
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.error).toBe("Invalid parameter")
+			expect(result.message).toContain("type_ids and exclude_type_ids must not contain the same IDs")
+			expect(result.message).toContain(sharedId)
+		})
+
+		it("explicit type_ids overrides default exclusions without error", async () => {
+			// Request a type that is in the default exclusion list — should succeed, not 400
+			const request = new Request(
+				`http://localhost/search?query=test&type_ids=${SystemIds.TEXT_BLOCK}`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			const callArg = (mockSearchClient.search as ReturnType<typeof vi.fn>).mock.calls[0][0]
+			expect(callArg.type_ids).toEqual([SystemIds.TEXT_BLOCK])
+			// TEXT_BLOCK should be stripped from the default exclusion list
+			if (callArg.exclude_type_ids) {
+				expect(callArg.exclude_type_ids).not.toContain(SystemIds.TEXT_BLOCK)
+			}
+		})
 	})
 
 	describe("inCanonicalGraph field", () => {
