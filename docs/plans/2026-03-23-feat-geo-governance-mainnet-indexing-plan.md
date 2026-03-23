@@ -18,11 +18,11 @@ Today Gaia's indexing stack assumes:
 - `updateVotingSettings(...)` uses the older 4-field struct
 - proposal executability can be derived from the old fast/slow threshold formulas
 
-The new contracts break those assumptions. We need to carry richer voting settings, track the latest proposal version, decode new action payloads, and reset latest-state votes correctly when a proposal is updated.
+The new contracts evolve those assumptions. We need to carry richer voting settings, track the latest proposal version, decode new action payloads, and reset latest-state votes correctly when a proposal is updated.
 
 ## Problem Statement
 
-The current indexing shape is not forward-compatible with the new governance contracts:
+The current indexing shape does not fully represent the new governance contracts:
 
 1. `hermes-pipeline/src/decode.rs` decodes the old `VotingSettings` tuple and old `PROPOSAL_VOTED` payload.
 2. `hermes-schema/proto/governance.proto` models proposal settings as `quorum + flat_threshold + percentage_threshold`, which is too lossy for the new contract.
@@ -32,10 +32,10 @@ The current indexing shape is not forward-compatible with the new governance con
 
 If left unchanged, Gaia will:
 
-- decode governance events incorrectly
-- keep stale votes or stale tallies attached to the latest proposal version
-- compute proposal status incorrectly for slow-path early execution
-- expose stale or misleading proposal data to downstream consumers
+- decode governance events into outdated shapes
+- keep prior-version votes or tallies attached to the latest proposal version
+- compute proposal status using incomplete slow-path execution semantics
+- expose proposal data that no longer matches the latest protocol model to downstream consumers
 
 ## Proposed Solution
 
@@ -95,7 +95,6 @@ Out of scope:
 - UI form updates for create-dao initial topic data
 - factory trust metadata (`proxyIsChildOfFactory`)
 - production migrations or deployment steps
-- archive/recover/clear space UI behavior beyond documenting the indexer follow-up
 
 ## Local Research
 
@@ -129,8 +128,6 @@ Institutional learnings:
 Add the new raw action constants:
 
 - `GOVERNANCE.VOTING_SETTINGS_UPDATED`
-- optionally `GOVERNANCE.SPACE_ID_ARCHIVED`
-- optionally `GOVERNANCE.SPACE_ID_RECOVERED`
 
 #### `hermes-relay/src/actions.rs`
 
@@ -162,7 +159,7 @@ Required proto changes:
 
 Important constraint:
 
-- do not collapse the new proposal settings back to `flat_threshold` or `percentage_threshold`; that would recreate the same bug in a different place
+- do not collapse the new proposal settings back to `flat_threshold` or `percentage_threshold`; that would reintroduce the older reduced governance model in a different place
 - do not add `proposal_version` to create/update Hermes messages for this migration; KG will track latest-state version progression locally on create/update writes
 
 #### `hermes-pipeline/src/decode.rs`
@@ -335,7 +332,7 @@ Update storage methods:
 Important behavioral change:
 
 - when a `PROPOSAL_UPDATED` event arrives, increment `proposals.proposal_version`, replace actions for the proposal row, delete all existing latest-state votes for that proposal, and reset tallies
-- do not attempt to preserve stale votes in KG for this migration
+- do not attempt to preserve prior-version votes in KG for this migration
 - keep `proposal_actions` latest-version-oriented for this migration; do not introduce full per-version action history unless a downstream consumer proves it is needed
 - do not read the current proposal version from KG before writing a create/update event; assign it atomically in storage and then use that assigned version for all related writes in the transaction
 - when a vote arrives for a non-latest version, do not write it into latest-state storage
@@ -346,7 +343,7 @@ Important behavioral change:
 
 Update the tally worker so all aggregates are computed from the latest-state vote set only.
 
-Current bug:
+Current limitation:
 
 - tally logic assumes votes remain valid after a proposal update
 
@@ -436,7 +433,7 @@ Runtime decision:
 - use the indexed fields for execution eligibility
 - support slow-path early execution directly in the SQL/status logic
 - do not require on-chain `canExecuteProposal(bytes16)` reads in the runtime path
-- treat `canExecuteProposal(...)` only as a debugging or validation aid if needed during development
+- treat `canExecuteProposal(...)` only as a validation aid if needed during development
 
 ### Phase 5: Rollout and migration safety
 
@@ -449,24 +446,6 @@ Required rollout rules:
 - treat `threshold` as a compatibility projection in the API/query layer rather than a long-term stored source-of-truth field
 - treat `space_voting_settings` as internal/latest-state storage first; add API exposure only when there is a concrete caller
 - document any required deployment ordering between Hermes, KG, API, and executor
-
-### Phase 6: Optional follow-up for space lifecycle actions
-
-The contract doc also introduces:
-
-- `SPACE_ID_ARCHIVED`
-- `SPACE_ID_RECOVERED`
-- `SPACE_ID_CLEARED`
-
-Gaia currently only has `SPACE_ID_CLEARED` as a raw action constant and does not model archive/recover state.
-
-Follow-up options:
-
-- extend `space.creations` / space lifecycle indexing to persist archived state
-- add `archived_at` or `is_archived` to `spaces`
-- update search/API consumers accordingly
-
-This is not required to unblock the governance mainnet indexing changes.
 
 ## Spec Flow Notes
 
@@ -487,9 +466,9 @@ Edge cases to cover:
 - proposal update without any new votes
 - fast-to-slow escalation via orphaned `PROPOSAL_SETTINGS_SELECTED`
 - global voting settings updated after a proposal already exists
-- proposal vote payload decoded with the wrong version order
-- vote arrives for a stale proposal version after a proposal update
-- proposal status drift between API SQL and contract truth
+- proposal vote payload decoded with an unexpected version order
+- vote arrives for an older proposal version after a proposal update
+- proposal status diverges between API SQL and contract truth
 - proposal create/update version assignment remains correct without any storage pre-read in the write path
 
 ## Acceptance Criteria
@@ -500,7 +479,7 @@ Edge cases to cover:
 - [ ] Hermes emits a dedicated event for `VOTING_SETTINGS_UPDATED`.
 - [ ] KG stores the latest `proposal_version` on proposals.
 - [ ] KG assigns proposal versions atomically without reading current proposal version before create/update writes.
-- [ ] Proposal updates delete stale vote rows and reset latest-state tallies.
+- [ ] Proposal updates delete prior-version vote rows and reset latest-state tallies.
 - [ ] Votes for non-latest proposal versions are ignored by the latest-state write path.
 - [ ] Proposal tallies are computed from the latest-state vote set only.
 - [ ] `UpdateVotingSettings` proposal actions persist the new 6-field voting-settings payload.
@@ -514,8 +493,8 @@ Edge cases to cover:
 
 ## Success Metrics
 
-- No governance event from the new contracts is decoded into a stale or lossy shape.
-- Proposal version updates no longer leave stale votes attached to the latest proposal state.
+- No governance event from the new contracts is decoded into an outdated or lossy shape.
+- Proposal version updates no longer leave prior-version votes attached to the latest proposal state.
 - API/executor status computations match the new indexed governance semantics for the covered test cases.
 - Mainnet governance proposals can be indexed from the richer governance fields, with any legacy `threshold` response preserved only as a compatibility projection.
 
@@ -524,8 +503,8 @@ Edge cases to cover:
 ### Main risks
 
 - **Schema drift across layers:** Hermes, KG, API, and executor each currently encode the old governance assumptions separately.
-- **Stale latest-state votes:** If proposal updates do not clear votes, the indexer will compute status from votes that no longer apply to the latest contract version.
-- **Incorrect status formulas:** The old "one threshold per proposal" logic cannot represent slow-path early execution.
+- **Prior-version votes in latest state:** If proposal updates do not clear votes, the indexer will compute status from votes that no longer apply to the latest contract version.
+- **Incomplete status formulas:** The old "one threshold per proposal" logic does not represent slow-path early execution.
 - **Migration complexity:** This is a schema migration affecting both writers and readers.
 - **Mixed-version rollout:** independently deployed Hermes/KG/API services can break each other if the migration is not additive.
 - **Version allocation drift:** if KG derives proposal versions from wall-clock ordering or ad hoc reads, indexed versions can diverge from contract vote payloads.
@@ -578,4 +557,3 @@ Edge cases to cover:
 
 1. Should Gaia add separate version-history APIs later for old proposal revisions, or keep this migration strictly latest-state only?
 2. Should `VOTING_SETTINGS_UPDATED` remain current-state only in KG, or should a future follow-up keep a change history table as well?
-3. Should archive/recover lifecycle indexing be bundled into the same migration, or explicitly deferred?
