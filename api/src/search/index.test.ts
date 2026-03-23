@@ -11,6 +11,8 @@ const DEFAULT_EXCLUDED_TYPE_IDS = [
 	SystemIds.IMAGE_BLOCK,
 	SystemIds.DATA_BLOCK,
 	SystemIds.IMAGE_TYPE,
+	SystemIds.VIDEO_TYPE,
+	SystemIds.VIDEO_BLOCK,
 ]
 
 describe("Search Router - Integration Tests", () => {
