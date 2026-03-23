@@ -38,3 +38,15 @@ INSERT INTO values (id, entity_id, property_id, space_id, text) VALUES
   ('e2e-unset2', '00000000-0000-0000-0000-000000002222', '00000000-0000-0000-0000-000000000001', '00000000-0000-4000-8000-000000000001', 'Unset Test 2'),
   ('e2e-lww', '00000000-0000-0000-0000-000000003333', '00000000-0000-0000-0000-000000000001', '00000000-0000-4000-8000-000000000001', 'LWW Test')
 ON CONFLICT (id) DO NOTHING;
+
+-- Seed the relations table with entity-relation mappings for the e2e test.
+-- This enables the Postgres lookup → bulk doc ID update path for RemoveRelationById.
+-- The relation IDs here must match the relation_ids used by the Rust event generator
+-- when creating AddRelation events (see generators/relations.rs).
+-- For now we seed the Alice High entity's type relations so delete-relation lookups work.
+INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) VALUES
+  -- Alice High has Person type relation
+  ('00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000f1', '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1', '00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-000000000b01', '00000000-0000-4000-8000-000000000001'),
+  -- Alice High has Org type relation
+  ('00000000-0000-0000-0000-0000000000a2', '00000000-0000-0000-0000-0000000000f1', '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1', '00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-000000000b02', '00000000-0000-4000-8000-000000000001')
+ON CONFLICT (id) DO NOTHING;

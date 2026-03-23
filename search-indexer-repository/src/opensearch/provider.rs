@@ -1180,6 +1180,60 @@ impl SearchIndexProvider for OpenSearchProvider {
                     });
                     flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
                 }
+                EntityOperation::RemoveRelationByDoc(request) => {
+                    // Direct doc-ID update for relation removal (resolved via Postgres lookup).
+                    // Uses the bulk API with painless script — much faster than update_by_query.
+                    let body = json!({
+                        "script": {
+                            "source": REMOVE_RELATION_SCRIPT,
+                            "lang": "painless",
+                            "params": {
+                                "relation_id": request.relation_id
+                            }
+                        }
+                    });
+                    bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: String::new(),
+                        space_id: String::new(),
+                        operation_type: "RemoveRelationByDoc".to_string(),
+                    });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                }
+                EntityOperation::UpdateSpaceTopicEntityIdByDoc(request) => {
+                    // Direct doc-ID update for space topic entity ID (resolved via Postgres lookup).
+                    // Uses the bulk API — much faster than update_by_query.
+                    let body = json!({
+                        "doc": {
+                            "space_topic_entity_id": request.topic_entity_id
+                        },
+                        "doc_as_upsert": true
+                    });
+                    bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: String::new(),
+                        space_id: String::new(),
+                        operation_type: "UpdateSpaceTopicEntityIdByDoc".to_string(),
+                    });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                }
+                EntityOperation::UpdateInCanonicalGraphByDoc(request) => {
+                    // Direct doc-ID update for canonical graph flag (resolved via Postgres lookup).
+                    // Uses the bulk API — much faster than update_by_query.
+                    let body = json!({
+                        "doc": {
+                            "in_canonical_graph": request.in_canonical_graph
+                        },
+                        "doc_as_upsert": true
+                    });
+                    bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: String::new(),
+                        space_id: String::new(),
+                        operation_type: "UpdateInCanonicalGraphByDoc".to_string(),
+                    });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                }
                 EntityOperation::UpdateSpaceTopicEntityId(request) => {
                     // Flush before executing the update_by_query to maintain ordering
                     flush_pending_bulk!(

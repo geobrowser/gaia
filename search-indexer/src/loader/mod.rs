@@ -14,11 +14,12 @@ use crate::metrics::SearchIndexerMetrics;
 use crate::orchestrator::{BatchSource, ProcessedBatch};
 use crate::processor::ProcessedEvent;
 use search_indexer_repository::{
-    EntityOperation, RelationData, RemoveRelationData, SearchIndexProvider,
-    UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreByDocRequest,
+    EntityOperation, RelationData, RemoveRelationByDocRequest, RemoveRelationData,
+    SearchIndexProvider, UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreByDocRequest,
     UpdateEntityGlobalScoreRequest, UpdateEntityRequest, UpdateEntitySpaceScoreRequest,
-    UpdateInCanonicalGraphRequest, UpdateSpaceScoreByDocRequest, UpdateSpaceScoreRequest,
-    UpdateSpaceTopicEntityIdRequest,
+    UpdateInCanonicalGraphByDocRequest, UpdateInCanonicalGraphRequest,
+    UpdateSpaceScoreByDocRequest, UpdateSpaceScoreRequest,
+    UpdateSpaceTopicEntityIdByDocRequest, UpdateSpaceTopicEntityIdRequest,
 };
 
 /// Loader that indexes documents into the search engine.
@@ -167,6 +168,15 @@ impl SearchLoader {
                             UpdateSpaceScoreByDocRequest { doc_id, score },
                         ));
                 }
+                ProcessedEvent::RemoveRelationByDoc {
+                    doc_id,
+                    relation_id,
+                } => {
+                    self.pending_operations
+                        .push(EntityOperation::RemoveRelationByDoc(
+                            RemoveRelationByDocRequest { doc_id, relation_id },
+                        ));
+                }
                 ProcessedEvent::UpdateSpaceTopicEntityId {
                     space_id,
                     topic_entity_id,
@@ -179,6 +189,18 @@ impl SearchLoader {
                             },
                         ));
                 }
+                ProcessedEvent::UpdateSpaceTopicEntityIdByDoc {
+                    doc_id,
+                    topic_entity_id,
+                } => {
+                    self.pending_operations
+                        .push(EntityOperation::UpdateSpaceTopicEntityIdByDoc(
+                            UpdateSpaceTopicEntityIdByDocRequest {
+                                doc_id,
+                                topic_entity_id,
+                            },
+                        ));
+                }
                 ProcessedEvent::UpdateInCanonicalGraph {
                     space_id,
                     in_canonical_graph,
@@ -187,6 +209,18 @@ impl SearchLoader {
                         .push(EntityOperation::UpdateInCanonicalGraph(
                             UpdateInCanonicalGraphRequest {
                                 space_id: space_id.to_string(),
+                                in_canonical_graph,
+                            },
+                        ));
+                }
+                ProcessedEvent::UpdateInCanonicalGraphByDoc {
+                    doc_id,
+                    in_canonical_graph,
+                } => {
+                    self.pending_operations
+                        .push(EntityOperation::UpdateInCanonicalGraphByDoc(
+                            UpdateInCanonicalGraphByDocRequest {
+                                doc_id,
                                 in_canonical_graph,
                             },
                         ));
@@ -292,7 +326,8 @@ impl SearchLoader {
                         ProcessedEvent::UnsetProperties { .. } => {
                             metrics.total_unsets.fetch_add(1, Ordering::Relaxed);
                         }
-                        ProcessedEvent::RemoveRelationById { .. } => {
+                        ProcessedEvent::RemoveRelationById { .. }
+                        | ProcessedEvent::RemoveRelationByDoc { .. } => {
                             metrics
                                 .total_remove_relations
                                 .fetch_add(1, Ordering::Relaxed);
@@ -304,12 +339,14 @@ impl SearchLoader {
                         | ProcessedEvent::UpdateSpaceScoreByDoc { .. } => {
                             metrics.total_score_updates.fetch_add(1, Ordering::Relaxed);
                         }
-                        ProcessedEvent::UpdateSpaceTopicEntityId { .. } => {
+                        ProcessedEvent::UpdateSpaceTopicEntityId { .. }
+                        | ProcessedEvent::UpdateSpaceTopicEntityIdByDoc { .. } => {
                             metrics
                                 .total_space_topic_updates
                                 .fetch_add(1, Ordering::Relaxed);
                         }
-                        ProcessedEvent::UpdateInCanonicalGraph { .. } => {
+                        ProcessedEvent::UpdateInCanonicalGraph { .. }
+                        | ProcessedEvent::UpdateInCanonicalGraphByDoc { .. } => {
                             metrics.total_updates.fetch_add(1, Ordering::Relaxed);
                         }
                     }
@@ -515,15 +552,18 @@ mod tests {
                             relation_id: r.relation_id.clone(),
                         });
                     }
-                    // Score and space topic updates are tracked but don't need detailed tracking in tests
+                    // Score, space topic, topology, and ByDoc updates pass through - no special tracking needed
                     EntityOperation::UpdateEntityGlobalScore(_)
                     | EntityOperation::UpdateSpaceScore(_)
                     | EntityOperation::UpdateEntitySpaceScore(_)
                     | EntityOperation::UpdateEntityGlobalScoreByDoc(_)
                     | EntityOperation::UpdateSpaceScoreByDoc(_)
+                    | EntityOperation::RemoveRelationByDoc(_)
                     | EntityOperation::UpdateSpaceTopicEntityId(_)
-                    | EntityOperation::UpdateInCanonicalGraph(_) => {
-                        // Score, space topic, and topology updates pass through - no special tracking needed
+                    | EntityOperation::UpdateSpaceTopicEntityIdByDoc(_)
+                    | EntityOperation::UpdateInCanonicalGraph(_)
+                    | EntityOperation::UpdateInCanonicalGraphByDoc(_) => {
+                        // Pass through - no special tracking needed
                     }
                 }
             }
