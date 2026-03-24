@@ -36,6 +36,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # SDK for constants
 sdk = { path = "../../../sdk" }
 
+# Postgres seeding for Postgres lookup path
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid"] }
+
 # Load test specific
 rand = { version = "0.8", features = ["small_rng"] }
 indicatif = "0.17"

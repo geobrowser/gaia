@@ -52,6 +52,9 @@ pub struct ExpectedState {
     pub documents: HashMap<(Uuid, Uuid), ExpectedDocument>,
     /// space_id -> topic_entity_id
     pub space_topics: HashMap<Uuid, Uuid>,
+    /// All relations ever created (including those later deleted).
+    /// Used to seed the Postgres `relations` table for the lookup fast path.
+    pub all_created_relations: Vec<(Uuid, Uuid, Uuid)>, // (relation_id, entity_id, space_id)
 }
 
 impl ExpectedState {
@@ -59,6 +62,7 @@ impl ExpectedState {
         Self {
             documents: HashMap::new(),
             space_topics: HashMap::new(),
+            all_created_relations: Vec::new(),
         }
     }
 
@@ -150,6 +154,10 @@ impl ExpectedState {
         relation_type: Uuid,
         to_entity_id: Uuid,
     ) {
+        // Track all created relations for Postgres seeding
+        self.all_created_relations
+            .push((relation_id, entity_id, space_id));
+
         let doc = self.ensure_doc(entity_id, space_id);
         if doc.deleted {
             return;
