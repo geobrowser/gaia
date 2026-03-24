@@ -19,9 +19,10 @@ pub use opensearch::OpenSearchProvider;
 pub use service::SearchIndexService;
 pub use types::{
     BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
-    RelationData, RemoveRelationData, UnsetEntityPropertiesRequest,
+    RelationData, RemoveRelationByDocRequest, RemoveRelationData, UnsetEntityPropertiesRequest,
     UpdateEntityGlobalScoreByDocRequest, UpdateEntityGlobalScoreRequest, UpdateEntityRequest,
-    UpdateEntitySpaceScoreRequest, UpdateInCanonicalGraphRequest, UpdateSpaceScoreByDocRequest,
-    UpdateSpaceScoreRequest, UpdateSpaceTopicEntityIdRequest,
+    UpdateEntitySpaceScoreRequest, UpdateInCanonicalGraphByDocRequest,
+    UpdateInCanonicalGraphRequest, UpdateSpaceScoreByDocRequest, UpdateSpaceScoreRequest,
+    UpdateSpaceTopicEntityIdByDocRequest, UpdateSpaceTopicEntityIdRequest,
 };
 pub use utils::parse_entity_and_space_ids;

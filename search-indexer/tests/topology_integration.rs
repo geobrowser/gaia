@@ -728,6 +728,7 @@ async fn test_topology_entities_get_canonical_flag() {
     let events = vec![canonical_entity, non_canonical_entity];
     let processed = processor
         .process_batch(events)
+        .await
         .expect("Failed to process entity batch");
 
     // Find the Index events

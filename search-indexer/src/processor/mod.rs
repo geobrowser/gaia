@@ -72,8 +72,17 @@ pub enum ProcessedEvent {
         space_id: uuid::Uuid,
         topic_entity_id: uuid::Uuid,
     },
-    /// Update in_canonical_graph for all entities in a space.
-    /// Emitted when a space's canonical status changes.
+    /// Remove a relation by direct doc ID (fast path — bulk API).
+    /// Resolved via Postgres lookup of the `relations` table.
+    RemoveRelationByDoc { doc_id: String, relation_id: String },
+    /// Update space_topic_entity_id by direct doc ID (fast path — bulk API).
+    /// Resolved via Postgres lookup.
+    UpdateSpaceTopicEntityIdByDoc { doc_id: String, topic_entity_id: String },
+    /// Update in_canonical_graph by direct doc ID (fast path — bulk API).
+    /// Resolved via Postgres lookup.
+    UpdateInCanonicalGraphByDoc { doc_id: String, in_canonical_graph: bool },
+    /// Update in_canonical_graph for all entities in a space (slow path — update_by_query).
+    /// Used as fallback when Postgres lookup is unavailable.
     UpdateInCanonicalGraph {
         space_id: uuid::Uuid,
         in_canonical_graph: bool,
@@ -197,7 +206,7 @@ impl Processor {
     ///
     /// A vector of processed events ready for loading.
     #[instrument(skip(self, events), fields(event_count = events.len()))]
-    pub fn process_batch(
+    pub async fn process_batch(
         &self,
         events: Vec<EntityEvent>,
     ) -> Result<Vec<ProcessedEvent>, IngestError> {
@@ -206,6 +215,84 @@ impl Processor {
         for event in events {
             if let Some(result) = self.process_event(event)? {
                 processed.push(result);
+            }
+        }
+
+        // Resolve RemoveRelationById via Postgres lookup when available
+        if let Some(lookup) = &self.entity_space_lookup {
+            let relation_events: Vec<(usize, uuid::Uuid)> = processed
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| match e {
+                    ProcessedEvent::RemoveRelationById { relation_id } => Some((i, *relation_id)),
+                    _ => None,
+                })
+                .collect();
+
+            if !relation_events.is_empty() {
+                let relation_ids: Vec<uuid::Uuid> =
+                    relation_events.iter().map(|(_, rid)| *rid).collect();
+
+                match lookup.docs_for_relations(&relation_ids).await {
+                    Ok(pairs) => {
+                        // Build relation_id → (entity_id, space_id) map
+                        let mut relation_map: std::collections::HashMap<
+                            uuid::Uuid,
+                            Vec<(uuid::Uuid, uuid::Uuid)>,
+                        > = std::collections::HashMap::new();
+                        for (relation_id, entity_id, space_id) in &pairs {
+                            relation_map
+                                .entry(*relation_id)
+                                .or_default()
+                                .push((*entity_id, *space_id));
+                        }
+
+                        // Replace resolved events (iterate in reverse to maintain indices)
+                        let mut resolved = 0usize;
+                        let mut skipped = 0usize;
+                        for (idx, relation_id) in relation_events.into_iter().rev() {
+                            if let Some(docs) = relation_map.get(&relation_id) {
+                                processed.remove(idx);
+                                for (entity_id, space_id) in docs {
+                                    processed.insert(
+                                        idx,
+                                        ProcessedEvent::RemoveRelationByDoc {
+                                            doc_id: format!("{}_{}", entity_id, space_id),
+                                            relation_id: relation_id.to_string(),
+                                        },
+                                    );
+                                    resolved += 1;
+                                }
+                            } else {
+                                // Not found in Postgres — relation was likely already
+                                // deleted or never written. Remove the event entirely
+                                // rather than falling back to an expensive full-index scan.
+                                warn!(
+                                    relation_id = %relation_id,
+                                    "Relation not found in Postgres — skipping removal (already deleted or not yet indexed)"
+                                );
+                                processed.remove(idx);
+                                skipped += 1;
+                            }
+                        }
+
+                        if resolved > 0 || skipped > 0 {
+                            info!(
+                                resolved = resolved,
+                                skipped = skipped,
+                                "RemoveRelationById batch resolved via Postgres"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            relation_count = relation_ids.len(),
+                            "Postgres lookup failed for RemoveRelationById — falling back to slow update_by_query"
+                        );
+                        // Keep all as RemoveRelationById (update_by_query fallback)
+                    }
+                }
             }
         }
 
@@ -292,25 +379,20 @@ impl Processor {
                         // Fallback: entities not found in Postgres → use update_by_query
                         let found_entities: std::collections::HashSet<Uuid> =
                             pairs.iter().map(|(eid, _)| *eid).collect();
-                        let mut fallback_count = 0usize;
-                        for (entity_id, score) in &score_map {
+                        let mut skipped = 0usize;
+                        for entity_id in score_map.keys() {
                             if !found_entities.contains(entity_id) {
-                                error!(
-                                    entity_id = %entity_id,
-                                    "Entity not found in values table — falling back to slow update_by_query"
-                                );
-                                processed.push(ProcessedEvent::UpdateEntityGlobalScore {
-                                    entity_id: *entity_id,
-                                    score: *score,
-                                });
-                                fallback_count += 1;
+                                // Entity has no values (no name/description) — won't be in the
+                                // search index. Skip rather than falling back to update_by_query
+                                // which would scan the entire index and match 0 docs.
+                                skipped += 1;
                             }
                         }
 
-                        if resolved > 0 || fallback_count > 0 {
+                        if resolved > 0 || skipped > 0 {
                             info!(
                                 resolved = resolved,
-                                fallback = fallback_count,
+                                skipped = skipped,
                                 "EntityGlobalScore batch resolved"
                             );
                         }
@@ -356,28 +438,19 @@ impl Processor {
                             }
                         }
 
-                        // Fallback: spaces not found in Postgres
+                        // Spaces not found in Postgres have no entities with values —
+                        // skip rather than falling back to update_by_query.
                         let found_spaces: std::collections::HashSet<Uuid> =
                             pairs.iter().map(|(_, sid)| *sid).collect();
-                        let mut fallback_count = 0usize;
-                        for (space_id, score) in &score_map {
-                            if !found_spaces.contains(space_id) {
-                                error!(
-                                    space_id = %space_id,
-                                    "Space not found in values table — falling back to slow update_by_query"
-                                );
-                                processed.push(ProcessedEvent::UpdateSpaceScore {
-                                    space_id: *space_id,
-                                    score: *score,
-                                });
-                                fallback_count += 1;
-                            }
-                        }
+                        let skipped = score_map
+                            .keys()
+                            .filter(|sid| !found_spaces.contains(sid))
+                            .count();
 
-                        if resolved > 0 || fallback_count > 0 {
+                        if resolved > 0 || skipped > 0 {
                             info!(
                                 resolved = resolved,
-                                fallback = fallback_count,
+                                skipped = skipped,
                                 "SpaceScore batch resolved"
                             );
                         }
@@ -420,11 +493,14 @@ impl Processor {
     ///    if no other entities in the space have been indexed yet. When the full entity data
     ///    arrives via `knowledge.edits`, the upsert merges into this stub.
     #[instrument(skip(self, events), fields(event_count = events.len()))]
-    pub fn process_space_topic_batch(
+    pub async fn process_space_topic_batch(
         &mut self,
         events: Vec<SpaceTopicEvent>,
     ) -> Result<Vec<ProcessedEvent>, IngestError> {
         let mut processed = Vec::with_capacity(events.len() * 2);
+
+        // Collect space_id → topic_entity_id mappings for batch resolution
+        let mut topic_updates: Vec<(Uuid, Uuid)> = Vec::new();
 
         for event in events {
             // Update the cache before creating the processed events
@@ -439,11 +515,7 @@ impl Processor {
                 );
             }
 
-            // Backfill all existing documents in this space
-            processed.push(ProcessedEvent::UpdateSpaceTopicEntityId {
-                space_id: event.space_id,
-                topic_entity_id: event.topic_entity_id,
-            });
+            topic_updates.push((event.space_id, event.topic_entity_id));
 
             // Upsert a stub document for the topic entity itself. This is
             // necessary for two reasons:
@@ -465,6 +537,64 @@ impl Processor {
             processed.push(ProcessedEvent::Index(doc));
         }
 
+        // Resolve space_id → entity docs via Postgres, or fall back to update_by_query
+        if !topic_updates.is_empty() {
+            if let Some(lookup) = &self.entity_space_lookup {
+                let space_ids: Vec<Uuid> = topic_updates.iter().map(|(sid, _)| *sid).collect();
+                let topic_map: HashMap<Uuid, Uuid> = topic_updates.into_iter().collect();
+
+                match lookup.entities_for_spaces(&space_ids).await {
+                    Ok(pairs) => {
+                        let mut resolved = 0usize;
+                        for (entity_id, space_id) in &pairs {
+                            if let Some(&topic_entity_id) = topic_map.get(space_id) {
+                                processed.push(ProcessedEvent::UpdateSpaceTopicEntityIdByDoc {
+                                    doc_id: format!("{}_{}", entity_id, space_id),
+                                    topic_entity_id: topic_entity_id.to_string(),
+                                });
+                                resolved += 1;
+                            }
+                        }
+
+                        let found_spaces: std::collections::HashSet<Uuid> =
+                            pairs.iter().map(|(_, sid)| *sid).collect();
+                        let skipped = topic_map
+                            .keys()
+                            .filter(|sid| !found_spaces.contains(sid))
+                            .count();
+
+                        if resolved > 0 || skipped > 0 {
+                            info!(
+                                resolved = resolved,
+                                skipped = skipped,
+                                "UpdateSpaceTopicEntityId batch resolved via Postgres"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            space_count = topic_map.len(),
+                            "Postgres lookup failed for UpdateSpaceTopicEntityId — falling back to slow update_by_query"
+                        );
+                        for (space_id, topic_entity_id) in topic_map {
+                            processed.push(ProcessedEvent::UpdateSpaceTopicEntityId {
+                                space_id,
+                                topic_entity_id,
+                            });
+                        }
+                    }
+                }
+            } else {
+                for (space_id, topic_entity_id) in topic_updates {
+                    processed.push(ProcessedEvent::UpdateSpaceTopicEntityId {
+                        space_id,
+                        topic_entity_id,
+                    });
+                }
+            }
+        }
+
         debug!(
             processed_count = processed.len(),
             "Processed space topic event batch"
@@ -474,8 +604,11 @@ impl Processor {
 
     /// Process a topology batch: apply changes to in-memory graph, return update operations.
     #[instrument(skip(self, batch), fields(diff_count = batch.diffs.len()))]
-    pub fn process_topology_batch(&self, batch: &TopologyProcessingBatch) -> Vec<ProcessedEvent> {
-        let mut ops = Vec::new();
+    pub async fn process_topology_batch(
+        &self,
+        batch: &TopologyProcessingBatch,
+    ) -> Vec<ProcessedEvent> {
+        let mut canonical_changes: Vec<(Uuid, bool)> = Vec::new();
         for diff in &batch.diffs {
             let root_uuid = Uuid::from_bytes(diff.root_id);
             let changes = self
@@ -497,12 +630,69 @@ impl Processor {
                         "[sample] TopologyChange"
                     );
                 }
-                ops.push(ProcessedEvent::UpdateInCanonicalGraph {
-                    space_id: change.space_id,
-                    in_canonical_graph: change.in_canonical_graph,
-                });
+                canonical_changes.push((change.space_id, change.in_canonical_graph));
             }
         }
+
+        let mut ops = Vec::new();
+
+        if !canonical_changes.is_empty() {
+            if let Some(lookup) = &self.entity_space_lookup {
+                let space_ids: Vec<Uuid> = canonical_changes.iter().map(|(sid, _)| *sid).collect();
+                let change_map: HashMap<Uuid, bool> = canonical_changes.into_iter().collect();
+
+                match lookup.entities_for_spaces(&space_ids).await {
+                    Ok(pairs) => {
+                        let mut resolved = 0usize;
+                        for (entity_id, space_id) in &pairs {
+                            if let Some(&in_canonical_graph) = change_map.get(space_id) {
+                                ops.push(ProcessedEvent::UpdateInCanonicalGraphByDoc {
+                                    doc_id: format!("{}_{}", entity_id, space_id),
+                                    in_canonical_graph,
+                                });
+                                resolved += 1;
+                            }
+                        }
+
+                        let found_spaces: std::collections::HashSet<Uuid> =
+                            pairs.iter().map(|(_, sid)| *sid).collect();
+                        let skipped = change_map
+                            .keys()
+                            .filter(|sid| !found_spaces.contains(sid))
+                            .count();
+
+                        if resolved > 0 || skipped > 0 {
+                            info!(
+                                resolved = resolved,
+                                skipped = skipped,
+                                "UpdateInCanonicalGraph batch resolved via Postgres"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            error = %e,
+                            space_count = change_map.len(),
+                            "Postgres lookup failed for UpdateInCanonicalGraph — falling back to slow update_by_query"
+                        );
+                        for (space_id, in_canonical_graph) in change_map {
+                            ops.push(ProcessedEvent::UpdateInCanonicalGraph {
+                                space_id,
+                                in_canonical_graph,
+                            });
+                        }
+                    }
+                }
+            } else {
+                for (space_id, in_canonical_graph) in canonical_changes {
+                    ops.push(ProcessedEvent::UpdateInCanonicalGraph {
+                        space_id,
+                        in_canonical_graph,
+                    });
+                }
+            }
+        }
+
         debug!(operations = ops.len(), "Processed topology batch");
         ops
     }
@@ -752,7 +942,7 @@ impl Processor {
             event_count,
         } = batch;
 
-        match self.process_batch(events) {
+        match self.process_batch(events).await {
             Ok(processed_events) => {
                 metrics
                     .total_events_processed
@@ -884,7 +1074,7 @@ impl Processor {
             event_count,
         } = batch;
 
-        match self.process_space_topic_batch(events) {
+        match self.process_space_topic_batch(events).await {
             Ok(processed_events) => {
                 metrics
                     .total_events_processed
@@ -954,7 +1144,7 @@ impl Processor {
         let event_count = *event_count;
 
         // 1. Apply changes to in-memory graph
-        let processed_events = self.process_topology_batch(&batch);
+        let processed_events = self.process_topology_batch(&batch).await;
 
         metrics
             .total_events_processed
@@ -1331,8 +1521,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_process_batch() {
+    #[tokio::test]
+    async fn test_process_batch() {
         let processor = Processor::new();
 
         let events = vec![
@@ -1357,7 +1547,7 @@ mod tests {
             EntityEvent::delete(Uuid::new_v4(), Uuid::new_v4()),
         ];
 
-        let results = processor.process_batch(events).unwrap();
+        let results = processor.process_batch(events).await.unwrap();
         assert_eq!(results.len(), 3);
     }
 
@@ -1572,8 +1762,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_space_topic_batch_updates_cache_and_creates_stub() {
+    #[tokio::test]
+    async fn test_space_topic_batch_updates_cache_and_creates_stub() {
         let mut processor = Processor::new();
         assert_eq!(processor.space_topic_cache_len(), 0);
 
@@ -1585,17 +1775,15 @@ mod tests {
             space_id,
             topic_entity_id,
         }];
-        let processed = processor.process_space_topic_batch(events).unwrap();
+        let processed = processor.process_space_topic_batch(events).await.unwrap();
 
-        // Should emit 2 events: UpdateSpaceTopicEntityId + Index stub
+        // Should emit 2 events: Index stub + UpdateSpaceTopicEntityId (no Postgres lookup → fallback)
         assert_eq!(processed.len(), 2);
-        assert!(matches!(
-            processed[0],
-            ProcessedEvent::UpdateSpaceTopicEntityId { .. }
-        ));
 
-        // Verify the stub document
-        if let ProcessedEvent::Index(ref doc) = processed[1] {
+        // Find the stub Index event
+        let stub = processed.iter().find(|e| matches!(e, ProcessedEvent::Index(_)));
+        assert!(stub.is_some(), "Expected an Index stub event");
+        if let Some(ProcessedEvent::Index(ref doc)) = stub {
             assert_eq!(doc.entity_id, topic_entity_id);
             assert_eq!(doc.space_id, space_id);
             assert_eq!(
@@ -1608,9 +1796,13 @@ mod tests {
                 doc.description.is_none(),
                 "Stub document should have no description"
             );
-        } else {
-            panic!("Expected ProcessedEvent::Index for stub document");
         }
+
+        // Find the UpdateSpaceTopicEntityId fallback event
+        assert!(
+            processed.iter().any(|e| matches!(e, ProcessedEvent::UpdateSpaceTopicEntityId { .. })),
+            "Expected UpdateSpaceTopicEntityId fallback event"
+        );
 
         // Cache should now have one entry
         assert_eq!(processor.space_topic_cache_len(), 1);

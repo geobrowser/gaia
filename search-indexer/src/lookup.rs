@@ -1,11 +1,12 @@
-//! Entity-space lookup for resolving score update doc IDs.
+//! Entity-space lookup for resolving doc IDs via Postgres.
 //!
-//! Queries the Postgres `values` table to resolve:
-//! - `entity_id → [space_ids]` for EntityGlobalScore updates
-//! - `space_id → [entity_ids]` for SpaceScore updates
+//! Queries Postgres tables to resolve:
+//! - `entity_id → [space_ids]` for EntityGlobalScore updates (via `values` table)
+//! - `space_id → [entity_ids]` for SpaceScore / SpaceTopicEntityId / InCanonicalGraph updates (via `values` table)
+//! - `relation_id → (entity_id, space_id)` for RemoveRelationById (via `relations` table)
 //!
-//! This allows score updates to use direct bulk doc ID updates (`_bulk` API)
-//! instead of `update_by_query`, reducing score indexing time from ~60 hours to ~5 minutes.
+//! This allows operations to use direct bulk doc ID updates (`_bulk` API)
+//! instead of `update_by_query`, reducing indexing time by orders of magnitude.
 
 use hermes_instrumentation::{error, info};
 use sqlx::{PgPool, Row};
@@ -23,9 +24,9 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 5;
 
 /// Entity-space lookup backed by Postgres.
 ///
-/// Queries the `values` table (written by kg-indexer) to resolve entity_id → space_ids
-/// and space_id → entity_ids. Results are used to construct OpenSearch doc IDs
-/// (`{entity_id}_{space_id}`) for direct bulk updates.
+/// Queries the `values` and `relations` tables (written by kg-indexer) to resolve
+/// doc IDs for direct bulk updates. Results are used to construct OpenSearch doc IDs
+/// (`{entity_id}_{space_id}`).
 pub struct EntitySpaceLookup {
     pool: PgPool,
 }
@@ -174,6 +175,57 @@ impl EntitySpaceLookup {
                 let entity_id: Uuid = row.get("entity_id");
                 let space_id: Uuid = row.get("space_id");
                 all_results.push((entity_id, space_id));
+            }
+        }
+
+        Ok(all_results)
+    }
+
+    /// Given a batch of relation_ids, return (relation_id, entity_id, space_id) tuples.
+    ///
+    /// Queries the `relations` table to resolve which entity/space each relation belongs to.
+    /// Batches larger than 1000 are chunked automatically.
+    pub async fn docs_for_relations(
+        &self,
+        relation_ids: &[Uuid],
+    ) -> Result<Vec<(Uuid, Uuid, Uuid)>, IngestError> {
+        if relation_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut all_results = Vec::new();
+
+        for chunk in relation_ids.chunks(MAX_BATCH_SIZE) {
+            let start = std::time::Instant::now();
+            let chunk_vec: Vec<Uuid> = chunk.to_vec();
+
+            let rows = sqlx::query(
+                "SELECT id, entity_id, space_id FROM relations WHERE id = ANY($1)",
+            )
+            .bind(&chunk_vec)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| {
+                IngestError::parse(format!("Postgres lookup failed for relation_ids: {}", e))
+            })?;
+
+            let elapsed_ms = start.elapsed().as_millis();
+            let rows_found = rows.len();
+
+            if elapsed_ms > 100 || rows_found > 1000 {
+                info!(
+                    relation_ids = chunk.len(),
+                    rows_found = rows_found,
+                    elapsed_ms = elapsed_ms,
+                    "Relation→doc lookup"
+                );
+            }
+
+            for row in rows {
+                let relation_id: Uuid = row.get("id");
+                let entity_id: Uuid = row.get("entity_id");
+                let space_id: Uuid = row.get("space_id");
+                all_results.push((relation_id, entity_id, space_id));
             }
         }
 

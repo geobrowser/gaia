@@ -313,15 +313,18 @@ impl SearchIndexProvider for MockSearchProvider {
                 EntityOperation::Update(_) => self.fail_bulk_updates && i >= operations.len() / 2,
                 EntityOperation::Delete(_) => false, // Hard deletes not used (soft delete via Update)
                 EntityOperation::Unset(_) => self.fail_bulk_unsets && i >= operations.len() / 2,
-                EntityOperation::RemoveRelationById(_) => false, // Never fails in mock
-                // Score, space topic, and topology operations never fail in mock
+                EntityOperation::RemoveRelationById(_)
+                | EntityOperation::RemoveRelationByDoc(_) => false,
+                // Score, space topic, topology, and ByDoc operations never fail in mock
                 EntityOperation::UpdateEntityGlobalScore(_)
                 | EntityOperation::UpdateSpaceScore(_)
                 | EntityOperation::UpdateEntitySpaceScore(_)
                 | EntityOperation::UpdateEntityGlobalScoreByDoc(_)
                 | EntityOperation::UpdateSpaceScoreByDoc(_)
                 | EntityOperation::UpdateSpaceTopicEntityId(_)
-                | EntityOperation::UpdateInCanonicalGraph(_) => false,
+                | EntityOperation::UpdateSpaceTopicEntityIdByDoc(_)
+                | EntityOperation::UpdateInCanonicalGraph(_)
+                | EntityOperation::UpdateInCanonicalGraphByDoc(_) => false,
             };
 
             if should_fail {
@@ -350,17 +353,20 @@ impl SearchIndexProvider for MockSearchProvider {
                             .unwrap()
                             .push(req.clone());
                     }
-                    EntityOperation::RemoveRelationById(_) => {
+                    EntityOperation::RemoveRelationById(_)
+                    | EntityOperation::RemoveRelationByDoc(_) => {
                         // Tracked via all_operations
                     }
-                    // Score, space topic, and topology operations are tracked via all_operations only
+                    // Score, space topic, topology, and ByDoc operations are tracked via all_operations only
                     EntityOperation::UpdateEntityGlobalScore(_)
                     | EntityOperation::UpdateSpaceScore(_)
                     | EntityOperation::UpdateEntitySpaceScore(_)
                     | EntityOperation::UpdateEntityGlobalScoreByDoc(_)
                     | EntityOperation::UpdateSpaceScoreByDoc(_)
                     | EntityOperation::UpdateSpaceTopicEntityId(_)
-                    | EntityOperation::UpdateInCanonicalGraph(_) => {
+                    | EntityOperation::UpdateSpaceTopicEntityIdByDoc(_)
+                    | EntityOperation::UpdateInCanonicalGraph(_)
+                    | EntityOperation::UpdateInCanonicalGraphByDoc(_) => {
                         // Tracked via all_operations
                     }
                 }
