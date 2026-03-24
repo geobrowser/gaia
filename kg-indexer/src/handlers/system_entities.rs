@@ -819,9 +819,11 @@ mod tests {
         let eoa_rels = eoa_result.relations_to_create();
         let dao_rels = dao_result.relations_to_create();
 
-        // The third relation (SpaceType) should have different IDs
-        let eoa_space_type_rel = &eoa_rels[2];
-        let dao_space_type_rel = &dao_rels[2];
+        // Find SpaceType relations by to_id rather than assuming index
+        let eoa_type_uuid = Uuid::parse_str(EOA_SPACE_TYPE_ID).unwrap();
+        let dao_type_uuid = Uuid::parse_str(DAO_SPACE_TYPE_ID).unwrap();
+        let eoa_space_type_rel = eoa_rels.iter().find(|r| r.to_id == eoa_type_uuid).unwrap();
+        let dao_space_type_rel = dao_rels.iter().find(|r| r.to_id == dao_type_uuid).unwrap();
 
         assert_ne!(
             eoa_space_type_rel.entity_id, dao_space_type_rel.entity_id,
