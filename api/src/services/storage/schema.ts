@@ -217,6 +217,7 @@ export const relations = pgTable(
 		position: text(),
 		spaceId: uuid().notNull(),
 		verified: boolean(),
+		isSystem: boolean().notNull().default(false),
 	},
 	(table) => [
 		// Foreign key indexes for join performance
