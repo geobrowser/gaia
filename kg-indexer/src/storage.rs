@@ -396,7 +396,7 @@ impl Storage {
         let ids: Vec<Uuid> = deletes.iter().map(|(id, _)| *id).collect();
         let space_ids: Vec<Uuid> = deletes.iter().map(|(_, sid)| *sid).collect();
 
-        let result = sqlx::query(
+        sqlx::query(
             "DELETE FROM relations WHERE (id, space_id) IN (
                 SELECT id, space_id FROM UNNEST($1::uuid[], $2::uuid[]) AS t(id, space_id)
             ) AND relations.is_system = false",
@@ -405,8 +405,6 @@ impl Storage {
         .bind(&space_ids)
         .execute(&mut **tx)
         .await?;
-
-        result.rows_affected() as usize;
 
         Ok(())
     }
