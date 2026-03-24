@@ -115,6 +115,74 @@ async fn main() -> Result<()> {
         println!();
 
         // =====================================================================
+        // Step 1b: Seed Postgres with entity-space pairs and relations
+        // =====================================================================
+        // The search-indexer uses Postgres lookups to resolve doc IDs for bulk
+        // updates instead of slow update_by_query. Without this seed data,
+        // scores and relation removals would be skipped (entity not found).
+        if let Ok(database_url) = std::env::var("DATABASE_URL") {
+            println!("  [1b/6] Seeding Postgres for lookup fast path...");
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(5)
+                .connect(&database_url)
+                .await?;
+
+            // Seed values table with all entity-space pairs
+            let pairs: Vec<_> = scenario
+                .expected_state
+                .documents
+                .keys()
+                .cloned()
+                .collect();
+            let prop_id =
+                uuid::Uuid::parse_str("00000000-0000-0000-0000-000000000001").expect("valid");
+            for (entity_id, space_id) in &pairs {
+                let vid = format!("load-{}-{}", entity_id, space_id);
+                sqlx::query(
+                    "INSERT INTO values (id, entity_id, property_id, space_id, text) \
+                     VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO NOTHING",
+                )
+                .bind(&vid)
+                .bind(entity_id)
+                .bind(prop_id)
+                .bind(space_id)
+                .bind(format!("load-test {}", entity_id))
+                .execute(&pool)
+                .await?;
+            }
+
+            // Seed relations table with all created relations
+            for (relation_id, entity_id, space_id) in
+                &scenario.expected_state.all_created_relations
+            {
+                let type_id =
+                    uuid::Uuid::parse_str("8f151ba4-de20-4e3c-9cb4-99ddf96f48f1").expect("valid");
+                sqlx::query(
+                    "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) \
+                     VALUES ($1, $2, $3, $2, $2, $4) ON CONFLICT (id) DO NOTHING",
+                )
+                .bind(relation_id)
+                .bind(entity_id)
+                .bind(type_id)
+                .bind(space_id)
+                .execute(&pool)
+                .await?;
+            }
+
+            println!(
+                "  Seeded {} entity-space pairs + {} relations in Postgres",
+                pairs.len(),
+                scenario.expected_state.all_created_relations.len()
+            );
+            println!();
+        } else {
+            println!(
+                "  [1b/6] Skipping Postgres seed (DATABASE_URL not set — indexer will use update_by_query fallback)"
+            );
+            println!();
+        }
+
+        // =====================================================================
         // Step 2: Send main events to Kafka (interleaved)
         // =====================================================================
         println!("  [2/6] Sending main events to Kafka...");
