@@ -941,19 +941,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         continue;
                     }
 
-                    // Flush pending bulk operations before unset to maintain ordering
-                    flush_pending_bulk!(
-                        self,
-                        bulk_ops,
-                        metas,
-                        total_succeeded,
-                        total_failed,
-                        all_results,
-                        total_wall_ms,
-                        total_took_ms,
-                        _bulk_call_count
-                    );
-
+                    // Unset uses a scripted bulk update targeting a specific doc_id —
+                    // it goes into the bulk queue like Update/Delete. No flush needed.
+                    // OpenSearch processes bulk items sequentially within a single request,
+                    // so ordering between an Update and Unset on the same doc is preserved.
                     let (entity_id, space_id) =
                         utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
                     let doc_id = Self::document_id(&entity_id, &space_id);
@@ -978,21 +969,6 @@ impl SearchIndexProvider for OpenSearchProvider {
                         operation_type: "Unset".to_string(),
                     });
                     flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
-
-                    // Flush immediately after unset to ensure it's processed before any subsequent
-                    // updates to the same document. Multiple updates to the same document in one
-                    // bulk request can have undefined behavior in OpenSearch.
-                    flush_pending_bulk!(
-                        self,
-                        bulk_ops,
-                        metas,
-                        total_succeeded,
-                        total_failed,
-                        all_results,
-                        total_wall_ms,
-                        total_took_ms,
-                        _bulk_call_count
-                    );
                 }
                 EntityOperation::UpdateEntityGlobalScore(request) => {
                     // Flush before executing the update_by_query to maintain ordering
