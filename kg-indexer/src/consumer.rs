@@ -56,6 +56,7 @@ impl KafkaConsumer {
             format!("{}space.creations", prefix),
             format!("{}space.membership", prefix),
             format!("{}space.trust.extensions", prefix),
+            format!("{}space.topics", prefix),
             format!("{}space.governance", prefix),
         ];
 
@@ -113,6 +114,7 @@ pub enum KgMessage {
     RoleGranted(hermes_schema::pb::membership::HermesRoleGranted),
     RoleRevoked(hermes_schema::pb::membership::HermesRoleRevoked),
     TrustExtension(hermes_schema::pb::space::HermesSpaceTrustExtension),
+    TopicDeclared(hermes_schema::pb::topics::HermesTopicDeclared),
     ProposalCreated(hermes_schema::pb::governance::HermesProposalCreated),
     ProposalUpdated(hermes_schema::pb::governance::HermesProposalUpdated),
     ProposalVoted(hermes_schema::pb::governance::HermesProposalVoted),
@@ -130,6 +132,7 @@ impl KgMessage {
             KgMessage::RoleGranted(r) => r.meta.as_ref(),
             KgMessage::RoleRevoked(r) => r.meta.as_ref(),
             KgMessage::TrustExtension(t) => t.meta.as_ref(),
+            KgMessage::TopicDeclared(t) => t.meta.as_ref(),
             KgMessage::ProposalCreated(p) => p.meta.as_ref(),
             KgMessage::ProposalUpdated(p) => p.meta.as_ref(),
             KgMessage::ProposalVoted(v) => v.meta.as_ref(),
@@ -214,6 +217,11 @@ pub fn parse_message(
                 .map_err(|e| IndexerError::decode(format!("HermesSpaceTrustExtension: {}", e)))?;
             Ok(KgMessage::TrustExtension(extension))
         }
+        "space.topics" => {
+            let declared = hermes_schema::pb::topics::HermesTopicDeclared::decode(payload)
+                .map_err(|e| IndexerError::decode(format!("HermesTopicDeclared: {}", e)))?;
+            Ok(KgMessage::TopicDeclared(declared))
+        }
         "space.governance" => {
             // Use event-type header to determine message type
             match event_type {
@@ -263,5 +271,30 @@ pub fn parse_message(
             }
         }
         _ => Err(IndexerError::decode(format!("unknown topic: {}", topic))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_space_topics_message() {
+        let msg = hermes_schema::pb::topics::HermesTopicDeclared {
+            space_id: vec![1; 16],
+            topic_id: vec![2; 16],
+            meta: None,
+        };
+        let payload = msg.encode_to_vec();
+
+        let parsed = parse_message("space.topics", &payload, Some("TOPIC_DECLARED")).unwrap();
+
+        match parsed {
+            KgMessage::TopicDeclared(event) => {
+                assert_eq!(event.space_id, vec![1; 16]);
+                assert_eq!(event.topic_id, vec![2; 16]);
+            }
+            _ => panic!("expected TopicDeclared"),
+        }
     }
 }

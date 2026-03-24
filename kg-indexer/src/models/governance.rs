@@ -56,6 +56,10 @@ pub enum ProposalActionPayload {
     SubspaceTopicDeclared { target_topic_id: Uuid },
     /// Remove a topic from a subspace
     SubspaceTopicRemoved { target_topic_id: Uuid },
+    /// Set the space topic
+    SetTopic { target_topic_id: Uuid },
+    /// Unset the current space topic
+    UnsetTopic,
     /// Unknown or undecoded action
     Unknown,
 }
