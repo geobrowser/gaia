@@ -240,9 +240,15 @@ pub fn parse_bulk_response(
 
         let (success, error) = if let Some(result) = item_result {
             let status = result.get("status").and_then(|s| s.as_u64()).unwrap_or(0);
-            // 404 on delete is OK (document not found means it's already deleted)
+            // 404 on delete is OK (document not found means it's already deleted).
+            // 404 on RemoveRelationByDoc is also OK — the doc may not be indexed
+            // yet or was already removed, and the desired end state (no relation) is met.
+            let is_delete_not_found = status == 404 && action == BulkAction::Delete;
+            let is_relation_removal_not_found =
+                status == 404 && meta.operation_type == "RemoveRelationByDoc";
             let is_success = (200..300).contains(&(status as u16))
-                || status == 404 && action == BulkAction::Delete;
+                || is_delete_not_found
+                || is_relation_removal_not_found;
 
             if is_success {
                 (true, None)

@@ -1183,6 +1183,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                 EntityOperation::RemoveRelationByDoc(request) => {
                     // Direct doc-ID update for relation removal (resolved via Postgres lookup).
                     // Uses the bulk API with painless script — much faster than update_by_query.
+                    // 404 (doc not found) is treated as success — see parse_bulk_response.
                     let body = json!({
                         "script": {
                             "source": REMOVE_RELATION_SCRIPT,
@@ -1194,8 +1195,8 @@ impl SearchIndexProvider for OpenSearchProvider {
                     });
                     bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
                     metas.push(BulkOperationMeta {
-                        entity_id: String::new(),
-                        space_id: String::new(),
+                        entity_id: request.doc_id.clone(),
+                        space_id: request.relation_id.clone(),
                         operation_type: "RemoveRelationByDoc".to_string(),
                     });
                     flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
@@ -1211,8 +1212,8 @@ impl SearchIndexProvider for OpenSearchProvider {
                     });
                     bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
                     metas.push(BulkOperationMeta {
-                        entity_id: String::new(),
-                        space_id: String::new(),
+                        entity_id: request.doc_id.clone(),
+                        space_id: request.topic_entity_id.clone(),
                         operation_type: "UpdateSpaceTopicEntityIdByDoc".to_string(),
                     });
                     flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
@@ -1228,7 +1229,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                     });
                     bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
                     metas.push(BulkOperationMeta {
-                        entity_id: String::new(),
+                        entity_id: request.doc_id.clone(),
                         space_id: String::new(),
                         operation_type: "UpdateInCanonicalGraphByDoc".to_string(),
                     });
