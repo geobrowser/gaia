@@ -1125,7 +1125,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                     }
                 }
                 EntityOperation::UpdateEntitySpaceScore(request) => {
-                    // This is a targeted update for a specific document, can be batched
+                    // This is a targeted update for a specific document, can be batched.
+                    // No doc_as_upsert: if the doc doesn't exist (entity has no values),
+                    // we don't want to create a ghost doc with only a score field.
+                    // 404 is treated as success in parse_bulk_response.
                     let (entity_id, space_id) =
                         utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
                     let doc_id = Self::document_id(&entity_id, &space_id);
@@ -1135,8 +1138,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                             "entity_id": entity_id.to_string(),
                             "space_id": space_id.to_string(),
                             "entity_space_score": request.score
-                        },
-                        "doc_as_upsert": true
+                        }
                     });
                     bulk_ops.push(BulkOperation::update(doc_id, body).into());
                     metas.push(BulkOperationMeta {
@@ -1148,12 +1150,12 @@ impl SearchIndexProvider for OpenSearchProvider {
                 }
                 EntityOperation::UpdateEntityGlobalScoreByDoc(request) => {
                     // Direct doc-ID update for entity global score (resolved via Postgres lookup).
-                    // Uses the bulk API — much faster than update_by_query.
+                    // No doc_as_upsert: if the doc doesn't exist (entity has no values),
+                    // we don't want to create a ghost doc. 404 is treated as success.
                     let body = json!({
                         "doc": {
                             "entity_global_score": request.score
-                        },
-                        "doc_as_upsert": true
+                        }
                     });
                     bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
                     metas.push(BulkOperationMeta {
@@ -1165,12 +1167,12 @@ impl SearchIndexProvider for OpenSearchProvider {
                 }
                 EntityOperation::UpdateSpaceScoreByDoc(request) => {
                     // Direct doc-ID update for space score (resolved via Postgres lookup).
-                    // Uses the bulk API — much faster than update_by_query.
+                    // No doc_as_upsert: if the doc doesn't exist (entity has no values),
+                    // we don't want to create a ghost doc. 404 is treated as success.
                     let body = json!({
                         "doc": {
                             "space_score": request.score
-                        },
-                        "doc_as_upsert": true
+                        }
                     });
                     bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
                     metas.push(BulkOperationMeta {
@@ -1203,12 +1205,12 @@ impl SearchIndexProvider for OpenSearchProvider {
                 }
                 EntityOperation::UpdateSpaceTopicEntityIdByDoc(request) => {
                     // Direct doc-ID update for space topic entity ID (resolved via Postgres lookup).
-                    // Uses the bulk API — much faster than update_by_query.
+                    // No doc_as_upsert: if the doc doesn't exist, don't create a ghost.
+                    // 404 is treated as success in parse_bulk_response.
                     let body = json!({
                         "doc": {
                             "space_topic_entity_id": request.topic_entity_id
-                        },
-                        "doc_as_upsert": true
+                        }
                     });
                     bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
                     metas.push(BulkOperationMeta {
@@ -1220,12 +1222,12 @@ impl SearchIndexProvider for OpenSearchProvider {
                 }
                 EntityOperation::UpdateInCanonicalGraphByDoc(request) => {
                     // Direct doc-ID update for canonical graph flag (resolved via Postgres lookup).
-                    // Uses the bulk API — much faster than update_by_query.
+                    // No doc_as_upsert: if the doc doesn't exist, don't create a ghost.
+                    // 404 is treated as success in parse_bulk_response.
                     let body = json!({
                         "doc": {
                             "in_canonical_graph": request.in_canonical_graph
-                        },
-                        "doc_as_upsert": true
+                        }
                     });
                     bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
                     metas.push(BulkOperationMeta {
