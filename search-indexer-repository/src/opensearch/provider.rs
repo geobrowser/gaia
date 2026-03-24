@@ -35,7 +35,7 @@ use crate::utils;
 /// Default maximum number of operations per bulk HTTP request.
 /// Prevents 413 Payload Too Large errors from OpenSearch.
 /// Override with the `OPENSEARCH_MAX_BULK_SIZE` environment variable.
-const DEFAULT_OPENSEARCH_MAX_BULK_SIZE: usize = 1000;
+const DEFAULT_OPENSEARCH_MAX_BULK_SIZE: usize = 5000;
 
 fn opensearch_max_bulk_size() -> usize {
     std::env::var("OPENSEARCH_MAX_BULK_SIZE")
