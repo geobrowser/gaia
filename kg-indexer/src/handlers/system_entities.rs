@@ -158,6 +158,7 @@ fn make_system_type_relation(
         to_version_id: None,
         position: None,
         verified: None,
+        is_system: true,
         context_root_id: None,
         context_edge_type_id: None,
     }

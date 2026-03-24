@@ -143,6 +143,7 @@ async fn test_insert_relations_does_not_overwrite_system_relation() {
         position: Some("overwritten_position".to_string()),
         space_id,
         verified: Some(false),
+        is_system: false,
         context_root_id: None,
         context_edge_type_id: None,
     };

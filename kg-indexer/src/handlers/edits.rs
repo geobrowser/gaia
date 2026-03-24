@@ -231,6 +231,7 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             to_version_id: u.to_version_id.or(c.to_version_id),
             position: u.position.or(c.position),
             verified: u.verified.or(c.verified),
+            is_system: c.is_system,
             context_root_id: c.context_root_id,
             context_edge_type_id: c.context_edge_type_id,
         }),
@@ -276,6 +277,7 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             } else {
                 c.verified
             },
+            is_system: c.is_system,
             context_root_id: c.context_root_id,
             context_edge_type_id: c.context_edge_type_id,
         }),
@@ -703,6 +705,7 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
                     to_space_id: to_space,
                     to_version_id: to_version,
                     verified: None, // v2 doesn't have verified field on CreateRelation
+                    is_system: false,
                     context_root_id,
                     context_edge_type_id,
                 }));
@@ -840,6 +843,7 @@ mod tests {
             to_version_id: None,
             position: None,
             verified: None,
+            is_system: false,
             context_root_id: None,
             context_edge_type_id: None,
         }
@@ -1295,6 +1299,7 @@ mod tests {
             to_version_id: None,
             position: None,
             verified: None,
+            is_system: false,
             context_root_id: None,
             context_edge_type_id: None,
         }

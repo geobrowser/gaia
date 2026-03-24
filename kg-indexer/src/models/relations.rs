@@ -14,6 +14,7 @@ pub struct SetRelationItem {
     pub position: Option<String>,
     pub space_id: Uuid,
     pub verified: Option<bool>,
+    pub is_system: bool,
     // Context columns for grouping changes (GRC-20 Section 4.5)
     pub context_root_id: Option<Uuid>,
     pub context_edge_type_id: Option<Uuid>,

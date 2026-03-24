@@ -251,6 +251,7 @@ impl Storage {
         let mut type_ids = Vec::with_capacity(relations.len());
         let mut positions = Vec::with_capacity(relations.len());
         let mut verified = Vec::with_capacity(relations.len());
+        let mut is_system = Vec::with_capacity(relations.len());
 
         for rel in relations {
             ids.push(&rel.id);
@@ -263,16 +264,18 @@ impl Storage {
             type_ids.push(&rel.type_id);
             positions.push(&rel.position);
             verified.push(&rel.verified);
+            is_system.push(rel.is_system);
         }
 
         let query = r#"
             INSERT INTO relations (
                 id, space_id, entity_id, from_entity_id, from_space_id,
-                to_entity_id, to_space_id, type_id, position, verified
+                to_entity_id, to_space_id, type_id, position, verified, is_system
             )
             SELECT * FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::uuid[],
-                $6::uuid[], $7::uuid[], $8::uuid[], $9::text[], $10::boolean[]
+                $6::uuid[], $7::uuid[], $8::uuid[], $9::text[], $10::boolean[],
+                $11::boolean[]
             )
             ON CONFLICT (id) DO UPDATE SET
                 to_space_id = EXCLUDED.to_space_id,
@@ -293,6 +296,7 @@ impl Storage {
             .bind(&type_ids)
             .bind(&positions)
             .bind(&verified)
+            .bind(&is_system)
             .execute(&mut **tx)
             .await?;
 
