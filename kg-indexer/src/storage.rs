@@ -1,4 +1,4 @@
-use hermes_instrumentation::info;
+use hermes_instrumentation::{info, warn};
 use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -279,9 +279,10 @@ impl Storage {
                 from_space_id = EXCLUDED.from_space_id,
                 position = EXCLUDED.position,
                 verified = EXCLUDED.verified
+            WHERE relations.is_system = false
         "#;
 
-        sqlx::query(query)
+        let result = sqlx::query(query)
             .bind(&ids)
             .bind(&space_ids)
             .bind(&entity_ids)
@@ -294,6 +295,14 @@ impl Storage {
             .bind(&verified)
             .execute(&mut **tx)
             .await?;
+
+        let affected = result.rows_affected() as usize;
+        if affected < relations.len() {
+            warn!(
+                "Skipped upsert on {} system relation(s)",
+                relations.len() - affected
+            );
+        }
 
         Ok(())
     }
@@ -315,25 +324,37 @@ impl Storage {
              to_version_id = COALESCE(v.to_version_id, relations.to_version_id),
              position = COALESCE(v.position, relations.position),
              verified = COALESCE(v.verified, relations.verified)
-             FROM (VALUES ",
+             FROM (",
         );
 
         query_builder.push_values(relations, |mut b, relation| {
             b.push_bind(relation.id);
-            b.push_bind(&relation.from_space_id);
-            b.push_bind(&relation.from_version_id);
-            b.push_bind(&relation.to_space_id);
-            b.push_bind(&relation.to_version_id);
+            b.push_bind(&relation.from_space_id)
+                .push_unseparated("::uuid");
+            b.push_bind(&relation.from_version_id)
+                .push_unseparated("::uuid");
+            b.push_bind(&relation.to_space_id)
+                .push_unseparated("::uuid");
+            b.push_bind(&relation.to_version_id)
+                .push_unseparated("::uuid");
             b.push_bind(&relation.position);
             b.push_bind(relation.verified);
         });
 
         query_builder.push(
             ") AS v(id, from_space_id, from_version_id, to_space_id, to_version_id, position, verified)
-             WHERE relations.id = v.id",
+             WHERE relations.id = v.id AND relations.is_system = false",
         );
 
-        query_builder.build().execute(&mut **tx).await?;
+        let result = query_builder.build().execute(&mut **tx).await?;
+
+        let affected = result.rows_affected() as usize;
+        if affected < relations.len() {
+            warn!(
+                "Skipped update on {} system relation(s)",
+                relations.len() - affected
+            );
+        }
 
         Ok(())
     }
@@ -355,34 +376,34 @@ impl Storage {
              to_version_id = CASE WHEN v.unset_to_version_id THEN NULL ELSE to_version_id END,
              position = CASE WHEN v.unset_position THEN NULL ELSE position END,
              verified = CASE WHEN v.unset_verified THEN NULL ELSE verified END
-             FROM (VALUES ",
+             FROM (",
         );
 
         query_builder.push_values(relations, |mut b, relation| {
-            b.push("(");
             b.push_bind(relation.id);
-            b.push(", ");
             b.push_bind(relation.from_space_id.unwrap_or(false));
-            b.push(", ");
             b.push_bind(relation.from_version_id.unwrap_or(false));
-            b.push(", ");
             b.push_bind(relation.to_space_id.unwrap_or(false));
-            b.push(", ");
             b.push_bind(relation.to_version_id.unwrap_or(false));
-            b.push(", ");
             b.push_bind(relation.position.unwrap_or(false));
-            b.push(", ");
             b.push_bind(relation.verified.unwrap_or(false));
-            b.push(")");
         });
 
         query_builder.push(
             ") AS v(id, unset_from_space_id, unset_from_version_id, unset_to_space_id,
                    unset_to_version_id, unset_position, unset_verified)
-             WHERE relations.id = v.id",
+             WHERE relations.id = v.id AND relations.is_system = false",
         );
 
-        query_builder.build().execute(&mut **tx).await?;
+        let result = query_builder.build().execute(&mut **tx).await?;
+
+        let affected = result.rows_affected() as usize;
+        if affected < relations.len() {
+            warn!(
+                "Skipped unset on {} system relation(s)",
+                relations.len() - affected
+            );
+        }
 
         Ok(())
     }
@@ -399,15 +420,23 @@ impl Storage {
         let ids: Vec<Uuid> = deletes.iter().map(|(id, _)| *id).collect();
         let space_ids: Vec<Uuid> = deletes.iter().map(|(_, sid)| *sid).collect();
 
-        sqlx::query(
+        let result = sqlx::query(
             "DELETE FROM relations WHERE (id, space_id) IN (
                 SELECT id, space_id FROM UNNEST($1::uuid[], $2::uuid[]) AS t(id, space_id)
-            )",
+            ) AND relations.is_system = false",
         )
         .bind(&ids)
         .bind(&space_ids)
         .execute(&mut **tx)
         .await?;
+
+        let affected = result.rows_affected() as usize;
+        if affected < deletes.len() {
+            warn!(
+                "Skipped delete on {} system relation(s)",
+                deletes.len() - affected
+            );
+        }
 
         Ok(())
     }
