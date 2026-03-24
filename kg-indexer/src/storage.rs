@@ -1,4 +1,4 @@
-use hermes_instrumentation::{info, warn};
+use hermes_instrumentation::info;
 use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -282,7 +282,7 @@ impl Storage {
             WHERE relations.is_system = false
         "#;
 
-        let result = sqlx::query(query)
+        sqlx::query(query)
             .bind(&ids)
             .bind(&space_ids)
             .bind(&entity_ids)
@@ -295,14 +295,6 @@ impl Storage {
             .bind(&verified)
             .execute(&mut **tx)
             .await?;
-
-        let affected = result.rows_affected() as usize;
-        if affected < relations.len() {
-            warn!(
-                "Skipped upsert on {} system relation(s)",
-                relations.len() - affected
-            );
-        }
 
         Ok(())
     }
@@ -346,15 +338,7 @@ impl Storage {
              WHERE relations.id = v.id AND relations.is_system = false",
         );
 
-        let result = query_builder.build().execute(&mut **tx).await?;
-
-        let affected = result.rows_affected() as usize;
-        if affected < relations.len() {
-            warn!(
-                "Skipped update on {} system relation(s)",
-                relations.len() - affected
-            );
-        }
+        query_builder.build().execute(&mut **tx).await?;
 
         Ok(())
     }
@@ -395,15 +379,7 @@ impl Storage {
              WHERE relations.id = v.id AND relations.is_system = false",
         );
 
-        let result = query_builder.build().execute(&mut **tx).await?;
-
-        let affected = result.rows_affected() as usize;
-        if affected < relations.len() {
-            warn!(
-                "Skipped unset on {} system relation(s)",
-                relations.len() - affected
-            );
-        }
+        query_builder.build().execute(&mut **tx).await?;
 
         Ok(())
     }
@@ -430,13 +406,7 @@ impl Storage {
         .execute(&mut **tx)
         .await?;
 
-        let affected = result.rows_affected() as usize;
-        if affected < deletes.len() {
-            warn!(
-                "Skipped delete on {} system relation(s)",
-                deletes.len() - affected
-            );
-        }
+        result.rows_affected() as usize;
 
         Ok(())
     }
