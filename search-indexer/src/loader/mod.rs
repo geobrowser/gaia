@@ -2,8 +2,9 @@
 //!
 //! Loads processed documents into the search index using UpdateEntityRequest.
 
-use hermes_instrumentation::{debug, error, info_span, instrument, Instrument};
+use hermes_instrumentation::{debug, error, info, info_span, instrument, Instrument};
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -232,7 +233,11 @@ impl SearchLoader {
         let operations: Vec<EntityOperation> = self.pending_operations.drain(..).collect();
         let count = operations.len();
 
-        debug!(count = count, "Processing operations in order");
+        info!(
+            ops = count,
+            "loader.batch.start — sending to OpenSearch"
+        );
+        let load_start = Instant::now();
 
         let result = async { self.provider.bulk_operations(&operations).await }
             .instrument(info_span!(
@@ -241,13 +246,19 @@ impl SearchLoader {
             ))
             .await;
 
+        let load_elapsed_ms = load_start.elapsed().as_millis() as u64;
+
         match result {
             Ok(summary) => {
                 if summary.failed > 0 {
                     error!(
+                        ops = count,
                         succeeded = summary.succeeded,
                         failed = summary.failed,
-                        "Bulk operations completed with some failures"
+                        wall_ms = summary.wall_ms,
+                        took_ms = summary.took_ms,
+                        load_elapsed_ms = load_elapsed_ms,
+                        "loader.batch.done — completed with failures"
                     );
                     for result in summary.results.iter().filter(|r| !r.success) {
                         if let Some(ref err) = result.error {
@@ -261,15 +272,24 @@ impl SearchLoader {
                         }
                     }
                 } else {
-                    debug!(
-                        count = summary.succeeded,
-                        "Successfully completed all operations"
+                    info!(
+                        ops = count,
+                        succeeded = summary.succeeded,
+                        wall_ms = summary.wall_ms,
+                        took_ms = summary.took_ms,
+                        load_elapsed_ms = load_elapsed_ms,
+                        "loader.batch.done — OK"
                     );
                 }
                 Ok(vec![summary])
             }
             Err(e) => {
-                error!(error = %e, count = count, "Failed bulk operations");
+                error!(
+                    error = %e,
+                    ops = count,
+                    load_elapsed_ms = load_elapsed_ms,
+                    "loader.batch.done — FAILED"
+                );
                 Err(IngestError::loader(format!(
                     "Failed to process {} operations: {}",
                     count, e
