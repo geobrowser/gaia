@@ -706,6 +706,21 @@ impl SearchIndexProvider for OpenSearchProvider {
             return Ok(BatchOperationSummary::empty());
         }
 
+        let batch_start = std::time::Instant::now();
+        let total_ops = operations.len();
+
+        // Count operation types for visibility
+        let mut op_counts: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for op in operations {
+            *op_counts.entry(op.operation_type()).or_default() += 1;
+        }
+        info!(
+            total_ops = total_ops,
+            op_breakdown = ?op_counts,
+            "bulk_operations.start"
+        );
+
         // Accumulate results across all batches
         let mut all_results: Vec<BatchOperationResult> = Vec::new();
         let mut total_succeeded = 0usize;
@@ -1397,6 +1412,19 @@ impl SearchIndexProvider for OpenSearchProvider {
             _bulk_call_count += 1;
             all_results.extend(summary.results);
         }
+
+        let batch_elapsed_ms = batch_start.elapsed().as_millis() as u64;
+        info!(
+            total_ops = total_ops,
+            succeeded = total_succeeded,
+            failed = total_failed,
+            bulk_calls = _bulk_call_count,
+            total_wall_ms = total_wall_ms,
+            total_took_ms = total_took_ms,
+            batch_elapsed_ms = batch_elapsed_ms,
+            overhead_ms = batch_elapsed_ms.saturating_sub(total_wall_ms),
+            "bulk_operations.done"
+        );
 
         Ok(BatchOperationSummary {
             total: operations.len(),
