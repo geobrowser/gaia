@@ -379,25 +379,20 @@ impl Processor {
                         // Fallback: entities not found in Postgres → use update_by_query
                         let found_entities: std::collections::HashSet<Uuid> =
                             pairs.iter().map(|(eid, _)| *eid).collect();
-                        let mut fallback_count = 0usize;
-                        for (entity_id, score) in &score_map {
+                        let mut skipped = 0usize;
+                        for entity_id in score_map.keys() {
                             if !found_entities.contains(entity_id) {
-                                error!(
-                                    entity_id = %entity_id,
-                                    "Entity not found in values table — falling back to slow update_by_query"
-                                );
-                                processed.push(ProcessedEvent::UpdateEntityGlobalScore {
-                                    entity_id: *entity_id,
-                                    score: *score,
-                                });
-                                fallback_count += 1;
+                                // Entity has no values (no name/description) — won't be in the
+                                // search index. Skip rather than falling back to update_by_query
+                                // which would scan the entire index and match 0 docs.
+                                skipped += 1;
                             }
                         }
 
-                        if resolved > 0 || fallback_count > 0 {
+                        if resolved > 0 || skipped > 0 {
                             info!(
                                 resolved = resolved,
-                                fallback = fallback_count,
+                                skipped = skipped,
                                 "EntityGlobalScore batch resolved"
                             );
                         }
@@ -443,28 +438,19 @@ impl Processor {
                             }
                         }
 
-                        // Fallback: spaces not found in Postgres
+                        // Spaces not found in Postgres have no entities with values —
+                        // skip rather than falling back to update_by_query.
                         let found_spaces: std::collections::HashSet<Uuid> =
                             pairs.iter().map(|(_, sid)| *sid).collect();
-                        let mut fallback_count = 0usize;
-                        for (space_id, score) in &score_map {
-                            if !found_spaces.contains(space_id) {
-                                error!(
-                                    space_id = %space_id,
-                                    "Space not found in values table — falling back to slow update_by_query"
-                                );
-                                processed.push(ProcessedEvent::UpdateSpaceScore {
-                                    space_id: *space_id,
-                                    score: *score,
-                                });
-                                fallback_count += 1;
-                            }
-                        }
+                        let skipped = score_map
+                            .keys()
+                            .filter(|sid| !found_spaces.contains(sid))
+                            .count();
 
-                        if resolved > 0 || fallback_count > 0 {
+                        if resolved > 0 || skipped > 0 {
                             info!(
                                 resolved = resolved,
-                                fallback = fallback_count,
+                                skipped = skipped,
                                 "SpaceScore batch resolved"
                             );
                         }
@@ -572,21 +558,15 @@ impl Processor {
 
                         let found_spaces: std::collections::HashSet<Uuid> =
                             pairs.iter().map(|(_, sid)| *sid).collect();
-                        let mut fallback_count = 0usize;
-                        for (space_id, topic_entity_id) in &topic_map {
-                            if !found_spaces.contains(space_id) {
-                                processed.push(ProcessedEvent::UpdateSpaceTopicEntityId {
-                                    space_id: *space_id,
-                                    topic_entity_id: *topic_entity_id,
-                                });
-                                fallback_count += 1;
-                            }
-                        }
+                        let skipped = topic_map
+                            .keys()
+                            .filter(|sid| !found_spaces.contains(sid))
+                            .count();
 
-                        if resolved > 0 || fallback_count > 0 {
+                        if resolved > 0 || skipped > 0 {
                             info!(
                                 resolved = resolved,
-                                fallback = fallback_count,
+                                skipped = skipped,
                                 "UpdateSpaceTopicEntityId batch resolved via Postgres"
                             );
                         }
@@ -676,21 +656,15 @@ impl Processor {
 
                         let found_spaces: std::collections::HashSet<Uuid> =
                             pairs.iter().map(|(_, sid)| *sid).collect();
-                        let mut fallback_count = 0usize;
-                        for (space_id, in_canonical_graph) in &change_map {
-                            if !found_spaces.contains(space_id) {
-                                ops.push(ProcessedEvent::UpdateInCanonicalGraph {
-                                    space_id: *space_id,
-                                    in_canonical_graph: *in_canonical_graph,
-                                });
-                                fallback_count += 1;
-                            }
-                        }
+                        let skipped = change_map
+                            .keys()
+                            .filter(|sid| !found_spaces.contains(sid))
+                            .count();
 
-                        if resolved > 0 || fallback_count > 0 {
+                        if resolved > 0 || skipped > 0 {
                             info!(
                                 resolved = resolved,
-                                fallback = fallback_count,
+                                skipped = skipped,
                                 "UpdateInCanonicalGraph batch resolved via Postgres"
                             );
                         }
