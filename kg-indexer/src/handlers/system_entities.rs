@@ -2,9 +2,9 @@ use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::governance::{HermesProposalCreated, VotingMode as ProtoVotingMode};
 use hermes_schema::pb::space::{hermes_create_space::Payload, HermesCreateSpace};
 use sdk::core::ids::{
-    CREATED_AT_BLOCK_PROPERTY_ID, DESCRIPTION_PROPERTY_ID,
-    GEO_SYSTEM_NAMESPACE, NAME_PROPERTY_ID, PROPOSAL_ID_PROPERTY_ID, PROPOSAL_TYPE_ID,
-    SPACE_ADDRESS_PROPERTY_ID, SPACE_ID_PROPERTY_ID, SPACE_TYPE_ID,
+    CREATED_AT_BLOCK_PROPERTY_ID, DAO_SPACE_TYPE_ID, DESCRIPTION_PROPERTY_ID,
+    EOA_SPACE_TYPE_ID, GEO_SYSTEM_NAMESPACE, NAME_PROPERTY_ID, PROPOSAL_ID_PROPERTY_ID,
+    PROPOSAL_TYPE_ID, SPACE_ADDRESS_PROPERTY_ID, SPACE_ID_PROPERTY_ID, SPACE_TYPE_ID,
     SYSTEM_TYPES_RELATION_TYPE_ID, SYSTEM_TYPE_ID, VOTING_MODE_PROPERTY_ID,
 };
 use uuid::Uuid;
@@ -233,7 +233,7 @@ pub fn map_space_registered(
     let space_type_uuid =
         Uuid::parse_str(SPACE_TYPE_ID).expect("SPACE_TYPE_ID is a valid UUID constant");
 
-    let relations = vec![
+    let mut relations = vec![
         RelationOp::Create(make_system_type_relation(
             &entity_id,
             &system_type_uuid,
@@ -247,6 +247,31 @@ pub fn map_space_registered(
             &space_id,
         )),
     ];
+
+    // Add SpaceType relation based on payload variant
+    match &space.payload {
+        Some(Payload::EoaSpace(_)) => {
+            let eoa_type_uuid = Uuid::parse_str(EOA_SPACE_TYPE_ID)
+                .expect("EOA_SPACE_TYPE_ID is a valid UUID constant");
+            relations.push(RelationOp::Create(make_system_type_relation(
+                &entity_id,
+                &eoa_type_uuid,
+                "EoaSpace",
+                &space_id,
+            )));
+        }
+        Some(Payload::DefaultDaoSpace(_)) => {
+            let dao_type_uuid = Uuid::parse_str(DAO_SPACE_TYPE_ID)
+                .expect("DAO_SPACE_TYPE_ID is a valid UUID constant");
+            relations.push(RelationOp::Create(make_system_type_relation(
+                &entity_id,
+                &dao_type_uuid,
+                "DaoSpace",
+                &space_id,
+            )));
+        }
+        None => {} // No SpaceType relation for unknown payloads
+    }
 
     Ok(SystemEntityResult {
         entities: vec![entity],
@@ -375,6 +400,22 @@ mod tests {
         }
     }
 
+    fn make_eoa_test_space(space_id_bytes: &[u8; 16], owner: Vec<u8>) -> HermesCreateSpace {
+        use hermes_schema::pb::space::EoaSpacePayload;
+        HermesCreateSpace {
+            space_id: space_id_bytes.to_vec(),
+            meta: Some(BlockchainMetadata {
+                created_at: 1000,
+                created_by: vec![0xAA; 20],
+                block_number: 42,
+                cursor: String::new(),
+                sequence: 0,
+                is_last: true,
+            }),
+            payload: Some(Payload::EoaSpace(EoaSpacePayload { owner })),
+        }
+    }
+
     fn test_meta() -> BlockchainMetadata {
         BlockchainMetadata {
             created_at: 1000,
@@ -461,13 +502,14 @@ mod tests {
 
         let result = map_space_registered(&space, &meta).unwrap();
         let relations = result.relations_to_create();
-        assert_eq!(relations.len(), 2);
+        assert_eq!(relations.len(), 3);
 
         let system_types_tid = Uuid::parse_str(SYSTEM_TYPES_RELATION_TYPE_ID).unwrap();
         let system_type_eid = Uuid::parse_str(SYSTEM_TYPE_ID).unwrap();
         let space_type_eid = Uuid::parse_str(SPACE_TYPE_ID).unwrap();
+        let dao_type_eid = Uuid::parse_str(DAO_SPACE_TYPE_ID).unwrap();
 
-        // Both use SYSTEM_TYPES_RELATION_TYPE_ID
+        // All use SYSTEM_TYPES_RELATION_TYPE_ID
         for rel in &relations {
             assert_eq!(rel.type_id, system_types_tid);
             assert_eq!(rel.from_id, result.entities[0].id);
@@ -476,6 +518,7 @@ mod tests {
         let to_ids: Vec<Uuid> = relations.iter().map(|r| r.to_id).collect();
         assert!(to_ids.contains(&system_type_eid));
         assert!(to_ids.contains(&space_type_eid));
+        assert!(to_ids.contains(&dao_type_eid));
     }
 
     #[test]
@@ -707,5 +750,89 @@ mod tests {
         let voting_mode_pid = Uuid::parse_str(VOTING_MODE_PROPERTY_ID).unwrap();
         let vm_val = result.values.iter().find(|v| v.property_id == voting_mode_pid).unwrap();
         assert_eq!(vm_val.integer, Some(0));
+    }
+
+    // ===================
+    // SpaceType relation tests
+    // ===================
+
+    #[test]
+    fn dao_space_creates_three_relations() {
+        let space_id_bytes: [u8; 16] = [41; 16];
+        let space = make_test_space(&space_id_bytes, vec![0xCC; 20]);
+        let meta = test_meta();
+
+        let result = map_space_registered(&space, &meta).unwrap();
+        let relations = result.relations_to_create();
+        assert_eq!(relations.len(), 3);
+
+        let dao_type_uuid = Uuid::parse_str(DAO_SPACE_TYPE_ID).unwrap();
+        let to_ids: Vec<Uuid> = relations.iter().map(|r| r.to_id).collect();
+        assert!(to_ids.contains(&dao_type_uuid), "Should contain DAO_SPACE_TYPE_ID relation");
+    }
+
+    #[test]
+    fn eoa_space_creates_three_relations() {
+        let space_id_bytes: [u8; 16] = [40; 16];
+        let space = make_eoa_test_space(&space_id_bytes, vec![0xBB; 20]);
+        let meta = test_meta();
+
+        let result = map_space_registered(&space, &meta).unwrap();
+        let relations = result.relations_to_create();
+        assert_eq!(relations.len(), 3);
+
+        let eoa_type_uuid = Uuid::parse_str(EOA_SPACE_TYPE_ID).unwrap();
+        let to_ids: Vec<Uuid> = relations.iter().map(|r| r.to_id).collect();
+        assert!(to_ids.contains(&eoa_type_uuid), "Should contain EOA_SPACE_TYPE_ID relation");
+    }
+
+    #[test]
+    fn space_type_relation_ids_are_deterministic() {
+        let space_id_bytes: [u8; 16] = [42; 16];
+        let space = make_eoa_test_space(&space_id_bytes, vec![0xDD; 20]);
+        let meta = test_meta();
+
+        let result1 = map_space_registered(&space, &meta).unwrap();
+        let result2 = map_space_registered(&space, &meta).unwrap();
+
+        let rels1 = result1.relations_to_create();
+        let rels2 = result2.relations_to_create();
+
+        assert_eq!(rels1.len(), rels2.len());
+        for (r1, r2) in rels1.iter().zip(rels2.iter()) {
+            assert_eq!(r1.id, r2.id, "Relation row IDs should be deterministic");
+            assert_eq!(r1.entity_id, r2.entity_id, "Reified entity IDs should be deterministic");
+        }
+    }
+
+    #[test]
+    fn space_type_relation_ids_differ_between_eoa_and_dao() {
+        let space_id_bytes: [u8; 16] = [43; 16];
+        let eoa_space = make_eoa_test_space(&space_id_bytes, vec![0xEE; 20]);
+        let dao_space = make_test_space(&space_id_bytes, vec![0xEE; 20]);
+        let meta = test_meta();
+
+        let eoa_result = map_space_registered(&eoa_space, &meta).unwrap();
+        let dao_result = map_space_registered(&dao_space, &meta).unwrap();
+
+        let eoa_rels = eoa_result.relations_to_create();
+        let dao_rels = dao_result.relations_to_create();
+
+        // The third relation (SpaceType) should have different IDs
+        let eoa_space_type_rel = &eoa_rels[2];
+        let dao_space_type_rel = &dao_rels[2];
+
+        assert_ne!(
+            eoa_space_type_rel.entity_id, dao_space_type_rel.entity_id,
+            "EOA and DAO should have different reified entity IDs"
+        );
+        assert_ne!(
+            eoa_space_type_rel.id, dao_space_type_rel.id,
+            "EOA and DAO should have different relation row IDs"
+        );
+        assert_ne!(
+            eoa_space_type_rel.to_id, dao_space_type_rel.to_id,
+            "EOA and DAO should point to different type entities"
+        );
     }
 }

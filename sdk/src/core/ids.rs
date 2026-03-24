@@ -29,6 +29,8 @@ pub const GEO_SYSTEM_NAMESPACE: &str = "ae1e004d-b125-57d8-b3bf-e85a2484f129";
 pub const SYSTEM_TYPE_ID: &str = "2ff7ea09-8b9e-50bc-9be7-8a0cafa268d0";
 pub const SPACE_TYPE_ID: &str = "f4ce7263-ed14-56c5-aafe-8b74428ce812";
 pub const PROPOSAL_TYPE_ID: &str = "1cb9d5ba-c730-52a7-bc73-1f2c3ff5a330";
+pub const EOA_SPACE_TYPE_ID: &str = "09d28123-178f-5828-b85a-81979389c746";
+pub const DAO_SPACE_TYPE_ID: &str = "afd76215-db11-5cba-81b9-e7f77f865805";
 
 // Protected property IDs (system-managed, user edits targeting these are dropped)
 pub const SPACE_ADDRESS_PROPERTY_ID: &str = "8f65b58c-d001-5bac-b1d3-3a66ae23193c";
@@ -76,6 +78,8 @@ mod tests {
             (SPACE_ID_PROPERTY_ID, "property:SpaceId"),
             (CREATED_AT_BLOCK_PROPERTY_ID, "property:CreatedAtBlock"),
             (SYSTEM_TYPES_RELATION_TYPE_ID, "relation_type:SystemTypes"),
+            (EOA_SPACE_TYPE_ID, "type:EoaSpace"),
+            (DAO_SPACE_TYPE_ID, "type:DaoSpace"),
         ];
 
         for (constant, input) in cases {
@@ -86,6 +90,26 @@ mod tests {
                 "Mismatch for derivation input '{}'",
                 input
             );
+        }
+    }
+
+    #[test]
+    fn eoa_and_dao_space_type_ids_are_unique() {
+        let all_ids = [
+            SYSTEM_TYPE_ID,
+            SPACE_TYPE_ID,
+            PROPOSAL_TYPE_ID,
+            EOA_SPACE_TYPE_ID,
+            DAO_SPACE_TYPE_ID,
+        ];
+        for i in 0..all_ids.len() {
+            for j in (i + 1)..all_ids.len() {
+                assert_ne!(
+                    all_ids[i], all_ids[j],
+                    "Collision between index {} and {}",
+                    i, j
+                );
+            }
         }
     }
 
