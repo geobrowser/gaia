@@ -9,7 +9,7 @@ use opensearch::params::Refresh;
 use opensearch::{BulkOperation, BulkParts, OpenSearch};
 use serde::Serialize;
 use serde_json::Value;
-use tracing::{debug, error, warn};
+use tracing::{error, info, warn};
 
 use crate::errors::SearchIndexError;
 use crate::opensearch::retry::{self, RetryConfig};
@@ -112,8 +112,19 @@ pub async fn execute_bulk<B: Serialize>(
 ) -> Result<BatchOperationSummary, SearchIndexError> {
     let action_str = action.as_str();
 
+    let op_count = metas.len();
+
     // Pre-serialize so we can retry with the same bytes
     let body_bytes = serialize_bulk_operations(operations)?;
+    let payload_bytes = body_bytes.len();
+
+    info!(
+        ops = op_count,
+        payload_kb = payload_bytes / 1024,
+        refresh = refresh,
+        "bulk.request.start {} ops → OpenSearch",
+        action_str
+    );
 
     let mut attempt = 0u32;
     loop {
@@ -175,18 +186,23 @@ pub async fn execute_bulk<B: Serialize>(
 
             if summary.failed > 0 {
                 warn!(
-                    total = summary.total,
+                    ops = op_count,
                     succeeded = summary.succeeded,
                     failed = summary.failed,
+                    wall_ms = wall_ms,
+                    took_ms = took_ms,
                     attempts = attempt + 1,
-                    "Bulk {} completed with failures (retries exhausted)",
+                    "bulk.request.done {} — completed with failures",
                     action_str
                 );
             } else {
-                debug!(
-                    total = summary.total,
+                info!(
+                    ops = op_count,
                     succeeded = summary.succeeded,
-                    "Bulk {} indexed successfully",
+                    wall_ms = wall_ms,
+                    took_ms = took_ms,
+                    payload_kb = payload_bytes / 1024,
+                    "bulk.request.done {} — OK",
                     action_str
                 );
             }
