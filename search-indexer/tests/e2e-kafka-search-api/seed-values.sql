@@ -41,12 +41,13 @@ ON CONFLICT (id) DO NOTHING;
 
 -- Seed the relations table with entity-relation mappings for the e2e test.
 -- This enables the Postgres lookup → bulk doc ID update path for RemoveRelationById.
--- The relation IDs here must match the relation_ids used by the Rust event generator
--- when creating AddRelation events (see generators/relations.rs).
--- For now we seed the Alice High entity's type relations so delete-relation lookups work.
+-- The relation IDs here MUST match the fixed IDs used by the Rust event generator (main.rs).
+-- Relations that get deleted need Postgres lookup to resolve entity_id + space_id.
 INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) VALUES
-  -- Alice High has Person type relation
-  ('00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000f1', '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1', '00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-000000000b01', '00000000-0000-4000-8000-000000000001'),
-  -- Alice High has Org type relation
-  ('00000000-0000-0000-0000-0000000000a2', '00000000-0000-0000-0000-0000000000f1', '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1', '00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-000000000b02', '00000000-0000-4000-8000-000000000001')
+  -- Alice Medium → Org type relation (created then deleted, then recreated with b2)
+  ('00000000-0000-0000-0000-0000000000b1', '00000000-0000-0000-0000-0000000000f2', '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1', '00000000-0000-0000-0000-0000000000f2', '00000000-0000-0000-0000-000000000b02', '00000000-0000-4000-8000-000000000001'),
+  -- Alice Medium → Org type relation (recreated after delete of b1)
+  ('00000000-0000-0000-0000-0000000000b2', '00000000-0000-0000-0000-0000000000f2', '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1', '00000000-0000-0000-0000-0000000000f2', '00000000-0000-0000-0000-000000000b02', '00000000-0000-4000-8000-000000000001'),
+  -- Alice Low → Org type relation (created then deleted)
+  ('00000000-0000-0000-0000-0000000000b3', '00000000-0000-0000-0000-0000000000f3', '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1', '00000000-0000-0000-0000-0000000000f3', '00000000-0000-0000-0000-000000000b02', '00000000-0000-4000-8000-000000000001')
 ON CONFLICT (id) DO NOTHING;

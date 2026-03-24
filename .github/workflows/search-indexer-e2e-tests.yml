@@ -150,7 +150,7 @@ jobs:
         working-directory: ./api
         run: bun run db:migrate
 
-      - name: Seed values table for score lookups
+      - name: Seed values and relations tables for Postgres lookups
         run: |
           psql -h localhost -p 5432 -U test_user -d gaia_test \
             -f search-indexer/tests/e2e-kafka-search-api/seed-values.sql
