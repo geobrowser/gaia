@@ -34,7 +34,6 @@ pub const DAO_SPACE_TYPE_ID: &str = "afd76215-db11-5cba-81b9-e7f77f865805";
 
 // Protected property IDs (system-managed, user edits targeting these are dropped)
 pub const SPACE_ADDRESS_PROPERTY_ID: &str = "8f65b58c-d001-5bac-b1d3-3a66ae23193c";
-pub const PROPOSAL_ID_PROPERTY_ID: &str = "6db3cfce-1941-57cc-8ac0-125b5c3669a1";
 pub const VOTING_MODE_PROPERTY_ID: &str = "af26ed41-de0f-5b4f-a093-e9d3f683db07";
 pub const SPACE_ID_PROPERTY_ID: &str = "712adc1f-e950-5d14-bbd8-bf2166fe59c1";
 pub const CREATED_AT_BLOCK_PROPERTY_ID: &str = "da2952fb-17d6-53f3-b521-52e254106e0b";
@@ -45,7 +44,6 @@ pub const SYSTEM_TYPES_RELATION_TYPE_ID: &str = "88b3d6ad-288c-529c-a212-0e1c248
 // Collected sets for protection checks
 pub const PROTECTED_PROPERTY_IDS: &[&str] = &[
     SPACE_ADDRESS_PROPERTY_ID,
-    PROPOSAL_ID_PROPERTY_ID,
     VOTING_MODE_PROPERTY_ID,
     SPACE_ID_PROPERTY_ID,
     CREATED_AT_BLOCK_PROPERTY_ID,
@@ -73,7 +71,6 @@ mod tests {
             (SPACE_TYPE_ID, "type:Space"),
             (PROPOSAL_TYPE_ID, "type:Proposal"),
             (SPACE_ADDRESS_PROPERTY_ID, "property:SpaceAddress"),
-            (PROPOSAL_ID_PROPERTY_ID, "property:ProposalId"),
             (VOTING_MODE_PROPERTY_ID, "property:VotingMode"),
             (SPACE_ID_PROPERTY_ID, "property:SpaceId"),
             (CREATED_AT_BLOCK_PROPERTY_ID, "property:CreatedAtBlock"),
@@ -117,7 +114,6 @@ mod tests {
     fn protected_property_ids_contains_all_system_properties() {
         let expected = [
             SPACE_ADDRESS_PROPERTY_ID,
-            PROPOSAL_ID_PROPERTY_ID,
             VOTING_MODE_PROPERTY_ID,
             SPACE_ID_PROPERTY_ID,
             CREATED_AT_BLOCK_PROPERTY_ID,
