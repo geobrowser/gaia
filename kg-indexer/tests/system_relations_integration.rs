@@ -127,7 +127,10 @@ async fn test_insert_relations_does_not_overwrite_system_relation() {
     }
 
     // Insert a system relation directly
-    insert_system_relation(&pool, rel_id, space_id, entity_id, from_id, to_id, type_id, true).await;
+    insert_system_relation(
+        &pool, rel_id, space_id, entity_id, from_id, to_id, type_id, true,
+    )
+    .await;
 
     // Attempt to upsert via Storage (should be a no-op for system relations)
     let upsert = SetRelationItem {
@@ -154,8 +157,16 @@ async fn test_insert_relations_does_not_overwrite_system_relation() {
 
     // Assert: system relation should still have original values
     let (position, verified) = get_relation_fields(&pool, rel_id).await.unwrap();
-    assert_eq!(position.as_deref(), Some("original_position"), "system relation position should not be overwritten");
-    assert_eq!(verified, Some(true), "system relation verified should not be overwritten");
+    assert_eq!(
+        position.as_deref(),
+        Some("original_position"),
+        "system relation position should not be overwritten"
+    );
+    assert_eq!(
+        verified,
+        Some(true),
+        "system relation verified should not be overwritten"
+    );
 
     cleanup_relation(&pool, rel_id).await;
 }
@@ -180,7 +191,10 @@ async fn test_update_relations_does_not_modify_system_relation() {
         ensure_entity(&pool, id).await;
     }
 
-    insert_system_relation(&pool, rel_id, space_id, entity_id, from_id, to_id, type_id, true).await;
+    insert_system_relation(
+        &pool, rel_id, space_id, entity_id, from_id, to_id, type_id, true,
+    )
+    .await;
 
     // Attempt to update via Storage
     let update = UpdateRelationItem {
@@ -200,8 +214,16 @@ async fn test_update_relations_does_not_modify_system_relation() {
 
     // Assert: system relation should still have original values
     let (position, verified) = get_relation_fields(&pool, rel_id).await.unwrap();
-    assert_eq!(position.as_deref(), Some("original_position"), "system relation position should not be updated");
-    assert_eq!(verified, Some(true), "system relation verified should not be updated");
+    assert_eq!(
+        position.as_deref(),
+        Some("original_position"),
+        "system relation position should not be updated"
+    );
+    assert_eq!(
+        verified,
+        Some(true),
+        "system relation verified should not be updated"
+    );
 
     cleanup_relation(&pool, rel_id).await;
 }
@@ -226,7 +248,10 @@ async fn test_unset_relation_fields_does_not_nullify_system_relation() {
         ensure_entity(&pool, id).await;
     }
 
-    insert_system_relation(&pool, rel_id, space_id, entity_id, from_id, to_id, type_id, true).await;
+    insert_system_relation(
+        &pool, rel_id, space_id, entity_id, from_id, to_id, type_id, true,
+    )
+    .await;
 
     // Attempt to unset position and verified via Storage
     let unset = UnsetRelationItem {
@@ -235,19 +260,30 @@ async fn test_unset_relation_fields_does_not_nullify_system_relation() {
         from_version_id: None,
         to_space_id: None,
         to_version_id: None,
-        position: Some(true),   // request to unset
+        position: Some(true), // request to unset
         space_id,
-        verified: Some(true),   // request to unset
+        verified: Some(true), // request to unset
     };
 
     let mut tx = pool.begin().await.unwrap();
-    storage.unset_relation_fields(&[unset], &mut tx).await.unwrap();
+    storage
+        .unset_relation_fields(&[unset], &mut tx)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     // Assert: system relation fields should NOT be nullified
     let (position, verified) = get_relation_fields(&pool, rel_id).await.unwrap();
-    assert_eq!(position.as_deref(), Some("original_position"), "system relation position should not be unset");
-    assert_eq!(verified, Some(true), "system relation verified should not be unset");
+    assert_eq!(
+        position.as_deref(),
+        Some("original_position"),
+        "system relation position should not be unset"
+    );
+    assert_eq!(
+        verified,
+        Some(true),
+        "system relation verified should not be unset"
+    );
 
     cleanup_relation(&pool, rel_id).await;
 }
@@ -272,15 +308,24 @@ async fn test_delete_relations_does_not_delete_system_relation() {
         ensure_entity(&pool, id).await;
     }
 
-    insert_system_relation(&pool, rel_id, space_id, entity_id, from_id, to_id, type_id, true).await;
+    insert_system_relation(
+        &pool, rel_id, space_id, entity_id, from_id, to_id, type_id, true,
+    )
+    .await;
 
     // Attempt to delete via Storage
     let mut tx = pool.begin().await.unwrap();
-    storage.delete_relations(&[(rel_id, space_id)], &mut tx).await.unwrap();
+    storage
+        .delete_relations(&[(rel_id, space_id)], &mut tx)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     // Assert: system relation should still exist
-    assert!(relation_exists(&pool, rel_id).await, "system relation should not be deleted");
+    assert!(
+        relation_exists(&pool, rel_id).await,
+        "system relation should not be deleted"
+    );
 
     cleanup_relation(&pool, rel_id).await;
 }
