@@ -1,17 +1,9 @@
 [workspace]
 members = [
     "stream",
-    "indexer",
-    "indexer_utils",
     "wire",
-    "cache",
     "ipfs",
-
-    "actions-indexer",
-    "actions-indexer-pipeline",
-    "actions-indexer-shared",
-    "actions-indexer-repository",
-    "actions-substream",
+    "indexer_utils",
 
     "search-indexer",
     "search-indexer-shared",

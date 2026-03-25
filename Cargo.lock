@@ -3,90 +3,6 @@
 version = 4
 
 [[package]]
-name = "actions-indexer"
-version = "0.1.0"
-dependencies = [
- "actions-indexer-pipeline",
- "actions-indexer-repository",
- "actions-indexer-shared",
- "dotenv",
- "serial_test",
- "sqlx",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-test",
- "uuid",
-]
-
-[[package]]
-name = "actions-indexer-pipeline"
-version = "0.1.0"
-dependencies = [
- "actions-indexer-repository",
- "actions-indexer-shared",
- "alloy",
- "anyhow",
- "async-stream",
- "async-trait",
- "chrono",
- "futures 0.3.31",
- "lazy_static",
- "prost 0.13.5",
- "prost-types 0.13.5",
- "regex",
- "reqwest 0.11.27",
- "semver 1.0.27",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
- "tokio-retry",
- "tokio-stream",
- "tonic 0.12.3",
- "uuid",
-]
-
-[[package]]
-name = "actions-indexer-repository"
-version = "0.1.0"
-dependencies = [
- "actions-indexer-shared",
- "alloy",
- "async-trait",
- "hex",
- "sqlx",
- "thiserror 1.0.69",
- "time",
- "uuid",
-]
-
-[[package]]
-name = "actions-indexer-shared"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "serde",
- "uuid",
-]
-
-[[package]]
-name = "actions-substream"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "getrandom 0.2.17",
- "hex",
- "hex-literal",
- "num-bigint",
- "num-traits",
- "prost 0.13.5",
- "prost-types 0.13.5",
- "regex",
- "substreams 0.6.4",
- "substreams-ethereum 0.10.6",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1077,7 +993,7 @@ name = "atlas"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "criterion 0.5.1",
+ "criterion",
  "dotenvy",
  "hermes-instrumentation",
  "hermes-kafka",
@@ -1125,31 +1041,6 @@ name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
-
-[[package]]
-name = "axiom-rs"
-version = "0.11.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ead05aa318aa28c5eb1cf8e28f5382932b58986e2b73da6647c4be3d9af1ec59"
-dependencies = [
- "backoff",
- "bitflags 2.10.0",
- "bitflags_serde_shim",
- "bytes",
- "chrono",
- "flate2",
- "futures 0.3.31",
- "http 1.4.0",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "serde_qs",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "url",
-]
 
 [[package]]
 name = "axum"
@@ -1256,12 +1147,9 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b62ddb9cb1ec0a098ad4bbf9344d0713fa193ae1a80af55febcff2627b6a00c1"
 dependencies = [
- "futures-core",
  "getrandom 0.2.17",
  "instant",
- "pin-project-lite",
  "rand 0.8.5",
- "tokio",
 ]
 
 [[package]]
@@ -1389,15 +1277,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "812e12b5285cc515a9c72a5c1d3b6d46a19dac5acfef5265968c166106e31dd3"
 dependencies = [
  "serde_core",
-]
-
-[[package]]
-name = "bitflags_serde_shim"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df031780c32b0f93cecaf883fa9e351e74679e24380c534aeef94556cfd80ac9"
-dependencies = [
- "serde",
 ]
 
 [[package]]
@@ -1826,29 +1705,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_derive",
- "serde_json",
- "tinytemplate",
- "walkdir",
-]
-
-[[package]]
-name = "criterion"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3bf7af66b0989381bd0be551bd7cc91912a655a58c6918420c9527b1fd8b4679"
-dependencies = [
- "anes",
- "cast",
- "ciborium",
- "clap",
- "criterion-plot",
- "itertools 0.13.0",
- "num-traits",
- "oorandom",
- "plotters",
- "rayon",
- "regex",
- "serde",
  "serde_json",
  "tinytemplate",
  "walkdir",
@@ -2900,7 +2756,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
- "criterion 0.5.1",
+ "criterion",
  "dotenv",
  "ethabi 18.0.0",
  "futures 0.3.31",
@@ -2957,8 +2813,8 @@ dependencies = [
  "ethabi 18.0.0",
  "prost 0.13.5",
  "prost-types 0.13.5",
- "substreams 0.7.3",
- "substreams-ethereum 0.11.1",
+ "substreams",
+ "substreams-ethereum",
 ]
 
 [[package]]
@@ -3424,34 +3280,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
-]
-
-[[package]]
-name = "indexer"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axiom-rs",
- "bytes",
- "chrono",
- "criterion 0.6.0",
- "dotenv",
- "futures 0.3.31",
- "indexer_utils",
- "prost 0.13.5",
- "prost-types 0.13.5",
- "serde",
- "serde_json",
- "serial_test",
- "sqlx",
- "stream",
- "thiserror 2.0.18",
- "tokio",
- "tokio-retry",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "wire",
 ]
 
 [[package]]
@@ -5449,14 +5277,12 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-rustls",
- "tokio-util",
  "tower 0.5.3",
  "tower-http 0.6.8",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams",
  "web-sys",
  "webpki-roots 1.0.5",
 ]
@@ -6190,17 +6016,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_qs"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd34f36fe4c5ba9654417139a9b3a20d2e1de6012ee678ad14d240c22c78d8d6"
-dependencies = [
- "percent-encoding",
- "serde",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "serde_urlencoded"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6478,7 +6293,6 @@ dependencies = [
  "sha2",
  "smallvec",
  "thiserror 2.0.18",
- "time",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -6564,7 +6378,6 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.18",
- "time",
  "tracing",
  "uuid",
  "whoami",
@@ -6604,7 +6417,6 @@ dependencies = [
  "sqlx-core",
  "stringprep",
  "thiserror 2.0.18",
- "time",
  "tracing",
  "uuid",
  "whoami",
@@ -6631,7 +6443,6 @@ dependencies = [
  "serde_urlencoded",
  "sqlx-core",
  "thiserror 2.0.18",
- "time",
  "tracing",
  "url",
  "uuid",
@@ -6712,29 +6523,6 @@ dependencies = [
 
 [[package]]
 name = "substreams"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e02e7abbbcbd809708634207bbe87f904db8696f5c148c6dd46cee5d7713d25"
-dependencies = [
- "anyhow",
- "bigdecimal 0.3.1",
- "hex",
- "hex-literal",
- "num-bigint",
- "num-integer",
- "num-traits",
- "pad",
- "pest",
- "pest_derive",
- "prost 0.13.5",
- "prost-build 0.13.5",
- "prost-types 0.13.5",
- "substreams-macro 0.6.4",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "substreams"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "237c36dcd8e85d408b5e0c321a01f39c61e81290575896d76c29d522c08f1a39"
@@ -6752,22 +6540,8 @@ dependencies = [
  "prost 0.13.5",
  "prost-build 0.13.5",
  "prost-types 0.13.5",
- "substreams-macro 0.7.3",
+ "substreams-macro",
  "thiserror 1.0.69",
-]
-
-[[package]]
-name = "substreams-ethereum"
-version = "0.10.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2fc683b368e317c60064267dbddc5d8ce290ef00170eb74df8cdde7cda939f3"
-dependencies = [
- "getrandom 0.2.17",
- "num-bigint",
- "substreams 0.6.4",
- "substreams-ethereum-abigen 0.10.6",
- "substreams-ethereum-core 0.10.6",
- "substreams-ethereum-derive 0.10.6",
 ]
 
 [[package]]
@@ -6778,27 +6552,10 @@ checksum = "80672540906a3f15be899c31691f03de85d5a6d2df9337bac32b6095137e2e64"
 dependencies = [
  "getrandom 0.2.17",
  "num-bigint",
- "substreams 0.7.3",
- "substreams-ethereum-abigen 0.11.1",
- "substreams-ethereum-core 0.11.1",
- "substreams-ethereum-derive 0.11.1",
-]
-
-[[package]]
-name = "substreams-ethereum-abigen"
-version = "0.10.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72db7f7ca7766cb393c8479add840c76139bb25818f38d6db80c2be3b49b02a2"
-dependencies = [
- "anyhow",
- "ethabi 17.2.0",
- "heck 0.4.1",
- "hex",
- "prettyplease 0.1.25",
- "proc-macro2",
- "quote",
- "substreams-ethereum-core 0.10.6",
- "syn 1.0.109",
+ "substreams",
+ "substreams-ethereum-abigen",
+ "substreams-ethereum-core",
+ "substreams-ethereum-derive",
 ]
 
 [[package]]
@@ -6814,24 +6571,8 @@ dependencies = [
  "prettyplease 0.1.25",
  "proc-macro2",
  "quote",
- "substreams-ethereum-core 0.11.1",
+ "substreams-ethereum-core",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "substreams-ethereum-core"
-version = "0.10.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "533e22206a9709568ed829037ed49838d4c8c441b799f9c43a20c5a7d84027c9"
-dependencies = [
- "bigdecimal 0.3.1",
- "ethabi 17.2.0",
- "getrandom 0.2.17",
- "num-bigint",
- "prost 0.13.5",
- "prost-build 0.11.9",
- "prost-types 0.13.5",
- "substreams 0.6.4",
 ]
 
 [[package]]
@@ -6847,23 +6588,7 @@ dependencies = [
  "prost 0.13.5",
  "prost-build 0.11.9",
  "prost-types 0.13.5",
- "substreams 0.7.3",
-]
-
-[[package]]
-name = "substreams-ethereum-derive"
-version = "0.10.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b66155cfe7197efafcd46135fb8da7bfa344142c20a9c25d8fdb97cd1995cf8c"
-dependencies = [
- "ethabi 17.2.0",
- "heck 0.4.1",
- "hex",
- "num-bigint",
- "proc-macro2",
- "quote",
- "substreams-ethereum-abigen 0.10.6",
- "syn 1.0.109",
+ "substreams",
 ]
 
 [[package]]
@@ -6878,20 +6603,8 @@ dependencies = [
  "num-bigint",
  "proc-macro2",
  "quote",
- "substreams-ethereum-abigen 0.11.1",
+ "substreams-ethereum-abigen",
  "syn 1.0.109",
-]
-
-[[package]]
-name = "substreams-macro"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21b4fdca34da8c0250425bd798bd843f95b12dea527eeb3ba571e0b0af93d1b7"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
- "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -7245,17 +6958,6 @@ dependencies = [
  "pin-project-lite",
  "tokio",
  "tokio-util",
-]
-
-[[package]]
-name = "tokio-test"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f6d24790a10a7af737693a3e8f1d03faef7e6ca0cc99aae5066f533766de545"
-dependencies = [
- "futures-core",
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]
@@ -7893,19 +7595,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasm-streams"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
-dependencies = [
- "futures-util",
- "js-sys",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "wasmtimer"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8312,7 +8001,7 @@ dependencies = [
 name = "wire"
 version = "0.1.0"
 dependencies = [
- "criterion 0.5.1",
+ "criterion",
  "prost 0.13.5",
  "prost-build 0.13.5",
  "serde",
