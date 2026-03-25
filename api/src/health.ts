@@ -8,6 +8,13 @@ const health = new Hono()
 
 const READINESS_DB_TIMEOUT_MS = parseInt(process.env.READINESS_DB_TIMEOUT_MS || "1000", 10)
 
+type PoolStats = {
+	totalConnections: number
+	idleConnections: number
+	waitingCount: number
+	maxConnections: number
+}
+
 async function isDatabaseReachable(): Promise<boolean> {
 	try {
 		await Promise.race([
@@ -20,6 +27,93 @@ async function isDatabaseReachable(): Promise<boolean> {
 	} catch {
 		return false
 	}
+}
+
+function poolUtilizationRatio(poolStats: PoolStats): number {
+	if (poolStats.maxConnections <= 0) {
+		return 0
+	}
+
+	return poolStats.totalConnections / poolStats.maxConnections
+}
+
+function renderGaugeMetric(name: string, help: string, value: number): string {
+	const normalizedValue = Number.isFinite(value) ? value : 0
+	return `# HELP ${name} ${help}\n# TYPE ${name} gauge\n${name} ${normalizedValue}\n`
+}
+
+function renderPrometheusMetrics(): string {
+	const dbPoolStats = getPoolStats()
+	const graphqlPoolStats = getGraphqlPoolStats()
+	const graphqlPoolPressure = getGraphqlPoolPressure()
+
+	return [
+		renderGaugeMetric(
+			"gaia_api_db_pool_total_connections",
+			"Total connections currently tracked by the REST/Drizzle PostgreSQL pool.",
+			dbPoolStats.totalConnections,
+		),
+		renderGaugeMetric(
+			"gaia_api_db_pool_idle_connections",
+			"Idle connections currently available in the REST/Drizzle PostgreSQL pool.",
+			dbPoolStats.idleConnections,
+		),
+		renderGaugeMetric(
+			"gaia_api_db_pool_waiting_count",
+			"Requests currently waiting for a REST/Drizzle PostgreSQL pool client.",
+			dbPoolStats.waitingCount,
+		),
+		renderGaugeMetric(
+			"gaia_api_db_pool_max_connections",
+			"Configured maximum size of the REST/Drizzle PostgreSQL pool.",
+			dbPoolStats.maxConnections,
+		),
+		renderGaugeMetric(
+			"gaia_api_db_pool_utilization_ratio",
+			"Current utilization ratio of the REST/Drizzle PostgreSQL pool.",
+			poolUtilizationRatio(dbPoolStats),
+		),
+		renderGaugeMetric(
+			"gaia_api_graphql_pool_total_connections",
+			"Total connections currently tracked by the GraphQL/PostGraphile PostgreSQL pool.",
+			graphqlPoolStats.totalConnections,
+		),
+		renderGaugeMetric(
+			"gaia_api_graphql_pool_idle_connections",
+			"Idle connections currently available in the GraphQL/PostGraphile PostgreSQL pool.",
+			graphqlPoolStats.idleConnections,
+		),
+		renderGaugeMetric(
+			"gaia_api_graphql_pool_waiting_count",
+			"Requests currently waiting for a GraphQL/PostGraphile PostgreSQL pool client.",
+			graphqlPoolStats.waitingCount,
+		),
+		renderGaugeMetric(
+			"gaia_api_graphql_pool_max_connections",
+			"Configured maximum size of the GraphQL/PostGraphile PostgreSQL pool.",
+			graphqlPoolStats.maxConnections,
+		),
+		renderGaugeMetric(
+			"gaia_api_graphql_pool_utilization_ratio",
+			"Current utilization ratio of the GraphQL/PostGraphile PostgreSQL pool.",
+			poolUtilizationRatio(graphqlPoolStats),
+		),
+		renderGaugeMetric(
+			"gaia_api_graphql_pool_pressured",
+			"Whether the GraphQL/PostGraphile PostgreSQL pool is currently pressured (1=true, 0=false).",
+			graphqlPoolPressure.isPressured ? 1 : 0,
+		),
+		renderGaugeMetric(
+			"gaia_api_graphql_pool_saturated",
+			"Whether the GraphQL/PostGraphile PostgreSQL pool is currently saturated (1=true, 0=false).",
+			graphqlPoolPressure.isSaturated ? 1 : 0,
+		),
+		renderGaugeMetric(
+			"gaia_api_graphql_pool_recent_acquire_timeouts",
+			"Recent GraphQL/PostGraphile pool acquire timeouts inside the configured moving window.",
+			graphqlPoolPressure.recentAcquireTimeouts,
+		),
+	].join("\n")
 }
 
 // Liveness probe — proves the event loop is responsive, no DB or external dependencies.
@@ -367,6 +461,32 @@ health.get(
 			timestamp: new Date().toISOString(),
 		})
 	},
+)
+
+health.get(
+	"/metrics",
+	describeRoute({
+		tags: ["Health"],
+		summary: "Prometheus metrics",
+		description: "Returns Prometheus-formatted PostgreSQL pool metrics for autoscaling and alerting.",
+		responses: {
+			200: {
+				description: "Prometheus metrics payload",
+				content: {
+					"text/plain": {
+						schema: {
+							type: "string",
+						},
+					},
+				},
+			},
+		},
+	}),
+	(c) =>
+		c.body(renderPrometheusMetrics(), 200, {
+			"content-type": "text/plain; version=0.0.4; charset=utf-8",
+			"cache-control": "no-store",
+		}),
 )
 
 health.get(

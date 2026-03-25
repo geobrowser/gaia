@@ -32,6 +32,20 @@ spec:
           value: 1
           periodSeconds: 60
   metrics:
+    - type: External
+      external:
+        metric:
+          name: api_ingress_p95_latency_seconds_2m
+        target:
+          type: Value
+          value: "1"
+    - type: External
+      external:
+        metric:
+          name: api_ingress_p99_latency_seconds_2m
+        target:
+          type: Value
+          value: "2"
     # Fast capacity-loss signal from kube-state-metrics via prometheus-adapter.
     # Healthy state reports 1.0. As available replicas disappear, the value rises
     # above 1.0 so HPA scales before ingress error-rate metrics have to accumulate.
@@ -63,3 +77,10 @@ spec:
         target:
           type: Utilization
           averageUtilization: 80
+    - type: Pods
+      pods:
+        metric:
+          name: gaia_api_graphql_pool_saturated
+        target:
+          type: AverageValue
+          averageValue: 100m
