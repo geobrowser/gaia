@@ -3,8 +3,8 @@ use hermes_schema::pb::governance::{HermesProposalCreated, VotingMode as ProtoVo
 use hermes_schema::pb::space::{hermes_create_space::Payload, HermesCreateSpace};
 use sdk::core::ids::{
     CREATED_AT_BLOCK_PROPERTY_ID, DAO_SPACE_TYPE_ID, DESCRIPTION_PROPERTY_ID,
-    EOA_SPACE_TYPE_ID, GEO_SYSTEM_NAMESPACE, NAME_PROPERTY_ID, PROPOSAL_ID_PROPERTY_ID,
-    PROPOSAL_TYPE_ID, SPACE_ADDRESS_PROPERTY_ID, SPACE_ID_PROPERTY_ID, SPACE_TYPE_ID,
+    EOA_SPACE_TYPE_ID, GEO_SYSTEM_NAMESPACE, NAME_PROPERTY_ID, PROPOSAL_TYPE_ID,
+    SPACE_ADDRESS_PROPERTY_ID, SPACE_ID_PROPERTY_ID, SPACE_TYPE_ID,
     SYSTEM_TYPES_RELATION_TYPE_ID, SYSTEM_TYPE_ID, VOTING_MODE_PROPERTY_ID,
 };
 use uuid::Uuid;
@@ -44,13 +44,6 @@ impl SystemEntityResult {
 
 fn geo_system_namespace() -> Uuid {
     Uuid::parse_str(GEO_SYSTEM_NAMESPACE).expect("GEO_SYSTEM_NAMESPACE is a valid UUID constant")
-}
-
-fn derive_system_entity_id(event_type: &str, unique_data: &str) -> Uuid {
-    Uuid::new_v5(
-        &geo_system_namespace(),
-        format!("geo:system:{}:{}", event_type, unique_data).as_bytes(),
-    )
 }
 
 fn derive_system_relation_id(type_name: &str, entity_id: &Uuid) -> Uuid {
@@ -179,8 +172,7 @@ pub fn map_space_registered(
     meta: &BlockchainMetadata,
 ) -> Result<SystemEntityResult, HandlerError> {
     let space_id = Uuid::from_slice(&space.space_id)?;
-    let entity_id =
-        derive_system_entity_id("GOVERNANCE.SPACE_ID_REGISTERED", &space_id.to_string());
+    let entity_id = space_id;
 
     let address = extract_space_address(space)?;
     let timestamp = meta.created_at.to_string();
@@ -196,8 +188,6 @@ pub fn map_space_registered(
 
     let space_address_pid =
         Uuid::parse_str(SPACE_ADDRESS_PROPERTY_ID).expect("SPACE_ADDRESS_PROPERTY_ID is a valid UUID constant");
-    let space_id_property_pid =
-        Uuid::parse_str(SPACE_ID_PROPERTY_ID).expect("SPACE_ID_PROPERTY_ID is a valid UUID constant");
     let created_at_block_pid =
         Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID).expect("CREATED_AT_BLOCK_PROPERTY_ID is a valid UUID constant");
 
@@ -208,7 +198,6 @@ pub fn map_space_registered(
 
     let values = vec![
         make_system_value_text(&entity_id, &space_address_pid, &space_id, &format!("0x{}", hex::encode(&address))),
-        make_system_value_text(&entity_id, &space_id_property_pid, &space_id, &format!("0x{}", hex::encode(space_id.as_bytes()))),
         make_system_value_integer(
             &entity_id,
             &created_at_block_pid,
@@ -289,10 +278,7 @@ pub fn map_proposal_created(
     let space_id = Uuid::from_slice(&msg.space_id)?;
     let proposal_id = Uuid::from_slice(&msg.proposal_id)?;
 
-    let entity_id = derive_system_entity_id(
-        "GOVERNANCE.PROPOSAL_CREATED",
-        &format!("{}:{}", space_id, proposal_id),
-    );
+    let entity_id = proposal_id;
 
     let timestamp = meta.created_at.to_string();
     let block = meta.block_number.to_string();
@@ -305,8 +291,6 @@ pub fn map_proposal_created(
         updated_at_block: block,
     };
 
-    let proposal_id_pid = Uuid::parse_str(PROPOSAL_ID_PROPERTY_ID)
-        .expect("PROPOSAL_ID_PROPERTY_ID is a valid UUID constant");
     let voting_mode_pid = Uuid::parse_str(VOTING_MODE_PROPERTY_ID)
         .expect("VOTING_MODE_PROPERTY_ID is a valid UUID constant");
     let space_id_property_pid =
@@ -326,7 +310,6 @@ pub fn map_proposal_created(
         .expect("DESCRIPTION_PROPERTY_ID is a valid UUID constant");
 
     let values = vec![
-        make_system_value_text(&entity_id, &proposal_id_pid, &space_id, &format!("0x{}", hex::encode(&msg.proposal_id))),
         make_system_value_integer(
             &entity_id,
             &voting_mode_pid,
@@ -429,21 +412,16 @@ mod tests {
     }
 
     #[test]
-    fn space_entity_id_is_deterministic() {
+    fn space_entity_id_matches_onchain_space_id() {
         let space_id_bytes: [u8; 16] = [1; 16];
         let space = make_test_space(&space_id_bytes, vec![0xBB; 20]);
         let meta = test_meta();
 
-        let result1 = map_space_registered(&space, &meta).unwrap();
-        let result2 = map_space_registered(&space, &meta).unwrap();
+        let result = map_space_registered(&space, &meta).unwrap();
 
-        assert_eq!(result1.entities[0].id, result2.entities[0].id);
-
-        // Verify it's a proper UUID v5 derivation
-        let space_id = Uuid::from_bytes(space_id_bytes);
-        let expected =
-            derive_system_entity_id("GOVERNANCE.SPACE_ID_REGISTERED", &space_id.to_string());
-        assert_eq!(result1.entities[0].id, expected);
+        // Entity ID should be the onchain space_id directly
+        let expected = Uuid::from_bytes(space_id_bytes);
+        assert_eq!(result.entities[0].id, expected);
     }
 
     #[test]
@@ -454,10 +432,9 @@ mod tests {
         let meta = test_meta();
 
         let result = map_space_registered(&space, &meta).unwrap();
-        assert_eq!(result.values.len(), 5);
+        assert_eq!(result.values.len(), 4);
 
         let space_address_pid = Uuid::parse_str(SPACE_ADDRESS_PROPERTY_ID).unwrap();
-        let space_id_property_pid = Uuid::parse_str(SPACE_ID_PROPERTY_ID).unwrap();
         let created_at_block_pid = Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID).unwrap();
 
         // SpaceAddress — hex string
@@ -472,18 +449,6 @@ mod tests {
         );
         assert!(addr_val.bytes.is_none());
         assert!(addr_val.integer.is_none());
-
-        // SpaceId — hex string
-        let by_val = result
-            .values
-            .iter()
-            .find(|v| v.property_id == space_id_property_pid)
-            .unwrap();
-        assert_eq!(
-            by_val.text.as_ref().unwrap(),
-            &format!("0x{}", hex::encode(space_id_bytes)),
-        );
-        assert!(by_val.bytes.is_none());
 
         // CreatedAtBlock — integer
         let block_val = result
@@ -608,25 +573,18 @@ mod tests {
     }
 
     #[test]
-    fn proposal_entity_id_is_deterministic() {
+    fn proposal_entity_id_matches_onchain_proposal_id() {
         let space_id: [u8; 16] = [10; 16];
         let proposal_id: [u8; 16] = [20; 16];
         let proposer_id: [u8; 16] = [30; 16];
         let msg = make_test_proposal(&space_id, &proposal_id, &proposer_id, 0);
         let meta = test_meta();
 
-        let result1 = map_proposal_created(&msg, &meta).unwrap();
-        let result2 = map_proposal_created(&msg, &meta).unwrap();
-        assert_eq!(result1.entities[0].id, result2.entities[0].id);
+        let result = map_proposal_created(&msg, &meta).unwrap();
 
-        // Verify derivation uses "{space_id}:{proposal_id}"
-        let sid = Uuid::from_bytes(space_id);
-        let pid = Uuid::from_bytes(proposal_id);
-        let expected = derive_system_entity_id(
-            "GOVERNANCE.PROPOSAL_CREATED",
-            &format!("{}:{}", sid, pid),
-        );
-        assert_eq!(result1.entities[0].id, expected);
+        // Entity ID should be the onchain proposal_id directly
+        let expected = Uuid::from_bytes(proposal_id);
+        assert_eq!(result.entities[0].id, expected);
     }
 
     #[test]
@@ -638,27 +596,18 @@ mod tests {
         let meta = test_meta();
 
         let result = map_proposal_created(&msg, &meta).unwrap();
-        assert_eq!(result.values.len(), 6);
+        assert_eq!(result.values.len(), 5);
 
-        let proposal_id_pid = Uuid::parse_str(PROPOSAL_ID_PROPERTY_ID).unwrap();
         let voting_mode_pid = Uuid::parse_str(VOTING_MODE_PROPERTY_ID).unwrap();
         let space_id_property_pid = Uuid::parse_str(SPACE_ID_PROPERTY_ID).unwrap();
         let created_at_block_pid = Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID).unwrap();
-
-        // ProposalId — hex string
-        let pid_val = result.values.iter().find(|v| v.property_id == proposal_id_pid).unwrap();
-        assert_eq!(
-            pid_val.text.as_ref().unwrap(),
-            &format!("0x{}", hex::encode(proposal_id)),
-        );
-        assert!(pid_val.bytes.is_none());
 
         // VotingMode — integer (Slow = 1)
         let vm_val = result.values.iter().find(|v| v.property_id == voting_mode_pid).unwrap();
         assert_eq!(vm_val.integer, Some(1));
         assert!(vm_val.bytes.is_none());
 
-        // SpaceId — hex string (proposer space_id)
+        // SpaceId — hex string (proposer id)
         let by_val = result.values.iter().find(|v| v.property_id == space_id_property_pid).unwrap();
         assert_eq!(
             by_val.text.as_ref().unwrap(),
@@ -723,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn proposal_cross_space_uniqueness() {
+    fn proposal_entity_id_is_the_onchain_id_regardless_of_space() {
         let proposal_id: [u8; 16] = [99; 16];
         let proposer_id: [u8; 16] = [88; 16];
         let space_a: [u8; 16] = [1; 16];
@@ -736,10 +685,10 @@ mod tests {
         let result_a = map_proposal_created(&msg_a, &meta).unwrap();
         let result_b = map_proposal_created(&msg_b, &meta).unwrap();
 
-        assert_ne!(
-            result_a.entities[0].id, result_b.entities[0].id,
-            "Same proposal_id in different spaces must produce different entity IDs"
-        );
+        // Same proposal_id produces same entity ID (it's the onchain ID)
+        let expected = Uuid::from_bytes(proposal_id);
+        assert_eq!(result_a.entities[0].id, expected);
+        assert_eq!(result_b.entities[0].id, expected);
     }
 
     #[test]

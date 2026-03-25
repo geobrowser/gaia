@@ -1348,7 +1348,7 @@ mod tests {
 
     #[test]
     fn filter_relations_drops_protected_from_id() {
-        let protected_entity = Uuid::parse_str(sdk::core::ids::PROPOSAL_ID_PROPERTY_ID).unwrap();
+        let protected_entity = Uuid::parse_str(sdk::core::ids::VOTING_MODE_PROPERTY_ID).unwrap();
         let ops = vec![RelationOp::Create(make_create_relation_with_ids(
             Uuid::new_v4(), protected_entity, Uuid::new_v4(),
         ))];
