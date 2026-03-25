@@ -88,11 +88,8 @@ ORDER BY p.created_at::bigint ASC
  * Connect to PostgreSQL. Uses a single Client (not a pool) since this is a
  * short-lived CronJob process that runs one query then exits.
  *
- * Timeout settings are chosen for a batch CronJob with activeDeadlineSeconds: 290:
+ * Connection settings are chosen for a batch CronJob with activeDeadlineSeconds: 290:
  * - connectionTimeoutMillis: 5s — fail fast if DB/PgBouncer is unreachable
- * - statement_timeout: 30s — cap on the detection query (normally <100ms)
- * - idle_in_transaction_session_timeout: 60s — safety net against leaked transactions
- * - lock_timeout: 5s — we only do reads, but prevents hangs on metadata locks
  * - keepAlive: true — detect broken TCP connections (e.g., pod network disruption)
  * - keepAliveInitialDelayMillis: 10s — start probing quickly (short-lived process)
  * - application_name: shows in pg_stat_activity for observability
@@ -108,11 +105,6 @@ export function connectDb(databaseUrl: string): Effect.Effect<PgClient, InfraErr
 				application_name: "proposal-executor",
 			})
 			await client.connect()
-			// Set session-level timeouts after connecting. DigitalOcean managed Postgres
-			// rejects these as startup parameters, so we issue SET commands instead.
-			await client.query("SET statement_timeout = '30s'")
-			await client.query("SET idle_in_transaction_session_timeout = '60s'")
-			await client.query("SET lock_timeout = '5s'")
 			return client
 		},
 		catch: (error) => {

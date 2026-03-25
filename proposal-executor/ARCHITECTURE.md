@@ -216,9 +216,6 @@ Chosen for a batch CronJob with `activeDeadlineSeconds: 290`:
 | Setting | Value | Rationale |
 |---|---|---|
 | `connectionTimeoutMillis` | 5s | Fail fast if DB/PgBouncer unreachable |
-| `statement_timeout` | 30s | Cap on detection query (normally <100ms) |
-| `idle_in_transaction_session_timeout` | 60s | Safety net against leaked transactions |
-| `lock_timeout` | 5s | Prevent hangs on metadata locks (reads only) |
 | `keepAlive` | true | Detect broken TCP connections |
 | `keepAliveInitialDelayMillis` | 10s | Start probing quickly (short-lived process) |
 | `application_name` | `"proposal-executor"` | Visible in `pg_stat_activity` |
