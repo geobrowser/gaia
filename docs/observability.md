@@ -2,7 +2,7 @@
 
 Reference document mapping the monitoring and observability landscape across Gaia's services and Kubernetes infrastructure.
 
-**Platform:** DigitalOcean Managed Kubernetes · **Last verified:** 2026-03-10
+**Platform:** DigitalOcean Managed Kubernetes · **Last verified:** 2026-03-25
 
 ## 1. Overview
 
@@ -53,10 +53,10 @@ The observability stack consists of:
 
 ### API Ingress Recording Rules
 
-[`monitoring/k8s/api-ingress-rules.yaml`](monitoring/k8s/api-ingress-rules.yaml) — PrometheusRule `api-ingress-observability` in `monitoring` namespace. 16 recording rules computed over `nginx_ingress_controller_requests{host="testnet-api.geobrowser.io"}`:
+[`monitoring/k8s/api-ingress-rules.yaml`](monitoring/k8s/api-ingress-rules.yaml) — PrometheusRule `api-ingress-observability` in `monitoring` namespace. Recording rules computed over `nginx_ingress_controller_requests{host="testnet-api.geobrowser.io"}`:
 
 - **Request rates:** total, by status code, by HTTP method, error-class (4xx/5xx, 499, 500, 503)
-- **Latency percentiles:** p50, p75, p95, p99 (overall), p99 by method
+- **Latency percentiles:** p50, p75, p95, p99 (overall), p99 by method, plus fast 2-minute p95/p99 series for HPA
 - **Error ratios:** 5xx, 499, 503 (`api:ingress_503_ratio:rate5m` also used by HPA)
 
 ### Grafana Dashboards
@@ -68,7 +68,7 @@ The observability stack consists of:
 | Atlas Overview (Staging) | 6 panels | ConfigMap sidecar | [`hermes/k8s/staging/atlas-monitoring.yaml`](hermes/k8s/staging/atlas-monitoring.yaml) |
 | OpenSearch Overview | 20+ panels | Volume mount (kustomize) | [`search-indexer-deploy/grafana/dashboards/opensearch-overview-dashboard.json`](search-indexer-deploy/grafana/dashboards/opensearch-overview-dashboard.json) |
 
-**Config:** [`monitoring/k8s/ingress-nginx-metrics.yaml`](monitoring/k8s/ingress-nginx-metrics.yaml) (ServiceMonitor for ingress-nginx)
+**Config:** [`monitoring/k8s/ingress-nginx-metrics.yaml`](monitoring/k8s/ingress-nginx-metrics.yaml) (ServiceMonitor for ingress-nginx), [`monitoring/k8s/api-metrics-servicemonitor.yaml`](monitoring/k8s/api-metrics-servicemonitor.yaml) (ServiceMonitor for API pool metrics)
 
 ## 3. Alerting
 
@@ -180,24 +180,25 @@ Sentry applies server-side Dynamic Sampling even when the SDK sends 100% of trac
 
 ### API Health Endpoints
 
-The API exposes 6 health endpoints under `/health` ([`api/src/health.ts`](api/src/health.ts)):
+The API exposes 7 health endpoints under `/health` ([`api/src/health.ts`](api/src/health.ts)):
 
 **K8s probes:**
 
 | Endpoint | Purpose | Dependencies |
 |----------|---------|-------------|
 | `/health/liveness` | Event loop responsive | None |
-| `/health/readiness` | Ready for traffic | DB reachability, GraphQL pool saturation |
+| `/health/readiness` | Ready for traffic | DB reachability only |
 
-**Debugging endpoints:** `/health/` (basic DB check), `/health/detailed` (full pool diagnostics), `/health/graphql-pool` (PostGraphile pool), `/health/pool` (Drizzle pool)
+**Debugging endpoints:** `/health/` (basic DB check), `/health/detailed` (full pool diagnostics), `/health/graphql-pool` (PostGraphile pool), `/health/pool` (Drizzle pool), `/health/metrics` (Prometheus-formatted pool metrics for autoscaling and alerting)
 
 ### DB Saturation Detection
 
-[`api/src/services/dbSaturation.ts`](api/src/services/dbSaturation.ts) — Hysteresis-based activation/release that feeds into the readiness probe:
+[`api/src/services/dbSaturation.ts`](api/src/services/dbSaturation.ts) — Hysteresis-based activation/release used for local overload handling and metrics export:
 
 - **Pressure signals:** Waiting clients ≥ 1, pool utilization ≥ 90%, acquire timeouts ≥ 2 in 30s window
-- **Activation:** Sustained pressure for 15s → `isSaturated = true` → readiness probe returns 503
-- **Release:** No pressure for 30s → `isSaturated = false` → readiness probe returns 200
+- **Fast shed path:** waiting clients or recent acquire timeouts can trigger immediate GraphQL request shedding on that pod before the hysteresis window completes
+- **Activation:** Sustained pressure for 15s → `isSaturated = true` → `gaia_api_graphql_pool_saturated` becomes 1 and HPA can scale on the pod metric
+- **Release:** No pressure for 30s → `isSaturated = false` → shed/metric state returns to normal
 - Configurable via env vars: `PG_POOL_PRESSURE_WAITING_THRESHOLD`, `PG_POOL_PRESSURE_UTILIZATION_THRESHOLD`, `PG_POOL_PRESSURE_TIMEOUT_THRESHOLD`, `PG_POOL_SATURATION_ACTIVATION_MS`, `PG_POOL_SATURATION_RELEASE_MS`, `PG_POOL_ACQUIRE_TIMEOUT_WINDOW_MS`
 
 ### Search-Indexer Health
@@ -250,22 +251,33 @@ The API deployment uses a multi-metric HPA ([`api/k8s/production/hpa.yaml`](api/
 
 | Metric | Type | Target |
 |--------|------|--------|
+| `api_ingress_p95_latency_seconds_2m` | External | 1s |
+| `api_ingress_p99_latency_seconds_2m` | External | 2s |
+| `api_ready_replica_pressure` | External | 1 |
+| `gaia_api_graphql_pool_saturated` | Pods | 100m average |
+| `api_ingress_503_ratio_rate5m` | External | 1.5% (value: `15m` = 0.015) |
 | CPU utilization | Resource | 70% average |
 | Memory utilization | Resource | 80% average |
-| `api_ingress_503_ratio_rate5m` | External | 1.5% (value: `15m` = 0.015) |
 
-- **Min replicas:** 2
-- **Max replicas:** 6
+- **Min replicas:** 4
+- **Max replicas:** 8
+- **Scale-up behavior:** no stabilization window, doubles or adds 4 pods per minute
+- **Scale-down behavior:** 10-minute stabilization window, removes capacity conservatively
 
 ### Prometheus Adapter
 
-[`monitoring/k8s/prometheus-adapter-config.yaml`](monitoring/k8s/prometheus-adapter-config.yaml) bridges Prometheus recording rules to the K8s external metrics API:
+[`monitoring/k8s/prometheus-adapter-config.yaml`](monitoring/k8s/prometheus-adapter-config.yaml) bridges Prometheus recording rules and scraped pod metrics to the K8s metrics APIs:
 
 ```
-Recording Rule → Prometheus → Prometheus Adapter → external.metrics.k8s.io API → HPA
+Recording Rule / ServiceMonitor scrape → Prometheus → Prometheus Adapter → metrics API → HPA
 ```
 
-The adapter exposes `api_ingress_503_ratio_rate5m` as an external metric by computing the 503 ratio from raw `nginx_ingress_controller_requests` metrics (independently from the recording rule, because the adapter's `externalRules` require a `seriesQuery`/`metricsQuery` pair). The HPA references this metric to scale based on error rate.
+The adapter exposes these autoscaling signals:
+
+- `api_ingress_p95_latency_seconds_2m` and `api_ingress_p99_latency_seconds_2m` as external metrics from Prometheus recording rules
+- `api_ingress_503_ratio_rate5m` as an external metric by computing the 503 ratio from raw `nginx_ingress_controller_requests`
+- `api_ready_replica_pressure` as an external metric derived from deployment desired vs available replicas
+- `gaia_api_graphql_pool_saturated` as a pod metric sourced from `/health/metrics`
 
 ### Ingress-NGINX Metrics
 

@@ -8,6 +8,8 @@ We currently have quite a large diff between our p50 queries (~10ms) and our p99
 
 It's not obvious how we get into situations where there are enough long queries to cause queuing. Need more investigation. Note that we do have statement timeouts configured at the DB level as well. We have quite a bit of monitoring set up around our query timing + DB connection pooling and saturation metrics.
 
+Current mitigations reduce the blast radius but do not explain the root cause yet. The API now sheds new GraphQL work on locally saturated pods, exports pool-pressure metrics for autoscaling, and scales earlier on latency / saturation / capacity-loss signals. That should make incidents recover faster, but we still need to explain why the long-tail queries happen in the first place.
+
 #### Pooling topology follow-up
 
 Part of the likely problem is that we are still treating "uses Postgres" as one workload class when it is really several:

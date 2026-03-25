@@ -8,10 +8,55 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: api
-  minReplicas: 2
-  maxReplicas: 6
+  minReplicas: 4
+  maxReplicas: 8
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      selectPolicy: Max
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 600
+      selectPolicy: Min
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+        - type: Pods
+          value: 1
+          periodSeconds: 60
   metrics:
-    # DB-pressure-adjacent trigger via ingress 503 ratio.
+    - type: External
+      external:
+        metric:
+          name: api_ingress_p95_latency_seconds_2m
+        target:
+          type: Value
+          value: "1"
+    - type: External
+      external:
+        metric:
+          name: api_ingress_p99_latency_seconds_2m
+        target:
+          type: Value
+          value: "2"
+    # Fast capacity-loss signal from kube-state-metrics via prometheus-adapter.
+    # Healthy state reports 1.0. As available replicas disappear, the value rises
+    # above 1.0 so HPA scales before ingress error-rate metrics have to accumulate.
+    - type: External
+      external:
+        metric:
+          name: api_ready_replica_pressure
+        target:
+          type: Value
+          value: "1"
+    # Fallback signal when requests are already failing at ingress.
     # Target 1.5% (15m = 0.015) sustained error ratio.
     - type: External
       external:
@@ -32,3 +77,10 @@ spec:
         target:
           type: Utilization
           averageUtilization: 80
+    - type: Pods
+      pods:
+        metric:
+          name: gaia_api_graphql_pool_saturated
+        target:
+          type: AverageValue
+          averageValue: 100m

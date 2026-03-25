@@ -10,6 +10,7 @@ import {createProfileRouter} from "./src/profile"
 import {createProposalsRouter} from "./src/proposals"
 import {createSearchRouter} from "./src/search"
 import {isPoolConnectTimeout} from "./src/services/dbFailures"
+import {shouldShedPoolTraffic} from "./src/services/dbSaturation"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
 import {runtime} from "./src/services/runtime"
 import {OpenSearchClient} from "./src/services/search"
@@ -30,6 +31,19 @@ type AppEnv = {
 }
 
 const app = new Hono<AppEnv>()
+
+function createGraphqlOverloadResponse(requestId: string) {
+	const headers = new Headers({
+		"content-type": "application/json",
+		"retry-after": "1",
+		"x-request-id": requestId,
+	})
+
+	return new Response(JSON.stringify({error: "database temporarily overloaded", requestId}), {
+		status: 503,
+		headers,
+	})
+}
 
 // Request ID middleware (cheap, needed everywhere for correlation)
 app.use("*", requestId())
@@ -91,6 +105,21 @@ app.get("/", swaggerUI({url: "/openapi"}))
 
 app.use("/graphql", async (c) => {
 	const requestId = c.get("requestId") || "unknown"
+	const method = c.req.method
+
+	if (method !== "OPTIONS") {
+		const poolPressure = getGraphqlPoolPressure()
+		if (shouldShedPoolTraffic(poolPressure)) {
+			log.warn("GraphQL overloaded: shedding request before pool checkout", {
+				requestId,
+				path: c.req.path,
+				method,
+				poolPressure,
+			})
+
+			return createGraphqlOverloadResponse(requestId)
+		}
+	}
 
 	try {
 		return await graphqlServer.fetch(c.req.raw, {
@@ -106,20 +135,11 @@ app.use("/graphql", async (c) => {
 			log.warn("GraphQL overloaded: pool checkout timeout", {
 				requestId,
 				path: c.req.path,
-				method: c.req.method,
+				method,
 				poolPressure: freshPoolPressure,
 			})
 
-			const headers = new Headers({
-				"content-type": "application/json",
-				"retry-after": "1",
-				"x-request-id": requestId,
-			})
-
-			return new Response(JSON.stringify({error: "database temporarily overloaded", requestId}), {
-				status: 503,
-				headers,
-			})
+			return createGraphqlOverloadResponse(requestId)
 		}
 
 		throw error
