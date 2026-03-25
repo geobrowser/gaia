@@ -149,8 +149,9 @@ Both pools have 3-second connection timeouts and route through PgBouncer.
 Kubernetes-aware probes:
 
 - **Liveness** — Event loop alive, no I/O
-- **Readiness** — Database reachable, no sustained pool saturation (tracked via a custom saturation detector that monitors recent acquire timeouts)
-- **Pool metrics** — Exposes connection pool statistics
+- **Readiness** — Database reachable
+- **Pool metrics** — `/health/metrics`, `/health/graphql-pool`, and `/health/pool` expose connection pool statistics for debugging and autoscaling
+- **Overload handling** — GraphQL sheds new work locally when pool waiters, recent acquire timeouts, or sustained saturation indicate the pod is overloaded
 
 ## Key Architectural Decisions
 
