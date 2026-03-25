@@ -2,6 +2,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 import {getGraphqlPoolPressure, getGraphqlPoolStats} from "./kg/postgraphile"
 import {db, getPoolStats} from "./services/storage/storage"
+import {log} from "./services/telemetry"
 
 const health = new Hono()
 
@@ -49,15 +50,15 @@ health.get(
 	(c) => c.json({status: "ok"}),
 )
 
-// Readiness probe — fail only on sustained DB pool saturation.
-// This allows Kubernetes to route traffic away from saturated pods
-// while avoiding liveness restart cascades.
+// Readiness probe — fail only when the pod cannot reach its core dependency.
+// Local query saturation is handled by request shedding in /graphql so we do not
+// drop every pod from service endpoints during a shared overload event.
 health.get(
 	"/readiness",
 	describeRoute({
 		tags: ["Health"],
 		summary: "Readiness probe",
-		description: "Returns 200 when pod is ready to receive traffic, 503 when dependencies are unavailable.",
+		description: "Returns 200 when pod is ready to receive traffic, 503 when the database is unavailable.",
 		responses: {
 			200: {
 				description: "Pod is ready",
@@ -75,7 +76,7 @@ health.get(
 				},
 			},
 			503: {
-				description: "Pod is temporarily not ready due to sustained pool saturation",
+				description: "Pod is temporarily not ready because the database is unavailable",
 				content: {
 					"application/json": {
 						schema: {
@@ -93,26 +94,19 @@ health.get(
 		},
 	}),
 	async (c) => {
-		const poolPressure = getGraphqlPoolPressure()
 		const databaseReachable = await isDatabaseReachable()
 		const timestamp = new Date().toISOString()
 
 		if (!databaseReachable) {
+			log.warn("Readiness probe failed: database unreachable", {
+				path: c.req.path,
+				readinessDbTimeoutMs: READINESS_DB_TIMEOUT_MS,
+			})
+
 			return c.json(
 				{
 					status: "not_ready",
 					reason: "database_unreachable",
-					timestamp,
-				},
-				503,
-			)
-		}
-
-		if (poolPressure.isSaturated) {
-			return c.json(
-				{
-					status: "not_ready",
-					reason: "sustained_graphql_pool_saturation",
 					timestamp,
 				},
 				503,

@@ -110,7 +110,7 @@ PG_POOL_MAX=50
 PG_CONNECTION_TIMEOUT_MS=3000
 PG_IDLE_TIMEOUT_MS=30000
 
-# Pool saturation readiness controls
+# Pool pressure controls
 PG_POOL_PRESSURE_WAITING_THRESHOLD=1
 PG_POOL_PRESSURE_UTILIZATION_THRESHOLD=90
 PG_POOL_PRESSURE_TIMEOUT_THRESHOLD=2
@@ -139,9 +139,9 @@ Avoid setting all layers to the same value (for example all 10s), which makes ro
 The API exposes:
 
 - `/health/liveness` for process-only liveness.
-- `/health/readiness` for sustained pool saturation checks.
+- `/health/readiness` for database reachability checks.
 
-Kubernetes readiness should target `/health/readiness` so saturated pods are removed from service endpoints without restart loops.
+Kubernetes readiness should target `/health/readiness`, but local GraphQL pool pressure should be handled by request shedding rather than removing saturated pods from service endpoints.
 
 ## Capacity Planning
 
@@ -157,8 +157,8 @@ PostgreSQL max_connections = 100 (30 reserved for indexers/admin/emergencies)
 
 Current safety budget:
 - Per pod DB clients: ~68 (50 GraphQL + 18 REST)
-- Max replicas: 6
-- Worst-case client demand: ~408 (< 900 max_client_conn)
+- Max replicas: 8
+- Worst-case client demand: ~544 (< 900 max_client_conn)
 ```
 
 ## Logging
