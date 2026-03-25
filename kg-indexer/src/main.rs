@@ -1066,18 +1066,19 @@ async fn process_message(
 
             // Create system entity in knowledge graph
             if let Some(meta) = space.meta.as_ref() {
-                let system_result =
-                    handlers::system_entities::map_space_registered(&space, meta)?;
+                let system_result = handlers::system_entities::map_space_registered(&space, meta)?;
                 storage
                     .insert_entities(&system_result.entities, &mut tx)
                     .await?;
-                let set_values: Vec<_> = system_result.values_to_set().into_iter().cloned().collect();
+                let set_values: Vec<_> =
+                    system_result.values_to_set().into_iter().cloned().collect();
                 storage.insert_values(&set_values, &mut tx).await?;
-                let set_relations: Vec<_> =
-                    system_result.relations_to_create().into_iter().cloned().collect();
-                storage
-                    .insert_relations(&set_relations, &mut tx)
-                    .await?;
+                let set_relations: Vec<_> = system_result
+                    .relations_to_create()
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                storage.insert_relations(&set_relations, &mut tx).await?;
             }
             1
         }
@@ -1144,8 +1145,7 @@ async fn process_message(
 
             // Create system entity in knowledge graph
             if let Some(meta) = event.meta.as_ref() {
-                let system_result =
-                    handlers::system_entities::map_proposal_created(&event, meta)?;
+                let system_result = handlers::system_entities::map_proposal_created(&event, meta)?;
                 storage
                     .insert_entities(&system_result.entities, &mut tx)
                     .await?;
@@ -1157,9 +1157,7 @@ async fn process_message(
                     .into_iter()
                     .cloned()
                     .collect();
-                storage
-                    .insert_relations(&set_relations, &mut tx)
-                    .await?;
+                storage.insert_relations(&set_relations, &mut tx).await?;
             }
             1 + result.actions.len()
         }
@@ -1465,9 +1463,7 @@ async fn process_block(
                             .into_iter()
                             .cloned()
                             .collect();
-                        storage
-                            .insert_relations(&set_relations, &mut tx)
-                            .await?;
+                        storage.insert_relations(&set_relations, &mut tx).await?;
                     }
                     1
                 }
@@ -1603,9 +1599,7 @@ async fn process_block(
                             .into_iter()
                             .cloned()
                             .collect();
-                        storage
-                            .insert_relations(&set_relations, &mut tx)
-                            .await?;
+                        storage.insert_relations(&set_relations, &mut tx).await?;
                     }
                     1 + result.actions.len()
                 }

@@ -1338,9 +1338,12 @@ mod tests {
 
     #[test]
     fn filter_relations_drops_protected_type() {
-        let protected_type = Uuid::parse_str(sdk::core::ids::SYSTEM_TYPES_RELATION_TYPE_ID).unwrap();
+        let protected_type =
+            Uuid::parse_str(sdk::core::ids::SYSTEM_TYPES_RELATION_TYPE_ID).unwrap();
         let ops = vec![RelationOp::Create(make_create_relation_with_ids(
-            protected_type, Uuid::new_v4(), Uuid::new_v4(),
+            protected_type,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
         ))];
         let result = filter_protected_relations(ops);
         assert!(result.is_empty());
@@ -1350,7 +1353,9 @@ mod tests {
     fn filter_relations_drops_protected_from_id() {
         let protected_entity = Uuid::parse_str(sdk::core::ids::VOTING_MODE_PROPERTY_ID).unwrap();
         let ops = vec![RelationOp::Create(make_create_relation_with_ids(
-            Uuid::new_v4(), protected_entity, Uuid::new_v4(),
+            Uuid::new_v4(),
+            protected_entity,
+            Uuid::new_v4(),
         ))];
         let result = filter_protected_relations(ops);
         assert!(result.is_empty());
@@ -1360,7 +1365,9 @@ mod tests {
     fn filter_relations_drops_protected_to_id() {
         let protected_entity = Uuid::parse_str(sdk::core::ids::SPACE_ID_PROPERTY_ID).unwrap();
         let ops = vec![RelationOp::Create(make_create_relation_with_ids(
-            Uuid::new_v4(), Uuid::new_v4(), protected_entity,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            protected_entity,
         ))];
         let result = filter_protected_relations(ops);
         assert!(result.is_empty());
@@ -1369,7 +1376,9 @@ mod tests {
     #[test]
     fn filter_relations_keeps_normal_create() {
         let ops = vec![RelationOp::Create(make_create_relation_with_ids(
-            Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
         ))];
         let result = filter_protected_relations(ops);
         assert_eq!(result.len(), 1);
