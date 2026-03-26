@@ -7,7 +7,7 @@
 use std::env;
 use std::sync::Arc;
 
-use hermes_instrumentation::{debug, error, info, warn};
+use hermes_instrumentation::{debug, error, info, instrument, warn};
 use tokio::task::JoinSet;
 
 use delivery_worker::deliver::{
@@ -269,6 +269,14 @@ async fn async_main() -> Result<(), WorkerError> {
 }
 
 /// Process a single delivery: serialize, POST, update DB status.
+#[instrument(
+    name = "delivery_worker.process_delivery",
+    skip(client, storage, delivery, max_retries),
+    fields(
+        delivery_id = %delivery.delivery_id,
+        webhook_url = %delivery.webhook_url,
+    )
+)]
 async fn process_delivery(
     client: &reqwest::Client,
     storage: &Storage,

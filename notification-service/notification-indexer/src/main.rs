@@ -10,7 +10,7 @@
 use std::env;
 
 use futures::StreamExt;
-use hermes_instrumentation::{error, info, warn};
+use hermes_instrumentation::{error, info, info_span, warn};
 use rdkafka::message::Message;
 
 use notification_indexer::consumer::{
@@ -252,6 +252,13 @@ async fn async_main() -> Result<(), IndexerError> {
                         let offset = msg.offset();
 
                         let event_type = get_event_type(msg.headers());
+                        let _span = info_span!(
+                            "notification_indexer.process_event",
+                            event_type = event_type.as_deref().unwrap_or("unknown"),
+                            partition = partition,
+                            offset = offset,
+                        )
+                        .entered();
                         let mut should_commit = false;
 
                         if let Some(payload) = msg.payload() {

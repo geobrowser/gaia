@@ -1,5 +1,6 @@
 //! HMAC signing and HTTP delivery logic.
 
+use hermes_instrumentation::instrument;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
@@ -22,6 +23,10 @@ pub fn compute_hmac(secret: &str, payload: &[u8]) -> Result<String, DeliveryErro
 ///
 /// The idempotency key is included in the JSON body (not as a header).
 /// Returns `Ok(status_code)` on any HTTP response, or `Err` on network failure.
+#[instrument(
+    name = "delivery_worker.deliver_webhook",
+    skip(client, secret, payload)
+)]
 pub async fn deliver_webhook(
     client: &reqwest::Client,
     url: &str,
