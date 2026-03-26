@@ -66,6 +66,17 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
 CREATE INDEX IF NOT EXISTS idx_deliveries_pending
     ON notification_deliveries (status, next_retry_at);
 
+-- Minimal values table for name enrichment (matches kg-indexer schema).
+-- Only includes columns needed by notification-indexer lookups.
+CREATE TABLE IF NOT EXISTS "values" (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id uuid NOT NULL,
+    property_id uuid NOT NULL,
+    space_id uuid NOT NULL,
+    text text,
+    UNIQUE(entity_id, property_id, space_id)
+);
+
 -- Expression index for the rejection poller's LEFT JOIN anti-pattern.
 -- Without this, the (payload->>'proposal_id')::uuid extraction does a seq scan.
 CREATE INDEX IF NOT EXISTS idx_outbox_rejected_proposal

@@ -216,4 +216,70 @@ impl Storage {
 
         Ok(expired)
     }
+
+    // -----------------------------------------------------------------------
+    // Enrichment lookups (best-effort — return None on failure)
+    // -----------------------------------------------------------------------
+
+    /// Look up a human-readable name for an entity from the KG values table.
+    ///
+    /// Returns `None` if the entity has no name or the query fails.
+    pub async fn lookup_entity_name(&self, entity_id: Uuid, space_id: Uuid) -> Option<String> {
+        sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT v.text
+            FROM "values" v
+            WHERE v.entity_id = $1
+              AND v.property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935'::uuid
+              AND v.space_id = $2
+              AND v.text IS NOT NULL
+            LIMIT 1
+            "#,
+        )
+        .bind(entity_id)
+        .bind(space_id)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// Look up the human-readable name for a proposal from the proposals table.
+    pub async fn lookup_proposal_name(&self, proposal_id: Uuid) -> Option<String> {
+        sqlx::query_scalar::<_, String>(
+            "SELECT name FROM proposals WHERE id = $1 AND name IS NOT NULL",
+        )
+        .bind(proposal_id)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// Look up current vote tallies for a proposal.
+    pub async fn lookup_vote_tallies(&self, proposal_id: Uuid) -> Option<(i64, i64, i64)> {
+        sqlx::query_as::<_, (i64, i64, i64)>(
+            "SELECT yes_count, no_count, abstain_count FROM proposals WHERE id = $1",
+        )
+        .bind(proposal_id)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// Get the latest block number written by the kg-indexer.
+    ///
+    /// Used by the block delay logic to wait for the kg-indexer to catch up
+    /// before processing notifications (so names/metadata are populated).
+    pub async fn lookup_latest_block(&self) -> Option<u64> {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT MAX(created_at_block::bigint) FROM proposals WHERE created_at_block != '0'",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|b| b as u64)
+    }
 }

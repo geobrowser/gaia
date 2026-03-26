@@ -1,7 +1,7 @@
 //! Domain models for notification events.
 
 use hermes_schema::pb::governance::{
-    HermesProposalCreated, HermesProposalExecuted, HermesProposalSettingsUpdated,
+    proposal_action, HermesProposalCreated, HermesProposalExecuted, HermesProposalSettingsUpdated,
     HermesProposalUpdated, HermesProposalVoted, ProposalVoteOption,
 };
 use serde::Serialize;
@@ -81,6 +81,9 @@ pub struct NotificationPayload {
     pub block_number: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<u64>,
+    /// Human-readable space name (best-effort, from KG values table).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_name: Option<String>,
     /// Event-specific fields (governance or bounty).
     #[serde(flatten)]
     pub data: NotificationData,
@@ -104,6 +107,74 @@ pub struct GovernanceData {
     pub voter_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vote: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voting_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actions: Option<Vec<ActionSummary>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings: Option<ProposalSettingsPayload>,
+    /// Human-readable proposal name (best-effort, from proposals table).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposal_name: Option<String>,
+    /// Human-readable proposer name (best-effort, from KG values table).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposer_name: Option<String>,
+    /// Human-readable voter name (best-effort, from KG values table).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voter_name: Option<String>,
+    /// Current vote tallies (best-effort, from proposals table). Present on `proposal_voted` only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yes_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abstain_count: Option<i64>,
+}
+
+/// Summary of a single proposal action for the webhook payload.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ActionSummary {
+    /// Action type: "add_member", "remove_editor", "publish", etc.
+    #[serde(rename = "type")]
+    pub action_type: String,
+    /// Target address (hex-encoded, for member/editor actions).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_address: Option<String>,
+    /// Target space ID (for subspace actions).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_space_id: Option<String>,
+    /// Target topic ID (for subspace topic actions).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_topic_id: Option<String>,
+    /// Content URI (for publish actions).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_uri: Option<String>,
+    /// Edit name (for publish actions, if available).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Voting settings details (for update_voting_settings actions).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voting_settings: Option<VotingSettingsUpdate>,
+}
+
+/// Details of a voting settings update action.
+#[derive(Debug, Clone, Serialize)]
+pub struct VotingSettingsUpdate {
+    pub quorum: u64,
+    pub fast_threshold: u64,
+    pub slow_threshold: u64,
+    pub duration: u64,
+}
+
+/// Proposal voting settings for the webhook payload.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProposalSettingsPayload {
+    pub start_date: u64,
+    pub end_date: u64,
+    pub voting_mode: String,
+    pub quorum: u64,
+    pub flat_threshold: u64,
+    pub percentage_threshold: u64,
 }
 
 /// Bounty-specific payload fields.
@@ -117,6 +188,12 @@ pub struct BountyData {
     pub proposal_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interested_user_space_id: Option<String>,
+    /// Human-readable bounty name (best-effort, from KG values table).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounty_name: Option<String>,
+    /// Human-readable curator name (best-effort, from KG values table).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curator_name: Option<String>,
 }
 
 /// Result of handling a governance event: payload + idempotency key.
@@ -156,11 +233,21 @@ pub fn handle_proposal_created(
             idempotency_key: None,
             block_number: Some(block_number),
             timestamp: Some(timestamp),
+            space_name: None,
             data: NotificationData::Governance(GovernanceData {
                 proposal_id: proposal_id.to_string(),
                 proposer_id: Some(proposer_id.to_string()),
                 voter_id: None,
                 vote: None,
+                voting_mode: Some(voting_mode_to_string(msg.voting_mode)),
+                actions: Some(msg.actions.iter().map(action_to_summary).collect()),
+                settings: msg.settings.as_ref().map(settings_to_payload),
+                proposal_name: None,
+                proposer_name: None,
+                voter_name: None,
+                yes_count: None,
+                no_count: None,
+                abstain_count: None,
             }),
         },
     })
@@ -195,14 +282,158 @@ pub fn handle_proposal_updated(
             idempotency_key: None,
             block_number: Some(block_number),
             timestamp: Some(timestamp),
+            space_name: None,
             data: NotificationData::Governance(GovernanceData {
                 proposal_id: proposal_id.to_string(),
                 proposer_id: Some(proposer_id.to_string()),
                 voter_id: None,
                 vote: None,
+                voting_mode: Some(voting_mode_to_string(msg.voting_mode)),
+                actions: Some(msg.actions.iter().map(action_to_summary).collect()),
+                settings: msg.settings.as_ref().map(settings_to_payload),
+                proposal_name: None,
+                proposer_name: None,
+                voter_name: None,
+                yes_count: None,
+                no_count: None,
+                abstain_count: None,
             }),
         },
     })
+}
+
+/// Map a protobuf voting mode to a string.
+fn voting_mode_to_string(mode: i32) -> String {
+    match mode {
+        0 => "fast".to_string(),
+        1 => "slow".to_string(),
+        _ => "unknown".to_string(),
+    }
+}
+
+/// Convert protobuf ProposalSettings to payload struct.
+fn settings_to_payload(
+    settings: &hermes_schema::pb::governance::ProposalSettings,
+) -> ProposalSettingsPayload {
+    ProposalSettingsPayload {
+        start_date: settings.start_date,
+        end_date: settings.last_date,
+        voting_mode: voting_mode_to_string(settings.voting_mode),
+        quorum: settings.quorum,
+        flat_threshold: settings.flat_threshold,
+        percentage_threshold: settings.percentage_threshold,
+    }
+}
+
+/// Convert a protobuf ProposalAction to a webhook-friendly summary.
+fn action_to_summary(action: &hermes_schema::pb::governance::ProposalAction) -> ActionSummary {
+    match &action.action {
+        Some(proposal_action::Action::AddMember(a)) => ActionSummary {
+            action_type: "add_member".to_string(),
+            target_address: Some(hex::encode(&a.target_address)),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::RemoveMember(a)) => ActionSummary {
+            action_type: "remove_member".to_string(),
+            target_address: Some(hex::encode(&a.target_address)),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::AddEditor(a)) => ActionSummary {
+            action_type: "add_editor".to_string(),
+            target_address: Some(hex::encode(&a.target_address)),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::RemoveEditor(a)) => ActionSummary {
+            action_type: "remove_editor".to_string(),
+            target_address: Some(hex::encode(&a.target_address)),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::UnflagEditor(a)) => ActionSummary {
+            action_type: "unflag_editor".to_string(),
+            target_address: Some(hex::encode(&a.target_address)),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::Publish(p)) => ActionSummary {
+            action_type: "publish".to_string(),
+            content_uri: if p.content_uri.is_empty() {
+                None
+            } else {
+                Some(p.content_uri.clone())
+            },
+            name: if p.name.is_empty() {
+                None
+            } else {
+                Some(p.name.clone())
+            },
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::Flag(f)) => ActionSummary {
+            action_type: "flag".to_string(),
+            target_address: Some(hex::encode(&f.content_id)),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::Unflag(u)) => ActionSummary {
+            action_type: "unflag".to_string(),
+            target_address: Some(hex::encode(&u.content_id)),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::UpdateVotingSettings(s)) => ActionSummary {
+            action_type: "update_voting_settings".to_string(),
+            voting_settings: Some(VotingSettingsUpdate {
+                quorum: s.quorum,
+                fast_threshold: s.fast_threshold,
+                slow_threshold: s.slow_threshold,
+                duration: s.duration,
+            }),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::SubspaceVerified(s)) => ActionSummary {
+            action_type: "subspace_verified".to_string(),
+            target_space_id: Uuid::from_slice(&s.target_space_id)
+                .ok()
+                .map(|u| u.to_string()),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::SubspaceUnverified(s)) => ActionSummary {
+            action_type: "subspace_unverified".to_string(),
+            target_space_id: Uuid::from_slice(&s.target_space_id)
+                .ok()
+                .map(|u| u.to_string()),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::SubspaceRelated(s)) => ActionSummary {
+            action_type: "subspace_related".to_string(),
+            target_space_id: Uuid::from_slice(&s.target_space_id)
+                .ok()
+                .map(|u| u.to_string()),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::SubspaceUnrelated(s)) => ActionSummary {
+            action_type: "subspace_unrelated".to_string(),
+            target_space_id: Uuid::from_slice(&s.target_space_id)
+                .ok()
+                .map(|u| u.to_string()),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::SubspaceTopicDeclared(t)) => ActionSummary {
+            action_type: "subspace_topic_declared".to_string(),
+            target_topic_id: Uuid::from_slice(&t.target_topic_id)
+                .ok()
+                .map(|u| u.to_string()),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::SubspaceTopicRemoved(t)) => ActionSummary {
+            action_type: "subspace_topic_removed".to_string(),
+            target_topic_id: Uuid::from_slice(&t.target_topic_id)
+                .ok()
+                .map(|u| u.to_string()),
+            ..ActionSummary::default()
+        },
+        None => ActionSummary {
+            action_type: "unknown".to_string(),
+            ..ActionSummary::default()
+        },
+    }
 }
 
 /// Map a protobuf vote option to a string for the webhook payload.
@@ -240,11 +471,21 @@ pub fn handle_proposal_voted(msg: &HermesProposalVoted) -> Result<NotificationEv
             idempotency_key: None,
             block_number: Some(block_number),
             timestamp: Some(timestamp),
+            space_name: None,
             data: NotificationData::Governance(GovernanceData {
                 proposal_id: proposal_id.to_string(),
                 proposer_id: None,
                 voter_id: Some(voter_id.to_string()),
                 vote: Some(vote_option_to_string(msg.vote)),
+                voting_mode: None,
+                actions: None,
+                settings: None,
+                proposal_name: None,
+                proposer_name: None,
+                voter_name: None,
+                yes_count: None,
+                no_count: None,
+                abstain_count: None,
             }),
         },
     })
@@ -278,11 +519,21 @@ pub fn handle_proposal_executed(
             idempotency_key: None,
             block_number: Some(block_number),
             timestamp: Some(timestamp),
+            space_name: None,
             data: NotificationData::Governance(GovernanceData {
                 proposal_id: proposal_id.to_string(),
                 proposer_id: None,
                 voter_id: None,
                 vote: None,
+                voting_mode: None,
+                actions: None,
+                settings: None,
+                proposal_name: None,
+                proposer_name: None,
+                voter_name: None,
+                yes_count: None,
+                no_count: None,
+                abstain_count: None,
             }),
         },
     })
@@ -318,11 +569,24 @@ pub fn handle_proposal_settings_updated(
             idempotency_key: None,
             block_number: Some(block_number),
             timestamp: Some(timestamp),
+            space_name: None,
             data: NotificationData::Governance(GovernanceData {
                 proposal_id: proposal_id.to_string(),
                 proposer_id: None,
                 voter_id: None,
                 vote: None,
+                voting_mode: msg
+                    .settings
+                    .as_ref()
+                    .map(|s| voting_mode_to_string(s.voting_mode)),
+                actions: None,
+                settings: msg.settings.as_ref().map(settings_to_payload),
+                proposal_name: None,
+                proposer_name: None,
+                voter_name: None,
+                yes_count: None,
+                no_count: None,
+                abstain_count: None,
             }),
         },
     })
@@ -353,11 +617,21 @@ pub fn build_rejection_event(
             idempotency_key: None,
             block_number: None,
             timestamp: Some(end_time as u64),
+            space_name: None,
             data: NotificationData::Governance(GovernanceData {
                 proposal_id: proposal_id.to_string(),
                 proposer_id: Some(proposed_by.to_string()),
                 voter_id: None,
                 vote: None,
+                voting_mode: None,
+                actions: None,
+                settings: None,
+                proposal_name: None,
+                proposer_name: None,
+                voter_name: None,
+                yes_count: None,
+                no_count: None,
+                abstain_count: None,
             }),
         },
     }
@@ -456,6 +730,7 @@ pub fn handle_bounty_interest(info: &BountyRelationInfo) -> NotificationEvent {
             idempotency_key: None,
             block_number: Some(info.block_number),
             timestamp: Some(info.timestamp),
+            space_name: None,
             data: NotificationData::Bounty(BountyData {
                 bounty_entity_id: info.bounty_entity_id.to_string(),
                 relation_id: info.relation_id.to_string(),
@@ -463,6 +738,8 @@ pub fn handle_bounty_interest(info: &BountyRelationInfo) -> NotificationEvent {
                 bounty_space_id: info.bounty_space_id.to_string(),
                 proposal_id: None,
                 interested_user_space_id: Some(info.curator_space_id.to_string()),
+                bounty_name: None,
+                curator_name: None,
             }),
         },
     }
@@ -486,6 +763,7 @@ pub fn handle_bounty_allocated(info: &BountyRelationInfo) -> NotificationEvent {
             idempotency_key: None,
             block_number: Some(info.block_number),
             timestamp: Some(info.timestamp),
+            space_name: None,
             data: NotificationData::Bounty(BountyData {
                 bounty_entity_id: info.bounty_entity_id.to_string(),
                 relation_id: info.relation_id.to_string(),
@@ -493,6 +771,8 @@ pub fn handle_bounty_allocated(info: &BountyRelationInfo) -> NotificationEvent {
                 bounty_space_id: info.bounty_space_id.to_string(),
                 proposal_id: info.proposal_id.map(|p| p.to_string()),
                 interested_user_space_id: None,
+                bounty_name: None,
+                curator_name: None,
             }),
         },
     }
@@ -514,6 +794,7 @@ pub fn handle_bounty_payout(info: &BountyRelationInfo) -> NotificationEvent {
             idempotency_key: None,
             block_number: Some(info.block_number),
             timestamp: Some(info.timestamp),
+            space_name: None,
             data: NotificationData::Bounty(BountyData {
                 bounty_entity_id: info.bounty_entity_id.to_string(),
                 relation_id: info.relation_id.to_string(),
@@ -521,6 +802,8 @@ pub fn handle_bounty_payout(info: &BountyRelationInfo) -> NotificationEvent {
                 bounty_space_id: info.bounty_space_id.to_string(),
                 proposal_id: info.proposal_id.map(|p| p.to_string()),
                 interested_user_space_id: None,
+                bounty_name: None,
+                curator_name: None,
             }),
         },
     }

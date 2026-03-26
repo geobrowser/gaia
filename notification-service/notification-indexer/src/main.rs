@@ -10,7 +10,7 @@
 use std::env;
 
 use futures::StreamExt;
-use hermes_instrumentation::{error, info, info_span, warn};
+use hermes_instrumentation::{debug, error, info, info_span, warn};
 use rdkafka::message::Message;
 
 use notification_indexer::consumer::{
@@ -100,6 +100,16 @@ async fn async_main() -> Result<(), IndexerError> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(8080);
 
+    let block_delay: u64 = env::var("BLOCK_DELAY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2);
+
+    let block_delay_timeout_secs: u64 = env::var("BLOCK_DELAY_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30);
+
     // Initialize storage
     let storage = Storage::connect(&database_url).await?;
     info!("Connected to database");
@@ -147,12 +157,15 @@ async fn async_main() -> Result<(), IndexerError> {
                                     info!(count = batch_len, "Found expired proposals");
                                 }
                                 for proposal in &expired {
-                                    let event = build_rejection_event(
+                                    let mut event = build_rejection_event(
                                         proposal.id,
                                         proposal.space_id,
                                         proposal.proposed_by,
                                         proposal.end_time,
                                     );
+                                    // Enrich rejection with names (proposal is guaranteed to exist)
+                                    enrich_payload(&poller_storage, &mut event, proposal.space_id).await;
+
                                     let editors = match poller_storage.find_editors_for_space(proposal.space_id).await {
                                         Ok(eds) => eds,
                                         Err(e) => {
@@ -303,7 +316,21 @@ async fn async_main() -> Result<(), IndexerError> {
                             };
 
                             match result {
-                                Ok(event) => {
+                                Ok(mut event) => {
+                                    // Block delay: wait for kg-indexer to catch up so
+                                    // names/metadata are populated before we send
+                                    if block_delay > 0 {
+                                        if let Some(msg_block) = event.payload.block_number {
+                                            wait_for_kg_catchup(
+                                                &storage,
+                                                msg_block,
+                                                block_delay,
+                                                block_delay_timeout_secs,
+                                            )
+                                            .await;
+                                        }
+                                    }
+
                                     // Resolve editors for the space
                                     let space_id = match uuid::Uuid::parse_str(&event.payload.space_id) {
                                         Ok(sid) => sid,
@@ -317,6 +344,9 @@ async fn async_main() -> Result<(), IndexerError> {
                                             continue;
                                         }
                                     };
+
+                                    // Enrich payload with human-readable names (best-effort)
+                                    enrich_payload(&storage, &mut event, space_id).await;
 
                                     let editors = match storage.find_editors_for_space(space_id).await {
                                         Ok(eds) => eds,
@@ -421,4 +451,104 @@ async fn async_main() -> Result<(), IndexerError> {
     );
 
     Ok(())
+}
+
+/// Wait for the kg-indexer to process blocks up to (at least) the message's block.
+///
+/// Polls `lookup_latest_block()` until `latest_kg_block >= msg_block + delay`,
+/// or until `timeout_secs` elapses. Handles Anvil/dev environments where blocks
+/// may not advance without transactions.
+async fn wait_for_kg_catchup(storage: &Storage, msg_block: u64, delay: u64, timeout_secs: u64) {
+    let target = msg_block.saturating_add(delay);
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
+
+    loop {
+        if let Some(latest) = storage.lookup_latest_block().await {
+            if latest >= target {
+                return;
+            }
+            debug!(
+                msg_block = msg_block,
+                target = target,
+                latest_kg_block = latest,
+                "Waiting for kg-indexer to catch up"
+            );
+        } else {
+            // No blocks in DB yet — don't wait
+            return;
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            debug!(
+                msg_block = msg_block,
+                timeout_secs = timeout_secs,
+                "Block delay timeout, processing anyway (best-effort)"
+            );
+            return;
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    }
+}
+
+/// Enrich a notification event payload with human-readable names from the DB.
+///
+/// All lookups are best-effort — failures are silently ignored and the
+/// corresponding field remains None (omitted from the webhook payload).
+async fn enrich_payload(
+    storage: &Storage,
+    event: &mut notification_indexer::models::NotificationEvent,
+    space_id: uuid::Uuid,
+) {
+    use notification_indexer::models::{NotificationData, NotificationEventType};
+
+    // Space name (common to all event types)
+    event.payload.space_name = storage.lookup_entity_name(space_id, space_id).await;
+
+    match &mut event.payload.data {
+        NotificationData::Governance(ref mut gov) => {
+            // Proposal name
+            if let Ok(pid) = uuid::Uuid::parse_str(&gov.proposal_id) {
+                gov.proposal_name = storage.lookup_proposal_name(pid).await;
+            }
+
+            // Proposer display name
+            if let Some(ref proposer_id) = gov.proposer_id {
+                if let Ok(pid) = uuid::Uuid::parse_str(proposer_id) {
+                    gov.proposer_name = storage.lookup_entity_name(pid, space_id).await;
+                }
+            }
+
+            // Voter display name
+            if let Some(ref voter_id) = gov.voter_id {
+                if let Ok(vid) = uuid::Uuid::parse_str(voter_id) {
+                    gov.voter_name = storage.lookup_entity_name(vid, space_id).await;
+                }
+            }
+
+            // Vote tallies (proposal_voted events only)
+            if event.event_type == NotificationEventType::ProposalVoted {
+                if let Ok(pid) = uuid::Uuid::parse_str(&gov.proposal_id) {
+                    if let Some((yes, no, abstain)) = storage.lookup_vote_tallies(pid).await {
+                        gov.yes_count = Some(yes);
+                        gov.no_count = Some(no);
+                        gov.abstain_count = Some(abstain);
+                    }
+                }
+            }
+        }
+        NotificationData::Bounty(ref mut bounty) => {
+            // Bounty entity name
+            if let Ok(bid) = uuid::Uuid::parse_str(&bounty.bounty_entity_id) {
+                if let Ok(bsid) = uuid::Uuid::parse_str(&bounty.bounty_space_id) {
+                    bounty.bounty_name = storage.lookup_entity_name(bid, bsid).await;
+                }
+            }
+
+            // Curator display name
+            if let Ok(cid) = uuid::Uuid::parse_str(&bounty.curator_space_id) {
+                bounty.curator_name = storage.lookup_entity_name(cid, cid).await;
+            }
+        }
+    }
 }
