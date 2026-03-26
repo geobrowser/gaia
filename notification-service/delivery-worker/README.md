@@ -76,6 +76,76 @@ This means staging can never call production webhooks (or vice versa), as long a
 **Writes to:**
 - `notification_deliveries` — updates status, attempts, next_retry_at, delivered_at
 
+## Registering a Webhook
+
+Webhooks are registered manually in the `app_webhooks` table (no registration API in v1). You need:
+
+| Column | Example | Description |
+|---|---|---|
+| `app_name` | `curator-ios` | Unique name for your app |
+| `url` | `https://api.curator.app/webhooks/geo` | HTTPS endpoint that accepts POST |
+| `secret` | *(hex string)* | Shared HMAC-SHA256 secret |
+
+### Generate a secret
+
+```bash
+openssl rand -hex 32
+```
+
+### Local development
+
+```bash
+PGPASSWORD=postgres psql -h localhost -U postgres -d gaia -c "
+INSERT INTO app_webhooks (app_name, url, secret)
+VALUES ('my-app', 'http://localhost:3000/webhooks/geo', 'your-secret-here')
+ON CONFLICT (app_name) DO UPDATE SET url = EXCLUDED.url, secret = EXCLUDED.secret;
+"
+```
+
+### Kubernetes (staging)
+
+Connect to the staging database via the `scoring-service-credentials` secret in the `notifications-staging` namespace:
+
+```bash
+# Get the DATABASE_URL from the K8s secret
+DB_URL=$(kubectl get secret scoring-service-credentials -n notifications-staging \
+  -o jsonpath='{.data.DATABASE_URL}' | base64 -d)
+
+# Insert the webhook (use a port-forward or a psql pod)
+kubectl run psql-tmp --rm -i --tty -n notifications-staging \
+  --image=postgres:16-alpine --restart=Never -- \
+  psql "$DB_URL" -c "
+INSERT INTO app_webhooks (app_name, url, secret)
+VALUES ('my-app', 'https://my-app.example.com/webhooks/geo', '$(openssl rand -hex 32)')
+ON CONFLICT (app_name) DO UPDATE SET url = EXCLUDED.url, secret = EXCLUDED.secret;
+"
+```
+
+### Kubernetes (production)
+
+Same as staging but in the `notifications` namespace:
+
+```bash
+DB_URL=$(kubectl get secret scoring-service-credentials -n notifications \
+  -o jsonpath='{.data.DATABASE_URL}' | base64 -d)
+
+kubectl run psql-tmp --rm -i --tty -n notifications \
+  --image=postgres:16-alpine --restart=Never -- \
+  psql "$DB_URL" -c "
+INSERT INTO app_webhooks (app_name, url, secret)
+VALUES ('my-app', 'https://my-app.example.com/webhooks/geo', '$(openssl rand -hex 32)')
+ON CONFLICT (app_name) DO UPDATE SET url = EXCLUDED.url, secret = EXCLUDED.secret;
+"
+```
+
+> **Important:** Staging and production use completely separate databases. A webhook registered in staging will never receive production notifications (and vice versa). Always verify you're connected to the correct environment's database.
+
+### Verify registration
+
+```sql
+SELECT app_name, url, created_at FROM app_webhooks;
+```
+
 ## Running locally
 
 ```bash
