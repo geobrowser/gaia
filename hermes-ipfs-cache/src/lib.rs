@@ -18,9 +18,9 @@
 //!
 //! // Development: use all mock sources
 //! let cache = CacheSource::mock().into_cache().await?;
-//! let mut edits = HashMap::new();
-//! edits.insert("QmTestCid".to_string(), test_edit);
-//! let sink = IpfsCacheSink::new(cache, IpfsSource::mock(edits));
+//! let mut data = HashMap::new();
+//! data.insert("QmTestCid".to_string(), grc20_bytes);
+//! let sink = IpfsCacheSink::new(cache, IpfsSource::mock_bytes(data));
 //! sink.run(StreamSource::mock()).await?;
 //!
 //! // Production: use live sources
@@ -133,9 +133,9 @@ impl IpfsCacheSink {
     ///
     /// ```ignore
     /// // Development: use mock IPFS data
-    /// let mut edits = HashMap::new();
-    /// edits.insert("QmTestCid".to_string(), test_edit);
-    /// let sink = IpfsCacheSink::new(cache, IpfsSource::mock(edits));
+    /// let mut data = HashMap::new();
+    /// data.insert("QmTestCid".to_string(), grc20_bytes);
+    /// let sink = IpfsCacheSink::new(cache, IpfsSource::mock_bytes(data));
     ///
     /// // Production: use live IPFS gateway
     /// let sink = IpfsCacheSink::new(cache, IpfsSource::live("https://ipfs.io/ipfs/"));

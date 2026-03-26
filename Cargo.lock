@@ -3307,11 +3307,10 @@ name = "ipfs"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "prost 0.13.5",
+ "grc-20",
  "reqwest 0.12.28",
  "thiserror 2.0.18",
  "tokio",
- "wire",
 ]
 
 [[package]]
