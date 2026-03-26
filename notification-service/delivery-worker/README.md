@@ -138,6 +138,8 @@ ON CONFLICT (app_name) DO UPDATE SET url = EXCLUDED.url, secret = EXCLUDED.secre
 "
 ```
 
+> **No restart required.** New webhooks are picked up automatically — the notification-indexer queries `app_webhooks` when fanning out each event. However, events that occurred *before* the webhook was registered will not be retroactively delivered.
+
 > **Important:** Staging and production use completely separate databases. A webhook registered in staging will never receive production notifications (and vice versa). Always verify you're connected to the correct environment's database.
 
 ### Verify registration
