@@ -65,3 +65,9 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
 
 CREATE INDEX IF NOT EXISTS idx_deliveries_pending
     ON notification_deliveries (status, next_retry_at);
+
+-- Expression index for the rejection poller's LEFT JOIN anti-pattern.
+-- Without this, the (payload->>'proposal_id')::uuid extraction does a seq scan.
+CREATE INDEX IF NOT EXISTS idx_outbox_rejected_proposal
+    ON notification_outbox (((payload->>'proposal_id')::uuid))
+    WHERE event_type = 'proposal_rejected';

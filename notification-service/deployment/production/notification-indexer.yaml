@@ -107,17 +107,35 @@ spec:
                   name: notification-indexer-secrets
                   key: SENTRY_DEBUG
                   optional: true
+          ports:
+            - containerPort: 8080
+              name: health
+              protocol: TCP
           startupProbe:
-            exec:
-              command: ["pgrep", "-x", "notification-in"]
+            httpGet:
+              path: /healthz
+              port: 8080
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 6
           livenessProbe:
-            exec:
-              command: ["pgrep", "-x", "notification-in"]
+            httpGet:
+              path: /healthz
+              port: 8080
             periodSeconds: 30
             failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           resources:
             requests:
               memory: "256Mi"

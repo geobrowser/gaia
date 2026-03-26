@@ -124,17 +124,17 @@ mod tests {
 
     #[test]
     fn test_exponential_backoff_calculation() {
-        assert_eq!(backoff_seconds(1), 30);       // 30 * 2^0
-        assert_eq!(backoff_seconds(2), 60);       // 30 * 2^1
-        assert_eq!(backoff_seconds(3), 120);      // 30 * 2^2
-        assert_eq!(backoff_seconds(4), 240);      // 30 * 2^3
-        assert_eq!(backoff_seconds(5), 480);      // 30 * 2^4
-        assert_eq!(backoff_seconds(6), 960);      // 30 * 2^5
-        assert_eq!(backoff_seconds(7), 1920);     // 30 * 2^6
-        assert_eq!(backoff_seconds(8), 3840);     // 30 * 2^7
-        assert_eq!(backoff_seconds(13), 122880);  // 30 * 2^12
-        assert_eq!(backoff_seconds(14), 172800);  // capped at 48hr
-        assert_eq!(backoff_seconds(15), 172800);  // still capped
+        assert_eq!(backoff_seconds(1), 30); // 30 * 2^0
+        assert_eq!(backoff_seconds(2), 60); // 30 * 2^1
+        assert_eq!(backoff_seconds(3), 120); // 30 * 2^2
+        assert_eq!(backoff_seconds(4), 240); // 30 * 2^3
+        assert_eq!(backoff_seconds(5), 480); // 30 * 2^4
+        assert_eq!(backoff_seconds(6), 960); // 30 * 2^5
+        assert_eq!(backoff_seconds(7), 1920); // 30 * 2^6
+        assert_eq!(backoff_seconds(8), 3840); // 30 * 2^7
+        assert_eq!(backoff_seconds(13), 122880); // 30 * 2^12
+        assert_eq!(backoff_seconds(14), 172800); // capped at 48hr
+        assert_eq!(backoff_seconds(15), 172800); // still capped
         assert_eq!(backoff_seconds(100), 172800); // still capped
     }
 }

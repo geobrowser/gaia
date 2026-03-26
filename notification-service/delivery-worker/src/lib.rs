@@ -5,4 +5,5 @@
 
 pub mod deliver;
 pub mod error;
+pub mod health;
 pub mod storage;

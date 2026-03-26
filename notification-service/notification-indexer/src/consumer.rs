@@ -9,7 +9,7 @@ use rdkafka::{
     TopicPartitionList,
 };
 use std::env;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use crate::error::IndexerError;
 
@@ -31,7 +31,12 @@ impl KafkaConsumer {
             .set("group.id", group_id)
             .set("enable.auto.commit", "false")
             .set("auto.offset.reset", "earliest")
-            .set("session.timeout.ms", "6000");
+            .set("session.timeout.ms", "6000")
+            // Memory bounds: limit fetch and message sizes to prevent OOM
+            .set("fetch.max.bytes", "52428800") // 50MB total fetch
+            .set("max.partition.fetch.bytes", "1048576") // 1MB per partition
+            .set("message.max.bytes", "10485760") // 10MB max message
+            .set("max.poll.interval.ms", "300000"); // 5min max processing time
 
         // Optional SASL/SSL configuration
         if let Ok(username) = env::var("KAFKA_USERNAME") {
@@ -96,6 +101,19 @@ impl KafkaConsumer {
 
         debug!(topic = %topic, partition = partition, offset = offset, "Committed offset");
         Ok(())
+    }
+
+    /// Flush any pending async offset commits synchronously.
+    ///
+    /// Called during graceful shutdown to ensure all successfully processed
+    /// offsets are persisted before the consumer is dropped.
+    pub fn flush_commits(&self) {
+        if let Err(e) = self
+            .consumer
+            .commit_consumer_state(rdkafka::consumer::CommitMode::Sync)
+        {
+            error!(error = %e, "Failed to flush commits during shutdown");
+        }
     }
 }
 

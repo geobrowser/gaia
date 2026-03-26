@@ -42,6 +42,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.92.0"
+          components: clippy, rustfmt
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -66,6 +67,16 @@ jobs:
           key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-e2e-
+
+      - name: Check formatting
+        run: |
+          cargo fmt -p notification-indexer --check
+          cargo fmt -p delivery-worker --check
+
+      - name: Run clippy
+        run: |
+          cargo clippy -p notification-indexer -- -D warnings
+          cargo clippy -p delivery-worker -- -D warnings
 
       - name: Start Postgres and Kafka
         run: |

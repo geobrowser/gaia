@@ -27,9 +27,12 @@ RUN cargo build --release
 FROM debian:bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y ca-certificates libssl3 procps && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y ca-certificates libssl3 && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd -r -u 1001 -g root appuser
 
 COPY --from=builder /app/notification-service/notification-indexer/target/release/notification-indexer /usr/local/bin/notification-indexer
+
+USER 1001
 
 CMD ["notification-indexer"]

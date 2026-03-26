@@ -1,7 +1,10 @@
 //! Storage layer for notification outbox and delivery fan-out.
 
+use std::time::Duration;
+
 use hermes_instrumentation::instrument;
 use sha2::{Digest, Sha256};
+use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -27,8 +30,22 @@ impl Storage {
     }
 
     /// Connect to the database and create a new Storage instance.
+    ///
+    /// Pool tuning is configurable via `DB_POOL_MAX_CONNECTIONS` (default 20).
     pub async fn connect(database_url: &str) -> Result<Self, StorageError> {
-        let pool = PgPool::connect(database_url).await?;
+        let max_connections: u32 = std::env::var("DB_POOL_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(20);
+
+        let pool = PgPoolOptions::new()
+            .max_connections(max_connections)
+            .min_connections(2)
+            .acquire_timeout(Duration::from_secs(5))
+            .idle_timeout(Some(Duration::from_secs(600)))
+            .max_lifetime(Some(Duration::from_secs(1800)))
+            .connect(database_url)
+            .await?;
         Ok(Self::new(pool))
     }
 
@@ -41,11 +58,11 @@ impl Storage {
     ///
     /// Returns the `member_space_id` of each editor — this is the editor's account
     /// space UUID and becomes the `user_space_id` in the webhook payload.
-    #[instrument(name = "notification_indexer.storage.find_editors_for_space", skip(self))]
-    pub async fn find_editors_for_space(
-        &self,
-        space_id: Uuid,
-    ) -> Result<Vec<Uuid>, StorageError> {
+    #[instrument(
+        name = "notification_indexer.storage.find_editors_for_space",
+        skip(self)
+    )]
+    pub async fn find_editors_for_space(&self, space_id: Uuid) -> Result<Vec<Uuid>, StorageError> {
         let rows = sqlx::query(
             r#"
             SELECT member_space_id FROM editors WHERE space_id = $1
@@ -65,7 +82,10 @@ impl Storage {
     /// to all registered webhooks. Idempotency keys include the editor ID.
     ///
     /// Returns the number of new outbox rows inserted (0 if all were duplicates).
-    #[instrument(name = "notification_indexer.storage.insert_notifications_for_editors", skip(self, event, editors))]
+    #[instrument(
+        name = "notification_indexer.storage.insert_notifications_for_editors",
+        skip(self, event, editors)
+    )]
     pub async fn insert_notifications_for_editors(
         &self,
         event: &NotificationEvent,
@@ -73,23 +93,40 @@ impl Storage {
     ) -> Result<u64, StorageError> {
         let mut inserted_count: u64 = 0;
 
-        for editor_id in editors {
-            let mut payload = event.payload.clone();
-            payload.user_space_id = Some(editor_id.to_string());
+        // Serialize the payload once before the editor loop. Per-editor fields
+        // (user_space_id, idempotency_key) are stamped into the Value clone,
+        // avoiding N struct clones + N serializations.
+        let base_value = serde_json::to_value(&event.payload).map_err(|e| {
+            StorageError::Database(sqlx::Error::Protocol(format!(
+                "failed to serialize payload: {}",
+                e
+            )))
+        })?;
 
+        // Single transaction for all editors — either all fan-out rows are
+        // committed or none are. On error the transaction is dropped (implicit
+        // rollback), and the Kafka offset is not committed so the message
+        // will be reprocessed. The ON CONFLICT DO NOTHING clause on the outbox
+        // insert ensures safe reprocessing of already-committed editors.
+        let mut tx = self.pool.begin().await?;
+
+        for editor_id in editors {
             // Hash(base:user_space_id) — base is e.g. "12345:0:proposal_created"
             let pre_hash = format!("{}:{}", event.idempotency_key, editor_id);
             let idempotency_key = hex::encode(Sha256::digest(pre_hash.as_bytes()));
-            payload.idempotency_key = Some(idempotency_key.clone());
 
-            let serialized_payload = serde_json::to_value(&payload).map_err(|e| {
-                StorageError::Database(sqlx::Error::Protocol(format!(
-                    "failed to serialize payload: {}",
-                    e
-                )))
-            })?;
-
-            let mut tx = self.pool.begin().await?;
+            // Clone the pre-serialized Value and stamp per-editor fields
+            let mut serialized_payload = base_value.clone();
+            if let serde_json::Value::Object(ref mut map) = serialized_payload {
+                map.insert(
+                    "user_space_id".to_string(),
+                    serde_json::Value::String(editor_id.to_string()),
+                );
+                map.insert(
+                    "idempotency_key".to_string(),
+                    serde_json::Value::String(idempotency_key.clone()),
+                );
+            }
 
             // Insert into outbox (ON CONFLICT DO NOTHING for idempotency)
             let result = sqlx::query(
@@ -109,8 +146,7 @@ impl Storage {
             let outbox_id: Uuid = match result {
                 Some(row) => row.get("id"),
                 None => {
-                    // Duplicate — already processed
-                    tx.rollback().await?;
+                    // Duplicate — already processed, skip this editor
                     continue;
                 }
             };
@@ -126,17 +162,28 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
 
-            tx.commit().await?;
             inserted_count += 1;
         }
+
+        tx.commit().await?;
 
         Ok(inserted_count)
     }
 
     /// Find proposals that have expired (end_time < now) without being executed,
     /// and for which we haven't yet sent a rejection notification.
-    #[instrument(name = "notification_indexer.storage.find_expired_proposals", skip(self))]
-    pub async fn find_expired_proposals(&self) -> Result<Vec<ExpiredProposal>, StorageError> {
+    ///
+    /// Results are limited to `limit` rows to prevent unbounded memory usage.
+    /// Callers should loop until a batch returns fewer than `limit` rows.
+    #[instrument(
+        name = "notification_indexer.storage.find_expired_proposals",
+        skip(self),
+        fields(limit = limit)
+    )]
+    pub async fn find_expired_proposals(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<ExpiredProposal>, StorageError> {
         let rows = sqlx::query(
             r#"
             SELECT p.id, p.space_id, p.proposed_by, p.end_time
@@ -147,8 +194,10 @@ impl Storage {
             WHERE p.end_time < EXTRACT(EPOCH FROM now())
               AND p.executed_at IS NULL
               AND o.id IS NULL
+            LIMIT $1
             "#,
         )
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
 

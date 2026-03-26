@@ -148,7 +148,9 @@ pub fn handle_proposal_created(
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalCreated.as_str().to_string(),
-            category: NotificationEventType::ProposalCreated.category().to_string(),
+            category: NotificationEventType::ProposalCreated
+                .category()
+                .to_string(),
             space_id: space_id.to_string(),
             user_space_id: None,
             idempotency_key: None,
@@ -185,7 +187,9 @@ pub fn handle_proposal_updated(
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalUpdated.as_str().to_string(),
-            category: NotificationEventType::ProposalUpdated.category().to_string(),
+            category: NotificationEventType::ProposalUpdated
+                .category()
+                .to_string(),
             space_id: space_id.to_string(),
             user_space_id: None,
             idempotency_key: None,
@@ -212,9 +216,7 @@ fn vote_option_to_string(vote: i32) -> String {
 }
 
 /// Build a notification event from a PROPOSAL_VOTED protobuf message.
-pub fn handle_proposal_voted(
-    msg: &HermesProposalVoted,
-) -> Result<NotificationEvent, HandlerError> {
+pub fn handle_proposal_voted(msg: &HermesProposalVoted) -> Result<NotificationEvent, HandlerError> {
     let proposal_id = Uuid::from_slice(&msg.proposal_id)?;
     let space_id = Uuid::from_slice(&msg.space_id)?;
     let voter_id = Uuid::from_slice(&msg.voter_id)?;
@@ -268,7 +270,9 @@ pub fn handle_proposal_executed(
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalExecuted.as_str().to_string(),
-            category: NotificationEventType::ProposalExecuted.category().to_string(),
+            category: NotificationEventType::ProposalExecuted
+                .category()
+                .to_string(),
             space_id: space_id.to_string(),
             user_space_id: None,
             idempotency_key: None,
@@ -296,10 +300,7 @@ pub fn handle_proposal_settings_updated(
     let sequence = meta.sequence;
     let timestamp = meta.created_at;
 
-    let idempotency_base = format!(
-        "{}:{}:proposal_settings_updated",
-        block_number, sequence
-    );
+    let idempotency_base = format!("{}:{}:proposal_settings_updated", block_number, sequence);
 
     Ok(NotificationEvent {
         event_type: NotificationEventType::ProposalSettingsUpdated,
@@ -344,7 +345,9 @@ pub fn build_rejection_event(
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalRejected.as_str().to_string(),
-            category: NotificationEventType::ProposalRejected.category().to_string(),
+            category: NotificationEventType::ProposalRejected
+                .category()
+                .to_string(),
             space_id: space_id.to_string(),
             user_space_id: None,
             idempotency_key: None,
@@ -475,7 +478,9 @@ pub fn handle_bounty_allocated(info: &BountyRelationInfo) -> NotificationEvent {
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::BountyAllocated.as_str().to_string(),
-            category: NotificationEventType::BountyAllocated.category().to_string(),
+            category: NotificationEventType::BountyAllocated
+                .category()
+                .to_string(),
             space_id: info.bounty_space_id.to_string(),
             user_space_id: None,
             idempotency_key: None,
@@ -951,5 +956,125 @@ mod tests {
         );
         assert_eq!(event.event_type, NotificationEventType::ProposalRejected);
         assert_eq!(event.payload.event_type, "proposal_rejected");
+    }
+
+    // -----------------------------------------------------------------------
+    // Bounty events
+    // -----------------------------------------------------------------------
+
+    fn make_bounty_info() -> BountyRelationInfo {
+        BountyRelationInfo {
+            relation_id: Uuid::from_bytes([0x10; 16]),
+            bounty_entity_id: Uuid::from_bytes([0x20; 16]),
+            curator_space_id: Uuid::from_bytes([0x30; 16]),
+            bounty_space_id: Uuid::from_bytes([0x40; 16]),
+            proposal_id: None,
+            block_number: 50000,
+            sequence: 7,
+            timestamp: 1700010000,
+        }
+    }
+
+    #[test]
+    fn test_bounty_interest_event() {
+        let info = make_bounty_info();
+        let event = handle_bounty_interest(&info);
+
+        assert_eq!(event.event_type, NotificationEventType::BountyInterest);
+        assert_eq!(event.idempotency_key, "50000:7:bounty_interest");
+
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert_eq!(json["event_type"], "bounty_interest");
+        assert_eq!(json["category"], "bounty");
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["space_id"], info.bounty_space_id.to_string());
+        assert_eq!(json["block_number"], 50000);
+        assert_eq!(json["timestamp"], 1700010000);
+        assert_eq!(json["bounty_entity_id"], info.bounty_entity_id.to_string());
+        assert_eq!(json["relation_id"], info.relation_id.to_string());
+        assert_eq!(json["curator_space_id"], info.curator_space_id.to_string());
+        assert_eq!(
+            json["interested_user_space_id"],
+            info.curator_space_id.to_string()
+        );
+        // No governance fields
+        assert!(json.get("voter_id").is_none());
+        assert!(json.get("proposer_id").is_none());
+    }
+
+    #[test]
+    fn test_bounty_allocated_event() {
+        let mut info = make_bounty_info();
+        info.proposal_id = Some(Uuid::from_bytes([0x50; 16]));
+        let event = handle_bounty_allocated(&info);
+
+        assert_eq!(event.event_type, NotificationEventType::BountyAllocated);
+        assert_eq!(event.idempotency_key, "50000:7:bounty_allocated");
+
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert_eq!(json["event_type"], "bounty_allocated");
+        assert_eq!(json["category"], "bounty");
+        assert_eq!(
+            json["proposal_id"],
+            Uuid::from_bytes([0x50; 16]).to_string()
+        );
+        // interested_user_space_id absent for allocation
+        assert!(json.get("interested_user_space_id").is_none());
+    }
+
+    #[test]
+    fn test_bounty_payout_event() {
+        let mut info = make_bounty_info();
+        info.proposal_id = Some(Uuid::from_bytes([0x60; 16]));
+        let event = handle_bounty_payout(&info);
+
+        assert_eq!(event.event_type, NotificationEventType::BountyPayout);
+        assert_eq!(event.idempotency_key, "50000:7:bounty_payout");
+
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert_eq!(json["event_type"], "bounty_payout");
+        assert_eq!(json["category"], "bounty");
+        assert_eq!(
+            json["proposal_id"],
+            Uuid::from_bytes([0x60; 16]).to_string()
+        );
+        assert!(json.get("interested_user_space_id").is_none());
+    }
+
+    #[test]
+    fn test_bounty_config_default() {
+        let config = BountyConfig::default();
+        // Should parse hardcoded UUIDs without panicking
+        assert_ne!(config.interest_type_id, Uuid::nil());
+    }
+
+    #[test]
+    fn test_bounty_config_match_type() {
+        let config = BountyConfig::default();
+
+        assert_eq!(
+            config.match_type(&config.interest_type_id),
+            Some(NotificationEventType::BountyInterest)
+        );
+        // allocated and payout use placeholder UUIDs — test with distinct values
+        let config = BountyConfig {
+            interest_type_id: Uuid::from_bytes([0x01; 16]),
+            allocated_type_id: Uuid::from_bytes([0x02; 16]),
+            payout_type_id: Uuid::from_bytes([0x03; 16]),
+        };
+        assert_eq!(
+            config.match_type(&config.interest_type_id),
+            Some(NotificationEventType::BountyInterest)
+        );
+        assert_eq!(
+            config.match_type(&config.allocated_type_id),
+            Some(NotificationEventType::BountyAllocated)
+        );
+        assert_eq!(
+            config.match_type(&config.payout_type_id),
+            Some(NotificationEventType::BountyPayout)
+        );
+        // Unknown type returns None
+        assert_eq!(config.match_type(&Uuid::from_bytes([0xFF; 16])), None);
     }
 }

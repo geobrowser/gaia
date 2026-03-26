@@ -14,8 +14,8 @@ use hermes_instrumentation::{error, info, warn};
 use rdkafka::message::Message;
 
 use notification_indexer::consumer::{
-    get_event_type, parse_proposal_created, parse_proposal_executed, parse_proposal_settings_updated,
-    parse_proposal_updated, parse_proposal_voted, KafkaConsumer,
+    get_event_type, parse_proposal_created, parse_proposal_executed,
+    parse_proposal_settings_updated, parse_proposal_updated, parse_proposal_voted, KafkaConsumer,
 };
 use notification_indexer::error::IndexerError;
 use notification_indexer::models::{
@@ -95,9 +95,18 @@ async fn async_main() -> Result<(), IndexerError> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(60);
 
+    let health_port: u16 = env::var("HEALTH_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8080);
+
     // Initialize storage
     let storage = Storage::connect(&database_url).await?;
     info!("Connected to database");
+
+    // Start health check server
+    let _health_handle =
+        notification_indexer::health::start_health_server(storage.pool().clone(), health_port);
 
     // Initialize Kafka consumer
     let consumer = KafkaConsumer::new(&kafka_broker, &kafka_group_id)?;
@@ -127,52 +136,63 @@ async fn async_main() -> Result<(), IndexerError> {
                     break;
                 }
                 _ = interval.tick() => {
-                    match poller_storage.find_expired_proposals().await {
-                        Ok(expired) => {
-                            if !expired.is_empty() {
-                                info!(count = expired.len(), "Found expired proposals");
-                            }
-                            for proposal in expired {
-                                let event = build_rejection_event(
-                                    proposal.id,
-                                    proposal.space_id,
-                                    proposal.proposed_by,
-                                    proposal.end_time,
-                                );
-                                let editors = match poller_storage.find_editors_for_space(proposal.space_id).await {
-                                    Ok(eds) => eds,
-                                    Err(e) => {
-                                        error!(error = %e, space_id = %proposal.space_id, "Failed to look up editors for rejection, will retry next poll");
+                    const BATCH_LIMIT: i64 = 1000;
+
+                    // Process in batches to avoid unbounded memory usage
+                    loop {
+                        match poller_storage.find_expired_proposals(BATCH_LIMIT).await {
+                            Ok(expired) => {
+                                let batch_len = expired.len();
+                                if !expired.is_empty() {
+                                    info!(count = batch_len, "Found expired proposals");
+                                }
+                                for proposal in &expired {
+                                    let event = build_rejection_event(
+                                        proposal.id,
+                                        proposal.space_id,
+                                        proposal.proposed_by,
+                                        proposal.end_time,
+                                    );
+                                    let editors = match poller_storage.find_editors_for_space(proposal.space_id).await {
+                                        Ok(eds) => eds,
+                                        Err(e) => {
+                                            error!(error = %e, space_id = %proposal.space_id, "Failed to look up editors for rejection, will retry next poll");
+                                            continue;
+                                        }
+                                    };
+                                    if editors.is_empty() {
                                         continue;
                                     }
-                                };
-                                if editors.is_empty() {
-                                    continue;
+                                    match poller_storage.insert_notifications_for_editors(&event, &editors).await {
+                                        Ok(count) if count > 0 => {
+                                            info!(
+                                                proposal_id = %proposal.id,
+                                                editors = editors.len(),
+                                                inserted = count,
+                                                "Inserted rejection notifications"
+                                            );
+                                        }
+                                        Ok(_) => {
+                                            // All duplicates, already notified
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                error = %e,
+                                                proposal_id = %proposal.id,
+                                                "Failed to insert rejection notifications"
+                                            );
+                                        }
+                                    }
                                 }
-                                match poller_storage.insert_notifications_for_editors(&event, &editors).await {
-                                    Ok(count) if count > 0 => {
-                                        info!(
-                                            proposal_id = %proposal.id,
-                                            editors = editors.len(),
-                                            inserted = count,
-                                            "Inserted rejection notifications"
-                                        );
-                                    }
-                                    Ok(_) => {
-                                        // All duplicates, already notified
-                                    }
-                                    Err(e) => {
-                                        error!(
-                                            error = %e,
-                                            proposal_id = %proposal.id,
-                                            "Failed to insert rejection notifications"
-                                        );
-                                    }
+                                // If we got fewer than the limit, there are no more to process
+                                if (batch_len as i64) < BATCH_LIMIT {
+                                    break;
                                 }
                             }
-                        }
-                        Err(e) => {
-                            error!(error = %e, "Failed to query expired proposals");
+                            Err(e) => {
+                                error!(error = %e, "Failed to query expired proposals");
+                                break;
+                            }
                         }
                     }
                 }
@@ -204,9 +224,22 @@ async fn async_main() -> Result<(), IndexerError> {
             }
 
             _ = heartbeat_timer.tick() => {
+                let outbox_total = sqlx::query_scalar::<_, i64>(
+                    "SELECT count(*) FROM notification_outbox"
+                )
+                .fetch_one(storage.pool())
+                .await
+                .unwrap_or(-1);
+
+                let pool_size = storage.pool().size();
+                let pool_idle = storage.pool().num_idle();
+
                 info!(
                     processed = processed_count,
                     errors = error_count,
+                    outbox_total = outbox_total,
+                    pool_size = pool_size,
+                    pool_idle = pool_idle,
                     "Heartbeat"
                 );
             }
@@ -219,48 +252,39 @@ async fn async_main() -> Result<(), IndexerError> {
                         let offset = msg.offset();
 
                         let event_type = get_event_type(msg.headers());
+                        let mut should_commit = false;
 
                         if let Some(payload) = msg.payload() {
                             let result = match event_type.as_deref() {
                                 Some("PROPOSAL_CREATED") => {
-                                    parse_proposal_created(payload)
-                                        .map_err(IndexerError::from)
-                                        .and_then(|proto| {
-                                            handle_proposal_created(&proto)
-                                                .map_err(IndexerError::from)
-                                        })
+                                    parse_proposal_created(payload).and_then(|proto| {
+                                        handle_proposal_created(&proto)
+                                            .map_err(IndexerError::from)
+                                    })
                                 }
                                 Some("PROPOSAL_UPDATED") => {
-                                    parse_proposal_updated(payload)
-                                        .map_err(IndexerError::from)
-                                        .and_then(|proto| {
-                                            handle_proposal_updated(&proto)
-                                                .map_err(IndexerError::from)
-                                        })
+                                    parse_proposal_updated(payload).and_then(|proto| {
+                                        handle_proposal_updated(&proto)
+                                            .map_err(IndexerError::from)
+                                    })
                                 }
                                 Some("PROPOSAL_VOTED") => {
-                                    parse_proposal_voted(payload)
-                                        .map_err(IndexerError::from)
-                                        .and_then(|proto| {
-                                            handle_proposal_voted(&proto)
-                                                .map_err(IndexerError::from)
-                                        })
+                                    parse_proposal_voted(payload).and_then(|proto| {
+                                        handle_proposal_voted(&proto)
+                                            .map_err(IndexerError::from)
+                                    })
                                 }
                                 Some("PROPOSAL_EXECUTED") => {
-                                    parse_proposal_executed(payload)
-                                        .map_err(IndexerError::from)
-                                        .and_then(|proto| {
-                                            handle_proposal_executed(&proto)
-                                                .map_err(IndexerError::from)
-                                        })
+                                    parse_proposal_executed(payload).and_then(|proto| {
+                                        handle_proposal_executed(&proto)
+                                            .map_err(IndexerError::from)
+                                    })
                                 }
                                 Some("PROPOSAL_SETTINGS_UPDATED") => {
-                                    parse_proposal_settings_updated(payload)
-                                        .map_err(IndexerError::from)
-                                        .and_then(|proto| {
-                                            handle_proposal_settings_updated(&proto)
-                                                .map_err(IndexerError::from)
-                                        })
+                                    parse_proposal_settings_updated(payload).and_then(|proto| {
+                                        handle_proposal_settings_updated(&proto)
+                                            .map_err(IndexerError::from)
+                                    })
                                 }
                                 _ => {
                                     // Ignore unknown event types
@@ -277,6 +301,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     let space_id = match uuid::Uuid::parse_str(&event.payload.space_id) {
                                         Ok(sid) => sid,
                                         Err(e) => {
+                                            // Malformed space_id — cannot reprocess, commit to avoid poison pill
                                             error!(error = %e, "Invalid space_id in event");
                                             error_count += 1;
                                             if let Err(e) = consumer.commit_message(&topic, partition, offset) {
@@ -304,6 +329,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     if editors.is_empty() {
                                         // Genuinely no editors — this is normal, not an error
                                         processed_count += 1;
+                                        should_commit = true;
                                     } else {
                                         match storage.insert_notifications_for_editors(&event, &editors).await {
                                             Ok(count) => {
@@ -317,12 +343,14 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     );
                                                 }
                                                 processed_count += 1;
+                                                should_commit = true;
                                             }
                                             Err(e) => {
+                                                // DB error — don't commit offset so we retry on restart
                                                 error!(
                                                     error = %e,
                                                     event_type = %event.payload.event_type,
-                                                    "Failed to insert notifications"
+                                                    "Failed to insert notifications, will retry"
                                                 );
                                                 error_count += 1;
                                             }
@@ -330,6 +358,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     }
                                 }
                                 Err(e) => {
+                                    // Handler/parse error — cannot reprocess, commit to avoid poison pill
                                     warn!(
                                         error = %e,
                                         partition = partition,
@@ -337,13 +366,21 @@ async fn async_main() -> Result<(), IndexerError> {
                                         "Failed to handle governance message"
                                     );
                                     error_count += 1;
+                                    should_commit = true;
                                 }
                             }
+                        } else {
+                            // No payload — nothing to process, safe to commit
+                            should_commit = true;
                         }
 
-                        // Commit offset regardless of processing outcome to avoid getting stuck
-                        if let Err(e) = consumer.commit_message(&topic, partition, offset) {
-                            error!(error = %e, "Failed to commit offset");
+                        // Only commit offset when processing succeeded or the message
+                        // is permanently unprocessable. DB errors leave the offset
+                        // uncommitted so the message is retried on restart.
+                        if should_commit {
+                            if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+                                error!(error = %e, "Failed to commit offset");
+                            }
                         }
                     }
                     Some(Err(e)) => {
@@ -357,6 +394,9 @@ async fn async_main() -> Result<(), IndexerError> {
             }
         }
     }
+
+    // Flush any pending async offset commits before shutting down
+    consumer.flush_commits();
 
     // Wait for poller to finish gracefully (it should exit via shutdown_rx2)
     match tokio::time::timeout(tokio::time::Duration::from_secs(5), poller_handle).await {

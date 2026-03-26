@@ -2033,6 +2033,7 @@ dependencies = [
 name = "delivery-worker"
 version = "0.1.0"
 dependencies = [
+ "axum 0.7.9",
  "dotenv",
  "hermes-instrumentation",
  "hex",
@@ -4106,6 +4107,7 @@ dependencies = [
 name = "notification-indexer"
 version = "0.1.0"
 dependencies = [
+ "axum 0.7.9",
  "dotenv",
  "futures 0.3.31",
  "grc-20",
