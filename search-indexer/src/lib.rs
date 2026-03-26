@@ -27,6 +27,7 @@ pub mod consumer;
 pub mod errors;
 pub mod http;
 pub mod loader;
+pub mod lookup;
 pub mod metrics;
 pub mod orchestrator;
 pub mod processor;

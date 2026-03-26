@@ -706,6 +706,21 @@ impl SearchIndexProvider for OpenSearchProvider {
             return Ok(BatchOperationSummary::empty());
         }
 
+        let batch_start = std::time::Instant::now();
+        let total_ops = operations.len();
+
+        // Count operation types for visibility
+        let mut op_counts: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for op in operations {
+            *op_counts.entry(op.operation_type()).or_default() += 1;
+        }
+        info!(
+            total_ops = total_ops,
+            op_breakdown = ?op_counts,
+            "bulk_operations.start"
+        );
+
         // Accumulate results across all batches
         let mut all_results: Vec<BatchOperationResult> = Vec::new();
         let mut total_succeeded = 0usize;
@@ -941,19 +956,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         continue;
                     }
 
-                    // Flush pending bulk operations before unset to maintain ordering
-                    flush_pending_bulk!(
-                        self,
-                        bulk_ops,
-                        metas,
-                        total_succeeded,
-                        total_failed,
-                        all_results,
-                        total_wall_ms,
-                        total_took_ms,
-                        _bulk_call_count
-                    );
-
+                    // Unset uses a scripted bulk update targeting a specific doc_id —
+                    // it goes into the bulk queue like Update/Delete. No flush needed.
+                    // OpenSearch processes bulk items sequentially within a single request,
+                    // so ordering between an Update and Unset on the same doc is preserved.
                     let (entity_id, space_id) =
                         utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
                     let doc_id = Self::document_id(&entity_id, &space_id);
@@ -978,21 +984,6 @@ impl SearchIndexProvider for OpenSearchProvider {
                         operation_type: "Unset".to_string(),
                     });
                     flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
-
-                    // Flush immediately after unset to ensure it's processed before any subsequent
-                    // updates to the same document. Multiple updates to the same document in one
-                    // bulk request can have undefined behavior in OpenSearch.
-                    flush_pending_bulk!(
-                        self,
-                        bulk_ops,
-                        metas,
-                        total_succeeded,
-                        total_failed,
-                        all_results,
-                        total_wall_ms,
-                        total_took_ms,
-                        _bulk_call_count
-                    );
                 }
                 EntityOperation::UpdateEntityGlobalScore(request) => {
                     // Flush before executing the update_by_query to maintain ordering
@@ -1125,7 +1116,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                     }
                 }
                 EntityOperation::UpdateEntitySpaceScore(request) => {
-                    // This is a targeted update for a specific document, can be batched
+                    // This is a targeted update for a specific document, can be batched.
+                    // No doc_as_upsert: if the doc doesn't exist (entity has no values),
+                    // we don't want to create a ghost doc with only a score field.
+                    // 404 is treated as success in parse_bulk_response.
                     let (entity_id, space_id) =
                         utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
                     let doc_id = Self::document_id(&entity_id, &space_id);
@@ -1135,14 +1129,102 @@ impl SearchIndexProvider for OpenSearchProvider {
                             "entity_id": entity_id.to_string(),
                             "space_id": space_id.to_string(),
                             "entity_space_score": request.score
-                        },
-                        "doc_as_upsert": true
+                        }
                     });
                     bulk_ops.push(BulkOperation::update(doc_id, body).into());
                     metas.push(BulkOperationMeta {
                         entity_id: request.entity_id.clone(),
                         space_id: request.space_id.clone(),
                         operation_type: "UpdateEntitySpaceScore".to_string(),
+                    });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                }
+                EntityOperation::UpdateEntityGlobalScoreByDoc(request) => {
+                    // Direct doc-ID update for entity global score (resolved via Postgres lookup).
+                    // No doc_as_upsert: if the doc doesn't exist (entity has no values),
+                    // we don't want to create a ghost doc. 404 is treated as success.
+                    let body = json!({
+                        "doc": {
+                            "entity_global_score": request.score
+                        }
+                    });
+                    bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: String::new(),
+                        space_id: String::new(),
+                        operation_type: "UpdateEntityGlobalScoreByDoc".to_string(),
+                    });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                }
+                EntityOperation::UpdateSpaceScoreByDoc(request) => {
+                    // Direct doc-ID update for space score (resolved via Postgres lookup).
+                    // No doc_as_upsert: if the doc doesn't exist (entity has no values),
+                    // we don't want to create a ghost doc. 404 is treated as success.
+                    let body = json!({
+                        "doc": {
+                            "space_score": request.score
+                        }
+                    });
+                    bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: String::new(),
+                        space_id: String::new(),
+                        operation_type: "UpdateSpaceScoreByDoc".to_string(),
+                    });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                }
+                EntityOperation::RemoveRelationByDoc(request) => {
+                    // Direct doc-ID update for relation removal (resolved via Postgres lookup).
+                    // Uses the bulk API with painless script — much faster than update_by_query.
+                    // 404 (doc not found) is treated as success — see parse_bulk_response.
+                    let body = json!({
+                        "script": {
+                            "source": REMOVE_RELATION_SCRIPT,
+                            "lang": "painless",
+                            "params": {
+                                "relation_id": request.relation_id
+                            }
+                        }
+                    });
+                    bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: request.doc_id.clone(),
+                        space_id: request.relation_id.clone(),
+                        operation_type: "RemoveRelationByDoc".to_string(),
+                    });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                }
+                EntityOperation::UpdateSpaceTopicEntityIdByDoc(request) => {
+                    // Direct doc-ID update for space topic entity ID (resolved via Postgres lookup).
+                    // No doc_as_upsert: if the doc doesn't exist, don't create a ghost.
+                    // 404 is treated as success in parse_bulk_response.
+                    let body = json!({
+                        "doc": {
+                            "space_topic_entity_id": request.topic_entity_id
+                        }
+                    });
+                    bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: request.doc_id.clone(),
+                        space_id: request.topic_entity_id.clone(),
+                        operation_type: "UpdateSpaceTopicEntityIdByDoc".to_string(),
+                    });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                }
+                EntityOperation::UpdateInCanonicalGraphByDoc(request) => {
+                    // Direct doc-ID update for canonical graph flag (resolved via Postgres lookup).
+                    // No doc_as_upsert: if the doc doesn't exist, don't create a ghost.
+                    // 404 is treated as success in parse_bulk_response.
+                    let body = json!({
+                        "doc": {
+                            "in_canonical_graph": request.in_canonical_graph
+                        }
+                    });
+                    bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: request.doc_id.clone(),
+                        space_id: String::new(),
+                        operation_type: "UpdateInCanonicalGraphByDoc".to_string(),
                     });
                     flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
                 }
@@ -1306,6 +1388,19 @@ impl SearchIndexProvider for OpenSearchProvider {
             _bulk_call_count += 1;
             all_results.extend(summary.results);
         }
+
+        let batch_elapsed_ms = batch_start.elapsed().as_millis() as u64;
+        info!(
+            total_ops = total_ops,
+            succeeded = total_succeeded,
+            failed = total_failed,
+            bulk_calls = _bulk_call_count,
+            total_wall_ms = total_wall_ms,
+            total_took_ms = total_took_ms,
+            batch_elapsed_ms = batch_elapsed_ms,
+            overhead_ms = batch_elapsed_ms.saturating_sub(total_wall_ms),
+            "bulk_operations.done"
+        );
 
         Ok(BatchOperationSummary {
             total: operations.len(),

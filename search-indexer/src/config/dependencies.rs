@@ -13,6 +13,7 @@ use rdkafka::client::DefaultClientContext;
 use crate::consumer::kafka_config::create_client_config;
 use crate::consumer::{EntitiesConsumer, ScoresConsumer, SpaceTopicsConsumer, TopologyConsumer};
 use crate::loader::SearchLoader;
+use crate::lookup::EntitySpaceLookup;
 use crate::orchestrator::{Orchestrator, OrchestratorConfig};
 use crate::processor::Processor;
 use crate::topology::persistence as topology_persistence;
@@ -241,9 +242,16 @@ impl Dependencies {
             sample_interval, "Log sampling configuration"
         );
 
+        // Initialize Postgres lookup for fast score indexing (optional)
+        let entity_space_lookup = EntitySpaceLookup::from_env().await;
+
         // Initialize processor with pre-warmed space topic cache and topology state
-        let processor =
-            Processor::with_config(space_topic_cache, topology_state.clone(), sample_interval);
+        let processor = Processor::with_config(
+            space_topic_cache,
+            topology_state.clone(),
+            sample_interval,
+            entity_space_lookup,
+        );
 
         // Wrap provider in Arc for sharing between loader and health checks
         let provider = Arc::new(search_provider);

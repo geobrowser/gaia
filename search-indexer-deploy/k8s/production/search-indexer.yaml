@@ -87,11 +87,19 @@ spec:
                 secretKeyRef:
                   name: kafka-credentials
                   key: KAFKA_SSL_CA_PEM
+            # Database (Postgres lookup for fast score indexing)
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: search-indexer-secrets
+                  key: DATABASE_URL
+            - name: DATABASE_MAX_CONNECTIONS
+              value: "5"
             # Kafka consumer configuration
             - name: ENVIRONMENT
               value: "production"
             - name: KAFKA_GROUP_EDITS_ID
-              value: "search-indexer-group-edits-v3"
+              value: "search-indexer-group-edits-v4"
             - name: KAFKA_GROUP_SCORES_ID
               value: "search-indexer-group-scores-v3"
             - name: KAFKA_GROUP_SPACE_TOPICS_ID

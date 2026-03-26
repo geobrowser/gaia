@@ -39,6 +39,9 @@ hex = "0.4"
 # Error handling
 thiserror = "2.0.17"
 
+# Database (Postgres lookup for score indexing)
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "uuid", "tls-rustls"] }
+
 # Utilities
 chrono = "0.4.41"
 uuid = { version = "1.17.0", features = ["v4"] }

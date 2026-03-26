@@ -355,6 +355,13 @@
     {
       "idx": 50,
       "version": "7",
+      "when": 1773936521562,
+      "tag": "0050_little_hellfire_club",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
       "when": 1773871219329,
       "tag": "0051_complete_captain_cross",
       "breakpoints": true

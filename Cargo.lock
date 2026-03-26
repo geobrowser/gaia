@@ -5921,6 +5921,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "sqlx",
  "temp-env",
  "thiserror 2.0.18",
  "tokio",

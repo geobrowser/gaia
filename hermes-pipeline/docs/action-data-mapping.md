@@ -204,14 +204,14 @@ This action triggers an internal `createProposal()` which emits PROPOSAL_CREATED
 
 **Onchain:**
 - Action: `keccak256('GOVERNANCE.TOPIC_DECLARED')`
-- Topic: unused
-- Data: `abi.encode(bytes16(topicId))`
+- Topic: `bytes32(bytes16(topicId) | padding)`
+- Data: optional topic metadata payload
 
 **Proto Output:** `HermesTopicDeclared`
 | Field | Source | Type |
 |-------|--------|------|
 | `space_id` | `from_id` | bytes (16) |
-| `topic_id` | Decoded from `data` | bytes (16) |
+| `topic_id` | First 16 bytes of `topic` | bytes (16) |
 
 ---
 

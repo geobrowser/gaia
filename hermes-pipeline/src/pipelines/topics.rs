@@ -52,20 +52,20 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 ///
 /// The action structure:
 /// - from_id: space_id (16 bytes) - space declaring topic
-/// - data: abi.encode(bytes16(topicId))
+/// - topic: bytes32(bytes16(topicId) | padding)
+/// - data: optional topic metadata payload, ignored for id decoding
 fn convert_topic_declared(
     action: &Action,
     meta: &BlockMetadata,
     sequence: u32,
 ) -> Result<HermesTopicDeclared> {
-    // Decode the topic_id from the data field
-    let topic_id = match decode::decode_topic_declared(&action.data) {
+    let topic_id = match decode::decode_topic_declared(&action.topic) {
         Ok(id) => id,
         Err(e) => {
             warn!(
                 error = %e,
                 space_id = %hex::encode(&action.from_id),
-                "Failed to decode topic declared data"
+                "Failed to decode topic declared topic field"
             );
             vec![0; 16]
         }
@@ -91,18 +91,35 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_topic_declared_empty_data() {
+    fn test_convert_topic_declared_uses_topic_field() {
+        let mut topic = vec![2; 16];
+        topic.extend_from_slice(&[0; 16]);
+
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
             action: actions::TOPIC_DECLARED.to_vec(),
-            topic: vec![2; 32],
-            data: vec![],
+            topic,
+            data: vec![9; 32],
         };
 
         let result = convert_topic_declared(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
-        // Empty data defaults to zero-filled 16-byte UUID
+        assert_eq!(result.topic_id, vec![2; 16]);
+    }
+
+    #[test]
+    fn test_convert_topic_declared_empty_topic() {
+        let action = Action {
+            from_id: vec![1; 16],
+            to_id: vec![],
+            action: actions::TOPIC_DECLARED.to_vec(),
+            topic: vec![],
+            data: vec![9; 32],
+        };
+
+        let result = convert_topic_declared(&action, &test_meta(), 0).unwrap();
+        assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.topic_id, vec![0; 16]);
     }
 

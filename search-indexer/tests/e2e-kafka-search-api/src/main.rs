@@ -493,7 +493,8 @@ async fn main() -> Result<()> {
 
     // Alice Medium: Create -> Delete -> Create pattern (tests relation recreation)
     info!("  - Alice Medium: Adding Organization type relation (first time)...");
-    let alice_medium_org_rel_id_1 = Uuid::new_v4();
+    // Fixed ID so Postgres lookup can resolve it for the DeleteRelation event
+    let alice_medium_org_rel_id_1 = Uuid::parse_str("00000000-0000-0000-0000-0000000000b1").expect("valid");
     let alice_medium_org_create_1_payload = relations::create_type_relation_with_id(
         "Alice Medium -> Organization Type (first, to be removed)",
         test_space,
@@ -516,7 +517,8 @@ async fn main() -> Result<()> {
         .await?;
 
     info!("  - Alice Medium: Re-adding Organization type relation (second time, should be final state)...");
-    let alice_medium_org_rel_id_2 = Uuid::new_v4();
+    // Fixed ID for the recreated relation
+    let alice_medium_org_rel_id_2 = Uuid::parse_str("00000000-0000-0000-0000-0000000000b2").expect("valid");
     let alice_medium_org_create_2_payload = relations::create_type_relation_with_id(
         "Alice Medium -> Organization Type (recreated)",
         test_space,
@@ -530,7 +532,8 @@ async fn main() -> Result<()> {
 
     // Alice Low: Two type relations, one removed (typeIds should only have Person)
     info!("  - Alice Low: Adding Organization type relation (to be removed)...");
-    let alice_low_org_rel_id = Uuid::new_v4();
+    // Fixed ID so Postgres lookup can resolve it for the DeleteRelation event
+    let alice_low_org_rel_id = Uuid::parse_str("00000000-0000-0000-0000-0000000000b3").expect("valid");
     let alice_low_org_create_payload = relations::create_type_relation_with_id(
         "Alice Low -> Organization Type (to be removed)",
         test_space,

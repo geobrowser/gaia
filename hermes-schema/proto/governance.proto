@@ -37,6 +37,8 @@ enum ProposalActionType {
   PROPOSAL_ACTION_SUBSPACE_UNRELATED = 14;
   PROPOSAL_ACTION_SUBSPACE_TOPIC_DECLARED = 15;
   PROPOSAL_ACTION_SUBSPACE_TOPIC_REMOVED = 16;
+  PROPOSAL_ACTION_SET_TOPIC = 17;
+  PROPOSAL_ACTION_UNSET_TOPIC = 18;
 }
 
 // Decoded action: add a member to the space
@@ -101,6 +103,14 @@ message SubspaceTopicAction {
   bytes target_topic_id = 1;  // 16 bytes - topic entity ID
 }
 
+// Decoded action: set the space topic
+message SetTopicAction {
+  bytes target_topic_id = 1;  // 16 bytes - topic entity ID
+}
+
+// Decoded action: unset the current space topic
+message UnsetTopicAction {}
+
 // Action to be executed when proposal passes
 message ProposalAction {
   bytes to = 1;        // 20 bytes - target contract address
@@ -124,6 +134,8 @@ message ProposalAction {
     SubspaceEdgeAction subspace_unrelated = 22;
     SubspaceTopicAction subspace_topic_declared = 23;
     SubspaceTopicAction subspace_topic_removed = 24;
+    SetTopicAction set_topic = 25;
+    UnsetTopicAction unset_topic = 26;
   }
 }
 
