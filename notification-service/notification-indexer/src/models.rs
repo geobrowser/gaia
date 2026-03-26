@@ -430,6 +430,17 @@ fn action_to_summary(action: &hermes_schema::pb::governance::ProposalAction) -> 
                 .map(|u| u.to_string()),
             ..ActionSummary::default()
         },
+        Some(proposal_action::Action::SetTopic(t)) => ActionSummary {
+            action_type: "set_topic".to_string(),
+            target_topic_id: Uuid::from_slice(&t.target_topic_id)
+                .ok()
+                .map(|u| u.to_string()),
+            ..ActionSummary::default()
+        },
+        Some(proposal_action::Action::UnsetTopic(_)) => ActionSummary {
+            action_type: "unset_topic".to_string(),
+            ..ActionSummary::default()
+        },
         None => ActionSummary {
             action_type: "unknown".to_string(),
             ..ActionSummary::default()
