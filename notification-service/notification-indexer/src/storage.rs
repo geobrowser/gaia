@@ -111,11 +111,14 @@ impl Storage {
         let mut tx = self.pool.begin().await?;
 
         for editor_id in editors {
-            // Hash(base:user_space_id) — base is e.g. "12345:0:proposal_created"
-            let pre_hash = format!("{}:{}", event.idempotency_key, editor_id);
-            let idempotency_key = hex::encode(Sha256::digest(pre_hash.as_bytes()));
+            // Raw key for debugging: e.g. "12345:0:proposal_created:editor-uuid"
+            let raw_key = format!("{}:{}", event.idempotency_key, editor_id);
+            // SHA-256 hash for the DB UNIQUE constraint (fixed-length, collision-resistant)
+            let db_key = hex::encode(Sha256::digest(raw_key.as_bytes()));
 
-            // Clone the pre-serialized Value and stamp per-editor fields
+            // Clone the pre-serialized Value and stamp per-editor fields.
+            // The payload sends the raw string so app servers can debug/log it;
+            // the DB stores the hash for indexing.
             let mut serialized_payload = base_value.clone();
             if let serde_json::Value::Object(ref mut map) = serialized_payload {
                 map.insert(
@@ -124,7 +127,7 @@ impl Storage {
                 );
                 map.insert(
                     "idempotency_key".to_string(),
-                    serde_json::Value::String(idempotency_key.clone()),
+                    serde_json::Value::String(raw_key.clone()),
                 );
             }
 
@@ -137,7 +140,7 @@ impl Storage {
                 RETURNING id
                 "#,
             )
-            .bind(&idempotency_key)
+            .bind(&db_key)
             .bind(event.event_type.as_str())
             .bind(&serialized_payload)
             .fetch_optional(&mut *tx)

@@ -261,7 +261,7 @@ One row per user per event. Written by the notification-indexer.
 | Column | Type | Description |
 |---|---|---|
 | `id` | `uuid` PK | Auto-generated |
-| `idempotency_key` | `text` UNIQUE | SHA-256 hex of `{block_number}:{sequence}:{event_type}:{user_space_id}` (see [Idempotency Keys](#idempotency-keys)) |
+| `idempotency_key` | `text` UNIQUE | SHA-256 hex digest of `{block_number}:{sequence}:{event_type}:{user_space_id}` for DB uniqueness. The webhook payload sends the raw pre-hash string for debugging (see [Idempotency Keys](#idempotency-keys)). |
 | `event_type` | `text` | e.g. `proposal_created` |
 | `payload` | `jsonb` | Full webhook payload including `user_space_id` |
 | `created_at` | `timestamptz` | Row creation time |
@@ -448,7 +448,7 @@ Example (bounty):
 Notes:
 
 - `category` is always present and is either `"governance"` or `"bounty"`.
-- `idempotency_key` is a lowercase hex-encoded SHA-256 digest (see [Idempotency Keys](#idempotency-keys)).
+- `idempotency_key` is the raw human-readable string (e.g. `12345:0:proposal_created:<user-uuid>`). The database stores a SHA-256 hash for indexing; the payload sends the raw string for easier debugging. See [Idempotency Keys](#idempotency-keys).
 
 ### Fields
 
@@ -461,7 +461,7 @@ Notes:
 | `category` | string | Always | Event category: `"governance"` or `"bounty"` |
 | `space_id` | UUID string | Always | Space where the event occurred |
 | `user_space_id` | UUID string | Always | The user this notification is addressed to |
-| `idempotency_key` | string | Always | Unique deduplication key (SHA-256 hex) |
+| `idempotency_key` | string | Always | Unique deduplication key (raw string in payload; SHA-256 hash in DB) |
 | `block_number` | number | All except `proposal_rejected` | On-chain block number |
 | `timestamp` | number | Always | Unix timestamp in seconds |
 

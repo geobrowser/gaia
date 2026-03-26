@@ -532,17 +532,18 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
     }
 
     // ===================================================================
-    // All calls have idempotency key (SHA-256 hex hash)
+    // All calls have idempotency key (raw string format: base:user_space_id)
     // ===================================================================
     r.check(
         "all calls have idempotency key",
         calls.iter().all(|c| !c.idempotency_key.is_empty()),
     );
     r.check(
-        "all idempotency keys are 64-char hex (SHA-256)",
+        "all idempotency keys contain colon-separated components",
         calls.iter().all(|c| {
-            c.idempotency_key.len() == 64
-                && c.idempotency_key.chars().all(|ch| ch.is_ascii_hexdigit())
+            // Raw format: "{block}:{sequence}:{event_type}:{user_space_id}"
+            // or for rejections: "{proposal_id}:proposal_rejected:{user_space_id}"
+            c.idempotency_key.contains(':') && c.idempotency_key.len() > 10
         }),
     );
     // Each unique (event_type, user_space_id) pair should have a unique key.
