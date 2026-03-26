@@ -12,9 +12,10 @@ use std::collections::HashMap;
 use anyhow::Result;
 use grc_20::decode_edit;
 use hermes_instrumentation::warn;
-
+use hermes_kafka::KAFKA_MESSAGE_MAX_BYTES;
 use hermes_relay::{Action, actions, extract_ipfs_uri};
 use hermes_schema::pb::knowledge::HermesEdit;
+use prost::Message;
 
 use crate::cache::CachedEdit;
 
@@ -29,6 +30,8 @@ pub struct TransformResult {
     pub cache_misses: u64,
     /// Number of errored entries (cache marked them as failed).
     pub errored_entries: u64,
+    /// Number of edits skipped because the encoded Kafka message would exceed the broker limit.
+    pub oversized_events: u64,
 }
 
 /// Transform all EDITS_PUBLISHED actions in a block using prefetched cache data.
@@ -74,7 +77,24 @@ pub fn transform(
                     result.errored_entries += 1;
                 } else if let Some(payload) = &cached_edit.payload {
                     match convert(action, payload, meta, index as u32) {
-                        Ok(event) => result.events.push(event),
+                        Ok(event) => {
+                            if let Err(encoded_len) =
+                                validate_kafka_message_size(&event, KAFKA_MESSAGE_MAX_BYTES)
+                            {
+                                warn!(
+                                    ipfs_uri = %ipfs_uri,
+                                    space_id = %hex::encode(&action.from_id),
+                                    payload_bytes = payload.len(),
+                                    encoded_message_bytes = encoded_len,
+                                    kafka_limit_bytes = KAFKA_MESSAGE_MAX_BYTES,
+                                    "EDITS_PUBLISHED exceeds Kafka max message size, skipping"
+                                );
+                                result.oversized_events += 1;
+                                continue;
+                            }
+
+                            result.events.push(event);
+                        }
                         Err(e) => {
                             warn!(
                                 ipfs_uri = %ipfs_uri,
@@ -135,6 +155,15 @@ fn convert(
     })
 }
 
+fn validate_kafka_message_size<T: Message>(message: &T, max_bytes: usize) -> Result<(), usize> {
+    let encoded_len = message.encoded_len();
+    if encoded_len > max_bytes {
+        Err(encoded_len)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +222,28 @@ mod tests {
         assert!(!result.payload.is_empty());
         assert_eq!(result.space_id, vec![0x01; 16]);
         assert!(result.is_canonical);
+    }
+
+    #[test]
+    fn test_validate_kafka_message_size_uses_encoded_len() {
+        let event = HermesEdit {
+            id: vec![1u8; 16],
+            name: "Test Edit".into(),
+            payload: vec![7u8; 32],
+            authors: vec![vec![4u8; 16]],
+            language: None,
+            space_id: vec![0x01; 16],
+            is_canonical: true,
+            meta: Some(test_meta().to_proto(0)),
+        };
+
+        let encoded_len = event.encoded_len();
+
+        assert_eq!(validate_kafka_message_size(&event, encoded_len), Ok(()));
+        assert_eq!(
+            validate_kafka_message_size(&event, encoded_len.saturating_sub(1)),
+            Err(encoded_len)
+        );
     }
 
     #[test]
