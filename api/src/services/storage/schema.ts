@@ -929,8 +929,12 @@ export const notificationDeliveries = pgTable(
 	"notification_deliveries",
 	{
 		id: uuid().primaryKey().defaultRandom(),
-		outboxId: uuid("outbox_id").notNull().references(() => notificationOutbox.id),
-		webhookId: uuid("webhook_id").notNull().references(() => appWebhooks.id),
+		outboxId: uuid("outbox_id")
+			.notNull()
+			.references(() => notificationOutbox.id),
+		webhookId: uuid("webhook_id")
+			.notNull()
+			.references(() => appWebhooks.id),
 		status: text().notNull().default("pending"),
 		attempts: smallint().notNull().default(0),
 		lastError: text("last_error"),
