@@ -49,8 +49,8 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use async_trait::async_trait;
 use crate::{IpfsError, IpfsFetcher, Result};
+use async_trait::async_trait;
 
 /// Mock IPFS client that returns pre-configured edit data.
 ///
