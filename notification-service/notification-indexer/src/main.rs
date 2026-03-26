@@ -310,7 +310,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                 if count > 0 {
                                                     info!(
                                                         event_type = %event.payload.event_type,
-                                                        proposal_id = %event.payload.proposal_id,
+                                                        category = %event.payload.category,
                                                         editors = editors.len(),
                                                         inserted = count,
                                                         "Inserted per-editor notifications"

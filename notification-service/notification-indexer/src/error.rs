@@ -13,6 +13,9 @@ pub enum HandlerError {
 
     #[error("unknown event type: {0}")]
     UnknownEventType(String),
+
+    #[error("grc-20 decode error: {0}")]
+    Grc20Decode(String),
 }
 
 /// Errors that can occur during storage operations.

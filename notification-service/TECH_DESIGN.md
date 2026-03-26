@@ -252,7 +252,7 @@ One row per user per event. Written by the notification-indexer.
 | Column | Type | Description |
 |---|---|---|
 | `id` | `uuid` PK | Auto-generated |
-| `idempotency_key` | `text` UNIQUE | `{event_type}:{proposal_id}:{block_number}:{editor_id}` |
+| `idempotency_key` | `text` UNIQUE | SHA-256 hex of `{block_number}:{sequence}:{event_type}:{user_space_id}` (see [Idempotency Keys](#idempotency-keys)) |
 | `event_type` | `text` | e.g. `proposal_created` |
 | `payload` | `jsonb` | Full webhook payload including `user_space_id` |
 | `created_at` | `timestamptz` | Row creation time |

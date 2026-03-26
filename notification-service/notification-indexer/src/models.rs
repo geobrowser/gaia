@@ -12,12 +12,17 @@ use crate::error::HandlerError;
 /// Notification event types sent to webhooks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotificationEventType {
+    // Governance events
     ProposalCreated,
     ProposalUpdated,
     ProposalVoted,
     ProposalExecuted,
     ProposalSettingsUpdated,
     ProposalRejected,
+    // Bounty events
+    BountyInterest,
+    BountyAllocated,
+    BountyPayout,
 }
 
 impl NotificationEventType {
@@ -29,42 +34,89 @@ impl NotificationEventType {
             NotificationEventType::ProposalExecuted => "proposal_executed",
             NotificationEventType::ProposalSettingsUpdated => "proposal_settings_updated",
             NotificationEventType::ProposalRejected => "proposal_rejected",
+            NotificationEventType::BountyInterest => "bounty_interest",
+            NotificationEventType::BountyAllocated => "bounty_allocated",
+            NotificationEventType::BountyPayout => "bounty_payout",
+        }
+    }
+
+    /// Event category for filtering — app servers can use this to route notifications.
+    pub fn category(&self) -> &'static str {
+        match self {
+            NotificationEventType::ProposalCreated
+            | NotificationEventType::ProposalUpdated
+            | NotificationEventType::ProposalVoted
+            | NotificationEventType::ProposalExecuted
+            | NotificationEventType::ProposalSettingsUpdated
+            | NotificationEventType::ProposalRejected => "governance",
+            NotificationEventType::BountyInterest
+            | NotificationEventType::BountyAllocated
+            | NotificationEventType::BountyPayout => "bounty",
         }
     }
 }
 
-/// Webhook notification payload sent to app servers.
-///
-/// Each notification is addressed to a specific editor (`user_space_id`) in the
-/// space where the governance event occurred. The notification-indexer resolves
-/// editors from the `editors` table and creates one payload per editor.
 /// Webhook payload version. Increment when the payload schema changes
 /// in a backwards-incompatible way so consumers can handle both formats.
 pub const PAYLOAD_VERSION: u32 = 1;
 
+/// Webhook notification payload sent to app servers.
+///
+/// Common fields are shared across all event types. Event-specific fields
+/// are in the `data` enum, which serializes flat (no nesting) via `serde(flatten)`.
 #[derive(Debug, Clone, Serialize)]
 pub struct NotificationPayload {
     pub version: u32,
     pub event_type: String,
+    pub category: String,
     pub space_id: String,
-    pub proposal_id: String,
-    /// The editor's account space UUID — the recipient of this notification.
-    /// Set by the notification-indexer during per-editor fan-out.
+    /// The recipient's account space UUID.
+    /// Set by the notification-indexer during per-user fan-out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_space_id: Option<String>,
     /// Unique key for deduplication. Set by the storage layer during insert.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_number: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<u64>,
+    /// Event-specific fields (governance or bounty).
+    #[serde(flatten)]
+    pub data: NotificationData,
+}
+
+/// Event-specific payload data. Serialized flat into the parent payload.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum NotificationData {
+    Governance(GovernanceData),
+    Bounty(BountyData),
+}
+
+/// Governance-specific payload fields.
+#[derive(Debug, Clone, Serialize)]
+pub struct GovernanceData {
+    pub proposal_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub proposer_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voter_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vote: Option<String>,
+}
+
+/// Bounty-specific payload fields.
+#[derive(Debug, Clone, Serialize)]
+pub struct BountyData {
+    pub bounty_entity_id: String,
+    pub relation_id: String,
+    pub curator_space_id: String,
+    pub bounty_space_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub block_number: Option<u64>,
+    pub proposal_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<u64>,
+    pub interested_user_space_id: Option<String>,
 }
 
 /// Result of handling a governance event: payload + idempotency key.
@@ -96,15 +148,18 @@ pub fn handle_proposal_created(
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalCreated.as_str().to_string(),
+            category: NotificationEventType::ProposalCreated.category().to_string(),
             space_id: space_id.to_string(),
-            proposal_id: proposal_id.to_string(),
             user_space_id: None,
             idempotency_key: None,
-            proposer_id: Some(proposer_id.to_string()),
-            voter_id: None,
-            vote: None,
             block_number: Some(block_number),
             timestamp: Some(timestamp),
+            data: NotificationData::Governance(GovernanceData {
+                proposal_id: proposal_id.to_string(),
+                proposer_id: Some(proposer_id.to_string()),
+                voter_id: None,
+                vote: None,
+            }),
         },
     })
 }
@@ -130,15 +185,18 @@ pub fn handle_proposal_updated(
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalUpdated.as_str().to_string(),
+            category: NotificationEventType::ProposalUpdated.category().to_string(),
             space_id: space_id.to_string(),
-            proposal_id: proposal_id.to_string(),
             user_space_id: None,
             idempotency_key: None,
-            proposer_id: Some(proposer_id.to_string()),
-            voter_id: None,
-            vote: None,
             block_number: Some(block_number),
             timestamp: Some(timestamp),
+            data: NotificationData::Governance(GovernanceData {
+                proposal_id: proposal_id.to_string(),
+                proposer_id: Some(proposer_id.to_string()),
+                voter_id: None,
+                vote: None,
+            }),
         },
     })
 }
@@ -174,15 +232,18 @@ pub fn handle_proposal_voted(
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalVoted.as_str().to_string(),
+            category: NotificationEventType::ProposalVoted.category().to_string(),
             space_id: space_id.to_string(),
-            proposal_id: proposal_id.to_string(),
             user_space_id: None,
             idempotency_key: None,
-            proposer_id: None,
-            voter_id: Some(voter_id.to_string()),
-            vote: Some(vote_option_to_string(msg.vote)),
             block_number: Some(block_number),
             timestamp: Some(timestamp),
+            data: NotificationData::Governance(GovernanceData {
+                proposal_id: proposal_id.to_string(),
+                proposer_id: None,
+                voter_id: Some(voter_id.to_string()),
+                vote: Some(vote_option_to_string(msg.vote)),
+            }),
         },
     })
 }
@@ -207,15 +268,18 @@ pub fn handle_proposal_executed(
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalExecuted.as_str().to_string(),
+            category: NotificationEventType::ProposalExecuted.category().to_string(),
             space_id: space_id.to_string(),
-            proposal_id: proposal_id.to_string(),
             user_space_id: None,
             idempotency_key: None,
-            proposer_id: None,
-            voter_id: None,
-            vote: None,
             block_number: Some(block_number),
             timestamp: Some(timestamp),
+            data: NotificationData::Governance(GovernanceData {
+                proposal_id: proposal_id.to_string(),
+                proposer_id: None,
+                voter_id: None,
+                vote: None,
+            }),
         },
     })
 }
@@ -245,15 +309,20 @@ pub fn handle_proposal_settings_updated(
             event_type: NotificationEventType::ProposalSettingsUpdated
                 .as_str()
                 .to_string(),
+            category: NotificationEventType::ProposalSettingsUpdated
+                .category()
+                .to_string(),
             space_id: space_id.to_string(),
-            proposal_id: proposal_id.to_string(),
             user_space_id: None,
             idempotency_key: None,
-            proposer_id: None,
-            voter_id: None,
-            vote: None,
             block_number: Some(block_number),
             timestamp: Some(timestamp),
+            data: NotificationData::Governance(GovernanceData {
+                proposal_id: proposal_id.to_string(),
+                proposer_id: None,
+                voter_id: None,
+                vote: None,
+            }),
         },
     })
 }
@@ -275,15 +344,179 @@ pub fn build_rejection_event(
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalRejected.as_str().to_string(),
+            category: NotificationEventType::ProposalRejected.category().to_string(),
             space_id: space_id.to_string(),
-            proposal_id: proposal_id.to_string(),
             user_space_id: None,
             idempotency_key: None,
-            proposer_id: Some(proposed_by.to_string()),
-            voter_id: None,
-            vote: None,
             block_number: None,
             timestamp: Some(end_time as u64),
+            data: NotificationData::Governance(GovernanceData {
+                proposal_id: proposal_id.to_string(),
+                proposer_id: Some(proposed_by.to_string()),
+                voter_id: None,
+                vote: None,
+            }),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bounty configuration and handlers
+// ---------------------------------------------------------------------------
+
+/// Well-known relation type UUIDs for bounty events.
+/// Hardcoded from the GRC-20 protocol; env vars override if set.
+const DEFAULT_INTEREST_TYPE_ID: &str = "2c765cae-c1b6-4cc3-a65d-693d0a67eaeb";
+// Placeholder UUIDs — update when the protocol defines them
+const DEFAULT_ALLOCATED_TYPE_ID: &str = "00000000-0000-0000-0000-000000000000";
+const DEFAULT_PAYOUT_TYPE_ID: &str = "00000000-0000-0000-0000-000000000000";
+
+/// Configuration for bounty relation type detection.
+#[derive(Debug, Clone)]
+pub struct BountyConfig {
+    pub interest_type_id: Uuid,
+    pub allocated_type_id: Uuid,
+    pub payout_type_id: Uuid,
+}
+
+impl Default for BountyConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BountyConfig {
+    /// Create config from hardcoded defaults with optional env var overrides.
+    pub fn new() -> Self {
+        let interest = std::env::var("BOUNTY_INTEREST_RELATION_TYPE_ID")
+            .ok()
+            .and_then(|s| Uuid::parse_str(&s).ok())
+            .unwrap_or_else(|| Uuid::parse_str(DEFAULT_INTEREST_TYPE_ID).expect("valid UUID"));
+
+        let allocated = std::env::var("BOUNTY_ALLOCATED_RELATION_TYPE_ID")
+            .ok()
+            .and_then(|s| Uuid::parse_str(&s).ok())
+            .unwrap_or_else(|| Uuid::parse_str(DEFAULT_ALLOCATED_TYPE_ID).expect("valid UUID"));
+
+        let payout = std::env::var("BOUNTY_PAYOUT_RELATION_TYPE_ID")
+            .ok()
+            .and_then(|s| Uuid::parse_str(&s).ok())
+            .unwrap_or_else(|| Uuid::parse_str(DEFAULT_PAYOUT_TYPE_ID).expect("valid UUID"));
+
+        Self {
+            interest_type_id: interest,
+            allocated_type_id: allocated,
+            payout_type_id: payout,
+        }
+    }
+
+    /// Check if a relation type matches any bounty type.
+    pub fn match_type(&self, relation_type: &Uuid) -> Option<NotificationEventType> {
+        if *relation_type == self.interest_type_id {
+            Some(NotificationEventType::BountyInterest)
+        } else if *relation_type == self.allocated_type_id {
+            Some(NotificationEventType::BountyAllocated)
+        } else if *relation_type == self.payout_type_id {
+            Some(NotificationEventType::BountyPayout)
+        } else {
+            None
+        }
+    }
+}
+
+/// Decoded bounty relation fields extracted from a GRC-20 CreateRelation.
+#[derive(Debug, Clone)]
+pub struct BountyRelationInfo {
+    pub relation_id: Uuid,
+    pub bounty_entity_id: Uuid,
+    pub curator_space_id: Uuid,
+    pub bounty_space_id: Uuid,
+    pub proposal_id: Option<Uuid>,
+    pub block_number: u64,
+    pub sequence: u64,
+    pub timestamp: u64,
+}
+
+/// Build a notification event for a bounty interest expression.
+pub fn handle_bounty_interest(info: &BountyRelationInfo) -> NotificationEvent {
+    let idempotency_base = format!("{}:{}:bounty_interest", info.block_number, info.sequence);
+
+    NotificationEvent {
+        event_type: NotificationEventType::BountyInterest,
+        idempotency_key: idempotency_base,
+        payload: NotificationPayload {
+            version: PAYLOAD_VERSION,
+            event_type: NotificationEventType::BountyInterest.as_str().to_string(),
+            category: NotificationEventType::BountyInterest.category().to_string(),
+            space_id: info.bounty_space_id.to_string(),
+            user_space_id: None,
+            idempotency_key: None,
+            block_number: Some(info.block_number),
+            timestamp: Some(info.timestamp),
+            data: NotificationData::Bounty(BountyData {
+                bounty_entity_id: info.bounty_entity_id.to_string(),
+                relation_id: info.relation_id.to_string(),
+                curator_space_id: info.curator_space_id.to_string(),
+                bounty_space_id: info.bounty_space_id.to_string(),
+                proposal_id: None,
+                interested_user_space_id: Some(info.curator_space_id.to_string()),
+            }),
+        },
+    }
+}
+
+/// Build a notification event for a bounty allocation.
+pub fn handle_bounty_allocated(info: &BountyRelationInfo) -> NotificationEvent {
+    let idempotency_base = format!("{}:{}:bounty_allocated", info.block_number, info.sequence);
+
+    NotificationEvent {
+        event_type: NotificationEventType::BountyAllocated,
+        idempotency_key: idempotency_base,
+        payload: NotificationPayload {
+            version: PAYLOAD_VERSION,
+            event_type: NotificationEventType::BountyAllocated.as_str().to_string(),
+            category: NotificationEventType::BountyAllocated.category().to_string(),
+            space_id: info.bounty_space_id.to_string(),
+            user_space_id: None,
+            idempotency_key: None,
+            block_number: Some(info.block_number),
+            timestamp: Some(info.timestamp),
+            data: NotificationData::Bounty(BountyData {
+                bounty_entity_id: info.bounty_entity_id.to_string(),
+                relation_id: info.relation_id.to_string(),
+                curator_space_id: info.curator_space_id.to_string(),
+                bounty_space_id: info.bounty_space_id.to_string(),
+                proposal_id: info.proposal_id.map(|p| p.to_string()),
+                interested_user_space_id: None,
+            }),
+        },
+    }
+}
+
+/// Build a notification event for a bounty payout.
+pub fn handle_bounty_payout(info: &BountyRelationInfo) -> NotificationEvent {
+    let idempotency_base = format!("{}:{}:bounty_payout", info.block_number, info.sequence);
+
+    NotificationEvent {
+        event_type: NotificationEventType::BountyPayout,
+        idempotency_key: idempotency_base,
+        payload: NotificationPayload {
+            version: PAYLOAD_VERSION,
+            event_type: NotificationEventType::BountyPayout.as_str().to_string(),
+            category: NotificationEventType::BountyPayout.category().to_string(),
+            space_id: info.bounty_space_id.to_string(),
+            user_space_id: None,
+            idempotency_key: None,
+            block_number: Some(info.block_number),
+            timestamp: Some(info.timestamp),
+            data: NotificationData::Bounty(BountyData {
+                bounty_entity_id: info.bounty_entity_id.to_string(),
+                relation_id: info.relation_id.to_string(),
+                curator_space_id: info.curator_space_id.to_string(),
+                bounty_space_id: info.bounty_space_id.to_string(),
+                proposal_id: info.proposal_id.map(|p| p.to_string()),
+                interested_user_space_id: None,
+            }),
         },
     }
 }
@@ -331,21 +564,22 @@ mod tests {
         let event = handle_proposal_created(&msg).expect("should parse");
         assert_eq!(event.event_type, NotificationEventType::ProposalCreated);
         assert_eq!(event.payload.event_type, "proposal_created");
+        assert_eq!(event.payload.category, "governance");
 
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
         let expected_space = Uuid::from_slice(&make_test_uuid(0x01)).expect("valid uuid");
         let expected_proposal = Uuid::from_slice(&make_test_uuid(0x03)).expect("valid uuid");
         let expected_proposer = Uuid::from_slice(&make_test_uuid(0x02)).expect("valid uuid");
 
-        assert_eq!(event.payload.space_id, expected_space.to_string());
-        assert_eq!(event.payload.proposal_id, expected_proposal.to_string());
-        assert_eq!(
-            event.payload.proposer_id,
-            Some(expected_proposer.to_string())
-        );
-        assert_eq!(event.payload.block_number, Some(12345));
-        assert_eq!(event.payload.timestamp, Some(1700000000));
-        // user_space_id is None at handler level — stamped later by storage
-        assert!(event.payload.user_space_id.is_none());
+        assert_eq!(json["space_id"], expected_space.to_string());
+        assert_eq!(json["proposal_id"], expected_proposal.to_string());
+        assert_eq!(json["proposer_id"], expected_proposer.to_string());
+        assert_eq!(json["block_number"], 12345);
+        assert_eq!(json["timestamp"], 1700000000);
+        // user_space_id should be absent at handler level — stamped later by storage
+        assert!(json.get("user_space_id").is_none());
+        // bounty fields should be absent for governance events
+        assert!(json.get("bounty_entity_id").is_none());
     }
 
     #[test]
@@ -438,13 +672,11 @@ mod tests {
         assert_eq!(event.event_type, NotificationEventType::ProposalUpdated);
         assert_eq!(event.payload.event_type, "proposal_updated");
 
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
         let expected_proposer = Uuid::from_slice(&make_test_uuid(0x02)).expect("valid uuid");
-        assert_eq!(
-            event.payload.proposer_id,
-            Some(expected_proposer.to_string())
-        );
-        assert_eq!(event.payload.block_number, Some(555));
-        assert_eq!(event.payload.timestamp, Some(1700002000));
+        assert_eq!(json["proposer_id"], expected_proposer.to_string());
+        assert_eq!(json["block_number"], 555);
+        assert_eq!(json["timestamp"], 1700002000);
     }
 
     #[test]
@@ -481,12 +713,13 @@ mod tests {
         assert_eq!(event.event_type, NotificationEventType::ProposalVoted);
         assert_eq!(event.payload.event_type, "proposal_voted");
 
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
         let expected_voter = Uuid::from_slice(&make_test_uuid(0x0A)).expect("valid uuid");
-        assert_eq!(event.payload.voter_id, Some(expected_voter.to_string()));
-        assert_eq!(event.payload.vote, Some("yes".to_string()));
-        assert!(event.payload.proposer_id.is_none());
-        assert_eq!(event.payload.block_number, Some(888));
-        assert_eq!(event.payload.timestamp, Some(1700003000));
+        assert_eq!(json["voter_id"], expected_voter.to_string());
+        assert_eq!(json["vote"], "yes");
+        assert!(json.get("proposer_id").is_none());
+        assert_eq!(json["block_number"], 888);
+        assert_eq!(json["timestamp"], 1700003000);
     }
 
     #[test]
@@ -500,7 +733,8 @@ mod tests {
         };
 
         let event = handle_proposal_voted(&msg).expect("should parse");
-        assert_eq!(event.payload.vote, Some("no".to_string()));
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert_eq!(json["vote"], "no");
     }
 
     #[test]
@@ -514,7 +748,8 @@ mod tests {
         };
 
         let event = handle_proposal_voted(&msg).expect("should parse");
-        assert_eq!(event.payload.vote, Some("abstain".to_string()));
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert_eq!(json["vote"], "abstain");
     }
 
     #[test]
@@ -612,10 +847,11 @@ mod tests {
             NotificationEventType::ProposalSettingsUpdated
         );
         assert_eq!(event.payload.event_type, "proposal_settings_updated");
-        assert_eq!(event.payload.block_number, Some(777));
-        assert_eq!(event.payload.timestamp, Some(1700004000));
-        assert!(event.payload.proposer_id.is_none());
-        assert!(event.payload.voter_id.is_none());
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert_eq!(json["block_number"], 777);
+        assert_eq!(json["timestamp"], 1700004000);
+        assert!(json.get("proposer_id").is_none());
+        assert!(json.get("voter_id").is_none());
     }
 
     #[test]
