@@ -32,6 +32,7 @@ async fn setup_storage() -> Storage {
 }
 
 /// Helper: insert a relation directly via SQL with is_system flag
+#[allow(clippy::too_many_arguments)]
 async fn insert_system_relation(
     pool: &sqlx::Pool<sqlx::Postgres>,
     id: Uuid,
