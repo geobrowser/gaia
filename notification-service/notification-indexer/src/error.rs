@@ -14,6 +14,12 @@ pub enum HandlerError {
     #[error("unknown event type: {0}")]
     UnknownEventType(String),
 
+    #[error("invalid vote option: {0}")]
+    InvalidVoteOption(i32),
+
+    #[error("invalid voting mode: {0}")]
+    InvalidVotingMode(i32),
+
     #[error("grc-20 decode error: {0}")]
     Grc20Decode(String),
 }

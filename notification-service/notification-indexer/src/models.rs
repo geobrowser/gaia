@@ -239,9 +239,9 @@ pub fn handle_proposal_created(
                 proposer_id: Some(proposer_id.to_string()),
                 voter_id: None,
                 vote: None,
-                voting_mode: Some(voting_mode_to_string(msg.voting_mode)),
+                voting_mode: Some(voting_mode_to_string(msg.voting_mode)?),
                 actions: Some(msg.actions.iter().map(action_to_summary).collect()),
-                settings: msg.settings.as_ref().map(settings_to_payload),
+                settings: msg.settings.as_ref().map(settings_to_payload).transpose()?,
                 proposal_name: None,
                 proposer_name: None,
                 voter_name: None,
@@ -288,9 +288,9 @@ pub fn handle_proposal_updated(
                 proposer_id: Some(proposer_id.to_string()),
                 voter_id: None,
                 vote: None,
-                voting_mode: Some(voting_mode_to_string(msg.voting_mode)),
+                voting_mode: Some(voting_mode_to_string(msg.voting_mode)?),
                 actions: Some(msg.actions.iter().map(action_to_summary).collect()),
-                settings: msg.settings.as_ref().map(settings_to_payload),
+                settings: msg.settings.as_ref().map(settings_to_payload).transpose()?,
                 proposal_name: None,
                 proposer_name: None,
                 voter_name: None,
@@ -303,26 +303,27 @@ pub fn handle_proposal_updated(
 }
 
 /// Map a protobuf voting mode to a string.
-fn voting_mode_to_string(mode: i32) -> String {
-    match mode {
-        0 => "fast".to_string(),
-        1 => "slow".to_string(),
-        _ => "unknown".to_string(),
+fn voting_mode_to_string(mode: i32) -> Result<String, HandlerError> {
+    use hermes_schema::pb::governance::VotingMode;
+    match VotingMode::try_from(mode) {
+        Ok(VotingMode::Fast) => Ok("fast".to_string()),
+        Ok(VotingMode::Slow) => Ok("slow".to_string()),
+        Err(_) => Err(HandlerError::InvalidVotingMode(mode)),
     }
 }
 
 /// Convert protobuf ProposalSettings to payload struct.
 fn settings_to_payload(
     settings: &hermes_schema::pb::governance::ProposalSettings,
-) -> ProposalSettingsPayload {
-    ProposalSettingsPayload {
+) -> Result<ProposalSettingsPayload, HandlerError> {
+    Ok(ProposalSettingsPayload {
         start_date: settings.start_date,
         end_date: settings.last_date,
-        voting_mode: voting_mode_to_string(settings.voting_mode),
+        voting_mode: voting_mode_to_string(settings.voting_mode)?,
         quorum: settings.quorum,
         flat_threshold: settings.flat_threshold,
         percentage_threshold: settings.percentage_threshold,
-    }
+    })
 }
 
 /// Convert a protobuf ProposalAction to a webhook-friendly summary.
@@ -437,12 +438,12 @@ fn action_to_summary(action: &hermes_schema::pb::governance::ProposalAction) -> 
 }
 
 /// Map a protobuf vote option to a string for the webhook payload.
-fn vote_option_to_string(vote: i32) -> String {
+fn vote_option_to_string(vote: i32) -> Result<String, HandlerError> {
     match ProposalVoteOption::try_from(vote) {
-        Ok(ProposalVoteOption::VoteOptionYes) => "yes".to_string(),
-        Ok(ProposalVoteOption::VoteOptionNo) => "no".to_string(),
-        Ok(ProposalVoteOption::VoteOptionAbstain) => "abstain".to_string(),
-        _ => "unknown".to_string(),
+        Ok(ProposalVoteOption::VoteOptionYes) => Ok("yes".to_string()),
+        Ok(ProposalVoteOption::VoteOptionNo) => Ok("no".to_string()),
+        Ok(ProposalVoteOption::VoteOptionAbstain) => Ok("abstain".to_string()),
+        _ => Err(HandlerError::InvalidVoteOption(vote)),
     }
 }
 
@@ -476,7 +477,7 @@ pub fn handle_proposal_voted(msg: &HermesProposalVoted) -> Result<NotificationEv
                 proposal_id: proposal_id.to_string(),
                 proposer_id: None,
                 voter_id: Some(voter_id.to_string()),
-                vote: Some(vote_option_to_string(msg.vote)),
+                vote: Some(vote_option_to_string(msg.vote)?),
                 voting_mode: None,
                 actions: None,
                 settings: None,
@@ -578,9 +579,10 @@ pub fn handle_proposal_settings_updated(
                 voting_mode: msg
                     .settings
                     .as_ref()
-                    .map(|s| voting_mode_to_string(s.voting_mode)),
+                    .map(|s| voting_mode_to_string(s.voting_mode))
+                    .transpose()?,
                 actions: None,
-                settings: msg.settings.as_ref().map(settings_to_payload),
+                settings: msg.settings.as_ref().map(settings_to_payload).transpose()?,
                 proposal_name: None,
                 proposer_name: None,
                 voter_name: None,

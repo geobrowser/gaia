@@ -83,23 +83,35 @@ jobs:
           docker compose -f notification-service/e2e-tests/docker-compose.yml up -d
           echo "Waiting for services to be healthy..."
           # Wait for postgres
+          POSTGRES_READY=false
           for i in $(seq 1 30); do
             if docker compose -f notification-service/e2e-tests/docker-compose.yml exec -T postgres pg_isready -U test -d notifications_test 2>/dev/null; then
               echo "Postgres is ready"
+              POSTGRES_READY=true
               break
             fi
             echo "  waiting for postgres... ($i/30)"
             sleep 2
           done
+          if [ "$POSTGRES_READY" != "true" ]; then
+            echo "ERROR: Postgres failed to become ready"
+            exit 1
+          fi
           # Wait for kafka
+          KAFKA_READY=false
           for i in $(seq 1 30); do
             if docker compose -f notification-service/e2e-tests/docker-compose.yml exec -T kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 2>/dev/null; then
               echo "Kafka is ready"
+              KAFKA_READY=true
               break
             fi
             echo "  waiting for kafka... ($i/30)"
             sleep 2
           done
+          if [ "$KAFKA_READY" != "true" ]; then
+            echo "ERROR: Kafka failed to become ready"
+            exit 1
+          fi
 
       - name: Apply database schema
         run: |

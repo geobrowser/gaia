@@ -136,7 +136,7 @@ async fn async_main() -> Result<(), WorkerError> {
     // Set up shutdown signal
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
 
-    tokio::spawn(async move {
+    let _signal_handle = tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
         info!("Shutdown signal received");
         shutdown_tx.send(()).ok();

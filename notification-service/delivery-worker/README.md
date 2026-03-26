@@ -79,7 +79,7 @@ This means staging can never call production webhooks (or vice versa), as long a
 ## Running locally
 
 ```bash
-DATABASE_URL=postgres://user:pass@localhost:5432/geo \
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/gaia \
 POLL_INTERVAL_MS=5000 \
 RUST_LOG=info,delivery_worker=debug \
 cargo run -p delivery-worker

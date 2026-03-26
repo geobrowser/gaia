@@ -668,8 +668,11 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("Failed to bind on port {}: {}", webhook_port, e));
     println!("[1/5] Webhook server listening on port {}", webhook_port);
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.ok();
+    let _webhook_handle = tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, app).await {
+            eprintln!("\nERROR: Webhook server failed: {}", e);
+            std::process::exit(1);
+        }
     });
 
     // 2. Seed database

@@ -132,6 +132,8 @@ app.post("/webhooks/geo", async (req, res) => {
 })
 ```
 
+> **Important:** The idempotency set must be backed by persistent storage (e.g. a database table or Redis) so that already-processed keys survive server restarts. An in-memory `Set` will be lost on restart, causing duplicate notifications to be re-processed.
+
 Returning **409** tells the delivery worker the notification was already processed — it won't retry.
 
 ## 5. Full example (Express)

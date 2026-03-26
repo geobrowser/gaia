@@ -898,8 +898,8 @@ export const appWebhooks = pgTable("app_webhooks", {
 	appName: text("app_name").notNull().unique(),
 	url: text().notNull(),
 	secret: text().notNull(),
-	createdAt: timestamp("created_at", {withTimezone: true}).defaultNow().notNull(),
-	updatedAt: timestamp("updated_at", {withTimezone: true}).defaultNow().notNull(),
+	createdAt: timestamp("created_at", {withTimezone: true, mode: "date"}).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).defaultNow().notNull(),
 })
 
 /**
@@ -913,8 +913,8 @@ export const notificationOutbox = pgTable("notification_outbox", {
 	idempotencyKey: text("idempotency_key").notNull().unique(),
 	eventType: text("event_type").notNull(),
 	payload: jsonb().notNull(),
-	createdAt: timestamp("created_at", {withTimezone: true}).defaultNow().notNull(),
-	updatedAt: timestamp("updated_at", {withTimezone: true}).defaultNow().notNull(),
+	createdAt: timestamp("created_at", {withTimezone: true, mode: "date"}).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).defaultNow().notNull(),
 })
 
 /**
@@ -932,10 +932,10 @@ export const notificationDeliveries = pgTable(
 		status: text().notNull().default("pending"),
 		attempts: smallint().notNull().default(0),
 		lastError: text("last_error"),
-		nextRetryAt: timestamp("next_retry_at", {withTimezone: true}).defaultNow().notNull(),
-		deliveredAt: timestamp("delivered_at", {withTimezone: true}),
-		createdAt: timestamp("created_at", {withTimezone: true}).defaultNow().notNull(),
-		updatedAt: timestamp("updated_at", {withTimezone: true}).defaultNow().notNull(),
+		nextRetryAt: timestamp("next_retry_at", {withTimezone: true, mode: "date"}).defaultNow().notNull(),
+		deliveredAt: timestamp("delivered_at", {withTimezone: true, mode: "date"}),
+		createdAt: timestamp("created_at", {withTimezone: true, mode: "date"}).defaultNow().notNull(),
+		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).defaultNow().notNull(),
 	},
 	(table) => [
 		unique().on(table.outboxId, table.webhookId),

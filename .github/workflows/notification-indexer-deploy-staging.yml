@@ -7,6 +7,7 @@ on:
     paths:
       - 'notification-service/notification-indexer/**'
       - 'notification-service/deployment/staging/notification-indexer.yaml'
+      - 'notification-service/deployment/staging/namespace.yaml'
       - 'hermes-schema/**'
       - 'hermes-kafka/**'
       - 'wire/**'
@@ -74,4 +75,4 @@ jobs:
           kubectl get pods -n notifications-staging -l app=notification-indexer
           echo ""
           echo "=== Recent Events ==="
-          kubectl get events -n notifications-staging --sort-by='.lastTimestamp' | grep notification-indexer | tail -10
+          kubectl get events -n notifications-staging --sort-by='.lastTimestamp' | grep notification-indexer | tail -10 || true

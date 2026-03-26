@@ -62,7 +62,7 @@ Consumes governance events from the `space.governance` Kafka topic and writes pe
 ## Running locally
 
 ```bash
-DATABASE_URL=postgres://user:pass@localhost:5432/geo \
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/gaia \
 KAFKA_BROKER=localhost:9092 \
 ENVIRONMENT=production \
 RUST_LOG=info,notification_indexer=debug \
