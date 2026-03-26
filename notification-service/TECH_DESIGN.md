@@ -61,9 +61,11 @@ flowchart LR
 
 ### Design Principles
 
-- **Per-user delivery**: Each notification is addressed to a specific user (`user_space_id`). The notification service resolves users from the database — app servers don't need to know space membership.
+- **Per-user delivery**: Each notification is addressed to a specific user (`user_space_id`). The notification service resolves recipients from the database — app servers don't need to know space membership.
+    - **Governance (v1):** relevant users = editors of the event's `space_id` (queried from the `editors` table). Member notifications are explicitly out of scope for v1 — see Open Questions.
+    - **Bounty (v1):** recipients depend on the relation type: `bounty_interest` notifies editors of the bounty's owning space; `bounty_allocated` / `bounty_payout` notify the target curator (resolved via `to_space_id` or entity→space lookup).
 - **Idempotent**: Unique idempotency keys (event + user) prevent duplicate notifications. App servers can safely deduplicate using the `idempotency_key` field.
-- **Signed**: Every webhook call includes an `X-Geo-Signature` HMAC-SHA256 header so app servers can verify authenticity.
+- **Signed**: Every webhook call includes an `X-Geo-Signature` HMAC-SHA256 header so app servers can verify authenticity. The HMAC-SHA256 is computed over the exact raw HTTP request body bytes as sent (UTF-8 JSON). No canonicalization or reordering is applied; app servers must verify the signature against the raw body bytes, not a re-serialized version.
 - **Versioned**: Payloads include a `version` field to enable future schema evolution without breaking existing consumers.
 - **Decoupled**: The outbox pattern separates event processing from delivery. If a webhook is down, notifications queue up and retry automatically.
 
@@ -95,11 +97,13 @@ flowchart LR
 
 | Kafka Event | Webhook `event_type` | Source |
 |---|---|---|
-| `EDITS_PUBLISHED` (interest relation created) | `bounty_interest` | `knowledge.edits` topic |
-| `PROPOSAL_EXECUTED` (allocation relation created) | `bounty_allocated` | `space.governance` topic |
-| `PROPOSAL_EXECUTED` (payout relation created) | `bounty_payout` | `space.governance` topic |
+| `HermesEdit` containing interest `CreateRelation` | `bounty_interest` | `knowledge.edits` topic |
+| `HermesEdit` containing allocation `CreateRelation` | `bounty_allocated` | `knowledge.edits` topic |
+| `HermesEdit` containing payout `CreateRelation` | `bounty_payout` | `knowledge.edits` topic |
 
-Bounty events require consuming the `knowledge.edits` Kafka topic in addition to `space.governance`. The notification-indexer must decode the GRC-20 payload from `HermesEdit` messages and inspect the relation `type_id` to identify bounty-specific relations. Well-known relation type UUIDs for bounty interest, allocation, and payout will be defined in the protocol and configured via environment variables (e.g. `BOUNTY_INTEREST_RELATION_TYPE_ID`, `BOUNTY_ALLOCATED_RELATION_TYPE_ID`, `BOUNTY_PAYOUT_RELATION_TYPE_ID`).
+Footnote: For `bounty_interest`, `HermesEdit.space_id` is the curator's personal space (no DB lookup needed). For `bounty_allocated` / `bounty_payout`, the curator's space is resolved from the relation's `to_space_id` if present, otherwise via the entity→space DB lookup.
+
+Bounty events require consuming the `knowledge.edits` Kafka topic. The notification-indexer decodes the GRC-20 payload from `HermesEdit` messages and inspects the relation `type_id` to identify bounty-specific relations. Well-known relation type UUIDs for bounty interest, allocation, and payout are defined in the protocol and configured via environment variables (e.g. `BOUNTY_INTEREST_RELATION_TYPE_ID`, `BOUNTY_ALLOCATED_RELATION_TYPE_ID`, `BOUNTY_PAYOUT_RELATION_TYPE_ID`).
 
 #### Resolving entity_id → user_space_id
 
@@ -158,7 +162,7 @@ sequenceDiagram
 
 #### Bounty Allocation
 
-An editor of the bounty's space creates a governance proposal that, when executed, creates a relation from the bounty entity to the allocated curator. The `proposal_executed` event already flows through `space.governance`. The notification-indexer inspects the proposal's executed actions (via `knowledge.edits`) to detect the allocation relation and emits a `bounty_allocated` notification to the allocated curator.
+An editor of the bounty's space allocates a bounty by creating an allocation relation from the bounty entity to the allocated curator. The notification-indexer detects this allocation relation by consuming `knowledge.edits` directly (decoding the executed edit payload and inspecting `CreateRelation` operations), and emits a `bounty_allocated` notification to the allocated curator.
 
 **Who gets notified:** The curator who was allocated (identified by the `to_id` of the allocation relation).
 
@@ -193,7 +197,7 @@ sequenceDiagram
 
 #### Bounty Payout
 
-After work is completed, an editor creates a governance proposal that, when executed, creates a payout relation. The notification-indexer detects the payout relation type in the executed edit and notifies the curator that they have been paid.
+After work is completed, a payout relation is created from the bounty entity to the curator entity. In DAO/governance spaces this typically happens via a governance proposal that, when executed, publishes an edit containing the payout relation; in EOA spaces the relation may be created directly. The notification-indexer detects the payout relation type by consuming `knowledge.edits` and inspecting `CreateRelation` operations, and notifies the curator that they have been paid.
 
 **Who gets notified:** The curator who received the payout (identified by the `to_id` of the payout relation).
 
@@ -224,7 +228,12 @@ sequenceDiagram
 
 #### Deduplication: Governance vs. Bounty Notifications
 
-A single `PROPOSAL_EXECUTED` event for a bounty allocation will generate both a generic `proposal_executed` notification (to all space editors) and a targeted `bounty_allocated` notification (to the allocated curator). This is intentional — they serve different audiences and purposes. The app server can deduplicate or merge these on its end if desired.
+A bounty allocation will typically produce:
+
+- a generic `proposal_executed` notification (to all space editors) from `space.governance` (DAO/governance spaces), and
+- a targeted `bounty_allocated` notification (to the allocated curator) from `knowledge.edits` when the allocation relation is published.
+
+These are intentionally separate notifications for different audiences. They are emitted from different Kafka topics (and may arrive at different times), so there is no single-event overlap; any deduplication/merging is an application-layer choice.
 
 Future versions may add events from other topics such as `space.membership` and `space.moderation`.
 
@@ -267,7 +276,7 @@ One row per outbox entry per webhook. Written by the notification-indexer, updat
 | `id` | `uuid` PK | Auto-generated |
 | `outbox_id` | `uuid` FK | References `notification_outbox.id` |
 | `webhook_id` | `uuid` FK | References `app_webhooks.id` |
-| `status` | `text` | `pending`, `delivered`, or `failed` |
+| `status` | `text` | `pending`, `in_progress`, `delivered`, or `failed` |
 | `attempts` | `smallint` | Number of delivery attempts |
 | `last_error` | `text` | Last error message (nullable) |
 | `next_retry_at` | `timestamptz` | When to retry next |
@@ -344,7 +353,7 @@ Each outbox row has a unique idempotency key computed as:
 idempotency_key = SHA-256(block_number + ":" + sequence + ":" + event_type + ":" + user_space_id)
 ```
 
-The `block_number` and `sequence` together uniquely identify an on-chain event (sequence handles multiple events within the same block), so they would be sufficient on their own. The `event_type` and `user_space_id` are included defensively to ensure per-user uniqueness.
+The `block_number` and `sequence` together uniquely identify an on-chain event. `sequence` is `BlockchainMetadata.sequence` — the action index within the block (0-based) — and disambiguates multiple events within the same block. The `event_type` and `user_space_id` are included defensively to ensure per-user uniqueness.
 
 For `proposal_rejected` (off-chain, no block/sequence), the input is `{proposal_id}:proposal_rejected:{user_space_id}` since a proposal can only be rejected once.
 
@@ -356,23 +365,28 @@ The `ON CONFLICT (idempotency_key) DO NOTHING` clause prevents duplicate outbox 
 
 **Crate:** `notification-service/delivery-worker/`
 
-A poll-based worker that delivers notifications to webhooks:
+A poll-based worker that delivers notifications to webhooks concurrently:
 
-1. Queries pending deliveries: `WHERE status = 'pending' AND next_retry_at <= now()` with `FOR UPDATE SKIP LOCKED` (enables horizontal scaling)
-2. For each delivery, POSTs the JSON payload to the webhook URL
-3. Signs the request: `X-Geo-Signature: sha256={HMAC-SHA256(secret, body)}`
-4. Handles the response:
+1. Claims pending deliveries using a CTE that atomically selects and updates status to `in_progress`, releasing the `FOR UPDATE SKIP LOCKED` row lock immediately rather than holding it through the HTTP call.
+2. Delivers up to `MAX_CONCURRENT_DELIVERIES` (default 10) webhooks concurrently via `tokio::JoinSet`.
+3. For each delivery, POSTs the JSON payload to the webhook URL.
+4. Signs the request: `X-Geo-Signature: sha256={HMAC-SHA256(secret, body)}`
+5. Handles the response:
 
 | Response | Action |
 |---|---|
 | 2xx | Mark as `delivered` |
-| 409 | Mark as `delivered` (duplicate, already processed) |
+| 409 | Mark as `delivered` (duplicate: `idempotency_key` already processed successfully). App servers should return 409 only in this case; it will not be retried. |
 | 5xx, 429 | Increment attempts, schedule retry with exponential backoff |
 | Other 4xx | Mark as `failed` (permanent, logged at `error` level) |
 | Network error | Retry with backoff |
 | Max retries exceeded | Mark as `failed` (logged at `error` level) |
 
+A periodic stale-claim reaper (every 60s) resets `in_progress` deliveries older than 5 minutes back to `pending`, handling the case where a worker crashes mid-delivery.
+
 ### Retry Schedule
+
+Retry delay formula: `delay_secs = min(30 * 2^(attempt-1), 172800)` (capped at 48 hours). No jitter is currently applied; jitter may be added in a future version.
 
 | Attempt | Delay |
 |---|---|
@@ -390,21 +404,51 @@ After 100 failed attempts, the delivery is permanently marked as `failed`.
 
 ## Webhook Payload
 
-Every webhook POST body follows this JSON schema:
+Every webhook POST body uses a single top-level payload shape. Optional fields are omitted when not applicable (not set to `null`).
+
+Example (governance):
 
 ```json
 {
   "version": 1,
   "event_type": "proposal_created",
+  "category": "governance",
   "space_id": "d4f5a6b7-...",
-  "proposal_id": "c3e4f5a6-...",
   "user_space_id": "b2c3d4e5-...",
-  "idempotency_key": "proposal_created:c3e4f5a6-...:12345:b2c3d4e5-...",
-  "proposer_id": "a1b2c3d4-...",
+  "idempotency_key": "<sha256-hex>",
   "block_number": 12345,
-  "timestamp": 1700000000
+  "timestamp": 1700000000,
+
+  "proposal_id": "c3e4f5a6-...",
+  "proposer_id": "a1b2c3d4-..."
 }
 ```
+
+Example (bounty):
+
+```json
+{
+  "version": 1,
+  "event_type": "bounty_interest",
+  "category": "bounty",
+  "space_id": "d4f5a6b7-...",
+  "user_space_id": "b2c3d4e5-...",
+  "idempotency_key": "<sha256-hex>",
+  "block_number": 12345,
+  "timestamp": 1700000000,
+
+  "bounty_entity_id": "...",
+  "relation_id": "...",
+  "curator_space_id": "...",
+  "bounty_space_id": "...",
+  "interested_user_space_id": "..."
+}
+```
+
+Notes:
+
+- `category` is always present and is either `"governance"` or `"bounty"`.
+- `idempotency_key` is a lowercase hex-encoded SHA-256 digest (see [Idempotency Keys](#idempotency-keys)).
 
 ### Fields
 
@@ -414,10 +458,11 @@ Every webhook POST body follows this JSON schema:
 |---|---|---|---|
 | `version` | number | Always | Payload schema version (currently `1`) |
 | `event_type` | string | Always | Event type identifier |
+| `category` | string | Always | Event category: `"governance"` or `"bounty"` |
 | `space_id` | UUID string | Always | Space where the event occurred |
 | `user_space_id` | UUID string | Always | The user this notification is addressed to |
-| `idempotency_key` | string | Always | Unique deduplication key |
-| `block_number` | number | All except `rejected` | On-chain block number |
+| `idempotency_key` | string | Always | Unique deduplication key (SHA-256 hex) |
+| `block_number` | number | All except `proposal_rejected` | On-chain block number |
 | `timestamp` | number | Always | Unix timestamp in seconds |
 
 #### Governance fields
@@ -437,7 +482,7 @@ Every webhook POST body follows this JSON schema:
 | `relation_id` | UUID string | All bounty events | The relation that triggered the notification |
 | `curator_space_id` | UUID string | All bounty events | The curator's personal space (resolved from `HermesEdit.space_id` for interest, or entity→space lookup for allocation/payout) |
 | `bounty_space_id` | UUID string | All bounty events | The space that owns the bounty |
-| `interested_user_space_id` | UUID string | `bounty_interest` only | The personal space of the user who expressed interest (same as `curator_space_id` — included explicitly so app servers can identify the interested user without extra lookups) |
+| `interested_user_space_id` | UUID string | `bounty_interest` only | The personal space of the user who expressed interest (always equals `curator_space_id` — included explicitly so app servers can identify the interested user without understanding the curator resolution logic) |
 | `proposal_id` | UUID string | `bounty_allocated`, `bounty_payout` | The governance proposal (absent for `bounty_interest` since no proposal is involved) |
 
 ## Deployment
@@ -515,7 +560,6 @@ A complete integration guide with TypeScript examples is provided in [WEBHOOK_IN
 3. **Member notifications**: Currently only editors receive notifications. Should members (non-editors) also be notified for certain event types?
 4. **Rate limiting**: Should we add per-webhook rate limiting to prevent overwhelming a slow app server?
 5. **Dead letter queue**: Permanently failed deliveries are logged at `error` level. Should we add a dedicated DLQ table or alerting integration for operational visibility?
-6. **Health endpoints**: Both services use `pgrep`-based liveness probes. Should we add HTTP `/healthz` endpoints that check DB and Kafka connectivity?
 
 > Please note that the design presented here serves as a foundational starting point. As the development process progresses, certain details may evolve and adjustments may be made. Therefore, the final implementation may differ from the initial design described in this document.
 
