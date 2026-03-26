@@ -20,7 +20,6 @@ COPY hermes-relay ./hermes-relay
 COPY hermes-schema ./hermes-schema
 COPY hermes-substream ./hermes-substream
 COPY stream ./stream
-COPY wire ./wire
 
 # Build from the crate directory (standalone, not as workspace member)
 WORKDIR /app/atlas

@@ -7975,19 +7975,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wire"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "prost 0.13.5",
- "prost-build 0.13.5",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "zstd",
-]
-
-[[package]]
 name = "wit-bindgen"
 version = "0.51.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

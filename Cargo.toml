@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "stream",
-    "wire",
     "ipfs",
     "indexer_utils",
 
