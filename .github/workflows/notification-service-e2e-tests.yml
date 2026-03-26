@@ -3,7 +3,7 @@ name: Notification Service E2E Tests
 on:
   workflow_dispatch:
   push:
-    branches: [main, dev]
+    branches: [main, dev, feat/notification-service]  # TODO: remove feat branch before merge
     paths:
       - 'notification-service/**'
       - 'hermes-schema/**'
