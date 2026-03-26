@@ -451,6 +451,8 @@ export const proposalActionTypeEnum = pgEnum("proposalActionType", [
 	"SubspaceUnrelated",
 	"SubspaceTopicDeclared",
 	"SubspaceTopicRemoved",
+	"SetTopic",
+	"UnsetTopic",
 ])
 
 /**

@@ -29,3 +29,4 @@ New decisions should follow whichever format the crate already uses. For new cra
 | RFC-0001 | Canonical graph inputs | [link](../rfcs/0001-canonical-graph-inputs.md) |
 | RFC-0002 | Graph diff emission | [link](../rfcs/0002-graph-diff-emission.md) |
 | RFC-0003 | Context-aware versioned diffs | [link](../rfcs/0003-context-aware-versioned-diffs.md) |
+| RFC-0004 | Multi-proposal diff groups | [link](../rfcs/0004-multi-proposal-diff-groups.md) |

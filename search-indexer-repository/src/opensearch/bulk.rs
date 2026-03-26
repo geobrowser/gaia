@@ -9,7 +9,7 @@ use opensearch::params::Refresh;
 use opensearch::{BulkOperation, BulkParts, OpenSearch};
 use serde::Serialize;
 use serde_json::Value;
-use tracing::{debug, error, warn};
+use tracing::{error, info, warn};
 
 use crate::errors::SearchIndexError;
 use crate::opensearch::retry::{self, RetryConfig};
@@ -112,8 +112,19 @@ pub async fn execute_bulk<B: Serialize>(
 ) -> Result<BatchOperationSummary, SearchIndexError> {
     let action_str = action.as_str();
 
+    let op_count = metas.len();
+
     // Pre-serialize so we can retry with the same bytes
     let body_bytes = serialize_bulk_operations(operations)?;
+    let payload_bytes = body_bytes.len();
+
+    info!(
+        ops = op_count,
+        payload_kb = payload_bytes / 1024,
+        refresh = refresh,
+        "bulk.request.start {} ops → OpenSearch",
+        action_str
+    );
 
     let mut attempt = 0u32;
     loop {
@@ -175,18 +186,23 @@ pub async fn execute_bulk<B: Serialize>(
 
             if summary.failed > 0 {
                 warn!(
-                    total = summary.total,
+                    ops = op_count,
                     succeeded = summary.succeeded,
                     failed = summary.failed,
+                    wall_ms = wall_ms,
+                    took_ms = took_ms,
                     attempts = attempt + 1,
-                    "Bulk {} completed with failures (retries exhausted)",
+                    "bulk.request.done {} — completed with failures",
                     action_str
                 );
             } else {
-                debug!(
-                    total = summary.total,
+                info!(
+                    ops = op_count,
                     succeeded = summary.succeeded,
-                    "Bulk {} indexed successfully",
+                    wall_ms = wall_ms,
+                    took_ms = took_ms,
+                    payload_kb = payload_bytes / 1024,
+                    "bulk.request.done {} — OK",
                     action_str
                 );
             }
@@ -240,9 +256,23 @@ pub fn parse_bulk_response(
 
         let (success, error) = if let Some(result) = item_result {
             let status = result.get("status").and_then(|s| s.as_u64()).unwrap_or(0);
-            // 404 on delete is OK (document not found means it's already deleted)
-            let is_success = (200..300).contains(&(status as u16))
-                || status == 404 && action == BulkAction::Delete;
+            // 404 on delete is OK (document not found means it's already deleted).
+            // 404 on score updates, space topic updates, topology updates, and
+            // relation removals is also OK — the scoring cronjob calculates
+            // scores for every entity in Postgres, but we only index entities
+            // that have values (name, description, etc.) into OpenSearch. Entities
+            // without values won't have a search doc, so 404 is expected and we
+            // must not NACK the batch for a doc that legitimately doesn't exist.
+            let is_not_found_ok = status == 404
+                && (action == BulkAction::Delete
+                    || meta.operation_type == "RemoveRelationByDoc"
+                    || meta.operation_type == "UpdateEntityGlobalScoreByDoc"
+                    || meta.operation_type == "UpdateSpaceScoreByDoc"
+                    || meta.operation_type == "UpdateEntitySpaceScore"
+                    || meta.operation_type == "UpdateSpaceTopicEntityIdByDoc"
+                    || meta.operation_type == "UpdateInCanonicalGraphByDoc");
+            let is_success =
+                (200..300).contains(&(status as u16)) || is_not_found_ok;
 
             if is_success {
                 (true, None)

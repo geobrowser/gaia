@@ -16,6 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   REGISTRY: registry.digitalocean.com/geo
   IMAGE_NAME: kg-indexer
 
@@ -24,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install doctl
         uses: digitalocean/action-doctl@v2

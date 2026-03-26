@@ -58,6 +58,7 @@ pub use hermes_substream::ACTION_SUBSPACE_UNRELATED as SUBSPACE_UNRELATED;
 pub use hermes_substream::ACTION_SUBSPACE_UNVERIFIED as SUBSPACE_UNVERIFIED;
 pub use hermes_substream::ACTION_SUBSPACE_VERIFIED as SUBSPACE_VERIFIED;
 pub use hermes_substream::ACTION_TOPIC_DECLARED as TOPIC_DECLARED;
+pub use hermes_substream::ACTION_TOPIC_REMOVED as TOPIC_REMOVED;
 pub use hermes_substream::ACTION_UNFLAGGED as UNFLAGGED;
 
 // =============================================================================

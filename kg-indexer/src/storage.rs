@@ -456,6 +456,21 @@ impl Storage {
         Ok(())
     }
 
+    pub async fn update_space_topic(
+        &self,
+        space_id: Uuid,
+        topic_id: Uuid,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        sqlx::query("UPDATE spaces SET topic_id = $2 WHERE id = $1")
+            .bind(space_id)
+            .bind(topic_id)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+
     pub async fn insert_members(
         &self,
         members: &[MemberItem],
@@ -963,6 +978,13 @@ impl Storage {
                     target_id = Some(*id);
                     "SubspaceTopicRemoved"
                 }
+                ProposalActionPayload::SetTopic {
+                    target_topic_id: id,
+                } => {
+                    target_id = Some(*id);
+                    "SetTopic"
+                }
+                ProposalActionPayload::UnsetTopic => "UnsetTopic",
                 ProposalActionPayload::Unknown => "Unknown",
             };
 
