@@ -216,7 +216,6 @@ services:
       kafka.clusters.0.serde.18.properties.protobufFilesDir: /proto/
       kafka.clusters.0.serde.18.properties.protobufMessageName: voting.HermesVoteCast
     volumes:
-      - ./wire/proto/grc20.proto:/proto/grc20.proto:ro
       - ./hermes-schema/proto/block_summary.proto:/proto/block_summary.proto:ro
       - ./hermes-schema/proto/blockchain_metadata.proto:/proto/blockchain_metadata.proto:ro
       - ./hermes-schema/proto/governance.proto:/proto/governance.proto:ro

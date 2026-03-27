@@ -17,7 +17,6 @@ COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-relay ./hermes-relay
 COPY hermes-substream ./hermes-substream
 COPY stream ./stream
-COPY wire ./wire
 COPY ipfs ./ipfs
 
 # Build from the crate directory (standalone, not as workspace member)

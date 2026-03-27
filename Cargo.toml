@@ -1,17 +1,8 @@
 [workspace]
 members = [
     "stream",
-    "indexer",
-    "indexer_utils",
-    "wire",
-    "cache",
     "ipfs",
-
-    "actions-indexer",
-    "actions-indexer-pipeline",
-    "actions-indexer-shared",
-    "actions-indexer-repository",
-    "actions-substream",
+    "indexer_utils",
 
     "search-indexer",
     "search-indexer-shared",
@@ -34,8 +25,4 @@ members = [
     "scoring-service/vote-indexer",
     "scoring-service/topology-indexer",
 ]
-# `substreams build` doesn't work well when in a workspace. The CLI looks for the
-# target directory within the substream crate, but the workspace hoists it to the
-# workspace root. indexer-substream still uses prost 0.11, so it remains excluded.
-exclude = ["indexer-substream"]
 resolver = "2"

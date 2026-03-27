@@ -8,7 +8,6 @@ path = "src/lib.rs"
 
 [dependencies]
 prost = "0.13.5"
-wire = { path = "../wire" }
 
 [build-dependencies]
 prost-build = "0.13.5"

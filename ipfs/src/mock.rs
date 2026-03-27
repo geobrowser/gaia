@@ -25,35 +25,32 @@
 //! let fetched = client.get_bytes("ipfs://QmTestCid123").await?;
 //! ```
 //!
-//! # Legacy Example (v1 protobuf)
+//! # Bytes Example
 //!
 //! ```ignore
 //! use ipfs::{MockIpfsClient, IpfsFetcher};
-//! use wire::pb::grc20::Edit;
+//! use grc_20::{Edit, encode_edit};
+//! use std::borrow::Cow;
 //!
-//! // Legacy v1 protobuf Edit (deprecated, use GRC-20 v2)
-//! let edits = vec![
-//!     ("QmTestCid123".to_string(), Edit {
-//!         id: vec![0x01],
-//!         name: "Test Edit".to_string(),
-//!         ops: vec![],
-//!         authors: vec![],
-//!         language: None,
-//!     }),
-//! ];
+//! let edit = Edit {
+//!     id: [0x01; 16],
+//!     name: Cow::Borrowed("Test Edit"),
+//!     authors: vec![],
+//!     created_at: 1700000000,
+//!     ops: vec![],
+//! };
+//! let bytes = encode_edit(&edit).unwrap();
 //!
-//! let client = MockIpfsClient::with_edits(edits);
-//! let edit = client.get("ipfs://QmTestCid123").await?;
+//! let client = MockIpfsClient::new();
+//! client.register_bytes("QmTestCid123", bytes);
+//! let fetched = client.get_bytes("ipfs://QmTestCid123").await?;
 //! ```
 
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use async_trait::async_trait;
-use prost::Message;
-use wire::pb::grc20::Edit;
-
 use crate::{IpfsError, IpfsFetcher, Result};
+use async_trait::async_trait;
 
 /// Mock IPFS client that returns pre-configured edit data.
 ///
@@ -69,26 +66,6 @@ impl MockIpfsClient {
         Self {
             edits: RwLock::new(HashMap::new()),
         }
-    }
-
-    /// Create a mock client pre-populated with the given CID → Edit mappings.
-    ///
-    /// **Deprecated**: Use `with_bytes` with GRC-20 v2 encoded bytes instead.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let mut edits = HashMap::new();
-    /// edits.insert("QmCid1".to_string(), edit1);
-    /// edits.insert("QmCid2".to_string(), edit2);
-    /// let client = MockIpfsClient::with_edits(edits);
-    /// ```
-    pub fn with_edits(edits: HashMap<String, Edit>) -> Self {
-        let client = Self::new();
-        for (cid, edit) in edits {
-            client.register_edit(&cid, edit);
-        }
-        client
     }
 
     /// Create a mock client pre-populated with the given CID → bytes mappings.
@@ -120,17 +97,6 @@ impl MockIpfsClient {
             client.register_bytes(&cid, bytes);
         }
         client
-    }
-
-    /// Register an edit to be returned for a given CID (legacy v1 protobuf).
-    ///
-    /// The CID can be provided with or without the `ipfs://` prefix.
-    ///
-    /// **Deprecated**: Use `register_bytes` with GRC-20 v2 encoded bytes instead.
-    pub fn register_edit(&self, cid: &str, edit: Edit) {
-        let normalized_cid = normalize_cid(cid);
-        let bytes = edit.encode_to_vec();
-        self.edits.write().unwrap().insert(normalized_cid, bytes);
     }
 
     /// Register raw bytes to be returned for a given CID.
@@ -167,12 +133,6 @@ impl Default for MockIpfsClient {
 
 #[async_trait]
 impl IpfsFetcher for MockIpfsClient {
-    async fn get(&self, uri: &str) -> Result<Edit> {
-        let bytes = self.get_bytes(uri).await?;
-        let edit = Edit::decode(bytes.as_slice()).map_err(IpfsError::Prost)?;
-        Ok(edit)
-    }
-
     async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
         let cid = normalize_cid(uri);
         self.edits
@@ -197,22 +157,12 @@ fn normalize_cid(uri: &str) -> String {
 mod tests {
     use super::*;
 
-    fn test_edit(name: &str) -> Edit {
-        Edit {
-            id: vec![0x01, 0x02, 0x03],
-            name: name.to_string(),
-            ops: vec![],
-            authors: vec![],
-            language: None,
-        }
-    }
-
     #[tokio::test]
-    async fn test_mock_client_with_edits() {
-        let mut edits = HashMap::new();
-        edits.insert("QmTestCid1".to_string(), test_edit("Edit 1"));
-        edits.insert("QmTestCid2".to_string(), test_edit("Edit 2"));
-        let client = MockIpfsClient::with_edits(edits);
+    async fn test_mock_client_with_bytes() {
+        let mut data = HashMap::new();
+        data.insert("QmTestCid1".to_string(), b"Edit 1".to_vec());
+        data.insert("QmTestCid2".to_string(), b"Edit 2".to_vec());
+        let client = MockIpfsClient::with_bytes(data);
 
         assert_eq!(client.len(), 2);
         assert!(client.has_cid("QmTestCid1"));
@@ -223,31 +173,31 @@ mod tests {
     #[tokio::test]
     async fn test_mock_client_get_with_prefix() {
         let client = MockIpfsClient::new();
-        client.register_edit("QmTestCid", test_edit("Test"));
+        client.register_bytes("QmTestCid", b"Test".to_vec());
 
         // Should work with ipfs:// prefix
-        let edit = client.get("ipfs://QmTestCid").await.unwrap();
-        assert_eq!(edit.name, "Test");
+        let bytes = client.get_bytes("ipfs://QmTestCid").await.unwrap();
+        assert_eq!(bytes, b"Test".to_vec());
     }
 
     #[tokio::test]
     async fn test_mock_client_get_without_prefix() {
         let client = MockIpfsClient::new();
-        client.register_edit("QmTestCid", test_edit("Test"));
+        client.register_bytes("QmTestCid", b"Test".to_vec());
 
         // Should work without prefix
-        let edit = client.get("QmTestCid").await.unwrap();
-        assert_eq!(edit.name, "Test");
+        let bytes = client.get_bytes("QmTestCid").await.unwrap();
+        assert_eq!(bytes, b"Test".to_vec());
     }
 
     #[tokio::test]
     async fn test_mock_client_not_found() {
         let client = MockIpfsClient::new();
 
-        let result = client.get("ipfs://QmUnknown").await;
+        let result = client.get_bytes("ipfs://QmUnknown").await;
         assert!(result.is_err());
 
-        if let Err(IpfsError::NotFound(msg)) = result {
+        if let Err(crate::IpfsError::NotFound(msg)) = result {
             assert!(msg.contains("QmUnknown"));
         } else {
             panic!("Expected NotFound error");
@@ -259,13 +209,13 @@ mod tests {
         let client = MockIpfsClient::new();
 
         // Register with prefix
-        client.register_edit("ipfs://QmTestCid", test_edit("Test"));
+        client.register_bytes("ipfs://QmTestCid", b"Test".to_vec());
 
         // Should still be found without prefix
         assert!(client.has_cid("QmTestCid"));
 
         // And with prefix
-        let edit = client.get("ipfs://QmTestCid").await.unwrap();
-        assert_eq!(edit.name, "Test");
+        let bytes = client.get_bytes("ipfs://QmTestCid").await.unwrap();
+        assert_eq!(bytes, b"Test".to_vec());
     }
 }
