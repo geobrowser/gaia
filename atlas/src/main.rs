@@ -38,7 +38,7 @@ use atlas::events::{BlockMetadata, SpaceId, SpaceTopologyEvent, SpaceTopologyPay
 use atlas::graph::{CanonicalProcessor, DiffTracker, GraphState, TransitiveProcessor};
 use atlas::kafka::{AtlasProducer, CanonicalGraphEmitter};
 use atlas::persistence::{CheckpointConfig, CheckpointManager, PersistedGraphState};
-use hermes_instrumentation::{Instrument, debug, info, info_span};
+use hermes_instrumentation::{debug, info, info_span, Instrument};
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 use prost::Message;
 
