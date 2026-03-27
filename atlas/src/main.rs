@@ -390,6 +390,10 @@ fn main() -> anyhow::Result<()> {
     // Load .env file if present (ignored in production)
     dotenvy::dotenv().ok();
 
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls ring crypto provider");
+
     // Initialize telemetry BEFORE tokio runtime starts.
     // Keep the guard alive until the end of main to ensure spans are flushed.
     let _telemetry = hermes_instrumentation::init(build_telemetry_config())?;
