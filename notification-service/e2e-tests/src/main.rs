@@ -564,45 +564,160 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
     );
 
     // ===================================================================
-    // Payload spot-checks
+    // Comprehensive per-event-type payload validation
     // ===================================================================
+
+    let proposer = Uuid::from_bytes(PROPOSER_ID_BYTES).to_string();
+    let voter = Uuid::from_bytes(VOTER_ID_BYTES).to_string();
+
+    // Helper: validate common fields present on every notification
+    let check_common = |r: &mut TestResults, prefix: &str, call: &WebhookCall, expected_space: &str, expected_block: Option<u64>, expected_ts: Option<u64>| {
+        r.check(
+            &format!("{}: has version 1", prefix),
+            call.body["version"].as_u64() == Some(1),
+        );
+        r.check(
+            &format!("{}: has category 'governance'", prefix),
+            call.body["category"].as_str() == Some("governance"),
+        );
+        r.check(
+            &format!("{}: correct space_id", prefix),
+            call.body["space_id"].as_str() == Some(expected_space),
+        );
+        r.check(
+            &format!("{}: has user_space_id", prefix),
+            call.body["user_space_id"].is_string(),
+        );
+        r.check(
+            &format!("{}: has idempotency_key", prefix),
+            call.body["idempotency_key"].is_string(),
+        );
+        if let Some(block) = expected_block {
+            r.check(
+                &format!("{}: correct block_number {}", prefix, block),
+                call.body["block_number"].as_u64() == Some(block),
+            );
+        } else {
+            r.check(
+                &format!("{}: no block_number (off-chain)", prefix),
+                call.body.get("block_number").is_none(),
+            );
+        }
+        if let Some(ts) = expected_ts {
+            r.check(
+                &format!("{}: correct timestamp {}", prefix, ts),
+                call.body["timestamp"].as_u64() == Some(ts),
+            );
+        }
+    };
+
+    // --- proposal_created ---
     if let Some(call) = calls_3e.iter().find(|c| c.body["event_type"].as_str() == Some("proposal_created")) {
-        let expected = Uuid::from_bytes(PROP_3E_CREATED_BYTES).to_string();
-        r.check(
-            "3e proposal_created: correct proposal_id",
-            call.body["proposal_id"].as_str() == Some(expected.as_str()),
-        );
-        r.check(
-            "3e proposal_created: has block_number 12345",
-            call.body["block_number"].as_u64() == Some(12345),
-        );
-        let proposer = Uuid::from_bytes(PROPOSER_ID_BYTES).to_string();
-        r.check(
-            "3e proposal_created: has proposer_id",
-            call.body["proposer_id"].as_str() == Some(proposer.as_str()),
-        );
+        let prefix = "3e proposal_created";
+        let pid = Uuid::from_bytes(PROP_3E_CREATED_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_3e, Some(12345), Some(1700000000));
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: has proposer_id", prefix), call.body["proposer_id"].as_str() == Some(proposer.as_str()));
+        r.check(&format!("{}: voting_mode is 'fast'", prefix), call.body["voting_mode"].as_str() == Some("fast"));
+        r.check(&format!("{}: has actions array", prefix), call.body["actions"].is_array());
+        r.check(&format!("{}: has settings object", prefix), call.body["settings"].is_object());
+        if call.body["settings"].is_object() {
+            r.check(&format!("{}: settings.start_date", prefix), call.body["settings"]["start_date"].as_u64() == Some(1700000000));
+            r.check(&format!("{}: settings.end_date", prefix), call.body["settings"]["end_date"].as_u64() == Some(1700086400));
+            r.check(&format!("{}: settings.voting_mode", prefix), call.body["settings"]["voting_mode"].as_str() == Some("fast"));
+            r.check(&format!("{}: settings.quorum", prefix), call.body["settings"]["quorum"].as_u64() == Some(1));
+        }
+        r.check(&format!("{}: no voter_id", prefix), call.body.get("voter_id").is_none());
+        r.check(&format!("{}: no vote", prefix), call.body.get("vote").is_none());
     }
+
+    // --- proposal_updated ---
+    if let Some(call) = calls_3e.iter().find(|c| c.body["event_type"].as_str() == Some("proposal_updated")) {
+        let prefix = "3e proposal_updated";
+        let pid = Uuid::from_bytes(PROP_3E_UPDATED_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_3e, Some(12347), Some(1700002000));
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: has proposer_id", prefix), call.body["proposer_id"].as_str() == Some(proposer.as_str()));
+        r.check(&format!("{}: voting_mode is 'fast'", prefix), call.body["voting_mode"].as_str() == Some("fast"));
+        r.check(&format!("{}: has actions array", prefix), call.body["actions"].is_array());
+        r.check(&format!("{}: has settings object", prefix), call.body["settings"].is_object());
+        r.check(&format!("{}: no voter_id", prefix), call.body.get("voter_id").is_none());
+        r.check(&format!("{}: no vote", prefix), call.body.get("vote").is_none());
+    }
+
+    // --- proposal_voted ---
     if let Some(call) = calls_3e.iter().find(|c| c.body["event_type"].as_str() == Some("proposal_voted")) {
-        let voter = Uuid::from_bytes(VOTER_ID_BYTES).to_string();
-        r.check(
-            "3e proposal_voted: correct voter_id",
-            call.body["voter_id"].as_str() == Some(voter.as_str()),
-        );
-        r.check(
-            "3e proposal_voted: vote is 'yes'",
-            call.body["vote"].as_str() == Some("yes"),
-        );
-        r.check(
-            "3e proposal_voted: no proposer_id",
-            call.body.get("proposer_id").is_none(),
-        );
+        let prefix = "3e proposal_voted";
+        let pid = Uuid::from_bytes(PROP_3E_VOTED_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_3e, Some(12348), Some(1700003000));
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: correct voter_id", prefix), call.body["voter_id"].as_str() == Some(voter.as_str()));
+        r.check(&format!("{}: vote is 'yes'", prefix), call.body["vote"].as_str() == Some("yes"));
+        r.check(&format!("{}: no proposer_id", prefix), call.body.get("proposer_id").is_none());
+        r.check(&format!("{}: no voting_mode", prefix), call.body.get("voting_mode").is_none());
+        r.check(&format!("{}: no actions", prefix), call.body.get("actions").is_none());
+        r.check(&format!("{}: no settings", prefix), call.body.get("settings").is_none());
     }
+
+    // --- proposal_executed ---
+    if let Some(call) = calls_3e.iter().find(|c| c.body["event_type"].as_str() == Some("proposal_executed")) {
+        let prefix = "3e proposal_executed";
+        let pid = Uuid::from_bytes(PROP_3E_EXECUTED_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_3e, Some(12346), Some(1700001000));
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: no proposer_id", prefix), call.body.get("proposer_id").is_none());
+        r.check(&format!("{}: no voter_id", prefix), call.body.get("voter_id").is_none());
+        r.check(&format!("{}: no vote", prefix), call.body.get("vote").is_none());
+        r.check(&format!("{}: no voting_mode", prefix), call.body.get("voting_mode").is_none());
+        r.check(&format!("{}: no actions", prefix), call.body.get("actions").is_none());
+        r.check(&format!("{}: no settings", prefix), call.body.get("settings").is_none());
+    }
+
+    // --- proposal_settings_updated ---
+    if let Some(call) = calls_3e.iter().find(|c| c.body["event_type"].as_str() == Some("proposal_settings_updated")) {
+        let prefix = "3e proposal_settings_updated";
+        let pid = Uuid::from_bytes(PROP_3E_SETTINGS_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_3e, Some(12349), Some(1700004000));
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: voting_mode is 'slow'", prefix), call.body["voting_mode"].as_str() == Some("slow"));
+        r.check(&format!("{}: has settings object", prefix), call.body["settings"].is_object());
+        if call.body["settings"].is_object() {
+            r.check(&format!("{}: settings.end_date", prefix), call.body["settings"]["end_date"].as_u64() == Some(1700172800));
+            r.check(&format!("{}: settings.voting_mode 'slow'", prefix), call.body["settings"]["voting_mode"].as_str() == Some("slow"));
+            r.check(&format!("{}: settings.quorum 5", prefix), call.body["settings"]["quorum"].as_u64() == Some(5));
+            r.check(&format!("{}: settings.percentage_threshold 5000000", prefix), call.body["settings"]["percentage_threshold"].as_u64() == Some(5000000));
+        }
+        r.check(&format!("{}: no proposer_id", prefix), call.body.get("proposer_id").is_none());
+        r.check(&format!("{}: no voter_id", prefix), call.body.get("voter_id").is_none());
+        r.check(&format!("{}: no actions", prefix), call.body.get("actions").is_none());
+    }
+
+    // --- proposal_rejected ---
     if let Some(call) = calls_3e.iter().find(|c| c.body["event_type"].as_str() == Some("proposal_rejected")) {
-        let expected = Uuid::from_bytes(PROP_3E_REJECTED_BYTES).to_string();
-        r.check(
-            "3e proposal_rejected: correct proposal_id",
-            call.body["proposal_id"].as_str() == Some(expected.as_str()),
-        );
+        let prefix = "3e proposal_rejected";
+        let pid = Uuid::from_bytes(PROP_3E_REJECTED_BYTES).to_string();
+        let proposed_by = Uuid::from_bytes(PROPOSER_ID_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_3e, None, None);
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: has proposer_id", prefix), call.body["proposer_id"].as_str() == Some(proposed_by.as_str()));
+        r.check(&format!("{}: has timestamp", prefix), call.body["timestamp"].is_number());
+        r.check(&format!("{}: no voter_id", prefix), call.body.get("voter_id").is_none());
+        r.check(&format!("{}: no vote", prefix), call.body.get("vote").is_none());
+        r.check(&format!("{}: no voting_mode", prefix), call.body.get("voting_mode").is_none());
+        r.check(&format!("{}: no actions", prefix), call.body.get("actions").is_none());
+        r.check(&format!("{}: no settings", prefix), call.body.get("settings").is_none());
+    }
+
+    // --- 1-editor space: proposal_created ---
+    if let Some(call) = calls.iter().find(|c| {
+        c.body["space_id"].as_str() == Some(space_1e.as_str())
+            && c.body["event_type"].as_str() == Some("proposal_created")
+    }) {
+        let prefix = "1e proposal_created";
+        let pid = Uuid::from_bytes(PROP_1E_CREATED_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_1e, Some(20001), Some(1700010000));
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: correct user_space_id", prefix), call.body["user_space_id"].as_str() == Some(editor_solo.as_str()));
     }
 
     // ===================================================================
