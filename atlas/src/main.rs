@@ -38,7 +38,7 @@ use atlas::events::{BlockMetadata, SpaceId, SpaceTopologyEvent, SpaceTopologyPay
 use atlas::graph::{CanonicalProcessor, DiffTracker, GraphState, TransitiveProcessor};
 use atlas::kafka::{AtlasProducer, CanonicalGraphEmitter};
 use atlas::persistence::{CheckpointConfig, CheckpointManager, PersistedGraphState};
-use hermes_instrumentation::{debug, info, info_span, Instrument};
+use hermes_instrumentation::{Instrument, debug, info, info_span};
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 use prost::Message;
 
@@ -389,6 +389,10 @@ fn parse_root_space_id() -> anyhow::Result<SpaceId> {
 fn main() -> anyhow::Result<()> {
     // Load .env file if present (ignored in production)
     dotenvy::dotenv().ok();
+
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install rustls ring crypto provider");
 
     // Initialize telemetry BEFORE tokio runtime starts.
     // Keep the guard alive until the end of main to ensure spans are flushed.

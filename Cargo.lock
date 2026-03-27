@@ -1003,6 +1003,7 @@ dependencies = [
  "prost 0.13.5",
  "rand 0.8.5",
  "rdkafka 0.36.2",
+ "rustls",
  "serde",
  "serde_json",
  "sqlx",
