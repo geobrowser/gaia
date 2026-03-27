@@ -298,6 +298,7 @@ The pipeline transform is not a bottleneck. Network I/O (substreams, Kafka, IPFS
 
 - Hermes pipeline now waits for Kafka broker delivery reports before treating an emit as successful.
 - Producer defaults prioritize durability and ordering (`acks=all`, idempotence enabled, single in-flight request).
+- `EDITS_PUBLISHED` events that would exceed Kafka's max message size are skipped with a warning so the pipeline can continue processing the rest of the block.
 - Timeouts are configurable:
   - `KAFKA_MESSAGE_TIMEOUT_MS` (producer delivery timeout, default `30000`)
   - `KAFKA_SEND_TIMEOUT_MS` (send queue timeout, defaults to `KAFKA_MESSAGE_TIMEOUT_MS`)

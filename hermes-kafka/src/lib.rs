@@ -29,6 +29,7 @@ use anyhow::Result;
 use rdkafka::config::ClientConfig;
 
 pub const DEFAULT_KAFKA_TIMEOUT_MS: u64 = 30_000;
+pub const KAFKA_MESSAGE_MAX_BYTES: usize = 20 * 1024 * 1024;
 
 pub fn kafka_message_timeout_ms() -> u64 {
     env::var("KAFKA_MESSAGE_TIMEOUT_MS")
@@ -125,7 +126,7 @@ pub fn create_producer_with_config(
         .set("max.in.flight.requests.per.connection", "1")
         .set("retries", "1000000")
         .set("message.timeout.ms", message_timeout_ms.to_string())
-        .set("message.max.bytes", "20971520") // 20MB to match broker config
+        .set("message.max.bytes", KAFKA_MESSAGE_MAX_BYTES.to_string())
         .set("queue.buffering.max.messages", "100000")
         .set("queue.buffering.max.kbytes", "1048576")
         .set("batch.num.messages", "10000");

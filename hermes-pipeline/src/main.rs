@@ -655,6 +655,7 @@ impl Pipeline {
         let total_cache_misses = prefetch_result.cache_misses + edits.cache_misses;
         let total_errored_entries = prefetch_result.errored_entries + edits.errored_entries;
         let total_fetch_failures = prefetch_result.fetch_failures;
+        let total_oversized_edits = edits.oversized_events;
 
         if total_cache_misses > 0 {
             error!(
@@ -668,6 +669,13 @@ impl Pipeline {
         }
         if total_fetch_failures > 0 {
             warn!(count = total_fetch_failures, "Cache fetch failures");
+        }
+        if total_oversized_edits > 0 {
+            warn!(
+                block_number = meta.block_number,
+                count = total_oversized_edits,
+                "Oversized edits exceeded Kafka max message size and were skipped"
+            );
         }
 
         // Emit block summary for consumers
@@ -700,6 +708,7 @@ impl Pipeline {
                 voting_down = voting.downvotes,
                 voting_unvote = voting.unvotes,
                 edits = edit_count,
+                oversized_edits = total_oversized_edits,
                 cache_misses = total_cache_misses,
                 errored_entries = total_errored_entries,
                 fetch_failures = total_fetch_failures,
