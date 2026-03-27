@@ -630,7 +630,7 @@ mod tests {
         assert_eq!(vm_val.integer, Some(1));
         assert!(vm_val.bytes.is_none());
 
-        // SpaceId — hex string (proposer id)
+        // SpaceId — space id string
         let by_val = result
             .values
             .iter()
@@ -638,7 +638,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             by_val.text.as_ref().unwrap(),
-            &format!("0x{}", hex::encode(proposer_id)),
+            "0b0b0b0b-0b0b-0b0b-0b0b-0b0b0b0b0b0b",
         );
         assert!(by_val.bytes.is_none());
 
