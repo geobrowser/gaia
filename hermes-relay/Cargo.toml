@@ -9,7 +9,7 @@ path = "src/lib.rs"
 [dependencies]
 stream = { path = "../stream" }
 hermes-substream = { path = "../hermes-substream" }
-alloy = { version = "1.0.24", features = ["sol-types"] }
+alloy = { version = "=1.5.2", features = ["sol-types"] }
 ethabi = "18.0.0"
 anyhow = "1"
 async-trait = "0.1"
