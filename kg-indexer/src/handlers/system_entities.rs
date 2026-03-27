@@ -320,7 +320,7 @@ pub fn map_proposal_created(
             &entity_id,
             &space_id_property_pid,
             &space_id,
-            &format!("0x{}", hex::encode(&msg.proposer_id)),
+            &space_id.to_string(),
         ),
         make_system_value_integer(
             &entity_id,
