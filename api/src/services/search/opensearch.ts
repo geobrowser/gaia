@@ -11,6 +11,7 @@ import {Client} from "@opensearch-project/opensearch"
 import {normalizeUuid, toDashedUuid} from "../../utils/uuid"
 import type {SearchClient} from "./client"
 import {
+	type BoostOverrides,
 	SearchError,
 	type SearchQuery,
 	type SearchResponse,
@@ -181,6 +182,7 @@ export class OpenSearchClient implements SearchClient {
 	private topologyServiceUrl: string | null
 	private subspaceCache: Map<string, {result: SubspacesResult; expiry: number}>
 	private rootSpaceId: string | null
+	private activeBoosts: BoostOverrides | undefined
 
 	/**
 	 * Create a new OpenSearch client.
@@ -195,6 +197,7 @@ export class OpenSearchClient implements SearchClient {
 		this.topologyServiceUrl = topologyServiceUrl ?? process.env.TOPOLOGY_SERVICE_URL ?? null
 		this.subspaceCache = new Map()
 		this.rootSpaceId = null
+		this.activeBoosts = undefined
 	}
 
 	/**
@@ -233,6 +236,7 @@ export class OpenSearchClient implements SearchClient {
 	 * Execute a search query against the index.
 	 */
 	async search(query: SearchQuery): Promise<SearchResponse> {
+		this.activeBoosts = query.boosts
 		const searchBody = (await this.buildSearchBody(query)) as Record<string, unknown>
 
 		// When script_fields is present, OpenSearch suppresses _source by default
@@ -820,6 +824,13 @@ export class OpenSearchClient implements SearchClient {
 	 * - Fuzzy multi_match for typo tolerance
 	 * - match_phrase_prefix for strong prefix matching on name and description
 	 */
+	/**
+	 * Get the effective boost value, using the active query override if set.
+	 */
+	private b(name: keyof BoostOverrides, defaultValue: number): number {
+		return this.activeBoosts?.[name] ?? defaultValue
+	}
+
 	buildBaseTextQuery(queryText: string): object {
 		return {
 			bool: {
@@ -834,7 +845,7 @@ export class OpenSearchClient implements SearchClient {
 						term: {
 							name_raw: {
 								value: queryText,
-								boost: NAME_RAW_EXACT_BOOST,
+								boost: this.b("name_raw_exact_boost", NAME_RAW_EXACT_BOOST),
 							},
 						},
 					},
@@ -849,7 +860,7 @@ export class OpenSearchClient implements SearchClient {
 						match: {
 							name: {
 								query: queryText,
-								boost: NAME_EXACT_TOKEN_BOOST,
+								boost: this.b("name_exact_token_boost", NAME_EXACT_TOKEN_BOOST),
 							},
 						},
 					},
@@ -859,9 +870,9 @@ export class OpenSearchClient implements SearchClient {
 							query: queryText,
 							type: "bool_prefix",
 							fields: [
-								`name^${NAME_FIELD_BOOST}`,
-								`name._2gram^${NAME_FIELD_BOOST}`,
-								`name._3gram^${NAME_FIELD_BOOST}`,
+								`name^${this.b("name_field_boost", NAME_FIELD_BOOST)}`,
+								`name._2gram^${this.b("name_field_boost", NAME_FIELD_BOOST)}`,
+								`name._3gram^${this.b("name_field_boost", NAME_FIELD_BOOST)}`,
 								"description",
 								"description._2gram",
 								"description._3gram",
@@ -875,7 +886,7 @@ export class OpenSearchClient implements SearchClient {
 							query: queryText,
 							fields: ["name", "description"],
 							fuzziness: "AUTO",
-							boost: FUZZY_REDUCTION_BOOST,
+							boost: this.b("fuzzy_reduction_boost", FUZZY_REDUCTION_BOOST),
 						},
 					},
 					{
@@ -883,7 +894,7 @@ export class OpenSearchClient implements SearchClient {
 						match_phrase_prefix: {
 							name: {
 								query: queryText,
-								boost: NAME_PREFIX_BOOST,
+								boost: this.b("name_prefix_boost", NAME_PREFIX_BOOST),
 							},
 						},
 					},
@@ -892,7 +903,7 @@ export class OpenSearchClient implements SearchClient {
 						match_phrase_prefix: {
 							description: {
 								query: queryText,
-								boost: DESCRIPTION_PREFIX_BOOST,
+								boost: this.b("description_prefix_boost", DESCRIPTION_PREFIX_BOOST),
 							},
 						},
 					},
@@ -910,12 +921,13 @@ export class OpenSearchClient implements SearchClient {
 	 * Formula: (max(score, 0.0) + 1.0) * 10.0
 	 */
 	buildScoreBoostScript(scoreField: string): string {
+		const scoreBoost = this.b("score_boost", SCORE_BOOST)
 		return `
 			def scoreValue = doc.containsKey('${scoreField}') && !doc['${scoreField}'].empty
 				? doc['${scoreField}'].value
 				: ${DEFAULT_AVERAGE_SCORE};
 			def clampedScore = Math.max(scoreValue, ${MIN_SCORE_THRESHOLD});
-			return (clampedScore + ${SCORE_SHIFT}) * ${SCORE_BOOST};
+			return (clampedScore + ${SCORE_SHIFT}) * ${scoreBoost};
 		`
 	}
 
