@@ -557,10 +557,22 @@ export class OpenSearchClient implements SearchClient {
 		// Apply scope-specific query building
 		switch (query.scope) {
 			case "GLOBAL":
-				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds, includeNonCanonical)
+				return this.buildGlobalQuery(
+					baseTextQuery,
+					query.type_ids,
+					includeDeleted,
+					excludeTypeIds,
+					includeNonCanonical,
+				)
 
 			case "GLOBAL_BY_SPACE_SCORE":
-				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds, includeNonCanonical)
+				return this.buildGlobalBySpaceScoreQuery(
+					baseTextQuery,
+					query.type_ids,
+					includeDeleted,
+					excludeTypeIds,
+					includeNonCanonical,
+				)
 
 			case "GLOBAL_BY_ENTITY_SPACE_SCORE":
 				return this.buildGlobalByEntitySpaceScoreQuery(
@@ -614,7 +626,13 @@ export class OpenSearchClient implements SearchClient {
 			}
 
 			default:
-				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds, includeNonCanonical)
+				return this.buildGlobalQuery(
+					baseTextQuery,
+					query.type_ids,
+					includeDeleted,
+					excludeTypeIds,
+					includeNonCanonical,
+				)
 		}
 	}
 
