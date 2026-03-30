@@ -129,6 +129,14 @@ class SearchValidator {
     if (query.limit) params.append('limit', query.limit.toString());
     if (query.offset) params.append('offset', query.offset.toString());
     if (query.include_deleted) params.append('include_deleted', 'true');
+    // Default to include_non_canonical=true so e2e test entities (which are not
+    // in the canonical graph) are returned. Tests that specifically validate
+    // canonical filtering override this explicitly.
+    if (query.include_non_canonical !== undefined) {
+      if (query.include_non_canonical) params.append('include_non_canonical', 'true');
+    } else {
+      params.append('include_non_canonical', 'true');
+    }
     // Pass exclude_type_ids if provided; default to empty (disable default exclusions)
     // so existing e2e tests are unaffected by the new default filtering behavior.
     if (query.exclude_type_ids !== undefined) {
@@ -1389,8 +1397,9 @@ class SearchValidator {
       return;
     }
 
-    // All textMatchScores should be ~0 (floating point: score and script_fields compute independently)
-    const epsilon = 1e-6;
+    // All textMatchScores should be ~0 (floating point: score and script_fields compute
+    // independently, and larger SCORE_BOOST values amplify floating point drift)
+    const epsilon = 1e-4;
     const allZeroTextMatch = response.results.every(r => (r.textMatchScore ?? 0) < epsilon);
     if (allZeroTextMatch) {
       this.addResult('test20_text_match_zero', true,
@@ -2905,6 +2914,8 @@ class SearchValidator {
     params.append('query', 'alice');
     params.append('scope', 'GLOBAL');
     // Intentionally NOT appending exclude_type_ids — server defaults apply.
+    // include_non_canonical=true so test entities (not in canonical graph) are returned.
+    params.append('include_non_canonical', 'true');
 
     const url = `${this.baseUrl}/search?${params.toString()}`;
     const response = await fetch(url, {

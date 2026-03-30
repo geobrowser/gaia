@@ -11,6 +11,7 @@ import {Client} from "@opensearch-project/opensearch"
 import {normalizeUuid, toDashedUuid} from "../../utils/uuid"
 import type {SearchClient} from "./client"
 import {
+	type BoostOverrides,
 	SearchError,
 	type SearchQuery,
 	type SearchResponse,
@@ -65,14 +66,16 @@ export const SCORE_SHIFT = 1.0
  * With scores in [0, 1], this multiplier controls how much global/space scores
  * influence ranking relative to text match quality.
  *
- * Formula: (max(score, 0) + 1) * 20
- *   score=0.0 → boost=20, score=0.5 → boost=30, score=1.0 → boost=40
+ * Formula: (max(score, 0) + 1) * 75
+ *   score=0.0 → boost=75, score=0.5 → boost=112.5, score=1.0 → boost=150
  *
- * This produces a boost range of 20 across the full score spectrum, which is
- * large enough for high-score entities to outrank low-score entities even when
- * the lower-score entity has richer text matches (e.g., keyword-heavy descriptions).
+ * This produces a boost range of 75 across the full score spectrum. A ~0.5
+ * score difference generates a ~37.5-point boost gap, enough to decisively
+ * outrank entities with stronger text matches but lower popularity.
+ * A strong exact name match (~20 BM25) can still beat a small score
+ * advantage, preserving text relevance for close score matchups.
  */
-export const SCORE_BOOST = 20.0
+export const SCORE_BOOST = 75.0
 
 /**
  * Boost value for name field in match_phrase_prefix queries.
@@ -116,7 +119,7 @@ export const NAME_FIELD_BOOST = 1.5
  * a short exact name match.
  *
  * Set to 8.0 to create a strong signal for exact token matches while
- * keeping the boost proportional to SCORE_BOOST=20 so that score field
+ * keeping the boost proportional to SCORE_BOOST=75 so that score field
  * differences can still override text match gaps between entities.
  */
 export const NAME_EXACT_TOKEN_BOOST = 8.0
@@ -132,6 +135,16 @@ export const NAME_EXACT_TOKEN_BOOST = 8.0
  * custom subfields (name.raw does not work).
  */
 export const NAME_RAW_EXACT_BOOST = 10.0
+
+/**
+ * Boost value for case-insensitive raw name match on the name_raw keyword field.
+ * Uses a `term` query with case_insensitive: true, so "world affairs" matches
+ * "World affairs", "WORLD AFFAIRS", etc. but NOT "world-affairs" (different string).
+ * Set below NAME_RAW_EXACT_BOOST (10.0) and NAME_EXACT_TOKEN_BOOST (8.0) so
+ * exact-case and token matches rank higher, but still provides a meaningful
+ * boost for case-insensitive full-string matches.
+ */
+export const NAME_RAW_CASE_INSENSITIVE_BOOST = 5.0
 
 /**
  * Boost value for fuzzy text match queries.
@@ -181,6 +194,7 @@ export class OpenSearchClient implements SearchClient {
 	private topologyServiceUrl: string | null
 	private subspaceCache: Map<string, {result: SubspacesResult; expiry: number}>
 	private rootSpaceId: string | null
+	private activeBoosts: BoostOverrides | undefined
 
 	/**
 	 * Create a new OpenSearch client.
@@ -195,6 +209,7 @@ export class OpenSearchClient implements SearchClient {
 		this.topologyServiceUrl = topologyServiceUrl ?? process.env.TOPOLOGY_SERVICE_URL ?? null
 		this.subspaceCache = new Map()
 		this.rootSpaceId = null
+		this.activeBoosts = undefined
 	}
 
 	/**
@@ -233,6 +248,7 @@ export class OpenSearchClient implements SearchClient {
 	 * Execute a search query against the index.
 	 */
 	async search(query: SearchQuery): Promise<SearchResponse> {
+		this.activeBoosts = query.boosts
 		const searchBody = (await this.buildSearchBody(query)) as Record<string, unknown>
 
 		// When script_fields is present, OpenSearch suppresses _source by default
@@ -517,6 +533,7 @@ export class OpenSearchClient implements SearchClient {
 	 */
 	async buildSearchBody(query: SearchQuery): Promise<object> {
 		const includeDeleted = query.include_deleted ?? false
+		const includeNonCanonical = query.include_non_canonical ?? false
 
 		// Check if the query is empty or whitespace-only
 		const trimmedQuery = query.query.trim()
@@ -529,6 +546,7 @@ export class OpenSearchClient implements SearchClient {
 				query.type_ids,
 				includeDeleted,
 				excludeTypeIds,
+				includeNonCanonical,
 			)
 		}
 
@@ -541,6 +559,7 @@ export class OpenSearchClient implements SearchClient {
 				query.type_ids,
 				includeDeleted,
 				excludeTypeIds,
+				includeNonCanonical,
 			)
 		}
 
@@ -550,10 +569,22 @@ export class OpenSearchClient implements SearchClient {
 		// Apply scope-specific query building
 		switch (query.scope) {
 			case "GLOBAL":
-				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds)
+				return this.buildGlobalQuery(
+					baseTextQuery,
+					query.type_ids,
+					includeDeleted,
+					excludeTypeIds,
+					includeNonCanonical,
+				)
 
 			case "GLOBAL_BY_SPACE_SCORE":
-				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds)
+				return this.buildGlobalBySpaceScoreQuery(
+					baseTextQuery,
+					query.type_ids,
+					includeDeleted,
+					excludeTypeIds,
+					includeNonCanonical,
+				)
 
 			case "GLOBAL_BY_ENTITY_SPACE_SCORE":
 				return this.buildGlobalByEntitySpaceScoreQuery(
@@ -561,6 +592,7 @@ export class OpenSearchClient implements SearchClient {
 					query.type_ids,
 					includeDeleted,
 					excludeTypeIds,
+					includeNonCanonical,
 				)
 
 			case "SPACE_SINGLE": {
@@ -573,6 +605,7 @@ export class OpenSearchClient implements SearchClient {
 					query.type_ids,
 					includeDeleted,
 					excludeTypeIds,
+					includeNonCanonical,
 				)
 			}
 
@@ -589,6 +622,7 @@ export class OpenSearchClient implements SearchClient {
 						includeDeleted,
 						true,
 						excludeTypeIds,
+						includeNonCanonical,
 					)
 				}
 				const {subspaces, isRoot} = await this.fetchSubspaces(query.space_id)
@@ -599,11 +633,18 @@ export class OpenSearchClient implements SearchClient {
 					includeDeleted,
 					isRoot,
 					excludeTypeIds,
+					includeNonCanonical,
 				)
 			}
 
 			default:
-				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds)
+				return this.buildGlobalQuery(
+					baseTextQuery,
+					query.type_ids,
+					includeDeleted,
+					excludeTypeIds,
+					includeNonCanonical,
+				)
 		}
 	}
 
@@ -622,6 +663,7 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): Promise<object> {
 		// Match both dashed and dashless forms (index may contain either during migration)
 		const baseUuidQuery = {
@@ -633,6 +675,7 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -689,12 +732,14 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): Promise<object> {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -820,6 +865,13 @@ export class OpenSearchClient implements SearchClient {
 	 * - Fuzzy multi_match for typo tolerance
 	 * - match_phrase_prefix for strong prefix matching on name and description
 	 */
+	/**
+	 * Get the effective boost value, using the active query override if set.
+	 */
+	private b(name: keyof BoostOverrides, defaultValue: number): number {
+		return this.activeBoosts?.[name] ?? defaultValue
+	}
+
 	buildBaseTextQuery(queryText: string): object {
 		return {
 			bool: {
@@ -834,7 +886,21 @@ export class OpenSearchClient implements SearchClient {
 						term: {
 							name_raw: {
 								value: queryText,
-								boost: NAME_RAW_EXACT_BOOST,
+								boost: this.b("name_raw_exact_boost", NAME_RAW_EXACT_BOOST),
+							},
+						},
+					},
+					{
+						// Case-insensitive raw name match — boosts documents where the
+						// query matches the full unanalyzed name string ignoring case.
+						// "world affairs" matches "World affairs" or "WORLD AFFAIRS"
+						// but NOT "world-affairs" (different string structure).
+						// Ranked below exact-case match (10.0) and token match (8.0).
+						term: {
+							name_raw: {
+								value: queryText,
+								boost: this.b("name_raw_case_insensitive_boost", NAME_RAW_CASE_INSENSITIVE_BOOST),
+								case_insensitive: true,
 							},
 						},
 					},
@@ -849,7 +915,7 @@ export class OpenSearchClient implements SearchClient {
 						match: {
 							name: {
 								query: queryText,
-								boost: NAME_EXACT_TOKEN_BOOST,
+								boost: this.b("name_exact_token_boost", NAME_EXACT_TOKEN_BOOST),
 							},
 						},
 					},
@@ -859,9 +925,9 @@ export class OpenSearchClient implements SearchClient {
 							query: queryText,
 							type: "bool_prefix",
 							fields: [
-								`name^${NAME_FIELD_BOOST}`,
-								`name._2gram^${NAME_FIELD_BOOST}`,
-								`name._3gram^${NAME_FIELD_BOOST}`,
+								`name^${this.b("name_field_boost", NAME_FIELD_BOOST)}`,
+								`name._2gram^${this.b("name_field_boost", NAME_FIELD_BOOST)}`,
+								`name._3gram^${this.b("name_field_boost", NAME_FIELD_BOOST)}`,
 								"description",
 								"description._2gram",
 								"description._3gram",
@@ -875,7 +941,7 @@ export class OpenSearchClient implements SearchClient {
 							query: queryText,
 							fields: ["name", "description"],
 							fuzziness: "AUTO",
-							boost: FUZZY_REDUCTION_BOOST,
+							boost: this.b("fuzzy_reduction_boost", FUZZY_REDUCTION_BOOST),
 						},
 					},
 					{
@@ -883,7 +949,7 @@ export class OpenSearchClient implements SearchClient {
 						match_phrase_prefix: {
 							name: {
 								query: queryText,
-								boost: NAME_PREFIX_BOOST,
+								boost: this.b("name_prefix_boost", NAME_PREFIX_BOOST),
 							},
 						},
 					},
@@ -892,7 +958,7 @@ export class OpenSearchClient implements SearchClient {
 						match_phrase_prefix: {
 							description: {
 								query: queryText,
-								boost: DESCRIPTION_PREFIX_BOOST,
+								boost: this.b("description_prefix_boost", DESCRIPTION_PREFIX_BOOST),
 							},
 						},
 					},
@@ -910,12 +976,13 @@ export class OpenSearchClient implements SearchClient {
 	 * Formula: (max(score, 0.0) + 1.0) * 10.0
 	 */
 	buildScoreBoostScript(scoreField: string): string {
+		const scoreBoost = this.b("score_boost", SCORE_BOOST)
 		return `
 			def scoreValue = doc.containsKey('${scoreField}') && !doc['${scoreField}'].empty
 				? doc['${scoreField}'].value
 				: ${DEFAULT_AVERAGE_SCORE};
 			def clampedScore = Math.max(scoreValue, ${MIN_SCORE_THRESHOLD});
-			return (clampedScore + ${SCORE_SHIFT}) * ${SCORE_BOOST};
+			return (clampedScore + ${SCORE_SHIFT}) * ${scoreBoost};
 		`
 	}
 
@@ -986,12 +1053,14 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1023,12 +1092,14 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1060,12 +1131,14 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1097,12 +1170,14 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = [{terms: {space_id: uuidTermVariants(spaceId)}}]
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1136,6 +1211,7 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 		isRoot: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
@@ -1145,6 +1221,7 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = [spaceFilter]
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1262,6 +1339,14 @@ export class OpenSearchClient implements SearchClient {
 				},
 			},
 		}
+	}
+
+	/**
+	 * Build a filter to select entities in the canonical graph.
+	 * Matches documents where in_canonical_graph is true.
+	 */
+	buildCanonicalFilter(): object {
+		return {term: {in_canonical_graph: true}}
 	}
 
 	/**

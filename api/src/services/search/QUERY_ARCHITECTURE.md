@@ -36,13 +36,15 @@ If the query matches a UUID pattern, it bypasses text search entirely and perfor
 
 ## 2. Base Text Query
 
-Five parallel matching strategies run inside a `bool.should` clause with `minimum_should_match: 1`:
+Seven parallel matching strategies run inside a `bool.should` clause with `minimum_should_match: 1`:
 
 ### Strategy Breakdown
 
 | Strategy | Query Type | Fields | Boost | Purpose |
 |----------|------------|--------|-------|---------|
-| **Exact Name Token** | `match` | `name` | **5.0×** | Strong boost for exact analyzed token match in name |
+| **Exact Raw Name** | `term` | `name_raw` | **10.0×** | Exact case-sensitive full-string match on unanalyzed name |
+| **Raw Name (case-insensitive)** | `term` (case_insensitive) | `name_raw` | **5.0×** | Case-insensitive full-string match, still distinguishes punctuation |
+| **Exact Name Token** | `match` | `name` | **8.0×** | Strong boost for exact analyzed token match in name |
 | **Autocomplete** | `multi_match` (bool_prefix) | `name^1.5`, `name._2gram^1.5`, `name._3gram^1.5`, `description`, `description._2gram`, `description._3gram` | 1.5× on name fields | N-gram autocomplete matching |
 | **Fuzzy** | `multi_match` | `name`, `description` | **0.6×** (reduced) | Typo tolerance with AUTO fuzziness |
 | **Name Prefix** | `match_phrase_prefix` | `name` | **5.0×** | Strong boost for "starts with" on name |
@@ -85,7 +87,7 @@ From highest to lowest impact:
 
 | Constant | Value | Usage |
 |----------|-------|-------|
-| `SCORE_BOOST` | 20.0 | Multiplier applied inside `script_score` logic after clamping and shifting score fields (see `buildScoreBoostFunction` in opensearch.ts) |
+| `SCORE_BOOST` | 75.0 | Multiplier applied inside `script_score` logic after clamping and shifting score fields (see `buildScoreBoostFunction` in opensearch.ts) |
 | `NAME_PREFIX_BOOST` | 5.0 | `match_phrase_prefix` on name |
 | `DESCRIPTION_PREFIX_BOOST` | 1.5 | `match_phrase_prefix` on description |
 | `NAME_FIELD_BOOST` | 1.5 | Field boost on name in `multi_match` |
@@ -102,9 +104,9 @@ From highest to lowest impact:
 - **Score field normalization**: Score fields use `float` type normalized to [0, 1] with 0.5 as average. Boosting is done via `function_score` with `script_score` (see `buildScoreBoostFunction` in opensearch.ts). The script applies:
   1. **Clamping**: Scores below `MIN_SCORE_THRESHOLD` (0.0) are clamped to 0.0
   2. **Shifting**: Scores are shifted by `SCORE_SHIFT` (1.0) to ensure all values are positive (OpenSearch requirement)
-  3. **Multiplier**: The shifted score is multiplied by `SCORE_BOOST` (20.0) for the final boost value
-  4. **Formula**: `(max(score, 0.0) + 1.0) * 20.0`
-  5. **Range**: score=0.0 → boost=20, score=0.5 → boost=30, score=1.0 → boost=40
+  3. **Multiplier**: The shifted score is multiplied by `SCORE_BOOST` (75.0) for the final boost value
+  4. **Formula**: `(max(score, 0.0) + 1.0) * 75.0`
+  5. **Range**: score=0.0 → boost=75, score=0.5 → boost=112.5, score=1.0 → boost=150
 - **Autocomplete support**: `search_as_you_type` field type with n-gram sub-fields enables smooth autocomplete UX.
 
 ---

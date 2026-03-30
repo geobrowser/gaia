@@ -3,3 +3,6 @@ name = "sdk"
 version = "0.1.0"
 edition = "2021"
 
+[dev-dependencies]
+uuid = { version = "1", features = ["v5"] }
+

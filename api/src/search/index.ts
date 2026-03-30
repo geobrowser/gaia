@@ -17,7 +17,7 @@ type AppEnv = {
 	}
 }
 
-import type {SearchClient, SearchResponse, SearchScope} from "../services/search"
+import type {BoostOverrides, SearchClient, SearchResponse, SearchScope} from "../services/search"
 import {isValidUuid} from "../utils/uuid"
 
 /**
@@ -78,6 +78,17 @@ const DEFAULT_EXCLUDED_TYPE_IDS: string[] = [
 /**
  * Valid query parameter names for the search endpoint.
  */
+const BOOST_PARAMS = [
+	"score_boost",
+	"name_prefix_boost",
+	"description_prefix_boost",
+	"name_field_boost",
+	"name_exact_token_boost",
+	"name_raw_exact_boost",
+	"name_raw_case_insensitive_boost",
+	"fuzzy_reduction_boost",
+] as const
+
 const VALID_PARAMS: Set<string> = new Set([
 	"query",
 	"q",
@@ -88,6 +99,8 @@ const VALID_PARAMS: Set<string> = new Set([
 	"limit",
 	"offset",
 	"include_deleted",
+	"include_non_canonical",
+	...BOOST_PARAMS,
 ])
 
 // Error types for search operations
@@ -192,6 +205,14 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					required: false,
 					schema: {type: "integer", minimum: 0, maximum: 1000, default: 0},
 				},
+				{
+					name: "include_non_canonical",
+					in: "query",
+					description:
+						"When true, include entities from spaces outside the canonical graph. By default, only entities in canonical spaces are returned. The canonical graph is the trust-based subset of spaces rooted at the configured root space, connected by verified/related/editor/member edges.",
+					required: false,
+					schema: {type: "boolean", default: false},
+				},
 			],
 			responses: {
 				200: {
@@ -249,6 +270,11 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 													type: "number",
 													description:
 														"Text matching score without score field boosts, reflecting pure query relevance",
+												},
+												inCanonicalGraph: {
+													type: "boolean",
+													description:
+														"Whether this entity's space is part of the canonical graph (trust-based subset of spaces)",
 												},
 											},
 										},
@@ -318,6 +344,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 				const limitParam = c.req.query("limit")
 				const offsetParam = c.req.query("offset")
 				const includeDeletedParam = c.req.query("include_deleted")
+				const includeNonCanonicalParam = c.req.query("include_non_canonical")
 
 				// Validate query length
 				const trimmedQuery = query?.trim() ?? ""
@@ -501,6 +528,28 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 				// Parse include_deleted flag (default: false)
 				const includeDeleted = includeDeletedParam === "true"
 
+				// Parse include_non_canonical flag (default: false)
+				const includeNonCanonical = includeNonCanonicalParam === "true"
+
+				// Parse optional boost overrides (undocumented — for internal testing)
+				const boosts: BoostOverrides = {}
+				for (const param of BOOST_PARAMS) {
+					const raw = c.req.query(param)
+					if (raw !== undefined) {
+						const value = Number.parseFloat(raw)
+						if (Number.isNaN(value) || value < 0) {
+							return yield* Effect.fail(
+								new SearchValidationError({
+									message: `${param} must be a non-negative number`,
+									status: 400,
+								}),
+							)
+						}
+						boosts[param] = value
+					}
+				}
+				const hasBoosts = Object.keys(boosts).length > 0
+
 				// Execute search - only include optional params when defined
 				const searchQuery = {
 					query: trimmedQuery,
@@ -511,6 +560,8 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					...(typeIds && {type_ids: typeIds}),
 					...(excludeTypeIds && excludeTypeIds.length > 0 && {exclude_type_ids: excludeTypeIds}),
 					...(includeDeleted && {include_deleted: true}),
+					...(includeNonCanonical && {include_non_canonical: true}),
+					...(hasBoosts && {boosts}),
 				}
 
 				const response = yield* Effect.tryPromise({

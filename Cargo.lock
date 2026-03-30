@@ -3501,6 +3501,7 @@ dependencies = [
  "indexer_utils",
  "prost 0.13.5",
  "rdkafka 0.38.0",
+ "sdk",
  "serde",
  "serde_json",
  "sqlx",
@@ -5611,6 +5612,9 @@ checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
 [[package]]
 name = "sdk"
 version = "0.1.0"
+dependencies = [
+ "uuid",
+]
 
 [[package]]
 name = "search-admin"
