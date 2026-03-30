@@ -66,14 +66,16 @@ export const SCORE_SHIFT = 1.0
  * With scores in [0, 1], this multiplier controls how much global/space scores
  * influence ranking relative to text match quality.
  *
- * Formula: (max(score, 0) + 1) * 20
- *   score=0.0 → boost=20, score=0.5 → boost=30, score=1.0 → boost=40
+ * Formula: (max(score, 0) + 1) * 75
+ *   score=0.0 → boost=75, score=0.5 → boost=112.5, score=1.0 → boost=150
  *
- * This produces a boost range of 20 across the full score spectrum, which is
- * large enough for high-score entities to outrank low-score entities even when
- * the lower-score entity has richer text matches (e.g., keyword-heavy descriptions).
+ * This produces a boost range of 75 across the full score spectrum. A ~0.5
+ * score difference generates a ~37.5-point boost gap, enough to decisively
+ * outrank entities with stronger text matches but lower popularity.
+ * A strong exact name match (~20 BM25) can still beat a small score
+ * advantage, preserving text relevance for close score matchups.
  */
-export const SCORE_BOOST = 20.0
+export const SCORE_BOOST = 75.0
 
 /**
  * Boost value for name field in match_phrase_prefix queries.
@@ -117,7 +119,7 @@ export const NAME_FIELD_BOOST = 1.5
  * a short exact name match.
  *
  * Set to 8.0 to create a strong signal for exact token matches while
- * keeping the boost proportional to SCORE_BOOST=20 so that score field
+ * keeping the boost proportional to SCORE_BOOST=75 so that score field
  * differences can still override text match gaps between entities.
  */
 export const NAME_EXACT_TOKEN_BOOST = 8.0

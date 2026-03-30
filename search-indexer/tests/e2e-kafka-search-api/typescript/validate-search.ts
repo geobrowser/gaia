@@ -1397,8 +1397,9 @@ class SearchValidator {
       return;
     }
 
-    // All textMatchScores should be ~0 (floating point: score and script_fields compute independently)
-    const epsilon = 1e-6;
+    // All textMatchScores should be ~0 (floating point: score and script_fields compute
+    // independently, and larger SCORE_BOOST values amplify floating point drift)
+    const epsilon = 1e-4;
     const allZeroTextMatch = response.results.every(r => (r.textMatchScore ?? 0) < epsilon);
     if (allZeroTextMatch) {
       this.addResult('test20_text_match_zero', true,
