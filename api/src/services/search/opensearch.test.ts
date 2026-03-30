@@ -487,7 +487,8 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("space_id")
 			expect(queryStr).toContain(spaceIds[0])
 			expect(queryStr).toContain(spaceIds[1])
-			expect(queryStr).not.toContain("in_canonical_graph")
+			// in_canonical_graph is present as the default canonical filter (separate from the space filter)
+			expect(queryStr).toContain("in_canonical_graph")
 		})
 
 		it("uses in_canonical_graph filter when isRoot is true", () => {
@@ -625,7 +626,8 @@ describe("OpenSearchClient", () => {
 			})
 			const queryStr = JSON.stringify(query)
 
-			expect(queryStr).not.toContain("in_canonical_graph")
+			// in_canonical_graph is now always present as the default canonical filter
+			expect(queryStr).toContain("in_canonical_graph")
 			expect(queryStr).toContain(spaceId)
 		})
 	})
@@ -739,7 +741,8 @@ describe("OpenSearchClient", () => {
 
 			// Should have called fetch for subspaces (2nd call after init)
 			expect(fetchSpy).toHaveBeenCalledTimes(2)
-			expect(queryStr).not.toContain("in_canonical_graph")
+			// in_canonical_graph is now always present as the default canonical filter
+			expect(queryStr).toContain("in_canonical_graph")
 			expect(queryStr).toContain(otherSpaceId)
 		})
 
