@@ -16,7 +16,6 @@ WORKDIR /app
 COPY hermes-schema ./hermes-schema
 COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-kafka ./hermes-kafka
-COPY wire ./wire
 COPY indexer_utils ./indexer_utils
 COPY kg-indexer ./kg-indexer
 

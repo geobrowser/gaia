@@ -4,7 +4,7 @@
 //! - [`IpfsSource`] config enum for choosing between mock and live IPFS clients
 //! - [`IpfsFetcher`] trait for abstracting IPFS access
 //! - [`IpfsClient`] production client that fetches from an IPFS gateway
-//! - [`MockIpfsClient`] mock client for testing with pre-configured CID → Edit mappings
+//! - [`MockIpfsClient`] mock client for testing with pre-configured CID → bytes mappings
 //!
 //! ## Usage with IpfsSource (Recommended)
 //!
@@ -13,15 +13,15 @@
 //! use std::collections::HashMap;
 //!
 //! // Development/testing: use mock data
-//! let mut edits = HashMap::new();
-//! edits.insert("QmTestCid1".to_string(), edit1);
-//! let fetcher = IpfsSource::mock(edits).into_fetcher();
+//! let mut data = HashMap::new();
+//! data.insert("QmTestCid1".to_string(), grc20_bytes);
+//! let fetcher = IpfsSource::mock_bytes(data).into_fetcher();
 //!
 //! // Production: use live gateway
 //! let fetcher = IpfsSource::live("https://ipfs.io/ipfs/").into_fetcher();
 //!
 //! // Use the fetcher
-//! let edit = fetcher.get("ipfs://QmTestCid1").await?;
+//! let bytes = fetcher.get_bytes("ipfs://QmTestCid1").await?;
 //! ```
 
 mod mock;
@@ -32,10 +32,6 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use reqwest::Client as ReqwestClient;
-use wire::{
-    deserialize::{deserialize, DeserializeError},
-    pb::grc20::Edit,
-};
 
 #[derive(Debug, thiserror::Error)]
 pub enum IpfsError {
@@ -43,12 +39,6 @@ pub enum IpfsError {
     Reqwest(#[from] reqwest::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("prost error: {0}")]
-    Prost(#[from] prost::DecodeError),
-    #[error("cid error: {0}")]
-    CidError(String),
-    #[error("deserialize error: {0}")]
-    DeserializeError(#[from] DeserializeError),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("network error: {0}")]
@@ -70,18 +60,15 @@ pub type Result<T> = std::result::Result<T, IpfsError>;
 /// ```ignore
 /// use ipfs::IpfsFetcher;
 ///
-/// async fn fetch_edit<F: IpfsFetcher>(fetcher: &F, uri: &str) -> Result<Edit> {
-///     fetcher.get(uri).await
+/// async fn fetch_bytes<F: IpfsFetcher>(fetcher: &F, uri: &str) -> Result<Vec<u8>> {
+///     fetcher.get_bytes(uri).await
 /// }
 /// ```
 #[async_trait]
 pub trait IpfsFetcher: Send + Sync {
-    /// Fetch and decode a GRC-20 Edit from IPFS by URI.
+    /// Fetch raw bytes from IPFS by CID.
     ///
     /// The URI should be in the format `ipfs://CID` or just a raw CID.
-    async fn get(&self, uri: &str) -> Result<Edit>;
-
-    /// Fetch raw bytes from IPFS by CID.
     async fn get_bytes(&self, cid: &str) -> Result<Vec<u8>>;
 }
 
@@ -93,7 +80,7 @@ pub trait IpfsFetcher: Send + Sync {
 /// use ipfs::IpfsClient;
 ///
 /// let client = IpfsClient::new("https://ipfs.io/ipfs/");
-/// let edit = client.get("ipfs://QmYwAPJzv5CZsnA...").await?;
+/// let bytes = client.get_bytes("ipfs://QmYwAPJzv5CZsnA...").await?;
 /// ```
 pub struct IpfsClient {
     url: String,
@@ -111,13 +98,6 @@ impl IpfsClient {
 
 #[async_trait]
 impl IpfsFetcher for IpfsClient {
-    async fn get(&self, uri: &str) -> Result<Edit> {
-        // get_bytes handles ipfs:// prefix stripping
-        let bytes = self.get_bytes(uri).await?;
-        let data = deserialize(&bytes)?;
-        Ok(data)
-    }
-
     async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
         // Strip ipfs:// prefix if present
         let cid = uri.strip_prefix("ipfs://").unwrap_or(uri);
@@ -157,23 +137,11 @@ impl IpfsFetcher for IpfsClient {
 /// data.insert("QmTestCid1".to_string(), grc20_bytes);
 /// let fetcher = IpfsSource::mock_bytes(data).into_fetcher();
 ///
-/// // Legacy: mock with v1 protobuf Edit (deprecated)
-/// let mut edits = HashMap::new();
-/// edits.insert("QmTestCid1".to_string(), edit1);
-/// let fetcher = IpfsSource::mock(edits).into_fetcher();
-///
 /// // Production: use live gateway
 /// let fetcher = IpfsSource::live("https://ipfs.io/ipfs/").into_fetcher();
 /// ```
 #[derive(Debug, Clone)]
 pub enum IpfsSource {
-    /// Use mock IPFS client with pre-configured CID → Edit mappings.
-    ///
-    /// **Deprecated**: Use `MockBytes` with GRC-20 v2 encoded bytes instead.
-    ///
-    /// The map keys are CIDs (with or without `ipfs://` prefix).
-    Mock(HashMap<String, Edit>),
-
     /// Use mock IPFS client with pre-configured CID → raw bytes mappings.
     ///
     /// Use this with GRC-20 v2 encoded bytes (`grc_20::encode_edit`).
@@ -188,22 +156,6 @@ pub enum IpfsSource {
 }
 
 impl IpfsSource {
-    /// Create a mock IPFS source with the given CID → Edit mappings.
-    ///
-    /// **Deprecated**: Use `mock_bytes` with GRC-20 v2 encoded bytes instead.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let mut edits = HashMap::new();
-    /// edits.insert("QmTestCid1".to_string(), edit1);
-    /// edits.insert("QmTestCid2".to_string(), edit2);
-    /// let source = IpfsSource::mock(edits);
-    /// ```
-    pub fn mock(edits: HashMap<String, Edit>) -> Self {
-        Self::Mock(edits)
-    }
-
     /// Create a mock IPFS source with the given CID → raw bytes mappings.
     ///
     /// Use this with GRC-20 v2 encoded bytes (`grc_20::encode_edit`).
@@ -249,7 +201,6 @@ impl IpfsSource {
     /// Returns a boxed trait object that can be used to fetch IPFS content.
     pub fn into_fetcher(self) -> Box<dyn IpfsFetcher> {
         match self {
-            Self::Mock(edits) => Box::new(MockIpfsClient::with_edits(edits)),
             Self::MockBytes(data) => Box::new(MockIpfsClient::with_bytes(data)),
             Self::Live { gateway_url } => Box::new(IpfsClient::new(&gateway_url)),
         }

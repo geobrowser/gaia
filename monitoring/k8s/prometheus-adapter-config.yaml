@@ -9,6 +9,20 @@ metadata:
   namespace: monitoring
 data:
   config.yaml: |-
+    rules:
+      - seriesQuery: 'gaia_api_graphql_pool_saturated{namespace!="",pod!=""}'
+        resources:
+          overrides:
+            namespace:
+              resource: namespace
+            pod:
+              resource: pod
+        name:
+          matches: '^gaia_api_graphql_pool_saturated$'
+          as: 'gaia_api_graphql_pool_saturated'
+        metricsQuery: |
+          max(gaia_api_graphql_pool_saturated{<<.LabelMatchers>>}) by (<<.GroupBy>>)
+
     resourceRules:
       cpu:
         containerLabel: container
@@ -60,5 +74,35 @@ data:
           (sum(rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io",status="503"}[5m])) or vector(0))
           /
           clamp_min(sum(rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io"}[5m])), 1)
+        resources:
+          namespaced: false
+      - seriesQuery: '{__name__="api:ingress_p95_latency_seconds:2m"}'
+        name:
+          as: api_ingress_p95_latency_seconds_2m
+        metricsQuery: |
+          api:ingress_p95_latency_seconds:2m
+        resources:
+          namespaced: false
+      - seriesQuery: '{__name__="api:ingress_p99_latency_seconds:2m"}'
+        name:
+          as: api_ingress_p99_latency_seconds_2m
+        metricsQuery: |
+          api:ingress_p99_latency_seconds:2m
+        resources:
+          namespaced: false
+      - seriesQuery: '{__name__="kube_deployment_status_replicas_available",namespace="api",deployment="api"}'
+        name:
+          as: api_ready_replica_pressure
+        metricsQuery: |
+          1 + (
+            clamp_min(
+              scalar(kube_deployment_spec_replicas{namespace="api",deployment="api"})
+              -
+              scalar(kube_deployment_status_replicas_available{namespace="api",deployment="api"}),
+              0
+            )
+            /
+            clamp_min(scalar(kube_deployment_spec_replicas{namespace="api",deployment="api"}), 1)
+          )
         resources:
           namespaced: false

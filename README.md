@@ -213,7 +213,6 @@ The following crates are from the pre-Hermes architecture and are sunset. They a
 
 - `indexer/` — legacy knowledge graph indexer (replaced by kg-indexer + Hermes pipeline)
 - `cache/` — legacy IPFS cache (replaced by hermes-ipfs-cache)
-- `wire/` — legacy protobuf wire format
 - `stream/` — legacy substreams connector
 - `indexer_utils/` — legacy indexer utilities
 

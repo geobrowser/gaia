@@ -1,6 +1,6 @@
 import {describe, expect, it} from "vitest"
 
-import {getPoolSaturationSnapshot, recordPoolAcquireTimeout} from "./dbSaturation"
+import {getPoolSaturationSnapshot, recordPoolAcquireTimeout, shouldShedPoolTraffic} from "./dbSaturation"
 
 type PoolStats = {
 	totalConnections: number
@@ -93,5 +93,42 @@ describe("dbSaturation pressure reasons", () => {
 		const snapshot = getPoolSaturationSnapshot(poolName, highUtilStats, 1_000)
 		expect(snapshot.reasons).toContain("high_utilization")
 		expect(snapshot.utilizationPercent).toBe(90)
+	})
+})
+
+describe("dbSaturation load shedding", () => {
+	it("sheds when clients are waiting for a connection", () => {
+		const poolName = uniquePoolName("waiting")
+		const snapshot = getPoolSaturationSnapshot(poolName, {...baseStats, waitingCount: 1}, 1_000)
+
+		expect(shouldShedPoolTraffic(snapshot)).toBe(true)
+	})
+
+	it("sheds once saturation has activated", () => {
+		const poolName = uniquePoolName("saturated")
+		const pressuredStats: PoolStats = {...baseStats, waitingCount: 1}
+
+		getPoolSaturationSnapshot(poolName, pressuredStats, 10_000)
+		const snapshot = getPoolSaturationSnapshot(poolName, pressuredStats, 25_000)
+
+		expect(snapshot.isSaturated).toBe(true)
+		expect(shouldShedPoolTraffic(snapshot)).toBe(true)
+	})
+
+	it("does not shed on high utilization alone", () => {
+		const poolName = uniquePoolName("utilization-only")
+		const snapshot = getPoolSaturationSnapshot(
+			poolName,
+			{
+				...baseStats,
+				totalConnections: 45,
+				idleConnections: 0,
+				maxConnections: 50,
+			},
+			1_000,
+		)
+
+		expect(snapshot.reasons).toContain("high_utilization")
+		expect(shouldShedPoolTraffic(snapshot)).toBe(false)
 	})
 })

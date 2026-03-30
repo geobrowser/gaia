@@ -5,9 +5,9 @@ type PoolStats = {
 	maxConnections: number
 }
 
-type SaturationReason = "waiting_clients" | "high_utilization" | "acquire_timeouts"
+export type SaturationReason = "waiting_clients" | "high_utilization" | "acquire_timeouts"
 
-type SaturationSnapshot = {
+export type SaturationSnapshot = {
 	isPressured: boolean
 	isSaturated: boolean
 	reasons: SaturationReason[]
@@ -191,4 +191,12 @@ export function getGraphqlPressureSnapshot(stats: PoolStats, nowMs = Date.now())
 
 export function recordGraphqlAcquireTimeout(nowMs = Date.now()): void {
 	recordPoolAcquireTimeout("graphql", nowMs)
+}
+
+export function shouldShedPoolTraffic(snapshot: SaturationSnapshot): boolean {
+	return (
+		snapshot.isSaturated ||
+		snapshot.reasons.includes("waiting_clients") ||
+		snapshot.reasons.includes("acquire_timeouts")
+	)
 }

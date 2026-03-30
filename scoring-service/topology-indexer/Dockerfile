@@ -16,7 +16,6 @@ WORKDIR /app
 COPY hermes-schema ./hermes-schema
 COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-kafka ./hermes-kafka
-COPY wire ./wire
 COPY scoring-service/topology-indexer ./scoring-service/topology-indexer
 
 # Build from the crate directory (standalone, not as workspace member)
