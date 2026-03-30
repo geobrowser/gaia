@@ -85,6 +85,7 @@ const BOOST_PARAMS = [
 	"name_field_boost",
 	"name_exact_token_boost",
 	"name_raw_exact_boost",
+	"name_raw_case_insensitive_boost",
 	"fuzzy_reduction_boost",
 ] as const
 

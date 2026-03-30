@@ -57,6 +57,7 @@ export interface BoostOverrides {
 	name_field_boost?: number
 	name_exact_token_boost?: number
 	name_raw_exact_boost?: number
+	name_raw_case_insensitive_boost?: number
 	fuzzy_reduction_boost?: number
 }
 
