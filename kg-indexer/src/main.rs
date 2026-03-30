@@ -1067,6 +1067,23 @@ async fn process_message(
         KgMessage::CreateSpace(space) => {
             let space_item = handlers::spaces::handle_create_space(&space)?;
             storage.insert_spaces(&[space_item], &mut tx).await?;
+
+            // Create system entity in knowledge graph
+            if let Some(meta) = space.meta.as_ref() {
+                let system_result = handlers::system_entities::map_space_registered(&space, meta)?;
+                storage
+                    .insert_entities(&system_result.entities, &mut tx)
+                    .await?;
+                let set_values: Vec<_> =
+                    system_result.values_to_set().into_iter().cloned().collect();
+                storage.insert_values(&set_values, &mut tx).await?;
+                let set_relations: Vec<_> = system_result
+                    .relations_to_create()
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                storage.insert_relations(&set_relations, &mut tx).await?;
+            }
             1
         }
         KgMessage::RoleGranted(event) => {
@@ -1137,6 +1154,23 @@ async fn process_message(
                 storage
                     .insert_proposal_actions(&result.actions, &mut tx)
                     .await?;
+            }
+
+            // Create system entity in knowledge graph
+            if let Some(meta) = event.meta.as_ref() {
+                let system_result = handlers::system_entities::map_proposal_created(&event, meta)?;
+                storage
+                    .insert_entities(&system_result.entities, &mut tx)
+                    .await?;
+                let set_values: Vec<_> =
+                    system_result.values_to_set().into_iter().cloned().collect();
+                storage.insert_values(&set_values, &mut tx).await?;
+                let set_relations: Vec<_> = system_result
+                    .relations_to_create()
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                storage.insert_relations(&set_relations, &mut tx).await?;
             }
             1 + result.actions.len()
         }
@@ -1436,6 +1470,24 @@ async fn process_block(
                     event_span.record("space_address", space_item.address.as_str());
 
                     storage.insert_spaces(&[space_item], &mut tx).await?;
+
+                    // Create system entity in knowledge graph
+                    if let Some(meta) = space.meta.as_ref() {
+                        let system_result =
+                            handlers::system_entities::map_space_registered(space, meta)?;
+                        storage
+                            .insert_entities(&system_result.entities, &mut tx)
+                            .await?;
+                        let set_values: Vec<_> =
+                            system_result.values_to_set().into_iter().cloned().collect();
+                        storage.insert_values(&set_values, &mut tx).await?;
+                        let set_relations: Vec<_> = system_result
+                            .relations_to_create()
+                            .into_iter()
+                            .cloned()
+                            .collect();
+                        storage.insert_relations(&set_relations, &mut tx).await?;
+                    }
                     1
                 }
                 KgMessage::RoleGranted(role_event) => {
@@ -1568,6 +1620,24 @@ async fn process_block(
                         storage
                             .insert_proposal_actions(&result.actions, &mut tx)
                             .await?;
+                    }
+
+                    // Create system entity in knowledge graph
+                    if let Some(meta) = proposal_event.meta.as_ref() {
+                        let system_result =
+                            handlers::system_entities::map_proposal_created(proposal_event, meta)?;
+                        storage
+                            .insert_entities(&system_result.entities, &mut tx)
+                            .await?;
+                        let set_values: Vec<_> =
+                            system_result.values_to_set().into_iter().cloned().collect();
+                        storage.insert_values(&set_values, &mut tx).await?;
+                        let set_relations: Vec<_> = system_result
+                            .relations_to_create()
+                            .into_iter()
+                            .cloned()
+                            .collect();
+                        storage.insert_relations(&set_relations, &mut tx).await?;
                     }
                     1 + result.actions.len()
                 }

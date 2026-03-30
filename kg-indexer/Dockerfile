@@ -17,6 +17,7 @@ COPY hermes-schema ./hermes-schema
 COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-kafka ./hermes-kafka
 COPY indexer_utils ./indexer_utils
+COPY sdk ./sdk
 COPY kg-indexer ./kg-indexer
 
 # Build from the crate directory (standalone, not as workspace member)
