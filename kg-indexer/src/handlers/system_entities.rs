@@ -69,8 +69,7 @@ static VOTING_MODE_PID: LazyLock<Uuid> = LazyLock::new(|| {
 });
 
 static SPACE_ID_PROPERTY_PID: LazyLock<Uuid> = LazyLock::new(|| {
-    Uuid::parse_str(SPACE_ID_PROPERTY_ID)
-        .expect("SPACE_ID_PROPERTY_ID is a valid UUID constant")
+    Uuid::parse_str(SPACE_ID_PROPERTY_ID).expect("SPACE_ID_PROPERTY_ID is a valid UUID constant")
 });
 
 static PROPOSAL_TYPE_UUID: LazyLock<Uuid> = LazyLock::new(|| {
