@@ -533,7 +533,7 @@ export class OpenSearchClient implements SearchClient {
 	 */
 	async buildSearchBody(query: SearchQuery): Promise<object> {
 		const includeDeleted = query.include_deleted ?? false
-		const includeNonCanonical = query.include_non_canonical ?? false
+		const includeNonCanonical = query.include_non_canonical ?? true
 
 		// Check if the query is empty or whitespace-only
 		const trimmedQuery = query.query.trim()
