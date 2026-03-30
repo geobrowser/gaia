@@ -36,13 +36,15 @@ If the query matches a UUID pattern, it bypasses text search entirely and perfor
 
 ## 2. Base Text Query
 
-Five parallel matching strategies run inside a `bool.should` clause with `minimum_should_match: 1`:
+Seven parallel matching strategies run inside a `bool.should` clause with `minimum_should_match: 1`:
 
 ### Strategy Breakdown
 
 | Strategy | Query Type | Fields | Boost | Purpose |
 |----------|------------|--------|-------|---------|
-| **Exact Name Token** | `match` | `name` | **5.0×** | Strong boost for exact analyzed token match in name |
+| **Exact Raw Name** | `term` | `name_raw` | **10.0×** | Exact case-sensitive full-string match on unanalyzed name |
+| **Raw Name (case-insensitive)** | `term` (case_insensitive) | `name_raw` | **5.0×** | Case-insensitive full-string match, still distinguishes punctuation |
+| **Exact Name Token** | `match` | `name` | **8.0×** | Strong boost for exact analyzed token match in name |
 | **Autocomplete** | `multi_match` (bool_prefix) | `name^1.5`, `name._2gram^1.5`, `name._3gram^1.5`, `description`, `description._2gram`, `description._3gram` | 1.5× on name fields | N-gram autocomplete matching |
 | **Fuzzy** | `multi_match` | `name`, `description` | **0.6×** (reduced) | Typo tolerance with AUTO fuzziness |
 | **Name Prefix** | `match_phrase_prefix` | `name` | **5.0×** | Strong boost for "starts with" on name |

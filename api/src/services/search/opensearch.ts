@@ -137,6 +137,16 @@ export const NAME_EXACT_TOKEN_BOOST = 8.0
 export const NAME_RAW_EXACT_BOOST = 10.0
 
 /**
+ * Boost value for case-insensitive raw name match on the name_raw keyword field.
+ * Uses a `term` query with case_insensitive: true, so "world affairs" matches
+ * "World affairs", "WORLD AFFAIRS", etc. but NOT "world-affairs" (different string).
+ * Set below NAME_RAW_EXACT_BOOST (10.0) and NAME_EXACT_TOKEN_BOOST (8.0) so
+ * exact-case and token matches rank higher, but still provides a meaningful
+ * boost for case-insensitive full-string matches.
+ */
+export const NAME_RAW_CASE_INSENSITIVE_BOOST = 5.0
+
+/**
  * Boost value for fuzzy text match queries.
  * Reduces the weight of fuzzy matches compared to exact/prefix matches.
  */
@@ -877,6 +887,20 @@ export class OpenSearchClient implements SearchClient {
 							name_raw: {
 								value: queryText,
 								boost: this.b("name_raw_exact_boost", NAME_RAW_EXACT_BOOST),
+							},
+						},
+					},
+					{
+						// Case-insensitive raw name match — boosts documents where the
+						// query matches the full unanalyzed name string ignoring case.
+						// "world affairs" matches "World affairs" or "WORLD AFFAIRS"
+						// but NOT "world-affairs" (different string structure).
+						// Ranked below exact-case match (10.0) and token match (8.0).
+						term: {
+							name_raw: {
+								value: queryText,
+								boost: this.b("name_raw_case_insensitive_boost", NAME_RAW_CASE_INSENSITIVE_BOOST),
+								case_insensitive: true,
 							},
 						},
 					},
