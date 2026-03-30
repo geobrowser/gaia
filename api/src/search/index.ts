@@ -209,9 +209,9 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					name: "include_non_canonical",
 					in: "query",
 					description:
-						"When true, include entities from spaces outside the canonical graph. By default, only entities in canonical spaces are returned. The canonical graph is the trust-based subset of spaces rooted at the configured root space, connected by verified/related/editor/member edges.",
+						"Whether to include entities from spaces outside the canonical graph. Defaults to true (all entities returned). Set to false to restrict results to canonical spaces only. The canonical graph is the trust-based subset of spaces rooted at the configured root space, connected by verified/related/editor/member edges.",
 					required: false,
-					schema: {type: "boolean", default: false},
+					schema: {type: "boolean", default: true},
 				},
 			],
 			responses: {
@@ -528,8 +528,8 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 				// Parse include_deleted flag (default: false)
 				const includeDeleted = includeDeletedParam === "true"
 
-				// Parse include_non_canonical flag (default: false)
-				const includeNonCanonical = includeNonCanonicalParam === "true"
+				// Parse include_non_canonical flag (default: true)
+				const includeNonCanonical = includeNonCanonicalParam !== "false"
 
 				// Parse optional boost overrides (undocumented — for internal testing)
 				const boosts: BoostOverrides = {}
@@ -560,7 +560,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					...(typeIds && {type_ids: typeIds}),
 					...(excludeTypeIds && excludeTypeIds.length > 0 && {exclude_type_ids: excludeTypeIds}),
 					...(includeDeleted && {include_deleted: true}),
-					...(includeNonCanonical && {include_non_canonical: true}),
+					...(!includeNonCanonical && {include_non_canonical: false}),
 					...(hasBoosts && {boosts}),
 				}
 
