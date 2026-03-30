@@ -17,7 +17,7 @@ type AppEnv = {
 	}
 }
 
-import type {SearchClient, SearchResponse, SearchScope} from "../services/search"
+import type {BoostOverrides, SearchClient, SearchResponse, SearchScope} from "../services/search"
 import {isValidUuid} from "../utils/uuid"
 
 /**
@@ -78,6 +78,16 @@ const DEFAULT_EXCLUDED_TYPE_IDS: string[] = [
 /**
  * Valid query parameter names for the search endpoint.
  */
+const BOOST_PARAMS = [
+	"score_boost",
+	"name_prefix_boost",
+	"description_prefix_boost",
+	"name_field_boost",
+	"name_exact_token_boost",
+	"name_raw_exact_boost",
+	"fuzzy_reduction_boost",
+] as const
+
 const VALID_PARAMS: Set<string> = new Set([
 	"query",
 	"q",
@@ -88,6 +98,7 @@ const VALID_PARAMS: Set<string> = new Set([
 	"limit",
 	"offset",
 	"include_deleted",
+	...BOOST_PARAMS,
 ])
 
 // Error types for search operations
@@ -501,6 +512,25 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 				// Parse include_deleted flag (default: false)
 				const includeDeleted = includeDeletedParam === "true"
 
+				// Parse optional boost overrides (undocumented — for internal testing)
+				const boosts: BoostOverrides = {}
+				for (const param of BOOST_PARAMS) {
+					const raw = c.req.query(param)
+					if (raw !== undefined) {
+						const value = Number.parseFloat(raw)
+						if (Number.isNaN(value) || value < 0) {
+							return yield* Effect.fail(
+								new SearchValidationError({
+									message: `${param} must be a non-negative number`,
+									status: 400,
+								}),
+							)
+						}
+						boosts[param] = value
+					}
+				}
+				const hasBoosts = Object.keys(boosts).length > 0
+
 				// Execute search - only include optional params when defined
 				const searchQuery = {
 					query: trimmedQuery,
@@ -511,6 +541,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					...(typeIds && {type_ids: typeIds}),
 					...(excludeTypeIds && excludeTypeIds.length > 0 && {exclude_type_ids: excludeTypeIds}),
 					...(includeDeleted && {include_deleted: true}),
+					...(hasBoosts && {boosts}),
 				}
 
 				const response = yield* Effect.tryPromise({

@@ -40,6 +40,22 @@ export interface SearchQuery {
 	offset?: number
 	/** Include soft-deleted entities in results (default: false). */
 	include_deleted?: boolean
+	/** Optional boost overrides for tuning search relevance. */
+	boosts?: BoostOverrides
+}
+
+/**
+ * Optional overrides for search boost values.
+ * When provided, these override the corresponding constants in opensearch.ts.
+ */
+export interface BoostOverrides {
+	score_boost?: number
+	name_prefix_boost?: number
+	description_prefix_boost?: number
+	name_field_boost?: number
+	name_exact_token_boost?: number
+	name_raw_exact_boost?: number
+	fuzzy_reduction_boost?: number
 }
 
 /**
