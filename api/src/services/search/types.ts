@@ -40,6 +40,8 @@ export interface SearchQuery {
 	offset?: number
 	/** Include soft-deleted entities in results (default: false). */
 	include_deleted?: boolean
+	/** Include entities from non-canonical spaces (default: false). */
+	include_non_canonical?: boolean
 	/** Optional boost overrides for tuning search relevance. */
 	boosts?: BoostOverrides
 }

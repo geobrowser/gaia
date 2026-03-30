@@ -521,6 +521,7 @@ export class OpenSearchClient implements SearchClient {
 	 */
 	async buildSearchBody(query: SearchQuery): Promise<object> {
 		const includeDeleted = query.include_deleted ?? false
+		const includeNonCanonical = query.include_non_canonical ?? false
 
 		// Check if the query is empty or whitespace-only
 		const trimmedQuery = query.query.trim()
@@ -533,6 +534,7 @@ export class OpenSearchClient implements SearchClient {
 				query.type_ids,
 				includeDeleted,
 				excludeTypeIds,
+				includeNonCanonical,
 			)
 		}
 
@@ -545,6 +547,7 @@ export class OpenSearchClient implements SearchClient {
 				query.type_ids,
 				includeDeleted,
 				excludeTypeIds,
+				includeNonCanonical,
 			)
 		}
 
@@ -554,10 +557,10 @@ export class OpenSearchClient implements SearchClient {
 		// Apply scope-specific query building
 		switch (query.scope) {
 			case "GLOBAL":
-				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds)
+				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds, includeNonCanonical)
 
 			case "GLOBAL_BY_SPACE_SCORE":
-				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds)
+				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds, includeNonCanonical)
 
 			case "GLOBAL_BY_ENTITY_SPACE_SCORE":
 				return this.buildGlobalByEntitySpaceScoreQuery(
@@ -565,6 +568,7 @@ export class OpenSearchClient implements SearchClient {
 					query.type_ids,
 					includeDeleted,
 					excludeTypeIds,
+					includeNonCanonical,
 				)
 
 			case "SPACE_SINGLE": {
@@ -577,6 +581,7 @@ export class OpenSearchClient implements SearchClient {
 					query.type_ids,
 					includeDeleted,
 					excludeTypeIds,
+					includeNonCanonical,
 				)
 			}
 
@@ -593,6 +598,7 @@ export class OpenSearchClient implements SearchClient {
 						includeDeleted,
 						true,
 						excludeTypeIds,
+						includeNonCanonical,
 					)
 				}
 				const {subspaces, isRoot} = await this.fetchSubspaces(query.space_id)
@@ -603,11 +609,12 @@ export class OpenSearchClient implements SearchClient {
 					includeDeleted,
 					isRoot,
 					excludeTypeIds,
+					includeNonCanonical,
 				)
 			}
 
 			default:
-				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds)
+				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted, excludeTypeIds, includeNonCanonical)
 		}
 	}
 
@@ -626,6 +633,7 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): Promise<object> {
 		// Match both dashed and dashless forms (index may contain either during migration)
 		const baseUuidQuery = {
@@ -637,6 +645,7 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -693,12 +702,14 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): Promise<object> {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -998,12 +1009,14 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1035,12 +1048,14 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1072,12 +1087,14 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1109,12 +1126,14 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = [{terms: {space_id: uuidTermVariants(spaceId)}}]
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1148,6 +1167,7 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 		isRoot: boolean = false,
 		excludeTypeIds?: string[],
+		includeNonCanonical: boolean = false,
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
@@ -1157,6 +1177,7 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = [spaceFilter]
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1274,6 +1295,14 @@ export class OpenSearchClient implements SearchClient {
 				},
 			},
 		}
+	}
+
+	/**
+	 * Build a filter to select entities in the canonical graph.
+	 * Matches documents where in_canonical_graph is true.
+	 */
+	buildCanonicalFilter(): object {
+		return {term: {in_canonical_graph: true}}
 	}
 
 	/**
