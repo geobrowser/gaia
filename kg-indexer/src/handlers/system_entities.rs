@@ -655,10 +655,8 @@ mod tests {
             .iter()
             .find(|v| v.property_id == space_id_property_pid)
             .unwrap();
-        assert_eq!(
-            by_val.text.as_ref().unwrap(),
-            "0b0b0b0b-0b0b-0b0b-0b0b-0b0b0b0b0b0b",
-        );
+        let expected_space_id = Uuid::from_bytes(space_id).to_string();
+        assert_eq!(by_val.text.as_deref(), Some(expected_space_id.as_str()));
         assert!(by_val.bytes.is_none());
 
         // CreatedAtBlock — integer
