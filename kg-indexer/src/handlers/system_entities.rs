@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::governance::{HermesProposalCreated, VotingMode as ProtoVotingMode};
 use hermes_schema::pb::space::{hermes_create_space::Payload, HermesCreateSpace};
@@ -16,6 +18,64 @@ use crate::models::{
     relations::{RelationOp, SetRelationItem},
     values::{ValueChangeType, ValueOp},
 };
+
+static GEO_SYSTEM_NS: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str(GEO_SYSTEM_NAMESPACE).expect("GEO_SYSTEM_NAMESPACE is a valid UUID constant")
+});
+
+static SYSTEM_TYPES_RELATION_TID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str(SYSTEM_TYPES_RELATION_TYPE_ID)
+        .expect("SYSTEM_TYPES_RELATION_TYPE_ID is a valid UUID constant")
+});
+
+static SPACE_ADDRESS_PID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str(SPACE_ADDRESS_PROPERTY_ID)
+        .expect("SPACE_ADDRESS_PROPERTY_ID is a valid UUID constant")
+});
+
+static CREATED_AT_BLOCK_PID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID)
+        .expect("CREATED_AT_BLOCK_PROPERTY_ID is a valid UUID constant")
+});
+
+static NAME_PID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str(NAME_PROPERTY_ID).expect("NAME_PROPERTY_ID is a valid UUID constant")
+});
+
+static DESCRIPTION_PID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str(DESCRIPTION_PROPERTY_ID)
+        .expect("DESCRIPTION_PROPERTY_ID is a valid UUID constant")
+});
+
+static SYSTEM_TYPE_UUID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str(SYSTEM_TYPE_ID).expect("SYSTEM_TYPE_ID is a valid UUID constant")
+});
+
+static SPACE_TYPE_UUID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str(SPACE_TYPE_ID).expect("SPACE_TYPE_ID is a valid UUID constant")
+});
+
+static EOA_SPACE_TYPE_UUID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str(EOA_SPACE_TYPE_ID).expect("EOA_SPACE_TYPE_ID is a valid UUID constant")
+});
+
+static DAO_SPACE_TYPE_UUID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str(DAO_SPACE_TYPE_ID).expect("DAO_SPACE_TYPE_ID is a valid UUID constant")
+});
+
+static VOTING_MODE_PID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str(VOTING_MODE_PROPERTY_ID)
+        .expect("VOTING_MODE_PROPERTY_ID is a valid UUID constant")
+});
+
+static SPACE_ID_PROPERTY_PID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str(SPACE_ID_PROPERTY_ID)
+        .expect("SPACE_ID_PROPERTY_ID is a valid UUID constant")
+});
+
+static PROPOSAL_TYPE_UUID: LazyLock<Uuid> = LazyLock::new(|| {
+    Uuid::parse_str(PROPOSAL_TYPE_ID).expect("PROPOSAL_TYPE_ID is a valid UUID constant")
+});
 
 pub struct SystemEntityResult {
     pub entities: Vec<EntityItem>,
@@ -42,13 +102,9 @@ impl SystemEntityResult {
     }
 }
 
-fn geo_system_namespace() -> Uuid {
-    Uuid::parse_str(GEO_SYSTEM_NAMESPACE).expect("GEO_SYSTEM_NAMESPACE is a valid UUID constant")
-}
-
 fn derive_system_relation_id(type_name: &str, entity_id: &Uuid) -> Uuid {
     Uuid::new_v5(
-        &geo_system_namespace(),
+        &GEO_SYSTEM_NS,
         format!("geo:system:rel:{}:{}", type_name, entity_id).as_bytes(),
     )
 }
@@ -124,7 +180,7 @@ fn make_system_value_text(
 /// Derive the relation row ID (distinct from the reified entity ID).
 fn derive_system_relation_row_id(type_name: &str, entity_id: &Uuid) -> Uuid {
     Uuid::new_v5(
-        &geo_system_namespace(),
+        &GEO_SYSTEM_NS,
         format!("geo:system:rel_id:{}:{}", type_name, entity_id).as_bytes(),
     )
 }
@@ -140,8 +196,7 @@ fn make_system_type_relation(
     SetRelationItem {
         id: relation_row_id,
         entity_id: reified_entity_id,
-        type_id: Uuid::parse_str(SYSTEM_TYPES_RELATION_TYPE_ID)
-            .expect("SYSTEM_TYPES_RELATION_TYPE_ID is a valid UUID constant"),
+        type_id: *SYSTEM_TYPES_RELATION_TID,
         from_id: *entity_id,
         to_id: *type_entity_id,
         space_id: *space_id,
@@ -186,58 +241,43 @@ pub fn map_space_registered(
         updated_at_block: block,
     };
 
-    let space_address_pid = Uuid::parse_str(SPACE_ADDRESS_PROPERTY_ID)
-        .expect("SPACE_ADDRESS_PROPERTY_ID is a valid UUID constant");
-    let created_at_block_pid = Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID)
-        .expect("CREATED_AT_BLOCK_PROPERTY_ID is a valid UUID constant");
-
-    let name_pid =
-        Uuid::parse_str(NAME_PROPERTY_ID).expect("NAME_PROPERTY_ID is a valid UUID constant");
-    let description_pid = Uuid::parse_str(DESCRIPTION_PROPERTY_ID)
-        .expect("DESCRIPTION_PROPERTY_ID is a valid UUID constant");
-
     let values = vec![
         make_system_value_text(
             &entity_id,
-            &space_address_pid,
+            &SPACE_ADDRESS_PID,
             &space_id,
             &format!("0x{}", hex::encode(&address)),
         ),
         make_system_value_integer(
             &entity_id,
-            &created_at_block_pid,
+            &CREATED_AT_BLOCK_PID,
             &space_id,
             meta.block_number as i64,
         ),
         make_system_value_text(
             &entity_id,
-            &name_pid,
+            &NAME_PID,
             &space_id,
             &format!("Space {}", space_id),
         ),
         make_system_value_text(
             &entity_id,
-            &description_pid,
+            &DESCRIPTION_PID,
             &space_id,
             &format!("System entity for space {}", space_id),
         ),
     ];
 
-    let system_type_uuid =
-        Uuid::parse_str(SYSTEM_TYPE_ID).expect("SYSTEM_TYPE_ID is a valid UUID constant");
-    let space_type_uuid =
-        Uuid::parse_str(SPACE_TYPE_ID).expect("SPACE_TYPE_ID is a valid UUID constant");
-
     let mut relations = vec![
         RelationOp::Create(make_system_type_relation(
             &entity_id,
-            &system_type_uuid,
+            &SYSTEM_TYPE_UUID,
             "System",
             &space_id,
         )),
         RelationOp::Create(make_system_type_relation(
             &entity_id,
-            &space_type_uuid,
+            &SPACE_TYPE_UUID,
             "Space",
             &space_id,
         )),
@@ -246,21 +286,17 @@ pub fn map_space_registered(
     // Add SpaceType relation based on payload variant
     match &space.payload {
         Some(Payload::EoaSpace(_)) => {
-            let eoa_type_uuid = Uuid::parse_str(EOA_SPACE_TYPE_ID)
-                .expect("EOA_SPACE_TYPE_ID is a valid UUID constant");
             relations.push(RelationOp::Create(make_system_type_relation(
                 &entity_id,
-                &eoa_type_uuid,
+                &EOA_SPACE_TYPE_UUID,
                 "EoaSpace",
                 &space_id,
             )));
         }
         Some(Payload::DefaultDaoSpace(_)) => {
-            let dao_type_uuid = Uuid::parse_str(DAO_SPACE_TYPE_ID)
-                .expect("DAO_SPACE_TYPE_ID is a valid UUID constant");
             relations.push(RelationOp::Create(make_system_type_relation(
                 &entity_id,
-                &dao_type_uuid,
+                &DAO_SPACE_TYPE_UUID,
                 "DaoSpace",
                 &space_id,
             )));
@@ -296,47 +332,35 @@ pub fn map_proposal_created(
         updated_at_block: block,
     };
 
-    let voting_mode_pid = Uuid::parse_str(VOTING_MODE_PROPERTY_ID)
-        .expect("VOTING_MODE_PROPERTY_ID is a valid UUID constant");
-    let space_id_property_pid = Uuid::parse_str(SPACE_ID_PROPERTY_ID)
-        .expect("SPACE_ID_PROPERTY_ID is a valid UUID constant");
-    let created_at_block_pid = Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID)
-        .expect("CREATED_AT_BLOCK_PROPERTY_ID is a valid UUID constant");
-
     // Map proto voting mode through enum for validation (consistent with governance.rs)
     let voting_mode_value = match ProtoVotingMode::try_from(msg.voting_mode) {
         Ok(ProtoVotingMode::Fast) => 0i64,
         Ok(ProtoVotingMode::Slow) | Err(_) => 1i64,
     };
 
-    let name_pid =
-        Uuid::parse_str(NAME_PROPERTY_ID).expect("NAME_PROPERTY_ID is a valid UUID constant");
-    let description_pid = Uuid::parse_str(DESCRIPTION_PROPERTY_ID)
-        .expect("DESCRIPTION_PROPERTY_ID is a valid UUID constant");
-
     let values = vec![
-        make_system_value_integer(&entity_id, &voting_mode_pid, &space_id, voting_mode_value),
+        make_system_value_integer(&entity_id, &VOTING_MODE_PID, &space_id, voting_mode_value),
         make_system_value_text(
             &entity_id,
-            &space_id_property_pid,
+            &SPACE_ID_PROPERTY_PID,
             &space_id,
             &space_id.to_string(),
         ),
         make_system_value_integer(
             &entity_id,
-            &created_at_block_pid,
+            &CREATED_AT_BLOCK_PID,
             &space_id,
             meta.block_number as i64,
         ),
         make_system_value_text(
             &entity_id,
-            &name_pid,
+            &NAME_PID,
             &space_id,
             &format!("Proposal {}", proposal_id),
         ),
         make_system_value_text(
             &entity_id,
-            &description_pid,
+            &DESCRIPTION_PID,
             &space_id,
             &format!(
                 "System entity for proposal {} in space {}",
@@ -345,21 +369,16 @@ pub fn map_proposal_created(
         ),
     ];
 
-    let system_type_uuid =
-        Uuid::parse_str(SYSTEM_TYPE_ID).expect("SYSTEM_TYPE_ID is a valid UUID constant");
-    let proposal_type_uuid =
-        Uuid::parse_str(PROPOSAL_TYPE_ID).expect("PROPOSAL_TYPE_ID is a valid UUID constant");
-
     let relations = vec![
         RelationOp::Create(make_system_type_relation(
             &entity_id,
-            &system_type_uuid,
+            &SYSTEM_TYPE_UUID,
             "System",
             &space_id,
         )),
         RelationOp::Create(make_system_type_relation(
             &entity_id,
-            &proposal_type_uuid,
+            &PROPOSAL_TYPE_UUID,
             "Proposal",
             &space_id,
         )),
