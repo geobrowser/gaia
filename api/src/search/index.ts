@@ -66,6 +66,13 @@ const MAX_TYPE_IDS = 10
  * These are block/media types that are not useful as standalone search results.
  * Users can override this by passing an explicit `exclude_type_ids` parameter.
  */
+/**
+ * Comment type entity ID. Not yet in the GRC-20 npm SDK.
+ * Dashless format to match SystemIds convention.
+ * Also defined in sdk/src/core/content_ids.rs (dashed, for Rust services).
+ */
+const COMMENT_TYPE = "82f6123a03234c6ca811701c5bc026e9"
+
 const DEFAULT_EXCLUDED_TYPE_IDS: string[] = [
 	SystemIds.TEXT_BLOCK,
 	SystemIds.IMAGE_BLOCK,
@@ -73,6 +80,7 @@ const DEFAULT_EXCLUDED_TYPE_IDS: string[] = [
 	SystemIds.IMAGE_TYPE,
 	SystemIds.VIDEO_TYPE,
 	SystemIds.VIDEO_BLOCK,
+	COMMENT_TYPE,
 ]
 
 /**
