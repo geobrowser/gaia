@@ -6,6 +6,8 @@ import type {SearchClient, SearchResponse} from "../services/search"
 
 import {createSearchRouter} from "./index"
 
+const COMMENT_TYPE = "82f6123a03234c6ca811701c5bc026e9"
+
 const DEFAULT_EXCLUDED_TYPE_IDS = [
 	SystemIds.TEXT_BLOCK,
 	SystemIds.IMAGE_BLOCK,
@@ -13,6 +15,7 @@ const DEFAULT_EXCLUDED_TYPE_IDS = [
 	SystemIds.IMAGE_TYPE,
 	SystemIds.VIDEO_TYPE,
 	SystemIds.VIDEO_BLOCK,
+	COMMENT_TYPE,
 ]
 
 describe("Search Router - Integration Tests", () => {
