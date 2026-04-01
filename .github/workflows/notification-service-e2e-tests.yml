@@ -1,0 +1,182 @@
+name: Notification Service E2E Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, dev, feat/notification-service]  # TODO: remove feat branch before merge
+    paths:
+      - 'notification-service/**'
+      - 'hermes-schema/**'
+      - 'hermes-kafka/**'
+      - 'wire/**'
+      - '.github/workflows/notification-service-e2e-tests.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'notification-service/**'
+      - 'hermes-schema/**'
+      - 'hermes-kafka/**'
+      - 'wire/**'
+      - '.github/workflows/notification-service-e2e-tests.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  POSTGRES_PORT: "5432"
+  KAFKA_PORT: "9092"
+  DATABASE_URL: postgres://test:test@localhost:5432/notifications_test
+  KAFKA_BROKER: localhost:9092
+  WEBHOOK_PORT: "8765"
+  WEBHOOK_SECRET: test-e2e-secret
+  ENVIRONMENT: production
+
+jobs:
+  e2e-test:
+    name: Run E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+          components: clippy, rustfmt
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get install -y \
+            cmake \
+            libclang-dev \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            pkg-config \
+            postgresql-client
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-e2e-
+
+      - name: Check formatting
+        run: |
+          cargo fmt -p notification-indexer --check
+          cargo fmt -p delivery-worker --check
+
+      - name: Run clippy
+        run: |
+          cargo clippy -p notification-indexer -- -D warnings
+          cargo clippy -p delivery-worker -- -D warnings
+
+      - name: Start Postgres and Kafka
+        run: |
+          docker compose -f notification-service/e2e-tests/docker-compose.yml up -d
+          echo "Waiting for services to be healthy..."
+          # Wait for postgres
+          POSTGRES_READY=false
+          for i in $(seq 1 30); do
+            if docker compose -f notification-service/e2e-tests/docker-compose.yml exec -T postgres pg_isready -U test -d notifications_test 2>/dev/null; then
+              echo "Postgres is ready"
+              POSTGRES_READY=true
+              break
+            fi
+            echo "  waiting for postgres... ($i/30)"
+            sleep 2
+          done
+          if [ "$POSTGRES_READY" != "true" ]; then
+            echo "ERROR: Postgres failed to become ready"
+            exit 1
+          fi
+          # Wait for kafka
+          KAFKA_READY=false
+          for i in $(seq 1 30); do
+            if docker compose -f notification-service/e2e-tests/docker-compose.yml exec -T kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 2>/dev/null; then
+              echo "Kafka is ready"
+              KAFKA_READY=true
+              break
+            fi
+            echo "  waiting for kafka... ($i/30)"
+            sleep 2
+          done
+          if [ "$KAFKA_READY" != "true" ]; then
+            echo "ERROR: Kafka failed to become ready"
+            exit 1
+          fi
+
+      - name: Apply database schema
+        run: |
+          PGPASSWORD=test psql -h localhost -U test -d notifications_test \
+            -f notification-service/e2e-tests/setup.sql
+
+      - name: Build all binaries
+        run: |
+          cargo build \
+            -p notification-indexer \
+            -p delivery-worker \
+            -p notification-e2e-tests
+
+      - name: Start notification-indexer
+        run: |
+          DATABASE_URL=${{ env.DATABASE_URL }} \
+          KAFKA_BROKER=${{ env.KAFKA_BROKER }} \
+          KAFKA_GROUP_ID=notification-indexer-e2e \
+          ENVIRONMENT=${{ env.ENVIRONMENT }} \
+          REJECTION_POLL_INTERVAL_SECS=3 \
+          RUST_LOG=info,notification_indexer=debug \
+          ./target/debug/notification-indexer > /tmp/notification-indexer.log 2>&1 &
+          echo $! > /tmp/notification-indexer.pid
+          echo "notification-indexer started (pid: $(cat /tmp/notification-indexer.pid))"
+
+      - name: Start delivery-worker
+        run: |
+          DATABASE_URL=${{ env.DATABASE_URL }} \
+          POLL_INTERVAL_MS=1000 \
+          MAX_RETRIES=3 \
+          RUST_LOG=info,delivery_worker=debug \
+          ./target/debug/delivery-worker > /tmp/delivery-worker.log 2>&1 &
+          echo $! > /tmp/delivery-worker.pid
+          echo "delivery-worker started (pid: $(cat /tmp/delivery-worker.pid))"
+
+      - name: Wait for services to initialize
+        run: sleep 5
+
+      - name: Run e2e tests
+        run: |
+          DATABASE_URL=${{ env.DATABASE_URL }} \
+          KAFKA_BROKER=${{ env.KAFKA_BROKER }} \
+          WEBHOOK_PORT=${{ env.WEBHOOK_PORT }} \
+          WEBHOOK_SECRET=${{ env.WEBHOOK_SECRET }} \
+          ENVIRONMENT=${{ env.ENVIRONMENT }} \
+          E2E_TIMEOUT_SECS=60 \
+          RUST_LOG=info \
+          ./target/debug/notification-e2e-tests
+
+      - name: Show service logs on failure
+        if: failure()
+        run: |
+          echo "=== notification-indexer logs ==="
+          cat /tmp/notification-indexer.log || true
+          echo ""
+          echo "=== delivery-worker logs ==="
+          cat /tmp/delivery-worker.log || true
+          echo ""
+          echo "=== Docker compose logs ==="
+          docker compose -f notification-service/e2e-tests/docker-compose.yml logs
+
+      - name: Cleanup
+        if: always()
+        run: |
+          kill $(cat /tmp/notification-indexer.pid) 2>/dev/null || true
+          kill $(cat /tmp/delivery-worker.pid) 2>/dev/null || true
+          docker compose -f notification-service/e2e-tests/docker-compose.yml down -v

@@ -140,6 +140,16 @@ sequenceDiagram
 | Proposal expiring soon | `space.governance` | Editors who haven't voted | Implicit (membership) |
 | Voting settings changed | `space.governance` | Space editors | Implicit (membership) |
 
+### Bounty Lifecycle
+
+| Event | Kafka Topic | Who Gets Notified | Subscription Type |
+|---|---|---|---|
+| Curator interested in bounty | `knowledge.edits` | Editors of the bounty's space | Implicit (membership) |
+| Curator allocated to bounty | `knowledge.edits` | The allocated curator | Implicit (direct) |
+| Curator paid out for bounty | `knowledge.edits` | The paid curator | Implicit (direct) |
+
+Bounty events are detected by inspecting `CreateRelation` operations in GRC-20 edit payloads and matching on well-known relation type UUIDs. The `knowledge.edits` topic carries the executed relation data for all three cases — interest relations are published directly by the curator, while allocation and payout relations are published via governance proposal execution.
+
 ### Membership
 
 | Event | Kafka Topic | Who Gets Notified | Subscription Type |

@@ -1,0 +1,68 @@
+name: Delivery Worker Unit Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, dev, feat/notification-service]  # TODO: remove feat branch before merge
+    paths:
+      - 'notification-service/delivery-worker/**'
+      - 'wire/**'
+      - '.github/workflows/delivery-worker-tests.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'notification-service/delivery-worker/**'
+      - 'wire/**'
+      - '.github/workflows/delivery-worker-tests.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  unit-tests:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+          components: clippy, rustfmt
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get install -y \
+            cmake \
+            libclang-dev \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt -p delivery-worker --check
+
+      - name: Run clippy
+        run: cargo clippy -p delivery-worker -- -D warnings
+
+      - name: Run unit tests
+        run: cargo test -p delivery-worker
+        env:
+          RUST_BACKTRACE: 1

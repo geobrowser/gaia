@@ -1,0 +1,145 @@
+# Notification Indexer Deployment
+#
+# Consumes governance events from Kafka and writes to the notification outbox.
+# Also polls for expired proposals to generate rejection notifications.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-indexer
+  namespace: notifications
+  labels:
+    app: notification-indexer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: notification-indexer
+  template:
+    metadata:
+      labels:
+        app: notification-indexer
+    spec:
+      restartPolicy: Always
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: notification-indexer
+          image: registry.digitalocean.com/geo/notification-indexer:latest
+          imagePullPolicy: Always
+          env:
+            # Database configuration
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: scoring-service-credentials
+                  key: DATABASE_URL
+            # Kafka configuration
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_USERNAME
+                  optional: true
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_PASSWORD
+                  optional: true
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_SSL_CA_PEM
+                  optional: true
+            # Consumer configuration
+            - name: ENVIRONMENT
+              value: "production"
+            - name: KAFKA_GROUP_ID
+              value: "notification-indexer"
+            - name: REJECTION_POLL_INTERVAL_SECS
+              value: "60"
+            # Logging
+            - name: RUST_LOG
+              value: "info,notification_indexer=debug"
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: notification-indexer-secrets
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              valueFrom:
+                secretKeyRef:
+                  name: notification-indexer-secrets
+                  key: SENTRY_TRACES_SAMPLE_RATE
+                  optional: true
+            - name: SENTRY_SEND_DEFAULT_PII
+              valueFrom:
+                secretKeyRef:
+                  name: notification-indexer-secrets
+                  key: SENTRY_SEND_DEFAULT_PII
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: notification-indexer-secrets
+                  key: SENTRY_ENVIRONMENT
+                  optional: true
+            - name: SENTRY_RELEASE
+              valueFrom:
+                secretKeyRef:
+                  name: notification-indexer-secrets
+                  key: SENTRY_RELEASE
+                  optional: true
+            - name: SENTRY_DEBUG
+              valueFrom:
+                secretKeyRef:
+                  name: notification-indexer-secrets
+                  key: SENTRY_DEBUG
+                  optional: true
+          ports:
+            - containerPort: 8080
+              name: health
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
