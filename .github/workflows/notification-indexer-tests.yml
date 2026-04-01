@@ -68,3 +68,4 @@ jobs:
         run: cargo test -p notification-indexer
         env:
           RUST_BACKTRACE: 1
+          NOTIFICATION_MIN_AGE_SECS: "0"
