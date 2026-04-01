@@ -189,6 +189,7 @@ Proposal voting settings were changed (e.g. quorum, thresholds, duration).
   "block_number": 12345,
   "timestamp": 1700000000,
   "proposal_id": "c3e4f5a6-...",
+  "voting_mode": "slow",
   "settings": {
     "start_date": 1700000000,
     "end_date": 1700086400,
@@ -295,17 +296,41 @@ Same structure as `bounty_allocated`.
 
 ### Action types (in `actions` array)
 
+**Membership actions:**
+
 | Action type | Fields | Description |
 |---|---|---|
 | `add_member` | `target_address` | Add a member to the space |
 | `remove_member` | `target_address` | Remove a member |
 | `add_editor` | `target_address` | Add an editor |
 | `remove_editor` | `target_address` | Remove an editor |
-| `add_subspace` | `target_space_id` | Add a subspace |
-| `remove_subspace` | `target_space_id` | Remove a subspace |
-| `set_topic` | `target_space_id`, `target_topic_id` | Set a topic on a subspace |
-| `unset_topic` | `target_space_id`, `target_topic_id` | Unset a topic on a subspace |
+| `unflag_editor` | `target_address` | Unflag a flagged editor |
+
+**Content actions:**
+
+| Action type | Fields | Description |
+|---|---|---|
 | `publish` | `content_uri`, `name` | Publish an edit |
+| `flag` | `target_address` (content ID) | Flag content |
+| `unflag` | `target_address` (content ID) | Unflag content |
+
+**Subspace actions:**
+
+| Action type | Fields | Description |
+|---|---|---|
+| `subspace_verified` | `target_space_id` | Mark a subspace as verified |
+| `subspace_unverified` | `target_space_id` | Mark a subspace as unverified |
+| `subspace_related` | `target_space_id` | Mark a subspace as related |
+| `subspace_unrelated` | `target_space_id` | Mark a subspace as unrelated |
+| `subspace_topic_declared` | `target_topic_id` | Declare a topic on a subspace |
+| `subspace_topic_removed` | `target_topic_id` | Remove a topic from a subspace |
+| `set_topic` | `target_topic_id` | Set a topic |
+| `unset_topic` | _(none)_ | Unset a topic |
+
+**Settings actions:**
+
+| Action type | Fields | Description |
+|---|---|---|
 | `update_voting_settings` | `voting_settings` | Update voting configuration |
 
 ### Settings object
