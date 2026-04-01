@@ -70,7 +70,8 @@ impl Storage {
             r#"
             WITH claimed AS (
                 UPDATE notification_deliveries d
-                SET status = 'in_progress'
+                SET status = 'in_progress',
+                    updated_at = now()
                 WHERE d.id IN (
                     SELECT d2.id
                     FROM notification_deliveries d2
@@ -122,7 +123,8 @@ impl Storage {
             r#"
             UPDATE notification_deliveries
             SET status = 'delivered',
-                delivered_at = now()
+                delivered_at = now(),
+                updated_at = now()
             WHERE id = $1
             "#,
         )
@@ -149,7 +151,8 @@ impl Storage {
             SET status = 'pending',
                 attempts = attempts + 1,
                 last_error = $2,
-                next_retry_at = now() + ($3 || ' seconds')::interval
+                next_retry_at = now() + ($3 || ' seconds')::interval,
+                updated_at = now()
             WHERE id = $1
             "#,
         )
@@ -174,7 +177,8 @@ impl Storage {
             UPDATE notification_deliveries
             SET status = 'failed',
                 attempts = attempts + 1,
-                last_error = $2
+                last_error = $2,
+                updated_at = now()
             WHERE id = $1
             "#,
         )
@@ -199,7 +203,8 @@ impl Storage {
         let result = sqlx::query(
             r#"
             UPDATE notification_deliveries
-            SET status = 'pending'
+            SET status = 'pending',
+                updated_at = now()
             WHERE status = 'in_progress'
               AND updated_at < now() - ($1 || ' seconds')::interval
             "#,

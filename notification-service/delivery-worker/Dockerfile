@@ -1,4 +1,4 @@
-FROM rust:1.92-bookworm as builder
+FROM rust:1.92-bookworm AS builder
 
 # Install build dependencies for protobuf (needed by hermes-instrumentation)
 RUN apt-get update && \
@@ -14,7 +14,6 @@ WORKDIR /app
 
 # Copy only required crates (no workspace Cargo.toml - build standalone)
 COPY hermes-instrumentation ./hermes-instrumentation
-COPY wire ./wire
 COPY notification-service/delivery-worker ./notification-service/delivery-worker
 
 # Build from the crate directory (standalone, not as workspace member)
