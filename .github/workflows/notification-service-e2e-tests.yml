@@ -131,6 +131,7 @@ jobs:
           KAFKA_GROUP_ID=notification-indexer-e2e \
           ENVIRONMENT=${{ env.ENVIRONMENT }} \
           REJECTION_POLL_INTERVAL_SECS=3 \
+          NOTIFICATION_MIN_AGE_SECS=0 \
           RUST_LOG=info,notification_indexer=debug \
           ./target/debug/notification-indexer > /tmp/notification-indexer.log 2>&1 &
           echo $! > /tmp/notification-indexer.pid

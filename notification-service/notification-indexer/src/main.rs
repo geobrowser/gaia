@@ -8,10 +8,12 @@
 //!    and writes rejection notifications.
 
 use std::env;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use hermes_instrumentation::{debug, error, info, info_span, warn};
 use rdkafka::message::Message;
+use rdkafka::Timestamp;
 
 use notification_indexer::consumer::{
     get_event_type, parse_proposal_created, parse_proposal_executed,
@@ -109,6 +111,20 @@ async fn async_main() -> Result<(), IndexerError> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(30);
+
+    // Minimum event age: skip Kafka messages older than this many seconds.
+    // Default: 86400 (1 day). Set to 0 to process all historical events.
+    let min_age_secs: u64 = env::var("NOTIFICATION_MIN_AGE_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(259200); // 3 days
+
+    if min_age_secs > 0 {
+        info!(
+            min_age_secs = min_age_secs,
+            "Skipping events older than {}s", min_age_secs
+        );
+    }
 
     // Initialize storage
     let storage = Storage::connect(&database_url).await?;
@@ -263,6 +279,32 @@ async fn async_main() -> Result<(), IndexerError> {
                         let topic = msg.topic().to_string();
                         let partition = msg.partition();
                         let offset = msg.offset();
+
+                        // Skip old messages on startup replay
+                        if min_age_secs > 0 {
+                            let now_ms = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .map(|d| d.as_millis() as i64)
+                                .unwrap_or(0);
+                            let too_old = match msg.timestamp() {
+                                Timestamp::CreateTime(ts) | Timestamp::LogAppendTime(ts) => {
+                                    (now_ms - ts) > (min_age_secs as i64 * 1000)
+                                }
+                                Timestamp::NotAvailable => false,
+                            };
+                            if too_old {
+                                debug!(
+                                    partition = partition,
+                                    offset = offset,
+                                    "Skipping old message (older than {}s)",
+                                    min_age_secs
+                                );
+                                if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+                                    error!(error = %e, "Failed to commit offset");
+                                }
+                                continue;
+                            }
+                        }
 
                         let event_type = get_event_type(msg.headers());
                         let _span = info_span!(
