@@ -37,7 +37,7 @@ spec:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: scoring-service-credentials
+                  name: notification-service-credentials
                   key: DATABASE_URL
             # Kafka configuration
             - name: KAFKA_BROKER
