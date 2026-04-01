@@ -52,8 +52,12 @@ pub fn is_success(status: u16) -> bool {
 }
 
 /// Check if a response status code indicates the delivery should be retried.
+///
+/// Retries on all non-success responses. Webhook misconfiguration (4xx) is
+/// often transient (wrong URL, secret rotation, deploy in progress), so we
+/// retry with exponential backoff rather than permanently failing.
 pub fn should_retry(status: u16) -> bool {
-    status >= 500 || status == 429
+    !is_success(status)
 }
 
 /// Calculate exponential backoff delay in seconds for a given attempt number.
@@ -105,16 +109,18 @@ mod tests {
     }
 
     #[test]
-    fn test_should_not_retry_on_4xx() {
-        assert!(!should_retry(400));
-        assert!(!should_retry(401));
-        assert!(!should_retry(404));
+    fn test_should_retry_on_4xx() {
+        assert!(should_retry(400));
+        assert!(should_retry(401));
+        assert!(should_retry(404));
     }
 
     #[test]
-    fn test_should_not_retry_on_409() {
-        // 409 Conflict is treated as "already delivered" (duplicate), not a retry
-        assert!(!should_retry(409));
+    fn test_should_not_retry_on_success() {
+        assert!(!should_retry(200));
+        assert!(!should_retry(201));
+        assert!(!should_retry(204));
+        assert!(!should_retry(409)); // duplicate = success, no retry
     }
 
     #[test]
