@@ -120,7 +120,10 @@ async fn async_main() -> Result<(), IndexerError> {
         .unwrap_or(259200); // 3 days
 
     if min_age_secs > 0 {
-        info!(min_age_secs = min_age_secs, "Skipping events older than {}s", min_age_secs);
+        info!(
+            min_age_secs = min_age_secs,
+            "Skipping events older than {}s", min_age_secs
+        );
     }
 
     // Initialize storage
