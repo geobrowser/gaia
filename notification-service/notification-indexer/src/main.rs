@@ -117,7 +117,7 @@ async fn async_main() -> Result<(), IndexerError> {
     let min_age_secs: u64 = env::var("NOTIFICATION_MIN_AGE_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(86400);
+        .unwrap_or(259200); // 3 days
 
     if min_age_secs > 0 {
         info!(min_age_secs = min_age_secs, "Skipping events older than {}s", min_age_secs);
