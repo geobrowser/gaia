@@ -6,13 +6,11 @@ on:
     branches: [main, dev, feat/notification-service]  # TODO: remove feat branch before merge
     paths:
       - 'notification-service/delivery-worker/**'
-      - 'wire/**'
       - '.github/workflows/delivery-worker-tests.yml'
   pull_request:
     branches: [main, dev]
     paths:
       - 'notification-service/delivery-worker/**'
-      - 'wire/**'
       - '.github/workflows/delivery-worker-tests.yml'
 
 env:
@@ -25,10 +23,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: "1.92.0"
           components: clippy, rustfmt
@@ -46,7 +44,7 @@ jobs:
             pkg-config
 
       - name: Cache cargo registry
-        uses: actions/cache@v3
+        uses: actions/cache@6f8efc29b200d32929f49075959781ed54ec270c # v3
         with:
           path: |
             ~/.cargo/registry
