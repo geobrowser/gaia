@@ -8,7 +8,6 @@ on:
       - 'notification-service/delivery-worker/**'
       - 'notification-service/deployment/production/delivery-worker.yaml'
       - 'notification-service/deployment/production/namespace.yaml'
-      - 'wire/**'
       - '.github/workflows/delivery-worker-deploy.yml'
 
 concurrency:
@@ -24,10 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install doctl
-        uses: digitalocean/action-doctl@v2
+        uses: digitalocean/action-doctl@6374d029dfd5f449281f186d65663779c706c994 # v2
         with:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
 
@@ -43,7 +42,7 @@ jobs:
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
       - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
 
       - name: Configure kubectl for DigitalOcean
         run: |

@@ -1,4 +1,4 @@
-FROM rust:1.92-bookworm as builder
+FROM rust:1.92-bookworm AS builder
 
 # Install build dependencies for rdkafka and protobuf
 RUN apt-get update && \
@@ -16,7 +16,6 @@ WORKDIR /app
 COPY hermes-schema ./hermes-schema
 COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-kafka ./hermes-kafka
-COPY wire ./wire
 COPY notification-service/notification-indexer ./notification-service/notification-indexer
 
 # Build from the crate directory (standalone, not as workspace member)
