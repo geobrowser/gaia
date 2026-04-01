@@ -251,6 +251,7 @@ impl Storage {
         let mut type_ids = Vec::with_capacity(relations.len());
         let mut positions = Vec::with_capacity(relations.len());
         let mut verified = Vec::with_capacity(relations.len());
+        let mut is_system = Vec::with_capacity(relations.len());
 
         for rel in relations {
             ids.push(&rel.id);
@@ -263,22 +264,25 @@ impl Storage {
             type_ids.push(&rel.type_id);
             positions.push(&rel.position);
             verified.push(&rel.verified);
+            is_system.push(rel.is_system);
         }
 
         let query = r#"
             INSERT INTO relations (
                 id, space_id, entity_id, from_entity_id, from_space_id,
-                to_entity_id, to_space_id, type_id, position, verified
+                to_entity_id, to_space_id, type_id, position, verified, is_system
             )
             SELECT * FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::uuid[],
-                $6::uuid[], $7::uuid[], $8::uuid[], $9::text[], $10::boolean[]
+                $6::uuid[], $7::uuid[], $8::uuid[], $9::text[], $10::boolean[],
+                $11::boolean[]
             )
             ON CONFLICT (id) DO UPDATE SET
                 to_space_id = EXCLUDED.to_space_id,
                 from_space_id = EXCLUDED.from_space_id,
                 position = EXCLUDED.position,
                 verified = EXCLUDED.verified
+            WHERE relations.is_system = false
         "#;
 
         sqlx::query(query)
@@ -292,6 +296,7 @@ impl Storage {
             .bind(&type_ids)
             .bind(&positions)
             .bind(&verified)
+            .bind(&is_system)
             .execute(&mut **tx)
             .await?;
 
@@ -315,22 +320,26 @@ impl Storage {
              to_version_id = COALESCE(v.to_version_id, relations.to_version_id),
              position = COALESCE(v.position, relations.position),
              verified = COALESCE(v.verified, relations.verified)
-             FROM (VALUES ",
+             FROM (",
         );
 
         query_builder.push_values(relations, |mut b, relation| {
             b.push_bind(relation.id);
-            b.push_bind(&relation.from_space_id);
-            b.push_bind(&relation.from_version_id);
-            b.push_bind(&relation.to_space_id);
-            b.push_bind(&relation.to_version_id);
+            b.push_bind(&relation.from_space_id)
+                .push_unseparated("::uuid");
+            b.push_bind(&relation.from_version_id)
+                .push_unseparated("::uuid");
+            b.push_bind(&relation.to_space_id)
+                .push_unseparated("::uuid");
+            b.push_bind(&relation.to_version_id)
+                .push_unseparated("::uuid");
             b.push_bind(&relation.position);
             b.push_bind(relation.verified);
         });
 
         query_builder.push(
             ") AS v(id, from_space_id, from_version_id, to_space_id, to_version_id, position, verified)
-             WHERE relations.id = v.id",
+             WHERE relations.id = v.id AND relations.is_system = false",
         );
 
         query_builder.build().execute(&mut **tx).await?;
@@ -355,31 +364,23 @@ impl Storage {
              to_version_id = CASE WHEN v.unset_to_version_id THEN NULL ELSE to_version_id END,
              position = CASE WHEN v.unset_position THEN NULL ELSE position END,
              verified = CASE WHEN v.unset_verified THEN NULL ELSE verified END
-             FROM (VALUES ",
+             FROM (",
         );
 
         query_builder.push_values(relations, |mut b, relation| {
-            b.push("(");
             b.push_bind(relation.id);
-            b.push(", ");
             b.push_bind(relation.from_space_id.unwrap_or(false));
-            b.push(", ");
             b.push_bind(relation.from_version_id.unwrap_or(false));
-            b.push(", ");
             b.push_bind(relation.to_space_id.unwrap_or(false));
-            b.push(", ");
             b.push_bind(relation.to_version_id.unwrap_or(false));
-            b.push(", ");
             b.push_bind(relation.position.unwrap_or(false));
-            b.push(", ");
             b.push_bind(relation.verified.unwrap_or(false));
-            b.push(")");
         });
 
         query_builder.push(
             ") AS v(id, unset_from_space_id, unset_from_version_id, unset_to_space_id,
                    unset_to_version_id, unset_position, unset_verified)
-             WHERE relations.id = v.id",
+             WHERE relations.id = v.id AND relations.is_system = false",
         );
 
         query_builder.build().execute(&mut **tx).await?;
@@ -402,7 +403,7 @@ impl Storage {
         sqlx::query(
             "DELETE FROM relations WHERE (id, space_id) IN (
                 SELECT id, space_id FROM UNNEST($1::uuid[], $2::uuid[]) AS t(id, space_id)
-            )",
+            ) AND relations.is_system = false",
         )
         .bind(&ids)
         .bind(&space_ids)

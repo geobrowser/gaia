@@ -17,7 +17,6 @@ rdkafka = { version = "0.37", features = ["cmake-build", "ssl", "sasl"] }
 # Protobuf
 prost = "0.13.5"
 hermes-schema = { path = "../../../hermes-schema" }
-wire = { path = "../../../wire" }
 
 # GRC-20 encoding
 grc-20 = "0.4.1"

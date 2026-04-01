@@ -7,6 +7,7 @@
 export type {SearchClient} from "./client"
 export {OpenSearchClient} from "./opensearch"
 export type {
+	BoostOverrides,
 	SearchErrorType,
 	SearchQuery,
 	SearchResponse,

@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use rdkafka::admin::AdminClient;
 use rdkafka::client::DefaultClientContext;
-use tokio::task::JoinHandle;
 
 use crate::topology::CanonicalGraphState;
 use hermes_instrumentation::{error, info};
@@ -24,7 +23,12 @@ pub struct AppState {
     pub(crate) topology_state: CanonicalGraphState,
 }
 
-/// Start the HTTP server.
+/// Start the HTTP server on a dedicated OS thread with its own tokio runtime.
+///
+/// This ensures health probes always respond even when the main pipeline
+/// saturates the primary tokio runtime (e.g., during heavy bulk serialization
+/// or protobuf decoding). Without this, Kubernetes kills the pod for failing
+/// the liveness probe (exit code 137) even though the process is healthy.
 ///
 /// The server exposes:
 /// - `GET /healthz` - Liveness probe
@@ -37,7 +41,7 @@ pub fn start_http_server(
     kafka_admin: Arc<AdminClient<DefaultClientContext>>,
     topology_state: CanonicalGraphState,
     port: u16,
-) -> JoinHandle<()> {
+) -> std::thread::JoinHandle<()> {
     let state = AppState {
         provider,
         kafka_admin,
@@ -46,20 +50,27 @@ pub fn start_http_server(
 
     let app = health::routes().merge(topology::routes()).with_state(state);
 
-    tokio::spawn(async move {
-        let addr = format!("0.0.0.0:{}", port);
-        let listener = match tokio::net::TcpListener::bind(&addr).await {
-            Ok(listener) => listener,
-            Err(e) => {
-                error!(error = %e, addr = %addr, "Failed to bind HTTP server");
-                return;
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create health server tokio runtime");
+
+        rt.block_on(async move {
+            let addr = format!("0.0.0.0:{}", port);
+            let listener = match tokio::net::TcpListener::bind(&addr).await {
+                Ok(listener) => listener,
+                Err(e) => {
+                    error!(error = %e, addr = %addr, "Failed to bind HTTP server");
+                    return;
+                }
+            };
+
+            info!(addr = %addr, "HTTP server listening (dedicated thread)");
+
+            if let Err(e) = axum::serve(listener, app).await {
+                error!(error = %e, "HTTP server error");
             }
-        };
-
-        info!(addr = %addr, "HTTP server listening");
-
-        if let Err(e) = axum::serve(listener, app).await {
-            error!(error = %e, "HTTP server error");
-        }
+        });
     })
 }

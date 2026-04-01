@@ -10,6 +10,7 @@ hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
 hermes-kafka = { path = "../hermes-kafka" }
 indexer_utils = { path = "../indexer_utils" }
+sdk = { path = "../sdk" }
 
 # GRC-20 v2 binary format
 grc-20 = "0.4.1"
@@ -48,3 +49,7 @@ tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "test-uti
 [[test]]
 name = "e2e"
 path = "tests/e2e.rs"
+
+[[test]]
+name = "system_relations_integration"
+path = "tests/system_relations_integration.rs"

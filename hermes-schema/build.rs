@@ -21,13 +21,12 @@ fn main() -> Result<()> {
     //     "proto/topology.proto",
     //     "proto/voting.proto",
     // ];
-    // let proto_include = &["proto/", "../wire/proto/"];
+    // let proto_include = &["proto/"];
 
     // let mut config = prost_build::Config::new();
     // config.out_dir(&out_dir);
 
     // config
-    //     .extern_path(".grc20", "::wire::pb::grc20")
     //     .compile_protos(&protos, proto_include)
     //     .expect("Failed to compile protos");
 

@@ -136,7 +136,6 @@ When the executor submits a transaction, the proposal's `executed_at` stays NULL
 | Effect top-level timeout | 270s | Graceful shutdown — 20s margin for finalizers (DB disconnect) before K8s kills |
 | Per-proposal execution timeout | 30s | Prevents a single hung UserOperation from blocking the pipeline |
 | DB `connectionTimeoutMillis` | 5s | Fail fast if DB/PgBouncer unreachable |
-| DB `statement_timeout` | 30s | Cap on detection query (normally <100ms) |
 
 ### Performance
 

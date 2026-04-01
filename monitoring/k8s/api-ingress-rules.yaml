@@ -44,6 +44,24 @@ spec:
               )
             )
 
+        - record: api:ingress_p95_latency_seconds:2m
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[2m])
+              )
+            )
+
+        - record: api:ingress_p99_latency_seconds:2m
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[2m])
+              )
+            )
+
         - record: api:ingress_error_status_requests_per_second:rate5m
           expr: |
             sum by (status) (
