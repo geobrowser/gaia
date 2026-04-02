@@ -4,8 +4,8 @@
 
 use hermes_instrumentation::{debug, error, info, info_span, instrument, Instrument};
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -19,8 +19,8 @@ use search_indexer_repository::{
     SearchIndexProvider, UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreByDocRequest,
     UpdateEntityGlobalScoreRequest, UpdateEntityRequest, UpdateEntitySpaceScoreRequest,
     UpdateInCanonicalGraphByDocRequest, UpdateInCanonicalGraphRequest,
-    UpdateSpaceScoreByDocRequest, UpdateSpaceScoreRequest,
-    UpdateSpaceTopicEntityIdByDocRequest, UpdateSpaceTopicEntityIdRequest,
+    UpdateSpaceScoreByDocRequest, UpdateSpaceScoreRequest, UpdateSpaceTopicEntityIdByDocRequest,
+    UpdateSpaceTopicEntityIdRequest,
 };
 
 /// Loader that indexes documents into the search engine.
@@ -175,7 +175,10 @@ impl SearchLoader {
                 } => {
                     self.pending_operations
                         .push(EntityOperation::RemoveRelationByDoc(
-                            RemoveRelationByDocRequest { doc_id, relation_id },
+                            RemoveRelationByDocRequest {
+                                doc_id,
+                                relation_id,
+                            },
                         ));
                 }
                 ProcessedEvent::UpdateSpaceTopicEntityId {
@@ -233,10 +236,7 @@ impl SearchLoader {
         let operations: Vec<EntityOperation> = self.pending_operations.drain(..).collect();
         let count = operations.len();
 
-        info!(
-            ops = count,
-            "loader.batch.start — sending to OpenSearch"
-        );
+        info!(ops = count, "loader.batch.start — sending to OpenSearch");
         let load_start = Instant::now();
 
         let result = async { self.provider.bulk_operations(&operations).await }
@@ -1090,7 +1090,10 @@ mod tests {
             })
             .collect();
 
-        loader.load(events).await.expect("large batch should not fail");
+        loader
+            .load(events)
+            .await
+            .expect("large batch should not fail");
 
         assert_eq!(provider.get_operation_count(), 5000);
     }

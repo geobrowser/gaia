@@ -16,6 +16,7 @@ use crate::loader::SearchLoader;
 use crate::lookup::EntitySpaceLookup;
 use crate::orchestrator::{Orchestrator, OrchestratorConfig};
 use crate::processor::Processor;
+use crate::relation_map::{RelationMap, RelationMapConfig};
 use crate::topology::persistence as topology_persistence;
 use crate::topology::CanonicalGraphState;
 use crate::IndexingError;
@@ -62,6 +63,8 @@ pub struct Dependencies {
     pub kafka_admin: Arc<AdminClient<DefaultClientContext>>,
     /// Canonical graph topology state (shared with health server).
     pub topology_state: CanonicalGraphState,
+    /// Optional relation map for fast DeleteRelation lookups (for shutdown checkpoint).
+    pub relation_map: Option<Arc<RelationMap>>,
 }
 
 impl ConnectionMode {
@@ -245,12 +248,54 @@ impl Dependencies {
         // Initialize Postgres lookup for fast score indexing (optional)
         let entity_space_lookup = EntitySpaceLookup::from_env().await;
 
+        // Initialize relation map for fast DeleteRelation lookups (optional)
+        let relation_map = match RelationMap::open(RelationMapConfig::from_env()) {
+            Ok(rm) => {
+                let snapshot = rm.metrics_snapshot();
+                info!(
+                    db_path = %rm.config().db_path.display(),
+                    cache_size = rm.config().cache_size,
+                    db_size_mb = format!("{:.1}", snapshot.db_size_bytes as f64 / 1_048_576.0),
+                    sqlite_entries = rm.sqlite_count(),
+                    "Relation map initialized"
+                );
+
+                let rm = Arc::new(rm);
+
+                // Rebuild from Postgres if database was corrupt and needed recreation
+                if rm.needs_rebuild() {
+                    if let Some(ref lookup) = entity_space_lookup {
+                        info!("Relation map needs rebuild — loading from Postgres...");
+                        match rm.rebuild_from_postgres(lookup.pool()).await {
+                            Ok(count) => info!(count, "Relation map rebuilt from Postgres"),
+                            Err(e) => warn!(
+                                error = %e,
+                                "Failed to rebuild relation map from Postgres — will populate from incoming events"
+                            ),
+                        }
+                    } else {
+                        warn!("Relation map needs rebuild but no Postgres connection — will populate from incoming events");
+                    }
+                }
+
+                Some(rm)
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "Failed to initialize relation map — DeleteRelation will use Postgres/update_by_query fallback"
+                );
+                None
+            }
+        };
+
         // Initialize processor with pre-warmed space topic cache and topology state
         let processor = Processor::with_config(
             space_topic_cache,
             topology_state.clone(),
             sample_interval,
             entity_space_lookup,
+            relation_map.clone(),
         );
 
         // Wrap provider in Arc for sharing between loader and health checks
@@ -303,6 +348,7 @@ impl Dependencies {
             provider,
             kafka_admin,
             topology_state,
+            relation_map,
         })
     }
 

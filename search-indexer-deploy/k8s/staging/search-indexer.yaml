@@ -98,6 +98,11 @@ spec:
                   key: DATABASE_URL
             - name: DATABASE_MAX_CONNECTIONS
               value: "5"
+            # Relation map (SQLite-backed, for fast DeleteRelation lookups)
+            - name: RELATION_MAP_DB_PATH
+              value: "/data/relation_map.sqlite"
+            - name: RELATION_MAP_CACHE_SIZE
+              value: "500000"
             # Kafka consumer configuration
             - name: ENVIRONMENT
               value: "staging"

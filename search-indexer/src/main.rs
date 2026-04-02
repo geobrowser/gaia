@@ -93,7 +93,16 @@ async fn main() -> Result<(), IndexingError> {
     info!(port = http_port, "HTTP server started");
 
     // Run the orchestrator
-    match deps.orchestrator.run().await {
+    let result = deps.orchestrator.run().await;
+
+    // Clean shutdown: flush relation map SQLite WAL and log final metrics
+    if let Some(ref rm) = deps.relation_map {
+        rm.checkpoint();
+        rm.log_heartbeat();
+        info!("Relation map flushed to disk");
+    }
+
+    match result {
         Ok(()) => {
             info!("Search indexer completed successfully");
             Ok(())
