@@ -1407,9 +1407,9 @@ impl Processor {
                     }
 
                     // Try local relation map first (LRU cache + SQLite).
-                    // We do NOT remove the entry here — if the loader fails and the
-                    // event is NACKed/replayed, the mapping must still be available.
-                    // Stale entries are harmless and evicted naturally by the LRU.
+                    // We do NOT remove the entry here — removal happens in the loader
+                    // after a fully successful bulk write (summary.failed == 0).
+                    // This ensures the mapping survives for retry on NACK/replay.
                     if let Some(ref rm) = self.relation_map {
                         if let Some((entity_id, space_id)) = rm.lookup(&relation_id) {
                             debug!(
