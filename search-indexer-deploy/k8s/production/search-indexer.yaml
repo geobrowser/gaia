@@ -95,6 +95,11 @@ spec:
                   key: DATABASE_URL
             - name: DATABASE_MAX_CONNECTIONS
               value: "5"
+            # Relation map (SQLite-backed, for fast DeleteRelation lookups)
+            - name: RELATION_MAP_DB_PATH
+              value: "/data/relation_map.sqlite"
+            - name: RELATION_MAP_CACHE_SIZE
+              value: "500000"
             # Kafka consumer configuration
             - name: ENVIRONMENT
               value: "production"
@@ -167,7 +172,7 @@ spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 1Gi
+            storage: 2Gi
 ---
 # Optional: Secret for sensitive configuration
 # Create with: kubectl create secret generic search-indexer-secrets \

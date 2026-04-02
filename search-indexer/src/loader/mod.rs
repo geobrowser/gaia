@@ -4,8 +4,8 @@
 
 use hermes_instrumentation::{debug, error, info, info_span, instrument, Instrument};
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -14,13 +14,14 @@ use crate::errors::IngestError;
 use crate::metrics::SearchIndexerMetrics;
 use crate::orchestrator::{BatchSource, ProcessedBatch};
 use crate::processor::ProcessedEvent;
+use crate::relation_map::RelationMap;
 use search_indexer_repository::{
     EntityOperation, RelationData, RemoveRelationByDocRequest, RemoveRelationData,
     SearchIndexProvider, UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreByDocRequest,
     UpdateEntityGlobalScoreRequest, UpdateEntityRequest, UpdateEntitySpaceScoreRequest,
     UpdateInCanonicalGraphByDocRequest, UpdateInCanonicalGraphRequest,
-    UpdateSpaceScoreByDocRequest, UpdateSpaceScoreRequest,
-    UpdateSpaceTopicEntityIdByDocRequest, UpdateSpaceTopicEntityIdRequest,
+    UpdateSpaceScoreByDocRequest, UpdateSpaceScoreRequest, UpdateSpaceTopicEntityIdByDocRequest,
+    UpdateSpaceTopicEntityIdRequest,
 };
 
 /// Loader that indexes documents into the search engine.
@@ -33,6 +34,10 @@ pub struct SearchLoader {
     provider: Arc<dyn SearchIndexProvider>,
     /// All pending operations, maintained in order for correct sequencing
     pending_operations: Vec<EntityOperation>,
+    /// Relation IDs to clean up from the relation map after successful bulk operation.
+    pending_relation_removals: Vec<uuid::Uuid>,
+    /// Optional relation map for post-ack cleanup of DeleteRelation entries.
+    relation_map: Option<Arc<RelationMap>>,
 }
 
 impl SearchLoader {
@@ -41,6 +46,21 @@ impl SearchLoader {
         Self {
             provider,
             pending_operations: Vec::new(),
+            pending_relation_removals: Vec::new(),
+            relation_map: None,
+        }
+    }
+
+    /// Create a new search loader with a relation map for post-ack cleanup.
+    pub fn with_relation_map(
+        provider: Arc<dyn SearchIndexProvider>,
+        relation_map: Option<Arc<RelationMap>>,
+    ) -> Self {
+        Self {
+            provider,
+            pending_operations: Vec::new(),
+            pending_relation_removals: Vec::new(),
+            relation_map,
         }
     }
 
@@ -173,9 +193,18 @@ impl SearchLoader {
                     doc_id,
                     relation_id,
                 } => {
+                    // Track for post-ack cleanup from relation map
+                    if self.relation_map.is_some() {
+                        if let Ok(rid) = uuid::Uuid::parse_str(&relation_id) {
+                            self.pending_relation_removals.push(rid);
+                        }
+                    }
                     self.pending_operations
                         .push(EntityOperation::RemoveRelationByDoc(
-                            RemoveRelationByDocRequest { doc_id, relation_id },
+                            RemoveRelationByDocRequest {
+                                doc_id,
+                                relation_id,
+                            },
                         ));
                 }
                 ProcessedEvent::UpdateSpaceTopicEntityId {
@@ -233,10 +262,7 @@ impl SearchLoader {
         let operations: Vec<EntityOperation> = self.pending_operations.drain(..).collect();
         let count = operations.len();
 
-        info!(
-            ops = count,
-            "loader.batch.start — sending to OpenSearch"
-        );
+        info!(ops = count, "loader.batch.start — sending to OpenSearch");
         let load_start = Instant::now();
 
         let result = async { self.provider.bulk_operations(&operations).await }
@@ -281,9 +307,28 @@ impl SearchLoader {
                         "loader.batch.done — OK"
                     );
                 }
+
+                // Only clean up relation map entries when the entire batch succeeded.
+                // Partial failures (summary.failed > 0) trigger a NACK and replay,
+                // so mappings must be retained for the retry.
+                if summary.failed == 0 && !self.pending_relation_removals.is_empty() {
+                    if let Some(ref rm) = self.relation_map {
+                        for rid in self.pending_relation_removals.drain(..) {
+                            rm.remove(&rid);
+                        }
+                    } else {
+                        self.pending_relation_removals.clear();
+                    }
+                } else {
+                    self.pending_relation_removals.clear();
+                }
+
                 Ok(vec![summary])
             }
             Err(e) => {
+                // Don't remove from relation map on failure — entries stay for retry
+                self.pending_relation_removals.clear();
+
                 error!(
                     error = %e,
                     ops = count,
@@ -1090,7 +1135,10 @@ mod tests {
             })
             .collect();
 
-        loader.load(events).await.expect("large batch should not fail");
+        loader
+            .load(events)
+            .await
+            .expect("large batch should not fail");
 
         assert_eq!(provider.get_operation_count(), 5000);
     }

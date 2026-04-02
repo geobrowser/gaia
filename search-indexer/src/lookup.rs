@@ -37,6 +37,11 @@ impl EntitySpaceLookup {
         Self { pool }
     }
 
+    /// Get a reference to the underlying Postgres pool.
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
     /// Connect to Postgres and create a lookup instance.
     ///
     /// Returns `None` if `DATABASE_URL` is not set (graceful degradation).
@@ -199,15 +204,17 @@ impl EntitySpaceLookup {
             let start = std::time::Instant::now();
             let chunk_vec: Vec<Uuid> = chunk.to_vec();
 
-            let rows = sqlx::query(
-                "SELECT id, entity_id, space_id FROM relations WHERE id = ANY($1)",
-            )
-            .bind(&chunk_vec)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| {
-                IngestError::parse(format!("Postgres lookup failed for relation_ids: {}", e))
-            })?;
+            let rows =
+                sqlx::query("SELECT id, entity_id, space_id FROM relations WHERE id = ANY($1)")
+                    .bind(&chunk_vec)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| {
+                        IngestError::parse(format!(
+                            "Postgres lookup failed for relation_ids: {}",
+                            e
+                        ))
+                    })?;
 
             let elapsed_ms = start.elapsed().as_millis();
             let rows_found = rows.len();
