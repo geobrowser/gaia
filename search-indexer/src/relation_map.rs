@@ -14,7 +14,23 @@ use std::sync::Mutex;
 use hermes_instrumentation::{error, info, warn};
 use lru::LruCache;
 use rusqlite::{params, Connection, OpenFlags};
+use thiserror::Error;
 use uuid::Uuid;
+
+/// Errors from the relation map module.
+#[derive(Debug, Error)]
+pub enum RelationMapError {
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Lock poisoned: {0}")]
+    LockPoisoned(String),
+    #[error("Schema migration failed: {0}")]
+    Migration(String),
+    #[error("Postgres rebuild failed: {0}")]
+    Rebuild(String),
+}
 
 /// Current schema version. Increment when making breaking changes.
 const SCHEMA_VERSION: i64 = 1;
@@ -92,11 +108,10 @@ pub struct RelationMap {
 impl RelationMap {
     /// Open or create the SQLite database. Enables WAL mode, validates schema,
     /// warms the LRU cache. Returns error only if SQLite is completely unusable.
-    pub fn open(config: RelationMapConfig) -> Result<Self, String> {
+    pub fn open(config: RelationMapConfig) -> Result<Self, RelationMapError> {
         // Ensure parent directory exists
         if let Some(parent) = config.db_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create directory {}: {}", parent.display(), e))?;
+            std::fs::create_dir_all(parent)?;
         }
 
         let (conn, needs_rebuild) = match Self::open_and_validate(&config.db_path) {
@@ -109,8 +124,7 @@ impl RelationMap {
                 );
                 // Delete corrupt file and recreate
                 let _ = std::fs::remove_file(&config.db_path);
-                let conn = Self::create_fresh(&config.db_path)
-                    .map_err(|e| format!("Failed to create fresh database: {}", e))?;
+                let conn = Self::create_fresh(&config.db_path)?;
                 (conn, true)
             }
         };
@@ -144,52 +158,41 @@ impl RelationMap {
     }
 
     /// Open an existing database, run integrity check, ensure schema is current.
-    fn open_and_validate(path: &Path) -> Result<Connection, String> {
+    fn open_and_validate(path: &Path) -> Result<Connection, RelationMapError> {
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
-        )
-        .map_err(|e| format!("Failed to open SQLite: {}", e))?;
+        )?;
 
-        // Enable WAL mode for concurrent reads during writes
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(|e| format!("Failed to set WAL mode: {}", e))?;
-
-        // NORMAL synchronous is safe with WAL and much faster than FULL
-        conn.pragma_update(None, "synchronous", "NORMAL")
-            .map_err(|e| format!("Failed to set synchronous mode: {}", e))?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
 
         // Integrity check (limited to first result for speed)
-        let integrity: String = conn
-            .pragma_query_value(None, "integrity_check", |row| row.get(0))
-            .map_err(|e| format!("Integrity check query failed: {}", e))?;
-
+        let integrity: String =
+            conn.pragma_query_value(None, "integrity_check", |row| row.get(0))?;
         if integrity != "ok" {
-            return Err(format!("Integrity check failed: {}", integrity));
+            return Err(RelationMapError::Migration(format!(
+                "Integrity check failed: {}",
+                integrity
+            )));
         }
 
-        // Create tables if needed and handle migrations
         Self::ensure_schema(&conn)?;
 
         Ok(conn)
     }
 
     /// Create a fresh database with the current schema.
-    fn create_fresh(path: &Path) -> Result<Connection, String> {
-        let conn = Connection::open(path).map_err(|e| format!("Failed to create SQLite: {}", e))?;
-
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(|e| format!("Failed to set WAL mode: {}", e))?;
-        conn.pragma_update(None, "synchronous", "NORMAL")
-            .map_err(|e| format!("Failed to set synchronous mode: {}", e))?;
-
+    fn create_fresh(path: &Path) -> Result<Connection, RelationMapError> {
+        let conn = Connection::open(path)?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         Self::ensure_schema(&conn)?;
-
         Ok(conn)
     }
 
     /// Create tables and set schema version.
-    fn ensure_schema(conn: &Connection) -> Result<(), String> {
+    fn ensure_schema(conn: &Connection) -> Result<(), RelationMapError> {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
              CREATE TABLE IF NOT EXISTS relation_map (
@@ -200,10 +203,8 @@ impl RelationMap {
              );
              CREATE INDEX IF NOT EXISTS idx_relation_map_created_at
                  ON relation_map(created_at DESC);",
-        )
-        .map_err(|e| format!("Failed to create schema: {}", e))?;
+        )?;
 
-        // Check/set version
         let version: Option<i64> = conn
             .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
                 row.get(0)
@@ -215,16 +216,13 @@ impl RelationMap {
                 conn.execute(
                     "INSERT INTO schema_version (version) VALUES (?1)",
                     params![SCHEMA_VERSION],
-                )
-                .map_err(|e| format!("Failed to set schema version: {}", e))?;
+                )?;
             }
             Some(v) if v < SCHEMA_VERSION => {
-                // Future migrations go here
                 conn.execute(
                     "UPDATE schema_version SET version = ?1",
                     params![SCHEMA_VERSION],
-                )
-                .map_err(|e| format!("Failed to update schema version: {}", e))?;
+                )?;
                 info!(
                     from_version = v,
                     to_version = SCHEMA_VERSION,
@@ -238,32 +236,28 @@ impl RelationMap {
     }
 
     /// Load the most recent entries from SQLite into the LRU cache.
-    fn warm_cache(&mut self) -> Result<usize, String> {
+    fn warm_cache(&mut self) -> Result<usize, RelationMapError> {
         let db = self
             .db
             .lock()
-            .map_err(|e| format!("Lock poisoned: {}", e))?;
-        let mut stmt = db
-            .prepare(
-                "SELECT relation_id, entity_id, space_id FROM relation_map
+            .map_err(|e| RelationMapError::LockPoisoned(e.to_string()))?;
+        let mut stmt = db.prepare(
+            "SELECT relation_id, entity_id, space_id FROM relation_map
                  ORDER BY created_at DESC LIMIT ?1",
-            )
-            .map_err(|e| format!("Failed to prepare warm query: {}", e))?;
+        )?;
 
         let mut cache = self
             .cache
             .lock()
-            .map_err(|e| format!("Lock poisoned: {}", e))?;
+            .map_err(|e| RelationMapError::LockPoisoned(e.to_string()))?;
         let mut count = 0usize;
 
-        let rows = stmt
-            .query_map(params![self.config.cache_size as i64], |row| {
-                let rid: Vec<u8> = row.get(0)?;
-                let eid: Vec<u8> = row.get(1)?;
-                let sid: Vec<u8> = row.get(2)?;
-                Ok((rid, eid, sid))
-            })
-            .map_err(|e| format!("Failed to query warm data: {}", e))?;
+        let rows = stmt.query_map(params![self.config.cache_size as i64], |row| {
+            let rid: Vec<u8> = row.get(0)?;
+            let eid: Vec<u8> = row.get(1)?;
+            let sid: Vec<u8> = row.get(2)?;
+            Ok((rid, eid, sid))
+        })?;
 
         for row in rows {
             match row {
@@ -458,7 +452,10 @@ impl RelationMap {
 
     /// Rebuild the SQLite database from a Postgres connection pool.
     /// Uses cursor-based pagination to avoid loading the entire table into memory.
-    pub async fn rebuild_from_postgres(&self, pool: &sqlx::PgPool) -> Result<u64, String> {
+    pub async fn rebuild_from_postgres(
+        &self,
+        pool: &sqlx::PgPool,
+    ) -> Result<u64, RelationMapError> {
         const BATCH_SIZE: i64 = 10_000;
 
         info!("Rebuilding relation map from Postgres (batch_size={BATCH_SIZE})...");
@@ -486,23 +483,21 @@ impl RelationMap {
                     .await
                 }
             }
-            .map_err(|e| format!("Postgres query failed: {}", e))?;
+            .map_err(|e| RelationMapError::Rebuild(format!("Postgres query failed: {}", e)))?;
 
             let batch_len = rows.len() as u64;
             if batch_len == 0 {
                 break;
             }
 
-            // Update cursor to last row's id
             last_id = rows.last().map(|(id, _, _)| *id);
 
             let db = self
                 .db
                 .lock()
-                .map_err(|e| format!("Lock poisoned: {}", e))?;
+                .map_err(|e| RelationMapError::LockPoisoned(e.to_string()))?;
 
-            db.execute_batch("BEGIN")
-                .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+            db.execute_batch("BEGIN")?;
 
             for (relation_id, entity_id, space_id) in &rows {
                 if let Err(e) = db.execute(
@@ -518,8 +513,7 @@ impl RelationMap {
                 }
             }
 
-            db.execute_batch("COMMIT")
-                .map_err(|e| format!("Failed to commit rebuild: {}", e))?;
+            db.execute_batch("COMMIT")?;
 
             total += batch_len;
 
@@ -551,17 +545,19 @@ impl RelationMap {
             0.0
         };
 
+        let db_size_mb = m.db_size_bytes as f64 / 1_048_576.0;
+
         info!(
             cache_hits = m.cache_hits,
             cache_misses = m.cache_misses,
-            cache_hit_rate = format!("{:.1}%", hit_rate),
+            cache_hit_rate_pct = hit_rate,
             cache_len = m.cache_len,
             sqlite_hits = m.sqlite_hits,
             sqlite_misses = m.sqlite_misses,
             sqlite_errors = m.sqlite_errors,
             inserts = m.inserts,
             removes = m.removes,
-            db_size_mb = format!("{:.1}", m.db_size_bytes as f64 / 1_048_576.0),
+            db_size_mb = db_size_mb,
             "Relation map heartbeat"
         );
     }

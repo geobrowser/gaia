@@ -2073,11 +2073,12 @@ async fn test_delete_relation_uses_fast_path_via_relation_map() {
         all_ops
     );
 
-    // The relation should be removed from the map after delete
+    // The mapping should still be in the map (not removed until LRU eviction)
+    // to support retry after loader failure.
     assert_eq!(
         rm.lookup(&relation_id),
-        None,
-        "Relation map should be cleaned up after DeleteRelation"
+        Some((entity_id, space_id)),
+        "Relation map should retain mapping for retry safety"
     );
 }
 

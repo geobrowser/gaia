@@ -252,10 +252,11 @@ impl Dependencies {
         let relation_map = match RelationMap::open(RelationMapConfig::from_env()) {
             Ok(rm) => {
                 let snapshot = rm.metrics_snapshot();
+                let db_size_mb = snapshot.db_size_bytes as f64 / 1_048_576.0;
                 info!(
                     db_path = %rm.config().db_path.display(),
                     cache_size = rm.config().cache_size,
-                    db_size_mb = format!("{:.1}", snapshot.db_size_bytes as f64 / 1_048_576.0),
+                    db_size_mb = db_size_mb,
                     sqlite_entries = rm.sqlite_count(),
                     "Relation map initialized"
                 );

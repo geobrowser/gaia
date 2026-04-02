@@ -1406,10 +1406,12 @@ impl Processor {
                         );
                     }
 
-                    // Try local relation map first (LRU cache + SQLite)
+                    // Try local relation map first (LRU cache + SQLite).
+                    // We do NOT remove the entry here — if the loader fails and the
+                    // event is NACKed/replayed, the mapping must still be available.
+                    // Stale entries are harmless and evicted naturally by the LRU.
                     if let Some(ref rm) = self.relation_map {
                         if let Some((entity_id, space_id)) = rm.lookup(&relation_id) {
-                            rm.remove(&relation_id);
                             debug!(
                                 relation_id = %relation_id,
                                 entity_id = %entity_id,
