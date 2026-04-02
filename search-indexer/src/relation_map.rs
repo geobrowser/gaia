@@ -457,44 +457,85 @@ impl RelationMap {
     }
 
     /// Rebuild the SQLite database from a Postgres connection pool.
-    /// Loads all relations in batches and inserts into SQLite.
+    /// Uses cursor-based pagination to avoid loading the entire table into memory.
     pub async fn rebuild_from_postgres(&self, pool: &sqlx::PgPool) -> Result<u64, String> {
-        info!("Rebuilding relation map from Postgres...");
+        const BATCH_SIZE: i64 = 10_000;
 
-        let rows = sqlx::query_as::<_, (Uuid, Uuid, Uuid)>(
-            "SELECT id, entity_id, space_id FROM relations",
-        )
-        .fetch_all(pool)
-        .await
-        .map_err(|e| format!("Postgres query failed: {}", e))?;
+        info!("Rebuilding relation map from Postgres (batch_size={BATCH_SIZE})...");
 
-        let total = rows.len() as u64;
+        let mut total: u64 = 0;
+        let mut last_id: Option<Uuid> = None;
 
-        let db = self
-            .db
-            .lock()
-            .map_err(|e| format!("Lock poisoned: {}", e))?;
+        loop {
+            let rows: Vec<(Uuid, Uuid, Uuid)> = match last_id {
+                None => {
+                    sqlx::query_as(
+                        "SELECT id, entity_id, space_id FROM relations ORDER BY id LIMIT $1",
+                    )
+                    .bind(BATCH_SIZE)
+                    .fetch_all(pool)
+                    .await
+                }
+                Some(cursor) => {
+                    sqlx::query_as(
+                        "SELECT id, entity_id, space_id FROM relations WHERE id > $1 ORDER BY id LIMIT $2",
+                    )
+                    .bind(cursor)
+                    .bind(BATCH_SIZE)
+                    .fetch_all(pool)
+                    .await
+                }
+            }
+            .map_err(|e| format!("Postgres query failed: {}", e))?;
 
-        // Use a transaction for bulk insert performance
-        db.execute_batch("BEGIN")
-            .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+            let batch_len = rows.len() as u64;
+            if batch_len == 0 {
+                break;
+            }
 
-        for (relation_id, entity_id, space_id) in &rows {
-            if let Err(e) = db.execute(
-                "INSERT OR REPLACE INTO relation_map (relation_id, entity_id, space_id)
-                 VALUES (?1, ?2, ?3)",
-                params![
-                    relation_id.as_bytes().as_slice(),
-                    entity_id.as_bytes().as_slice(),
-                    space_id.as_bytes().as_slice(),
-                ],
-            ) {
-                warn!(error = %e, "Failed to insert during rebuild");
+            // Update cursor to last row's id
+            last_id = rows.last().map(|(id, _, _)| *id);
+
+            let db = self
+                .db
+                .lock()
+                .map_err(|e| format!("Lock poisoned: {}", e))?;
+
+            db.execute_batch("BEGIN")
+                .map_err(|e| format!("Failed to begin transaction: {}", e))?;
+
+            for (relation_id, entity_id, space_id) in &rows {
+                if let Err(e) = db.execute(
+                    "INSERT OR REPLACE INTO relation_map (relation_id, entity_id, space_id)
+                     VALUES (?1, ?2, ?3)",
+                    params![
+                        relation_id.as_bytes().as_slice(),
+                        entity_id.as_bytes().as_slice(),
+                        space_id.as_bytes().as_slice(),
+                    ],
+                ) {
+                    warn!(error = %e, "Failed to insert during rebuild");
+                }
+            }
+
+            db.execute_batch("COMMIT")
+                .map_err(|e| format!("Failed to commit rebuild: {}", e))?;
+
+            total += batch_len;
+
+            if total.is_multiple_of(100_000) || batch_len < BATCH_SIZE as u64 {
+                info!(
+                    progress = total,
+                    batch = batch_len,
+                    "Relation map rebuild progress"
+                );
+            }
+
+            // Last batch was smaller than limit — we're done
+            if batch_len < BATCH_SIZE as u64 {
+                break;
             }
         }
-
-        db.execute_batch("COMMIT")
-            .map_err(|e| format!("Failed to commit rebuild: {}", e))?;
 
         info!(total = total, "Relation map rebuilt from Postgres");
 
