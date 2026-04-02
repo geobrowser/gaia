@@ -303,7 +303,7 @@ impl Dependencies {
         let provider = Arc::new(search_provider);
 
         // Initialize loader with search provider
-        let loader = SearchLoader::new(provider.clone());
+        let loader = SearchLoader::with_relation_map(provider.clone(), relation_map.clone());
 
         // Initialize Kafka consumer for score updates
         let scores_consumer =
