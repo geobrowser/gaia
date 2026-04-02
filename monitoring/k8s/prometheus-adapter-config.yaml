@@ -96,13 +96,13 @@ data:
         metricsQuery: |
           1 + (
             clamp_min(
-              scalar(kube_deployment_spec_replicas{namespace="api",deployment="api"})
+              kube_deployment_spec_replicas{namespace="api",deployment="api"}
               -
-              scalar(kube_deployment_status_replicas_available{namespace="api",deployment="api"}),
+              kube_deployment_status_replicas_available{namespace="api",deployment="api"},
               0
             )
             /
-            clamp_min(scalar(kube_deployment_spec_replicas{namespace="api",deployment="api"}), 1)
+            clamp_min(kube_deployment_spec_replicas{namespace="api",deployment="api"}, 1)
           )
         resources:
           namespaced: false
