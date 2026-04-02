@@ -172,7 +172,7 @@ spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 1Gi
+            storage: 2Gi
 ---
 # Optional: Secret for sensitive configuration
 # Create with: kubectl create secret generic search-indexer-secrets \
