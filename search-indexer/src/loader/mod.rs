@@ -308,9 +308,10 @@ impl SearchLoader {
                     );
                 }
 
-                // Clean up relation map entries after successful OpenSearch write.
-                // This ensures entries are only removed after durable persistence.
-                if !self.pending_relation_removals.is_empty() {
+                // Only clean up relation map entries when the entire batch succeeded.
+                // Partial failures (summary.failed > 0) trigger a NACK and replay,
+                // so mappings must be retained for the retry.
+                if summary.failed == 0 && !self.pending_relation_removals.is_empty() {
                     if let Some(ref rm) = self.relation_map {
                         for rid in self.pending_relation_removals.drain(..) {
                             rm.remove(&rid);
@@ -318,6 +319,8 @@ impl SearchLoader {
                     } else {
                         self.pending_relation_removals.clear();
                     }
+                } else {
+                    self.pending_relation_removals.clear();
                 }
 
                 Ok(vec![summary])
