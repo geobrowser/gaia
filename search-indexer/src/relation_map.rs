@@ -492,15 +492,15 @@ impl RelationMap {
 
             last_id = rows.last().map(|(id, _, _)| *id);
 
-            let db = self
+            let mut db = self
                 .db
                 .lock()
                 .map_err(|e| RelationMapError::LockPoisoned(e.to_string()))?;
 
-            db.execute_batch("BEGIN")?;
+            let tx = db.transaction()?;
 
             for (relation_id, entity_id, space_id) in &rows {
-                if let Err(e) = db.execute(
+                if let Err(e) = tx.execute(
                     "INSERT OR REPLACE INTO relation_map (relation_id, entity_id, space_id)
                      VALUES (?1, ?2, ?3)",
                     params![
@@ -513,7 +513,7 @@ impl RelationMap {
                 }
             }
 
-            db.execute_batch("COMMIT")?;
+            tx.commit()?;
 
             total += batch_len;
 
