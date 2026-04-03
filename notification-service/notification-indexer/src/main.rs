@@ -262,11 +262,13 @@ async fn async_main() -> Result<(), IndexerError> {
 
                 let pool_size = storage.pool().size();
                 let pool_idle = storage.pool().num_idle();
+                let consumer_lag = consumer.consumer_lag().unwrap_or(-1);
 
                 info!(
                     processed = processed_count,
                     errors = error_count,
                     outbox_total = outbox_total,
+                    consumer_lag = consumer_lag,
                     pool_size = pool_size,
                     pool_idle = pool_idle,
                     "Heartbeat"
