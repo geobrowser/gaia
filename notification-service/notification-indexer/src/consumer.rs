@@ -103,36 +103,6 @@ impl KafkaConsumer {
         Ok(())
     }
 
-    /// Get the consumer lag (high watermark - committed offset) for the subscribed topic.
-    /// Returns None if the lag cannot be determined.
-    pub fn consumer_lag(&self) -> Option<i64> {
-        use rdkafka::consumer::Consumer;
-
-        // Get the committed offset for partition 0
-        let mut committed_tpl = TopicPartitionList::new();
-        committed_tpl.add_partition(&self.topic, 0);
-        let committed = self
-            .consumer
-            .committed_offsets(committed_tpl, std::time::Duration::from_secs(5))
-            .ok()?;
-
-        let committed_offset =
-            committed
-                .find_partition(&self.topic, 0)
-                .and_then(|p| match p.offset() {
-                    rdkafka::Offset::Offset(o) => Some(o),
-                    _ => None,
-                })?;
-
-        // Get the high watermark (latest offset) for partition 0
-        let (_, high_watermark) = self
-            .consumer
-            .fetch_watermarks(&self.topic, 0, std::time::Duration::from_secs(5))
-            .ok()?;
-
-        Some((high_watermark - committed_offset).max(0))
-    }
-
     /// Flush any pending async offset commits synchronously.
     ///
     /// Called during graceful shutdown to ensure all successfully processed

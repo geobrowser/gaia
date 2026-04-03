@@ -19,6 +19,7 @@ use notification_indexer::consumer::{
     get_event_type, parse_proposal_created, parse_proposal_executed,
     parse_proposal_settings_updated, parse_proposal_updated, parse_proposal_voted, KafkaConsumer,
 };
+use notification_indexer::consumer_lag::LagMonitor;
 use notification_indexer::error::IndexerError;
 use notification_indexer::models::{
     build_rejection_event, handle_proposal_created, handle_proposal_executed,
@@ -137,6 +138,29 @@ async fn async_main() -> Result<(), IndexerError> {
     // Initialize Kafka consumer
     let consumer = KafkaConsumer::new(&kafka_broker, &kafka_group_id)?;
     consumer.subscribe()?;
+
+    // Start background lag monitor (dedicated thread, never blocks async runtime)
+    let prefix = hermes_kafka::get_topic_prefix();
+    let governance_topic = format!("{}space.governance", prefix);
+    let lag_poll_secs: u64 = env::var("HEARTBEAT_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+    let lag_monitor = match LagMonitor::start(
+        &kafka_broker,
+        &kafka_group_id,
+        governance_topic,
+        lag_poll_secs,
+    ) {
+        Ok(m) => {
+            info!("Lag monitor started");
+            Some(m)
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to start lag monitor — heartbeat will report lag=-1");
+            None
+        }
+    };
 
     // Set up shutdown signal
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
@@ -262,7 +286,7 @@ async fn async_main() -> Result<(), IndexerError> {
 
                 let pool_size = storage.pool().size();
                 let pool_idle = storage.pool().num_idle();
-                let consumer_lag = consumer.consumer_lag().unwrap_or(-1);
+                let consumer_lag = lag_monitor.as_ref().map_or(-1, |m| m.get());
 
                 info!(
                     processed = processed_count,
