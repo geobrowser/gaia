@@ -365,6 +365,13 @@
       "when": 1774560952538,
       "tag": "0051_next_firestar",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1774560952539,
+      "tag": "0052_complete_captain_cross",
+      "breakpoints": true
     }
   ]
 }

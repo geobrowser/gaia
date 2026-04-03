@@ -1,0 +1,75 @@
+name: Deploy Delivery Worker (Production)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'notification-service/delivery-worker/**'
+      - 'notification-service/deployment/production/delivery-worker.yaml'
+      - 'notification-service/deployment/production/namespace.yaml'
+      - '.github/workflows/delivery-worker-deploy.yml'
+
+concurrency:
+  group: delivery-worker-production
+  cancel-in-progress: true
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: delivery-worker
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@6374d029dfd5f449281f186d65663779c706c994 # v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -f notification-service/delivery-worker/Dockerfile .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f notification-service/deployment/production/namespace.yaml
+          # Update image tag to use SHA and apply
+          sed -i 's|image: registry.digitalocean.com/geo/delivery-worker:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' notification-service/deployment/production/delivery-worker.yaml
+          kubectl apply -f notification-service/deployment/production/delivery-worker.yaml
+
+      - name: Restart deployment to pick up new image
+        run: |
+          kubectl rollout restart deployment/delivery-worker -n notifications
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/delivery-worker -n notifications --timeout=120s
+
+      - name: Show deployment status
+        run: |
+          echo "=== Delivery Worker Deployment ==="
+          kubectl get deployment delivery-worker -n notifications
+          echo ""
+          echo "=== Delivery Worker Pods ==="
+          kubectl get pods -n notifications -l app=delivery-worker
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n notifications --sort-by='.lastTimestamp' | grep delivery-worker | tail -10 || true

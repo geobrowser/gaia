@@ -1,0 +1,910 @@
+//! End-to-end test runner for the notification service.
+//!
+//! Tests three editor-count scenarios:
+//! - Space with 0 editors: events produce zero webhook calls
+//! - Space with 1 editor: events produce 1 × webhooks calls
+//! - Space with 3 editors: all 6 event types produce 3 × webhooks calls each
+//!
+//! Steps:
+//! 1. Starts a mock webhook server
+//! 2. Seeds the database (webhooks, editors across 3 spaces, expired proposals)
+//! 3. Produces governance events to Kafka for all 3 spaces
+//! 4. Waits for expected webhook calls
+//! 5. Verifies correctness, fan-out counts, and absence of false positives
+
+use std::collections::HashMap;
+use std::env;
+use std::time::Duration;
+
+use axum::{
+    body::Bytes,
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    routing::post,
+    Router,
+};
+use hmac::{Hmac, Mac};
+use prost::Message;
+use rdkafka::config::ClientConfig;
+use rdkafka::message::{Header, OwnedHeaders};
+use rdkafka::producer::{FutureProducer, FutureRecord};
+use sha2::Sha256;
+use sqlx::PgPool;
+use tokio::sync::mpsc;
+use uuid::Uuid;
+
+type HmacSha256 = Hmac<Sha256>;
+
+// ---------------------------------------------------------------------------
+// Test fixtures
+// ---------------------------------------------------------------------------
+
+// Space with 3 editors (full test — all 6 event types)
+const SPACE_3E_BYTES: [u8; 16] = [0x01; 16];
+const EDITOR_A_BYTES: [u8; 16] = [0xA0; 16];
+const EDITOR_B_BYTES: [u8; 16] = [0xB0; 16];
+const EDITOR_C_BYTES: [u8; 16] = [0xC0; 16];
+
+// Space with 1 editor (PROPOSAL_CREATED only)
+const SPACE_1E_BYTES: [u8; 16] = [0x11; 16];
+const EDITOR_SOLO_BYTES: [u8; 16] = [0xD0; 16];
+
+// Space with 0 editors (PROPOSAL_CREATED only — expect zero calls)
+const SPACE_0E_BYTES: [u8; 16] = [0x22; 16];
+
+const PROPOSER_ID_BYTES: [u8; 16] = [0x02; 16];
+const VOTER_ID_BYTES: [u8; 16] = [0x0A; 16];
+
+// Proposal IDs for 3-editor space (one per on-chain event type + rejection)
+const PROP_3E_CREATED_BYTES: [u8; 16] = [0x03; 16];
+const PROP_3E_UPDATED_BYTES: [u8; 16] = [0x06; 16];
+const PROP_3E_VOTED_BYTES: [u8; 16] = [0x07; 16];
+const PROP_3E_EXECUTED_BYTES: [u8; 16] = [0x04; 16];
+const PROP_3E_SETTINGS_BYTES: [u8; 16] = [0x08; 16];
+const PROP_3E_REJECTED_BYTES: [u8; 16] = [0x05; 16];
+
+// Proposal IDs for 1-editor and 0-editor spaces
+const PROP_1E_CREATED_BYTES: [u8; 16] = [0x31; 16];
+const PROP_0E_CREATED_BYTES: [u8; 16] = [0x32; 16];
+
+const GOVERNANCE_TOPIC: &str = "space.governance";
+const NUM_WEBHOOKS: usize = 3;
+
+// Expected calls:
+// 3-editor space: 6 event types × 3 editors × 3 webhooks = 54
+// 1-editor space: 1 event type  × 1 editor  × 3 webhooks = 3
+// 0-editor space: 1 event type  × 0 editors × 3 webhooks = 0
+const EXPECTED_CALLS: usize = 54 + 3;
+
+const ALL_EVENT_TYPES: &[&str] = &[
+    "proposal_created",
+    "proposal_updated",
+    "proposal_voted",
+    "proposal_executed",
+    "proposal_settings_updated",
+    "proposal_rejected",
+];
+
+// ---------------------------------------------------------------------------
+// Webhook call capture
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+struct WebhookCall {
+    body: serde_json::Value,
+    raw_body: Vec<u8>,
+    signature: String,
+    idempotency_key: String,
+}
+
+async fn webhook_handler(
+    State(tx): State<mpsc::UnboundedSender<WebhookCall>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let signature = headers
+        .get("x-geo-signature")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let body_json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    let idempotency_key = body_json["idempotency_key"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    tx.send(WebhookCall {
+        body: body_json,
+        raw_body: body.to_vec(),
+        signature,
+        idempotency_key,
+    })
+    .ok();
+
+    StatusCode::OK
+}
+
+// ---------------------------------------------------------------------------
+// HMAC verification
+// ---------------------------------------------------------------------------
+
+fn verify_hmac(secret: &str, body: &[u8], signature_header: &str) -> bool {
+    let prefix = "sha256=";
+    if !signature_header.starts_with(prefix) {
+        return false;
+    }
+    let received_hex = &signature_header[prefix.len()..];
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
+    mac.update(body);
+    hex::encode(mac.finalize().into_bytes()) == received_hex
+}
+
+// ---------------------------------------------------------------------------
+// Database seeding
+// ---------------------------------------------------------------------------
+
+async fn seed_database(
+    pool: &PgPool,
+    webhook_port: u16,
+    webhook_secret: &str,
+) -> Result<(), sqlx::Error> {
+    // Register webhooks
+    for i in 0..NUM_WEBHOOKS {
+        sqlx::query(
+            "INSERT INTO app_webhooks (app_name, url, secret) VALUES ($1, $2, $3) \
+             ON CONFLICT (app_name) DO NOTHING",
+        )
+        .bind(format!("e2e-app-{}", i))
+        .bind(format!("http://localhost:{}/webhook", webhook_port))
+        .bind(webhook_secret)
+        .execute(pool)
+        .await?;
+    }
+
+    // 3-editor space
+    let space_3e = Uuid::from_bytes(SPACE_3E_BYTES);
+    for bytes in [EDITOR_A_BYTES, EDITOR_B_BYTES, EDITOR_C_BYTES] {
+        sqlx::query(
+            "INSERT INTO editors (member_space_id, space_id) VALUES ($1, $2) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(Uuid::from_bytes(bytes))
+        .bind(space_3e)
+        .execute(pool)
+        .await?;
+    }
+
+    // 1-editor space
+    let space_1e = Uuid::from_bytes(SPACE_1E_BYTES);
+    sqlx::query(
+        "INSERT INTO editors (member_space_id, space_id) VALUES ($1, $2) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(EDITOR_SOLO_BYTES))
+    .bind(space_1e)
+    .execute(pool)
+    .await?;
+
+    // 0-editor space: no rows inserted
+
+    // Expired proposals for rejection polling (one per space that has editors)
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before epoch")
+        .as_secs() as i64;
+    let proposer = Uuid::from_bytes(PROPOSER_ID_BYTES);
+
+    sqlx::query(
+        "INSERT INTO proposals (id, space_id, proposed_by, start_time, end_time, created_at, created_at_block) \
+         VALUES ($1, $2, $3, $4, $5, '0', '0') ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(PROP_3E_REJECTED_BYTES))
+    .bind(space_3e)
+    .bind(proposer)
+    .bind(now - 7200)
+    .bind(now - 3600)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Kafka event production
+// ---------------------------------------------------------------------------
+
+fn make_meta(
+    block_number: u64,
+    created_at: u64,
+) -> hermes_schema::pb::blockchain_metadata::BlockchainMetadata {
+    hermes_schema::pb::blockchain_metadata::BlockchainMetadata {
+        created_at,
+        created_by: vec![],
+        block_number,
+        cursor: String::new(),
+        sequence: 0,
+        is_last: false,
+    }
+}
+
+fn make_settings() -> hermes_schema::pb::governance::ProposalSettings {
+    hermes_schema::pb::governance::ProposalSettings {
+        start_date: 1700000000,
+        last_date: 1700086400,
+        voting_mode: 0,
+        quorum: 1,
+        flat_threshold: 1,
+        percentage_threshold: 0,
+    }
+}
+
+async fn send_event(
+    producer: &FutureProducer,
+    event_type: &str,
+    payload: &[u8],
+    key: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let headers = OwnedHeaders::new().insert(Header {
+        key: "event-type",
+        value: Some(event_type.as_bytes()),
+    });
+    producer
+        .send(
+            FutureRecord::to(GOVERNANCE_TOPIC)
+                .payload(payload)
+                .key(key)
+                .headers(headers),
+            Duration::from_secs(10),
+        )
+        .await
+        .map_err(|(e, _)| e)?;
+    Ok(())
+}
+
+async fn produce_test_events(kafka_broker: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let producer: FutureProducer = ClientConfig::new()
+        .set("bootstrap.servers", kafka_broker)
+        .set("message.timeout.ms", "30000")
+        .create()?;
+
+    // === 3-editor space: all 5 on-chain event types ===
+
+    let msg = hermes_schema::pb::governance::HermesProposalCreated {
+        space_id: SPACE_3E_BYTES.to_vec(),
+        proposer_id: PROPOSER_ID_BYTES.to_vec(),
+        proposal_id: PROP_3E_CREATED_BYTES.to_vec(),
+        voting_mode: 0,
+        actions: vec![],
+        settings: Some(make_settings()),
+        meta: Some(make_meta(12345, 1700000000)),
+    };
+    send_event(&producer, "PROPOSAL_CREATED", &msg.encode_to_vec(), "3e-created").await?;
+
+    let msg = hermes_schema::pb::governance::HermesProposalUpdated {
+        space_id: SPACE_3E_BYTES.to_vec(),
+        proposer_id: PROPOSER_ID_BYTES.to_vec(),
+        proposal_id: PROP_3E_UPDATED_BYTES.to_vec(),
+        voting_mode: 0,
+        actions: vec![],
+        settings: Some(make_settings()),
+        meta: Some(make_meta(12347, 1700002000)),
+    };
+    send_event(&producer, "PROPOSAL_UPDATED", &msg.encode_to_vec(), "3e-updated").await?;
+
+    let msg = hermes_schema::pb::governance::HermesProposalVoted {
+        voter_id: VOTER_ID_BYTES.to_vec(),
+        space_id: SPACE_3E_BYTES.to_vec(),
+        proposal_id: PROP_3E_VOTED_BYTES.to_vec(),
+        vote: hermes_schema::pb::governance::ProposalVoteOption::VoteOptionYes as i32,
+        meta: Some(make_meta(12348, 1700003000)),
+    };
+    send_event(&producer, "PROPOSAL_VOTED", &msg.encode_to_vec(), "3e-voted").await?;
+
+    let msg = hermes_schema::pb::governance::HermesProposalExecuted {
+        space_id: SPACE_3E_BYTES.to_vec(),
+        proposal_id: PROP_3E_EXECUTED_BYTES.to_vec(),
+        meta: Some(make_meta(12346, 1700001000)),
+    };
+    send_event(&producer, "PROPOSAL_EXECUTED", &msg.encode_to_vec(), "3e-executed").await?;
+
+    let msg = hermes_schema::pb::governance::HermesProposalSettingsUpdated {
+        space_id: SPACE_3E_BYTES.to_vec(),
+        proposal_id: PROP_3E_SETTINGS_BYTES.to_vec(),
+        settings: Some(hermes_schema::pb::governance::ProposalSettings {
+            start_date: 1700000000,
+            last_date: 1700172800,
+            voting_mode: 1,
+            quorum: 5,
+            flat_threshold: 0,
+            percentage_threshold: 5000000,
+        }),
+        meta: Some(make_meta(12349, 1700004000)),
+    };
+    send_event(&producer, "PROPOSAL_SETTINGS_UPDATED", &msg.encode_to_vec(), "3e-settings").await?;
+
+    // === 1-editor space: PROPOSAL_CREATED only ===
+
+    let msg = hermes_schema::pb::governance::HermesProposalCreated {
+        space_id: SPACE_1E_BYTES.to_vec(),
+        proposer_id: PROPOSER_ID_BYTES.to_vec(),
+        proposal_id: PROP_1E_CREATED_BYTES.to_vec(),
+        voting_mode: 0,
+        actions: vec![],
+        settings: Some(make_settings()),
+        meta: Some(make_meta(20001, 1700010000)),
+    };
+    send_event(&producer, "PROPOSAL_CREATED", &msg.encode_to_vec(), "1e-created").await?;
+
+    // === 0-editor space: PROPOSAL_CREATED only (expect zero calls) ===
+
+    let msg = hermes_schema::pb::governance::HermesProposalCreated {
+        space_id: SPACE_0E_BYTES.to_vec(),
+        proposer_id: PROPOSER_ID_BYTES.to_vec(),
+        proposal_id: PROP_0E_CREATED_BYTES.to_vec(),
+        voting_mode: 0,
+        actions: vec![],
+        settings: Some(make_settings()),
+        meta: Some(make_meta(30001, 1700020000)),
+    };
+    send_event(&producer, "PROPOSAL_CREATED", &msg.encode_to_vec(), "0e-created").await?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Verification
+// ---------------------------------------------------------------------------
+
+struct TestResults {
+    passed: u32,
+    failed: u32,
+}
+
+impl TestResults {
+    fn new() -> Self {
+        Self { passed: 0, failed: 0 }
+    }
+
+    fn check(&mut self, name: &str, ok: bool) {
+        if ok {
+            println!("  PASS: {}", name);
+            self.passed += 1;
+        } else {
+            eprintln!("  FAIL: {}", name);
+            self.failed += 1;
+        }
+    }
+}
+
+fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
+    let mut r = TestResults::new();
+
+    let space_3e = Uuid::from_bytes(SPACE_3E_BYTES).to_string();
+    let space_1e = Uuid::from_bytes(SPACE_1E_BYTES).to_string();
+    let space_0e = Uuid::from_bytes(SPACE_0E_BYTES).to_string();
+
+    let editors_3e: Vec<String> = [EDITOR_A_BYTES, EDITOR_B_BYTES, EDITOR_C_BYTES]
+        .iter()
+        .map(|b| Uuid::from_bytes(*b).to_string())
+        .collect();
+    let editor_solo = Uuid::from_bytes(EDITOR_SOLO_BYTES).to_string();
+
+    // ===================================================================
+    // Total count
+    // ===================================================================
+    r.check(
+        &format!("total calls is exactly {}", EXPECTED_CALLS),
+        calls.len() == EXPECTED_CALLS,
+    );
+
+    // ===================================================================
+    // 0-editor space: zero calls
+    // ===================================================================
+    let calls_0e: Vec<_> = calls
+        .iter()
+        .filter(|c| c.body["space_id"].as_str() == Some(space_0e.as_str()))
+        .collect();
+    r.check(
+        "0-editor space: zero webhook calls",
+        calls_0e.is_empty(),
+    );
+
+    // ===================================================================
+    // 1-editor space: 1 event × 1 editor × 3 webhooks = 3 calls
+    // ===================================================================
+    let calls_1e: Vec<_> = calls
+        .iter()
+        .filter(|c| c.body["space_id"].as_str() == Some(space_1e.as_str()))
+        .collect();
+    r.check(
+        "1-editor space: exactly 3 calls (1 event x 1 editor x 3 webhooks)",
+        calls_1e.len() == 3,
+    );
+    // All should be proposal_created
+    r.check(
+        "1-editor space: all calls are proposal_created",
+        calls_1e
+            .iter()
+            .all(|c| c.body["event_type"].as_str() == Some("proposal_created")),
+    );
+    // All should have the solo editor's user_space_id
+    r.check(
+        "1-editor space: all calls have correct user_space_id",
+        calls_1e
+            .iter()
+            .all(|c| c.body["user_space_id"].as_str() == Some(editor_solo.as_str())),
+    );
+    // Correct proposal_id
+    let prop_1e = Uuid::from_bytes(PROP_1E_CREATED_BYTES).to_string();
+    r.check(
+        "1-editor space: correct proposal_id",
+        calls_1e
+            .iter()
+            .all(|c| c.body["proposal_id"].as_str() == Some(prop_1e.as_str())),
+    );
+    // HMAC valid
+    if let Some(call) = calls_1e.first() {
+        r.check(
+            "1-editor space: valid HMAC signature",
+            verify_hmac(webhook_secret, &call.raw_body, &call.signature),
+        );
+    }
+
+    // ===================================================================
+    // 3-editor space: 6 event types × 3 editors × 3 webhooks = 54 calls
+    // ===================================================================
+    let calls_3e: Vec<_> = calls
+        .iter()
+        .filter(|c| c.body["space_id"].as_str() == Some(space_3e.as_str()))
+        .collect();
+    r.check(
+        "3-editor space: exactly 54 calls (6 events x 3 editors x 3 webhooks)",
+        calls_3e.len() == 54,
+    );
+
+    // Per event-type fan-out
+    for et in ALL_EVENT_TYPES {
+        let et_calls: Vec<_> = calls_3e
+            .iter()
+            .filter(|c| c.body["event_type"].as_str() == Some(et))
+            .collect();
+        r.check(
+            &format!("3e {}: 9 calls (3 editors x 3 webhooks)", et),
+            et_calls.len() == 9,
+        );
+        // Each editor gets exactly 3 (one per webhook)
+        for editor_str in &editors_3e {
+            let n = et_calls
+                .iter()
+                .filter(|c| c.body["user_space_id"].as_str() == Some(editor_str.as_str()))
+                .count();
+            r.check(
+                &format!("3e {}: editor {}.. got 3 deliveries", et, &editor_str[..8]),
+                n == 3,
+            );
+        }
+    }
+
+    // ===================================================================
+    // Every call has user_space_id and it's a known editor
+    // ===================================================================
+    let all_known: Vec<String> = editors_3e
+        .iter()
+        .chain(std::iter::once(&editor_solo))
+        .cloned()
+        .collect();
+
+    let all_have_uid = calls
+        .iter()
+        .all(|c| c.body["user_space_id"].as_str().is_some());
+    r.check("all calls have user_space_id", all_have_uid);
+
+    let no_unknown = calls.iter().all(|c| {
+        c.body["user_space_id"]
+            .as_str()
+            .map_or(false, |id| all_known.iter().any(|k| k == id))
+    });
+    r.check("no unexpected user_space_ids (false positive)", no_unknown);
+
+    // ===================================================================
+    // No unexpected event types
+    // ===================================================================
+    let known_types: std::collections::HashSet<&str> =
+        ALL_EVENT_TYPES.iter().copied().collect();
+    r.check(
+        "no unexpected event types",
+        calls
+            .iter()
+            .all(|c| c.body["event_type"].as_str().map_or(false, |t| known_types.contains(t))),
+    );
+
+    // ===================================================================
+    // HMAC signatures (spot-check one per event type)
+    // ===================================================================
+    for et in ALL_EVENT_TYPES {
+        if let Some(call) = calls_3e.iter().find(|c| c.body["event_type"].as_str() == Some(et)) {
+            r.check(
+                &format!("3e {}: valid HMAC", et),
+                verify_hmac(webhook_secret, &call.raw_body, &call.signature),
+            );
+        }
+    }
+
+    // ===================================================================
+    // All calls have idempotency key (raw string format: base:user_space_id)
+    // ===================================================================
+    r.check(
+        "all calls have idempotency key",
+        calls.iter().all(|c| !c.idempotency_key.is_empty()),
+    );
+    r.check(
+        "all idempotency keys contain colon-separated components",
+        calls.iter().all(|c| {
+            // Raw format: "{block}:{sequence}:{event_type}:{user_space_id}"
+            // or for rejections: "{proposal_id}:proposal_rejected:{user_space_id}"
+            c.idempotency_key.contains(':') && c.idempotency_key.len() > 10
+        }),
+    );
+    // Each unique (event_type, user_space_id) pair should have a unique key.
+    // Multiple webhooks receive the same key for the same user — that's correct.
+    // So the number of distinct keys should equal events × users, not total calls.
+    r.check(
+        "idempotency keys are unique per (event, user) pair",
+        {
+            let keys: std::collections::HashSet<&str> = calls
+                .iter()
+                .map(|c| c.idempotency_key.as_str())
+                .collect();
+            // 3-editor space: 6 events × 3 editors = 18 distinct keys
+            // 1-editor space: 1 event × 1 editor = 1 distinct key
+            // Total: 19
+            keys.len() == 19
+        },
+    );
+
+    // ===================================================================
+    // Comprehensive per-event-type payload validation
+    // ===================================================================
+
+    let proposer = Uuid::from_bytes(PROPOSER_ID_BYTES).to_string();
+    let voter = Uuid::from_bytes(VOTER_ID_BYTES).to_string();
+
+    // Helper: validate common fields present on every notification
+    let check_common = |r: &mut TestResults, prefix: &str, call: &WebhookCall, expected_space: &str, expected_block: Option<u64>, expected_ts: Option<u64>| {
+        r.check(
+            &format!("{}: has version 1", prefix),
+            call.body["version"].as_u64() == Some(1),
+        );
+        r.check(
+            &format!("{}: has category 'governance'", prefix),
+            call.body["category"].as_str() == Some("governance"),
+        );
+        r.check(
+            &format!("{}: correct space_id", prefix),
+            call.body["space_id"].as_str() == Some(expected_space),
+        );
+        r.check(
+            &format!("{}: has user_space_id", prefix),
+            call.body["user_space_id"].is_string(),
+        );
+        r.check(
+            &format!("{}: has idempotency_key", prefix),
+            call.body["idempotency_key"].is_string(),
+        );
+        if let Some(block) = expected_block {
+            r.check(
+                &format!("{}: correct block_number {}", prefix, block),
+                call.body["block_number"].as_u64() == Some(block),
+            );
+        } else {
+            r.check(
+                &format!("{}: no block_number (off-chain)", prefix),
+                call.body.get("block_number").is_none(),
+            );
+        }
+        if let Some(ts) = expected_ts {
+            r.check(
+                &format!("{}: correct timestamp {}", prefix, ts),
+                call.body["timestamp"].as_u64() == Some(ts),
+            );
+        }
+    };
+
+    // --- proposal_created ---
+    if let Some(call) = calls_3e.iter().find(|c| c.body["event_type"].as_str() == Some("proposal_created")) {
+        let prefix = "3e proposal_created";
+        let pid = Uuid::from_bytes(PROP_3E_CREATED_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_3e, Some(12345), Some(1700000000));
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: has proposer_id", prefix), call.body["proposer_id"].as_str() == Some(proposer.as_str()));
+        r.check(&format!("{}: voting_mode is 'fast'", prefix), call.body["voting_mode"].as_str() == Some("fast"));
+        r.check(&format!("{}: has actions array", prefix), call.body["actions"].is_array());
+        r.check(&format!("{}: has settings object", prefix), call.body["settings"].is_object());
+        if call.body["settings"].is_object() {
+            r.check(&format!("{}: settings.start_date", prefix), call.body["settings"]["start_date"].as_u64() == Some(1700000000));
+            r.check(&format!("{}: settings.end_date", prefix), call.body["settings"]["end_date"].as_u64() == Some(1700086400));
+            r.check(&format!("{}: settings.voting_mode", prefix), call.body["settings"]["voting_mode"].as_str() == Some("fast"));
+            r.check(&format!("{}: settings.quorum", prefix), call.body["settings"]["quorum"].as_u64() == Some(1));
+        }
+        r.check(&format!("{}: no voter_id", prefix), call.body.get("voter_id").is_none());
+        r.check(&format!("{}: no vote", prefix), call.body.get("vote").is_none());
+    }
+
+    // --- proposal_updated ---
+    if let Some(call) = calls_3e.iter().find(|c| c.body["event_type"].as_str() == Some("proposal_updated")) {
+        let prefix = "3e proposal_updated";
+        let pid = Uuid::from_bytes(PROP_3E_UPDATED_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_3e, Some(12347), Some(1700002000));
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: has proposer_id", prefix), call.body["proposer_id"].as_str() == Some(proposer.as_str()));
+        r.check(&format!("{}: voting_mode is 'fast'", prefix), call.body["voting_mode"].as_str() == Some("fast"));
+        r.check(&format!("{}: has actions array", prefix), call.body["actions"].is_array());
+        r.check(&format!("{}: has settings object", prefix), call.body["settings"].is_object());
+        r.check(&format!("{}: no voter_id", prefix), call.body.get("voter_id").is_none());
+        r.check(&format!("{}: no vote", prefix), call.body.get("vote").is_none());
+    }
+
+    // --- proposal_voted ---
+    if let Some(call) = calls_3e.iter().find(|c| c.body["event_type"].as_str() == Some("proposal_voted")) {
+        let prefix = "3e proposal_voted";
+        let pid = Uuid::from_bytes(PROP_3E_VOTED_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_3e, Some(12348), Some(1700003000));
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: correct voter_id", prefix), call.body["voter_id"].as_str() == Some(voter.as_str()));
+        r.check(&format!("{}: vote is 'yes'", prefix), call.body["vote"].as_str() == Some("yes"));
+        r.check(&format!("{}: no proposer_id", prefix), call.body.get("proposer_id").is_none());
+        r.check(&format!("{}: no voting_mode", prefix), call.body.get("voting_mode").is_none());
+        r.check(&format!("{}: no actions", prefix), call.body.get("actions").is_none());
+        r.check(&format!("{}: no settings", prefix), call.body.get("settings").is_none());
+    }
+
+    // --- proposal_executed ---
+    if let Some(call) = calls_3e.iter().find(|c| c.body["event_type"].as_str() == Some("proposal_executed")) {
+        let prefix = "3e proposal_executed";
+        let pid = Uuid::from_bytes(PROP_3E_EXECUTED_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_3e, Some(12346), Some(1700001000));
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: no proposer_id", prefix), call.body.get("proposer_id").is_none());
+        r.check(&format!("{}: no voter_id", prefix), call.body.get("voter_id").is_none());
+        r.check(&format!("{}: no vote", prefix), call.body.get("vote").is_none());
+        r.check(&format!("{}: no voting_mode", prefix), call.body.get("voting_mode").is_none());
+        r.check(&format!("{}: no actions", prefix), call.body.get("actions").is_none());
+        r.check(&format!("{}: no settings", prefix), call.body.get("settings").is_none());
+    }
+
+    // --- proposal_settings_updated ---
+    if let Some(call) = calls_3e.iter().find(|c| c.body["event_type"].as_str() == Some("proposal_settings_updated")) {
+        let prefix = "3e proposal_settings_updated";
+        let pid = Uuid::from_bytes(PROP_3E_SETTINGS_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_3e, Some(12349), Some(1700004000));
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: voting_mode is 'slow'", prefix), call.body["voting_mode"].as_str() == Some("slow"));
+        r.check(&format!("{}: has settings object", prefix), call.body["settings"].is_object());
+        if call.body["settings"].is_object() {
+            r.check(&format!("{}: settings.end_date", prefix), call.body["settings"]["end_date"].as_u64() == Some(1700172800));
+            r.check(&format!("{}: settings.voting_mode 'slow'", prefix), call.body["settings"]["voting_mode"].as_str() == Some("slow"));
+            r.check(&format!("{}: settings.quorum 5", prefix), call.body["settings"]["quorum"].as_u64() == Some(5));
+            r.check(&format!("{}: settings.percentage_threshold 5000000", prefix), call.body["settings"]["percentage_threshold"].as_u64() == Some(5000000));
+        }
+        r.check(&format!("{}: no proposer_id", prefix), call.body.get("proposer_id").is_none());
+        r.check(&format!("{}: no voter_id", prefix), call.body.get("voter_id").is_none());
+        r.check(&format!("{}: no actions", prefix), call.body.get("actions").is_none());
+    }
+
+    // --- proposal_rejected ---
+    if let Some(call) = calls_3e.iter().find(|c| c.body["event_type"].as_str() == Some("proposal_rejected")) {
+        let prefix = "3e proposal_rejected";
+        let pid = Uuid::from_bytes(PROP_3E_REJECTED_BYTES).to_string();
+        let proposed_by = Uuid::from_bytes(PROPOSER_ID_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_3e, None, None);
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: has proposer_id", prefix), call.body["proposer_id"].as_str() == Some(proposed_by.as_str()));
+        r.check(&format!("{}: has timestamp", prefix), call.body["timestamp"].is_number());
+        r.check(&format!("{}: no voter_id", prefix), call.body.get("voter_id").is_none());
+        r.check(&format!("{}: no vote", prefix), call.body.get("vote").is_none());
+        r.check(&format!("{}: no voting_mode", prefix), call.body.get("voting_mode").is_none());
+        r.check(&format!("{}: no actions", prefix), call.body.get("actions").is_none());
+        r.check(&format!("{}: no settings", prefix), call.body.get("settings").is_none());
+    }
+
+    // --- 1-editor space: proposal_created ---
+    if let Some(call) = calls.iter().find(|c| {
+        c.body["space_id"].as_str() == Some(space_1e.as_str())
+            && c.body["event_type"].as_str() == Some("proposal_created")
+    }) {
+        let prefix = "1e proposal_created";
+        let pid = Uuid::from_bytes(PROP_1E_CREATED_BYTES).to_string();
+        check_common(&mut r, prefix, call, &space_1e, Some(20001), Some(1700010000));
+        r.check(&format!("{}: correct proposal_id", prefix), call.body["proposal_id"].as_str() == Some(pid.as_str()));
+        r.check(&format!("{}: correct user_space_id", prefix), call.body["user_space_id"].as_str() == Some(editor_solo.as_str()));
+    }
+
+    // ===================================================================
+    // Cross-event isolation
+    // ===================================================================
+    let created_id = Uuid::from_bytes(PROP_3E_CREATED_BYTES).to_string();
+    r.check(
+        "3e created proposal_id only in proposal_created",
+        !calls.iter().any(|c| {
+            c.body["proposal_id"].as_str() == Some(created_id.as_str())
+                && c.body["event_type"].as_str() != Some("proposal_created")
+        }),
+    );
+    let executed_id = Uuid::from_bytes(PROP_3E_EXECUTED_BYTES).to_string();
+    r.check(
+        "3e executed proposal_id only in proposal_executed",
+        !calls.iter().any(|c| {
+            c.body["proposal_id"].as_str() == Some(executed_id.as_str())
+                && c.body["event_type"].as_str() != Some("proposal_executed")
+        }),
+    );
+
+    r
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+#[tokio::main]
+async fn main() {
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let kafka_broker =
+        env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
+    let webhook_port: u16 = env::var("WEBHOOK_PORT")
+        .unwrap_or_else(|_| "8765".to_string())
+        .parse()
+        .expect("WEBHOOK_PORT must be a valid port number");
+    let webhook_secret =
+        env::var("WEBHOOK_SECRET").unwrap_or_else(|_| "test-e2e-secret".to_string());
+    let timeout_secs: u64 = env::var("E2E_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(90);
+
+    println!("=== Notification Service E2E Tests ===");
+    println!();
+    println!("  database:       {}", database_url);
+    println!("  kafka:          {}", kafka_broker);
+    println!("  webhook port:   {}", webhook_port);
+    println!("  timeout:        {}s", timeout_secs);
+    println!("  spaces:         3 (0 editors, 1 editor, 3 editors)");
+    println!("  webhooks:       {}", NUM_WEBHOOKS);
+    println!("  expected calls: {}", EXPECTED_CALLS);
+    println!();
+
+    // 1. Start webhook server
+    let (tx, mut rx) = mpsc::unbounded_channel::<WebhookCall>();
+    let app = Router::new()
+        .route("/webhook", post(webhook_handler))
+        .with_state(tx);
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", webhook_port))
+        .await
+        .unwrap_or_else(|e| panic!("Failed to bind on port {}: {}", webhook_port, e));
+    println!("[1/5] Webhook server listening on port {}", webhook_port);
+    let _webhook_handle = tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, app).await {
+            eprintln!("\nERROR: Webhook server failed: {}", e);
+            std::process::exit(1);
+        }
+    });
+
+    // 2. Seed database
+    let pool = PgPool::connect(&database_url)
+        .await
+        .expect("Failed to connect to database");
+    seed_database(&pool, webhook_port, &webhook_secret)
+        .await
+        .expect("Failed to seed database");
+    println!("[2/5] Database seeded");
+
+    // 3. Produce Kafka events
+    produce_test_events(&kafka_broker)
+        .await
+        .expect("Failed to produce Kafka events");
+    println!("[3/5] Kafka events produced (7 events across 3 spaces)");
+
+    // 4. Wait for webhook calls
+    // We wait for EXPECTED_CALLS, plus an extra grace period to catch false positives.
+    println!(
+        "[4/5] Waiting for {} webhook calls (timeout: {}s)...",
+        EXPECTED_CALLS, timeout_secs
+    );
+
+    let mut calls: Vec<WebhookCall> = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+
+    // First, collect the expected calls
+    while calls.len() < EXPECTED_CALLS {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            eprintln!(
+                "\nERROR: Timeout. Received {}/{} calls.",
+                calls.len(),
+                EXPECTED_CALLS
+            );
+            let mut counts: HashMap<String, usize> = HashMap::new();
+            for c in &calls {
+                *counts
+                    .entry(
+                        c.body["event_type"]
+                            .as_str()
+                            .unwrap_or("?")
+                            .to_string(),
+                    )
+                    .or_default() += 1;
+            }
+            for (et, n) in &counts {
+                eprintln!("  {}: {}", et, n);
+            }
+            std::process::exit(1);
+        }
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(call)) => {
+                let n = calls.len() + 1;
+                if n <= 6 || n % 10 == 0 || n == EXPECTED_CALLS {
+                    let et = call.body["event_type"].as_str().unwrap_or("?");
+                    let uid = call.body["user_space_id"]
+                        .as_str()
+                        .map(|s| &s[..8])
+                        .unwrap_or("?");
+                    println!("  -> {}/{}: {} (editor: {}...)", n, EXPECTED_CALLS, et, uid);
+                }
+                calls.push(call);
+            }
+            Ok(None) => {
+                eprintln!("\nERROR: Channel closed");
+                std::process::exit(1);
+            }
+            Err(_) => {
+                eprintln!(
+                    "\nERROR: Timeout. Received {}/{}.",
+                    calls.len(),
+                    EXPECTED_CALLS
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Brief grace period: drain any unexpected extra calls (false positives)
+    println!("  Draining extras for 3s...");
+    let grace_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let remaining = grace_deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(call)) => {
+                eprintln!(
+                    "  !! extra call: {} (space: {}, editor: {})",
+                    call.body["event_type"].as_str().unwrap_or("?"),
+                    call.body["space_id"].as_str().unwrap_or("?"),
+                    call.body["user_space_id"].as_str().unwrap_or("?"),
+                );
+                calls.push(call);
+            }
+            _ => break,
+        }
+    }
+
+    // 5. Verify
+    println!();
+    println!("[5/5] Verifying {} webhook calls...", calls.len());
+    println!();
+
+    let results = verify_calls(&calls, &webhook_secret);
+
+    println!();
+    println!(
+        "=== Results: {} passed, {} failed ===",
+        results.passed, results.failed
+    );
+    if results.failed > 0 {
+        std::process::exit(1);
+    }
+    println!();
+    println!("All e2e tests passed!");
+}

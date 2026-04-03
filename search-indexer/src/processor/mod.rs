@@ -18,6 +18,7 @@ use crate::orchestrator::{
     BatchSource, EntityProcessingBatch, ProcessedBatch, ScoreProcessingBatch,
     SpaceTopicProcessingBatch, TopologyProcessingBatch,
 };
+use crate::relation_map::RelationMap;
 use crate::topology::persistence;
 use crate::topology::CanonicalGraphState;
 use sdk::core::ids::{AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID};
@@ -77,10 +78,16 @@ pub enum ProcessedEvent {
     RemoveRelationByDoc { doc_id: String, relation_id: String },
     /// Update space_topic_entity_id by direct doc ID (fast path — bulk API).
     /// Resolved via Postgres lookup.
-    UpdateSpaceTopicEntityIdByDoc { doc_id: String, topic_entity_id: String },
+    UpdateSpaceTopicEntityIdByDoc {
+        doc_id: String,
+        topic_entity_id: String,
+    },
     /// Update in_canonical_graph by direct doc ID (fast path — bulk API).
     /// Resolved via Postgres lookup.
-    UpdateInCanonicalGraphByDoc { doc_id: String, in_canonical_graph: bool },
+    UpdateInCanonicalGraphByDoc {
+        doc_id: String,
+        in_canonical_graph: bool,
+    },
     /// Update in_canonical_graph for all entities in a space (slow path — update_by_query).
     /// Used as fallback when Postgres lookup is unavailable.
     UpdateInCanonicalGraph {
@@ -124,6 +131,9 @@ pub struct Processor {
     /// When available, EntityGlobalScore and SpaceScore use bulk doc ID updates
     /// instead of update_by_query. When None, falls back to update_by_query (slow).
     entity_space_lookup: Option<EntitySpaceLookup>,
+    /// Optional SQLite-backed relation map for fast DeleteRelation lookups.
+    /// Avoids the race condition where Postgres has already deleted the relation.
+    relation_map: Option<Arc<RelationMap>>,
     sample_counters: [AtomicU64; SAMPLE_CATEGORY_COUNT],
     sample_interval: u64,
 }
@@ -135,6 +145,7 @@ impl Processor {
             space_topic_cache: HashMap::new(),
             topology_state: CanonicalGraphState::new(),
             entity_space_lookup: None,
+            relation_map: None,
             sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
             sample_interval: 0,
         }
@@ -146,18 +157,21 @@ impl Processor {
         topology_state: CanonicalGraphState,
         sample_interval: u64,
         entity_space_lookup: Option<EntitySpaceLookup>,
+        relation_map: Option<Arc<RelationMap>>,
     ) -> Self {
         info!(
             cache_size = cache.len(),
             canonical_graph_size = topology_state.len(),
             sample_interval,
             has_entity_space_lookup = entity_space_lookup.is_some(),
+            has_relation_map = relation_map.is_some(),
             "Processor created with space topic cache and topology state"
         );
         Self {
             space_topic_cache: cache,
             topology_state,
             entity_space_lookup,
+            relation_map,
             sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
             sample_interval,
         }
@@ -173,6 +187,7 @@ impl Processor {
             space_topic_cache: cache,
             topology_state: CanonicalGraphState::new(),
             entity_space_lookup: None,
+            relation_map: None,
             sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
             sample_interval,
         }
@@ -329,7 +344,10 @@ impl Processor {
                     })?;
                     if !event.score.is_finite() {
                         error!(entity_id = %entity_id, score = event.score, "EntityGlobalScore invalid score");
-                        return Err(IngestError::parse(format!("invalid score: {}", event.score)));
+                        return Err(IngestError::parse(format!(
+                            "invalid score: {}",
+                            event.score
+                        )));
                     }
                     if self.should_sample(SampleCategory::EntityGlobalScore) {
                         info!(entity_id = %entity_id, score = event.score, "[sample] EntityGlobalScore");
@@ -343,7 +361,10 @@ impl Processor {
                     })?;
                     if !event.score.is_finite() {
                         error!(space_id = %space_id, score = event.score, "SpaceScore invalid score");
-                        return Err(IngestError::parse(format!("invalid score: {}", event.score)));
+                        return Err(IngestError::parse(format!(
+                            "invalid score: {}",
+                            event.score
+                        )));
                     }
                     if self.should_sample(SampleCategory::SpaceScore) {
                         info!(space_id = %space_id, score = event.score, "[sample] SpaceScore");
@@ -404,10 +425,8 @@ impl Processor {
                             "Postgres lookup failed for EntityGlobalScore — falling back to slow update_by_query"
                         );
                         for (entity_id, score) in score_map {
-                            processed.push(ProcessedEvent::UpdateEntityGlobalScore {
-                                entity_id,
-                                score,
-                            });
+                            processed
+                                .push(ProcessedEvent::UpdateEntityGlobalScore { entity_id, score });
                         }
                     }
                 }
@@ -462,10 +481,7 @@ impl Processor {
                             "Postgres lookup failed for SpaceScore — falling back to slow update_by_query"
                         );
                         for (space_id, score) in score_map {
-                            processed.push(ProcessedEvent::UpdateSpaceScore {
-                                space_id,
-                                score,
-                            });
+                            processed.push(ProcessedEvent::UpdateSpaceScore { space_id, score });
                         }
                     }
                 }
@@ -827,11 +843,15 @@ impl Processor {
             let mut topology_closed = false;
 
             // Topology heartbeat timer (every 2 minutes)
-            let mut topology_heartbeat = tokio::time::interval(tokio::time::Duration::from_secs(120));
+            let mut topology_heartbeat =
+                tokio::time::interval(tokio::time::Duration::from_secs(120));
             topology_heartbeat.tick().await; // skip immediate first tick
 
             // Set initial topology node count in metrics
-            metrics.canonical_graph_size.store(self.topology_state.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            metrics.canonical_graph_size.store(
+                self.topology_state.len() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
 
             loop {
                 // Exit when all channels are closed
@@ -1159,7 +1179,9 @@ impl Processor {
 
         match save_result {
             Ok(Ok(())) => {
-                metrics.canonical_graph_size.store(self.topology_state.len() as u64, Ordering::Relaxed);
+                metrics
+                    .canonical_graph_size
+                    .store(self.topology_state.len() as u64, Ordering::Relaxed);
             }
             Ok(Err(e)) => {
                 error!(error = %e, "Failed to save topology state, NACKing batch");
@@ -1347,6 +1369,11 @@ impl Processor {
                             );
                         }
 
+                        // Record mapping for future DeleteRelation lookups
+                        if let Some(ref rm) = self.relation_map {
+                            rm.insert(relation_id, event.entity_id, event.space_id);
+                        }
+
                         Ok(Some(ProcessedEvent::AddRelation {
                             entity_id: event.entity_id,
                             space_id: event.space_id,
@@ -1367,8 +1394,6 @@ impl Processor {
                 }
             }
             EntityEventType::DeleteRelation => {
-                // For delete relations, we may not know which entity contains the relation.
-                // We only need the relation_id to perform the removal.
                 if let Some(relation_id) = event.relation_id {
                     debug!(
                         relation_id = %relation_id,
@@ -1381,6 +1406,26 @@ impl Processor {
                         );
                     }
 
+                    // Try local relation map first (LRU cache + SQLite).
+                    // We do NOT remove the entry here — removal happens in the loader
+                    // after a fully successful bulk write (summary.failed == 0).
+                    // This ensures the mapping survives for retry on NACK/replay.
+                    if let Some(ref rm) = self.relation_map {
+                        if let Some((entity_id, space_id)) = rm.lookup(&relation_id) {
+                            debug!(
+                                relation_id = %relation_id,
+                                entity_id = %entity_id,
+                                space_id = %space_id,
+                                "DeleteRelation resolved via local relation map"
+                            );
+                            return Ok(Some(ProcessedEvent::RemoveRelationByDoc {
+                                doc_id: format!("{}_{}", entity_id, space_id),
+                                relation_id: relation_id.to_string(),
+                            }));
+                        }
+                    }
+
+                    // Fall through to RemoveRelationById (Postgres batch lookup / update_by_query)
                     Ok(Some(ProcessedEvent::RemoveRelationById { relation_id }))
                 } else {
                     debug!("Skipped delete relation event with missing relation_id");
@@ -1781,7 +1826,9 @@ mod tests {
         assert_eq!(processed.len(), 2);
 
         // Find the stub Index event
-        let stub = processed.iter().find(|e| matches!(e, ProcessedEvent::Index(_)));
+        let stub = processed
+            .iter()
+            .find(|e| matches!(e, ProcessedEvent::Index(_)));
         assert!(stub.is_some(), "Expected an Index stub event");
         if let Some(ProcessedEvent::Index(ref doc)) = stub {
             assert_eq!(doc.entity_id, topic_entity_id);
@@ -1800,7 +1847,9 @@ mod tests {
 
         // Find the UpdateSpaceTopicEntityId fallback event
         assert!(
-            processed.iter().any(|e| matches!(e, ProcessedEvent::UpdateSpaceTopicEntityId { .. })),
+            processed
+                .iter()
+                .any(|e| matches!(e, ProcessedEvent::UpdateSpaceTopicEntityId { .. })),
             "Expected UpdateSpaceTopicEntityId fallback event"
         );
 

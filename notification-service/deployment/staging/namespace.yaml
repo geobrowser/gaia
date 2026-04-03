@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: notifications-staging
+  labels:
+    app.kubernetes.io/name: notifications
+    app.kubernetes.io/part-of: geo-knowledge-graph
+    environment: staging

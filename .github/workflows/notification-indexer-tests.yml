@@ -1,0 +1,71 @@
+name: Notification Indexer Unit Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, dev, feat/notification-service]  # TODO: remove feat branch before merge
+    paths:
+      - 'notification-service/notification-indexer/**'
+      - 'hermes-schema/**'
+      - 'hermes-kafka/**'
+      - '.github/workflows/notification-indexer-tests.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'notification-service/notification-indexer/**'
+      - 'hermes-schema/**'
+      - 'hermes-kafka/**'
+      - '.github/workflows/notification-indexer-tests.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  unit-tests:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.92.0"
+          components: clippy, rustfmt
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get install -y \
+            cmake \
+            libclang-dev \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: Cache cargo registry
+        uses: actions/cache@6f8efc29b200d32929f49075959781ed54ec270c # v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt -p notification-indexer --check
+
+      - name: Run clippy
+        run: cargo clippy -p notification-indexer -- -D warnings
+
+      - name: Run unit tests
+        run: cargo test -p notification-indexer
+        env:
+          RUST_BACKTRACE: 1
+          NOTIFICATION_MIN_AGE_SECS: "0"
