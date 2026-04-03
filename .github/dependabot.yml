@@ -1,0 +1,18 @@
+# Dependabot version updates for GitHub Actions only.
+# Scans .github/workflows/*.yml weekly for outdated action versions
+# (e.g. actions/checkout, actions/cache) and creates PRs to bump them.
+#
+# This does NOT scan code dependencies (Cargo, npm, etc.) for security
+# vulnerabilities. For that, enable "Dependabot alerts" and "Dependabot
+# security updates" in the repo's Settings → Code security and analysis.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "ci"
