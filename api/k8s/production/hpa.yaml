@@ -47,15 +47,16 @@ spec:
           type: Value
           value: "2"
     # Fast capacity-loss signal from kube-state-metrics via prometheus-adapter.
-    # Healthy state reports 1.0. As available replicas disappear, the value rises
-    # above 1.0 so HPA scales before ingress error-rate metrics have to accumulate.
+    # Returns 0.0 when all replicas are available (allows scale-down).
+    # Rises toward 1.0 as replicas become unavailable (triggers scale-up).
+    # Formula: (spec - available) / spec
     - type: External
       external:
         metric:
           name: api_ready_replica_pressure
         target:
           type: Value
-          value: "1"
+          value: 500m   # 0.5 — scale up when >50% of replicas are unavailable
     # Fallback signal when requests are already failing at ingress.
     # Target 1.5% (15m = 0.015) sustained error ratio.
     - type: External
