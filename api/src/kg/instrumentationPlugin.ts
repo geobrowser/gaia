@@ -3,6 +3,9 @@ import * as Sentry from "@sentry/node"
 import {type FieldNode, Kind, type OperationDefinitionNode, print} from "graphql"
 import type {Plugin} from "graphql-yoga"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
+import {log} from "../services/telemetry"
+
+const SLOW_QUERY_THRESHOLD_MS = 3000
 
 type TraceContext = {
 	traceId: string
@@ -102,6 +105,8 @@ export function useGraphQLInstrumentation(): Plugin {
 				})
 			}
 
+			const executeStartMs = Date.now()
+
 			const span = tracer.startSpan(
 				`graphql ${operationLabel}`,
 				{
@@ -118,8 +123,20 @@ export function useGraphQLInstrumentation(): Plugin {
 
 			return {
 				onExecuteDone({result}) {
+					const durationMs = Date.now() - executeStartMs
 					const errors = "errors" in result ? result.errors : undefined
 					const hasErrors = errors && errors.length > 0
+
+					if (durationMs >= SLOW_QUERY_THRESHOLD_MS) {
+						log.warn("Slow GraphQL query", {
+							operationName: operationLabel,
+							queryFingerprint,
+							durationMs,
+							query: query.slice(0, 5000),
+							variables: args.variableValues,
+							requestId,
+						})
+					}
 
 					if (hasErrors) {
 						span.setStatus({code: SpanStatusCode.ERROR, message: "GraphQL errors"})
@@ -143,6 +160,7 @@ export function useGraphQLInstrumentation(): Plugin {
 						}
 					}
 
+					span.setAttribute("graphql.duration_ms", durationMs)
 					span.end()
 				},
 			}
