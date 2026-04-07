@@ -655,11 +655,15 @@ pub fn build_rejection_event(
 // ---------------------------------------------------------------------------
 
 /// Well-known relation type UUIDs for bounty events.
-/// Hardcoded from the GRC-20 protocol; env vars override if set.
-const DEFAULT_INTEREST_TYPE_ID: &str = "2c765cae-c1b6-4cc3-a65d-693d0a67eaeb";
-// Placeholder UUIDs — update when the protocol defines them
-const DEFAULT_ALLOCATED_TYPE_ID: &str = "00000000-0000-0000-0000-000000000000";
-const DEFAULT_PAYOUT_TYPE_ID: &str = "00000000-0000-0000-0000-000000000000";
+/// Sourced from the curator-app (packages/curator-utils/src/ids.ts); env vars override if set.
+///
+/// Interest:  INTERESTED_IN_PROPERTY_ID — curator (Person) → bounty, in curator's personal space
+/// Allocated: ALLOCATED_PROPERTY_ID     — bounty → person, in public space (optional DAO proposal)
+/// Payout:    PAYOUT_RECIPIENT_PROPERTY_ID — space → recipient space, creates Payout entity
+///            (Payout is a multi-relation entity; we detect it by the recipient relation type)
+const DEFAULT_INTEREST_TYPE_ID: &str = "ff7e1b44-44a2-4191-8732-4e6c222afe07";
+const DEFAULT_ALLOCATED_TYPE_ID: &str = "cfeb6422-23c5-4df4-b3f9-375a489d9e22";
+const DEFAULT_PAYOUT_TYPE_ID: &str = "fddacaae-8513-8a43-ec1a-50ff71564d42";
 
 /// Configuration for bounty relation type detection.
 #[derive(Debug, Clone)]
@@ -1340,24 +1344,20 @@ mod tests {
     #[test]
     fn test_bounty_config_default() {
         let config = BountyConfig::default();
-        // Should parse hardcoded UUIDs without panicking
+        // All three should parse to real (non-nil) UUIDs from curator-app constants
         assert_ne!(config.interest_type_id, Uuid::nil());
+        assert_ne!(config.allocated_type_id, Uuid::nil());
+        assert_ne!(config.payout_type_id, Uuid::nil());
+        // Verify they are distinct
+        assert_ne!(config.interest_type_id, config.allocated_type_id);
+        assert_ne!(config.interest_type_id, config.payout_type_id);
+        assert_ne!(config.allocated_type_id, config.payout_type_id);
     }
 
     #[test]
     fn test_bounty_config_match_type() {
         let config = BountyConfig::default();
 
-        assert_eq!(
-            config.match_type(&config.interest_type_id),
-            Some(NotificationEventType::BountyInterest)
-        );
-        // allocated and payout use placeholder UUIDs — test with distinct values
-        let config = BountyConfig {
-            interest_type_id: Uuid::from_bytes([0x01; 16]),
-            allocated_type_id: Uuid::from_bytes([0x02; 16]),
-            payout_type_id: Uuid::from_bytes([0x03; 16]),
-        };
         assert_eq!(
             config.match_type(&config.interest_type_id),
             Some(NotificationEventType::BountyInterest)
