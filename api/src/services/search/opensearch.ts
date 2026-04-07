@@ -122,7 +122,7 @@ export const NAME_FIELD_BOOST = 1.5
  * keeping the boost proportional to SCORE_BOOST=75 so that score field
  * differences can still override text match gaps between entities.
  */
-export const NAME_EXACT_TOKEN_BOOST = 8.0
+export const NAME_EXACT_TOKEN_BOOST = 30.0
 
 /**
  * Boost value for exact raw name match on the name_raw keyword field.
