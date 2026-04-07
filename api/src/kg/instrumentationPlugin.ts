@@ -3,6 +3,10 @@ import * as Sentry from "@sentry/node"
 import {type FieldNode, Kind, type OperationDefinitionNode, print} from "graphql"
 import type {Plugin} from "graphql-yoga"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
+import {log} from "../services/telemetry"
+
+const SLOW_QUERY_THRESHOLD_MS = 3000
+const LARGE_RESPONSE_THRESHOLD_BYTES = 1_000_000 // 1 MB
 
 type TraceContext = {
 	traceId: string
@@ -102,6 +106,8 @@ export function useGraphQLInstrumentation(): Plugin {
 				})
 			}
 
+			const executeStartMs = Date.now()
+
 			const span = tracer.startSpan(
 				`graphql ${operationLabel}`,
 				{
@@ -118,8 +124,47 @@ export function useGraphQLInstrumentation(): Plugin {
 
 			return {
 				onExecuteDone({result}) {
+					const durationMs = Date.now() - executeStartMs
 					const errors = "errors" in result ? result.errors : undefined
 					const hasErrors = errors && errors.length > 0
+
+					// Measure serialized response size for large payload detection.
+					// Only stringify data (not errors) since that's the memory-heavy part.
+					// Guard behind a 1s duration check to avoid the stringify cost on fast queries.
+					const data = "data" in result ? result.data : undefined
+					let responseSizeBytes: number | undefined
+					if (data && durationMs >= 1000) {
+						try {
+							responseSizeBytes = JSON.stringify(data).length
+						} catch {
+							// If stringify fails (circular refs, etc.), skip size measurement
+						}
+					}
+
+					if (responseSizeBytes !== undefined && responseSizeBytes >= LARGE_RESPONSE_THRESHOLD_BYTES) {
+						log.warn("Large GraphQL response", {
+							operationName: operationLabel,
+							queryFingerprint,
+							responseSizeBytes,
+							responseSizeMB: Math.round((responseSizeBytes / 1_000_000) * 100) / 100,
+							durationMs,
+							query: query.slice(0, 5000),
+							variables: args.variableValues,
+							requestId,
+						})
+					}
+
+					if (durationMs >= SLOW_QUERY_THRESHOLD_MS) {
+						log.warn("Slow GraphQL query", {
+							operationName: operationLabel,
+							queryFingerprint,
+							durationMs,
+							responseSizeBytes,
+							query: query.slice(0, 5000),
+							variables: args.variableValues,
+							requestId,
+						})
+					}
 
 					if (hasErrors) {
 						span.setStatus({code: SpanStatusCode.ERROR, message: "GraphQL errors"})
@@ -143,6 +188,10 @@ export function useGraphQLInstrumentation(): Plugin {
 						}
 					}
 
+					span.setAttribute("graphql.duration_ms", durationMs)
+					if (responseSizeBytes !== undefined) {
+						span.setAttribute("graphql.response_size_bytes", responseSizeBytes)
+					}
 					span.end()
 				},
 			}
