@@ -39,11 +39,12 @@ function uuidTermVariants(uuid: string): [string, string] {
 }
 
 /**
- * Default average score for entities without a specific score.
+ * Default score for entities without a specific score (global, space, or entity).
  * When an entity has no score value (missing or empty), this default is used.
- * Scores are normalized to [0, 1] with 0.5 being average.
+ * Set to 0.08 so unscored entities rank below most scored entities without
+ * being completely invisible in results.
  */
-export const DEFAULT_AVERAGE_SCORE = 0.5
+export const DEFAULT_AVERAGE_SCORE = 0.08
 
 /**
  * Minimum score threshold for search boosting.
