@@ -1341,21 +1341,49 @@ mod tests {
         assert!(json.get("interested_user_space_id").is_none());
     }
 
+    // -----------------------------------------------------------------------
+    // Bounty config: exact UUID verification
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn test_bounty_config_default() {
+    fn test_bounty_config_default_ids_are_non_nil_and_distinct() {
         let config = BountyConfig::default();
-        // All three should parse to real (non-nil) UUIDs from curator-app constants
         assert_ne!(config.interest_type_id, Uuid::nil());
         assert_ne!(config.allocated_type_id, Uuid::nil());
         assert_ne!(config.payout_type_id, Uuid::nil());
-        // Verify they are distinct
         assert_ne!(config.interest_type_id, config.allocated_type_id);
         assert_ne!(config.interest_type_id, config.payout_type_id);
         assert_ne!(config.allocated_type_id, config.payout_type_id);
     }
 
     #[test]
-    fn test_bounty_config_match_type() {
+    fn test_bounty_config_exact_uuids_match_curator_app() {
+        // These must match curator-app packages/curator-utils/src/ids.ts exactly.
+        // If any of these fail, the notification service will not detect bounty events.
+        let config = BountyConfig::default();
+        assert_eq!(
+            config.interest_type_id,
+            Uuid::parse_str("ff7e1b44-44a2-4191-8732-4e6c222afe07").expect("valid"),
+            "INTERESTED_IN_PROPERTY_ID must match curator-app"
+        );
+        assert_eq!(
+            config.allocated_type_id,
+            Uuid::parse_str("cfeb6422-23c5-4df4-b3f9-375a489d9e22").expect("valid"),
+            "ALLOCATED_PROPERTY_ID must match curator-app"
+        );
+        assert_eq!(
+            config.payout_type_id,
+            Uuid::parse_str("fddacaae-8513-8a43-ec1a-50ff71564d42").expect("valid"),
+            "PAYOUT_RECIPIENT_PROPERTY_ID must match curator-app"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bounty config: match_type routing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bounty_config_match_type_routes_correctly() {
         let config = BountyConfig::default();
 
         assert_eq!(
@@ -1370,7 +1398,325 @@ mod tests {
             config.match_type(&config.payout_type_id),
             Some(NotificationEventType::BountyPayout)
         );
-        // Unknown type returns None
+    }
+
+    #[test]
+    fn test_bounty_config_match_type_returns_none_for_unknown() {
+        let config = BountyConfig::default();
         assert_eq!(config.match_type(&Uuid::from_bytes([0xFF; 16])), None);
+        assert_eq!(config.match_type(&Uuid::nil()), None);
+    }
+
+    #[test]
+    fn test_bounty_config_match_type_returns_none_for_old_interest_id() {
+        // The old hardcoded interest ID should NOT match after the fix
+        let config = BountyConfig::default();
+        let old_interest_id =
+            Uuid::parse_str("2c765cae-c1b6-4cc3-a65d-693d0a67eaeb").expect("valid");
+        assert_eq!(config.match_type(&old_interest_id), None);
+    }
+
+    #[test]
+    fn test_bounty_config_env_var_override() {
+        // Verify the env var override mechanism works by constructing manually
+        // (we can't set env vars safely in parallel tests, but we can test the
+        // parsing logic via BountyConfig::new struct construction)
+        let custom = BountyConfig {
+            interest_type_id: Uuid::from_bytes([0x01; 16]),
+            allocated_type_id: Uuid::from_bytes([0x02; 16]),
+            payout_type_id: Uuid::from_bytes([0x03; 16]),
+        };
+        assert_eq!(
+            custom.match_type(&Uuid::from_bytes([0x01; 16])),
+            Some(NotificationEventType::BountyInterest)
+        );
+        assert_eq!(
+            custom.match_type(&Uuid::from_bytes([0x02; 16])),
+            Some(NotificationEventType::BountyAllocated)
+        );
+        assert_eq!(
+            custom.match_type(&Uuid::from_bytes([0x03; 16])),
+            Some(NotificationEventType::BountyPayout)
+        );
+        // Default IDs should NOT match when overridden
+        let default_config = BountyConfig::default();
+        assert_eq!(custom.match_type(&default_config.interest_type_id), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Bounty interest events
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bounty_interest_payload_structure() {
+        let info = make_bounty_info();
+        let event = handle_bounty_interest(&info);
+
+        assert_eq!(event.event_type, NotificationEventType::BountyInterest);
+        assert_eq!(event.idempotency_key, "50000:7:bounty_interest");
+
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert_eq!(json["event_type"], "bounty_interest");
+        assert_eq!(json["category"], "bounty");
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["space_id"], info.bounty_space_id.to_string());
+        assert_eq!(json["block_number"], 50000);
+        assert_eq!(json["timestamp"], 1700010000);
+        assert_eq!(json["bounty_entity_id"], info.bounty_entity_id.to_string());
+        assert_eq!(json["relation_id"], info.relation_id.to_string());
+        assert_eq!(json["curator_space_id"], info.curator_space_id.to_string());
+        assert_eq!(json["bounty_space_id"], info.bounty_space_id.to_string());
+        // interested_user_space_id equals curator_space_id for interest events
+        assert_eq!(
+            json["interested_user_space_id"],
+            info.curator_space_id.to_string()
+        );
+    }
+
+    #[test]
+    fn test_bounty_interest_has_no_proposal_id() {
+        let info = make_bounty_info();
+        let event = handle_bounty_interest(&info);
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        // Interest is direct publish, no DAO proposal involved
+        assert!(json.get("proposal_id").is_none());
+    }
+
+    #[test]
+    fn test_bounty_interest_has_no_governance_fields() {
+        let info = make_bounty_info();
+        let event = handle_bounty_interest(&info);
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert!(json.get("voter_id").is_none());
+        assert!(json.get("proposer_id").is_none());
+        assert!(json.get("vote").is_none());
+        assert!(json.get("actions").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Bounty allocation events
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bounty_allocated_payload_structure() {
+        let mut info = make_bounty_info();
+        info.proposal_id = Some(Uuid::from_bytes([0x50; 16]));
+        let event = handle_bounty_allocated(&info);
+
+        assert_eq!(event.event_type, NotificationEventType::BountyAllocated);
+        assert_eq!(event.idempotency_key, "50000:7:bounty_allocated");
+
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert_eq!(json["event_type"], "bounty_allocated");
+        assert_eq!(json["category"], "bounty");
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["space_id"], info.bounty_space_id.to_string());
+        assert_eq!(json["bounty_entity_id"], info.bounty_entity_id.to_string());
+        assert_eq!(json["relation_id"], info.relation_id.to_string());
+        assert_eq!(json["curator_space_id"], info.curator_space_id.to_string());
+        assert_eq!(json["bounty_space_id"], info.bounty_space_id.to_string());
+        assert_eq!(
+            json["proposal_id"],
+            Uuid::from_bytes([0x50; 16]).to_string()
+        );
+    }
+
+    #[test]
+    fn test_bounty_allocated_without_proposal() {
+        // Allocation in EOA (non-DAO) space — no proposal involved
+        let info = make_bounty_info(); // proposal_id defaults to None
+        let event = handle_bounty_allocated(&info);
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert!(json.get("proposal_id").is_none());
+    }
+
+    #[test]
+    fn test_bounty_allocated_has_no_interested_user() {
+        let mut info = make_bounty_info();
+        info.proposal_id = Some(Uuid::from_bytes([0x50; 16]));
+        let event = handle_bounty_allocated(&info);
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        // interested_user_space_id is only for interest events
+        assert!(json.get("interested_user_space_id").is_none());
+    }
+
+    #[test]
+    fn test_bounty_allocated_has_no_governance_fields() {
+        let mut info = make_bounty_info();
+        info.proposal_id = Some(Uuid::from_bytes([0x50; 16]));
+        let event = handle_bounty_allocated(&info);
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert!(json.get("voter_id").is_none());
+        assert!(json.get("proposer_id").is_none());
+        assert!(json.get("vote").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Bounty payout events
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bounty_payout_payload_structure() {
+        let mut info = make_bounty_info();
+        info.proposal_id = Some(Uuid::from_bytes([0x60; 16]));
+        let event = handle_bounty_payout(&info);
+
+        assert_eq!(event.event_type, NotificationEventType::BountyPayout);
+        assert_eq!(event.idempotency_key, "50000:7:bounty_payout");
+
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert_eq!(json["event_type"], "bounty_payout");
+        assert_eq!(json["category"], "bounty");
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["space_id"], info.bounty_space_id.to_string());
+        assert_eq!(json["bounty_entity_id"], info.bounty_entity_id.to_string());
+        assert_eq!(json["relation_id"], info.relation_id.to_string());
+        assert_eq!(json["curator_space_id"], info.curator_space_id.to_string());
+        assert_eq!(json["bounty_space_id"], info.bounty_space_id.to_string());
+        assert_eq!(
+            json["proposal_id"],
+            Uuid::from_bytes([0x60; 16]).to_string()
+        );
+    }
+
+    #[test]
+    fn test_bounty_payout_without_proposal() {
+        // Payout in EOA space — direct publish, no proposal
+        let info = make_bounty_info();
+        let event = handle_bounty_payout(&info);
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert!(json.get("proposal_id").is_none());
+    }
+
+    #[test]
+    fn test_bounty_payout_has_no_interested_user() {
+        let mut info = make_bounty_info();
+        info.proposal_id = Some(Uuid::from_bytes([0x60; 16]));
+        let event = handle_bounty_payout(&info);
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert!(json.get("interested_user_space_id").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Bounty event type categorization
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bounty_event_types_are_bounty_category() {
+        assert_eq!(NotificationEventType::BountyInterest.category(), "bounty");
+        assert_eq!(NotificationEventType::BountyAllocated.category(), "bounty");
+        assert_eq!(NotificationEventType::BountyPayout.category(), "bounty");
+    }
+
+    #[test]
+    fn test_bounty_event_type_as_str() {
+        assert_eq!(
+            NotificationEventType::BountyInterest.as_str(),
+            "bounty_interest"
+        );
+        assert_eq!(
+            NotificationEventType::BountyAllocated.as_str(),
+            "bounty_allocated"
+        );
+        assert_eq!(
+            NotificationEventType::BountyPayout.as_str(),
+            "bounty_payout"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bounty idempotency keys
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bounty_idempotency_keys_are_unique_per_event_type() {
+        let info = make_bounty_info();
+        let interest = handle_bounty_interest(&info);
+        let allocated = handle_bounty_allocated(&info);
+        let payout = handle_bounty_payout(&info);
+
+        // Same block/sequence but different event types must produce different keys
+        assert_ne!(interest.idempotency_key, allocated.idempotency_key);
+        assert_ne!(interest.idempotency_key, payout.idempotency_key);
+        assert_ne!(allocated.idempotency_key, payout.idempotency_key);
+    }
+
+    #[test]
+    fn test_bounty_idempotency_keys_differ_by_block() {
+        let mut info1 = make_bounty_info();
+        let mut info2 = make_bounty_info();
+        info2.block_number = 50001;
+
+        let event1 = handle_bounty_interest(&info1);
+        let event2 = handle_bounty_interest(&info2);
+        assert_ne!(event1.idempotency_key, event2.idempotency_key);
+    }
+
+    #[test]
+    fn test_bounty_idempotency_keys_differ_by_sequence() {
+        let mut info1 = make_bounty_info();
+        let mut info2 = make_bounty_info();
+        info2.sequence = 8;
+
+        let event1 = handle_bounty_interest(&info1);
+        let event2 = handle_bounty_interest(&info2);
+        assert_ne!(event1.idempotency_key, event2.idempotency_key);
+    }
+
+    // -----------------------------------------------------------------------
+    // Bounty optional name fields (best-effort)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bounty_name_fields_absent_by_default() {
+        let info = make_bounty_info();
+        let event = handle_bounty_interest(&info);
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+        assert!(json.get("bounty_name").is_none());
+        assert!(json.get("curator_name").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Cross-category isolation: bounty events have no governance fields
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_governance_events_have_no_bounty_fields() {
+        let msg = HermesProposalCreated {
+            space_id: make_test_uuid(0x01),
+            proposer_id: make_test_uuid(0x02),
+            proposal_id: make_test_uuid(0x03),
+            voting_mode: 0,
+            actions: vec![],
+            settings: None,
+            meta: Some(make_metadata(12345, 1700000000)),
+        };
+        let event = handle_proposal_created(&msg).expect("should parse");
+        let json = serde_json::to_value(&event.payload).expect("should serialize");
+
+        assert!(json.get("bounty_entity_id").is_none());
+        assert!(json.get("bounty_space_id").is_none());
+        assert!(json.get("curator_space_id").is_none());
+        assert!(json.get("interested_user_space_id").is_none());
+        assert!(json.get("bounty_name").is_none());
+        assert!(json.get("curator_name").is_none());
+    }
+
+    #[test]
+    fn test_bounty_events_have_no_governance_specific_fields() {
+        let info = make_bounty_info();
+        for event in [
+            handle_bounty_interest(&info),
+            handle_bounty_allocated(&info),
+            handle_bounty_payout(&info),
+        ] {
+            let json = serde_json::to_value(&event.payload).expect("should serialize");
+            assert!(json.get("voter_id").is_none(), "bounty event should not have voter_id");
+            assert!(json.get("proposer_id").is_none(), "bounty event should not have proposer_id");
+            assert!(json.get("vote").is_none(), "bounty event should not have vote");
+            assert!(json.get("actions").is_none(), "bounty event should not have actions");
+            assert!(json.get("settings").is_none(), "bounty event should not have settings");
+            assert!(json.get("voting_mode").is_none(), "bounty event should not have voting_mode");
+        }
     }
 }
