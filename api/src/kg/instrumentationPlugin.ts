@@ -130,9 +130,10 @@ export function useGraphQLInstrumentation(): Plugin {
 
 					// Measure serialized response size for large payload detection.
 					// Only stringify data (not errors) since that's the memory-heavy part.
+					// Guard behind a 1s duration check to avoid the stringify cost on fast queries.
 					const data = "data" in result ? result.data : undefined
 					let responseSizeBytes: number | undefined
-					if (data) {
+					if (data && durationMs >= 1000) {
 						try {
 							responseSizeBytes = JSON.stringify(data).length
 						} catch {
