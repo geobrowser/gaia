@@ -1711,12 +1711,30 @@ mod tests {
             handle_bounty_payout(&info),
         ] {
             let json = serde_json::to_value(&event.payload).expect("should serialize");
-            assert!(json.get("voter_id").is_none(), "bounty event should not have voter_id");
-            assert!(json.get("proposer_id").is_none(), "bounty event should not have proposer_id");
-            assert!(json.get("vote").is_none(), "bounty event should not have vote");
-            assert!(json.get("actions").is_none(), "bounty event should not have actions");
-            assert!(json.get("settings").is_none(), "bounty event should not have settings");
-            assert!(json.get("voting_mode").is_none(), "bounty event should not have voting_mode");
+            assert!(
+                json.get("voter_id").is_none(),
+                "bounty event should not have voter_id"
+            );
+            assert!(
+                json.get("proposer_id").is_none(),
+                "bounty event should not have proposer_id"
+            );
+            assert!(
+                json.get("vote").is_none(),
+                "bounty event should not have vote"
+            );
+            assert!(
+                json.get("actions").is_none(),
+                "bounty event should not have actions"
+            );
+            assert!(
+                json.get("settings").is_none(),
+                "bounty event should not have settings"
+            );
+            assert!(
+                json.get("voting_mode").is_none(),
+                "bounty event should not have voting_mode"
+            );
         }
     }
 }
