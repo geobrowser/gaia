@@ -94,15 +94,15 @@ data:
         name:
           as: api_ready_replica_pressure
         metricsQuery: |
-          1 + (
+          (
             clamp_min(
-              scalar(kube_deployment_spec_replicas{namespace="api",deployment="api"})
+              max(kube_deployment_spec_replicas{namespace="api",deployment="api"})
               -
-              scalar(kube_deployment_status_replicas_available{namespace="api",deployment="api"}),
+              max(kube_deployment_status_replicas_available{namespace="api",deployment="api"}),
               0
             )
             /
-            clamp_min(scalar(kube_deployment_spec_replicas{namespace="api",deployment="api"}), 1)
-          )
+            clamp_min(max(kube_deployment_spec_replicas{namespace="api",deployment="api"}), 1)
+          ) or vector(0)
         resources:
           namespaced: false

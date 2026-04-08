@@ -325,16 +325,14 @@ impl Orchestrator {
         let (loader_tx, loader_rx) = mpsc::channel::<ProcessedBatch>(config.channel_buffer_size);
 
         // Channel from loader back to entities consumer (for acknowledgments)
-        let (entities_ack_tx, entities_ack_rx) =
-            mpsc::channel::<StreamMessage>(ack_buffer_size);
+        let (entities_ack_tx, entities_ack_rx) = mpsc::channel::<StreamMessage>(ack_buffer_size);
 
         // Channels from scores consumer to processor
         let (scores_processor_tx, scores_processor_rx) =
             mpsc::channel::<ScoreProcessingBatch>(config.channel_buffer_size);
 
         // Channel from loader back to scores consumer (for acknowledgments)
-        let (scores_ack_tx, scores_ack_rx) =
-            mpsc::channel::<StreamMessage>(ack_buffer_size);
+        let (scores_ack_tx, scores_ack_rx) = mpsc::channel::<StreamMessage>(ack_buffer_size);
 
         // Channels from space topics consumer to processor
         let (space_topics_processor_tx, space_topics_processor_rx) =
@@ -349,8 +347,7 @@ impl Orchestrator {
             mpsc::channel::<TopologyProcessingBatch>(config.channel_buffer_size);
 
         // Channel from loader back to topology consumer (for acknowledgments)
-        let (topology_ack_tx, topology_ack_rx) =
-            mpsc::channel::<StreamMessage>(ack_buffer_size);
+        let (topology_ack_tx, topology_ack_rx) = mpsc::channel::<StreamMessage>(ack_buffer_size);
 
         // Clone senders for components that need them
         let entities_processor_tx_for_consumer = entities_processor_tx.clone();

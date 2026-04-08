@@ -39,11 +39,12 @@ function uuidTermVariants(uuid: string): [string, string] {
 }
 
 /**
- * Default average score for entities without a specific score.
+ * Default score for entities without a specific score (global, space, or entity).
  * When an entity has no score value (missing or empty), this default is used.
- * Scores are normalized to [0, 1] with 0.5 being average.
+ * Set to 0.08 so unscored entities rank below most scored entities without
+ * being completely invisible in results.
  */
-export const DEFAULT_AVERAGE_SCORE = 0.5
+export const DEFAULT_AVERAGE_SCORE = 0.08
 
 /**
  * Minimum score threshold for search boosting.
@@ -122,7 +123,7 @@ export const NAME_FIELD_BOOST = 1.5
  * keeping the boost proportional to SCORE_BOOST=75 so that score field
  * differences can still override text match gaps between entities.
  */
-export const NAME_EXACT_TOKEN_BOOST = 8.0
+export const NAME_EXACT_TOKEN_BOOST = 30.0
 
 /**
  * Boost value for exact raw name match on the name_raw keyword field.
@@ -140,9 +141,8 @@ export const NAME_RAW_EXACT_BOOST = 10.0
  * Boost value for case-insensitive raw name match on the name_raw keyword field.
  * Uses a `term` query with case_insensitive: true, so "world affairs" matches
  * "World affairs", "WORLD AFFAIRS", etc. but NOT "world-affairs" (different string).
- * Set below NAME_RAW_EXACT_BOOST (10.0) and NAME_EXACT_TOKEN_BOOST (8.0) so
- * exact-case and token matches rank higher, but still provides a meaningful
- * boost for case-insensitive full-string matches.
+ * This BM25 clause is paired with a constant_score clause (flat 50 points) to ensure
+ * exact full name matches get a predictable boost that isn't diluted by IDF.
  */
 export const NAME_RAW_CASE_INSENSITIVE_BOOST = 5.0
 
@@ -882,7 +882,7 @@ export class OpenSearchClient implements SearchClient {
 						// "World affairs" from "world-affairs" which the analyzer
 						// treats as identical tokens. Uses name_raw (separate keyword
 						// field with lowercase normalizer) because search_as_you_type
-						// ignores custom subfields.
+						// ignores custom subfields (name.raw does not work).
 						term: {
 							name_raw: {
 								value: queryText,
@@ -891,17 +891,33 @@ export class OpenSearchClient implements SearchClient {
 						},
 					},
 					{
-						// Case-insensitive raw name match — boosts documents where the
-						// query matches the full unanalyzed name string ignoring case.
+						// Case-insensitive raw name match (BM25) — boosts documents where
+						// the query matches the full unanalyzed name string ignoring case.
 						// "world affairs" matches "World affairs" or "WORLD AFFAIRS"
 						// but NOT "world-affairs" (different string structure).
-						// Ranked below exact-case match (10.0) and token match (8.0).
 						term: {
 							name_raw: {
 								value: queryText,
 								boost: this.b("name_raw_case_insensitive_boost", NAME_RAW_CASE_INSENSITIVE_BOOST),
 								case_insensitive: true,
 							},
+						},
+					},
+					{
+						// Case-insensitive raw name match (flat bonus) — adds a fixed 50
+						// points on top of the BM25 clause above. This ensures exact full
+						// name matches get a predictable boost that isn't diluted by IDF
+						// when the term appears in many documents.
+						constant_score: {
+							filter: {
+								term: {
+									name_raw: {
+										value: queryText,
+										case_insensitive: true,
+									},
+								},
+							},
+							boost: 50,
 						},
 					},
 					{

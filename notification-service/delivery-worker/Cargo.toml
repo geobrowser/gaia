@@ -1,0 +1,24 @@
+[package]
+name = "delivery-worker"
+version = "0.1.0"
+edition = "2021"
+description = "Delivery worker that polls the notification outbox and POSTs to registered webhooks with HMAC signatures"
+
+[dependencies]
+hermes-instrumentation = { path = "../../hermes-instrumentation" }
+tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "net"] }
+axum = "0.7"
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json", "tls-rustls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+thiserror = "2.0.12"
+uuid = { version = "1.17.0", features = ["v4"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dotenv = "0.15.0"
+tracing = "0.1.41"
+
+[dev-dependencies]
+tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "test-util"] }

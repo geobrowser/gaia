@@ -90,6 +90,8 @@ See the [search-admin documentation](../search-admin/README.md) for manual index
 | `OPENSEARCH_CONNECTION_MODE` | Connection mode: `fail-fast` or `retry` | `retry` |
 | `OPENSEARCH_RETRY_INTERVAL_SECS` | Retry interval in seconds (retry mode only) | `15` |
 | `HEALTH_PORT` | HTTP port for health check endpoints | `8080` |
+| `RELATION_MAP_DB_PATH` | SQLite file path for relation map persistence | `/data/relation_map.sqlite` |
+| `RELATION_MAP_CACHE_SIZE` | Max entries in the relation map LRU cache | `500000` |
 
 ### Telemetry Configuration
 
@@ -454,9 +456,23 @@ The canonical graph is held entirely in memory for O(1) lookups. It uses four da
 
 The topology state is also persisted to disk as JSON (see `TOPOLOGY_STATE_PATH`). During persistence, `snapshot()` temporarily allocates a copy of the node list (~36 bytes/node).
 
+### Relation Map Memory
+
+The relation map maintains an LRU cache of `relation_id → (entity_id, space_id)` mappings for fast `DeleteRelation` lookups. Each entry is three UUIDs (48 bytes) plus LRU overhead (~32 bytes), totalling ~80 bytes per cached entry.
+
+| Cache Size (entries) | LRU Memory |
+|----------------------|------------|
+| 100,000 | ~8 MiB |
+| 500,000 (default) | ~40 MiB |
+| 1,000,000 | ~80 MiB |
+
+The cache size is configurable via `RELATION_MAP_CACHE_SIZE` (default: 500,000). Entries beyond the limit are evicted (least-recently-used) but remain in SQLite on disk.
+
 ### Disk Storage
 
-The topology state is persisted to a JSON file at `TOPOLOGY_STATE_PATH` (default `/data/topology_state.json`). Each node stores two hex-encoded UUIDs (space_id, parent_id) and a distance value, costing ~130 bytes per node on disk.
+Two files are persisted to the `/data` PersistentVolumeClaim:
+
+**Topology state** (`/data/topology_state.json`): Each node stores two hex-encoded UUIDs (space_id, parent_id) and a distance value, costing ~130 bytes per node on disk.
 
 | Canonical Spaces | File Size |
 |------------------|-----------|
@@ -465,7 +481,16 @@ The topology state is persisted to a JSON file at `TOPOLOGY_STATE_PATH` (default
 | 500,000 | ~65 MB |
 | ~8,000,000 | ~1 Gi |
 
-The Kubernetes StatefulSet provisions a 1 Gi PersistentVolumeClaim at `/data`, which is sufficient for millions of spaces.
+**Relation map** (`/data/relation_map.sqlite`): SQLite database storing `relation_id → (entity_id, space_id)` as 16-byte BLOBs (not 36-byte TEXT UUIDs). Each row costs ~48 bytes of data plus SQLite page overhead.
+
+| Relations | SQLite File Size |
+|-----------|-----------------|
+| 100,000 | ~5 MB |
+| 1,000,000 | ~48 MB |
+| 5,000,000 | ~240 MB |
+| 10,000,000 | ~480 MB |
+
+The Kubernetes StatefulSet provisions a 1 Gi PersistentVolumeClaim at `/data`. With both topology state and relation map, the PVC may need to be increased to 2 Gi for deployments with >5M relations and >500K canonical spaces.
 
 ### Total Memory Formula
 
@@ -476,12 +501,13 @@ Total Memory ≈
   + (CHANNEL_BUFFER_SIZE × SCORES_BATCH_SIZE × avg_msg_size)                         # scores_processor
   + (CHANNEL_BUFFER_SIZE × max(KAFKA_BATCH_SIZE, SCORES_BATCH_SIZE) × avg_proc_size) # loader
   + topology_state                                                                   # ~300 bytes × canonical_spaces
+  + relation_map_cache                                                               # ~80 bytes × RELATION_MAP_CACHE_SIZE
   + overhead                                                                         # ~100 MiB
 ```
 
 ### Example: Typical Case
 
-With production settings (`CHANNEL_BUFFER_SIZE=2`, `KAFKA_BATCH_SIZE=10`, `SCORES_BATCH_SIZE=10`, avg entity message ~500 KiB, 500K canonical spaces):
+With production settings (`CHANNEL_BUFFER_SIZE=2`, `KAFKA_BATCH_SIZE=10`, `SCORES_BATCH_SIZE=10`, avg entity message ~500 KiB, 500K canonical spaces, 500K relation map cache):
 
 | Component | Calculation | Memory |
 |-----------|-------------|--------|
@@ -492,12 +518,13 @@ With production settings (`CHANNEL_BUFFER_SIZE=2`, `KAFKA_BATCH_SIZE=10`, `SCORE
 | topology_processor | 2 batches × 10 msgs × 40 KiB | <1 MiB |
 | loader | 2 batches × 10 msgs × 300 KiB (processed) | 6 MiB |
 | Topology state | 500K spaces × ~300 bytes | 150 MiB |
+| Relation map LRU | 500K entries × ~80 bytes | 40 MiB |
 | Overhead | Runtime, heap fragmentation | 100 MiB |
-| **Total** | | **~525 MiB** |
+| **Total** | | **~565 MiB** |
 
 ### Example: Worst Case
 
-With worst-case entity messages at 20 MB (matching hermes producer `message.max.bytes`), topology diffs with 1,000 changes each, 500K canonical spaces:
+With worst-case entity messages at 20 MB (matching hermes producer `message.max.bytes`), topology diffs with 1,000 changes each, 500K canonical spaces, 500K relation map cache:
 
 | Component | Calculation | Memory |
 |-----------|-------------|--------|
@@ -508,8 +535,9 @@ With worst-case entity messages at 20 MB (matching hermes producer `message.max.
 | topology_processor | 2 batches × 10 msgs × 40 KiB | <1 MiB |
 | loader | 2 batches × 10 msgs × 20 MB | 400 MiB |
 | Topology state | 500K spaces × ~300 bytes | 150 MiB |
+| Relation map LRU | 500K entries × ~80 bytes | 40 MiB |
 | Overhead | Runtime, heap fragmentation | 100 MiB |
-| **Total** | | **~1,310 MiB** |
+| **Total** | | **~1,350 MiB** |
 
 Note: This absolute worst case (all 10 messages at 20 MB each across all 2 channel slots) is unrealistic in practice. The consumer's `EVENTS_FLUSH_THRESHOLD=1000` causes early batch flushes when large messages arrive (a 20 MB message typically contains 100K+ events, triggering flush after 1 message). Combined with rdkafka's 64 MiB per-consumer queue limit throttling intake, realistic peak is closer to ~600–800 MiB.
 ## Error Recovery
