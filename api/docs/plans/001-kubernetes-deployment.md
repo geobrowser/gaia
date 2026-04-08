@@ -114,6 +114,8 @@ metadata:
 | `api-secrets` | `IPFS_ALTERNATIVE_GATEWAY_KEY` | Alternative IPFS gateway key |
 | `api-secrets` | `IPFS_ALTERNATIVE_GATEWAY_WRITE` | Alternative IPFS write gateway URL |
 | `api-secrets` | `TELEMETRY_TOKEN` | Axiom API token (optional) |
+| `api-cache-secrets` | `VALKEY_PASSWORD` | Valkey cache AUTH password |
+| `api-cache-secrets` | `VALKEY_URL` | Valkey connection URL with credentials (e.g. `redis://:<password>@api-cache.api.svc.cluster.local:6379`) |
 | `regcred` | - | Docker registry credentials |
 
 **Template File**: `api/k8s/secrets.yaml`
@@ -133,6 +135,11 @@ metadata:
 #   --from-literal=IPFS_ALTERNATIVE_GATEWAY_KEY='...' \
 #   --from-literal=IPFS_ALTERNATIVE_GATEWAY_WRITE='https://...' \
 #   --from-literal=TELEMETRY_TOKEN='...'
+#
+# kubectl create secret generic api-cache-secrets \
+#   --namespace=api \
+#   --from-literal=VALKEY_PASSWORD='<generate-a-strong-password>' \
+#   --from-literal=VALKEY_URL='redis://:<password>@api-cache.api.svc.cluster.local:6379'
 #
 # kubectl create secret docker-registry regcred \
 #   --namespace=api \
@@ -433,6 +440,12 @@ api/
      --from-literal=IPFS_ALTERNATIVE_GATEWAY_KEY='...' \
      --from-literal=IPFS_ALTERNATIVE_GATEWAY_WRITE='...' \
      --from-literal=TELEMETRY_TOKEN='...'
+   
+   # Create Valkey cache secrets (optional — cache disabled without this)
+   kubectl create secret generic api-cache-secrets \
+     --namespace=api \
+     --from-literal=VALKEY_PASSWORD='<generate-a-strong-password>' \
+     --from-literal=VALKEY_URL='redis://:<password>@api-cache.api.svc.cluster.local:6379'
    
    # Create registry credentials
    kubectl create secret docker-registry regcred \
