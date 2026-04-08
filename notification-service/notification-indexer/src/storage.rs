@@ -173,6 +173,73 @@ impl Storage {
         Ok(inserted_count)
     }
 
+    // -----------------------------------------------------------------------
+    // Bounty entity/space resolution
+    // -----------------------------------------------------------------------
+
+    /// Resolve a user entity_id to their personal space UUID.
+    ///
+    /// Uses the "front page entity" pattern: finds a personal space
+    /// that has a Types relation pointing from the entity to SPACE_TYPE.
+    #[instrument(name = "notification_indexer.storage.lookup_entity_space", skip(self))]
+    pub async fn lookup_entity_space(&self, entity_id: Uuid) -> Result<Option<Uuid>, StorageError> {
+        // TYPE_RELATION_TYPE_ID = 8f151ba4-de20-4e3c-9cb4-99ddf96f48f1
+        // SPACE_TYPE = 362c1dbd-dc64-44bb-a3c4-652f38a642d7
+        let result = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT r.space_id
+            FROM relations r
+            JOIN spaces s ON s.id = r.space_id
+            WHERE r.from_entity_id = $1
+              AND r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid
+              AND r.to_entity_id = '362c1dbd-dc64-44bb-a3c4-652f38a642d7'::uuid
+            LIMIT 1
+            "#,
+        )
+        .bind(entity_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(result)
+    }
+
+    /// Look up which space owns a bounty entity (for interest notifications).
+    #[instrument(name = "notification_indexer.storage.lookup_bounty_space", skip(self))]
+    pub async fn lookup_bounty_space(
+        &self,
+        bounty_entity_id: Uuid,
+    ) -> Result<Option<Uuid>, StorageError> {
+        let result = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT space_id
+            FROM relations
+            WHERE from_entity_id = $1
+              AND type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid
+            LIMIT 1
+            "#,
+        )
+        .bind(bounty_entity_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(result)
+    }
+
+    /// Insert a notification for a single user (curator) into the outbox.
+    ///
+    /// Used for bounty_allocated and bounty_payout where there's one recipient.
+    /// Delegates to `insert_notifications_for_editors` with a single-element slice.
+    #[instrument(
+        name = "notification_indexer.storage.insert_notification_for_user",
+        skip(self, event)
+    )]
+    pub async fn insert_notification_for_user(
+        &self,
+        event: &NotificationEvent,
+        user_space_id: Uuid,
+    ) -> Result<u64, StorageError> {
+        self.insert_notifications_for_editors(event, &[user_space_id])
+            .await
+    }
+
     /// Find proposals that have expired (end_time < now) without being executed,
     /// and for which we haven't yet sent a rejection notification.
     ///
