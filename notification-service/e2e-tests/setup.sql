@@ -77,6 +77,24 @@ CREATE TABLE IF NOT EXISTS "values" (
     UNIQUE(entity_id, property_id, space_id)
 );
 
+-- Minimal relations table for bounty entity→space resolution.
+-- Used by lookup_entity_space() and lookup_bounty_space().
+CREATE TABLE IF NOT EXISTS relations (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    from_entity_id uuid NOT NULL,
+    to_entity_id uuid NOT NULL,
+    type_id uuid NOT NULL,
+    space_id uuid NOT NULL
+);
+CREATE INDEX IF NOT EXISTS relations_from_entity_idx ON relations (from_entity_id);
+
+-- Minimal spaces table for bounty entity→space resolution.
+-- Used by lookup_entity_space() to filter personal spaces.
+CREATE TABLE IF NOT EXISTS spaces (
+    id uuid PRIMARY KEY,
+    type text NOT NULL DEFAULT 'Personal'
+);
+
 -- Expression index for the rejection poller's LEFT JOIN anti-pattern.
 -- Without this, the (payload->>'proposal_id')::uuid extraction does a seq scan.
 CREATE INDEX IF NOT EXISTS idx_outbox_rejected_proposal
