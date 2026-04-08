@@ -92,9 +92,9 @@ export const log = {
 		if (sentryInitialized) {
 			// Breadcrumb only - provides context for subsequent errors without creating issues
 			Sentry.addBreadcrumb({message, data, level: "warning", category: "log"})
-		} else {
-			console.warn(formatConsoleLog("warn", message, data))
 		}
+		// Always write to stdout so warnings are visible in kubectl logs
+		console.warn(formatConsoleLog("warn", message, data))
 	},
 	error: (message: string, data?: LogData) => {
 		if (sentryInitialized) {
