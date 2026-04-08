@@ -1,6 +1,6 @@
 # Values OrderBy Score
 
-**Status:** Draft
+**Status:** Implemented
 
 ## Problem
 
@@ -14,7 +14,7 @@ PostGraphile auto-generates the `values` GraphQL connection from the `public.val
 values (entity_id, space_id) → local_scores (entity_id, space_id)
 ```
 
-Both tables share the `(entity_id, space_id)` composite key, making a direct JOIN possible.
+Both tables share the `(entity_id, space_id)` composite key, making correlation straightforward.
 
 ## Approach: `makeAddPgTableOrderByPlugin`
 
@@ -31,58 +31,67 @@ The `EntitySpaceFilterPlugin` uses `addArgDataGenerator` with `queryBuilder.wher
 
 Rolling this by hand with `addArgDataGenerator` would require reimplementing all of the above.
 
+### Why correlated subqueries instead of LEFT JOIN?
+
+The initial draft proposed using `queryBuilder.leftJoin()`. However, `leftJoin` is **not a public API** on PostGraphile 4's `QueryBuilder` — the internal `join` array has no public push method. The implementation uses correlated subqueries as the ORDER BY expression instead.
+
+This is acceptable because:
+- The subqueries hit primary key indexes (O(1) per row)
+- PostGraphile's pagination cap limits result sets to 1000 rows max
+- The subquery only executes when the orderBy enum is actually selected
+
 ## Implementation
 
-### 1. New Plugin File
+### Plugin File
 
 ```typescript
 // api/src/kg/valueOrderByScorePlugin.ts
 import {makeAddPgTableOrderByPlugin, orderByAscDesc} from "graphile-utils"
 
-/**
- * Adds orderBy support to the values connection for sorting by local_scores.score.
- *
- * Joins local_scores on (entity_id, space_id) and orders by score.
- * Uses a LEFT JOIN so values without scores sort to the end (nulls last when ascending).
- *
- * Usage:
- *   values(orderBy: [LOCAL_SCORE_ASC], first: 100) { ... }
- *   values(orderBy: [LOCAL_SCORE_DESC], first: 100) { ... }
- */
 export const ValueOrderByScorePlugin = makeAddPgTableOrderByPlugin(
   "public",
   "values",
   (build) => {
     const {pgSql: sql} = build
 
-    return orderByAscDesc(
+    const localScore = orderByAscDesc(
       "LOCAL_SCORE",
       ({queryBuilder}) => {
-        const tableAlias = queryBuilder.getTableAlias()
-        // Unique alias to avoid conflicts if multiple orderBy expressions join
-        const scoreAlias = sql.identifier(Symbol("local_scores"))
-
-        queryBuilder.leftJoin(
-          sql.fragment`public.local_scores`,
-          scoreAlias,
-          sql.fragment`${scoreAlias}.entity_id = ${tableAlias}.entity_id
-            AND ${scoreAlias}.space_id = ${tableAlias}.space_id`,
-        )
-
-        return sql.fragment`${scoreAlias}.score`
+        const t = queryBuilder.getTableAlias()
+        return sql.fragment`(
+          SELECT ls.score FROM public.local_scores ls
+          WHERE ls.entity_id = ${t}.entity_id
+            AND ls.space_id = ${t}.space_id
+        )`
       },
-      {unique: false, nulls: "last-iff-ascending"},
+      {unique: false, nulls: "last"},
     )
+
+    const globalScore = orderByAscDesc(
+      "GLOBAL_SCORE",
+      ({queryBuilder}) => {
+        const t = queryBuilder.getTableAlias()
+        return sql.fragment`(
+          SELECT gs.score FROM public.global_scores gs
+          WHERE gs.entity_id = ${t}.entity_id
+        )`
+      },
+      {unique: false, nulls: "last"},
+    )
+
+    return {...localScore, ...globalScore}
   },
-  "Adding orderBy local_scores.score to values connection",
+  "Adding orderBy local_scores.score and global_scores.score to values connection",
 )
 
 export default ValueOrderByScorePlugin
 ```
 
-### 2. Register the Plugin
+Both `LOCAL_SCORE` and `GLOBAL_SCORE` live in the same plugin by spreading multiple `orderByAscDesc` results.
 
-In `api/src/kg/postgraphile.ts`, add to `appendPlugins` after `EntitySpaceFilterPlugin`:
+### Plugin Registration
+
+In `api/src/kg/postgraphile.ts`, added to `appendPlugins` after `EntitySpaceFilterPlugin`:
 
 ```typescript
 import ValueOrderByScorePlugin from "./valueOrderByScorePlugin"
@@ -93,27 +102,26 @@ appendPlugins: [
   ConnectionFilterPlugin,
   SimplifyInflectionPlugin,
   EntitySpaceFilterPlugin,
-  ValueOrderByScorePlugin,   // NEW
+  ValueOrderByScorePlugin,   // orderBy LOCAL_SCORE / GLOBAL_SCORE
   PaginationCapPlugin,
 ],
 ```
 
-### 3. GraphQL Usage
+### GraphQL Usage
 
 ```graphql
+# Top entities in a space by local score
 query ValuesByScore {
-  values(
+  valuesConnection(
     first: 50
-    orderBy: [LOCAL_SCORE_DESC]
+    orderBy: LOCAL_SCORE_DESC
     filter: { spaceId: { is: "space-uuid" } }
   ) {
-    edges {
-      node {
-        id
-        entityId
-        propertyId
-        text
-      }
+    nodes {
+      id
+      entityId
+      propertyId
+      text
     }
     pageInfo {
       hasNextPage
@@ -121,98 +129,54 @@ query ValuesByScore {
     }
   }
 }
+
+# Global ranking across all spaces
+query GlobalTopValues {
+  valuesConnection(orderBy: GLOBAL_SCORE_DESC, first: 100) {
+    nodes { id entityId text }
+  }
+}
+
+# Multi-column sort
+query ValuesByScoreThenProperty {
+  valuesConnection(orderBy: [LOCAL_SCORE_DESC, PROPERTY_ID_ASC], first: 50) {
+    nodes { id entityId propertyId text }
+  }
+}
 ```
-
-## QueryBuilder API
-
-`makeAddPgTableOrderByPlugin`'s `OrderBySpecIdentity` accepts a function `({queryBuilder}) => SQL`. The `queryBuilder` exposes:
-
-| Method | Purpose |
-|---|---|
-| `getTableAlias()` | Current table alias in the generated SQL |
-| `leftJoin(table, alias, condition)` | Add a LEFT JOIN clause |
-| `where(fragment)` | Add a WHERE condition |
-| `orderBy(fragment, ascending)` | Add ORDER BY (handled automatically by the plugin) |
-
-The plugin handles `ORDER BY` itself — the callback only needs to return the SQL expression to sort on. The framework wraps it with `ASC`/`DESC` and nulls ordering.
 
 ## SQL Generated
 
-The plugin will produce SQL roughly equivalent to:
+The plugin produces SQL roughly equivalent to:
 
 ```sql
 SELECT v.*
 FROM public.values v
-LEFT JOIN public.local_scores ls
-  ON ls.entity_id = v.entity_id
-  AND ls.space_id = v.space_id
-ORDER BY ls.score DESC NULLS LAST
+ORDER BY (
+  SELECT ls.score FROM public.local_scores ls
+  WHERE ls.entity_id = v.entity_id AND ls.space_id = v.space_id
+) DESC NULLS LAST
 LIMIT 51  -- first: 50 + 1 for hasNextPage
 ```
 
+Entities without scores get `NULL` from the subquery and always sort to the end via `nulls: "last"`.
+
 ## Index Coverage
 
-Existing indexes already cover this JOIN:
+| Query pattern | Index used |
+|---|---|
+| Subquery: `local_scores WHERE entity_id AND space_id` | PK `(entity_id, space_id)` |
+| Subquery: `global_scores WHERE entity_id` | PK `(entity_id)` |
+| Filter by space + sort by score | `idx_local_scores_space_score (space_id, score DESC)` |
 
-- `idx_local_scores_entity_id` on `local_scores(entity_id)`
-- `idx_local_scores_space_id` on `local_scores(space_id)`
-- `values_entity_space_idx` on `values(entity_id, space_id)`
-
-For optimal performance on large result sets with `ORDER BY score`, consider adding a composite index:
-
-```sql
-CREATE INDEX idx_local_scores_space_score
-  ON local_scores (space_id, score DESC);
-```
-
-This would help when filtering values by `spaceId` and ordering by score (the most common query pattern).
-
-## Extension: Global Score OrderBy
-
-The same pattern works for `global_scores` (one score per entity, no space dimension):
-
-```typescript
-...orderByAscDesc(
-  "GLOBAL_SCORE",
-  ({queryBuilder}) => {
-    const tableAlias = queryBuilder.getTableAlias()
-    const scoreAlias = sql.identifier(Symbol("global_scores"))
-
-    queryBuilder.leftJoin(
-      sql.fragment`public.global_scores`,
-      scoreAlias,
-      sql.fragment`${scoreAlias}.entity_id = ${tableAlias}.entity_id`,
-    )
-
-    return sql.fragment`${scoreAlias}.score`
-  },
-  {unique: false, nulls: "last-iff-ascending"},
-)
-```
-
-Both can live in the same plugin by spreading multiple `orderByAscDesc` results:
-
-```typescript
-return {
-  ...orderByAscDesc("LOCAL_SCORE", localScoreSql, opts),
-  ...orderByAscDesc("GLOBAL_SCORE", globalScoreSql, opts),
-}
-```
+The composite index `idx_local_scores_space_score` was added to optimize the common pattern of filtering values by `spaceId` while ordering by local score.
 
 ## Risks & Considerations
 
-1. **LEFT JOIN cost**: The JOIN runs on every values query that uses this orderBy. Without the orderBy argument, the JOIN is not added — `makeAddPgTableOrderByPlugin` only activates when the enum value is selected.
+1. **Correlated subquery cost**: Each result row triggers a subquery. Mitigated by PK index lookups (O(1)) and pagination cap (max 1000 rows). The subquery only runs when the orderBy enum is selected — no cost on other queries.
 
 2. **Cursor pagination**: PostGraphile encodes the sort column value into the cursor. If scores change between page fetches, rows may shift. This is acceptable for score-based ranking (scores update infrequently via the indexer pipeline).
 
 3. **Multiple orderBy values**: PostGraphile supports `orderBy: [LOCAL_SCORE_DESC, PROPERTY_ID_ASC]` — the SQL gets multiple `ORDER BY` columns. This works out of the box.
 
-4. **`queryBuilder.leftJoin` availability**: This method exists on PostGraphile 4.x's `QueryBuilder`. Verified in the graphile-build-pg source. If it's not available at runtime, the fallback is a raw SQL subquery expression instead of a JOIN (less efficient but guaranteed to work):
-   ```typescript
-   // Fallback: correlated subquery instead of JOIN
-   return sql.fragment`(
-     SELECT ls.score FROM public.local_scores ls
-     WHERE ls.entity_id = ${tableAlias}.entity_id
-       AND ls.space_id = ${tableAlias}.space_id
-   )`
-   ```
+4. **Nulls ordering**: `nulls: "last"` ensures entities without scores always sort to the end for both ASC and DESC. The alternative `"last-iff-ascending"` was considered but rejected because it causes `DESC NULLS FIRST`, placing unscored entities before scored ones in descending order.
