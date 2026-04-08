@@ -103,7 +103,7 @@ flowchart LR
 
 Footnote: For `bounty_interest`, `HermesEdit.space_id` is the curator's personal space (no DB lookup needed). For `bounty_allocated` / `bounty_payout`, the curator's space is resolved from the relation's `to_space_id` if present, otherwise via the entity→space DB lookup.
 
-Bounty events require consuming the `knowledge.edits` Kafka topic. The notification-indexer decodes the GRC-20 payload from `HermesEdit` messages and inspects the relation `type_id` to identify bounty-specific relations. The relation type UUIDs are sourced from the curator-app (`packages/curator-utils/src/ids.ts`) and configured via environment variables:
+Bounty events require consuming the `knowledge.edits` Kafka topic. The notification-indexer decodes the GRC-20 payload from `HermesEdit` messages and inspects the relation `type_id` to identify bounty-specific relations. The relation type UUIDs are sourced from the curator-app (`packages/curator-utils/src/ids.ts`) and are being upstreamed to the geo-sdk (`src/core/ids/system.ts`) and the grc-20 Rust crate. They are configured via environment variables with hardcoded defaults:
 
 - **`BOUNTY_INTEREST_RELATION_TYPE_ID`** = `ff7e1b44-44a2-4191-8732-4e6c222afe07` (`INTERESTED_IN_PROPERTY_ID`) — curator (Person) → bounty, in curator's personal space
 - **`BOUNTY_ALLOCATED_RELATION_TYPE_ID`** = `cfeb6422-23c5-4df4-b3f9-375a489d9e22` (`ALLOCATED_PROPERTY_ID`) — bounty → person, in public space (optional DAO proposal flow)

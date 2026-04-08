@@ -2069,4 +2069,229 @@ mod tests {
             crate::error::HandlerError::Grc20Decode(_)
         ));
     }
+
+    #[test]
+    fn test_extract_bounty_relations_allocated_with_to_space() {
+        let config = BountyConfig::default();
+        let curator_space = [0xCC; 16];
+        let hermes_edit = make_hermes_edit_with_relation(
+            *Uuid::parse_str(DEFAULT_ALLOCATED_TYPE_ID)
+                .expect("valid")
+                .as_bytes(),
+            [0x20; 16], // from = bounty
+            [0x30; 16], // to = curator entity
+            [0x40; 16], // edit space = bounty space
+            Some(curator_space),
+        );
+
+        let result = extract_bounty_relations(&hermes_edit, &config).expect("should succeed");
+        assert_eq!(result.len(), 1);
+        let (info, event_type) = &result[0];
+        assert_eq!(*event_type, NotificationEventType::BountyAllocated);
+        // curator_space_id should come from to_space, NOT be nil
+        assert_eq!(info.curator_space_id, Uuid::from_bytes(curator_space));
+        assert_ne!(info.curator_space_id, Uuid::nil());
+        // curator_entity_id should be rel.to
+        assert_eq!(info.curator_entity_id, Uuid::from_bytes([0x30; 16]));
+    }
+
+    #[test]
+    fn test_extract_bounty_relations_payout_with_to_space() {
+        let config = BountyConfig::default();
+        let curator_space = [0xDD; 16];
+        let hermes_edit = make_hermes_edit_with_relation(
+            *Uuid::parse_str(DEFAULT_PAYOUT_TYPE_ID)
+                .expect("valid")
+                .as_bytes(),
+            [0x20; 16],
+            [0x30; 16],
+            [0x40; 16],
+            Some(curator_space),
+        );
+
+        let result = extract_bounty_relations(&hermes_edit, &config).expect("should succeed");
+        assert_eq!(result.len(), 1);
+        let (info, event_type) = &result[0];
+        assert_eq!(*event_type, NotificationEventType::BountyPayout);
+        assert_eq!(info.curator_space_id, Uuid::from_bytes(curator_space));
+    }
+
+    #[test]
+    fn test_extract_bounty_relations_allocated_without_to_space() {
+        let config = BountyConfig::default();
+        let hermes_edit = make_hermes_edit_with_relation(
+            *Uuid::parse_str(DEFAULT_ALLOCATED_TYPE_ID)
+                .expect("valid")
+                .as_bytes(),
+            [0x20; 16],
+            [0x30; 16],
+            [0x40; 16],
+            None, // no to_space — needs DB fallback
+        );
+
+        let result = extract_bounty_relations(&hermes_edit, &config).expect("should succeed");
+        assert_eq!(result.len(), 1);
+        let (info, _) = &result[0];
+        // curator_space_id should be nil (needs DB lookup)
+        assert_eq!(info.curator_space_id, Uuid::nil());
+        // curator_entity_id should still be populated for the DB lookup
+        assert_eq!(info.curator_entity_id, Uuid::from_bytes([0x30; 16]));
+    }
+
+    #[test]
+    fn test_extract_bounty_relations_multiple_relations_in_one_edit() {
+        use std::borrow::Cow;
+        let config = BountyConfig::default();
+
+        // Build an edit with interest + allocated + a non-bounty relation
+        let interest_type = *Uuid::parse_str(DEFAULT_INTEREST_TYPE_ID)
+            .expect("valid")
+            .as_bytes();
+        let allocated_type = *Uuid::parse_str(DEFAULT_ALLOCATED_TYPE_ID)
+            .expect("valid")
+            .as_bytes();
+        let random_type = [0xEE; 16]; // non-bounty
+
+        let edit = grc_20::Edit {
+            id: [0x99; 16],
+            name: Cow::Borrowed("multi-relation edit"),
+            authors: vec![[0xAA; 16]],
+            created_at: 1700000000,
+            ops: vec![
+                grc_20::Op::CreateRelation(grc_20::CreateRelation {
+                    id: [0x01; 16],
+                    relation_type: interest_type,
+                    from: [0x10; 16], // curator
+                    from_is_value_ref: false,
+                    to: [0x20; 16], // bounty
+                    to_is_value_ref: false,
+                    from_space: None,
+                    from_version: None,
+                    to_space: None,
+                    to_version: None,
+                    entity: None,
+                    position: None,
+                    context: None,
+                }),
+                grc_20::Op::CreateRelation(grc_20::CreateRelation {
+                    id: [0x02; 16],
+                    relation_type: allocated_type,
+                    from: [0x20; 16], // bounty
+                    from_is_value_ref: false,
+                    to: [0x10; 16], // curator
+                    to_is_value_ref: false,
+                    from_space: None,
+                    from_version: None,
+                    to_space: Some([0xCC; 16]),
+                    to_version: None,
+                    entity: None,
+                    position: None,
+                    context: None,
+                }),
+                grc_20::Op::CreateRelation(grc_20::CreateRelation {
+                    id: [0x03; 16],
+                    relation_type: random_type, // non-bounty
+                    from: [0x30; 16],
+                    from_is_value_ref: false,
+                    to: [0x40; 16],
+                    to_is_value_ref: false,
+                    from_space: None,
+                    from_version: None,
+                    to_space: None,
+                    to_version: None,
+                    entity: None,
+                    position: None,
+                    context: None,
+                }),
+            ],
+        };
+        let payload = grc_20::encode_edit(&edit).expect("encode should succeed");
+
+        let hermes_edit = hermes_schema::pb::knowledge::HermesEdit {
+            id: vec![0x88; 16],
+            name: "multi".into(),
+            payload,
+            authors: vec![vec![0xAA; 16]],
+            language: None,
+            space_id: vec![0x50; 16],
+            is_canonical: true,
+            meta: Some(BlockchainMetadata {
+                block_number: 100,
+                created_at: 1700000000,
+                created_by: vec![],
+                cursor: String::new(),
+                sequence: 0,
+                is_last: false,
+            }),
+        };
+
+        let result = extract_bounty_relations(&hermes_edit, &config).expect("should succeed");
+        // Should find 2 bounty relations, not the non-bounty one
+        assert_eq!(result.len(), 2);
+
+        let types: Vec<_> = result.iter().map(|(_, t)| t.clone()).collect();
+        assert!(types.contains(&NotificationEventType::BountyInterest));
+        assert!(types.contains(&NotificationEventType::BountyAllocated));
+
+        // Verify interest has correct direction
+        let (interest_info, _) = result
+            .iter()
+            .find(|(_, t)| *t == NotificationEventType::BountyInterest)
+            .expect("interest present");
+        assert_eq!(interest_info.bounty_entity_id, Uuid::from_bytes([0x20; 16])); // to = bounty
+        assert_eq!(
+            interest_info.curator_entity_id,
+            Uuid::from_bytes([0x10; 16])
+        ); // from = curator
+
+        // Verify allocated has correct direction and to_space
+        let (alloc_info, _) = result
+            .iter()
+            .find(|(_, t)| *t == NotificationEventType::BountyAllocated)
+            .expect("allocated present");
+        assert_eq!(alloc_info.bounty_entity_id, Uuid::from_bytes([0x20; 16])); // from = bounty
+        assert_eq!(alloc_info.curator_entity_id, Uuid::from_bytes([0x10; 16])); // to = curator
+        assert_eq!(alloc_info.curator_space_id, Uuid::from_bytes([0xCC; 16])); // to_space
+    }
+
+    #[test]
+    fn test_extract_bounty_relations_edit_with_only_non_bounty_ops() {
+        use std::borrow::Cow;
+        let config = BountyConfig::default();
+
+        // CreateEntity op (not a relation at all)
+        let edit = grc_20::Edit {
+            id: [0x99; 16],
+            name: Cow::Borrowed("entity-only edit"),
+            authors: vec![],
+            created_at: 1700000000,
+            ops: vec![grc_20::Op::CreateEntity(grc_20::CreateEntity {
+                id: [0x01; 16],
+                values: vec![],
+                context: None,
+            })],
+        };
+        let payload = grc_20::encode_edit(&edit).expect("encode should succeed");
+
+        let hermes_edit = hermes_schema::pb::knowledge::HermesEdit {
+            id: vec![0x88; 16],
+            name: "entity".into(),
+            payload,
+            authors: vec![],
+            language: None,
+            space_id: vec![0x50; 16],
+            is_canonical: true,
+            meta: Some(BlockchainMetadata {
+                block_number: 100,
+                created_at: 1700000000,
+                created_by: vec![],
+                cursor: String::new(),
+                sequence: 0,
+                is_last: false,
+            }),
+        };
+
+        let result = extract_bounty_relations(&hermes_edit, &config).expect("should succeed");
+        assert!(result.is_empty());
+    }
 }
