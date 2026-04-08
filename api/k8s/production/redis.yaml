@@ -34,6 +34,15 @@ spec:
             # LRU eviction: evict least-recently-used keys when memory is full
             - "--maxmemory-policy"
             - "allkeys-lru"
+            # Require authentication
+            - "--requirepass"
+            - "$(VALKEY_PASSWORD)"
+          env:
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: api-cache-secrets
+                  key: VALKEY_PASSWORD
           ports:
             - containerPort: 6379
               protocol: TCP
@@ -50,13 +59,19 @@ spec:
               memory: "1Gi"
           livenessProbe:
             exec:
-              command: ["valkey-cli", "ping"]
+              command:
+                - sh
+                - -c
+                - valkey-cli -a "$VALKEY_PASSWORD" --no-auth-warning ping
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
           readinessProbe:
             exec:
-              command: ["valkey-cli", "ping"]
+              command:
+                - sh
+                - -c
+                - valkey-cli -a "$VALKEY_PASSWORD" --no-auth-warning ping
             initialDelaySeconds: 3
             periodSeconds: 5
             timeoutSeconds: 3
@@ -72,9 +87,30 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-    - name: redis
+    - name: valkey
       port: 6379
       targetPort: 6379
       protocol: TCP
   selector:
     app: api-cache
+---
+# Restrict Valkey access to API pods only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-cache-ingress
+  namespace: api
+spec:
+  podSelector:
+    matchLabels:
+      app: api-cache
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api
+      ports:
+        - port: 6379
+          protocol: TCP

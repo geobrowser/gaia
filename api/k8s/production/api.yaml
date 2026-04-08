@@ -127,7 +127,10 @@ spec:
             - name: TOPOLOGY_SERVICE_URL
               value: "http://search-indexer.search.svc.cluster.local:8080"
             - name: VALKEY_URL
-              value: "redis://api-cache.api.svc.cluster.local:6379"
+              valueFrom:
+                secretKeyRef:
+                  name: api-cache-secrets
+                  key: VALKEY_URL
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:

@@ -8,7 +8,7 @@ import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
 import {classifyDbFailure} from "../services/dbFailures"
-import {getGraphqlPressureSnapshot, recordGraphqlAcquireTimeout} from "../services/dbSaturation"
+import {getGraphqlPressureSnapshot, recordGraphqlAcquireTimeout, shouldShedPoolTraffic} from "../services/dbSaturation"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
@@ -156,6 +156,13 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 			const query = fullQuery.slice(0, 2000)
 			const queryFingerprint = graphqlQueryFingerprint(fullQuery)
 			const acquireStartMs = Date.now()
+
+			// Check pool pressure before attempting checkout. This only runs on
+			// cache misses — cached responses skip usePgClient entirely.
+			const poolPressure = getGraphqlPressureSnapshot(getGraphqlPoolStats())
+			if (shouldShedPoolTraffic(poolPressure)) {
+				throw new Error("pool_pressure_shed")
+			}
 
 			let pgClient: PoolClient
 			try {
