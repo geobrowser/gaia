@@ -15,9 +15,7 @@ async function executeGraphQL(query: string, variables?: Record<string, unknown>
 
 function filterSchemaErrors(errors: Array<{message: string; extensions?: {code?: string}}> | undefined) {
 	return (errors ?? []).filter(
-		(e) =>
-			e.extensions?.code === "GRAPHQL_VALIDATION_FAILED" ||
-			e.extensions?.code === "GRAPHQL_PARSE_FAILED",
+		(e) => e.extensions?.code === "GRAPHQL_VALIDATION_FAILED" || e.extensions?.code === "GRAPHQL_PARSE_FAILED",
 	)
 }
 
@@ -103,14 +101,17 @@ describe("ValueOrderByScorePlugin", () => {
 		expect(filterSchemaErrors(firstPage.errors)).toHaveLength(0)
 
 		// Second page using cursor — validates schema accepts after + orderBy together
-		const nextPage = await executeGraphQL(`
+		const nextPage = await executeGraphQL(
+			`
 			query NextPage($cursor: Cursor!) {
 				valuesConnection(orderBy: LOCAL_SCORE_DESC, first: 2, after: $cursor) {
 					nodes { id }
 					pageInfo { hasNextPage endCursor }
 				}
 			}
-		`, {cursor: "fakecursor"})
+		`,
+			{cursor: "fakecursor"},
+		)
 
 		expect(filterSchemaErrors(nextPage.errors)).toHaveLength(0)
 	})
