@@ -16,7 +16,7 @@ export const ValueOrderByScorePlugin = makeAddPgTableOrderByPlugin(
 						AND ls.space_id = ${t}.space_id
 				)`
 			},
-			{unique: false, nulls: "last-iff-ascending"},
+			{unique: false, nulls: "last"},
 		)
 
 		const globalScore = orderByAscDesc(
@@ -28,7 +28,7 @@ export const ValueOrderByScorePlugin = makeAddPgTableOrderByPlugin(
 					WHERE gs.entity_id = ${t}.entity_id
 				)`
 			},
-			{unique: false, nulls: "last-iff-ascending"},
+			{unique: false, nulls: "last"},
 		)
 
 		return {...localScore, ...globalScore}

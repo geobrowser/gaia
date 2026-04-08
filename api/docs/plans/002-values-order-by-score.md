@@ -60,7 +60,7 @@ export const ValueOrderByScorePlugin = makeAddPgTableOrderByPlugin(
             AND ls.space_id = ${t}.space_id
         )`
       },
-      { unique: false, nulls: "last-iff-ascending" },
+      { unique: false, nulls: "last" },
     )
 
     const globalScore = orderByAscDesc(
@@ -72,7 +72,7 @@ export const ValueOrderByScorePlugin = makeAddPgTableOrderByPlugin(
           WHERE gs.entity_id = ${t}.entity_id
         )`
       },
-      { unique: false, nulls: "last-iff-ascending" },
+      { unique: false, nulls: "last" },
     )
 
     return { ...localScore, ...globalScore }
@@ -91,11 +91,11 @@ FROM public.values v
 ORDER BY (
   SELECT ls.score FROM public.local_scores ls
   WHERE ls.entity_id = v.entity_id AND ls.space_id = v.space_id
-) DESC NULLS FIRST
+) DESC NULLS LAST
 LIMIT 51
 ```
 
-Entities without scores get `NULL` from the subquery and sort to the end via `nulls: "last-iff-ascending"`.
+Entities without scores get `NULL` from the subquery and always sort to the end via `nulls: "last"`.
 
 ### 2. Plugin Registration
 
