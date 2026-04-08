@@ -44,10 +44,10 @@ spec:
                 - ALL
           resources:
             requests:
-              memory: "256Mi"
+              memory: "512Mi"
               cpu: "50m"
             limits:
-              memory: "640Mi"
+              memory: "1Gi"
           livenessProbe:
             exec:
               command: ["valkey-cli", "ping"]
