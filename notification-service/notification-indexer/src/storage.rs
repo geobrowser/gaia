@@ -11,6 +11,19 @@ use uuid::Uuid;
 use crate::error::StorageError;
 use crate::models::NotificationEvent;
 
+// Well-known system IDs from the knowledge graph.
+// Sourced from geo-sdk (src/core/ids/system.ts) and curator-app (packages/curator-utils/src/ids.ts).
+// These are being upstreamed to the grc-20 Rust crate — once available, import from there instead.
+
+/// The "Types" relation type ID — used for entity type membership (e.g. entity → Bounty type).
+const TYPE_RELATION_TYPE_ID: &str = "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1";
+/// The "Space" type entity ID — used to identify space entities via Types relations.
+const SPACE_TYPE_ID: &str = "362c1dbd-dc64-44bb-a3c4-652f38a642d7";
+/// The "Bounty" type entity ID — used to identify bounty entities via Types relations.
+const BOUNTY_TYPE_ID: &str = "808af0ba-d588-4e33-91f0-9dd4b25e18be";
+/// The "Name" property ID — used to look up entity display names.
+const NAME_PROPERTY_ID: &str = "a126ca53-0c8e-48d5-b888-82c734c38935";
+
 /// Storage for notification-related database operations.
 pub struct Storage {
     pool: PgPool,
@@ -183,20 +196,23 @@ impl Storage {
     /// that has a Types relation pointing from the entity to SPACE_TYPE.
     #[instrument(name = "notification_indexer.storage.lookup_entity_space", skip(self))]
     pub async fn lookup_entity_space(&self, entity_id: Uuid) -> Result<Option<Uuid>, StorageError> {
-        // TYPE_RELATION_TYPE_ID = 8f151ba4-de20-4e3c-9cb4-99ddf96f48f1
-        // SPACE_TYPE = 362c1dbd-dc64-44bb-a3c4-652f38a642d7
+        let type_rel_id =
+            Uuid::parse_str(TYPE_RELATION_TYPE_ID).expect("valid TYPE_RELATION_TYPE_ID");
+        let space_type_id = Uuid::parse_str(SPACE_TYPE_ID).expect("valid SPACE_TYPE_ID");
         let result = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT r.space_id
             FROM relations r
             JOIN spaces s ON s.id = r.space_id
             WHERE r.from_entity_id = $1
-              AND r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid
-              AND r.to_entity_id = '362c1dbd-dc64-44bb-a3c4-652f38a642d7'::uuid
+              AND r.type_id = $2
+              AND r.to_entity_id = $3
             LIMIT 1
             "#,
         )
         .bind(entity_id)
+        .bind(type_rel_id)
+        .bind(space_type_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(result)
@@ -212,19 +228,22 @@ impl Storage {
         &self,
         bounty_entity_id: Uuid,
     ) -> Result<Option<Uuid>, StorageError> {
-        // TYPE_RELATION_TYPE_ID = 8f151ba4-de20-4e3c-9cb4-99ddf96f48f1
-        // BOUNTY_TYPE_ID = 808af0ba-d588-4e33-91f0-9dd4b25e18be
+        let type_rel_id =
+            Uuid::parse_str(TYPE_RELATION_TYPE_ID).expect("valid TYPE_RELATION_TYPE_ID");
+        let bounty_type_id = Uuid::parse_str(BOUNTY_TYPE_ID).expect("valid BOUNTY_TYPE_ID");
         let result = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT space_id
             FROM relations
             WHERE from_entity_id = $1
-              AND type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid
-              AND to_entity_id = '808af0ba-d588-4e33-91f0-9dd4b25e18be'::uuid
+              AND type_id = $2
+              AND to_entity_id = $3
             LIMIT 1
             "#,
         )
         .bind(bounty_entity_id)
+        .bind(type_rel_id)
+        .bind(bounty_type_id)
         .fetch_optional(&self.pool)
         .await?;
         Ok(result)
@@ -299,12 +318,13 @@ impl Storage {
     ///
     /// Returns `None` if the entity has no name or the query fails.
     pub async fn lookup_entity_name(&self, entity_id: Uuid, space_id: Uuid) -> Option<String> {
+        let name_prop_id = Uuid::parse_str(NAME_PROPERTY_ID).expect("valid NAME_PROPERTY_ID");
         sqlx::query_scalar::<_, String>(
             r#"
             SELECT v.text
             FROM "values" v
             WHERE v.entity_id = $1
-              AND v.property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935'::uuid
+              AND v.property_id = $3
               AND v.space_id = $2
               AND v.text IS NOT NULL
             LIMIT 1
@@ -312,6 +332,7 @@ impl Storage {
         )
         .bind(entity_id)
         .bind(space_id)
+        .bind(name_prop_id)
         .fetch_optional(&self.pool)
         .await
         .ok()

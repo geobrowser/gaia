@@ -283,6 +283,10 @@ async fn async_main() -> Result<(), IndexerError> {
         let ke_min_age = min_age_secs;
         let ke_stor = Storage::new(storage.pool().clone());
         let ke_cfg = bounty_config;
+        let ke_heartbeat_secs: u64 = env::var("HEARTBEAT_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60);
 
         Some(tokio::spawn(async move {
             // Create consumer inside the task so it's fully owned
@@ -301,6 +305,11 @@ async fn async_main() -> Result<(), IndexerError> {
             let mut ke_stream = kec.stream();
             let mut ke_processed: u64 = 0;
             let mut ke_errors: u64 = 0;
+            let mut ke_skipped: u64 = 0;
+
+            let mut ke_heartbeat =
+                tokio::time::interval(tokio::time::Duration::from_secs(ke_heartbeat_secs));
+            ke_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             info!("Knowledge edits consumer loop started");
 
@@ -309,6 +318,14 @@ async fn async_main() -> Result<(), IndexerError> {
                     _ = shutdown_rx3.recv() => {
                         info!("Knowledge edits consumer shutting down");
                         break;
+                    }
+                    _ = ke_heartbeat.tick() => {
+                        info!(
+                            processed = ke_processed,
+                            errors = ke_errors,
+                            skipped = ke_skipped,
+                            "Knowledge edits heartbeat"
+                        );
                     }
                     message = ke_stream.next() => {
                         match message {
@@ -396,61 +413,58 @@ async fn async_main() -> Result<(), IndexerError> {
                                     continue;
                                 }
 
-                                let mut all_ok = true;
-                                for (mut info, event_type) in relations {
-                                    // Block delay: wait for kg-indexer catchup
-                                    if ke_bd > 0 {
-                                        wait_for_kg_catchup(
-                                            &ke_stor,
-                                            info.block_number,
-                                            ke_bd,
-                                            ke_bd_timeout,
-                                        )
-                                        .await;
-                                    }
+                                // Process all bounty relations in this edit.
+                                // Returns Err on DB errors (don't commit — retry on restart).
+                                // Returns Ok on success or non-retryable skips.
+                                let process_result: Result<(), ()> = async {
+                                    for (mut info, event_type) in relations {
+                                        // Block delay: wait for kg-indexer catchup
+                                        if ke_bd > 0 {
+                                            wait_for_kg_catchup(
+                                                &ke_stor,
+                                                info.block_number,
+                                                ke_bd,
+                                                ke_bd_timeout,
+                                            )
+                                            .await;
+                                        }
 
-                                    match event_type {
-                                        NotificationEventType::BountyInterest => {
-                                            // Resolve bounty_space_id from DB
-                                            match ke_stor.lookup_bounty_space(info.bounty_entity_id).await {
-                                                Ok(Some(space_id)) => {
-                                                    info.bounty_space_id = space_id;
+                                        match event_type {
+                                            NotificationEventType::BountyInterest => {
+                                                // Resolve bounty_space_id from DB
+                                                match ke_stor.lookup_bounty_space(info.bounty_entity_id).await {
+                                                    Ok(Some(space_id)) => {
+                                                        info.bounty_space_id = space_id;
+                                                    }
+                                                    Ok(None) => {
+                                                        warn!(
+                                                            bounty_entity_id = %info.bounty_entity_id,
+                                                            "Could not resolve bounty space, skipping interest notification"
+                                                        );
+                                                        ke_skipped += 1;
+                                                        continue;
+                                                    }
+                                                    Err(e) => {
+                                                        error!(error = %e, "DB error looking up bounty space, will retry");
+                                                        ke_errors += 1;
+                                                        return Err(());
+                                                    }
                                                 }
-                                                Ok(None) => {
-                                                    warn!(
-                                                        bounty_entity_id = %info.bounty_entity_id,
-                                                        "Could not resolve bounty space, skipping interest notification"
-                                                    );
-                                                    continue;
-                                                }
-                                                Err(e) => {
-                                                    error!(error = %e, "DB error looking up bounty space, will retry");
-                                                    ke_errors += 1;
-                                                    all_ok = false;
-                                                    break;
-                                                }
-                                            }
 
-                                            let mut event = handle_bounty_interest(&info);
-                                            enrich_payload(&ke_stor, &mut event, info.bounty_space_id).await;
+                                                let mut event = handle_bounty_interest(&info);
+                                                enrich_payload(&ke_stor, &mut event, info.bounty_space_id).await;
 
-                                            let editors = match ke_stor.find_editors_for_space(info.bounty_space_id).await {
-                                                Ok(eds) => eds,
-                                                Err(e) => {
+                                                let editors = ke_stor.find_editors_for_space(info.bounty_space_id).await.map_err(|e| {
                                                     error!(error = %e, "DB error looking up editors for bounty interest, will retry");
                                                     ke_errors += 1;
-                                                    all_ok = false;
-                                                    break;
+                                                })?;
+
+                                                if editors.is_empty() {
+                                                    ke_processed += 1;
+                                                    continue;
                                                 }
-                                            };
 
-                                            if editors.is_empty() {
-                                                ke_processed += 1;
-                                                continue;
-                                            }
-
-                                            match ke_stor.insert_notifications_for_editors(&event, &editors).await {
-                                                Ok(count) => {
+                                                ke_stor.insert_notifications_for_editors(&event, &editors).await.map(|count| {
                                                     if count > 0 {
                                                         info!(
                                                             event_type = "bounty_interest",
@@ -460,49 +474,45 @@ async fn async_main() -> Result<(), IndexerError> {
                                                         );
                                                     }
                                                     ke_processed += 1;
-                                                }
-                                                Err(e) => {
+                                                }).map_err(|e| {
                                                     error!(error = %e, "DB error inserting bounty interest notifications, will retry");
                                                     ke_errors += 1;
-                                                    all_ok = false;
-                                                    break;
-                                                }
+                                                })?;
                                             }
-                                        }
-                                        NotificationEventType::BountyAllocated
-                                        | NotificationEventType::BountyPayout => {
-                                            // Resolve curator_space_id if nil
-                                            if info.curator_space_id.is_nil() {
-                                                match ke_stor.lookup_entity_space(info.curator_entity_id).await {
-                                                    Ok(Some(space_id)) => {
-                                                        info.curator_space_id = space_id;
-                                                    }
-                                                    Ok(None) => {
-                                                        warn!(
-                                                            bounty_entity_id = %info.bounty_entity_id,
-                                                            event_type = %event_type.as_str(),
-                                                            "Could not resolve curator space, skipping notification"
-                                                        );
-                                                        continue;
-                                                    }
-                                                    Err(e) => {
-                                                        error!(error = %e, "DB error looking up curator space, will retry");
-                                                        ke_errors += 1;
-                                                        all_ok = false;
-                                                        break;
+                                            NotificationEventType::BountyAllocated
+                                            | NotificationEventType::BountyPayout => {
+                                                // Resolve curator_space_id if nil
+                                                if info.curator_space_id.is_nil() {
+                                                    match ke_stor.lookup_entity_space(info.curator_entity_id).await {
+                                                        Ok(Some(space_id)) => {
+                                                            info.curator_space_id = space_id;
+                                                        }
+                                                        Ok(None) => {
+                                                            warn!(
+                                                                bounty_entity_id = %info.bounty_entity_id,
+                                                                curator_entity_id = %info.curator_entity_id,
+                                                                event_type = %event_type.as_str(),
+                                                                "Could not resolve curator space, skipping notification"
+                                                            );
+                                                            ke_skipped += 1;
+                                                            continue;
+                                                        }
+                                                        Err(e) => {
+                                                            error!(error = %e, "DB error looking up curator space, will retry");
+                                                            ke_errors += 1;
+                                                            return Err(());
+                                                        }
                                                     }
                                                 }
-                                            }
 
-                                            let mut event = if event_type == NotificationEventType::BountyAllocated {
-                                                handle_bounty_allocated(&info)
-                                            } else {
-                                                handle_bounty_payout(&info)
-                                            };
-                                            enrich_payload(&ke_stor, &mut event, info.bounty_space_id).await;
+                                                let mut event = if event_type == NotificationEventType::BountyAllocated {
+                                                    handle_bounty_allocated(&info)
+                                                } else {
+                                                    handle_bounty_payout(&info)
+                                                };
+                                                enrich_payload(&ke_stor, &mut event, info.bounty_space_id).await;
 
-                                            match ke_stor.insert_notification_for_user(&event, info.curator_space_id).await {
-                                                Ok(count) => {
+                                                ke_stor.insert_notification_for_user(&event, info.curator_space_id).await.map(|count| {
                                                     if count > 0 {
                                                         info!(
                                                             event_type = %event_type.as_str(),
@@ -512,28 +522,26 @@ async fn async_main() -> Result<(), IndexerError> {
                                                         );
                                                     }
                                                     ke_processed += 1;
-                                                }
-                                                Err(e) => {
+                                                }).map_err(|e| {
                                                     error!(
                                                         error = %e,
                                                         event_type = %event_type.as_str(),
                                                         "DB error inserting bounty notification, will retry"
                                                     );
                                                     ke_errors += 1;
-                                                    all_ok = false;
-                                                    break;
-                                                }
+                                                })?;
+                                            }
+                                            _ => {
+                                                continue;
                                             }
                                         }
-                                        _ => {
-                                            continue;
-                                        }
                                     }
-                                }
+                                    Ok(())
+                                }.await;
 
-                                // Only commit offset if all relations in the edit were processed successfully.
-                                // On DB error: don't commit — retry on restart.
-                                if all_ok {
+                                // Only commit offset if all relations processed successfully.
+                                // On DB error (Err): don't commit — retry on restart.
+                                if process_result.is_ok() {
                                     if let Err(e) = kec.commit_message(&topic, partition, offset) {
                                         error!(error = %e, "Failed to commit knowledge edits offset");
                                     }
