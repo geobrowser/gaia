@@ -1,4 +1,5 @@
 import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
+import {useResponseCache} from "@graphql-yoga/plugin-response-cache"
 import * as Sentry from "@sentry/node"
 import {GraphQLError, print} from "graphql"
 import {createYoga, maskError, type Plugin, useExecutionCancellation} from "graphql-yoga"
@@ -13,6 +14,7 @@ import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin from "./paginationCapPlugin"
+import {createRedisCache} from "./redisCache"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 import ValueScalarsPlugin from "./valueScalarsPlugin"
 
@@ -227,8 +229,33 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 	}
 }
 
-// Shared plugins for GraphQL server
-const sharedPlugins = [useGraphQLInstrumentation(), usePgClient(pgPool), useExecutionCancellation()]
+// Response cache — shared across all API pods via Redis.
+// Disabled gracefully if REDIS_URL is not set (no cache, direct DB queries).
+// TTL of 10s balances freshness with DB load reduction.
+// Redis maxmemory + allkeys-lru eviction prevents unbounded memory growth.
+const RESPONSE_CACHE_TTL_MS = 10_000
+const responseCachePlugin = (() => {
+	const redisUrl = process.env.REDIS_URL
+	if (!redisUrl) {
+		log.info("Response cache disabled (REDIS_URL not set)")
+		return null
+	}
+	log.info("Response cache enabled", {redisUrl: redisUrl.replace(/\/\/.*@/, "//<redacted>@")})
+	return useResponseCache({
+		session: () => null,
+		ttl: RESPONSE_CACHE_TTL_MS,
+		cache: createRedisCache(redisUrl),
+	})
+})()
+
+// Shared plugins for GraphQL server.
+// Response cache is first so cache hits skip pgClient checkout entirely.
+const sharedPlugins = [
+	...(responseCachePlugin ? [responseCachePlugin] : []),
+	useGraphQLInstrumentation(),
+	usePgClient(pgPool),
+	useExecutionCancellation(),
+]
 
 // GraphQL server without uuidScalarPlugin
 export const graphqlServer = createYoga<GraphQLServerContext>({

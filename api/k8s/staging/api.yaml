@@ -128,6 +128,8 @@ spec:
                   key: OPENSEARCH_URL
             - name: TOPOLOGY_SERVICE_URL
               value: "http://search-indexer.search-staging.svc.cluster.local:8080"
+            - name: REDIS_URL
+              value: "redis://api-cache.api-staging.svc.cluster.local:6379"
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
