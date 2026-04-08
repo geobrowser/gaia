@@ -473,7 +473,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                         | NotificationEventType::BountyPayout => {
                                             // Resolve curator_space_id if nil
                                             if info.curator_space_id.is_nil() {
-                                                match ke_stor.lookup_entity_space(info.bounty_entity_id).await {
+                                                match ke_stor.lookup_entity_space(info.curator_entity_id).await {
                                                     Ok(Some(space_id)) => {
                                                         info.curator_space_id = space_id;
                                                     }

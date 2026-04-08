@@ -723,6 +723,9 @@ impl BountyConfig {
 pub struct BountyRelationInfo {
     pub relation_id: Uuid,
     pub bounty_entity_id: Uuid,
+    /// The curator's entity ID (rel.to for allocated/payout).
+    /// Used for entity→space DB lookup when curator_space_id is nil.
+    pub curator_entity_id: Uuid,
     pub curator_space_id: Uuid,
     pub bounty_space_id: Uuid,
     pub proposal_id: Option<Uuid>,
@@ -859,6 +862,7 @@ pub fn extract_bounty_relations(
                         BountyRelationInfo {
                             relation_id: Uuid::from_bytes(rel.id),
                             bounty_entity_id: Uuid::from_bytes(rel.to),
+                            curator_entity_id: Uuid::from_bytes(rel.from),
                             curator_space_id: edit_space_id,
                             bounty_space_id: Uuid::nil(), // Needs DB lookup
                             proposal_id: None,
@@ -874,6 +878,7 @@ pub fn extract_bounty_relations(
                         BountyRelationInfo {
                             relation_id: Uuid::from_bytes(rel.id),
                             bounty_entity_id: Uuid::from_bytes(rel.from),
+                            curator_entity_id: Uuid::from_bytes(rel.to),
                             curator_space_id: curator_space.unwrap_or(Uuid::nil()),
                             bounty_space_id: edit_space_id,
                             proposal_id: None,
@@ -1331,6 +1336,7 @@ mod tests {
         BountyRelationInfo {
             relation_id: Uuid::from_bytes([0x10; 16]),
             bounty_entity_id: Uuid::from_bytes([0x20; 16]),
+            curator_entity_id: Uuid::from_bytes([0x25; 16]),
             curator_space_id: Uuid::from_bytes([0x30; 16]),
             bounty_space_id: Uuid::from_bytes([0x40; 16]),
             proposal_id: None,
