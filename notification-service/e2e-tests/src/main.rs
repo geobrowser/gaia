@@ -106,6 +106,15 @@ const NUM_WEBHOOKS: usize = 3;
 // Bounty payout: 1 event × 1 curator × 3 webhooks = 3
 const EXPECTED_CALLS: usize = 54 + 3 + 6 + 3 + 3;
 
+const GOVERNANCE_EVENT_TYPES: &[&str] = &[
+    "proposal_created",
+    "proposal_updated",
+    "proposal_voted",
+    "proposal_executed",
+    "proposal_settings_updated",
+    "proposal_rejected",
+];
+
 const ALL_EVENT_TYPES: &[&str] = &[
     "proposal_created",
     "proposal_updated",
@@ -778,8 +787,8 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         calls_3e.len() == 54,
     );
 
-    // Per event-type fan-out
-    for et in ALL_EVENT_TYPES {
+    // Per governance event-type fan-out (3-editor space)
+    for et in GOVERNANCE_EVENT_TYPES {
         let et_calls: Vec<_> = calls_3e
             .iter()
             .filter(|c| c.body["event_type"].as_str() == Some(et))
