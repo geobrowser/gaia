@@ -21,7 +21,7 @@ spec:
         fsGroup: 999
       containers:
         - name: redis
-          image: redis:7-alpine
+          image: valkey/valkey:8.1-alpine
           args:
             # Ephemeral cache — no persistence, no disk writes
             - "--save"
@@ -50,13 +50,13 @@ spec:
               memory: "192Mi"
           livenessProbe:
             exec:
-              command: ["redis-cli", "ping"]
+              command: ["valkey-cli", "ping"]
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
           readinessProbe:
             exec:
-              command: ["redis-cli", "ping"]
+              command: ["valkey-cli", "ping"]
             initialDelaySeconds: 3
             periodSeconds: 5
             timeoutSeconds: 3
