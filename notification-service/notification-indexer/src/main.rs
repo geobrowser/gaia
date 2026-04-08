@@ -1,10 +1,13 @@
 //! Notification indexer entry point.
 //!
-//! Two concurrent tasks:
-//! 1. Kafka consumer — subscribes to `space.governance`, processes all governance
+//! Three concurrent tasks:
+//! 1. Governance consumer — subscribes to `space.governance`, processes all governance
 //!    events (PROPOSAL_CREATED, PROPOSAL_UPDATED, PROPOSAL_VOTED,
 //!    PROPOSAL_EXECUTED, PROPOSAL_SETTINGS_UPDATED) and writes to the notification outbox.
-//! 2. Rejection poller — every 60s, finds proposals that expired without execution
+//! 2. Knowledge edits consumer — subscribes to `knowledge.edits`, decodes GRC-20
+//!    payloads, detects bounty-related CreateRelation operations (interest, allocated,
+//!    payout) and writes to the notification outbox.
+//! 3. Rejection poller — every 60s, finds proposals that expired without execution
 //!    and writes rejection notifications.
 
 use std::env;
@@ -165,15 +168,6 @@ async fn async_main() -> Result<(), IndexerError> {
         }
     };
 
-    // Knowledge edits consumer (optional, default disabled)
-    let knowledge_edits_enabled = env::var("KNOWLEDGE_EDITS_ENABLED")
-        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-        .unwrap_or(false);
-
-    if !knowledge_edits_enabled {
-        info!("Knowledge edits consumer disabled (set KNOWLEDGE_EDITS_ENABLED=true to enable)");
-    }
-
     let bounty_config = BountyConfig::new();
     info!(
         interest = %bounty_config.interest_type_id,
@@ -274,8 +268,8 @@ async fn async_main() -> Result<(), IndexerError> {
         }
     });
 
-    // Spawn knowledge edits consumer task (if enabled)
-    let ke_handle: Option<tokio::task::JoinHandle<()>> = if knowledge_edits_enabled {
+    // Spawn knowledge edits consumer task
+    let ke_handle: tokio::task::JoinHandle<()> = {
         let ke_kafka_broker = kafka_broker.clone();
         let ke_kafka_group_id = kafka_group_id.clone();
         let ke_bd = block_delay;
@@ -288,7 +282,7 @@ async fn async_main() -> Result<(), IndexerError> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(60);
 
-        Some(tokio::spawn(async move {
+        tokio::spawn(async move {
             // Create consumer inside the task so it's fully owned
             let kec = match KnowledgeEditsConsumer::new(&ke_kafka_broker, &ke_kafka_group_id) {
                 Ok(c) => c,
@@ -565,9 +559,7 @@ async fn async_main() -> Result<(), IndexerError> {
                 errors = ke_errors,
                 "Knowledge edits consumer stopped"
             );
-        }))
-    } else {
-        None
+        })
     };
 
     // Main Kafka consumer loop
@@ -829,14 +821,12 @@ async fn async_main() -> Result<(), IndexerError> {
         }
     }
 
-    // Wait for knowledge edits consumer to finish (if enabled)
-    if let Some(handle) = ke_handle {
-        match tokio::time::timeout(tokio::time::Duration::from_secs(5), handle).await {
-            Ok(Ok(())) => info!("Knowledge edits consumer stopped"),
-            Ok(Err(e)) => warn!(error = %e, "Knowledge edits consumer task failed"),
-            Err(_) => {
-                warn!("Knowledge edits consumer did not stop within 5s, aborting");
-            }
+    // Wait for knowledge edits consumer to finish
+    match tokio::time::timeout(tokio::time::Duration::from_secs(5), ke_handle).await {
+        Ok(Ok(())) => info!("Knowledge edits consumer stopped"),
+        Ok(Err(e)) => warn!(error = %e, "Knowledge edits consumer task failed"),
+        Err(_) => {
+            warn!("Knowledge edits consumer did not stop within 5s, aborting");
         }
     }
 
