@@ -14,7 +14,7 @@ import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin from "./paginationCapPlugin"
-import {createRedisCache} from "./redisCache"
+import {createValkeyCache} from "./valkeyCache"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 import ValueScalarsPlugin from "./valueScalarsPlugin"
 
@@ -229,20 +229,20 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 	}
 }
 
-// Response cache — shared across all API pods via Redis.
-// Disabled gracefully if REDIS_URL is not set (no cache, direct DB queries).
-// Redis maxmemory + allkeys-lru eviction prevents unbounded memory growth.
+// Response cache — shared across all API pods via Valkey (Redis-compatible).
+// Disabled gracefully if VALKEY_URL is not set (no cache, direct DB queries).
+// Valkey maxmemory + allkeys-lru eviction prevents unbounded memory growth.
 const DEFAULT_TTL_MS = 10_000
 // Longer TTL for expensive, rarely-changing queries identified in production logs.
 // These queries are identical across all users and produce large responses (2-15 MB).
 const LONG_TTL_MS = 60_000
 const responseCachePlugin = (() => {
-	const redisUrl = process.env.REDIS_URL
-	if (!redisUrl) {
-		log.info("Response cache disabled (REDIS_URL not set)")
+	const valkeyUrl = process.env.VALKEY_URL
+	if (!valkeyUrl) {
+		log.info("Response cache disabled (VALKEY_URL not set)")
 		return null
 	}
-	log.info("Response cache enabled", {redisUrl: redisUrl.replace(/\/\/.*@/, "//<redacted>@")})
+	log.info("Response cache enabled", {valkeyUrl: valkeyUrl.replace(/\/\/.*@/, "//<redacted>@")})
 	return useResponseCache({
 		session: () => null,
 		ttl: DEFAULT_TTL_MS,
@@ -255,7 +255,7 @@ const responseCachePlugin = (() => {
 			"Query.entitiesConnection": LONG_TTL_MS,
 			"Query.entitiesOrderedByProperty": LONG_TTL_MS,
 		},
-		cache: createRedisCache(redisUrl),
+		cache: createValkeyCache(valkeyUrl),
 	})
 })()
 

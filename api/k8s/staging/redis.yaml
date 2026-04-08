@@ -20,7 +20,7 @@ spec:
         runAsUser: 999
         fsGroup: 999
       containers:
-        - name: redis
+        - name: valkey
           image: valkey/valkey:8.1-alpine
           args:
             # Ephemeral cache — no persistence, no disk writes
