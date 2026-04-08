@@ -16,14 +16,17 @@ use rdkafka::message::Message;
 use rdkafka::Timestamp;
 
 use notification_indexer::consumer::{
-    get_event_type, parse_proposal_created, parse_proposal_executed,
+    get_event_type, parse_hermes_edit, parse_proposal_created, parse_proposal_executed,
     parse_proposal_settings_updated, parse_proposal_updated, parse_proposal_voted, KafkaConsumer,
+    KnowledgeEditsConsumer,
 };
 use notification_indexer::consumer_lag::LagMonitor;
 use notification_indexer::error::IndexerError;
 use notification_indexer::models::{
-    build_rejection_event, handle_proposal_created, handle_proposal_executed,
-    handle_proposal_settings_updated, handle_proposal_updated, handle_proposal_voted,
+    build_rejection_event, extract_bounty_relations, handle_bounty_allocated,
+    handle_bounty_interest, handle_bounty_payout, handle_proposal_created,
+    handle_proposal_executed, handle_proposal_settings_updated, handle_proposal_updated,
+    handle_proposal_voted, BountyConfig, NotificationEventType,
 };
 use notification_indexer::storage::Storage;
 
@@ -162,9 +165,27 @@ async fn async_main() -> Result<(), IndexerError> {
         }
     };
 
+    // Knowledge edits consumer (optional, default disabled)
+    let knowledge_edits_enabled = env::var("KNOWLEDGE_EDITS_ENABLED")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+
+    if !knowledge_edits_enabled {
+        info!("Knowledge edits consumer disabled (set KNOWLEDGE_EDITS_ENABLED=true to enable)");
+    }
+
+    let bounty_config = BountyConfig::new();
+    info!(
+        interest = %bounty_config.interest_type_id,
+        allocated = %bounty_config.allocated_type_id,
+        payout = %bounty_config.payout_type_id,
+        "Bounty relation type config"
+    );
+
     // Set up shutdown signal
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
     let mut shutdown_rx2 = shutdown_tx.subscribe();
+    let mut shutdown_rx3 = shutdown_tx.subscribe();
 
     let _signal_handle = tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
@@ -252,6 +273,294 @@ async fn async_main() -> Result<(), IndexerError> {
             }
         }
     });
+
+    // Spawn knowledge edits consumer task (if enabled)
+    let ke_handle: Option<tokio::task::JoinHandle<()>> = if knowledge_edits_enabled {
+        let ke_kafka_broker = kafka_broker.clone();
+        let ke_kafka_group_id = kafka_group_id.clone();
+        let ke_bd = block_delay;
+        let ke_bd_timeout = block_delay_timeout_secs;
+        let ke_min_age = min_age_secs;
+        let ke_stor = Storage::new(storage.pool().clone());
+        let ke_cfg = bounty_config;
+
+        Some(tokio::spawn(async move {
+            // Create consumer inside the task so it's fully owned
+            let kec = match KnowledgeEditsConsumer::new(&ke_kafka_broker, &ke_kafka_group_id) {
+                Ok(c) => c,
+                Err(e) => {
+                    error!(error = %e, "Failed to create knowledge edits consumer");
+                    return;
+                }
+            };
+            if let Err(e) = kec.subscribe() {
+                error!(error = %e, "Failed to subscribe to knowledge.edits");
+                return;
+            }
+
+            let mut ke_stream = kec.stream();
+            let mut ke_processed: u64 = 0;
+            let mut ke_errors: u64 = 0;
+
+            info!("Knowledge edits consumer loop started");
+
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx3.recv() => {
+                        info!("Knowledge edits consumer shutting down");
+                        break;
+                    }
+                    message = ke_stream.next() => {
+                        match message {
+                            Some(Ok(msg)) => {
+                                let topic = msg.topic().to_string();
+                                let partition = msg.partition();
+                                let offset = msg.offset();
+
+                                // Skip old messages
+                                if ke_min_age > 0 {
+                                    let now_ms = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .map(|d| d.as_millis() as i64)
+                                        .unwrap_or(0);
+                                    let too_old = match msg.timestamp() {
+                                        Timestamp::CreateTime(ts) | Timestamp::LogAppendTime(ts) => {
+                                            (now_ms - ts) > (ke_min_age as i64 * 1000)
+                                        }
+                                        Timestamp::NotAvailable => false,
+                                    };
+                                    if too_old {
+                                        debug!(
+                                            partition = partition,
+                                            offset = offset,
+                                            "Skipping old knowledge edit (older than {}s)",
+                                            ke_min_age
+                                        );
+                                        if let Err(e) = kec.commit_message(&topic, partition, offset) {
+                                            error!(error = %e, "Failed to commit knowledge edits offset");
+                                        }
+                                        continue;
+                                    }
+                                }
+
+                                let Some(payload) = msg.payload() else {
+                                    if let Err(e) = kec.commit_message(&topic, partition, offset) {
+                                        error!(error = %e, "Failed to commit knowledge edits offset");
+                                    }
+                                    continue;
+                                };
+
+                                // Parse HermesEdit protobuf
+                                let hermes_edit = match parse_hermes_edit(payload) {
+                                    Ok(edit) => edit,
+                                    Err(e) => {
+                                        // Parse error — commit to avoid poison pill
+                                        warn!(
+                                            error = %e,
+                                            partition = partition,
+                                            offset = offset,
+                                            "Failed to parse HermesEdit, committing to skip"
+                                        );
+                                        ke_errors += 1;
+                                        if let Err(e) = kec.commit_message(&topic, partition, offset) {
+                                            error!(error = %e, "Failed to commit knowledge edits offset");
+                                        }
+                                        continue;
+                                    }
+                                };
+
+                                // Extract bounty relations from GRC-20 payload
+                                let relations = match extract_bounty_relations(&hermes_edit, &ke_cfg) {
+                                    Ok(rels) => rels,
+                                    Err(e) => {
+                                        // Decode error — commit to avoid poison pill
+                                        warn!(
+                                            error = %e,
+                                            partition = partition,
+                                            offset = offset,
+                                            "Failed to extract bounty relations, committing to skip"
+                                        );
+                                        ke_errors += 1;
+                                        if let Err(e) = kec.commit_message(&topic, partition, offset) {
+                                            error!(error = %e, "Failed to commit knowledge edits offset");
+                                        }
+                                        continue;
+                                    }
+                                };
+
+                                if relations.is_empty() {
+                                    // No bounty relations in this edit — commit and continue
+                                    if let Err(e) = kec.commit_message(&topic, partition, offset) {
+                                        error!(error = %e, "Failed to commit knowledge edits offset");
+                                    }
+                                    continue;
+                                }
+
+                                let mut all_ok = true;
+                                for (mut info, event_type) in relations {
+                                    // Block delay: wait for kg-indexer catchup
+                                    if ke_bd > 0 {
+                                        wait_for_kg_catchup(
+                                            &ke_stor,
+                                            info.block_number,
+                                            ke_bd,
+                                            ke_bd_timeout,
+                                        )
+                                        .await;
+                                    }
+
+                                    match event_type {
+                                        NotificationEventType::BountyInterest => {
+                                            // Resolve bounty_space_id from DB
+                                            match ke_stor.lookup_bounty_space(info.bounty_entity_id).await {
+                                                Ok(Some(space_id)) => {
+                                                    info.bounty_space_id = space_id;
+                                                }
+                                                Ok(None) => {
+                                                    warn!(
+                                                        bounty_entity_id = %info.bounty_entity_id,
+                                                        "Could not resolve bounty space, skipping interest notification"
+                                                    );
+                                                    continue;
+                                                }
+                                                Err(e) => {
+                                                    error!(error = %e, "DB error looking up bounty space, will retry");
+                                                    ke_errors += 1;
+                                                    all_ok = false;
+                                                    break;
+                                                }
+                                            }
+
+                                            let mut event = handle_bounty_interest(&info);
+                                            enrich_payload(&ke_stor, &mut event, info.bounty_space_id).await;
+
+                                            let editors = match ke_stor.find_editors_for_space(info.bounty_space_id).await {
+                                                Ok(eds) => eds,
+                                                Err(e) => {
+                                                    error!(error = %e, "DB error looking up editors for bounty interest, will retry");
+                                                    ke_errors += 1;
+                                                    all_ok = false;
+                                                    break;
+                                                }
+                                            };
+
+                                            if editors.is_empty() {
+                                                ke_processed += 1;
+                                                continue;
+                                            }
+
+                                            match ke_stor.insert_notifications_for_editors(&event, &editors).await {
+                                                Ok(count) => {
+                                                    if count > 0 {
+                                                        info!(
+                                                            event_type = "bounty_interest",
+                                                            editors = editors.len(),
+                                                            inserted = count,
+                                                            "Inserted bounty interest notifications"
+                                                        );
+                                                    }
+                                                    ke_processed += 1;
+                                                }
+                                                Err(e) => {
+                                                    error!(error = %e, "DB error inserting bounty interest notifications, will retry");
+                                                    ke_errors += 1;
+                                                    all_ok = false;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        NotificationEventType::BountyAllocated
+                                        | NotificationEventType::BountyPayout => {
+                                            // Resolve curator_space_id if nil
+                                            if info.curator_space_id.is_nil() {
+                                                match ke_stor.lookup_entity_space(info.bounty_entity_id).await {
+                                                    Ok(Some(space_id)) => {
+                                                        info.curator_space_id = space_id;
+                                                    }
+                                                    Ok(None) => {
+                                                        warn!(
+                                                            bounty_entity_id = %info.bounty_entity_id,
+                                                            event_type = %event_type.as_str(),
+                                                            "Could not resolve curator space, skipping notification"
+                                                        );
+                                                        continue;
+                                                    }
+                                                    Err(e) => {
+                                                        error!(error = %e, "DB error looking up curator space, will retry");
+                                                        ke_errors += 1;
+                                                        all_ok = false;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+
+                                            let mut event = if event_type == NotificationEventType::BountyAllocated {
+                                                handle_bounty_allocated(&info)
+                                            } else {
+                                                handle_bounty_payout(&info)
+                                            };
+                                            enrich_payload(&ke_stor, &mut event, info.bounty_space_id).await;
+
+                                            match ke_stor.insert_notification_for_user(&event, info.curator_space_id).await {
+                                                Ok(count) => {
+                                                    if count > 0 {
+                                                        info!(
+                                                            event_type = %event_type.as_str(),
+                                                            curator_space_id = %info.curator_space_id,
+                                                            inserted = count,
+                                                            "Inserted bounty notification for curator"
+                                                        );
+                                                    }
+                                                    ke_processed += 1;
+                                                }
+                                                Err(e) => {
+                                                    error!(
+                                                        error = %e,
+                                                        event_type = %event_type.as_str(),
+                                                        "DB error inserting bounty notification, will retry"
+                                                    );
+                                                    ke_errors += 1;
+                                                    all_ok = false;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            continue;
+                                        }
+                                    }
+                                }
+
+                                // Only commit offset if all relations in the edit were processed successfully.
+                                // On DB error: don't commit — retry on restart.
+                                if all_ok {
+                                    if let Err(e) = kec.commit_message(&topic, partition, offset) {
+                                        error!(error = %e, "Failed to commit knowledge edits offset");
+                                    }
+                                }
+                            }
+                            Some(Err(e)) => {
+                                error!(error = %e, "Knowledge edits Kafka error");
+                            }
+                            None => {
+                                info!("Knowledge edits stream ended");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            kec.flush_commits();
+            info!(
+                processed = ke_processed,
+                errors = ke_errors,
+                "Knowledge edits consumer stopped"
+            );
+        }))
+    } else {
+        None
+    };
 
     // Main Kafka consumer loop
     let mut stream = consumer.stream();
@@ -509,6 +818,17 @@ async fn async_main() -> Result<(), IndexerError> {
         Ok(Err(e)) => warn!(error = %e, "Rejection poller task failed"),
         Err(_) => {
             warn!("Rejection poller did not stop within 5s, aborting");
+        }
+    }
+
+    // Wait for knowledge edits consumer to finish (if enabled)
+    if let Some(handle) = ke_handle {
+        match tokio::time::timeout(tokio::time::Duration::from_secs(5), handle).await {
+            Ok(Ok(())) => info!("Knowledge edits consumer stopped"),
+            Ok(Err(e)) => warn!(error = %e, "Knowledge edits consumer task failed"),
+            Err(_) => {
+                warn!("Knowledge edits consumer did not stop within 5s, aborting");
+            }
         }
     }
 

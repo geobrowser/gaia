@@ -3930,6 +3930,7 @@ name = "notification-e2e-tests"
 version = "0.1.0"
 dependencies = [
  "axum 0.7.9",
+ "grc-20",
  "hermes-kafka",
  "hermes-schema",
  "hex",
