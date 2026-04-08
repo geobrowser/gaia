@@ -22,10 +22,7 @@ const VALKEY_COMMAND_TIMEOUT_MS = 500
  * Race a promise against a timeout. Returns undefined if the timeout fires first.
  */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
-	return Promise.race([
-		promise,
-		new Promise<undefined>((resolve) => setTimeout(resolve, ms)),
-	])
+	return Promise.race([promise, new Promise<undefined>((resolve) => setTimeout(resolve, ms))])
 }
 
 /**
