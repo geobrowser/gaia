@@ -13,14 +13,11 @@ async function executeGraphQL(query: string, variables?: Record<string, unknown>
 	return response.json()
 }
 
-function filterSchemaErrors(errors: Array<{message: string}> | undefined) {
+function filterSchemaErrors(errors: Array<{message: string; extensions?: {code?: string}}> | undefined) {
 	return (errors ?? []).filter(
 		(e) =>
-			e.message.includes("is not a valid enum value") ||
-			e.message.includes("Unknown argument") ||
-			e.message.includes("Expected type") ||
-			e.message.includes("Cannot query field") ||
-			e.message.includes("Unknown field"),
+			e.extensions?.code === "GRAPHQL_VALIDATION_FAILED" ||
+			e.extensions?.code === "GRAPHQL_PARSE_FAILED",
 	)
 }
 
