@@ -651,6 +651,7 @@ export const localScores = pgTable(
 			pk: primaryKey({columns: [table.entityId, table.spaceId]}),
 			idxSpaceId: index("idx_local_scores_space_id").on(table.spaceId),
 			idxEntityId: index("idx_local_scores_entity_id").on(table.entityId),
+			idxSpaceScore: index("idx_local_scores_space_score").on(table.spaceId, table.score),
 		}
 	},
 )
