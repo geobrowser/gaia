@@ -770,7 +770,7 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
     let no_unknown = calls.iter().all(|c| {
         c.body["user_space_id"]
             .as_str()
-            .map_or(false, |id| all_known.iter().any(|k| k == id))
+            .is_some_and(|id| all_known.iter().any(|k| k == id))
     });
     r.check("no unexpected user_space_ids (false positive)", no_unknown);
 
@@ -783,7 +783,7 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         calls.iter().all(|c| {
             c.body["event_type"]
                 .as_str()
-                .map_or(false, |t| known_types.contains(t))
+                .is_some_and(|t| known_types.contains(t))
         }),
     );
 
@@ -1453,7 +1453,7 @@ async fn main() {
         match tokio::time::timeout(remaining, rx.recv()).await {
             Ok(Some(call)) => {
                 let n = calls.len() + 1;
-                if n <= 6 || n % 10 == 0 || n == EXPECTED_CALLS {
+                if n <= 6 || n.is_multiple_of(10) || n == EXPECTED_CALLS {
                     let et = call.body["event_type"].as_str().unwrap_or("?");
                     let uid = call.body["user_space_id"]
                         .as_str()
