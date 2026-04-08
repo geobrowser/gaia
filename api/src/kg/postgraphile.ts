@@ -231,9 +231,11 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 
 // Response cache — shared across all API pods via Redis.
 // Disabled gracefully if REDIS_URL is not set (no cache, direct DB queries).
-// TTL of 10s balances freshness with DB load reduction.
 // Redis maxmemory + allkeys-lru eviction prevents unbounded memory growth.
-const RESPONSE_CACHE_TTL_MS = 10_000
+const DEFAULT_TTL_MS = 10_000
+// Longer TTL for expensive, rarely-changing queries identified in production logs.
+// These queries are identical across all users and produce large responses (2-15 MB).
+const LONG_TTL_MS = 60_000
 const responseCachePlugin = (() => {
 	const redisUrl = process.env.REDIS_URL
 	if (!redisUrl) {
@@ -243,7 +245,16 @@ const responseCachePlugin = (() => {
 	log.info("Response cache enabled", {redisUrl: redisUrl.replace(/\/\/.*@/, "//<redacted>@")})
 	return useResponseCache({
 		session: () => null,
-		ttl: RESPONSE_CACHE_TTL_MS,
+		ttl: DEFAULT_TTL_MS,
+		ttlPerSchemaCoordinate: {
+			// All DAO spaces list — 12 MB, called on 5+ pages, near-static
+			"Query.spaces": LONG_TTL_MS,
+			"Query.spacesConnection": LONG_TTL_MS,
+			// Bounties/entity lists — 2-15 MB, same result for all users
+			"Query.entities": LONG_TTL_MS,
+			"Query.entitiesConnection": LONG_TTL_MS,
+			"Query.entitiesOrderedByProperty": LONG_TTL_MS,
+		},
 		cache: createRedisCache(redisUrl),
 	})
 })()
