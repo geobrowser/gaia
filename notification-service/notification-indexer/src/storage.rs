@@ -203,17 +203,24 @@ impl Storage {
     }
 
     /// Look up which space owns a bounty entity (for interest notifications).
+    ///
+    /// Finds the space via the bounty's Types relation pointing to BOUNTY_TYPE.
+    /// Requires both type_id (TYPE_RELATION_TYPE_ID) and to_entity_id (BOUNTY_TYPE)
+    /// to avoid matching unrelated Types relations from the same entity.
     #[instrument(name = "notification_indexer.storage.lookup_bounty_space", skip(self))]
     pub async fn lookup_bounty_space(
         &self,
         bounty_entity_id: Uuid,
     ) -> Result<Option<Uuid>, StorageError> {
+        // TYPE_RELATION_TYPE_ID = 8f151ba4-de20-4e3c-9cb4-99ddf96f48f1
+        // BOUNTY_TYPE_ID = 808af0ba-d588-4e33-91f0-9dd4b25e18be
         let result = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT space_id
             FROM relations
             WHERE from_entity_id = $1
               AND type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid
+              AND to_entity_id = '808af0ba-d588-4e33-91f0-9dd4b25e18be'::uuid
             LIMIT 1
             "#,
         )

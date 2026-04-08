@@ -253,11 +253,13 @@ async fn seed_database(
         .await?;
     }
 
-    // Seed a relation so lookup_bounty_space can resolve BOUNTY_ENTITY -> BOUNTY_SPACE
+    // Seed the bounty entity's Types relation (from=bounty, to=BOUNTY_TYPE)
+    // so lookup_bounty_space can resolve BOUNTY_ENTITY -> BOUNTY_SPACE.
     // TYPE_RELATION_TYPE_ID = 8f151ba4-de20-4e3c-9cb4-99ddf96f48f1
+    // BOUNTY_TYPE_ID = 808af0ba-d588-4e33-91f0-9dd4b25e18be
     sqlx::query(
-        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id, created_at, created_at_block) \
-         VALUES ($1, $2, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, $3, '362c1dbd-dc64-44bb-a3c4-652f38a642d7'::uuid, '0', '0') \
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, $3, '808af0ba-d588-4e33-91f0-9dd4b25e18be'::uuid) \
          ON CONFLICT DO NOTHING",
     )
     .bind(Uuid::new_v4())
@@ -266,7 +268,34 @@ async fn seed_database(
     .execute(pool)
     .await?;
 
-    // Seed a space row for the bounty space (needed for lookup_entity_space JOIN)
+    // Decoy: a Types relation from the same bounty entity pointing to a DIFFERENT type.
+    // This must NOT be matched by lookup_bounty_space (tests the to_entity_id constraint).
+    let wrong_space = Uuid::from_bytes([0xBB; 16]);
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, $3, 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'::uuid) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(wrong_space)
+    .bind(Uuid::from_bytes(BOUNTY_ENTITY_BYTES))
+    .execute(pool)
+    .await?;
+
+    // Decoy: a non-Types relation from the same bounty entity.
+    // This must NOT be matched by lookup_bounty_space (tests the type_id constraint).
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, 'cccccccc-cccc-cccc-cccc-cccccccccccc'::uuid, $3, '808af0ba-d588-4e33-91f0-9dd4b25e18be'::uuid) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(wrong_space)
+    .bind(Uuid::from_bytes(BOUNTY_ENTITY_BYTES))
+    .execute(pool)
+    .await?;
+
+    // Seed space rows (needed for lookup_entity_space JOIN)
     sqlx::query("INSERT INTO spaces (id) VALUES ($1) ON CONFLICT DO NOTHING")
         .bind(bounty_space)
         .execute(pool)
@@ -278,6 +307,32 @@ async fn seed_database(
         .bind(curator_space)
         .execute(pool)
         .await?;
+
+    // Seed curator entity→space relation (from=curator_entity, to=SPACE_TYPE, space=curator_space)
+    // SPACE_TYPE = 362c1dbd-dc64-44bb-a3c4-652f38a642d7
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, $3, '362c1dbd-dc64-44bb-a3c4-652f38a642d7'::uuid) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(curator_space)
+    .bind(Uuid::from_bytes(CURATOR_ENTITY_BYTES))
+    .execute(pool)
+    .await?;
+
+    // Decoy: curator entity with a non-SPACE_TYPE to_entity in a different space.
+    // Must NOT be matched by lookup_entity_space.
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, $3, 'dddddddd-dddd-dddd-dddd-dddddddddddd'::uuid) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(wrong_space)
+    .bind(Uuid::from_bytes(CURATOR_ENTITY_BYTES))
+    .execute(pool)
+    .await?;
 
     // Add curator as editor of their own space (for single-user notifications)
     sqlx::query(
