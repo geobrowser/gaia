@@ -14,8 +14,8 @@ import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin from "./paginationCapPlugin"
-import {createValkeyCache} from "./valkeyCache"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
+import {createValkeyCache} from "./valkeyCache"
 import ValueScalarsPlugin from "./valueScalarsPlugin"
 
 // Server context passed from HTTP middleware
