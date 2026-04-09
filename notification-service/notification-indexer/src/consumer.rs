@@ -194,15 +194,13 @@ pub struct KnowledgeEditsConsumer {
 impl KnowledgeEditsConsumer {
     /// Create a new knowledge edits consumer.
     ///
-    /// Uses a separate consumer group suffix (`-knowledge-edits`) to avoid
-    /// conflicting with the governance consumer's offsets.
+    /// Uses a separate consumer group (configured via KAFKA_GROUP_ID_KNOWLEDGE_EDITS)
+    /// to avoid conflicting with the governance consumer's offsets.
     pub fn new(brokers: &str, group_id: &str) -> Result<Self, IndexerError> {
-        let ke_group_id = format!("{}-knowledge-edits", group_id);
-
         let mut config = ClientConfig::new();
         config
             .set("bootstrap.servers", brokers)
-            .set("group.id", &ke_group_id)
+            .set("group.id", group_id)
             .set("enable.auto.commit", "false")
             .set("auto.offset.reset", "earliest")
             .set("session.timeout.ms", "6000")
@@ -237,7 +235,7 @@ impl KnowledgeEditsConsumer {
 
         info!(
             brokers = %brokers,
-            group_id = %ke_group_id,
+            group_id = %group_id,
             topic = %topic,
             "Created knowledge edits consumer"
         );

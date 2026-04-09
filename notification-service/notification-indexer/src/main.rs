@@ -96,8 +96,10 @@ async fn async_main() -> Result<(), IndexerError> {
     let database_url = env::var("DATABASE_URL")
         .map_err(|_| IndexerError::Config("DATABASE_URL not set".into()))?;
     let kafka_broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
-    let kafka_group_id =
-        env::var("KAFKA_GROUP_ID").unwrap_or_else(|_| "notification-indexer".to_string());
+    let kafka_group_id_governance = env::var("KAFKA_GROUP_ID_GOVERNANCE")
+        .unwrap_or_else(|_| "notification-indexer-governance".to_string());
+    let kafka_group_id_ke = env::var("KAFKA_GROUP_ID_KNOWLEDGE_EDITS")
+        .unwrap_or_else(|_| "notification-indexer-knowledge-edits".to_string());
 
     let rejection_poll_interval_secs: u64 = env::var("REJECTION_POLL_INTERVAL_SECS")
         .ok()
@@ -142,7 +144,7 @@ async fn async_main() -> Result<(), IndexerError> {
         notification_indexer::health::start_health_server(storage.pool().clone(), health_port);
 
     // Initialize Kafka consumer
-    let consumer = KafkaConsumer::new(&kafka_broker, &kafka_group_id)?;
+    let consumer = KafkaConsumer::new(&kafka_broker, &kafka_group_id_governance)?;
     consumer.subscribe()?;
 
     // Start background lag monitor (dedicated thread, never blocks async runtime)
@@ -154,7 +156,7 @@ async fn async_main() -> Result<(), IndexerError> {
         .unwrap_or(60);
     let lag_monitor = match LagMonitor::start(
         &kafka_broker,
-        &kafka_group_id,
+        &kafka_group_id_governance,
         governance_topic,
         lag_poll_secs,
     ) {
@@ -271,7 +273,7 @@ async fn async_main() -> Result<(), IndexerError> {
     // Spawn knowledge edits consumer task
     let ke_handle: tokio::task::JoinHandle<()> = {
         let ke_kafka_broker = kafka_broker.clone();
-        let ke_kafka_group_id = kafka_group_id.clone();
+        let ke_kafka_group_id = kafka_group_id_ke.clone();
         let ke_bd = block_delay;
         let ke_bd_timeout = block_delay_timeout_secs;
         let ke_min_age = min_age_secs;
