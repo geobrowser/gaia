@@ -14,7 +14,7 @@
  * - spaces(address, type) WHERE type = 'Personal'
  */
 
-import {ContentIds, SystemIds} from "@graphprotocol/grc-20"
+import {ContentIds, SystemIds} from "@geoprotocol/geo-sdk"
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect} from "effect"
@@ -76,9 +76,8 @@ export function defaultProfile(address: string, spaceId?: string): Profile {
 	}
 }
 
-// SystemIds for finding space front page entity
-const TYPES_RELATION = "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-const SPACE_TYPE = "362c1dbd-dc64-44bb-a3c4-652f38a642d7"
+const TYPES_RELATION = SystemIds.TYPES_PROPERTY
+const SPACE_TYPE = SystemIds.SPACE_TYPE
 
 /**
  * SQL fragment for selecting profile fields from a space.
