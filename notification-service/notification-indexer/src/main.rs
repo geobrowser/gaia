@@ -385,6 +385,23 @@ async fn async_main() -> Result<(), IndexerError> {
 
                             match result {
                                 Ok(mut event) => {
+                                    // Check block timestamp for age (more reliable than Kafka timestamp
+                                    // which can be recent even for old blocks after topic reprocessing)
+                                    if let Some(ts) = event.payload.timestamp {
+                                        if is_block_too_old(ts, min_age_secs) {
+                                            debug!(
+                                                event_type = %event.payload.event_type,
+                                                block_timestamp = ts,
+                                                "Skipping old governance event (block older than {}s)",
+                                                min_age_secs
+                                            );
+                                            if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+                                                error!(error = %e, "Failed to commit offset");
+                                            }
+                                            continue;
+                                        }
+                                    }
+
                                     // Block delay: wait for kg-indexer to catch up so
                                     // names/metadata are populated before we send
                                     if block_delay > 0 {
@@ -519,6 +536,22 @@ async fn async_main() -> Result<(), IndexerError> {
     );
 
     Ok(())
+}
+
+/// Check if a block timestamp is too old based on `min_age_secs`.
+///
+/// Uses the on-chain `BlockchainMetadata.created_at` (epoch seconds) rather than
+/// the Kafka message timestamp, which can be recent even for old blocks if the
+/// Kafka topic was recently (re)populated.
+fn is_block_too_old(block_created_at: u64, min_age_secs: u64) -> bool {
+    if min_age_secs == 0 {
+        return false;
+    }
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    block_created_at > 0 && now_secs.saturating_sub(block_created_at) > min_age_secs
 }
 
 /// Wait for the kg-indexer to process blocks up to (at least) the message's block.
