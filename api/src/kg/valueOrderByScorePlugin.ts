@@ -31,9 +31,28 @@ export const ValueOrderByScorePlugin = makeAddPgTableOrderByPlugin(
 			{unique: false, nulls: "last"},
 		)
 
-		return {...localScore, ...globalScore}
+		const rawScore = orderByAscDesc(
+			"RAW_SCORE",
+			({queryBuilder}) => {
+				const t = queryBuilder.getTableAlias()
+				return sql.fragment`(
+					COALESCE(
+						(
+							SELECT (vc.upvotes - vc.downvotes) FROM public.votes_count vc
+							WHERE vc.object_id = ${t}.entity_id
+								AND vc.space_id = ${t}.space_id
+								AND vc.object_type = 0
+						),
+						0
+					)
+				)`
+			},
+			{unique: false, nulls: "last"},
+		)
+
+		return {...localScore, ...globalScore, ...rawScore}
 	},
-	"Adding orderBy local_scores.score and global_scores.score to values connection",
+	"Adding orderBy local_scores.score, global_scores.score, and raw vote score to values connection",
 )
 
 export default ValueOrderByScorePlugin
