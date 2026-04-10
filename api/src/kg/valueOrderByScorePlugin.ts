@@ -36,10 +36,15 @@ export const ValueOrderByScorePlugin = makeAddPgTableOrderByPlugin(
 			({queryBuilder}) => {
 				const t = queryBuilder.getTableAlias()
 				return sql.fragment`(
-					SELECT (vc.upvotes - vc.downvotes) FROM public.votes_count vc
-					WHERE vc.object_id = ${t}.entity_id
-						AND vc.space_id = ${t}.space_id
-						AND vc.object_type = 0
+					COALESCE(
+						(
+							SELECT (vc.upvotes - vc.downvotes) FROM public.votes_count vc
+							WHERE vc.object_id = ${t}.entity_id
+								AND vc.space_id = ${t}.space_id
+								AND vc.object_type = 0
+						),
+						0
+					)
 				)`
 			},
 			{unique: false, nulls: "last"},
