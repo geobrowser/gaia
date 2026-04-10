@@ -35,7 +35,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
@@ -128,7 +128,8 @@ jobs:
         run: |
           DATABASE_URL=${{ env.DATABASE_URL }} \
           KAFKA_BROKER=${{ env.KAFKA_BROKER }} \
-          KAFKA_GROUP_ID=notification-indexer-e2e \
+          KAFKA_GROUP_ID_GOVERNANCE=notification-indexer-governance-e2e \
+          KAFKA_GROUP_ID_KNOWLEDGE_EDITS=notification-indexer-knowledge-edits-e2e \
           ENVIRONMENT=${{ env.ENVIRONMENT }} \
           REJECTION_POLL_INTERVAL_SECS=3 \
           NOTIFICATION_MIN_AGE_SECS=0 \

@@ -30,8 +30,9 @@
  *   - relations(from_entity_id, type_id, to_entity_id)
  */
 
-// SystemIds.Types - the relation type that defines an entity's type
-const SYSTEM_IDS_TYPES = "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+import {SystemIds} from "@geoprotocol/geo-sdk"
+
+const SYSTEM_IDS_TYPES = SystemIds.TYPES_PROPERTY
 
 // ============================================================================
 // Space filter helpers
