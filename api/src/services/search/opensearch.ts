@@ -7,6 +7,7 @@
  * All indexing/updating/deleting is done by the Rust search-indexer service.
  */
 
+import {ContentIds, SystemIds} from "@geoprotocol/geo-sdk"
 import {Client} from "@opensearch-project/opensearch"
 import {normalizeUuid, toDashedUuid} from "../../utils/uuid"
 import type {SearchClient} from "./client"
@@ -162,12 +163,10 @@ export const DEFAULT_PAGE_SIZE = 20
  */
 export const MAX_PAGE_SIZE = 100
 
-/**
- * GRC-20 relation type IDs used to identify avatar and cover relations.
- */
-const TYPE_RELATION_TYPE_ID = normalizeUuid("8f151ba4-de20-4e3c-9cb4-99ddf96f48f1") as string
-const AVATAR_RELATION_TYPE_ID = normalizeUuid("1155beff-fad5-49b7-a2e0-da4777b8792c") as string
-const COVER_RELATION_TYPE_ID = normalizeUuid("34f53507-2e6b-42c5-a844-43981a77cfa2") as string
+// System IDs from the SDK are already dashless — use directly for OpenSearch queries
+const TYPE_RELATION_TYPE_ID = SystemIds.TYPES_PROPERTY as string
+const AVATAR_RELATION_TYPE_ID = ContentIds.AVATAR_PROPERTY as string
+const COVER_RELATION_TYPE_ID = SystemIds.COVER_PROPERTY as string
 
 interface SubspacesResult {
 	subspaces: string[]
