@@ -116,6 +116,34 @@ describe("ValueOrderByScorePlugin", () => {
 		expect(filterSchemaErrors(nextPage.errors)).toHaveLength(0)
 	})
 
+	it("adds RAW_SCORE_ASC and RAW_SCORE_DESC to ValuesOrderBy enum", async () => {
+		const result = await executeGraphQL(`
+			{
+				__type(name: "ValuesOrderBy") {
+					enumValues { name }
+				}
+			}
+		`)
+
+		expect(result.errors).toBeUndefined()
+		const enumNames = result.data.__type.enumValues.map((v: {name: string}) => v.name)
+		expect(enumNames).toContain("RAW_SCORE_ASC")
+		expect(enumNames).toContain("RAW_SCORE_DESC")
+	})
+
+	it("accepts RAW_SCORE_DESC as an orderBy argument", async () => {
+		const result = await executeGraphQL(`
+			{
+				valuesConnection(orderBy: RAW_SCORE_DESC, first: 5) {
+					nodes { id entityId spaceId }
+					pageInfo { hasNextPage endCursor }
+				}
+			}
+		`)
+
+		expect(filterSchemaErrors(result.errors)).toHaveLength(0)
+	})
+
 	it("composes orderBy with spaceId filter", async () => {
 		const result = await executeGraphQL(`
 			{
@@ -125,6 +153,23 @@ describe("ValueOrderByScorePlugin", () => {
 					first: 5
 				) {
 					nodes { id entityId spaceId }
+				}
+			}
+		`)
+
+		expect(filterSchemaErrors(result.errors)).toHaveLength(0)
+	})
+
+	it("composes RAW_SCORE orderBy with spaceId filter", async () => {
+		const result = await executeGraphQL(`
+			{
+				valuesConnection(
+					filter: { spaceId: { is: "00000000000000000000000000000000" } }
+					orderBy: RAW_SCORE_DESC
+					first: 50
+				) {
+					nodes { id entityId spaceId }
+					pageInfo { hasNextPage endCursor }
 				}
 			}
 		`)
