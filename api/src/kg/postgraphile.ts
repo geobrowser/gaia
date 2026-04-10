@@ -1,4 +1,5 @@
 import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
+import {useResponseCache} from "@graphql-yoga/plugin-response-cache"
 import * as Sentry from "@sentry/node"
 import {GraphQLError, print} from "graphql"
 import {createYoga, maskError, type Plugin, useExecutionCancellation} from "graphql-yoga"
@@ -7,13 +8,14 @@ import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
 import {classifyDbFailure} from "../services/dbFailures"
-import {getGraphqlPressureSnapshot, recordGraphqlAcquireTimeout} from "../services/dbSaturation"
+import {getGraphqlPressureSnapshot, recordGraphqlAcquireTimeout, shouldShedPoolTraffic} from "../services/dbSaturation"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin from "./paginationCapPlugin"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
+import {createValkeyCache} from "./valkeyCache"
 import ValueScalarsPlugin from "./valueScalarsPlugin"
 
 // Server context passed from HTTP middleware
@@ -155,6 +157,13 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 			const queryFingerprint = graphqlQueryFingerprint(fullQuery)
 			const acquireStartMs = Date.now()
 
+			// Check pool pressure before attempting checkout. This only runs on
+			// cache misses — cached responses skip usePgClient entirely.
+			const poolPressure = getGraphqlPressureSnapshot(getGraphqlPoolStats())
+			if (shouldShedPoolTraffic(poolPressure)) {
+				throw new Error("pool_pressure_shed")
+			}
+
 			let pgClient: PoolClient
 			try {
 				pgClient = await pool.connect()
@@ -227,8 +236,44 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 	}
 }
 
-// Shared plugins for GraphQL server
-const sharedPlugins = [useGraphQLInstrumentation(), usePgClient(pgPool), useExecutionCancellation()]
+// Response cache — shared across all API pods via Valkey (Redis-compatible).
+// Disabled gracefully if VALKEY_URL is not set (no cache, direct DB queries).
+// Valkey maxmemory + allkeys-lru eviction prevents unbounded memory growth.
+const DEFAULT_TTL_MS = 10_000
+// Longer TTL for expensive, rarely-changing queries identified in production logs.
+// These queries are identical across all users and produce large responses (2-15 MB).
+const LONG_TTL_MS = 60_000
+const responseCachePlugin = (() => {
+	const valkeyUrl = process.env.VALKEY_URL
+	if (!valkeyUrl) {
+		log.info("Response cache disabled (VALKEY_URL not set)")
+		return null
+	}
+	log.info("Response cache enabled", {valkeyUrl: valkeyUrl.replace(/\/\/.*@/, "//<redacted>@")})
+	return useResponseCache({
+		session: () => null,
+		ttl: DEFAULT_TTL_MS,
+		ttlPerSchemaCoordinate: {
+			// All DAO spaces list — 12 MB, called on 5+ pages, near-static
+			"Query.spaces": LONG_TTL_MS,
+			"Query.spacesConnection": LONG_TTL_MS,
+			// Bounties/entity lists — 2-15 MB, same result for all users
+			"Query.entities": LONG_TTL_MS,
+			"Query.entitiesConnection": LONG_TTL_MS,
+			"Query.entitiesOrderedByProperty": LONG_TTL_MS,
+		},
+		cache: createValkeyCache(valkeyUrl),
+	})
+})()
+
+// Shared plugins for GraphQL server.
+// Response cache is first so cache hits skip pgClient checkout entirely.
+const sharedPlugins = [
+	...(responseCachePlugin ? [responseCachePlugin] : []),
+	useGraphQLInstrumentation(),
+	usePgClient(pgPool),
+	useExecutionCancellation(),
+]
 
 // GraphQL server without uuidScalarPlugin
 export const graphqlServer = createYoga<GraphQLServerContext>({
