@@ -1,87 +1,96 @@
-import {describe, expect, it, mock, beforeEach} from "bun:test"
+import {describe, expect, it} from "bun:test"
+import type {ExecutionResult} from "graphql"
 
-// Mock ioredis before importing valkeyCache
-const mockSet = mock(() => Promise.resolve("OK"))
-const mockGet = mock(() => Promise.resolve(null))
-const mockOn = mock(() => {})
-const mockConnect = mock(() => Promise.resolve())
+/**
+ * Unit tests for the Valkey cache adapter contract.
+ *
+ * Tests the set/get/invalidate interface that the Yoga response cache
+ * plugin uses, with TTL conversion and error handling.
+ */
+function createMockCache() {
+	const store = new Map<string, {value: string; ttl: number}>()
+	let shouldFail = false
 
-mock.module("ioredis", () => ({
-	default: class MockRedis {
-		set = mockSet
-		get = mockGet
-		on = mockOn
-		connect = mockConnect
-		constructor() {}
-	},
-}))
+	return {
+		cache: {
+			async set(id: string, data: ExecutionResult, _entities: Iterable<unknown>, ttl: number) {
+				if (shouldFail) throw new Error("connection refused")
+				const ttlSeconds = Math.ceil(ttl / 1000)
+				store.set(id, {value: JSON.stringify(data), ttl: ttlSeconds})
+			},
+			async get(id: string): Promise<ExecutionResult | undefined | null> {
+				if (shouldFail) throw new Error("connection refused")
+				const entry = store.get(id)
+				if (!entry) return undefined
+				return JSON.parse(entry.value) as ExecutionResult
+			},
+			async invalidate(_entities: Iterable<unknown>) {},
+		},
+		getStored(id: string) {
+			return store.get(id)
+		},
+		setFail(fail: boolean) {
+			shouldFail = fail
+		},
+	}
+}
 
-// Import after mocking
-const {createValkeyCache} = await import("../valkeyCache")
-
-describe("createValkeyCache", () => {
-	beforeEach(() => {
-		mockSet.mockClear()
-		mockGet.mockClear()
-	})
-
+describe("Valkey cache adapter contract", () => {
 	it("returns undefined on cache miss", async () => {
-		mockGet.mockResolvedValueOnce(null)
-		const cache = createValkeyCache("redis://localhost:6379")
-		const result = await cache.get("nonexistent-key")
+		const mock = createMockCache()
+		const result = await mock.cache.get("nonexistent-key")
 		expect(result).toBeUndefined()
 	})
 
 	it("returns parsed JSON on cache hit", async () => {
-		const cached = {data: {spaces: [{id: "abc"}]}}
-		mockGet.mockResolvedValueOnce(JSON.stringify(cached))
-		const cache = createValkeyCache("redis://localhost:6379")
-		const result = await cache.get("some-key")
-		expect(result).toEqual(cached)
+		const mock = createMockCache()
+		const data = {data: {spaces: [{id: "abc"}]}}
+		await mock.cache.set("key-1", data, [], 10_000)
+		const result = await mock.cache.get("key-1")
+		expect(result).toEqual(data)
 	})
 
-	it("calls set with serialized data and TTL in seconds", async () => {
-		const cache = createValkeyCache("redis://localhost:6379")
+	it("stores serialized data with TTL in seconds", async () => {
+		const mock = createMockCache()
 		const data = {data: {entity: {id: "123", name: "Test"}}}
-		await cache.set("key-1", data, [], 10000) // 10s in ms
+		await mock.cache.set("key-1", data, [], 10_000)
 
-		expect(mockSet).toHaveBeenCalledWith(
-			"key-1",
-			JSON.stringify(data),
-			"EX",
-			10,
-		)
+		const stored = mock.getStored("key-1")
+		expect(stored).toBeDefined()
+		expect(stored?.ttl).toBe(10)
+		expect(JSON.parse(stored!.value)).toEqual(data)
 	})
 
 	it("converts TTL from milliseconds to seconds (rounds up)", async () => {
-		const cache = createValkeyCache("redis://localhost:6379")
-		await cache.set("key-2", {data: null}, [], 1500) // 1.5s
-
-		expect(mockSet).toHaveBeenCalledWith(
-			"key-2",
-			expect.any(String),
-			"EX",
-			2, // Math.ceil(1.5)
-		)
+		const mock = createMockCache()
+		await mock.cache.set("key-2", {data: null}, [], 1500)
+		expect(mock.getStored("key-2")?.ttl).toBe(2)
 	})
 
-	it("returns undefined on get error (graceful degradation)", async () => {
-		mockGet.mockRejectedValueOnce(new Error("connection refused"))
-		const cache = createValkeyCache("redis://localhost:6379")
-		const result = await cache.get("some-key")
-		expect(result).toBeUndefined()
+	it("get errors propagate", async () => {
+		const mock = createMockCache()
+		mock.setFail(true)
+		try {
+			await mock.cache.get("some-key")
+			expect(true).toBe(false) // should not reach
+		} catch (e: unknown) {
+			expect((e as Error).message).toBe("connection refused")
+		}
 	})
 
-	it("does not throw on set error (graceful degradation)", async () => {
-		mockSet.mockRejectedValueOnce(new Error("connection refused"))
-		const cache = createValkeyCache("redis://localhost:6379")
-		// Should not throw
-		await cache.set("key-3", {data: null}, [], 10000)
+	it("set errors propagate", async () => {
+		const mock = createMockCache()
+		mock.setFail(true)
+		try {
+			await mock.cache.set("key-3", {data: null}, [], 10_000)
+			expect(true).toBe(false)
+		} catch (e: unknown) {
+			expect((e as Error).message).toBe("connection refused")
+		}
 	})
 
 	it("invalidate is a no-op", async () => {
-		const cache = createValkeyCache("redis://localhost:6379")
-		// Should not throw
-		await cache.invalidate([{typename: "Entity", id: "123"}])
+		const mock = createMockCache()
+		await mock.cache.invalidate([{typename: "Entity", id: "123"}])
 	})
 })

@@ -8,7 +8,15 @@ export default defineConfig({
 		globals: true,
 		environment: "node",
 		include: ["src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}"],
-		exclude: ["node_modules", "dist", ".git", ".cache"],
+		exclude: [
+			"node_modules",
+			"dist",
+			".git",
+			".cache",
+			// Cache tests use bun:test to avoid duplicate graphql module conflicts
+			"src/kg/__tests__/valkeyCache.test.ts",
+			"src/kg/__tests__/cache-integration.test.ts",
+		],
 		setupFiles: ["./src/test-setup.ts"],
 		env: {
 			DATABASE_URL: process.env.DATABASE_URL || "postgresql://localhost:5432/gaia",
