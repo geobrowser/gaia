@@ -64,8 +64,10 @@ spec:
             # Consumer configuration
             - name: ENVIRONMENT
               value: "production"
-            - name: KAFKA_GROUP_ID
-              value: "notification-indexer"
+            - name: KAFKA_GROUP_ID_GOVERNANCE
+              value: "notification-indexer-governance-v1"
+            - name: KAFKA_GROUP_ID_KNOWLEDGE_EDITS
+              value: "notification-indexer-knowledge-edits-v1"
             - name: REJECTION_POLL_INTERVAL_SECS
               value: "60"
             # Logging

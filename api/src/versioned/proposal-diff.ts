@@ -63,6 +63,11 @@ export class EditBlobNotCachedError {
 	constructor(readonly uri: string) {}
 }
 
+export class EditBlobDecodeFailedError {
+	readonly _tag = "EditBlobDecodeFailedError"
+	constructor(readonly uri: string) {}
+}
+
 export class EditDecodeError {
 	readonly _tag = "EditDecodeError"
 	constructor(readonly cause: unknown) {}
@@ -85,6 +90,7 @@ export type ProposalDiffError =
 	| QueryError
 	| ProposalNotFoundError
 	| EditBlobNotCachedError
+	| EditBlobDecodeFailedError
 	| EditDecodeError
 	| SpaceMismatchError
 	| InvalidCursorError
@@ -165,16 +171,23 @@ function getProposalWithPublishAction(
 
 /**
  * Get edit blob from IPFS cache.
+ * Returns { data, isErrored } so callers can distinguish between
+ * "not cached" (no row), "cached but decode failed" (row with is_errored=true),
+ * and "cached successfully" (row with data).
  */
-function getIpfsCacheData(db: Database, uri: string): Effect.Effect<Buffer | null, QueryError> {
+function getIpfsCacheData(
+	db: Database,
+	uri: string,
+): Effect.Effect<{data: Buffer | null; isErrored: boolean} | null, QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
-			const result = await db.execute<{data: Buffer | null}>(sql`
-				SELECT data FROM ipfs_cache WHERE uri = ${uri} LIMIT 1
+			const result = await db.execute<{data: Buffer | null; is_errored: boolean}>(sql`
+				SELECT data, is_errored FROM ipfs_cache WHERE uri = ${uri} LIMIT 1
 			`)
 
 			const row = result.rows[0]
-			return row?.data ?? null
+			if (!row) return null
+			return {data: row.data, isErrored: row.is_errored}
 		},
 		catch: (error) => new QueryError("getIpfsCacheData", error),
 	}).pipe(
@@ -908,10 +921,17 @@ export function computeProposalDiff(
 		}
 
 		// 5. Fetch edit blob from IPFS cache
-		const blob = yield* getIpfsCacheData(db, contentUri)
-		if (!blob) {
+		const cacheResult = yield* getIpfsCacheData(db, contentUri)
+		if (!cacheResult) {
 			return yield* Effect.fail(new EditBlobNotCachedError(contentUri))
 		}
+		if (cacheResult.isErrored) {
+			return yield* Effect.fail(new EditBlobDecodeFailedError(contentUri))
+		}
+		if (!cacheResult.data) {
+			return yield* Effect.fail(new EditBlobNotCachedError(contentUri))
+		}
+		const blob = cacheResult.data
 
 		// 6. Decode using @geoprotocol/grc-20
 		const ops = yield* Effect.tryPromise({

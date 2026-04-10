@@ -1,6 +1,7 @@
 export * from "./grouping"
 export {
 	computeProposalDiff,
+	EditBlobDecodeFailedError,
 	EditBlobNotCachedError,
 	EditDecodeError,
 	InvalidCursorError,

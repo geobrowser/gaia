@@ -148,7 +148,13 @@ sequenceDiagram
 | Curator allocated to bounty | `knowledge.edits` | The allocated curator | Implicit (direct) |
 | Curator paid out for bounty | `knowledge.edits` | The paid curator | Implicit (direct) |
 
-Bounty events are detected by inspecting `CreateRelation` operations in GRC-20 edit payloads and matching on well-known relation type UUIDs. The `knowledge.edits` topic carries the executed relation data for all three cases — interest relations are published directly by the curator, while allocation and payout relations are published via governance proposal execution.
+Bounty events are detected by inspecting `CreateRelation` operations in GRC-20 edit payloads and matching on well-known relation type UUIDs sourced from the curator-app (`packages/curator-utils/src/ids.ts`):
+
+- **Interest**: `INTERESTED_IN_PROPERTY_ID` (`ff7e1b44-44a2-4191-8732-4e6c222afe07`) — from=curator, to=bounty, in curator's personal space (direct publish)
+- **Allocation**: `ALLOCATED_PROPERTY_ID` (`cfeb6422-23c5-4df4-b3f9-375a489d9e22`) — from=bounty, to=person, in public space (optional DAO proposal)
+- **Payout**: `PAYOUT_RECIPIENT_PROPERTY_ID` (`fddacaae-8513-8a43-ec1a-50ff71564d42`) — from=space, to=recipient space, creates a Payout entity with sub-relations for bounty, submission(s), and amount
+
+The `knowledge.edits` topic carries the executed relation data for all three cases — interest relations are published directly by the curator, while allocation and payout relations are published via governance proposal execution.
 
 ### Membership
 

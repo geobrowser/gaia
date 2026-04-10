@@ -22,7 +22,7 @@ jobs:
         working-directory: ./stream
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6.0.2
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master

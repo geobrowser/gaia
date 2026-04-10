@@ -644,6 +644,69 @@ describe("GET /versioned/proposals/:id/diff", () => {
 			expect(body.message).not.toContain("QmTest123")
 		})
 
+		it("returns 422 when edit blob failed GRC-20 validation (is_errored=true)", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const spaceId = "00000000-0000-0000-0000-000000000002"
+			const now = Math.floor(Date.now() / 1000)
+
+			// Mock: getProposalWithPublishAction returns proposal with content_uri
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: spaceId,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: "ipfs://QmTestErroredBlob",
+					},
+				],
+			})
+
+			// Mock: getIpfsCacheData returns row with is_errored=true
+			db.execute.mockResolvedValueOnce({rows: [{data: null, is_errored: true}]})
+
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
+
+			expect(res.status).toBe(422)
+			const body = await res.json()
+			expect(body.error).toBe("Unprocessable")
+			expect(body.message).toContain("GRC-20 validation")
+			// Verify IPFS URI is NOT leaked
+			expect(body.message).not.toContain("ipfs://")
+			expect(body.message).not.toContain("QmTestErroredBlob")
+		})
+
+		it("returns 404 when ipfs_cache row exists but data is null and not errored", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const spaceId = "00000000-0000-0000-0000-000000000002"
+			const now = Math.floor(Date.now() / 1000)
+
+			// Mock: getProposalWithPublishAction returns proposal with content_uri
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: spaceId,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: "ipfs://QmTestNullData",
+					},
+				],
+			})
+
+			// Mock: getIpfsCacheData returns row with data=null, is_errored=false
+			db.execute.mockResolvedValueOnce({rows: [{data: null, is_errored: false}]})
+
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
+
+			expect(res.status).toBe(404)
+			const body = await res.json()
+			expect(body.error).toBe("Not found")
+			expect(body.message).toContain("Edit blob not cached")
+		})
+
 		it("returns 400 when spaceId does not match proposal's space", async () => {
 			const proposalId = "00000000-0000-0000-0000-000000000001"
 			const proposalSpaceId = "00000000-0000-0000-0000-000000000002"

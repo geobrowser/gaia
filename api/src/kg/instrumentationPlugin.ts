@@ -192,6 +192,19 @@ export function useGraphQLInstrumentation(): Plugin {
 					if (responseSizeBytes !== undefined) {
 						span.setAttribute("graphql.response_size_bytes", responseSizeBytes)
 					}
+
+					// Sentry metrics for dashboards and alerting
+					Sentry.metrics.distribution("graphql.duration_ms", durationMs, {
+						attributes: {operation: operationLabel},
+						unit: "millisecond",
+					})
+					if (responseSizeBytes !== undefined) {
+						Sentry.metrics.distribution("graphql.large_response_size_bytes", responseSizeBytes, {
+							attributes: {operation: operationLabel},
+							unit: "byte",
+						})
+					}
+
 					span.end()
 				},
 			}
