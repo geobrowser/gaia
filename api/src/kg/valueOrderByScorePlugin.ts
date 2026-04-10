@@ -42,7 +42,7 @@ export const ValueOrderByScorePlugin = makeAddPgTableOrderByPlugin(
 						AND vc.object_type = 0
 				)`
 			},
-			{unique: false, nulls: "last-iff-ascending"},
+			{unique: false, nulls: "last"},
 		)
 
 		return {...localScore, ...globalScore, ...rawScore}
