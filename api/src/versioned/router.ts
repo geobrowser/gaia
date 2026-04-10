@@ -23,6 +23,7 @@ import {getProfilesBySpaceIds} from "../profile/queries"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
 import type {
+	EditBlobDecodeFailedError,
 	EditBlobNotCachedError,
 	EditDecodeError,
 	InvalidCursorError,
@@ -58,6 +59,7 @@ type ProposalError =
 	| QueryError
 	| ProposalNotFoundError
 	| EditBlobNotCachedError
+	| EditBlobDecodeFailedError
 	| EditDecodeError
 	| SpaceMismatchError
 	| InvalidCursorError
@@ -896,6 +898,15 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 									message: "Edit blob not cached for this proposal",
 								},
 								404,
+							)
+						case "EditBlobDecodeFailedError":
+							return c.json(
+								{
+									error: "Unprocessable",
+									message: "Edit blob failed GRC-20 validation and cannot be decoded",
+									uri: error.uri,
+								},
+								422,
 							)
 						case "SpaceMismatchError":
 							return c.json(
