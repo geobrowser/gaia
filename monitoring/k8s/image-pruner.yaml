@@ -1,14 +1,86 @@
 # Image Pruner DaemonSet
+# =====================================================================
+# WHY
+# ---------------------------------------------------------------------
+# DigitalOcean managed Kubernetes (DOKS) does not expose kubelet
+# configuration, so the built-in image GC thresholds (which only watch
+# disk **bytes**, not inodes) cannot be tuned. Container images
+# accumulate over the life of a node and eventually exhaust inodes
+# well before disk bytes are full, triggering the
+# NodeFilesystemFilesFillingUp alert. This DaemonSet automates the
+# `crictl rmi --prune` cleanup that we'd otherwise have to run manually.
 #
-# Runs on every node on a weekly cadence and executes `crictl rmi --prune`
-# to reclaim inodes consumed by unreferenced container images. DigitalOcean
-# managed Kubernetes (DOKS) does not expose kubelet configuration, so the
-# built-in image GC thresholds (byte-based only) cannot be tuned. Container
-# images accumulate over the life of a node and eventually exhaust inodes
-# well before disk bytes are full, triggering NodeFilesystemFilesFillingUp.
+# HOW IT WORKS
+# ---------------------------------------------------------------------
+# 1. The DaemonSet schedules one privileged pod per node (incl. tainted
+#    nodes via `tolerations: operator=Exists`).
+# 2. On startup each pod downloads a pinned `crictl` binary into the
+#    container, then enters a loop that wakes every CHECK_INTERVAL_SECONDS
+#    (default 10 min) and checks the wall clock.
+# 3. When `date -u +%u` (day-of-week, 1=Mon..7=Sun) matches TARGET_DOW
+#    *and* `date -u +%H` matches TARGET_HOUR, the pod runs the prune.
+#    Default schedule: Mon 06:00 UTC = Sun 22:00 PT (low-traffic).
+# 4. A LAST_RUN_KEY (today's date in UTC) prevents repeat runs within
+#    the same hour-window if the loop checks multiple times.
+# 5. The prune itself is two passes of `crictl -t 5m rmi --prune`:
+#       - pass 1 frees references on unused images
+#       - pass 2 reaps orphaned layers exposed by pass 1
+#    The 5-minute timeout is necessary because containerd rmi calls
+#    get slow under inode pressure (the default 2s yields
+#    DeadlineExceeded errors).
+# 6. Each run logs structured events to stdout that flow through the
+#    cluster's existing log shipper into Axiom:
+#       event=run_start
+#       event=before  images=N used=N free=N used_pct=N%
+#       event=after   images=N used=N free=N used_pct=N%
+#       event=summary before(...) -> after(...)
+#       event=run_complete
+#    Plus the raw `df -i /host-root` output before and after each run.
 #
-# Each run logs BEFORE/AFTER `df -i /` and image counts so the job's impact
-# is visible in `kubectl logs` / Axiom.
+# WHY DAEMONSET INSTEAD OF CRONJOB
+# ---------------------------------------------------------------------
+# A native CronJob runs a single pod per schedule fire. To prune every
+# node you'd need either one CronJob per node (clunky) or pod-affinity
+# tricks. A DaemonSet with an internal scheduler is simpler, survives
+# node replacement automatically, and gives consistent observability.
+#
+# VERIFYING WITHOUT WAITING FOR SUNDAY
+# ---------------------------------------------------------------------
+# Option 1 — Force an immediate one-shot prune on a single node:
+#   POD=$(kubectl -n kube-system get pod -l app=image-pruner \
+#     -o jsonpath='{.items[0].metadata.name}')
+#   kubectl -n kube-system exec -it "$POD" -- \
+#     crictl -t 5m rmi --prune
+#
+# Option 2 — Temporarily override the schedule to the current UTC
+# day/hour so the loop fires within ~10 minutes on every node:
+#   kubectl -n kube-system set env ds/image-pruner \
+#     TARGET_DOW=$(date -u +%u) TARGET_HOUR=$(date -u +%H)
+#   kubectl -n kube-system rollout status ds/image-pruner
+#   kubectl -n kube-system logs -f ds/image-pruner
+#   # When done, revert:
+#   kubectl -n kube-system set env ds/image-pruner \
+#     TARGET_DOW=1 TARGET_HOUR=06
+#
+# VIEWING PAST RUNS
+# ---------------------------------------------------------------------
+#   # Latest from the live pods
+#   kubectl -n kube-system logs ds/image-pruner --tail=200
+#
+#   # Just the summary lines from the last week
+#   kubectl -n kube-system logs ds/image-pruner --since=8d \
+#     | grep 'event=summary'
+#
+#   # Durable history → query Axiom for `kubernetes.labels.app=image-pruner`
+#   # and filter on `message contains "event=run_complete"`.
+#
+# OPERATIONAL NOTES
+# ---------------------------------------------------------------------
+# - CRICTL_VERSION must track the cluster's k8s minor version. Bump
+#   alongside cluster upgrades.
+# - To change schedule timezone: TARGET_DOW uses 1=Mon..7=Sun (UTC),
+#   TARGET_HOUR is 00-23 (UTC).
+# - Resource limits are intentionally tight; the work is rare and bursty.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
