@@ -1,0 +1,115 @@
+# Image Pruner DaemonSet
+#
+# Runs on every node on a weekly cadence and executes `crictl rmi --prune`
+# to reclaim inodes consumed by unreferenced container images. DigitalOcean
+# managed Kubernetes (DOKS) does not expose kubelet configuration, so the
+# built-in image GC thresholds (byte-based only) cannot be tuned. Container
+# images accumulate over the life of a node and eventually exhaust inodes
+# well before disk bytes are full, triggering NodeFilesystemFilesFillingUp.
+#
+# Each run logs BEFORE/AFTER `df -i /` and image counts so the job's impact
+# is visible in `kubectl logs` / Axiom.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: image-pruner
+  namespace: kube-system
+  labels:
+    app: image-pruner
+spec:
+  selector:
+    matchLabels:
+      app: image-pruner
+  template:
+    metadata:
+      labels:
+        app: image-pruner
+    spec:
+      # Tolerate all taints so the pruner runs even on tainted/dedicated nodes
+      tolerations:
+        - operator: Exists
+      # Privileged so we can talk to containerd's socket on the host
+      hostPID: true
+      containers:
+        - name: pruner
+          image: alpine:3.20
+          securityContext:
+            privileged: true
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # Pin crictl version. Must be compatible with the cluster's k8s
+            # minor version (currently 1.33). Bump alongside cluster upgrades.
+            - name: CRICTL_VERSION
+              value: v1.33.0
+            # Sleep between runs. 7 days is plenty — image accumulation is slow.
+            - name: PRUNE_INTERVAL_SECONDS
+              value: "604800"
+            # Per-call crictl timeout. When the fs is inode-pressured,
+            # containerd rmi calls get slow; the default 2s is too short.
+            - name: CRICTL_TIMEOUT
+              value: 5m
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -u
+              apk add --no-cache curl ca-certificates >/dev/null
+              curl -fsSL "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-amd64.tar.gz" \
+                | tar -xz -C /usr/local/bin
+              export CONTAINER_RUNTIME_ENDPOINT=unix:///run/containerd/containerd.sock
+
+              log() { echo "[$(date -u +%FT%TZ)] [${NODE_NAME}] $*"; }
+              # stats prints: images=<N> used=<N> free=<N> used_pct=<N%>
+              stats() {
+                imgs=$(crictl images -q 2>/dev/null | wc -l | tr -d ' ')
+                set -- $(df -i /host-root | awk 'NR==2 {print $3, $4, $5}')
+                echo "images=${imgs} used=$1 free=$2 used_pct=$3"
+              }
+
+              while true; do
+                log "==== image-pruner run starting ===="
+                BEFORE=$(stats)
+                log "BEFORE: ${BEFORE}"
+                log "df -i BEFORE:"
+                df -i /host-root
+
+                log "running: crictl -t ${CRICTL_TIMEOUT} rmi --prune (pass 1)"
+                crictl -t "${CRICTL_TIMEOUT}" rmi --prune 2>&1 | tail -20 | sed "s/^/[${NODE_NAME}] /" || log "pass 1 returned non-zero (continuing)"
+
+                log "running: crictl -t ${CRICTL_TIMEOUT} rmi --prune (pass 2)"
+                crictl -t "${CRICTL_TIMEOUT}" rmi --prune 2>&1 | tail -20 | sed "s/^/[${NODE_NAME}] /" || log "pass 2 returned non-zero (continuing)"
+
+                AFTER=$(stats)
+                log "AFTER:  ${AFTER}"
+                log "df -i AFTER:"
+                df -i /host-root
+
+                log "summary: before(${BEFORE}) -> after(${AFTER})"
+                log "==== sleeping ${PRUNE_INTERVAL_SECONDS}s ===="
+                sleep "${PRUNE_INTERVAL_SECONDS}"
+              done
+          volumeMounts:
+            - name: containerd-sock
+              mountPath: /run/containerd/containerd.sock
+            - name: host-root
+              mountPath: /host-root
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: containerd-sock
+          hostPath:
+            path: /run/containerd/containerd.sock
+            type: Socket
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
