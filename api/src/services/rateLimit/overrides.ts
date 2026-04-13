@@ -3,7 +3,7 @@ import type {db as Db} from "../storage/storage"
 import {log} from "../telemetry"
 
 /**
- * Lookup per-IP rate limit overrides from Postgres with a small in-process
+ * Lookup per-IP rate limit overrides from Postgres with a small in-process LRU
  * cache to keep the hot path off the DB.
  *
  * We use the cache for *both* hits (an explicit limit) and misses (no row
@@ -14,23 +14,60 @@ import {log} from "../telemetry"
  * `ttlSeconds` to be picked up by all pods. That's the price of avoiding
  * a Postgres query on every API request, and acceptable for an admin-managed
  * configuration table.
+ *
+ * Memory bounding: the cache is a fixed-size LRU. When full, the
+ * least-recently-used entry is evicted. This caps per-pod memory regardless
+ * of unique-IP volume (e.g. a scraper from many IPs cannot grow it without
+ * bound). Stale entries are also evicted lazily on read, so a long-idle pod
+ * does not keep dead entries around past their TTL.
  */
 export type OverrideLookup = {
 	/** Returns the per-minute limit for `ip` if an override matches, otherwise `null`. */
 	lookup(ip: string): Promise<number | null>
+	/** Test/observability hook: current cache size. */
+	size(): number
 }
 
 type CacheEntry = {limit: number | null; expiresAtMs: number}
 
-export function createOverrideLookup(db: typeof Db, ttlSeconds: number): OverrideLookup {
+export const DEFAULT_OVERRIDE_CACHE_MAX_ENTRIES = 10_000
+
+export function createOverrideLookup(
+	db: typeof Db,
+	ttlSeconds: number,
+	maxEntries: number = DEFAULT_OVERRIDE_CACHE_MAX_ENTRIES,
+): OverrideLookup {
+	// Map preserves insertion order in JS, which we exploit for LRU:
+	// every read of a fresh entry deletes+re-inserts it, moving it to the tail.
+	// On overflow, the head (oldest) is evicted via .keys().next().
 	const cache = new Map<string, CacheEntry>()
 	const ttlMs = ttlSeconds * 1000
+
+	function touchAsRecent(ip: string, entry: CacheEntry): void {
+		cache.delete(ip)
+		cache.set(ip, entry)
+	}
+
+	function evictOldestIfFull(): void {
+		while (cache.size >= maxEntries) {
+			const oldest = cache.keys().next().value
+			if (oldest === undefined) break
+			cache.delete(oldest)
+		}
+	}
 
 	return {
 		async lookup(ip) {
 			const now = Date.now()
 			const cached = cache.get(ip)
-			if (cached && cached.expiresAtMs > now) return cached.limit
+			if (cached) {
+				if (cached.expiresAtMs > now) {
+					touchAsRecent(ip, cached)
+					return cached.limit
+				}
+				// Expired: drop it now rather than waiting for LRU pressure.
+				cache.delete(ip)
+			}
 
 			let limit: number | null = null
 			try {
@@ -51,8 +88,13 @@ export function createOverrideLookup(db: typeof Db, ttlSeconds: number): Overrid
 				return null
 			}
 
+			evictOldestIfFull()
 			cache.set(ip, {limit, expiresAtMs: now + ttlMs})
 			return limit
+		},
+
+		size() {
+			return cache.size
 		},
 	}
 }

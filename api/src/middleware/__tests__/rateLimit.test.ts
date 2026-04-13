@@ -26,6 +26,9 @@ function fakeOverrides(map: Record<string, number | null>): OverrideLookup {
 		async lookup(ip) {
 			return map[ip] ?? null
 		},
+		size() {
+			return 0
+		},
 	}
 }
 
