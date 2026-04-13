@@ -105,22 +105,9 @@ app.get("/", swaggerUI({url: "/openapi"}))
 
 app.use("/graphql", async (c) => {
 	const requestId = c.get("requestId") || "unknown"
-	const method = c.req.method
 
-	if (method !== "OPTIONS") {
-		const poolPressure = getGraphqlPoolPressure()
-		if (shouldShedPoolTraffic(poolPressure)) {
-			log.warn("GraphQL overloaded: shedding request before pool checkout", {
-				requestId,
-				path: c.req.path,
-				method,
-				poolPressure,
-			})
-
-			return createGraphqlOverloadResponse(requestId)
-		}
-	}
-
+	// Pool pressure shedding is handled inside usePgClient (only on cache misses).
+	// This allows cached responses to be served even when the DB pool is saturated.
 	try {
 		return await graphqlServer.fetch(c.req.raw, {
 			traceContext: c.get("traceContext"),
@@ -130,12 +117,12 @@ app.use("/graphql", async (c) => {
 			},
 		})
 	} catch (error) {
-		if (isPoolConnectTimeout(error)) {
+		if (isPoolConnectTimeout(error) || (error instanceof Error && error.message === "pool_pressure_shed")) {
 			const freshPoolPressure = getGraphqlPoolPressure()
-			log.warn("GraphQL overloaded: pool checkout timeout", {
+			log.warn("GraphQL overloaded: pool pressure shed", {
 				requestId,
 				path: c.req.path,
-				method,
+				method: c.req.method,
 				poolPressure: freshPoolPressure,
 			})
 

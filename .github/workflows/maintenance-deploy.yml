@@ -1,0 +1,77 @@
+name: Deploy Maintenance (Production)
+
+# Deploys cluster-wide maintenance manifests in maintenance/k8s/.
+# Uses `kubectl apply --prune` with the `managed-by=gha-maintenance-deploy`
+# selector so resources removed from the repo are also removed from the
+# cluster on the next deploy. Any new manifest must include the label
+# `managed-by: gha-maintenance-deploy` (on the resource AND on its pod
+# template if applicable) to be tracked.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'maintenance/k8s/**'
+      - '.github/workflows/maintenance-deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: maintenance-production
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.2
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Validate manifests (server-side dry-run)
+        run: |
+          kubectl apply -f maintenance/k8s/ --dry-run=server
+
+      - name: Apply manifests with prune
+        run: |
+          # Apply every manifest in maintenance/k8s/ (kubectl ignores non-yaml).
+          # --prune removes any resource in the cluster carrying our label
+          # that is no longer present in the applied manifest set, so deleting
+          # a file from the directory also removes its resource from the cluster.
+          # When adding new resource KINDs, extend --prune-allowlist accordingly.
+          kubectl apply \
+            -f maintenance/k8s/ \
+            --prune \
+            --selector managed-by=gha-maintenance-deploy \
+            --prune-allowlist=apps/v1/DaemonSet
+
+      - name: Wait for image-pruner DaemonSet rollout
+        run: |
+          kubectl -n kube-system rollout status ds/image-pruner --timeout=180s
+
+      - name: Show DaemonSet status
+        run: |
+          echo "=== image-pruner DaemonSet ==="
+          kubectl -n kube-system get ds image-pruner
+          echo ""
+          echo "=== image-pruner Pods ==="
+          kubectl -n kube-system get pods -l app=image-pruner -o wide
+          echo ""
+          echo "=== Recent logs (last 20 lines per pod) ==="
+          for pod in $(kubectl -n kube-system get pods -l app=image-pruner -o name); do
+            echo "--- $pod ---"
+            kubectl -n kube-system logs "$pod" --tail=20 || true
+          done
