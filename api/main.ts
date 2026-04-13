@@ -3,8 +3,10 @@ import {Effect, Either} from "effect"
 import {Hono} from "hono"
 import {cors} from "hono/cors"
 import {describeRoute, openAPISpecs} from "hono-openapi"
+import Redis from "ioredis"
 import {health} from "./src/health"
 import {getGraphqlPoolPressure, graphqlServer} from "./src/kg/postgraphile"
+import {rateLimit} from "./src/middleware/rateLimit"
 import {canonicalRequestLogging, requestId} from "./src/middleware/requestLogging"
 import {createProfileRouter} from "./src/profile"
 import {createProposalsRouter} from "./src/proposals"
@@ -12,6 +14,9 @@ import {createSearchRouter} from "./src/search"
 import {isPoolConnectTimeout} from "./src/services/dbFailures"
 import {shouldShedPoolTraffic} from "./src/services/dbSaturation"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
+import {loadRateLimitConfig} from "./src/services/rateLimit/config"
+import {createOverrideLookup} from "./src/services/rateLimit/overrides"
+import {createValkeyRateLimitStore} from "./src/services/rateLimit/store"
 import {runtime} from "./src/services/runtime"
 import {OpenSearchClient} from "./src/services/search"
 import {db} from "./src/services/storage/storage"
@@ -102,6 +107,43 @@ app.route("/proposals", createProposalsRouter(db, runtime))
 log.info("Proposals routes enabled")
 
 app.get("/", swaggerUI({url: "/openapi"}))
+
+// Rate limit middleware: scoped to /graphql only for v1.
+// Whitelist (env CIDRs) → DB overrides → default per-minute limit.
+// Counter is shared across all API pods via Valkey; failure mode is fail-open.
+const rateLimitConfig = loadRateLimitConfig()
+if (rateLimitConfig.enabled) {
+	const valkeyUrl = process.env.VALKEY_URL
+	if (!valkeyUrl) {
+		log.warn("Rate limit enabled but VALKEY_URL is not set — disabling rate limit")
+	} else {
+		const valkey = new Redis(valkeyUrl, {
+			maxRetriesPerRequest: 1,
+			lazyConnect: true,
+			connectTimeout: 2000,
+			commandTimeout: 500,
+			retryStrategy(times) {
+				return Math.min(times * 500, 5000)
+			},
+		})
+		valkey.on("error", (err) => log.warn("Valkey rate limit client error", {error: String(err)}))
+		valkey.on("connect", () => log.info("Valkey rate limit client connected"))
+		valkey.connect().catch((err) => {
+			log.warn("Valkey rate limit initial connection failed, will retry", {error: String(err)})
+		})
+
+		const store = createValkeyRateLimitStore(valkey)
+		const overrides = createOverrideLookup(db, rateLimitConfig.overrideCacheTtlSeconds)
+		app.use("/graphql", rateLimit({config: rateLimitConfig, store, overrides}))
+		log.info("Rate limit enabled on /graphql", {
+			defaultPerMinute: rateLimitConfig.defaultPerMinute,
+			whitelistEntries: rateLimitConfig.whitelist.length,
+			trustedProxyHops: rateLimitConfig.trustedProxyHops,
+		})
+	}
+} else {
+	log.info("Rate limit disabled (RATE_LIMIT_ENABLED=false)")
+}
 
 app.use("/graphql", async (c) => {
 	const requestId = c.get("requestId") || "unknown"

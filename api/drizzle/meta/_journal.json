@@ -379,6 +379,13 @@
       "when": 1775675273149,
       "tag": "0053_crazy_moondragon",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1776111586600,
+      "tag": "0054_curved_post",
+      "breakpoints": true
     }
   ]
 }
