@@ -43,14 +43,17 @@ jobs:
 
       - name: Validate manifests (server-side dry-run)
         run: |
-          kubectl apply -f maintenance/k8s/image-pruner.yaml --dry-run=server
+          kubectl apply -f maintenance/k8s/ --dry-run=server
 
       - name: Apply manifests with prune
         run: |
+          # Apply every manifest in maintenance/k8s/ (kubectl ignores non-yaml).
           # --prune removes any resource in the cluster carrying our label
-          # that is no longer present in the applied manifest set.
+          # that is no longer present in the applied manifest set, so deleting
+          # a file from the directory also removes its resource from the cluster.
+          # When adding new resource KINDs, extend --prune-allowlist accordingly.
           kubectl apply \
-            -f maintenance/k8s/image-pruner.yaml \
+            -f maintenance/k8s/ \
             --prune \
             --selector managed-by=gha-maintenance-deploy \
             --prune-allowlist=apps/v1/DaemonSet
