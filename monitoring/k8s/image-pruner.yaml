@@ -44,9 +44,16 @@ spec:
             # minor version (currently 1.33). Bump alongside cluster upgrades.
             - name: CRICTL_VERSION
               value: v1.33.0
-            # Sleep between runs. 7 days is plenty — image accumulation is slow.
-            - name: PRUNE_INTERVAL_SECONDS
-              value: "604800"
+            # Schedule: weekly on TARGET_DOW at TARGET_HOUR (UTC).
+            # 1 = Monday in `date -u +%u` (busybox/POSIX). Monday 06:00 UTC =
+            # Sunday 23:00 PT / 22:00 PST — low-traffic window in US west.
+            - name: TARGET_DOW
+              value: "1"
+            - name: TARGET_HOUR
+              value: "06"
+            # How often to wake and check the clock (seconds).
+            - name: CHECK_INTERVAL_SECONDS
+              value: "600"
             # Per-call crictl timeout. When the fs is inode-pressured,
             # containerd rmi calls get slow; the default 2s is too short.
             - name: CRICTL_TIMEOUT
@@ -69,10 +76,10 @@ spec:
                 echo "images=${imgs} used=$1 free=$2 used_pct=$3"
               }
 
-              while true; do
-                log "==== image-pruner run starting ===="
+              run_prune() {
+                log "==== image-pruner run starting (event=run_start) ===="
                 BEFORE=$(stats)
-                log "BEFORE: ${BEFORE}"
+                log "event=before ${BEFORE}"
                 log "df -i BEFORE:"
                 df -i /host-root
 
@@ -83,13 +90,25 @@ spec:
                 crictl -t "${CRICTL_TIMEOUT}" rmi --prune 2>&1 | tail -20 | sed "s/^/[${NODE_NAME}] /" || log "pass 2 returned non-zero (continuing)"
 
                 AFTER=$(stats)
-                log "AFTER:  ${AFTER}"
+                log "event=after  ${AFTER}"
                 log "df -i AFTER:"
                 df -i /host-root
 
-                log "summary: before(${BEFORE}) -> after(${AFTER})"
-                log "==== sleeping ${PRUNE_INTERVAL_SECONDS}s ===="
-                sleep "${PRUNE_INTERVAL_SECONDS}"
+                log "event=summary before(${BEFORE}) -> after(${AFTER})"
+                log "==== run complete (event=run_complete) ===="
+              }
+
+              log "image-pruner started; schedule=DOW=${TARGET_DOW} HOUR=${TARGET_HOUR} (UTC), check_interval=${CHECK_INTERVAL_SECONDS}s"
+              LAST_RUN_KEY=""
+              while true; do
+                NOW_DOW=$(date -u +%u)
+                NOW_HOUR=$(date -u +%H)
+                NOW_KEY=$(date -u +%Y-%m-%d)
+                if [ "${NOW_DOW}" = "${TARGET_DOW}" ] && [ "${NOW_HOUR}" = "${TARGET_HOUR}" ] && [ "${LAST_RUN_KEY}" != "${NOW_KEY}" ]; then
+                  run_prune
+                  LAST_RUN_KEY="${NOW_KEY}"
+                fi
+                sleep "${CHECK_INTERVAL_SECONDS}"
               done
           volumeMounts:
             - name: containerd-sock
