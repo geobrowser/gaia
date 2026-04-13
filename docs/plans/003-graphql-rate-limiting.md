@@ -8,7 +8,7 @@ Protect the GraphQL HTTP endpoint from abuse (scrapers, runaway clients, acciden
 
 Tier resolution is first-match-wins:
 
-1. **Whitelist** (env CIDRs) — unlimited, counter not incremented, no rate-limit headers. Used for cluster-internal traffic and our own backend services.
+1. **Unlimited allowlist** (env CIDRs) — unlimited, counter not incremented, no rate-limit headers. Used for cluster-internal traffic and our own backend services.
 2. **Per-IP override** (DB row) — uses the row's `requests_per_min`. Used for specific clients we've negotiated higher (or lower) limits with.
 3. **Default** — `RATE_LIMIT_DEFAULT_PER_MINUTE` from env (1000/min). Applies to everyone else.
 
@@ -77,19 +77,19 @@ Content-Type: application/json
 {"error":"rate_limit_exceeded","retry_after_seconds":23}
 ```
 
-Whitelisted IPs get **no headers** at all (signaling unlimited).
+Allowlisted IPs get **no headers** at all (signaling unlimited).
 
 ## Configuration
 
 ```bash
 RATE_LIMIT_ENABLED=true
 RATE_LIMIT_DEFAULT_PER_MINUTE=1000
-RATE_LIMIT_WHITELIST_IPS=10.108.0.0/16,10.109.0.0/16   # DOKS pod + service nets
+RATE_LIMIT_UNLIMITED_ALLOWLIST_IPS=10.108.0.0/16,10.109.0.0/16   # DOKS pod + service nets
 RATE_LIMIT_OVERRIDE_CACHE_TTL_SECONDS=60
 RATE_LIMIT_TRUSTED_PROXY_HOPS=1                         # ingress-nginx is 1 hop
 ```
 
-Whitelist defaults to **DOKS pod CIDR (`10.108.0.0/16`)** and **service CIDR (`10.109.0.0/16`)** so all internal cluster traffic (pod-to-pod calls from notification-service, scoring-service, etc.) is exempted.
+Unlimited allowlist defaults to **DOKS pod CIDR (`10.108.0.0/16`)** and **service CIDR (`10.109.0.0/16`)** so all internal cluster traffic (pod-to-pod calls from notification-service, scoring-service, etc.) is exempted.
 
 ## Sizing rationale (1000/min default)
 
@@ -180,4 +180,4 @@ kubectl -n api set env deployment/api RATE_LIMIT_ENABLED=true
 - Token bucket or true sliding window if minute-edge boundary effect causes complaints.
 - API key support: `Authorization: Bearer <key>` mapped to a client ID, override table keyed by client ID instead of (or in addition to) IP.
 - Per-route rate limits with different defaults (e.g. tighter on `/ipfs/upload-*`).
-- Prometheus metric: `graphql_rate_limit_total{status="allowed|blocked|whitelisted"}`.
+- Prometheus metric: `graphql_rate_limit_total{status="allowed|blocked|allowlisted"}`.

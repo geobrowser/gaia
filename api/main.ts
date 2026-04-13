@@ -109,7 +109,7 @@ log.info("Proposals routes enabled")
 app.get("/", swaggerUI({url: "/openapi"}))
 
 // Rate limit middleware: scoped to /graphql only for v1.
-// Whitelist (env CIDRs) → DB overrides → default per-minute limit.
+// Unlimited allowlist (env CIDRs) → DB overrides → default per-minute limit.
 // Counter is shared across all API pods via Valkey; failure mode is fail-open.
 const rateLimitConfig = loadRateLimitConfig()
 if (rateLimitConfig.enabled) {
@@ -137,7 +137,7 @@ if (rateLimitConfig.enabled) {
 		app.use("/graphql", rateLimit({config: rateLimitConfig, store, overrides}))
 		log.info("Rate limit enabled on /graphql", {
 			defaultPerMinute: rateLimitConfig.defaultPerMinute,
-			whitelistEntries: rateLimitConfig.whitelist.length,
+			unlimitedAllowlistEntries: rateLimitConfig.unlimitedAllowlist.length,
 			trustedProxyHops: rateLimitConfig.trustedProxyHops,
 		})
 	}
@@ -503,7 +503,19 @@ app.get(
 			info: {
 				title: "Geo API",
 				version: "1.0.0",
-				description: "API for interacting with the Geo knowledge graph",
+				description: [
+					"API for interacting with the Geo knowledge graph.",
+					"",
+					"## Rate Limits",
+					"",
+					"The `/graphql` endpoint applies a per-IP rate limit (default **1000 requests per minute**).",
+					"Responses include `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset` headers.",
+					"When the limit is exceeded the endpoint returns `HTTP 429 Too Many Requests` with",
+					"`Retry-After` indicating seconds until the window resets.",
+					"",
+					"Cluster-internal traffic is exempt. **If you need a higher limit for your IP or IP range,",
+					"please contact the Geo team to request an override.**",
+				].join("\n"),
 			},
 			servers: [
 				{url: "http://localhost:3000", description: "Local Server"},

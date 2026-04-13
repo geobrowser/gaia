@@ -39,7 +39,7 @@ function makeApp(config: RateLimitConfig, store: RateLimitStore, overrides: Over
 const baseConfig: RateLimitConfig = {
 	enabled: true,
 	defaultPerMinute: 3,
-	whitelist: [],
+	unlimitedAllowlist: [],
 	overrideCacheTtlSeconds: 60,
 	trustedProxyHops: 1,
 }
@@ -82,8 +82,8 @@ describe("rateLimit middleware", () => {
 		expect(body.retry_after_seconds).toBe(30)
 	})
 
-	it("does not consume counter for whitelisted IPs", async () => {
-		const config = {...baseConfig, whitelist: [parseCidr("203.0.113.0/24")!]}
+	it("does not consume counter for allowlisted IPs", async () => {
+		const config = {...baseConfig, unlimitedAllowlist: [parseCidr("203.0.113.0/24")!]}
 		const app = makeApp(config, store, fakeOverrides({}))
 		// Do 10 requests — would normally exceed the limit of 3
 		for (let i = 0; i < 10; i++) {

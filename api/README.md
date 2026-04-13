@@ -84,6 +84,32 @@ The API starts on `http://localhost:3000` (default).
 
 See [`.env.example`](.env.example) for all environment variables with descriptions.
 
+## Rate Limits
+
+The `/graphql` endpoint applies a per-IP rate limit (default **1000 requests per minute**) to protect against scraping and runaway clients. Counters are shared across all API pods.
+
+Responses include standard rate-limit headers:
+
+```
+RateLimit-Limit: 1000
+RateLimit-Remaining: 957
+RateLimit-Reset: 23
+```
+
+When a client exceeds the limit, the API returns `HTTP 429 Too Many Requests` with `Retry-After` indicating seconds until the window resets:
+
+```json
+{"error":"rate_limit_exceeded","retry_after_seconds":23}
+```
+
+**Cluster-internal traffic** (pod-to-pod calls within DOKS) is exempt from rate limiting.
+
+**Need a higher limit?** If you are a partner or integrator and 1000 req/min is not enough for your use case, **contact the Geo team** (open an issue at [geobrowser/gaia/issues](https://github.com/geobrowser/gaia/issues) or reach out via the project's communication channels) to request an override for your IP or IP range.
+
+**Disabling locally**: rate limiting is disabled when `RATE_LIMIT_ENABLED=false` or when `VALKEY_URL` is unset, so local development and CI/CD load tests are unaffected by default.
+
+See [`docs/plans/003-graphql-rate-limiting.md`](../docs/plans/003-graphql-rate-limiting.md) for the full design.
+
 ## Documentation
 
 - [API Architecture](../docs/api-architecture.md) — layers, tech stack, query patterns

@@ -8,7 +8,7 @@ describe("loadRateLimitConfig", () => {
 		expect(config.defaultPerMinute).toBe(1000)
 		expect(config.overrideCacheTtlSeconds).toBe(60)
 		expect(config.trustedProxyHops).toBe(1)
-		expect(config.whitelist).toEqual([])
+		expect(config.unlimitedAllowlist).toEqual([])
 	})
 
 	it("honors RATE_LIMIT_ENABLED=false", () => {
@@ -32,22 +32,22 @@ describe("loadRateLimitConfig", () => {
 		expect(loadRateLimitConfig({RATE_LIMIT_DEFAULT_PER_MINUTE: "1.5"}).defaultPerMinute).toBe(1000)
 	})
 
-	it("parses comma-separated whitelist", () => {
+	it("parses comma-separated allowlist", () => {
 		const config = loadRateLimitConfig({
-			RATE_LIMIT_WHITELIST_IPS: "10.0.0.1, 192.168.0.0/24 , 203.0.113.42",
+			RATE_LIMIT_UNLIMITED_ALLOWLIST_IPS: "10.0.0.1, 192.168.0.0/24 , 203.0.113.42",
 		})
-		expect(config.whitelist).toHaveLength(3)
-		expect(config.whitelist.map((c) => c.source)).toEqual(["10.0.0.1", "192.168.0.0/24", "203.0.113.42"])
+		expect(config.unlimitedAllowlist).toHaveLength(3)
+		expect(config.unlimitedAllowlist.map((c) => c.source)).toEqual(["10.0.0.1", "192.168.0.0/24", "203.0.113.42"])
 	})
 
-	it("ignores unparseable whitelist entries", () => {
+	it("ignores unparseable allowlist entries", () => {
 		const config = loadRateLimitConfig({
-			RATE_LIMIT_WHITELIST_IPS: "10.0.0.1,bad-entry,192.168.0.0/24,256.0.0.0",
+			RATE_LIMIT_UNLIMITED_ALLOWLIST_IPS: "10.0.0.1,bad-entry,192.168.0.0/24,256.0.0.0",
 		})
-		expect(config.whitelist).toHaveLength(2)
+		expect(config.unlimitedAllowlist).toHaveLength(2)
 	})
 
-	it("treats empty whitelist string as no entries", () => {
-		expect(loadRateLimitConfig({RATE_LIMIT_WHITELIST_IPS: ""}).whitelist).toEqual([])
+	it("treats empty allowlist string as no entries", () => {
+		expect(loadRateLimitConfig({RATE_LIMIT_UNLIMITED_ALLOWLIST_IPS: ""}).unlimitedAllowlist).toEqual([])
 	})
 })

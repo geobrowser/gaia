@@ -8,7 +8,7 @@ import {type Cidr, parseCidr} from "./cidr"
 export type RateLimitConfig = {
 	enabled: boolean
 	defaultPerMinute: number
-	whitelist: Cidr[]
+	unlimitedAllowlist: Cidr[]
 	overrideCacheTtlSeconds: number
 	trustedProxyHops: number
 }
@@ -20,23 +20,23 @@ export function loadRateLimitConfig(env: NodeJS.ProcessEnv = process.env): RateL
 	const overrideCacheTtlSeconds = parsePositiveInt(env.RATE_LIMIT_OVERRIDE_CACHE_TTL_SECONDS, 60)
 	const trustedProxyHops = parsePositiveInt(env.RATE_LIMIT_TRUSTED_PROXY_HOPS, 1)
 
-	const rawWhitelist = env.RATE_LIMIT_WHITELIST_IPS ?? ""
-	const whitelist: Cidr[] = []
-	for (const entry of rawWhitelist.split(",")) {
+	const rawAllowlist = env.RATE_LIMIT_UNLIMITED_ALLOWLIST_IPS ?? ""
+	const unlimitedAllowlist: Cidr[] = []
+	for (const entry of rawAllowlist.split(",")) {
 		const trimmed = entry.trim()
 		if (trimmed === "") continue
 		const parsed = parseCidr(trimmed)
 		if (parsed === null) {
-			log.warn("rate limit: ignoring unparseable whitelist entry", {entry: trimmed})
+			log.warn("rate limit: ignoring unparseable allowlist entry", {entry: trimmed})
 			continue
 		}
-		whitelist.push(parsed)
+		unlimitedAllowlist.push(parsed)
 	}
 
 	return {
 		enabled,
 		defaultPerMinute,
-		whitelist,
+		unlimitedAllowlist,
 		overrideCacheTtlSeconds,
 		trustedProxyHops,
 	}

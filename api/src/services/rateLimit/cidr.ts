@@ -1,9 +1,9 @@
 /**
  * Minimal IPv4 CIDR matcher used by the rate-limit middleware to evaluate the
- * env-configured whitelist. Per-row DB overrides are matched server-side via
+ * env-configured allowlist. Per-row DB overrides are matched server-side via
  * Postgres's native `>>=` operator on the `cidr` column.
  *
- * IPv6 is not supported; whitelist entries that don't parse as IPv4 (or as an
+ * IPv6 is not supported; allowlist entries that don't parse as IPv4 (or as an
  * IPv4 CIDR like `10.0.0.0/24`) are ignored at parse time and logged as a
  * warning. We can extend to IPv6 if/when a use case appears.
  */

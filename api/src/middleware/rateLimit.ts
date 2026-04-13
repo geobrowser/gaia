@@ -10,7 +10,7 @@ import {extractClientIp} from "./clientIp"
  * Per-IP rate limit middleware for the GraphQL HTTP endpoint.
  *
  * Tier resolution (first match wins):
- *   1. CIDR whitelist from env  → unlimited (counter not incremented, no headers)
+ *   1. CIDR unlimited-allowlist from env → unlimited (counter not incremented, no headers)
  *   2. DB override for this IP  → use the row's `requests_per_min`
  *   3. Default                  → `defaultPerMinute` from env
  *
@@ -47,8 +47,8 @@ export function rateLimit(deps: RateLimitDeps): MiddlewareHandler {
 			return next()
 		}
 
-		// Tier 1: whitelist (cluster-internal IPs, our own backend services).
-		if (ipInAnyCidr(ip, config.whitelist)) return next()
+		// Tier 1: unlimited allowlist (cluster-internal IPs, our own backend services).
+		if (ipInAnyCidr(ip, config.unlimitedAllowlist)) return next()
 
 		// Tier 2 / 3: DB override or default.
 		const overrideLimit = await overrides.lookup(ip)
