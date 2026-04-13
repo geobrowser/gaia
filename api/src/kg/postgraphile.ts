@@ -16,6 +16,7 @@ import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin from "./paginationCapPlugin"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 import {createValkeyCache} from "./valkeyCache"
+import ValueOrderByScorePlugin from "./valueOrderByScorePlugin"
 import ValueScalarsPlugin from "./valueScalarsPlugin"
 
 // Server context passed from HTTP middleware
@@ -109,6 +110,7 @@ const postgraphileOptions = {
 		ConnectionFilterPlugin,
 		SimplifyInflectionPlugin,
 		EntitySpaceFilterPlugin,
+		ValueOrderByScorePlugin,
 		PaginationCapPlugin,
 	],
 	disableDefaultMutations: true,
