@@ -108,6 +108,8 @@ When a client exceeds the limit, the API returns `HTTP 429 Too Many Requests` wi
 
 **Capacity**: each API pod tracks up to **100,000 distinct IPs** in its in-memory override cache (LRU). Worst-case memory impact: ~20 MB per pod. Beyond 100k unique IPs in the active window, the least-recently-seen IP's override is re-fetched from Postgres on its next request.
 
+**Identifying the client IP**: `RATE_LIMIT_TRUSTED_PROXY_HOPS` (default `1`) tells the limiter how many proxies we own sit in front of the API pod, so it can pick the correct entry from `X-Forwarded-For`. For our DOKS setup the only trusted hop is ingress-nginx, hence `1`. Bump this if you ever add a CDN (e.g. Cloudflare → `2`); without the right value, clients could either spoof their IP via `X-Forwarded-For` or get bucketed into the wrong counter.
+
 ### Disabling rate limiting
 
 Rate limiting auto-disables when `RATE_LIMIT_ENABLED=false` **or** when `VALKEY_URL` is unset. Local dev (no Valkey) and CI/CD load tests are unaffected by default.
