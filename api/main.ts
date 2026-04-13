@@ -145,35 +145,121 @@ if (rateLimitConfig.enabled) {
 	log.info("Rate limit disabled (RATE_LIMIT_ENABLED=false)")
 }
 
-app.use("/graphql", async (c) => {
-	const requestId = c.get("requestId") || "unknown"
-
-	// Pool pressure shedding is handled inside usePgClient (only on cache misses).
-	// This allows cached responses to be served even when the DB pool is saturated.
-	try {
-		return await graphqlServer.fetch(c.req.raw, {
-			traceContext: c.get("traceContext"),
-			requestId,
-			setGraphqlOperationName: (operationName: string) => {
-				c.set("graphqlOperationName", operationName)
+app.on(
+	["GET", "POST"],
+	"/graphql",
+	describeRoute({
+		tags: ["GraphQL"],
+		summary: "PostGraphile GraphQL endpoint",
+		description: [
+			"PostGraphile-generated GraphQL endpoint over the Geo knowledge graph.",
+			"",
+			"### Rate Limits",
+			"This endpoint is rate-limited to **1000 requests per minute per IP** by default.",
+			"Cluster-internal traffic (pod-to-pod within DOKS) is exempt.",
+			"",
+			"Successful responses include:",
+			"- `RateLimit-Limit` — your per-minute quota",
+			"- `RateLimit-Remaining` — requests remaining in the current window",
+			"- `RateLimit-Reset` — seconds until the window resets",
+			"",
+			"Exceeding the limit returns `HTTP 429 Too Many Requests` with `Retry-After`",
+			'and a body of `{"error":"rate_limit_exceeded","retry_after_seconds":N}`.',
+			"",
+			"**Need a higher limit?** If 1000 req/min is not enough for your integration,",
+			"contact the Geo team to request an override for your IP or IP range.",
+		].join("\n"),
+		responses: {
+			200: {
+				description: "GraphQL execution result (data and/or errors)",
+				content: {
+					"application/json": {
+						schema: {type: "object"},
+					},
+				},
+				headers: {
+					"RateLimit-Limit": {
+						description: "Per-minute request quota for the calling IP",
+						schema: {type: "integer"},
+					},
+					"RateLimit-Remaining": {
+						description: "Requests remaining in the current minute window",
+						schema: {type: "integer"},
+					},
+					"RateLimit-Reset": {
+						description: "Seconds until the rate-limit window resets",
+						schema: {type: "integer"},
+					},
+				},
 			},
-		})
-	} catch (error) {
-		if (isPoolConnectTimeout(error) || (error instanceof Error && error.message === "pool_pressure_shed")) {
-			const freshPoolPressure = getGraphqlPoolPressure()
-			log.warn("GraphQL overloaded: pool pressure shed", {
+			429: {
+				description: "Rate limit exceeded — see Retry-After header",
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							properties: {
+								error: {type: "string", example: "rate_limit_exceeded"},
+								retry_after_seconds: {type: "integer", example: 23},
+							},
+							required: ["error", "retry_after_seconds"],
+						},
+					},
+				},
+				headers: {
+					"Retry-After": {
+						description: "Seconds until the rate-limit window resets",
+						schema: {type: "integer"},
+					},
+				},
+			},
+			503: {
+				description: "Database temporarily overloaded; retry shortly",
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							properties: {
+								error: {type: "string", example: "database temporarily overloaded"},
+								requestId: {type: "string"},
+							},
+							required: ["error", "requestId"],
+						},
+					},
+				},
+			},
+		},
+	}),
+	async (c) => {
+		const requestId = c.get("requestId") || "unknown"
+
+		// Pool pressure shedding is handled inside usePgClient (only on cache misses).
+		// This allows cached responses to be served even when the DB pool is saturated.
+		try {
+			return await graphqlServer.fetch(c.req.raw, {
+				traceContext: c.get("traceContext"),
 				requestId,
-				path: c.req.path,
-				method: c.req.method,
-				poolPressure: freshPoolPressure,
+				setGraphqlOperationName: (operationName: string) => {
+					c.set("graphqlOperationName", operationName)
+				},
 			})
+		} catch (error) {
+			if (isPoolConnectTimeout(error) || (error instanceof Error && error.message === "pool_pressure_shed")) {
+				const freshPoolPressure = getGraphqlPoolPressure()
+				log.warn("GraphQL overloaded: pool pressure shed", {
+					requestId,
+					path: c.req.path,
+					method: c.req.method,
+					poolPressure: freshPoolPressure,
+				})
 
-			return createGraphqlOverloadResponse(requestId)
+				return createGraphqlOverloadResponse(requestId)
+			}
+
+			throw error
 		}
-
-		throw error
-	}
-})
+	},
+)
 
 app.post(
 	"/ipfs/upload-edit",
