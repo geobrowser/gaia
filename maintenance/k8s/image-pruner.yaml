@@ -88,7 +88,7 @@ metadata:
   namespace: kube-system
   labels:
     app: image-pruner
-    managed-by: gha-monitoring-deploy
+    managed-by: gha-maintenance-deploy
 spec:
   selector:
     matchLabels:
@@ -97,7 +97,7 @@ spec:
     metadata:
       labels:
         app: image-pruner
-        managed-by: gha-monitoring-deploy
+        managed-by: gha-maintenance-deploy
     spec:
       # Tolerate all taints so the pruner runs even on tainted/dedicated nodes
       tolerations:

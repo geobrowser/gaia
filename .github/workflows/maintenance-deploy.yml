@@ -1,22 +1,22 @@
-name: Deploy Monitoring (Production)
+name: Deploy Maintenance (Production)
 
-# Deploys cluster-wide monitoring/maintenance manifests in monitoring/k8s/.
-# Uses `kubectl apply --prune` with the `managed-by=gha-monitoring-deploy`
+# Deploys cluster-wide maintenance manifests in maintenance/k8s/.
+# Uses `kubectl apply --prune` with the `managed-by=gha-maintenance-deploy`
 # selector so resources removed from the repo are also removed from the
 # cluster on the next deploy. Any new manifest must include the label
-# `managed-by: gha-monitoring-deploy` (on the resource AND on its pod
+# `managed-by: gha-maintenance-deploy` (on the resource AND on its pod
 # template if applicable) to be tracked.
 on:
   push:
     branches:
       - main
     paths:
-      - 'monitoring/k8s/**'
-      - '.github/workflows/monitoring-deploy.yml'
+      - 'maintenance/k8s/**'
+      - '.github/workflows/maintenance-deploy.yml'
   workflow_dispatch:
 
 concurrency:
-  group: monitoring-production
+  group: maintenance-production
   cancel-in-progress: false
 
 env:
@@ -43,16 +43,16 @@ jobs:
 
       - name: Validate manifests (server-side dry-run)
         run: |
-          kubectl apply -f monitoring/k8s/image-pruner.yaml --dry-run=server
+          kubectl apply -f maintenance/k8s/image-pruner.yaml --dry-run=server
 
       - name: Apply manifests with prune
         run: |
           # --prune removes any resource in the cluster carrying our label
           # that is no longer present in the applied manifest set.
           kubectl apply \
-            -f monitoring/k8s/image-pruner.yaml \
+            -f maintenance/k8s/image-pruner.yaml \
             --prune \
-            --selector managed-by=gha-monitoring-deploy \
+            --selector managed-by=gha-maintenance-deploy \
             --prune-allowlist=apps/v1/DaemonSet
 
       - name: Wait for image-pruner DaemonSet rollout
