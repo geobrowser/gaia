@@ -30,7 +30,7 @@ export type OverrideLookup = {
 
 type CacheEntry = {limit: number | null; expiresAtMs: number}
 
-export const DEFAULT_OVERRIDE_CACHE_MAX_ENTRIES = 10_000
+export const DEFAULT_OVERRIDE_CACHE_MAX_ENTRIES = 100_000
 
 export function createOverrideLookup(
 	db: typeof Db,

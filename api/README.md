@@ -106,7 +106,19 @@ When a client exceeds the limit, the API returns `HTTP 429 Too Many Requests` wi
 
 **Need a higher limit?** If you are a partner or integrator and 1000 req/min is not enough for your use case, **contact the Geo team** (open an issue at [geobrowser/gaia/issues](https://github.com/geobrowser/gaia/issues) or reach out via the project's communication channels) to request an override for your IP or IP range.
 
-**Disabling locally**: rate limiting is disabled when `RATE_LIMIT_ENABLED=false` or when `VALKEY_URL` is unset, so local development and CI/CD load tests are unaffected by default.
+**Capacity**: each API pod tracks up to **100,000 distinct IPs** in its in-memory override cache (LRU). Worst-case memory impact: ~20 MB per pod. Beyond 100k unique IPs in the active window, the least-recently-seen IP's override is re-fetched from Postgres on its next request.
+
+### Disabling rate limiting
+
+Rate limiting auto-disables when `RATE_LIMIT_ENABLED=false` **or** when `VALKEY_URL` is unset. Local dev (no Valkey) and CI/CD load tests are unaffected by default.
+
+To disable in a running cluster (e.g. for a load test):
+
+```bash
+kubectl -n api set env deployment/api RATE_LIMIT_ENABLED=false
+# revert with:
+kubectl -n api set env deployment/api RATE_LIMIT_ENABLED=true
+```
 
 See [`docs/plans/003-graphql-rate-limiting.md`](../docs/plans/003-graphql-rate-limiting.md) for the full design.
 
