@@ -102,7 +102,7 @@ kubectl create secret generic api-cache-secrets \
 
 ### Steps
 
-1. Apply Valkey manifests: `kubectl apply -f api/k8s/production/redis.yaml`
+1. Apply Valkey manifests: `kubectl apply -f api/k8s/production/valkey.yaml`
 2. Wait for Valkey pod: `kubectl get pods -n api -l app=api-cache`
 3. Deploy updated API (picks up `VALKEY_URL` from secret)
 4. Verify: `kubectl logs -l app=api -n api | grep "Response cache"`
@@ -131,7 +131,7 @@ kubectl exec -n api deploy/api-cache -- valkey-cli -a <password> --no-auth-warni
 | `api/src/kg/valkeyCache.ts` | Valkey cache adapter for Yoga plugin |
 | `api/src/kg/postgraphile.ts` | Cache plugin integration + pool shedding moved inside usePgClient |
 | `api/main.ts` | Pre-fetch shedding removed, catch pool_pressure_shed error |
-| `api/k8s/{production,staging}/redis.yaml` | Valkey deployment + service + NetworkPolicy |
+| `api/k8s/{production,staging}/valkey.yaml` | Valkey deployment + service + NetworkPolicy |
 | `api/k8s/{production,staging}/api.yaml` | VALKEY_URL from secret |
 | `api/.env.example` | VALKEY_URL documented |
 
