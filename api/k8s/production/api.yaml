@@ -131,6 +131,17 @@ spec:
                 secretKeyRef:
                   name: api-cache-secrets
                   key: VALKEY_URL
+            # Per-IP rate limit on /graphql. Counters in Valkey, shared across pods.
+            # Allowlist covers DOKS pod (10.108.0.0/16) + service (10.109.0.0/16) CIDRs
+            # so cluster-internal traffic is exempt.
+            - name: RATE_LIMIT_ENABLED
+              value: "true"
+            - name: RATE_LIMIT_DEFAULT_PER_MINUTE
+              value: "1000"
+            - name: RATE_LIMIT_UNLIMITED_ALLOWLIST_IPS
+              value: "10.108.0.0/16,10.109.0.0/16"
+            - name: RATE_LIMIT_TRUSTED_PROXY_HOPS
+              value: "1"
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
