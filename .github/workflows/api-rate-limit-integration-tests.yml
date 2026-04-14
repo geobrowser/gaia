@@ -69,7 +69,9 @@ jobs:
         run: bun install
 
       - name: Run rate limit integration tests
-        run: bun run test src/middleware/__tests__/rateLimit-integration.test.ts --run
+        # Uses a separate vitest config that includes *integration*.test.ts
+        # files (excluded from the default config since they need real services).
+        run: bunx vitest run --config vitest.integration.config.ts
         env:
           DATABASE_URL: "postgresql://test:test@localhost:5432/test"
           VALKEY_URL: "redis://localhost:6379"
