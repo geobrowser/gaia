@@ -110,21 +110,20 @@ describe("Rate limit integration", () => {
 		})
 	}
 
-	it("allows requests under the DB override limit", async () => {
+	it("allows requests under the DB override limit then returns 429", async () => {
+		// Self-contained: consumes the full quota and verifies 429 in one test
 		for (let i = 0; i < TEST_LIMIT; i++) {
 			const res = await req(TEST_IP)
 			expect(res.status).toBe(200)
 			expect(res.headers.get("RateLimit-Limit")).toBe(String(TEST_LIMIT))
 			expect(Number(res.headers.get("RateLimit-Remaining"))).toBe(TEST_LIMIT - i - 1)
 		}
-	})
 
-	it("returns 429 after exceeding the DB override limit", async () => {
-		// The previous test already consumed TEST_LIMIT requests
-		const res = await req(TEST_IP)
-		expect(res.status).toBe(429)
-		expect(res.headers.get("Retry-After")).toBeDefined()
-		const body = (await res.json()) as {error: string; retry_after_seconds: number}
+		// Next request exceeds the limit
+		const blocked = await req(TEST_IP)
+		expect(blocked.status).toBe(429)
+		expect(blocked.headers.get("Retry-After")).toBeDefined()
+		const body = (await blocked.json()) as {error: string; retry_after_seconds: number}
 		expect(body.error).toBe("rate_limit_exceeded")
 		expect(body.retry_after_seconds).toBeGreaterThan(0)
 	})
