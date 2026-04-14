@@ -1,3 +1,4 @@
+export {enrichEntityDiffs} from "./enrich"
 export * from "./grouping"
 export {
 	computeGroupedProposalDiff,

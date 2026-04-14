@@ -22,6 +22,7 @@ type AppEnv = {
 import {getProfilesBySpaceIds} from "../profile/queries"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
+import {enrichEntityDiffs} from "./enrich"
 import type {
 	DuplicateProposalError,
 	EditBlobDecodeFailedError,
@@ -875,7 +876,10 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				// Compute proposal diff
 				const diff = yield* computeProposalDiff(db, proposalId, spaceId, cursor, limit)
 
-				return diff
+				// Enrich with resolved names
+				const enrichedEntities = yield* enrichEntityDiffs(db, diff.entities)
+
+				return {...diff, entities: enrichedEntities}
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
@@ -1041,7 +1045,9 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 			const proposalIds = rawIds.map(normalizeUuid)
 
 			const program = Effect.gen(function* () {
-				return yield* computeGroupedProposalDiff(db, proposalIds, spaceId, rawCursor ?? undefined, limit)
+				const diff = yield* computeGroupedProposalDiff(db, proposalIds, spaceId, rawCursor ?? undefined, limit)
+				const enrichedEntities = yield* enrichEntityDiffs(db, diff.entities)
+				return {...diff, entities: enrichedEntities}
 			}).pipe(
 				Effect.withSpan("versioned.groupedProposalDiff", {
 					attributes: {spaceId, proposalCount: proposalIds.length, limit},

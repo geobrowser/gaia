@@ -87,6 +87,7 @@ export type ValueType = TextValueType | SimpleValueType
  */
 export interface TextValueChange {
 	propertyId: NormalizedUuid
+	propertyName?: string | null // Resolved human-readable name for propertyId
 	spaceId: NormalizedUuid
 	type: TextValueType
 	before: string | null
@@ -99,6 +100,7 @@ export interface TextValueChange {
  */
 export interface SimpleValueChange {
 	propertyId: NormalizedUuid
+	propertyName?: string | null // Resolved human-readable name for propertyId
 	spaceId: NormalizedUuid
 	type: SimpleValueType
 	before: string | null
@@ -135,15 +137,18 @@ export interface VersionedRelation {
 export interface RelationChange {
 	relationId: NormalizedUuid
 	typeId: NormalizedUuid
+	typeName?: string | null // Resolved human-readable name for typeId
 	spaceId: NormalizedUuid
 	changeType: "ADD" | "REMOVE" | "UPDATE"
 	before?: {
 		toEntityId: NormalizedUuid
+		toEntityName?: string | null // Resolved human-readable name for toEntityId
 		toSpaceId?: NormalizedUuid | null
 		position?: string | null
 	} | null
 	after?: {
 		toEntityId: NormalizedUuid
+		toEntityName?: string | null // Resolved human-readable name for toEntityId
 		toSpaceId?: NormalizedUuid | null
 		position?: string | null
 	} | null
