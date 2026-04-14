@@ -164,4 +164,38 @@ describe("Rate limit integration", () => {
 		expect(r1.headers.get("RateLimit-Remaining")).toBe("999")
 		expect(r2.headers.get("RateLimit-Remaining")).toBe("998")
 	})
+
+	it("cache hits still count against rate limit (every request decrements remaining)", async () => {
+		// This test proves that even if the GraphQL handler responds instantly
+		// (simulating a Valkey response-cache hit), the rate limit middleware
+		// still increments the counter on every request. The middleware runs
+		// BEFORE the handler, so whether Yoga serves from cache or hits Postgres
+		// is irrelevant — the counter was already incremented.
+		//
+		// We use a fresh IP with the default 1000/min limit and a DB override
+		// of 5/min to make the test fast.
+		const cacheHitIp = "192.0.2.200"
+		await db.execute(
+			sql`INSERT INTO rate_limit_overrides (ip_range, requests_per_min, description)
+			    VALUES (${cacheHitIp}::cidr, 5, 'integration test: cache-hit counting')`,
+		)
+
+		// Fire 5 requests — all "cache hits" (our handler returns instantly)
+		const responses = []
+		for (let i = 0; i < 5; i++) {
+			responses.push(await req(cacheHitIp))
+		}
+
+		// Every response should be 200 with decrementing Remaining
+		for (let i = 0; i < 5; i++) {
+			const res = responses[i]!
+			expect(res.status).toBe(200)
+			expect(res.headers.get("RateLimit-Remaining")).toBe(String(5 - i - 1))
+		}
+
+		// 6th request should be 429 — even though every previous response was instant
+		const blocked = await req(cacheHitIp)
+		expect(blocked.status).toBe(429)
+		expect(blocked.headers.get("RateLimit-Limit")).toBe("5")
+	})
 })
