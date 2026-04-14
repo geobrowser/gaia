@@ -23,8 +23,9 @@ export function parseIPv4(ip: string): number | null {
 	if (parts.length !== 4) return null
 	let result = 0
 	for (const part of parts) {
-		// Reject leading zeros / non-digit / out-of-range
-		if (!/^\d{1,3}$/.test(part)) return null
+		// Reject leading zeros (ambiguous: octal in C/Python, decimal in JS),
+		// non-digit, and out-of-range octets. Only "0" itself may start with 0.
+		if (!/^(0|[1-9]\d{0,2})$/.test(part)) return null
 		const n = Number(part)
 		if (n < 0 || n > 255) return null
 		result = (result << 8) | n
