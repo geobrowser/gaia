@@ -23,14 +23,19 @@ import {getProfilesBySpaceIds} from "../profile/queries"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
 import type {
+	DuplicateProposalError,
 	EditBlobDecodeFailedError,
 	EditBlobNotCachedError,
 	EditDecodeError,
+	GroupedProposalDiffError,
+	GroupSizeLimitError,
 	InvalidCursorError,
+	MissingPublishActionError,
+	MixedModeError,
 	ProposalNotFoundError,
 	SpaceMismatchError,
 } from "./proposal-diff"
-import {computeProposalDiff} from "./proposal-diff"
+import {computeGroupedProposalDiff, computeProposalDiff} from "./proposal-diff"
 import {
 	getEntitySnapshotAtVersion,
 	getEntityVersions,
@@ -38,7 +43,13 @@ import {
 	type QueryError,
 	resolveVersionKey,
 } from "./queries"
-import type {DiffResponse, PaginatedProposalDiff, SnapshotResponse, VersionEntry} from "./types"
+import type {
+	DiffResponse,
+	PaginatedGroupedProposalDiff,
+	PaginatedProposalDiff,
+	SnapshotResponse,
+	VersionEntry,
+} from "./types"
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
@@ -63,6 +74,13 @@ type ProposalError =
 	| EditDecodeError
 	| SpaceMismatchError
 	| InvalidCursorError
+
+type GroupedProposalError =
+	| ProposalError
+	| GroupSizeLimitError
+	| DuplicateProposalError
+	| MixedModeError
+	| MissingPublishActionError
 
 /**
  * Batch-resolve creator profiles from a list of nullable creator space IDs.
@@ -954,6 +972,188 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					}
 				},
 				onRight: (diff: PaginatedProposalDiff) => c.json(diff),
+			})
+		},
+	)
+
+	// =========================================================================
+	// GET /proposal-groups/diff — grouped multi-proposal diff
+	// =========================================================================
+
+	router.get(
+		"/proposal-groups/diff",
+		describeRoute({
+			tags: ["Versioned"],
+			summary: "Grouped multi-proposal diff",
+			description:
+				"Computes a combined diff for multiple proposals in one space. " +
+				"Proposals are applied in edit-timestamp order. All proposals must be in the same mode (active or historical).",
+			responses: {
+				200: {description: "Grouped proposal diff"},
+				400: {description: "Invalid parameter"},
+				404: {description: "Not found"},
+				422: {description: "Unprocessable"},
+				500: {description: "Internal server error"},
+			},
+		}),
+		async (c) => {
+			const rawSpaceId = c.req.query("spaceId")
+			const rawProposalIds = c.req.query("proposalIds")
+			const rawCursor = c.req.query("cursor")
+			const rawLimit = c.req.query("limit")
+
+			// Validate spaceId
+			if (!rawSpaceId || !isValidUuid(rawSpaceId)) {
+				return c.json({error: "Invalid parameter", message: "spaceId must be a valid UUID"}, 400)
+			}
+
+			// Validate proposalIds
+			if (!rawProposalIds) {
+				return c.json(
+					{error: "Invalid parameter", message: "proposalIds is required (comma-separated UUIDs)"},
+					400,
+				)
+			}
+			const rawIds = rawProposalIds.split(",").map((s) => s.trim())
+			if (rawIds.length < 2) {
+				return c.json(
+					{error: "Invalid parameter", message: "proposalIds must contain at least 2 proposal IDs"},
+					400,
+				)
+			}
+			for (const id of rawIds) {
+				if (!isValidUuid(id)) {
+					return c.json({error: "Invalid parameter", message: `Invalid UUID in proposalIds: ${id}`}, 400)
+				}
+			}
+
+			// Validate limit
+			let limit = 50
+			if (rawLimit !== undefined) {
+				const parsed = Number.parseInt(rawLimit, 10)
+				if (Number.isNaN(parsed) || parsed < 1) {
+					return c.json({error: "Invalid parameter", message: "limit must be a positive integer"}, 400)
+				}
+				limit = Math.min(parsed, 100)
+			}
+
+			const spaceId = normalizeUuid(rawSpaceId)
+			const proposalIds = rawIds.map(normalizeUuid)
+
+			const program = Effect.gen(function* () {
+				return yield* computeGroupedProposalDiff(db, proposalIds, spaceId, rawCursor ?? undefined, limit)
+			}).pipe(
+				Effect.withSpan("versioned.groupedProposalDiff", {
+					attributes: {spaceId, proposalCount: proposalIds.length, limit},
+				}),
+			)
+
+			const result = await runtime.runPromise(Effect.either(program))
+
+			return Either.match(result, {
+				onLeft: (error: GroupedProposalError) => {
+					switch (error._tag) {
+						case "ValidationError":
+							return c.json({error: "Invalid parameter", message: error.message}, 400)
+						case "NotFoundError":
+							return c.json({error: "Not found", message: error.message}, 404)
+						case "ProposalNotFoundError":
+							return c.json({error: "Not found", message: "One or more proposals not found"}, 404)
+						case "EditBlobNotCachedError":
+							return c.json(
+								{
+									error: "Not found",
+									message: "Edit blob not cached for one or more proposals",
+								},
+								404,
+							)
+						case "EditBlobDecodeFailedError":
+							return c.json(
+								{
+									error: "Unprocessable",
+									message: "Edit blob failed GRC-20 validation and cannot be decoded",
+									uri: error.uri,
+								},
+								422,
+							)
+						case "SpaceMismatchError":
+							return c.json(
+								{
+									error: "Invalid parameter",
+									message: "One or more proposals do not belong to the specified space",
+								},
+								400,
+							)
+						case "InvalidCursorError":
+							return c.json(
+								{
+									error: "Invalid parameter",
+									message: "Invalid pagination cursor",
+								},
+								400,
+							)
+						case "GroupSizeLimitError":
+							return c.json(
+								{
+									error: "Invalid parameter",
+									message: `Group size ${error.actual} exceeds maximum of ${error.max}`,
+								},
+								400,
+							)
+						case "DuplicateProposalError":
+							return c.json(
+								{
+									error: "Invalid parameter",
+									message: "Duplicate proposal IDs are not allowed",
+								},
+								400,
+							)
+						case "MixedModeError":
+							return c.json(
+								{
+									error: "Invalid parameter",
+									message: `Cannot mix active (${error.activeCount}) and historical (${error.nonActiveCount}) proposals in a group`,
+								},
+								400,
+							)
+						case "MissingPublishActionError":
+							return c.json(
+								{
+									error: "Unprocessable",
+									message: "All proposals in a group must have a Publish action",
+									proposalId: error.proposalId,
+								},
+								422,
+							)
+						case "EditDecodeError":
+							return c.json(
+								{
+									error: "Internal server error",
+									message: "Failed to decode edit blob",
+								},
+								500,
+							)
+						case "QueryError":
+							return c.json(
+								{
+									error: "Internal server error",
+									message: "An unexpected error occurred",
+								},
+								500,
+							)
+						default: {
+							const _exhaustive: never = error
+							return c.json(
+								{
+									error: "Internal server error",
+									message: "An unexpected error occurred",
+								},
+								500,
+							)
+						}
+					}
+				},
+				onRight: (diff: PaginatedGroupedProposalDiff) => c.json(diff),
 			})
 		},
 	)

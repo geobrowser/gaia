@@ -332,7 +332,7 @@ export interface ProposalDiffCursor {
 export type ProposalStatus = "active" | "closed" | "executed"
 
 /**
- * Paginated response for proposal diffs.
+ * Paginated response for single-proposal diffs.
  */
 export interface PaginatedProposalDiff {
 	proposalId: NormalizedUuid
@@ -341,6 +341,28 @@ export interface PaginatedProposalDiff {
 	entities: EntityDiff[]
 	pagination: {
 		cursor: string | null // Base64-encoded cursor for next page
+		hasMore: boolean
+		totalEntities: number
+	}
+}
+
+/**
+ * Base-state mode for grouped proposal diffs.
+ * - "active": all proposals are active; base = current live KG state
+ * - "historical": all proposals are closed/executed; base = versioned state before earliest edit
+ */
+export type GroupedProposalDiffMode = "active" | "historical"
+
+/**
+ * Paginated response for grouped (multi-proposal) diffs.
+ */
+export interface PaginatedGroupedProposalDiff {
+	proposalIds: NormalizedUuid[]
+	spaceId: NormalizedUuid
+	mode: GroupedProposalDiffMode
+	entities: EntityDiff[]
+	pagination: {
+		cursor: string | null
 		hasMore: boolean
 		totalEntities: number
 	}
