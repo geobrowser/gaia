@@ -103,7 +103,6 @@ spec:
       tolerations:
         - operator: Exists
       # Privileged so we can talk to containerd's socket on the host
-      hostPID: true
       containers:
         - name: pruner
           image: alpine:3.20
@@ -136,10 +135,11 @@ spec:
             - /bin/sh
             - -c
             - |
-              set -u
+              set -eu
               apk add --no-cache curl ca-certificates >/dev/null
               curl -fsSL "https://github.com/kubernetes-sigs/cri-tools/releases/download/${CRICTL_VERSION}/crictl-${CRICTL_VERSION}-linux-amd64.tar.gz" \
                 | tar -xz -C /usr/local/bin
+              crictl --version   # fail fast if binary is missing or broken
               export CONTAINER_RUNTIME_ENDPOINT=unix:///run/containerd/containerd.sock
 
               log() { echo "[$(date -u +%FT%TZ)] [${NODE_NAME}] $*"; }
@@ -172,6 +172,10 @@ spec:
                 log "==== run complete (event=run_complete) ===="
               }
 
+              # Init succeeded. Disable -e for the main loop: crictl rmi --prune
+              # can return non-zero when individual images timeout, which is expected
+              # and handled by the || log fallback. We don't want that to kill the pod.
+              set +e
               log "image-pruner started; schedule=DOW=${TARGET_DOW} HOUR=${TARGET_HOUR} (UTC), check_interval=${CHECK_INTERVAL_SECONDS}s"
               LAST_RUN_KEY=""
               while true; do
