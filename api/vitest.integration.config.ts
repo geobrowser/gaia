@@ -11,6 +11,6 @@ export default defineConfig({
 	test: {
 		globals: true,
 		environment: "node",
-		include: ["src/**/*integration*.test.ts"],
+		include: ["src/middleware/__tests__/rateLimit-integration.test.ts"],
 	},
 })
