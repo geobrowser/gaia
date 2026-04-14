@@ -56,6 +56,20 @@ Most-specific match wins (e.g. an explicit `/32` override beats a containing `/1
 
 Per-pod in-memory cache with 60s TTL (`RATE_LIMIT_OVERRIDE_CACHE_TTL_SECONDS`) keeps the hot path off Postgres. Both hits and misses are cached; trade-off is up to 60s for a new override to propagate to all pods.
 
+## Latency impact
+
+| Scenario | What runs | Added latency |
+|---|---|---|
+| Allowlisted IP (cluster-internal) | In-memory CIDR check only (integer bitwise math, no I/O) | ~0 ms |
+| Normal IP, override cache hit | CIDR check + Map lookup + 1 Valkey `INCR`+`EXPIRE` pipeline | ~0.3–0.5 ms |
+| Normal IP, override cache miss | CIDR check + Postgres query + Valkey pipeline | ~2–5 ms (once per 60s per IP, then cached) |
+
+The dominant cost is the Valkey pipeline — one pod-to-pod round-trip within DOKS (~0.2–0.5 ms). For context, typical GraphQL queries take 50–1300 ms, so the rate-limit overhead is well under 1%.
+
+Allowlisted IPs (all internal services) pay essentially zero: the CIDR check is a loop over 2 entries doing `(ip & mask) === network` — nanoseconds, no network call, no cache lookup.
+
+Cache hits and cache misses are both counted against the rate limit. The middleware runs **before** the GraphQL handler (`app.use` registered before `app.on`), so the Valkey counter is incremented before Yoga checks its response cache.
+
 ## HTTP behavior
 
 Allowed requests (response from upstream handler) include rate-limit headers:
