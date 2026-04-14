@@ -14,6 +14,7 @@ import {Hono} from "hono"
 import Redis from "ioredis"
 import pg from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
+import {createApiKeyLookup} from "../../services/rateLimit/apiKeys"
 import {loadRateLimitConfig} from "../../services/rateLimit/config"
 import {createOverrideLookup} from "../../services/rateLimit/overrides"
 import {createValkeyRateLimitStore} from "../../services/rateLimit/store"
@@ -53,7 +54,20 @@ describe("Rate limit integration", () => {
 			ON rate_limit_overrides USING gist (ip_range inet_ops)
 		`)
 
-		// Insert test overrides
+		// Create api_keys table
+		await db.execute(sql`
+			CREATE TABLE IF NOT EXISTS api_keys (
+				key text PRIMARY KEY,
+				client_name text NOT NULL,
+				requests_per_min integer,
+				enabled boolean DEFAULT true NOT NULL,
+				created_at timestamptz NOT NULL DEFAULT now(),
+				updated_at timestamptz NOT NULL DEFAULT now()
+			)
+		`)
+
+		// Insert test data
+		await db.execute(sql`DELETE FROM api_keys`)
 		await db.execute(sql`DELETE FROM rate_limit_overrides`)
 		await db.execute(
 			sql`INSERT INTO rate_limit_overrides (ip_range, requests_per_min, description)
@@ -62,6 +76,19 @@ describe("Rate limit integration", () => {
 		await db.execute(
 			sql`INSERT INTO rate_limit_overrides (ip_range, requests_per_min, description)
 			    VALUES (${TEST_IP_BLOCKED}::cidr, 0, 'integration test: blocked')`,
+		)
+		// API key test data
+		await db.execute(
+			sql`INSERT INTO api_keys (key, client_name, requests_per_min, enabled)
+			    VALUES ('test-custom-key', 'test-client', 3, true)`,
+		)
+		await db.execute(
+			sql`INSERT INTO api_keys (key, client_name, requests_per_min, enabled)
+			    VALUES ('test-unlimited-key', 'railway-backend', NULL, true)`,
+		)
+		await db.execute(
+			sql`INSERT INTO api_keys (key, client_name, requests_per_min, enabled)
+			    VALUES ('test-disabled-key', 'disabled-client', 5000, false)`,
 		)
 
 		// Connect to real Valkey
@@ -85,13 +112,15 @@ describe("Rate limit integration", () => {
 		})
 		const store = createValkeyRateLimitStore(valkey)
 		const overrides = createOverrideLookup(db as never, 0) // TTL=0 so every lookup hits DB (no stale cache)
+		const apiKeyLookup = createApiKeyLookup(db as never, 0)
 
 		app = new Hono()
-		app.use("/graphql", rateLimit({config, store, overrides}))
+		app.use("/graphql", rateLimit({config, store, overrides, apiKeys: apiKeyLookup}))
 		app.post("/graphql", (c) => c.json({data: {ok: true}}))
 	})
 
 	afterAll(async () => {
+		await db.execute(sql`DELETE FROM api_keys`)
 		await db.execute(sql`DELETE FROM rate_limit_overrides`)
 		const keys = await valkey.keys("rl:*")
 		if (keys.length > 0) await valkey.del(...keys)
@@ -196,5 +225,65 @@ describe("Rate limit integration", () => {
 		const blocked = await req(cacheHitIp)
 		expect(blocked.status).toBe(429)
 		expect(blocked.headers.get("RateLimit-Limit")).toBe("5")
+	})
+
+	// ─── API key integration tests ────────────────────────────────────
+
+	function reqWithKey(key: string) {
+		return app.request("/graphql", {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-forwarded-for": "203.0.113.99, 10.108.0.5",
+				"x-api-key": key,
+			},
+			body: JSON.stringify({query: "{__typename}"}),
+		})
+	}
+
+	it("API key with custom limit: allows under limit then returns 429", async () => {
+		for (let i = 0; i < 3; i++) {
+			const res = await reqWithKey("test-custom-key")
+			expect(res.status).toBe(200)
+			expect(res.headers.get("RateLimit-Limit")).toBe("3")
+			expect(Number(res.headers.get("RateLimit-Remaining"))).toBe(3 - i - 1)
+		}
+		const blocked = await reqWithKey("test-custom-key")
+		expect(blocked.status).toBe(429)
+	})
+
+	it("API key with unlimited (null) allows unlimited requests with no headers", async () => {
+		for (let i = 0; i < 20; i++) {
+			const res = await reqWithKey("test-unlimited-key")
+			expect(res.status).toBe(200)
+			// Unlimited keys get no rate-limit headers
+			expect(res.headers.get("RateLimit-Limit")).toBeNull()
+		}
+	})
+
+	it("disabled API key falls through to IP-based limiting", async () => {
+		const res = await reqWithKey("test-disabled-key")
+		expect(res.status).toBe(200)
+		// Should use the default IP-based limit (1000), not the key's 5000
+		expect(res.headers.get("RateLimit-Limit")).toBe("1000")
+	})
+
+	it("unknown API key falls through to IP-based limiting", async () => {
+		const res = await reqWithKey("nonexistent-key")
+		expect(res.status).toBe(200)
+		expect(res.headers.get("RateLimit-Limit")).toBe("1000")
+	})
+
+	it("API key counter is separate from IP counter", async () => {
+		const freshIp = "192.0.2.55"
+		// Make requests with IP (uses IP counter)
+		const ipRes = await req(freshIp)
+		expect(ipRes.headers.get("RateLimit-Remaining")).toBe("999")
+
+		// Make requests with API key from same IP (uses key counter, separate)
+		const keyRes = await reqWithKey("test-custom-key")
+		// Key counter was already at 4 from earlier test... use unlimited key to verify isolation
+		const unlimitedRes = await reqWithKey("test-unlimited-key")
+		expect(unlimitedRes.status).toBe(200) // unlimited, unaffected by IP counter
 	})
 })

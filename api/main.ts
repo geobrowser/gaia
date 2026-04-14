@@ -14,6 +14,7 @@ import {createSearchRouter} from "./src/search"
 import {isPoolConnectTimeout} from "./src/services/dbFailures"
 import {shouldShedPoolTraffic} from "./src/services/dbSaturation"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
+import {createApiKeyLookup} from "./src/services/rateLimit/apiKeys"
 import {loadRateLimitConfig} from "./src/services/rateLimit/config"
 import {createOverrideLookup} from "./src/services/rateLimit/overrides"
 import {createValkeyRateLimitStore} from "./src/services/rateLimit/store"
@@ -134,7 +135,8 @@ if (rateLimitConfig.enabled) {
 
 		const store = createValkeyRateLimitStore(valkey)
 		const overrides = createOverrideLookup(db, rateLimitConfig.overrideCacheTtlSeconds)
-		app.use("/graphql", rateLimit({config: rateLimitConfig, store, overrides}))
+		const apiKeyLookup = createApiKeyLookup(db, rateLimitConfig.overrideCacheTtlSeconds)
+		app.use("/graphql", rateLimit({config: rateLimitConfig, store, overrides, apiKeys: apiKeyLookup}))
 		log.info("Rate limit enabled on /graphql", {
 			defaultPerMinute: rateLimitConfig.defaultPerMinute,
 			unlimitedAllowlistEntries: rateLimitConfig.unlimitedAllowlist.length,

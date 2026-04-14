@@ -104,7 +104,9 @@ When a client exceeds the limit, the API returns `HTTP 429 Too Many Requests` wi
 
 **Cluster-internal traffic** (pod-to-pod calls within DOKS) is exempt from rate limiting.
 
-**Need a higher limit?** If you are a partner or integrator and 1000 req/min is not enough for your use case, **contact the Geo team** (open an issue at [geobrowser/gaia/issues](https://github.com/geobrowser/gaia/issues) or reach out via the project's communication channels) to request an override for your IP or IP range.
+**API keys**: backend services (e.g. Railway-hosted curator-app) can send an `X-Api-Key` header to use a key-based limit instead of IP-based. Keys are stored in the `api_keys` table with either a custom `requests_per_min` or `NULL` for unlimited. Counters are tracked separately per key, independent of IP counters.
+
+**Need a higher limit?** If you are a partner or integrator and 1000 req/min is not enough for your use case, **contact the Geo team** (open an issue at [geobrowser/gaia/issues](https://github.com/geobrowser/gaia/issues) or reach out via the project's communication channels) to request an API key or an override for your IP range.
 
 **Capacity**: each API pod tracks up to **100,000 distinct IPs** in its in-memory override cache (LRU). Worst-case memory impact: ~20 MB per pod. Beyond 100k unique IPs in the active window, the least-recently-seen IP's override is re-fetched from Postgres on its next request.
 

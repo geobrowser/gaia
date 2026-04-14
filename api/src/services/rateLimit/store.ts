@@ -15,10 +15,12 @@ import {log} from "../telemetry"
  */
 export type RateLimitStore = {
 	/**
-	 * Atomically increment the counter for `(ip, minute)` and return the new
-	 * count + seconds-until-reset. Returns `null` on Valkey failure.
+	 * Atomically increment the counter for `(identifier, minute)` and return the
+	 * new count + seconds-until-reset. The identifier is either an IP address or
+	 * an API key prefixed with "key:" to keep namespaces separate.
+	 * Returns `null` on Valkey failure.
 	 */
-	incrementAndGet(ip: string, nowMs: number): Promise<{count: number; resetSeconds: number} | null>
+	incrementAndGet(identifier: string, nowMs: number): Promise<{count: number; resetSeconds: number} | null>
 }
 
 const KEY_PREFIX = "rl:"
@@ -29,10 +31,10 @@ const EXPIRE_SECONDS = WINDOW_SECONDS * 2
 
 export function createValkeyRateLimitStore(valkey: Redis): RateLimitStore {
 	return {
-		async incrementAndGet(ip, nowMs) {
+		async incrementAndGet(identifier, nowMs) {
 			try {
 				const minute = Math.floor(nowMs / 1000 / WINDOW_SECONDS)
-				const key = `${KEY_PREFIX}${ip}:${minute}`
+				const key = `${KEY_PREFIX}${identifier}:${minute}`
 
 				// Pipeline INCR + EXPIRE in a single round-trip. We send EXPIRE
 				// every time (cheap; idempotent) so the key's lifetime is always
@@ -55,7 +57,7 @@ export function createValkeyRateLimitStore(valkey: Redis): RateLimitStore {
 
 				return {count, resetSeconds}
 			} catch (err) {
-				log.warn("rate limit: Valkey increment failed", {error: String(err), ip})
+				log.warn("rate limit: Valkey increment failed", {error: String(err), identifier})
 				return null
 			}
 		},

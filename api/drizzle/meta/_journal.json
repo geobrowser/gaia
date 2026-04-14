@@ -386,6 +386,13 @@
       "when": 1776111586600,
       "tag": "0054_curved_post",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1776193401580,
+      "tag": "0055_sour_moondragon",
+      "breakpoints": true
     }
   ]
 }
