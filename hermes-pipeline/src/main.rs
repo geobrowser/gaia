@@ -870,8 +870,9 @@ async fn async_main() -> anyhow::Result<()> {
     };
     info!("IPFS cache initialized");
 
-    // Create the pipeline
-    let pipeline = Pipeline::new(emitter, cache);
+    // Create the pipeline with env-configurable retry settings
+    let retry_config = RetryConfig::from_env();
+    let pipeline = Pipeline::with_retry_config(emitter, cache, retry_config);
 
     // Determine stream source: mock or live substreams
     let source = if use_mock {

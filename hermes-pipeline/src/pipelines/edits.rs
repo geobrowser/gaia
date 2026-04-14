@@ -251,7 +251,7 @@ mod tests {
         let config = RetryConfig::default();
         assert_eq!(config.initial_delay_ms, 10);
         assert_eq!(config.factor, 2);
-        assert_eq!(config.max_delay, Duration::from_secs(5));
-        assert_eq!(config.max_retries, 10);
+        assert_eq!(config.max_delay, Duration::from_secs(30));
+        assert_eq!(config.max_retries, 30);
     }
 }

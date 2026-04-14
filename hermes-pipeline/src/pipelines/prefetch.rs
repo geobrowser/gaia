@@ -24,15 +24,26 @@ use crate::cache::{CacheError, CachedEdit, IpfsCache};
 use crate::decode::{ProposalActionType, decode_proposal_created, decode_publish_args};
 
 /// Configuration for cache retry behavior.
+///
+/// When the IPFS cache falls behind (e.g. after a Pinax substream disconnect),
+/// the pipeline needs to wait long enough for the cache to catch up before
+/// giving up. The defaults give a ~5 minute window which covers typical
+/// reconnect-and-catch-up scenarios.
+///
+/// All fields can be overridden via environment variables:
+/// - `PREFETCH_RETRY_INITIAL_MS` (default: 10)
+/// - `PREFETCH_RETRY_FACTOR` (default: 2)
+/// - `PREFETCH_RETRY_MAX_DELAY_SECS` (default: 30)
+/// - `PREFETCH_RETRY_MAX_COUNT` (default: 30)
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
     /// Initial delay between retries (default: 10ms)
     pub initial_delay_ms: u64,
     /// Multiplier for each subsequent retry (default: 2)
     pub factor: u64,
-    /// Maximum delay between retries (default: 5s)
+    /// Maximum delay between retries (default: 30s)
     pub max_delay: Duration,
-    /// Maximum number of retries (default: 10)
+    /// Maximum number of retries (default: 30)
     pub max_retries: usize,
 }
 
@@ -41,8 +52,34 @@ impl Default for RetryConfig {
         Self {
             initial_delay_ms: 10,
             factor: 2,
-            max_delay: Duration::from_secs(5),
-            max_retries: 10,
+            max_delay: Duration::from_secs(30),
+            max_retries: 30,
+        }
+    }
+}
+
+impl RetryConfig {
+    /// Load retry config from environment variables, falling back to defaults.
+    pub fn from_env() -> Self {
+        let defaults = Self::default();
+        Self {
+            initial_delay_ms: std::env::var("PREFETCH_RETRY_INITIAL_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(defaults.initial_delay_ms),
+            factor: std::env::var("PREFETCH_RETRY_FACTOR")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(defaults.factor),
+            max_delay: std::env::var("PREFETCH_RETRY_MAX_DELAY_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(Duration::from_secs)
+                .unwrap_or(defaults.max_delay),
+            max_retries: std::env::var("PREFETCH_RETRY_MAX_COUNT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(defaults.max_retries),
         }
     }
 }
@@ -289,5 +326,92 @@ mod tests {
             .collect();
 
         assert_eq!(deduped.len(), 2);
+    }
+
+    #[test]
+    fn test_default_retry_window_covers_cache_catchup() {
+        // After a Pinax disconnect the IPFS cache can fall behind by minutes.
+        // Verify the default config gives enough total wait time.
+        let config = RetryConfig::default();
+
+        // Calculate total wait: sum of exponential delays capped at max_delay
+        let mut total_ms: u64 = 0;
+        let mut delay_ms = config.initial_delay_ms;
+        for _ in 0..config.max_retries {
+            let capped = delay_ms.min(config.max_delay.as_millis() as u64);
+            total_ms += capped;
+            delay_ms = delay_ms.saturating_mul(config.factor);
+        }
+
+        let total_secs = total_ms / 1000;
+        // Must wait at least 3 minutes to survive typical Pinax reconnect lag
+        assert!(
+            total_secs >= 180,
+            "Default retry window {total_secs}s is too short, need >= 180s"
+        );
+    }
+
+    #[test]
+    fn test_from_env_uses_defaults_when_unset() {
+        // SAFETY: test-only env mutation, tests run with --test-threads=1 for env tests
+        unsafe {
+            std::env::remove_var("PREFETCH_RETRY_INITIAL_MS");
+            std::env::remove_var("PREFETCH_RETRY_FACTOR");
+            std::env::remove_var("PREFETCH_RETRY_MAX_DELAY_SECS");
+            std::env::remove_var("PREFETCH_RETRY_MAX_COUNT");
+        }
+
+        let config = RetryConfig::from_env();
+        let defaults = RetryConfig::default();
+
+        assert_eq!(config.initial_delay_ms, defaults.initial_delay_ms);
+        assert_eq!(config.factor, defaults.factor);
+        assert_eq!(config.max_delay, defaults.max_delay);
+        assert_eq!(config.max_retries, defaults.max_retries);
+    }
+
+    #[test]
+    fn test_from_env_reads_overrides() {
+        // SAFETY: test-only env mutation
+        unsafe {
+            std::env::set_var("PREFETCH_RETRY_INITIAL_MS", "50");
+            std::env::set_var("PREFETCH_RETRY_FACTOR", "3");
+            std::env::set_var("PREFETCH_RETRY_MAX_DELAY_SECS", "60");
+            std::env::set_var("PREFETCH_RETRY_MAX_COUNT", "20");
+        }
+
+        let config = RetryConfig::from_env();
+
+        assert_eq!(config.initial_delay_ms, 50);
+        assert_eq!(config.factor, 3);
+        assert_eq!(config.max_delay, Duration::from_secs(60));
+        assert_eq!(config.max_retries, 20);
+
+        unsafe {
+            std::env::remove_var("PREFETCH_RETRY_INITIAL_MS");
+            std::env::remove_var("PREFETCH_RETRY_FACTOR");
+            std::env::remove_var("PREFETCH_RETRY_MAX_DELAY_SECS");
+            std::env::remove_var("PREFETCH_RETRY_MAX_COUNT");
+        }
+    }
+
+    #[test]
+    fn test_from_env_ignores_invalid_values() {
+        // SAFETY: test-only env mutation
+        unsafe {
+            std::env::set_var("PREFETCH_RETRY_INITIAL_MS", "not_a_number");
+            std::env::set_var("PREFETCH_RETRY_MAX_COUNT", "-5");
+        }
+
+        let config = RetryConfig::from_env();
+        let defaults = RetryConfig::default();
+
+        assert_eq!(config.initial_delay_ms, defaults.initial_delay_ms);
+        assert_eq!(config.max_retries, defaults.max_retries);
+
+        unsafe {
+            std::env::remove_var("PREFETCH_RETRY_INITIAL_MS");
+            std::env::remove_var("PREFETCH_RETRY_MAX_COUNT");
+        }
     }
 }
