@@ -372,13 +372,6 @@
       "when": 1774560952539,
       "tag": "0052_complete_captain_cross",
       "breakpoints": true
-    },
-    {
-      "idx": 53,
-      "version": "7",
-      "when": 1775675273149,
-      "tag": "0053_crazy_moondragon",
-      "breakpoints": true
     }
   ]
 }
