@@ -1,5 +1,6 @@
-import {describe, expect, it} from "vitest"
-import {assertPaginationWithinLimit} from "../paginationCapPlugin"
+import {Pool} from "pg"
+import {afterAll, beforeAll, describe, expect, it} from "vitest"
+import {applyDefaultFirstIfOmitted, assertPaginationWithinLimit, MAX_PAGINATION_LIMIT} from "../paginationCapPlugin"
 import {graphqlServer} from "../postgraphile"
 
 async function executeGraphQL(query: string, variables?: Record<string, unknown>) {
@@ -26,6 +27,36 @@ describe("assertPaginationWithinLimit", () => {
 		expect(() => assertPaginationWithinLimit({first: 1001})).toThrow(/first.*1000.*1001/i)
 		expect(() => assertPaginationWithinLimit({last: 1001})).toThrow(/last.*1000.*1001/i)
 		expect(() => assertPaginationWithinLimit({offset: 1001})).toThrow(/offset.*1000.*1001/i)
+	})
+})
+
+describe("applyDefaultFirstIfOmitted", () => {
+	it("injects default first when neither first nor last is supplied", () => {
+		expect(applyDefaultFirstIfOmitted({})).toEqual({first: MAX_PAGINATION_LIMIT})
+	})
+
+	it("preserves other args while injecting the default first", () => {
+		expect(applyDefaultFirstIfOmitted({offset: 10, filter: {name: "x"}})).toEqual({
+			offset: 10,
+			filter: {name: "x"},
+			first: MAX_PAGINATION_LIMIT,
+		})
+	})
+
+	it("does not override an explicit first", () => {
+		expect(applyDefaultFirstIfOmitted({first: 50})).toEqual({first: 50})
+	})
+
+	it("does not inject first when only last is supplied", () => {
+		expect(applyDefaultFirstIfOmitted({last: 50})).toEqual({last: 50})
+	})
+
+	it("does not inject first for a non-numeric first (GraphQL strong typing catches those)", () => {
+		// if `first` came through as anything non-numeric (shouldn't happen at runtime
+		// due to Int scalar validation) we still shouldn't silently override it
+		expect(applyDefaultFirstIfOmitted({first: null as unknown as number})).toEqual({
+			first: MAX_PAGINATION_LIMIT,
+		})
 	})
 })
 
@@ -121,9 +152,11 @@ describe("PaginationCapPlugin", () => {
 		expect(result.body.errors).toBeUndefined()
 	})
 
-	it("accepts queries with no pagination argument (no cap applied when omitted)", async () => {
-		// NOTE: this documents current behavior — when `first` is omitted the
-		// plugin does not inject a default. PostGraphile may return all rows.
+	it("accepts queries with no pagination argument (cap enforced via injected default)", async () => {
+		// When `first` is omitted we still succeed, but the plugin injects a
+		// default `first = MAX_PAGINATION_LIMIT` so PostGraphile cannot resolve
+		// an unbounded collection. See the seeded integration block below for
+		// the length assertion.
 		const result = await executeGraphQL(`
 			{
 				entities { id }
@@ -166,5 +199,73 @@ describe("PaginationCapPlugin", () => {
 		}
 		// Validation error is acceptable — means the field name differs
 		expect(result.body.errors).toBeDefined()
+	})
+})
+
+/**
+ * Integration test that seeds MAX_PAGINATION_LIMIT+N rows directly into the
+ * entities table and verifies that a bare collection query resolves at most
+ * MAX_PAGINATION_LIMIT rows — i.e. that applyDefaultFirstIfOmitted actually
+ * propagates a LIMIT into the generated SQL. Runs against the test DB
+ * configured in vitest.config.ts.
+ */
+describe("PaginationCapPlugin default-first injection (seeded)", () => {
+	const OVER_LIMIT = MAX_PAGINATION_LIMIT + 5
+	let seededIds: string[] = []
+	let pool: Pool
+
+	beforeAll(async () => {
+		pool = new Pool({connectionString: process.env.DATABASE_URL})
+		seededIds = Array.from({length: OVER_LIMIT}, () => crypto.randomUUID())
+		const values = seededIds.map((_id, i) => `($${i + 1}, 0, 0, 0, 0)`).join(", ")
+		await pool.query(
+			`INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block) VALUES ${values}`,
+			seededIds,
+		)
+	})
+
+	afterAll(async () => {
+		if (seededIds.length) {
+			await pool.query("DELETE FROM entities WHERE id = ANY($1::uuid[])", [seededIds])
+		}
+		await pool.end()
+	})
+
+	it("returns at most MAX_PAGINATION_LIMIT rows when first is omitted", async () => {
+		const result = await executeGraphQL(`
+			{
+				entities { id }
+			}
+		`)
+		expect(result.status).toBe(200)
+		expect(result.body.errors).toBeUndefined()
+		const rows: Array<{id: string}> = result.body.data.entities
+		expect(rows.length).toBe(MAX_PAGINATION_LIMIT)
+	})
+
+	it("returns exactly first rows when a first < cap is specified", async () => {
+		const result = await executeGraphQL(`
+			{
+				entities(first: 50) { id }
+			}
+		`)
+		expect(result.status).toBe(200)
+		expect(result.body.errors).toBeUndefined()
+		const rows: Array<{id: string}> = result.body.data.entities
+		expect(rows.length).toBe(50)
+	})
+
+	it("returns at most MAX_PAGINATION_LIMIT rows via the connection form when first is omitted", async () => {
+		const result = await executeGraphQL(`
+			{
+				entitiesConnection {
+					nodes { id }
+				}
+			}
+		`)
+		expect(result.status).toBe(200)
+		expect(result.body.errors).toBeUndefined()
+		const nodes: Array<{id: string}> = result.body.data.entitiesConnection.nodes
+		expect(nodes.length).toBe(MAX_PAGINATION_LIMIT)
 	})
 })
