@@ -190,12 +190,16 @@ describe("PaginationCapPlugin", () => {
 	})
 
 	it("rejects oversized last on nested sub-collections", async () => {
+		// `last` is only exposed on the Relay connection form — on Entity the
+		// connection form of the from_entity_id back-ref is `relations` (per the
+		// smart comment @foreignFieldName relations in drizzle/0004_functions.sql).
+		// The simple-collection form `relationsList` has only `first` + `offset`.
 		const result = await executeGraphQL(`
 			{
 				entitiesConnection(first: 1) {
 					nodes {
 						id
-						relationsList(last: 10000) { id }
+						relations(last: 10000) { nodes { id } }
 					}
 				}
 			}
