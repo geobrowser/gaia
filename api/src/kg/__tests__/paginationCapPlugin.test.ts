@@ -272,4 +272,219 @@ describe("PaginationCapPlugin default-first injection (seeded)", () => {
 		const nodes: Array<{id: string}> = result.body.data.entitiesConnection.nodes
 		expect(nodes.length).toBe(MAX_PAGINATION_LIMIT)
 	})
+
+	// --- Boundary tests: at-cap vs just-over-cap ---
+
+	it("accepts first at exactly the cap", async () => {
+		const result = await executeGraphQL(`
+			{ entities(first: ${MAX_PAGINATION_LIMIT}) { id } }
+		`)
+		expect(result.status).toBe(200)
+		expect(result.body.errors).toBeUndefined()
+		const rows: Array<{id: string}> = result.body.data.entities
+		expect(rows.length).toBe(MAX_PAGINATION_LIMIT)
+	})
+
+	it("rejects first at cap + 1 (off-by-one boundary)", async () => {
+		const result = await executeGraphQL(`
+			{ entities(first: ${MAX_PAGINATION_LIMIT + 1}) { id } }
+		`)
+		expect(result.status).toBe(400)
+		expect(result.body.errors?.[0]?.extensions?.code).toBe("BAD_USER_INPUT")
+	})
+
+	it("accepts last at exactly the cap", async () => {
+		const result = await executeGraphQL(`
+			{ entities(last: ${MAX_PAGINATION_LIMIT}) { id } }
+		`)
+		expect(result.status).toBe(200)
+		expect(result.body.errors).toBeUndefined()
+	})
+
+	it("rejects last at cap + 1", async () => {
+		const result = await executeGraphQL(`
+			{ entities(last: ${MAX_PAGINATION_LIMIT + 1}) { id } }
+		`)
+		expect(result.status).toBe(400)
+		expect(result.body.errors?.[0]?.extensions?.code).toBe("BAD_USER_INPUT")
+	})
+
+	it("accepts offset at exactly the cap", async () => {
+		const result = await executeGraphQL(`
+			{ entities(offset: ${MAX_PAGINATION_LIMIT}, first: 10) { id } }
+		`)
+		expect(result.status).toBe(200)
+		expect(result.body.errors).toBeUndefined()
+	})
+
+	it("rejects offset at cap + 1", async () => {
+		const result = await executeGraphQL(`
+			{ entities(offset: ${MAX_PAGINATION_LIMIT + 1}) { id } }
+		`)
+		expect(result.status).toBe(400)
+		expect(result.body.errors?.[0]?.extensions?.code).toBe("BAD_USER_INPUT")
+	})
+
+	// --- last / offset happy-path coverage ---
+
+	it("honors last below the cap", async () => {
+		const result = await executeGraphQL(`
+			{ entities(last: 50) { id } }
+		`)
+		expect(result.status).toBe(200)
+		expect(result.body.errors).toBeUndefined()
+		const rows: Array<{id: string}> = result.body.data.entities
+		expect(rows.length).toBe(50)
+	})
+
+	it("honors offset combined with first below the cap", async () => {
+		const result = await executeGraphQL(`
+			{ entities(first: 25, offset: 100) { id } }
+		`)
+		expect(result.status).toBe(200)
+		expect(result.body.errors).toBeUndefined()
+		const rows: Array<{id: string}> = result.body.data.entities
+		expect(rows.length).toBe(25)
+	})
+
+	it("accepts first: 0 (edge — returns nothing, does not inject default)", async () => {
+		const result = await executeGraphQL(`
+			{ entities(first: 0) { id } }
+		`)
+		expect(result.status).toBe(200)
+		expect(result.body.errors).toBeUndefined()
+		const rows: Array<{id: string}> = result.body.data.entities
+		expect(rows.length).toBe(0)
+	})
+
+	// --- cursor pagination still works with the cap in place ---
+
+	it("supports cursor pagination via the connection form", async () => {
+		const page1 = await executeGraphQL(`
+			{
+				entitiesConnection(first: 10) {
+					nodes { id }
+					pageInfo { hasNextPage endCursor }
+				}
+			}
+		`)
+		expect(page1.status).toBe(200)
+		expect(page1.body.errors).toBeUndefined()
+
+		const firstPageNodes: Array<{id: string}> = page1.body.data.entitiesConnection.nodes
+		const {hasNextPage, endCursor} = page1.body.data.entitiesConnection.pageInfo
+		expect(firstPageNodes.length).toBe(10)
+		expect(hasNextPage).toBe(true)
+		expect(endCursor).toBeTruthy()
+
+		const page2 = await executeGraphQL(
+			`
+				query Page2($cursor: Cursor!) {
+					entitiesConnection(first: 10, after: $cursor) {
+						nodes { id }
+					}
+				}
+			`,
+			{cursor: endCursor},
+		)
+		expect(page2.status).toBe(200)
+		expect(page2.body.errors).toBeUndefined()
+		const page2Nodes: Array<{id: string}> = page2.body.data.entitiesConnection.nodes
+		expect(page2Nodes.length).toBe(10)
+
+		const firstPageIds = new Set(firstPageNodes.map((r) => r.id))
+		for (const node of page2Nodes) {
+			expect(firstPageIds.has(node.id)).toBe(false)
+		}
+	})
+})
+
+/**
+ * Integration test for the PR's core claim: nested sub-collections receive the
+ * default-first injection in their *own* SQL lateral. Seeds MAX+N relations
+ * pointing from a single parent entity and asserts that a nested
+ * `relationsByFromEntityIdList` query without `first:` is capped at MAX.
+ */
+describe("PaginationCapPlugin nested default-first injection (seeded)", () => {
+	const OVER_LIMIT = MAX_PAGINATION_LIMIT + 5
+	let parentEntityId: string
+	let siblingEntityId: string
+	let spaceId: string
+	let typeId: string
+	let seededRelationIds: string[] = []
+	let seededEntityIds: string[] = []
+	let pool: Pool
+
+	beforeAll(async () => {
+		pool = new Pool({connectionString: process.env.DATABASE_URL})
+		parentEntityId = crypto.randomUUID()
+		siblingEntityId = crypto.randomUUID()
+		spaceId = crypto.randomUUID()
+		typeId = crypto.randomUUID()
+		seededEntityIds = [parentEntityId, siblingEntityId, typeId]
+
+		const entityValues = seededEntityIds.map((_id, i) => `($${i + 1}, 0, 0, 0, 0)`).join(", ")
+		await pool.query(
+			`INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block) VALUES ${entityValues}`,
+			seededEntityIds,
+		)
+
+		seededRelationIds = Array.from({length: OVER_LIMIT}, () => crypto.randomUUID())
+		// relations schema: id, entity_id, type_id, from_entity_id, to_entity_id, space_id (all NOT NULL)
+		const relPlaceholders = seededRelationIds
+			.map((_id, i) => `($${i + 1}, $${i + 1}, $${OVER_LIMIT + 1}, $${OVER_LIMIT + 2}, $${OVER_LIMIT + 3}, $${OVER_LIMIT + 4})`)
+			.join(", ")
+		await pool.query(
+			`INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) VALUES ${relPlaceholders}`,
+			[...seededRelationIds, typeId, parentEntityId, siblingEntityId, spaceId],
+		)
+	})
+
+	afterAll(async () => {
+		if (seededRelationIds.length) {
+			await pool.query("DELETE FROM relations WHERE id = ANY($1::uuid[])", [seededRelationIds])
+		}
+		if (seededEntityIds.length) {
+			await pool.query("DELETE FROM entities WHERE id = ANY($1::uuid[])", [seededEntityIds])
+		}
+		await pool.end()
+	})
+
+	it("caps nested relations at MAX when first is omitted on the nested field", async () => {
+		const result = await executeGraphQL(
+			`
+				query NestedDefault($id: UUID!) {
+					entity(id: $id) {
+						relationsByFromEntityIdList {
+							id
+						}
+					}
+				}
+			`,
+			{id: parentEntityId},
+		)
+		expect(result.status).toBe(200)
+		expect(result.body.errors).toBeUndefined()
+		const nested: Array<{id: string}> = result.body.data.entity.relationsByFromEntityIdList
+		expect(nested.length).toBe(MAX_PAGINATION_LIMIT)
+	})
+
+	it("honors explicit first < cap on the nested field", async () => {
+		const result = await executeGraphQL(
+			`
+				query NestedExplicit($id: UUID!) {
+					entity(id: $id) {
+						relationsByFromEntityIdList(first: 7) {
+							id
+						}
+					}
+				}
+			`,
+			{id: parentEntityId},
+		)
+		expect(result.status).toBe(200)
+		expect(result.body.errors).toBeUndefined()
+		const nested: Array<{id: string}> = result.body.data.entity.relationsByFromEntityIdList
+		expect(nested.length).toBe(7)
+	})
 })
