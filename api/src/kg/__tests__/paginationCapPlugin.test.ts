@@ -167,11 +167,13 @@ describe("PaginationCapPlugin", () => {
 		expect(result.body.errors).toBeUndefined()
 	})
 
-	it("caps oversized first on nested sub-collections", async () => {
-		// The plugin doc string says nested sub-collections "don't typically
-		// accept user-controlled `first` arguments", but PostGraphile does
-		// generate `first` args on nested FK-relation connections. This probes
-		// whether the cap applies there too. If it does not, this is the gap.
+	it("rejects oversized first on nested sub-collections", async () => {
+		// Nested collections inside an entity selection (e.g. relationsByFromEntityIdList
+		// or valuesList) must be capped too. The previous implementation used
+		// makeWrapResolversPlugin, which per PostGraphile docs only reliably
+		// influences SQL for root-level resolvers. The current implementation
+		// registers an arg data generator on every connection/simple-collection
+		// field, so the cap runs during SQL construction at every nesting level.
 		const result = await executeGraphQL(`
 			{
 				entitiesConnection(first: 1) {
@@ -183,22 +185,24 @@ describe("PaginationCapPlugin", () => {
 			}
 		`)
 
-		// Expect either: (a) validation error because the field/arg doesn't exist
-		// (in which case the shape doesn't apply), or (b) BAD_USER_INPUT because
-		// the cap caught it. Anything else (200 with data) = gap.
-		if (result.status === 200 && !result.body.errors) {
-			throw new Error(
-				`Nested sub-collection accepted first: 10000 without being rejected. Response: ${JSON.stringify(
-					result.body,
-				).slice(0, 400)}`,
-			)
-		}
-		if (result.body.errors?.[0]?.extensions?.code === "BAD_USER_INPUT") {
-			expect(result.body.errors[0].extensions.code).toBe("BAD_USER_INPUT")
-			return
-		}
-		// Validation error is acceptable — means the field name differs
 		expect(result.body.errors).toBeDefined()
+		expect(result.body.errors[0]?.extensions?.code).toBe("BAD_USER_INPUT")
+	})
+
+	it("rejects oversized last on nested sub-collections", async () => {
+		const result = await executeGraphQL(`
+			{
+				entitiesConnection(first: 1) {
+					nodes {
+						id
+						relationsByFromEntityIdList(last: 10000) { id }
+					}
+				}
+			}
+		`)
+
+		expect(result.body.errors).toBeDefined()
+		expect(result.body.errors[0]?.extensions?.code).toBe("BAD_USER_INPUT")
 	})
 })
 
