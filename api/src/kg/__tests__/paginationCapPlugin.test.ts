@@ -168,7 +168,7 @@ describe("PaginationCapPlugin", () => {
 	})
 
 	it("rejects oversized first on nested sub-collections", async () => {
-		// Nested collections inside an entity selection (e.g. relationsByFromEntityIdList
+		// Nested collections inside an entity selection (e.g. relationsList
 		// or valuesList) must be capped too. The previous implementation used
 		// makeWrapResolversPlugin, which per PostGraphile docs only reliably
 		// influences SQL for root-level resolvers. The current implementation
@@ -179,7 +179,7 @@ describe("PaginationCapPlugin", () => {
 				entitiesConnection(first: 1) {
 					nodes {
 						id
-						relationsByFromEntityIdList(first: 10000) { id }
+						relationsList(first: 10000) { id }
 					}
 				}
 			}
@@ -195,7 +195,7 @@ describe("PaginationCapPlugin", () => {
 				entitiesConnection(first: 1) {
 					nodes {
 						id
-						relationsByFromEntityIdList(last: 10000) { id }
+						relationsList(last: 10000) { id }
 					}
 				}
 			}
@@ -293,17 +293,19 @@ describe("PaginationCapPlugin default-first injection (seeded)", () => {
 		expect(result.body.errors?.[0]?.extensions?.code).toBe("BAD_USER_INPUT")
 	})
 
-	it("accepts last at exactly the cap", async () => {
+	it("accepts last at exactly the cap (connection form)", async () => {
+		// `last` is only exposed on the Relay connection form — simple collections
+		// support `first` / `offset` only.
 		const result = await executeGraphQL(`
-			{ entities(last: ${MAX_PAGINATION_LIMIT}) { id } }
+			{ entitiesConnection(last: ${MAX_PAGINATION_LIMIT}) { nodes { id } } }
 		`)
 		expect(result.status).toBe(200)
 		expect(result.body.errors).toBeUndefined()
 	})
 
-	it("rejects last at cap + 1", async () => {
+	it("rejects last at cap + 1 (connection form)", async () => {
 		const result = await executeGraphQL(`
-			{ entities(last: ${MAX_PAGINATION_LIMIT + 1}) { id } }
+			{ entitiesConnection(last: ${MAX_PAGINATION_LIMIT + 1}) { nodes { id } } }
 		`)
 		expect(result.status).toBe(400)
 		expect(result.body.errors?.[0]?.extensions?.code).toBe("BAD_USER_INPUT")
@@ -327,14 +329,14 @@ describe("PaginationCapPlugin default-first injection (seeded)", () => {
 
 	// --- last / offset happy-path coverage ---
 
-	it("honors last below the cap", async () => {
+	it("honors last below the cap (connection form)", async () => {
 		const result = await executeGraphQL(`
-			{ entities(last: 50) { id } }
+			{ entitiesConnection(last: 50) { nodes { id } } }
 		`)
 		expect(result.status).toBe(200)
 		expect(result.body.errors).toBeUndefined()
-		const rows: Array<{id: string}> = result.body.data.entities
-		expect(rows.length).toBe(50)
+		const nodes: Array<{id: string}> = result.body.data.entitiesConnection.nodes
+		expect(nodes.length).toBe(50)
 	})
 
 	it("honors offset combined with first below the cap", async () => {
@@ -403,7 +405,7 @@ describe("PaginationCapPlugin default-first injection (seeded)", () => {
  * Integration test for the PR's core claim: nested sub-collections receive the
  * default-first injection in their *own* SQL lateral. Seeds MAX+N relations
  * pointing from a single parent entity and asserts that a nested
- * `relationsByFromEntityIdList` query without `first:` is capped at MAX.
+ * `relationsList` query without `first:` is capped at MAX.
  */
 describe("PaginationCapPlugin nested default-first injection (seeded)", () => {
 	const OVER_LIMIT = MAX_PAGINATION_LIMIT + 5
@@ -432,7 +434,10 @@ describe("PaginationCapPlugin nested default-first injection (seeded)", () => {
 		seededRelationIds = Array.from({length: OVER_LIMIT}, () => crypto.randomUUID())
 		// relations schema: id, entity_id, type_id, from_entity_id, to_entity_id, space_id (all NOT NULL)
 		const relPlaceholders = seededRelationIds
-			.map((_id, i) => `($${i + 1}, $${i + 1}, $${OVER_LIMIT + 1}, $${OVER_LIMIT + 2}, $${OVER_LIMIT + 3}, $${OVER_LIMIT + 4})`)
+			.map(
+				(_id, i) =>
+					`($${i + 1}, $${i + 1}, $${OVER_LIMIT + 1}, $${OVER_LIMIT + 2}, $${OVER_LIMIT + 3}, $${OVER_LIMIT + 4})`,
+			)
 			.join(", ")
 		await pool.query(
 			`INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) VALUES ${relPlaceholders}`,
@@ -455,7 +460,7 @@ describe("PaginationCapPlugin nested default-first injection (seeded)", () => {
 			`
 				query NestedDefault($id: UUID!) {
 					entity(id: $id) {
-						relationsByFromEntityIdList {
+						relationsList {
 							id
 						}
 					}
@@ -465,7 +470,7 @@ describe("PaginationCapPlugin nested default-first injection (seeded)", () => {
 		)
 		expect(result.status).toBe(200)
 		expect(result.body.errors).toBeUndefined()
-		const nested: Array<{id: string}> = result.body.data.entity.relationsByFromEntityIdList
+		const nested: Array<{id: string}> = result.body.data.entity.relationsList
 		expect(nested.length).toBe(MAX_PAGINATION_LIMIT)
 	})
 
@@ -474,7 +479,7 @@ describe("PaginationCapPlugin nested default-first injection (seeded)", () => {
 			`
 				query NestedExplicit($id: UUID!) {
 					entity(id: $id) {
-						relationsByFromEntityIdList(first: 7) {
+						relationsList(first: 7) {
 							id
 						}
 					}
@@ -484,7 +489,7 @@ describe("PaginationCapPlugin nested default-first injection (seeded)", () => {
 		)
 		expect(result.status).toBe(200)
 		expect(result.body.errors).toBeUndefined()
-		const nested: Array<{id: string}> = result.body.data.entity.relationsByFromEntityIdList
+		const nested: Array<{id: string}> = result.body.data.entity.relationsList
 		expect(nested.length).toBe(7)
 	})
 })
