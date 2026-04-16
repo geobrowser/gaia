@@ -74611,7 +74611,7 @@ type: Opaque
 data:
   
   admin-user: "YWRtaW4="
-  admin-password: "NTFjeUQ2aEExTlhGZXNZUll0VDZsbTA4MGRjQVNtelpJT2xNZjBiaQ=="
+  admin-password: "WlNtVXl5TjZRd1ZRRHNLU3BQRXBVRE1vRjB2bWR3ck5aaGlWRmtEbQ=="
   ldap-toml: ""
 ---
 # Source: kube-prometheus-stack/templates/alertmanager/secret.yaml
@@ -74631,7 +74631,7 @@ metadata:
     release: "kube-prometheus-stack"
     heritage: "Helm"
 data:
-  alertmanager.yaml: "Z2xvYmFsOgogIHJlc29sdmVfdGltZW91dDogNW0KaW5oaWJpdF9ydWxlczoKLSBlcXVhbDoKICAtIG5hbWVzcGFjZQogIC0gYWxlcnRuYW1lCiAgc291cmNlX21hdGNoZXJzOgogIC0gc2V2ZXJpdHkgPSBjcml0aWNhbAogIHRhcmdldF9tYXRjaGVyczoKICAtIHNldmVyaXR5ID1+IHdhcm5pbmd8aW5mbwotIGVxdWFsOgogIC0gbmFtZXNwYWNlCiAgLSBhbGVydG5hbWUKICBzb3VyY2VfbWF0Y2hlcnM6CiAgLSBzZXZlcml0eSA9IHdhcm5pbmcKICB0YXJnZXRfbWF0Y2hlcnM6CiAgLSBzZXZlcml0eSA9IGluZm8KLSBlcXVhbDoKICAtIG5hbWVzcGFjZQogIHNvdXJjZV9tYXRjaGVyczoKICAtIGFsZXJ0bmFtZSA9IEluZm9JbmhpYml0b3IKICB0YXJnZXRfbWF0Y2hlcnM6CiAgLSBzZXZlcml0eSA9IGluZm8KLSB0YXJnZXRfbWF0Y2hlcnM6CiAgLSBhbGVydG5hbWUgPSBJbmZvSW5oaWJpdG9yCnJlY2VpdmVyczoKLSBuYW1lOiAibnVsbCIKcm91dGU6CiAgZ3JvdXBfYnk6CiAgLSBuYW1lc3BhY2UKICBncm91cF9pbnRlcnZhbDogNW0KICBncm91cF93YWl0OiAzMHMKICByZWNlaXZlcjogIm51bGwiCiAgcmVwZWF0X2ludGVydmFsOiAxMmgKICByb3V0ZXM6CiAgLSBtYXRjaGVyczoKICAgIC0gYWxlcnRuYW1lID0gIldhdGNoZG9nIgogICAgcmVjZWl2ZXI6ICJudWxsIgp0ZW1wbGF0ZXM6Ci0gL2V0Yy9hbGVydG1hbmFnZXIvY29uZmlnLyoudG1wbA=="
+  alertmanager.yaml: "Z2xvYmFsOgogIHJlc29sdmVfdGltZW91dDogNW0KICBzbGFja19hcGlfdXJsX2ZpbGU6IC9ldGMvYWxlcnRtYW5hZ2VyL3NlY3JldHMvYWxlcnRtYW5hZ2VyLXNsYWNrLXdlYmhvb2svdXJsCmluaGliaXRfcnVsZXM6Ci0gZXF1YWw6CiAgLSBuYW1lc3BhY2UKICAtIGFsZXJ0bmFtZQogIHNvdXJjZV9tYXRjaGVyczoKICAtIHNldmVyaXR5ID0gY3JpdGljYWwKICB0YXJnZXRfbWF0Y2hlcnM6CiAgLSBzZXZlcml0eSA9fiB3YXJuaW5nfGluZm8KLSBlcXVhbDoKICAtIG5hbWVzcGFjZQogIC0gYWxlcnRuYW1lCiAgc291cmNlX21hdGNoZXJzOgogIC0gc2V2ZXJpdHkgPSB3YXJuaW5nCiAgdGFyZ2V0X21hdGNoZXJzOgogIC0gc2V2ZXJpdHkgPSBpbmZvCnJlY2VpdmVyczoKLSBuYW1lOiAibnVsbCIKLSBuYW1lOiBzbGFjawogIHNsYWNrX2NvbmZpZ3M6CiAgLSBjaGFubmVsOiAnI2FsZXJ0cycKICAgIHNlbmRfcmVzb2x2ZWQ6IHRydWUKICAgIHRleHQ6ICd7eyByYW5nZSAuQWxlcnRzIH19ICp7eyAuTGFiZWxzLnNldmVyaXR5IHwgdG9VcHBlciB9fSog4oCUIHt7IC5MYWJlbHMubmFtZXNwYWNlCiAgICAgIH19L3t7IC5MYWJlbHMuYWxlcnRuYW1lIH19IHt7IGlmIC5Bbm5vdGF0aW9ucy5kZXNjcmlwdGlvbiB9fXt7IC5Bbm5vdGF0aW9ucy5kZXNjcmlwdGlvbgogICAgICB9fXt7IGVuZCB9fSB7eyBpZiAuQW5ub3RhdGlvbnMuc3VtbWFyeSB9fXt7IC5Bbm5vdGF0aW9ucy5zdW1tYXJ5IH19e3sgZW5kIH19CiAgICAgIHt7IGVuZCB9fScKICAgIHRpdGxlOiAne3sgaWYgZXEgLlN0YXR1cyAiZmlyaW5nIiB9fTpmaXJlOnt7IGVsc2UgfX06d2hpdGVfY2hlY2tfbWFyazp7eyBlbmQgfX0KICAgICAgW3t7IC5TdGF0dXMgfCB0b1VwcGVyIH19XSB7eyAuR3JvdXBMYWJlbHMuYWxlcnRuYW1lIH19Jwpyb3V0ZToKICBncm91cF9ieToKICAtIG5hbWVzcGFjZQogIC0gYWxlcnRuYW1lCiAgZ3JvdXBfaW50ZXJ2YWw6IDVtCiAgZ3JvdXBfd2FpdDogMzBzCiAgcmVjZWl2ZXI6IHNsYWNrCiAgcmVwZWF0X2ludGVydmFsOiAxMmgKICByb3V0ZXM6CiAgLSBtYXRjaGVyczoKICAgIC0gYWxlcnRuYW1lID0gIldhdGNoZG9nIgogICAgcmVjZWl2ZXI6ICJudWxsIgogIC0gbWF0Y2hlcnM6CiAgICAtIGFsZXJ0bmFtZSA9ICJJbmZvSW5oaWJpdG9yIgogICAgcmVjZWl2ZXI6ICJudWxsIgp0ZW1wbGF0ZXM6Ci0gL2V0Yy9hbGVydG1hbmFnZXIvY29uZmlnLyoudG1wbA=="
 ---
 # Source: kube-prometheus-stack/charts/grafana/templates/configmap-dashboard-provider.yaml
 apiVersion: v1
@@ -76103,7 +76103,7 @@ spec:
       annotations:
         checksum/config: 5bceeca3808849664f09f642547ce17fdf495522238ef9ce952b20cfa36b7de5
         checksum/sc-dashboard-provider-config: e70bf6a851099d385178a76de9757bb0bef8299da6d8443602590e44f05fdf24
-        checksum/secret: 4f4c4c9d0c9d775b7b6692bff756843be98b40f6a2101cb4671d6292545709a0
+        checksum/secret: 6563997f6843171361d6be14fce660014706396bce8145df5ab0c5abae932c6c
         kubectl.kubernetes.io/default-container: grafana
     spec:
       
@@ -76644,6 +76644,8 @@ spec:
   logFormat: "logfmt"
   logLevel:  "info"
   retention: "120h"
+  secrets:
+    - alertmanager-slack-webhook
   alertmanagerConfigSelector: {}
   alertmanagerConfigNamespaceSelector:
     {}
@@ -78365,18 +78367,6 @@ spec:
         kube_horizontalpodautoscaler_spec_max_replicas{job="kube-state-metrics", namespace=~".*"})
           and
         changes(kube_horizontalpodautoscaler_status_current_replicas{job="kube-state-metrics", namespace=~".*"}[15m]) == 0
-      for: 15m
-      labels:
-        severity: warning
-    - alert: KubeHpaMaxedOut
-      annotations:
-        description: HPA {{ $labels.namespace }}/{{ $labels.horizontalpodautoscaler  }} has been running at max replicas for longer than 15 minutes on cluster {{ $labels.cluster }}.
-        runbook_url: https://runbooks.prometheus-operator.dev/runbooks/kubernetes/kubehpamaxedout
-        summary: HPA is running at max replicas
-      expr: |-
-        kube_horizontalpodautoscaler_status_current_replicas{job="kube-state-metrics", namespace=~".*"}
-          ==
-        kube_horizontalpodautoscaler_spec_max_replicas{job="kube-state-metrics", namespace=~".*"}
       for: 15m
       labels:
         severity: warning

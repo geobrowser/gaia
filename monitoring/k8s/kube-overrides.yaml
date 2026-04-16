@@ -1,0 +1,23 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: kube-overrides
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: kubernetes-apps.overrides
+      rules:
+        - alert: KubeHpaMaxedOut
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{job="kube-state-metrics"}
+              ==
+            kube_horizontalpodautoscaler_spec_max_replicas{job="kube-state-metrics"}
+          for: 60m
+          labels:
+            severity: warning
+          annotations:
+            description: HPA {{ $labels.namespace }}/{{ $labels.horizontalpodautoscaler }} has been running at max replicas for longer than 60 minutes on cluster {{ $labels.cluster }}.
+            runbook_url: https://runbooks.prometheus-operator.dev/runbooks/kubernetes/kubehpamaxedout
+            summary: HPA is running at max replicas

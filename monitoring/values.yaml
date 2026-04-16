@@ -37,6 +37,12 @@ grafana:
       cpu: 500m
       memory: 512Mi
 
+# Override default alert rules
+# KubeHpaMaxedOut is replaced in monitoring/k8s/kube-overrides.yaml with a 60m window
+defaultRules:
+  disabled:
+    KubeHpaMaxedOut: true
+
 # Prometheus configuration
 prometheus:
   prometheusSpec:
