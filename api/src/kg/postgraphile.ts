@@ -14,6 +14,7 @@ import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin from "./paginationCapPlugin"
+import {useSearchInvocationLogger} from "./searchInvocationLogger"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 import {createValkeyCache} from "./valkeyCache"
 import ValueOrderByScorePlugin from "./valueOrderByScorePlugin"
@@ -270,9 +271,13 @@ const responseCachePlugin = (() => {
 
 // Shared plugins for GraphQL server.
 // Response cache is first so cache hits skip pgClient checkout entirely.
+// Search-invocation logger runs per request (AST walk only, no DB) and
+// warns on every `search` / `searchConnection` invocation so we can
+// observe usage + caller IP without adding a separate metrics pipeline.
 const sharedPlugins = [
 	...(responseCachePlugin ? [responseCachePlugin] : []),
 	useGraphQLInstrumentation(),
+	useSearchInvocationLogger(),
 	usePgClient(pgPool),
 	useExecutionCancellation(),
 ]
