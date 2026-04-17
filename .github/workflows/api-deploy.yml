@@ -50,6 +50,7 @@ jobs:
       - name: Deploy to Kubernetes
         run: |
           kubectl apply -f api/k8s/production/namespace.yaml
+          kubectl apply -f api/k8s/production/valkey.yaml
           # Update image tag to use SHA and apply
           sed -i 's|image: registry.digitalocean.com/geo/api:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' api/k8s/production/api.yaml
           kubectl apply -f api/k8s/production/api.yaml
