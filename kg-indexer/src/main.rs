@@ -1018,6 +1018,7 @@ async fn process_message(
             }
 
             let ops = result.entities.len()
+                + result.entities_referenced.len()
                 + set_values.len()
                 + delete_value_ids.len()
                 + set_relations.len()
@@ -1027,6 +1028,9 @@ async fn process_message(
 
             // Bulk insert all operations (live tables)
             storage.insert_entities(&result.entities, &mut tx).await?;
+            storage
+                .ensure_entities_exist(&result.entities_referenced, &mut tx)
+                .await?;
             storage.insert_values(&set_values, &mut tx).await?;
             storage.delete_values(&delete_value_ids, &mut tx).await?;
             storage.insert_relations(&set_relations, &mut tx).await?;
@@ -1411,6 +1415,7 @@ async fn process_block(
                     }
 
                     let ops = result.entities.len()
+                        + result.entities_referenced.len()
                         + set_values.len()
                         + delete_value_ids.len()
                         + set_relations.len()
@@ -1420,6 +1425,9 @@ async fn process_block(
 
                     // Bulk insert all operations (live tables)
                     storage.insert_entities(&result.entities, &mut tx).await?;
+                    storage
+                        .ensure_entities_exist(&result.entities_referenced, &mut tx)
+                        .await?;
                     storage.insert_values(&set_values, &mut tx).await?;
                     storage.delete_values(&delete_value_ids, &mut tx).await?;
                     storage.insert_relations(&set_relations, &mut tx).await?;

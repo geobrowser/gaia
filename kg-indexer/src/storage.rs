@@ -73,6 +73,50 @@ impl Storage {
         Ok(())
     }
 
+    /// Ensure the given entities exist as rows without touching their timestamps.
+    ///
+    /// Used for entities that appear only as backlink targets (the `to` side of a
+    /// new relation). We still want a row so joins resolve, but the entity itself
+    /// has not been modified, so its `updated_at` must not bump.
+    pub async fn ensure_entities_exist(
+        &self,
+        entities: &[EntityItem],
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        if entities.is_empty() {
+            return Ok(());
+        }
+
+        let ids: Vec<Uuid> = entities.iter().map(|x| x.id).collect();
+        let created_ats: Vec<String> = entities.iter().map(|x| x.created_at.clone()).collect();
+        let created_at_blocks: Vec<String> = entities
+            .iter()
+            .map(|x| x.created_at_block.clone())
+            .collect();
+        let updated_ats: Vec<String> = entities.iter().map(|x| x.updated_at.clone()).collect();
+        let updated_at_blocks: Vec<String> = entities
+            .iter()
+            .map(|x| x.updated_at_block.clone())
+            .collect();
+
+        sqlx::query(
+            r#"
+            INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
+            SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[])
+            ON CONFLICT (id) DO NOTHING
+            "#,
+        )
+        .bind(&ids)
+        .bind(&created_ats)
+        .bind(&created_at_blocks)
+        .bind(&updated_ats)
+        .bind(&updated_at_blocks)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn insert_values(
         &self,
         values: &[ValueOp],

@@ -41,7 +41,13 @@ static PROTECTED_RELATION_TYPES: LazyLock<HashSet<Uuid>> = LazyLock::new(|| {
 pub struct EditResult {
     /// The edit ID (from HermesEdit.id)
     pub edit_id: Uuid,
+    /// Entities that were modified by this edit. These upsert with
+    /// `updated_at` bumped to the edit's timestamp.
     pub entities: Vec<EntityItem>,
+    /// Entities that only appear as backlink targets (the `to` side of a
+    /// new relation) and were not otherwise modified. These upsert with
+    /// `ON CONFLICT DO NOTHING` so their `updated_at` is preserved.
+    pub entities_referenced: Vec<EntityItem>,
     pub values: Vec<ValueOp>,
     pub relations: Vec<RelationOp>,
 }
@@ -145,13 +151,13 @@ pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
     };
 
     // Extract all data from the decoded edit (DEBUG level)
-    let (entities, value_ops, relation_ops) = {
+    let (entities, entities_referenced, value_ops, relation_ops) = {
         let _span =
             debug_span!("kg_indexer.extract_ops", op_count = grc20_edit.ops.len()).entered();
-        let entities = extract_entities(&grc20_edit, &space_id, &meta);
+        let (entities, entities_referenced) = extract_entities(&grc20_edit, &space_id, &meta);
         let value_ops = extract_values(&grc20_edit, &space_id);
         let relation_ops = extract_relations(&grc20_edit, &space_id);
-        (entities, value_ops, relation_ops)
+        (entities, entities_referenced, value_ops, relation_ops)
     };
 
     // Filter out operations targeting system-protected properties and relation types
@@ -165,6 +171,7 @@ pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
     Ok(EditResult {
         edit_id,
         entities,
+        entities_referenced,
         values,
         relations,
     })
@@ -376,60 +383,87 @@ fn parse_space_id(space_id_bytes: &[u8]) -> Result<Uuid, HandlerError> {
     Ok(Uuid::from_bytes(bytes))
 }
 
-fn extract_entities(edit: &Grc20Edit, _space_id: &Uuid, meta: &EditMetadata) -> Vec<EntityItem> {
-    let mut entities = Vec::new();
-    let mut seen = HashSet::new();
+/// Partition entity IDs touched by this edit into two buckets:
+///
+/// - `touched`: entities whose own state changed — value writes, relation
+///   ownership (the `from` side), the reified relation entity, the relation
+///   type being used. These upsert with `updated_at` bumped.
+/// - `referenced`: entities that only appear as backlink targets (the `to`
+///   side of a `CreateRelation`). We need the row to exist so joins resolve,
+///   but being linked to is not a modification of the target — its
+///   `updated_at` is preserved.
+///
+/// If an id appears in both buckets within the same edit (e.g. an entity is
+/// both a backlink target and independently modified), the touched bump wins.
+fn extract_entities(
+    edit: &Grc20Edit,
+    _space_id: &Uuid,
+    meta: &EditMetadata,
+) -> (Vec<EntityItem>, Vec<EntityItem>) {
+    let mut touched: Vec<EntityItem> = Vec::new();
+    let mut referenced: Vec<EntityItem> = Vec::new();
+    let mut seen_touched: HashSet<Uuid> = HashSet::new();
+    let mut seen_referenced: HashSet<Uuid> = HashSet::new();
 
     for op in &edit.ops {
-        let ids_to_add: Vec<Uuid> = match op {
+        let (touched_ids, referenced_ids): (Vec<Uuid>, Vec<Uuid>) = match op {
             Grc20Op::CreateEntity(entity) => {
                 let mut ids = vec![id_to_uuid(&entity.id)];
-                // Add property IDs as entities
                 for pv in &entity.values {
                     ids.push(id_to_uuid(&pv.property));
                 }
-                ids
+                (ids, vec![])
             }
             Grc20Op::UpdateEntity(entity) => {
                 let mut ids = vec![id_to_uuid(&entity.id)];
-                // Add property IDs from set values
                 for pv in &entity.set_properties {
                     ids.push(id_to_uuid(&pv.property));
                 }
-                ids
+                (ids, vec![])
             }
             Grc20Op::CreateRelation(relation) => {
-                let mut ids = vec![
+                let touched_ids = vec![
                     id_to_uuid(&relation.id),
                     id_to_uuid(&relation.relation_type),
                     id_to_uuid(&relation.from),
-                    id_to_uuid(&relation.to),
+                    id_to_uuid(&relation.entity_id()),
                 ];
-                // Add the reified entity ID
-                ids.push(id_to_uuid(&relation.entity_id()));
-                ids
+                let referenced_ids = vec![id_to_uuid(&relation.to)];
+                (touched_ids, referenced_ids)
             }
-            Grc20Op::DeleteRelation(del) => {
-                vec![id_to_uuid(&del.id)]
-            }
-            _ => vec![],
+            Grc20Op::DeleteRelation(del) => (vec![id_to_uuid(&del.id)], vec![]),
+            _ => (vec![], vec![]),
         };
 
-        for id in ids_to_add {
-            if !seen.contains(&id) {
-                entities.push(EntityItem {
+        for id in touched_ids {
+            if seen_touched.insert(id) {
+                touched.push(EntityItem {
                     id,
                     created_at: meta.timestamp.clone(),
                     created_at_block: meta.block_number.clone(),
                     updated_at: meta.timestamp.clone(),
                     updated_at_block: meta.block_number.clone(),
                 });
-                seen.insert(id);
+            }
+        }
+        for id in referenced_ids {
+            if seen_referenced.insert(id) {
+                referenced.push(EntityItem {
+                    id,
+                    created_at: meta.timestamp.clone(),
+                    created_at_block: meta.block_number.clone(),
+                    updated_at: meta.timestamp.clone(),
+                    updated_at_block: meta.block_number.clone(),
+                });
             }
         }
     }
 
-    entities
+    // If an id is both touched and referenced within the same edit, drop it
+    // from referenced so the updated_at bump from the touched upsert wins.
+    referenced.retain(|e| !seen_touched.contains(&e.id));
+
+    (touched, referenced)
 }
 
 /// Convert a grc_20::Value to a ValueOp with appropriate fields set
@@ -1421,5 +1455,125 @@ mod tests {
 
         // Should use first edge's type_id
         assert_eq!(extracted_edge_type, Some(Uuid::from_bytes(first_edge_type)));
+    }
+
+    // ===================
+    // extract_entities tests
+    // ===================
+
+    fn make_id(n: u8) -> Grc20Id {
+        [n; 16]
+    }
+
+    fn make_meta() -> EditMetadata {
+        EditMetadata {
+            timestamp: "1700000000".to_string(),
+            block_number: "42".to_string(),
+        }
+    }
+
+    fn make_create_relation_op(
+        id: Grc20Id,
+        relation_type: Grc20Id,
+        from: Grc20Id,
+        to: Grc20Id,
+    ) -> Grc20Op<'static> {
+        Grc20Op::CreateRelation(grc_20::model::CreateRelation {
+            id,
+            relation_type,
+            from,
+            from_is_value_ref: false,
+            from_space: None,
+            from_version: None,
+            to,
+            to_is_value_ref: false,
+            to_space: None,
+            to_version: None,
+            entity: None,
+            position: None,
+            context: None,
+        })
+    }
+
+    #[test]
+    fn test_extract_entities_create_relation_to_is_referenced_only() {
+        let rel_id = make_id(1);
+        let rel_type = make_id(2);
+        let from = make_id(3);
+        let to = make_id(4);
+
+        let mut edit = Grc20Edit::new(make_id(0));
+        edit.ops
+            .push(make_create_relation_op(rel_id, rel_type, from, to));
+
+        let space_id = Uuid::new_v4();
+        let meta = make_meta();
+        let (touched, referenced) = extract_entities(&edit, &space_id, &meta);
+
+        let touched_ids: HashSet<Uuid> = touched.iter().map(|e| e.id).collect();
+        let referenced_ids: HashSet<Uuid> = referenced.iter().map(|e| e.id).collect();
+
+        // from / relation_type / relation id all bump updated_at.
+        assert!(touched_ids.contains(&Uuid::from_bytes(from)));
+        assert!(touched_ids.contains(&Uuid::from_bytes(rel_type)));
+        assert!(touched_ids.contains(&Uuid::from_bytes(rel_id)));
+
+        // `to` is only ensured to exist — its updated_at must not be bumped.
+        assert!(referenced_ids.contains(&Uuid::from_bytes(to)));
+        assert!(!touched_ids.contains(&Uuid::from_bytes(to)));
+    }
+
+    #[test]
+    fn test_extract_entities_touched_wins_when_entity_is_both_from_and_to() {
+        // Entity X is the `to` of one relation and the `from` of another
+        // within the same edit. The from bump must win — X should be in
+        // touched only, not referenced.
+        let shared = make_id(10);
+        let other = make_id(11);
+        let rel_type = make_id(2);
+
+        let mut edit = Grc20Edit::new(make_id(0));
+        edit.ops
+            .push(make_create_relation_op(make_id(1), rel_type, other, shared));
+        edit.ops
+            .push(make_create_relation_op(make_id(3), rel_type, shared, other));
+
+        let space_id = Uuid::new_v4();
+        let meta = make_meta();
+        let (touched, referenced) = extract_entities(&edit, &space_id, &meta);
+
+        let shared_uuid = Uuid::from_bytes(shared);
+        assert!(touched.iter().any(|e| e.id == shared_uuid));
+        assert!(!referenced.iter().any(|e| e.id == shared_uuid));
+    }
+
+    #[test]
+    fn test_extract_entities_referenced_deduped_across_ops() {
+        // Same entity is the `to` of two different relations. It should
+        // appear in referenced exactly once and not in touched.
+        let target = make_id(20);
+        let rel_type = make_id(2);
+
+        let mut edit = Grc20Edit::new(make_id(0));
+        edit.ops.push(make_create_relation_op(
+            make_id(1),
+            rel_type,
+            make_id(4),
+            target,
+        ));
+        edit.ops.push(make_create_relation_op(
+            make_id(3),
+            rel_type,
+            make_id(5),
+            target,
+        ));
+
+        let space_id = Uuid::new_v4();
+        let meta = make_meta();
+        let (touched, referenced) = extract_entities(&edit, &space_id, &meta);
+
+        let target_uuid = Uuid::from_bytes(target);
+        assert_eq!(referenced.iter().filter(|e| e.id == target_uuid).count(), 1);
+        assert_eq!(touched.iter().filter(|e| e.id == target_uuid).count(), 0);
     }
 }
