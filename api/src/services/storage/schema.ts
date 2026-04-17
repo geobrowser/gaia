@@ -118,6 +118,8 @@ export const entities = pgTable(
 		index("entities_updated_at_idx").on(table.updatedAt),
 		// Composite index for ordering with id for stable pagination
 		index("entities_updated_at_id_idx").on(table.updatedAt, table.id),
+		// Composite index for ordering by createdAt with id for stable pagination
+		index("entities_created_at_id_idx").on(table.createdAt, table.id).concurrently(),
 	],
 )
 
