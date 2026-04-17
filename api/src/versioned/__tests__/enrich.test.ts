@@ -40,7 +40,7 @@ describe("enrichEntityDiffs", () => {
 		const diffs = [makeDiff({entityId, name: null})]
 		const result = await Effect.runPromise(enrichEntityDiffs(db as any, diffs))
 
-		expect(result[0].name).toBe("My Entity")
+		expect(result[0]?.name).toBe("My Entity")
 	})
 
 	it("preserves existing entity name when already set", async () => {
@@ -54,7 +54,7 @@ describe("enrichEntityDiffs", () => {
 		const diffs = [makeDiff({entityId, name: "Existing Name"})]
 		const result = await Effect.runPromise(enrichEntityDiffs(db as any, diffs))
 
-		expect(result[0].name).toBe("Existing Name")
+		expect(result[0]?.name).toBe("Existing Name")
 	})
 
 	it("resolves propertyName on value changes", async () => {
@@ -81,7 +81,7 @@ describe("enrichEntityDiffs", () => {
 		]
 
 		const result = await Effect.runPromise(enrichEntityDiffs(db as any, diffs))
-		expect(result[0].values[0].propertyName).toBe("Description")
+		expect(result[0]?.values[0]?.propertyName).toBe("Description")
 	})
 
 	it("resolves typeName and toEntityName on relation changes", async () => {
@@ -116,9 +116,9 @@ describe("enrichEntityDiffs", () => {
 		]
 
 		const result = await Effect.runPromise(enrichEntityDiffs(db as any, diffs))
-		const rel = result[0].relations[0]
-		expect(rel.typeName).toBe("Member Of")
-		expect(rel.after?.toEntityName).toBe("Geo DAO")
+		const rel = result[0]?.relations[0]
+		expect(rel?.typeName).toBe("Member Of")
+		expect(rel?.after?.toEntityName).toBe("Geo DAO")
 	})
 
 	it("sets null for names that cannot be resolved", async () => {
@@ -146,8 +146,8 @@ describe("enrichEntityDiffs", () => {
 		]
 
 		const result = await Effect.runPromise(enrichEntityDiffs(db as any, diffs))
-		expect(result[0].values[0].propertyName).toBeNull()
-		expect(result[0].name).toBeNull()
+		expect(result[0]?.values[0]?.propertyName).toBeNull()
+		expect(result[0]?.name).toBeNull()
 	})
 
 	it("deduplicates IDs across multiple diffs", async () => {
@@ -190,8 +190,8 @@ describe("enrichEntityDiffs", () => {
 		const result = await Effect.runPromise(enrichEntityDiffs(db as any, diffs))
 
 		// Both diffs should have the same propertyName resolved from a single query
-		expect(result[0].values[0].propertyName).toBe("Name")
-		expect(result[1].values[0].propertyName).toBe("Name")
+		expect(result[0]?.values[0]?.propertyName).toBe("Name")
+		expect(result[1]?.values[0]?.propertyName).toBe("Name")
 
 		// Only one DB call (batch query)
 		expect(db.execute).toHaveBeenCalledTimes(1)
@@ -225,7 +225,7 @@ describe("enrichEntityDiffs", () => {
 		]
 
 		const result = await Effect.runPromise(enrichEntityDiffs(db as any, diffs))
-		expect(result[0].relations[0].before?.toEntityName).toBe("Removed Entity")
-		expect(result[0].relations[0].after).toBeNull()
+		expect(result[0]?.relations[0]?.before?.toEntityName).toBe("Removed Entity")
+		expect(result[0]?.relations[0]?.after).toBeNull()
 	})
 })

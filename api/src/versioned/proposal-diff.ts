@@ -1041,12 +1041,15 @@ export function computeProposalDiff(
 			Effect.annotateLogs({proposalId, opCount: ops.length, entityCount: entityIds.length}),
 		)
 
-		// 8. Validate cursor consistency (entity count shouldn't change between pages)
+		// 8. Validate cursor consistency. If the entity set changed between pages
+		// (proposal edited, blob re-uploaded), continuing with a stale cursor
+		// would silently return inconsistent results. Fail loudly so the client
+		// re-fetches page 1 and acquires a fresh cursor.
 		if (expectedTotalEntities !== undefined && expectedTotalEntities !== entityIds.length) {
-			yield* Effect.logWarning("Entity count changed between pages").pipe(
+			yield* Effect.logWarning("Cursor drift detected (entity count changed between pages)").pipe(
 				Effect.annotateLogs({proposalId, expected: expectedTotalEntities, actual: entityIds.length}),
 			)
-			// Don't fail - just log the inconsistency. The proposal may have been updated.
+			return yield* Effect.fail(new InvalidCursorError(cursorStr ?? ""))
 		}
 
 		// 9. Paginate using the already-validated cursor
@@ -1192,7 +1195,23 @@ export function computeProposalDiff(
 // ============================================================================
 
 /** Maximum number of proposals in a single grouped diff request. */
-const MAX_GROUP_SIZE = 20
+export const MAX_GROUP_SIZE = 20
+
+/**
+ * Ordering rule for grouped-diff ops (RFC 0004): apply in edit-timestamp order
+ * ascending, tiebreak by proposalId ascending. Exported so the ordering can be
+ * unit-tested without wiring up ipfs + drizzle + decode.
+ */
+export function compareGroupedEdits(
+	a: {createdAt: bigint; proposalId: NormalizedUuid},
+	b: {createdAt: bigint; proposalId: NormalizedUuid},
+): number {
+	if (a.createdAt < b.createdAt) return -1
+	if (a.createdAt > b.createdAt) return 1
+	if (a.proposalId < b.proposalId) return -1
+	if (a.proposalId > b.proposalId) return 1
+	return 0
+}
 
 /**
  * Compute a paginated grouped proposal diff.
@@ -1309,11 +1328,7 @@ export function computeGroupedProposalDiff(
 			})
 		}
 
-		decodedEdits.sort((a, b) => {
-			const tsDiff = Number(a.createdAt - b.createdAt)
-			if (tsDiff !== 0) return tsDiff
-			return a.proposalId < b.proposalId ? -1 : a.proposalId > b.proposalId ? 1 : 0
-		})
+		decodedEdits.sort(compareGroupedEdits)
 
 		// Concatenate ops in sorted order
 		const allOps: Op[] = decodedEdits.flatMap((e) => e.ops)
@@ -1325,11 +1340,15 @@ export function computeGroupedProposalDiff(
 		// 9. Extract affected entity IDs (sorted for stable pagination)
 		const entityIds = (yield* extractAffectedEntities(db, allOps)).sort()
 
-		// 10. Validate cursor consistency
+		// 10. Validate cursor consistency. If the entity set changed between pages
+		// (proposal edited, a proposal added/removed from the group, blob
+		// re-uploaded), continuing with a stale cursor would silently return
+		// inconsistent results. Fail loudly so the client re-fetches page 1.
 		if (expectedTotalEntities !== undefined && expectedTotalEntities !== entityIds.length) {
-			yield* Effect.logWarning("Entity count changed between pages").pipe(
+			yield* Effect.logWarning("Cursor drift detected (entity count changed between pages)").pipe(
 				Effect.annotateLogs({expected: expectedTotalEntities, actual: entityIds.length}),
 			)
+			return yield* Effect.fail(new InvalidCursorError(cursorStr ?? ""))
 		}
 
 		// 11. Paginate

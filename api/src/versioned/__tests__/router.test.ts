@@ -1063,9 +1063,7 @@ describe("GET /versioned/proposal-groups/diff", () => {
 
 	describe("validation errors", () => {
 		it("returns 400 when spaceId is missing", async () => {
-			const res = await app.request(
-				`/versioned/proposal-groups/diff?proposalIds=${PROPOSAL_1},${PROPOSAL_2}`,
-			)
+			const res = await app.request(`/versioned/proposal-groups/diff?proposalIds=${PROPOSAL_1},${PROPOSAL_2}`)
 			expect(res.status).toBe(400)
 			const body = await res.json()
 			expect(body.error).toBe("Invalid parameter")

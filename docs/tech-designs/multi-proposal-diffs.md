@@ -414,10 +414,16 @@ These are compile-time constants. If runtime configurability is needed, they can
 
 ### Known Limitations
 
-1. **`restoreEntity` / `restoreRelation` ops** — these only contain the entity/relation ID, not the data to restore. The diff shows the op was applied but cannot display what was restored. This is inherited from the single-proposal endpoint.
-2. **`deleteEntity` ops** — shows removal of current values but doesn't account for already-deleted entities. Same inheritance.
-3. **Cross-space groups** — not supported in v1. All proposals must belong to one space.
-4. **Name resolution uses live state** — names are fetched from the current live values table, not versioned state. For historical diffs, a recently renamed entity will show its current name, not the name at the time of the proposals.
+These limitations are inherited from the single-proposal endpoint and documented in the `KNOWN LIMITATIONS` header comment of `api/src/versioned/proposal-diff.ts`. The OpenAPI `describeRoute` for `GET /versioned/proposal-groups/diff` links back to this section so callers see them in the generated spec.
+
+1. **`restoreEntity` ops** — the op contains only the entity ID, not the values/relations to restore. We'd need to fetch historical state to show what's being restored. Currently the diff cannot display the restored contents.
+2. **`restoreRelation` ops** — the op contains only the relation ID. Since the relation doesn't exist in the live table (it was deleted), we can't look up which entity is affected. **These ops are silently skipped** — they produce no diff entry.
+3. **`deleteEntity` ops** — shows removal of all current values/relations, but doesn't account for the entity potentially being in a deleted state already. Treating a double-delete as a regular delete is generally harmless but may produce a misleading "removed" diff.
+4. **Cross-space groups** — not supported in v1. All proposals must belong to one space.
+5. **Name resolution uses live state** — names are fetched from the current live values table, not versioned state. For historical diffs, a recently renamed entity will show its current name, not the name at the time of the proposals.
+6. **Group size** — capped at `MAX_GROUP_SIZE = 20` proposals per request. Exported from `proposal-diff.ts` and surfaced in the route description.
+
+Properly supporting (1)-(3) requires restructuring the op-extraction code to (a) pass version context into entity extraction, (b) fetch historical state for restore ops, and (c) track entity/relation deletion state. Out of scope for v1.
 
 ## Invariants
 
