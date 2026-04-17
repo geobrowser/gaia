@@ -78,3 +78,5 @@ $$;
 CREATE INDEX IF NOT EXISTS idx_global_scores_score ON global_scores (score DESC);
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS idx_votes_count_space_net_score ON votes_count (space_id, (upvotes - downvotes) DESC) WHERE object_type = 0;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS idx_votes_count_object_id_entity_only ON votes_count (object_id) WHERE object_type = 0;
