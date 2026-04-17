@@ -74611,7 +74611,7 @@ type: Opaque
 data:
   
   admin-user: "YWRtaW4="
-  admin-password: "WlNtVXl5TjZRd1ZRRHNLU3BQRXBVRE1vRjB2bWR3ck5aaGlWRmtEbQ=="
+  admin-password: "dGVGZ3Zyc080MHNOMklmejBOZU0xemVlZWs1cFBTYmxvRUJUekJkWQ=="
   ldap-toml: ""
 ---
 # Source: kube-prometheus-stack/templates/alertmanager/secret.yaml
@@ -76103,7 +76103,7 @@ spec:
       annotations:
         checksum/config: 5bceeca3808849664f09f642547ce17fdf495522238ef9ce952b20cfa36b7de5
         checksum/sc-dashboard-provider-config: e70bf6a851099d385178a76de9757bb0bef8299da6d8443602590e44f05fdf24
-        checksum/secret: 6563997f6843171361d6be14fce660014706396bce8145df5ab0c5abae932c6c
+        checksum/secret: 7ca6374aec4ac2e2302144a2b142aa41295e31a6795b36b890ecd86b3f4e7df1
         kubectl.kubernetes.io/default-container: grafana
     spec:
       
@@ -78368,6 +78368,18 @@ spec:
           and
         changes(kube_horizontalpodautoscaler_status_current_replicas{job="kube-state-metrics", namespace=~".*"}[15m]) == 0
       for: 15m
+      labels:
+        severity: warning
+    - alert: KubeHpaMaxedOut
+      annotations:
+        description: HPA {{ $labels.namespace }}/{{ $labels.horizontalpodautoscaler  }} has been running at max replicas for longer than 15 minutes on cluster {{ $labels.cluster }}.
+        runbook_url: https://runbooks.prometheus-operator.dev/runbooks/kubernetes/kubehpamaxedout
+        summary: HPA is running at max replicas
+      expr: |-
+        kube_horizontalpodautoscaler_status_current_replicas{job="kube-state-metrics", namespace=~".*"}
+          ==
+        kube_horizontalpodautoscaler_spec_max_replicas{job="kube-state-metrics", namespace=~".*"}
+      for: 60m
       labels:
         severity: warning
     - alert: KubePdbNotEnoughHealthyPods
