@@ -27,50 +27,77 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
 
+  -- Branch on sort_direction explicitly so Postgres can use the ordering indexes
+  -- on score / (upvotes - downvotes) directly instead of sorting CASE expressions.
   IF score_type = 'local' THEN
-    RETURN QUERY
-      SELECT e.*
-      FROM entities e
-      INNER JOIN local_scores ls ON ls.entity_id = e.id AND ls.space_id = entities_ordered_by_score.space_id
-      ORDER BY
-        CASE WHEN sort_direction = 'ASC' THEN ls.score END ASC,
-        CASE WHEN sort_direction = 'DESC' THEN ls.score END DESC,
-        e.id ASC;
+    IF sort_direction = 'ASC' THEN
+      RETURN QUERY
+        SELECT e.*
+        FROM entities e
+        INNER JOIN local_scores ls ON ls.entity_id = e.id AND ls.space_id = entities_ordered_by_score.space_id
+        ORDER BY ls.score ASC, e.id ASC;
+    ELSE
+      RETURN QUERY
+        SELECT e.*
+        FROM entities e
+        INNER JOIN local_scores ls ON ls.entity_id = e.id AND ls.space_id = entities_ordered_by_score.space_id
+        ORDER BY ls.score DESC, e.id ASC;
+    END IF;
 
   ELSIF score_type = 'global' THEN
-    RETURN QUERY
-      SELECT e.*
-      FROM entities e
-      INNER JOIN global_scores gs ON gs.entity_id = e.id
-      ORDER BY
-        CASE WHEN sort_direction = 'ASC' THEN gs.score END ASC,
-        CASE WHEN sort_direction = 'DESC' THEN gs.score END DESC,
-        e.id ASC;
+    IF sort_direction = 'ASC' THEN
+      RETURN QUERY
+        SELECT e.*
+        FROM entities e
+        INNER JOIN global_scores gs ON gs.entity_id = e.id
+        ORDER BY gs.score ASC, e.id ASC;
+    ELSE
+      RETURN QUERY
+        SELECT e.*
+        FROM entities e
+        INNER JOIN global_scores gs ON gs.entity_id = e.id
+        ORDER BY gs.score DESC, e.id ASC;
+    END IF;
 
   ELSIF score_type = 'raw' AND entities_ordered_by_score.space_id IS NOT NULL THEN
-    RETURN QUERY
-      SELECT e.*
-      FROM entities e
-      INNER JOIN votes_count vc ON vc.object_id = e.id AND vc.object_type = 0 AND vc.space_id = entities_ordered_by_score.space_id
-      ORDER BY
-        CASE WHEN sort_direction = 'ASC' THEN (vc.upvotes - vc.downvotes) END ASC,
-        CASE WHEN sort_direction = 'DESC' THEN (vc.upvotes - vc.downvotes) END DESC,
-        e.id ASC;
+    IF sort_direction = 'ASC' THEN
+      RETURN QUERY
+        SELECT e.*
+        FROM entities e
+        INNER JOIN votes_count vc ON vc.object_id = e.id AND vc.object_type = 0 AND vc.space_id = entities_ordered_by_score.space_id
+        ORDER BY (vc.upvotes - vc.downvotes) ASC, e.id ASC;
+    ELSE
+      RETURN QUERY
+        SELECT e.*
+        FROM entities e
+        INNER JOIN votes_count vc ON vc.object_id = e.id AND vc.object_type = 0 AND vc.space_id = entities_ordered_by_score.space_id
+        ORDER BY (vc.upvotes - vc.downvotes) DESC, e.id ASC;
+    END IF;
 
   ELSIF score_type = 'raw' THEN
-    RETURN QUERY
-      SELECT e.*
-      FROM entities e
-      INNER JOIN (
-        SELECT vc.object_id, SUM(vc.upvotes - vc.downvotes)::bigint AS net_score
-        FROM votes_count vc
-        WHERE vc.object_type = 0
-        GROUP BY vc.object_id
-      ) agg ON agg.object_id = e.id
-      ORDER BY
-        CASE WHEN sort_direction = 'ASC' THEN agg.net_score END ASC,
-        CASE WHEN sort_direction = 'DESC' THEN agg.net_score END DESC,
-        e.id ASC;
+    IF sort_direction = 'ASC' THEN
+      RETURN QUERY
+        SELECT e.*
+        FROM entities e
+        INNER JOIN (
+          SELECT vc.object_id, SUM(vc.upvotes - vc.downvotes)::bigint AS net_score
+          FROM votes_count vc
+          WHERE vc.object_type = 0
+          GROUP BY vc.object_id
+        ) agg ON agg.object_id = e.id
+        ORDER BY agg.net_score ASC, e.id ASC;
+    ELSE
+      RETURN QUERY
+        SELECT e.*
+        FROM entities e
+        INNER JOIN (
+          SELECT vc.object_id, SUM(vc.upvotes - vc.downvotes)::bigint AS net_score
+          FROM votes_count vc
+          WHERE vc.object_type = 0
+          GROUP BY vc.object_id
+        ) agg ON agg.object_id = e.id
+        ORDER BY agg.net_score DESC, e.id ASC;
+    END IF;
   END IF;
 END;
 $$;
