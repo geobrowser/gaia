@@ -97,11 +97,25 @@ describe("dbSaturation pressure reasons", () => {
 })
 
 describe("dbSaturation load shedding", () => {
-	it("sheds when clients are waiting for a connection", () => {
+	it("does not shed on a momentary waiting client before activation", () => {
 		const poolName = uniquePoolName("waiting")
 		const snapshot = getPoolSaturationSnapshot(poolName, {...baseStats, waitingCount: 1}, 1_000)
 
-		expect(shouldShedPoolTraffic(snapshot)).toBe(true)
+		expect(snapshot.isPressured).toBe(true)
+		expect(snapshot.isSaturated).toBe(false)
+		expect(shouldShedPoolTraffic(snapshot)).toBe(false)
+	})
+
+	it("does not shed on recent acquire timeouts before activation", () => {
+		const poolName = uniquePoolName("timeouts-only")
+		recordPoolAcquireTimeout(poolName, 1_000)
+		recordPoolAcquireTimeout(poolName, 1_500)
+
+		const snapshot = getPoolSaturationSnapshot(poolName, baseStats, 2_000)
+
+		expect(snapshot.reasons).toContain("acquire_timeouts")
+		expect(snapshot.isSaturated).toBe(false)
+		expect(shouldShedPoolTraffic(snapshot)).toBe(false)
 	})
 
 	it("sheds once saturation has activated", () => {
@@ -113,6 +127,22 @@ describe("dbSaturation load shedding", () => {
 
 		expect(snapshot.isSaturated).toBe(true)
 		expect(shouldShedPoolTraffic(snapshot)).toBe(true)
+	})
+
+	it("continues shedding while saturated even after raw signals drop", () => {
+		const poolName = uniquePoolName("sticky-saturated")
+		const pressuredStats: PoolStats = {...baseStats, waitingCount: 1}
+
+		getPoolSaturationSnapshot(poolName, pressuredStats, 10_000)
+		const atSaturation = getPoolSaturationSnapshot(poolName, pressuredStats, 25_000)
+		expect(atSaturation.isSaturated).toBe(true)
+
+		// Signal drops, but release window has not elapsed.
+		const normalStats: PoolStats = {...baseStats, waitingCount: 0}
+		const stillSaturated = getPoolSaturationSnapshot(poolName, normalStats, 30_000)
+		expect(stillSaturated.reasons).toEqual([])
+		expect(stillSaturated.isSaturated).toBe(true)
+		expect(shouldShedPoolTraffic(stillSaturated)).toBe(true)
 	})
 
 	it("does not shed on high utilization alone", () => {
@@ -130,5 +160,19 @@ describe("dbSaturation load shedding", () => {
 
 		expect(snapshot.reasons).toContain("high_utilization")
 		expect(shouldShedPoolTraffic(snapshot)).toBe(false)
+	})
+
+	it("stops shedding after the release window elapses", () => {
+		const poolName = uniquePoolName("release-shed")
+		const pressuredStats: PoolStats = {...baseStats, waitingCount: 1}
+
+		getPoolSaturationSnapshot(poolName, pressuredStats, 10_000)
+		const saturated = getPoolSaturationSnapshot(poolName, pressuredStats, 25_000)
+		expect(shouldShedPoolTraffic(saturated)).toBe(true)
+
+		const normalStats: PoolStats = {...baseStats, waitingCount: 0}
+		const afterRelease = getPoolSaturationSnapshot(poolName, normalStats, 55_001)
+		expect(afterRelease.isSaturated).toBe(false)
+		expect(shouldShedPoolTraffic(afterRelease)).toBe(false)
 	})
 })
