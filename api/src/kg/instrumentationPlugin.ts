@@ -5,37 +5,50 @@ import type {Plugin} from "graphql-yoga"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 
-// GraphQL error codes that always indicate a client-side problem (bad input,
-// syntax/validation errors). These are the expected consequence of a
-// misbehaving client and should not alert Sentry.
-const CLIENT_ERROR_CODES = new Set(["BAD_USER_INPUT", "GRAPHQL_PARSE_FAILED", "GRAPHQL_VALIDATION_FAILED"])
+// GraphQL error codes that should NOT alert Sentry. These are expected
+// operational outcomes — either client misbehavior (BAD_USER_INPUT,
+// GRAPHQL_PARSE_FAILED, GRAPHQL_VALIDATION_FAILED) or protective server
+// responses (SERVICE_UNAVAILABLE, returned when pool pressure sheds traffic).
+// Shed events are tracked separately via the `graphql.pool_shed` counter and
+// a rising-edge warn log in postgraphile.ts — per-request Sentry issues
+// would just flood the inbox under saturation.
+const EXPECTED_ERROR_CODES = new Set([
+	"BAD_USER_INPUT",
+	"GRAPHQL_PARSE_FAILED",
+	"GRAPHQL_VALIDATION_FAILED",
+	"SERVICE_UNAVAILABLE",
+])
 
-// PostGraphile throws a plain Error (no BAD_USER_INPUT code) when the client
+// PostGraphile throws a plain Error (no structured code) when the client
 // supplies both `first` and `last`. Match on message text since there's no
 // structured way to identify it.
-const CLIENT_ERROR_MESSAGE_PATTERNS = [/^We don't support setting both first and last$/]
+const EXPECTED_ERROR_MESSAGE_PATTERNS = [/^We don't support setting both first and last$/]
 
-export function isClientError(error: unknown): boolean {
+export function isExpectedError(error: unknown): boolean {
 	const maybeGraphQL = error as {extensions?: {code?: string}; originalError?: unknown; message?: string} | null
 	if (!maybeGraphQL) return false
 
 	const code = maybeGraphQL.extensions?.code
-	if (typeof code === "string" && CLIENT_ERROR_CODES.has(code)) return true
+	if (typeof code === "string" && EXPECTED_ERROR_CODES.has(code)) return true
 
 	const original = maybeGraphQL.originalError
 	if (original instanceof GraphQLError) {
 		const origCode = original.extensions?.code
-		if (typeof origCode === "string" && CLIENT_ERROR_CODES.has(origCode)) return true
+		if (typeof origCode === "string" && EXPECTED_ERROR_CODES.has(origCode)) return true
 	}
 
 	const originalMessage = original instanceof Error ? original.message : undefined
 	const message = originalMessage ?? maybeGraphQL.message
-	if (typeof message === "string" && CLIENT_ERROR_MESSAGE_PATTERNS.some((re) => re.test(message))) {
+	if (typeof message === "string" && EXPECTED_ERROR_MESSAGE_PATTERNS.some((re) => re.test(message))) {
 		return true
 	}
 
 	return false
 }
+
+// Back-compat alias for the previous name. Remove once downstream consumers
+// (if any) update.
+export const isClientError = isExpectedError
 
 const SLOW_QUERY_THRESHOLD_MS = 3000
 const LARGE_RESPONSE_THRESHOLD_BYTES = 1_000_000 // 1 MB
@@ -203,9 +216,10 @@ export function useGraphQLInstrumentation(): Plugin {
 						span.setAttribute("graphql.error_count", errors.length)
 
 						for (const error of errors) {
-							// Client-caused errors (bad pagination args, syntax errors, validation
-							// failures) are expected noise and should not alert Sentry.
-							if (isClientError(error)) continue
+							// Expected errors (bad client input, syntax/validation failures, and
+							// protective SERVICE_UNAVAILABLE sheds) are tracked via metrics /
+							// warn logs and should not alert Sentry per-request.
+							if (isExpectedError(error)) continue
 							Sentry.captureException(error.originalError || error, {
 								tags: {
 									"graphql.operation_name": operationLabel,
