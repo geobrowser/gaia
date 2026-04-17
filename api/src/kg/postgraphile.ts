@@ -76,6 +76,38 @@ function isUserInputGraphQLError(error: unknown): error is GraphQLError {
 	return error.originalError instanceof GraphQLError && error.originalError.extensions?.code === "BAD_USER_INPUT"
 }
 
+// SQLSTATE codes raised intentionally by Postgres functions to signal user input errors.
+// These should surface the raised message to API clients instead of being masked.
+// - 22023 invalid_parameter_value
+// - 22P02 invalid_text_representation (e.g. bad enum/UUID)
+// - 23514 check_violation
+const USER_INPUT_SQLSTATES = new Set(["22023", "22P02", "23514"])
+
+function findPgUserInputError(error: unknown): Error | null {
+	let cur: unknown = error
+	while (cur && typeof cur === "object") {
+		const code = (cur as {code?: unknown}).code
+		if (typeof code === "string" && USER_INPUT_SQLSTATES.has(code)) {
+			return cur as Error
+		}
+		cur = (cur as {originalError?: unknown}).originalError
+	}
+	return null
+}
+
+function toUserInputGraphQLError(error: GraphQLError, pgError: Error): GraphQLError {
+	return new GraphQLError(pgError.message, {
+		nodes: error.nodes,
+		source: error.source,
+		positions: error.positions,
+		path: error.path,
+		extensions: {
+			code: "BAD_USER_INPUT",
+			http: {status: 400},
+		},
+	})
+}
+
 // Without this handler, background connection errors (PgBouncer closing idle connections,
 // network blips) become unhandled events. The pool doesn't remove the dead connection,
 // so subsequent connect() calls can check out a stale client that fails during query execution.
@@ -287,6 +319,12 @@ export const graphqlServer = createYoga<GraphQLServerContext>({
 		maskError(error, message, isDev) {
 			if (isUserInputGraphQLError(error)) {
 				return error
+			}
+			if (error instanceof GraphQLError) {
+				const pgError = findPgUserInputError(error.originalError)
+				if (pgError) {
+					return toUserInputGraphQLError(error, pgError)
+				}
 			}
 			return maskError(error, message, isDev)
 		},
