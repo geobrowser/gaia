@@ -1,28 +1,30 @@
 /**
- * PostGraphile plugin that rejects oversized `first`, `last`, and `offset`
- * pagination arguments on all connections and simple collections.
+ * PostGraphile plugin that bounds pagination on all connections and simple
+ * collections — at every nesting level.
  *
- * PostGraphile 4 passes `first`/`last` directly to SQL LIMIT without any cap,
- * meaning any client can request unbounded result sets. This is especially
- * expensive for queries that fan out into nested lists (valuesList, relationsList).
+ * Does two things, uniformly across root and nested fields:
+ * 1. Rejects oversized `first`/`last`/`offset` values (> MAX_PAGINATION_LIMIT)
+ *    so abusive or buggy clients fail fast with BAD_USER_INPUT.
+ * 2. Injects a default `first` when neither `first` nor `last` is supplied,
+ *    so a bare `{ entity(id: ...) { relationsList { ... } } }` cannot resolve
+ *    an unbounded sub-collection. Without this, PostGraphile 4 produces SQL
+ *    without any LIMIT and returns every row — the Claim entity has 75K+
+ *    inbound relations, which is the worst-case memory/CPU path.
  *
- * Uses `makeWrapResolversPlugin` (method 2) to intercept resolved argument
- * values before they reach the resolver and its arg data generators. This works
- * regardless of whether values are passed as variables or inline literals.
+ * Implementation: hooks `GraphQLObjectType:fields:field:args` and registers an
+ * arg data generator on every connection / simple-collection field. The
+ * generator's `pgQuery(queryBuilder)` runs during SQL construction at the
+ * field's own nesting level, so a nested `relationsList` inside an `entity`
+ * selection is capped exactly like a top-level `relations` query.
  *
- * Values exceeding the cap are rejected so abusive or buggy clients fail fast
- * instead of silently issuing very large collection reads.
- *
- * Per PostGraphile docs, resolver wrapping only reliably influences SQL
- * generation for root-level resolvers. This is fine for our use case - the
- * expensive queries we're protecting against (e.g. `entities(first: 5000)`)
- * are root-level collection fields. Nested sub-collections (valuesList,
- * relationsList) don't typically accept user-controlled `first` arguments.
+ * This supersedes the earlier `makeWrapResolversPlugin` approach, which per
+ * PostGraphile docs only reliably influences SQL for root-level resolvers —
+ * nested sub-collections were uncapped, which is exactly the pattern
+ * geogenesis' EntityPage hits when a user opens a hub entity like Claim.
  */
-import {makeWrapResolversPlugin} from "graphile-utils"
 import {GraphQLError} from "graphql"
 
-const MAX_PAGINATION_LIMIT = 1000
+export const MAX_PAGINATION_LIMIT = 1000
 
 export function assertPaginationWithinLimit(args: Record<string, unknown>) {
 	for (const key of ["first", "last", "offset"] as const) {
@@ -43,17 +45,51 @@ export function assertPaginationWithinLimit(args: Record<string, unknown>) {
 	}
 }
 
-const PaginationCapPlugin = makeWrapResolversPlugin(
-	(context) => {
-		if (context.scope.isPgFieldConnection || context.scope.isPgFieldSimpleCollection) {
-			return {}
+/**
+ * If the client supplied neither `first` nor `last`, inject `first` set to the
+ * cap. Returns the original args object when either is set so we don't
+ * silently override an explicit `last`-only pagination.
+ *
+ * Kept as a pure helper so unit tests can exercise the policy without
+ * standing up a full PostGraphile schema.
+ */
+export function applyDefaultFirstIfOmitted(args: Record<string, unknown>): Record<string, unknown> {
+	const hasFirst = typeof args.first === "number"
+	const hasLast = typeof args.last === "number"
+	if (hasFirst || hasLast) {
+		return args
+	}
+	return {...args, first: MAX_PAGINATION_LIMIT}
+}
+
+const PaginationCapPlugin = (builder: any) => {
+	builder.hook("GraphQLObjectType:fields:field:args", (args: any, _build: any, context: any) => {
+		const {
+			scope: {isPgFieldConnection, isPgFieldSimpleCollection},
+			addArgDataGenerator,
+		} = context
+
+		if (!isPgFieldConnection && !isPgFieldSimpleCollection) {
+			return args
 		}
-		return null
-	},
-	() => (resolve, source, args, context, resolveInfo) => {
-		assertPaginationWithinLimit(args)
-		return resolve(source, args, context, resolveInfo)
-	},
-)
+		if (typeof addArgDataGenerator !== "function") {
+			return args
+		}
+
+		addArgDataGenerator((fieldArgs: {first?: number; last?: number; offset?: number}) => ({
+			pgQuery: (queryBuilder: any) => {
+				assertPaginationWithinLimit(fieldArgs as Record<string, unknown>)
+
+				const hasFirst = typeof fieldArgs.first === "number"
+				const hasLast = typeof fieldArgs.last === "number"
+				if (!hasFirst && !hasLast) {
+					queryBuilder.first(MAX_PAGINATION_LIMIT)
+				}
+			},
+		}))
+
+		return args
+	})
+}
 
 export default PaginationCapPlugin
