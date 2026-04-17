@@ -64,14 +64,14 @@ BEGIN
       RETURN QUERY
         SELECT e.*
         FROM entities e
-        INNER JOIN votes_count vc ON vc.object_id = e.id AND vc.object_type = 0 AND vc.space_id = entities_ordered_by_score.space_id
-        ORDER BY (vc.upvotes - vc.downvotes) ASC, e.id ASC;
+        LEFT JOIN votes_count vc ON vc.object_id = e.id AND vc.object_type = 0 AND vc.space_id = entities_ordered_by_score.space_id
+        ORDER BY COALESCE(vc.upvotes - vc.downvotes, 0) ASC, e.id ASC;
     ELSE
       RETURN QUERY
         SELECT e.*
         FROM entities e
-        INNER JOIN votes_count vc ON vc.object_id = e.id AND vc.object_type = 0 AND vc.space_id = entities_ordered_by_score.space_id
-        ORDER BY (vc.upvotes - vc.downvotes) DESC, e.id ASC;
+        LEFT JOIN votes_count vc ON vc.object_id = e.id AND vc.object_type = 0 AND vc.space_id = entities_ordered_by_score.space_id
+        ORDER BY COALESCE(vc.upvotes - vc.downvotes, 0) DESC, e.id ASC;
     END IF;
 
   ELSIF score_type = 'raw' THEN
@@ -79,24 +79,24 @@ BEGIN
       RETURN QUERY
         SELECT e.*
         FROM entities e
-        INNER JOIN (
+        LEFT JOIN (
           SELECT vc.object_id, SUM(vc.upvotes - vc.downvotes)::bigint AS net_score
           FROM votes_count vc
           WHERE vc.object_type = 0
           GROUP BY vc.object_id
         ) agg ON agg.object_id = e.id
-        ORDER BY agg.net_score ASC, e.id ASC;
+        ORDER BY COALESCE(agg.net_score, 0) ASC, e.id ASC;
     ELSE
       RETURN QUERY
         SELECT e.*
         FROM entities e
-        INNER JOIN (
+        LEFT JOIN (
           SELECT vc.object_id, SUM(vc.upvotes - vc.downvotes)::bigint AS net_score
           FROM votes_count vc
           WHERE vc.object_type = 0
           GROUP BY vc.object_id
         ) agg ON agg.object_id = e.id
-        ORDER BY agg.net_score DESC, e.id ASC;
+        ORDER BY COALESCE(agg.net_score, 0) DESC, e.id ASC;
     END IF;
   END IF;
 END;
