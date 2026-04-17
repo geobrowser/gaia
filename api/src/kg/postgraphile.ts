@@ -8,12 +8,19 @@ import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
 import {classifyDbFailure} from "../services/dbFailures"
-import {getGraphqlPressureSnapshot, recordGraphqlAcquireTimeout, shouldShedPoolTraffic} from "../services/dbSaturation"
+import {
+	getGraphqlPressureSnapshot,
+	recordGraphqlAcquireTimeout,
+	type SaturationSnapshot,
+	shouldShedPoolTraffic,
+} from "../services/dbSaturation"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
+import {shouldUnmaskError} from "./errorMasking"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin from "./paginationCapPlugin"
+import {createShedEpisodeTracker} from "./shedEpisodeTracker"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 import {createValkeyCache} from "./valkeyCache"
 import ValueOrderByScorePlugin from "./valueOrderByScorePlugin"
@@ -64,16 +71,48 @@ export function getGraphqlPoolPressure() {
 	return getGraphqlPressureSnapshot(getGraphqlPoolStats())
 }
 
-function isUserInputGraphQLError(error: unknown): error is GraphQLError {
-	if (!(error instanceof GraphQLError)) {
-		return false
-	}
+// Rising-edge log tracker: remembers the last logged saturation episode so
+// we emit an onset log on the first shed of each new episode and skip the
+// rest (avoiding log storms under load).
+const shedEpisodeTracker = createShedEpisodeTracker()
 
-	if (error.extensions?.code === "BAD_USER_INPUT") {
-		return true
-	}
+function emitShedSignal(args: {
+	poolPressure: SaturationSnapshot
+	operationName: string
+	queryFingerprint: string
+	query: string
+}) {
+	const {poolPressure, operationName, queryFingerprint, query} = args
 
-	return error.originalError instanceof GraphQLError && error.originalError.extensions?.code === "BAD_USER_INPUT"
+	Sentry.metrics.count("graphql.pool_shed", 1, {
+		attributes: {
+			operation: operationName,
+			reasons: poolPressure.reasons.length > 0 ? poolPressure.reasons.join(",") : "saturated_no_signal",
+		},
+	})
+
+	if (shedEpisodeTracker.shouldLogOnset(poolPressure)) {
+		log.warn("GraphQL pool pressure shedding started", {
+			operationName,
+			queryFingerprint,
+			query,
+			poolStats: getGraphqlPoolStats(),
+			poolPressure,
+		})
+	}
+}
+
+// Push pool utilization as Sentry gauges every 10s for dashboards. Independent
+// of the request path, so it continues reporting even when traffic is shed.
+// `.unref()` allows process exit when nothing else is holding the event loop.
+const POOL_METRICS_INTERVAL_MS = 10_000
+if (process.env.SENTRY_DSN) {
+	setInterval(() => {
+		const stats = getGraphqlPoolStats()
+		Sentry.metrics.gauge("graphql.pool.total_connections", stats.totalConnections)
+		Sentry.metrics.gauge("graphql.pool.idle_connections", stats.idleConnections)
+		Sentry.metrics.gauge("graphql.pool.waiting_count", stats.waitingCount)
+	}, POOL_METRICS_INTERVAL_MS).unref()
 }
 
 // Without this handler, background connection errors (PgBouncer closing idle connections,
@@ -163,7 +202,18 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 			// cache misses — cached responses skip usePgClient entirely.
 			const poolPressure = getGraphqlPressureSnapshot(getGraphqlPoolStats())
 			if (shouldShedPoolTraffic(poolPressure)) {
-				throw new Error("pool_pressure_shed")
+				emitShedSignal({poolPressure, operationName, queryFingerprint, query})
+				throw new GraphQLError("Service temporarily unavailable due to database pressure; please retry.", {
+					extensions: {
+						code: "SERVICE_UNAVAILABLE",
+						http: {
+							status: 503,
+							headers: {
+								"Retry-After": "2",
+							},
+						},
+					},
+				})
 			}
 
 			let pgClient: PoolClient
@@ -285,7 +335,7 @@ export const graphqlServer = createYoga<GraphQLServerContext>({
 	},
 	maskedErrors: {
 		maskError(error, message, isDev) {
-			if (isUserInputGraphQLError(error)) {
+			if (shouldUnmaskError(error)) {
 				return error
 			}
 			return maskError(error, message, isDev)

@@ -40,11 +40,15 @@ function readIntEnv(name: string, defaultValue: number, minValue: number, maxVal
 	return parsed
 }
 
-const PRESSURE_WAITING_THRESHOLD = readIntEnv("PG_POOL_PRESSURE_WAITING_THRESHOLD", 1, 1, 500)
+// waitingCount=1 is normal under bursty traffic; 5 is a better signal that
+// requests are actually queuing up. Overridable via env for incident tuning.
+const PRESSURE_WAITING_THRESHOLD = readIntEnv("PG_POOL_PRESSURE_WAITING_THRESHOLD", 5, 1, 500)
 const PRESSURE_UTILIZATION_THRESHOLD = readIntEnv("PG_POOL_PRESSURE_UTILIZATION_THRESHOLD", 90, 1, 100)
 const PRESSURE_TIMEOUT_THRESHOLD = readIntEnv("PG_POOL_PRESSURE_TIMEOUT_THRESHOLD", 2, 1, 500)
 const SATURATION_ACTIVATION_MS = readIntEnv("PG_POOL_SATURATION_ACTIVATION_MS", 15000, 1000, 300000)
-const SATURATION_RELEASE_MS = readIntEnv("PG_POOL_SATURATION_RELEASE_MS", 30000, 1000, 600000)
+// Recovery shouldn't be 2x slower than onset (15s activation). 10s of quiet
+// is a clean signal that pressure has eased.
+const SATURATION_RELEASE_MS = readIntEnv("PG_POOL_SATURATION_RELEASE_MS", 10000, 1000, 600000)
 const ACQUIRE_TIMEOUT_WINDOW_MS = readIntEnv("PG_POOL_ACQUIRE_TIMEOUT_WINDOW_MS", 30000, 1000, 600000)
 const ACQUIRE_TIMEOUT_BUCKET_MS = 1000
 
