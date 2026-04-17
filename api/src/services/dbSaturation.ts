@@ -193,10 +193,16 @@ export function recordGraphqlAcquireTimeout(nowMs = Date.now()): void {
 	recordPoolAcquireTimeout("graphql", nowMs)
 }
 
+/**
+ * Shed traffic only when saturation has been sustained through the activation
+ * window. Raw `waiting_clients` / `acquire_timeouts` reasons are transient
+ * signals — they advance the saturation FSM so a sustained signal will flip
+ * `isSaturated` — but shedding on them directly bypasses the activation delay
+ * and drops requests on momentary bursts (e.g. `waitingCount=1` for 30ms under
+ * normal bursty traffic). The pool's own `connectionTimeoutMillis` is the
+ * short-circuit fuse for truly stuck acquires; this gate is for sustained
+ * pressure.
+ */
 export function shouldShedPoolTraffic(snapshot: SaturationSnapshot): boolean {
-	return (
-		snapshot.isSaturated ||
-		snapshot.reasons.includes("waiting_clients") ||
-		snapshot.reasons.includes("acquire_timeouts")
-	)
+	return snapshot.isSaturated
 }
