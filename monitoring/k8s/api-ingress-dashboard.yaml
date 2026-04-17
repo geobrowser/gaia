@@ -13,7 +13,7 @@ data:
       "title": "API Ingress Observability",
       "uid": "api-ingress-observability",
       "schemaVersion": 39,
-      "version": 6,
+      "version": 8,
       "timezone": "browser",
       "refresh": "30s",
       "time": {
@@ -36,6 +36,296 @@ data:
       },
       "panels": [
         {
+          "id": 100,
+          "type": "row",
+          "title": "Key Health Indicators",
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "panels": []
+        },
+        {
+          "id": 10,
+          "type": "stat",
+          "title": "API RPS",
+          "gridPos": {
+            "h": 6,
+            "w": 5,
+            "x": 0,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_requests_per_second:rate5m",
+              "legendFormat": "req/s"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "decimals": 1,
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null}
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "values": false,
+              "calcs": ["lastNotNull"],
+              "fields": ""
+            },
+            "graphMode": "area",
+            "textMode": "auto",
+            "colorMode": "value",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          }
+        },
+        {
+          "id": 11,
+          "type": "stat",
+          "title": "p95 Latency",
+          "gridPos": {
+            "h": 6,
+            "w": 5,
+            "x": 5,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_p95_latency_seconds:5m",
+              "legendFormat": "p95"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "decimals": 2,
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 1},
+                  {"color": "red", "value": 2}
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "values": false,
+              "calcs": ["lastNotNull"],
+              "fields": ""
+            },
+            "graphMode": "area",
+            "textMode": "auto",
+            "colorMode": "value",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          }
+        },
+        {
+          "id": 12,
+          "type": "stat",
+          "title": "p99 Latency",
+          "gridPos": {
+            "h": 6,
+            "w": 5,
+            "x": 10,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_p99_latency_seconds:5m",
+              "legendFormat": "p99"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "decimals": 2,
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 2},
+                  {"color": "red", "value": 5}
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "values": false,
+              "calcs": ["lastNotNull"],
+              "fields": ""
+            },
+            "graphMode": "area",
+            "textMode": "auto",
+            "colorMode": "value",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          }
+        },
+        {
+          "id": 13,
+          "type": "stat",
+          "title": "5xx Ratio",
+          "gridPos": {
+            "h": 6,
+            "w": 4,
+            "x": 15,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_5xx_ratio:rate5m",
+              "legendFormat": "5xx"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 2,
+              "min": 0,
+              "max": 1,
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 0.01},
+                  {"color": "red", "value": 0.05}
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "values": false,
+              "calcs": ["lastNotNull"],
+              "fields": ""
+            },
+            "graphMode": "area",
+            "textMode": "auto",
+            "colorMode": "value",
+            "justifyMode": "auto",
+            "orientation": "auto"
+          }
+        },
+        {
+          "id": 14,
+          "type": "stat",
+          "title": "API HPA Replicas",
+          "description": "Current vs max replicas for the api HorizontalPodAutoscaler.",
+          "gridPos": {
+            "h": 6,
+            "w": 5,
+            "x": 19,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"api\", horizontalpodautoscaler=\"api\"}",
+              "legendFormat": "current"
+            },
+            {
+              "refId": "B",
+              "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"api\", horizontalpodautoscaler=\"api\"}",
+              "legendFormat": "max"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "decimals": 0,
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null}
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "values": false,
+              "calcs": ["lastNotNull"],
+              "fields": ""
+            },
+            "graphMode": "none",
+            "textMode": "value_and_name",
+            "colorMode": "value",
+            "justifyMode": "auto",
+            "orientation": "horizontal"
+          }
+        },
+        {
+          "id": 101,
+          "type": "row",
+          "title": "API Traffic & Latency",
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 7
+          },
+          "panels": []
+        },
+        {
           "id": 1,
           "type": "timeseries",
           "title": "Ingress Request Rate (RPS)",
@@ -43,7 +333,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 0
+            "y": 8
           },
           "datasource": {
             "type": "prometheus",
@@ -65,7 +355,23 @@ data:
             "defaults": {
               "unit": "reqps"
             },
-            "overrides": []
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "5xx"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "red"
+                    }
+                  }
+                ]
+              }
+            ]
           },
           "options": {
             "legend": {
@@ -86,7 +392,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 0
+            "y": 8
           },
           "datasource": {
             "type": "prometheus",
@@ -126,7 +432,7 @@ data:
             "h": 8,
             "w": 24,
             "x": 0,
-            "y": 8
+            "y": 16
           },
           "datasource": {
             "type": "prometheus",
@@ -179,7 +485,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 16
+            "y": 24
           },
           "datasource": {
             "type": "prometheus",
@@ -217,7 +523,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 16
+            "y": 24
           },
           "datasource": {
             "type": "prometheus",
@@ -255,7 +561,7 @@ data:
             "h": 8,
             "w": 24,
             "x": 0,
-            "y": 24
+            "y": 32
           },
           "datasource": {
             "type": "prometheus",
@@ -293,7 +599,7 @@ data:
             "h": 8,
             "w": 24,
             "x": 0,
-            "y": 32
+            "y": 40
           },
           "datasource": {
             "type": "prometheus",
@@ -348,7 +654,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 40
+            "y": 48
           },
           "datasource": {
             "type": "prometheus",
@@ -396,7 +702,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 40
+            "y": 48
           },
           "datasource": {
             "type": "prometheus",
