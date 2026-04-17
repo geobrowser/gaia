@@ -1,1 +1,1 @@
-CREATE INDEX "spaces_topic_id_idx" ON "spaces" USING btree ("topic_id");
+CREATE INDEX IF NOT EXISTS "spaces_topic_id_idx" ON "spaces" USING btree ("topic_id");
