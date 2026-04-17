@@ -37,6 +37,10 @@ grafana:
       cpu: 500m
       memory: 512Mi
 
+customRules:
+  KubeHpaMaxedOut:
+    for: 60m
+
 # Prometheus configuration
 prometheus:
   prometheusSpec:
