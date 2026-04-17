@@ -1,5 +1,6 @@
 import {describe, expect, it} from "bun:test"
 import type {ExecutionResult} from "graphql"
+import {MAX_CACHEABLE_BYTES, shouldSkipCacheSet} from "../valkeyCache"
 
 /**
  * Unit tests for the Valkey cache adapter contract.
@@ -92,5 +93,35 @@ describe("Valkey cache adapter contract", () => {
 	it("invalidate is a no-op", async () => {
 		const mock = createMockCache()
 		await mock.cache.invalidate([{typename: "Entity", id: "123"}])
+	})
+})
+
+describe("shouldSkipCacheSet", () => {
+	it("returns false for an empty payload", () => {
+		expect(shouldSkipCacheSet("")).toBe(false)
+	})
+
+	it("returns false for payloads at the exact limit", () => {
+		// boundary: a string of exactly MAX_CACHEABLE_BYTES chars is NOT skipped
+		const atLimit = "x".repeat(MAX_CACHEABLE_BYTES)
+		expect(shouldSkipCacheSet(atLimit)).toBe(false)
+	})
+
+	it("returns true for payloads just over the limit", () => {
+		const overLimit = "x".repeat(MAX_CACHEABLE_BYTES + 1)
+		expect(shouldSkipCacheSet(overLimit)).toBe(true)
+	})
+
+	it("returns true for significantly oversized payloads", () => {
+		// Simulates the 36 MB Claim-relations response we saw in prod logs
+		const huge = "x".repeat(36_000_000)
+		expect(shouldSkipCacheSet(huge)).toBe(true)
+	})
+
+	it("is a pure function over string length", () => {
+		// Deliberately schema-agnostic: we only inspect length, not content
+		expect(shouldSkipCacheSet("x".repeat(MAX_CACHEABLE_BYTES + 100))).toBe(
+			shouldSkipCacheSet("y".repeat(MAX_CACHEABLE_BYTES + 100)),
+		)
 	})
 })
