@@ -47,8 +47,17 @@ export type Cache = {
  */
 export const MAX_CACHEABLE_BYTES = 15_000_000
 
+/**
+ * Decide whether to skip caching a serialized response based on its
+ * UTF-8 byte length, not `serialized.length` (which is UTF-16 code units).
+ * ASCII chars are 1:1, but a single CJK char is 3 UTF-8 bytes and an
+ * emoji is 4 — a code-unit check would under-count and let oversized
+ * payloads through. ioredis ultimately encodes the string to UTF-8 for
+ * its send buffer and the Valkey wire, which is the property we want
+ * to bound.
+ */
 export function shouldSkipCacheSet(serialized: string): boolean {
-	return serialized.length > MAX_CACHEABLE_BYTES
+	return Buffer.byteLength(serialized, "utf8") > MAX_CACHEABLE_BYTES
 }
 
 /**
@@ -104,10 +113,11 @@ export function createValkeyCache(valkeyUrl: string): Cache {
 		async set(id, data, _entities, ttl) {
 			try {
 				const serialized = JSON.stringify(data)
-				if (shouldSkipCacheSet(serialized)) {
+				const bytes = Buffer.byteLength(serialized, "utf8")
+				if (bytes > MAX_CACHEABLE_BYTES) {
 					log.debug("Valkey cache skip: response exceeds MAX_CACHEABLE_BYTES", {
 						cacheKey: id.slice(0, 64),
-						bytes: serialized.length,
+						bytes,
 						limit: MAX_CACHEABLE_BYTES,
 					})
 					return

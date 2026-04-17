@@ -124,4 +124,27 @@ describe("shouldSkipCacheSet", () => {
 			shouldSkipCacheSet("y".repeat(MAX_CACHEABLE_BYTES + 100)),
 		)
 	})
+
+	it("measures UTF-8 bytes, not UTF-16 code units (CJK content)", () => {
+		// Regression guard: `.length` returns UTF-16 code units. Each CJK char
+		// is 1 code unit but 3 UTF-8 bytes, so a payload that looks "safe" by
+		// length alone can still exceed the byte budget. ceil(limit/3)+1 chars
+		// puts us just past the cap after UTF-8 encoding.
+		const cjkCharsOverLimit = Math.ceil(MAX_CACHEABLE_BYTES / 3) + 1
+		const cjk = "日".repeat(cjkCharsOverLimit)
+		// By UTF-16 code units it looks well under the cap...
+		expect(cjk.length).toBeLessThan(MAX_CACHEABLE_BYTES)
+		// ...but the actual UTF-8 byte length is over, so we skip.
+		expect(Buffer.byteLength(cjk, "utf8")).toBeGreaterThan(MAX_CACHEABLE_BYTES)
+		expect(shouldSkipCacheSet(cjk)).toBe(true)
+	})
+
+	it("treats ASCII content as byte-for-byte equal to its length", () => {
+		// Sanity check: for pure ASCII, UTF-16 code units == UTF-8 bytes,
+		// so the byte-accurate check still agrees with `.length` here.
+		const asciiJustUnder = "x".repeat(MAX_CACHEABLE_BYTES)
+		const asciiJustOver = "x".repeat(MAX_CACHEABLE_BYTES + 1)
+		expect(shouldSkipCacheSet(asciiJustUnder)).toBe(false)
+		expect(shouldSkipCacheSet(asciiJustOver)).toBe(true)
+	})
 })
