@@ -1,6 +1,6 @@
 {
-  "id": "bed5c7f7-06bb-4413-81bc-a918e5b7d53d",
-  "prevId": "6abcfa17-88bb-4d0e-9bb7-989879e12ae7",
+  "id": "1f2061c5-24c7-4bb3-bea0-8bd1f0afa637",
+  "prevId": "bed5c7f7-06bb-4413-81bc-a918e5b7d53d",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1977,7 +1977,23 @@
           "notNull": false
         }
       },
-      "indexes": {},
+      "indexes": {
+        "spaces_topic_id_idx": {
+          "name": "spaces_topic_id_idx",
+          "columns": [
+            {
+              "expression": "topic_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "spaces_topic_id_entities_id_fk": {
           "name": "spaces_topic_id_entities_id_fk",
