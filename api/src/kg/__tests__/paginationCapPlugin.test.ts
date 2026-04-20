@@ -20,27 +20,13 @@ async function executeGraphQL(query: string, variables?: Record<string, unknown>
 
 describe("assertPaginationWithinLimit", () => {
 	it("allows pagination arguments at or below the limit", () => {
-		expect(() => assertPaginationWithinLimit({first: 1000, offset: 1000})).not.toThrow()
-		expect(() => assertPaginationWithinLimit({last: 1000, offset: 1000})).not.toThrow()
+		expect(() => assertPaginationWithinLimit({first: 1000, last: 1000, offset: 1000})).not.toThrow()
 	})
 
 	it("rejects oversized pagination arguments", () => {
 		expect(() => assertPaginationWithinLimit({first: 1001})).toThrow(/first.*1000.*1001/i)
 		expect(() => assertPaginationWithinLimit({last: 1001})).toThrow(/last.*1000.*1001/i)
 		expect(() => assertPaginationWithinLimit({offset: 1001})).toThrow(/offset.*1000.*1001/i)
-	})
-
-	it("rejects first and last supplied together", () => {
-		expect(() => assertPaginationWithinLimit({first: 10, last: 10})).toThrow(/both "first" and "last"/)
-	})
-
-	it("tags first+last violations with BAD_USER_INPUT code", () => {
-		try {
-			assertPaginationWithinLimit({first: 10, last: 10})
-			throw new Error("expected to throw")
-		} catch (err) {
-			expect((err as {extensions?: {code?: string}}).extensions?.code).toBe("BAD_USER_INPUT")
-		}
 	})
 })
 

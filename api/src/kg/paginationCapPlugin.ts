@@ -22,24 +22,11 @@
  * nested sub-collections were uncapped, which is exactly the pattern
  * geogenesis' EntityPage hits when a user opens a hub entity like Claim.
  */
-import {GraphQLError} from "graphql"
+import {type FieldNode, GraphQLError, type ValidationContext} from "graphql"
 
 export const MAX_PAGINATION_LIMIT = 1000
 
 export function assertPaginationWithinLimit(args: Record<string, unknown>) {
-	// Reject first + last together. PostGraphile also enforces this at resolver
-	// time, but throws a plain Error — catching it here surfaces a proper
-	// BAD_USER_INPUT with http.status 400, matches the rest of pagination
-	// policy, and keeps it out of Sentry as server noise.
-	if (typeof args.first === "number" && typeof args.last === "number") {
-		throw new GraphQLError('Cannot specify both "first" and "last" on a paginated field', {
-			extensions: {
-				code: "BAD_USER_INPUT",
-				http: {status: 400},
-			},
-		})
-	}
-
 	for (const key of ["first", "last", "offset"] as const) {
 		const value = args[key]
 		if (typeof value === "number" && value > MAX_PAGINATION_LIMIT) {
@@ -55,6 +42,44 @@ export function assertPaginationWithinLimit(args: Record<string, unknown>) {
 				},
 			)
 		}
+	}
+}
+
+/**
+ * GraphQL validation rule that rejects `first` + `last` on the same field.
+ *
+ * PostGraphile's `PgConnectionArgFirstLastBeforeAfter` plugin also enforces
+ * this, but it runs during SQL construction (pgQuery hook) and throws a plain
+ * `Error` that reaches the client without any extension code and returns HTTP
+ * 200. That path sent the error to Sentry as a server issue and gave the
+ * client an unhelpful response.
+ *
+ * Running it as a validation rule catches the misuse during the validate
+ * phase — before any resolver or SQL runs — and surfaces it as a structured
+ * BAD_USER_INPUT / 400 on the response.
+ *
+ * No schema-type introspection needed: the GraphQL schema only exposes `last`
+ * on fields that legitimately paginate, so checking argument presence alone
+ * is sufficient.
+ */
+export function NoFirstAndLastRule(context: ValidationContext) {
+	return {
+		Field(node: FieldNode) {
+			const args = node.arguments ?? []
+			const hasFirst = args.some((a) => a.name.value === "first")
+			const hasLast = args.some((a) => a.name.value === "last")
+			if (hasFirst && hasLast) {
+				context.reportError(
+					new GraphQLError(`Cannot specify both "first" and "last" on field "${node.name.value}"`, {
+						nodes: [node],
+						extensions: {
+							code: "BAD_USER_INPUT",
+							http: {status: 400},
+						},
+					}),
+				)
+			}
+		},
 	}
 }
 
