@@ -79,10 +79,8 @@ function isUserInputGraphQLError(error: unknown): error is GraphQLError {
 
 // SQLSTATE codes raised intentionally by Postgres functions to signal user input errors.
 // These should surface the raised message to API clients instead of being masked.
-// - 22023 invalid_parameter_value
-// - 22P02 invalid_text_representation (e.g. bad enum/UUID)
-// - 23514 check_violation
-const USER_INPUT_SQLSTATES = new Set(["22023", "22P02", "23514"])
+// - 22023 invalid_parameter_value (RAISE ... USING ERRCODE = '22023' in pg functions)
+const USER_INPUT_SQLSTATES = new Set(["22023"])
 
 function findPgUserInputError(error: unknown): Error | null {
 	let cur: unknown = error
