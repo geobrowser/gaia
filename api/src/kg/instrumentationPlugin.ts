@@ -10,10 +10,14 @@ import {log} from "../services/telemetry"
 // misbehaving client and should not alert Sentry.
 const CLIENT_ERROR_CODES = new Set(["BAD_USER_INPUT", "GRAPHQL_PARSE_FAILED", "GRAPHQL_VALIDATION_FAILED"])
 
-// PostGraphile throws a plain Error (no BAD_USER_INPUT code) when the client
-// supplies both `first` and `last`. Match on message text since there's no
-// structured way to identify it.
-const CLIENT_ERROR_MESSAGE_PATTERNS = [/^We don't support setting both first and last$/]
+// graphql-js throws variable coercion errors (missing required variable,
+// non-null violations, invalid values) as plain GraphQLError without any
+// extension code. PostGraphile throws "first and last" as a plain Error.
+// Both are client input problems, so match on message text.
+const CLIENT_ERROR_MESSAGE_PATTERNS = [
+	/^We don't support setting both first and last$/,
+	/^Variable "\$[^"]+"/,
+]
 
 export function isClientError(error: unknown): boolean {
 	const maybeGraphQL = error as {extensions?: {code?: string}; originalError?: unknown; message?: string} | null

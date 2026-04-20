@@ -30,6 +30,21 @@ describe("isClientError", () => {
 		expect(isClientError(wrapper)).toBe(true)
 	})
 
+	it("flags missing required variable error from graphql-js", () => {
+		const err = new GraphQLError('Variable "$id" of required type "UUID!" was not provided.')
+		expect(isClientError(err)).toBe(true)
+	})
+
+	it("flags non-null variable violation from graphql-js", () => {
+		const err = new GraphQLError('Variable "$id" of non-null type "UUID!" must not be null.')
+		expect(isClientError(err)).toBe(true)
+	})
+
+	it("flags invalid variable value from graphql-js", () => {
+		const err = new GraphQLError('Variable "$spaceId" got invalid value "abc"; Expected type "UUID".')
+		expect(isClientError(err)).toBe(true)
+	})
+
 	it("does not flag a server error", () => {
 		const err = new GraphQLError("db exploded", {extensions: {code: "INTERNAL_SERVER_ERROR"}})
 		expect(isClientError(err)).toBe(false)
