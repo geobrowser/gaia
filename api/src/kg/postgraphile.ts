@@ -82,19 +82,16 @@ function isUserInputGraphQLError(error: unknown): error is GraphQLError {
 // - 22023 invalid_parameter_value (RAISE ... USING ERRCODE = '22023' in pg functions)
 const USER_INPUT_SQLSTATES = new Set(["22023"])
 
-function findPgUserInputError(error: unknown): Error | null {
-	let cur: unknown = error
-	while (cur && typeof cur === "object") {
-		const code = (cur as {code?: unknown}).code
-		if (typeof code === "string" && USER_INPUT_SQLSTATES.has(code)) {
-			return cur as Error
-		}
-		cur = (cur as {originalError?: unknown}).originalError
+function findPgUserInputError(error: unknown): {message: string} | null {
+	if (!error || typeof error !== "object") return null
+	const code = (error as {code?: unknown}).code
+	if (typeof code === "string" && USER_INPUT_SQLSTATES.has(code)) {
+		return error as {message: string}
 	}
 	return null
 }
 
-function toUserInputGraphQLError(error: GraphQLError, pgError: Error): GraphQLError {
+function toUserInputGraphQLError(error: GraphQLError, pgError: {message: string}): GraphQLError {
 	return new GraphQLError(pgError.message, {
 		nodes: error.nodes,
 		source: error.source,

@@ -14,12 +14,6 @@ async function executeGraphQL(query: string, variables?: Record<string, unknown>
 	return response.json()
 }
 
-function filterSchemaErrors(errors: Array<{message: string; extensions?: {code?: string}}> | undefined) {
-	return (errors ?? []).filter(
-		(e) => e.extensions?.code === "GRAPHQL_VALIDATION_FAILED" || e.extensions?.code === "GRAPHQL_PARSE_FAILED",
-	)
-}
-
 const undash = (uuid: string) => uuid.replace(/-/g, "")
 
 // Well-known UUIDs for the test fixture. Chosen so they can't collide with real
@@ -184,7 +178,6 @@ describe("entitiesOrderedByScore", () => {
 				`,
 				{spaceId: undash(SPACE_A)},
 			)
-			expect(filterSchemaErrors(result.errors)).toHaveLength(0)
 			expect(result.errors).toBeUndefined()
 
 			const ids: string[] = result.data.entitiesOrderedByScore.map((e: {id: string}) => e.id)
@@ -199,7 +192,6 @@ describe("entitiesOrderedByScore", () => {
 					entitiesOrderedByScore(scoreType: GLOBAL, first: 10) { id }
 				}
 			`)
-			expect(filterSchemaErrors(result.errors)).toHaveLength(0)
 			expect(result.errors).toBeUndefined()
 
 			const ids: string[] = result.data.entitiesOrderedByScore.map((e: {id: string}) => e.id)
@@ -216,7 +208,6 @@ describe("entitiesOrderedByScore", () => {
 				`,
 				{spaceId: undash(SPACE_A)},
 			)
-			expect(filterSchemaErrors(result.errors)).toHaveLength(0)
 			expect(result.errors).toBeUndefined()
 
 			const ids: string[] = result.data.entitiesOrderedByScore.map((e: {id: string}) => e.id)
@@ -230,7 +221,6 @@ describe("entitiesOrderedByScore", () => {
 					entitiesOrderedByScore(scoreType: RAW, first: 50) { id }
 				}
 			`)
-			expect(filterSchemaErrors(result.errors)).toHaveLength(0)
 			expect(result.errors).toBeUndefined()
 
 			const ids: string[] = result.data.entitiesOrderedByScore.map((e: {id: string}) => e.id)
@@ -289,7 +279,6 @@ describe("entitiesOrderedByScore", () => {
 					}
 				}
 			`)
-			expect(filterSchemaErrors(page1.errors)).toHaveLength(0)
 			expect(page1.errors).toBeUndefined()
 
 			const {endCursor, hasNextPage} = page1.data.entitiesOrderedByScoreConnection.pageInfo
@@ -307,7 +296,6 @@ describe("entitiesOrderedByScore", () => {
 				`,
 				{after: endCursor},
 			)
-			expect(filterSchemaErrors(page2.errors)).toHaveLength(0)
 			expect(page2.errors).toBeUndefined()
 
 			const ids1: string[] = page1.data.entitiesOrderedByScoreConnection.nodes.map((n: {id: string}) => n.id)
@@ -327,7 +315,6 @@ describe("entitiesOrderedByScore", () => {
 					}
 				}
 			`)
-			expect(filterSchemaErrors(result.errors)).toHaveLength(0)
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entitiesOrderedByScoreConnection.nodes.length).toBeGreaterThan(0)
 		}, 30_000)
