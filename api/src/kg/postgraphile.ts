@@ -14,6 +14,7 @@ import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin from "./paginationCapPlugin"
+import {useSearchInvocationLogger} from "./searchInvocationLogger"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 import {createValkeyCache} from "./valkeyCache"
 import ValueOrderByScorePlugin from "./valueOrderByScorePlugin"
@@ -74,6 +75,33 @@ function isUserInputGraphQLError(error: unknown): error is GraphQLError {
 	}
 
 	return error.originalError instanceof GraphQLError && error.originalError.extensions?.code === "BAD_USER_INPUT"
+}
+
+// SQLSTATE codes raised intentionally by Postgres functions to signal user input errors.
+// These should surface the raised message to API clients instead of being masked.
+// - 22023 invalid_parameter_value (RAISE ... USING ERRCODE = '22023' in pg functions)
+const USER_INPUT_SQLSTATES = new Set(["22023"])
+
+function findPgUserInputError(error: unknown): {message: string} | null {
+	if (!error || typeof error !== "object") return null
+	const code = (error as {code?: unknown}).code
+	if (typeof code === "string" && USER_INPUT_SQLSTATES.has(code)) {
+		return error as {message: string}
+	}
+	return null
+}
+
+function toUserInputGraphQLError(error: GraphQLError, pgError: {message: string}): GraphQLError {
+	return new GraphQLError(pgError.message, {
+		nodes: error.nodes,
+		source: error.source,
+		positions: error.positions,
+		path: error.path,
+		extensions: {
+			code: "BAD_USER_INPUT",
+			http: {status: 400},
+		},
+	})
 }
 
 // Without this handler, background connection errors (PgBouncer closing idle connections,
@@ -270,9 +298,13 @@ const responseCachePlugin = (() => {
 
 // Shared plugins for GraphQL server.
 // Response cache is first so cache hits skip pgClient checkout entirely.
+// Search-invocation logger runs per request (AST walk only, no DB) and
+// warns on every `search` / `searchConnection` invocation so we can
+// observe usage + caller IP without adding a separate metrics pipeline.
 const sharedPlugins = [
 	...(responseCachePlugin ? [responseCachePlugin] : []),
 	useGraphQLInstrumentation(),
+	useSearchInvocationLogger(),
 	usePgClient(pgPool),
 	useExecutionCancellation(),
 ]
@@ -287,6 +319,12 @@ export const graphqlServer = createYoga<GraphQLServerContext>({
 		maskError(error, message, isDev) {
 			if (isUserInputGraphQLError(error)) {
 				return error
+			}
+			if (error instanceof GraphQLError) {
+				const pgError = findPgUserInputError(error.originalError)
+				if (pgError) {
+					return toUserInputGraphQLError(error, pgError)
+				}
 			}
 			return maskError(error, message, isDev)
 		},

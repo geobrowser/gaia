@@ -87,8 +87,8 @@ spec:
                       optional: true
               resources:
                 requests:
-                  memory: "2048Mi"
+                  memory: "4096Mi"
                   cpu: "1000m"
                 limits:
-                  memory: "4096Mi"
+                  memory: "8192Mi"
                   cpu: "2000m"
