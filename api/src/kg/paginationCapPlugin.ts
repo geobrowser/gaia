@@ -27,6 +27,19 @@ import {GraphQLError} from "graphql"
 export const MAX_PAGINATION_LIMIT = 1000
 
 export function assertPaginationWithinLimit(args: Record<string, unknown>) {
+	// Reject first + last together. PostGraphile also enforces this at resolver
+	// time, but throws a plain Error — catching it here surfaces a proper
+	// BAD_USER_INPUT with http.status 400, matches the rest of pagination
+	// policy, and keeps it out of Sentry as server noise.
+	if (typeof args.first === "number" && typeof args.last === "number") {
+		throw new GraphQLError('Cannot specify both "first" and "last" on a paginated field', {
+			extensions: {
+				code: "BAD_USER_INPUT",
+				http: {status: 400},
+			},
+		})
+	}
+
 	for (const key of ["first", "last", "offset"] as const) {
 		const value = args[key]
 		if (typeof value === "number" && value > MAX_PAGINATION_LIMIT) {

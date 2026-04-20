@@ -20,13 +20,27 @@ async function executeGraphQL(query: string, variables?: Record<string, unknown>
 
 describe("assertPaginationWithinLimit", () => {
 	it("allows pagination arguments at or below the limit", () => {
-		expect(() => assertPaginationWithinLimit({first: 1000, last: 1000, offset: 1000})).not.toThrow()
+		expect(() => assertPaginationWithinLimit({first: 1000, offset: 1000})).not.toThrow()
+		expect(() => assertPaginationWithinLimit({last: 1000, offset: 1000})).not.toThrow()
 	})
 
 	it("rejects oversized pagination arguments", () => {
 		expect(() => assertPaginationWithinLimit({first: 1001})).toThrow(/first.*1000.*1001/i)
 		expect(() => assertPaginationWithinLimit({last: 1001})).toThrow(/last.*1000.*1001/i)
 		expect(() => assertPaginationWithinLimit({offset: 1001})).toThrow(/offset.*1000.*1001/i)
+	})
+
+	it("rejects first and last supplied together", () => {
+		expect(() => assertPaginationWithinLimit({first: 10, last: 10})).toThrow(/both "first" and "last"/)
+	})
+
+	it("tags first+last violations with BAD_USER_INPUT code", () => {
+		try {
+			assertPaginationWithinLimit({first: 10, last: 10})
+			throw new Error("expected to throw")
+		} catch (err) {
+			expect((err as {extensions?: {code?: string}}).extensions?.code).toBe("BAD_USER_INPUT")
+		}
 	})
 })
 
@@ -187,6 +201,25 @@ describe("PaginationCapPlugin", () => {
 
 		expect(result.body.errors).toBeDefined()
 		expect(result.body.errors[0]?.extensions?.code).toBe("BAD_USER_INPUT")
+	})
+
+	it("rejects a connection query that supplies both first and last", async () => {
+		// Previously surfaced as a plain Error from PostGraphile
+		// ("We don't support setting both first and last"), which reached Sentry
+		// as a server-side issue. Now intercepted by assertPaginationWithinLimit
+		// and tagged BAD_USER_INPUT.
+		const result = await executeGraphQL(`
+			{
+				entitiesConnection(first: 5, last: 5) {
+					nodes { id }
+				}
+			}
+		`)
+
+		expect(result.status).toBe(400)
+		expect(result.body.errors).toBeDefined()
+		expect(result.body.errors[0]?.extensions?.code).toBe("BAD_USER_INPUT")
+		expect(result.body.errors[0]?.message).toMatch(/both "first" and "last"/)
 	})
 
 	it("rejects oversized last on nested sub-collections", async () => {

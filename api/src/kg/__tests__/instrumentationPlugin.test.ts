@@ -89,16 +89,6 @@ describe("isClientError", () => {
 	})
 
 	// ------------------------------------------------------------------
-	// Library-specific fallbacks
-	// ------------------------------------------------------------------
-
-	it("flags the PostGraphile first+last error by message", () => {
-		const original = new Error("We don't support setting both first and last")
-		const wrapper = new GraphQLError("Unexpected error.", {originalError: original})
-		expect(isClientError(wrapper)).toBe(true)
-	})
-
-	// ------------------------------------------------------------------
 	// Non-client errors (must not be flagged)
 	// ------------------------------------------------------------------
 

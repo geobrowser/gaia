@@ -19,12 +19,6 @@ import {log} from "../services/telemetry"
 // misbehaving client and should not alert Sentry.
 const CLIENT_ERROR_CODES = new Set(["BAD_USER_INPUT", "GRAPHQL_PARSE_FAILED", "GRAPHQL_VALIDATION_FAILED"])
 
-// PostGraphile throws a plain Error (no GraphQLError wrapper, no AST context)
-// when the client supplies both `first` and `last`. This is the only remaining
-// case that has to be matched by message — everything else is detected via
-// AST-node inspection in `isClientError` below.
-const CLIENT_ERROR_MESSAGE_PATTERNS = [/^We don't support setting both first and last$/]
-
 // True if an AST node is part of a client-authored executable document
 // (queries, mutations, subscriptions, fragments, values) as opposed to
 // server-side schema definitions. graphql-js attaches these nodes to errors
@@ -45,9 +39,6 @@ function isClientDocumentNode(node: ASTNode): boolean {
  *      `GraphQLError` itself). This catches parse, validation, and variable /
  *      argument coercion errors from graphql-js even when they lack an
  *      extension code.
- *   3. The (original) error message matches a known library-specific pattern
- *      (currently only PostGraphile's `first + last` error, which is a plain
- *      `Error` without AST context).
  */
 export function isClientError(error: unknown): boolean {
 	if (error === null || typeof error !== "object") return false
@@ -78,13 +69,6 @@ export function isClientError(error: unknown): boolean {
 	const hasResolverOrigin = original instanceof Error && !(original instanceof GraphQLError)
 	if (!hasResolverOrigin && err.nodes?.length) {
 		if (err.nodes.some(isClientDocumentNode)) return true
-	}
-
-	// 3. Message-pattern fallback for library errors without AST context.
-	const originalMessage = original instanceof Error ? original.message : undefined
-	const message = originalMessage ?? err.message
-	if (typeof message === "string" && CLIENT_ERROR_MESSAGE_PATTERNS.some((re) => re.test(message))) {
-		return true
 	}
 
 	return false
