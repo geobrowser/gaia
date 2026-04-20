@@ -1,6 +1,15 @@
 import {ROOT_CONTEXT, SpanStatusCode, trace} from "@opentelemetry/api"
 import * as Sentry from "@sentry/node"
-import {type FieldNode, GraphQLError, Kind, type OperationDefinitionNode, print} from "graphql"
+import {
+	type ASTNode,
+	type FieldNode,
+	GraphQLError,
+	isTypeSystemDefinitionNode,
+	isTypeSystemExtensionNode,
+	Kind,
+	type OperationDefinitionNode,
+	print,
+} from "graphql"
 import type {Plugin} from "graphql-yoga"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
@@ -10,30 +19,70 @@ import {log} from "../services/telemetry"
 // misbehaving client and should not alert Sentry.
 const CLIENT_ERROR_CODES = new Set(["BAD_USER_INPUT", "GRAPHQL_PARSE_FAILED", "GRAPHQL_VALIDATION_FAILED"])
 
-// graphql-js throws variable coercion errors (missing required variable,
-// non-null violations, invalid values) as plain GraphQLError without any
-// extension code. PostGraphile throws "first and last" as a plain Error.
-// Both are client input problems, so match on message text.
-const CLIENT_ERROR_MESSAGE_PATTERNS = [
-	/^We don't support setting both first and last$/,
-	/^Variable "\$[^"]+"/,
-]
+// PostGraphile throws a plain Error (no GraphQLError wrapper, no AST context)
+// when the client supplies both `first` and `last`. This is the only remaining
+// case that has to be matched by message — everything else is detected via
+// AST-node inspection in `isClientError` below.
+const CLIENT_ERROR_MESSAGE_PATTERNS = [/^We don't support setting both first and last$/]
 
+// True if an AST node is part of a client-authored executable document
+// (queries, mutations, subscriptions, fragments, values) as opposed to
+// server-side schema definitions. graphql-js attaches these nodes to errors
+// that originate from parse/validate/coerce stages before resolvers run.
+function isClientDocumentNode(node: ASTNode): boolean {
+	return !isTypeSystemDefinitionNode(node) && !isTypeSystemExtensionNode(node)
+}
+
+/**
+ * Classify whether an error was caused by bad client input and therefore should
+ * not alert Sentry.
+ *
+ * Detection strategy, in priority order:
+ *   1. Structured `extensions.code` on the error (or its `originalError`) is one
+ *      of the well-known client codes.
+ *   2. The error carries AST nodes from the client's executable document and
+ *      was NOT thrown from a resolver (i.e. `originalError` is absent or is a
+ *      `GraphQLError` itself). This catches parse, validation, and variable /
+ *      argument coercion errors from graphql-js even when they lack an
+ *      extension code.
+ *   3. The (original) error message matches a known library-specific pattern
+ *      (currently only PostGraphile's `first + last` error, which is a plain
+ *      `Error` without AST context).
+ */
 export function isClientError(error: unknown): boolean {
-	const maybeGraphQL = error as {extensions?: {code?: string}; originalError?: unknown; message?: string} | null
-	if (!maybeGraphQL) return false
+	if (error === null || typeof error !== "object") return false
 
-	const code = maybeGraphQL.extensions?.code
+	const err = error as {
+		extensions?: {code?: string}
+		originalError?: unknown
+		message?: string
+		nodes?: readonly ASTNode[]
+	}
+
+	// 1. Structured code (direct or via originalError)
+	const code = err.extensions?.code
 	if (typeof code === "string" && CLIENT_ERROR_CODES.has(code)) return true
 
-	const original = maybeGraphQL.originalError
+	const original = err.originalError
 	if (original instanceof GraphQLError) {
 		const origCode = original.extensions?.code
 		if (typeof origCode === "string" && CLIENT_ERROR_CODES.has(origCode)) return true
 	}
 
+	// 2. AST-node inspection: if the error points at part of the client's
+	//    executable document and didn't come from a resolver throw, it's
+	//    structurally client-caused (unknown field, missing variable, bad
+	//    argument, invalid input value, etc.).
+	//    Resolver throws wrap the raw Error in `originalError`; GraphQL-internal
+	//    errors (parse / validate / coerce) leave `originalError` unset.
+	const hasResolverOrigin = original instanceof Error && !(original instanceof GraphQLError)
+	if (!hasResolverOrigin && err.nodes?.length) {
+		if (err.nodes.some(isClientDocumentNode)) return true
+	}
+
+	// 3. Message-pattern fallback for library errors without AST context.
 	const originalMessage = original instanceof Error ? original.message : undefined
-	const message = originalMessage ?? maybeGraphQL.message
+	const message = originalMessage ?? err.message
 	if (typeof message === "string" && CLIENT_ERROR_MESSAGE_PATTERNS.some((re) => re.test(message))) {
 		return true
 	}
