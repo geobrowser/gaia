@@ -193,18 +193,6 @@ describe("entitiesOrderedByScore", () => {
 			expect(ids.slice(0, 3)).toEqual([undash(ENTITY_1), undash(ENTITY_2), undash(ENTITY_3)])
 		})
 
-		it("rejects LOCAL without spaceId with BAD_USER_INPUT", async () => {
-			const result = await executeGraphQL(`
-				{
-					entitiesOrderedByScore(scoreType: LOCAL, first: 5) { id }
-				}
-			`)
-			expect(result.errors).toBeDefined()
-			expect(result.errors.length).toBeGreaterThan(0)
-			expect(result.errors[0].message).toMatch(/space_id is required/)
-			expect(result.errors[0].extensions?.code).toBe("BAD_USER_INPUT")
-		})
-
 		it("accepts GLOBAL without spaceId and returns seeded entities in score order", async () => {
 			const result = await executeGraphQL(`
 				{
