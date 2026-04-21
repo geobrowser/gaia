@@ -114,6 +114,19 @@ describe("isClientError", () => {
 		expect(isClientError(wrapper)).toBe(false)
 	})
 
+	it("does not flag a resolver-thrown GraphQLError that has an execution path", () => {
+		// If a resolver does `throw new GraphQLError("db timed out")` directly,
+		// there is no code on extensions and no plain-Error originalError to
+		// signal a resolver origin. The discriminator is `path`: graphql-js
+		// only attaches it during execution, so parse/validate/coerce errors
+		// lack it while any resolver-surfaced error has it.
+		const err = new GraphQLError("db timed out", {
+			nodes: [node(Kind.FIELD)],
+			path: ["entities", 0, "name"],
+		})
+		expect(isClientError(err)).toBe(false)
+	})
+
 	it("does not flag a GraphQLError whose nodes are only type-system definitions", () => {
 		// Contrived — wouldn't normally appear at request time — but proves
 		// schema-build errors are excluded from the client-error classification.

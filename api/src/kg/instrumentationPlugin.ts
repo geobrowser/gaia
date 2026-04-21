@@ -34,11 +34,10 @@ function isClientDocumentNode(node: ASTNode): boolean {
  * Detection strategy, in priority order:
  *   1. Structured `extensions.code` on the error (or its `originalError`) is one
  *      of the well-known client codes.
- *   2. The error carries AST nodes from the client's executable document and
- *      was NOT thrown from a resolver (i.e. `originalError` is absent or is a
- *      `GraphQLError` itself). This catches parse, validation, and variable /
- *      argument coercion errors from graphql-js even when they lack an
- *      extension code.
+ *   2. The error carries AST nodes from the client's executable document AND
+ *      has no execution `path` AND didn't come from a resolver throw. This
+ *      catches parse, validation, and variable / argument coercion errors from
+ *      graphql-js even when they lack an extension code.
  */
 export function isClientError(error: unknown): boolean {
 	if (error === null || typeof error !== "object") return false
@@ -48,6 +47,7 @@ export function isClientError(error: unknown): boolean {
 		originalError?: unknown
 		message?: string
 		nodes?: readonly ASTNode[]
+		path?: readonly (string | number)[]
 	}
 
 	// 1. Structured code (direct or via originalError)
@@ -60,14 +60,17 @@ export function isClientError(error: unknown): boolean {
 		if (typeof origCode === "string" && CLIENT_ERROR_CODES.has(origCode)) return true
 	}
 
-	// 2. AST-node inspection: if the error points at part of the client's
-	//    executable document and didn't come from a resolver throw, it's
-	//    structurally client-caused (unknown field, missing variable, bad
-	//    argument, invalid input value, etc.).
-	//    Resolver throws wrap the raw Error in `originalError`; GraphQL-internal
-	//    errors (parse / validate / coerce) leave `originalError` unset.
+	// 2. AST-node inspection. Two signals narrow this to *pre-execution* errors
+	//    (parse, validate, variable/argument coercion) and exclude anything
+	//    thrown from a resolver:
+	//      - `path` is only set by graphql-js during execution — parse, validate,
+	//        and coerce errors all lack it.
+	//      - Plain resolver throws wrap the raw Error in `originalError`.
+	//    Without the `path` guard, a resolver that does
+	//    `throw new GraphQLError("db timed out")` would satisfy the node-kind
+	//    check and silently skip Sentry.
 	const hasResolverOrigin = original instanceof Error && !(original instanceof GraphQLError)
-	if (!hasResolverOrigin && err.nodes?.length) {
+	if (!hasResolverOrigin && !err.path && err.nodes?.length) {
 		if (err.nodes.some(isClientDocumentNode)) return true
 	}
 
