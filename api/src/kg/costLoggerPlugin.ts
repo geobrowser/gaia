@@ -14,18 +14,29 @@ import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 import {MAX_PAGINATION_LIMIT} from "./paginationCapPlugin"
 
+// Parse a positive-integer env var, falling back to `fallback` on anything
+// non-finite or non-positive. Guards against deploy-time misconfiguration
+// (e.g. `GRAPHQL_COST_CALC_LIMIT=abc` → parseInt = NaN) silently disabling
+// the walker's safety cap.
+function parsePositiveIntEnv(name: string, fallback: number): number {
+	const raw = process.env[name]
+	if (raw === undefined) return fallback
+	const parsed = Number.parseInt(raw, 10)
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
 // Threshold above which we emit an info-level log line with the full query +
 // variables. Not an alert — just "this one is worth finding in logs if we
 // need to investigate a slow response later". Kept separate from the
 // histogram metric (which records every query regardless of size).
-const COST_LOG_THRESHOLD = Number.parseInt(process.env.GRAPHQL_COST_LOG_THRESHOLD ?? "1000000", 10)
+const COST_LOG_THRESHOLD = parsePositiveIntEnv("GRAPHQL_COST_LOG_THRESHOLD", 1_000_000)
 
 // Hard ceiling on the cost calculation itself. Once the walker's running
 // total reaches this value it short-circuits and returns the cap instead of
 // continuing to multiply. Caps memory (totalSum can't drift to Infinity),
 // caps CPU (adversarial or pathological queries don't walk forever), and
 // keeps the metric values in a sane range for Prometheus / Grafana.
-const MAX_COST_CALC_LIMIT = Number.parseInt(process.env.GRAPHQL_COST_CALC_LIMIT ?? "1000000000", 10)
+const MAX_COST_CALC_LIMIT = parsePositiveIntEnv("GRAPHQL_COST_CALC_LIMIT", 1_000_000_000)
 
 // ---------------------------------------------------------------------------
 // Prometheus histogram metric — gaia_api_graphql_query_cost
