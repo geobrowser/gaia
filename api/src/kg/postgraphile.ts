@@ -13,7 +13,7 @@ import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
-import PaginationCapPlugin from "./paginationCapPlugin"
+import PaginationCapPlugin, {NoFirstAndLastRule} from "./paginationCapPlugin"
 import {useSearchInvocationLogger} from "./searchInvocationLogger"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 import {createValkeyCache} from "./valkeyCache"
@@ -297,12 +297,23 @@ const responseCachePlugin = (() => {
 })()
 
 // Shared plugins for GraphQL server.
+// Yoga plugin that registers custom GraphQL validation rules.
+// Validation runs before execute, so rules like NoFirstAndLastRule surface
+// misuse as a structured BAD_USER_INPUT response (with http.status 400) and
+// never reach resolvers — or the instrumentation plugin's Sentry capture.
+const customValidationRules: Plugin = {
+	onValidate({addValidationRule}) {
+		addValidationRule(NoFirstAndLastRule)
+	},
+}
+
 // Response cache is first so cache hits skip pgClient checkout entirely.
 // Search-invocation logger runs per request (AST walk only, no DB) and
 // warns on every `search` / `searchConnection` invocation so we can
 // observe usage + caller IP without adding a separate metrics pipeline.
 const sharedPlugins = [
 	...(responseCachePlugin ? [responseCachePlugin] : []),
+	customValidationRules,
 	useGraphQLInstrumentation(),
 	useSearchInvocationLogger(),
 	usePgClient(pgPool),
