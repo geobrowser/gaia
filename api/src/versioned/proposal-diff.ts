@@ -1198,6 +1198,23 @@ export function computeProposalDiff(
 export const MAX_GROUP_SIZE = 20
 
 /**
+ * Convert an edit's `createdAt` to seconds-since-epoch for use with
+ * `resolveVersionKeyBeforeTimestamp` (which calls PostgreSQL `to_timestamp(bigint)`
+ * — seconds input).
+ *
+ * Per the grc-20 `Edit` type, `createdAt` is microseconds since the Unix epoch:
+ *   https://github.com/graphprotocol/grc-20-ts (Edit interface)
+ *
+ * Exported so the conversion is trivially unit-testable — getting the divisor
+ * wrong (e.g. dividing by 1_000 instead of 1_000_000) silently makes historical
+ * grouped-diffs return empty because the base version resolves to "now" and the
+ * diff is computed against already-applied state.
+ */
+export function editCreatedAtToSeconds(microseconds: bigint): bigint {
+	return microseconds / 1_000_000n
+}
+
+/**
  * Ordering rule for grouped-diff ops (RFC 0004): apply in edit-timestamp order
  * ascending, tiebreak by proposalId ascending. Exported so the ordering can be
  * unit-tested without wiring up ipfs + drizzle + decode.
@@ -1360,8 +1377,7 @@ export function computeGroupedProposalDiff(
 		let baseVersionKey: bigint | null = null
 		const firstEdit = decodedEdits[0]
 		if (mode === "historical" && firstEdit) {
-			// createdAt is in microseconds, resolveVersionKeyBeforeTimestamp expects seconds
-			const earliestTimestamp = firstEdit.createdAt / 1000n
+			const earliestTimestamp = editCreatedAtToSeconds(firstEdit.createdAt)
 			baseVersionKey = yield* resolveVersionKeyBeforeTimestamp(db, earliestTimestamp)
 		}
 
