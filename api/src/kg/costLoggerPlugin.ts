@@ -20,6 +20,13 @@ import {MAX_PAGINATION_LIMIT} from "./paginationCapPlugin"
 // histogram metric (which records every query regardless of size).
 const COST_LOG_THRESHOLD = Number.parseInt(process.env.GRAPHQL_COST_LOG_THRESHOLD ?? "1000000", 10)
 
+// Hard ceiling on the cost calculation itself. Once the walker's running
+// total reaches this value it short-circuits and returns the cap instead of
+// continuing to multiply. Caps memory (totalSum can't drift to Infinity),
+// caps CPU (adversarial or pathological queries don't walk forever), and
+// keeps the metric values in a sane range for Prometheus / Grafana.
+const MAX_COST_CALC_LIMIT = Number.parseInt(process.env.GRAPHQL_COST_CALC_LIMIT ?? "1000000000", 10)
+
 // ---------------------------------------------------------------------------
 // Prometheus histogram metric — gaia_api_graphql_query_cost
 // ---------------------------------------------------------------------------
@@ -29,9 +36,8 @@ const COST_LOG_THRESHOLD = Number.parseInt(process.env.GRAPHQL_COST_LOG_THRESHOL
 // distributions for the Grafana dashboard.
 
 // Upper bucket edges, spanning the realistic range of the conservative model
-// (trivial scalar ≈ 1 at the low end, deeply-nested no-pagination queries in
-// the billions at the high end). `+Inf` is emitted implicitly via the total
-// count at render time.
+// (trivial scalar ≈ 1 at the low end, nested no-pagination queries near the
+// 1B cap at the high end). `+Inf` is emitted via the total count at render.
 const COST_BUCKET_EDGES: readonly number[] = [
 	10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000, 1_000_000_000,
 ]
@@ -45,16 +51,20 @@ let totalCount = 0
 let totalSum = 0
 
 function recordQueryCost(cost: number): void {
+	// Defensive: `computeQueryCost` already caps at MAX_COST_CALC_LIMIT and
+	// can't produce NaN / Infinity / negative, but a future caller mustn't be
+	// able to poison the metric. Non-finite / negative inputs are dropped.
+	if (!Number.isFinite(cost) || cost < 0) return
+	const clamped = Math.min(cost, MAX_COST_CALC_LIMIT)
 	totalCount++
-	totalSum += cost
+	totalSum += clamped
 	for (const edge of COST_BUCKET_EDGES) {
-		if (cost <= edge) bucketCounts.set(edge, (bucketCounts.get(edge) ?? 0) + 1)
+		if (clamped <= edge) bucketCounts.set(edge, (bucketCounts.get(edge) ?? 0) + 1)
 	}
 }
 
 /**
- * Render the cost histogram in Prometheus text format. Called by
- * `/health/metrics` alongside the existing pool gauges. Emits the `le`
+ * Render the cost histogram in Prometheus text format. Emits the `le`
  * buckets, `+Inf` total, `_sum`, and `_count` lines.
  */
 export function renderQueryCostHistogram(): string {
@@ -97,6 +107,10 @@ export function __resetQueryCostHistogramForTests(): void {
  *     can see it in the AST.
  *   - No pagination arg, no selections → 1 (scalar leaf).
  *
+ * Every recursive step checks a hard `MAX_COST_CALC_LIMIT` budget and short-
+ * circuits once crossed — prevents Number overflow, unbounded walking on
+ * adversarial inputs, and Infinity / NaN leaking into the Prometheus metric.
+ *
  * Intentionally schema-free: walking only the document + variables means the
  * estimator works regardless of which `graphql` module instance built the
  * schema (PostGraphile v4 bundles its own copy). Schema-aware libraries like
@@ -106,28 +120,49 @@ export function __resetQueryCostHistogramForTests(): void {
 export function computeQueryCost(doc: DocumentNode, variables: Record<string, unknown> = {}): number {
 	const op = doc.definitions.find((d): d is OperationDefinitionNode => d.kind === Kind.OPERATION_DEFINITION)
 	if (!op) return 0
-	return sumSelections(op.selectionSet, variables, doc)
+	return sumSelections(op.selectionSet, variables, doc, new Set())
 }
 
-function sumSelections(selectionSet: SelectionSetNode, vars: Record<string, unknown>, doc: DocumentNode): number {
+function sumSelections(
+	selectionSet: SelectionSetNode,
+	vars: Record<string, unknown>,
+	doc: DocumentNode,
+	visitedFragments: Set<string>,
+): number {
 	let total = 0
 	for (const sel of selectionSet.selections) {
 		if (sel.kind === Kind.FIELD) {
-			total += fieldCost(sel, vars, doc)
+			total += fieldCost(sel, vars, doc, visitedFragments)
 		} else if (sel.kind === Kind.INLINE_FRAGMENT) {
-			total += sumSelections(sel.selectionSet, vars, doc)
+			total += sumSelections(sel.selectionSet, vars, doc, visitedFragments)
 		} else if (sel.kind === Kind.FRAGMENT_SPREAD) {
+			// Fragment cycles (A spreads B spreads A) are normally blocked by
+			// the NoFragmentCycles validation rule, but if something in the
+			// pipeline ever skipped validation we'd recurse forever. Cheap
+			// insurance: track visited names on the way down, pop on the way
+			// back up so siblings can reuse the same fragment legitimately.
+			const name = sel.name.value
+			if (visitedFragments.has(name)) continue
 			const frag = doc.definitions.find(
-				(d): d is FragmentDefinitionNode =>
-					d.kind === Kind.FRAGMENT_DEFINITION && d.name.value === sel.name.value,
+				(d): d is FragmentDefinitionNode => d.kind === Kind.FRAGMENT_DEFINITION && d.name.value === name,
 			)
-			if (frag) total += sumSelections(frag.selectionSet, vars, doc)
+			if (frag) {
+				visitedFragments.add(name)
+				total += sumSelections(frag.selectionSet, vars, doc, visitedFragments)
+				visitedFragments.delete(name)
+			}
 		}
+		if (total >= MAX_COST_CALC_LIMIT) return MAX_COST_CALC_LIMIT
 	}
 	return total
 }
 
-function fieldCost(field: FieldNode, vars: Record<string, unknown>, doc: DocumentNode): number {
+function fieldCost(
+	field: FieldNode,
+	vars: Record<string, unknown>,
+	doc: DocumentNode,
+	visitedFragments: Set<string>,
+): number {
 	// Check for the *syntactic* presence of first/last in the query, not the
 	// resolved value. `entities(first: $first)` with $first unresolved means
 	// the user intends pagination — we should still treat it as a list (and
@@ -135,22 +170,25 @@ function fieldCost(field: FieldNode, vars: Record<string, unknown>, doc: Documen
 	const argNames = new Set((field.arguments ?? []).map((a) => a.name.value))
 	const hasPagination = argNames.has("first") || argNames.has("last")
 
-	const child = field.selectionSet ? sumSelections(field.selectionSet, vars, doc) : 0
+	const child = field.selectionSet ? sumSelections(field.selectionSet, vars, doc, visitedFragments) : 0
+
+	// Propagate the cap so we never try to multiply a near-cap value and
+	// overflow. Math.min below also clamps the final result.
+	if (child >= MAX_COST_CALC_LIMIT) return MAX_COST_CALC_LIMIT
 
 	if (hasPagination) {
 		const args = resolveArgs(field.arguments, vars)
 		const raw = args.first ?? args.last
 		const validExplicit = typeof raw === "number" && Number.isFinite(raw) && raw > 0
 		const limit = validExplicit ? (raw as number) : MAX_PAGINATION_LIMIT
-		return child * limit + 1
+		return Math.min(child * limit + 1, MAX_COST_CALC_LIMIT)
 	}
 
 	// Structured field without an explicit limit: conservatively assume the
-	// SQL-injected default of MAX_PAGINATION_LIMIT applies. Without this we'd
-	// miss every `{ entities { ... } }`-style query that leans on the implicit
-	// cap. Leaf scalars (no selection set → child=0) collapse to `0 × N + 1 = 1`
-	// here, so we don't need a separate branch.
-	return child * MAX_PAGINATION_LIMIT + 1
+	// SQL-injected default of MAX_PAGINATION_LIMIT applies. Leaf scalars
+	// (no selection set → child=0) collapse to `0 × N + 1 = 1` here, so we
+	// don't need a separate branch.
+	return Math.min(child * MAX_PAGINATION_LIMIT + 1, MAX_COST_CALC_LIMIT)
 }
 
 function resolveArgs(
@@ -197,37 +235,54 @@ function resolveValue(value: ValueNode, vars: Record<string, unknown>): unknown 
  *     `COST_LOG_THRESHOLD` — structured stdout line, not a Sentry issue,
  *     so noisy shapes don't page anyone but are findable in log search.
  *
- * Phase 1 is strictly observational. Phase 2 will add a hard ceiling by
- * comparing the same computed cost against a configured limit.
+ * Phase 1 is strictly observational. The outer try/catch is a shadow-mode
+ * safety invariant: a failure inside the plugin must never break the
+ * request it was observing.
  */
 export function useCostLogger(): Plugin {
 	return {
 		onExecute({args}) {
-			if (args.operationName === "IntrospectionQuery") return
-
-			let cost: number
 			try {
-				cost = computeQueryCost(args.document, args.variableValues ?? {})
+				if (args.operationName === "IntrospectionQuery") return
+
+				let cost: number
+				try {
+					cost = computeQueryCost(args.document, args.variableValues ?? {})
+				} catch (error) {
+					log.warn("[cost] complexity calculation failed", {
+						error: error instanceof Error ? error.message : String(error),
+						operationName: args.operationName ?? undefined,
+					})
+					return
+				}
+
+				recordQueryCost(cost)
+
+				if (cost >= COST_LOG_THRESHOLD) {
+					const fullQuery = print(args.document)
+					log.info("High GraphQL query cost", {
+						cost,
+						threshold: COST_LOG_THRESHOLD,
+						operationName: getOperationLabel(args),
+						queryFingerprint: graphqlQueryFingerprint(fullQuery),
+						query: fullQuery.slice(0, 2000),
+						variables: args.variableValues,
+					})
+				}
 			} catch (error) {
-				log.warn("[cost] complexity calculation failed", {
-					error: error instanceof Error ? error.message : String(error),
-					operationName: args.operationName ?? undefined,
-				})
-				return
-			}
-
-			recordQueryCost(cost)
-
-			if (cost >= COST_LOG_THRESHOLD) {
-				const fullQuery = print(args.document)
-				log.info("High GraphQL query cost", {
-					cost,
-					threshold: COST_LOG_THRESHOLD,
-					operationName: getOperationLabel(args),
-					queryFingerprint: graphqlQueryFingerprint(fullQuery),
-					query: fullQuery.slice(0, 2000),
-					variables: args.variableValues,
-				})
+				// Shadow-mode guarantee: never break the request. If anything at
+				// all throws — log stringification bombing on a circular variable,
+				// print() choking on an unusual AST, anything else — swallow it.
+				// The nested try around the diagnostic log itself protects against
+				// a log writer that's itself broken.
+				try {
+					log.warn("[cost] plugin onExecute threw", {
+						error: error instanceof Error ? error.message : String(error),
+						operationName: args.operationName ?? undefined,
+					})
+				} catch {
+					// Nothing we can do; keep the request flowing.
+				}
 			}
 		},
 	}
