@@ -1235,6 +1235,10 @@ async fn process_message(
                     result.end_time,
                     result.quorum,
                     result.threshold,
+                    result.partial_percentage_support_threshold,
+                    result.universal_percentage_support_threshold,
+                    result.flat_support_threshold,
+                    result.execute_by,
                     &mut tx,
                 )
                 .await?;
@@ -1707,6 +1711,10 @@ async fn process_block(
                             result.end_time,
                             result.quorum,
                             result.threshold,
+                            result.partial_percentage_support_threshold,
+                            result.universal_percentage_support_threshold,
+                            result.flat_support_threshold,
+                            result.execute_by,
                             &mut tx,
                         )
                         .await?;

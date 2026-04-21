@@ -8,8 +8,8 @@ use crate::error::IndexerError;
 use crate::models::{
     entities::EntityItem,
     governance::{
-        ProposalActionItem, ProposalActionPayload, ProposalItem, ProposalVoteItem, VoteOption,
-        VotingMode,
+        ProposalActionItem, ProposalActionPayload, ProposalItem, ProposalVoteItem,
+        SpaceVotingSettingsItem, VoteOption, VotingMode,
     },
     membership::{EditorItem, MemberItem},
     relations::{RelationOp, SetRelationItem, UnsetRelationItem, UpdateRelationItem},
@@ -739,6 +739,11 @@ impl Storage {
         let mut created_ats = Vec::with_capacity(proposals.len());
         let mut created_at_blocks = Vec::with_capacity(proposals.len());
         let mut names: Vec<Option<String>> = Vec::with_capacity(proposals.len());
+        let mut proposal_versions = Vec::with_capacity(proposals.len());
+        let mut partial_thresholds = Vec::with_capacity(proposals.len());
+        let mut universal_thresholds = Vec::with_capacity(proposals.len());
+        let mut flat_thresholds = Vec::with_capacity(proposals.len());
+        let mut execute_bys: Vec<Option<i64>> = Vec::with_capacity(proposals.len());
 
         for proposal in proposals {
             ids.push(proposal.id);
@@ -756,20 +761,35 @@ impl Storage {
             created_ats.push(proposal.created_at.to_string());
             created_at_blocks.push(proposal.created_at_block.to_string());
             names.push(proposal.name.clone());
+            proposal_versions.push(proposal.proposal_version);
+            partial_thresholds.push(proposal.partial_percentage_support_threshold);
+            universal_thresholds.push(proposal.universal_percentage_support_threshold);
+            flat_thresholds.push(proposal.flat_support_threshold);
+            execute_bys.push(proposal.execute_by);
         }
 
+        // ON CONFLICT intentionally does NOT update `proposal_version`: an existing
+        // row's version is authoritative (a replay of the initial CREATE must not
+        // clobber a version that a subsequent UPDATE already bumped).
         let query = r#"
             INSERT INTO proposals (
                 id, space_id, proposed_by, voting_mode, start_time, end_time,
-                quorum, threshold, executed_at, created_at, created_at_block, name
+                quorum, threshold, executed_at, created_at, created_at_block, name,
+                proposal_version, partial_percentage_support_threshold,
+                universal_percentage_support_threshold, flat_support_threshold, execute_by
             )
             SELECT id, space_id, proposed_by, voting_mode::"votingMode", start_time, end_time,
-                   quorum, threshold, executed_at, created_at, created_at_block, name
+                   quorum, threshold, executed_at, created_at, created_at_block, name,
+                   proposal_version, partial_percentage_support_threshold,
+                   universal_percentage_support_threshold, flat_support_threshold, execute_by
             FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::bigint[], $6::bigint[],
-                $7::bigint[], $8::bigint[], $9::bigint[], $10::text[], $11::text[], $12::text[]
+                $7::bigint[], $8::bigint[], $9::bigint[], $10::text[], $11::text[], $12::text[],
+                $13::integer[], $14::bigint[], $15::bigint[], $16::bigint[], $17::bigint[]
             ) AS t(id, space_id, proposed_by, voting_mode, start_time, end_time,
-                   quorum, threshold, executed_at, created_at, created_at_block, name)
+                   quorum, threshold, executed_at, created_at, created_at_block, name,
+                   proposal_version, partial_percentage_support_threshold,
+                   universal_percentage_support_threshold, flat_support_threshold, execute_by)
             ON CONFLICT (id) DO UPDATE SET
                 executed_at = COALESCE(EXCLUDED.executed_at, proposals.executed_at),
                 name = COALESCE(EXCLUDED.name, proposals.name)
@@ -788,12 +808,31 @@ impl Storage {
             .bind(&created_ats)
             .bind(&created_at_blocks)
             .bind(&names)
+            .bind(&proposal_versions)
+            .bind(&partial_thresholds)
+            .bind(&universal_thresholds)
+            .bind(&flat_thresholds)
+            .bind(&execute_bys)
             .execute(&mut **tx)
             .await?;
 
         Ok(())
     }
 
+    /// Update a proposal in-place with a new version.
+    ///
+    /// Invariants (all in the caller's transaction):
+    /// - `proposal_version` is atomically incremented (`proposals.proposal_version + 1`)
+    ///   so concurrent updates can't clobber each other. Note: the incoming
+    ///   `ProposalItem.proposal_version` (always 1 from the handler) is IGNORED —
+    ///   the DB-side increment is authoritative.
+    /// - Denormalized tally counts (`yes_count`, `no_count`, `abstain_count`) reset to 0;
+    ///   the tally worker will recompute from whatever new-version votes arrive.
+    /// - Existing `proposal_votes` rows are NOT deleted. They remain in place as
+    ///   version-scoped history (PK is `(proposal_id, proposal_version, voter_id)`),
+    ///   and tally aggregation filters by the current version.
+    /// - If the proposal row doesn't exist yet (UPDATE event arrived before CREATE was
+    ///   processed), fall back to `insert_proposals` so the row exists.
     #[allow(dead_code)]
     pub async fn update_proposal(
         &self,
@@ -805,7 +844,8 @@ impl Storage {
             VotingMode::Slow => "Slow",
         };
 
-        let result = sqlx::query(
+        // Step 1: atomic version bump + settings rewrite + tally reset.
+        let new_version: Option<(i32,)> = sqlx::query_as(
             r#"
             UPDATE proposals
             SET space_id = $2,
@@ -814,8 +854,18 @@ impl Storage {
                 start_time = $5,
                 end_time = $6,
                 quorum = $7,
-                threshold = $8
+                threshold = $8,
+                partial_percentage_support_threshold = $9,
+                universal_percentage_support_threshold = $10,
+                flat_support_threshold = $11,
+                execute_by = $12,
+                name = COALESCE($13, name),
+                proposal_version = proposals.proposal_version + 1,
+                yes_count = 0,
+                no_count = 0,
+                abstain_count = 0
             WHERE id = $1
+            RETURNING proposal_version
             "#,
         )
         .bind(proposal.id)
@@ -826,12 +876,31 @@ impl Storage {
         .bind(proposal.end_time)
         .bind(proposal.quorum)
         .bind(proposal.threshold)
-        .execute(&mut **tx)
+        .bind(proposal.partial_percentage_support_threshold)
+        .bind(proposal.universal_percentage_support_threshold)
+        .bind(proposal.flat_support_threshold)
+        .bind(proposal.execute_by)
+        .bind(proposal.name.as_ref())
+        .fetch_optional(&mut **tx)
         .await?;
 
-        if result.rows_affected() == 0 {
-            self.insert_proposals(std::slice::from_ref(proposal), tx)
-                .await?;
+        match new_version {
+            None => {
+                // Proposal didn't exist — UPDATE arrived before CREATE. Insert instead.
+                self.insert_proposals(std::slice::from_ref(proposal), tx)
+                    .await?;
+            }
+            Some((version,)) => {
+                // Votes are deliberately NOT deleted. They remain in place scoped
+                // by `proposal_votes.proposal_version` so prior-version votes are
+                // retained as history. Tally aggregation filters by current
+                // version, so the denormalized counts reset above are correct.
+                info!(
+                    proposal_id = %proposal.id,
+                    new_version = version,
+                    "Proposal updated: version bumped (prior-version votes preserved as history)"
+                );
+            }
         }
 
         Ok(())
@@ -873,10 +942,17 @@ impl Storage {
         let mut content_uris: Vec<Option<&str>> = Vec::with_capacity(actions.len());
         let mut metadatas: Vec<Option<&[u8]>> = Vec::with_capacity(actions.len());
         let mut content_ids: Vec<Option<&[u8]>> = Vec::with_capacity(actions.len());
+        // Legacy V1 columns — kept populated for backward compat with existing API queries.
         let mut quorums: Vec<Option<i64>> = Vec::with_capacity(actions.len());
         let mut fast_thresholds: Vec<Option<i64>> = Vec::with_capacity(actions.len());
         let mut slow_thresholds: Vec<Option<i64>> = Vec::with_capacity(actions.len());
         let mut durations: Vec<Option<i64>> = Vec::with_capacity(actions.len());
+        // V2 columns (GEO-478 schema + GEO-481 writes).
+        let mut partial_thresholds: Vec<Option<i64>> = Vec::with_capacity(actions.len());
+        let mut universal_thresholds: Vec<Option<i64>> = Vec::with_capacity(actions.len());
+        let mut flat_thresholds: Vec<Option<i64>> = Vec::with_capacity(actions.len());
+        let mut disable_fast_path_flags: Vec<Option<bool>> = Vec::with_capacity(actions.len());
+        let mut execution_grace_periods: Vec<Option<i64>> = Vec::with_capacity(actions.len());
 
         for action in actions {
             ids.push(action.id);
@@ -890,6 +966,12 @@ impl Storage {
             let mut fast_threshold: Option<i64> = None;
             let mut slow_threshold: Option<i64> = None;
             let mut duration: Option<i64> = None;
+            // V2 per-action fields
+            let mut partial_threshold: Option<i64> = None;
+            let mut universal_threshold: Option<i64> = None;
+            let mut flat_threshold: Option<i64> = None;
+            let mut disable_fast_path: Option<bool> = None;
+            let mut execution_grace_period: Option<i64> = None;
 
             let action_type = match &action.payload {
                 ProposalActionPayload::AddMember { target_id: id } => {
@@ -930,25 +1012,29 @@ impl Storage {
                     content_id = Some(id.as_slice());
                     "Unflag"
                 }
-                // V2 payload shape. The 5 new fields (partial/universal/flat
-                // thresholds, disable_fast_path_access_for_new_members,
-                // execution_grace_period) are destructured but not yet wired
-                // to columns — GEO-481 adds the V2 column writes. Here we keep
-                // the legacy V1 columns populated using the V2 equivalents
-                // (fast=flat, slow=partial) so existing queries keep working.
+                // V2 UpdateVotingSettings. Populate the 5 V2 columns directly
+                // (GEO-478 schema) AND keep the legacy V1 columns populated for
+                // backward compat with existing API queries (fast=flat, slow=partial).
                 ProposalActionPayload::UpdateVotingSettings {
                     partial_percentage_support_threshold: partial,
-                    universal_percentage_support_threshold: _universal,
+                    universal_percentage_support_threshold: universal,
                     flat_support_threshold: flat,
                     quorum: q,
                     duration: d,
-                    disable_fast_path_access_for_new_members: _disable_fp,
-                    execution_grace_period: _grace,
+                    disable_fast_path_access_for_new_members: disable_fp,
+                    execution_grace_period: grace,
                 } => {
+                    // V1 bridge
                     quorum = Some(*q as i64);
                     fast_threshold = Some(*flat as i64);
                     slow_threshold = Some(*partial as i64);
                     duration = Some(*d as i64);
+                    // V2 columns
+                    partial_threshold = Some(*partial as i64);
+                    universal_threshold = Some(*universal as i64);
+                    flat_threshold = Some(*flat as i64);
+                    disable_fast_path = Some(*disable_fp);
+                    execution_grace_period = Some(*grace as i64);
                     "UpdateVotingSettings"
                 }
                 ProposalActionPayload::SubspaceVerified {
@@ -1006,24 +1092,46 @@ impl Storage {
             fast_thresholds.push(fast_threshold);
             slow_thresholds.push(slow_threshold);
             durations.push(duration);
+            partial_thresholds.push(partial_threshold);
+            universal_thresholds.push(universal_threshold);
+            flat_thresholds.push(flat_threshold);
+            disable_fast_path_flags.push(disable_fast_path);
+            execution_grace_periods.push(execution_grace_period);
         }
 
         let query = r#"
             INSERT INTO proposal_actions (
                 id, proposal_id, action_type,
                 target_id, content_uri, metadata, content_id,
-                quorum, fast_threshold, slow_threshold, duration
+                quorum, fast_threshold, slow_threshold, duration,
+                partial_percentage_support_threshold,
+                universal_percentage_support_threshold,
+                flat_support_threshold,
+                disable_fast_path_access_for_new_members,
+                execution_grace_period
             )
             SELECT id, proposal_id, action_type::"proposalActionType",
                    target_id, content_uri, metadata, content_id,
-                   quorum, fast_threshold, slow_threshold, duration
+                   quorum, fast_threshold, slow_threshold, duration,
+                   partial_percentage_support_threshold,
+                   universal_percentage_support_threshold,
+                   flat_support_threshold,
+                   disable_fast_path_access_for_new_members,
+                   execution_grace_period
             FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::text[],
                 $4::uuid[], $5::text[], $6::bytea[], $7::bytea[],
-                $8::bigint[], $9::bigint[], $10::bigint[], $11::bigint[]
+                $8::bigint[], $9::bigint[], $10::bigint[], $11::bigint[],
+                $12::bigint[], $13::bigint[], $14::bigint[],
+                $15::boolean[], $16::bigint[]
             ) AS t(id, proposal_id, action_type,
                    target_id, content_uri, metadata, content_id,
-                   quorum, fast_threshold, slow_threshold, duration)
+                   quorum, fast_threshold, slow_threshold, duration,
+                   partial_percentage_support_threshold,
+                   universal_percentage_support_threshold,
+                   flat_support_threshold,
+                   disable_fast_path_access_for_new_members,
+                   execution_grace_period)
             ON CONFLICT (id) DO NOTHING
         "#;
 
@@ -1039,12 +1147,31 @@ impl Storage {
             .bind(&fast_thresholds)
             .bind(&slow_thresholds)
             .bind(&durations)
+            .bind(&partial_thresholds)
+            .bind(&universal_thresholds)
+            .bind(&flat_thresholds)
+            .bind(&disable_fast_path_flags)
+            .bind(&execution_grace_periods)
             .execute(&mut **tx)
             .await?;
 
         Ok(())
     }
 
+    /// Insert proposal votes, scoped by `proposal_version`.
+    ///
+    /// V2 (GEO-481): votes are non-destructive across proposal updates. The
+    /// primary key is `(proposal_id, proposal_version, voter_id)` — votes from
+    /// prior versions live forever as history, and tally queries filter by
+    /// `proposal_version = proposals.proposal_version` to count only the
+    /// current version.
+    ///
+    /// A vote event with a `proposal_version` that doesn't match the current
+    /// proposal row simply lands in its own version's bucket. This is not an
+    /// error — it's the mechanism that makes vote-vs-update event ordering
+    /// safe: if a vote event arrives before the UPDATE that bumps the version
+    /// (or after, referencing a newer version than we've processed), the row
+    /// exists in the right bucket when tally computation catches up.
     #[allow(dead_code)]
     pub async fn insert_proposal_votes(
         &self,
@@ -1056,6 +1183,7 @@ impl Storage {
         }
 
         let mut proposal_ids = Vec::with_capacity(votes.len());
+        let mut proposal_versions = Vec::with_capacity(votes.len());
         let mut voter_ids = Vec::with_capacity(votes.len());
         let mut space_ids = Vec::with_capacity(votes.len());
         let mut vote_options = Vec::with_capacity(votes.len());
@@ -1064,6 +1192,7 @@ impl Storage {
 
         for vote in votes {
             proposal_ids.push(vote.proposal_id);
+            proposal_versions.push(vote.proposal_version);
             voter_ids.push(vote.voter_id);
             space_ids.push(vote.space_id);
             vote_options.push(match vote.vote {
@@ -1077,13 +1206,16 @@ impl Storage {
 
         let query = r#"
             INSERT INTO proposal_votes (
-                proposal_id, voter_id, space_id, vote, created_at, created_at_block
+                proposal_id, proposal_version, voter_id, space_id, vote, created_at, created_at_block
             )
-            SELECT proposal_id, voter_id, space_id, vote::"voteOption", created_at, created_at_block
+            SELECT proposal_id, proposal_version, voter_id, space_id,
+                   vote::"voteOption", created_at, created_at_block
             FROM UNNEST(
-                $1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::text[]
-            ) AS t(proposal_id, voter_id, space_id, vote, created_at, created_at_block)
-            ON CONFLICT (proposal_id, voter_id) DO UPDATE SET
+                $1::uuid[], $2::integer[], $3::uuid[], $4::uuid[],
+                $5::text[], $6::text[], $7::text[]
+            ) AS t(proposal_id, proposal_version, voter_id, space_id, vote,
+                   created_at, created_at_block)
+            ON CONFLICT (proposal_id, proposal_version, voter_id) DO UPDATE SET
                 vote = EXCLUDED.vote::"voteOption",
                 created_at = EXCLUDED.created_at,
                 created_at_block = EXCLUDED.created_at_block
@@ -1091,6 +1223,7 @@ impl Storage {
 
         sqlx::query(query)
             .bind(&proposal_ids)
+            .bind(&proposal_versions)
             .bind(&voter_ids)
             .bind(&space_ids)
             .bind(&vote_options)
@@ -1125,7 +1258,10 @@ impl Storage {
     }
 
     /// Update only the voting settings of a proposal (fast→slow escalation).
-    /// Unlike update_proposal, this does not touch proposer_id or actions.
+    ///
+    /// Unlike `update_proposal`, this does NOT touch `proposer_id`, actions,
+    /// votes, or `proposal_version` — escalation is not a proposal update,
+    /// so the version is preserved and votes carry over.
     #[allow(dead_code, clippy::too_many_arguments)]
     pub async fn update_proposal_settings(
         &self,
@@ -1135,6 +1271,10 @@ impl Storage {
         end_time: i64,
         quorum: i64,
         threshold: i64,
+        partial_percentage_support_threshold: i64,
+        universal_percentage_support_threshold: i64,
+        flat_support_threshold: i64,
+        execute_by: Option<i64>,
         tx: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<(), IndexerError> {
         sqlx::query(
@@ -1144,7 +1284,11 @@ impl Storage {
                 start_time = $3,
                 end_time = $4,
                 quorum = $5,
-                threshold = $6
+                threshold = $6,
+                partial_percentage_support_threshold = $7,
+                universal_percentage_support_threshold = $8,
+                flat_support_threshold = $9,
+                execute_by = $10
             WHERE id = $1
             "#,
         )
@@ -1154,6 +1298,75 @@ impl Storage {
         .bind(end_time)
         .bind(quorum)
         .bind(threshold)
+        .bind(partial_percentage_support_threshold)
+        .bind(universal_percentage_support_threshold)
+        .bind(flat_support_threshold)
+        .bind(execute_by)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Upsert DAO-global voting settings for a space.
+    ///
+    /// On first write, inserts all fields including `total_editors` (which the
+    /// handler always passes as 0). On subsequent updates, ALL settings fields
+    /// are overwritten with the new values — EXCEPT `total_editors`, which is
+    /// intentionally omitted from the ON CONFLICT DO UPDATE clause. That
+    /// counter is maintained separately by `EDITOR_ADDED` / `EDITOR_REMOVED`
+    /// handlers (GEO-482) and must survive settings upserts.
+    #[allow(dead_code)]
+    pub async fn upsert_space_voting_settings(
+        &self,
+        settings: &SpaceVotingSettingsItem,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        sqlx::query(
+            r#"
+            INSERT INTO space_voting_settings (
+                space_id,
+                partial_percentage_support_threshold,
+                universal_percentage_support_threshold,
+                flat_support_threshold,
+                quorum,
+                duration,
+                disable_fast_path_access_for_new_members,
+                execution_grace_period,
+                total_editors,
+                updated_at,
+                updated_at_block
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ON CONFLICT (space_id) DO UPDATE SET
+                partial_percentage_support_threshold =
+                    EXCLUDED.partial_percentage_support_threshold,
+                universal_percentage_support_threshold =
+                    EXCLUDED.universal_percentage_support_threshold,
+                flat_support_threshold = EXCLUDED.flat_support_threshold,
+                quorum = EXCLUDED.quorum,
+                duration = EXCLUDED.duration,
+                disable_fast_path_access_for_new_members =
+                    EXCLUDED.disable_fast_path_access_for_new_members,
+                execution_grace_period = EXCLUDED.execution_grace_period,
+                updated_at = EXCLUDED.updated_at,
+                updated_at_block = EXCLUDED.updated_at_block
+                -- NOTE: total_editors is intentionally NOT in DO UPDATE.
+                -- It is maintained by EDITOR_ADDED/REMOVED handlers (GEO-482)
+                -- and must be preserved across settings upserts.
+            "#,
+        )
+        .bind(settings.space_id)
+        .bind(settings.partial_percentage_support_threshold)
+        .bind(settings.universal_percentage_support_threshold)
+        .bind(settings.flat_support_threshold)
+        .bind(settings.quorum)
+        .bind(settings.duration)
+        .bind(settings.disable_fast_path_access_for_new_members)
+        .bind(settings.execution_grace_period)
+        .bind(settings.total_editors)
+        .bind(settings.updated_at.to_string())
+        .bind(settings.updated_at_block.to_string())
         .execute(&mut **tx)
         .await?;
 
@@ -1216,9 +1429,20 @@ impl Storage {
         let count = proposal_ids.len();
 
         // Update vote counts for these proposals by computing from proposal_votes.
-        // Use LEFT JOIN to handle proposals with zero votes (all votes deleted).
+        //
+        // V2 (GEO-481): votes are version-scoped. The aggregate filters on
+        // `pv.proposal_version = p.proposal_version` so tallies count only the
+        // current-version votes. Prior-version votes remain in the table as
+        // history but are excluded here. LEFT JOIN handles proposals with zero
+        // current-version votes (e.g. right after a version bump, before any
+        // new votes arrive).
         sqlx::query(
             r#"
+            WITH current_versions AS (
+                SELECT id AS proposal_id, proposal_version
+                FROM proposals
+                WHERE id = ANY($1)
+            )
             UPDATE proposals p
             SET
                 yes_count = COALESCE(vc.yes_count, 0),
@@ -1227,13 +1451,16 @@ impl Storage {
             FROM UNNEST($1::uuid[]) AS queued(proposal_id)
             LEFT JOIN (
                 SELECT
-                    proposal_id,
-                    COUNT(*) FILTER (WHERE vote = 'Yes') as yes_count,
-                    COUNT(*) FILTER (WHERE vote = 'No') as no_count,
-                    COUNT(*) FILTER (WHERE vote = 'Abstain') as abstain_count
-                FROM proposal_votes
-                WHERE proposal_id = ANY($1)
-                GROUP BY proposal_id
+                    pv.proposal_id,
+                    COUNT(*) FILTER (WHERE pv.vote = 'Yes') as yes_count,
+                    COUNT(*) FILTER (WHERE pv.vote = 'No') as no_count,
+                    COUNT(*) FILTER (WHERE pv.vote = 'Abstain') as abstain_count
+                FROM proposal_votes pv
+                JOIN current_versions cv
+                    ON cv.proposal_id = pv.proposal_id
+                    AND cv.proposal_version = pv.proposal_version
+                WHERE pv.proposal_id = ANY($1)
+                GROUP BY pv.proposal_id
             ) vc ON queued.proposal_id = vc.proposal_id
             WHERE p.id = queued.proposal_id
             "#,
@@ -1248,23 +1475,39 @@ impl Storage {
         // vote meets the threshold (_vote → _executeProposal), but does NOT emit a
         // PROPOSAL_EXECUTED event. Only the explicit enter(PROPOSAL_EXECUTED) path
         // emits that event. So for fast-path proposals we must infer execution from
-        // the tally: if yes_count > threshold and executed_at is still NULL, mark it
-        // as executed using the timestamp of the most recent vote.
+        // the tally.
+        //
+        // V2 semantics (GEO-481):
+        // - Use `flat_support_threshold` (V2 column) for the fast-path threshold,
+        //   not the legacy `threshold` column (which is voting-mode-dependent and
+        //   semantically ambiguous).
+        // - The "latest vote" for auto-exec detection is scoped to the current
+        //   `proposal_version`; old-version votes must not trigger auto-exec on a
+        //   newer version.
+        // - Respect `execute_by`: if the latest current-version vote was cast past
+        //   the contract's execution deadline, the contract would not have
+        //   auto-executed, so we must not infer execution either. `execute_by
+        //   IS NULL` bypasses this check for V1 rows.
         let auto_executed = sqlx::query(
             r#"
             UPDATE proposals p
             SET executed_at = latest_vote.max_created_at::bigint
             FROM UNNEST($1::uuid[]) AS queued(proposal_id)
+            JOIN proposals pp ON pp.id = queued.proposal_id
             JOIN (
-                SELECT proposal_id, MAX(created_at)::bigint as max_created_at
-                FROM proposal_votes
-                WHERE proposal_id = ANY($1)
-                GROUP BY proposal_id
+                SELECT pv.proposal_id, MAX(pv.created_at)::bigint as max_created_at
+                FROM proposal_votes pv
+                JOIN proposals cp
+                    ON cp.id = pv.proposal_id
+                    AND cp.proposal_version = pv.proposal_version
+                WHERE pv.proposal_id = ANY($1)
+                GROUP BY pv.proposal_id
             ) latest_vote ON queued.proposal_id = latest_vote.proposal_id
             WHERE p.id = queued.proposal_id
               AND p.voting_mode = 'Fast'::"votingMode"
               AND p.executed_at IS NULL
-              AND p.yes_count >= p.threshold
+              AND p.yes_count >= p.flat_support_threshold
+              AND (p.execute_by IS NULL OR latest_vote.max_created_at <= p.execute_by)
             "#,
         )
         .bind(&proposal_ids)
