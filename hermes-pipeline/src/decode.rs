@@ -244,31 +244,52 @@ pub fn decode_voting_settings_args(calldata: &[u8]) -> Result<VotingSettingsArgs
     decode_voting_settings_data(&calldata[4..])
 }
 
+/// Size in bytes of the raw ABI-encoded `VotingSettings` tuple: 7 static
+/// words × 32 bytes each.
+const VOTING_SETTINGS_TUPLE_SIZE: usize = 7 * 32;
+
 /// Decode a raw ABI-encoded `VotingSettings` tuple (no function selector).
 ///
 /// Used for the `VOTING_SETTINGS_UPDATED` action event, whose `data` field is
 /// `abi.encode(_votingSettings)` without any selector prefix.
 ///
-/// Mirrors `decode_proposal_settings_used`: the EVM may deliver the payload
-/// wrapped in an ABI `bytes` envelope (offset + length + content), so we strip
-/// one level defensively and retry once on failure.
+/// The expected payload is a fixed-size static 7-word tuple (7 × 32 = 224 bytes),
+/// so we do not need to speculatively unwrap before trying to decode. The eager
+/// `maybe_unwrap_bytes` heuristic can mis-detect a valid raw tuple as an ABI
+/// `bytes` envelope (e.g., when `partial_percentage_support_threshold == 32`
+/// and `universal_percentage_support_threshold <= 160`), slice the buffer, and
+/// drop the event. Invert the order:
+///
+/// 1. If the payload is exactly 224 bytes, decode it as a raw tuple. Because
+///    `abi_decode` tolerates trailing bytes, a longer payload could otherwise
+///    spuriously decode a wrapped envelope's header as tuple fields, so we
+///    gate the raw attempt on exact-length to distinguish the cases.
+/// 2. Otherwise (or if the raw decode failed), strip one level of ABI `bytes`
+///    envelope (offset + length + content) if present and retry.
+/// 3. If that also fails, try one more `unwrap_bytes_once` to handle
+///    double-wrapping.
+/// 4. If all paths fail, return `DecodeError::AbiDecode`.
 pub fn decode_voting_settings_data(data: &[u8]) -> Result<VotingSettingsArgs, DecodeError> {
-    let current = maybe_unwrap_bytes(data);
-
-    match decode_voting_settings_data_inner(&current) {
-        Ok(args) => Ok(args),
-        Err(_) => {
-            let Some(unwrapped) = unwrap_bytes_once(current.as_ref()) else {
-                return Err(DecodeError::AbiDecode(
-                    "Failed to decode voting settings data".to_string(),
-                ));
-            };
-            let current = Cow::Owned(unwrapped);
-            decode_voting_settings_data_inner(&current).map_err(|_| {
-                DecodeError::AbiDecode("Failed to decode voting settings data".to_string())
-            })
-        }
+    if data.len() == VOTING_SETTINGS_TUPLE_SIZE
+        && let Ok(args) = decode_voting_settings_data_inner(data)
+    {
+        return Ok(args);
     }
+
+    let unwrapped_once = maybe_unwrap_bytes(data);
+    if let Ok(args) = decode_voting_settings_data_inner(&unwrapped_once) {
+        return Ok(args);
+    }
+
+    if let Some(unwrapped_twice) = unwrap_bytes_once(unwrapped_once.as_ref())
+        && let Ok(args) = decode_voting_settings_data_inner(&unwrapped_twice)
+    {
+        return Ok(args);
+    }
+
+    Err(DecodeError::AbiDecode(
+        "Failed to decode voting settings data".to_string(),
+    ))
 }
 
 fn decode_voting_settings_data_inner(data: &[u8]) -> Result<VotingSettingsArgs, DecodeError> {
@@ -993,6 +1014,43 @@ mod tests {
         let args = decode_voting_settings_data(&wrapped).unwrap();
         assert_eq!(args.partial_percentage_support_threshold, 1_000_000);
         assert_eq!(args.universal_percentage_support_threshold, 2_000_000);
+        assert_eq!(args.flat_support_threshold, 3);
+        assert_eq!(args.quorum, 4);
+        assert_eq!(args.duration, 5);
+        assert!(args.disable_fast_path_access_for_new_members);
+        assert_eq!(args.execution_grace_period, 6);
+    }
+
+    #[test]
+    fn decode_voting_settings_data_decodes_raw_tuple_with_small_partial_threshold() {
+        use alloy::primitives::U256;
+
+        // Regression test: `maybe_unwrap_bytes` looks at words 0 and 1 of the
+        // payload and treats `(offset=32, length<=data.len()-64)` as an ABI
+        // `bytes` envelope. For a raw `VotingSettings` tuple, word 0 is
+        // `partial_percentage_support_threshold` and word 1 is
+        // `universal_percentage_support_threshold`. Choosing `partial == 32`
+        // and `universal == 160` produces a valid tuple whose wire layout
+        // satisfies the envelope heuristic: the eager pre-unwrap would slice
+        // the buffer down to the inner 160 bytes and fail to decode the
+        // (now-truncated) 7-word tuple, causing the event to be dropped.
+        //
+        // With the fix, the raw tuple decode is attempted first and succeeds.
+        let tuple = (
+            U256::from(32u64),  // partial — matches the "offset" word
+            U256::from(160u64), // universal — matches the "length" word (<= 224 - 64)
+            U256::from(3u64),
+            U256::from(4u64),
+            U256::from(5u64),
+            true,
+            U256::from(6u64),
+        );
+        let data = VotingSettingsTuple::abi_encode(&tuple);
+        assert_eq!(data.len(), 224, "static 7-word tuple should be 224 bytes");
+
+        let args = decode_voting_settings_data(&data).unwrap();
+        assert_eq!(args.partial_percentage_support_threshold, 32);
+        assert_eq!(args.universal_percentage_support_threshold, 160);
         assert_eq!(args.flat_support_threshold, 3);
         assert_eq!(args.quorum, 4);
         assert_eq!(args.duration, 5);
