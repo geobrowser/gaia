@@ -1,5 +1,5 @@
 {
-  "id": "3dcaaa95-ca81-48cc-9124-d3872f7d4f79",
+  "id": "a4d15e39-e0e1-4693-a484-5f507ca2e04a",
   "prevId": "8844e0b6-b70a-474f-b092-307b7d002c9e",
   "version": "7",
   "dialect": "postgresql",
@@ -1063,6 +1063,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "proposal_version": {
+          "name": "proposal_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
         "voter_id": {
           "name": "voter_id",
           "type": "uuid",
@@ -1140,6 +1147,27 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "proposal_votes_proposal_version_idx": {
+          "name": "proposal_votes_proposal_version_idx",
+          "columns": [
+            {
+              "expression": "proposal_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "proposal_version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -1171,10 +1199,11 @@
         }
       },
       "compositePrimaryKeys": {
-        "proposal_votes_proposal_id_voter_id_pk": {
-          "name": "proposal_votes_proposal_id_voter_id_pk",
+        "proposal_votes_proposal_id_proposal_version_voter_id_pk": {
+          "name": "proposal_votes_proposal_id_proposal_version_voter_id_pk",
           "columns": [
             "proposal_id",
+            "proposal_version",
             "voter_id"
           ]
         }

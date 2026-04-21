@@ -582,7 +582,14 @@ export const proposalActions = pgTable(
 /**
  * proposal_votes
  *
- * Stores votes cast on governance proposals.
+ * Stores votes cast on governance proposals, scoped by proposal version.
+ *
+ * V2: votes are non-destructive across proposal updates — a vote cast on v1
+ * stays in the table forever, even after the proposal is updated to v2 and
+ * new votes are cast. Queries that care about the "current" tally filter
+ * `WHERE proposal_version = proposals.proposal_version`. The composite PK
+ * `(proposal_id, proposal_version, voter_id)` mirrors the on-chain contract
+ * semantics `votes[(proposalId, proposalVersion, voterId)]`.
  */
 export const proposalVotes = pgTable(
 	"proposal_votes",
@@ -590,6 +597,12 @@ export const proposalVotes = pgTable(
 		proposalId: uuid("proposal_id")
 			.notNull()
 			.references(() => proposals.id),
+		/**
+		 * V2 (GEO-481): the proposal version this vote was cast on. Combined with
+		 * `proposal_id` in the primary key so votes from prior versions are retained
+		 * as history rather than deleted on proposal update.
+		 */
+		proposalVersion: integer("proposal_version").notNull().default(1),
 		voterId: uuid("voter_id").notNull(),
 		spaceId: uuid("space_id")
 			.notNull()
@@ -599,10 +612,12 @@ export const proposalVotes = pgTable(
 		createdAtBlock: text("created_at_block").notNull(),
 	},
 	(table) => [
-		primaryKey({columns: [table.proposalId, table.voterId]}),
+		primaryKey({columns: [table.proposalId, table.proposalVersion, table.voterId]}),
 		index("proposal_votes_space_id_idx").on(table.spaceId),
 		index("proposal_votes_voter_id_idx").on(table.voterId),
 		index("proposal_votes_vote_idx").on(table.vote),
+		// Tally aggregation scans by (proposal_id, proposal_version).
+		index("proposal_votes_proposal_version_idx").on(table.proposalId, table.proposalVersion),
 	],
 )
 
