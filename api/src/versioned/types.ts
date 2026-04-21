@@ -87,6 +87,7 @@ export type ValueType = TextValueType | SimpleValueType
  */
 export interface TextValueChange {
 	propertyId: NormalizedUuid
+	propertyName?: string | null // Resolved human-readable name for propertyId
 	spaceId: NormalizedUuid
 	type: TextValueType
 	before: string | null
@@ -99,6 +100,7 @@ export interface TextValueChange {
  */
 export interface SimpleValueChange {
 	propertyId: NormalizedUuid
+	propertyName?: string | null // Resolved human-readable name for propertyId
 	spaceId: NormalizedUuid
 	type: SimpleValueType
 	before: string | null
@@ -135,15 +137,18 @@ export interface VersionedRelation {
 export interface RelationChange {
 	relationId: NormalizedUuid
 	typeId: NormalizedUuid
+	typeName?: string | null // Resolved human-readable name for typeId
 	spaceId: NormalizedUuid
 	changeType: "ADD" | "REMOVE" | "UPDATE"
 	before?: {
 		toEntityId: NormalizedUuid
+		toEntityName?: string | null // Resolved human-readable name for toEntityId
 		toSpaceId?: NormalizedUuid | null
 		position?: string | null
 	} | null
 	after?: {
 		toEntityId: NormalizedUuid
+		toEntityName?: string | null // Resolved human-readable name for toEntityId
 		toSpaceId?: NormalizedUuid | null
 		position?: string | null
 	} | null
@@ -332,7 +337,7 @@ export interface ProposalDiffCursor {
 export type ProposalStatus = "active" | "closed" | "executed"
 
 /**
- * Paginated response for proposal diffs.
+ * Paginated response for single-proposal diffs.
  */
 export interface PaginatedProposalDiff {
 	proposalId: NormalizedUuid
@@ -341,6 +346,28 @@ export interface PaginatedProposalDiff {
 	entities: EntityDiff[]
 	pagination: {
 		cursor: string | null // Base64-encoded cursor for next page
+		hasMore: boolean
+		totalEntities: number
+	}
+}
+
+/**
+ * Base-state mode for grouped proposal diffs.
+ * - "active": all proposals are active; base = current live KG state
+ * - "historical": all proposals are closed/executed; base = versioned state before earliest edit
+ */
+export type GroupedProposalDiffMode = "active" | "historical"
+
+/**
+ * Paginated response for grouped (multi-proposal) diffs.
+ */
+export interface PaginatedGroupedProposalDiff {
+	proposalIds: NormalizedUuid[]
+	spaceId: NormalizedUuid
+	mode: GroupedProposalDiffMode
+	entities: EntityDiff[]
+	pagination: {
+		cursor: string | null
 		hasMore: boolean
 		totalEntities: number
 	}
