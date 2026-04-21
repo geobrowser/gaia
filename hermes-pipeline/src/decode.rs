@@ -248,7 +248,30 @@ pub fn decode_voting_settings_args(calldata: &[u8]) -> Result<VotingSettingsArgs
 ///
 /// Used for the `VOTING_SETTINGS_UPDATED` action event, whose `data` field is
 /// `abi.encode(_votingSettings)` without any selector prefix.
+///
+/// Mirrors `decode_proposal_settings_used`: the EVM may deliver the payload
+/// wrapped in an ABI `bytes` envelope (offset + length + content), so we strip
+/// one level defensively and retry once on failure.
 pub fn decode_voting_settings_data(data: &[u8]) -> Result<VotingSettingsArgs, DecodeError> {
+    let current = maybe_unwrap_bytes(data);
+
+    match decode_voting_settings_data_inner(&current) {
+        Ok(args) => Ok(args),
+        Err(_) => {
+            let Some(unwrapped) = unwrap_bytes_once(current.as_ref()) else {
+                return Err(DecodeError::AbiDecode(
+                    "Failed to decode voting settings data".to_string(),
+                ));
+            };
+            let current = Cow::Owned(unwrapped);
+            decode_voting_settings_data_inner(&current).map_err(|_| {
+                DecodeError::AbiDecode("Failed to decode voting settings data".to_string())
+            })
+        }
+    }
+}
+
+fn decode_voting_settings_data_inner(data: &[u8]) -> Result<VotingSettingsArgs, DecodeError> {
     let (
         partial,
         universal,
@@ -942,6 +965,39 @@ mod tests {
         assert_eq!(args.duration, 500);
         assert!(!args.disable_fast_path_access_for_new_members);
         assert_eq!(args.execution_grace_period, 600);
+    }
+
+    #[test]
+    fn decode_voting_settings_data_accepts_bytes_wrapped_payload() {
+        use alloy::primitives::U256;
+        use alloy::sol_types::SolValue;
+
+        // The EVM may deliver Action.data wrapped in an ABI `bytes` envelope
+        // (offset + length + content). Verify the decoder transparently unwraps
+        // one level so VOTING_SETTINGS_UPDATED is not silently dropped.
+        let tuple = (
+            U256::from(1_000_000u64),
+            U256::from(2_000_000u64),
+            U256::from(3u64),
+            U256::from(4u64),
+            U256::from(5u64),
+            true,
+            U256::from(6u64),
+        );
+        let tuple_bytes = VotingSettingsTuple::abi_encode(&tuple);
+
+        // Wrap tuple encoding inside a `bytes` ABI envelope, mirroring the
+        // shape the EVM produces for a non-indexed `bytes` event parameter.
+        let wrapped = PrimBytes::from(tuple_bytes).abi_encode();
+
+        let args = decode_voting_settings_data(&wrapped).unwrap();
+        assert_eq!(args.partial_percentage_support_threshold, 1_000_000);
+        assert_eq!(args.universal_percentage_support_threshold, 2_000_000);
+        assert_eq!(args.flat_support_threshold, 3);
+        assert_eq!(args.quorum, 4);
+        assert_eq!(args.duration, 5);
+        assert!(args.disable_fast_path_access_for_new_members);
+        assert_eq!(args.execution_grace_period, 6);
     }
 
     #[test]
