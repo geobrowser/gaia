@@ -198,7 +198,7 @@ export function upload(formData: FormData, url: string) {
 		if (responseJson.error) {
 			const errorMsg =
 				typeof responseJson.error === "object" && responseJson.error !== null
-					? ((responseJson.error as {message?: string}).message ?? JSON.stringify(responseJson.error))
+					? (responseJson.error as {message?: string}).message || JSON.stringify(responseJson.error)
 					: String(responseJson.error)
 			yield* Effect.logWarning("[IPFS] gateway returned error in body", {
 				...diagnostics,
