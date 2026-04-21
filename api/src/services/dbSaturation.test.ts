@@ -48,10 +48,10 @@ describe("dbSaturation hysteresis", () => {
 		expect(saturated.isSaturated).toBe(true)
 
 		const normalStats: PoolStats = {...baseStats, waitingCount: 0}
-		const beforeRelease = getPoolSaturationSnapshot(poolName, normalStats, 34_999)
+		const beforeRelease = getPoolSaturationSnapshot(poolName, normalStats, 54_999)
 		expect(beforeRelease.isSaturated).toBe(true)
 
-		const atRelease = getPoolSaturationSnapshot(poolName, normalStats, 35_000)
+		const atRelease = getPoolSaturationSnapshot(poolName, normalStats, 55_000)
 		expect(atRelease.isSaturated).toBe(false)
 		expect(atRelease.activeSince).toBeNull()
 	})
@@ -171,7 +171,7 @@ describe("dbSaturation load shedding", () => {
 		expect(shouldShedPoolTraffic(saturated)).toBe(true)
 
 		const normalStats: PoolStats = {...baseStats, waitingCount: 0}
-		const afterRelease = getPoolSaturationSnapshot(poolName, normalStats, 35_001)
+		const afterRelease = getPoolSaturationSnapshot(poolName, normalStats, 55_001)
 		expect(afterRelease.isSaturated).toBe(false)
 		expect(shouldShedPoolTraffic(afterRelease)).toBe(false)
 	})
