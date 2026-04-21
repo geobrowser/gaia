@@ -10,10 +10,14 @@ describe("computeQueryCost — basic shapes", () => {
 		expect(cost(`{ __typename }`)).toBe(1)
 	})
 
-	it("object field with no pagination args → sum of children + 1", () => {
-		// Single-entity lookup (no first/last): not multiplied.
-		// entity { id name } → (1 + 1) + 1 = 3
-		expect(cost(`{ entity(id: "...") { id name } }`)).toBe(3)
+	it("structured field without first/last defaults to MAX (conservative)", () => {
+		// Single-entity lookups get over-counted — intentionally. We never know
+		// from the AST alone whether a field is a list or a single object; the
+		// SQL layer injects first=MAX on every collection field anyway, so
+		// over-counting single-entity lookups is the price of never missing an
+		// unbounded collection.
+		// entity { id name } → MAX × (1 + 1) + 1 = 2001
+		expect(cost(`{ entity(id: "...") { id name } }`)).toBe(MAX_PAGINATION_LIMIT * 2 + 1)
 	})
 })
 
@@ -44,13 +48,12 @@ describe("computeQueryCost — pagination", () => {
 	})
 
 	it("models the slow-query pattern that triggered prod statement_timeout", () => {
-		// 1000-entity outer × 5 relation sub-collections × 50 each × 2 nested entity fields
-		// matches the real shape we saw timing out.
-		// inner per-sub-collection: 50 × (1 + (1 + 1)) + 1 ... we'll just compute raw:
-		// { id, entity { valuesList(first:1){propertyId} } } = 1 + (1*1+1 + 1) = 4
-		// sub-collection(first:50){...} = 50 × 4 + 1 = 201
-		// 5 of those + id = 5 × 201 + 1 = 1006 per outer entity
-		// entities(first:1000){...} = 1000 × 1006 + 1 = 1_006_001
+		// The real shape we saw timing out, computed with the conservative model:
+		//   valuesList(first:1){propertyId}        = 1 × 1 + 1                  = 2
+		//   entity { valuesList }                  = MAX × 2 + 1                = 2001
+		//   relations(first:50) { id, entity }     = 50 × (1 + 2001) + 1        = 100_101
+		//   5 × 100_101 + 1 (id on entity)         = 500_506
+		//   entities(first:1000) { ... }           = 1000 × 500_506 + 1         = 500_506_001
 		const query = `
 			{
 				entities(first: 1000) {
@@ -64,8 +67,25 @@ describe("computeQueryCost — pagination", () => {
 			}
 		`
 		const result = cost(query)
-		expect(result).toBe(1_006_001)
-		expect(result).toBeGreaterThan(100_000) // would trivially exceed any sane threshold
+		expect(result).toBe(500_506_001)
+		expect(result).toBeGreaterThan(100_000_000) // trivially exceeds any threshold
+	})
+
+	it("catches implicit-default heavy queries that omit `first`", () => {
+		// Previously under-counted — now a nested un-paginated query correctly
+		// scales with the MAX default at each level.
+		// innermost: valuesList { propertyId text }  → MAX × 2 + 1 = 2001
+		// entity { id valuesList }                    → MAX × (1 + 2001) + 1 = 2_002_001
+		// entities { id entity { ... } }              → MAX × (1 + 2_002_001) + 1 = 2_002_002_001
+		const result = cost(`{
+			entities {
+				id
+				relationsList {
+					toEntity { valuesList { propertyId text } }
+				}
+			}
+		}`)
+		expect(result).toBeGreaterThan(1_000_000_000) // billions — real SQL fan-out is huge
 	})
 })
 

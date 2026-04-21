@@ -16,31 +16,34 @@ import {log} from "../services/telemetry"
 import {MAX_PAGINATION_LIMIT} from "./paginationCapPlugin"
 
 // Threshold above which we warn (log + Sentry issue). Phase 1 tuning knob —
-// start conservative, then re-tune from observed distribution.
-const COST_WARN_THRESHOLD = Number.parseInt(process.env.GRAPHQL_COST_WARN_THRESHOLD ?? "10000", 10)
+// start from a ceiling that accommodates the conservative model (fields
+// without explicit first/last are scored as if they returned MAX items,
+// so nested structured responses score in the millions), then re-tune from
+// observed distribution.
+const COST_WARN_THRESHOLD = Number.parseInt(process.env.GRAPHQL_COST_WARN_THRESHOLD ?? "1000000", 10)
 
 /**
  * Compute a query complexity score from the operation AST alone.
  *
  * Cost model, per field:
- *   - with an explicit first/last arg → `child × limit + 1` (limit clamped to
- *     MAX_PAGINATION_LIMIT if non-positive / non-finite, matching what
- *     PaginationCapPlugin injects at SQL-build time and closing the bogus-arg
- *     attack vector).
- *   - no pagination arg, has selections → `child + 1` (treated as an object).
- *   - no pagination arg, no selections → 1 (scalar).
+ *   - Explicit `first` / `last` arg → `child × limit + 1`. Limit clamps to
+ *     MAX_PAGINATION_LIMIT when non-positive / non-finite / missing (from an
+ *     unresolved variable), mirroring what PaginationCapPlugin actually
+ *     applies at SQL-build time and closing the bogus-arg attack vector.
+ *   - No pagination arg, has selections → `child × MAX_PAGINATION_LIMIT + 1`.
+ *     Conservative: we treat any structured field without an explicit limit
+ *     as if it were a list taking the 1000 default. Over-counts single-entity
+ *     lookups, but we prefer over-counting to under-counting — PaginationCap
+ *     injects the 1000 default on every collection field at SQL time, so the
+ *     real work done under those queries scales that way whether or not we
+ *     can see it in the AST.
+ *   - No pagination arg, no selections → 1 (scalar leaf).
  *
- * Intentionally schema-free: walking only the document + variables means this
- * works regardless of which `graphql` module instance built the schema
- * (PostGraphile v4 bundles its own copy). That's the only way to use
- * graphql-js type introspection here without hitting instanceof failures
- * across CJS/ESM module boundaries.
- *
- * Known limitation: simple-collection fields called without explicit `first`
- * will be under-counted (the SQL layer still applies MAX_PAGINATION_LIMIT
- * via PaginationCapPlugin, but we can't see that from the AST). Phase 1's
- * job is to catch queries with explicit high limits — those are the real
- * attack surface — not to model the implicit default perfectly.
+ * Intentionally schema-free: walking only the document + variables means the
+ * estimator works regardless of which `graphql` module instance built the
+ * schema (PostGraphile v4 bundles its own copy). Schema-aware libraries like
+ * graphql-query-complexity hit instanceof failures across the CJS/ESM module
+ * boundary in that setup.
  */
 export function computeQueryCost(doc: DocumentNode, variables: Record<string, unknown> = {}): number {
 	const op = doc.definitions.find((d): d is OperationDefinitionNode => d.kind === Kind.OPERATION_DEFINITION)
@@ -84,8 +87,12 @@ function fieldCost(field: FieldNode, vars: Record<string, unknown>, doc: Documen
 		return child * limit + 1
 	}
 
-	// No pagination args — object (has selections) or scalar.
-	return child + 1
+	// Structured field without an explicit limit: conservatively assume the
+	// SQL-injected default of MAX_PAGINATION_LIMIT applies. Without this we'd
+	// miss every `{ entities { ... } }`-style query that leans on the implicit
+	// cap. Leaf scalars (no selection set → child=0) collapse to `0 × N + 1 = 1`
+	// here, so we don't need a separate branch.
+	return child * MAX_PAGINATION_LIMIT + 1
 }
 
 function resolveArgs(
