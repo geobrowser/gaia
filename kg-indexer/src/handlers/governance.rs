@@ -1,14 +1,15 @@
 use hermes_schema::pb::governance::{
     proposal_action::Action, HermesProposalCreated, HermesProposalExecuted,
-    HermesProposalSettingsUpdated, HermesProposalUpdated, HermesProposalVoted, ProposalSettings,
-    ProposalVoteOption, VotingMode as ProtoVotingMode,
+    HermesProposalSettingsUpdated, HermesProposalUpdated, HermesProposalVoted,
+    HermesVotingSettingsUpdated, ProposalSettings, ProposalVoteOption,
+    VotingMode as ProtoVotingMode,
 };
 use uuid::Uuid;
 
 use crate::error::HandlerError;
 use crate::models::governance::{
-    ProposalActionItem, ProposalActionPayload, ProposalItem, ProposalVoteItem, VoteOption,
-    VotingMode,
+    ProposalActionItem, ProposalActionPayload, ProposalItem, ProposalVoteItem,
+    SpaceVotingSettingsItem, VoteOption, VotingMode,
 };
 
 /// Result of processing a proposal creation
@@ -82,6 +83,7 @@ pub fn handle_proposal_voted(msg: &HermesProposalVoted) -> Result<ProposalVoteIt
         vote,
         created_at,
         created_at_block,
+        proposal_version: msg.proposal_version as i32,
     })
 }
 
@@ -101,7 +103,11 @@ pub fn handle_proposal_executed(
     })
 }
 
-/// Result of processing a proposal settings update (fast→slow escalation)
+/// Result of processing a proposal settings update (fast→slow escalation).
+///
+/// Version is NOT bumped on escalation; all new V2 threshold fields + execute_by
+/// are carried through so the storage layer can overwrite the existing row's
+/// per-proposal settings snapshot.
 #[allow(dead_code)]
 pub struct ProposalSettingsUpdateResult {
     pub proposal_id: Uuid,
@@ -110,7 +116,12 @@ pub struct ProposalSettingsUpdateResult {
     pub start_time: i64,
     pub end_time: i64,
     pub quorum: i64,
+    /// Legacy threshold: voting-mode-dependent selection from V2 fields.
     pub threshold: i64,
+    pub partial_percentage_support_threshold: i64,
+    pub universal_percentage_support_threshold: i64,
+    pub flat_support_threshold: i64,
+    pub execute_by: Option<i64>,
 }
 
 /// Process a HermesProposalSettingsUpdated message (fast→slow escalation)
@@ -127,10 +138,7 @@ pub fn handle_proposal_settings_updated(
         Ok(ProtoVotingMode::Slow) | Err(_) => VotingMode::Slow,
     };
 
-    let threshold = match voting_mode {
-        VotingMode::Fast => settings.flat_threshold as i64,
-        VotingMode::Slow => settings.percentage_threshold as i64,
-    };
+    let threshold = legacy_threshold(&voting_mode, settings);
 
     Ok(ProposalSettingsUpdateResult {
         proposal_id,
@@ -140,6 +148,53 @@ pub fn handle_proposal_settings_updated(
         end_time: settings.last_date as i64,
         quorum: settings.quorum as i64,
         threshold,
+        partial_percentage_support_threshold: settings.partial_percentage_support_threshold as i64,
+        universal_percentage_support_threshold: settings.universal_percentage_support_threshold
+            as i64,
+        flat_support_threshold: settings.flat_support_threshold as i64,
+        execute_by: Some(settings.execute_by as i64),
+    })
+}
+
+/// Derive the legacy `threshold` value from V2 settings using the V1
+/// voting-mode-dependent selection rule. Kept in one spot so create +
+/// escalation paths stay in sync.
+fn legacy_threshold(voting_mode: &VotingMode, settings: &ProposalSettings) -> i64 {
+    match voting_mode {
+        VotingMode::Fast => settings.flat_support_threshold as i64,
+        VotingMode::Slow => settings.partial_percentage_support_threshold as i64,
+    }
+}
+
+/// Process a HermesVotingSettingsUpdated message.
+///
+/// Maps the DAO-global voting settings into `SpaceVotingSettingsItem`.
+/// `total_editors` is initialized to 0 — the counter is maintained separately
+/// by the consumer layer on `EDITOR_ADDED` / `EDITOR_REMOVED` events, and the
+/// storage layer preserves the existing counter value across settings updates.
+#[allow(dead_code)] // wired by GEO-482 (consumer routing)
+pub fn handle_voting_settings_updated(
+    msg: &HermesVotingSettingsUpdated,
+) -> Result<SpaceVotingSettingsItem, HandlerError> {
+    let space_id = Uuid::from_slice(&msg.space_id)?;
+
+    let meta = msg.meta.as_ref();
+    let (updated_at, updated_at_block) = meta
+        .map(|m| (m.created_at as i64, m.block_number as i64))
+        .unwrap_or((0, 0));
+
+    Ok(SpaceVotingSettingsItem {
+        space_id,
+        partial_percentage_support_threshold: msg.partial_percentage_support_threshold as i64,
+        universal_percentage_support_threshold: msg.universal_percentage_support_threshold as i64,
+        flat_support_threshold: msg.flat_support_threshold as i64,
+        quorum: msg.quorum as i64,
+        duration: msg.duration as i64,
+        disable_fast_path_access_for_new_members: msg.disable_fast_path_access_for_new_members,
+        execution_grace_period: msg.execution_grace_period as i64,
+        total_editors: 0,
+        updated_at,
+        updated_at_block,
     })
 }
 
@@ -244,12 +299,7 @@ fn map_proposal_message(
         .map(|m| (m.created_at as i64, m.block_number as i64))
         .unwrap_or((0, 0));
 
-    // For fast path, threshold is flat_threshold (absolute votes)
-    // For slow path, threshold is percentage_threshold
-    let threshold = match voting_mode {
-        VotingMode::Fast => settings.flat_threshold as i64,
-        VotingMode::Slow => settings.percentage_threshold as i64,
-    };
+    let threshold = legacy_threshold(&voting_mode, settings);
 
     // Derive name from proto actions (before mapping to internal types)
     let name = derive_proposal_name(actions);
@@ -274,6 +324,12 @@ fn map_proposal_message(
         created_at,
         created_at_block,
         name,
+        proposal_version: 1,
+        partial_percentage_support_threshold: settings.partial_percentage_support_threshold as i64,
+        universal_percentage_support_threshold: settings.universal_percentage_support_threshold
+            as i64,
+        flat_support_threshold: settings.flat_support_threshold as i64,
+        execute_by: Some(settings.execute_by as i64),
     };
 
     Ok(ProposalResult { proposal, actions })
@@ -331,10 +387,13 @@ fn map_proposal_action(
             content_id: a.content_id.clone(),
         },
         Some(Action::UpdateVotingSettings(a)) => ProposalActionPayload::UpdateVotingSettings {
+            partial_percentage_support_threshold: a.partial_percentage_support_threshold,
+            universal_percentage_support_threshold: a.universal_percentage_support_threshold,
+            flat_support_threshold: a.flat_support_threshold,
             quorum: a.quorum,
-            fast_threshold: a.fast_threshold,
-            slow_threshold: a.slow_threshold,
             duration: a.duration,
+            disable_fast_path_access_for_new_members: a.disable_fast_path_access_for_new_members,
+            execution_grace_period: a.execution_grace_period,
         },
         Some(Action::SubspaceVerified(a)) => match bytes_to_uuid(&a.target_space_id) {
             Some(id) => ProposalActionPayload::SubspaceVerified {
@@ -511,5 +570,212 @@ mod tests {
         assert_eq!(truncate_to_char_boundary(s, 4), "🎉");
         assert_eq!(truncate_to_char_boundary(s, 5), "🎉"); // can't cut mid-emoji
         assert_eq!(truncate_to_char_boundary(s, 8), "🎉🎊");
+    }
+
+    fn make_meta(
+        created_at: u64,
+        block_number: u64,
+    ) -> hermes_schema::pb::blockchain_metadata::BlockchainMetadata {
+        hermes_schema::pb::blockchain_metadata::BlockchainMetadata {
+            created_at,
+            created_by: vec![],
+            block_number,
+            cursor: String::new(),
+            sequence: 0,
+            is_last: false,
+        }
+    }
+
+    fn v2_settings(voting_mode: i32) -> ProposalSettings {
+        ProposalSettings {
+            voting_mode,
+            partial_percentage_support_threshold: 500_000,
+            universal_percentage_support_threshold: 750_000,
+            flat_support_threshold: 5,
+            quorum: 10,
+            start_date: 1_000,
+            last_date: 2_000,
+            execute_by: 3_000,
+        }
+    }
+
+    #[test]
+    fn handle_voting_settings_updated_maps_all_fields() {
+        use hermes_schema::pb::governance::HermesVotingSettingsUpdated;
+
+        let space_id = Uuid::new_v4();
+        let msg = HermesVotingSettingsUpdated {
+            space_id: space_id.as_bytes().to_vec(),
+            partial_percentage_support_threshold: 1_000_000,
+            universal_percentage_support_threshold: 2_000_000,
+            flat_support_threshold: 3,
+            quorum: 4,
+            duration: 5,
+            disable_fast_path_access_for_new_members: true,
+            execution_grace_period: 6,
+            meta: Some(make_meta(1_700_000_000, 999)),
+        };
+
+        let item = handle_voting_settings_updated(&msg).unwrap();
+
+        assert_eq!(item.space_id, space_id);
+        assert_eq!(item.partial_percentage_support_threshold, 1_000_000);
+        assert_eq!(item.universal_percentage_support_threshold, 2_000_000);
+        assert_eq!(item.flat_support_threshold, 3);
+        assert_eq!(item.quorum, 4);
+        assert_eq!(item.duration, 5);
+        assert!(item.disable_fast_path_access_for_new_members);
+        assert_eq!(item.execution_grace_period, 6);
+        assert_eq!(item.updated_at, 1_700_000_000);
+        assert_eq!(item.updated_at_block, 999);
+        // total_editors defaults to 0; counter maintenance lives in GEO-482
+        assert_eq!(item.total_editors, 0);
+    }
+
+    #[test]
+    fn handle_proposal_voted_propagates_proposal_version() {
+        let msg = HermesProposalVoted {
+            voter_id: Uuid::new_v4().as_bytes().to_vec(),
+            space_id: Uuid::new_v4().as_bytes().to_vec(),
+            proposal_id: Uuid::new_v4().as_bytes().to_vec(),
+            vote: ProposalVoteOption::VoteOptionYes as i32,
+            meta: Some(make_meta(100, 1)),
+            proposal_version: 7,
+        };
+
+        let item = handle_proposal_voted(&msg).unwrap();
+
+        assert_eq!(item.proposal_version, 7);
+        assert_eq!(item.vote, VoteOption::Yes);
+    }
+
+    #[test]
+    fn handle_proposal_created_populates_v2_fields() {
+        let space_id = Uuid::new_v4();
+        let proposer_id = Uuid::new_v4();
+        let proposal_id = Uuid::new_v4();
+
+        let msg = HermesProposalCreated {
+            space_id: space_id.as_bytes().to_vec(),
+            proposer_id: proposer_id.as_bytes().to_vec(),
+            proposal_id: proposal_id.as_bytes().to_vec(),
+            voting_mode: ProtoVotingMode::Slow as i32,
+            actions: vec![],
+            settings: Some(v2_settings(ProtoVotingMode::Slow as i32)),
+            meta: Some(make_meta(1_700_000_000, 42)),
+        };
+
+        let result = handle_proposal_created(&msg).unwrap();
+        let p = result.proposal;
+
+        assert_eq!(p.proposal_version, 1);
+        assert_eq!(p.partial_percentage_support_threshold, 500_000);
+        assert_eq!(p.universal_percentage_support_threshold, 750_000);
+        assert_eq!(p.flat_support_threshold, 5);
+        assert_eq!(p.execute_by, Some(3_000));
+        // Legacy threshold: Slow path → partial_percentage_support_threshold
+        assert_eq!(p.threshold, 500_000);
+        assert_eq!(p.quorum, 10);
+    }
+
+    #[test]
+    fn handle_proposal_created_legacy_threshold_fast_path_uses_flat() {
+        let space_id = Uuid::new_v4();
+        let proposer_id = Uuid::new_v4();
+        let proposal_id = Uuid::new_v4();
+
+        let msg = HermesProposalCreated {
+            space_id: space_id.as_bytes().to_vec(),
+            proposer_id: proposer_id.as_bytes().to_vec(),
+            proposal_id: proposal_id.as_bytes().to_vec(),
+            voting_mode: ProtoVotingMode::Fast as i32,
+            actions: vec![],
+            settings: Some(v2_settings(ProtoVotingMode::Fast as i32)),
+            meta: Some(make_meta(1, 1)),
+        };
+
+        let result = handle_proposal_created(&msg).unwrap();
+        // Legacy threshold: Fast path → flat_support_threshold
+        assert_eq!(result.proposal.threshold, 5);
+    }
+
+    #[test]
+    fn update_voting_settings_action_payload_has_v2_seven_fields() {
+        use hermes_schema::pb::governance::{ProposalAction, UpdateVotingSettingsAction};
+
+        let proposer_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+        let proposal_id = Uuid::new_v4();
+
+        let action = ProposalAction {
+            to: vec![],
+            value: vec![],
+            data: vec![],
+            action: Some(Action::UpdateVotingSettings(UpdateVotingSettingsAction {
+                partial_percentage_support_threshold: 1_000,
+                universal_percentage_support_threshold: 2_000,
+                flat_support_threshold: 3,
+                quorum: 4,
+                duration: 5,
+                disable_fast_path_access_for_new_members: true,
+                execution_grace_period: 6,
+            })),
+        };
+
+        let msg = HermesProposalCreated {
+            space_id: space_id.as_bytes().to_vec(),
+            proposer_id: proposer_id.as_bytes().to_vec(),
+            proposal_id: proposal_id.as_bytes().to_vec(),
+            voting_mode: ProtoVotingMode::Slow as i32,
+            actions: vec![action],
+            settings: Some(v2_settings(ProtoVotingMode::Slow as i32)),
+            meta: Some(make_meta(0, 0)),
+        };
+
+        let result = handle_proposal_created(&msg).unwrap();
+        let payload = &result.actions[0].payload;
+
+        match payload {
+            ProposalActionPayload::UpdateVotingSettings {
+                partial_percentage_support_threshold,
+                universal_percentage_support_threshold,
+                flat_support_threshold,
+                quorum,
+                duration,
+                disable_fast_path_access_for_new_members,
+                execution_grace_period,
+            } => {
+                assert_eq!(*partial_percentage_support_threshold, 1_000);
+                assert_eq!(*universal_percentage_support_threshold, 2_000);
+                assert_eq!(*flat_support_threshold, 3);
+                assert_eq!(*quorum, 4);
+                assert_eq!(*duration, 5);
+                assert!(*disable_fast_path_access_for_new_members);
+                assert_eq!(*execution_grace_period, 6);
+            }
+            other => panic!("expected UpdateVotingSettings payload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn handle_proposal_settings_updated_carries_v2_fields() {
+        let proposal_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let msg = HermesProposalSettingsUpdated {
+            proposal_id: proposal_id.as_bytes().to_vec(),
+            space_id: space_id.as_bytes().to_vec(),
+            settings: Some(v2_settings(ProtoVotingMode::Slow as i32)),
+            meta: Some(make_meta(0, 0)),
+        };
+
+        let result = handle_proposal_settings_updated(&msg).unwrap();
+
+        assert_eq!(result.partial_percentage_support_threshold, 500_000);
+        assert_eq!(result.universal_percentage_support_threshold, 750_000);
+        assert_eq!(result.flat_support_threshold, 5);
+        assert_eq!(result.execute_by, Some(3_000));
+        // Legacy threshold preserved: Slow → partial
+        assert_eq!(result.threshold, 500_000);
     }
 }
