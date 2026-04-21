@@ -259,16 +259,6 @@ const VOTING_SETTINGS_TUPLE_SIZE: usize = 7 * 32;
 /// `bytes` envelope (e.g., when `partial_percentage_support_threshold == 32`
 /// and `universal_percentage_support_threshold <= 160`), slice the buffer, and
 /// drop the event. Invert the order:
-///
-/// 1. If the payload is exactly 224 bytes, decode it as a raw tuple. Because
-///    `abi_decode` tolerates trailing bytes, a longer payload could otherwise
-///    spuriously decode a wrapped envelope's header as tuple fields, so we
-///    gate the raw attempt on exact-length to distinguish the cases.
-/// 2. Otherwise (or if the raw decode failed), strip one level of ABI `bytes`
-///    envelope (offset + length + content) if present and retry.
-/// 3. If that also fails, try one more `unwrap_bytes_once` to handle
-///    double-wrapping.
-/// 4. If all paths fail, return `DecodeError::AbiDecode`.
 pub fn decode_voting_settings_data(data: &[u8]) -> Result<VotingSettingsArgs, DecodeError> {
     if data.len() == VOTING_SETTINGS_TUPLE_SIZE
         && let Ok(args) = decode_voting_settings_data_inner(data)
