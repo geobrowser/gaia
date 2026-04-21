@@ -189,6 +189,25 @@ describe("PaginationCapPlugin", () => {
 		expect(result.body.errors[0]?.extensions?.code).toBe("BAD_USER_INPUT")
 	})
 
+	it("rejects a connection query that supplies both first and last", async () => {
+		// Previously surfaced as a plain Error from PostGraphile
+		// ("We don't support setting both first and last"), which reached Sentry
+		// as a server-side issue. Now intercepted by assertPaginationWithinLimit
+		// and tagged BAD_USER_INPUT.
+		const result = await executeGraphQL(`
+			{
+				entitiesConnection(first: 5, last: 5) {
+					nodes { id }
+				}
+			}
+		`)
+
+		expect(result.status).toBe(400)
+		expect(result.body.errors).toBeDefined()
+		expect(result.body.errors[0]?.extensions?.code).toBe("BAD_USER_INPUT")
+		expect(result.body.errors[0]?.message).toMatch(/both "first" and "last"/)
+	})
+
 	it("rejects oversized last on nested sub-collections", async () => {
 		// `last` is only exposed on the Relay connection form — on Entity the
 		// connection form of the from_entity_id back-ref is `relations` (per the
