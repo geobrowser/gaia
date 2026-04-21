@@ -801,15 +801,25 @@ impl Storage {
 
     /// Append a new proposal version, atomically bumping `proposals.current_version`.
     ///
-    /// Returns the newly-assigned `proposal_version` number so the caller can
-    /// stamp it on accompanying action rows. Uses a CTE to:
-    ///   1. Increment `proposals.current_version` and return the new value.
-    ///   2. INSERT the version row at that value.
+    /// Returns the assigned `proposal_version` number so the caller can stamp it
+    /// on accompanying action rows.
     ///
-    /// Tally counts on the new version row default to 0; the tally worker
-    /// recomputes from scratch using votes scoped to this new version. Votes
-    /// for prior versions remain in `proposal_votes` as history (PK includes
-    /// `proposal_version`), so no delete is needed.
+    /// **Idempotent on Kafka replay.** Kafka delivery is at-least-once, so the
+    /// same `ProposalUpdated` event can be redelivered. The INSERT uses
+    /// `ON CONFLICT (proposal_id, version_created_at_block) DO NOTHING` against
+    /// the `proposal_versions_idempotency_key` unique constraint. On replay:
+    ///   * the INSERT is a no-op (the row already exists),
+    ///   * `proposals.current_version` is NOT bumped (guarded by
+    ///     `EXISTS (SELECT 1 FROM inserted)`), and
+    ///   * we return the already-assigned `proposal_version` from the existing
+    ///     row so the caller stamps actions with the same version — which also
+    ///     hit their own `ON CONFLICT DO NOTHING` on
+    ///     `(proposal_id, proposal_version, index)`.
+    ///
+    /// Tally counts on a freshly-inserted version row default to 0; the tally
+    /// worker recomputes from scratch using votes scoped to this new version.
+    /// Votes for prior versions remain in `proposal_votes` as history (PK
+    /// includes `proposal_version`), so no delete is needed.
     ///
     /// If the proposal identity row doesn't exist yet (UPDATE arrived before
     /// CREATE — pre-mainnet this shouldn't happen since events are ordered,
@@ -828,29 +838,55 @@ impl Storage {
             VotingMode::Fast => "Fast",
             VotingMode::Slow => "Slow",
         };
+        let version_created_at_block = version.version_created_at_block.to_string();
 
-        let row: Option<(i32,)> = sqlx::query_as(
+        // The INSERT is the source of truth: it either wins (fresh event) or
+        // hits the idempotency-key ON CONFLICT (replay). current_version is
+        // bumped only when the INSERT actually inserts a row, and we always
+        // return the version stamped on the row for (proposal_id,
+        // version_created_at_block) — whether newly inserted or pre-existing.
+        //
+        // The outer SELECT uses COALESCE and returns exactly one row; its
+        // column is NULL only in the orphan case where the identity row
+        // doesn't exist AND no prior version row for this idempotency key
+        // exists (so both sub-selects are empty).
+        let row: (Option<i32>,) = sqlx::query_as(
             r#"
-            WITH bumped AS (
-                UPDATE proposals
-                SET current_version = current_version + 1
-                WHERE id = $1
-                RETURNING id, current_version
-            )
-            INSERT INTO proposal_versions (
-                proposal_id, proposal_version, voting_mode, start_time, end_time,
-                quorum, threshold,
-                partial_percentage_support_threshold,
-                universal_percentage_support_threshold,
-                flat_support_threshold, execute_by, name,
-                version_created_at, version_created_at_block
-            )
-            SELECT b.id, b.current_version,
-                   $2::"votingMode", $3, $4, $5, $6,
-                   $7, $8, $9, $10, $11,
-                   $12, $13
-            FROM bumped b
-            RETURNING proposal_version
+            WITH
+                next_version AS (
+                    SELECT id, current_version + 1 AS candidate_version
+                    FROM proposals
+                    WHERE id = $1
+                ),
+                inserted AS (
+                    INSERT INTO proposal_versions (
+                        proposal_id, proposal_version, voting_mode, start_time, end_time,
+                        quorum, threshold,
+                        partial_percentage_support_threshold,
+                        universal_percentage_support_threshold,
+                        flat_support_threshold, execute_by, name,
+                        version_created_at, version_created_at_block
+                    )
+                    SELECT nv.id, nv.candidate_version,
+                           $2::"votingMode", $3, $4, $5, $6,
+                           $7, $8, $9, $10, $11,
+                           $12, $13
+                    FROM next_version nv
+                    ON CONFLICT (proposal_id, version_created_at_block) DO NOTHING
+                    RETURNING proposal_version
+                ),
+                bumped AS (
+                    UPDATE proposals
+                    SET current_version = current_version + 1
+                    WHERE id = $1
+                      AND EXISTS (SELECT 1 FROM inserted)
+                    RETURNING current_version
+                )
+            SELECT COALESCE(
+                (SELECT proposal_version FROM inserted),
+                (SELECT proposal_version FROM proposal_versions
+                 WHERE proposal_id = $1 AND version_created_at_block = $13)
+            ) AS proposal_version
             "#,
         )
         .bind(proposal_id)
@@ -865,19 +901,23 @@ impl Storage {
         .bind(version.execute_by)
         .bind(version.name.as_ref())
         .bind(version.version_created_at.to_string())
-        .bind(version.version_created_at_block.to_string())
-        .fetch_optional(&mut **tx)
+        .bind(&version_created_at_block)
+        .fetch_one(&mut **tx)
         .await?;
 
-        match row {
-            Some((new_version,)) => {
+        match row.0 {
+            Some(active_version) => {
                 info!(
                     proposal_id = %proposal_id,
-                    new_version,
-                    "Proposal version appended (prior versions preserved as history)"
+                    proposal_version = active_version,
+                    "Proposal version appended or replay-reconciled (prior versions preserved as history)"
                 );
-                Ok(new_version)
+                Ok(active_version)
             }
+            // Both COALESCE branches are empty → the identity row doesn't
+            // exist yet AND there's no prior version for this idempotency
+            // key. This is the orphan UPDATE case; caller decides how to
+            // recover.
             None => Err(HandlerError::MissingPayload.into()),
         }
     }

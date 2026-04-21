@@ -55,6 +55,7 @@ ALTER TABLE "proposal_versions" ADD CONSTRAINT "proposal_versions_proposal_id_pr
 ALTER TABLE "space_voting_settings" ADD CONSTRAINT "space_voting_settings_space_id_spaces_id_fk" FOREIGN KEY ("space_id") REFERENCES "public"."spaces"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "proposal_actions" ADD CONSTRAINT "proposal_actions_version_fk" FOREIGN KEY ("proposal_id","proposal_version") REFERENCES "public"."proposal_versions"("proposal_id","proposal_version") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "proposal_votes" ADD CONSTRAINT "proposal_votes_version_fk" FOREIGN KEY ("proposal_id","proposal_version") REFERENCES "public"."proposal_versions"("proposal_id","proposal_version") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "proposal_versions" ADD CONSTRAINT "proposal_versions_idempotency_key" UNIQUE("proposal_id","version_created_at_block");--> statement-breakpoint
 CREATE INDEX "proposal_versions_proposal_version_desc_idx" ON "proposal_versions" USING btree ("proposal_id","proposal_version" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "proposal_versions_end_time_idx" ON "proposal_versions" USING btree ("end_time");--> statement-breakpoint
 CREATE INDEX "proposal_versions_start_time_idx" ON "proposal_versions" USING btree ("start_time");--> statement-breakpoint

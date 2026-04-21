@@ -346,8 +346,11 @@ async fn test_update_appends_new_version() {
     .unwrap();
 
     // Append v2 with a new name + bumped partial threshold.
+    // `version_created_at_block` must differ from v1 — it acts as the replay
+    // idempotency key (see `proposal_versions_idempotency_key`).
     let mut v2 = version_slow(Some("V2"));
     v2.partial_percentage_support_threshold = 600_000;
+    v2.version_created_at_block = 2;
     let mut tx = pool.begin().await.unwrap();
     let new_version = storage
         .insert_new_proposal_version(proposal_id, &v2, &mut tx)
@@ -431,10 +434,13 @@ async fn test_votes_scoped_by_version_across_proposal_update() {
         .unwrap();
     tx.commit().await.unwrap();
 
-    // Append v2.
+    // Append v2. Must use a distinct `version_created_at_block` since that's
+    // the replay idempotency key (see `proposal_versions_idempotency_key`).
+    let mut v2 = v1.clone();
+    v2.version_created_at_block = 2;
     let mut tx = pool.begin().await.unwrap();
     let new_version = storage
-        .insert_new_proposal_version(proposal_id, &v1, &mut tx)
+        .insert_new_proposal_version(proposal_id, &v2, &mut tx)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -628,10 +634,13 @@ async fn test_process_tally_queue_counts_only_current_version() {
         .unwrap();
     tx.commit().await.unwrap();
 
-    // Append v2.
+    // Append v2. Must use a distinct `version_created_at_block` since that's
+    // the replay idempotency key (see `proposal_versions_idempotency_key`).
+    let mut v2 = v1.clone();
+    v2.version_created_at_block = 2;
     let mut tx = pool.begin().await.unwrap();
     storage
-        .insert_new_proposal_version(proposal_id, &v1, &mut tx)
+        .insert_new_proposal_version(proposal_id, &v2, &mut tx)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -833,6 +842,103 @@ async fn test_process_tally_queue_respects_execute_by_deadline() {
     );
 
     cleanup_proposal(&pool, proposal_id, &[space_id, proposer_id, voter_id]).await;
+}
+
+// --------------------------------------------------------------------------
+// insert_new_proposal_version is idempotent on Kafka replay.
+//
+// Kafka delivery is at-least-once, so the same ProposalUpdated event can be
+// re-processed. The `proposal_versions_idempotency_key` UNIQUE constraint on
+// `(proposal_id, version_created_at_block)` combined with the
+// `ON CONFLICT DO NOTHING` guard in `insert_new_proposal_version` must cause
+// replays to be no-ops:
+//   * both calls return the same version number,
+//   * `proposals.current_version` only bumps once,
+//   * exactly one `proposal_versions` row exists for that version.
+// --------------------------------------------------------------------------
+#[tokio::test]
+#[ignore]
+async fn test_insert_new_proposal_version_is_idempotent_on_replay() {
+    let pool = get_pool().await;
+    let storage = setup_storage().await;
+    let space_id = Uuid::new_v4();
+    let proposal_id = Uuid::new_v4();
+    let proposer_id = Uuid::new_v4();
+
+    ensure_space(&pool, space_id).await;
+    ensure_space(&pool, proposer_id).await;
+
+    // v1 seeded at block 1 (via insert_proposal_version_initial).
+    let v1 = version_slow(Some("V1"));
+    seed_proposal_v1(&storage, &pool, proposal_id, space_id, proposer_id, &v1).await;
+
+    // v2 at block 2.
+    let mut v2 = version_slow(Some("V2"));
+    v2.partial_percentage_support_threshold = 600_000;
+    v2.version_created_at_block = 2;
+
+    // First call: fresh event → inserts v2, bumps current_version to 2.
+    let mut tx = pool.begin().await.unwrap();
+    let returned_first = storage
+        .insert_new_proposal_version(proposal_id, &v2, &mut tx)
+        .await
+        .expect("first insert_new_proposal_version failed");
+    tx.commit().await.unwrap();
+    assert_eq!(returned_first, 2, "first call must return version 2");
+
+    // Second call with IDENTICAL input: simulated Kafka replay. Must NOT
+    // insert a new row, NOT bump current_version, and MUST return the same
+    // version number as the first call.
+    let mut tx = pool.begin().await.unwrap();
+    let returned_replay = storage
+        .insert_new_proposal_version(proposal_id, &v2, &mut tx)
+        .await
+        .expect("replay insert_new_proposal_version failed");
+    tx.commit().await.unwrap();
+    assert_eq!(
+        returned_replay, 2,
+        "replay must return the already-assigned version number"
+    );
+
+    // current_version must still be 2 (not 3) after replay.
+    let (current_version,): (i32,) =
+        sqlx::query_as("SELECT current_version FROM proposals WHERE id = $1")
+            .bind(proposal_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        current_version, 2,
+        "current_version must not bump on replay"
+    );
+
+    // Exactly one row in proposal_versions for version 2.
+    let (v2_row_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM proposal_versions
+         WHERE proposal_id = $1 AND proposal_version = 2",
+    )
+    .bind(proposal_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        v2_row_count, 1,
+        "replay must not duplicate the proposal_versions row"
+    );
+
+    // And only 2 total rows for this proposal (v1 + v2, no spurious v3).
+    let (total_rows,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM proposal_versions WHERE proposal_id = $1")
+            .bind(proposal_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        total_rows, 2,
+        "replay must not create a spurious v3 (or any additional version)"
+    );
+
+    cleanup_proposal(&pool, proposal_id, &[space_id, proposer_id]).await;
 }
 
 // Silence unused-import warnings for types not exercised in every test.

@@ -1264,7 +1264,16 @@
           ]
         }
       },
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "proposal_versions_idempotency_key": {
+          "name": "proposal_versions_idempotency_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "proposal_id",
+            "version_created_at_block"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
