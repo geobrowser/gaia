@@ -11,6 +11,7 @@ import {classifyDbFailure} from "../services/dbFailures"
 import {getGraphqlPressureSnapshot, recordGraphqlAcquireTimeout, shouldShedPoolTraffic} from "../services/dbSaturation"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
+import {useCostLogger} from "./costLoggerPlugin"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin, {NoFirstAndLastRule} from "./paginationCapPlugin"
@@ -159,8 +160,11 @@ const postgraphileOptions = {
 	},
 }
 
-// Create PostGraphile schemas
-const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], postgraphileOptions)
+// Create PostGraphile schemas. Exported so cost-estimator / query-shape tests
+// can run complexity calculations against the real schema instead of a fake
+// minimal one — catches schema-level surprises (NonNull wrapping, Connection
+// naming, auto-generated field shapes) that mocks don't.
+export const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], postgraphileOptions)
 
 /**
  * Yoga plugin that manages the pgClient lifecycle for PostGraphile resolvers.
@@ -314,6 +318,7 @@ const customValidationRules: Plugin = {
 const sharedPlugins = [
 	...(responseCachePlugin ? [responseCachePlugin] : []),
 	customValidationRules,
+	useCostLogger(),
 	useGraphQLInstrumentation(),
 	useSearchInvocationLogger(),
 	usePgClient(pgPool),
