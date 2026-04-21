@@ -6,6 +6,7 @@ import {
 	decimal,
 	doublePrecision,
 	index,
+	integer,
 	jsonb,
 	pgEnum,
 	pgTable,
@@ -501,6 +502,21 @@ export const proposals = pgTable(
 		yesCount: bigint("yes_count", {mode: "number"}).notNull().default(0),
 		noCount: bigint("no_count", {mode: "number"}).notNull().default(0),
 		abstainCount: bigint("abstain_count", {mode: "number"}).notNull().default(0),
+		/**
+		 * Governance V2 fields.
+		 *
+		 * `threshold` and `quorum` above are kept for backward compatibility during the
+		 * V1→V2 transition; new rows populate the separate V2 fields below.
+		 */
+		proposalVersion: integer("proposal_version").notNull().default(1),
+		partialPercentageSupportThreshold: bigint("partial_percentage_support_threshold", {
+			mode: "number",
+		}),
+		universalPercentageSupportThreshold: bigint("universal_percentage_support_threshold", {
+			mode: "number",
+		}),
+		flatSupportThreshold: bigint("flat_support_threshold", {mode: "number"}),
+		executeBy: bigint("execute_by", {mode: "number"}),
 	},
 	(table) => [
 		index("proposals_space_id_idx").on(table.spaceId),
@@ -537,11 +553,22 @@ export const proposalActions = pgTable(
 		metadata: bytea("metadata"),
 		// Flag/Unflag actions
 		contentId: bytea("content_id"),
-		// UpdateVotingSettings action
+		// UpdateVotingSettings action — V1 fields kept for backward compatibility
 		quorum: bigint("quorum", {mode: "number"}),
 		fastThreshold: bigint("fast_threshold", {mode: "number"}),
 		slowThreshold: bigint("slow_threshold", {mode: "number"}),
 		duration: bigint("duration", {mode: "number"}),
+		// UpdateVotingSettings action — V2 fields. Populated alongside V1 fields during
+		// the transition; new code should prefer these.
+		partialPercentageSupportThreshold: bigint("partial_percentage_support_threshold", {
+			mode: "number",
+		}),
+		universalPercentageSupportThreshold: bigint("universal_percentage_support_threshold", {
+			mode: "number",
+		}),
+		flatSupportThreshold: bigint("flat_support_threshold", {mode: "number"}),
+		disableFastPathAccessForNewMembers: boolean("disable_fast_path_access_for_new_members"),
+		executionGracePeriod: bigint("execution_grace_period", {mode: "number"}),
 	},
 	(table) => [
 		index("proposal_actions_proposal_id_idx").on(table.proposalId),
@@ -606,9 +633,50 @@ export const proposalVotesRelations = drizzleRelations(proposalVotes, ({one}) =>
 	}),
 }))
 
+/**
+ * space_voting_settings
+ *
+ * Latest-state DAO-global voting settings, one row per DAO space. Upserted on
+ * every `VOTING_SETTINGS_UPDATED` action event (including the initial emission
+ * at DAO creation time).
+ *
+ * `total_editors` is a denormalized count maintained by the KG indexer via
+ * `EDITOR_ADDED` / `EDITOR_REMOVED` events. It is required to evaluate the V2
+ * slow-path early execution formula (`universalPercentageSupportThreshold *
+ * totalEditors / RATIO_BASE`) without an RPC call to the contract's
+ * `canExecuteProposal()` view function.
+ */
+export const spaceVotingSettings = pgTable("space_voting_settings", {
+	spaceId: uuid("space_id")
+		.primaryKey()
+		.references(() => spaces.id),
+	partialPercentageSupportThreshold: bigint("partial_percentage_support_threshold", {
+		mode: "number",
+	}).notNull(),
+	universalPercentageSupportThreshold: bigint("universal_percentage_support_threshold", {
+		mode: "number",
+	}).notNull(),
+	flatSupportThreshold: bigint("flat_support_threshold", {mode: "number"}).notNull(),
+	quorum: bigint("quorum", {mode: "number"}).notNull(),
+	duration: bigint("duration", {mode: "number"}).notNull(),
+	disableFastPathAccessForNewMembers: boolean("disable_fast_path_access_for_new_members").notNull(),
+	executionGracePeriod: bigint("execution_grace_period", {mode: "number"}).notNull(),
+	totalEditors: bigint("total_editors", {mode: "number"}).notNull().default(0),
+	updatedAt: text("updated_at").notNull(),
+	updatedAtBlock: text("updated_at_block").notNull(),
+})
+
+export const spaceVotingSettingsRelations = drizzleRelations(spaceVotingSettings, ({one}) => ({
+	space: one(spaces, {
+		fields: [spaceVotingSettings.spaceId],
+		references: [spaces.id],
+	}),
+}))
+
 export type DbProposal = InferSelectModel<typeof proposals>
 export type DbProposalAction = InferSelectModel<typeof proposalActions>
 export type DbProposalVote = InferSelectModel<typeof proposalVotes>
+export type DbSpaceVotingSettings = InferSelectModel<typeof spaceVotingSettings>
 
 /**
  * proposal_tally_queue
