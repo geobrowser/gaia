@@ -1,6 +1,11 @@
 import {parse} from "graphql"
-import {describe, expect, it} from "vitest"
-import {computeQueryCost} from "../costLoggerPlugin"
+import {beforeEach, describe, expect, it} from "vitest"
+import {
+	__resetQueryCostHistogramForTests,
+	computeQueryCost,
+	renderQueryCostHistogram,
+	useCostLogger,
+} from "../costLoggerPlugin"
 import {MAX_PAGINATION_LIMIT} from "../paginationCapPlugin"
 
 const cost = (query: string, variables: Record<string, unknown> = {}) => computeQueryCost(parse(query), variables)
@@ -162,5 +167,62 @@ describe("computeQueryCost — fragments", () => {
 describe("computeQueryCost — empty / edge", () => {
 	it("returns 0 for a document with no operation", () => {
 		expect(cost(`fragment Unused on Query { __typename }`)).toBe(0)
+	})
+})
+
+// --------------------------------------------------------------------------
+// Prometheus histogram exposed via /health/metrics
+// --------------------------------------------------------------------------
+
+describe("query cost histogram", () => {
+	beforeEach(() => {
+		__resetQueryCostHistogramForTests()
+	})
+
+	it("empty state emits zero-counts for all buckets", () => {
+		const out = renderQueryCostHistogram()
+		expect(out).toMatch(/# TYPE gaia_api_graphql_query_cost histogram/)
+		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="\+Inf"} 0/)
+		expect(out).toMatch(/gaia_api_graphql_query_cost_count 0/)
+		expect(out).toMatch(/gaia_api_graphql_query_cost_sum 0/)
+	})
+
+	it("each recorded query increments the right buckets cumulatively", async () => {
+		const plugin = useCostLogger()
+		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
+		const runQuery = (query: string, variables: Record<string, unknown> = {}) => {
+			onExecute({
+				args: {document: parse(query), variableValues: variables, operationName: null},
+			})
+		}
+
+		// Cost 51 → should hit le=100, le=1000, ..., le=+Inf (all ≥ 51)
+		runQuery(`{ entities(first: 50) { id } }`)
+		// Cost 1001 → hits le=10_000, le=100_000, ..., le=+Inf (buckets ≥ 1001)
+		runQuery(`{ entities { id } }`)
+
+		const out = renderQueryCostHistogram()
+		expect(out).toContain("gaia_api_graphql_query_cost_count 2")
+		expect(out).toContain(`gaia_api_graphql_query_cost_sum ${51 + 1001}`)
+		// le=100: only the cost=51 observation qualifies
+		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="100"} 1$/m)
+		// le=1000: still only cost=51 (1001 > 1000)
+		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="1000"} 1$/m)
+		// le=10000: both observations
+		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="10000"} 2$/m)
+		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="\+Inf"} 2$/m)
+	})
+
+	it("skips introspection queries", async () => {
+		const plugin = useCostLogger()
+		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
+		onExecute({
+			args: {
+				document: parse(`{ __typename }`),
+				variableValues: {},
+				operationName: "IntrospectionQuery",
+			},
+		})
+		expect(renderQueryCostHistogram()).toContain("gaia_api_graphql_query_cost_count 0")
 	})
 })

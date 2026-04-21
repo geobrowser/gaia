@@ -1,4 +1,3 @@
-import * as Sentry from "@sentry/node"
 import {
 	type ArgumentNode,
 	type DocumentNode,
@@ -15,12 +14,71 @@ import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 import {MAX_PAGINATION_LIMIT} from "./paginationCapPlugin"
 
-// Threshold above which we warn (log + Sentry issue). Phase 1 tuning knob —
-// start from a ceiling that accommodates the conservative model (fields
-// without explicit first/last are scored as if they returned MAX items,
-// so nested structured responses score in the millions), then re-tune from
-// observed distribution.
-const COST_WARN_THRESHOLD = Number.parseInt(process.env.GRAPHQL_COST_WARN_THRESHOLD ?? "1000000", 10)
+// Threshold above which we emit an info-level log line with the full query +
+// variables. Not an alert — just "this one is worth finding in logs if we
+// need to investigate a slow response later". Kept separate from the
+// histogram metric (which records every query regardless of size).
+const COST_LOG_THRESHOLD = Number.parseInt(process.env.GRAPHQL_COST_LOG_THRESHOLD ?? "1000000", 10)
+
+// ---------------------------------------------------------------------------
+// Prometheus histogram metric — gaia_api_graphql_query_cost
+// ---------------------------------------------------------------------------
+// Exposed via /health/metrics (see renderQueryCostHistogram). We accumulate
+// in-process monotonic counters (process start = 0), and Prometheus uses
+// rate()/histogram_quantile() over the scrape stream to derive time-windowed
+// distributions for the Grafana dashboard.
+
+// Upper bucket edges, spanning the realistic range of the conservative model
+// (trivial scalar ≈ 1 at the low end, deeply-nested no-pagination queries in
+// the billions at the high end). `+Inf` is emitted implicitly via the total
+// count at render time.
+const COST_BUCKET_EDGES: readonly number[] = [
+	10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000, 1_000_000_000,
+]
+
+// noUncheckedIndexedAccess widens `number[]`'s index access to `number | undefined`,
+// so we go via a Map which has a crisper `get(k) | undefined` story and always
+// normalize via `?? 0`. A bit more allocation than a typed array but the map
+// is bounded to 9 entries and only written on the hot path; effect is nil.
+const bucketCounts = new Map<number, number>()
+let totalCount = 0
+let totalSum = 0
+
+function recordQueryCost(cost: number): void {
+	totalCount++
+	totalSum += cost
+	for (const edge of COST_BUCKET_EDGES) {
+		if (cost <= edge) bucketCounts.set(edge, (bucketCounts.get(edge) ?? 0) + 1)
+	}
+}
+
+/**
+ * Render the cost histogram in Prometheus text format. Called by
+ * `/health/metrics` alongside the existing pool gauges. Emits the `le`
+ * buckets, `+Inf` total, `_sum`, and `_count` lines.
+ */
+export function renderQueryCostHistogram(): string {
+	const lines = [
+		"# HELP gaia_api_graphql_query_cost GraphQL query complexity score distribution (conservative model, see costLoggerPlugin.ts).",
+		"# TYPE gaia_api_graphql_query_cost histogram",
+	]
+	for (const edge of COST_BUCKET_EDGES) {
+		lines.push(`gaia_api_graphql_query_cost_bucket{le="${edge}"} ${bucketCounts.get(edge) ?? 0}`)
+	}
+	lines.push(`gaia_api_graphql_query_cost_bucket{le="+Inf"} ${totalCount}`)
+	lines.push(`gaia_api_graphql_query_cost_sum ${totalSum}`)
+	lines.push(`gaia_api_graphql_query_cost_count ${totalCount}`)
+	return `${lines.join("\n")}\n`
+}
+
+/**
+ * Reset accumulated histogram state. Tests only — not used in runtime.
+ */
+export function __resetQueryCostHistogramForTests(): void {
+	bucketCounts.clear()
+	totalCount = 0
+	totalSum = 0
+}
 
 /**
  * Compute a query complexity score from the operation AST alone.
@@ -131,10 +189,16 @@ function resolveValue(value: ValueNode, vars: Record<string, unknown>): unknown 
 }
 
 /**
- * Yoga plugin that computes query cost and logs / Sentry-alerts when it
- * exceeds `COST_WARN_THRESHOLD`. Phase 1 is strictly observational — the
- * plugin never rejects a query. Phase 2 will add a hard ceiling by comparing
- * the same computed cost against a configured limit.
+ * Yoga plugin that computes query cost on every request. Two observability
+ * channels, no alerts:
+ *   - Prometheus histogram `gaia_api_graphql_query_cost` — records every
+ *     query's cost; charted in Grafana for distribution / outliers.
+ *   - `log.info("High GraphQL query cost", ...)` when cost exceeds
+ *     `COST_LOG_THRESHOLD` — structured stdout line, not a Sentry issue,
+ *     so noisy shapes don't page anyone but are findable in log search.
+ *
+ * Phase 1 is strictly observational. Phase 2 will add a hard ceiling by
+ * comparing the same computed cost against a configured limit.
  */
 export function useCostLogger(): Plugin {
 	return {
@@ -152,39 +216,17 @@ export function useCostLogger(): Plugin {
 				return
 			}
 
-			const operationLabel = getOperationLabel(args)
-			const fullQuery = print(args.document)
-			const queryFingerprint = graphqlQueryFingerprint(fullQuery)
+			recordQueryCost(cost)
 
-			Sentry.addBreadcrumb({
-				category: "graphql.cost",
-				message: "Computed GraphQL query cost",
-				data: {cost, operationName: operationLabel, queryFingerprint},
-				level: "info",
-			})
-
-			if (cost >= COST_WARN_THRESHOLD) {
-				log.warn("High GraphQL query cost", {
+			if (cost >= COST_LOG_THRESHOLD) {
+				const fullQuery = print(args.document)
+				log.info("High GraphQL query cost", {
 					cost,
-					threshold: COST_WARN_THRESHOLD,
-					operationName: operationLabel,
-					queryFingerprint,
+					threshold: COST_LOG_THRESHOLD,
+					operationName: getOperationLabel(args),
+					queryFingerprint: graphqlQueryFingerprint(fullQuery),
 					query: fullQuery.slice(0, 2000),
 					variables: args.variableValues,
-				})
-
-				Sentry.captureMessage("High GraphQL query cost", {
-					level: "warning",
-					tags: {
-						"graphql.operation_name": operationLabel,
-						"graphql.query_fingerprint": queryFingerprint,
-					},
-					extra: {
-						cost,
-						threshold: COST_WARN_THRESHOLD,
-						query: fullQuery.slice(0, 2000),
-						variables: args.variableValues,
-					},
 				})
 			}
 		},
