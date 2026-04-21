@@ -140,6 +140,7 @@ class IpfsParseResponseError extends Error {
 export function upload(formData: FormData, url: string) {
 	return Effect.gen(function* () {
 		const config = yield* Environment
+		const requestStart = Date.now()
 
 		const response = yield* Effect.tryPromise({
 			try: () =>
@@ -153,24 +154,65 @@ export function upload(formData: FormData, url: string) {
 			catch: (error) => new IpfsUploadError(`IPFS fetch failed: ${error}`),
 		})
 
-		const responseJson = yield* Effect.tryPromise({
-			try: () => response.json(),
-			catch: (error) => new IpfsParseResponseError(`Could not parse IPFS JSON response: ${error}`),
+		const responseText = yield* Effect.tryPromise({
+			try: () => response.text(),
+			catch: (error) => new IpfsParseResponseError(`Could not read IPFS response body: ${error}`),
 		})
+
+		const diagnostics = {
+			url,
+			httpStatus: response.status,
+			httpStatusText: response.statusText,
+			responseTimeMs: Date.now() - requestStart,
+			contentType: response.headers.get("content-type"),
+			contentLength: response.headers.get("content-length"),
+			pinataRequestId: response.headers.get("x-pinata-request-id") ?? response.headers.get("x-request-id"),
+			cfRay: response.headers.get("cf-ray"),
+			server: response.headers.get("server"),
+			retryAfter: response.headers.get("retry-after"),
+			rateLimitLimit: response.headers.get("x-ratelimit-limit"),
+			rateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
+			rateLimitReset: response.headers.get("x-ratelimit-reset"),
+			bodyLength: responseText.length,
+			bodyPreview: responseText.slice(0, 1000),
+		}
+
+		if (!response.ok) {
+			yield* Effect.logWarning("[IPFS] gateway returned non-2xx status", diagnostics)
+			yield* Effect.fail(
+				new IpfsUploadError(
+					`IPFS gateway HTTP ${response.status} ${response.statusText}: ${diagnostics.bodyPreview}`,
+				),
+			)
+		}
+
+		const responseJson = yield* Effect.try({
+			try: () => JSON.parse(responseText) as {error?: unknown; data?: {cid?: string}},
+			catch: () =>
+				new IpfsParseResponseError(
+					`IPFS response not JSON (status=${response.status}): ${diagnostics.bodyPreview}`,
+				),
+		}).pipe(Effect.tapError(() => Effect.logWarning("[IPFS] gateway returned non-JSON response", diagnostics)))
 
 		// Handle error responses from gateway
 		if (responseJson.error) {
 			const errorMsg =
-				typeof responseJson.error === "object"
-					? responseJson.error.message || JSON.stringify(responseJson.error)
+				typeof responseJson.error === "object" && responseJson.error !== null
+					? ((responseJson.error as {message?: string}).message ?? JSON.stringify(responseJson.error))
 					: String(responseJson.error)
+			yield* Effect.logWarning("[IPFS] gateway returned error in body", {
+				...diagnostics,
+				gatewayErrorMessage: errorMsg,
+			})
 			yield* Effect.fail(new IpfsUploadError(`IPFS gateway error: ${errorMsg}`))
 		}
 
-		if (!responseJson.data?.cid) {
-			yield* Effect.fail(new IpfsUploadError("IPFS gateway returned no CID"))
+		const cid = responseJson.data?.cid
+		if (!cid) {
+			yield* Effect.logWarning("[IPFS] gateway returned no CID", diagnostics)
+			return yield* Effect.fail(new IpfsUploadError("IPFS gateway returned no CID"))
 		}
 
-		return `ipfs://${responseJson.data.cid}` as const
+		return `ipfs://${cid}` as const
 	}).pipe(Effect.withSpan("ipfs.upload"))
 }
