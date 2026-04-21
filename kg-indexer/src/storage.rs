@@ -930,15 +930,24 @@ impl Storage {
                     content_id = Some(id.as_slice());
                     "Unflag"
                 }
+                // V2 payload shape. The 5 new fields (partial/universal/flat
+                // thresholds, disable_fast_path_access_for_new_members,
+                // execution_grace_period) are destructured but not yet wired
+                // to columns — GEO-481 adds the V2 column writes. Here we keep
+                // the legacy V1 columns populated using the V2 equivalents
+                // (fast=flat, slow=partial) so existing queries keep working.
                 ProposalActionPayload::UpdateVotingSettings {
+                    partial_percentage_support_threshold: partial,
+                    universal_percentage_support_threshold: _universal,
+                    flat_support_threshold: flat,
                     quorum: q,
-                    fast_threshold: ft,
-                    slow_threshold: st,
                     duration: d,
+                    disable_fast_path_access_for_new_members: _disable_fp,
+                    execution_grace_period: _grace,
                 } => {
                     quorum = Some(*q as i64);
-                    fast_threshold = Some(*ft as i64);
-                    slow_threshold = Some(*st as i64);
+                    fast_threshold = Some(*flat as i64);
+                    slow_threshold = Some(*partial as i64);
                     duration = Some(*d as i64);
                     "UpdateVotingSettings"
                 }
