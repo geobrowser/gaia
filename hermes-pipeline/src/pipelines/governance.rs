@@ -23,10 +23,11 @@ use crate::decode::{
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::governance::{
     AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
-    HermesProposalSettingsUpdated, HermesProposalUpdated, HermesProposalVoted, ProposalAction,
-    ProposalSettings, ProposalVoteOption, PublishAction, RemoveEditorAction, RemoveMemberAction,
-    SetTopicAction, SubspaceEdgeAction, SubspaceTopicAction, UnflagAction, UnflagEditorAction,
-    UnsetTopicAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
+    HermesProposalSettingsUpdated, HermesProposalUpdated, HermesProposalVoted,
+    HermesVotingSettingsUpdated, ProposalAction, ProposalSettings, ProposalVoteOption,
+    PublishAction, RemoveEditorAction, RemoveMemberAction, SetTopicAction, SubspaceEdgeAction,
+    SubspaceTopicAction, UnflagAction, UnflagEditorAction, UnsetTopicAction,
+    UpdateVotingSettingsAction, VotingMode, proposal_action,
 };
 
 use super::BlockMetadata;
@@ -39,6 +40,7 @@ pub struct TransformResult {
     pub proposals_voted: Vec<HermesProposalVoted>,
     pub proposals_executed: Vec<HermesProposalExecuted>,
     pub proposals_settings_updated: Vec<HermesProposalSettingsUpdated>,
+    pub voting_settings_updated: Vec<HermesVotingSettingsUpdated>,
 }
 
 impl TransformResult {
@@ -48,6 +50,7 @@ impl TransformResult {
             + self.proposals_voted.len()
             + self.proposals_executed.len()
             + self.proposals_settings_updated.len()
+            + self.voting_settings_updated.len()
     }
 }
 
@@ -140,6 +143,14 @@ pub fn transform(
             )
             .in_scope(|| convert_proposal_executed(action, meta, sequence))?;
             result.proposals_executed.push(event);
+        } else if actions::matches(action_type, &actions::VOTING_SETTINGS_UPDATED)
+            && let Some(event) = debug_span!(
+                "convert.governance.voting_settings_updated",
+                space_id = %hex::encode(&action.from_id)
+            )
+            .in_scope(|| convert_voting_settings_updated(action, meta, sequence))
+        {
+            result.voting_settings_updated.push(event);
         }
     }
 
@@ -316,10 +327,15 @@ fn decode_proposal_action(
             let args = decode_voting_settings_args(calldata).ok()?;
             Some(proposal_action::Action::UpdateVotingSettings(
                 UpdateVotingSettingsAction {
+                    partial_percentage_support_threshold: args.partial_percentage_support_threshold,
+                    universal_percentage_support_threshold: args
+                        .universal_percentage_support_threshold,
+                    flat_support_threshold: args.flat_support_threshold,
                     quorum: args.quorum,
-                    fast_threshold: args.fast_threshold,
-                    slow_threshold: args.slow_threshold,
                     duration: args.duration,
+                    disable_fast_path_access_for_new_members: args
+                        .disable_fast_path_access_for_new_members,
+                    execution_grace_period: args.execution_grace_period,
                 },
             ))
         }
@@ -627,11 +643,9 @@ fn parse_proposal_settings_used(action: &Action, sequence: u32) -> Option<Propos
         }
     };
 
-    // Determine threshold type based on voting mode
-    // Slow=0 uses percentage threshold, Fast=1 uses flat threshold
-    let (flat_threshold, percentage_threshold) = match decoded.voting_mode {
-        0 => (0, decoded.support_threshold), // Slow path uses percentage threshold
-        1 => (decoded.support_threshold, 0), // Fast path uses flat threshold
+    let voting_mode = match decoded.voting_mode {
+        0 => VotingMode::Slow,
+        1 => VotingMode::Fast,
         _ => {
             let debug_chain = decode::unwrap_debug_chain(&action.data, 2);
             let mut levels: Vec<String> = Vec::new();
@@ -652,22 +666,18 @@ fn parse_proposal_settings_used(action: &Action, sequence: u32) -> Option<Propos
         }
     };
 
-    let voting_mode = match decoded.voting_mode {
-        0 => VotingMode::Slow,
-        1 => VotingMode::Fast,
-        _ => unreachable!(), // Already handled above
-    };
-
     Some(ProposalSettingsPending {
         space_id: action.from_id.clone(),
         sequence,
         settings: ProposalSettings {
+            voting_mode: voting_mode as i32,
+            partial_percentage_support_threshold: decoded.partial_percentage_support_threshold,
+            universal_percentage_support_threshold: decoded.universal_percentage_support_threshold,
+            flat_support_threshold: decoded.flat_support_threshold,
+            quorum: decoded.quorum,
             start_date: decoded.start_date,
             last_date: decoded.last_date,
-            voting_mode: voting_mode as i32,
-            quorum: decoded.quorum,
-            flat_threshold,
-            percentage_threshold,
+            execute_by: decoded.execute_by,
         },
     })
 }
@@ -686,21 +696,24 @@ fn convert_proposal_voted(
 ) -> Result<HermesProposalVoted> {
     // Decode the data field
     // VoteOption enum (IDAOSpace): None=0, Yes=1, No=2, Abstain=3
-    let vote = match decode::decode_proposal_voted(&action.data) {
-        Ok(decoded) => match decoded.vote {
-            0 => ProposalVoteOption::VoteOptionNone,
-            1 => ProposalVoteOption::VoteOptionYes,
-            2 => ProposalVoteOption::VoteOptionNo,
-            3 => ProposalVoteOption::VoteOptionAbstain,
-            _ => ProposalVoteOption::VoteOptionNone,
-        },
+    let (vote, proposal_version) = match decode::decode_proposal_voted(&action.data) {
+        Ok(decoded) => {
+            let vote_option = match decoded.vote {
+                0 => ProposalVoteOption::VoteOptionNone,
+                1 => ProposalVoteOption::VoteOptionYes,
+                2 => ProposalVoteOption::VoteOptionNo,
+                3 => ProposalVoteOption::VoteOptionAbstain,
+                _ => ProposalVoteOption::VoteOptionNone,
+            };
+            (vote_option, decoded.proposal_version)
+        }
         Err(e) => {
             warn!(
                 error = %e,
                 proposal_id = %hex::encode(&action.topic[..16]),
                 "Failed to decode proposal voted data"
             );
-            ProposalVoteOption::VoteOptionNone
+            (ProposalVoteOption::VoteOptionNone, 0)
         }
     };
 
@@ -713,6 +726,7 @@ fn convert_proposal_voted(
         proposal_id,
         vote: vote as i32,
         meta: Some(meta.to_proto(sequence)),
+        proposal_version: proposal_version as u32,
     })
 }
 
@@ -734,6 +748,46 @@ fn convert_proposal_executed(
     Ok(HermesProposalExecuted {
         space_id: action.from_id.clone(),
         proposal_id,
+        meta: Some(meta.to_proto(sequence)),
+    })
+}
+
+/// Convert a VOTING_SETTINGS_UPDATED action into a HermesVotingSettingsUpdated proto.
+///
+/// Event encoding (emitted by DAOSpace via SpaceRegistry._ping):
+/// - from_id: space_id that updated its settings
+/// - to_id:   space_id (same — ping event)
+/// - topic:   bytes32(0) (unused for this space-level event)
+/// - data:    abi.encode(VotingSettings) — 7-field tuple
+///
+/// Returns None if decoding fails (logged as a warning).
+fn convert_voting_settings_updated(
+    action: &Action,
+    meta: &BlockMetadata,
+    sequence: u32,
+) -> Option<HermesVotingSettingsUpdated> {
+    let decoded = match decode::decode_voting_settings_data(&action.data) {
+        Ok(decoded) => decoded,
+        Err(e) => {
+            warn!(
+                error = %e,
+                space_id = %hex::encode(&action.from_id),
+                data_len = action.data.len(),
+                "Failed to decode voting settings updated payload"
+            );
+            return None;
+        }
+    };
+
+    Some(HermesVotingSettingsUpdated {
+        space_id: action.from_id.clone(),
+        partial_percentage_support_threshold: decoded.partial_percentage_support_threshold,
+        universal_percentage_support_threshold: decoded.universal_percentage_support_threshold,
+        flat_support_threshold: decoded.flat_support_threshold,
+        quorum: decoded.quorum,
+        duration: decoded.duration,
+        disable_fast_path_access_for_new_members: decoded.disable_fast_path_access_for_new_members,
+        execution_grace_period: decoded.execution_grace_period,
         meta: Some(meta.to_proto(sequence)),
     })
 }
@@ -771,7 +825,11 @@ mod tests {
         ])
     }
 
-    // Helper to create encoded PROPOSAL_SETTINGS_SELECTED data
+    // Helper to create encoded PROPOSAL_SETTINGS_SELECTED data (V2 ProposalParameters shape).
+    // The single `threshold` parameter is mapped to `flat_support_threshold`; the
+    // other V2 threshold fields are zeroed for test simplicity. Field order matches
+    // the Solidity `ProposalParameters` struct: votingMode, partialPct, universalPct,
+    // flat, quorum, startDate, lastDate, executeBy.
     fn encode_proposal_settings_data(
         start_date: u64,
         last_date: u64,
@@ -782,11 +840,14 @@ mod tests {
         use ethabi::{Token, ethereum_types::U256 as EthU256};
 
         ethabi::encode(&[
+            Token::Uint(EthU256::from(voting_mode)),
+            Token::Uint(EthU256::zero()), // partial_percentage_support_threshold
+            Token::Uint(EthU256::zero()), // universal_percentage_support_threshold
+            Token::Uint(EthU256::from(threshold)), // flat_support_threshold
+            Token::Uint(EthU256::from(quorum)),
             Token::Uint(EthU256::from(start_date)),
             Token::Uint(EthU256::from(last_date)),
-            Token::Uint(EthU256::from(voting_mode)),
-            Token::Uint(EthU256::from(quorum)),
-            Token::Uint(EthU256::from(threshold)),
+            Token::Uint(EthU256::zero()), // execute_by
         ])
     }
 
@@ -831,7 +892,7 @@ mod tests {
         let settings = event.settings.as_ref().unwrap();
         assert_eq!(settings.start_date, 1000);
         assert_eq!(settings.last_date, 2000);
-        assert_eq!(settings.flat_threshold, 50); // Fast path uses flat threshold
+        assert_eq!(settings.flat_support_threshold, 50); // Fast path uses flat threshold
     }
 
     #[test]
@@ -1254,17 +1315,77 @@ mod tests {
         assert_eq!(result.proposals_executed.len(), 1);
     }
 
+    /// Encode a VOTING_SETTINGS_UPDATED event's `data` field: `abi.encode(VotingSettings)`
+    /// as a 7-field tuple.
+    fn encode_voting_settings_event(
+        partial: u64,
+        universal: u64,
+        flat: u64,
+        quorum: u64,
+        duration: u64,
+        disable_fast_path: bool,
+        grace_period: u64,
+    ) -> Vec<u8> {
+        use alloy::primitives::U256;
+        use alloy::sol_types::SolValue;
+
+        (
+            U256::from(partial),
+            U256::from(universal),
+            U256::from(flat),
+            U256::from(quorum),
+            U256::from(duration),
+            disable_fast_path,
+            U256::from(grace_period),
+        )
+            .abi_encode_params()
+    }
+
+    #[test]
+    fn transform_routes_voting_settings_updated_event() {
+        let space_id = vec![0x42; 16];
+
+        let test_actions = vec![Action {
+            from_id: space_id.clone(),
+            to_id: space_id.clone(),
+            action: actions::VOTING_SETTINGS_UPDATED.to_vec(),
+            topic: vec![0u8; 32], // bytes32(0) per contract
+            data: encode_voting_settings_event(
+                1_000_000, // partial
+                2_000_000, // universal
+                3,         // flat
+                4,         // quorum
+                5,         // duration
+                true,      // disableFastPathAccessForNewMembers
+                6,         // executionGracePeriod
+            ),
+        }];
+
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
+
+        assert_eq!(result.voting_settings_updated.len(), 1);
+        let event = &result.voting_settings_updated[0];
+        assert_eq!(event.space_id, space_id);
+        assert_eq!(event.partial_percentage_support_threshold, 1_000_000);
+        assert_eq!(event.universal_percentage_support_threshold, 2_000_000);
+        assert_eq!(event.flat_support_threshold, 3);
+        assert_eq!(event.quorum, 4);
+        assert_eq!(event.duration, 5);
+        assert!(event.disable_fast_path_access_for_new_members);
+        assert_eq!(event.execution_grace_period, 6);
+    }
+
     /// Encode vote data matching Solidity's `abi.encode(bytes16 proposalId, VoteOption)`.
     ///
-    /// ABI encoding for `(bytes16, uint8)`:
-    ///   Word 0: bytes16 left-aligned, right-padded with zeros to 32 bytes
-    ///   Word 1: uint8 right-aligned, left-padded with zeros to 32 bytes
-    fn encode_vote_data(proposal_id: [u8; 16], vote_option: u8) -> Vec<u8> {
-        let mut data = vec![0u8; 64];
-        // Word 0: bytes16, left-aligned
+    /// ABI encoding for the V2 vote payload `(bytes16, uint8, uint8)`:
+    ///   Word 0: bytes16 proposalId (left-aligned, right-padded with zeros)
+    ///   Word 1: uint8  proposalVersion (right-aligned, left-padded with zeros)
+    ///   Word 2: uint8  voteOption (right-aligned, left-padded with zeros)
+    fn encode_vote_data(proposal_id: [u8; 16], proposal_version: u8, vote_option: u8) -> Vec<u8> {
+        let mut data = vec![0u8; 96];
         data[..16].copy_from_slice(&proposal_id);
-        // Word 1: uint8, right-aligned
-        data[63] = vote_option;
+        data[63] = proposal_version;
+        data[95] = vote_option;
         data
     }
 
@@ -1307,7 +1428,7 @@ mod tests {
                 to_id: space_id.clone(),
                 action: actions::PROPOSAL_VOTED.to_vec(),
                 topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
-                data: encode_vote_data(proposal_id, vote_value),
+                data: encode_vote_data(proposal_id, 3, vote_value),
             };
 
             let result = convert_proposal_voted(&action, &test_meta(), 0)
@@ -1321,6 +1442,7 @@ mod tests {
             assert_eq!(result.voter_id, voter_id);
             assert_eq!(result.space_id, space_id);
             assert_eq!(result.proposal_id, proposal_id.to_vec());
+            assert_eq!(result.proposal_version, 3);
         }
     }
 
@@ -1344,8 +1466,8 @@ mod tests {
         ];
 
         for (vote_value, expected_proto, label) in cases {
-            // Inner data: abi.encode(bytes16 proposalId, uint8 VoteOption)
-            let inner = encode_vote_data(proposal_id, vote_value);
+            // Inner data: abi.encode(bytes16 proposalId, uint8 proposalVersion, uint8 VoteOption)
+            let inner = encode_vote_data(proposal_id, 1, vote_value);
             // Wrapped as the EVM would produce for a non-indexed `bytes` event parameter
             let wrapped = wrap_in_abi_bytes(&inner);
 
@@ -1390,12 +1512,14 @@ mod tests {
                 })),
             }],
             settings: Some(ProposalSettings {
+                voting_mode: 0,
+                partial_percentage_support_threshold: 0,
+                universal_percentage_support_threshold: 0,
+                flat_support_threshold: 0,
+                quorum: 0,
                 start_date: 0,
                 last_date: 0,
-                voting_mode: 0,
-                quorum: 0,
-                percentage_threshold: 0,
-                flat_threshold: 0,
+                execute_by: 0,
             }),
             meta: None,
         }
@@ -1663,12 +1787,14 @@ mod tests {
                 })),
             }],
             settings: Some(ProposalSettings {
+                voting_mode: 0,
+                partial_percentage_support_threshold: 0,
+                universal_percentage_support_threshold: 0,
+                flat_support_threshold: 0,
+                quorum: 0,
                 start_date: 0,
                 last_date: 0,
-                voting_mode: 0,
-                quorum: 0,
-                percentage_threshold: 0,
-                flat_threshold: 0,
+                execute_by: 0,
             }),
             meta: None,
         }];

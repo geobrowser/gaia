@@ -782,6 +782,7 @@ mod tests {
             proposal_id: vec![0xCD; 16],
             vote: ProposalVoteOption::VoteOptionYes as i32,
             meta: None,
+            proposal_version: 1,
         };
         // Should key by space_id, not voter_id
         assert_eq!(event.key(), vec![0xAB; 16]);
