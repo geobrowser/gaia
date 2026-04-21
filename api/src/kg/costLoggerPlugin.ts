@@ -242,9 +242,13 @@ function resolveValue(value: ValueNode, vars: Record<string, unknown>): unknown 
  * channels, no alerts:
  *   - Prometheus histogram `gaia_api_graphql_query_cost` — records every
  *     query's cost; charted in Grafana for distribution / outliers.
- *   - `log.info("High GraphQL query cost", ...)` when cost exceeds
- *     `COST_LOG_THRESHOLD` — structured stdout line, not a Sentry issue,
- *     so noisy shapes don't page anyone but are findable in log search.
+ *   - `log.warn("High GraphQL query cost", ...)` when cost exceeds
+ *     `COST_LOG_THRESHOLD`. `log.warn` in this codebase always writes to
+ *     stdout (visible in kubectl + Axiom) *and* drops a Sentry breadcrumb,
+ *     but does NOT create a Sentry issue — that's the captureMessage path
+ *     we deliberately don't use. `log.info`, by contrast, only writes a
+ *     breadcrumb in production (invisible to log search), which defeats the
+ *     point of the threshold log.
  *
  * Phase 1 is strictly observational. The outer try/catch is a shadow-mode
  * safety invariant: a failure inside the plugin must never break the
@@ -271,7 +275,7 @@ export function useCostLogger(): Plugin {
 
 				if (cost >= COST_LOG_THRESHOLD) {
 					const fullQuery = print(args.document)
-					log.info("High GraphQL query cost", {
+					log.warn("High GraphQL query cost", {
 						cost,
 						threshold: COST_LOG_THRESHOLD,
 						operationName: getOperationLabel(args),
