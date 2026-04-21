@@ -179,19 +179,12 @@ export function upload(formData: FormData, url: string) {
 
 		if (!response.ok) {
 			yield* Effect.logWarning("[IPFS] gateway returned non-2xx status", diagnostics)
-			yield* Effect.fail(
-				new IpfsUploadError(
-					`IPFS gateway HTTP ${response.status} ${response.statusText}: ${diagnostics.bodyPreview}`,
-				),
-			)
+			yield* Effect.fail(new IpfsUploadError(`IPFS gateway HTTP ${response.status} ${response.statusText}`))
 		}
 
 		const responseJson = yield* Effect.try({
 			try: () => JSON.parse(responseText) as {error?: unknown; data?: {cid?: string}},
-			catch: () =>
-				new IpfsParseResponseError(
-					`IPFS response not JSON (status=${response.status}): ${diagnostics.bodyPreview}`,
-				),
+			catch: () => new IpfsParseResponseError(`Could not parse IPFS JSON response (status=${response.status})`),
 		}).pipe(Effect.tapError(() => Effect.logWarning("[IPFS] gateway returned non-JSON response", diagnostics)))
 
 		// Handle error responses from gateway
