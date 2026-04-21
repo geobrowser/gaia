@@ -76,6 +76,10 @@ pub fn handle_proposal_voted(msg: &HermesProposalVoted) -> Result<ProposalVoteIt
         .map(|m| (m.created_at as i64, m.block_number as i64))
         .unwrap_or((0, 0));
 
+    // proto3 scalars can't distinguish "unset" from "zero"; the contract
+    // says proposal versions start at 1, so treat 0 as unset and default to 1.
+    let proposal_version = normalize_proposal_version(msg.proposal_version);
+
     Ok(ProposalVoteItem {
         proposal_id,
         voter_id,
@@ -83,8 +87,24 @@ pub fn handle_proposal_voted(msg: &HermesProposalVoted) -> Result<ProposalVoteIt
         vote,
         created_at,
         created_at_block,
-        proposal_version: msg.proposal_version as i32,
+        proposal_version,
     })
+}
+
+/// Normalize a proto3 `proposal_version` scalar: treat 0 as "unset" and
+/// default to 1 (per the documented "versions start at 1" contract).
+fn normalize_proposal_version(raw: u32) -> i32 {
+    if raw == 0 {
+        1
+    } else {
+        raw as i32
+    }
+}
+
+/// Normalize a proto3 `execute_by` scalar: treat 0 as "no deadline" (None)
+/// so it is distinguishable from an actual epoch timestamp.
+fn normalize_execute_by(raw: u64) -> Option<i64> {
+    (raw != 0).then_some(raw as i64)
 }
 
 /// Process a HermesProposalExecuted message
@@ -152,7 +172,7 @@ pub fn handle_proposal_settings_updated(
         universal_percentage_support_threshold: settings.universal_percentage_support_threshold
             as i64,
         flat_support_threshold: settings.flat_support_threshold as i64,
-        execute_by: Some(settings.execute_by as i64),
+        execute_by: normalize_execute_by(settings.execute_by),
     })
 }
 
@@ -329,7 +349,7 @@ fn map_proposal_message(
         universal_percentage_support_threshold: settings.universal_percentage_support_threshold
             as i64,
         flat_support_threshold: settings.flat_support_threshold as i64,
-        execute_by: Some(settings.execute_by as i64),
+        execute_by: normalize_execute_by(settings.execute_by),
     };
 
     Ok(ProposalResult { proposal, actions })
@@ -777,5 +797,87 @@ mod tests {
         assert_eq!(result.execute_by, Some(3_000));
         // Legacy threshold preserved: Slow → partial
         assert_eq!(result.threshold, 500_000);
+    }
+
+    #[test]
+    fn handle_proposal_voted_defaults_proposal_version_to_one_when_zero() {
+        // proto3 scalars can't distinguish unset from 0, so a 0 on the wire
+        // should be normalized to the documented starting version of 1.
+        let msg = HermesProposalVoted {
+            voter_id: Uuid::new_v4().as_bytes().to_vec(),
+            space_id: Uuid::new_v4().as_bytes().to_vec(),
+            proposal_id: Uuid::new_v4().as_bytes().to_vec(),
+            vote: ProposalVoteOption::VoteOptionYes as i32,
+            meta: Some(make_meta(100, 1)),
+            proposal_version: 0,
+        };
+
+        let item = handle_proposal_voted(&msg).unwrap();
+
+        assert_eq!(item.proposal_version, 1);
+    }
+
+    #[test]
+    fn handle_proposal_voted_preserves_explicit_version_one() {
+        // A non-zero wire value should pass through unchanged.
+        let msg = HermesProposalVoted {
+            voter_id: Uuid::new_v4().as_bytes().to_vec(),
+            space_id: Uuid::new_v4().as_bytes().to_vec(),
+            proposal_id: Uuid::new_v4().as_bytes().to_vec(),
+            vote: ProposalVoteOption::VoteOptionYes as i32,
+            meta: Some(make_meta(100, 1)),
+            proposal_version: 1,
+        };
+
+        let item = handle_proposal_voted(&msg).unwrap();
+
+        assert_eq!(item.proposal_version, 1);
+    }
+
+    #[test]
+    fn handle_proposal_created_maps_zero_execute_by_to_none() {
+        // execute_by == 0 means "no deadline" on the wire; the mapped row
+        // should carry None so it is distinguishable from an epoch timestamp.
+        let space_id = Uuid::new_v4();
+        let proposer_id = Uuid::new_v4();
+        let proposal_id = Uuid::new_v4();
+
+        let mut settings = v2_settings(ProtoVotingMode::Slow as i32);
+        settings.execute_by = 0;
+
+        let msg = HermesProposalCreated {
+            space_id: space_id.as_bytes().to_vec(),
+            proposer_id: proposer_id.as_bytes().to_vec(),
+            proposal_id: proposal_id.as_bytes().to_vec(),
+            voting_mode: ProtoVotingMode::Slow as i32,
+            actions: vec![],
+            settings: Some(settings),
+            meta: Some(make_meta(1_700_000_000, 42)),
+        };
+
+        let result = handle_proposal_created(&msg).unwrap();
+
+        assert_eq!(result.proposal.execute_by, None);
+    }
+
+    #[test]
+    fn handle_proposal_settings_updated_maps_zero_execute_by_to_none() {
+        // Same contract on the escalation path.
+        let proposal_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let mut settings = v2_settings(ProtoVotingMode::Slow as i32);
+        settings.execute_by = 0;
+
+        let msg = HermesProposalSettingsUpdated {
+            proposal_id: proposal_id.as_bytes().to_vec(),
+            space_id: space_id.as_bytes().to_vec(),
+            settings: Some(settings),
+            meta: Some(make_meta(0, 0)),
+        };
+
+        let result = handle_proposal_settings_updated(&msg).unwrap();
+
+        assert_eq!(result.execute_by, None);
     }
 }
