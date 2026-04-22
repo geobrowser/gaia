@@ -680,8 +680,10 @@ export function listProposalsInSpace(
 			const cursorCondition = buildCursorCondition(cursor, orderBy, orderDirection)
 			const orderClause = buildOrderClause(orderBy, orderDirection)
 
-			// Build action type filter conditions
-			// Use EXISTS subquery instead of JOIN to avoid SQL injection and cartesian products
+			// Build action type filter conditions.
+			// Use EXISTS subquery instead of JOIN to avoid SQL injection and cartesian products.
+			// Scope by proposal_version so historical actions from prior versions don't
+			// match the current-version list.
 			let actionTypeCondition = sql``
 			if (actionTypes && actionTypes.length > 0) {
 				// Include filter: proposal must have at least one of these action types
@@ -689,8 +691,10 @@ export function listProposalsInSpace(
 				const actionTypeChecks = actionTypes.map((t) => sql`pa_filter.action_type = ${t}::"proposalActionType"`)
 				const actionTypeOr = actionTypeChecks.reduce((acc, check) => sql`${acc} OR ${check}`)
 				actionTypeCondition = sql`AND EXISTS (
-          SELECT 1 FROM proposal_actions pa_filter 
-          WHERE pa_filter.proposal_id = p.id AND (${actionTypeOr})
+          SELECT 1 FROM proposal_actions pa_filter
+          WHERE pa_filter.proposal_id = p.id
+            AND pa_filter.proposal_version = p.proposal_version
+            AND (${actionTypeOr})
         )`
 			} else if (excludeActionTypes && excludeActionTypes.length > 0) {
 				// Exclude filter: proposal must NOT have any of these action types
@@ -699,8 +703,10 @@ export function listProposalsInSpace(
 				)
 				const excludeTypeOr = excludeTypeChecks.reduce((acc, check) => sql`${acc} OR ${check}`)
 				actionTypeCondition = sql`AND NOT EXISTS (
-          SELECT 1 FROM proposal_actions pa_exclude 
-          WHERE pa_exclude.proposal_id = p.id AND (${excludeTypeOr})
+          SELECT 1 FROM proposal_actions pa_exclude
+          WHERE pa_exclude.proposal_id = p.id
+            AND pa_exclude.proposal_version = p.proposal_version
+            AND (${excludeTypeOr})
         )`
 			}
 
