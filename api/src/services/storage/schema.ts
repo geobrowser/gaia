@@ -546,14 +546,14 @@ export const proposalVersions = pgTable(
 		/** V2: slow-path late execution threshold (0..RATIO_BASE). */
 		partialPercentageSupportThreshold: bigint("partial_percentage_support_threshold", {
 			mode: "number",
-		}),
+		}).notNull(),
 		/** V2: slow-path early execution threshold (0..RATIO_BASE). */
 		universalPercentageSupportThreshold: bigint("universal_percentage_support_threshold", {
 			mode: "number",
-		}),
+		}).notNull(),
 		/** V2: fast-path absolute YES votes needed. */
-		flatSupportThreshold: bigint("flat_support_threshold", {mode: "number"}),
-		/** V2: inclusive upper bound timestamp for execution. `null` for V1 rows. */
+		flatSupportThreshold: bigint("flat_support_threshold", {mode: "number"}).notNull(),
+		/** V2: inclusive upper bound timestamp for execution. `null` when the proposal has no deadline. */
 		executeBy: bigint("execute_by", {mode: "number"}),
 		/**
 		 * Timestamp/block when this proposal was executed, if any. Version-specific:
