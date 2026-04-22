@@ -73,7 +73,7 @@ spec:
       restartPolicy: Always
       containers:
         - name: exporter
-          image: quay.io/prometheuscommunity/elasticsearch-exporter:v1.7.0
+          image: quay.io/prometheuscommunity/elasticsearch-exporter:v1.10.0
           imagePullPolicy: IfNotPresent
           args:
             # v1.7.0 of the exporter does NOT read ES_URI from the environment —
