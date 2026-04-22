@@ -1,9 +1,10 @@
 //! Integration tests for V2 governance storage (GEO-481, Shape B).
 //!
 //! Proposals are split into identity (`proposals`) + append-only versions
-//! (`proposal_versions`). Mutable state (voting settings, tallies, executed_at,
-//! name) lives on `proposal_versions` scoped by `(proposal_id, proposal_version)`.
-//! `proposals.current_version` points at the active row.
+//! (`proposal_versions`). Per-version mutable state (voting settings,
+//! tallies, name) lives on `proposal_versions` scoped by
+//! `(proposal_id, proposal_version)`. Identity-level fields
+//! (`executed_at`, `current_version`) live on `proposals`.
 //!
 //! Votes and actions are version-scoped — prior-version votes are history, not
 //! deleted on update.
@@ -787,6 +788,67 @@ async fn test_insert_new_proposal_version_is_idempotent_on_replay() {
     assert_eq!(
         total_rows, 2,
         "replay must not create a spurious v3 (or any additional version)"
+    );
+
+    cleanup_proposal(&pool, proposal_id, &[space_id, proposer_id]).await;
+}
+
+// --------------------------------------------------------------------------
+// update_proposal_executed writes to proposals (identity), not proposal_versions.
+//
+// GEO-531 moved `executed_at` from `proposal_versions` to `proposals`. Execution
+// is semantically identity-level — only the current version of a proposal can
+// ever be executed, so the field belongs on the identity row, not the
+// versioned one. This test pins that behavior.
+// --------------------------------------------------------------------------
+#[tokio::test]
+#[ignore]
+async fn test_update_proposal_executed_writes_to_identity() {
+    let pool = get_pool().await;
+    let storage = setup_storage().await;
+    let space_id = Uuid::new_v4();
+    let proposal_id = Uuid::new_v4();
+    let proposer_id = Uuid::new_v4();
+
+    ensure_space(&pool, space_id).await;
+    ensure_space(&pool, proposer_id).await;
+
+    let v1 = version_slow(Some("Executed proposal"));
+    seed_proposal_v1(&storage, &pool, proposal_id, space_id, proposer_id, &v1).await;
+
+    // Bump to v2 so we can verify the write lands on identity, not on a
+    // specific version row.
+    let v2 = ProposalVersionItem {
+        version_created_at_block: 2,
+        ..version_slow(Some("Executed proposal v2"))
+    };
+    let mut tx = pool.begin().await.unwrap();
+    storage
+        .insert_new_proposal_version(proposal_id, &v2, &mut tx)
+        .await
+        .expect("insert v2 failed");
+    tx.commit().await.unwrap();
+
+    // Stamp executed_at.
+    let executed_at_ts: i64 = 1_700_000_500;
+    let mut tx = pool.begin().await.unwrap();
+    storage
+        .update_proposal_executed(proposal_id, executed_at_ts, &mut tx)
+        .await
+        .expect("update_proposal_executed failed");
+    tx.commit().await.unwrap();
+
+    // The value must be readable from `proposals` directly — no join.
+    let (from_identity,): (Option<i64>,) =
+        sqlx::query_as("SELECT executed_at FROM proposals WHERE id = $1")
+            .bind(proposal_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read from proposals failed");
+    assert_eq!(
+        from_identity,
+        Some(executed_at_ts),
+        "executed_at must live on proposals (identity) after GEO-531"
     );
 
     cleanup_proposal(&pool, proposal_id, &[space_id, proposer_id]).await;

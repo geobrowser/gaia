@@ -1235,11 +1235,11 @@ impl Storage {
         Ok(())
     }
 
-    /// Stamp `executed_at` on the current version of a proposal.
+    /// Stamp `executed_at` on a proposal.
     ///
-    /// Targets the row in `proposal_versions` whose `proposal_version` equals
-    /// `proposals.current_version` — older historical versions remain
-    /// un-executed (they were superseded by a subsequent update).
+    /// Identity-level: execution applies to the proposal as a whole, not to
+    /// any specific version. Only one execution per proposal is possible by
+    /// contract design.
     #[allow(dead_code)]
     pub async fn update_proposal_executed(
         &self,
@@ -1249,12 +1249,9 @@ impl Storage {
     ) -> Result<(), IndexerError> {
         sqlx::query(
             r#"
-            UPDATE proposal_versions pv
+            UPDATE proposals
             SET executed_at = $1
-            FROM proposals p
-            WHERE p.id = pv.proposal_id
-              AND pv.proposal_version = p.current_version
-              AND p.id = $2
+            WHERE id = $2
             "#,
         )
         .bind(executed_at)

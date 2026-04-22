@@ -69,9 +69,11 @@ pub enum ProposalActionPayload {
 
 /// Immutable identity of a governance proposal.
 ///
-/// Stored once on CREATE. Mutable state (voting settings, tally counts, name,
-/// executed_at) lives in [`ProposalVersionItem`] rows scoped by
-/// `(proposal_id, proposal_version)`.
+/// Stored once on CREATE. Per-version mutable state (voting settings, tally
+/// counts, name) lives in [`ProposalVersionItem`] rows scoped by
+/// `(proposal_id, proposal_version)`. Identity-level fields — `current_version`
+/// (pointer to the active version row) and `executed_at` (stamped once on
+/// execution) — live on the `proposals` row itself.
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct ProposalIdentity {
