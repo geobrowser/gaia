@@ -278,6 +278,19 @@ export const editors = pgTable(
 	],
 )
 
+/**
+ * space_editor_counts (view)
+ *
+ * Per-space editor count derived from the `editors` table. Consumed by V2
+ * slow-path early-execution checks where
+ * `yesCount >= ceil(universalPercentageSupportThreshold * totalEditors /
+ * RATIO_BASE)`
+ */
+export const spaceEditorCounts = pgView("space_editor_counts", {
+	spaceId: uuid("space_id").notNull(),
+	totalEditors: bigint("total_editors", {mode: "number"}).notNull(),
+}).as(sql`SELECT space_id, COUNT(*)::bigint AS total_editors FROM editors GROUP BY space_id`)
+
 export const subspaceTypeEnum = pgEnum("subspaceType", ["verified", "related"])
 
 export const subspaces = pgTable(

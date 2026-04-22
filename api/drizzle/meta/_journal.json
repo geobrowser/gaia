@@ -407,6 +407,13 @@
       "when": 1776871468815,
       "tag": "0057_nifty_gertrude_yorkes",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1776872188819,
+      "tag": "0058_easy_magdalene",
+      "breakpoints": true
     }
   ]
 }
