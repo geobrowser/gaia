@@ -19,6 +19,7 @@ import {log} from "../services/telemetry"
 import {useCostLogger} from "./costLoggerPlugin"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {shouldUnmaskError} from "./errorMasking"
+import HideProceduresPlugin from "./hideProceduresPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin, {NoFirstAndLastRule} from "./paginationCapPlugin"
 import {useSearchInvocationLogger} from "./searchInvocationLogger"
@@ -180,6 +181,7 @@ const postgraphileOptions = {
 		EntitySpaceFilterPlugin,
 		ValueOrderByScorePlugin,
 		PaginationCapPlugin,
+		HideProceduresPlugin,
 	],
 	disableDefaultMutations: true,
 	simpleCollections: "both" as const,
