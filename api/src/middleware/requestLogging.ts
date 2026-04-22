@@ -64,11 +64,13 @@ export function canonicalRequestLogging() {
 
 		// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
 		const tracer = trace.getTracer("gaia-api-http")
+		const origin = c.req.header("origin")
 		const span = tracer.startSpan(`${method} ${path}`, {
 			attributes: {
 				"http.method": method,
 				"http.route": path,
 				"http.request_id": requestId,
+				...(origin && {"http.request.header.origin": origin}),
 			},
 		})
 

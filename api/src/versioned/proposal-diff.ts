@@ -45,6 +45,8 @@ import type {
 	BlockSnapshot,
 	EntityDiff,
 	EntitySnapshot,
+	GroupedProposalDiffMode,
+	PaginatedGroupedProposalDiff,
 	PaginatedProposalDiff,
 	ProposalDiffCursor,
 	ProposalStatus,
@@ -86,6 +88,33 @@ export class InvalidCursorError {
 	constructor(readonly cursor: string) {}
 }
 
+// Grouped diff error types
+export class GroupSizeLimitError {
+	readonly _tag = "GroupSizeLimitError"
+	constructor(
+		readonly max: number,
+		readonly actual: number,
+	) {}
+}
+
+export class DuplicateProposalError {
+	readonly _tag = "DuplicateProposalError"
+	constructor(readonly duplicates: string[]) {}
+}
+
+export class MixedModeError {
+	readonly _tag = "MixedModeError"
+	constructor(
+		readonly activeCount: number,
+		readonly nonActiveCount: number,
+	) {}
+}
+
+export class MissingPublishActionError {
+	readonly _tag = "MissingPublishActionError"
+	constructor(readonly proposalId: string) {}
+}
+
 export type ProposalDiffError =
 	| QueryError
 	| ProposalNotFoundError
@@ -94,6 +123,13 @@ export type ProposalDiffError =
 	| EditDecodeError
 	| SpaceMismatchError
 	| InvalidCursorError
+
+export type GroupedProposalDiffError =
+	| ProposalDiffError
+	| GroupSizeLimitError
+	| DuplicateProposalError
+	| MixedModeError
+	| MissingPublishActionError
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
@@ -165,6 +201,61 @@ function getProposalWithPublishAction(
 	}).pipe(
 		Effect.withSpan("proposal-diff.getProposalWithPublishAction", {
 			attributes: {proposalId},
+		}),
+	)
+}
+
+/**
+ * Batch-load multiple proposals with their Publish actions in a single query.
+ * Returns a Map keyed by proposal ID for O(1) lookup.
+ */
+function batchGetProposalsWithPublishActions(
+	db: Database,
+	proposalIds: NormalizedUuid[],
+): Effect.Effect<Map<NormalizedUuid, ProposalWithAction>, QueryError> {
+	return Effect.tryPromise({
+		try: async () => {
+			const idsArray = `{${proposalIds.join(",")}}`
+			const result = await db.execute<{
+				proposal_id: string
+				space_id: string
+				start_time: string
+				end_time: string
+				executed_at: string | null
+				content_uri: string | null
+			}>(sql`
+				SELECT
+					p.id as proposal_id,
+					p.space_id,
+					p.start_time,
+					p.end_time,
+					p.executed_at,
+					pa.content_uri
+				FROM proposals p
+				LEFT JOIN proposal_actions pa ON pa.proposal_id = p.id AND pa.action_type = 'Publish'
+				WHERE p.id = ANY(${idsArray}::uuid[])
+			`)
+
+			const map = new Map<NormalizedUuid, ProposalWithAction>()
+			for (const row of result.rows) {
+				const id = normalizeUuid(row.proposal_id)
+				map.set(id, {
+					proposal: {
+						id,
+						spaceId: normalizeUuid(row.space_id),
+						startTime: BigInt(row.start_time),
+						endTime: BigInt(row.end_time),
+						executedAt: row.executed_at ? BigInt(row.executed_at) : null,
+					},
+					contentUri: row.content_uri,
+				})
+			}
+			return map
+		},
+		catch: (error) => new QueryError("batchGetProposalsWithPublishActions", error),
+	}).pipe(
+		Effect.withSpan("proposal-diff.batchGetProposalsWithPublishActions", {
+			attributes: {count: proposalIds.length},
 		}),
 	)
 }
@@ -950,12 +1041,15 @@ export function computeProposalDiff(
 			Effect.annotateLogs({proposalId, opCount: ops.length, entityCount: entityIds.length}),
 		)
 
-		// 8. Validate cursor consistency (entity count shouldn't change between pages)
+		// 8. Validate cursor consistency. If the entity set changed between pages
+		// (proposal edited, blob re-uploaded), continuing with a stale cursor
+		// would silently return inconsistent results. Fail loudly so the client
+		// re-fetches page 1 and acquires a fresh cursor.
 		if (expectedTotalEntities !== undefined && expectedTotalEntities !== entityIds.length) {
-			yield* Effect.logWarning("Entity count changed between pages").pipe(
+			yield* Effect.logWarning("Cursor drift detected (entity count changed between pages)").pipe(
 				Effect.annotateLogs({proposalId, expected: expectedTotalEntities, actual: entityIds.length}),
 			)
-			// Don't fail - just log the inconsistency. The proposal may have been updated.
+			return yield* Effect.fail(new InvalidCursorError(cursorStr ?? ""))
 		}
 
 		// 9. Paginate using the already-validated cursor
@@ -1092,6 +1186,306 @@ export function computeProposalDiff(
 	}).pipe(
 		Effect.withSpan("proposal-diff.computeProposalDiff", {
 			attributes: {proposalId, spaceId, limit},
+		}),
+	)
+}
+
+// ============================================================================
+// Grouped (Multi-Proposal) Diff
+// ============================================================================
+
+/** Maximum number of proposals in a single grouped diff request. */
+export const MAX_GROUP_SIZE = 20
+
+/**
+ * Convert an edit's `createdAt` to seconds-since-epoch for use with
+ * `resolveVersionKeyBeforeTimestamp` (which calls PostgreSQL `to_timestamp(bigint)`
+ * — seconds input).
+ *
+ * Per the grc-20 `Edit` type, `createdAt` is microseconds since the Unix epoch:
+ *   https://github.com/graphprotocol/grc-20-ts (Edit interface)
+ *
+ * Exported so the conversion is trivially unit-testable — getting the divisor
+ * wrong (e.g. dividing by 1_000 instead of 1_000_000) silently makes historical
+ * grouped-diffs return empty because the base version resolves to "now" and the
+ * diff is computed against already-applied state.
+ */
+export function editCreatedAtToSeconds(microseconds: bigint): bigint {
+	return microseconds / 1_000_000n
+}
+
+/**
+ * Ordering rule for grouped-diff ops (RFC 0004): apply in edit-timestamp order
+ * ascending, tiebreak by proposalId ascending. Exported so the ordering can be
+ * unit-tested without wiring up ipfs + drizzle + decode.
+ */
+export function compareGroupedEdits(
+	a: {createdAt: bigint; proposalId: NormalizedUuid},
+	b: {createdAt: bigint; proposalId: NormalizedUuid},
+): number {
+	if (a.createdAt < b.createdAt) return -1
+	if (a.createdAt > b.createdAt) return 1
+	if (a.proposalId < b.proposalId) return -1
+	if (a.proposalId > b.proposalId) return 1
+	return 0
+}
+
+/**
+ * Compute a paginated grouped proposal diff.
+ *
+ * Loads N proposals, fetches N edit blobs, decodes and sorts ops by
+ * (edit timestamp ASC, proposal ID ASC), then runs the standard diff
+ * pipeline on the concatenated op stream.
+ */
+export function computeGroupedProposalDiff(
+	db: Database,
+	proposalIds: NormalizedUuid[],
+	spaceId: NormalizedUuid,
+	cursorStr?: string,
+	limit = 50,
+): Effect.Effect<PaginatedGroupedProposalDiff, GroupedProposalDiffError> {
+	return Effect.gen(function* () {
+		yield* Effect.logDebug("ComputeGroupedProposalDiff started").pipe(
+			Effect.annotateLogs({proposalCount: proposalIds.length, spaceId, limit, hasCursor: !!cursorStr}),
+		)
+
+		// 1. Validate group size
+		if (proposalIds.length > MAX_GROUP_SIZE) {
+			return yield* Effect.fail(new GroupSizeLimitError(MAX_GROUP_SIZE, proposalIds.length))
+		}
+
+		// 2. Reject duplicates
+		const seen = new Set<NormalizedUuid>()
+		const duplicates: string[] = []
+		for (const id of proposalIds) {
+			if (seen.has(id)) duplicates.push(id)
+			seen.add(id)
+		}
+		if (duplicates.length > 0) {
+			return yield* Effect.fail(new DuplicateProposalError(duplicates))
+		}
+
+		// 3. Batch-load all proposals
+		const proposalsMap = yield* batchGetProposalsWithPublishActions(db, proposalIds)
+
+		// 4. Validate all proposals exist and belong to the requested space
+		for (const id of proposalIds) {
+			const data = proposalsMap.get(id)
+			if (!data) {
+				return yield* Effect.fail(new ProposalNotFoundError(id))
+			}
+			if (data.proposal.spaceId !== spaceId) {
+				return yield* Effect.fail(new SpaceMismatchError(spaceId, data.proposal.spaceId))
+			}
+			if (!data.contentUri) {
+				return yield* Effect.fail(new MissingPublishActionError(id))
+			}
+		}
+
+		// 5. Determine mode: all active → "active", all historical → "historical", mixed → reject
+		let activeCount = 0
+		let nonActiveCount = 0
+		for (const id of proposalIds) {
+			const data = proposalsMap.get(id)
+			if (!data) continue // already validated above
+			const status = getProposalStatus(data.proposal)
+			if (status === "active") activeCount++
+			else nonActiveCount++
+		}
+		if (activeCount > 0 && nonActiveCount > 0) {
+			return yield* Effect.fail(new MixedModeError(activeCount, nonActiveCount))
+		}
+		const mode: GroupedProposalDiffMode = activeCount > 0 ? "active" : "historical"
+
+		yield* Effect.logDebug("Group validated").pipe(Effect.annotateLogs({mode, proposalCount: proposalIds.length}))
+
+		// 6. Validate cursor early
+		let startIndex = 0
+		let expectedTotalEntities: number | undefined
+		if (cursorStr) {
+			const cursor = decodeCursor(cursorStr)
+			if (cursor === null) {
+				return yield* Effect.fail(new InvalidCursorError(cursorStr))
+			}
+			startIndex = cursor.entityIndex
+			expectedTotalEntities = cursor.totalEntities
+		}
+
+		// 7. Fetch all edit blobs in parallel
+		const blobEffects = proposalIds.map((id) => {
+			const data = proposalsMap.get(id)
+			const contentUri = data?.contentUri ?? "" // already validated above
+			return Effect.gen(function* () {
+				const cacheResult = yield* getIpfsCacheData(db, contentUri)
+				if (!cacheResult) {
+					return yield* Effect.fail(new EditBlobNotCachedError(contentUri) as GroupedProposalDiffError)
+				}
+				if (cacheResult.isErrored) {
+					return yield* Effect.fail(new EditBlobDecodeFailedError(contentUri) as GroupedProposalDiffError)
+				}
+				if (!cacheResult.data) {
+					return yield* Effect.fail(new EditBlobNotCachedError(contentUri) as GroupedProposalDiffError)
+				}
+				return {proposalId: id, blob: cacheResult.data}
+			})
+		})
+		const blobs = yield* Effect.all(blobEffects, {concurrency: "unbounded"})
+
+		// 8. Decode all edits and sort by (createdAt ASC, proposalId ASC)
+		const decodedEdits: {proposalId: NormalizedUuid; ops: Op[]; createdAt: bigint}[] = []
+		for (const {proposalId, blob} of blobs) {
+			const edit = yield* Effect.tryPromise({
+				try: async () => decodeEditAuto(blob),
+				catch: (error) => new EditDecodeError(error),
+			})
+			decodedEdits.push({
+				proposalId,
+				ops: edit.ops,
+				createdAt: edit.createdAt,
+			})
+		}
+
+		decodedEdits.sort(compareGroupedEdits)
+
+		// Concatenate ops in sorted order
+		const allOps: Op[] = decodedEdits.flatMap((e) => e.ops)
+
+		yield* Effect.logDebug("Edits decoded and sorted").pipe(
+			Effect.annotateLogs({editCount: decodedEdits.length, totalOps: allOps.length}),
+		)
+
+		// 9. Extract affected entity IDs (sorted for stable pagination)
+		const entityIds = (yield* extractAffectedEntities(db, allOps)).sort()
+
+		// 10. Validate cursor consistency. If the entity set changed between pages
+		// (proposal edited, a proposal added/removed from the group, blob
+		// re-uploaded), continuing with a stale cursor would silently return
+		// inconsistent results. Fail loudly so the client re-fetches page 1.
+		if (expectedTotalEntities !== undefined && expectedTotalEntities !== entityIds.length) {
+			yield* Effect.logWarning("Cursor drift detected (entity count changed between pages)").pipe(
+				Effect.annotateLogs({expected: expectedTotalEntities, actual: entityIds.length}),
+			)
+			return yield* Effect.fail(new InvalidCursorError(cursorStr ?? ""))
+		}
+
+		// 11. Paginate
+		const pageEntityIds = entityIds.slice(startIndex, startIndex + limit)
+
+		// 12. Resolve base version key
+		// For active mode: use live state (no version key)
+		// For historical mode: use versioned state before the earliest edit timestamp
+		let baseVersionKey: bigint | null = null
+		const firstEdit = decodedEdits[0]
+		if (mode === "historical" && firstEdit) {
+			const earliestTimestamp = editCreatedAtToSeconds(firstEdit.createdAt)
+			baseVersionKey = yield* resolveVersionKeyBeforeTimestamp(db, earliestTimestamp)
+		}
+
+		// Use "active" status for fetchBaseData when mode is "active", "closed" otherwise
+		const fetchStatus: ProposalStatus = mode === "active" ? "active" : "closed"
+
+		// 13. Batch fetch base states
+		const baseStates = yield* fetchBaseData(
+			fetchStatus,
+			baseVersionKey,
+			() => batchGetLiveSnapshots(db, pageEntityIds, spaceId),
+			(vk) => batchGetVersionedSnapshots(db, pageEntityIds, spaceId, vk),
+			() => {
+				const m = new Map<NormalizedUuid, EntitySnapshot>()
+				for (const id of pageEntityIds) m.set(id, emptySnapshot(id))
+				return m
+			},
+		)
+
+		// 14. Discover block relations and populate blocks
+		const blockRelationsMap = yield* fetchBaseData(
+			fetchStatus,
+			baseVersionKey,
+			() => batchGetLiveBlockRelationsForEntities(db, pageEntityIds, spaceId),
+			(vk) => batchGetBlockRelationsForEntities(db, pageEntityIds, vk, spaceId),
+			() => {
+				const m = new Map<NormalizedUuid, BlockRelationEntry[]>()
+				for (const id of pageEntityIds) m.set(id, [])
+				return m
+			},
+		)
+
+		const allBlockIds = new Set<NormalizedUuid>()
+		for (const entries of blockRelationsMap.values()) {
+			for (const entry of entries) {
+				allBlockIds.add(entry.blockEntityId)
+			}
+		}
+
+		const blockIdsList = Array.from(allBlockIds)
+		let blockSnapshotsMap: Map<NormalizedUuid, BlockSnapshot>
+		if (blockIdsList.length === 0) {
+			blockSnapshotsMap = new Map()
+		} else {
+			const blockSnapshots = yield* fetchBaseData(
+				fetchStatus,
+				baseVersionKey,
+				() => batchGetLiveBlockSnapshots(db, blockIdsList, spaceId),
+				(vk) => batchGetBlockSnapshotsAtVersion(db, blockIdsList, vk, spaceId),
+				() => [] as BlockSnapshot[],
+			)
+			blockSnapshotsMap = new Map(blockSnapshots.map((b) => [b.id, b]))
+		}
+
+		const blocksRelationMap = new Map<NormalizedUuid, NormalizedUuid>()
+		for (const entityId of pageEntityIds) {
+			const entries = blockRelationsMap.get(entityId) ?? []
+			const baseState = baseStates.get(entityId)
+			if (baseState) {
+				baseState.blocks = entries
+					.map((entry) => {
+						blocksRelationMap.set(entry.relationId, entry.blockEntityId)
+						return blockSnapshotsMap.get(entry.blockEntityId)
+					})
+					.filter((b): b is BlockSnapshot => b !== undefined)
+			}
+		}
+
+		// 15. Compute diffs
+		const diffs: EntityDiff[] = []
+		for (const entityId of pageEntityIds) {
+			const baseState = baseStates.get(entityId) ?? emptySnapshot(entityId)
+			const proposedState = applyOpsToSnapshot(baseState, allOps, entityId, spaceId, blocksRelationMap)
+			const diff = yield* diffEntitySnapshots(entityId, baseState, proposedState)
+			if (!isDiffEmpty(diff)) {
+				diffs.push(diff)
+			}
+		}
+
+		// 16. Pagination
+		const nextIndex = startIndex + limit
+		const hasMore = nextIndex < entityIds.length
+
+		yield* Effect.logInfo("ComputeGroupedProposalDiff completed").pipe(
+			Effect.annotateLogs({
+				mode,
+				proposalCount: proposalIds.length,
+				totalEntities: entityIds.length,
+				pageEntities: pageEntityIds.length,
+				diffsReturned: diffs.length,
+				hasMore,
+			}),
+		)
+
+		return {
+			proposalIds,
+			spaceId,
+			mode,
+			entities: diffs,
+			pagination: {
+				cursor: hasMore ? encodeCursor({entityIndex: nextIndex, totalEntities: entityIds.length}) : null,
+				hasMore,
+				totalEntities: entityIds.length,
+			},
+		}
+	}).pipe(
+		Effect.withSpan("proposal-diff.computeGroupedProposalDiff", {
+			attributes: {proposalCount: proposalIds.length, spaceId, limit},
 		}),
 	)
 }

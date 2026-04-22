@@ -903,3 +903,47 @@ export function getEntityVersions(
 		}),
 	)
 }
+
+// ============================================================================
+// Name Resolution
+// ============================================================================
+
+const NAME_PROPERTY_ID = normalizeUuid(SystemIds.NAME_PROPERTY)
+
+/**
+ * Batch-fetch entity names from the live values table.
+ * Returns a Map from entity ID to name string.
+ * Entities without a name property are omitted from the result.
+ */
+export function batchGetEntityNames(
+	db: NodePgDatabase<Record<string, unknown>>,
+	entityIds: NormalizedUuid[],
+): Effect.Effect<Map<NormalizedUuid, string>, QueryError> {
+	if (entityIds.length === 0) {
+		return Effect.succeed(new Map())
+	}
+
+	return Effect.tryPromise({
+		try: async () => {
+			const idsArray = `{${entityIds.join(",")}}`
+			const result = await db.execute<{entity_id: string; text: string}>(sql`
+				SELECT entity_id, text
+				FROM "values"
+				WHERE entity_id = ANY(${idsArray}::uuid[])
+				  AND property_id = ${NAME_PROPERTY_ID}::uuid
+				  AND text IS NOT NULL
+			`)
+
+			const names = new Map<NormalizedUuid, string>()
+			for (const row of result.rows) {
+				names.set(normalizeUuid(row.entity_id), row.text)
+			}
+			return names
+		},
+		catch: (error) => new QueryError("batchGetEntityNames", error),
+	}).pipe(
+		Effect.withSpan("queries.batchGetEntityNames", {
+			attributes: {count: entityIds.length},
+		}),
+	)
+}

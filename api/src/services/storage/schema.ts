@@ -97,12 +97,22 @@ export const atlasCheckpoints = pgTable("atlas_checkpoints", {
 
 export const spaceTypesEnum = pgEnum("spaceTypes", ["DAO", "Personal"])
 
-export const spaces = pgTable("spaces", {
-	id: uuid().primaryKey(),
-	type: spaceTypesEnum().notNull(),
-	address: text().notNull(),
-	topicId: uuid().references(() => entities.id),
-})
+export const spaces = pgTable(
+	"spaces",
+	{
+		id: uuid().primaryKey(),
+		type: spaceTypesEnum().notNull(),
+		address: text().notNull(),
+		topicId: uuid().references(() => entities.id),
+	},
+	(table) => [
+		// FK on topic_id had no supporting index, so DELETEs / UPDATEs on
+		// entities.id required a seq scan of spaces to enforce the FK.
+		// Table is tiny (hundreds of rows) so CREATE INDEX runs effectively
+		// instantly; the win is closing the FK-without-index gap.
+		index("spaces_topic_id_idx").on(table.topicId),
+	],
+)
 
 export const entities = pgTable(
 	"entities",
@@ -118,6 +128,8 @@ export const entities = pgTable(
 		index("entities_updated_at_idx").on(table.updatedAt),
 		// Composite index for ordering with id for stable pagination
 		index("entities_updated_at_id_idx").on(table.updatedAt, table.id),
+		// Composite index for ordering by createdAt with id for stable pagination
+		index("entities_created_at_id_idx").on(table.createdAt, table.id),
 	],
 )
 

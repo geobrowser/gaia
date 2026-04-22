@@ -466,7 +466,7 @@ app.get(
 			servers: [
 				{url: "http://localhost:3000", description: "Local Server"},
 				{
-					url: "https://api-testnet.geobrowser.io",
+					url: "https://testnet-api.geobrowser.io",
 					description: "Testnet Geo API",
 				},
 			],
