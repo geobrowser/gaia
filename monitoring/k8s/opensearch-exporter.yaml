@@ -11,8 +11,7 @@
 #
 # Hand-rendered from the upstream helm chart to match the pattern established
 # by prometheus-stack.yaml and api-metrics-servicemonitor.yaml: one committed
-# YAML, applied via `kubectl apply`. Equivalent chart values (note: v1.7.0
-# renamed some toggles into the `collector.*` namespace):
+# YAML, applied via `kubectl apply`. Equivalent chart values:
 #   serviceMonitor.enabled=true
 #   serviceMonitor.labels.release=kube-prometheus-stack
 #   extraEnvSecrets.ES_URI={secret: es-exporter-creds, key: ES_URI}
@@ -76,17 +75,11 @@ spec:
           image: quay.io/prometheuscommunity/elasticsearch-exporter:v1.10.0
           imagePullPolicy: IfNotPresent
           args:
-            # v1.7.0 of the exporter does NOT read ES_URI from the environment —
-            # it always uses --es.uri (default http://localhost:9200) unless
-            # explicitly overridden. k8s `$(VAR)` syntax substitutes the env
-            # var at container runtime, so the secret value never appears in
-            # the committed YAML or in the Deployment spec itself.
+            # The exporter does not auto-read ES_URI from the environment —
+            # the flag has to be passed explicitly. k8s `$(VAR)` syntax
+            # substitutes the env var at container runtime, so the secret
+            # value never appears in the committed YAML or Deployment spec.
             - --es.uri=$(ES_URI)
-            # Collector toggles — mirror the chart values documented above.
-            # Note: v1.7.0 moved some flags to the `--collector.*` namespace
-            # (dropping underscores). `--es.snapshots` and `--es.cluster_settings`
-            # from older docs are now `--collector.snapshots` and
-            # `--collector.clustersettings`.
             - --es.all
             - --es.indices
             - --es.shards
