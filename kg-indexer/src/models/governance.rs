@@ -150,11 +150,7 @@ pub struct ProposalVoteItem {
 
 /// DAO-global voting settings for a space (V2).
 ///
-/// Upserted on every `VOTING_SETTINGS_UPDATED` action event. `total_editors`
-/// is a denormalized counter maintained by the KG indexer consumer
-/// (`EDITOR_ADDED` / `EDITOR_REMOVED` events — see GEO-482); the handler
-/// returns 0 for it and storage defaults to 0 on insert so the counter is
-/// preserved across settings updates.
+/// Upserted on every `VOTING_SETTINGS_UPDATED` action event.
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct SpaceVotingSettingsItem {
@@ -166,7 +162,6 @@ pub struct SpaceVotingSettingsItem {
     pub duration: i64,
     pub disable_fast_path_access_for_new_members: bool,
     pub execution_grace_period: i64,
-    pub total_editors: i64,
     pub updated_at: i64,
     pub updated_at_block: i64,
 }

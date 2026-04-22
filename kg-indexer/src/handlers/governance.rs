@@ -242,9 +242,6 @@ fn legacy_threshold(voting_mode: &VotingMode, settings: &ProposalSettings) -> i6
 /// Process a HermesVotingSettingsUpdated message.
 ///
 /// Maps the DAO-global voting settings into `SpaceVotingSettingsItem`.
-/// `total_editors` is initialized to 0 — the counter is maintained separately
-/// by the consumer layer on `EDITOR_ADDED` / `EDITOR_REMOVED` events, and the
-/// storage layer preserves the existing counter value across settings updates.
 #[allow(dead_code)] // wired by GEO-482 (consumer routing)
 pub fn handle_voting_settings_updated(
     msg: &HermesVotingSettingsUpdated,
@@ -265,7 +262,6 @@ pub fn handle_voting_settings_updated(
         duration: msg.duration as i64,
         disable_fast_path_access_for_new_members: msg.disable_fast_path_access_for_new_members,
         execution_grace_period: msg.execution_grace_period as i64,
-        total_editors: 0,
         updated_at,
         updated_at_block,
     })
@@ -701,8 +697,6 @@ mod tests {
         assert_eq!(item.execution_grace_period, 6);
         assert_eq!(item.updated_at, 1_700_000_000);
         assert_eq!(item.updated_at_block, 999);
-        // total_editors defaults to 0; counter maintenance lives in GEO-482
-        assert_eq!(item.total_editors, 0);
     }
 
     #[test]

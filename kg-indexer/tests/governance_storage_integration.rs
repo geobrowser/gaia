@@ -178,18 +178,17 @@ fn settings_item(space_id: Uuid, partial: i64, updated_at: i64) -> SpaceVotingSe
         duration: 5,
         disable_fast_path_access_for_new_members: false,
         execution_grace_period: 6,
-        total_editors: 0,
         updated_at,
         updated_at_block: 1,
     }
 }
 
 // --------------------------------------------------------------------------
-// upsert_space_voting_settings preserves total_editors across updates
+// upsert_space_voting_settings overwrites all fields on conflict
 // --------------------------------------------------------------------------
 #[tokio::test]
 #[ignore]
-async fn test_upsert_space_voting_settings_preserves_total_editors() {
+async fn test_upsert_space_voting_settings_overwrites_on_conflict() {
     let pool = get_pool().await;
     let storage = setup_storage().await;
     let space_id = Uuid::new_v4();
@@ -204,14 +203,6 @@ async fn test_upsert_space_voting_settings_preserves_total_editors() {
         .expect("first upsert failed");
     tx.commit().await.unwrap();
 
-    // Simulate GEO-482's editor-counter updating total_editors out-of-band.
-    sqlx::query("UPDATE space_voting_settings SET total_editors = 5 WHERE space_id = $1")
-        .bind(space_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    // Second upsert: handler still passes total_editors = 0.
     let second = settings_item(space_id, 999_999, 2_000);
     let mut tx = pool.begin().await.unwrap();
     storage
@@ -220,8 +211,8 @@ async fn test_upsert_space_voting_settings_preserves_total_editors() {
         .expect("second upsert failed");
     tx.commit().await.unwrap();
 
-    let row: (i64, i64, i64) = sqlx::query_as(
-        r#"SELECT partial_percentage_support_threshold, total_editors, updated_at_block::bigint
+    let row: (i64, i64) = sqlx::query_as(
+        r#"SELECT partial_percentage_support_threshold, updated_at_block::bigint
            FROM space_voting_settings WHERE space_id = $1"#,
     )
     .bind(space_id)
@@ -229,14 +220,8 @@ async fn test_upsert_space_voting_settings_preserves_total_editors() {
     .await
     .unwrap();
 
-    assert_eq!(
-        row.0, 999_999,
-        "partial threshold must reflect latest upsert"
-    );
-    assert_eq!(
-        row.1, 5,
-        "total_editors must be preserved across upserts (maintained by GEO-482)"
-    );
+    assert_eq!(row.0, 999_999, "partial threshold must reflect latest upsert");
+    assert_eq!(row.1, 2_000, "updated_at_block must reflect latest upsert");
 
     cleanup_space_voting_settings(&pool, space_id).await;
 }

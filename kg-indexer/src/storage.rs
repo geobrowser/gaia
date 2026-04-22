@@ -1322,12 +1322,9 @@ impl Storage {
 
     /// Upsert DAO-global voting settings for a space.
     ///
-    /// On first write, inserts all fields including `total_editors` (which the
-    /// handler always passes as 0). On subsequent updates, ALL settings fields
-    /// are overwritten with the new values — EXCEPT `total_editors`, which is
-    /// intentionally omitted from the ON CONFLICT DO UPDATE clause. That
-    /// counter is maintained separately by `EDITOR_ADDED` / `EDITOR_REMOVED`
-    /// handlers (GEO-482) and must survive settings upserts.
+    /// On conflict, all settings fields are overwritten with the new values.
+    /// Editor count is not stored here — compute it via the `editors` table
+    /// (see the `space_editor_counts` view, GEO-514).
     #[allow(dead_code)]
     pub async fn upsert_space_voting_settings(
         &self,
@@ -1345,11 +1342,10 @@ impl Storage {
                 duration,
                 disable_fast_path_access_for_new_members,
                 execution_grace_period,
-                total_editors,
                 updated_at,
                 updated_at_block
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (space_id) DO UPDATE SET
                 partial_percentage_support_threshold =
                     EXCLUDED.partial_percentage_support_threshold,
@@ -1363,9 +1359,6 @@ impl Storage {
                 execution_grace_period = EXCLUDED.execution_grace_period,
                 updated_at = EXCLUDED.updated_at,
                 updated_at_block = EXCLUDED.updated_at_block
-                -- NOTE: total_editors is intentionally NOT in DO UPDATE.
-                -- It is maintained by EDITOR_ADDED/REMOVED handlers (GEO-482)
-                -- and must be preserved across settings upserts.
             "#,
         )
         .bind(settings.space_id)
@@ -1376,7 +1369,6 @@ impl Storage {
         .bind(settings.duration)
         .bind(settings.disable_fast_path_access_for_new_members)
         .bind(settings.execution_grace_period)
-        .bind(settings.total_editors)
         .bind(settings.updated_at.to_string())
         .bind(settings.updated_at_block.to_string())
         .execute(&mut **tx)
