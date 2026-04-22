@@ -1,0 +1,167 @@
+# Prometheus exporter for the DigitalOcean managed OpenSearch cluster.
+#
+# Translates the OpenSearch REST API (`/_cluster/health`, `/_nodes/stats`,
+# `/_cat/indices`, `/_snapshot/_all`, ...) into the `elasticsearch_*` metric
+# names that monitoring/k8s/gaia-overview-dashboard.yaml references. The
+# "OpenSearch Health" section of that dashboard stays empty until this
+# exporter is running and being scraped.
+#
+# OpenSearch is wire-compatible with Elasticsearch, so the upstream
+# prometheus-community/elasticsearch_exporter works against it unmodified.
+#
+# Hand-rendered from the upstream helm chart to match the pattern established
+# by prometheus-stack.yaml and api-metrics-servicemonitor.yaml: one committed
+# YAML, applied via `kubectl apply`. Equivalent chart values:
+#   serviceMonitor.enabled=true
+#   serviceMonitor.labels.release=kube-prometheus-stack
+#   extraEnvSecrets.ES_URI={secret: es-exporter-creds, key: ES_URI}
+#   es.all=true
+#   es.indices=true
+#   es.cluster_settings=true
+#   es.shards=true
+#   es.snapshots=true
+#
+# ─── Prerequisite: credentials Secret (NOT committed) ────────────────────────
+#
+# Copy the OpenSearch URL already in api-secrets into a Secret in the
+# monitoring namespace that this Deployment reads from:
+#
+#   kubectl create secret generic es-exporter-creds -n monitoring \
+#     --from-literal=ES_URI="$(kubectl get secret -n api api-secrets \
+#         -o jsonpath='{.data.OPENSEARCH_URL}' | base64 -d)"
+#
+# ─── Apply ───────────────────────────────────────────────────────────────────
+#
+#   kubectl apply -f monitoring/k8s/opensearch-exporter.yaml
+#
+# Verify metrics are flowing:
+#   kubectl -n monitoring port-forward svc/opensearch-exporter 9114:9114 &
+#   curl -s localhost:9114/metrics | grep -E '^elasticsearch_(cluster_health|indices_search_query_total|jvm_memory)'
+#
+# In Prometheus UI (port-forward 9090):
+#   sum(elasticsearch_indices_search_query_total)  should return a value.
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opensearch-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: opensearch-exporter
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensearch-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: opensearch-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensearch-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opensearch-exporter
+    spec:
+      serviceAccountName: opensearch-exporter
+      restartPolicy: Always
+      containers:
+        - name: exporter
+          image: quay.io/prometheuscommunity/elasticsearch-exporter:v1.7.0
+          imagePullPolicy: IfNotPresent
+          args:
+            # Collector toggles — mirror the chart values documented above.
+            - --es.all
+            - --es.indices
+            - --es.cluster_settings
+            - --es.shards
+            - --es.snapshots
+            - --es.timeout=30s
+          env:
+            # ES_URI is the standard env var the exporter reads; takes
+            # precedence over the --es.uri flag. URL includes auth creds, so
+            # it stays in the Secret and never in the checked-in YAML.
+            - name: ES_URI
+              valueFrom:
+                secretKeyRef:
+                  name: es-exporter-creds
+                  key: ES_URI
+          ports:
+            - name: http
+              containerPort: 9114
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: opensearch-exporter
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9114
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: opensearch-exporter
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: opensearch-exporter
+  namespace: monitoring
+  labels:
+    # The kube-prometheus-stack Prometheus CR selects ServiceMonitors with
+    # this label, matching the pattern used by api-metrics-servicemonitor.yaml
+    # and ingress-nginx-metrics.yaml.
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensearch-exporter
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
