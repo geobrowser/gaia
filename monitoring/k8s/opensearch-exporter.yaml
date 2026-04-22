@@ -11,15 +11,16 @@
 #
 # Hand-rendered from the upstream helm chart to match the pattern established
 # by prometheus-stack.yaml and api-metrics-servicemonitor.yaml: one committed
-# YAML, applied via `kubectl apply`. Equivalent chart values:
+# YAML, applied via `kubectl apply`. Equivalent chart values (note: v1.7.0
+# renamed some toggles into the `collector.*` namespace):
 #   serviceMonitor.enabled=true
 #   serviceMonitor.labels.release=kube-prometheus-stack
 #   extraEnvSecrets.ES_URI={secret: es-exporter-creds, key: ES_URI}
 #   es.all=true
 #   es.indices=true
-#   es.cluster_settings=true
 #   es.shards=true
-#   es.snapshots=true
+#   collector.snapshots=true
+#   collector.clustersettings=true
 #
 # ─── Prerequisite: credentials Secret (NOT committed) ────────────────────────
 #
@@ -76,11 +77,15 @@ spec:
           imagePullPolicy: IfNotPresent
           args:
             # Collector toggles — mirror the chart values documented above.
+            # Note: v1.7.0 moved some flags to the `--collector.*` namespace
+            # (dropping underscores). `--es.snapshots` and `--es.cluster_settings`
+            # from older docs are now `--collector.snapshots` and
+            # `--collector.clustersettings`.
             - --es.all
             - --es.indices
-            - --es.cluster_settings
             - --es.shards
-            - --es.snapshots
+            - --collector.snapshots
+            - --collector.clustersettings
             - --es.timeout=30s
           env:
             # ES_URI is the standard env var the exporter reads; takes
