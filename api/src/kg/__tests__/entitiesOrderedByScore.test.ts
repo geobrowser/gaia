@@ -79,7 +79,9 @@ async function seedFixtures(pool: Pool) {
 	)
 }
 
-describe("entitiesOrderedByScore", () => {
+// Skipped: entities_ordered_by_score is hidden from GraphQL via hideProceduresPlugin.
+// Unskip when the field is re-exposed.
+describe.skip("entitiesOrderedByScore", () => {
 	let pool: Pool
 
 	beforeAll(async () => {
