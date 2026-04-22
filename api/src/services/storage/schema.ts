@@ -508,6 +508,15 @@ export const proposals = pgTable(
 		 * proposal" read.
 		 */
 		currentVersion: integer("current_version").notNull().default(1),
+		/**
+		 * Unix-seconds timestamp when the proposal was executed on-chain, or
+		 * `null` if not yet executed. Identity-level because only one version of
+		 * a proposal can ever execute — the concept applies to the proposal as a
+		 * whole, not to any specific version. Stamped by the kg-indexer on
+		 * `PROPOSAL_EXECUTED` events (both Slow-path explicit `enter()` and
+		 * Fast-path inline auto-exec via `_ping()`).
+		 */
+		executedAt: bigint("executed_at", {mode: "number"}),
 	},
 	(table) => [
 		index("proposals_space_id_idx").on(table.spaceId),
@@ -555,12 +564,6 @@ export const proposalVersions = pgTable(
 		flatSupportThreshold: bigint("flat_support_threshold", {mode: "number"}).notNull(),
 		/** V2: inclusive upper bound timestamp for execution. `null` when the proposal has no deadline. */
 		executeBy: bigint("execute_by", {mode: "number"}),
-		/**
-		 * Timestamp/block when this proposal was executed, if any. Version-specific:
-		 * older versions remain un-executed (they were superseded), only the
-		 * currently-active version can transition to executed.
-		 */
-		executedAt: bigint("executed_at", {mode: "number"}),
 		/**
 		 * Human-readable name derived from the version's actions. For Publish
 		 * actions, uses the edit name; for others, uses the action type.
