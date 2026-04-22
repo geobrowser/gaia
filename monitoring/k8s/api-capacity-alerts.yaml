@@ -38,12 +38,12 @@ spec:
             summary: API HPA is maxed while p99 latency is high
             description: API is at max replicas with sustained p99 latency above 2s.
 
-        - alert: Api503RateHigh
-          expr: api:ingress_503_ratio:rate5m > 0.02
+        - alert: Api5xxRateHigh
+          expr: api:ingress_5xx_ratio:rate5m > 0.02
           for: 10m
           labels:
             severity: warning
             service: api
           annotations:
-            summary: API 503 ratio is elevated
-            description: More than 2% of API ingress requests are returning 503 over 10 minutes.
+            summary: API 5xx ratio is elevated
+            description: More than 2% of API ingress requests are returning 5xx over 10 minutes.

@@ -99,7 +99,7 @@ The observability stack consists of:
 |-------|----------|-----------|-------------|
 | `ApiReadinessDegraded` | warning | <75% of running pods ready for 5m | `kubectl get pods -n api` — check for unready pods |
 | `ApiHpaMaxedWithHighP99` | critical | HPA at max replicas AND p99 > 2s for 10m | Check HPA status and latency dashboard |
-| `Api503RateHigh` | warning | 503 ratio > 2% for 10m | Check API Ingress dashboard failure-class panel |
+| `Api5xxRateHigh` | warning | 5xx ratio > 2% for 10m | Check API Ingress dashboard failure-class panel |
 
 **Config:** [`monitoring/k8s/api-capacity-alerts.yaml`](monitoring/k8s/api-capacity-alerts.yaml)
 
