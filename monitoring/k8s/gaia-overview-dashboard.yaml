@@ -3335,6 +3335,51 @@ data:
           }
         },
         {
+          "type": "timeseries",
+          "title": "Total Docs Indexed (over time)",
+          "description": "Primary-shard document count across user indices (excludes internal `.`-prefixed indices). Use to spot sudden drops (re-indexing, deletion, index recreation) or gradual growth.",
+          "id": 108,
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 114
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(elasticsearch_indices_docs{index!~\"\\\\..*\"})",
+              "legendFormat": "docs",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "lineInterpolation": "smooth",
+                "spanNulls": true
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "single"
+            }
+          }
+        },
+        {
           "type": "row",
           "id": 107,
           "title": "GraphQL Query Cost (shadow mode)",
