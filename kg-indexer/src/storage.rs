@@ -1325,7 +1325,6 @@ impl Storage {
     /// On conflict, all settings fields are overwritten with the new values.
     /// Editor count is not stored here — compute it via the `editors` table
     /// (see the `space_editor_counts` view, GEO-514).
-    #[allow(dead_code)]
     pub async fn upsert_space_voting_settings(
         &self,
         settings: &SpaceVotingSettingsItem,

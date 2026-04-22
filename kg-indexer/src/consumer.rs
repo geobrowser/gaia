@@ -120,6 +120,7 @@ pub enum KgMessage {
     ProposalVoted(hermes_schema::pb::governance::HermesProposalVoted),
     ProposalExecuted(hermes_schema::pb::governance::HermesProposalExecuted),
     ProposalSettingsUpdated(hermes_schema::pb::governance::HermesProposalSettingsUpdated),
+    VotingSettingsUpdated(hermes_schema::pb::governance::HermesVotingSettingsUpdated),
 }
 
 impl KgMessage {
@@ -138,6 +139,7 @@ impl KgMessage {
             KgMessage::ProposalVoted(v) => v.meta.as_ref(),
             KgMessage::ProposalExecuted(e) => e.meta.as_ref(),
             KgMessage::ProposalSettingsUpdated(s) => s.meta.as_ref(),
+            KgMessage::VotingSettingsUpdated(v) => v.meta.as_ref(),
         }
     }
 
@@ -264,6 +266,17 @@ pub fn parse_message(
                         })?;
                     Ok(KgMessage::ProposalSettingsUpdated(settings_updated))
                 }
+                Some("VOTING_SETTINGS_UPDATED") => {
+                    let voting_settings_updated =
+                        hermes_schema::pb::governance::HermesVotingSettingsUpdated::decode(payload)
+                            .map_err(|e| {
+                                IndexerError::decode(format!(
+                                    "HermesVotingSettingsUpdated: {}",
+                                    e
+                                ))
+                            })?;
+                    Ok(KgMessage::VotingSettingsUpdated(voting_settings_updated))
+                }
                 _ => Err(IndexerError::decode(format!(
                     "unknown governance event type: {:?}",
                     event_type
@@ -295,6 +308,34 @@ mod tests {
                 assert_eq!(event.topic_id, vec![2; 16]);
             }
             _ => panic!("expected TopicDeclared"),
+        }
+    }
+
+    #[test]
+    fn test_parse_voting_settings_updated_message() {
+        let msg = hermes_schema::pb::governance::HermesVotingSettingsUpdated {
+            space_id: vec![7; 16],
+            partial_percentage_support_threshold: 500_000,
+            universal_percentage_support_threshold: 750_000,
+            flat_support_threshold: 3,
+            quorum: 10,
+            duration: 3_600,
+            disable_fast_path_access_for_new_members: false,
+            execution_grace_period: 600,
+            meta: None,
+        };
+        let payload = msg.encode_to_vec();
+
+        let parsed =
+            parse_message("space.governance", &payload, Some("VOTING_SETTINGS_UPDATED")).unwrap();
+
+        match parsed {
+            KgMessage::VotingSettingsUpdated(event) => {
+                assert_eq!(event.space_id, vec![7; 16]);
+                assert_eq!(event.partial_percentage_support_threshold, 500_000);
+                assert_eq!(event.universal_percentage_support_threshold, 750_000);
+            }
+            _ => panic!("expected VotingSettingsUpdated"),
         }
     }
 }
