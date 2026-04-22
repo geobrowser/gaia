@@ -17,7 +17,8 @@ CREATE TABLE "proposal_versions" (
 	"abstain_count" bigint DEFAULT 0 NOT NULL,
 	"version_created_at" text NOT NULL,
 	"version_created_at_block" text NOT NULL,
-	CONSTRAINT "proposal_versions_proposal_id_proposal_version_pk" PRIMARY KEY("proposal_id","proposal_version")
+	CONSTRAINT "proposal_versions_proposal_id_proposal_version_pk" PRIMARY KEY("proposal_id","proposal_version"),
+	CONSTRAINT "proposal_versions_idempotency_key" UNIQUE("proposal_id","version_created_at_block")
 );
 --> statement-breakpoint
 CREATE TABLE "space_voting_settings" (
@@ -29,13 +30,14 @@ CREATE TABLE "space_voting_settings" (
 	"duration" bigint NOT NULL,
 	"disable_fast_path_access_for_new_members" boolean NOT NULL,
 	"execution_grace_period" bigint NOT NULL,
-	"total_editors" bigint DEFAULT 0 NOT NULL,
 	"updated_at" text NOT NULL,
 	"updated_at_block" text NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "proposal_actions" DROP CONSTRAINT "proposal_actions_proposal_id_proposals_id_fk";--> statement-breakpoint
-ALTER TABLE "proposal_votes" DROP CONSTRAINT "proposal_votes_proposal_id_proposals_id_fk";--> statement-breakpoint
+ALTER TABLE "proposal_actions" DROP CONSTRAINT "proposal_actions_proposal_id_proposals_id_fk";
+--> statement-breakpoint
+ALTER TABLE "proposal_votes" DROP CONSTRAINT "proposal_votes_proposal_id_proposals_id_fk";
+--> statement-breakpoint
 DROP INDEX "proposals_space_end_time_idx";--> statement-breakpoint
 DROP INDEX "proposals_space_start_time_idx";--> statement-breakpoint
 ALTER TABLE "proposal_votes" DROP CONSTRAINT "proposal_votes_proposal_id_voter_id_pk";--> statement-breakpoint
@@ -55,7 +57,6 @@ ALTER TABLE "proposal_versions" ADD CONSTRAINT "proposal_versions_proposal_id_pr
 ALTER TABLE "space_voting_settings" ADD CONSTRAINT "space_voting_settings_space_id_spaces_id_fk" FOREIGN KEY ("space_id") REFERENCES "public"."spaces"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "proposal_actions" ADD CONSTRAINT "proposal_actions_version_fk" FOREIGN KEY ("proposal_id","proposal_version") REFERENCES "public"."proposal_versions"("proposal_id","proposal_version") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "proposal_votes" ADD CONSTRAINT "proposal_votes_version_fk" FOREIGN KEY ("proposal_id","proposal_version") REFERENCES "public"."proposal_versions"("proposal_id","proposal_version") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "proposal_versions" ADD CONSTRAINT "proposal_versions_idempotency_key" UNIQUE("proposal_id","version_created_at_block");--> statement-breakpoint
 CREATE INDEX "proposal_versions_proposal_version_desc_idx" ON "proposal_versions" USING btree ("proposal_id","proposal_version" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "proposal_versions_end_time_idx" ON "proposal_versions" USING btree ("end_time");--> statement-breakpoint
 CREATE INDEX "proposal_versions_start_time_idx" ON "proposal_versions" USING btree ("start_time");--> statement-breakpoint

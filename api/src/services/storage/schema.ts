@@ -747,12 +747,6 @@ export const proposalVotesRelations = drizzleRelations(proposalVotes, ({one}) =>
  * Latest-state DAO-global voting settings, one row per DAO space. Upserted on
  * every `VOTING_SETTINGS_UPDATED` action event (including the initial emission
  * at DAO creation time).
- *
- * `total_editors` is a denormalized count maintained by the KG indexer via
- * `EDITOR_ADDED` / `EDITOR_REMOVED` events. It is required to evaluate the V2
- * slow-path early execution formula (`universalPercentageSupportThreshold *
- * totalEditors / RATIO_BASE`) without an RPC call to the contract's
- * `canExecuteProposal()` view function.
  */
 export const spaceVotingSettings = pgTable("space_voting_settings", {
 	spaceId: uuid("space_id")
@@ -769,7 +763,6 @@ export const spaceVotingSettings = pgTable("space_voting_settings", {
 	duration: bigint("duration", {mode: "number"}).notNull(),
 	disableFastPathAccessForNewMembers: boolean("disable_fast_path_access_for_new_members").notNull(),
 	executionGracePeriod: bigint("execution_grace_period", {mode: "number"}).notNull(),
-	totalEditors: bigint("total_editors", {mode: "number"}).notNull().default(0),
 	updatedAt: text("updated_at").notNull(),
 	updatedAtBlock: text("updated_at_block").notNull(),
 })

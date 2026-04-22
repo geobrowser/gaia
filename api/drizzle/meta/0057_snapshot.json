@@ -1,5 +1,5 @@
 {
-  "id": "c4d43f70-2fc9-483b-91e9-6c955ddf8cdc",
+  "id": "30c74da2-0566-4a55-85a8-697d3bd69950",
   "prevId": "8844e0b6-b70a-474f-b092-307b7d002c9e",
   "version": "7",
   "dialect": "postgresql",
@@ -2163,13 +2163,6 @@
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
-        },
-        "total_editors": {
-          "name": "total_editors",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
         },
         "updated_at": {
           "name": "updated_at",
