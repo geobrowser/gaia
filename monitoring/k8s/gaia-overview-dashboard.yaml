@@ -1,0 +1,3520 @@
+apiVersion: v1
+data:
+  gaia-overview.json: |-
+    {
+      "id": null,
+      "uid": "gaia-overview",
+      "title": "Gaia Overview",
+      "tags": [
+        "gaia",
+        "overview",
+        "production"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 4,
+      "refresh": "30s",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {
+              "selected": true,
+              "text": "Prometheus",
+              "value": "Prometheus"
+            }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "title": "Key Health Indicators",
+          "id": 100,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "stat",
+          "title": "API RPS",
+          "id": 1,
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 0,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "api:ingress_requests_per_second:rate5m",
+              "legendFormat": "rps",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 0.1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value"
+          }
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "5xx Count",
+          "description": "Total 5xx responses over the selected dashboard time range",
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 4,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(increase(nginx_ingress_controller_requests{host=\"testnet-api.geobrowser.io\",status=~\"5..\"}[$__range]))",
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 1
+                  },
+                  {
+                    "color": "red",
+                    "value": 10
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "textMode": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          }
+        },
+        {
+          "type": "stat",
+          "title": "p99 Latency",
+          "id": 3,
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 8,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "api:ingress_p99_latency_seconds:5m",
+              "legendFormat": "p99",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "decimals": 2,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 1.0
+                  },
+                  {
+                    "color": "red",
+                    "value": 2.0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "5xx Ratio",
+          "id": 4,
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 12,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "api:ingress_5xx_ratio:rate5m",
+              "legendFormat": "5xx",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 2,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.01
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.02
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "API HPA Replicas",
+          "description": "Current / max replicas for API HPA",
+          "id": 5,
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 16,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"api\", horizontalpodautoscaler=\"api\"}",
+              "legendFormat": "current",
+              "refId": "A"
+            },
+            {
+              "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"api\", horizontalpodautoscaler=\"api\"}",
+              "legendFormat": "max",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "GQL Pool Saturated",
+          "description": "1 = saturated, 0 = normal",
+          "id": 6,
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 20,
+            "y": 1
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max(gaia_api_graphql_pool_saturated)",
+              "legendFormat": "saturated",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "OK",
+                      "color": "green"
+                    },
+                    "1": {
+                      "text": "SATURATED",
+                      "color": "red"
+                    }
+                  }
+                }
+              ],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background"
+          }
+        },
+        {
+          "type": "row",
+          "title": "API Traffic & Latency",
+          "id": 101,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 5
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "Request Rate (total + 5xx)",
+          "id": 10,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 6
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "api:ingress_requests_per_second:rate5m",
+              "legendFormat": "total",
+              "refId": "A"
+            },
+            {
+              "expr": "api:ingress_5xx_per_second:rate5m",
+              "legendFormat": "5xx",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "5xx"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "red",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Latency Percentiles (p50 / p75 / p95 / p99)",
+          "id": 11,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 6
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "api:ingress_p50_latency_seconds:5m",
+              "legendFormat": "p50",
+              "refId": "A"
+            },
+            {
+              "expr": "api:ingress_p75_latency_seconds:5m",
+              "legendFormat": "p75",
+              "refId": "B"
+            },
+            {
+              "expr": "api:ingress_p95_latency_seconds:5m",
+              "legendFormat": "p95",
+              "refId": "C"
+            },
+            {
+              "expr": "api:ingress_p99_latency_seconds:5m",
+              "legendFormat": "p99",
+              "refId": "D"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Error Rates (499 / 500 / 503)",
+          "id": 12,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 14
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "api:ingress_499_per_second:rate5m",
+              "legendFormat": "499 (client cancel)",
+              "refId": "A"
+            },
+            {
+              "expr": "api:ingress_500_per_second:rate5m",
+              "legendFormat": "500 (server error)",
+              "refId": "B"
+            },
+            {
+              "expr": "api:ingress_503_per_second:rate5m",
+              "legendFormat": "503 (unavailable)",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "500 (server error)"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "red",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "503 (unavailable)"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "orange",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Response Codes (RPS by Status)",
+          "id": 13,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 14
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "api:ingress_status_requests_per_second:rate5m",
+              "legendFormat": "{{status}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "row",
+          "title": "API Database Pool Health",
+          "id": 102,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 22
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "REST Pool Utilization",
+          "id": 20,
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 0,
+            "y": 23
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "avg(gaia_api_db_pool_utilization_ratio)",
+              "legendFormat": "utilization",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.9
+                  }
+                ]
+              },
+              "custom": {
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "GraphQL Pool Utilization",
+          "id": 21,
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 8,
+            "y": 23
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "avg(gaia_api_graphql_pool_utilization_ratio)",
+              "legendFormat": "utilization",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.9
+                  }
+                ]
+              },
+              "custom": {
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Pool Waiting & Acquire Timeouts",
+          "id": 22,
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 16,
+            "y": 23
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(gaia_api_db_pool_waiting_count)",
+              "legendFormat": "REST waiting",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(gaia_api_graphql_pool_waiting_count)",
+              "legendFormat": "GQL waiting",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(gaia_api_graphql_pool_recent_acquire_timeouts)",
+              "legendFormat": "GQL acquire timeouts",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "row",
+          "title": "Service Resource % of Limit",
+          "id": 105,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 30
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "stat",
+          "title": "api mem%",
+          "id": 60,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 0,
+            "y": 31
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"api\",container=\"api\"}) / sum(kube_pod_container_resource_limits{namespace=\"api\",container=\"api\",resource=\"memory\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore memory history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22api%5C%22,container%3D%5C%22api%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "atlas mem%",
+          "id": 61,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 3,
+            "y": 31
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"atlas\",resource=\"memory\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore memory history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22atlas%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "hermes mem%",
+          "id": 62,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 6,
+            "y": 31
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-pipeline\",resource=\"memory\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore memory history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "kg-idx mem%",
+          "id": 63,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 9,
+            "y": 31
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"kg-indexer\",resource=\"memory\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore memory history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22kg-indexer%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "search-idx mem%",
+          "id": 64,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 12,
+            "y": 31
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"search\",container=\"search-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"search\",container=\"search-indexer\",resource=\"memory\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore memory history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22search%5C%22,container%3D%5C%22search-indexer%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "ipfs-cache mem%",
+          "id": 65,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 15,
+            "y": 31
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-ipfs-cache\",resource=\"memory\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore memory history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "scoring mem%",
+          "id": 66,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 18,
+            "y": 31
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"scoring\",container=\"scoring-service\"}) / sum(kube_pod_container_resource_limits{namespace=\"scoring\",container=\"scoring-service\",resource=\"memory\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore memory history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22scoring%5C%22,container%3D%5C%22scoring-service%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "api cpu%",
+          "id": 70,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 0,
+            "y": 36
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"api\",container=\"api\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"api\",container=\"api\",resource=\"cpu\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore CPU history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22api%5C%22,container%3D%5C%22api%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "atlas cpu%",
+          "id": 71,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 3,
+            "y": 36
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"atlas\",resource=\"cpu\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore CPU history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22atlas%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "hermes cpu%",
+          "id": 72,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 6,
+            "y": 36
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-pipeline\",resource=\"cpu\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore CPU history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "kg-idx cpu%",
+          "id": 73,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 9,
+            "y": 36
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"kg-indexer\",resource=\"cpu\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore CPU history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22kg-indexer%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "search-idx cpu%",
+          "id": 74,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 12,
+            "y": 36
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"search\",container=\"search-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"search\",container=\"search-indexer\",resource=\"cpu\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore CPU history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22search%5C%22,container%3D%5C%22search-indexer%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "ipfs-cache cpu%",
+          "id": 75,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 15,
+            "y": 36
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-ipfs-cache\",resource=\"cpu\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore CPU history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "scoring cpu%",
+          "id": 76,
+          "gridPos": {
+            "h": 5,
+            "w": 3,
+            "x": 18,
+            "y": 36
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"scoring\",container=\"scoring-service\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"scoring\",container=\"scoring-service\",resource=\"cpu\"})",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.7
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              },
+              "links": [
+                {
+                  "title": "Explore CPU history",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22scoring%5C%22,container%3D%5C%22scoring-service%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "targetBlank": true
+                }
+              ]
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background",
+            "graphMode": "area"
+          }
+        },
+        {
+          "type": "text",
+          "title": "",
+          "id": 87,
+          "gridPos": {
+            "h": 2,
+            "w": 24,
+            "x": 0,
+            "y": 41
+          },
+          "options": {
+            "mode": "markdown",
+            "content": "### Peak % of Limit (last 48h)\nMemory (top) &nbsp;\u00b7&nbsp; CPU (bottom)"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "api peak 48h",
+          "id": 80,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 0,
+            "y": 43
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"api\",container=\"api\"}) / sum(kube_pod_container_resource_limits{namespace=\"api\",container=\"api\",resource=\"memory\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "atlas peak 48h",
+          "id": 81,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 3,
+            "y": 43
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"atlas\",resource=\"memory\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "hermes peak 48h",
+          "id": 82,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 6,
+            "y": 43
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-pipeline\",resource=\"memory\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "kg-idx peak 48h",
+          "id": 83,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 9,
+            "y": 43
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"kg-indexer\",resource=\"memory\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "search-idx peak 48h",
+          "id": 84,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 12,
+            "y": 43
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"search\",container=\"search-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"search\",container=\"search-indexer\",resource=\"memory\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "ipfs-cache peak 48h",
+          "id": 85,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 15,
+            "y": 43
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-ipfs-cache\",resource=\"memory\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "scoring peak 48h",
+          "id": 86,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 18,
+            "y": 43
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"scoring\",container=\"scoring-service\"}) / sum(kube_pod_container_resource_limits{namespace=\"scoring\",container=\"scoring-service\",resource=\"memory\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "api peak cpu 48h",
+          "id": 90,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 0,
+            "y": 47
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"api\",container=\"api\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"api\",container=\"api\",resource=\"cpu\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "atlas peak cpu 48h",
+          "id": 91,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 3,
+            "y": 47
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"atlas\",resource=\"cpu\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "hermes peak cpu 48h",
+          "id": 92,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 6,
+            "y": 47
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-pipeline\",resource=\"cpu\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "kg-idx peak cpu 48h",
+          "id": 93,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 9,
+            "y": 47
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"kg-indexer\",resource=\"cpu\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "search-idx peak cpu 48h",
+          "id": 94,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 12,
+            "y": 47
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"search\",container=\"search-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"search\",container=\"search-indexer\",resource=\"cpu\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "ipfs-cache peak cpu 48h",
+          "id": 95,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 15,
+            "y": 47
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-ipfs-cache\",resource=\"cpu\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "scoring peak cpu 48h",
+          "id": 96,
+          "gridPos": {
+            "h": 4,
+            "w": 3,
+            "x": 18,
+            "y": 47
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"scoring\",container=\"scoring-service\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"scoring\",container=\"scoring-service\",resource=\"cpu\"}))[48h:])",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "decimals": 0,
+              "min": 0,
+              "max": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.6
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.85
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value",
+            "graphMode": "none"
+          }
+        },
+        {
+          "type": "row",
+          "title": "Kubernetes Pod Health (All Services)",
+          "id": 103,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 51
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "Pod Restarts (5m increase)",
+          "description": "Container restart counts across all Gaia services",
+          "id": 30,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 52
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum by (container) (increase(kube_pod_container_status_restarts_total{namespace=~\"api|knowledge|search|scoring\", container=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}[5m]))",
+              "legendFormat": "{{container}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "table",
+          "title": "Deployment Availability",
+          "description": "Available vs desired replicas for all Gaia deployments",
+          "id": 31,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 52
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "kube_deployment_status_replicas_available{namespace=~\"api|knowledge|search|scoring\", deployment=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}",
+              "format": "table",
+              "instant": true,
+              "refId": "A"
+            },
+            {
+              "expr": "kube_deployment_spec_replicas{namespace=~\"api|knowledge|search|scoring\", deployment=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}",
+              "format": "table",
+              "instant": true,
+              "refId": "B"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "seriesToColumns",
+              "options": {
+                "byField": "deployment"
+              }
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time 1": true,
+                  "Time 2": true,
+                  "__name__ 1": true,
+                  "__name__ 2": true,
+                  "instance 1": true,
+                  "instance 2": true,
+                  "job 1": true,
+                  "job 2": true,
+                  "namespace 1": true,
+                  "namespace 2": true
+                },
+                "renameByName": {
+                  "deployment": "Deployment",
+                  "Value #A": "Available",
+                  "Value #B": "Desired"
+                }
+              }
+            }
+          ],
+          "options": {
+            "showHeader": true
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "CPU Usage by Service (cores)",
+          "id": 32,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 60
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{namespace=~\"api|knowledge|search|scoring\", container=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}[5m]))",
+              "legendFormat": "{{container}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Memory Usage by Service",
+          "id": 33,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 60
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum by (container) (container_memory_working_set_bytes{namespace=~\"api|knowledge|search|scoring\", container=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"})",
+              "legendFormat": "{{container}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Atlas CPU Throttling Ratio",
+          "id": 34,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 68
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_cfs_throttled_seconds_total{namespace=\"knowledge\",pod=~\"atlas-.*\",container=\"atlas\"}[5m])) / sum(rate(container_cpu_cfs_periods_total{namespace=\"knowledge\",pod=~\"atlas-.*\",container=\"atlas\"}[5m]))",
+              "legendFormat": "atlas throttling",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 0.15
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.25
+                  }
+                ]
+              },
+              "custom": {
+                "thresholdsStyle": {
+                  "mode": "line"
+                }
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Atlas Available Replicas",
+          "id": 35,
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 68
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "kube_deployment_status_replicas_available{namespace=\"knowledge\",deployment=\"atlas\"}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Atlas Desired Replicas",
+          "id": 36,
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 68
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "kube_deployment_spec_replicas{namespace=\"knowledge\",deployment=\"atlas\"}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value"
+          }
+        },
+        {
+          "type": "row",
+          "title": "OpenSearch Health",
+          "id": 104,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 76
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "stat",
+          "title": "Search QPS",
+          "id": 40,
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 0,
+            "y": 77
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(elasticsearch_indices_search_query_total[5m]))",
+              "legendFormat": "QPS",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps",
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Avg Search Latency (ms)",
+          "id": 41,
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 4,
+            "y": 77
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "1000 * (sum(rate(elasticsearch_indices_search_query_time_seconds[5m])) / sum(rate(elasticsearch_indices_search_query_total[5m])))",
+              "legendFormat": "latency",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 50
+                  },
+                  {
+                    "color": "red",
+                    "value": 200
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Total Docs",
+          "id": 42,
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 8,
+            "y": 77
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(elasticsearch_indices_docs{index!~\"\\\\..*\"})",
+              "legendFormat": "docs",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Cluster Health",
+          "description": "1 = healthy (green), 0 = degraded",
+          "id": 43,
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 12,
+            "y": 77
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(elasticsearch_cluster_health_status{color=\"green\"})",
+              "legendFormat": "green",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "mappings": [
+                {
+                  "type": "value",
+                  "options": {
+                    "0": {
+                      "text": "DEGRADED",
+                      "color": "red"
+                    },
+                    "1": {
+                      "text": "GREEN",
+                      "color": "green"
+                    }
+                  }
+                }
+              ],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "background"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Unassigned Shards",
+          "id": 44,
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 16,
+            "y": 77
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "elasticsearch_cluster_health_unassigned_shards",
+              "legendFormat": "unassigned",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Last Snapshot Age",
+          "id": 45,
+          "gridPos": {
+            "h": 4,
+            "w": 4,
+            "x": 20,
+            "y": 77
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "(time() - max(elasticsearch_snapshot_stats_latest_snapshot_timestamp_seconds)) / 3600",
+              "legendFormat": "hours",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "h",
+              "decimals": 1,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 24
+                  },
+                  {
+                    "color": "red",
+                    "value": 48
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ]
+            },
+            "colorMode": "value"
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Search QPS by Index",
+          "id": 46,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 81
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "rate(elasticsearch_indices_search_query_total[5m])",
+              "legendFormat": "{{index}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Indexing Rate & Failures",
+          "id": 47,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 81
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(elasticsearch_indices_indexing_index_total[5m]))",
+              "legendFormat": "index ops/s",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(elasticsearch_indices_indexing_index_failed_total[5m]))",
+              "legendFormat": "failed ops/s",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "failed ops/s"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "red",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "JVM Heap Usage vs Max",
+          "id": 48,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 89
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(elasticsearch_jvm_memory_used_bytes{area=\"heap\"})",
+              "legendFormat": "heap used",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(elasticsearch_jvm_memory_max_bytes{area=\"heap\"})",
+              "legendFormat": "heap max",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "bytes"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "GC Time & Frequency (5m rate)",
+          "id": 49,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 89
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(elasticsearch_jvm_gc_collection_seconds_sum[5m]))",
+              "legendFormat": "GC time (s/s)",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(elasticsearch_jvm_gc_collection_seconds_count[5m]))",
+              "legendFormat": "GC runs (/s)",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Thread Pool Rejections (5m rate)",
+          "id": 50,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 97
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "rate(elasticsearch_thread_pool_rejected_count[5m])",
+              "legendFormat": "{{node}} {{type}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Circuit Breaker Trips (5m rate)",
+          "id": 51,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 97
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "rate(elasticsearch_breakers_tripped[5m])",
+              "legendFormat": "{{name}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "row",
+          "id": 107,
+          "title": "GraphQL Query Cost (shadow mode)",
+          "collapsed": false,
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 105
+          },
+          "panels": []
+        },
+        {
+          "id": 14,
+          "type": "heatmap",
+          "title": "GraphQL Query Cost Distribution (5m rate)",
+          "description": "Histogram of GraphQL query cost over the last 5 minutes. Dark cells = many queries in that cost bucket.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 106
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (le) (rate(gaia_api_graphql_query_cost_bucket[5m]))",
+              "format": "heatmap",
+              "legendFormat": "{{le}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "calculate": false,
+            "yAxis": {
+              "axisLabel": "cost bucket",
+              "unit": "short"
+            },
+            "cellGap": 1,
+            "color": {
+              "mode": "scheme",
+              "scheme": "Spectral",
+              "steps": 64,
+              "exponent": 0.5
+            }
+          }
+        },
+        {
+          "id": 15,
+          "type": "timeseries",
+          "title": "GraphQL Query Cost p50 / p95 / p99 (5m)",
+          "description": "Percentiles of GraphQL query cost over the rolling 5-minute window. Spikes indicate callers sending more expensive queries.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 106
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(gaia_api_graphql_query_cost_bucket[5m])))",
+              "legendFormat": "p50"
+            },
+            {
+              "refId": "B",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(gaia_api_graphql_query_cost_bucket[5m])))",
+              "legendFormat": "p95"
+            },
+            {
+              "refId": "C",
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(gaia_api_graphql_query_cost_bucket[5m])))",
+              "legendFormat": "p99"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {
+                "fillOpacity": 10,
+                "showPoints": "never"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true,
+              "calcs": [
+                "mean",
+                "max"
+              ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        }
+      ]
+    }
+kind: ConfigMap
+metadata:
+  labels:
+    app: kube-prometheus-stack-grafana
+    grafana_dashboard: "1"
+    release: kube-prometheus-stack
+  name: gaia-overview-dashboard
+  namespace: monitoring

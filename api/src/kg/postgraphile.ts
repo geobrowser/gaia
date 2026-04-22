@@ -16,10 +16,12 @@ import {
 } from "../services/dbSaturation"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
+import {useCostLogger} from "./costLoggerPlugin"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {shouldUnmaskError} from "./errorMasking"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin, {NoFirstAndLastRule} from "./paginationCapPlugin"
+import {useSearchInvocationLogger} from "./searchInvocationLogger"
 import {createShedEpisodeTracker} from "./shedEpisodeTracker"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 import {createValkeyCache} from "./valkeyCache"
@@ -115,6 +117,33 @@ if (process.env.SENTRY_DSN) {
 	}, POOL_METRICS_INTERVAL_MS).unref()
 }
 
+// SQLSTATE codes raised intentionally by Postgres functions to signal user input errors.
+// These should surface the raised message to API clients instead of being masked.
+// - 22023 invalid_parameter_value (RAISE ... USING ERRCODE = '22023' in pg functions)
+const USER_INPUT_SQLSTATES = new Set(["22023"])
+
+function findPgUserInputError(error: unknown): {message: string} | null {
+	if (!error || typeof error !== "object") return null
+	const code = (error as {code?: unknown}).code
+	if (typeof code === "string" && USER_INPUT_SQLSTATES.has(code)) {
+		return error as {message: string}
+	}
+	return null
+}
+
+function toUserInputGraphQLError(error: GraphQLError, pgError: {message: string}): GraphQLError {
+	return new GraphQLError(pgError.message, {
+		nodes: error.nodes,
+		source: error.source,
+		positions: error.positions,
+		path: error.path,
+		extensions: {
+			code: "BAD_USER_INPUT",
+			http: {status: 400},
+		},
+	})
+}
+
 // Without this handler, background connection errors (PgBouncer closing idle connections,
 // network blips) become unhandled events. The pool doesn't remove the dead connection,
 // so subsequent connect() calls can check out a stale client that fails during query execution.
@@ -170,8 +199,11 @@ const postgraphileOptions = {
 	},
 }
 
-// Create PostGraphile schemas
-const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], postgraphileOptions)
+// Create PostGraphile schemas. Exported so cost-estimator / query-shape tests
+// can run complexity calculations against the real schema instead of a fake
+// minimal one — catches schema-level surprises (NonNull wrapping, Connection
+// naming, auto-generated field shapes) that mocks don't.
+export const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], postgraphileOptions)
 
 /**
  * Yoga plugin that manages the pgClient lifecycle for PostGraphile resolvers.
@@ -330,10 +362,15 @@ const customValidationRules: Plugin = {
 }
 
 // Response cache is first so cache hits skip pgClient checkout entirely.
+// Search-invocation logger runs per request (AST walk only, no DB) and
+// warns on every `search` / `searchConnection` invocation so we can
+// observe usage + caller IP without adding a separate metrics pipeline.
 const sharedPlugins = [
 	...(responseCachePlugin ? [responseCachePlugin] : []),
 	customValidationRules,
+	useCostLogger(),
 	useGraphQLInstrumentation(),
+	useSearchInvocationLogger(),
 	usePgClient(pgPool),
 	useExecutionCancellation(),
 ]
@@ -348,6 +385,12 @@ export const graphqlServer = createYoga<GraphQLServerContext>({
 		maskError(error, message, isDev) {
 			if (shouldUnmaskError(error)) {
 				return error
+			}
+			if (error instanceof GraphQLError) {
+				const pgError = findPgUserInputError(error.originalError)
+				if (pgError) {
+					return toUserInputGraphQLError(error, pgError)
+				}
 			}
 			return maskError(error, message, isDev)
 		},
