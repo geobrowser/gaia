@@ -242,7 +242,6 @@ fn legacy_threshold(voting_mode: &VotingMode, settings: &ProposalSettings) -> i6
 /// Process a HermesVotingSettingsUpdated message.
 ///
 /// Maps the DAO-global voting settings into `SpaceVotingSettingsItem`.
-#[allow(dead_code)] // wired by GEO-482 (consumer routing)
 pub fn handle_voting_settings_updated(
     msg: &HermesVotingSettingsUpdated,
 ) -> Result<SpaceVotingSettingsItem, HandlerError> {

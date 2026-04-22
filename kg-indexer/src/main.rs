@@ -688,6 +688,7 @@ const EXPECTED_EVENT_TYPES: &[&str] = &[
     "PROPOSAL_VOTED",
     "PROPOSAL_EXECUTED",
     "PROPOSAL_SETTINGS_UPDATED",
+    "VOTING_SETTINGS_UPDATED",
 ];
 
 fn expected_count_for_indexer(
@@ -730,6 +731,7 @@ fn event_type_label(event: &BufferedEvent) -> String {
         KgMessage::ProposalVoted(_) => "PROPOSAL_VOTED".to_string(),
         KgMessage::ProposalExecuted(_) => "PROPOSAL_EXECUTED".to_string(),
         KgMessage::ProposalSettingsUpdated(_) => "PROPOSAL_SETTINGS_UPDATED".to_string(),
+        KgMessage::VotingSettingsUpdated(_) => "VOTING_SETTINGS_UPDATED".to_string(),
         KgMessage::BlockSummary(_) => "BLOCK_SUMMARY".to_string(),
     }
 }
@@ -1256,6 +1258,15 @@ async fn process_message(
                 .await?;
             1
         }
+        KgMessage::VotingSettingsUpdated(event) => {
+            let item = handlers::governance::handle_voting_settings_updated(&event)?;
+            debug!(
+                space_id = %item.space_id,
+                "Processing VotingSettingsUpdated"
+            );
+            storage.upsert_space_voting_settings(&item, &mut tx).await?;
+            1
+        }
     };
 
     tx.commit().await?;
@@ -1372,6 +1383,13 @@ async fn process_block(
                 "kg_indexer.handle_proposal_settings_updated",
                 event_id = event_id,
                 proposal_id = tracing::field::Empty,
+                space_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::VotingSettingsUpdated(_) => info_span!(
+                "kg_indexer.handle_voting_settings_updated",
+                event_id = event_id,
                 space_id = tracing::field::Empty,
                 "otel.status_code" = tracing::field::Empty,
                 "otel.status_message" = tracing::field::Empty
@@ -1743,6 +1761,16 @@ async fn process_block(
                             &mut tx,
                         )
                         .await?;
+                    1
+                }
+                KgMessage::VotingSettingsUpdated(voting_settings_event) => {
+                    let item = handlers::governance::handle_voting_settings_updated(
+                        voting_settings_event,
+                    )?;
+
+                    event_span.record("space_id", display(item.space_id));
+
+                    storage.upsert_space_voting_settings(&item, &mut tx).await?;
                     1
                 }
                 KgMessage::BlockSummary(_) => 0,
