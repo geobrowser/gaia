@@ -14,15 +14,9 @@
  * fragment spreads, and emits one `log.warn` per search-field selection.
  * Multiple `search` calls in a single document all get logged.
  *
- * Client IP extraction (see `extractClientIp`) prefers `X-Real-IP`
- * because it's the unspoofable value in this cluster's topology:
- * DO LoadBalancer → ingress-nginx with `externalTrafficPolicy: Local`
- * and L4 TCP passthrough preserves the real client source IP to nginx,
- * and nginx sets `X-Real-IP = $remote_addr` (single-valued, overwrites
- * any client-supplied header). `X-Forwarded-For` is a fallback: nginx
- * appends its observed `$remote_addr` to the right of any client-supplied
- * value, so the *rightmost* entry is trustworthy and leftmost entries are
- * client-controlled / spoofable. Never reading leftmost XFF here.
+ * Client IP extraction uses `extractClientIp` from `utils/clientIp`
+ * (`X-Real-IP` preferred, rightmost `X-Forwarded-For` as fallback —
+ * documented trust rules for our nginx topology live there).
  */
 import {
 	type DocumentNode,
@@ -35,6 +29,7 @@ import {
 } from "graphql"
 import type {Plugin} from "graphql-yoga"
 import {log} from "../services/telemetry"
+import {extractClientIp} from "../utils/clientIp"
 
 const SEARCH_FIELD_NAMES: ReadonlySet<string> = new Set(["search", "searchConnection"])
 
@@ -44,36 +39,6 @@ export type SearchInvocation = {
 	spaceId?: string
 	first?: number
 	similarityThreshold?: number
-}
-
-/**
- * Extract the real client IP from request headers.
- *
- * Priority:
- *   1. `X-Real-IP` — set by nginx to `$remote_addr`, single-valued,
- *      overwrites any client-supplied value. Unspoofable via HTTP in
- *      our cluster config.
- *   2. Rightmost entry of `X-Forwarded-For` — nginx appends its own
- *      `$remote_addr` to the end of the XFF chain via
- *      `$proxy_add_x_forwarded_for`. Leftmost entries are client-
- *      controlled and NOT trusted; we only read the rightmost.
- *
- * Returns `null` if neither header is present.
- */
-export function extractClientIp(headers: Headers): string | null {
-	const xRealIp = headers.get("x-real-ip")?.trim()
-	if (xRealIp) return xRealIp
-
-	const xff = headers.get("x-forwarded-for")
-	if (xff) {
-		const parts = xff
-			.split(",")
-			.map((s) => s.trim())
-			.filter(Boolean)
-		const rightmost = parts[parts.length - 1]
-		if (rightmost) return rightmost
-	}
-	return null
 }
 
 /**

@@ -9,7 +9,9 @@
  */
 
 import {SpanStatusCode, trace} from "@opentelemetry/api"
+import * as Sentry from "@sentry/node"
 import type {Context, Next} from "hono"
+import {extractClientIp} from "../utils/clientIp"
 import {detectDbFailureClass} from "../services/dbFailures"
 import {log} from "../services/telemetry"
 
@@ -46,6 +48,13 @@ export function requestId() {
  * - END: status, duration, error (if any)
  *
  * Wraps request in OTEL span for HTTP context (flows through SentrySpanProcessor).
+ *
+ * Also opens a Sentry isolation scope around the request so that every
+ * `captureException` / `captureMessage` fired downstream (GraphQL errors,
+ * PostGraphile pool-connect failures, `log.error` calls, Effect `logError` /
+ * `logFatal`) inherits caller-identity tags — `origin`, `client_ip` — plus
+ * `user-agent` in the context. These are the signals you need to filter
+ * Sentry Issues by which frontend / IP / script is triggering them.
  */
 export function canonicalRequestLogging() {
 	return async (c: Context, next: Next) => {
@@ -54,82 +63,105 @@ export function canonicalRequestLogging() {
 		const path = c.req.path
 		const startTime = Date.now()
 
-		// Canonical START log
-		log.info(`${method} ${path} started`, {
-			requestId,
-			method,
-			path,
-			query: c.req.query(),
-		})
+		// Caller identity for Sentry alerts. `origin` + `user-agent` are
+		// client-settable but help distinguish frontends from ad-hoc scripts.
+		// `clientIp` uses the trust rules documented in searchInvocationLogger.
+		const headers = c.req.raw.headers
+		const origin = headers.get("origin")
+		const userAgent = headers.get("user-agent")
+		const clientIp = extractClientIp(headers)
 
-		// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
-		const tracer = trace.getTracer("gaia-api-http")
-		const origin = c.req.header("origin")
-		const span = tracer.startSpan(`${method} ${path}`, {
-			attributes: {
-				"http.method": method,
-				"http.route": path,
-				"http.request_id": requestId,
-				...(origin && {"http.request.header.origin": origin}),
-			},
-		})
-
-		// Store span context for GraphQL plugin (OTEL context doesn't propagate through graphql-yoga)
-		c.set("traceContext", {
-			traceId: span.spanContext().traceId,
-			spanId: span.spanContext().spanId,
-			traceFlags: span.spanContext().traceFlags,
-		})
-
-		try {
-			await next()
-
-			const status = c.res.status
-			const duration = Date.now() - startTime
-			const graphqlOperationName = c.get("graphqlOperationName") as string | undefined
-
-			span.setAttribute("http.status_code", status)
-			span.setAttribute("http.response_time_ms", duration)
-			if (graphqlOperationName) {
-				span.setAttribute("graphql.operation_name", graphqlOperationName)
-			}
-
-			if (status >= 400) {
-				span.setStatus({code: SpanStatusCode.ERROR, message: `HTTP ${status}`})
-			}
-
-			// Canonical END log
-			log.info(`${method} ${path} completed`, {
+		// withIsolationScope gives us a per-request Sentry scope so tags
+		// attach to every capture fired inside this handler without bleeding
+		// across concurrent requests.
+		return Sentry.withIsolationScope(async (scope) => {
+			if (origin) scope.setTag("origin", origin)
+			if (clientIp) scope.setTag("client_ip", clientIp)
+			scope.setContext("request", {
 				requestId,
 				method,
 				path,
-				status,
-				durationMs: duration,
-				...(graphqlOperationName ? {graphqlOperationName} : {}),
+				origin,
+				clientIp,
+				userAgent,
 			})
-		} catch (error) {
-			const duration = Date.now() - startTime
-			const failureClass = detectDbFailureClass(error)
 
-			span.setStatus({code: SpanStatusCode.ERROR, message: "error"})
-			span.setAttribute("http.response_time_ms", duration)
-			if (failureClass) {
-				span.setAttribute("db.failure_class", failureClass)
-			}
-
-			// Canonical ERROR log
-			log.error(`${method} ${path} failed`, {
+			// Canonical START log
+			log.info(`${method} ${path} started`, {
 				requestId,
 				method,
 				path,
-				durationMs: duration,
-				...(failureClass ? {failureClass} : {}),
-				error: error instanceof Error ? error.message : String(error),
+				query: c.req.query(),
 			})
 
-			throw error
-		} finally {
-			span.end()
-		}
+			// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
+			const tracer = trace.getTracer("gaia-api-http")
+			const span = tracer.startSpan(`${method} ${path}`, {
+				attributes: {
+					"http.method": method,
+					"http.route": path,
+					"http.request_id": requestId,
+					...(origin && {"http.request.header.origin": origin}),
+				},
+			})
+
+			// Store span context for GraphQL plugin (OTEL context doesn't propagate through graphql-yoga)
+			c.set("traceContext", {
+				traceId: span.spanContext().traceId,
+				spanId: span.spanContext().spanId,
+				traceFlags: span.spanContext().traceFlags,
+			})
+
+			try {
+				await next()
+
+				const status = c.res.status
+				const duration = Date.now() - startTime
+				const graphqlOperationName = c.get("graphqlOperationName") as string | undefined
+
+				span.setAttribute("http.status_code", status)
+				span.setAttribute("http.response_time_ms", duration)
+				if (graphqlOperationName) {
+					span.setAttribute("graphql.operation_name", graphqlOperationName)
+				}
+
+				if (status >= 400) {
+					span.setStatus({code: SpanStatusCode.ERROR, message: `HTTP ${status}`})
+				}
+
+				// Canonical END log
+				log.info(`${method} ${path} completed`, {
+					requestId,
+					method,
+					path,
+					status,
+					durationMs: duration,
+					...(graphqlOperationName ? {graphqlOperationName} : {}),
+				})
+			} catch (error) {
+				const duration = Date.now() - startTime
+				const failureClass = detectDbFailureClass(error)
+
+				span.setStatus({code: SpanStatusCode.ERROR, message: "error"})
+				span.setAttribute("http.response_time_ms", duration)
+				if (failureClass) {
+					span.setAttribute("db.failure_class", failureClass)
+				}
+
+				// Canonical ERROR log
+				log.error(`${method} ${path} failed`, {
+					requestId,
+					method,
+					path,
+					durationMs: duration,
+					...(failureClass ? {failureClass} : {}),
+					error: error instanceof Error ? error.message : String(error),
+				})
+
+				throw error
+			} finally {
+				span.end()
+			}
+		})
 	}
 }
