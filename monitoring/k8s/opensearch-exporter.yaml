@@ -76,6 +76,12 @@ spec:
           image: quay.io/prometheuscommunity/elasticsearch-exporter:v1.7.0
           imagePullPolicy: IfNotPresent
           args:
+            # v1.7.0 of the exporter does NOT read ES_URI from the environment —
+            # it always uses --es.uri (default http://localhost:9200) unless
+            # explicitly overridden. k8s `$(VAR)` syntax substitutes the env
+            # var at container runtime, so the secret value never appears in
+            # the committed YAML or in the Deployment spec itself.
+            - --es.uri=$(ES_URI)
             # Collector toggles — mirror the chart values documented above.
             # Note: v1.7.0 moved some flags to the `--collector.*` namespace
             # (dropping underscores). `--es.snapshots` and `--es.cluster_settings`
@@ -88,9 +94,8 @@ spec:
             - --collector.clustersettings
             - --es.timeout=30s
           env:
-            # ES_URI is the standard env var the exporter reads; takes
-            # precedence over the --es.uri flag. URL includes auth creds, so
-            # it stays in the Secret and never in the checked-in YAML.
+            # URL includes auth creds, so it stays in the Secret and never in
+            # the checked-in YAML. Substituted into --es.uri above via $(VAR).
             - name: ES_URI
               valueFrom:
                 secretKeyRef:
