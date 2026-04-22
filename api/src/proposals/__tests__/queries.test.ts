@@ -79,16 +79,24 @@ function makeDbProposalRow(overrides: Partial<Record<string, unknown>> = {}) {
  */
 function makeProposal(overrides: Partial<ProposalWithVotes> = {}): ProposalWithVotes {
 	const now = BigInt(Math.floor(Date.now() / 1000))
+	const votingMode = overrides.votingMode ?? "Fast"
+	const threshold = overrides.threshold ?? 10n
 	return {
 		id: "test-proposal-id",
 		spaceId: "test-space-id",
 		name: "Test Proposal",
 		proposedBy: "test-proposer-id",
-		votingMode: "Fast",
+		proposalVersion: 1,
+		votingMode,
 		startTime: now - 3600n,
 		endTime: now + 3600n,
 		quorum: 10n,
-		threshold: 10n,
+		threshold,
+		flatSupportThreshold: votingMode === "Fast" ? threshold : 0n,
+		partialPercentageSupportThreshold: votingMode === "Slow" ? threshold : 0n,
+		universalPercentageSupportThreshold: 0n,
+		executeBy: null,
+		totalEditors: 0n,
 		executedAt: null,
 		yesCount: 0n,
 		noCount: 0n,

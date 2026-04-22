@@ -15,19 +15,33 @@ import {type ProposalWithVotes, RATIO_BASE} from "../types"
 
 /**
  * Create a test proposal with sensible defaults.
+ *
+ * The V2 thresholds default so the legacy `threshold` field semantics still
+ * hold for callers that only set `threshold`: Fast-mode proposals mirror
+ * `threshold` into `flatSupportThreshold`, and Slow-mode proposals mirror it
+ * into `partialPercentageSupportThreshold`. Callers can always override a
+ * V2 field directly when a test needs it.
  */
 function makeProposal(overrides: Partial<ProposalWithVotes> = {}): ProposalWithVotes {
 	const now = BigInt(Math.floor(Date.now() / 1000))
+	const votingMode = overrides.votingMode ?? "Fast"
+	const threshold = overrides.threshold ?? 10n
 	return {
 		id: "test-proposal-id",
 		spaceId: "test-space-id",
 		name: "Test Proposal",
 		proposedBy: "test-proposer-id",
-		votingMode: "Fast",
+		proposalVersion: 1,
+		votingMode,
 		startTime: now - 3600n, // Started 1 hour ago
 		endTime: now + 3600n, // Ends in 1 hour
 		quorum: 10n,
-		threshold: 10n,
+		threshold,
+		flatSupportThreshold: votingMode === "Fast" ? threshold : 0n,
+		partialPercentageSupportThreshold: votingMode === "Slow" ? threshold : 0n,
+		universalPercentageSupportThreshold: 0n,
+		executeBy: null,
+		totalEditors: 0n,
 		executedAt: null,
 		yesCount: 0n,
 		noCount: 0n,
