@@ -688,6 +688,7 @@ const EXPECTED_EVENT_TYPES: &[&str] = &[
     "PROPOSAL_VOTED",
     "PROPOSAL_EXECUTED",
     "PROPOSAL_SETTINGS_UPDATED",
+    "VOTING_SETTINGS_UPDATED",
 ];
 
 fn expected_count_for_indexer(
