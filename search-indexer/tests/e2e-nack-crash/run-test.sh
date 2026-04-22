@@ -181,6 +181,9 @@ fi
 header "Phase 2: NACK → Crash"
 
 info "Starting search-indexer (run 1)"
+# Point topology persistence at our per-run work directory. The indexer
+# defaults to /data/topology_state.json, which isn't writable on CI runners
+# and isn't a sensible shared location between test runs anyway.
 ENVIRONMENT=staging \
 RUST_LOG="info,search_indexer=debug" \
 KAFKA_BROKER="$KAFKA_BROKER" \
@@ -192,6 +195,7 @@ OPENSEARCH_RETRY_INTERVAL_SECS=2 \
 KAFKA_GROUP_EDITS_ID="$KAFKA_GROUP_EDITS_ID" \
 KAFKA_GROUP_SCORES_ID="$KAFKA_GROUP_SCORES_ID" \
 KAFKA_GROUP_SPACE_TOPICS_ID="$KAFKA_GROUP_SPACE_TOPICS_ID" \
+TOPOLOGY_STATE_PATH="$WORK_DIR/topology_state.json" \
 "$INDEXER_BIN" > "$WORK_DIR/indexer-run1.log" 2>&1 &
 INDEXER_PID=$!
 
@@ -265,6 +269,9 @@ fi
 pass "Write block removed"
 
 info "Starting search-indexer (run 2)"
+# Reuse the same TOPOLOGY_STATE_PATH as run 1 so the second run actually
+# picks up the persisted state from the crashed run (that's the whole
+# point of the restart-replay test).
 ENVIRONMENT=staging \
 RUST_LOG="info,search_indexer=debug" \
 KAFKA_BROKER="$KAFKA_BROKER" \
@@ -276,6 +283,7 @@ OPENSEARCH_RETRY_INTERVAL_SECS=2 \
 KAFKA_GROUP_EDITS_ID="$KAFKA_GROUP_EDITS_ID" \
 KAFKA_GROUP_SCORES_ID="$KAFKA_GROUP_SCORES_ID" \
 KAFKA_GROUP_SPACE_TOPICS_ID="$KAFKA_GROUP_SPACE_TOPICS_ID" \
+TOPOLOGY_STATE_PATH="$WORK_DIR/topology_state.json" \
 "$INDEXER_BIN" > "$WORK_DIR/indexer-run2.log" 2>&1 &
 INDEXER_PID=$!
 
