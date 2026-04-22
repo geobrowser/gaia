@@ -8,14 +8,31 @@ use uuid::Uuid;
 
 use crate::error::HandlerError;
 use crate::models::governance::{
-    ProposalActionItem, ProposalActionPayload, ProposalItem, ProposalVoteItem,
-    SpaceVotingSettingsItem, VoteOption, VotingMode,
+    ProposalActionItem, ProposalActionPayload, ProposalIdentity, ProposalVersionItem,
+    ProposalVoteItem, SpaceVotingSettingsItem, VoteOption, VotingMode,
 };
 
-/// Result of processing a proposal creation
+/// Result of processing a `HermesProposalCreated` event: the immutable
+/// identity (inserted on first encounter), the initial version's state, and
+/// the actions for v1. Storage composes all three into a single transaction.
 #[allow(dead_code)]
-pub struct ProposalResult {
-    pub proposal: ProposalItem,
+pub struct ProposalCreatedResult {
+    pub identity: ProposalIdentity,
+    pub version: ProposalVersionItem,
+    /// Actions with `proposal_version = 1` pre-set, ready for storage insert.
+    pub actions: Vec<ProposalActionItem>,
+}
+
+/// Result of processing a `HermesProposalUpdated` event: a new version's
+/// state + the new action set. Storage atomically inserts the version row
+/// (assigning the next `proposal_version` number), bumps
+/// `proposals.current_version`, then inserts the actions against that new
+/// version. Actions returned here carry `proposal_version = 0` as a sentinel
+/// — storage overwrites it with the assigned version before writing.
+#[allow(dead_code)]
+pub struct ProposalUpdatedResult {
+    pub proposal_id: Uuid,
+    pub version: ProposalVersionItem,
     pub actions: Vec<ProposalActionItem>,
 }
 
@@ -27,11 +44,13 @@ pub struct ProposalExecutionResult {
     pub executed_at: i64,
 }
 
-/// Process a HermesProposalCreated message
+/// Process a HermesProposalCreated message.
+///
+/// Produces identity + v1 version + actions (pre-stamped with version 1).
 pub fn handle_proposal_created(
     msg: &HermesProposalCreated,
-) -> Result<ProposalResult, HandlerError> {
-    map_proposal_message(
+) -> Result<ProposalCreatedResult, HandlerError> {
+    let (proposal_id, space_id, proposer_id, version, actions) = map_proposal_message(
         &msg.proposal_id,
         &msg.space_id,
         &msg.proposer_id,
@@ -39,14 +58,41 @@ pub fn handle_proposal_created(
         msg.settings.as_ref(),
         &msg.actions,
         msg.meta.as_ref(),
-    )
+    )?;
+
+    // Stamp version=1 on all actions for this CREATE.
+    let actions: Vec<ProposalActionItem> = actions
+        .into_iter()
+        .map(|mut a| {
+            a.proposal_version = 1;
+            a
+        })
+        .collect();
+
+    let identity = ProposalIdentity {
+        id: proposal_id,
+        space_id,
+        proposed_by: proposer_id,
+        created_at: version.version_created_at,
+        created_at_block: version.version_created_at_block,
+    };
+
+    Ok(ProposalCreatedResult {
+        identity,
+        version,
+        actions,
+    })
 }
 
-/// Process a HermesProposalUpdated message
+/// Process a HermesProposalUpdated message.
+///
+/// Returns the proposal_id + the new version's state + actions with
+/// `proposal_version = 0` as a sentinel — storage assigns the real version
+/// number atomically when the version row is inserted.
 pub fn handle_proposal_updated(
     msg: &HermesProposalUpdated,
-) -> Result<ProposalResult, HandlerError> {
-    map_proposal_message(
+) -> Result<ProposalUpdatedResult, HandlerError> {
+    let (proposal_id, _space_id, _proposer_id, version, actions) = map_proposal_message(
         &msg.proposal_id,
         &msg.space_id,
         &msg.proposer_id,
@@ -54,7 +100,14 @@ pub fn handle_proposal_updated(
         msg.settings.as_ref(),
         &msg.actions,
         msg.meta.as_ref(),
-    )
+    )?;
+
+    // proposal_version left at 0; storage stamps it after the version insert.
+    Ok(ProposalUpdatedResult {
+        proposal_id,
+        version,
+        actions,
+    })
 }
 
 /// Process a HermesProposalVoted message
@@ -189,9 +242,6 @@ fn legacy_threshold(voting_mode: &VotingMode, settings: &ProposalSettings) -> i6
 /// Process a HermesVotingSettingsUpdated message.
 ///
 /// Maps the DAO-global voting settings into `SpaceVotingSettingsItem`.
-/// `total_editors` is initialized to 0 — the counter is maintained separately
-/// by the consumer layer on `EDITOR_ADDED` / `EDITOR_REMOVED` events, and the
-/// storage layer preserves the existing counter value across settings updates.
 #[allow(dead_code)] // wired by GEO-482 (consumer routing)
 pub fn handle_voting_settings_updated(
     msg: &HermesVotingSettingsUpdated,
@@ -212,7 +262,6 @@ pub fn handle_voting_settings_updated(
         duration: msg.duration as i64,
         disable_fast_path_access_for_new_members: msg.disable_fast_path_access_for_new_members,
         execution_grace_period: msg.execution_grace_period as i64,
-        total_editors: 0,
         updated_at,
         updated_at_block,
     })
@@ -296,6 +345,10 @@ fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+/// Shared CREATE/UPDATE mapping. Returns the tuple `(proposal_id, space_id,
+/// proposer_id, version_item, actions)`. The caller wraps these fields into
+/// whichever result type matches its event source.
+#[allow(clippy::type_complexity)]
 fn map_proposal_message(
     proposal_id: &[u8],
     space_id: &[u8],
@@ -304,7 +357,16 @@ fn map_proposal_message(
     settings: Option<&ProposalSettings>,
     actions: &[hermes_schema::pb::governance::ProposalAction],
     meta: Option<&hermes_schema::pb::blockchain_metadata::BlockchainMetadata>,
-) -> Result<ProposalResult, HandlerError> {
+) -> Result<
+    (
+        Uuid,
+        Uuid,
+        Uuid,
+        ProposalVersionItem,
+        Vec<ProposalActionItem>,
+    ),
+    HandlerError,
+> {
     let proposal_id = Uuid::from_slice(proposal_id)?;
     let space_id = Uuid::from_slice(space_id)?;
     let proposer_id = Uuid::from_slice(proposer_id)?;
@@ -315,7 +377,7 @@ fn map_proposal_message(
     };
 
     let settings = settings.ok_or(HandlerError::MissingPayload)?;
-    let (created_at, created_at_block) = meta
+    let (version_created_at, version_created_at_block) = meta
         .map(|m| (m.created_at as i64, m.block_number as i64))
         .unwrap_or((0, 0));
 
@@ -324,53 +386,38 @@ fn map_proposal_message(
     // Derive name from proto actions (before mapping to internal types)
     let name = derive_proposal_name(actions);
 
-    // Map proto actions to internal types
+    // Map proto actions to internal types. `proposal_version` is left as 0
+    // here — the CREATE handler stamps 1; the UPDATE handler defers to storage.
     let actions: Vec<ProposalActionItem> = actions
         .iter()
         .enumerate()
         .map(|(index, action)| map_proposal_action(proposal_id, index as i32, action))
         .collect();
 
-    let proposal = ProposalItem {
-        id: proposal_id,
-        space_id,
-        proposed_by: proposer_id,
+    let version = ProposalVersionItem {
         voting_mode,
         start_time: settings.start_date as i64,
         end_time: settings.last_date as i64,
         quorum: settings.quorum as i64,
         threshold,
-        executed_at: None,
-        created_at,
-        created_at_block,
-        name,
-        proposal_version: 1,
         partial_percentage_support_threshold: settings.partial_percentage_support_threshold as i64,
         universal_percentage_support_threshold: settings.universal_percentage_support_threshold
             as i64,
         flat_support_threshold: settings.flat_support_threshold as i64,
         execute_by: normalize_execute_by(settings.execute_by),
+        name,
+        version_created_at,
+        version_created_at_block,
     };
 
-    Ok(ProposalResult { proposal, actions })
+    Ok((proposal_id, space_id, proposer_id, version, actions))
 }
-
-/// Namespace UUID for generating deterministic action IDs
-const PROPOSAL_ACTION_NAMESPACE: Uuid = Uuid::from_bytes([
-    0x70, 0x72, 0x6f, 0x70, 0x6f, 0x73, 0x61, 0x6c, 0x5f, 0x61, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x73,
-]);
 
 fn map_proposal_action(
     proposal_id: Uuid,
     index: i32,
     action: &hermes_schema::pb::governance::ProposalAction,
 ) -> ProposalActionItem {
-    // Generate deterministic UUID from proposal_id + index
-    let id = Uuid::new_v5(
-        &PROPOSAL_ACTION_NAMESPACE,
-        format!("{}:{}", proposal_id, index).as_bytes(),
-    );
-
     // Helper to convert bytes16 space ID to UUID
     // The target_address field contains a 16-byte space ID (bytes16), not an Ethereum address
     let bytes_to_uuid = |bytes: &[u8]| -> Option<Uuid> { Uuid::from_slice(bytes).ok() };
@@ -462,8 +509,10 @@ fn map_proposal_action(
     };
 
     ProposalActionItem {
-        id,
         proposal_id,
+        // Stamped by the handler layer (CREATE → 1; UPDATE → set by storage).
+        proposal_version: 0,
+        index,
         payload,
     }
 }
@@ -648,8 +697,6 @@ mod tests {
         assert_eq!(item.execution_grace_period, 6);
         assert_eq!(item.updated_at, 1_700_000_000);
         assert_eq!(item.updated_at_block, 999);
-        // total_editors defaults to 0; counter maintenance lives in GEO-482
-        assert_eq!(item.total_editors, 0);
     }
 
     #[test]
@@ -686,9 +733,8 @@ mod tests {
         };
 
         let result = handle_proposal_created(&msg).unwrap();
-        let p = result.proposal;
+        let p = result.version;
 
-        assert_eq!(p.proposal_version, 1);
         assert_eq!(p.partial_percentage_support_threshold, 500_000);
         assert_eq!(p.universal_percentage_support_threshold, 750_000);
         assert_eq!(p.flat_support_threshold, 5);
@@ -716,7 +762,7 @@ mod tests {
 
         let result = handle_proposal_created(&msg).unwrap();
         // Legacy threshold: Fast path → flat_support_threshold
-        assert_eq!(result.proposal.threshold, 5);
+        assert_eq!(result.version.threshold, 5);
     }
 
     #[test]
@@ -857,7 +903,7 @@ mod tests {
 
         let result = handle_proposal_created(&msg).unwrap();
 
-        assert_eq!(result.proposal.execute_by, None);
+        assert_eq!(result.version.execute_by, None);
     }
 
     #[test]

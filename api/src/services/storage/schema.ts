@@ -5,11 +5,13 @@ import {
 	customType,
 	decimal,
 	doublePrecision,
+	foreignKey,
 	index,
 	integer,
 	jsonb,
 	pgEnum,
 	pgTable,
+	pgView,
 	primaryKey,
 	serial,
 	smallint,
@@ -469,9 +471,12 @@ export const proposalActionTypeEnum = pgEnum("proposalActionType", [
 ])
 
 /**
- * proposals
+ * proposals (V2 — identity table).
  *
- * Stores governance proposals for spaces.
+ * Holds the immutable identity of each proposal. All mutable state lives in
+ * `proposal_versions` so updates append rather than overwrite (full history is
+ * retained). `current_version` is a denormalized pointer for O(1) "latest
+ * version" lookups via the `proposals_current` view.
  */
 export const proposals = pgTable(
 	"proposals",
@@ -481,70 +486,126 @@ export const proposals = pgTable(
 			.notNull()
 			.references(() => spaces.id),
 		proposedBy: uuid("proposed_by").notNull(),
-		votingMode: votingModeEnum("voting_mode").notNull(),
-		startTime: bigint("start_time", {mode: "number"}).notNull(),
-		endTime: bigint("end_time", {mode: "number"}).notNull(),
-		quorum: bigint("quorum", {mode: "number"}).notNull(),
-		threshold: bigint("threshold", {mode: "number"}).notNull(),
-		executedAt: bigint("executed_at", {mode: "number"}),
 		createdAt: text("created_at").notNull(),
 		createdAtBlock: text("created_at_block").notNull(),
 		/**
-		 * Human-readable name derived from the proposal's actions.
-		 * For Publish actions, uses the edit name; for others, uses the action type.
-		 * Multiple actions are concatenated with ", " separator.
+		 * Denormalized pointer to the latest version in `proposal_versions`. Bumped
+		 * atomically when `update_proposal` inserts a new version row. Keeping it
+		 * here avoids a `SELECT MAX(proposal_version)` subquery on every "current
+		 * proposal" read.
 		 */
-		name: text(),
-		/**
-		 * Denormalized vote counts for efficient status filtering.
-		 * Updated asynchronously by a background worker via proposal_tally_queue.
-		 */
-		yesCount: bigint("yes_count", {mode: "number"}).notNull().default(0),
-		noCount: bigint("no_count", {mode: "number"}).notNull().default(0),
-		abstainCount: bigint("abstain_count", {mode: "number"}).notNull().default(0),
-		/**
-		 * Governance V2 fields.
-		 *
-		 * `threshold` and `quorum` above are kept for backward compatibility during the
-		 * V1→V2 transition; new rows populate the separate V2 fields below.
-		 */
-		proposalVersion: integer("proposal_version").notNull().default(1),
-		partialPercentageSupportThreshold: bigint("partial_percentage_support_threshold", {
-			mode: "number",
-		}),
-		universalPercentageSupportThreshold: bigint("universal_percentage_support_threshold", {
-			mode: "number",
-		}),
-		flatSupportThreshold: bigint("flat_support_threshold", {mode: "number"}),
-		executeBy: bigint("execute_by", {mode: "number"}),
+		currentVersion: integer("current_version").notNull().default(1),
 	},
 	(table) => [
 		index("proposals_space_id_idx").on(table.spaceId),
 		index("proposals_proposed_by_idx").on(table.proposedBy),
 		index("proposals_created_at_idx").on(table.createdAt),
-		// Composite indexes for list query ordering with pagination
-		// Note: Single-column end_time index removed as it's redundant with composite index
 		index("proposals_space_created_at_idx").on(table.spaceId, table.createdAt),
-		index("proposals_space_end_time_idx").on(table.spaceId, table.endTime),
-		index("proposals_space_start_time_idx").on(table.spaceId, table.startTime),
 	],
 )
 
 /**
- * proposal_actions
+ * proposal_versions (V2 — mutable state, one row per (proposal_id, version)).
  *
- * Stores actions within a governance proposal.
- * Each proposal can have multiple actions executed in sequence.
- * ID is deterministic (derived from proposal_id + index).
- * Payload fields are nullable - which fields are populated depends on action_type.
+ * Append-only. `update_proposal` inserts a new row with the next version
+ * number; `insert_proposals` seeds version 1. Settings escalation
+ * (fast→slow on a NO vote) UPDATES the current version's row in place (no
+ * version bump — the contract semantics don't increment the version for
+ * escalation).
+ */
+export const proposalVersions = pgTable(
+	"proposal_versions",
+	{
+		proposalId: uuid("proposal_id")
+			.notNull()
+			.references(() => proposals.id),
+		proposalVersion: integer("proposal_version").notNull(),
+		votingMode: votingModeEnum("voting_mode").notNull(),
+		startTime: bigint("start_time", {mode: "number"}).notNull(),
+		endTime: bigint("end_time", {mode: "number"}).notNull(),
+		quorum: bigint("quorum", {mode: "number"}).notNull(),
+		/**
+		 * Legacy threshold: voting-mode-dependent selection from the V2 fields
+		 * (Fast → flat, Slow → partial). Kept for backward compatibility with
+		 * existing API queries.
+		 */
+		threshold: bigint("threshold", {mode: "number"}).notNull(),
+		/** V2: slow-path late execution threshold (0..RATIO_BASE). */
+		partialPercentageSupportThreshold: bigint("partial_percentage_support_threshold", {
+			mode: "number",
+		}),
+		/** V2: slow-path early execution threshold (0..RATIO_BASE). */
+		universalPercentageSupportThreshold: bigint("universal_percentage_support_threshold", {
+			mode: "number",
+		}),
+		/** V2: fast-path absolute YES votes needed. */
+		flatSupportThreshold: bigint("flat_support_threshold", {mode: "number"}),
+		/** V2: inclusive upper bound timestamp for execution. `null` for V1 rows. */
+		executeBy: bigint("execute_by", {mode: "number"}),
+		/**
+		 * Timestamp/block when this proposal was executed, if any. Version-specific:
+		 * older versions remain un-executed (they were superseded), only the
+		 * currently-active version can transition to executed.
+		 */
+		executedAt: bigint("executed_at", {mode: "number"}),
+		/**
+		 * Human-readable name derived from the version's actions. For Publish
+		 * actions, uses the edit name; for others, uses the action type.
+		 */
+		name: text(),
+		/**
+		 * Denormalized vote counts for this specific version. Reset to 0 on every
+		 * new version insert; backfilled by the tally worker aggregating
+		 * `proposal_votes` scoped to this same `(proposal_id, proposal_version)`.
+		 */
+		yesCount: bigint("yes_count", {mode: "number"}).notNull().default(0),
+		noCount: bigint("no_count", {mode: "number"}).notNull().default(0),
+		abstainCount: bigint("abstain_count", {mode: "number"}).notNull().default(0),
+		/** Block timestamp when this version was created (via CREATE or UPDATE). */
+		versionCreatedAt: text("version_created_at").notNull(),
+		versionCreatedAtBlock: text("version_created_at_block").notNull(),
+	},
+	(table) => [
+		primaryKey({columns: [table.proposalId, table.proposalVersion]}),
+		/**
+		 * Idempotency key for Kafka replay safety. Kafka delivery is at-least-once,
+		 * so the same `ProposalUpdated` event can be replayed. `insert_new_proposal_version`
+		 * uses `ON CONFLICT (proposal_id, version_created_at_block) DO NOTHING` against
+		 * this constraint to make replays a no-op (and return the already-assigned
+		 * version number to the caller).
+		 */
+		unique("proposal_versions_idempotency_key").on(
+			table.proposalId,
+			table.versionCreatedAtBlock,
+		),
+		// "Get the latest version for a proposal" — descending so the first hit is current.
+		index("proposal_versions_proposal_version_desc_idx").on(
+			table.proposalId,
+			table.proposalVersion.desc(),
+		),
+		// Supports "list proposals ordered by end_time of current version" type queries.
+		index("proposal_versions_end_time_idx").on(table.endTime),
+		index("proposal_versions_start_time_idx").on(table.startTime),
+	],
+)
+
+/**
+ * proposal_actions (V2 — version-scoped).
+ *
+ * Primary key `(proposal_id, proposal_version, index)` — an UPDATE event
+ * inserts a new set of action rows against the new version rather than
+ * overwriting the previous version's actions. `index` is the position of the
+ * action in the proposal's action array (0-based).
+ *
+ * Payload fields are nullable — which fields are populated depends on
+ * `action_type`.
  */
 export const proposalActions = pgTable(
 	"proposal_actions",
 	{
-		id: uuid().primaryKey(),
-		proposalId: uuid("proposal_id")
-			.notNull()
-			.references(() => proposals.id),
+		proposalId: uuid("proposal_id").notNull(),
+		proposalVersion: integer("proposal_version").notNull(),
+		index: integer("index").notNull(),
 		actionType: proposalActionTypeEnum("action_type").notNull(),
 		// Member/editor operations: AddMember, RemoveMember, AddEditor, RemoveEditor, UnflagEditor
 		targetId: uuid("target_id"),
@@ -558,8 +619,7 @@ export const proposalActions = pgTable(
 		fastThreshold: bigint("fast_threshold", {mode: "number"}),
 		slowThreshold: bigint("slow_threshold", {mode: "number"}),
 		duration: bigint("duration", {mode: "number"}),
-		// UpdateVotingSettings action — V2 fields. Populated alongside V1 fields during
-		// the transition; new code should prefer these.
+		// UpdateVotingSettings action — V2 fields.
 		partialPercentageSupportThreshold: bigint("partial_percentage_support_threshold", {
 			mode: "number",
 		}),
@@ -571,25 +631,41 @@ export const proposalActions = pgTable(
 		executionGracePeriod: bigint("execution_grace_period", {mode: "number"}),
 	},
 	(table) => [
+		primaryKey({columns: [table.proposalId, table.proposalVersion, table.index]}),
+		// Compound FK so every action row references an existing version row.
+		foreignKey({
+			columns: [table.proposalId, table.proposalVersion],
+			foreignColumns: [proposalVersions.proposalId, proposalVersions.proposalVersion],
+			name: "proposal_actions_version_fk",
+		}),
 		index("proposal_actions_proposal_id_idx").on(table.proposalId),
 		index("proposal_actions_action_type_idx").on(table.actionType),
 		// Composite index for the active proposal check query (hasActiveProposalForTarget)
 		// which filters by (proposal_id, action_type, target_id) in a correlated EXISTS subquery
-		index("proposal_actions_proposal_action_target_idx").on(table.proposalId, table.actionType, table.targetId),
+		index("proposal_actions_proposal_action_target_idx").on(
+			table.proposalId,
+			table.actionType,
+			table.targetId,
+		),
 	],
 )
 
 /**
- * proposal_votes
+ * proposal_votes (V2 — version-scoped, append-only history).
  *
- * Stores votes cast on governance proposals.
+ * Votes are non-destructive across proposal updates — a vote cast on v1 stays
+ * in the table forever, even after the proposal is updated to v2 and new votes
+ * are cast. The composite PK `(proposal_id, proposal_version, voter_id)`
+ * mirrors the on-chain contract's `votes[(proposalId, proposalVersion,
+ * voterId)]` mapping. A compound FK to `proposal_versions(proposal_id,
+ * proposal_version)` enforces that every vote references an existing version.
+ * Tally aggregation filters by `proposal_version = proposals.current_version`.
  */
 export const proposalVotes = pgTable(
 	"proposal_votes",
 	{
-		proposalId: uuid("proposal_id")
-			.notNull()
-			.references(() => proposals.id),
+		proposalId: uuid("proposal_id").notNull(),
+		proposalVersion: integer("proposal_version").notNull(),
 		voterId: uuid("voter_id").notNull(),
 		spaceId: uuid("space_id")
 			.notNull()
@@ -599,11 +675,35 @@ export const proposalVotes = pgTable(
 		createdAtBlock: text("created_at_block").notNull(),
 	},
 	(table) => [
-		primaryKey({columns: [table.proposalId, table.voterId]}),
+		primaryKey({columns: [table.proposalId, table.proposalVersion, table.voterId]}),
+		foreignKey({
+			columns: [table.proposalId, table.proposalVersion],
+			foreignColumns: [proposalVersions.proposalId, proposalVersions.proposalVersion],
+			name: "proposal_votes_version_fk",
+		}),
 		index("proposal_votes_space_id_idx").on(table.spaceId),
 		index("proposal_votes_voter_id_idx").on(table.voterId),
 		index("proposal_votes_vote_idx").on(table.vote),
 	],
+)
+
+/**
+ * proposals_current (view)
+ *
+ * Joins `proposals` with the current version's `proposal_versions` row,
+ * flattening identity and mutable state into a single record. This is what
+ * callers should read when they want "the proposal's current state" — all the
+ * fields that used to live on `proposals` prior to the V2 versioning pivot
+ * are reachable here.
+ */
+export const proposalsCurrent = pgView("proposals_current").as((qb) =>
+	qb
+		.select()
+		.from(proposals)
+		.innerJoin(
+			proposalVersions,
+			sql`${proposalVersions.proposalId} = ${proposals.id} AND ${proposalVersions.proposalVersion} = ${proposals.currentVersion}`,
+		),
 )
 
 export const proposalsRelations = drizzleRelations(proposals, ({one, many}) => ({
@@ -611,8 +711,16 @@ export const proposalsRelations = drizzleRelations(proposals, ({one, many}) => (
 		fields: [proposals.spaceId],
 		references: [spaces.id],
 	}),
+	versions: many(proposalVersions),
 	actions: many(proposalActions),
 	votes: many(proposalVotes),
+}))
+
+export const proposalVersionsRelations = drizzleRelations(proposalVersions, ({one}) => ({
+	proposal: one(proposals, {
+		fields: [proposalVersions.proposalId],
+		references: [proposals.id],
+	}),
 }))
 
 export const proposalActionsRelations = drizzleRelations(proposalActions, ({one}) => ({
@@ -639,12 +747,6 @@ export const proposalVotesRelations = drizzleRelations(proposalVotes, ({one}) =>
  * Latest-state DAO-global voting settings, one row per DAO space. Upserted on
  * every `VOTING_SETTINGS_UPDATED` action event (including the initial emission
  * at DAO creation time).
- *
- * `total_editors` is a denormalized count maintained by the KG indexer via
- * `EDITOR_ADDED` / `EDITOR_REMOVED` events. It is required to evaluate the V2
- * slow-path early execution formula (`universalPercentageSupportThreshold *
- * totalEditors / RATIO_BASE`) without an RPC call to the contract's
- * `canExecuteProposal()` view function.
  */
 export const spaceVotingSettings = pgTable("space_voting_settings", {
 	spaceId: uuid("space_id")
@@ -661,7 +763,6 @@ export const spaceVotingSettings = pgTable("space_voting_settings", {
 	duration: bigint("duration", {mode: "number"}).notNull(),
 	disableFastPathAccessForNewMembers: boolean("disable_fast_path_access_for_new_members").notNull(),
 	executionGracePeriod: bigint("execution_grace_period", {mode: "number"}).notNull(),
-	totalEditors: bigint("total_editors", {mode: "number"}).notNull().default(0),
 	updatedAt: text("updated_at").notNull(),
 	updatedAtBlock: text("updated_at_block").notNull(),
 })
@@ -674,6 +775,7 @@ export const spaceVotingSettingsRelations = drizzleRelations(spaceVotingSettings
 }))
 
 export type DbProposal = InferSelectModel<typeof proposals>
+export type DbProposalVersion = InferSelectModel<typeof proposalVersions>
 export type DbProposalAction = InferSelectModel<typeof proposalActions>
 export type DbProposalVote = InferSelectModel<typeof proposalVotes>
 export type DbSpaceVotingSettings = InferSelectModel<typeof spaceVotingSettings>

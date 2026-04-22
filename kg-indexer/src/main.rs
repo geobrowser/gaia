@@ -1143,12 +1143,15 @@ async fn process_message(
         KgMessage::ProposalCreated(event) => {
             let result = handlers::governance::handle_proposal_created(&event)?;
             debug!(
-                proposal_id = %result.proposal.id,
+                proposal_id = %result.identity.id,
                 actions = result.actions.len(),
                 "Processing ProposalCreated"
             );
             storage
-                .insert_proposals(&[result.proposal], &mut tx)
+                .insert_proposal_identity(&result.identity, &mut tx)
+                .await?;
+            storage
+                .insert_proposal_version_initial(result.identity.id, &result.version, &mut tx)
                 .await?;
             if !result.actions.is_empty() {
                 storage
@@ -1177,20 +1180,29 @@ async fn process_message(
         KgMessage::ProposalUpdated(event) => {
             let result = handlers::governance::handle_proposal_updated(&event)?;
             debug!(
-                proposal_id = %result.proposal.id,
+                proposal_id = %result.proposal_id,
                 actions = result.actions.len(),
                 "Processing ProposalUpdated"
             );
-            storage.update_proposal(&result.proposal, &mut tx).await?;
-            storage
-                .delete_proposal_actions(result.proposal.id, &mut tx)
+            // Append new version row + atomically bump proposals.current_version.
+            let new_version = storage
+                .insert_new_proposal_version(result.proposal_id, &result.version, &mut tx)
                 .await?;
-            if !result.actions.is_empty() {
-                storage
-                    .insert_proposal_actions(&result.actions, &mut tx)
-                    .await?;
+            // Stamp the assigned version onto the actions before writing them.
+            // Actions are version-scoped (PK = proposal_id, proposal_version, index),
+            // so prior-version actions remain as history rather than being deleted.
+            let actions: Vec<_> = result
+                .actions
+                .into_iter()
+                .map(|mut a| {
+                    a.proposal_version = new_version;
+                    a
+                })
+                .collect();
+            if !actions.is_empty() {
+                storage.insert_proposal_actions(&actions, &mut tx).await?;
             }
-            1 + result.actions.len()
+            1 + actions.len()
         }
         KgMessage::ProposalVoted(event) => {
             let vote = handlers::governance::handle_proposal_voted(&event)?;
@@ -1235,6 +1247,10 @@ async fn process_message(
                     result.end_time,
                     result.quorum,
                     result.threshold,
+                    result.partial_percentage_support_threshold,
+                    result.universal_percentage_support_threshold,
+                    result.flat_support_threshold,
+                    result.execute_by,
                     &mut tx,
                 )
                 .await?;
@@ -1610,11 +1626,18 @@ async fn process_block(
                     let result = handlers::governance::handle_proposal_created(proposal_event)?;
 
                     // Record trace context
-                    event_span.record("proposal_id", display(result.proposal.id));
-                    event_span.record("space_id", display(result.proposal.space_id));
+                    event_span.record("proposal_id", display(result.identity.id));
+                    event_span.record("space_id", display(result.identity.space_id));
 
                     storage
-                        .insert_proposals(&[result.proposal], &mut tx)
+                        .insert_proposal_identity(&result.identity, &mut tx)
+                        .await?;
+                    storage
+                        .insert_proposal_version_initial(
+                            result.identity.id,
+                            &result.version,
+                            &mut tx,
+                        )
                         .await?;
                     if !result.actions.is_empty() {
                         storage
@@ -1645,19 +1668,25 @@ async fn process_block(
                     let result = handlers::governance::handle_proposal_updated(proposal_event)?;
 
                     // Record trace context
-                    event_span.record("proposal_id", display(result.proposal.id));
-                    event_span.record("space_id", display(result.proposal.space_id));
+                    event_span.record("proposal_id", display(result.proposal_id));
 
-                    storage.update_proposal(&result.proposal, &mut tx).await?;
-                    storage
-                        .delete_proposal_actions(result.proposal.id, &mut tx)
+                    // Append new version row + atomically bump proposals.current_version.
+                    let new_version = storage
+                        .insert_new_proposal_version(result.proposal_id, &result.version, &mut tx)
                         .await?;
-                    if !result.actions.is_empty() {
-                        storage
-                            .insert_proposal_actions(&result.actions, &mut tx)
-                            .await?;
+                    // Stamp the assigned version onto actions before writing.
+                    let actions: Vec<_> = result
+                        .actions
+                        .into_iter()
+                        .map(|mut a| {
+                            a.proposal_version = new_version;
+                            a
+                        })
+                        .collect();
+                    if !actions.is_empty() {
+                        storage.insert_proposal_actions(&actions, &mut tx).await?;
                     }
-                    1 + result.actions.len()
+                    1 + actions.len()
                 }
                 KgMessage::ProposalVoted(vote_event) => {
                     let vote = handlers::governance::handle_proposal_voted(vote_event)?;
@@ -1707,6 +1736,10 @@ async fn process_block(
                             result.end_time,
                             result.quorum,
                             result.threshold,
+                            result.partial_percentage_support_threshold,
+                            result.universal_percentage_support_threshold,
+                            result.flat_support_threshold,
+                            result.execute_by,
                             &mut tx,
                         )
                         .await?;

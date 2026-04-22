@@ -67,13 +67,31 @@ pub enum ProposalActionPayload {
     Unknown,
 }
 
-/// A governance proposal
+/// Immutable identity of a governance proposal.
+///
+/// Stored once on CREATE. Mutable state (voting settings, tally counts, name,
+/// executed_at) lives in [`ProposalVersionItem`] rows scoped by
+/// `(proposal_id, proposal_version)`.
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
-pub struct ProposalItem {
+pub struct ProposalIdentity {
     pub id: Uuid,
     pub space_id: Uuid,
     pub proposed_by: Uuid,
+    pub created_at: i64,
+    pub created_at_block: i64,
+}
+
+/// Per-version proposal state. Appended on every CREATE (version 1) and UPDATE
+/// (next version). The `proposal_version` number is assigned by the storage
+/// layer — the handler produces this item version-agnostically.
+///
+/// Settings escalation (fast→slow on a NO vote) UPDATES the current version's
+/// row in place rather than appending — the contract does not bump the version
+/// for escalation.
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub struct ProposalVersionItem {
     pub voting_mode: VotingMode,
     pub start_time: i64,
     pub end_time: i64,
@@ -83,14 +101,6 @@ pub struct ProposalItem {
     /// for Slow) for backward compatibility with the existing DB column.
     /// New code should prefer the individual V2 fields below.
     pub threshold: i64,
-    pub executed_at: Option<i64>,
-    pub created_at: i64,
-    pub created_at_block: i64,
-    /// Human-readable name derived from proposal actions
-    pub name: Option<String>,
-    /// V2: monotonically-incrementing proposal version (starts at 1 on create,
-    /// bumped on update). `uint8` on-chain, widened to `i32` for Postgres.
-    pub proposal_version: i32,
     /// V2: slow-path late execution threshold (0..RATIO_BASE).
     pub partial_percentage_support_threshold: i64,
     /// V2: slow-path early execution threshold (0..RATIO_BASE).
@@ -99,15 +109,26 @@ pub struct ProposalItem {
     pub flat_support_threshold: i64,
     /// V2: inclusive upper bound timestamp for execution. `None` for V1 rows.
     pub execute_by: Option<i64>,
+    /// Human-readable name derived from this version's actions.
+    pub name: Option<String>,
+    /// Timestamp when THIS version was created (may be the proposal's original
+    /// creation time for v1, or an update block's time for later versions).
+    pub version_created_at: i64,
+    pub version_created_at_block: i64,
 }
 
-/// An action within a proposal.
-/// ID is deterministic (derived from proposal_id + index).
+/// An action within a specific proposal version. PK is
+/// `(proposal_id, proposal_version, index)` — no standalone uuid column.
+///
+/// `index` is the 0-based position of the action in the proposal's action
+/// array. `proposal_version` is set by the caller (the storage layer knows
+/// which version the accompanying version row received on insert).
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct ProposalActionItem {
-    pub id: Uuid,
     pub proposal_id: Uuid,
+    pub proposal_version: i32,
+    pub index: i32,
     pub payload: ProposalActionPayload,
 }
 
@@ -129,11 +150,7 @@ pub struct ProposalVoteItem {
 
 /// DAO-global voting settings for a space (V2).
 ///
-/// Upserted on every `VOTING_SETTINGS_UPDATED` action event. `total_editors`
-/// is a denormalized counter maintained by the KG indexer consumer
-/// (`EDITOR_ADDED` / `EDITOR_REMOVED` events — see GEO-482); the handler
-/// returns 0 for it and storage defaults to 0 on insert so the counter is
-/// preserved across settings updates.
+/// Upserted on every `VOTING_SETTINGS_UPDATED` action event.
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct SpaceVotingSettingsItem {
@@ -145,7 +162,6 @@ pub struct SpaceVotingSettingsItem {
     pub duration: i64,
     pub disable_fast_path_access_for_new_members: bool,
     pub execution_grace_period: i64,
-    pub total_editors: i64,
     pub updated_at: i64,
     pub updated_at_block: i64,
 }
