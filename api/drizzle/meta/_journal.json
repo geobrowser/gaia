@@ -414,6 +414,13 @@
       "when": 1776872188819,
       "tag": "0058_easy_magdalene",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1776884234643,
+      "tag": "0059_tidy_wendell_vaughn",
+      "breakpoints": true
     }
   ]
 }

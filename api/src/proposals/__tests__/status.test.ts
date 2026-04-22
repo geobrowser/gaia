@@ -15,19 +15,33 @@ import {type ProposalWithVotes, RATIO_BASE} from "../types"
 
 /**
  * Create a test proposal with sensible defaults.
+ *
+ * The V2 thresholds default so the legacy `threshold` field semantics still
+ * hold for callers that only set `threshold`: Fast-mode proposals mirror
+ * `threshold` into `flatSupportThreshold`, and Slow-mode proposals mirror it
+ * into `partialPercentageSupportThreshold`. Callers can always override a
+ * V2 field directly when a test needs it.
  */
 function makeProposal(overrides: Partial<ProposalWithVotes> = {}): ProposalWithVotes {
 	const now = BigInt(Math.floor(Date.now() / 1000))
+	const votingMode = overrides.votingMode ?? "Fast"
+	const threshold = overrides.threshold ?? 10n
 	return {
 		id: "test-proposal-id",
 		spaceId: "test-space-id",
 		name: "Test Proposal",
 		proposedBy: "test-proposer-id",
-		votingMode: "Fast",
+		proposalVersion: 1,
+		votingMode,
 		startTime: now - 3600n, // Started 1 hour ago
 		endTime: now + 3600n, // Ends in 1 hour
 		quorum: 10n,
-		threshold: 10n,
+		threshold,
+		flatSupportThreshold: votingMode === "Fast" ? threshold : 0n,
+		partialPercentageSupportThreshold: votingMode === "Slow" ? threshold : 0n,
+		universalPercentageSupportThreshold: 0n,
+		executeBy: null,
+		totalEditors: 0n,
 		executedAt: null,
 		yesCount: 0n,
 		noCount: 0n,
@@ -452,5 +466,253 @@ describe("computeProposalStatus - edge cases", () => {
 		// 3M * 71 > 7M * 30
 		// 213M > 210M = true
 		expect(result2.status).toBe("EXECUTABLE")
+	})
+})
+
+// =============================================================================
+// V2: Fast path reads flatSupportThreshold (not legacy threshold)
+// =============================================================================
+
+describe("computeProposalStatus - V2 fast path uses flatSupportThreshold", () => {
+	it("fast path executes when yesCount reaches flatSupportThreshold, ignoring legacy threshold", () => {
+		// flat=3 is the real V2 threshold; legacy threshold is a stale/bogus value.
+		const proposal = makeProposal({
+			votingMode: "Fast",
+			threshold: 100n, // legacy (should be ignored by V2 fast path)
+			flatSupportThreshold: 3n,
+			yesCount: 5n,
+		})
+
+		const result = computeProposalStatus(proposal, proposal.startTime + 1n)
+
+		expect(result.status).toBe("EXECUTABLE")
+		expect(result.isThresholdReached).toBe(true)
+		expect(result.isEarlyExecutable).toBe(false)
+	})
+
+	it("fast path stays PROPOSED when yesCount is below flatSupportThreshold", () => {
+		const proposal = makeProposal({
+			votingMode: "Fast",
+			threshold: 0n, // would pass under legacy threshold reading
+			flatSupportThreshold: 10n,
+			yesCount: 5n,
+		})
+
+		const result = computeProposalStatus(proposal, proposal.startTime + 1n)
+
+		expect(result.status).toBe("PROPOSED")
+		expect(result.isEarlyExecutable).toBe(false)
+	})
+})
+
+// =============================================================================
+// V2: Slow-path late execution reads partialPercentageSupportThreshold
+// =============================================================================
+
+describe("computeProposalStatus - V2 slow late uses partialPercentageSupportThreshold", () => {
+	it("slow late path uses partial threshold (not legacy)", () => {
+		// Under legacy threshold=9M (90%), 5 yes vs 3 no would fail.
+		// Under V2 partial=5M (50%), 5 yes vs 3 no passes.
+		const proposal = makeProposal({
+			votingMode: "Slow",
+			threshold: 9_000_000n, // 90% — stale/bogus under V2
+			partialPercentageSupportThreshold: 5_000_000n, // 50%
+			quorum: 5n,
+			yesCount: 5n,
+			noCount: 3n,
+			abstainCount: 0n,
+		})
+
+		const result = computeProposalStatus(proposal, proposal.endTime + 1n)
+
+		// (RATIO_BASE - partial) * yes > partial * no
+		// (10M - 5M) * 5 > 5M * 3 => 25M > 15M ✓
+		expect(result.status).toBe("EXECUTABLE")
+		expect(result.isThresholdReached).toBe(true)
+		expect(result.isEarlyExecutable).toBe(false)
+	})
+})
+
+// =============================================================================
+// V2: Slow-path early execution (NEW) — universalPercentageSupportThreshold × totalEditors
+// =============================================================================
+
+describe("computeProposalStatus - V2 slow early execution", () => {
+	it("becomes EXECUTABLE before voting ends when yesCount meets the universal/totalEditors ratio", () => {
+		// ceil(75% × 4 editors) = ceil(30M/10M) = 3 yes-votes required.
+		const proposal = makeProposal({
+			votingMode: "Slow",
+			universalPercentageSupportThreshold: 7_500_000n, // 75%
+			totalEditors: 4n,
+			partialPercentageSupportThreshold: 5_000_000n,
+			quorum: 10n,
+			yesCount: 4n, // above the ceiling
+			noCount: 0n,
+			abstainCount: 0n,
+		})
+
+		// Voting is still ongoing.
+		const result = computeProposalStatus(proposal, proposal.startTime + 1n)
+
+		expect(result.status).toBe("EXECUTABLE")
+		expect(result.isEarlyExecutable).toBe(true)
+	})
+
+	it("does not early-execute below the universal threshold — stays PROPOSED during voting", () => {
+		// Requires 3 yes; only has 2.
+		const proposal = makeProposal({
+			votingMode: "Slow",
+			universalPercentageSupportThreshold: 7_500_000n, // 75%
+			totalEditors: 4n,
+			partialPercentageSupportThreshold: 5_000_000n,
+			quorum: 10n,
+			yesCount: 2n,
+			noCount: 0n,
+			abstainCount: 0n,
+		})
+
+		const result = computeProposalStatus(proposal, proposal.startTime + 1n)
+
+		expect(result.status).toBe("PROPOSED")
+		expect(result.isEarlyExecutable).toBe(false)
+	})
+
+	it("rounds the universal × totalEditors ratio up (ceiling)", () => {
+		// 33% × 10 editors = 3.3 → ceil = 4 yes-votes required.
+		const proposal = makeProposal({
+			votingMode: "Slow",
+			universalPercentageSupportThreshold: 3_333_333n, // ~33.33%
+			totalEditors: 10n,
+			partialPercentageSupportThreshold: 5_000_000n,
+			quorum: 10n,
+			yesCount: 3n, // below ceiling of 4
+			noCount: 0n,
+			abstainCount: 0n,
+		})
+
+		const result = computeProposalStatus(proposal, proposal.startTime + 1n)
+		expect(result.status).toBe("PROPOSED")
+		expect(result.isEarlyExecutable).toBe(false)
+
+		const proposal2 = makeProposal({
+			...proposal,
+			yesCount: 4n,
+		})
+		const result2 = computeProposalStatus(proposal2, proposal2.startTime + 1n)
+		expect(result2.status).toBe("EXECUTABLE")
+		expect(result2.isEarlyExecutable).toBe(true)
+	})
+
+	it("does not apply early execution when totalEditors is 0 (no editors indexed yet)", () => {
+		// Without a known editor count, we can't evaluate the formula safely.
+		// Falls through to the normal slow-path behavior (must wait for voting end).
+		const proposal = makeProposal({
+			votingMode: "Slow",
+			universalPercentageSupportThreshold: 7_500_000n,
+			totalEditors: 0n,
+			partialPercentageSupportThreshold: 5_000_000n,
+			quorum: 10n,
+			yesCount: 1_000_000n, // extremely high
+			noCount: 0n,
+			abstainCount: 0n,
+		})
+
+		const result = computeProposalStatus(proposal, proposal.startTime + 1n)
+
+		expect(result.status).toBe("PROPOSED")
+		expect(result.isEarlyExecutable).toBe(false)
+	})
+})
+
+// =============================================================================
+// V2: executeBy deadline
+// =============================================================================
+
+describe("computeProposalStatus - V2 executeBy deadline", () => {
+	it("REJECTS an otherwise-executable fast proposal past executeBy", () => {
+		const now = BigInt(Math.floor(Date.now() / 1000))
+		const proposal = makeProposal({
+			votingMode: "Fast",
+			flatSupportThreshold: 3n,
+			yesCount: 100n, // well past threshold
+			executeBy: now - 10n, // deadline passed
+			endTime: now + 3600n, // voting window still open
+		})
+
+		const result = computeProposalStatus(proposal, now)
+
+		expect(result.status).toBe("REJECTED")
+	})
+
+	it("REJECTS an otherwise-early-executable slow proposal past executeBy", () => {
+		const now = BigInt(Math.floor(Date.now() / 1000))
+		const proposal = makeProposal({
+			votingMode: "Slow",
+			universalPercentageSupportThreshold: 5_000_000n,
+			totalEditors: 2n, // ceil(50%×2)=1 yes required
+			partialPercentageSupportThreshold: 5_000_000n,
+			quorum: 1n,
+			yesCount: 2n,
+			executeBy: now - 10n,
+			endTime: now + 3600n,
+		})
+
+		const result = computeProposalStatus(proposal, now)
+
+		expect(result.status).toBe("REJECTED")
+		expect(result.isEarlyExecutable).toBe(false)
+	})
+
+	it("falls through to normal V1 behavior when executeBy is null (legacy proposals)", () => {
+		const now = BigInt(Math.floor(Date.now() / 1000))
+		const proposal = makeProposal({
+			votingMode: "Fast",
+			flatSupportThreshold: 3n,
+			yesCount: 5n,
+			executeBy: null,
+			endTime: now - 10n, // voting ended
+		})
+
+		const result = computeProposalStatus(proposal, now)
+
+		expect(result.status).toBe("EXECUTABLE")
+	})
+
+	it("does not reject exactly at executeBy (boundary: now == executeBy still allowed)", () => {
+		const now = BigInt(Math.floor(Date.now() / 1000))
+		const proposal = makeProposal({
+			votingMode: "Fast",
+			flatSupportThreshold: 3n,
+			yesCount: 5n,
+			executeBy: now,
+			endTime: now + 3600n,
+		})
+
+		const result = computeProposalStatus(proposal, now)
+
+		// `now > executeBy` is strictly greater; at the boundary, still executable.
+		expect(result.status).toBe("EXECUTABLE")
+	})
+})
+
+// =============================================================================
+// V2: isEarlyExecutable flag is false for all non-slow-early paths
+// =============================================================================
+
+describe("computeProposalStatus - isEarlyExecutable default", () => {
+	it.each([
+		["fast executable", {votingMode: "Fast" as const, flatSupportThreshold: 1n, yesCount: 5n}],
+		["fast proposed", {votingMode: "Fast" as const, flatSupportThreshold: 100n, yesCount: 0n}],
+	])("returns isEarlyExecutable=false for %s", (_label, overrides) => {
+		const proposal = makeProposal(overrides)
+		const result = computeProposalStatus(proposal, proposal.startTime + 1n)
+		expect(result.isEarlyExecutable).toBe(false)
+	})
+
+	it("returns isEarlyExecutable=false for ACCEPTED (already executed) proposals", () => {
+		const proposal = makeProposal({executedAt: 1234567890n})
+		const result = computeProposalStatus(proposal, proposal.startTime + 1n)
+		expect(result.status).toBe("ACCEPTED")
+		expect(result.isEarlyExecutable).toBe(false)
 	})
 })

@@ -36,6 +36,11 @@ interface ActionJsonRow {
 	fast_threshold: number | null
 	slow_threshold: number | null
 	duration: number | null
+	partial_percentage_support_threshold: number | null
+	universal_percentage_support_threshold: number | null
+	flat_support_threshold: number | null
+	disable_fast_path_access_for_new_members: boolean | null
+	execution_grace_period: number | null
 }
 
 /** Raw vote row from JSON aggregation */
@@ -44,17 +49,32 @@ interface VoteJsonRow {
 	vote: string
 }
 
-/** Base proposal row fields shared between queries */
+/**
+ * Base proposal row fields shared between queries.
+ *
+ * Rows come from the `proposals_current` view (identity joined with the
+ * current `proposal_versions` entry) LEFT-JOINed implicitly — via a
+ * correlated subquery — to `space_editor_counts` for `total_editors`.
+ *
+ * The legacy `threshold` column is retained on the view for backcompat but
+ * new logic reads the per-mode V2 fields directly.
+ */
 interface BaseProposalRow extends Record<string, unknown> {
 	id: string
 	space_id: string
 	name: string | null
 	proposed_by: string
+	proposal_version: number
 	voting_mode: "Fast" | "Slow"
 	start_time: string
 	end_time: string
 	quorum: string
 	threshold: string
+	flat_support_threshold: string
+	partial_percentage_support_threshold: string
+	universal_percentage_support_threshold: string
+	execute_by: string | null
+	total_editors: string
 	executed_at: string | null
 	yes_count: string
 	no_count: string
@@ -75,6 +95,11 @@ function mapActionsFromJson(actionsJson: ActionJsonRow[] | null): ProposalAction
 		fastThreshold: a.fast_threshold,
 		slowThreshold: a.slow_threshold,
 		duration: a.duration,
+		partialPercentageSupportThreshold: a.partial_percentage_support_threshold,
+		universalPercentageSupportThreshold: a.universal_percentage_support_threshold,
+		flatSupportThreshold: a.flat_support_threshold,
+		disableFastPathAccessForNewMembers: a.disable_fast_path_access_for_new_members,
+		executionGracePeriod: a.execution_grace_period,
 	}))
 }
 
@@ -99,19 +124,34 @@ function mapVotesFromJson(votesJson: VoteJsonRow[] | null): Vote[] {
 
 /**
  * Maps shared base fields from a proposal row.
+ *
+ * Computes the legacy `threshold` compatibility projection: Fast proposals
+ * use `flatSupportThreshold`, Slow proposals use
+ * `partialPercentageSupportThreshold`. New callers should read the per-mode
+ * V2 field directly; `threshold` stays for existing API response clients.
  */
 function mapBaseFields(row: BaseProposalRow) {
+	const votingMode = row.voting_mode as VotingMode
+	const flat = BigInt(row.flat_support_threshold)
+	const partial = BigInt(row.partial_percentage_support_threshold)
+	const legacyThreshold = votingMode === "Fast" ? flat : partial
 	return {
 		id: row.id,
 		spaceId: row.space_id,
 		name: row.name,
 		proposedBy: row.proposed_by,
-		votingMode: row.voting_mode as VotingMode,
+		proposalVersion: row.proposal_version,
+		votingMode,
 		startTime: BigInt(row.start_time),
 		endTime: BigInt(row.end_time),
 		quorum: BigInt(row.quorum),
-		threshold: BigInt(row.threshold),
-		executedAt: row.executed_at ? BigInt(row.executed_at) : null,
+		threshold: legacyThreshold,
+		flatSupportThreshold: flat,
+		partialPercentageSupportThreshold: partial,
+		universalPercentageSupportThreshold: BigInt(row.universal_percentage_support_threshold),
+		executeBy: row.execute_by !== null ? BigInt(row.execute_by) : null,
+		totalEditors: BigInt(row.total_editors),
+		executedAt: row.executed_at !== null ? BigInt(row.executed_at) : null,
 		yesCount: BigInt(row.yes_count),
 		noCount: BigInt(row.no_count),
 		abstainCount: BigInt(row.abstain_count),
@@ -170,30 +210,36 @@ export function getProposalWithVotes(
 			// Use JSON aggregation to get votes and actions in a single query
 			// Vote counts use denormalized columns; individual votes fetched via LATERAL
 			const result = await db.execute<BaseProposalRow & {votes_json: VoteJsonRow[] | null}>(sql`
-        SELECT 
+        SELECT
           p.id,
           p.space_id,
           p.name,
           p.proposed_by,
+          p.proposal_version,
           p.voting_mode,
           p.start_time,
           p.end_time,
           p.quorum,
           p.threshold,
+          p.flat_support_threshold,
+          p.partial_percentage_support_threshold,
+          p.universal_percentage_support_threshold,
+          p.execute_by,
+          ${sqlTotalEditors()} AS total_editors,
           p.executed_at,
           p.yes_count,
           p.no_count,
           p.abstain_count,
           v.votes_json,
           a.actions_json
-        FROM proposals p
+        FROM proposals_current p
         LEFT JOIN LATERAL (
           SELECT COALESCE(json_agg(json_build_object(
             'voter_id', voter_id,
             'vote', vote
           )), '[]'::json) as votes_json
           FROM proposal_votes
-          WHERE proposal_id = p.id
+          WHERE proposal_id = p.id AND proposal_version = p.proposal_version
         ) v ON true
         LEFT JOIN LATERAL (
           SELECT COALESCE(json_agg(json_build_object(
@@ -204,10 +250,15 @@ export function getProposalWithVotes(
             'quorum', quorum,
             'fast_threshold', fast_threshold,
             'slow_threshold', slow_threshold,
-            'duration', duration
+            'duration', duration,
+            'partial_percentage_support_threshold', partial_percentage_support_threshold,
+            'universal_percentage_support_threshold', universal_percentage_support_threshold,
+            'flat_support_threshold', flat_support_threshold,
+            'disable_fast_path_access_for_new_members', disable_fast_path_access_for_new_members,
+            'execution_grace_period', execution_grace_period
           )), '[]'::json) as actions_json
           FROM proposal_actions
-          WHERE proposal_id = p.id
+          WHERE proposal_id = p.id AND proposal_version = p.proposal_version
         ) a ON true
         WHERE p.id = ${proposalId}::uuid
       `)
@@ -278,10 +329,16 @@ export interface ListProposalsResult {
  * must be made in BOTH places. Run tests in __tests__/queries.test.ts to
  * verify implementations match.
  *
- * These fragment builders are the single source of truth for SQL status
- * conditions. All query functions (listProposalsInSpace, hasActiveProposalForTarget)
- * compose from these fragments rather than duplicating the logic.
+ * Fragments assume `p` is an alias of `proposals_current` (the view that
+ * joins identity + the current version row). Editor-count is read via a
+ * correlated subquery against the `space_editor_counts` view so fragments
+ * stay self-contained across call sites.
  */
+
+/** Correlated subquery: per-space editor count, 0 if the space has no indexed editors. */
+function sqlTotalEditors() {
+	return sql`COALESCE((SELECT sec.total_editors FROM space_editor_counts sec WHERE sec.space_id = p.space_id), 0)`
+}
 
 /** Proposal is ACCEPTED: already executed. */
 function sqlIsAccepted() {
@@ -289,55 +346,82 @@ function sqlIsAccepted() {
 }
 
 /**
- * Proposal is PROPOSED: not executed, voting not ended, and not yet
- * executable on the fast path.
- */
-function sqlIsProposed(nowSeconds: bigint) {
-	return sql`(
-		p.executed_at IS NULL
-		AND ${nowSeconds}::bigint <= p.end_time
-		AND (
-			p.voting_mode = 'Slow'
-			OR (p.voting_mode = 'Fast' AND p.yes_count <= GREATEST(p.threshold - 1, 0))
-		)
-	)`
-}
-
-/**
- * Proposal is EXECUTABLE: not executed, and threshold conditions met.
- * Fast path: yes_count > threshold - 1 (equivalent to yes >= threshold).
- * Slow path: voting ended, quorum met, and ratio-based threshold met.
+ * Proposal is EXECUTABLE iff not executed, deadline not passed, and any
+ * path produces an executable outcome:
+ *   - Fast: yes_count >= flat_support_threshold
+ *   - Slow early: voting ongoing AND total_editors > 0 AND universal > 0
+ *                 AND yes_count >= ceil(universal * total_editors / RATIO_BASE)
+ *   - Slow late:  voting ended AND quorum met
+ *                 AND (RATIO_BASE - partial) * yes > partial * no
  */
 function sqlIsExecutable(nowSeconds: bigint) {
 	return sql`(
 		p.executed_at IS NULL
+		AND (p.execute_by IS NULL OR ${nowSeconds}::bigint <= p.execute_by)
 		AND (
-			(p.voting_mode = 'Fast' AND p.yes_count > GREATEST(p.threshold - 1, 0))
+			(p.voting_mode = 'Fast' AND p.yes_count >= p.flat_support_threshold)
+			OR (
+				p.voting_mode = 'Slow'
+				AND ${nowSeconds}::bigint <= p.end_time
+				AND ${sqlTotalEditors()} > 0
+				AND p.universal_percentage_support_threshold > 0
+				AND p.yes_count::numeric >= CEIL(
+					(p.universal_percentage_support_threshold::numeric * ${sqlTotalEditors()}::numeric)
+					/ ${RATIO_BASE}::numeric
+				)
+			)
 			OR (
 				p.voting_mode = 'Slow'
 				AND ${nowSeconds}::bigint > p.end_time
 				AND (p.yes_count + p.no_count + p.abstain_count) >= p.quorum
-				AND (${RATIO_BASE}::numeric - p.threshold::numeric) * p.yes_count::numeric > p.threshold::numeric * p.no_count::numeric
+				AND (${RATIO_BASE}::numeric - p.partial_percentage_support_threshold::numeric) * p.yes_count::numeric > p.partial_percentage_support_threshold::numeric * p.no_count::numeric
 			)
 		)
 	)`
 }
 
 /**
- * Proposal is REJECTED: not executed, voting ended, and threshold/quorum
- * not met.
+ * Proposal is PROPOSED iff not executed, deadline not passed, voting
+ * ongoing, and no executable path is already matched.
+ */
+function sqlIsProposed(nowSeconds: bigint) {
+	return sql`(
+		p.executed_at IS NULL
+		AND (p.execute_by IS NULL OR ${nowSeconds}::bigint <= p.execute_by)
+		AND ${nowSeconds}::bigint <= p.end_time
+		AND NOT (
+			(p.voting_mode = 'Fast' AND p.yes_count >= p.flat_support_threshold)
+			OR (
+				p.voting_mode = 'Slow'
+				AND ${sqlTotalEditors()} > 0
+				AND p.universal_percentage_support_threshold > 0
+				AND p.yes_count::numeric >= CEIL(
+					(p.universal_percentage_support_threshold::numeric * ${sqlTotalEditors()}::numeric)
+					/ ${RATIO_BASE}::numeric
+				)
+			)
+		)
+	)`
+}
+
+/**
+ * Proposal is REJECTED iff not executed and either the executeBy deadline
+ * has passed, or voting ended without any executable path matching.
  */
 function sqlIsRejected(nowSeconds: bigint) {
 	return sql`(
 		p.executed_at IS NULL
-		AND ${nowSeconds}::bigint > p.end_time
 		AND (
-			(p.voting_mode = 'Fast' AND p.yes_count <= GREATEST(p.threshold - 1, 0))
+			(p.execute_by IS NOT NULL AND ${nowSeconds}::bigint > p.execute_by)
 			OR (
-				p.voting_mode = 'Slow'
-				AND (
-					(p.yes_count + p.no_count + p.abstain_count) < p.quorum
-					OR (${RATIO_BASE}::numeric - p.threshold::numeric) * p.yes_count::numeric <= p.threshold::numeric * p.no_count::numeric
+				${nowSeconds}::bigint > p.end_time
+				AND NOT (
+					(p.voting_mode = 'Fast' AND p.yes_count >= p.flat_support_threshold)
+					OR (
+						p.voting_mode = 'Slow'
+						AND (p.yes_count + p.no_count + p.abstain_count) >= p.quorum
+						AND (${RATIO_BASE}::numeric - p.partial_percentage_support_threshold::numeric) * p.yes_count::numeric > p.partial_percentage_support_threshold::numeric * p.no_count::numeric
+					)
 				)
 			)
 		)
@@ -530,12 +614,13 @@ function hasActiveProposalForTarget(
 
 			const result = await db.execute<{exists: boolean}>(sql`
 				SELECT EXISTS (
-					SELECT 1 FROM proposals p
+					SELECT 1 FROM proposals_current p
 					WHERE p.space_id = ${spaceId}::uuid
 						AND p.executed_at IS NULL
 						AND EXISTS (
 							SELECT 1 FROM proposal_actions pa
 							WHERE pa.proposal_id = p.id
+								AND pa.proposal_version = p.proposal_version
 								AND pa.action_type = ${actionType}::"proposalActionType"
 								AND pa.target_id = ${targetSpaceId}::uuid
 						)
@@ -595,8 +680,10 @@ export function listProposalsInSpace(
 			const cursorCondition = buildCursorCondition(cursor, orderBy, orderDirection)
 			const orderClause = buildOrderClause(orderBy, orderDirection)
 
-			// Build action type filter conditions
-			// Use EXISTS subquery instead of JOIN to avoid SQL injection and cartesian products
+			// Build action type filter conditions.
+			// Use EXISTS subquery instead of JOIN to avoid SQL injection and cartesian products.
+			// Scope by proposal_version so historical actions from prior versions don't
+			// match the current-version list.
 			let actionTypeCondition = sql``
 			if (actionTypes && actionTypes.length > 0) {
 				// Include filter: proposal must have at least one of these action types
@@ -604,8 +691,10 @@ export function listProposalsInSpace(
 				const actionTypeChecks = actionTypes.map((t) => sql`pa_filter.action_type = ${t}::"proposalActionType"`)
 				const actionTypeOr = actionTypeChecks.reduce((acc, check) => sql`${acc} OR ${check}`)
 				actionTypeCondition = sql`AND EXISTS (
-          SELECT 1 FROM proposal_actions pa_filter 
-          WHERE pa_filter.proposal_id = p.id AND (${actionTypeOr})
+          SELECT 1 FROM proposal_actions pa_filter
+          WHERE pa_filter.proposal_id = p.id
+            AND pa_filter.proposal_version = p.proposal_version
+            AND (${actionTypeOr})
         )`
 			} else if (excludeActionTypes && excludeActionTypes.length > 0) {
 				// Exclude filter: proposal must NOT have any of these action types
@@ -614,8 +703,10 @@ export function listProposalsInSpace(
 				)
 				const excludeTypeOr = excludeTypeChecks.reduce((acc, check) => sql`${acc} OR ${check}`)
 				actionTypeCondition = sql`AND NOT EXISTS (
-          SELECT 1 FROM proposal_actions pa_exclude 
-          WHERE pa_exclude.proposal_id = p.id AND (${excludeTypeOr})
+          SELECT 1 FROM proposal_actions pa_exclude
+          WHERE pa_exclude.proposal_id = p.id
+            AND pa_exclude.proposal_version = p.proposal_version
+            AND (${excludeTypeOr})
         )`
 			}
 
@@ -647,13 +738,15 @@ export function listProposalsInSpace(
 				statusCondition = sql`AND (${statusOr})`
 			}
 
-			// Vote counts are denormalized on the proposals table.
+			// Vote counts are denormalized on the current proposal_version.
 			// Individual voters are omitted for performance (use single proposal endpoint for full voter list).
-			// When voterId is provided, we fetch just the user's vote via a LATERAL join.
+			// When voterId is provided, we fetch just the user's vote on the current version via a LATERAL join.
 			const userVoteJoin = voterId
 				? sql`LEFT JOIN LATERAL (
             SELECT vote FROM proposal_votes
-            WHERE proposal_id = p.id AND voter_id = ${voterId}::uuid
+            WHERE proposal_id = p.id
+              AND proposal_version = p.proposal_version
+              AND voter_id = ${voterId}::uuid
             LIMIT 1
           ) user_vote ON true`
 				: sql``
@@ -661,16 +754,22 @@ export function listProposalsInSpace(
 
 			const result = await db.execute<BaseProposalRow & {created_at: string; user_vote?: string | null}>(
 				sql`
-        SELECT 
+        SELECT
           p.id,
           p.space_id,
           p.name,
           p.proposed_by,
+          p.proposal_version,
           p.voting_mode,
           p.start_time,
           p.end_time,
           p.quorum,
           p.threshold,
+          p.flat_support_threshold,
+          p.partial_percentage_support_threshold,
+          p.universal_percentage_support_threshold,
+          p.execute_by,
+          ${sqlTotalEditors()} AS total_editors,
           p.executed_at,
           p.created_at,
           p.yes_count,
@@ -678,7 +777,7 @@ export function listProposalsInSpace(
           p.abstain_count,
           actions_agg.actions_json
           ${userVoteSelect}
-        FROM proposals p
+        FROM proposals_current p
         LEFT JOIN LATERAL (
           SELECT COALESCE(json_agg(json_build_object(
             'action_type', action_type,
@@ -688,10 +787,15 @@ export function listProposalsInSpace(
             'quorum', quorum,
             'fast_threshold', fast_threshold,
             'slow_threshold', slow_threshold,
-            'duration', duration
+            'duration', duration,
+            'partial_percentage_support_threshold', partial_percentage_support_threshold,
+            'universal_percentage_support_threshold', universal_percentage_support_threshold,
+            'flat_support_threshold', flat_support_threshold,
+            'disable_fast_path_access_for_new_members', disable_fast_path_access_for_new_members,
+            'execution_grace_period', execution_grace_period
           )), '[]'::json) as actions_json
           FROM proposal_actions
-          WHERE proposal_id = p.id
+          WHERE proposal_id = p.id AND proposal_version = p.proposal_version
         ) actions_agg ON true
         ${userVoteJoin}
         WHERE p.space_id = ${spaceId}::uuid
