@@ -237,20 +237,14 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 					if (typeIds.notIn && typeIds.notIn.length > 0) {
 						queryBuilder.where(sql.fragment`NOT ${buildMultiTypeCondition(sql, tableAlias, typeIds.notIn)}`)
 					}
-					// `overlaps` on a uuid[] column is the array-overlap operator (`&&`).
-					// Semantically equivalent to `in` for entity types: "entity has at
-					// least one of these types". Without this case, PostGraphile falls
-					// back to the computed-column filter `entities_type_ids(e) && $1`,
-					// which forces a seq scan over all entities and calls the function
-					// per row — catastrophic (seen ≥60 s, 504 at nginx). Use the same
-					// EXISTS pattern as `in` so PostgreSQL uses `relations_to_entity_id_idx`.
+					// `overlaps`: semantically equivalent to `in` for type arrays
+					// ("entity has at least one of these"). Custom-handled so we
+					// don't fall back to the seq-scanning computed-column filter.
 					if (typeIds.overlaps && typeIds.overlaps.length > 0) {
 						queryBuilder.where(buildMultiTypeCondition(sql, tableAlias, typeIds.overlaps))
 					}
-					// `contains` on a uuid[] column is `@>` — "entity's type array
-					// contains ALL of these". For entity types, that's AND-semantics
-					// across the list: each supplied type must be present via its own
-					// EXISTS. Same per-row-seq-scan risk without a custom handler.
+					// `contains`: "entity has ALL of these types" — AND of per-type
+					// EXISTS predicates, same indexed path as `is`.
 					if (typeIds.contains && typeIds.contains.length > 0) {
 						for (const t of typeIds.contains) {
 							queryBuilder.where(buildSingleTypeCondition(sql, tableAlias, t))
