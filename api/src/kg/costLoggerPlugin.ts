@@ -25,12 +25,6 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
-// Threshold above which we emit an info-level log line with the full query +
-// variables. Not an alert — just "this one is worth finding in logs if we
-// need to investigate a slow response later". Kept separate from the
-// histogram metric (which records every query regardless of size).
-const COST_LOG_THRESHOLD = parsePositiveIntEnv("GRAPHQL_COST_LOG_THRESHOLD", 1_000_000)
-
 // Hard ceiling on the cost calculation itself. Once the walker's running
 // total reaches this value it short-circuits and returns the cap instead of
 // continuing to multiply. Caps memory (totalSum can't drift to Infinity),
@@ -42,6 +36,24 @@ const COST_LOG_THRESHOLD = parsePositiveIntEnv("GRAPHQL_COST_LOG_THRESHOLD", 1_0
 // integer precision. This is the practical ceiling for the cost number
 // itself without reaching for BigInt.
 const MAX_COST_CALC_LIMIT = parsePositiveIntEnv("GRAPHQL_COST_CALC_LIMIT", 9_000_000_000_000_000)
+
+// Threshold above which we emit a warn-level log line with the full query +
+// variables. Set to the cap itself, so we only log queries that were
+// actually clamped — i.e. whose unclamped theoretical cost exceeds
+// MAX_COST_CALC_LIMIT. These are the truly pathological shapes worth
+// investigating; anything below the cap is fine to leave in the Prometheus
+// histogram without adding to stdout noise.
+const COST_LOG_THRESHOLD = parsePositiveIntEnv("GRAPHQL_COST_LOG_THRESHOLD", MAX_COST_CALC_LIMIT)
+
+// Per-level multiplier used when a collection field omits `first`/`last`.
+// Separate from MAX_PAGINATION_LIMIT (1000) — the paginationCap plugin still
+// injects `first: 1000` at SQL build time, but assuming the *full* SQL cap
+// at every implicit level compounds into unrealistically large numbers for
+// typical query shapes. 100 is a more realistic expected-fan-out for the
+// cost model and keeps the histogram distribution readable — cap-hitters
+// still clamp, deeply-nested structural issues still stand out, but the
+// per-query numbers stay closer to "scan rows" than "theoretical ceiling".
+const COST_MODEL_DEFAULT_LIMIT = 100
 
 // ---------------------------------------------------------------------------
 // Prometheus histogram metric — gaia_api_graphql_query_cost
@@ -58,9 +70,8 @@ const MAX_COST_CALC_LIMIT = parsePositiveIntEnv("GRAPHQL_COST_CALC_LIMIT", 9_000
 // would exceed 9P land only in +Inf, since 9P > 5P (the last numeric edge).
 //
 // Granularity is intentionally asymmetric:
-//   - Everything below 100k collapses into a single bucket: trivial queries
-//     (scalar/introspection-shape) don't need fine resolution.
-//   - 100k → 100M covers the small-to-medium range on powers of 10.
+//   - Everything below 100M collapses into a single bucket: cheap / trivial
+//     queries don't need fine resolution (prod sees almost no volume there).
 //   - 100M → 800M is subdivided (100M/200M/500M/800M) because that's where
 //     the dominant population sits in prod.
 //   - 800M → 50B jumps directly to 5B/50B (the 1B–5B range collapsed to a
@@ -68,8 +79,8 @@ const MAX_COST_CALC_LIMIT = parsePositiveIntEnv("GRAPHQL_COST_CALC_LIMIT", 9_000
 //   - 50B → 9P covers the pathological tail on decade steps: 100B, 500B,
 //     5T, 50T, 500T, 5P — six resolution bins before +Inf / the cap.
 const COST_BUCKET_EDGES: readonly number[] = [
-	100_000, 1_000_000, 10_000_000, 100_000_000, 200_000_000, 500_000_000, 800_000_000, 5_000_000_000, 50_000_000_000,
-	100_000_000_000, 500_000_000_000, 5_000_000_000_000, 50_000_000_000_000, 500_000_000_000_000, 5_000_000_000_000_000,
+	100_000_000, 200_000_000, 500_000_000, 800_000_000, 5_000_000_000, 50_000_000_000, 100_000_000_000, 500_000_000_000,
+	5_000_000_000_000, 50_000_000_000_000, 500_000_000_000_000, 5_000_000_000_000_000,
 ]
 
 // noUncheckedIndexedAccess widens `number[]`'s index access to `number | undefined`,
@@ -214,11 +225,12 @@ function fieldCost(
 		return Math.min(child * limit + 1, MAX_COST_CALC_LIMIT)
 	}
 
-	// Structured field without an explicit limit: conservatively assume the
-	// SQL-injected default of MAX_PAGINATION_LIMIT applies. Leaf scalars
-	// (no selection set → child=0) collapse to `0 × N + 1 = 1` here, so we
-	// don't need a separate branch.
-	return Math.min(child * MAX_PAGINATION_LIMIT + 1, MAX_COST_CALC_LIMIT)
+	// Structured field without an explicit limit: assume the cost-model
+	// default fan-out (COST_MODEL_DEFAULT_LIMIT, decoupled from the
+	// SQL-level MAX_PAGINATION_LIMIT). Leaf scalars (no selection set →
+	// child=0) collapse to `0 × N + 1 = 1` here, so we don't need a
+	// separate branch.
+	return Math.min(child * COST_MODEL_DEFAULT_LIMIT + 1, MAX_COST_CALC_LIMIT)
 }
 
 function resolveArgs(

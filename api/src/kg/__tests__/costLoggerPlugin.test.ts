@@ -15,14 +15,14 @@ describe("computeQueryCost — basic shapes", () => {
 		expect(cost(`{ __typename }`)).toBe(1)
 	})
 
-	it("structured field without first/last defaults to MAX (conservative)", () => {
+	it("structured field without first/last defaults to COST_MODEL_DEFAULT_LIMIT", () => {
 		// Single-entity lookups get over-counted — intentionally. We never know
 		// from the AST alone whether a field is a list or a single object; the
-		// SQL layer injects first=MAX on every collection field anyway, so
+		// SQL layer injects `first:` on every collection field anyway, so
 		// over-counting single-entity lookups is the price of never missing an
 		// unbounded collection.
-		// entity { id name } → MAX × (1 + 1) + 1 = 2001
-		expect(cost(`{ entity(id: "...") { id name } }`)).toBe(MAX_PAGINATION_LIMIT * 2 + 1)
+		// entity { id name } → 100 × (1 + 1) + 1 = 201 (COST_MODEL_DEFAULT_LIMIT)
+		expect(cost(`{ entity(id: "...") { id name } }`)).toBe(201)
 	})
 })
 
@@ -53,12 +53,13 @@ describe("computeQueryCost — pagination", () => {
 	})
 
 	it("models the slow-query pattern that triggered prod statement_timeout", () => {
-		// The real shape we saw timing out, computed with the conservative model:
+		// The real shape we saw timing out, computed with the conservative model
+		// using COST_MODEL_DEFAULT_LIMIT = 100 for implicit fan-outs:
 		//   valuesList(first:1){propertyId}        = 1 × 1 + 1                  = 2
-		//   entity { valuesList }                  = MAX × 2 + 1                = 2001
-		//   relations(first:50) { id, entity }     = 50 × (1 + 2001) + 1        = 100_101
-		//   5 × 100_101 + 1 (id on entity)         = 500_506
-		//   entities(first:1000) { ... }           = 1000 × 500_506 + 1         = 500_506_001
+		//   entity { valuesList }                  = 100 × 2 + 1                = 201
+		//   relations(first:50) { id, entity }     = 50 × (1 + 201) + 1         = 10_101
+		//   5 × 10_101 + 1 (id on entity)          = 50_506
+		//   entities(first:1000) { ... }           = 1000 × 50_506 + 1          = 50_506_001
 		const query = `
 			{
 				entities(first: 1000) {
@@ -72,17 +73,19 @@ describe("computeQueryCost — pagination", () => {
 			}
 		`
 		const result = cost(query)
-		expect(result).toBe(500_506_001)
-		expect(result).toBeGreaterThan(100_000_000) // trivially exceeds any threshold
+		expect(result).toBe(50_506_001)
+		expect(result).toBeGreaterThan(10_000_000) // still trivially exceeds any threshold
 	})
 
 	it("catches implicit-default heavy queries that omit `first`", () => {
 		// Conservative model: each un-paginated structured field defaults to
-		// MAX_PAGINATION_LIMIT (1000). The nested shape below multiplies out to
-		// valuesList{2 scalars} = 2001, toEntity{valuesList} = 2_001_001,
-		// relationsList{toEntity} = 2_001_001_001, entities{id, relationsList} =
-		// 2_001_001_002_001 (~2T). Under the 500T cap this is the exact cost —
-		// useful as a regression fixture for the multiplier math itself.
+		// COST_MODEL_DEFAULT_LIMIT (100). The nested shape below multiplies out:
+		//   valuesList{2 scalars}             = 100 × 2 + 1         = 201
+		//   toEntity{valuesList}              = 100 × 201 + 1       = 20_101
+		//   relationsList{toEntity}           = 100 × 20_101 + 1    = 2_010_101
+		//   entities{id, relationsList}       = 100 × 2_010_102 + 1 = 201_010_201
+		// Under the 9P cap this is the exact cost — regression fixture for the
+		// multiplier math itself.
 		const result = cost(`{
 			entities {
 				id
@@ -91,7 +94,7 @@ describe("computeQueryCost — pagination", () => {
 				}
 			}
 		}`)
-		expect(result).toBe(2_001_001_002_001)
+		expect(result).toBe(201_010_201)
 	})
 })
 
@@ -197,23 +200,35 @@ describe("query cost histogram", () => {
 			})
 		}
 
-		// Cost 1001 → hits le=100_000, ..., le=+Inf (all buckets ≥ 1001)
+		// Cost 101 — well below every numeric edge, so it lands in every
+		// bucket from the 100M floor up through 5P and +Inf.
 		runQuery(`{ entities { id } }`)
-		// Cost 100_001 (first:100_000 × id) is rejected by PaginationCapPlugin in
-		// the server path, but computeQueryCost is purely schema-free and happily
-		// evaluates AST-derived multipliers — pick a construction that produces
-		// a cost between 100k and 1M: entities(first:1000){id name} = 2001,
-		// that's still ≤ 100_000 so it only adds to the smaller bucket. Use a
-		// deliberately heavier query to straddle the 100k/1M edges.
-		runQuery(`{ entities(first: 500) { id name values(first: 5) { propertyId text } } }`) // 500*(1+1+5*(1+1)+1) + 1 = 500*13 + 1 = 6501
+		// A 6-nested first:1000 query clamps at the 9P cap. Since 9P > 5P
+		// (the top numeric edge), this observation is ONLY in +Inf.
+		runQuery(`
+			{
+				entities(first: 1000) {
+					a: entities(first: 1000) {
+						b: entities(first: 1000) {
+							c: entities(first: 1000) {
+								d: entities(first: 1000) {
+									e: entities(first: 1000) { id }
+								}
+							}
+						}
+					}
+				}
+			}
+		`)
 
 		const out = renderQueryCostHistogram()
 		expect(out).toContain("gaia_api_graphql_query_cost_count 2")
-		expect(out).toContain(`gaia_api_graphql_query_cost_sum ${1001 + 6501}`)
-		// le=100000: both observations qualify (1001 and 6501 both ≤ 100_000)
-		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="100000"} 2$/m)
-		// le=1000000: still both
-		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="1000000"} 2$/m)
+		expect(out).toContain(`gaia_api_graphql_query_cost_sum ${101 + 9_000_000_000_000_000}`)
+		// le=100M (new floor): only the cheap query (cap-hitter is above 5P)
+		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="100000000"} 1$/m)
+		// le=5P (top numeric edge): still only the cheap query
+		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="5000000000000000"} 1$/m)
+		// +Inf: both
 		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="\+Inf"} 2$/m)
 	})
 
@@ -435,11 +450,26 @@ describe("useCostLogger — shadow-mode safety", () => {
 
 		const plugin = useCostLogger()
 		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
-		// A query guaranteed to cross the default 1M log threshold.
+		// A query guaranteed to cross the default log threshold (the cap itself).
+		// Six `first:1000` levels multiply out to 1000^6 = 1e18, well over 9P.
 		expect(() =>
 			onExecute({
 				args: {
-					document: parse(`{ entities(first: 1000) { relationsList { id } } }`),
+					document: parse(`
+						{
+							entities(first: 1000) {
+								a: entities(first: 1000) {
+									b: entities(first: 1000) {
+										c: entities(first: 1000) {
+											d: entities(first: 1000) {
+												e: entities(first: 1000) { id }
+											}
+										}
+									}
+								}
+							}
+						}
+					`),
 					variableValues: {circular},
 					operationName: null,
 				},
