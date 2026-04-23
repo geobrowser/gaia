@@ -3,6 +3,8 @@
 from datetime import datetime
 from unittest.mock import MagicMock, call, patch
 
+import logging
+
 import pytest
 
 from src.algorithm.models import Entity, Perspective, Space
@@ -336,6 +338,81 @@ class TestEmittedContent:
         first_batch = HermesScoresBatch()
         first_batch.ParseFromString(first_message)
         assert first_batch.is_final is False
+
+
+class TestEmitProgressLogging:
+    """Verify the emit phase emits transition and periodic progress logs.
+
+    Rationale: the emit phase in production handles ~5M items and previously
+    logged nothing between "Emitting scores to Kafka" and "Scores emitted to
+    Kafka successfully" — when it OOMed mid-phase there was no way to tell
+    which item kind was the culprit.
+    """
+
+    def test_transition_log_fires_after_each_non_empty_kind(self, caplog, mock_producer, sample_entities, sample_spaces):
+        emitter = ScoringDataEmitter(broker="localhost:9092", topic="test.scores", batch_size=100)
+        with caplog.at_level(logging.INFO, logger="src.scoring_data_emitter.scoring_data_emitter"):
+            emitter.emit_all(sample_entities, sample_spaces)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("Finished emitting entity scores" in m and "2 items" in m for m in messages), messages
+        assert any("Finished emitting perspective scores" in m and "3 items" in m for m in messages), messages
+        assert any("Finished emitting space scores" in m and "2 items" in m for m in messages), messages
+
+    def test_transition_log_is_skipped_for_empty_kind(self, caplog, mock_producer):
+        """Don't emit noise lines for kinds that had no items."""
+        emitter = ScoringDataEmitter(broker="localhost:9092", topic="test.scores", batch_size=100)
+        now = datetime.now()
+        # Only entities, no perspectives, no spaces
+        entities = [Entity(id=f"{i:032x}", created_at=now) for i in range(3)]
+        for e in entities:
+            e.normalized_score = 0.5
+            e.perspectives = []
+
+        with caplog.at_level(logging.INFO, logger="src.scoring_data_emitter.scoring_data_emitter"):
+            emitter.emit_all(entities, [])
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("Finished emitting entity scores" in m for m in messages)
+        assert not any("Finished emitting perspective scores" in m for m in messages)
+        assert not any("Finished emitting space scores" in m for m in messages)
+
+    def test_progress_log_fires_at_configured_interval(self, caplog, mock_producer):
+        """With emit_progress_every=2 and 5 batches, we expect 2 progress lines
+        (after the 2nd and 4th non-final produce). The final batch is not
+        counted — it's covered by the summary log."""
+        emitter = ScoringDataEmitter(
+            broker="localhost:9092",
+            topic="test.scores",
+            batch_size=2,
+            emit_progress_every=2,
+        )
+        now = datetime.now()
+        # 9 items / batch_size=2 → 5 batches (4 non-final + 1 final)
+        entities = [Entity(id=f"{i:032x}", created_at=now) for i in range(9)]
+        for e in entities:
+            e.normalized_score = 0.5
+            e.perspectives = []
+
+        with caplog.at_level(logging.INFO, logger="src.scoring_data_emitter.scoring_data_emitter"):
+            emitter.emit_all(entities, [])
+
+        progress_messages = [r.getMessage() for r in caplog.records if "Emit progress" in r.getMessage()]
+        assert len(progress_messages) == 2, progress_messages
+        # First progress log fires after 2 non-final batches (4 entities emitted in flushed batches)
+        assert "4 entities" in progress_messages[0]
+        # Second fires after 4 non-final batches (8 entities in flushed batches)
+        assert "8 entities" in progress_messages[1]
+
+    def test_progress_log_silent_for_small_runs(self, caplog, mock_producer, sample_entities, sample_spaces):
+        """With default interval of 500 and only a handful of items, no progress
+        logs should fire — the transition and summary logs are enough."""
+        emitter = ScoringDataEmitter(broker="localhost:9092", topic="test.scores", batch_size=100)
+        with caplog.at_level(logging.INFO, logger="src.scoring_data_emitter.scoring_data_emitter"):
+            emitter.emit_all(sample_entities, sample_spaces)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert not any("Emit progress" in m for m in messages)
 
 
 class TestDeliveryCallback:

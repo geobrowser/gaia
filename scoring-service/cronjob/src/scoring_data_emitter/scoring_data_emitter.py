@@ -23,6 +23,7 @@ class ScoringDataEmitter:
         username: str | None = None,
         password: str | None = None,
         ssl_ca_pem: str | None = None,
+        emit_progress_every: int = 500,
     ):
         """Initialize the ScoringDataEmitter with Kafka configuration.
 
@@ -33,9 +34,12 @@ class ScoringDataEmitter:
             username: SASL username for authentication (optional).
             password: SASL password for authentication (optional).
             ssl_ca_pem: Custom CA certificate PEM content (optional).
+            emit_progress_every: Log an INFO progress line every N non-final
+                batches produced. Set high enough that small runs stay quiet.
         """
         self._topic = topic
         self._batch_size = batch_size
+        self._emit_progress_every = emit_progress_every
 
         # Build Kafka producer config
         config: dict[str, str | Callable[[str, bytes], bytes]] = {
@@ -108,12 +112,33 @@ class ScoringDataEmitter:
         items_in_current = 0
         batch_sequence = 0
 
+        non_final_flushed = 0
+        entities_flushed = 0
+        perspectives_flushed = 0
+        spaces_flushed = 0
+        n_entities = 0
+        n_perspectives = 0
+        n_spaces = 0
+
+        def flush_non_final(batch: HermesScoresBatch) -> None:
+            nonlocal non_final_flushed, entities_flushed, perspectives_flushed, spaces_flushed
+            entities_flushed += len(batch.entity_scores)
+            perspectives_flushed += len(batch.perspective_scores)
+            spaces_flushed += len(batch.space_scores)
+            self._produce_batch(batch, is_final=False)
+            non_final_flushed += 1
+            if non_final_flushed % self._emit_progress_every == 0:
+                logger.info(
+                    "Emit progress: %d batches produced (%d entities, %d perspectives, %d spaces so far)",
+                    non_final_flushed, entities_flushed, perspectives_flushed, spaces_flushed,
+                )
+
         def rotate_if_full() -> None:
             nonlocal pending, current, items_in_current, batch_sequence
             if items_in_current < self._batch_size:
                 return
             if pending is not None:
-                self._produce_batch(pending, is_final=False)
+                flush_non_final(pending)
             pending = current
             batch_sequence += 1
             current = self._new_batch(computed_at, batch_sequence)
@@ -126,6 +151,9 @@ class ScoringDataEmitter:
             s.score = entity.normalized_score
             s.updated_at = computed_at
             items_in_current += 1
+            n_entities += 1
+        if n_entities > 0:
+            logger.info("Finished emitting entity scores: %d items", n_entities)
 
         for entity in entities:
             for perspective in entity.perspectives:
@@ -136,6 +164,9 @@ class ScoringDataEmitter:
                 s.score = perspective.normalized_score
                 s.updated_at = computed_at
                 items_in_current += 1
+                n_perspectives += 1
+        if n_perspectives > 0:
+            logger.info("Finished emitting perspective scores: %d items", n_perspectives)
 
         for space in spaces:
             rotate_if_full()
@@ -144,13 +175,16 @@ class ScoringDataEmitter:
             s.score = space.space_score
             s.updated_at = computed_at
             items_in_current += 1
+            n_spaces += 1
+        if n_spaces > 0:
+            logger.info("Finished emitting space scores: %d items", n_spaces)
 
         # Terminal flush. rotate_if_full is called before each append, so
         # current always has items whenever we added anything at all.
         batches_produced = 0
         if items_in_current > 0:
             if pending is not None:
-                self._produce_batch(pending, is_final=False)
+                flush_non_final(pending)
             self._produce_batch(current, is_final=True)
             batches_produced = batch_sequence + 1
 
