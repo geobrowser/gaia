@@ -11,9 +11,9 @@
 import {SpanStatusCode, trace} from "@opentelemetry/api"
 import * as Sentry from "@sentry/node"
 import type {Context, Next} from "hono"
-import {extractClientIp} from "../utils/clientIp"
 import {detectDbFailureClass} from "../services/dbFailures"
 import {log} from "../services/telemetry"
+import {extractClientIp} from "../utils/clientIp"
 
 /**
  * Extract or generate a request ID.
