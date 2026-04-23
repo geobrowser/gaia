@@ -7,7 +7,7 @@ from typing import Callable
 from confluent_kafka import Producer
 
 from src.algorithm.models import Entity, Space
-from src.pb import EntityScore, HermesScoresBatch, PerspectiveScore, SpaceScore
+from src.pb import HermesScoresBatch
 
 logger = logging.getLogger(__name__)
 
@@ -86,153 +86,97 @@ class ScoringDataEmitter:
     def emit_all(self, entities: list[Entity], spaces: list[Space]) -> None:
         """Emit all scores to Kafka in batches.
 
-        Scores are grouped into HermesScoresBatch messages respecting the
-        configured batch_size. Each batch includes entity scores, perspective
-        scores, and space scores.
+        Iterates entities (for global scores), then entity perspectives (for
+        local scores), then spaces — appending each item directly into a
+        HermesScoresBatch of up to batch_size items. No intermediate lists of
+        per-item protobufs are materialized, keeping peak memory bounded to
+        one in-flight batch plus the previous "pending" batch awaiting a
+        final-flag decision.
 
         Args:
             entities: List of Entity objects with calculated normalized_score and perspectives.
             spaces: List of Space objects with calculated space_score.
         """
         computed_at = int(time.time())
-
-        # Prepare all scores
         t0 = time.time()
-        entity_scores = self._prepare_entity_scores(entities, computed_at)
-        perspective_scores = self._prepare_perspective_scores(entities, computed_at)
-        space_scores = self._prepare_space_scores(spaces, computed_at)
 
-        logger.info(
-            f"Preparing to emit scores: {len(entity_scores)} entities, "
-            f"{len(perspective_scores)} perspectives, {len(space_scores)} spaces"
-        )
-
-        # Calculate total batches needed
-        total_items = len(entity_scores) + len(perspective_scores) + len(space_scores)
-        total_batches = max(1, (total_items + self._batch_size - 1) // self._batch_size)
-
-        # Emit in batches
+        # "pending" holds the last fully-filled batch: we delay producing it
+        # until we know whether more items follow, so we can set is_final=True
+        # on the actual last batch even when it happens to be exactly full.
+        pending: HermesScoresBatch | None = None
+        current = self._new_batch(computed_at, batch_sequence=0)
+        items_in_current = 0
         batch_sequence = 0
-        entity_idx = 0
-        perspective_idx = 0
-        space_idx = 0
 
-        while entity_idx < len(entity_scores) or \
-              perspective_idx < len(perspective_scores) or \
-              space_idx < len(space_scores):
-
-            batch = HermesScoresBatch()
-            batch.computed_at = computed_at
-            batch.batch_sequence = batch_sequence
-
-            items_in_batch = 0
-
-            # Add entity scores to batch
-            while entity_idx < len(entity_scores) and items_in_batch < self._batch_size:
-                score = batch.entity_scores.add()
-                src = entity_scores[entity_idx]
-                score.entity_id = src.entity_id
-                score.score = src.score
-                score.updated_at = src.updated_at
-                entity_idx += 1
-                items_in_batch += 1
-
-            # Add perspective scores to batch
-            while perspective_idx < len(perspective_scores) and items_in_batch < self._batch_size:
-                score = batch.perspective_scores.add()
-                src = perspective_scores[perspective_idx]
-                score.entity_id = src.entity_id
-                score.space_id = src.space_id
-                score.score = src.score
-                score.updated_at = src.updated_at
-                perspective_idx += 1
-                items_in_batch += 1
-
-            # Add space scores to batch
-            while space_idx < len(space_scores) and items_in_batch < self._batch_size:
-                score = batch.space_scores.add()
-                src = space_scores[space_idx]
-                score.space_id = src.space_id
-                score.score = src.score
-                score.updated_at = src.updated_at
-                space_idx += 1
-                items_in_batch += 1
-
-            # Mark final batch
-            is_final = (
-                entity_idx >= len(entity_scores) and
-                perspective_idx >= len(perspective_scores) and
-                space_idx >= len(space_scores)
-            )
-            batch.is_final = is_final
-
-            # Serialize and produce
-            message = batch.SerializeToString()
-            self._producer.produce(
-                self._topic,
-                value=message,
-                callback=self._delivery_callback,
-            )
-
-            # Poll to handle delivery callbacks
-            self._producer.poll(0)
-
+        def rotate_if_full() -> None:
+            nonlocal pending, current, items_in_current, batch_sequence
+            if items_in_current < self._batch_size:
+                return
+            if pending is not None:
+                self._produce_batch(pending, is_final=False)
+            pending = current
             batch_sequence += 1
+            current = self._new_batch(computed_at, batch_sequence)
+            items_in_current = 0
 
-            logger.debug(
-                f"Produced batch {batch_sequence}/{total_batches} "
-                f"({len(batch.entity_scores)} entities, "
-                f"{len(batch.perspective_scores)} perspectives, "
-                f"{len(batch.space_scores)} spaces, "
-                f"is_final={is_final})"
-            )
+        for entity in entities:
+            rotate_if_full()
+            s = current.entity_scores.add()
+            s.entity_id = self._uuid_str_to_bytes(entity.id)
+            s.score = entity.normalized_score
+            s.updated_at = computed_at
+            items_in_current += 1
+
+        for entity in entities:
+            for perspective in entity.perspectives:
+                rotate_if_full()
+                s = current.perspective_scores.add()
+                s.entity_id = self._uuid_str_to_bytes(perspective.entity_id)
+                s.space_id = self._uuid_str_to_bytes(perspective.space_id)
+                s.score = perspective.normalized_score
+                s.updated_at = computed_at
+                items_in_current += 1
+
+        for space in spaces:
+            rotate_if_full()
+            s = current.space_scores.add()
+            s.space_id = self._uuid_str_to_bytes(space.id)
+            s.score = space.space_score
+            s.updated_at = computed_at
+            items_in_current += 1
+
+        # Terminal flush. rotate_if_full is called before each append, so
+        # current always has items whenever we added anything at all.
+        batches_produced = 0
+        if items_in_current > 0:
+            if pending is not None:
+                self._produce_batch(pending, is_final=False)
+            self._produce_batch(current, is_final=True)
+            batches_produced = batch_sequence + 1
 
         elapsed = time.time() - t0
         logger.info(
             "Produced %d batches to topic '%s' in %.1fs",
-            batch_sequence, self._topic, elapsed,
+            batches_produced, self._topic, elapsed,
         )
 
-    def _prepare_entity_scores(
-        self, entities: list[Entity], updated_at: int
-    ) -> list[EntityScore]:
-        """Prepare EntityScore messages from entities."""
-        scores = []
-        for entity in entities:
-            score = EntityScore()
-            score.entity_id = self._uuid_str_to_bytes(entity.id)
-            score.score = entity.normalized_score
-            score.updated_at = updated_at
-            scores.append(score)
-        return scores
+    def _new_batch(self, computed_at: int, batch_sequence: int) -> HermesScoresBatch:
+        """Create an empty HermesScoresBatch with header fields set."""
+        batch = HermesScoresBatch()
+        batch.computed_at = computed_at
+        batch.batch_sequence = batch_sequence
+        return batch
 
-    def _prepare_perspective_scores(
-        self, entities: list[Entity], updated_at: int
-    ) -> list[PerspectiveScore]:
-        """Prepare PerspectiveScore messages from entity perspectives."""
-        scores = []
-        for entity in entities:
-            for perspective in entity.perspectives:
-                score = PerspectiveScore()
-                score.entity_id = self._uuid_str_to_bytes(perspective.entity_id)
-                score.space_id = self._uuid_str_to_bytes(perspective.space_id)
-                score.score = perspective.normalized_score
-                score.updated_at = updated_at
-                scores.append(score)
-        return scores
-
-    def _prepare_space_scores(
-        self, spaces: list[Space], updated_at: int
-    ) -> list[SpaceScore]:
-        """Prepare SpaceScore messages from spaces."""
-        scores = []
-        for space in spaces:
-            score = SpaceScore()
-            score.space_id = self._uuid_str_to_bytes(space.id)
-            score.score = space.space_score
-            score.updated_at = updated_at
-            scores.append(score)
-        return scores
+    def _produce_batch(self, batch: HermesScoresBatch, is_final: bool) -> None:
+        """Serialize a batch and hand it to the Kafka producer."""
+        batch.is_final = is_final
+        message = batch.SerializeToString()
+        self._producer.produce(
+            self._topic,
+            value=message,
+            callback=self._delivery_callback,
+        )
+        self._producer.poll(0)
 
     def flush(self, timeout: float = 30.0) -> int:
         """Flush pending messages and wait for delivery.
