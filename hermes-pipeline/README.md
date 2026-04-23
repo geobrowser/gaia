@@ -87,7 +87,7 @@ This transformer is part of the Hermes architecture (see `docs/architecture.md`)
 | `USE_MOCK` | Set to "true" or "1" to use mock data | `false` |
 | `SUBSTREAMS_ENDPOINT` | Substreams gRPC endpoint URL | `geotest.substreams.pinax.network:443` |
 | `SUBSTREAMS_API_TOKEN` | Auth token for substreams | - |
-| `SUBSTREAMS_START_BLOCK` | Block number to start from | `88109` |
+| `SUBSTREAMS_START_BLOCK` | Block number to start from. Set to `0` for a fresh/local Anvil chain; set to the contract deploy block for other chains. | `82655` |
 | `SUBSTREAMS_END_BLOCK` | Block number to stop at | `u64::MAX` (continuous) |
 
 ### Kafka Environment Variables
@@ -120,9 +120,13 @@ If `SENTRY_DSN` is set, telemetry is exported to Sentry. Otherwise, logs are wri
 # Start infrastructure (see docker-compose.yml at repo root)
 docker compose --profile infra up -d
 
-# Run with live substreams data (default)
+# Run with live substreams data (default).
+# SUBSTREAMS_START_BLOCK is the sole control for ingestion start:
+#   - Testnet live data:       82655 (ZC16 deploy block; current default)
+#   - Local Anvil / fresh chain: 0
+# Set it explicitly per target, or omit to accept the default.
 SUBSTREAMS_API_TOKEN=your-token \
-SUBSTREAMS_START_BLOCK=81809 \
+SUBSTREAMS_START_BLOCK=82655 \
 KAFKA_BROKER=localhost:9092 \
 cargo run --package hermes-pipeline
 ```

@@ -28,7 +28,7 @@ Before touching any service, confirm the following:
 | Kafka cluster reachable | `kafka-topics --bootstrap-server $KAFKA_BROKER --list` returns (can be empty; topics auto-create on first produce per cluster config) |
 | Kafka consumer groups clean | `kafka-consumer-groups --bootstrap-server $KAFKA_BROKER --list | grep kg-indexer` returns nothing — otherwise reset before bring-up (see [Recovery](#failure-recovery-during-bring-up)) |
 | Substream endpoint + token | `SUBSTREAMS_ENDPOINT` reachable (default `geotest.substreams.pinax.network:443`); `SUBSTREAMS_API_TOKEN` valid |
-| Starting block captured | `hermes-substream/substreams.yaml:21` → `initialBlock: 81809`. Override per deploy with `SUBSTREAMS_START_BLOCK` if pointing at a different fresh-chain genesis |
+| Starting block captured | `SUBSTREAMS_START_BLOCK` is the sole control for where ingestion begins (module-level `initialBlock` floors were removed in GEO-537). Default in `hermes-pipeline` is `82655` (ZC16 testnet deploy block). Set to the SpaceRegistry deploy block for mainnet, or `0` for a fresh local chain |
 | All K8s secrets populated | `DATABASE_URL`, `DATABASE_URL_DIRECT`, `KAFKA_PASSWORD`, `KAFKA_SSL_CA_PEM`, `EXECUTOR_PRIVATE_KEY`, `PIMLICO_API_KEY`, `SENTRY_DSN` |
 | Sentry project configured | `SENTRY_DSN` set per service (`api`, `kg-indexer`, `hermes-pipeline`, `proposal-executor`); `SENTRY_ENVIRONMENT` matches target env |
 
@@ -179,7 +179,7 @@ The V2 stack has no production data to preserve during bring-up. The canonical r
 
 ### Re-index timing estimate
 
-> **Gap — not yet measured.** The full re-index walltime from `initialBlock: 81809` to current chain head isn't documented. Recommend a dry run on staging before go-live to establish the baseline. The tight path is likely Substreams endpoint throughput × kg-indexer transaction commit rate; Kafka partition parallelism is currently single-consumer on the `kg-indexer` group.
+> **Gap — not yet measured.** The full re-index walltime from the SpaceRegistry deploy block to current chain head isn't documented. Recommend a dry run on staging before go-live to establish the baseline. The tight path is likely Substreams endpoint throughput × kg-indexer transaction commit rate; Kafka partition parallelism is currently single-consumer on the `kg-indexer` group.
 >
 > Rough order of magnitude for planning: if staging indexes at ~100 blocks/s and the chain has ~1M blocks since fork, that's ~3 hours for a full re-index. Measure before relying on this estimate.
 
