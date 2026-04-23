@@ -90,7 +90,7 @@ describe("computeQueryCost — pagination", () => {
 				}
 			}
 		}`)
-		expect(result).toBe(100_000_000_000)
+		expect(result).toBe(500_000_000_000)
 	})
 })
 
@@ -231,13 +231,13 @@ describe("query cost histogram", () => {
 // never produce Infinity / NaN regardless of input.
 // --------------------------------------------------------------------------
 
-const MAX_COST_CALC_LIMIT = Number.parseInt(process.env.GRAPHQL_COST_CALC_LIMIT ?? "100000000000", 10)
+const MAX_COST_CALC_LIMIT = Number.parseInt(process.env.GRAPHQL_COST_CALC_LIMIT ?? "500000000000", 10)
 
 describe("computeQueryCost — cap & overflow protection", () => {
-	it("caps at MAX_COST_CALC_LIMIT (100B default) on an otherwise-astronomical query", () => {
+	it("caps at MAX_COST_CALC_LIMIT (500B default) on an otherwise-astronomical query", () => {
 		// 6 nested levels of first:1000 would mathematically be 1000^6 = 1e18
 		// (way past Number.MAX_SAFE_INTEGER). With the cap in place the walker
-		// bails as soon as the running total crosses 100B.
+		// bails as soon as the running total crosses 500B.
 		const query = `
 			{
 				entities(first: 1000) {
@@ -293,6 +293,66 @@ describe("computeQueryCost — cap & overflow protection", () => {
 			q = `{ entity(id: "x") ${q} }`
 		}
 		expect(() => cost(q)).not.toThrow()
+	})
+
+	it("caps on the production `entitiesConnection` query that produced a ~45 MB response", () => {
+		// Real query captured from prod stdout during the OOM investigation
+		// (fingerprint gql:1424e9e7). first:1000 at the root plus three levels
+		// of unbounded nested `{ nodes { ... } }` connections — the effective
+		// multiplier chain is ~1000^7 times leaf-scalar counts, so the
+		// unclamped cost is on the order of 10^22. The walker crosses the
+		// 500B cap almost immediately and short-circuits. Kept as a regression
+		// fixture so future changes to the cost model don't quietly start
+		// returning a finite value here.
+		const query = `
+			query GetEntities($type: [UUID!], $first: Int!, $after: Cursor) {
+				entitiesConnection(
+					first: $first
+					after: $after
+					filter: {relations: {some: {typeId: {is: "8f151ba4de204e3c9cb499ddf96f48f1"}, toEntityId: {in: $type}}}}
+				) {
+					pageInfo { hasNextPage endCursor }
+					nodes {
+						id
+						name
+						values {
+							nodes {
+								spaceId propertyId text language date datetime time
+								integer float decimal unit boolean point
+							}
+						}
+						relations {
+							nodes {
+								id spaceId fromEntityId toEntityId typeId verified
+								position toSpaceId entityId
+								entity {
+									id
+									name
+									values {
+										nodes {
+											spaceId propertyId text language date datetime time
+											integer float decimal unit boolean point
+										}
+									}
+									relations {
+										nodes {
+											id spaceId fromEntityId toEntityId typeId
+											position toSpaceId entityId
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		`
+		const result = cost(query, {
+			type: ["7ed45f2bc48b419e8e4664d5ff680b0d"],
+			first: 1000,
+			after: null,
+		})
+		expect(result).toBe(MAX_COST_CALC_LIMIT)
 	})
 })
 
