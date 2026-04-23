@@ -90,7 +90,7 @@ describe("computeQueryCost — pagination", () => {
 				}
 			}
 		}`)
-		expect(result).toBe(1_000_000_000)
+		expect(result).toBe(5_000_000_000)
 	})
 })
 
@@ -196,7 +196,7 @@ describe("query cost histogram", () => {
 			})
 		}
 
-		// Cost 51 → should hit le=100, le=1000, ..., le=+Inf (all ≥ 51)
+		// Cost 51 → should hit le=1000, le=10_000, ..., le=+Inf (all ≥ 51)
 		runQuery(`{ entities(first: 50) { id } }`)
 		// Cost 1001 → hits le=10_000, le=100_000, ..., le=+Inf (buckets ≥ 1001)
 		runQuery(`{ entities { id } }`)
@@ -204,9 +204,7 @@ describe("query cost histogram", () => {
 		const out = renderQueryCostHistogram()
 		expect(out).toContain("gaia_api_graphql_query_cost_count 2")
 		expect(out).toContain(`gaia_api_graphql_query_cost_sum ${51 + 1001}`)
-		// le=100: only the cost=51 observation qualifies
-		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="100"} 1$/m)
-		// le=1000: still only cost=51 (1001 > 1000)
+		// le=1000: only the cost=51 observation qualifies (1001 > 1000)
 		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="1000"} 1$/m)
 		// le=10000: both observations
 		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="10000"} 2$/m)
@@ -233,13 +231,13 @@ describe("query cost histogram", () => {
 // never produce Infinity / NaN regardless of input.
 // --------------------------------------------------------------------------
 
-const MAX_COST_CALC_LIMIT = Number.parseInt(process.env.GRAPHQL_COST_CALC_LIMIT ?? "1000000000", 10)
+const MAX_COST_CALC_LIMIT = Number.parseInt(process.env.GRAPHQL_COST_CALC_LIMIT ?? "5000000000", 10)
 
 describe("computeQueryCost — cap & overflow protection", () => {
-	it("caps at MAX_COST_CALC_LIMIT (1B default) on an otherwise-astronomical query", () => {
+	it("caps at MAX_COST_CALC_LIMIT (5B default) on an otherwise-astronomical query", () => {
 		// 6 nested levels of first:1000 would mathematically be 1000^6 = 1e18
 		// (way past Number.MAX_SAFE_INTEGER). With the cap in place the walker
-		// bails as soon as the running total crosses 1B.
+		// bails as soon as the running total crosses 5B.
 		const query = `
 			{
 				entities(first: 1000) {
