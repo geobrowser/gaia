@@ -90,7 +90,7 @@ describe("computeQueryCost — pagination", () => {
 				}
 			}
 		}`)
-		expect(result).toBe(5_000_000_000)
+		expect(result).toBe(100_000_000_000)
 	})
 })
 
@@ -231,13 +231,13 @@ describe("query cost histogram", () => {
 // never produce Infinity / NaN regardless of input.
 // --------------------------------------------------------------------------
 
-const MAX_COST_CALC_LIMIT = Number.parseInt(process.env.GRAPHQL_COST_CALC_LIMIT ?? "5000000000", 10)
+const MAX_COST_CALC_LIMIT = Number.parseInt(process.env.GRAPHQL_COST_CALC_LIMIT ?? "100000000000", 10)
 
 describe("computeQueryCost — cap & overflow protection", () => {
-	it("caps at MAX_COST_CALC_LIMIT (5B default) on an otherwise-astronomical query", () => {
+	it("caps at MAX_COST_CALC_LIMIT (100B default) on an otherwise-astronomical query", () => {
 		// 6 nested levels of first:1000 would mathematically be 1000^6 = 1e18
 		// (way past Number.MAX_SAFE_INTEGER). With the cap in place the walker
-		// bails as soon as the running total crosses 5B.
+		// bails as soon as the running total crosses 100B.
 		const query = `
 			{
 				entities(first: 1000) {
