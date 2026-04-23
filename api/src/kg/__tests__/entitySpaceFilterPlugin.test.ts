@@ -15,6 +15,26 @@ async function executeGraphQL(query: string, variables?: Record<string, unknown>
 	return response.json()
 }
 
+/**
+ * Read the cumulative count of sequential scans Postgres has run against
+ * a table since startup. Compare before/after a query to detect whether
+ * the query forced a full scan — a useful assertion for filter plugins
+ * that must route through an indexed path.
+ *
+ * Note: the counter is per-table and increments once per executed Seq
+ * Scan node. If the test DB has concurrent background activity that
+ * happens to scan `entities`, the delta could be >0 for reasons outside
+ * the query under test — in that case, loosen to `<= 1` (the bug
+ * increments by exactly 1 per offending call).
+ */
+async function getSeqScanCount(pool: Pool, table: string): Promise<number> {
+	const r = await pool.query(
+		"SELECT seq_scan FROM pg_stat_user_tables WHERE schemaname = 'public' AND relname = $1",
+		[table],
+	)
+	return Number(r.rows[0]?.seq_scan ?? 0)
+}
+
 describe("EntitySpaceFilterPlugin", () => {
 	let pool: Pool
 	let testSpaceId: string | null = null
@@ -447,6 +467,128 @@ describe("EntitySpaceFilterPlugin", () => {
 			for (const entity of result.data.entities) {
 				expect(entity.typeIds).toEqual([])
 			}
+		})
+
+		// --------------------------------------------------------------------
+		// `overlaps` and `contains` — array-set operators on the typeIds
+		// computed column. Without the custom plugin handler, PostGraphile
+		// falls back to `entities_type_ids(e) && $1` (or `@> $1`), which
+		// forces a seq scan over the entities table and calls the computed
+		// function per row — observed as nginx 504 in prod (PR #635).
+		// These tests verify both:
+		//   (1) correctness — overlaps is equivalent to `in`, contains is AND
+		//   (2) plan shape — no new seq_scan on entities (plugin routes
+		//       through the indexed EXISTS path on relations_to_entity_id_idx)
+		// --------------------------------------------------------------------
+
+		it("should filter with 'overlaps' operator (equivalent to 'in' for type arrays)", async () => {
+			if (!testTypeId) {
+				console.log("Skipping test: no type with entities found")
+				return
+			}
+
+			const result = await executeGraphQL(
+				`
+				query TestTypeFilter($typeIds: [UUID!]!) {
+					entities(typeIds: { overlaps: $typeIds }, first: 5) {
+						id
+						typeIds
+					}
+				}
+			`,
+				{typeIds: [testTypeId]},
+			)
+
+			expect(result.errors).toBeUndefined()
+			expect(result.data.entities).toBeDefined()
+
+			for (const entity of result.data.entities) {
+				expect(entity.typeIds).toContain(testTypeId)
+			}
+		})
+
+		it("should filter with 'contains' operator (requires all specified types)", async () => {
+			if (!testTypeId) {
+				console.log("Skipping test: no type with entities found")
+				return
+			}
+
+			// Single-type `contains` — every returned entity must have that type.
+			const result = await executeGraphQL(
+				`
+				query TestTypeFilter($typeIds: [UUID!]!) {
+					entities(typeIds: { contains: $typeIds }, first: 5) {
+						id
+						typeIds
+					}
+				}
+			`,
+				{typeIds: [testTypeId]},
+			)
+
+			expect(result.errors).toBeUndefined()
+			expect(result.data.entities).toBeDefined()
+
+			for (const entity of result.data.entities) {
+				expect(entity.typeIds).toContain(testTypeId)
+			}
+		})
+
+		it("'overlaps' filter does not trigger a sequential scan on entities", async () => {
+			// The bug we're fixing: without the custom plugin case, the generated
+			// SQL is `entities_type_ids(e) && $1`, which forces `Seq Scan on
+			// entities`. pg_stat_user_tables.seq_scan increments by 1 per full
+			// sequential scan executed against the table. If the fix is working,
+			// the counter should not move for this query.
+			if (!testTypeId) {
+				console.log("Skipping test: no type with entities found")
+				return
+			}
+
+			const before = await getSeqScanCount(pool, "entities")
+			const result = await executeGraphQL(
+				`
+				query TestTypeFilter($typeIds: [UUID!]!) {
+					entities(typeIds: { overlaps: $typeIds }, first: 5) {
+						id
+						typeIds
+					}
+				}
+			`,
+				{typeIds: [testTypeId]},
+			)
+			const after = await getSeqScanCount(pool, "entities")
+
+			expect(result.errors).toBeUndefined()
+			// Tightest assertion: no seq_scan at all. If this ever gets flaky
+			// because of an unrelated concurrent workload, loosen to
+			// `expect(after - before).toBeLessThanOrEqual(1)` — still catches
+			// the bug, which increments by at least 1 per test call.
+			expect(after - before).toBe(0)
+		})
+
+		it("'contains' filter does not trigger a sequential scan on entities", async () => {
+			if (!testTypeId) {
+				console.log("Skipping test: no type with entities found")
+				return
+			}
+
+			const before = await getSeqScanCount(pool, "entities")
+			const result = await executeGraphQL(
+				`
+				query TestTypeFilter($typeIds: [UUID!]!) {
+					entities(typeIds: { contains: $typeIds }, first: 5) {
+						id
+						typeIds
+					}
+				}
+			`,
+				{typeIds: [testTypeId]},
+			)
+			const after = await getSeqScanCount(pool, "entities")
+
+			expect(result.errors).toBeUndefined()
+			expect(after - before).toBe(0)
 		})
 	})
 
