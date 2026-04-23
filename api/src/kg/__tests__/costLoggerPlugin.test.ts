@@ -77,11 +77,12 @@ describe("computeQueryCost — pagination", () => {
 	})
 
 	it("catches implicit-default heavy queries that omit `first`", () => {
-		// Previously under-counted — now a nested un-paginated query scales
-		// with the MAX default at each level. Math: innermost valuesList{2 scalars}
-		// would be MAX × 2 + 1 = 2001, then entity { id valuesList } → MAX × 2002 + 1,
-		// etc. Crosses the 1B cap at 3 levels of implicit defaults, so the walker
-		// clamps to MAX_COST_CALC_LIMIT rather than drifting toward Infinity.
+		// Conservative model: each un-paginated structured field defaults to
+		// MAX_PAGINATION_LIMIT (1000). The nested shape below multiplies out to
+		// valuesList{2 scalars} = 2001, toEntity{valuesList} = 2_001_001,
+		// relationsList{toEntity} = 2_001_001_001, entities{id, relationsList} =
+		// 2_001_001_002_001 (~2T). Under the 500T cap this is the exact cost —
+		// useful as a regression fixture for the multiplier math itself.
 		const result = cost(`{
 			entities {
 				id
@@ -90,7 +91,7 @@ describe("computeQueryCost — pagination", () => {
 				}
 			}
 		}`)
-		expect(result).toBe(500_000_000_000)
+		expect(result).toBe(2_001_001_002_001)
 	})
 })
 
@@ -231,13 +232,13 @@ describe("query cost histogram", () => {
 // never produce Infinity / NaN regardless of input.
 // --------------------------------------------------------------------------
 
-const MAX_COST_CALC_LIMIT = Number.parseInt(process.env.GRAPHQL_COST_CALC_LIMIT ?? "500000000000", 10)
+const MAX_COST_CALC_LIMIT = Number.parseInt(process.env.GRAPHQL_COST_CALC_LIMIT ?? "500000000000000", 10)
 
 describe("computeQueryCost — cap & overflow protection", () => {
-	it("caps at MAX_COST_CALC_LIMIT (500B default) on an otherwise-astronomical query", () => {
+	it("caps at MAX_COST_CALC_LIMIT (500T default) on an otherwise-astronomical query", () => {
 		// 6 nested levels of first:1000 would mathematically be 1000^6 = 1e18
 		// (way past Number.MAX_SAFE_INTEGER). With the cap in place the walker
-		// bails as soon as the running total crosses 500B.
+		// bails as soon as the running total crosses 500T.
 		const query = `
 			{
 				entities(first: 1000) {
@@ -259,12 +260,17 @@ describe("computeQueryCost — cap & overflow protection", () => {
 	it("stops accumulating once a sibling pushes past the cap", () => {
 		// The first branch alone exceeds the cap; the second branch shouldn't
 		// be walked at all. Observable effect: result is exactly the cap.
+		// Needs 6 `first:1000` levels to clear the 500T cap: 1000^6 = 10^18 > 500T.
 		const query = `
 			{
 				first_branch: entities(first: 1000) {
 					a: entities(first: 1000) {
 						b: entities(first: 1000) {
-							c: entities(first: 1000) { id }
+							c: entities(first: 1000) {
+								d: entities(first: 1000) {
+									e: entities(first: 1000) { id }
+								}
+							}
 						}
 					}
 				}
@@ -301,7 +307,7 @@ describe("computeQueryCost — cap & overflow protection", () => {
 		// of unbounded nested `{ nodes { ... } }` connections — the effective
 		// multiplier chain is ~1000^7 times leaf-scalar counts, so the
 		// unclamped cost is on the order of 10^22. The walker crosses the
-		// 500B cap almost immediately and short-circuits. Kept as a regression
+		// 500T cap almost immediately and short-circuits. Kept as a regression
 		// fixture so future changes to the cost model don't quietly start
 		// returning a finite value here.
 		const query = `
