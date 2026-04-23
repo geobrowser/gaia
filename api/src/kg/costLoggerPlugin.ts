@@ -45,6 +45,16 @@ const MAX_COST_CALC_LIMIT = parsePositiveIntEnv("GRAPHQL_COST_CALC_LIMIT", 9_000
 // histogram without adding to stdout noise.
 const COST_LOG_THRESHOLD = parsePositiveIntEnv("GRAPHQL_COST_LOG_THRESHOLD", MAX_COST_CALC_LIMIT)
 
+// Per-level multiplier used when a collection field omits `first`/`last`.
+// Separate from MAX_PAGINATION_LIMIT (1000) — the paginationCap plugin still
+// injects `first: 1000` at SQL build time, but assuming the *full* SQL cap
+// at every implicit level compounds into unrealistically large numbers for
+// typical query shapes. 100 is a more realistic expected-fan-out for the
+// cost model and keeps the histogram distribution readable — cap-hitters
+// still clamp, deeply-nested structural issues still stand out, but the
+// per-query numbers stay closer to "scan rows" than "theoretical ceiling".
+const COST_MODEL_DEFAULT_LIMIT = 100
+
 // ---------------------------------------------------------------------------
 // Prometheus histogram metric — gaia_api_graphql_query_cost
 // ---------------------------------------------------------------------------
@@ -215,11 +225,12 @@ function fieldCost(
 		return Math.min(child * limit + 1, MAX_COST_CALC_LIMIT)
 	}
 
-	// Structured field without an explicit limit: conservatively assume the
-	// SQL-injected default of MAX_PAGINATION_LIMIT applies. Leaf scalars
-	// (no selection set → child=0) collapse to `0 × N + 1 = 1` here, so we
-	// don't need a separate branch.
-	return Math.min(child * MAX_PAGINATION_LIMIT + 1, MAX_COST_CALC_LIMIT)
+	// Structured field without an explicit limit: assume the cost-model
+	// default fan-out (COST_MODEL_DEFAULT_LIMIT, decoupled from the
+	// SQL-level MAX_PAGINATION_LIMIT). Leaf scalars (no selection set →
+	// child=0) collapse to `0 × N + 1 = 1` here, so we don't need a
+	// separate branch.
+	return Math.min(child * COST_MODEL_DEFAULT_LIMIT + 1, MAX_COST_CALC_LIMIT)
 }
 
 function resolveArgs(
