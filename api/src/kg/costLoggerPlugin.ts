@@ -25,12 +25,6 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
-// Threshold above which we emit an info-level log line with the full query +
-// variables. Not an alert — just "this one is worth finding in logs if we
-// need to investigate a slow response later". Kept separate from the
-// histogram metric (which records every query regardless of size).
-const COST_LOG_THRESHOLD = parsePositiveIntEnv("GRAPHQL_COST_LOG_THRESHOLD", 1_000_000)
-
 // Hard ceiling on the cost calculation itself. Once the walker's running
 // total reaches this value it short-circuits and returns the cap instead of
 // continuing to multiply. Caps memory (totalSum can't drift to Infinity),
@@ -42,6 +36,14 @@ const COST_LOG_THRESHOLD = parsePositiveIntEnv("GRAPHQL_COST_LOG_THRESHOLD", 1_0
 // integer precision. This is the practical ceiling for the cost number
 // itself without reaching for BigInt.
 const MAX_COST_CALC_LIMIT = parsePositiveIntEnv("GRAPHQL_COST_CALC_LIMIT", 9_000_000_000_000_000)
+
+// Threshold above which we emit a warn-level log line with the full query +
+// variables. Set to the cap itself, so we only log queries that were
+// actually clamped — i.e. whose unclamped theoretical cost exceeds
+// MAX_COST_CALC_LIMIT. These are the truly pathological shapes worth
+// investigating; anything below the cap is fine to leave in the Prometheus
+// histogram without adding to stdout noise.
+const COST_LOG_THRESHOLD = parsePositiveIntEnv("GRAPHQL_COST_LOG_THRESHOLD", MAX_COST_CALC_LIMIT)
 
 // ---------------------------------------------------------------------------
 // Prometheus histogram metric — gaia_api_graphql_query_cost
@@ -58,9 +60,8 @@ const MAX_COST_CALC_LIMIT = parsePositiveIntEnv("GRAPHQL_COST_CALC_LIMIT", 9_000
 // would exceed 9P land only in +Inf, since 9P > 5P (the last numeric edge).
 //
 // Granularity is intentionally asymmetric:
-//   - Everything below 100k collapses into a single bucket: trivial queries
-//     (scalar/introspection-shape) don't need fine resolution.
-//   - 100k → 100M covers the small-to-medium range on powers of 10.
+//   - Everything below 100M collapses into a single bucket: cheap / trivial
+//     queries don't need fine resolution (prod sees almost no volume there).
 //   - 100M → 800M is subdivided (100M/200M/500M/800M) because that's where
 //     the dominant population sits in prod.
 //   - 800M → 50B jumps directly to 5B/50B (the 1B–5B range collapsed to a
@@ -68,8 +69,8 @@ const MAX_COST_CALC_LIMIT = parsePositiveIntEnv("GRAPHQL_COST_CALC_LIMIT", 9_000
 //   - 50B → 9P covers the pathological tail on decade steps: 100B, 500B,
 //     5T, 50T, 500T, 5P — six resolution bins before +Inf / the cap.
 const COST_BUCKET_EDGES: readonly number[] = [
-	100_000, 1_000_000, 10_000_000, 100_000_000, 200_000_000, 500_000_000, 800_000_000, 5_000_000_000, 50_000_000_000,
-	100_000_000_000, 500_000_000_000, 5_000_000_000_000, 50_000_000_000_000, 500_000_000_000_000, 5_000_000_000_000_000,
+	100_000_000, 200_000_000, 500_000_000, 800_000_000, 5_000_000_000, 50_000_000_000, 100_000_000_000, 500_000_000_000,
+	5_000_000_000_000, 50_000_000_000_000, 500_000_000_000_000, 5_000_000_000_000_000,
 ]
 
 // noUncheckedIndexedAccess widens `number[]`'s index access to `number | undefined`,

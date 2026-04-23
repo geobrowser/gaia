@@ -197,23 +197,35 @@ describe("query cost histogram", () => {
 			})
 		}
 
-		// Cost 1001 → hits le=100_000, ..., le=+Inf (all buckets ≥ 1001)
+		// Cost 1001 — well below every numeric edge, so it lands in every
+		// bucket from the 100M floor up through 5P and +Inf.
 		runQuery(`{ entities { id } }`)
-		// Cost 100_001 (first:100_000 × id) is rejected by PaginationCapPlugin in
-		// the server path, but computeQueryCost is purely schema-free and happily
-		// evaluates AST-derived multipliers — pick a construction that produces
-		// a cost between 100k and 1M: entities(first:1000){id name} = 2001,
-		// that's still ≤ 100_000 so it only adds to the smaller bucket. Use a
-		// deliberately heavier query to straddle the 100k/1M edges.
-		runQuery(`{ entities(first: 500) { id name values(first: 5) { propertyId text } } }`) // 500*(1+1+5*(1+1)+1) + 1 = 500*13 + 1 = 6501
+		// A 6-nested first:1000 query clamps at the 9P cap. Since 9P > 5P
+		// (the top numeric edge), this observation is ONLY in +Inf.
+		runQuery(`
+			{
+				entities(first: 1000) {
+					a: entities(first: 1000) {
+						b: entities(first: 1000) {
+							c: entities(first: 1000) {
+								d: entities(first: 1000) {
+									e: entities(first: 1000) { id }
+								}
+							}
+						}
+					}
+				}
+			}
+		`)
 
 		const out = renderQueryCostHistogram()
 		expect(out).toContain("gaia_api_graphql_query_cost_count 2")
-		expect(out).toContain(`gaia_api_graphql_query_cost_sum ${1001 + 6501}`)
-		// le=100000: both observations qualify (1001 and 6501 both ≤ 100_000)
-		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="100000"} 2$/m)
-		// le=1000000: still both
-		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="1000000"} 2$/m)
+		expect(out).toContain(`gaia_api_graphql_query_cost_sum ${1001 + 9_000_000_000_000_000}`)
+		// le=100M (new floor): only the cheap query (cap-hitter is above 5P)
+		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="100000000"} 1$/m)
+		// le=5P (top numeric edge): still only the cheap query
+		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="5000000000000000"} 1$/m)
+		// +Inf: both
 		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="\+Inf"} 2$/m)
 	})
 
@@ -435,11 +447,26 @@ describe("useCostLogger — shadow-mode safety", () => {
 
 		const plugin = useCostLogger()
 		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
-		// A query guaranteed to cross the default 1M log threshold.
+		// A query guaranteed to cross the default log threshold (the cap itself).
+		// Six `first:1000` levels multiply out to 1000^6 = 1e18, well over 9P.
 		expect(() =>
 			onExecute({
 				args: {
-					document: parse(`{ entities(first: 1000) { relationsList { id } } }`),
+					document: parse(`
+						{
+							entities(first: 1000) {
+								a: entities(first: 1000) {
+									b: entities(first: 1000) {
+										c: entities(first: 1000) {
+											d: entities(first: 1000) {
+												e: entities(first: 1000) { id }
+											}
+										}
+									}
+								}
+							}
+						}
+					`),
 					variableValues: {circular},
 					operationName: null,
 				},
