@@ -240,6 +240,20 @@ describe("query cost histogram", () => {
 const MAX_COST_CALC_LIMIT = Number.parseInt(process.env.GRAPHQL_COST_CALC_LIMIT ?? "9000000000000000", 10)
 
 describe("computeQueryCost — cap & overflow protection", () => {
+	it("MAX_COST_CALC_LIMIT stays within Number.MAX_SAFE_INTEGER", () => {
+		// Regression guard: the cap must be representable exactly as a JS
+		// Number. Above 2^53 - 1 (~9.007e15), integer arithmetic starts rounding,
+		// which would break the `Math.min(child * limit + 1, cap)` clamp and the
+		// `child >= cap` short-circuit — both rely on exact equality/comparison
+		// at the cap magnitude. If someone bumps the cap past this point they
+		// need BigInt, not just a bigger Number literal.
+		expect(MAX_COST_CALC_LIMIT).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER)
+		// And we still have unit precision at this magnitude (cap+1 > cap,
+		// cap-1 < cap). If we drift past MAX_SAFE_INTEGER these fail silently.
+		expect(MAX_COST_CALC_LIMIT + 1).toBeGreaterThan(MAX_COST_CALC_LIMIT)
+		expect(MAX_COST_CALC_LIMIT - 1).toBeLessThan(MAX_COST_CALC_LIMIT)
+	})
+
 	it("caps at MAX_COST_CALC_LIMIT (9P default) on an otherwise-astronomical query", () => {
 		// 6 nested levels of first:1000 would mathematically be 1000^6 = 1e18
 		// (way past Number.MAX_SAFE_INTEGER). With the 9P cap in place the
