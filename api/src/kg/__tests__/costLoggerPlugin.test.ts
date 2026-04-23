@@ -197,18 +197,23 @@ describe("query cost histogram", () => {
 			})
 		}
 
-		// Cost 51 → should hit le=1000, le=10_000, ..., le=+Inf (all ≥ 51)
-		runQuery(`{ entities(first: 50) { id } }`)
-		// Cost 1001 → hits le=10_000, le=100_000, ..., le=+Inf (buckets ≥ 1001)
+		// Cost 1001 → hits le=100_000, ..., le=+Inf (all buckets ≥ 1001)
 		runQuery(`{ entities { id } }`)
+		// Cost 100_001 (first:100_000 × id) is rejected by PaginationCapPlugin in
+		// the server path, but computeQueryCost is purely schema-free and happily
+		// evaluates AST-derived multipliers — pick a construction that produces
+		// a cost between 100k and 1M: entities(first:1000){id name} = 2001,
+		// that's still ≤ 100_000 so it only adds to the smaller bucket. Use a
+		// deliberately heavier query to straddle the 100k/1M edges.
+		runQuery(`{ entities(first: 500) { id name values(first: 5) { propertyId text } } }`) // 500*(1+1+5*(1+1)+1) + 1 = 500*13 + 1 = 6501
 
 		const out = renderQueryCostHistogram()
 		expect(out).toContain("gaia_api_graphql_query_cost_count 2")
-		expect(out).toContain(`gaia_api_graphql_query_cost_sum ${51 + 1001}`)
-		// le=1000: only the cost=51 observation qualifies (1001 > 1000)
-		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="1000"} 1$/m)
-		// le=10000: both observations
-		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="10000"} 2$/m)
+		expect(out).toContain(`gaia_api_graphql_query_cost_sum ${1001 + 6501}`)
+		// le=100000: both observations qualify (1001 and 6501 both ≤ 100_000)
+		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="100000"} 2$/m)
+		// le=1000000: still both
+		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="1000000"} 2$/m)
 		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="\+Inf"} 2$/m)
 	})
 
@@ -232,13 +237,13 @@ describe("query cost histogram", () => {
 // never produce Infinity / NaN regardless of input.
 // --------------------------------------------------------------------------
 
-const MAX_COST_CALC_LIMIT = Number.parseInt(process.env.GRAPHQL_COST_CALC_LIMIT ?? "500000000000000", 10)
+const MAX_COST_CALC_LIMIT = Number.parseInt(process.env.GRAPHQL_COST_CALC_LIMIT ?? "9000000000000000", 10)
 
 describe("computeQueryCost — cap & overflow protection", () => {
-	it("caps at MAX_COST_CALC_LIMIT (500T default) on an otherwise-astronomical query", () => {
+	it("caps at MAX_COST_CALC_LIMIT (9P default) on an otherwise-astronomical query", () => {
 		// 6 nested levels of first:1000 would mathematically be 1000^6 = 1e18
-		// (way past Number.MAX_SAFE_INTEGER). With the cap in place the walker
-		// bails as soon as the running total crosses 500T.
+		// (way past Number.MAX_SAFE_INTEGER). With the 9P cap in place the
+		// walker bails as soon as the running total crosses it.
 		const query = `
 			{
 				entities(first: 1000) {
@@ -307,7 +312,7 @@ describe("computeQueryCost — cap & overflow protection", () => {
 		// of unbounded nested `{ nodes { ... } }` connections — the effective
 		// multiplier chain is ~1000^7 times leaf-scalar counts, so the
 		// unclamped cost is on the order of 10^22. The walker crosses the
-		// 500T cap almost immediately and short-circuits. Kept as a regression
+		// 9P cap almost immediately and short-circuits. Kept as a regression
 		// fixture so future changes to the cost model don't quietly start
 		// returning a finite value here.
 		const query = `
