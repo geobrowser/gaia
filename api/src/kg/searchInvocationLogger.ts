@@ -14,9 +14,15 @@
  * fragment spreads, and emits one `log.warn` per search-field selection.
  * Multiple `search` calls in a single document all get logged.
  *
- * Client IP extraction uses `extractClientIp` from `utils/clientIp`
- * (`X-Real-IP` preferred, rightmost `X-Forwarded-For` as fallback —
- * documented trust rules for our nginx topology live there).
+ * Client IP extraction (see `extractClientIp` in `utils/clientIp`) prefers
+ * `X-Real-IP` because it's the unspoofable value in this cluster's topology:
+ * DO LoadBalancer → ingress-nginx with `externalTrafficPolicy: Local`
+ * and L4 TCP passthrough preserves the real client source IP to nginx,
+ * and nginx sets `X-Real-IP = $remote_addr` (single-valued, overwrites
+ * any client-supplied header). `X-Forwarded-For` is a fallback: nginx
+ * appends its observed `$remote_addr` to the right of any client-supplied
+ * value, so the *rightmost* entry is trustworthy and leftmost entries are
+ * client-controlled / spoofable. Never reading leftmost XFF here.
  */
 import {
 	type DocumentNode,
