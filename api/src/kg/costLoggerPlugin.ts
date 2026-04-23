@@ -36,7 +36,7 @@ const COST_LOG_THRESHOLD = parsePositiveIntEnv("GRAPHQL_COST_LOG_THRESHOLD", 1_0
 // continuing to multiply. Caps memory (totalSum can't drift to Infinity),
 // caps CPU (adversarial or pathological queries don't walk forever), and
 // keeps the metric values in a sane range for Prometheus / Grafana.
-const MAX_COST_CALC_LIMIT = parsePositiveIntEnv("GRAPHQL_COST_CALC_LIMIT", 1_000_000_000)
+const MAX_COST_CALC_LIMIT = parsePositiveIntEnv("GRAPHQL_COST_CALC_LIMIT", 5_000_000_000)
 
 // ---------------------------------------------------------------------------
 // Prometheus histogram metric — gaia_api_graphql_query_cost
@@ -48,16 +48,19 @@ const MAX_COST_CALC_LIMIT = parsePositiveIntEnv("GRAPHQL_COST_CALC_LIMIT", 1_000
 
 // Upper bucket edges, spanning the realistic range of the conservative model
 // (trivial scalar ≈ 1 at the low end, nested no-pagination queries near the
-// 1B cap at the high end). `+Inf` is emitted via the total count at render.
+// 5B cap at the high end). `+Inf` is emitted via the total count at render.
 //
-// Granularity is intentionally asymmetric: powers of 10 up through 100M give
-// cheap coverage of the small-to-medium range where most queries land, while
-// the top end (100M–1B) is subdivided into 100M/200M/500M/800M/1B so the
-// heatmap can distinguish where the dominant high-cost mass actually sits
-// instead of collapsing everything above 100M into a single bucket.
+// Granularity is intentionally asymmetric:
+//   - Everything below 1000 collapses into a single bucket: trivial queries
+//     (scalar/introspection-shape) don't need fine resolution.
+//   - 1k → 100M covers the small-to-medium range on powers of 10.
+//   - 100M → 1B is subdivided (100M/200M/500M/800M/1B) because that's where
+//     the dominant population sits in prod.
+//   - 1B → 5B adds 2B/3B/5B so the new top range (after the cap bump) can
+//     show which queries are truly pathological vs just "very expensive".
 const COST_BUCKET_EDGES: readonly number[] = [
-	10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000, 200_000_000, 500_000_000, 800_000_000,
-	1_000_000_000,
+	1_000, 10_000, 100_000, 1_000_000, 10_000_000, 100_000_000, 200_000_000, 500_000_000, 800_000_000, 1_000_000_000,
+	2_000_000_000, 3_000_000_000, 5_000_000_000,
 ]
 
 // noUncheckedIndexedAccess widens `number[]`'s index access to `number | undefined`,
