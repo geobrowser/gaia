@@ -36,7 +36,15 @@ class ScoringDataEmitter:
             ssl_ca_pem: Custom CA certificate PEM content (optional).
             emit_progress_every: Log an INFO progress line every N non-final
                 batches produced. Set high enough that small runs stay quiet.
+
+        Raises:
+            ValueError: If ``batch_size`` or ``emit_progress_every`` is < 1.
         """
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+        if emit_progress_every < 1:
+            raise ValueError("emit_progress_every must be >= 1")
+
         self._topic = topic
         self._batch_size = batch_size
         self._emit_progress_every = emit_progress_every

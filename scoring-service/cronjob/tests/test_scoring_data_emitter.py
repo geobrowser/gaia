@@ -119,6 +119,30 @@ class TestScoringDataEmitterInit:
             assert config["sasl.password"] == "secret"
             assert "-----BEGIN CERTIFICATE-----" in config["ssl.ca.pem"]
 
+    @pytest.mark.parametrize("bad_batch_size", [0, -1])
+    def test_init_rejects_non_positive_batch_size(self, bad_batch_size):
+        """batch_size <= 0 must raise ValueError, not silently produce empty batches."""
+        with patch("src.scoring_data_emitter.scoring_data_emitter.Producer"):
+            with pytest.raises(ValueError, match="batch_size must be >= 1"):
+                ScoringDataEmitter(
+                    broker="localhost:9092",
+                    topic="test.scores",
+                    batch_size=bad_batch_size,
+                )
+
+    @pytest.mark.parametrize("bad_interval", [0, -1])
+    def test_init_rejects_non_positive_emit_progress_every(self, bad_interval):
+        """emit_progress_every <= 0 must raise ValueError to avoid ZeroDivisionError in emit_all."""
+        with patch("src.scoring_data_emitter.scoring_data_emitter.Producer"):
+            with pytest.raises(ValueError, match="emit_progress_every must be >= 1"):
+                ScoringDataEmitter(
+                    broker="localhost:9092",
+                    topic="test.scores",
+                    batch_size=100,
+                    emit_progress_every=bad_interval,
+                )
+
+
 class TestUuidConversion:
     """Tests for UUID string to bytes conversion."""
 
