@@ -29,13 +29,7 @@ export function uploadEdit(file: File) {
 		const run = Effect.gen(function* () {
 			yield* Ref.update(attemptRef, (n) => n + 1)
 
-			// Pass the File directly rather than wrapping in `new Blob([file])`.
-			// The wrap is a Bun-era artifact from the original PR #15 that breaks
-			// under Node/undici — undici re-reads the wrapped Blob's stream during
-			// multipart serialization in a way that produces a chunked body
-			// without a proper terminating chunk, which Cloudflare's edge rejects
-			// with a fast 408 "client disconnected". Pinata's own SDK passes File
-			// directly for the same reason; `uploadFile` below has always done so.
+			// No Blob wrap — aligns with Pinata's SDK.
 			const formData = new FormData()
 			formData.append("network", "public")
 			formData.append("file", file, file.name || "edit.bin")
