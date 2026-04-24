@@ -37,7 +37,7 @@ pub const SPACE_ADDRESS_PROPERTY_ID: &str = "8f65b58c-d001-5bac-b1d3-3a66ae23193
 pub const VOTING_MODE_PROPERTY_ID: &str = "af26ed41-de0f-5b4f-a093-e9d3f683db07";
 pub const SPACE_ID_PROPERTY_ID: &str = "712adc1f-e950-5d14-bbd8-bf2166fe59c1";
 pub const CREATED_AT_BLOCK_PROPERTY_ID: &str = "da2952fb-17d6-53f3-b521-52e254106e0b";
-pub const SCORE_PROPERTY_ID: &str = "bb3f882a-38e3-5b93-879b-545e324b9762";
+pub const SCORE_PROPERTY_ID: &str = "85a4668a-42fa-4f48-8969-c0a9de0c294b";
 
 // Protected relation type IDs
 pub const SYSTEM_TYPES_RELATION_TYPE_ID: &str = "88b3d6ad-288c-529c-a212-0e1c24819185";
@@ -79,7 +79,6 @@ mod tests {
             (SYSTEM_TYPES_RELATION_TYPE_ID, "relation_type:SystemTypes"),
             (EOA_SPACE_TYPE_ID, "type:EoaSpace"),
             (DAO_SPACE_TYPE_ID, "type:DaoSpace"),
-            (SCORE_PROPERTY_ID, "property:Score"),
         ];
 
         for (constant, input) in cases {
