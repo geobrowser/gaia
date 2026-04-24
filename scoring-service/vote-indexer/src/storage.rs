@@ -198,7 +198,9 @@ impl Storage {
     /// Enables sorting entities by `upvotes - downvotes` through the existing
     /// `entities_ordered_by_property` function without any SQL changes.
     /// Upserts on `id` — a deterministic UUIDv5 of `score:<entity>:<space>`
-    /// stored as text, disjoint from kg-indexer-minted value ids.
+    /// under `GEO_SYSTEM_NAMESPACE`, stored as text. The `score:` tag keeps
+    /// these ids disjoint from kg-indexer-minted value ids and any other
+    /// `(entity_id, space_id)` scheme.
     #[instrument(name = "vote_indexer.storage.upsert_score_values", skip(self, rows, tx), fields(count = rows.len()))]
     pub async fn upsert_score_values(
         &self,

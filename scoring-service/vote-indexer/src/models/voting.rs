@@ -112,8 +112,9 @@ pub type VoteCountCriteria = (Uuid, Uuid, VoteObjectType);
 
 /// Row to upsert into the `values` table mirroring an entity's net score.
 ///
-/// `id` is a deterministic UUIDv5 derived from `score:<entity>:<space>` under
-/// `GEO_SYSTEM_NAMESPACE`, disjoint from kg-indexer-minted value ids.
+/// `id` is a deterministic UUIDv5 of the name `score:<entity>:<space>` under
+/// `GEO_SYSTEM_NAMESPACE`. The `score:` tag keeps these ids disjoint from
+/// kg-indexer-minted value ids and any other `(entity_id, space_id)` scheme.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScoreValueItem {
     pub id: Uuid,

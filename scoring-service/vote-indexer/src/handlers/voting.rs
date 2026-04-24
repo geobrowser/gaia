@@ -171,8 +171,9 @@ pub fn calculate_vote_counts(
 /// Build the `values`-table rows mirroring net scores for entities.
 ///
 /// Skips relation votes: only entities (`object_type == Entity`) get a score row.
-/// The row `id` is a deterministic UUIDv5 derived from the concatenated bytes of
-/// `entity_id` and `space_id` under `GEO_SYSTEM_NAMESPACE`.
+/// The row `id` is a deterministic UUIDv5 over the name `score:<entity>:<space>`
+/// under `GEO_SYSTEM_NAMESPACE` — the `score:` tag keeps these ids disjoint from
+/// any other scheme that might hash `(entity_id, space_id)`.
 pub fn build_score_values(counts: &[VotesCountItem]) -> Vec<ScoreValueItem> {
     let ns = Uuid::parse_str(GEO_SYSTEM_NAMESPACE)
         .expect("GEO_SYSTEM_NAMESPACE is a valid UUID constant");
@@ -188,12 +189,10 @@ pub fn build_score_values(counts: &[VotesCountItem]) -> Vec<ScoreValueItem> {
         .collect()
 }
 
-/// Derive the `values.id` for a score row from its (entity, space) pair.
+/// Derive the `values.id` for a score row as UUIDv5 of `score:<entity>:<space>`.
 fn derive_score_value_id(namespace: &Uuid, entity_id: &Uuid, space_id: &Uuid) -> Uuid {
-    let mut input = [0u8; 32];
-    input[..16].copy_from_slice(entity_id.as_bytes());
-    input[16..].copy_from_slice(space_id.as_bytes());
-    Uuid::new_v5(namespace, &input)
+    let name = format!("score:{entity_id}:{space_id}");
+    Uuid::new_v5(namespace, name.as_bytes())
 }
 
 #[cfg(test)]
