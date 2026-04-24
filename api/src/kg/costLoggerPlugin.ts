@@ -16,8 +16,8 @@ import {MAX_PAGINATION_LIMIT} from "./paginationCapPlugin"
 
 // Parse a positive-integer env var, falling back to `fallback` on anything
 // non-finite or non-positive. Guards against deploy-time misconfiguration
-// (e.g. `GRAPHQL_COST_CALC_LIMIT=abc` → parseInt = NaN) silently disabling
-// the walker's safety cap.
+// (e.g. `GRAPHQL_COST_LOG_THRESHOLD=abc` → parseInt = NaN) silently disabling
+// the threshold.
 function parsePositiveIntEnv(name: string, fallback: number): number {
 	const raw = process.env[name]
 	if (raw === undefined) return fallback
@@ -25,71 +25,57 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
-// Threshold above which we emit an info-level log line with the full query +
-// variables. Not an alert — just "this one is worth finding in logs if we
-// need to investigate a slow response later". Kept separate from the
-// histogram metric (which records every query regardless of size).
-const COST_LOG_THRESHOLD = parsePositiveIntEnv("GRAPHQL_COST_LOG_THRESHOLD", 1_000_000)
-
-// Hard ceiling on the cost calculation itself. Once the walker's running
-// total reaches this value it short-circuits and returns the cap instead of
-// continuing to multiply. Caps memory (totalSum can't drift to Infinity),
-// caps CPU (adversarial or pathological queries don't walk forever), and
-// keeps the metric values in a sane range for Prometheus / Grafana.
+// ---------------------------------------------------------------------------
+// Compressed (log₁₀-scaled) cost
+// ---------------------------------------------------------------------------
+// The raw cost is a multiplicative estimate (`child × limit + 1` at every
+// nested level) and can produce 20+-digit BigInts for pathological queries —
+// well past Number.MAX_SAFE_INTEGER. Rather than cap the value and collapse
+// the tail into a single "too big" bin, we walk in BigInt and surface a
+// compressed score: `round(log₁₀(rawCost) × 10)`.
 //
-// Sits just below `Number.MAX_SAFE_INTEGER` (≈ 9.007 × 10¹⁵) — any higher
-// and intermediate arithmetic in the walker (child × limit) would lose
-// integer precision. This is the practical ceiling for the cost number
-// itself without reaching for BigInt.
-const MAX_COST_CALC_LIMIT = parsePositiveIntEnv("GRAPHQL_COST_CALC_LIMIT", 9_000_000_000_000_000)
+// Properties:
+//   - 10-point step = 1 order of magnitude of raw cost. A score of 160 is
+//     10× more expensive than 150.
+//   - Fits Number. A 300-digit raw cost compresses to 3000 — still tiny.
+//   - Cheap to read. Triviality vs pathology is a two-digit diff, not an
+//     "is that 10¹⁷ or 10¹⁸ in scientific notation" squint.
+//
+// Approximate compressed landmarks, measured against real prod shapes:
+//   0           trivial scalar (`{ __typename }`)
+//   ~35         simple entity lookup (`entity(id) { id name }`)
+//   ~50         medium 1-level nested list
+//   ~160        non-nested heavy query (N=3 aliased relations, no nesting)
+//   ~250–270    cap-hitting prod shapes (N=3–10 aliased relations with
+//               nested `relations` inside `toEntity`) — these are the
+//               structurally-unbounded queries worth flagging.
+//   ~1500       50-level deeply nested adversarial probe.
+const COST_LOG_THRESHOLD = parsePositiveIntEnv("GRAPHQL_COST_LOG_THRESHOLD", 200)
 
 // ---------------------------------------------------------------------------
 // Prometheus histogram metric — gaia_api_graphql_query_cost
 // ---------------------------------------------------------------------------
-// Exposed via /health/metrics (see renderQueryCostHistogram). We accumulate
-// in-process monotonic counters (process start = 0), and Prometheus uses
-// rate()/histogram_quantile() over the scrape stream to derive time-windowed
-// distributions for the Grafana dashboard.
-
-// Upper bucket edges, spanning the realistic range of the conservative model
-// (trivial scalar ≈ 1 at the low end, nested no-pagination queries near the
-// 9 quadrillion cap at the high end). `+Inf` is emitted via the total count
-// at render and is the "clamped at cap" bin — queries whose unclamped cost
-// would exceed 9P land only in +Inf, since 9P > 5P (the last numeric edge).
+// Exposed via /health/metrics. In-process monotonic counters (reset on pod
+// restart) are converted by Prometheus over the scrape stream into rates +
+// quantiles for the Grafana dashboard.
 //
-// Granularity is intentionally asymmetric:
-//   - Everything below 100k collapses into a single bucket: trivial queries
-//     (scalar/introspection-shape) don't need fine resolution.
-//   - 100k → 100M covers the small-to-medium range on powers of 10.
-//   - 100M → 800M is subdivided (100M/200M/500M/800M) because that's where
-//     the dominant population sits in prod.
-//   - 800M → 50B jumps directly to 5B/50B (the 1B–5B range collapsed to a
-//     single 5B bucket since prod data didn't resolve anything useful there).
-//   - 50B → 9P covers the pathological tail on decade steps: 100B, 500B,
-//     5T, 50T, 500T, 5P — six resolution bins before +Inf / the cap.
-const COST_BUCKET_EDGES: readonly number[] = [
-	100_000, 1_000_000, 10_000_000, 100_000_000, 200_000_000, 500_000_000, 800_000_000, 5_000_000_000, 50_000_000_000,
-	100_000_000_000, 500_000_000_000, 5_000_000_000_000, 50_000_000_000_000, 500_000_000_000_000, 5_000_000_000_000_000,
-]
+// Bucket edges now use the compressed (log₁₀×10) scale. Each 10-point step
+// is a 10× jump in raw cost, so one linear scale captures everything from
+// trivial scalars (score 0) to adversarial fractal nesting (score 1000+).
+const COST_BUCKET_EDGES: readonly number[] = [30, 60, 90, 120, 150, 180, 200, 220, 240, 260, 280, 300, 500, 1000]
 
-// noUncheckedIndexedAccess widens `number[]`'s index access to `number | undefined`,
-// so we go via a Map which has a crisper `get(k) | undefined` story and always
-// normalize via `?? 0`. A bit more allocation than a typed array but the map
-// is bounded to 9 entries and only written on the hot path; effect is nil.
 const bucketCounts = new Map<number, number>()
 let totalCount = 0
 let totalSum = 0
 
 function recordQueryCost(cost: number): void {
-	// Defensive: `computeQueryCost` already caps at MAX_COST_CALC_LIMIT and
-	// can't produce NaN / Infinity / negative, but a future caller mustn't be
-	// able to poison the metric. Non-finite / negative inputs are dropped.
+	// Defensive: `computeQueryCost` shouldn't produce NaN / Infinity /
+	// negative, but a future caller mustn't be able to poison the metric.
 	if (!Number.isFinite(cost) || cost < 0) return
-	const clamped = Math.min(cost, MAX_COST_CALC_LIMIT)
 	totalCount++
-	totalSum += clamped
+	totalSum += cost
 	for (const edge of COST_BUCKET_EDGES) {
-		if (clamped <= edge) bucketCounts.set(edge, (bucketCounts.get(edge) ?? 0) + 1)
+		if (cost <= edge) bucketCounts.set(edge, (bucketCounts.get(edge) ?? 0) + 1)
 	}
 }
 
@@ -99,7 +85,7 @@ function recordQueryCost(cost: number): void {
  */
 export function renderQueryCostHistogram(): string {
 	const lines = [
-		"# HELP gaia_api_graphql_query_cost GraphQL query complexity score distribution (conservative model, see costLoggerPlugin.ts).",
+		"# HELP gaia_api_graphql_query_cost GraphQL query complexity score (log10×10 compressed, see costLoggerPlugin.ts).",
 		"# TYPE gaia_api_graphql_query_cost histogram",
 	]
 	for (const edge of COST_BUCKET_EDGES) {
@@ -120,37 +106,46 @@ export function __resetQueryCostHistogramForTests(): void {
 	totalSum = 0
 }
 
+// ---------------------------------------------------------------------------
+// BigInt cost walker
+// ---------------------------------------------------------------------------
+// Walks the operation AST in BigInt so the multiplicative cost chain can grow
+// past Number.MAX_SAFE_INTEGER without losing precision or needing a cap.
+// Intentionally schema-free: works regardless of which `graphql` module
+// instance built the schema (PostGraphile v4 bundles its own copy).
+
 /**
- * Compute a query complexity score from the operation AST alone.
+ * Raw (uncompressed, BigInt) query cost — exported for tests. Production
+ * call sites should use `computeQueryCost` instead and work with the
+ * compressed Number score.
+ */
+export function computeQueryCostRaw(doc: DocumentNode, variables: Record<string, unknown> = {}): bigint {
+	const op = doc.definitions.find((d): d is OperationDefinitionNode => d.kind === Kind.OPERATION_DEFINITION)
+	if (!op) return 0n
+	return sumSelections(op.selectionSet, variables, doc, new Set())
+}
+
+/**
+ * Compute a compressed query complexity score: `round(log₁₀(rawCost) × 10)`.
+ * See the constant block above for interpretive landmarks.
  *
- * Cost model, per field:
- *   - Explicit `first` / `last` arg → `child × limit + 1`. Limit clamps to
- *     MAX_PAGINATION_LIMIT when non-positive / non-finite / missing (from an
- *     unresolved variable), mirroring what PaginationCapPlugin actually
- *     applies at SQL-build time and closing the bogus-arg attack vector.
- *   - No pagination arg, has selections → `child × MAX_PAGINATION_LIMIT + 1`.
- *     Conservative: we treat any structured field without an explicit limit
- *     as if it were a list taking the 1000 default. Over-counts single-entity
- *     lookups, but we prefer over-counting to under-counting — PaginationCap
- *     injects the 1000 default on every collection field at SQL time, so the
- *     real work done under those queries scales that way whether or not we
- *     can see it in the AST.
- *   - No pagination arg, no selections → 1 (scalar leaf).
- *
- * Every recursive step checks a hard `MAX_COST_CALC_LIMIT` budget and short-
- * circuits once crossed — prevents Number overflow, unbounded walking on
- * adversarial inputs, and Infinity / NaN leaking into the Prometheus metric.
- *
- * Intentionally schema-free: walking only the document + variables means the
- * estimator works regardless of which `graphql` module instance built the
- * schema (PostGraphile v4 bundles its own copy). Schema-aware libraries like
- * graphql-query-complexity hit instanceof failures across the CJS/ESM module
- * boundary in that setup.
+ * Returns 0 for trivial queries; typical heavy prod queries land 150–250;
+ * structurally-unbounded shapes exceed 240.
  */
 export function computeQueryCost(doc: DocumentNode, variables: Record<string, unknown> = {}): number {
-	const op = doc.definitions.find((d): d is OperationDefinitionNode => d.kind === Kind.OPERATION_DEFINITION)
-	if (!op) return 0
-	return sumSelections(op.selectionSet, variables, doc, new Set())
+	return compressCost(computeQueryCostRaw(doc, variables))
+}
+
+/** `round(log₁₀(n) × 10)` with BigInt-safe log10. Returns 0 for n ≤ 1. */
+export function compressCost(n: bigint): number {
+	if (n <= 1n) return 0
+	// Approximate log₁₀ via string length + leading digits. Stable to ~15
+	// significant digits regardless of how big n is.
+	const s = n.toString()
+	const leadDigits = Math.min(15, s.length)
+	const lead = Number(s.slice(0, leadDigits)) // fits in Number, leadDigits ≤ 15
+	const log10 = Math.log10(lead) + (s.length - leadDigits)
+	return Math.round(log10 * 10)
 }
 
 function sumSelections(
@@ -158,8 +153,8 @@ function sumSelections(
 	vars: Record<string, unknown>,
 	doc: DocumentNode,
 	visitedFragments: Set<string>,
-): number {
-	let total = 0
+): bigint {
+	let total = 0n
 	for (const sel of selectionSet.selections) {
 		if (sel.kind === Kind.FIELD) {
 			total += fieldCost(sel, vars, doc, visitedFragments)
@@ -168,9 +163,9 @@ function sumSelections(
 		} else if (sel.kind === Kind.FRAGMENT_SPREAD) {
 			// Fragment cycles (A spreads B spreads A) are normally blocked by
 			// the NoFragmentCycles validation rule, but if something in the
-			// pipeline ever skipped validation we'd recurse forever. Cheap
-			// insurance: track visited names on the way down, pop on the way
-			// back up so siblings can reuse the same fragment legitimately.
+			// pipeline ever skipped validation we'd recurse forever. Track
+			// visited names on the way down, pop on the way back up so
+			// siblings can reuse the same fragment legitimately.
 			const name = sel.name.value
 			if (visitedFragments.has(name)) continue
 			const frag = doc.definitions.find(
@@ -182,43 +177,47 @@ function sumSelections(
 				visitedFragments.delete(name)
 			}
 		}
-		if (total >= MAX_COST_CALC_LIMIT) return MAX_COST_CALC_LIMIT
 	}
 	return total
 }
+
+/**
+ * Cost model per field:
+ *   - Explicit `first` / `last` arg with a valid positive value → `child × limit + 1`.
+ *   - Pagination arg present but value unresolved / non-positive → fall back
+ *     to MAX_PAGINATION_LIMIT (1000) — matches the effective cap at SQL build.
+ *   - No pagination arg, has selections → `child × MAX_PAGINATION_LIMIT + 1`.
+ *     PaginationCapPlugin injects `first: 1000` on every unpaginated
+ *     collection field at SQL build, so modeling the default at 1000 matches
+ *     the real fan-out ceiling. BigInt arithmetic means this doesn't overflow.
+ *   - No pagination arg, no selections → 1 (scalar leaf).
+ */
+const DEFAULT_LIMIT = BigInt(MAX_PAGINATION_LIMIT)
 
 function fieldCost(
 	field: FieldNode,
 	vars: Record<string, unknown>,
 	doc: DocumentNode,
 	visitedFragments: Set<string>,
-): number {
-	// Check for the *syntactic* presence of first/last in the query, not the
-	// resolved value. `entities(first: $first)` with $first unresolved means
-	// the user intends pagination — we should still treat it as a list (and
-	// fall back to MAX because the effective limit is undefined).
+): bigint {
+	// Check for the *syntactic* presence of first/last. `entities(first: $n)`
+	// with `$n` unresolved still means the caller intended pagination — treat
+	// it as a list (and fall back to MAX_PAGINATION_LIMIT since the effective
+	// limit is undefined).
 	const argNames = new Set((field.arguments ?? []).map((a) => a.name.value))
 	const hasPagination = argNames.has("first") || argNames.has("last")
 
-	const child = field.selectionSet ? sumSelections(field.selectionSet, vars, doc, visitedFragments) : 0
-
-	// Propagate the cap so we never try to multiply a near-cap value and
-	// overflow. Math.min below also clamps the final result.
-	if (child >= MAX_COST_CALC_LIMIT) return MAX_COST_CALC_LIMIT
+	const child = field.selectionSet ? sumSelections(field.selectionSet, vars, doc, visitedFragments) : 0n
 
 	if (hasPagination) {
 		const args = resolveArgs(field.arguments, vars)
 		const raw = args.first ?? args.last
 		const validExplicit = typeof raw === "number" && Number.isFinite(raw) && raw > 0
-		const limit = validExplicit ? (raw as number) : MAX_PAGINATION_LIMIT
-		return Math.min(child * limit + 1, MAX_COST_CALC_LIMIT)
+		const limit = validExplicit ? BigInt(raw as number) : DEFAULT_LIMIT
+		return child * limit + 1n
 	}
 
-	// Structured field without an explicit limit: conservatively assume the
-	// SQL-injected default of MAX_PAGINATION_LIMIT applies. Leaf scalars
-	// (no selection set → child=0) collapse to `0 × N + 1 = 1` here, so we
-	// don't need a separate branch.
-	return Math.min(child * MAX_PAGINATION_LIMIT + 1, MAX_COST_CALC_LIMIT)
+	return child * DEFAULT_LIMIT + 1n
 }
 
 function resolveArgs(
@@ -260,14 +259,11 @@ function resolveValue(value: ValueNode, vars: Record<string, unknown>): unknown 
  * Yoga plugin that computes query cost on every request. Two observability
  * channels, no alerts:
  *   - Prometheus histogram `gaia_api_graphql_query_cost` — records every
- *     query's cost; charted in Grafana for distribution / outliers.
- *   - `log.warn("High GraphQL query cost", ...)` when cost exceeds
- *     `COST_LOG_THRESHOLD`. `log.warn` in this codebase always writes to
- *     stdout (visible in kubectl + Axiom) *and* drops a Sentry breadcrumb,
- *     but does NOT create a Sentry issue — that's the captureMessage path
- *     we deliberately don't use. `log.info`, by contrast, only writes a
- *     breadcrumb in production (invisible to log search), which defeats the
- *     point of the threshold log.
+ *     query's compressed score; charted in Grafana for distribution.
+ *   - `log.warn("High GraphQL query cost", ...)` when score ≥
+ *     `COST_LOG_THRESHOLD`. `log.warn` always writes to stdout (visible in
+ *     kubectl + Axiom) *and* drops a Sentry breadcrumb, but does NOT create
+ *     a Sentry issue.
  *
  * Phase 1 is strictly observational. The outer try/catch is a shadow-mode
  * safety invariant: a failure inside the plugin must never break the
@@ -304,11 +300,7 @@ export function useCostLogger(): Plugin {
 					})
 				}
 			} catch (error) {
-				// Shadow-mode guarantee: never break the request. If anything at
-				// all throws — log stringification bombing on a circular variable,
-				// print() choking on an unusual AST, anything else — swallow it.
-				// The nested try around the diagnostic log itself protects against
-				// a log writer that's itself broken.
+				// Shadow-mode guarantee: never break the request.
 				try {
 					log.warn("[cost] plugin onExecute threw", {
 						error: error instanceof Error ? error.message : String(error),
