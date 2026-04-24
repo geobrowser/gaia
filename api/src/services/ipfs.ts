@@ -29,10 +29,10 @@ export function uploadEdit(file: File) {
 		const run = Effect.gen(function* () {
 			yield* Ref.update(attemptRef, (n) => n + 1)
 
-			const blob = new Blob([file], {type: "application/octet-stream"})
+			// No Blob wrap — aligns with Pinata's SDK.
 			const formData = new FormData()
 			formData.append("network", "public")
-			formData.append("file", blob, file.name || "edit.bin")
+			formData.append("file", file, file.name || "edit.bin")
 
 			const hash = yield* upload(formData, config.ipfsGatewayWrite)
 			yield* validateCid(hash)
