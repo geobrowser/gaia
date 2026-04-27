@@ -138,15 +138,10 @@ fn filter_protected_relations(ops: Vec<RelationOp>, edit_space_id: &Uuid) -> Vec
     ops.into_iter()
         .filter(|op| match op {
             RelationOp::Create(rel) => {
-                if PROTECTED_RELATION_TYPES.contains(&rel.type_id) {
-                    return false;
-                }
-                if is_root {
-                    return true;
-                }
+                let type_protected = PROTECTED_RELATION_TYPES.contains(&rel.type_id);
                 let from_protected = PROTECTED_PROPERTIES.contains(&rel.from_id);
                 let to_protected = PROTECTED_PROPERTIES.contains(&rel.to_id);
-                !from_protected && !to_protected
+                !type_protected && (is_root || (!from_protected && !to_protected))
             }
             _ => true,
         })
