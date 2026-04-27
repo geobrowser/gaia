@@ -13,6 +13,7 @@ import {
 import type {Plugin} from "graphql-yoga"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
+import {extractClientIp} from "../utils/clientIp"
 
 // GraphQL error codes that always indicate a client-side problem (bad input,
 // syntax/validation errors). These are the expected consequence of a
@@ -118,6 +119,13 @@ function getTraceContext(ctx: unknown): TraceContext | undefined {
 	return c?.traceContext
 }
 
+/** Pull caller identity off the original Request that yoga puts on contextValue. */
+function getCallerIdentity(ctx: unknown): {origin: string | null; clientIp: string | null} {
+	const headers = (ctx as {request?: Request})?.request?.headers
+	if (!headers) return {origin: null, clientIp: null}
+	return {origin: headers.get("origin"), clientIp: extractClientIp(headers)}
+}
+
 /**
  * Extract a descriptive operation name from the GraphQL document.
  * Returns the explicit operation name if present, otherwise derives one from
@@ -167,6 +175,7 @@ export function useGraphQLInstrumentation(): Plugin {
 			const variables = args.variableValues
 				? JSON.stringify(args.variableValues).slice(0, SENTRY_PAYLOAD_CHAR_LIMIT)
 				: undefined
+			const {origin, clientIp} = getCallerIdentity(args.contextValue)
 
 			// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
 			const tracer = trace.getTracer("gaia-api-graphql")
@@ -229,6 +238,8 @@ export function useGraphQLInstrumentation(): Plugin {
 							query,
 							variables: args.variableValues,
 							requestId,
+							origin,
+							clientIp,
 						})
 					}
 
@@ -241,6 +252,8 @@ export function useGraphQLInstrumentation(): Plugin {
 							query,
 							variables: args.variableValues,
 							requestId,
+							origin,
+							clientIp,
 						})
 					}
 
