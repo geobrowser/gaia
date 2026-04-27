@@ -228,7 +228,8 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 		async onExecute({extendContext, args}) {
 			const operationName = args.operationName || "anonymous"
 			const fullQuery = print(args.document)
-			const query = fullQuery.slice(0, 2000)
+			// Truncated for Sentry extras (server-side cap ~8 KB).
+			const truncatedQuery = fullQuery.slice(0, 5000)
 			const queryFingerprint = graphqlQueryFingerprint(fullQuery)
 			const acquireStartMs = Date.now()
 
@@ -236,7 +237,7 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 			// cache misses — cached responses skip usePgClient entirely.
 			const poolPressure = getGraphqlPressureSnapshot(getGraphqlPoolStats())
 			if (shouldShedPoolTraffic(poolPressure)) {
-				emitShedSignal({poolPressure, operationName, queryFingerprint, query})
+				emitShedSignal({poolPressure, operationName, queryFingerprint, query: fullQuery})
 				throw new GraphQLError("Service temporarily unavailable due to database pressure; please retry.", {
 					extensions: {
 						code: "SERVICE_UNAVAILABLE",
@@ -267,7 +268,7 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 					failureClass,
 					operationName,
 					queryFingerprint,
-					query,
+					query: fullQuery,
 					acquireWaitMs,
 					poolStats,
 					poolPressure,
@@ -281,7 +282,7 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 					},
 					extra: {
 						queryFingerprint,
-						query,
+						query: truncatedQuery,
 						variables: args.variableValues,
 						acquireWaitMs,
 						poolStats,

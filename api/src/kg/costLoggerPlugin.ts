@@ -14,6 +14,7 @@ import {
 import type {Plugin} from "graphql-yoga"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
+import {extractClientIp} from "../utils/clientIp"
 import {MAX_PAGINATION_LIMIT} from "./paginationCapPlugin"
 
 /**
@@ -282,9 +283,12 @@ function sumSelections(
  *   - Pagination arg present but value unresolved / non-positive → fall back
  *     to MAX_PAGINATION_LIMIT (1000) — matches the effective cap at SQL build.
  *   - No pagination arg, has selections → `child × MAX_PAGINATION_LIMIT + 1`.
- *     PaginationCapPlugin injects `first: 1000` on every unpaginated
- *     collection field at SQL build, so modeling the default at 1000 matches
- *     the real fan-out ceiling. BigInt arithmetic means this doesn't overflow.
+ *     PaginationCapPlugin injects a default `first` on every unpaginated
+ *     collection field at SQL build (currently DEFAULT_PAGINATION_LIMIT=100),
+ *     but modeling at the cap keeps cost a conservative upper bound — a
+ *     query whose SHAPE could fan out to 1000 rows still gets flagged even
+ *     when the runtime default reduces actual rows. BigInt arithmetic means
+ *     this doesn't overflow.
  *   - No pagination arg, no selections → 1 (scalar leaf).
  *   - Known SQL-heavy fields / args multiply the raw cost by conservative
  *     factors. On the compressed score, ×10 is roughly +10 points.
@@ -628,13 +632,16 @@ export function useCostLogger(): Plugin {
 
 				if (cost >= COST_LOG_THRESHOLD) {
 					const fullQuery = print(args.document)
+					const headers = (args.contextValue as {request?: Request} | undefined)?.request?.headers
 					log.warn("High GraphQL query cost", {
 						cost,
 						threshold: COST_LOG_THRESHOLD,
 						operationName: operationLabel,
 						queryFingerprint: graphqlQueryFingerprint(fullQuery),
-						query: fullQuery.slice(0, 2000),
+						query: fullQuery,
 						variables: args.variableValues,
+						origin: headers?.get("origin") ?? null,
+						clientIp: headers ? extractClientIp(headers) : null,
 					})
 				}
 			} catch (error) {
