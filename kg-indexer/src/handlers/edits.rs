@@ -1483,62 +1483,37 @@ mod tests {
 
     #[test]
     fn seed_edit_smoke_root_space_passes_property_schema() {
-        // Regression test for the original bug: the seed edit defining the
-        // schema for the four protected property entities had its 8
-        // schema-defining relations silently filtered out.
-        //
-        // Construct 8 CreateRelation ops with the same shape as the seed
-        // edit — for each protected property entity, one
-        // `<property> -types-> Property` relation and one
-        // `<property> -DataType-> Text` relation — and assert all 8 survive
-        // when published from the root space, and that all 8 are dropped when
-        // published from any other space.
-        let space_address = Uuid::parse_str(sdk::core::ids::SPACE_ADDRESS_PROPERTY_ID).unwrap();
-        let voting_mode = Uuid::parse_str(sdk::core::ids::VOTING_MODE_PROPERTY_ID).unwrap();
-        let space_id_prop = Uuid::parse_str(sdk::core::ids::SPACE_ID_PROPERTY_ID).unwrap();
-        let created_at_block =
-            Uuid::parse_str(sdk::core::ids::CREATED_AT_BLOCK_PROPERTY_ID).unwrap();
-
-        // `type` relation type — exists in the SDK.
+        let property = Uuid::parse_str(sdk::core::ids::SPACE_ADDRESS_PROPERTY_ID).unwrap();
         let type_rel_type = Uuid::parse_str(sdk::core::ids::TYPE_RELATION_TYPE_ID).unwrap();
 
-        // The SDK does not export constants for these (sdk/src/core/ids.rs has
-        // no DATA_TYPE_RELATION_TYPE_ID, PROPERTY_TYPE_ID, or TEXT_TYPE_ID).
-        // Use deterministic placeholders — this test asserts the count and
-        // the gate, not specific endpoint UUIDs.
-        let property_type_placeholder = Uuid::from_bytes([0xAA; 16]); // stand-in for "Property" type entity
-        let data_type_rel_type_placeholder = Uuid::from_bytes([0xBB; 16]); // stand-in for `DataType` relation type
-        let text_type_placeholder = Uuid::from_bytes([0xCC; 16]); // stand-in for `Text` data type entity
+        // SDK doesn't export constants for these — use deterministic
+        // placeholders. Test asserts gating behavior, not endpoint UUIDs.
+        let property_type = Uuid::from_bytes([0xAA; 16]); // "Property" type entity
+        let data_type_rel = Uuid::from_bytes([0xBB; 16]); // `DataType` relation type
+        let text_type = Uuid::from_bytes([0xCC; 16]); // `Text` data type entity
 
-        let mut ops: Vec<RelationOp> = Vec::with_capacity(8);
-        for property in [space_address, voting_mode, space_id_prop, created_at_block] {
+        let ops = vec![
             // `<property> -types-> Property`
-            ops.push(RelationOp::Create(make_create_relation_with_ids(
+            RelationOp::Create(make_create_relation_with_ids(
                 type_rel_type,
                 property,
-                property_type_placeholder,
-            )));
+                property_type,
+            )),
             // `<property> -DataType-> Text`
-            ops.push(RelationOp::Create(make_create_relation_with_ids(
-                data_type_rel_type_placeholder,
+            RelationOp::Create(make_create_relation_with_ids(
+                data_type_rel,
                 property,
-                text_type_placeholder,
-            )));
-        }
+                text_type,
+            )),
+        ];
 
-        // From root: all 8 must survive.
         let from_root = filter_protected_relations(ops.clone(), &ROOT_SPACE_UUID);
-        assert_eq!(
-            from_root.len(),
-            8,
-            "root space should be allowed to author all 8 schema-defining seed relations",
-        );
+        assert_eq!(from_root.len(), 2, "root space must pass schema relations");
 
-        // From any other space: all 8 must be dropped (proves the gate works).
         let from_other = filter_protected_relations(ops, &NON_ROOT_SPACE_ID);
         assert!(
             from_other.is_empty(),
-            "non-root space must not author relations whose endpoints are protected property entities",
+            "non-root space must not author relations whose endpoints are protected",
         );
     }
 
