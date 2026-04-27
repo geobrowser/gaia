@@ -11,6 +11,30 @@ vi.mock("../../services/telemetry", () => ({
 	},
 }))
 
+// Capture span status / attribute calls so we can assert them. The middleware
+// calls trace.getTracer(...).startSpan(...) at request time.
+const spanSetStatus = vi.fn()
+const spanSetAttribute = vi.fn()
+const spanEnd = vi.fn()
+vi.mock("@opentelemetry/api", async () => {
+	const actual = await vi.importActual<typeof import("@opentelemetry/api")>("@opentelemetry/api")
+	return {
+		...actual,
+		trace: {
+			...actual.trace,
+			getTracer: () => ({
+				startSpan: () => ({
+					setStatus: spanSetStatus,
+					setAttribute: spanSetAttribute,
+					end: spanEnd,
+					spanContext: () => ({traceId: "0".repeat(32), spanId: "0".repeat(16), traceFlags: 0}),
+				}),
+			}),
+		},
+	}
+})
+
+import {SpanStatusCode} from "@opentelemetry/api"
 import {log} from "../../services/telemetry"
 import {canonicalRequestLogging, isClientAbortError, requestId} from "../requestLogging"
 
@@ -134,5 +158,47 @@ describe("canonicalRequestLogging — client abort handling", () => {
 		expect(log.info).toHaveBeenCalledWith("GET /test completed", expect.objectContaining({status: 200}))
 		expect(log.warn).not.toHaveBeenCalled()
 		expect(log.error).not.toHaveBeenCalled()
+	})
+})
+
+describe("canonicalRequestLogging — span status", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("does NOT mark span as ERROR for 499 (client abort)", async () => {
+		const app = setupApp(() => {
+			throw makeAbortError()
+		})
+		await app.request("/test")
+
+		// Critical: SentrySpanProcessor turns ERROR spans into failed
+		// transactions in the Sentry Performance dashboard. Client aborts
+		// must not pollute that signal.
+		expect(spanSetStatus).not.toHaveBeenCalled()
+		expect(spanSetAttribute).toHaveBeenCalledWith("http.status_code", 499)
+	})
+
+	it("DOES mark span as ERROR for genuine 5xx", async () => {
+		const app = setupApp(() => {
+			throw new Error("database exploded")
+		})
+		await app.request("/test")
+
+		expect(spanSetStatus).toHaveBeenCalledWith({code: SpanStatusCode.ERROR, message: "HTTP 500"})
+	})
+
+	it("DOES mark span as ERROR for 4xx (non-499)", async () => {
+		const app = setupApp(() => new Response("bad", {status: 400}))
+		await app.request("/test")
+
+		expect(spanSetStatus).toHaveBeenCalledWith({code: SpanStatusCode.ERROR, message: "HTTP 400"})
+	})
+
+	it("does NOT mark span as ERROR for 2xx", async () => {
+		const app = setupApp(() => new Response("ok", {status: 200}))
+		await app.request("/test")
+
+		expect(spanSetStatus).not.toHaveBeenCalled()
 	})
 })

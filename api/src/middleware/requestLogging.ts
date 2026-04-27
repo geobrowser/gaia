@@ -148,7 +148,11 @@ export function canonicalRequestLogging() {
 					span.setAttribute("graphql.operation_name", graphqlOperationName)
 				}
 
-				if (status >= 400) {
+				// 499 is "client closed request" — by design not a server fault, so
+				// leave the span Unset (OK). Otherwise SentrySpanProcessor would
+				// flag the transaction as failed and inflate error-rate metrics
+				// alongside genuine 4xx/5xx responses.
+				if (status >= 400 && status !== CLIENT_CLOSED_REQUEST_STATUS) {
 					span.setStatus({code: SpanStatusCode.ERROR, message: `HTTP ${status}`})
 				}
 
