@@ -213,6 +213,9 @@ export function useGraphQLInstrumentation(): Plugin {
 						}
 					}
 
+					// Log the full query (no truncation): the missing tail is
+					// the part you need when triaging a slow / large response.
+					// Sentry / OTEL paths still cap at their own limits below.
 					if (responseSizeBytes !== undefined && responseSizeBytes >= LARGE_RESPONSE_THRESHOLD_BYTES) {
 						log.warn("Large GraphQL response", {
 							operationName: operationLabel,
@@ -220,7 +223,7 @@ export function useGraphQLInstrumentation(): Plugin {
 							responseSizeBytes,
 							responseSizeMB: Math.round((responseSizeBytes / 1_000_000) * 100) / 100,
 							durationMs,
-							query: query.slice(0, 5000),
+							query,
 							variables: args.variableValues,
 							requestId,
 						})
@@ -232,7 +235,7 @@ export function useGraphQLInstrumentation(): Plugin {
 							queryFingerprint,
 							durationMs,
 							responseSizeBytes,
-							query: query.slice(0, 5000),
+							query,
 							variables: args.variableValues,
 							requestId,
 						})

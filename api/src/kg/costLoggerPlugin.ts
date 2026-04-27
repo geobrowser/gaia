@@ -290,12 +290,16 @@ export function useCostLogger(): Plugin {
 
 				if (cost >= COST_LOG_THRESHOLD) {
 					const fullQuery = print(args.document)
+					// Log the full query (no truncation): when triaging a
+					// high-cost query, the missing tail is exactly the part
+					// you need to see. Sentry / OTEL paths still cap at their
+					// own limits.
 					log.warn("High GraphQL query cost", {
 						cost,
 						threshold: COST_LOG_THRESHOLD,
 						operationName: getOperationLabel(args),
 						queryFingerprint: graphqlQueryFingerprint(fullQuery),
-						query: fullQuery.slice(0, 2000),
+						query: fullQuery,
 						variables: args.variableValues,
 					})
 				}
