@@ -1420,7 +1420,7 @@ mod tests {
     }
 
     // ===================
-    // Root-space gating tests (GEO-563/564)
+    // Root-space gating tests
     // ===================
 
     #[test]

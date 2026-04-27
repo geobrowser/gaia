@@ -49,4 +49,3 @@
 - Non-root spaces still have system-property relations dropped, preserving prior behavior
 - Onchain handler retains exclusive ownership of system-property values, so no row-level write races
 - If the root space is ever migrated, `sdk::core::ids::ROOT_SPACE_ID` must be updated alongside the indexer's gating check
-- Implementation lives in GEO-563/564; the SDK constant is GEO-562
