@@ -129,15 +129,23 @@ export function canonicalRequestLogging() {
 					span.setStatus({code: SpanStatusCode.ERROR, message: `HTTP ${status}`})
 				}
 
-				// Canonical END log
-				log.info(`${method} ${path} completed`, {
+				// Canonical END log — promote to error level for 5xx responses
+				// so handlers that return a 5xx without throwing (e.g. c.text("…", 500),
+				// GraphQL errors surfaced by graphql-yoga) still produce a Sentry
+				// issue. The catch branch below handles the throwing path.
+				const endLogFields = {
 					requestId,
 					method,
 					path,
 					status,
 					durationMs: duration,
 					...(graphqlOperationName ? {graphqlOperationName} : {}),
-				})
+				}
+				if (status >= 500) {
+					log.error(`${method} ${path} returned ${status}`, endLogFields)
+				} else {
+					log.info(`${method} ${path} completed`, endLogFields)
+				}
 			} catch (error) {
 				const duration = Date.now() - startTime
 				const failureClass = detectDbFailureClass(error)
