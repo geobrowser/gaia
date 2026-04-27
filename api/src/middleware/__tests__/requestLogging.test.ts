@@ -106,7 +106,7 @@ describe("canonicalRequestLogging — client abort handling", () => {
 		vi.clearAllMocks()
 	})
 
-	it("client abort → 499 status, log.warn (not error), no Sentry issue", async () => {
+	it("client abort → 499 status, info-level log, no error/warn, no Sentry issue", async () => {
 		const app = setupApp(() => {
 			throw makeAbortError()
 		})
@@ -114,16 +114,17 @@ describe("canonicalRequestLogging — client abort handling", () => {
 		const res = await app.request("/test")
 
 		expect(res.status).toBe(499)
-		// log.warn fires from the success-branch 499 case, never log.error
-		// (which is what would create a Sentry issue).
-		expect(log.warn).toHaveBeenCalledWith(
-			"GET /test aborted by client",
+		// 499 falls through to the default "completed" path at info level —
+		// no warn/error means no Sentry issue and minimal log noise.
+		expect(log.info).toHaveBeenCalledWith(
+			"GET /test completed",
 			expect.objectContaining({method: "GET", path: "/test", status: 499}),
 		)
+		expect(log.warn).not.toHaveBeenCalled()
 		expect(log.error).not.toHaveBeenCalled()
 	})
 
-	it("Node-style AbortError also yields 499 + warn", async () => {
+	it("Node-style AbortError also yields 499 with no error/warn", async () => {
 		const app = setupApp(() => {
 			throw Object.assign(new Error("aborted"), {name: "AbortError", code: "ABORT_ERR"})
 		})
@@ -131,7 +132,7 @@ describe("canonicalRequestLogging — client abort handling", () => {
 		const res = await app.request("/test")
 
 		expect(res.status).toBe(499)
-		expect(log.warn).toHaveBeenCalledWith("GET /test aborted by client", expect.any(Object))
+		expect(log.warn).not.toHaveBeenCalled()
 		expect(log.error).not.toHaveBeenCalled()
 	})
 

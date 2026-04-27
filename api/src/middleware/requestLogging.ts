@@ -159,12 +159,9 @@ export function canonicalRequestLogging() {
 				// Canonical END log — promote to error level for 5xx responses
 				// so handlers that return a 5xx without throwing (e.g. c.text("…", 500),
 				// GraphQL errors surfaced by graphql-yoga) still produce a Sentry
-				// issue.
-				//
-				// Status 499 is reserved for "client closed request" — set by
-				// `app.onError` in main.ts when an AbortError bubbles up. These
-				// are not server faults; log as `warn` (breadcrumb only, no Sentry
-				// issue) so dashboards stop counting them as 5xx.
+				// issue. 499 (client closed request, set by `app.onError` for
+				// AbortErrors) falls through to the default info path — the status
+				// field is enough; we don't want to flood logs for non-faults.
 				const endLogFields = {
 					requestId,
 					method,
@@ -173,9 +170,7 @@ export function canonicalRequestLogging() {
 					durationMs: duration,
 					...(graphqlOperationName ? {graphqlOperationName} : {}),
 				}
-				if (status === CLIENT_CLOSED_REQUEST_STATUS) {
-					log.warn(`${method} ${path} aborted by client`, endLogFields)
-				} else if (status >= 500) {
+				if (status >= 500) {
 					log.error(`${method} ${path} returned ${status}`, endLogFields)
 				} else {
 					log.info(`${method} ${path} completed`, endLogFields)
