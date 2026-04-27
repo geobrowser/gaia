@@ -13,6 +13,7 @@ import {
 import type {Plugin} from "graphql-yoga"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
+import {extractClientIp} from "../utils/clientIp"
 
 // GraphQL error codes that always indicate a client-side problem (bad input,
 // syntax/validation errors). These are the expected consequence of a
@@ -80,6 +81,10 @@ export function isClientError(error: unknown): boolean {
 const SLOW_QUERY_THRESHOLD_MS = 3000
 const LARGE_RESPONSE_THRESHOLD_BYTES = 1_000_000 // 1 MB
 
+// Cap for query/variable strings sent to Sentry extras + OTEL span attributes.
+// Sentry truncates strings server-side around 8 KB. Logs are uncapped.
+const SENTRY_PAYLOAD_CHAR_LIMIT = 5000
+
 type TraceContext = {
 	traceId: string
 	spanId: string
@@ -112,6 +117,13 @@ function getRequestId(ctx: unknown): string {
 function getTraceContext(ctx: unknown): TraceContext | undefined {
 	const c = ctx as {traceContext?: TraceContext}
 	return c?.traceContext
+}
+
+/** Pull caller identity off the original Request that yoga puts on contextValue. */
+function getCallerIdentity(ctx: unknown): {origin: string | null; clientIp: string | null} {
+	const headers = (ctx as {request?: Request})?.request?.headers
+	if (!headers) return {origin: null, clientIp: null}
+	return {origin: headers.get("origin"), clientIp: extractClientIp(headers)}
 }
 
 /**
@@ -160,7 +172,10 @@ export function useGraphQLInstrumentation(): Plugin {
 			ctxWithSetter.setGraphqlOperationName?.(operationLabel)
 			const query = print(args.document)
 			const queryFingerprint = graphqlQueryFingerprint(query)
-			const variables = args.variableValues ? JSON.stringify(args.variableValues).slice(0, 2000) : undefined
+			const variables = args.variableValues
+				? JSON.stringify(args.variableValues).slice(0, SENTRY_PAYLOAD_CHAR_LIMIT)
+				: undefined
+			const {origin, clientIp} = getCallerIdentity(args.contextValue)
 
 			// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
 			const tracer = trace.getTracer("gaia-api-graphql")
@@ -186,7 +201,7 @@ export function useGraphQLInstrumentation(): Plugin {
 					attributes: {
 						"graphql.operation_name": operationLabel,
 						"graphql.query_fingerprint": queryFingerprint,
-						"graphql.document": query.slice(0, 2000),
+						"graphql.document": query.slice(0, SENTRY_PAYLOAD_CHAR_LIMIT),
 						...(variables && {"graphql.variables": variables}),
 						"http.request_id": requestId,
 					},
@@ -220,9 +235,11 @@ export function useGraphQLInstrumentation(): Plugin {
 							responseSizeBytes,
 							responseSizeMB: Math.round((responseSizeBytes / 1_000_000) * 100) / 100,
 							durationMs,
-							query: query.slice(0, 5000),
+							query,
 							variables: args.variableValues,
 							requestId,
+							origin,
+							clientIp,
 						})
 					}
 
@@ -232,9 +249,11 @@ export function useGraphQLInstrumentation(): Plugin {
 							queryFingerprint,
 							durationMs,
 							responseSizeBytes,
-							query: query.slice(0, 5000),
+							query,
 							variables: args.variableValues,
 							requestId,
+							origin,
+							clientIp,
 						})
 					}
 
@@ -254,7 +273,7 @@ export function useGraphQLInstrumentation(): Plugin {
 								},
 								extra: {
 									queryFingerprint,
-									query: query.slice(0, 2000),
+									query: query.slice(0, SENTRY_PAYLOAD_CHAR_LIMIT),
 									variables: args.variableValues,
 									path: error.path,
 									requestId,

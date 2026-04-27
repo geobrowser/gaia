@@ -12,6 +12,7 @@ import {
 import type {Plugin} from "graphql-yoga"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
+import {extractClientIp} from "../utils/clientIp"
 import {MAX_PAGINATION_LIMIT} from "./paginationCapPlugin"
 
 // Parse a positive-integer env var, falling back to `fallback` on anything
@@ -293,13 +294,16 @@ export function useCostLogger(): Plugin {
 
 				if (cost >= COST_LOG_THRESHOLD) {
 					const fullQuery = print(args.document)
+					const headers = (args.contextValue as {request?: Request} | undefined)?.request?.headers
 					log.warn("High GraphQL query cost", {
 						cost,
 						threshold: COST_LOG_THRESHOLD,
 						operationName: getOperationLabel(args),
 						queryFingerprint: graphqlQueryFingerprint(fullQuery),
-						query: fullQuery.slice(0, 2000),
+						query: fullQuery,
 						variables: args.variableValues,
+						origin: headers?.get("origin") ?? null,
+						clientIp: headers ? extractClientIp(headers) : null,
 					})
 				}
 			} catch (error) {
