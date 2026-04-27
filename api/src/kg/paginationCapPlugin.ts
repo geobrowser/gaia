@@ -5,11 +5,16 @@
  * Does two things, uniformly across root and nested fields:
  * 1. Rejects oversized `first`/`last`/`offset` values (> MAX_PAGINATION_LIMIT)
  *    so abusive or buggy clients fail fast with BAD_USER_INPUT.
- * 2. Injects a default `first` when neither `first` nor `last` is supplied,
- *    so a bare `{ entity(id: ...) { relationsList { ... } } }` cannot resolve
- *    an unbounded sub-collection. Without this, PostGraphile 4 produces SQL
- *    without any LIMIT and returns every row — the Claim entity has 75K+
- *    inbound relations, which is the worst-case memory/CPU path.
+ * 2. Injects a default `first = DEFAULT_PAGINATION_LIMIT` when neither `first`
+ *    nor `last` is supplied, so a bare `{ entity(id: ...) { relationsList } }`
+ *    cannot resolve an unbounded sub-collection. Without this, PostGraphile 4
+ *    produces SQL without any LIMIT and returns every row — the Claim entity
+ *    has 75K+ inbound relations, which is the worst-case memory/CPU path.
+ *
+ * The default (100) is decoupled from the cap (1000): clients that genuinely
+ * need a large page can still opt in by passing an explicit `first` up to
+ * MAX_PAGINATION_LIMIT, but clients that omit pagination get a sensibly small
+ * page rather than 1000 rows of unrequested payload.
  *
  * Implementation: hooks `GraphQLObjectType:fields:field:args` and registers an
  * arg data generator on every connection / simple-collection field. The
@@ -25,6 +30,7 @@
 import {type FieldNode, GraphQLError, type ValidationContext} from "graphql"
 
 export const MAX_PAGINATION_LIMIT = 1000
+export const DEFAULT_PAGINATION_LIMIT = 100
 
 export function assertPaginationWithinLimit(args: Record<string, unknown>) {
 	for (const key of ["first", "last", "offset"] as const) {
@@ -85,8 +91,9 @@ export function NoFirstAndLastRule(context: ValidationContext) {
 
 /**
  * If the client supplied neither `first` nor `last`, inject `first` set to the
- * cap. Returns the original args object when either is set so we don't
- * silently override an explicit `last`-only pagination.
+ * default page size (DEFAULT_PAGINATION_LIMIT). Returns the original args
+ * object when either is set so we don't silently override an explicit
+ * `last`-only pagination.
  *
  * Kept as a pure helper so unit tests can exercise the policy without
  * standing up a full PostGraphile schema.
@@ -97,7 +104,7 @@ export function applyDefaultFirstIfOmitted(args: Record<string, unknown>): Recor
 	if (hasFirst || hasLast) {
 		return args
 	}
-	return {...args, first: MAX_PAGINATION_LIMIT}
+	return {...args, first: DEFAULT_PAGINATION_LIMIT}
 }
 
 const PaginationCapPlugin = (builder: any) => {
@@ -121,7 +128,7 @@ const PaginationCapPlugin = (builder: any) => {
 				const hasFirst = typeof fieldArgs.first === "number"
 				const hasLast = typeof fieldArgs.last === "number"
 				if (!hasFirst && !hasLast) {
-					queryBuilder.first(MAX_PAGINATION_LIMIT)
+					queryBuilder.first(DEFAULT_PAGINATION_LIMIT)
 				}
 			},
 		}))

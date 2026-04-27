@@ -187,9 +187,12 @@ function sumSelections(
  *   - Pagination arg present but value unresolved / non-positive → fall back
  *     to MAX_PAGINATION_LIMIT (1000) — matches the effective cap at SQL build.
  *   - No pagination arg, has selections → `child × MAX_PAGINATION_LIMIT + 1`.
- *     PaginationCapPlugin injects `first: 1000` on every unpaginated
- *     collection field at SQL build, so modeling the default at 1000 matches
- *     the real fan-out ceiling. BigInt arithmetic means this doesn't overflow.
+ *     PaginationCapPlugin injects a default `first` on every unpaginated
+ *     collection field at SQL build (currently DEFAULT_PAGINATION_LIMIT=100),
+ *     but modeling at the cap keeps cost a conservative upper bound — a
+ *     query whose SHAPE could fan out to 1000 rows still gets flagged even
+ *     when the runtime default reduces actual rows. BigInt arithmetic means
+ *     this doesn't overflow.
  *   - No pagination arg, no selections → 1 (scalar leaf).
  */
 const DEFAULT_LIMIT = BigInt(MAX_PAGINATION_LIMIT)
