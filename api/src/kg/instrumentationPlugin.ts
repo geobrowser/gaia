@@ -80,16 +80,8 @@ export function isClientError(error: unknown): boolean {
 const SLOW_QUERY_THRESHOLD_MS = 3000
 const LARGE_RESPONSE_THRESHOLD_BYTES = 1_000_000 // 1 MB
 
-/**
- * Per-string char cap for fields we send to Sentry (extras) and OTEL spans
- * (attribute values). 5000 is the practical sweet spot:
- *   - Sentry server-side string truncator kicks in around 8 KB; past that the
- *     bytes are charged against quota but never render.
- *   - OTEL exporters and most APM UIs (Sentry Performance, Tempo) get
- *     unhappy past this range too.
- *   - Structured logs (kubectl / Axiom) bypass this — they get the full
- *     untruncated query.
- */
+// Cap for query/variable strings sent to Sentry extras + OTEL span attributes.
+// Sentry truncates strings server-side around 8 KB. Logs are uncapped.
 const SENTRY_PAYLOAD_CHAR_LIMIT = 5000
 
 type TraceContext = {
@@ -172,9 +164,6 @@ export function useGraphQLInstrumentation(): Plugin {
 			ctxWithSetter.setGraphqlOperationName?.(operationLabel)
 			const query = print(args.document)
 			const queryFingerprint = graphqlQueryFingerprint(query)
-			// 5000 chars matches Sentry's practical per-string cap before its
-			// server-side truncator kicks in. Past that we'd be paying quota
-			// for bytes that don't render.
 			const variables = args.variableValues
 				? JSON.stringify(args.variableValues).slice(0, SENTRY_PAYLOAD_CHAR_LIMIT)
 				: undefined
@@ -230,9 +219,6 @@ export function useGraphQLInstrumentation(): Plugin {
 						}
 					}
 
-					// Log the full query (no truncation): the missing tail is
-					// the part you need when triaging a slow / large response.
-					// Sentry / OTEL paths still cap at their own limits below.
 					if (responseSizeBytes !== undefined && responseSizeBytes >= LARGE_RESPONSE_THRESHOLD_BYTES) {
 						log.warn("Large GraphQL response", {
 							operationName: operationLabel,
