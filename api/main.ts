@@ -5,7 +5,7 @@ import {cors} from "hono/cors"
 import {describeRoute, openAPISpecs} from "hono-openapi"
 import {health} from "./src/health"
 import {getGraphqlPoolPressure, graphqlServer} from "./src/kg/postgraphile"
-import {canonicalRequestLogging, requestId} from "./src/middleware/requestLogging"
+import {canonicalRequestLogging, isClientAbortError, requestId} from "./src/middleware/requestLogging"
 import {createProfileRouter} from "./src/profile"
 import {createProposalsRouter} from "./src/proposals"
 import {createSearchRouter} from "./src/search"
@@ -31,6 +31,22 @@ type AppEnv = {
 }
 
 const app = new Hono<AppEnv>()
+
+// Hono dispatches all thrown errors through `app.onError` (see compose.js).
+// Recognize client-side aborts (browser navigated away, AbortController.abort,
+// React unmount cancelling an in-flight fetch) and short-circuit with a 499
+// "Client Closed Request" — same convention nginx uses. Without this, Hono's
+// default handler turns these into 500s, which downstream get logged as
+// `log.error` and create Sentry issues for what is not a server fault.
+//
+// Real errors fall through to the default 500 path, where canonicalRequestLogging
+// still emits the 5xx end log and Sentry issue.
+app.onError((err, c) => {
+	if (isClientAbortError(err)) {
+		return new Response(null, {status: 499})
+	}
+	return c.text("Internal Server Error", 500)
+})
 
 function createGraphqlOverloadResponse(requestId: string) {
 	const headers = new Headers({
