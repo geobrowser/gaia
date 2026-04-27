@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/node"
 import {
 	type ArgumentNode,
 	type DocumentNode,
@@ -13,6 +14,19 @@ import type {Plugin} from "graphql-yoga"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 import {MAX_PAGINATION_LIMIT} from "./paginationCapPlugin"
+
+/**
+ * Context-key used to share the per-request compressed cost score between
+ * `useCostLogger` (where it's computed) and `useGraphQLInstrumentation`
+ * (where it's attached to slow-query / large-response warnings so a 30s+
+ * report carries cost as context). Stashing on the yoga `contextValue`
+ * avoids recomputing in two plugins.
+ */
+export const GRAPHQL_QUERY_COST_CONTEXT_KEY = "graphqlQueryCost" as const
+
+export type GraphqlCostContext = {
+	[GRAPHQL_QUERY_COST_CONTEXT_KEY]?: number
+}
 
 // Parse a positive-integer env var, falling back to `fallback` on anything
 // non-finite or non-positive. Guards against deploy-time misconfiguration
@@ -256,14 +270,21 @@ function resolveValue(value: ValueNode, vars: Record<string, unknown>): unknown 
 }
 
 /**
- * Yoga plugin that computes query cost on every request. Two observability
- * channels, no alerts:
+ * Yoga plugin that computes query cost on every request. Three observability
+ * channels:
  *   - Prometheus histogram `gaia_api_graphql_query_cost` — records every
  *     query's compressed score; charted in Grafana for distribution.
+ *   - Sentry metric `graphql.query_cost` (distribution) — same value, tagged
+ *     by operation, lets Sentry surface cost percentiles next to its own
+ *     duration / error metrics. Sentry only — no issue is created here.
  *   - `log.warn("High GraphQL query cost", ...)` when score ≥
  *     `COST_LOG_THRESHOLD`. `log.warn` always writes to stdout (visible in
  *     kubectl + Axiom) *and* drops a Sentry breadcrumb, but does NOT create
  *     a Sentry issue.
+ *
+ * The cost is also stashed on the yoga `contextValue` under
+ * `GRAPHQL_QUERY_COST_CONTEXT_KEY` so `useGraphQLInstrumentation` can attach
+ * it to the slow-query / large-response warnings without recomputing.
  *
  * Phase 1 is strictly observational. The outer try/catch is a shadow-mode
  * safety invariant: a failure inside the plugin must never break the
@@ -288,12 +309,30 @@ export function useCostLogger(): Plugin {
 
 				recordQueryCost(cost)
 
+				const operationLabel = getOperationLabel(args)
+
+				// Sentry distribution metric — operation-tagged so dashboards can
+				// surface p50 / p95 / p99 cost per operation alongside duration.
+				// Cost is the compressed log10×10 score (dimensionless), so no unit.
+				Sentry.metrics.distribution("graphql.query_cost", cost, {
+					attributes: {operation: operationLabel},
+				})
+
+				// Stash on the request context so the instrumentation plugin can
+				// include cost in slow-query / large-response warnings without
+				// having to walk the AST again. `contextValue` is the same object
+				// passed through both plugins for a single request.
+				const ctx = args.contextValue as GraphqlCostContext | undefined
+				if (ctx && typeof ctx === "object") {
+					ctx[GRAPHQL_QUERY_COST_CONTEXT_KEY] = cost
+				}
+
 				if (cost >= COST_LOG_THRESHOLD) {
 					const fullQuery = print(args.document)
 					log.warn("High GraphQL query cost", {
 						cost,
 						threshold: COST_LOG_THRESHOLD,
-						operationName: getOperationLabel(args),
+						operationName: operationLabel,
 						queryFingerprint: graphqlQueryFingerprint(fullQuery),
 						query: fullQuery.slice(0, 2000),
 						variables: args.variableValues,

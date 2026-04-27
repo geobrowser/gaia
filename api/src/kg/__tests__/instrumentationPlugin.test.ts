@@ -1,6 +1,27 @@
-import {type ASTNode, GraphQLError, Kind} from "graphql"
-import {describe, expect, it} from "vitest"
-import {isClientError} from "../instrumentationPlugin"
+import {type ASTNode, GraphQLError, Kind, parse} from "graphql"
+import {afterEach, beforeEach, describe, expect, it, vi} from "vitest"
+
+// Mock telemetry so we can assert what gets logged. Must precede the import
+// of the plugin. `log` is destructured at call-time by the plugin, so this
+// stub reaches into the same module.
+vi.mock("../../services/telemetry", () => ({
+	log: {
+		debug: vi.fn(),
+		info: vi.fn(),
+		warn: vi.fn(),
+		error: vi.fn(),
+	},
+}))
+
+// Mock Sentry to prevent real network calls + so we can ignore captureException.
+vi.mock("@sentry/node", () => ({
+	captureException: vi.fn(),
+	metrics: {distribution: vi.fn()},
+}))
+
+import {log} from "../../services/telemetry"
+import {GRAPHQL_QUERY_COST_CONTEXT_KEY} from "../costLoggerPlugin"
+import {isClientError, useGraphQLInstrumentation} from "../instrumentationPlugin"
 
 // Minimal AST-node factory — isClientError only reads `kind`, so the rest of
 // the shape doesn't matter. Cast through `unknown` to avoid TS insisting on a
@@ -137,5 +158,76 @@ describe("isClientError", () => {
 	it("does not flag null or undefined", () => {
 		expect(isClientError(null)).toBe(false)
 		expect(isClientError(undefined)).toBe(false)
+	})
+})
+
+// --------------------------------------------------------------------------
+// Slow-query / large-response logs include cost when stashed by useCostLogger
+// --------------------------------------------------------------------------
+
+describe("useGraphQLInstrumentation — query cost in slow / large logs", () => {
+	const SLOW_QUERY_THRESHOLD_MS = 3000
+
+	beforeEach(() => {
+		vi.clearAllMocks()
+		vi.useFakeTimers()
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	function runRequest(opts: {durationMs: number; cost?: number; responseData?: unknown}) {
+		const plugin = useGraphQLInstrumentation()
+		const onExecute = (plugin as {onExecute: (args: unknown) => {onExecuteDone: (r: unknown) => void}}).onExecute
+
+		const ctx: Record<string, unknown> = {}
+		if (opts.cost !== undefined) {
+			ctx[GRAPHQL_QUERY_COST_CONTEXT_KEY] = opts.cost
+		}
+
+		const startTime = Date.now()
+		vi.setSystemTime(startTime)
+
+		const args = {
+			document: parse(`{ entity(id: "...") { id name } }`),
+			variableValues: {},
+			operationName: null,
+			contextValue: ctx,
+		}
+
+		const handle = onExecute({args})
+		vi.setSystemTime(startTime + opts.durationMs)
+		handle.onExecuteDone({result: {data: opts.responseData ?? {ok: true}}})
+	}
+
+	it("Slow GraphQL query log includes the cost field when context has it", () => {
+		runRequest({durationMs: SLOW_QUERY_THRESHOLD_MS + 1, cost: 235})
+
+		expect(log.warn).toHaveBeenCalledWith("Slow GraphQL query", expect.objectContaining({queryCost: 235}))
+	})
+
+	it("Slow GraphQL query log omits cost when context has none", () => {
+		runRequest({durationMs: SLOW_QUERY_THRESHOLD_MS + 1})
+
+		const slowCalls = (log.warn as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === "Slow GraphQL query")
+		expect(slowCalls).toHaveLength(1)
+		const fields = slowCalls[0]?.[1]
+		expect(fields).not.toHaveProperty("queryCost")
+	})
+
+	it("Large GraphQL response log includes the cost field when context has it", () => {
+		// Build a response that stringifies to >1MB so the large-response branch fires.
+		const big = {data: "x".repeat(1_100_000)}
+		runRequest({durationMs: 1500, cost: 250, responseData: big})
+
+		expect(log.warn).toHaveBeenCalledWith("Large GraphQL response", expect.objectContaining({queryCost: 250}))
+	})
+
+	it("does not fire slow log under threshold", () => {
+		runRequest({durationMs: SLOW_QUERY_THRESHOLD_MS - 1, cost: 235})
+
+		const slowCalls = (log.warn as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === "Slow GraphQL query")
+		expect(slowCalls).toHaveLength(0)
 	})
 })

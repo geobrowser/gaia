@@ -1,10 +1,22 @@
 import {parse} from "graphql"
-import {beforeEach, describe, expect, it} from "vitest"
+import {beforeEach, describe, expect, it, vi} from "vitest"
+
+// Mock Sentry so we can assert on the new metric emission without a real
+// Sentry init. Order matters: this mock must precede the import of the
+// module under test.
+vi.mock("@sentry/node", () => ({
+	metrics: {
+		distribution: vi.fn(),
+	},
+}))
+
+import * as Sentry from "@sentry/node"
 import {
 	__resetQueryCostHistogramForTests,
 	compressCost,
 	computeQueryCost,
 	computeQueryCostRaw,
+	GRAPHQL_QUERY_COST_CONTEXT_KEY,
 	renderQueryCostHistogram,
 	useCostLogger,
 } from "../costLoggerPlugin"
@@ -396,6 +408,90 @@ describe("query cost histogram", () => {
 			},
 		})
 		expect(renderQueryCostHistogram()).toContain("gaia_api_graphql_query_cost_count 0")
+	})
+})
+
+// --------------------------------------------------------------------------
+// Sentry metric emission + cross-plugin cost sharing via contextValue
+// --------------------------------------------------------------------------
+
+describe("useCostLogger — Sentry metric + context cost-sharing", () => {
+	beforeEach(() => {
+		__resetQueryCostHistogramForTests()
+		vi.clearAllMocks()
+	})
+
+	it("emits a Sentry distribution metric on every (non-introspection) query", () => {
+		const plugin = useCostLogger()
+		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
+		onExecute({
+			args: {
+				document: parse(`{ entity(id: "...") { id name } }`),
+				variableValues: {},
+				operationName: null,
+				contextValue: {},
+			},
+		})
+
+		expect(Sentry.metrics.distribution).toHaveBeenCalledTimes(1)
+		expect(Sentry.metrics.distribution).toHaveBeenCalledWith(
+			"graphql.query_cost",
+			expect.any(Number),
+			expect.objectContaining({attributes: expect.objectContaining({operation: "query entity"})}),
+		)
+	})
+
+	it("does not emit a Sentry metric for introspection queries", () => {
+		const plugin = useCostLogger()
+		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
+		onExecute({
+			args: {
+				document: parse(`{ __typename }`),
+				variableValues: {},
+				operationName: "IntrospectionQuery",
+				contextValue: {},
+			},
+		})
+
+		expect(Sentry.metrics.distribution).not.toHaveBeenCalled()
+	})
+
+	it("stashes cost on contextValue for downstream plugins to read", () => {
+		const plugin = useCostLogger()
+		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
+		const ctx: Record<string, unknown> = {}
+
+		onExecute({
+			args: {
+				document: parse(`{ entity(id: "...") { id name } }`),
+				variableValues: {},
+				operationName: null,
+				contextValue: ctx,
+			},
+		})
+
+		// Same compressed score the histogram bucketing test asserts (33 for
+		// a simple entity lookup).
+		expect(ctx[GRAPHQL_QUERY_COST_CONTEXT_KEY]).toBe(33)
+	})
+
+	it("does not stash cost when computation fails (shadow-mode safety)", () => {
+		const plugin = useCostLogger()
+		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
+		const ctx: Record<string, unknown> = {}
+
+		onExecute({
+			args: {
+				// biome-ignore lint/suspicious/noExplicitAny: deliberately malformed
+				document: null as any,
+				variableValues: {},
+				operationName: null,
+				contextValue: ctx,
+			},
+		})
+
+		expect(ctx[GRAPHQL_QUERY_COST_CONTEXT_KEY]).toBeUndefined()
+		expect(Sentry.metrics.distribution).not.toHaveBeenCalled()
 	})
 })
 

@@ -13,6 +13,7 @@ import {
 import type {Plugin} from "graphql-yoga"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
+import {GRAPHQL_QUERY_COST_CONTEXT_KEY, type GraphqlCostContext} from "./costLoggerPlugin"
 
 // GraphQL error codes that always indicate a client-side problem (bad input,
 // syntax/validation errors). These are the expected consequence of a
@@ -200,6 +201,15 @@ export function useGraphQLInstrumentation(): Plugin {
 					const errors = "errors" in result ? result.errors : undefined
 					const hasErrors = errors && errors.length > 0
 
+					// Read cost from context (set by useCostLogger). Treat as
+					// optional: if cost computation failed or the cost plugin
+					// ran out-of-order, we still emit the warning, just without
+					// the cost field. Helpful when triaging a 30s/60s timeout —
+					// a high cost score (≥200) plus the duration tells you it
+					// was an expensive query, not a stalled DB connection.
+					const ctx = args.contextValue as GraphqlCostContext | undefined
+					const queryCost = ctx?.[GRAPHQL_QUERY_COST_CONTEXT_KEY]
+
 					// Measure serialized response size for large payload detection.
 					// Only stringify data (not errors) since that's the memory-heavy part.
 					// Guard behind a 1s duration check to avoid the stringify cost on fast queries.
@@ -220,6 +230,7 @@ export function useGraphQLInstrumentation(): Plugin {
 							responseSizeBytes,
 							responseSizeMB: Math.round((responseSizeBytes / 1_000_000) * 100) / 100,
 							durationMs,
+							...(queryCost !== undefined && {queryCost}),
 							query: query.slice(0, 5000),
 							variables: args.variableValues,
 							requestId,
@@ -232,6 +243,7 @@ export function useGraphQLInstrumentation(): Plugin {
 							queryFingerprint,
 							durationMs,
 							responseSizeBytes,
+							...(queryCost !== undefined && {queryCost}),
 							query: query.slice(0, 5000),
 							variables: args.variableValues,
 							requestId,
@@ -258,6 +270,7 @@ export function useGraphQLInstrumentation(): Plugin {
 									variables: args.variableValues,
 									path: error.path,
 									requestId,
+									...(queryCost !== undefined && {queryCost}),
 								},
 							})
 						}
@@ -266,6 +279,9 @@ export function useGraphQLInstrumentation(): Plugin {
 					span.setAttribute("graphql.duration_ms", durationMs)
 					if (responseSizeBytes !== undefined) {
 						span.setAttribute("graphql.response_size_bytes", responseSizeBytes)
+					}
+					if (queryCost !== undefined) {
+						span.setAttribute("graphql.query_cost", queryCost)
 					}
 
 					// Sentry metrics for dashboards and alerting
