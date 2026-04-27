@@ -80,6 +80,18 @@ export function isClientError(error: unknown): boolean {
 const SLOW_QUERY_THRESHOLD_MS = 3000
 const LARGE_RESPONSE_THRESHOLD_BYTES = 1_000_000 // 1 MB
 
+/**
+ * Per-string char cap for fields we send to Sentry (extras) and OTEL spans
+ * (attribute values). 5000 is the practical sweet spot:
+ *   - Sentry server-side string truncator kicks in around 8 KB; past that the
+ *     bytes are charged against quota but never render.
+ *   - OTEL exporters and most APM UIs (Sentry Performance, Tempo) get
+ *     unhappy past this range too.
+ *   - Structured logs (kubectl / Axiom) bypass this — they get the full
+ *     untruncated query.
+ */
+const SENTRY_PAYLOAD_CHAR_LIMIT = 5000
+
 type TraceContext = {
 	traceId: string
 	spanId: string
@@ -160,7 +172,12 @@ export function useGraphQLInstrumentation(): Plugin {
 			ctxWithSetter.setGraphqlOperationName?.(operationLabel)
 			const query = print(args.document)
 			const queryFingerprint = graphqlQueryFingerprint(query)
-			const variables = args.variableValues ? JSON.stringify(args.variableValues).slice(0, 2000) : undefined
+			// 5000 chars matches Sentry's practical per-string cap before its
+			// server-side truncator kicks in. Past that we'd be paying quota
+			// for bytes that don't render.
+			const variables = args.variableValues
+				? JSON.stringify(args.variableValues).slice(0, SENTRY_PAYLOAD_CHAR_LIMIT)
+				: undefined
 
 			// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
 			const tracer = trace.getTracer("gaia-api-graphql")
@@ -186,7 +203,7 @@ export function useGraphQLInstrumentation(): Plugin {
 					attributes: {
 						"graphql.operation_name": operationLabel,
 						"graphql.query_fingerprint": queryFingerprint,
-						"graphql.document": query.slice(0, 2000),
+						"graphql.document": query.slice(0, SENTRY_PAYLOAD_CHAR_LIMIT),
 						...(variables && {"graphql.variables": variables}),
 						"http.request_id": requestId,
 					},
@@ -257,7 +274,7 @@ export function useGraphQLInstrumentation(): Plugin {
 								},
 								extra: {
 									queryFingerprint,
-									query: query.slice(0, 2000),
+									query: query.slice(0, SENTRY_PAYLOAD_CHAR_LIMIT),
 									variables: args.variableValues,
 									path: error.path,
 									requestId,

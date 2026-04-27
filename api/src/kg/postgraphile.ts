@@ -228,10 +228,11 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 		async onExecute({extendContext, args}) {
 			const operationName = args.operationName || "anonymous"
 			const fullQuery = print(args.document)
-			// Truncated form for Sentry / OTEL payloads (Sentry caps event size
-			// server-side; large extras inflate quota cost). Logs use `fullQuery`
-			// directly so triagers see the whole document.
-			const truncatedQuery = fullQuery.slice(0, 2000)
+			// Truncated form for Sentry / OTEL payloads. 5000 chars matches
+			// Sentry's ~8K server-side string truncator headroom — past that
+			// the bytes are billed against quota but never render. Logs use
+			// `fullQuery` directly so triagers see the whole document.
+			const truncatedQuery = fullQuery.slice(0, 5000)
 			const queryFingerprint = graphqlQueryFingerprint(fullQuery)
 			const acquireStartMs = Date.now()
 
