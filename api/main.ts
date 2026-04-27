@@ -29,6 +29,9 @@ type AppEnv = {
 	}
 }
 
+const EMPTY_FILE_LOG_MESSAGE = "Empty file provided"
+const EMPTY_FILE_ERROR_MESSAGE = "File cannot be empty"
+
 const app = new Hono<AppEnv>()
 
 // Hono dispatches all thrown errors through `app.onError` (see compose.js).
@@ -228,11 +231,11 @@ app.post(
 			}
 
 			if (file.size === 0) {
-				yield* Effect.logWarning("Empty file provided")
+				yield* Effect.logWarning(EMPTY_FILE_LOG_MESSAGE)
 				return yield* Effect.fail({
 					_tag: "ValidationError" as const,
 					status: 400,
-					message: "File cannot be empty",
+					message: EMPTY_FILE_ERROR_MESSAGE,
 				})
 			}
 
@@ -343,11 +346,11 @@ app.post(
 			}
 
 			if (file.size === 0) {
-				yield* Effect.logWarning("Empty file provided")
+				yield* Effect.logWarning(EMPTY_FILE_LOG_MESSAGE)
 				return yield* Effect.fail({
 					_tag: "ValidationError" as const,
 					status: 400,
-					message: "File cannot be empty",
+					message: EMPTY_FILE_ERROR_MESSAGE,
 				})
 			}
 
@@ -461,11 +464,11 @@ app.post(
 			}
 
 			if (file.size === 0) {
-				yield* Effect.logWarning("Empty file provided")
+				yield* Effect.logWarning(EMPTY_FILE_LOG_MESSAGE)
 				return yield* Effect.fail({
 					_tag: "ValidationError" as const,
 					status: 400,
-					message: "File cannot be empty",
+					message: EMPTY_FILE_ERROR_MESSAGE,
 				})
 			}
 
