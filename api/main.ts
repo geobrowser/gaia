@@ -227,6 +227,15 @@ app.post(
 				})
 			}
 
+			if (file.size === 0) {
+				yield* Effect.logWarning("Empty file provided")
+				return yield* Effect.fail({
+					_tag: "ValidationError" as const,
+					status: 400,
+					message: "File cannot be empty",
+				})
+			}
+
 			const result = yield* uploadEdit(file).pipe(
 				Effect.mapError((error) => ({
 					_tag: "UploadError" as const,
@@ -330,6 +339,15 @@ app.post(
 					_tag: "ValidationError" as const,
 					status: 400,
 					message: "No file provided",
+				})
+			}
+
+			if (file.size === 0) {
+				yield* Effect.logWarning("Empty file provided")
+				return yield* Effect.fail({
+					_tag: "ValidationError" as const,
+					status: 400,
+					message: "File cannot be empty",
 				})
 			}
 
@@ -439,6 +457,15 @@ app.post(
 					_tag: "ValidationError" as const,
 					status: 400,
 					message: "No file provided",
+				})
+			}
+
+			if (file.size === 0) {
+				yield* Effect.logWarning("Empty file provided")
+				return yield* Effect.fail({
+					_tag: "ValidationError" as const,
+					status: 400,
+					message: "File cannot be empty",
 				})
 			}
 
