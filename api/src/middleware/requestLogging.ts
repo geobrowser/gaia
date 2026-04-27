@@ -16,6 +16,29 @@ import {log} from "../services/telemetry"
 import {extractClientIp} from "../utils/clientIp"
 
 /**
+ * HTTP status code used for "client closed request" — matches nginx's
+ * `499` convention. The client is already gone, so the status is purely
+ * for our own metrics/logs (it never reaches a wire).
+ */
+const CLIENT_CLOSED_REQUEST_STATUS = 499
+
+/**
+ * Detect a client-side connection-close. graphql-yoga's
+ * `useExecutionCancellation` propagates the request's AbortSignal as a
+ * `DOMException` with `name === "AbortError"` and `code === 20` (ABORT_ERR).
+ * Node's stdlib variant uses `code === "ABORT_ERR"`. Treat all of these as
+ * "the client hung up" — they are not server faults.
+ */
+export function isClientAbortError(error: unknown): boolean {
+	if (typeof error !== "object" || error === null) return false
+	const candidate = error as {name?: unknown; code?: unknown}
+	if (candidate.name === "AbortError") return true
+	if (candidate.code === 20) return true
+	if (candidate.code === "ABORT_ERR") return true
+	return false
+}
+
+/**
  * Extract or generate a request ID.
  * Checks common headers, falls back to generating a UUID.
  */
@@ -132,7 +155,12 @@ export function canonicalRequestLogging() {
 				// Canonical END log — promote to error level for 5xx responses
 				// so handlers that return a 5xx without throwing (e.g. c.text("…", 500),
 				// GraphQL errors surfaced by graphql-yoga) still produce a Sentry
-				// issue. The catch branch below handles the throwing path.
+				// issue.
+				//
+				// Status 499 is reserved for "client closed request" — set by
+				// `app.onError` in main.ts when an AbortError bubbles up. These
+				// are not server faults; log as `warn` (breadcrumb only, no Sentry
+				// issue) so dashboards stop counting them as 5xx.
 				const endLogFields = {
 					requestId,
 					method,
@@ -141,7 +169,9 @@ export function canonicalRequestLogging() {
 					durationMs: duration,
 					...(graphqlOperationName ? {graphqlOperationName} : {}),
 				}
-				if (status >= 500) {
+				if (status === CLIENT_CLOSED_REQUEST_STATUS) {
+					log.warn(`${method} ${path} aborted by client`, endLogFields)
+				} else if (status >= 500) {
 					log.error(`${method} ${path} returned ${status}`, endLogFields)
 				} else {
 					log.info(`${method} ${path} completed`, endLogFields)
