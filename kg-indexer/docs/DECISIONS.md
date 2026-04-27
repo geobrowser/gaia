@@ -35,3 +35,18 @@
 - Kafka offsets only committed after full block is processed
 - If `is_last` never arrives, stale block detection warns after timeout
 - Messages without block metadata fall back to immediate processing
+
+## ADR-003: Root-space gating for system property relations
+
+**Status**: Accepted
+
+**Context**: The four onchain-derived system properties (`SpaceAddress`, `VotingMode`, `SpaceId`, `CreatedAtBlock`, enumerated in `sdk::core::ids::PROTECTED_PROPERTY_IDS`) need schema relations in the graph (e.g. `Types: Property`, `Data Type: Text/Integer`) so they look like first-class properties. Authoring those relations from arbitrary spaces would let any space redefine the schema of system properties. At the same time, their *values* are written directly by `handlers::system_entities::map_space_registered` from onchain events; permitting edit-pipeline writes for those values would create two writers racing for the same value rows.
+
+**Decision**: Edits from any space are blocked from authoring relations whose `from`/`to` is in `PROTECTED_PROPERTY_IDS`, with one exception: the root space (`sdk::core::ids::ROOT_SPACE_ID`) may author such relations to define the system-property schema. Values for those properties remain non-writable via edits — even from the root space — because the onchain handler is the sole writer.
+
+**Consequences**:
+- Schema for system properties is authored exactly once, by the root space
+- Non-root spaces still have system-property relations dropped, preserving prior behavior
+- Onchain handler retains exclusive ownership of system-property values, so no row-level write races
+- If the root space is ever migrated, `sdk::core::ids::ROOT_SPACE_ID` must be updated alongside the indexer's gating check
+- Implementation lives in GEO-563/564; the SDK constant is GEO-562
