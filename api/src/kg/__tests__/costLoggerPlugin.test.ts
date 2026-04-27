@@ -336,6 +336,11 @@ describe("computeQueryCost — operation selection, directives, and SQL-risk sig
 		expect(rawCost(`{ entities(first: 25, offset: 100) { id } }`)).toBe(378n)
 	})
 
+	it("treats offset zero as a valid no-skip value", () => {
+		expect(rawCost(`{ entities(first: 25) { id } }`)).toBe(26n)
+		expect(rawCost(`{ entities(first: 25, offset: 0) { id } }`)).toBe(26n)
+	})
+
 	it("charges totalCount as an extra connection-wide count", () => {
 		expect(rawCost(`{ entitiesConnection(first: 1) { totalCount } }`)).toBe(10_001n)
 		expect(cost(`{ entitiesConnection(first: 1) { totalCount } }`)).toBe(40)

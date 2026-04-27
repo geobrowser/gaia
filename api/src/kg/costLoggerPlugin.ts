@@ -436,7 +436,7 @@ function effectiveLimit(args: Record<string, unknown>, hasPagination: boolean, h
 	if (!hasOffset) return limit
 
 	const rawOffset = args.offset
-	const validOffset = typeof rawOffset === "number" && Number.isFinite(rawOffset) && rawOffset > 0
+	const validOffset = typeof rawOffset === "number" && Number.isFinite(rawOffset) && rawOffset >= 0
 	return limit + (validOffset ? BigInt(rawOffset) : DEFAULT_LIMIT)
 }
 
