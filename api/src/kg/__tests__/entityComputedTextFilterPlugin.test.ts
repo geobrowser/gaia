@@ -1,7 +1,7 @@
 import {describe, expect, it, vi} from "vitest"
 import {__testExports, EntityComputedTextFilterPlugin} from "../entityComputedTextFilterPlugin"
 
-const {NAME_PROPERTY_ID, DESCRIPTION_PROPERTY_ID, buildResolver, operatorFragment} = __testExports
+const {NAME_PROPERTY_ID, DESCRIPTION_PROPERTY_ID, buildResolver, operatorPredicate, buildMergedExists} = __testExports
 
 // ---------------------------------------------------------------------------
 // Mock graphile sql tag — captures fragment shape for assertion
@@ -11,9 +11,10 @@ const {NAME_PROPERTY_ID, DESCRIPTION_PROPERTY_ID, buildResolver, operatorFragmen
 // enough of the `pgSql` API surface that the resolver calls. The real graphile
 // `sql.fragment` returns an opaque object that ultimately renders to SQL +
 // bind parameters; we replicate that contract with a tagged-template that
-// preserves the literal text plus interpolated placeholders, and a `value()`
-// + `join()` helper. This lets the test assert "the fragment contains the
-// EXISTS structure and references the right property UUID" without a DB.
+// preserves the literal text plus interpolated placeholders, plus `value()`,
+// `identifier()`, and `join()` helpers. This lets us assert "the fragment
+// contains the right EXISTS structure / property UUID / predicates" without
+// running anything against a DB.
 
 type Mark = {kind: "value" | "literal" | "fragment"; payload: unknown}
 
@@ -32,18 +33,16 @@ const sql = {
 	identifier(...parts: string[]): Mark {
 		return {kind: "literal", payload: parts.join(".")}
 	},
-	join(fragments: Mark[], separator: string): Mark {
+	// `join` accepts either a string or another fragment as separator —
+	// the production code passes `sql.fragment\` AND \`` so we must handle
+	// fragment-shaped separators too.
+	join(fragments: Mark[], separator: string | Mark): Mark {
 		return {kind: "fragment", payload: {fragments, separator}}
 	},
 }
 
 const sourceAlias = sql.identifier("e")
 
-/**
- * Recursively flatten a fragment into a single string for substring-match
- * assertions. Values get serialized as `<<value>>` so `text = ${val}` becomes
- * `text = <<the-string>>` and is greppable.
- */
 function flatten(node: unknown): string {
 	if (node === null || node === undefined) return ""
 	if (typeof node === "string") return node
@@ -54,151 +53,97 @@ function flatten(node: unknown): string {
 	if (m.kind === "fragment") {
 		const p = m.payload as unknown
 		if (Array.isArray(p)) return p.map(flatten).join("")
-		const obj = p as {fragments: unknown[]; separator: string}
-		return obj.fragments.map(flatten).join(obj.separator)
+		const obj = p as {fragments: unknown[]; separator: unknown}
+		const sep = typeof obj.separator === "string" ? obj.separator : flatten(obj.separator)
+		return obj.fragments.map(flatten).join(sep)
 	}
 	return ""
 }
 
+// Convenience accessors for the tagged OpResult shape.
+function asMerge(result: unknown): {kind: "merge"; innerPred: Mark} {
+	if (!result || typeof result !== "object" || (result as {kind?: string}).kind !== "merge") {
+		throw new Error(`expected merge result, got ${JSON.stringify(result)}`)
+	}
+	return result as {kind: "merge"; innerPred: Mark}
+}
+
+function asStandalone(result: unknown): {kind: "standalone"; fragment: Mark} {
+	if (!result || typeof result !== "object" || (result as {kind?: string}).kind !== "standalone") {
+		throw new Error(`expected standalone result, got ${JSON.stringify(result)}`)
+	}
+	return result as {kind: "standalone"; fragment: Mark}
+}
+
 // ---------------------------------------------------------------------------
-// operatorFragment — per-operator SQL shape
+// operatorPredicate — per-operator classification + inner predicate shape
 // ---------------------------------------------------------------------------
 
-describe("operatorFragment", () => {
+describe("operatorPredicate", () => {
 	const propertyId = NAME_PROPERTY_ID
 
-	it("isNull: false → EXISTS with text IS NOT NULL", () => {
-		const f = operatorFragment(sql, sourceAlias, propertyId, "isNull", false)
-		expect(f).not.toBeNull()
-		const s = flatten(f)
-		expect(s).toContain("EXISTS")
-		expect(s).toContain("v.entity_id = e")
-		expect(s).toContain(`<<${JSON.stringify(propertyId)}>>`)
-		expect(s).toContain("v.text IS NOT NULL")
-		expect(s).not.toMatch(/^\s*NOT\b/)
+	// --- Existence ---
+	it("isNull: false → merge with v.text IS NOT NULL", () => {
+		const r = asMerge(operatorPredicate(sql, sourceAlias, propertyId, "isNull", false))
+		expect(flatten(r.innerPred)).toContain("v.text IS NOT NULL")
 	})
 
-	it("isNull: true → NOT EXISTS with text IS NOT NULL (entity has no name)", () => {
-		const f = operatorFragment(sql, sourceAlias, propertyId, "isNull", true)
-		const s = flatten(f)
-		expect(s).toContain("NOT")
-		expect(s).toContain("EXISTS")
+	it("isNull: true → standalone NOT EXISTS (… v.text IS NOT NULL)", () => {
+		const r = asStandalone(operatorPredicate(sql, sourceAlias, propertyId, "isNull", true))
+		const s = flatten(r.fragment)
+		expect(s).toContain("NOT EXISTS")
 		expect(s).toContain("v.text IS NOT NULL")
 	})
 
-	it("isNot: '' → EXISTS with v.text <> ''", () => {
-		const f = operatorFragment(sql, sourceAlias, propertyId, "isNot", "")
-		const s = flatten(f)
-		expect(s).toContain("EXISTS")
-		expect(s).toContain("v.text <>")
-		expect(s).toContain('<<"">>')
+	// --- Equality ---
+	it("equalTo / is → merge with v.text = $val", () => {
+		const r1 = asMerge(operatorPredicate(sql, sourceAlias, propertyId, "equalTo", "Alice"))
+		const r2 = asMerge(operatorPredicate(sql, sourceAlias, propertyId, "is", "Alice"))
+		expect(flatten(r1.innerPred)).toMatch(/v\.text = <<"Alice">>/)
+		expect(flatten(r2.innerPred)).toMatch(/v\.text = <<"Alice">>/)
 	})
 
-	it("equalTo / is → EXISTS with v.text =", () => {
-		const f1 = operatorFragment(sql, sourceAlias, propertyId, "equalTo", "Alice")
-		const f2 = operatorFragment(sql, sourceAlias, propertyId, "is", "Alice")
-		expect(flatten(f1)).toContain("v.text =")
-		expect(flatten(f2)).toContain("v.text =")
-		expect(flatten(f1)).toContain('<<"Alice">>')
+	it("isNot / notEqualTo → merge with v.text <> $val (NULL implicitly excluded)", () => {
+		const r1 = asMerge(operatorPredicate(sql, sourceAlias, propertyId, "isNot", ""))
+		const r2 = asMerge(operatorPredicate(sql, sourceAlias, propertyId, "notEqualTo", "Bob"))
+		expect(flatten(r1.innerPred)).toMatch(/v\.text <> <<"">>/)
+		expect(flatten(r2.innerPred)).toMatch(/v\.text <> <<"Bob">>/)
 	})
 
-	it("in → EXISTS with v.text = ANY(...)", () => {
-		const f = operatorFragment(sql, sourceAlias, propertyId, "in", ["Alice", "Bob"])
-		expect(flatten(f)).toContain("v.text = ANY(")
+	it("isInsensitive / equalToInsensitive → merge with lower(v.text) = lower($val)", () => {
+		const r1 = asMerge(operatorPredicate(sql, sourceAlias, propertyId, "isInsensitive", "Alice"))
+		const r2 = asMerge(operatorPredicate(sql, sourceAlias, propertyId, "equalToInsensitive", "Alice"))
+		expect(flatten(r1.innerPred)).toContain("lower(v.text) = lower(")
+		expect(flatten(r2.innerPred)).toContain("lower(v.text) = lower(")
 	})
 
-	it("notIn → EXISTS asserting non-null AND NOT v.text = ANY(...)", () => {
-		const f = operatorFragment(sql, sourceAlias, propertyId, "notIn", ["Alice", "Bob"])
-		const s = flatten(f)
-		expect(s).toContain("EXISTS")
-		expect(s).toContain("v.text IS NOT NULL")
-		expect(s).toContain("NOT")
-		expect(s).toContain("v.text = ANY(")
+	it("in → merge with v.text = ANY(...)", () => {
+		const r = asMerge(operatorPredicate(sql, sourceAlias, propertyId, "in", ["Alice", "Bob"]))
+		expect(flatten(r.innerPred)).toContain("v.text = ANY(")
 	})
 
-	it("includes → EXISTS with v.text LIKE %X%", () => {
-		const f = operatorFragment(sql, sourceAlias, propertyId, "includes", "Ali")
-		const s = flatten(f)
-		expect(s).toContain("v.text LIKE")
-		expect(s).toContain('<<"%Ali%">>')
+	it("comparison ops → merge with v.text <op> $val", () => {
+		expect(flatten(asMerge(operatorPredicate(sql, sourceAlias, propertyId, "lessThan", "M")).innerPred)).toMatch(
+			/v\.text < <<"M">>/,
+		)
+		expect(
+			flatten(asMerge(operatorPredicate(sql, sourceAlias, propertyId, "greaterThanOrEqualTo", "M")).innerPred),
+		).toMatch(/v\.text >= <<"M">>/)
 	})
 
-	it("includesInsensitive → EXISTS with v.text ILIKE %X%", () => {
-		const f = operatorFragment(sql, sourceAlias, propertyId, "includesInsensitive", "Ali")
-		const s = flatten(f)
-		expect(s).toContain("v.text ILIKE")
-		expect(s).toContain('<<"%Ali%">>')
+	// --- Pattern matching: positive ---
+	it("includes / startsWith / endsWith → merge with LIKE/ILIKE", () => {
+		const inc = asMerge(operatorPredicate(sql, sourceAlias, propertyId, "includes", "foo"))
+		expect(flatten(inc.innerPred)).toContain('v.text LIKE <<"%foo%">>')
+
+		const sw = asMerge(operatorPredicate(sql, sourceAlias, propertyId, "startsWithInsensitive", "foo"))
+		expect(flatten(sw.innerPred)).toContain('v.text ILIKE <<"foo%">>')
+
+		const ew = asMerge(operatorPredicate(sql, sourceAlias, propertyId, "endsWith", "foo"))
+		expect(flatten(ew.innerPred)).toContain('v.text LIKE <<"%foo">>')
 	})
 
-	it("startsWith → EXISTS with v.text LIKE X%", () => {
-		const s = flatten(operatorFragment(sql, sourceAlias, propertyId, "startsWith", "Ali"))
-		expect(s).toContain("v.text LIKE")
-		expect(s).toContain('<<"Ali%">>')
-	})
-
-	it("greaterThan → EXISTS with v.text >", () => {
-		const s = flatten(operatorFragment(sql, sourceAlias, propertyId, "greaterThan", "M"))
-		expect(s).toContain("v.text >")
-		expect(s).toContain('<<"M">>')
-	})
-
-	it("unknown operator → returns null (caller falls through to default)", () => {
-		const f = operatorFragment(sql, sourceAlias, propertyId, "distinctFrom", "x")
-		expect(f).toBeNull()
-	})
-
-	// --- Insensitive equality ops (renamed via connectionFilterOperatorNames) ---
-
-	it("isInsensitive (renamed equalToInsensitive) → EXISTS with lower(v.text) = lower($val)", () => {
-		const f = operatorFragment(sql, sourceAlias, NAME_PROPERTY_ID, "isInsensitive", "Alice")
-		const s = flatten(f)
-		expect(s).toContain("EXISTS")
-		expect(s).toContain("lower(v.text) = lower(")
-	})
-
-	it("equalToInsensitive (raw) also handled", () => {
-		const f = operatorFragment(sql, sourceAlias, NAME_PROPERTY_ID, "equalToInsensitive", "Alice")
-		expect(flatten(f)).toContain("lower(v.text) = lower(")
-	})
-
-	// --- notStartsWith / notEndsWith pattern variants ---
-
-	it("notStartsWith → EXISTS asserting text IS NOT NULL AND NOT LIKE 'val%'", () => {
-		const s = flatten(operatorFragment(sql, sourceAlias, NAME_PROPERTY_ID, "notStartsWith", "Bob"))
-		expect(s).toContain("v.text IS NOT NULL")
-		expect(s).toContain("v.text LIKE")
-		expect(s).toContain('<<"Bob%">>')
-	})
-
-	it("notEndsWithInsensitive → EXISTS with ILIKE", () => {
-		const s = flatten(operatorFragment(sql, sourceAlias, NAME_PROPERTY_ID, "notEndsWithInsensitive", "x"))
-		expect(s).toContain("v.text ILIKE")
-		expect(s).toContain('<<"%x">>')
-	})
-
-	it("uses the per-field property ID (description vs name)", () => {
-		const fName = operatorFragment(sql, sourceAlias, NAME_PROPERTY_ID, "isNull", false)
-		const fDesc = operatorFragment(sql, sourceAlias, DESCRIPTION_PROPERTY_ID, "isNull", false)
-		expect(flatten(fName)).toContain(`<<${JSON.stringify(NAME_PROPERTY_ID)}>>`)
-		expect(flatten(fDesc)).toContain(`<<${JSON.stringify(DESCRIPTION_PROPERTY_ID)}>>`)
-		// Sanity: the constants resolve to the canonical UUIDs (any format).
-		expect(NAME_PROPERTY_ID).toMatch(/^a126ca53-?0c8e-?48d5-?b888-?82c734c38935$/)
-		expect(DESCRIPTION_PROPERTY_ID).toMatch(/^9b1f76ff-?9711-?404c-?861e-?59dc3fa7d037$/)
-	})
-
-	// -----------------------------------------------------------------
-	// NULL-exclusion semantics for negative operators.
-	//
-	// The unrewritten `WHERE entities_name(e) NOT LIKE 'foo'` form returns
-	// FALSE for entities with no name (NULL NOT LIKE x → NULL → excluded).
-	// Our rewrite must preserve that — i.e., a name-less entity must NOT
-	// match a `notLike` / `notIn` / `notIncludes*` filter.
-	//
-	// We assert this via the SQL shape: every negative operator must emit
-	// an `EXISTS (… v.text IS NOT NULL AND NOT (…))` form, never a bare
-	// `NOT EXISTS (…)` (which would include name-less entities).
-	// -----------------------------------------------------------------
-
+	// --- Negative pattern matching: NULL-safe inner predicates ---
 	const NEGATIVE_OP_FIXTURES: ReadonlyArray<readonly [string, unknown]> = [
 		["notIn", ["a", "b"]],
 		["notIncludes", "foo"],
@@ -214,40 +159,113 @@ describe("operatorFragment", () => {
 	]
 
 	for (const [op, val] of NEGATIVE_OP_FIXTURES) {
-		it(`${op} requires v.text IS NOT NULL so name-less entities are excluded`, () => {
-			const s = flatten(operatorFragment(sql, sourceAlias, NAME_PROPERTY_ID, op, val))
-			// Must be the EXISTS-with-non-null-check shape, not bare NOT EXISTS.
-			expect(s).toContain("EXISTS")
+		it(`${op} → merge with "v.text IS NOT NULL AND NOT (...)" so name-less entities are excluded`, () => {
+			const r = asMerge(operatorPredicate(sql, sourceAlias, propertyId, op, val))
+			const s = flatten(r.innerPred)
 			expect(s).toContain("v.text IS NOT NULL")
 			expect(s).toContain("AND NOT (")
-			// Should NOT begin with a top-level NOT — that would be the
-			// buggy `NOT EXISTS (…)` shape that includes null rows.
-			expect(s).not.toMatch(/^\s*NOT\s+EXISTS/)
 		})
 	}
+
+	// --- Unknown ops fall back ---
+	it("unknown operator → null (caller delegates to default resolver)", () => {
+		expect(operatorPredicate(sql, sourceAlias, propertyId, "distinctFrom", "x")).toBeNull()
+		expect(operatorPredicate(sql, sourceAlias, propertyId, "notDistinctFrom", "x")).toBeNull()
+		expect(operatorPredicate(sql, sourceAlias, propertyId, "inInsensitive", ["a"])).toBeNull()
+	})
+
+	// --- Per-field property ID dispatch ---
+	it("uses the per-field property ID (description vs name) — not relevant for inner preds, but property hits buildMergedExists", () => {
+		const nameExists = buildMergedExists(sql, sourceAlias, NAME_PROPERTY_ID, [
+			sql.fragment`v.text = ${sql.value("X")}`,
+		])
+		const descExists = buildMergedExists(sql, sourceAlias, DESCRIPTION_PROPERTY_ID, [
+			sql.fragment`v.text = ${sql.value("X")}`,
+		])
+		expect(flatten(nameExists)).toContain(`<<${JSON.stringify(NAME_PROPERTY_ID)}>>`)
+		expect(flatten(descExists)).toContain(`<<${JSON.stringify(DESCRIPTION_PROPERTY_ID)}>>`)
+		// Sanity: SDK constants resolve to the canonical UUIDs (any format).
+		expect(NAME_PROPERTY_ID).toMatch(/^a126ca53-?0c8e-?48d5-?b888-?82c734c38935$/)
+		expect(DESCRIPTION_PROPERTY_ID).toMatch(/^9b1f76ff-?9711-?404c-?861e-?59dc3fa7d037$/)
+	})
 })
 
 // ---------------------------------------------------------------------------
-// buildResolver — composing multiple operators into one fragment
+// buildResolver — merging predicates into a single EXISTS
 // ---------------------------------------------------------------------------
 
-describe("buildResolver", () => {
+describe("buildResolver — multi-operator merging (P2 fix)", () => {
 	const noopDefault = vi.fn(() => null)
 	const resolver = buildResolver(NAME_PROPERTY_ID, sql, noopDefault)
 
-	it("single operator returns a single fragment", () => {
-		const out = resolver({sourceAlias, fieldValue: {isNull: false}})
-		expect(out).not.toBeNull()
+	/**
+	 * Count how many `EXISTS (` substrings appear at the top level of the
+	 * fragment, excluding the standalone `NOT EXISTS` form. Used to verify
+	 * that multi-operator filters collapse to ONE EXISTS, not N.
+	 */
+	function countExistsClauses(s: string): number {
+		// Split on "NOT EXISTS" first so we don't double-count: each NOT
+		// EXISTS contains an EXISTS substring.
+		const withoutNotExists = s.replaceAll("NOT EXISTS", "")
+		return (withoutNotExists.match(/\bEXISTS\s*\(/g) ?? []).length
+	}
+
+	it("single positive op → exactly one EXISTS containing the predicate", () => {
+		const out = resolver({sourceAlias, fieldValue: {is: "Alice"}})
 		const s = flatten(out)
-		expect(s).toContain("EXISTS")
-		expect(s).toContain("v.text IS NOT NULL")
+		expect(countExistsClauses(s)).toBe(1)
+		expect(s).toContain('v.text = <<"Alice">>')
 	})
 
-	it("multiple operators are AND-joined (matches `name: {isNull: false, isNot: ''}` shape)", () => {
+	it("two positive ops merge into ONE EXISTS so the same row must satisfy both (P2 fix)", () => {
+		// This is the reviewer's example: {startsWith: "A", endsWith: "Z"}.
+		// Before the merge fix, we emitted two separate EXISTS clauses, and
+		// could match an entity whose space-A name = "Alice" + space-B name
+		// = "Beta-Z" — neither row alone satisfies both predicates.
+		// After the fix, both predicates are AND-ed inside one EXISTS, so
+		// at least one row must match both.
+		const out = resolver({sourceAlias, fieldValue: {startsWith: "A", endsWith: "Z"}})
+		const s = flatten(out)
+		expect(countExistsClauses(s)).toBe(1)
+		expect(s).toContain('v.text LIKE <<"A%">>')
+		expect(s).toContain('v.text LIKE <<"%Z">>')
+		// Both predicates AND-ed inside the EXISTS.
+		expect(s).toMatch(/EXISTS[\s\S]*v\.text LIKE <<"A%">>[\s\S]*AND[\s\S]*v\.text LIKE <<"%Z">>/)
+	})
+
+	it("classic isNull:false + isNot:'' → ONE EXISTS with both predicates", () => {
 		const out = resolver({sourceAlias, fieldValue: {isNull: false, isNot: ""}})
 		const s = flatten(out)
+		expect(countExistsClauses(s)).toBe(1)
 		expect(s).toContain("v.text IS NOT NULL")
-		expect(s).toContain("v.text <>")
+		expect(s).toContain('v.text <> <<"">>')
+	})
+
+	it("positive + negative ops merge into ONE EXISTS (same row must satisfy both)", () => {
+		const out = resolver({sourceAlias, fieldValue: {is: "Alice", notLike: "Bob%"}})
+		const s = flatten(out)
+		expect(countExistsClauses(s)).toBe(1)
+		expect(s).toContain('v.text = <<"Alice">>')
+		// notLike contributes its IS NOT NULL AND NOT (LIKE …) inner pred.
+		expect(s).toContain("v.text IS NOT NULL")
+		expect(s).toContain("AND NOT (")
+	})
+
+	it("isNull:true alone → standalone NOT EXISTS, no merged EXISTS", () => {
+		const out = resolver({sourceAlias, fieldValue: {isNull: true}})
+		const s = flatten(out)
+		expect(s).toContain("NOT EXISTS")
+		// Only the NOT EXISTS, no merged-positive EXISTS.
+		expect(countExistsClauses(s)).toBe(0)
+	})
+
+	it("isNull:true + positive op → AND of standalone NOT EXISTS + merged EXISTS", () => {
+		// User-pathological combo (asks for "no name" AND "name = X" — never
+		// matches anything). But the SQL shape should still be well-formed.
+		const out = resolver({sourceAlias, fieldValue: {isNull: true, is: "Alice"}})
+		const s = flatten(out)
+		expect(s).toContain("NOT EXISTS")
+		expect(countExistsClauses(s)).toBe(1) // one merged EXISTS for the positive op
 		expect(s).toContain(" AND ")
 	})
 
@@ -257,28 +275,32 @@ describe("buildResolver", () => {
 		expect(resolver({sourceAlias, fieldValue: "string"})).toBeNull()
 		expect(resolver({sourceAlias, fieldValue: {}})).toBeNull()
 	})
+})
 
+// ---------------------------------------------------------------------------
+// buildResolver — fallback semantics for unknown operators
+// ---------------------------------------------------------------------------
+
+describe("buildResolver — fallback to default resolver", () => {
 	it("delegates unknown operators to the default resolver, AND-joins with fast-path ops", () => {
-		const defaultResolve = vi.fn((args) => {
-			// Echo a recognizable marker so we can verify the call shape.
-			return sql.fragment`<<DEFAULT(${sql.value(JSON.stringify(args.fieldValue))})>>`
-		})
+		const defaultResolve = vi.fn((args) => sql.fragment`<<DEFAULT(${sql.value(JSON.stringify(args.fieldValue))})>>`)
 		const r = buildResolver(NAME_PROPERTY_ID, sql, defaultResolve)
-		const out = r({sourceAlias, fieldValue: {isNull: false, distinctFrom: "x"}, foo: "bar"})
+		const out = r({sourceAlias, fieldValue: {is: "X", distinctFrom: "Y"}, extra: "ctx"})
 
 		expect(out).not.toBeNull()
 		const s = flatten(out)
-		// fast-path part:
-		expect(s).toContain("v.text IS NOT NULL")
-		// fallback part (default got called for the single unknown op only):
+
+		// Fast-path part (the merged EXISTS).
+		expect(s).toContain('v.text = <<"X">>')
+
+		// Fallback part (default got called for the single unknown op only).
 		expect(defaultResolve).toHaveBeenCalledTimes(1)
 		expect(defaultResolve.mock.calls[0]?.[0]).toMatchObject({
 			sourceAlias,
-			fieldValue: {distinctFrom: "x"},
-			foo: "bar", // other input fields preserved
+			fieldValue: {distinctFrom: "Y"},
+			extra: "ctx", // other input fields preserved
 		})
 		expect(s).toContain("DEFAULT")
-		// Composition is AND.
 		expect(s).toContain(" AND ")
 	})
 
@@ -288,9 +310,9 @@ describe("buildResolver", () => {
 		const out = r({sourceAlias, fieldValue: {distinctFrom: "x", notDistinctFrom: "y"}})
 
 		expect(out).not.toBeNull()
-		// Two unknown ops → two calls to default → AND-joined.
-		expect(defaultResolve).toHaveBeenCalledTimes(2)
+		expect(defaultResolve).toHaveBeenCalledTimes(2) // one per unknown op
 		expect(flatten(out)).toContain("DEFAULT_ONLY")
+		expect(flatten(out)).toContain(" AND ")
 	})
 })
 
@@ -301,12 +323,8 @@ describe("buildResolver", () => {
 describe("EntityComputedTextFilterPlugin (wiring)", () => {
 	it("wraps connectionFilterRegisterResolver and substitutes for EntityFilter.name / .description", () => {
 		const original = vi.fn()
-		const build = {
-			pgSql: sql,
-			connectionFilterRegisterResolver: original,
-		}
+		const build = {pgSql: sql, connectionFilterRegisterResolver: original}
 
-		// Hook system stub: capture the build-hook handler and invoke it.
 		// biome-ignore lint/suspicious/noExplicitAny: simplified stub
 		let buildHook: any
 		const builder = {
@@ -320,7 +338,6 @@ describe("EntityComputedTextFilterPlugin (wiring)", () => {
 		const result = buildHook(build)
 		expect(result).toBe(build)
 
-		// Now simulate computed-columns plugin registering the default resolver.
 		const defaultNameResolver = vi.fn()
 		const defaultDescResolver = vi.fn()
 		const defaultOtherResolver = vi.fn()
@@ -332,23 +349,20 @@ describe("EntityComputedTextFilterPlugin (wiring)", () => {
 		expect(original).toHaveBeenCalledTimes(3)
 		const [nameCall, descCall, otherCall] = original.mock.calls as [unknown[], unknown[], unknown[]]
 
-		// First call: name field — original called with our overrideResolver, NOT the default.
 		expect(nameCall[0]).toBe("EntityFilter")
 		expect(nameCall[1]).toBe("name")
 		expect(nameCall[2]).not.toBe(defaultNameResolver) // ← substituted
 		expect(typeof nameCall[2]).toBe("function")
 
-		// Second call: description field — overridden too.
 		expect(descCall[1]).toBe("description")
 		expect(descCall[2]).not.toBe(defaultDescResolver)
 
-		// Third call: createdAt — passes through unchanged.
 		expect(otherCall[1]).toBe("createdAt")
-		expect(otherCall[2]).toBe(defaultOtherResolver)
+		expect(otherCall[2]).toBe(defaultOtherResolver) // pass-through
 	})
 
 	it("no-ops when connection-filter plugin not loaded", () => {
-		const build = {pgSql: sql} // no connectionFilterRegisterResolver
+		const build = {pgSql: sql}
 		// biome-ignore lint/suspicious/noExplicitAny: simplified stub
 		let buildHook: any
 		const builder = {
@@ -364,7 +378,7 @@ describe("EntityComputedTextFilterPlugin (wiring)", () => {
 	})
 
 	it("no-ops when pgSql missing", () => {
-		const build = {connectionFilterRegisterResolver: () => undefined} // no pgSql
+		const build = {connectionFilterRegisterResolver: () => undefined}
 		// biome-ignore lint/suspicious/noExplicitAny: simplified stub
 		let buildHook: any
 		const builder = {

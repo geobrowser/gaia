@@ -21,19 +21,37 @@
  *   space.
  *
  *   This plugin overrides the default resolver for those two fields so the
- *   generated SQL is:
+ *   generated SQL is one merged EXISTS containing every operator's predicate
+ *   AND-ed inside it:
  *
  *     EXISTS (
  *       SELECT 1 FROM public.values v
  *       WHERE v.entity_id = e.id
  *         AND v.property_id = $NAME_PROPERTY
- *         AND v.text <op> $1   -- per operator
+ *         AND <pred_1> AND <pred_2> AND … <pred_N>
  *       LIMIT 1
  *     )
  *
  *   That uses `values_entity_property_idx (entity_id, property_id)` and
  *   short-circuits at the first match. Same `entity.name` semantics on the
  *   read path; just a different SQL shape for the filter path.
+ *
+ * Multi-operator semantics (the merge):
+ *   The previous design emitted a separate `EXISTS (…)` per operator and
+ *   AND-ed them. That broke for cross-space multi-value entities: with
+ *   names {"Alice" in space A, "Beta-Z" in space B}, the filter
+ *   `{startsWith: "A", endsWith: "Z"}` would match — startsWith finds
+ *   "Alice", endsWith finds "Beta-Z" — even though no single value satisfies
+ *   both predicates. The original `entities_name(e) LIKE 'A%' AND
+ *   entities_name(e) LIKE '%Z'` evaluates against ONE arbitrarily-chosen
+ *   value (LIMIT 1) and produces no match in that case.
+ *
+ *   Merging all positive/negative operator predicates into a single EXISTS
+ *   restores "at least one value satisfies every operator" semantics — the
+ *   same row must pass every predicate. `isNull: true` ("entity has no
+ *   value at all") and any unknown-operator fallbacks remain as standalone
+ *   top-level clauses since they assert facts that don't apply to a single
+ *   row.
  *
  * Implementation:
  *   `connectionFilterRegisterResolver(typeName, fieldName, resolve)` is
@@ -74,144 +92,163 @@ const TARGET_FILTER_TYPE = "EntityFilter"
 type Sql = any
 
 /**
- * Build a SQL fragment that ANDs into a base EXISTS subquery on `values`,
- * filtering for a given (entity_id, property_id) lookup with an extra
- * predicate on `v.text` (or none, for pure existence checks).
+ * Result of translating a single operator.
+ *   - `merge`: the operator contributes an inner predicate that gets
+ *     AND-ed with other `merge` predicates inside one shared EXISTS,
+ *     so they must all match the SAME value row.
+ *   - `standalone`: the operator already produced a top-level fragment
+ *     (e.g. `NOT EXISTS (…)` for `isNull: true`) that's AND-ed alongside
+ *     the merged EXISTS at the outer level.
+ *   - `null`: unknown operator — caller falls back to the default resolver.
  */
-function existsFragment(sql: Sql, sourceAlias: Sql, propertyId: string, textPredicate: Sql | null) {
-	const base = sql.fragment`
+type OpResult = {kind: "merge"; innerPred: Sql} | {kind: "standalone"; fragment: Sql} | null
+
+const merge = (innerPred: Sql): OpResult => ({kind: "merge", innerPred})
+const standalone = (fragment: Sql): OpResult => ({kind: "standalone", fragment})
+
+/**
+ * Build the merged EXISTS subquery: a single EXISTS containing all the
+ * `merge`-kind predicates AND-ed together. All predicates apply to the
+ * same value row, which is what guarantees "some single value satisfies
+ * every operator."
+ */
+function buildMergedExists(sql: Sql, sourceAlias: Sql, propertyId: string, innerPreds: Sql[]) {
+	const predClause = innerPreds.length === 1 ? innerPreds[0] : sql.join(innerPreds, sql.fragment` AND `)
+	return sql.fragment`
 		EXISTS (
 			SELECT 1 FROM public.values v
 			WHERE v.entity_id = ${sourceAlias}.id
 			  AND v.property_id = ${sql.value(propertyId)}::uuid
-			  ${textPredicate ?? sql.fragment``}
+			  AND ${predClause}
 			LIMIT 1
 		)
 	`
-	return base
 }
 
-const negate = (sql: Sql, fragment: Sql) => sql.fragment`NOT ${fragment}`
+/**
+ * Standalone "no value exists" fragment, used by `isNull: true`. It
+ * cannot share a row with merge-kind predicates because it asserts the
+ * absence of any qualifying row at all.
+ */
+function buildNoValueFragment(sql: Sql, sourceAlias: Sql, propertyId: string) {
+	return sql.fragment`
+		NOT EXISTS (
+			SELECT 1 FROM public.values v
+			WHERE v.entity_id = ${sourceAlias}.id
+			  AND v.property_id = ${sql.value(propertyId)}::uuid
+			  AND v.text IS NOT NULL
+			LIMIT 1
+		)
+	`
+}
 
 /**
- * Translate a single TextFilter operator + its value into a SQL fragment
- * that semantically matches "this entity has at least one (or zero, for
- * negative ops) value row matching the predicate."
+ * Translate a single TextFilter operator + its value into either an inner
+ * predicate (to merge) or a standalone fragment (to emit at the top level).
  *
- * Returns `null` for unknown operators so the caller skips them rather
- * than failing the whole filter.
+ * Returns `null` for unknown operators so the caller can fall back to the
+ * default resolver. The full set of String operators connection-filter
+ * generates is enumerated explicitly; anything else (e.g. `distinctFrom`,
+ * `inInsensitive`, future additions) takes the slow per-row path.
  *
  * NULL / missing-value semantics for negative operators:
  *   The unrewritten `WHERE entities_name(e) NOT LIKE 'foo'` form excludes
  *   entities without a name, because `NULL NOT LIKE x` evaluates to NULL
  *   under SQL three-valued logic. To preserve that, every "not <op>"
- *   form below uses `EXISTS (… v.text IS NOT NULL AND NOT (<op>))` rather
- *   than `NOT EXISTS (… <op>)` — so a name-less entity (no row) returns
- *   FALSE and is correctly excluded. `isNot` / `notEqualTo` already get
- *   this for free because `v.text <> $val` is NULL on NULL rows.
+ *   below produces `v.text IS NOT NULL AND NOT (<op>)` so a name-less
+ *   entity (no row) returns FALSE and is correctly excluded. `isNot` /
+ *   `notEqualTo` already get this for free because `v.text <> $val` is
+ *   NULL on NULL rows.
  */
-function operatorFragment(sql: Sql, sourceAlias: Sql, propertyId: string, op: string, val: unknown): Sql | null {
-	const exists = (textPred: Sql | null) => existsFragment(sql, sourceAlias, propertyId, textPred)
-
-	const textPred = (cond: Sql) => sql.fragment`AND ${cond}`
-
-	/**
-	 * "Has at least one non-null value where `<inner>` is FALSE." Used by
-	 * negative operators (notIn, notLike, notIncludes, …) so that an
-	 * entity with no value at all does NOT spuriously match.
-	 */
-	const notMatching = (inner: Sql) => exists(textPred(sql.fragment`v.text IS NOT NULL AND NOT (${inner})`))
-
+function operatorPredicate(sql: Sql, sourceAlias: Sql, propertyId: string, op: string, val: unknown): OpResult {
 	const valLiteral = (v: unknown) => sql.value(v as string)
+	// Inner predicate for "v.text IS NOT NULL AND NOT (<inner>)" — the
+	// shape every negative operator needs to preserve SQL NULL semantics.
+	const negPred = (inner: Sql) => sql.fragment`v.text IS NOT NULL AND NOT (${inner})`
 
 	switch (op) {
 		// --- Existence ---
 		case "isNull":
-			// {isNull: true}  → no row exists with non-null text  → entity has no name
-			// {isNull: false} → at least one row with non-null text → entity has a name
+			// {isNull: false} → "entity has at least one non-null value" — merges as a
+			// predicate alongside other ops (so they must all match a non-null row).
+			// {isNull: true}  → "no non-null value exists" — standalone, can't share
+			// a row with merge-kind predicates.
 			return val === true
-				? negate(sql, exists(textPred(sql.fragment`v.text IS NOT NULL`)))
-				: exists(textPred(sql.fragment`v.text IS NOT NULL`))
+				? standalone(buildNoValueFragment(sql, sourceAlias, propertyId))
+				: merge(sql.fragment`v.text IS NOT NULL`)
 
 		// --- Equality ---
 		case "is":
 		case "equalTo":
-			return exists(textPred(sql.fragment`v.text = ${valLiteral(val)}`))
+			return merge(sql.fragment`v.text = ${valLiteral(val)}`)
 		case "isNot":
 		case "notEqualTo":
-			// Special-case `isNot: ""` to "has at least one non-empty text"
-			// rather than the literal "≠ ''" semantics, since callers use
-			// it that way in practice. Both interpretations produce the
-			// same EXISTS form.
-			return exists(textPred(sql.fragment`v.text <> ${valLiteral(val)}`))
+			// `v.text <> $val` is NULL on NULL rows → already excludes them
+			// without an explicit IS NOT NULL.
+			return merge(sql.fragment`v.text <> ${valLiteral(val)}`)
 
-		// --- `equalTo` / `notEqualTo` insensitive variants ---
-		// Repo renames `equalToInsensitive` → `isInsensitive` and
-		// `notEqualToInsensitive` → `isNotInsensitive` via
-		// `connectionFilterOperatorNames` in postgraphile.ts.
+		// --- equalTo / notEqualTo insensitive (renamed via connectionFilterOperatorNames) ---
 		case "isInsensitive":
 		case "equalToInsensitive":
-			return exists(textPred(sql.fragment`lower(v.text) = lower(${valLiteral(val)})`))
+			return merge(sql.fragment`lower(v.text) = lower(${valLiteral(val)})`)
 		case "isNotInsensitive":
 		case "notEqualToInsensitive":
-			return notMatching(sql.fragment`lower(v.text) = lower(${valLiteral(val)})`)
+			return merge(negPred(sql.fragment`lower(v.text) = lower(${valLiteral(val)})`))
 
 		case "in":
-			return exists(textPred(sql.fragment`v.text = ANY(${sql.value(val)}::text[])`))
+			return merge(sql.fragment`v.text = ANY(${sql.value(val)}::text[])`)
 		case "notIn":
-			return notMatching(sql.fragment`v.text = ANY(${sql.value(val)}::text[])`)
+			return merge(negPred(sql.fragment`v.text = ANY(${sql.value(val)}::text[])`))
 
 		// --- Comparisons ---
 		case "lessThan":
-			return exists(textPred(sql.fragment`v.text < ${valLiteral(val)}`))
+			return merge(sql.fragment`v.text < ${valLiteral(val)}`)
 		case "lessThanOrEqualTo":
-			return exists(textPred(sql.fragment`v.text <= ${valLiteral(val)}`))
+			return merge(sql.fragment`v.text <= ${valLiteral(val)}`)
 		case "greaterThan":
-			return exists(textPred(sql.fragment`v.text > ${valLiteral(val)}`))
+			return merge(sql.fragment`v.text > ${valLiteral(val)}`)
 		case "greaterThanOrEqualTo":
-			return exists(textPred(sql.fragment`v.text >= ${valLiteral(val)}`))
+			return merge(sql.fragment`v.text >= ${valLiteral(val)}`)
 
 		// --- Pattern matching (LIKE / ILIKE) ---
 		case "includes":
-			return exists(textPred(sql.fragment`v.text LIKE ${sql.value(`%${val}%`)}`))
+			return merge(sql.fragment`v.text LIKE ${sql.value(`%${val}%`)}`)
 		case "includesInsensitive":
-			return exists(textPred(sql.fragment`v.text ILIKE ${sql.value(`%${val}%`)}`))
+			return merge(sql.fragment`v.text ILIKE ${sql.value(`%${val}%`)}`)
 		case "notIncludes":
-			return notMatching(sql.fragment`v.text LIKE ${sql.value(`%${val}%`)}`)
+			return merge(negPred(sql.fragment`v.text LIKE ${sql.value(`%${val}%`)}`))
 		case "notIncludesInsensitive":
-			return notMatching(sql.fragment`v.text ILIKE ${sql.value(`%${val}%`)}`)
+			return merge(negPred(sql.fragment`v.text ILIKE ${sql.value(`%${val}%`)}`))
 		case "startsWith":
-			return exists(textPred(sql.fragment`v.text LIKE ${sql.value(`${val}%`)}`))
+			return merge(sql.fragment`v.text LIKE ${sql.value(`${val}%`)}`)
 		case "startsWithInsensitive":
-			return exists(textPred(sql.fragment`v.text ILIKE ${sql.value(`${val}%`)}`))
+			return merge(sql.fragment`v.text ILIKE ${sql.value(`${val}%`)}`)
 		case "notStartsWith":
-			return notMatching(sql.fragment`v.text LIKE ${sql.value(`${val}%`)}`)
+			return merge(negPred(sql.fragment`v.text LIKE ${sql.value(`${val}%`)}`))
 		case "notStartsWithInsensitive":
-			return notMatching(sql.fragment`v.text ILIKE ${sql.value(`${val}%`)}`)
+			return merge(negPred(sql.fragment`v.text ILIKE ${sql.value(`${val}%`)}`))
 		case "endsWith":
-			return exists(textPred(sql.fragment`v.text LIKE ${sql.value(`%${val}`)}`))
+			return merge(sql.fragment`v.text LIKE ${sql.value(`%${val}`)}`)
 		case "endsWithInsensitive":
-			return exists(textPred(sql.fragment`v.text ILIKE ${sql.value(`%${val}`)}`))
+			return merge(sql.fragment`v.text ILIKE ${sql.value(`%${val}`)}`)
 		case "notEndsWith":
-			return notMatching(sql.fragment`v.text LIKE ${sql.value(`%${val}`)}`)
+			return merge(negPred(sql.fragment`v.text LIKE ${sql.value(`%${val}`)}`))
 		case "notEndsWithInsensitive":
-			return notMatching(sql.fragment`v.text ILIKE ${sql.value(`%${val}`)}`)
+			return merge(negPred(sql.fragment`v.text ILIKE ${sql.value(`%${val}`)}`))
 		case "like":
-			return exists(textPred(sql.fragment`v.text LIKE ${valLiteral(val)}`))
+			return merge(sql.fragment`v.text LIKE ${valLiteral(val)}`)
 		case "likeInsensitive":
-			return exists(textPred(sql.fragment`v.text ILIKE ${valLiteral(val)}`))
+			return merge(sql.fragment`v.text ILIKE ${valLiteral(val)}`)
 		case "notLike":
-			return notMatching(sql.fragment`v.text LIKE ${valLiteral(val)}`)
+			return merge(negPred(sql.fragment`v.text LIKE ${valLiteral(val)}`))
 		case "notLikeInsensitive":
-			return notMatching(sql.fragment`v.text ILIKE ${valLiteral(val)}`)
+			return merge(negPred(sql.fragment`v.text ILIKE ${valLiteral(val)}`))
 
 		default:
 			// Unknown operator (e.g. distinctFrom, notDistinctFrom,
 			// inInsensitive, *Insensitive comparisons, future additions).
-			// Returning null tells the hybrid resolver in
-			// `EntityComputedTextFilterPlugin` to fall back to the default
-			// per-row entities_<field>() function call for this op only —
-			// preserves correctness; just doesn't get the index speedup.
+			// Caller falls back to the default per-row entities_<field>()
+			// function call for this op only.
 			return null
 	}
 }
@@ -219,15 +256,13 @@ function operatorFragment(sql: Sql, sourceAlias: Sql, propertyId: string, op: st
 /**
  * Build a hybrid resolver for a given (fieldName, propertyId) pair.
  *
- * Per-op dispatch: each operator in the filter bag is tried against our
- * fast-path `operatorFragment`. If we have an EXISTS-form translation it's
- * used; otherwise that single op falls through to `defaultResolve` (the
- * original per-row `entities_<field>()` function-call form), so unknown
- * or rare ops still produce correct SQL — just at the slow speed.
+ * Per-op classification:
+ *   - merge ops contribute predicates collected into ONE EXISTS, so all
+ *     must match the same value row;
+ *   - standalone ops emit their own top-level fragment;
+ *   - unknown ops fall back to the default resolver per-op (correct, slow).
  *
- * `defaultResolve` is the resolver originally registered by
- * `PgConnectionArgFilterComputedColumnsPlugin`; we capture it in the
- * wrapper below.
+ * All produced fragments are AND-joined.
  */
 function buildResolver(
 	propertyId: string,
@@ -240,24 +275,31 @@ function buildResolver(
 		const {sourceAlias, fieldValue} = input
 		if (fieldValue == null || typeof fieldValue !== "object") return null
 
-		const fragments: Sql[] = []
+		const innerPreds: Sql[] = []
+		const standaloneFragments: Sql[] = []
+
 		for (const [op, val] of Object.entries(fieldValue)) {
-			const fastFragment = operatorFragment(sql, sourceAlias, propertyId, op, val)
-			if (fastFragment) {
-				fragments.push(fastFragment)
-				continue
+			const result = operatorPredicate(sql, sourceAlias, propertyId, op, val)
+			if (result == null) {
+				// Unknown op → delegate to the default resolver with a single-op
+				// view of the filter so it produces SQL only for this one op.
+				const slowFragment = defaultResolve({...input, fieldValue: {[op]: val}})
+				if (slowFragment != null) standaloneFragments.push(slowFragment)
+			} else if (result.kind === "merge") {
+				innerPreds.push(result.innerPred)
+			} else {
+				standaloneFragments.push(result.fragment)
 			}
-			// Unknown op → delegate to the default resolver with a single-op
-			// view of the filter so it produces SQL only for this one op.
-			const slowFragment = defaultResolve({...input, fieldValue: {[op]: val}})
-			if (slowFragment != null) fragments.push(slowFragment)
+		}
+
+		const fragments = [...standaloneFragments]
+		if (innerPreds.length > 0) {
+			fragments.push(buildMergedExists(sql, sourceAlias, propertyId, innerPreds))
 		}
 
 		if (fragments.length === 0) return null
 		if (fragments.length === 1) return fragments[0]
-		// Multiple operators in one filter object are AND-ed together
-		// (e.g. `{isNull: false, isNot: ""}` means "has a value AND it's not '").
-		return sql.fragment`(${sql.join(fragments, " AND ")})`
+		return sql.fragment`(${sql.join(fragments, sql.fragment` AND `)})`
 	}
 }
 
@@ -304,5 +346,6 @@ export const __testExports = {
 	NAME_PROPERTY_ID,
 	DESCRIPTION_PROPERTY_ID,
 	buildResolver,
-	operatorFragment,
+	operatorPredicate,
+	buildMergedExists,
 }
