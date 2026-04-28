@@ -147,6 +147,35 @@ describe("operatorFragment", () => {
 		expect(f).toBeNull()
 	})
 
+	// --- Insensitive equality ops (renamed via connectionFilterOperatorNames) ---
+
+	it("isInsensitive (renamed equalToInsensitive) → EXISTS with lower(v.text) = lower($val)", () => {
+		const f = operatorFragment(sql, sourceAlias, NAME_PROPERTY_ID, "isInsensitive", "Alice")
+		const s = flatten(f)
+		expect(s).toContain("EXISTS")
+		expect(s).toContain("lower(v.text) = lower(")
+	})
+
+	it("equalToInsensitive (raw) also handled", () => {
+		const f = operatorFragment(sql, sourceAlias, NAME_PROPERTY_ID, "equalToInsensitive", "Alice")
+		expect(flatten(f)).toContain("lower(v.text) = lower(")
+	})
+
+	// --- notStartsWith / notEndsWith pattern variants ---
+
+	it("notStartsWith → EXISTS asserting text IS NOT NULL AND NOT LIKE 'val%'", () => {
+		const s = flatten(operatorFragment(sql, sourceAlias, NAME_PROPERTY_ID, "notStartsWith", "Bob"))
+		expect(s).toContain("v.text IS NOT NULL")
+		expect(s).toContain("v.text LIKE")
+		expect(s).toContain('<<"Bob%">>')
+	})
+
+	it("notEndsWithInsensitive → EXISTS with ILIKE", () => {
+		const s = flatten(operatorFragment(sql, sourceAlias, NAME_PROPERTY_ID, "notEndsWithInsensitive", "x"))
+		expect(s).toContain("v.text ILIKE")
+		expect(s).toContain('<<"%x">>')
+	})
+
 	it("uses the per-field property ID (description vs name)", () => {
 		const fName = operatorFragment(sql, sourceAlias, NAME_PROPERTY_ID, "isNull", false)
 		const fDesc = operatorFragment(sql, sourceAlias, DESCRIPTION_PROPERTY_ID, "isNull", false)
@@ -174,8 +203,14 @@ describe("operatorFragment", () => {
 		["notIn", ["a", "b"]],
 		["notIncludes", "foo"],
 		["notIncludesInsensitive", "foo"],
+		["notStartsWith", "foo"],
+		["notStartsWithInsensitive", "foo"],
+		["notEndsWith", "foo"],
+		["notEndsWithInsensitive", "foo"],
 		["notLike", "%foo%"],
 		["notLikeInsensitive", "%foo%"],
+		["isNotInsensitive", "foo"],
+		["notEqualToInsensitive", "foo"],
 	]
 
 	for (const [op, val] of NEGATIVE_OP_FIXTURES) {
@@ -197,7 +232,8 @@ describe("operatorFragment", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildResolver", () => {
-	const resolver = buildResolver(NAME_PROPERTY_ID, sql)
+	const noopDefault = vi.fn(() => null)
+	const resolver = buildResolver(NAME_PROPERTY_ID, sql, noopDefault)
 
 	it("single operator returns a single fragment", () => {
 		const out = resolver({sourceAlias, fieldValue: {isNull: false}})
@@ -222,12 +258,39 @@ describe("buildResolver", () => {
 		expect(resolver({sourceAlias, fieldValue: {}})).toBeNull()
 	})
 
-	it("ignores unknown operators but still emits known ones", () => {
-		const out = resolver({sourceAlias, fieldValue: {isNull: false, distinctFrom: "x"}})
+	it("delegates unknown operators to the default resolver, AND-joins with fast-path ops", () => {
+		const defaultResolve = vi.fn((args) => {
+			// Echo a recognizable marker so we can verify the call shape.
+			return sql.fragment`<<DEFAULT(${sql.value(JSON.stringify(args.fieldValue))})>>`
+		})
+		const r = buildResolver(NAME_PROPERTY_ID, sql, defaultResolve)
+		const out = r({sourceAlias, fieldValue: {isNull: false, distinctFrom: "x"}, foo: "bar"})
+
 		expect(out).not.toBeNull()
 		const s = flatten(out)
+		// fast-path part:
 		expect(s).toContain("v.text IS NOT NULL")
-		expect(s).not.toContain("distinctFrom")
+		// fallback part (default got called for the single unknown op only):
+		expect(defaultResolve).toHaveBeenCalledTimes(1)
+		expect(defaultResolve.mock.calls[0]?.[0]).toMatchObject({
+			sourceAlias,
+			fieldValue: {distinctFrom: "x"},
+			foo: "bar", // other input fields preserved
+		})
+		expect(s).toContain("DEFAULT")
+		// Composition is AND.
+		expect(s).toContain(" AND ")
+	})
+
+	it("falls through entirely to default when every op is unknown", () => {
+		const defaultResolve = vi.fn(() => sql.fragment`<<DEFAULT_ONLY>>`)
+		const r = buildResolver(NAME_PROPERTY_ID, sql, defaultResolve)
+		const out = r({sourceAlias, fieldValue: {distinctFrom: "x", notDistinctFrom: "y"}})
+
+		expect(out).not.toBeNull()
+		// Two unknown ops → two calls to default → AND-joined.
+		expect(defaultResolve).toHaveBeenCalledTimes(2)
+		expect(flatten(out)).toContain("DEFAULT_ONLY")
 	})
 })
 

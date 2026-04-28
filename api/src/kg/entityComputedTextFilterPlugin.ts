@@ -145,6 +145,17 @@ function operatorFragment(sql: Sql, sourceAlias: Sql, propertyId: string, op: st
 			// same EXISTS form.
 			return exists(textPred(sql.fragment`v.text <> ${valLiteral(val)}`))
 
+		// --- `equalTo` / `notEqualTo` insensitive variants ---
+		// Repo renames `equalToInsensitive` → `isInsensitive` and
+		// `notEqualToInsensitive` → `isNotInsensitive` via
+		// `connectionFilterOperatorNames` in postgraphile.ts.
+		case "isInsensitive":
+		case "equalToInsensitive":
+			return exists(textPred(sql.fragment`lower(v.text) = lower(${valLiteral(val)})`))
+		case "isNotInsensitive":
+		case "notEqualToInsensitive":
+			return notMatching(sql.fragment`lower(v.text) = lower(${valLiteral(val)})`)
+
 		case "in":
 			return exists(textPred(sql.fragment`v.text = ANY(${sql.value(val)}::text[])`))
 		case "notIn":
@@ -173,10 +184,18 @@ function operatorFragment(sql: Sql, sourceAlias: Sql, propertyId: string, op: st
 			return exists(textPred(sql.fragment`v.text LIKE ${sql.value(`${val}%`)}`))
 		case "startsWithInsensitive":
 			return exists(textPred(sql.fragment`v.text ILIKE ${sql.value(`${val}%`)}`))
+		case "notStartsWith":
+			return notMatching(sql.fragment`v.text LIKE ${sql.value(`${val}%`)}`)
+		case "notStartsWithInsensitive":
+			return notMatching(sql.fragment`v.text ILIKE ${sql.value(`${val}%`)}`)
 		case "endsWith":
 			return exists(textPred(sql.fragment`v.text LIKE ${sql.value(`%${val}`)}`))
 		case "endsWithInsensitive":
 			return exists(textPred(sql.fragment`v.text ILIKE ${sql.value(`%${val}`)}`))
+		case "notEndsWith":
+			return notMatching(sql.fragment`v.text LIKE ${sql.value(`%${val}`)}`)
+		case "notEndsWithInsensitive":
+			return notMatching(sql.fragment`v.text ILIKE ${sql.value(`%${val}`)}`)
 		case "like":
 			return exists(textPred(sql.fragment`v.text LIKE ${valLiteral(val)}`))
 		case "likeInsensitive":
@@ -187,20 +206,35 @@ function operatorFragment(sql: Sql, sourceAlias: Sql, propertyId: string, op: st
 			return notMatching(sql.fragment`v.text ILIKE ${valLiteral(val)}`)
 
 		default:
-			// Unknown operator (e.g. distinctFrom, range ops). Fall through
-			// to the default proc-call resolver by returning null — the
-			// wrapped resolver will signal "not handled".
+			// Unknown operator (e.g. distinctFrom, notDistinctFrom,
+			// inInsensitive, *Insensitive comparisons, future additions).
+			// Returning null tells the hybrid resolver in
+			// `EntityComputedTextFilterPlugin` to fall back to the default
+			// per-row entities_<field>() function call for this op only —
+			// preserves correctness; just doesn't get the index speedup.
 			return null
 	}
 }
 
 /**
- * Build the resolver function we register with connection-filter for a
- * given (fieldName, propertyId) pair. The resolver is called once per
- * filter usage with the `fieldValue` being the operators bag like
- * `{isNull: false, isNot: ""}`.
+ * Build a hybrid resolver for a given (fieldName, propertyId) pair.
+ *
+ * Per-op dispatch: each operator in the filter bag is tried against our
+ * fast-path `operatorFragment`. If we have an EXISTS-form translation it's
+ * used; otherwise that single op falls through to `defaultResolve` (the
+ * original per-row `entities_<field>()` function-call form), so unknown
+ * or rare ops still produce correct SQL — just at the slow speed.
+ *
+ * `defaultResolve` is the resolver originally registered by
+ * `PgConnectionArgFilterComputedColumnsPlugin`; we capture it in the
+ * wrapper below.
  */
-function buildResolver(propertyId: string, sql: Sql) {
+function buildResolver(
+	propertyId: string,
+	sql: Sql,
+	// biome-ignore lint/suspicious/noExplicitAny: connection-filter resolver shape
+	defaultResolve: any,
+) {
 	// biome-ignore lint/suspicious/noExplicitAny: connection-filter resolver shape
 	return (input: any): Sql | null => {
 		const {sourceAlias, fieldValue} = input
@@ -208,8 +242,15 @@ function buildResolver(propertyId: string, sql: Sql) {
 
 		const fragments: Sql[] = []
 		for (const [op, val] of Object.entries(fieldValue)) {
-			const fragment = operatorFragment(sql, sourceAlias, propertyId, op, val)
-			if (fragment) fragments.push(fragment)
+			const fastFragment = operatorFragment(sql, sourceAlias, propertyId, op, val)
+			if (fastFragment) {
+				fragments.push(fastFragment)
+				continue
+			}
+			// Unknown op → delegate to the default resolver with a single-op
+			// view of the filter so it produces SQL only for this one op.
+			const slowFragment = defaultResolve({...input, fieldValue: {[op]: val}})
+			if (slowFragment != null) fragments.push(slowFragment)
 		}
 
 		if (fragments.length === 0) return null
@@ -237,23 +278,19 @@ export const EntityComputedTextFilterPlugin = (builder: any) => {
 			return build
 		}
 
-		const overrides = new Map<string, ReturnType<typeof buildResolver>>()
-		for (const [fieldName, propertyId] of Object.entries(PROPERTY_FOR_FIELD)) {
-			overrides.set(`${TARGET_FILTER_TYPE}.${fieldName}`, buildResolver(propertyId, sql))
-		}
-
 		// Replace `build.connectionFilterRegisterResolver` with a wrapper
-		// that substitutes our resolver for known (typeName, fieldName)
-		// pairs. Mutates `build` directly because `build.extend` would
-		// trip on the existing key.
+		// that substitutes a hybrid resolver for known (typeName, fieldName)
+		// pairs — falling back to the default resolver per-op for any ops
+		// our fast-path doesn't handle. Mutates `build` directly because
+		// `build.extend` would trip on the existing key.
 		// biome-ignore lint/suspicious/noExplicitAny: registering with untyped graphile callback
-		build.connectionFilterRegisterResolver = (typeName: string, fieldName: string, resolve: any) => {
-			const key = `${typeName}.${fieldName}`
-			const override = overrides.get(key)
-			if (override) {
-				return original(typeName, fieldName, override)
+		build.connectionFilterRegisterResolver = (typeName: string, fieldName: string, defaultResolve: any) => {
+			const propertyId = typeName === TARGET_FILTER_TYPE ? PROPERTY_FOR_FIELD[fieldName] : undefined
+			if (propertyId) {
+				const hybrid = buildResolver(propertyId, sql, defaultResolve)
+				return original(typeName, fieldName, hybrid)
 			}
-			return original(typeName, fieldName, resolve)
+			return original(typeName, fieldName, defaultResolve)
 		}
 
 		return build
