@@ -1360,7 +1360,7 @@ mod tests {
             score,
             Uuid::new_v4(),
         ))];
-        let result = filter_protected_relations(ops);
+        let result = filter_protected_relations(ops, &NON_ROOT_SPACE_ID);
         assert!(result.is_empty());
     }
 
@@ -1372,7 +1372,7 @@ mod tests {
             Uuid::new_v4(),
             score,
         ))];
-        let result = filter_protected_relations(ops);
+        let result = filter_protected_relations(ops, &NON_ROOT_SPACE_ID);
         assert!(result.is_empty());
     }
 
