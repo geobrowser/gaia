@@ -238,9 +238,25 @@ export class OpenSearchClient implements SearchClient {
 
 	/**
 	 * Check if a space ID is the cached root space.
+	 *
+	 * Both sides are normalized to dashless before comparison so the check
+	 * works regardless of which format the caller supplied or which format
+	 * the topology service returned. Without this, a caller passing the
+	 * dashed root ID would fail to match a dashless cached root (and vice
+	 * versa) — silently dropping the canonical-graph rewrite in
+	 * `buildAdditionalSpacesFilter` and the SPACE-scope short-circuits.
+	 *
+	 * Falls back to strict equality if either value isn't a valid UUID
+	 * (shouldn't happen in normal flow — route handlers validate UUIDs
+	 * upstream — but the cache could be set from an unvalidated source).
 	 */
 	private isRootSpace(spaceId: string): boolean {
-		return this.rootSpaceId !== null && spaceId === this.rootSpaceId
+		if (this.rootSpaceId === null) return false
+		try {
+			return normalizeUuid(spaceId) === normalizeUuid(this.rootSpaceId)
+		} catch {
+			return spaceId === this.rootSpaceId
+		}
 	}
 
 	/**
@@ -537,6 +553,7 @@ export class OpenSearchClient implements SearchClient {
 		// Check if the query is empty or whitespace-only
 		const trimmedQuery = query.query.trim()
 		const excludeTypeIds = query.exclude_type_ids
+		const additionalSpaceIds = query.additional_space_ids
 		if (trimmedQuery.length === 0) {
 			// For empty queries, return top ranked results based on scope
 			return await this.buildTopRankedQuery(
@@ -546,6 +563,7 @@ export class OpenSearchClient implements SearchClient {
 				includeDeleted,
 				excludeTypeIds,
 				includeNonCanonical,
+				additionalSpaceIds,
 			)
 		}
 
@@ -559,6 +577,7 @@ export class OpenSearchClient implements SearchClient {
 				includeDeleted,
 				excludeTypeIds,
 				includeNonCanonical,
+				additionalSpaceIds,
 			)
 		}
 
@@ -574,6 +593,7 @@ export class OpenSearchClient implements SearchClient {
 					includeDeleted,
 					excludeTypeIds,
 					includeNonCanonical,
+					additionalSpaceIds,
 				)
 
 			case "GLOBAL_BY_SPACE_SCORE":
@@ -583,6 +603,7 @@ export class OpenSearchClient implements SearchClient {
 					includeDeleted,
 					excludeTypeIds,
 					includeNonCanonical,
+					additionalSpaceIds,
 				)
 
 			case "GLOBAL_BY_ENTITY_SPACE_SCORE":
@@ -592,6 +613,7 @@ export class OpenSearchClient implements SearchClient {
 					includeDeleted,
 					excludeTypeIds,
 					includeNonCanonical,
+					additionalSpaceIds,
 				)
 
 			case "SPACE_SINGLE": {
@@ -643,6 +665,7 @@ export class OpenSearchClient implements SearchClient {
 					includeDeleted,
 					excludeTypeIds,
 					includeNonCanonical,
+					additionalSpaceIds,
 				)
 		}
 	}
@@ -663,6 +686,7 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
+		additionalSpaceIds?: string[],
 	): Promise<object> {
 		// Match both dashed and dashless forms (index may contain either during migration)
 		const baseUuidQuery = {
@@ -671,11 +695,13 @@ export class OpenSearchClient implements SearchClient {
 
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
+		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		const buildBoolQuery = () => ({
@@ -732,14 +758,17 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
+		additionalSpaceIds?: string[],
 	): Promise<object> {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
+		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		const buildBoolClause = () => ({
@@ -1069,14 +1098,17 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
+		additionalSpaceIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
+		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
@@ -1108,14 +1140,17 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
+		additionalSpaceIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
+		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
@@ -1147,14 +1182,17 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
+		additionalSpaceIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
+		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
@@ -1362,6 +1400,34 @@ export class OpenSearchClient implements SearchClient {
 	 */
 	buildCanonicalFilter(): object {
 		return {term: {in_canonical_graph: true}}
+	}
+
+	/**
+	 * Build the additional-spaces eligibility filter.
+	 *
+	 * If the canonical-graph root space ID appears in the list, it is rewritten
+	 * to `in_canonical_graph: true` (i.e. "the whole canonical graph"); other
+	 * IDs become a `terms: {space_id: ...}` clause. The two are OR'd via
+	 * `bool.should` so the caller's full set is treated as a single
+	 * eligibility filter.
+	 *
+	 * Returns `null` when there's nothing to add (no IDs supplied, or all
+	 * supplied IDs were the root and thus collapsed to one canonical clause —
+	 * caller can pick one term directly when only one clause is produced).
+	 */
+	buildAdditionalSpacesFilter(additionalSpaceIds?: string[]): object | null {
+		if (!additionalSpaceIds || additionalSpaceIds.length === 0) return null
+
+		const rootIncluded = additionalSpaceIds.some((id) => this.isRootSpace(id))
+		const nonRootIds = additionalSpaceIds.filter((id) => !this.isRootSpace(id))
+
+		const canonicalClause = rootIncluded ? this.buildCanonicalFilter() : null
+		const spaceIdsClause = nonRootIds.length > 0 ? {terms: {space_id: nonRootIds.flatMap(uuidTermVariants)}} : null
+
+		if (canonicalClause && spaceIdsClause) {
+			return {bool: {should: [canonicalClause, spaceIdsClause], minimum_should_match: 1}}
+		}
+		return canonicalClause ?? spaceIdsClause
 	}
 
 	/**
