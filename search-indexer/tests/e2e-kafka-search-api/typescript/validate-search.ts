@@ -3081,9 +3081,9 @@ class SearchValidator {
   //       result = canonical-graph entities ∪ (entities in any listed space)
   //   - listed-space entities appear regardless of their canonical-graph status
   //   - the canonical-graph root is naturally idempotent (already implicit)
-  //   - include_non_canonical=false is a no-op when additional_space_ids is set
-  //     (the asid filter takes over and admits non-canonical entities from the
-  //     listed spaces).
+  //   - include_non_canonical=false is the more restrictive constraint and
+  //     wins over additional_space_ids: when both are set, the result is just
+  //     canonical-only (asid is suppressed).
   // -----------------------------------------------------------------------
 
   /** Baseline: include_non_canonical=false — only the canonical AsidProbe is returned. */
@@ -3225,13 +3225,13 @@ class SearchValidator {
   }
 
   /**
-   * include_non_canonical=false is a no-op when additional_space_ids is set —
-   * the asid filter already includes the canonical-graph anchor and admits
-   * non-canonical entities from the listed spaces, overriding the
-   * canonical-only restriction.
+   * include_non_canonical=false is the more restrictive constraint and wins
+   * over additional_space_ids: when both are set, the result is canonical-only
+   * (the asid filter is suppressed entirely as an OpenSearch optimisation —
+   * canonical AND (canonical OR listed) collapses to canonical).
    */
-  async test55b_AdditionalSpaceIdsOverridesIncludeNonCanonicalFalse(): Promise<void> {
-    console.log(`\n${BLUE}Test 55b: include_non_canonical=false is a no-op when additional_space_ids is set${NC}`);
+  async test55b_IncludeNonCanonicalFalseSuppressesAsid(): Promise<void> {
+    console.log(`\n${BLUE}Test 55b: include_non_canonical=false suppresses additional_space_ids (canonical-only wins)${NC}`);
 
     const response = await this.search({
       query: 'AsidProbeEntity',
@@ -3240,16 +3240,12 @@ class SearchValidator {
       additional_space_ids: [TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID],
     });
 
-    const ids = new Set(response.results.map(r => r.entityId));
-    const expected = new Set([
-      TEST_ENTITIES.ASID_CANON_ENTITY_ID,
-      TEST_ENTITIES.ASID_X_ENTITY_ID,
-    ]);
-    const correct = ids.size === expected.size && [...expected].every(id => ids.has(id));
-    this.addResult('test55b_include_non_canonical_false_is_noop', correct,
-      correct
-        ? `include_non_canonical=false ignored: returns canonical + ASID_X (ASID_X is non-canonical but admitted via asid)`
-        : `expected {ASID_CANON, ASID_X}, got [${[...ids].join(', ')}]`);
+    const ids = response.results.map(r => r.entityId);
+    const onlyCanonical = ids.length === 1 && ids[0] === TEST_ENTITIES.ASID_CANON_ENTITY_ID;
+    this.addResult('test55b_include_non_canonical_false_suppresses_asid', onlyCanonical,
+      onlyCanonical
+        ? `include_non_canonical=false wins: returns canonical-only (ASID_X suppressed despite being in additional_space_ids)`
+        : `expected only ASID_CANON, got [${ids.join(', ')}]`);
   }
 
   /** SPACE_SINGLE scope rejects additional_space_ids. */
@@ -3846,7 +3842,7 @@ async function main() {
     await validator.test53_AdditionalSpaceIdsCanonicalPlusMultipleExtraSpaces();
     await validator.test54_AdditionalSpaceIdsCanonicalRootRewrite();
     await validator.test55_AdditionalSpaceIdsCanonicalRootPlusExtra();
-    await validator.test55b_AdditionalSpaceIdsOverridesIncludeNonCanonicalFalse();
+    await validator.test55b_IncludeNonCanonicalFalseSuppressesAsid();
     await validator.test56_AdditionalSpaceIdsRejectedOnSpaceScope();
     await validator.test57_AdditionalSpaceIdsRejectsInvalidUuid();
     await validator.test58_AdditionalSpaceIdsRejectsOverLimit();

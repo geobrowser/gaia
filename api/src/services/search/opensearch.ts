@@ -699,11 +699,14 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
-		// When additional_space_ids is set, the asid filter already includes the canonical-graph
-		// anchor (canonical OR listed). Skip the include_non_canonical=false redundant AND.
-		if (!includeNonCanonical && !additionalSpacesFilter) filters.push(this.buildCanonicalFilter())
+		// include_non_canonical=false is the more restrictive constraint: when set,
+		// the result is canonical-only regardless of additional_space_ids. The asid
+		// filter (canonical OR listed) AND'd with canonical-only collapses to just
+		// canonical-only — skip the asid filter entirely to save the bool.should
+		// evaluation in OpenSearch.
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
-		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
+		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		const buildBoolQuery = () => ({
@@ -768,11 +771,14 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
-		// When additional_space_ids is set, the asid filter already includes the canonical-graph
-		// anchor (canonical OR listed). Skip the include_non_canonical=false redundant AND.
-		if (!includeNonCanonical && !additionalSpacesFilter) filters.push(this.buildCanonicalFilter())
+		// include_non_canonical=false is the more restrictive constraint: when set,
+		// the result is canonical-only regardless of additional_space_ids. The asid
+		// filter (canonical OR listed) AND'd with canonical-only collapses to just
+		// canonical-only — skip the asid filter entirely to save the bool.should
+		// evaluation in OpenSearch.
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
-		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
+		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		const buildBoolClause = () => ({
@@ -1110,11 +1116,14 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
-		// When additional_space_ids is set, the asid filter already includes the canonical-graph
-		// anchor (canonical OR listed). Skip the include_non_canonical=false redundant AND.
-		if (!includeNonCanonical && !additionalSpacesFilter) filters.push(this.buildCanonicalFilter())
+		// include_non_canonical=false is the more restrictive constraint: when set,
+		// the result is canonical-only regardless of additional_space_ids. The asid
+		// filter (canonical OR listed) AND'd with canonical-only collapses to just
+		// canonical-only — skip the asid filter entirely to save the bool.should
+		// evaluation in OpenSearch.
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
-		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
+		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
@@ -1154,11 +1163,14 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
-		// When additional_space_ids is set, the asid filter already includes the canonical-graph
-		// anchor (canonical OR listed). Skip the include_non_canonical=false redundant AND.
-		if (!includeNonCanonical && !additionalSpacesFilter) filters.push(this.buildCanonicalFilter())
+		// include_non_canonical=false is the more restrictive constraint: when set,
+		// the result is canonical-only regardless of additional_space_ids. The asid
+		// filter (canonical OR listed) AND'd with canonical-only collapses to just
+		// canonical-only — skip the asid filter entirely to save the bool.should
+		// evaluation in OpenSearch.
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
-		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
+		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
@@ -1198,11 +1210,14 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
-		// When additional_space_ids is set, the asid filter already includes the canonical-graph
-		// anchor (canonical OR listed). Skip the include_non_canonical=false redundant AND.
-		if (!includeNonCanonical && !additionalSpacesFilter) filters.push(this.buildCanonicalFilter())
+		// include_non_canonical=false is the more restrictive constraint: when set,
+		// the result is canonical-only regardless of additional_space_ids. The asid
+		// filter (canonical OR listed) AND'd with canonical-only collapses to just
+		// canonical-only — skip the asid filter entirely to save the bool.should
+		// evaluation in OpenSearch.
+		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
-		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
+		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {

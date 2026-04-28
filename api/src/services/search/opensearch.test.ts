@@ -1104,5 +1104,46 @@ describe("OpenSearchClient", () => {
 			})
 			expect(JSON.stringify(after)).toBe(JSON.stringify(before))
 		})
+
+		it("suppresses additional_space_ids when include_non_canonical=false (canonical-only wins)", async () => {
+			setRoot(client, ROOT_ID)
+			// With both supplied, the asid filter must NOT be added — the
+			// canonical-only filter is the sole eligibility constraint and the
+			// asid clause is redundant (canonical AND (canonical OR listed) = canonical).
+			const body = (await client.buildSearchBody({
+				query: "test",
+				scope: "GLOBAL",
+				additional_space_ids: [SPACE_A, SPACE_B],
+				include_non_canonical: false,
+			})) as Record<string, unknown>
+
+			const filters = extractFunctionScoreFilters(body)
+			// Bare canonical-only filter must be present.
+			expect(filters).toContainEqual({term: {in_canonical_graph: true}})
+			// The asid bool.should must NOT be present in the filters array.
+			const asidLeak = filters.find((f) => {
+				const should = (f as {bool?: {should?: object[]}}).bool?.should
+				return Array.isArray(should) && should.some((c) => "terms" in c && (c as {terms: {space_id?: unknown}}).terms.space_id)
+			})
+			expect(asidLeak).toBeUndefined()
+		})
+
+		it("equivalent body for include_non_canonical=false with vs without additional_space_ids", async () => {
+			setRoot(client, ROOT_ID)
+			const without = await client.buildSearchBody({
+				query: "test",
+				scope: "GLOBAL",
+				include_non_canonical: false,
+			})
+			const with_ = await client.buildSearchBody({
+				query: "test",
+				scope: "GLOBAL",
+				additional_space_ids: [SPACE_A, SPACE_B],
+				include_non_canonical: false,
+			})
+			// Body must be byte-identical: the asid clause adds nothing when
+			// canonical-only wins.
+			expect(JSON.stringify(with_)).toBe(JSON.stringify(without))
+		})
 	})
 })
