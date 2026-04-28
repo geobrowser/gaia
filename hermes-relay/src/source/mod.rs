@@ -2,7 +2,7 @@
 //!
 //! Event builders mirror Space Registry contract actions:
 //! - `personal_space_registered` / `dao_space_initialized` → SPACE_ID_REGISTERED + SPACE_TYPE_DECLARED
-//! - `subspace_verified` / `subspace_related` / `subspace_topic_declared` → trust events
+//! - `subspace_verified` / `subspace_related` / `subspace_topic_set` → trust events
 //! - `edit_published` → EDITS_PUBLISHED
 //!
 //! # Example

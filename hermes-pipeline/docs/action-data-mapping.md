@@ -198,14 +198,17 @@ This action triggers an internal `createProposal()` which emits PROPOSAL_CREATED
 
 | Action | Kafka Topic | Proto Message |
 |--------|-------------|---------------|
-| TOPIC_DECLARED | `space.topics` | `HermesTopicDeclared` |
+| TOPIC_SET | `space.topics` | `HermesTopicDeclared` |
 
-#### TOPIC_DECLARED
+#### TOPIC_SET
 
 **Onchain:**
-- Action: `keccak256('GOVERNANCE.TOPIC_DECLARED')`
+- Action: `keccak256('GOVERNANCE.TOPIC_SET')`
 - Topic: `bytes32(bytes16(topicId) | padding)`
 - Data: optional topic metadata payload
+
+> Note: the wire-format proto stays `HermesTopicDeclared` for Kafka consumer
+> compatibility. Only the onchain action selector renamed in Governance V2.
 
 **Proto Output:** `HermesTopicDeclared`
 | Field | Source | Type |
@@ -353,10 +356,10 @@ This action triggers an internal `createProposal()` which emits PROPOSAL_CREATED
 |--------|-------------|------------------------|------------------------|
 | SUBSPACE_VERIFIED | `space.trust.extensions` | `VerifiedExtension` | `VERIFIED` |
 | SUBSPACE_RELATED | `space.trust.extensions` | `RelatedExtension` | `RELATED` |
-| SUBSPACE_TOPIC_DECLARED | `space.trust.extensions` | `SubtopicExtension` | `SUBTOPIC` |
+| SUBSPACE_TOPIC_SET | `space.trust.extensions` | `SubtopicExtension` | `SUBTOPIC` |
 | SUBSPACE_UNVERIFIED | `space.trust.extensions` | `VerifiedRemoval` | `VERIFIED_REMOVAL` |
 | SUBSPACE_UNRELATED | `space.trust.extensions` | `RelatedRemoval` | `RELATED_REMOVAL` |
-| SUBSPACE_TOPIC_REMOVED | `space.trust.extensions` | `SubtopicRemoval` | `SUBTOPIC_REMOVAL` |
+| SUBSPACE_TOPIC_UNSET | `space.trust.extensions` | `SubtopicRemoval` | `SUBTOPIC_REMOVAL` |
 
 
 #### SUBSPACE_VERIFIED / SUBSPACE_RELATED / SUBSPACE_UNVERIFIED / SUBSPACE_UNRELATED
@@ -375,10 +378,10 @@ ZC16: Solidity `bytes32(bytes16)` right-pads, so the bytes16 value occupies `[0.
 | `extension` | Action type → oneof variant | `VerifiedExtension` / `RelatedExtension` / `VerifiedRemoval` / `RelatedRemoval` |
 | `extension.*.target_space_id` | `topic[0..16]` | bytes (16) |
 
-#### SUBSPACE_TOPIC_DECLARED / SUBSPACE_TOPIC_REMOVED
+#### SUBSPACE_TOPIC_SET / SUBSPACE_TOPIC_UNSET
 
 **Onchain:**
-- Action: `keccak256('GOVERNANCE.SUBSPACE_TOPIC_DECLARED')` / `SUBSPACE_TOPIC_REMOVED`
+- Action: `keccak256('GOVERNANCE.SUBSPACE_TOPIC_SET')` / `SUBSPACE_TOPIC_UNSET`
 - Topic: `[subspace_id: 16 bytes | topic_id: 16 bytes]`
 - Data: empty
 

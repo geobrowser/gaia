@@ -26,10 +26,10 @@ This transformer is part of the Hermes architecture (see `docs/architecture.md`)
 |-------|-------------|-------------|
 | `SUBSPACE_VERIFIED` | Verified trust extensions | `space.trust.extensions` |
 | `SUBSPACE_RELATED` | Related trust extensions | `space.trust.extensions` |
-| `SUBSPACE_TOPIC_DECLARED` | Topic-based trust extensions | `space.trust.extensions` |
+| `SUBSPACE_TOPIC_SET` | Topic-based trust extensions | `space.trust.extensions` |
 | `SUBSPACE_UNVERIFIED` | Verified trust removals | `space.trust.extensions` |
 | `SUBSPACE_UNRELATED` | Related trust removals | `space.trust.extensions` |
-| `SUBSPACE_TOPIC_REMOVED` | Topic trust removals | `space.trust.extensions` |
+| `SUBSPACE_TOPIC_UNSET` | Topic trust removals | `space.trust.extensions` |
 
 ### Membership
 
@@ -54,7 +54,7 @@ This transformer is part of the Hermes architecture (see `docs/architecture.md`)
 
 | Event | Description | Kafka Topic |
 |-------|-------------|-------------|
-| `TOPIC_DECLARED` | Topic declared by space | `space.topics` |
+| `TOPIC_SET` | Topic set by space | `space.topics` |
 
 ### Governance
 
@@ -201,9 +201,9 @@ The pipeline is organized into modules that handle specific action categories:
 |--------|---------|--------------|
 | `spaces` | `SPACE_REGISTERED` | `space.creations` |
 | `membership` | `EDITOR_ADDED/REMOVED`, `MEMBER_ADDED/REMOVED`, `SPACE_LEFT` | `space.membership` |
-| `trust` | `SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED/REMOVED` | `space.trust.extensions` |
+| `trust` | `SUBSPACE_VERIFIED/RELATED/TOPIC_SET/UNSET` | `space.trust.extensions` |
 | `moderation` | `EDITOR_FLAGGED/UNFLAGGED`, `FLAGGED/UNFLAGGED` | `space.moderation` |
-| `topics` | `TOPIC_DECLARED` | `space.topics` |
+| `topics` | `TOPIC_SET` | `space.topics` |
 | `governance` | `PROPOSAL_CREATED/VOTED/EXECUTED` | `space.governance` |
 | `voting` | `UPVOTED/DOWNVOTED/UNVOTED` | `curation.votes` |
 | `edits` | `EDITS_PUBLISHED` | `knowledge.edits` |

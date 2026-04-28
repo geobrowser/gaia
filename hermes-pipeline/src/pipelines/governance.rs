@@ -359,15 +359,15 @@ fn decode_ping_governance_action(calldata: &[u8]) -> Option<proposal_action::Act
     };
 
     // ZC16 topic layout depends on action type:
-    //   Space topic actions (topic declared/removed): bytes32(bytes16 topicId)
+    //   Space topic actions (topic set/unset): bytes32(bytes16 topicId)
     //     → topic_id in [0..16], zero-padding in [16..32]
     //   Edge actions (verified/related/etc): bytes32(bytes16 targetSpaceId)
     //     → target in [0..16], zero-padding in [16..32]
-    //   Topic actions (topic_declared/removed): [subspace_id: 16 | topic_id: 16]
+    //   Subspace topic actions (subspace_topic_set/unset): [subspace_id: 16 | topic_id: 16]
     //     → topic_id in [16..32]
 
     match args.action {
-        x if x == actions::TOPIC_DECLARED => {
+        x if x == actions::TOPIC_SET => {
             let target = args.topic[0..16].to_vec();
             if target.iter().all(|b| *b == 0) {
                 warn!("All-zero target ID in ping set-topic action, storing as Unknown");
@@ -377,7 +377,7 @@ fn decode_ping_governance_action(calldata: &[u8]) -> Option<proposal_action::Act
                 target_topic_id: target,
             }))
         }
-        x if x == actions::TOPIC_REMOVED => {
+        x if x == actions::TOPIC_UNSET => {
             let target = args.topic[0..16].to_vec();
             if target.iter().all(|b| *b == 0) {
                 warn!("All-zero target ID in ping unset-topic action, storing as Unknown");
@@ -419,13 +419,13 @@ fn decode_ping_governance_action(calldata: &[u8]) -> Option<proposal_action::Act
                 _ => unreachable!(),
             }
         }
-        x if x == actions::SUBSPACE_TOPIC_DECLARED || x == actions::SUBSPACE_TOPIC_REMOVED => {
+        x if x == actions::SUBSPACE_TOPIC_SET || x == actions::SUBSPACE_TOPIC_UNSET => {
             let target = args.topic[16..32].to_vec();
             if target.iter().all(|b| *b == 0) {
                 warn!("All-zero target ID in ping subspace topic action, storing as Unknown");
                 return None;
             }
-            if x == actions::SUBSPACE_TOPIC_DECLARED {
+            if x == actions::SUBSPACE_TOPIC_SET {
                 Some(proposal_action::Action::SubspaceTopicDeclared(
                     SubspaceTopicAction {
                         target_topic_id: target,
@@ -1150,16 +1150,16 @@ mod tests {
         }
     }
 
-    /// End-to-end: a PROPOSAL_CREATED containing a ping(SUBSPACE_TOPIC_DECLARED) action.
+    /// End-to-end: a PROPOSAL_CREATED containing a ping(SUBSPACE_TOPIC_SET) action.
     #[test]
-    fn test_e2e_proposal_created_with_subspace_topic_declared_action() {
+    fn test_e2e_proposal_created_with_subspace_topic_set_action() {
         let proposal_id = [0xA4; 16];
         let proposer_id = vec![0x01; 16];
         let space_id = vec![0x02; 16];
         let topic_id = [0xFF; 16];
 
         let topic = make_topic_topic(&topic_id);
-        let ping_calldata = encode_ping_calldata(&actions::SUBSPACE_TOPIC_DECLARED, &topic, &[]);
+        let ping_calldata = encode_ping_calldata(&actions::SUBSPACE_TOPIC_SET, &topic, &[]);
 
         let created_data = encode_proposal_created_data_with_actions(
             proposal_id,
@@ -1196,7 +1196,7 @@ mod tests {
         }
     }
 
-    /// End-to-end: a PROPOSAL_CREATED containing a ping(TOPIC_DECLARED) action.
+    /// End-to-end: a PROPOSAL_CREATED containing a ping(TOPIC_SET) action.
     #[test]
     fn test_e2e_proposal_created_with_set_topic_action() {
         let proposal_id = [0xA5; 16];
@@ -1205,7 +1205,7 @@ mod tests {
         let topic_id = [0xAB; 16];
 
         let topic = make_edge_topic(&topic_id);
-        let ping_calldata = encode_ping_calldata(&actions::TOPIC_DECLARED, &topic, b"topic-data");
+        let ping_calldata = encode_ping_calldata(&actions::TOPIC_SET, &topic, b"topic-data");
 
         let created_data = encode_proposal_created_data_with_actions(
             proposal_id,
@@ -1696,10 +1696,10 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_ping_subspace_topic_declared() {
+    fn test_decode_ping_subspace_topic_set() {
         let target_id = [0xEE; 16];
         let topic = make_topic_topic(&target_id);
-        let calldata = encode_ping_calldata(&actions::SUBSPACE_TOPIC_DECLARED, &topic, &[]);
+        let calldata = encode_ping_calldata(&actions::SUBSPACE_TOPIC_SET, &topic, &[]);
 
         let result = decode_ping_governance_action(&calldata);
         match result {
@@ -1711,10 +1711,10 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_ping_subspace_topic_removed() {
+    fn test_decode_ping_subspace_topic_unset() {
         let target_id = [0xFF; 16];
         let topic = make_topic_topic(&target_id);
-        let calldata = encode_ping_calldata(&actions::SUBSPACE_TOPIC_REMOVED, &topic, &[]);
+        let calldata = encode_ping_calldata(&actions::SUBSPACE_TOPIC_UNSET, &topic, &[]);
 
         let result = decode_ping_governance_action(&calldata);
         match result {
@@ -1729,7 +1729,7 @@ mod tests {
     fn test_decode_ping_set_topic() {
         let target_id = [0x12; 16];
         let topic = make_edge_topic(&target_id);
-        let calldata = encode_ping_calldata(&actions::TOPIC_DECLARED, &topic, b"topic-data");
+        let calldata = encode_ping_calldata(&actions::TOPIC_SET, &topic, b"topic-data");
 
         let result = decode_ping_governance_action(&calldata);
         match result {
@@ -1744,7 +1744,7 @@ mod tests {
     fn test_decode_ping_unset_topic() {
         let target_id = [0x34; 16];
         let topic = make_edge_topic(&target_id);
-        let calldata = encode_ping_calldata(&actions::TOPIC_REMOVED, &topic, &[]);
+        let calldata = encode_ping_calldata(&actions::TOPIC_UNSET, &topic, &[]);
 
         let result = decode_ping_governance_action(&calldata);
         match result {
