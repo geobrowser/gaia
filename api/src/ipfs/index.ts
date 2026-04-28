@@ -26,6 +26,12 @@ type AppEnv = {
 const EMPTY_FILE_LOG_MESSAGE = "Empty file provided"
 const EMPTY_FILE_ERROR_MESSAGE = "File cannot be empty"
 
+// OpenAPI response descriptions — kept as constants so the three routes stay
+// in lockstep without copy-paste drift.
+const RESPONSE_200_DESCRIPTION = "File successfully uploaded to IPFS"
+const RESPONSE_400_DESCRIPTION = "Invalid file (missing or empty)"
+const RESPONSE_500_DESCRIPTION = "Upload failed"
+
 type UploadFn = (file: File) => Effect.Effect<{cid: string}, Error, Environment>
 
 /**
@@ -150,9 +156,9 @@ export function createIpfsRouter(uploadEdit: UploadFn, uploadFile: UploadFn, run
 			description: "Uploads an edit file to IPFS and returns the content identifier (CID)",
 			requestBody: {content: fileFormSchema},
 			responses: {
-				200: {description: "File successfully uploaded to IPFS", content: cidResponseSchema},
-				400: {description: "Invalid file (missing or empty)", content: validationErrorSchema},
-				500: {description: "Upload failed", content: uploadFailedSchema},
+				200: {description: RESPONSE_200_DESCRIPTION, content: cidResponseSchema},
+				400: {description: RESPONSE_400_DESCRIPTION, content: validationErrorSchema},
+				500: {description: RESPONSE_500_DESCRIPTION, content: uploadFailedSchema},
 			},
 		}),
 		createUploadHandler({spanName: "/ipfs/upload-edit", upload: uploadEdit, runtime}),
@@ -166,9 +172,9 @@ export function createIpfsRouter(uploadEdit: UploadFn, uploadFile: UploadFn, run
 			description: "Uploads a file to IPFS and returns the content identifier (CID)",
 			requestBody: {content: fileFormSchema},
 			responses: {
-				200: {description: "File successfully uploaded to IPFS", content: cidResponseSchema},
-				400: {description: "Invalid file (missing or empty)", content: validationErrorSchema},
-				500: {description: "Upload failed", content: uploadFailedSchema},
+				200: {description: RESPONSE_200_DESCRIPTION, content: cidResponseSchema},
+				400: {description: RESPONSE_400_DESCRIPTION, content: validationErrorSchema},
+				500: {description: RESPONSE_500_DESCRIPTION, content: uploadFailedSchema},
 			},
 		}),
 		createUploadHandler({spanName: "/ipfs/upload-file", upload: uploadFile, runtime}),
@@ -185,9 +191,9 @@ export function createIpfsRouter(uploadEdit: UploadFn, uploadFile: UploadFn, run
 			deprecated: true,
 			requestBody: {content: fileFormSchema},
 			responses: {
-				200: {description: "File successfully uploaded to IPFS", content: cidResponseSchema},
-				400: {description: "Invalid file (missing or empty)", content: validationErrorSchema},
-				500: {description: "Upload failed", content: uploadFailedSchema},
+				200: {description: RESPONSE_200_DESCRIPTION, content: cidResponseSchema},
+				400: {description: RESPONSE_400_DESCRIPTION, content: validationErrorSchema},
+				500: {description: RESPONSE_500_DESCRIPTION, content: uploadFailedSchema},
 			},
 		}),
 		createUploadHandler({
