@@ -38,6 +38,18 @@ pub const VOTING_MODE_PROPERTY_ID: &str = "af26ed41-de0f-5b4f-a093-e9d3f683db07"
 pub const SPACE_ID_PROPERTY_ID: &str = "712adc1f-e950-5d14-bbd8-bf2166fe59c1";
 pub const CREATED_AT_BLOCK_PROPERTY_ID: &str = "da2952fb-17d6-53f3-b521-52e254106e0b";
 
+/// Onchain-derived ID of the "root" space whose editors are authorized to
+/// publish edits that mutate the system property-definition entities — i.e.
+/// relations whose `from` or `to` is in `PROTECTED_PROPERTY_IDS`. Edits from
+/// any other space targeting those entities as relation endpoints are
+/// silently dropped by the kg-indexer.
+///
+/// NOTE: Space IDs are per-deployment (`keccak('grc20.space', account, nonce,
+/// chainId)`), so this constant pins the SDK to a single chain/env. Update
+/// it if the root space is migrated, or fork the SDK if you ever run
+/// multiple envs from one binary.
+pub const ROOT_SPACE_ID: &str = "a19c345a-b986-6679-b001-d7d2138d88a1";
+
 // Protected relation type IDs
 pub const SYSTEM_TYPES_RELATION_TYPE_ID: &str = "88b3d6ad-288c-529c-a212-0e1c24819185";
 
