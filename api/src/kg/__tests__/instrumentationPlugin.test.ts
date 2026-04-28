@@ -21,7 +21,12 @@ vi.mock("@sentry/node", () => ({
 
 import {log} from "../../services/telemetry"
 import {GRAPHQL_QUERY_COST_CONTEXT_KEY} from "../costLoggerPlugin"
-import {isClientError, useGraphQLInstrumentation} from "../instrumentationPlugin"
+import {
+	__resetResponseSizeHistogramForTests,
+	isClientError,
+	renderResponseSizeHistogram,
+	useGraphQLInstrumentation,
+} from "../instrumentationPlugin"
 
 // Minimal AST-node factory — isClientError only reads `kind`, so the rest of
 // the shape doesn't matter. Cast through `unknown` to avoid TS insisting on a
@@ -229,5 +234,80 @@ describe("useGraphQLInstrumentation — query cost in slow / large logs", () => 
 
 		const slowCalls = (log.warn as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === "Slow GraphQL query")
 		expect(slowCalls).toHaveLength(0)
+	})
+})
+
+// --------------------------------------------------------------------------
+// Prometheus histogram exposed via /health/metrics
+// --------------------------------------------------------------------------
+
+describe("response size histogram", () => {
+	beforeEach(() => {
+		__resetResponseSizeHistogramForTests()
+		vi.clearAllMocks()
+		vi.useFakeTimers()
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	function runRequest(opts: {durationMs: number; responseData: unknown}) {
+		const plugin = useGraphQLInstrumentation()
+		const onExecute = (plugin as {onExecute: (args: unknown) => {onExecuteDone: (r: unknown) => void}}).onExecute
+
+		const startTime = Date.now()
+		vi.setSystemTime(startTime)
+
+		const handle = onExecute({
+			args: {
+				document: parse(`{ entity(id: "...") { id name } }`),
+				variableValues: {},
+				operationName: null,
+				contextValue: {},
+			},
+		})
+		vi.setSystemTime(startTime + opts.durationMs)
+		handle.onExecuteDone({result: {data: opts.responseData}})
+	}
+
+	it("empty state emits zero counts for all buckets", () => {
+		const out = renderResponseSizeHistogram()
+		expect(out).toMatch(/# TYPE gaia_api_graphql_response_size_bytes histogram/)
+		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="\+Inf"} 0/)
+		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_count 0/)
+		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_sum 0/)
+	})
+
+	it("does not record fast queries (durationMs < 1000ms gate)", () => {
+		runRequest({durationMs: 500, responseData: {x: "y"}})
+		expect(renderResponseSizeHistogram()).toContain("gaia_api_graphql_response_size_bytes_count 0")
+	})
+
+	it("records observations for slow queries into the right buckets", () => {
+		// ~50 KB response — falls into le=100_000
+		runRequest({durationMs: 1500, responseData: {data: "x".repeat(50_000)}})
+		// ~1.5 MB response — falls into le=2_000_000
+		runRequest({durationMs: 1500, responseData: {data: "x".repeat(1_500_000)}})
+
+		const out = renderResponseSizeHistogram()
+		expect(out).toContain("gaia_api_graphql_response_size_bytes_count 2")
+		// 10K bucket — neither observation fits
+		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="10000"} 0$/m)
+		// 100K bucket — only the 50K observation
+		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="100000"} 1$/m)
+		// 2M bucket — both fit
+		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="2000000"} 2$/m)
+		// +Inf — both
+		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="\+Inf"} 2$/m)
+	})
+
+	it("very large responses land beyond the top bucket (+Inf only)", () => {
+		// 60 MB exceeds the 50 MB top bucket
+		runRequest({durationMs: 1500, responseData: {data: "x".repeat(60_000_000)}})
+
+		const out = renderResponseSizeHistogram()
+		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="50000000"} 0$/m)
+		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="\+Inf"} 1$/m)
 	})
 })
