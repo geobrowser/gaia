@@ -888,27 +888,31 @@ describe("OpenSearchClient", () => {
 			expect(client.buildAdditionalSpacesFilter([])).toBeNull()
 		})
 
-		it("returns a single terms clause when no root ID is in the list", () => {
+		it("OR's canonical + listed-space terms when only non-root IDs are supplied", () => {
 			setRoot(client, ROOT_ID)
 			const filter = client.buildAdditionalSpacesFilter([SPACE_A, SPACE_B]) as {
+				bool: {should: object[]; minimum_should_match: number}
+			}
+			expect(filter.bool.minimum_should_match).toBe(1)
+			expect(filter.bool.should).toContainEqual({term: {in_canonical_graph: true}})
+			const termsClause = filter.bool.should.find((c): c is {terms: {space_id: string[]}} => "terms" in c) as {
 				terms: {space_id: string[]}
 			}
-			expect(filter).not.toBeNull()
-			expect(filter).not.toHaveProperty("bool")
-			expect(filter.terms.space_id).toContain(SPACE_A)
-			expect(filter.terms.space_id).toContain(SPACE_B)
+			expect(termsClause.terms.space_id).toContain(SPACE_A)
+			expect(termsClause.terms.space_id).toContain(SPACE_B)
 			// includes both dashed and dashless variants
-			expect(filter.terms.space_id).toContain(SPACE_A.replace(/-/g, ""))
+			expect(termsClause.terms.space_id).toContain(SPACE_A.replace(/-/g, ""))
 		})
 
 		it("returns the single canonical term when only the root ID is supplied", () => {
 			setRoot(client, ROOT_ID)
+			// Root collapses to canonical, no listed-spaces terms ⇒ bare canonical clause.
 			expect(client.buildAdditionalSpacesFilter([ROOT_ID])).toEqual({
 				term: {in_canonical_graph: true},
 			})
 		})
 
-		it("returns a bool.should OR-ing canonical + non-root terms when both are present", () => {
+		it("returns a bool.should OR-ing canonical + non-root terms when root + extras are present", () => {
 			setRoot(client, ROOT_ID)
 			const filter = client.buildAdditionalSpacesFilter([ROOT_ID, SPACE_A, SPACE_B]) as {
 				bool: {should: object[]; minimum_should_match: number}
@@ -921,24 +925,27 @@ describe("OpenSearchClient", () => {
 			}
 			expect(termsClause.terms.space_id).toContain(SPACE_A)
 			expect(termsClause.terms.space_id).toContain(SPACE_B)
-			// Root ID is rewritten, not duplicated as a terms entry
+			// Root ID is naturally idempotent — no need to filter it out, but it shouldn't
+			// be duplicated as a non-root term either.
 			expect(termsClause.terms.space_id).not.toContain(ROOT_ID)
 		})
 
-		it("treats list as plain space IDs when the root is not yet known", () => {
+		it("still includes canonical even when the root is not yet cached (would-be-root stays in terms)", () => {
 			setRoot(client, null)
 			const filter = client.buildAdditionalSpacesFilter([ROOT_ID, SPACE_A]) as {
+				bool: {should: object[]; minimum_should_match: number}
+			}
+			expect(filter.bool.should).toContainEqual({term: {in_canonical_graph: true}})
+			const termsClause = filter.bool.should.find((c): c is {terms: {space_id: string[]}} => "terms" in c) as {
 				terms: {space_id: string[]}
 			}
-			expect(filter).not.toHaveProperty("bool")
-			// Without a known root the would-be-root ID stays as a regular term
-			expect(filter.terms.space_id).toContain(ROOT_ID)
-			expect(filter.terms.space_id).toContain(SPACE_A)
+			// Without a known root the would-be-root ID stays as a regular term.
+			expect(termsClause.terms.space_id).toContain(ROOT_ID)
+			expect(termsClause.terms.space_id).toContain(SPACE_A)
 		})
 
 		it("matches the root when caller passes dashless and cache is dashed", () => {
-			// Cache holds dashed; caller supplies dashless
-			setRoot(client, ROOT_ID) // dashed
+			setRoot(client, ROOT_ID) // dashed cache
 			const dashlessRoot = ROOT_ID.replace(/-/g, "")
 			expect(client.buildAdditionalSpacesFilter([dashlessRoot])).toEqual({
 				term: {in_canonical_graph: true},
@@ -946,7 +953,6 @@ describe("OpenSearchClient", () => {
 		})
 
 		it("matches the root when caller passes dashed and cache is dashless", () => {
-			// Cache holds dashless; caller supplies dashed
 			setRoot(client, ROOT_ID.replace(/-/g, ""))
 			expect(client.buildAdditionalSpacesFilter([ROOT_ID])).toEqual({
 				term: {in_canonical_graph: true},
@@ -1026,7 +1032,7 @@ describe("OpenSearchClient", () => {
 			expect(filters).toContainEqual({term: {in_canonical_graph: true}})
 		})
 
-		it("emits only a terms clause when GLOBAL is called with non-root spaces only", async () => {
+		it("emits canonical OR listed-spaces when GLOBAL is called with non-root spaces only", async () => {
 			setRoot(client, ROOT_ID)
 			const body = (await client.buildSearchBody({
 				query: "test",
@@ -1036,14 +1042,20 @@ describe("OpenSearchClient", () => {
 			})) as Record<string, unknown>
 
 			const filters = extractFunctionScoreFilters(body)
-			// No canonical anchor at the filters level (canonical not in list).
-			expect(
-				filters.find((f) => "term" in f && (f.term as {in_canonical_graph?: unknown}).in_canonical_graph),
-			).toBeUndefined()
-			// The additional-spaces filter is a bare terms clause (single non-root group).
-			const termsFilter = filters.find((f) => "terms" in f && (f.terms as {space_id?: unknown}).space_id) as
-				| {terms: {space_id: string[]}}
-				| undefined
+			// The asid filter must be a bool.should OR-ing canonical + listed-spaces terms,
+			// since canonical is now ALWAYS implicit when additional_space_ids is set.
+			// Match it by the canonical-anchor term inside `.should` (distinguishes it from
+			// the non-deleted filter which is also a bool.should).
+			const asidFilter = filters.find((f) => {
+				const should = (f as {bool?: {should?: object[]}}).bool?.should
+				return Array.isArray(should) && should.some((c) => JSON.stringify(c).includes("in_canonical_graph"))
+			}) as {bool: {should: object[]; minimum_should_match: number}} | undefined
+			expect(asidFilter).toBeDefined()
+			expect(asidFilter!.bool.minimum_should_match).toBe(1)
+			expect(asidFilter!.bool.should).toContainEqual({term: {in_canonical_graph: true}})
+			const termsFilter = asidFilter!.bool.should.find(
+				(c) => "terms" in c && (c as {terms: {space_id?: unknown}}).terms.space_id,
+			) as {terms: {space_id: string[]}} | undefined
 			expect(termsFilter).toBeDefined()
 			expect(termsFilter!.terms.space_id).toEqual(expect.arrayContaining([SPACE_A, SPACE_B]))
 		})

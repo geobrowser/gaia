@@ -195,7 +195,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					name: "additional_space_ids",
 					in: "query",
 					description:
-						"Comma-separated list of space UUIDs (max 10) to widen the eligibility set on GLOBAL-family scopes. The result set becomes the union of entities in any listed space. If the canonical-graph root space ID appears in the list, it is rewritten to 'all canonical-graph spaces' — pass it explicitly to include canonical results alongside other personal/current spaces in a single ranked response. Rejected when used with SPACE or SPACE_SINGLE scopes.",
+						"Comma-separated list of space UUIDs (max 10) to widen the eligibility set on GLOBAL-family scopes. The result set is the UNION of (a) all canonical-graph entities and (b) entities in any listed space — listed-space entities are returned regardless of their canonical-graph membership. The canonical-graph root space is implicitly included; passing it in the list is a no-op. Setting include_non_canonical=false alongside additional_space_ids has no effect (the asid filter takes over). Rejected with 400 when used with SPACE or SPACE_SINGLE scopes.",
 					required: false,
 					schema: {type: "string"},
 				},

@@ -699,7 +699,9 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
-		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
+		// When additional_space_ids is set, the asid filter already includes the canonical-graph
+		// anchor (canonical OR listed). Skip the include_non_canonical=false redundant AND.
+		if (!includeNonCanonical && !additionalSpacesFilter) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
@@ -766,7 +768,9 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
-		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
+		// When additional_space_ids is set, the asid filter already includes the canonical-graph
+		// anchor (canonical OR listed). Skip the include_non_canonical=false redundant AND.
+		if (!includeNonCanonical && !additionalSpacesFilter) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
@@ -1106,7 +1110,9 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
-		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
+		// When additional_space_ids is set, the asid filter already includes the canonical-graph
+		// anchor (canonical OR listed). Skip the include_non_canonical=false redundant AND.
+		if (!includeNonCanonical && !additionalSpacesFilter) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
@@ -1148,7 +1154,9 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
-		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
+		// When additional_space_ids is set, the asid filter already includes the canonical-graph
+		// anchor (canonical OR listed). Skip the include_non_canonical=false redundant AND.
+		if (!includeNonCanonical && !additionalSpacesFilter) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
@@ -1190,7 +1198,9 @@ export class OpenSearchClient implements SearchClient {
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
-		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
+		// When additional_space_ids is set, the asid filter already includes the canonical-graph
+		// anchor (canonical OR listed). Skip the include_non_canonical=false redundant AND.
+		if (!includeNonCanonical && !additionalSpacesFilter) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
 		if (additionalSpacesFilter) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
@@ -1418,16 +1428,19 @@ export class OpenSearchClient implements SearchClient {
 	buildAdditionalSpacesFilter(additionalSpaceIds?: string[]): object | null {
 		if (!additionalSpaceIds || additionalSpaceIds.length === 0) return null
 
-		const rootIncluded = additionalSpaceIds.some((id) => this.isRootSpace(id))
+		// The canonical-graph anchor is always implicit when additional_space_ids is set:
+		// the eligibility set is "entities in the canonical graph OR entities in any listed
+		// non-root space". This means a caller can pass a single non-root space and get
+		// canonical-graph results PLUS that space's entities — whether canonical or not.
+		// The root ID, if supplied, is naturally idempotent (canonical OR canonical = canonical).
 		const nonRootIds = additionalSpaceIds.filter((id) => !this.isRootSpace(id))
-
-		const canonicalClause = rootIncluded ? this.buildCanonicalFilter() : null
+		const canonicalClause = this.buildCanonicalFilter()
 		const spaceIdsClause = nonRootIds.length > 0 ? {terms: {space_id: nonRootIds.flatMap(uuidTermVariants)}} : null
 
-		if (canonicalClause && spaceIdsClause) {
+		if (spaceIdsClause) {
 			return {bool: {should: [canonicalClause, spaceIdsClause], minimum_should_match: 1}}
 		}
-		return canonicalClause ?? spaceIdsClause
+		return canonicalClause
 	}
 
 	/**
