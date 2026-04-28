@@ -23,7 +23,7 @@ pub mod voting;
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::governance::{
     HermesProposalCreated, HermesProposalExecuted, HermesProposalSettingsUpdated,
-    HermesProposalUpdated, HermesProposalVoted,
+    HermesProposalUpdated, HermesProposalVoted, HermesVotingSettingsUpdated,
 };
 use hermes_schema::pb::knowledge::HermesEdit;
 use hermes_schema::pb::membership::{HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft};
@@ -71,6 +71,7 @@ impl_has_meta!(
     HermesProposalVoted,
     HermesProposalExecuted,
     HermesProposalSettingsUpdated,
+    HermesVotingSettingsUpdated,
     HermesVoteCast,
     HermesEdit,
 );
