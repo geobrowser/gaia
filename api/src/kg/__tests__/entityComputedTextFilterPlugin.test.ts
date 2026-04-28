@@ -46,10 +46,15 @@ const sql = {
 	identifier(...parts: string[]): Mark {
 		return {kind: "literal", payload: parts.join(".")}
 	},
-	// `join` accepts either a string or another fragment as separator —
-	// the production code passes `sql.fragment\` AND \`` so we must handle
-	// fragment-shaped separators too.
-	join(fragments: Mark[], separator: string | Mark): Mark {
+	// Mirror pg-sql2's real contract: the separator MUST be a string. The
+	// real `sql.join` throws "Invalid separator - must be a string" on
+	// anything else — including a `sql.fragment`. A previous version of
+	// this plugin passed a fragment and only learned that at runtime in
+	// staging. Throwing here keeps unit tests honest.
+	join(fragments: Mark[], separator: string): Mark {
+		if (typeof separator !== "string") {
+			throw new Error("Invalid separator - must be a string")
+		}
 		return {kind: "fragment", payload: {fragments, separator}}
 	},
 }
@@ -67,8 +72,7 @@ function flatten(node: unknown): string {
 		const p = m.payload as unknown
 		if (Array.isArray(p)) return p.map(flatten).join("")
 		const obj = p as {fragments: unknown[]; separator: unknown}
-		const sep = typeof obj.separator === "string" ? obj.separator : flatten(obj.separator)
-		return obj.fragments.map(flatten).join(sep)
+		return obj.fragments.map(flatten).join(obj.separator as string)
 	}
 	return ""
 }
@@ -515,5 +519,174 @@ describe("buildResolver — search-like operator warn", () => {
 
 		const call = (log.warn as ReturnType<typeof vi.fn>).mock.calls[0]
 		expect(call?.[1]?.value).toHaveLength(200) // truncated from 500 → 200
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Real pg-sql2 contract — catches API drift between our mock and the lib
+// the plugin actually runs against in production.
+// ---------------------------------------------------------------------------
+//
+// The `sql.join must take a string separator` bug that broke every
+// name/description filter on staging slipped past the existing unit tests
+// because the mock's `join` happily accepted a fragment. This block exercises
+// the same code paths against REAL pg-sql2 so any contract divergence —
+// signature, return shape, throw behavior of `value`/`fragment`/`join` /
+// `identifier` — is caught at unit-test time in CI rather than production.
+//
+// No DB needed: we just call `realSql.compile(node)` to verify the produced
+// fragment compiles to a `{text, values}` pair without throwing.
+
+import * as realSql from "pg-sql2"
+
+describe("entityComputedTextFilterPlugin — real pg-sql2 contract (CI integration)", () => {
+	const realSourceAlias = realSql.identifier("e")
+
+	// Every operator the plugin claims to fast-path. If any of these throws
+	// on real pg-sql2, this test catches it before we ever ship.
+	const ALL_FAST_PATH_OPS: ReadonlyArray<readonly [string, unknown]> = [
+		// Existence
+		["isNull", false],
+		["isNull", true],
+		// Equality
+		["is", "Alice"],
+		["equalTo", "Alice"],
+		["isNot", ""],
+		["notEqualTo", "Bob"],
+		["isInsensitive", "Alice"],
+		["equalToInsensitive", "Alice"],
+		["isNotInsensitive", "Bob"],
+		["notEqualToInsensitive", "Bob"],
+		// Set
+		["in", ["A", "B", "C"]],
+		["notIn", ["X", "Y"]],
+		// Comparisons
+		["lessThan", "M"],
+		["lessThanOrEqualTo", "M"],
+		["greaterThan", "M"],
+		["greaterThanOrEqualTo", "M"],
+		// LIKE / ILIKE positives
+		["includes", "ali"],
+		["includesInsensitive", "ali"],
+		["startsWith", "Bob"],
+		["startsWithInsensitive", "Bob"],
+		["endsWith", "Z"],
+		["endsWithInsensitive", "Z"],
+		["like", "%a%"],
+		["likeInsensitive", "%a%"],
+		// LIKE / ILIKE negatives (NULL-safe shape)
+		["notIncludes", "ali"],
+		["notIncludesInsensitive", "ali"],
+		["notStartsWith", "Bob"],
+		["notStartsWithInsensitive", "Bob"],
+		["notEndsWith", "Z"],
+		["notEndsWithInsensitive", "Z"],
+		["notLike", "%a%"],
+		["notLikeInsensitive", "%a%"],
+	]
+
+	it.each(ALL_FAST_PATH_OPS.map(([op, val]) => [op, val] as const))(
+		"operatorPredicate('%s') compiles via real pg-sql2 without throwing",
+		(op, val) => {
+			const result = operatorPredicate(realSql, realSourceAlias, NAME_PROPERTY_ID, op, val)
+			expect(result).not.toBeNull()
+
+			// Whichever shape it returns, the SQL fragment inside must be
+			// compilable by real pg-sql2.
+			if (!result) return
+			const node = result.kind === "merge" ? result.innerPred : result.fragment
+			expect(() => realSql.compile(node)).not.toThrow()
+		},
+	)
+
+	it("buildResolver — single op compiles", () => {
+		const resolver = buildResolver(
+			"name",
+			NAME_PROPERTY_ID,
+			realSql,
+			vi.fn(() => null),
+		)
+		const out = resolver({sourceAlias: realSourceAlias, fieldValue: {is: "Alice"}})
+		expect(out).not.toBeNull()
+		expect(() => realSql.compile(out)).not.toThrow()
+	})
+
+	it("buildResolver — multi-op merge compiles (regression: sql.join string-separator)", () => {
+		// The exact case that broke staging: two ops triggers buildMergedExists's
+		// `sql.join(innerPreds, " AND ")`. If that ever drifts back to passing
+		// a fragment, real pg-sql2 throws and this test fails.
+		const resolver = buildResolver(
+			"name",
+			NAME_PROPERTY_ID,
+			realSql,
+			vi.fn(() => null),
+		)
+		const out = resolver({sourceAlias: realSourceAlias, fieldValue: {isNull: false, isNot: ""}})
+		expect(out).not.toBeNull()
+
+		const compiled = realSql.compile(out)
+		expect(compiled.text).toContain("EXISTS")
+		expect(compiled.text).toContain("v.text IS NOT NULL")
+		expect(compiled.text).toContain("v.text <>")
+		// Bind values flow through correctly.
+		expect(compiled.values).toContain("")
+	})
+
+	it("buildResolver — standalone + merged compiles (top-level join also uses string separator)", () => {
+		// {isNull: true} → standalone NOT EXISTS; {is: "X"} → merged EXISTS.
+		// Two top-level fragments AND-ed via sql.join — the second sql.join
+		// site that was previously passing a fragment. Real pg-sql2 must
+		// accept the result.
+		const resolver = buildResolver(
+			"name",
+			NAME_PROPERTY_ID,
+			realSql,
+			vi.fn(() => null),
+		)
+		const out = resolver({sourceAlias: realSourceAlias, fieldValue: {isNull: true, is: "Alice"}})
+		expect(out).not.toBeNull()
+
+		const compiled = realSql.compile(out)
+		expect(compiled.text).toContain("NOT EXISTS")
+		expect(compiled.text).toContain("EXISTS")
+		expect(compiled.text).toContain("AND")
+	})
+
+	it("buildResolver — many-op merge (5 predicates) compiles", () => {
+		const resolver = buildResolver(
+			"name",
+			NAME_PROPERTY_ID,
+			realSql,
+			vi.fn(() => null),
+		)
+		const out = resolver({
+			sourceAlias: realSourceAlias,
+			fieldValue: {
+				isNull: false,
+				isNot: "",
+				startsWith: "A",
+				endsWith: "Z",
+				includes: "li",
+			},
+		})
+		expect(out).not.toBeNull()
+		expect(() => realSql.compile(out)).not.toThrow()
+	})
+
+	it("buildResolver — fallback fragment (from default resolver) composes with merged EXISTS", () => {
+		// Simulates a mixed-bag where the default resolver returns a real SQL
+		// fragment for an unknown op. Verifies the AND-join works against
+		// realSql when one of the fragments comes from outside the plugin.
+		const defaultResolve = vi.fn(({fieldValue}) => {
+			// Mimic what connection-filter would emit for distinctFrom.
+			const op = Object.keys(fieldValue)[0]
+			const val = Object.values(fieldValue)[0]
+			return realSql.fragment`entities_name(${realSourceAlias}) IS DISTINCT FROM ${realSql.value(val)} /* op=${realSql.value(op)} */`
+		})
+		const resolver = buildResolver("name", NAME_PROPERTY_ID, realSql, defaultResolve)
+		const out = resolver({sourceAlias: realSourceAlias, fieldValue: {is: "Alice", distinctFrom: "Bob"}})
+		expect(out).not.toBeNull()
+		expect(defaultResolve).toHaveBeenCalledTimes(1)
+		expect(() => realSql.compile(out)).not.toThrow()
 	})
 })

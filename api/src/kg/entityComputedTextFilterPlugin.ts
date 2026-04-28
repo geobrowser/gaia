@@ -153,7 +153,10 @@ const standalone = (fragment: Sql): OpResult => ({kind: "standalone", fragment})
  * every operator."
  */
 function buildMergedExists(sql: Sql, sourceAlias: Sql, propertyId: string, innerPreds: Sql[]) {
-	const predClause = innerPreds.length === 1 ? innerPreds[0] : sql.join(innerPreds, sql.fragment` AND `)
+	// pg-sql2's `sql.join` requires a string separator (it wraps it in
+	// makeRawNode internally and throws "Invalid separator - must be a
+	// string" on anything else — including a fragment).
+	const predClause = innerPreds.length === 1 ? innerPreds[0] : sql.join(innerPreds, " AND ")
 	return sql.fragment`
 		EXISTS (
 			SELECT 1 FROM public.values v
@@ -353,7 +356,7 @@ function buildResolver(
 
 		if (fragments.length === 0) return null
 		if (fragments.length === 1) return fragments[0]
-		return sql.fragment`(${sql.join(fragments, sql.fragment` AND `)})`
+		return sql.fragment`(${sql.join(fragments, " AND ")})`
 	}
 }
 
