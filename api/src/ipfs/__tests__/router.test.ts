@@ -73,6 +73,33 @@ describe.each(ENDPOINTS)("POST %s", (endpoint) => {
 		expect(uploadFile).not.toHaveBeenCalled()
 	})
 
+	it("returns 400 with no Pinata call when the request body isn't multipart", async () => {
+		const {app, uploadEdit, uploadFile} = setupApp()
+
+		// Bare POST: no Content-Type, no body. c.req.formData() throws on this.
+		const res = await app.request(endpoint, {method: "POST"})
+
+		expect(res.status).toBe(400)
+		expect(await res.text()).toBe("Invalid multipart body")
+		expect(uploadEdit).not.toHaveBeenCalled()
+		expect(uploadFile).not.toHaveBeenCalled()
+	})
+
+	it("returns 400 with no Pinata call for a JSON body (wrong content-type)", async () => {
+		const {app, uploadEdit, uploadFile} = setupApp()
+
+		const res = await app.request(endpoint, {
+			method: "POST",
+			headers: {"content-type": "application/json"},
+			body: JSON.stringify({not: "multipart"}),
+		})
+
+		expect(res.status).toBe(400)
+		expect(await res.text()).toBe("Invalid multipart body")
+		expect(uploadEdit).not.toHaveBeenCalled()
+		expect(uploadFile).not.toHaveBeenCalled()
+	})
+
 	it("delegates to the upload service when a non-empty file is provided", async () => {
 		const {app, uploadEdit, uploadFile} = setupApp()
 
