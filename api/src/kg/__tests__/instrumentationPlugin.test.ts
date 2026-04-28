@@ -285,17 +285,17 @@ describe("response size histogram", () => {
 	})
 
 	it("records observations for slow queries into the right buckets", () => {
-		// ~50 KB response — falls into le=100_000
-		runRequest({durationMs: 1500, responseData: {data: "x".repeat(50_000)}})
+		// ~300 KB response — falls into le=500_000
+		runRequest({durationMs: 1500, responseData: {data: "x".repeat(300_000)}})
 		// ~1.5 MB response — falls into le=2_000_000
 		runRequest({durationMs: 1500, responseData: {data: "x".repeat(1_500_000)}})
 
 		const out = renderResponseSizeHistogram()
 		expect(out).toContain("gaia_api_graphql_response_size_bytes_count 2")
-		// 10K bucket — neither observation fits
-		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="10000"} 0$/m)
-		// 100K bucket — only the 50K observation
-		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="100000"} 1$/m)
+		// 500K bucket — only the 300K observation
+		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="500000"} 1$/m)
+		// 1M bucket — still only the 300K (1.5M > 1M)
+		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="1000000"} 1$/m)
 		// 2M bucket — both fit
 		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="2000000"} 2$/m)
 		// +Inf — both

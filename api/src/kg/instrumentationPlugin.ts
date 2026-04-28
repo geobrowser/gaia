@@ -95,8 +95,6 @@ const SENTRY_PAYLOAD_CHAR_LIMIT = 5000
 // distribution of slow-ish responses, not all responses. That's the
 // population we care about for OOM / payload triage anyway.
 const RESPONSE_SIZE_BUCKET_EDGES: readonly number[] = [
-	10_000, // 10 KB
-	100_000, // 100 KB
 	500_000, // 500 KB
 	1_000_000, // 1 MB
 	2_000_000, // 2 MB
