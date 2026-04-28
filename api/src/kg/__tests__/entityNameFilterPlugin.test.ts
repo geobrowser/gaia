@@ -150,6 +150,9 @@ describe("operatorFragment", () => {
 		const fDesc = operatorFragment(sql, sourceAlias, DESCRIPTION_PROPERTY_ID, "isNull", false)
 		expect(flatten(fName)).toContain(`<<${JSON.stringify(NAME_PROPERTY_ID)}>>`)
 		expect(flatten(fDesc)).toContain(`<<${JSON.stringify(DESCRIPTION_PROPERTY_ID)}>>`)
+		// Sanity: the constants resolve to the canonical UUIDs (any format).
+		expect(NAME_PROPERTY_ID).toMatch(/^a126ca53-?0c8e-?48d5-?b888-?82c734c38935$/)
+		expect(DESCRIPTION_PROPERTY_ID).toMatch(/^9b1f76ff-?9711-?404c-?861e-?59dc3fa7d037$/)
 	})
 })
 

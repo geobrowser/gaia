@@ -57,8 +57,11 @@
  *     `dist/PgConnectionArgFilterComputedColumnsPlugin.js`
  */
 
-const NAME_PROPERTY_ID = "a126ca53-0c8e-48d5-b888-82c734c38935"
-const DESCRIPTION_PROPERTY_ID = "9b1f76ff-9711-404c-861e-59dc3fa7d037"
+import {SystemIds} from "@geoprotocol/geo-sdk"
+
+// Pulled from the SDK's canonical IDs; UUIDs annotated for grep-ability.
+const NAME_PROPERTY_ID = SystemIds.NAME_PROPERTY // a126ca53-0c8e-48d5-b888-82c734c38935
+const DESCRIPTION_PROPERTY_ID = SystemIds.DESCRIPTION_PROPERTY // 9b1f76ff-9711-404c-861e-59dc3fa7d037
 
 const PROPERTY_FOR_FIELD: Record<string, string> = {
 	name: NAME_PROPERTY_ID,
