@@ -46,10 +46,15 @@ const sql = {
 	identifier(...parts: string[]): Mark {
 		return {kind: "literal", payload: parts.join(".")}
 	},
-	// `join` accepts either a string or another fragment as separator —
-	// the production code passes `sql.fragment\` AND \`` so we must handle
-	// fragment-shaped separators too.
-	join(fragments: Mark[], separator: string | Mark): Mark {
+	// Mirror pg-sql2's real contract: the separator MUST be a string. The
+	// real `sql.join` throws "Invalid separator - must be a string" on
+	// anything else — including a `sql.fragment`. A previous version of
+	// this plugin passed a fragment and only learned that at runtime in
+	// staging. Throwing here keeps unit tests honest.
+	join(fragments: Mark[], separator: string): Mark {
+		if (typeof separator !== "string") {
+			throw new Error("Invalid separator - must be a string")
+		}
 		return {kind: "fragment", payload: {fragments, separator}}
 	},
 }
@@ -67,8 +72,7 @@ function flatten(node: unknown): string {
 		const p = m.payload as unknown
 		if (Array.isArray(p)) return p.map(flatten).join("")
 		const obj = p as {fragments: unknown[]; separator: unknown}
-		const sep = typeof obj.separator === "string" ? obj.separator : flatten(obj.separator)
-		return obj.fragments.map(flatten).join(sep)
+		return obj.fragments.map(flatten).join(obj.separator as string)
 	}
 	return ""
 }
