@@ -1,6 +1,7 @@
 import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 import {renderQueryCostHistogram} from "./kg/costLoggerPlugin"
+import {renderResponseSizeHistogram} from "./kg/instrumentationPlugin"
 import {getGraphqlPoolPressure, getGraphqlPoolStats} from "./kg/postgraphile"
 import {db, getPoolStats} from "./services/storage/storage"
 import {log} from "./services/telemetry"
@@ -117,6 +118,9 @@ function renderPrometheusMetrics(): string {
 		// GraphQL query cost histogram (accumulated since process start;
 		// Prometheus derives time-windowed views via rate / histogram_quantile).
 		renderQueryCostHistogram(),
+		// GraphQL response size histogram (sampled only for queries with
+		// durationMs >= 1000ms — see comment in instrumentationPlugin.ts).
+		renderResponseSizeHistogram(),
 	].join("\n")
 }
 

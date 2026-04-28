@@ -35,6 +35,19 @@ function initSentry() {
 		tracesSampleRate,
 		skipOpenTelemetrySetup: true, // We manage OTEL setup ourselves
 		debug,
+		// Drop client-disconnect events. graphql-yoga's response stream throws a
+		// DOMException (name="AbortError", code=20) when the client closes the
+		// socket mid-write; Sentry's auto-capture of unhandled rejections would
+		// otherwise create issues for what isn't a server fault. Synchronous
+		// AbortErrors are also handled at the HTTP layer via `app.onError` →
+		// 499; this filter is the safety net for the async path.
+		beforeSend: (event, hint) => {
+			const err = hint?.originalException as {name?: unknown; code?: unknown} | undefined
+			if (err && (err.name === "AbortError" || err.code === 20 || err.code === "ABORT_ERR")) {
+				return null
+			}
+			return event
+		},
 	})
 
 	// Set up a minimal global TracerProvider for non-Effect code (GraphQL, HTTP middleware).
