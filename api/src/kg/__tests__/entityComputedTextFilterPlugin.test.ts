@@ -1,4 +1,17 @@
-import {describe, expect, it, vi} from "vitest"
+import {beforeEach, describe, expect, it, vi} from "vitest"
+
+// Mock the structured logger so we can assert on the search-like-op warn
+// without hitting Sentry / stdout. Must precede the import of the plugin.
+vi.mock("../../services/telemetry", () => ({
+	log: {
+		debug: vi.fn(),
+		info: vi.fn(),
+		warn: vi.fn(),
+		error: vi.fn(),
+	},
+}))
+
+import {log} from "../../services/telemetry"
 import {__testExports, EntityComputedTextFilterPlugin} from "../entityComputedTextFilterPlugin"
 
 const {NAME_PROPERTY_ID, DESCRIPTION_PROPERTY_ID, buildResolver, operatorPredicate, buildMergedExists} = __testExports
@@ -195,8 +208,12 @@ describe("operatorPredicate", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildResolver — multi-operator merging (P2 fix)", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
 	const noopDefault = vi.fn(() => null)
-	const resolver = buildResolver(NAME_PROPERTY_ID, sql, noopDefault)
+	const resolver = buildResolver("name", NAME_PROPERTY_ID, sql, noopDefault)
 
 	/**
 	 * Count how many `EXISTS (` substrings appear at the top level of the
@@ -284,7 +301,7 @@ describe("buildResolver — multi-operator merging (P2 fix)", () => {
 describe("buildResolver — fallback to default resolver", () => {
 	it("delegates unknown operators to the default resolver, AND-joins with fast-path ops", () => {
 		const defaultResolve = vi.fn((args) => sql.fragment`<<DEFAULT(${sql.value(JSON.stringify(args.fieldValue))})>>`)
-		const r = buildResolver(NAME_PROPERTY_ID, sql, defaultResolve)
+		const r = buildResolver("name", NAME_PROPERTY_ID, sql, defaultResolve)
 		const out = r({sourceAlias, fieldValue: {is: "X", distinctFrom: "Y"}, extra: "ctx"})
 
 		expect(out).not.toBeNull()
@@ -306,7 +323,7 @@ describe("buildResolver — fallback to default resolver", () => {
 
 	it("falls through entirely to default when every op is unknown", () => {
 		const defaultResolve = vi.fn(() => sql.fragment`<<DEFAULT_ONLY>>`)
-		const r = buildResolver(NAME_PROPERTY_ID, sql, defaultResolve)
+		const r = buildResolver("name", NAME_PROPERTY_ID, sql, defaultResolve)
 		const out = r({sourceAlias, fieldValue: {distinctFrom: "x", notDistinctFrom: "y"}})
 
 		expect(out).not.toBeNull()
@@ -409,5 +426,94 @@ describe("EntityComputedTextFilterPlugin (wiring)", () => {
 		const someOtherDefault = vi.fn()
 		result.connectionFilterRegisterResolver("PropertyFilter", "name", someOtherDefault)
 		expect(original.mock.calls[0]?.[2]).toBe(someOtherDefault) // pass-through
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Search-like operator detection — warn-level log when callers use the
+// GraphQL filter for what looks like text search instead of /search
+// ---------------------------------------------------------------------------
+
+describe("buildResolver — search-like operator warn", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	const resolver = buildResolver(
+		"name",
+		NAME_PROPERTY_ID,
+		sql,
+		vi.fn(() => null),
+	)
+
+	const SEARCH_LIKE_FIXTURES: ReadonlyArray<readonly [string, unknown]> = [
+		["includes", "alice"],
+		["includesInsensitive", "alice"],
+		["like", "%alice%"],
+		["likeInsensitive", "%alice%"],
+		["startsWith", "Ali"],
+		["startsWithInsensitive", "Ali"],
+		["endsWith", "ce"],
+		["endsWithInsensitive", "ce"],
+		["notIncludes", "bob"],
+		["notLike", "%bob%"],
+		["notStartsWith", "Bob"],
+		["notEndsWith", "X"],
+	]
+
+	for (const [op, val] of SEARCH_LIKE_FIXTURES) {
+		it(`logs warn for ${op} (signaling caller should use /search)`, () => {
+			resolver({sourceAlias, fieldValue: {[op]: val}})
+
+			expect(log.warn).toHaveBeenCalledWith(
+				"GraphQL pattern-match filter on entity name/description — prefer /search",
+				expect.objectContaining({field: "name", operator: op, value: val}),
+			)
+		})
+	}
+
+	it("does NOT warn for equality / existence ops (typeahead-style is fine)", () => {
+		resolver({sourceAlias, fieldValue: {is: "Alice"}})
+		resolver({sourceAlias, fieldValue: {isNot: ""}})
+		resolver({sourceAlias, fieldValue: {isNull: false}})
+		resolver({sourceAlias, fieldValue: {isNull: true}})
+		resolver({sourceAlias, fieldValue: {in: ["a", "b"]}})
+		resolver({sourceAlias, fieldValue: {isInsensitive: "alice"}})
+
+		expect(log.warn).not.toHaveBeenCalled()
+	})
+
+	it("warns once per search-like op in a mixed bag, not for the equality op", () => {
+		resolver({sourceAlias, fieldValue: {is: "Alice", includes: "li", startsWith: "A"}})
+
+		expect(log.warn).toHaveBeenCalledTimes(2)
+		expect(log.warn).toHaveBeenCalledWith(
+			expect.stringContaining("prefer /search"),
+			expect.objectContaining({operator: "includes"}),
+		)
+		expect(log.warn).toHaveBeenCalledWith(
+			expect.stringContaining("prefer /search"),
+			expect.objectContaining({operator: "startsWith"}),
+		)
+	})
+
+	it("uses the GraphQL field name (description vs name) in the log", () => {
+		const descResolver = buildResolver(
+			"description",
+			DESCRIPTION_PROPERTY_ID,
+			sql,
+			vi.fn(() => null),
+		)
+		descResolver({sourceAlias, fieldValue: {includes: "engineer"}})
+
+		expect(log.warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({field: "description"}))
+	})
+
+	it("truncates very long values in the log to keep payload bounded", () => {
+		const huge = "x".repeat(500)
+		resolver({sourceAlias, fieldValue: {includes: huge}})
+
+		const call = (log.warn as ReturnType<typeof vi.fn>).mock.calls[0]
+		expect(call?.[1]?.value).toHaveLength(200) // truncated from 500 → 200
 	})
 })

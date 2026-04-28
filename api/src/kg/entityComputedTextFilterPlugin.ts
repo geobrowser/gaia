@@ -3,6 +3,19 @@
  * `entity.name` and `entity.description` fields to use indexed EXISTS
  * subqueries on the `values` table — same pattern as `EntitySpaceFilterPlugin`.
  *
+ * NOT a text-search primitive:
+ *   This plugin makes equality / existence / `in` filters fast (the dominant
+ *   prod use cases). Pattern-matching ops (`includes`, `like`, `startsWith`,
+ *   `endsWith`, and their `Insensitive` / negated variants) get the same
+ *   indexed (entity_id, property_id) lookup floor, but the LIKE/ILIKE part
+ *   inside the EXISTS still scans the matching value rows row-by-row and
+ *   may not exploit the trigram GIN index on `values.text` for broad
+ *   entity scans. For real full-text search, use the `/search` endpoint
+ *   (OpenSearch-backed) — it has a dedicated index path with ranking and
+ *   stop-word handling. We emit a warn-level log when a caller uses
+ *   `name`/`description` with a pattern-matching op so we can surface
+ *   "this should be a /search call" in observability.
+ *
  * Why:
  *   `entities.name` and `entities.description` are not real columns. They're
  *   exposed by the `entities_name(entity)` / `entities_description(entity)`
@@ -76,6 +89,7 @@
  */
 
 import {SystemIds} from "@geoprotocol/geo-sdk"
+import {log} from "../services/telemetry"
 
 // Pulled from the SDK's canonical IDs; UUIDs annotated for grep-ability.
 const NAME_PROPERTY_ID = SystemIds.NAME_PROPERTY // a126ca53-0c8e-48d5-b888-82c734c38935
@@ -87,6 +101,32 @@ const PROPERTY_FOR_FIELD: Record<string, string> = {
 }
 
 const TARGET_FILTER_TYPE = "EntityFilter"
+
+/**
+ * Operators that imply the caller is doing text search on a name/description.
+ * These should really go through the OpenSearch-backed `/search` endpoint
+ * instead of the GraphQL graph traversal. We still translate them (to give
+ * the same speedup floor as equality filters), but emit a warn-level log
+ * each time so we can surface usage in Sentry / kubectl / Axiom.
+ */
+const SEARCH_LIKE_OPERATORS: ReadonlySet<string> = new Set([
+	"includes",
+	"includesInsensitive",
+	"notIncludes",
+	"notIncludesInsensitive",
+	"like",
+	"likeInsensitive",
+	"notLike",
+	"notLikeInsensitive",
+	"startsWith",
+	"startsWithInsensitive",
+	"notStartsWith",
+	"notStartsWithInsensitive",
+	"endsWith",
+	"endsWithInsensitive",
+	"notEndsWith",
+	"notEndsWithInsensitive",
+])
 
 // biome-ignore lint/suspicious/noExplicitAny: graphile build object is untyped
 type Sql = any
@@ -265,6 +305,7 @@ function operatorPredicate(sql: Sql, sourceAlias: Sql, propertyId: string, op: s
  * All produced fragments are AND-joined.
  */
 function buildResolver(
+	graphqlFieldName: string,
 	propertyId: string,
 	sql: Sql,
 	// biome-ignore lint/suspicious/noExplicitAny: connection-filter resolver shape
@@ -279,6 +320,19 @@ function buildResolver(
 		const standaloneFragments: Sql[] = []
 
 		for (const [op, val] of Object.entries(fieldValue)) {
+			if (SEARCH_LIKE_OPERATORS.has(op)) {
+				// Surface this usage so we can spot callers that should be
+				// using `/search` instead. Truncates the value to 200 chars
+				// in case someone passes a giant pattern, and never logs the
+				// result set — this is purely a "you used the wrong endpoint"
+				// signal. log.warn = breadcrumb in Sentry + stdout, no issue.
+				const truncatedValue = typeof val === "string" ? val.slice(0, 200) : val
+				log.warn("GraphQL pattern-match filter on entity name/description — prefer /search", {
+					field: graphqlFieldName,
+					operator: op,
+					value: truncatedValue,
+				})
+			}
 			const result = operatorPredicate(sql, sourceAlias, propertyId, op, val)
 			if (result == null) {
 				// Unknown op → delegate to the default resolver with a single-op
@@ -329,7 +383,7 @@ export const EntityComputedTextFilterPlugin = (builder: any) => {
 		build.connectionFilterRegisterResolver = (typeName: string, fieldName: string, defaultResolve: any) => {
 			const propertyId = typeName === TARGET_FILTER_TYPE ? PROPERTY_FOR_FIELD[fieldName] : undefined
 			if (propertyId) {
-				const hybrid = buildResolver(propertyId, sql, defaultResolve)
+				const hybrid = buildResolver(fieldName, propertyId, sql, defaultResolve)
 				return original(typeName, fieldName, hybrid)
 			}
 			return original(typeName, fieldName, defaultResolve)
