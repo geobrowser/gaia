@@ -17,6 +17,7 @@ import {
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 import {useCostLogger} from "./costLoggerPlugin"
+import EntityComputedTextFilterPlugin from "./entityComputedTextFilterPlugin"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {shouldUnmaskError} from "./errorMasking"
 import HideProceduresPlugin from "./hideProceduresPlugin"
@@ -172,6 +173,11 @@ const postgraphileOptions = {
 	// - ValueScalarsPlugin registers custom scalars (GeoPoint, GeoRect, Date, etc.)
 	//   and remaps Value fields to use them for self-documenting schema
 	// - EntitySpaceFilterPlugin adds efficient spaceId filter using EXISTS instead of computed column
+	// - EntityComputedTextFilterPlugin rewrites EntityFilter.name / .description filters
+	//   (and any other computed text fields backed by entities_<field>() STABLE functions)
+	//   as indexed EXISTS subqueries on values, replacing per-row function calls.
+	//   Must run AFTER ConnectionFilterPlugin so its build hook can wrap
+	//   `connectionFilterRegisterResolver` before the computed-columns sub-plugin uses it.
 	// - PaginationCapPlugin clamps first/last/offset on collection fields
 	appendPlugins: [
 		UndashedUuidPlugin,
@@ -179,6 +185,7 @@ const postgraphileOptions = {
 		ConnectionFilterPlugin,
 		SimplifyInflectionPlugin,
 		EntitySpaceFilterPlugin,
+		EntityComputedTextFilterPlugin,
 		ValueOrderByScorePlugin,
 		PaginationCapPlugin,
 		HideProceduresPlugin,
