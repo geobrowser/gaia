@@ -1,5 +1,5 @@
 import {describe, expect, it, vi} from "vitest"
-import {__testExports, EntityNameFilterPlugin} from "../entityNameFilterPlugin"
+import {__testExports, EntityComputedTextFilterPlugin} from "../entityComputedTextFilterPlugin"
 
 const {NAME_PROPERTY_ID, DESCRIPTION_PROPERTY_ID, buildResolver, operatorFragment} = __testExports
 
@@ -199,7 +199,7 @@ describe("buildResolver", () => {
 // Plugin wiring — verifies build-hook wrap behavior
 // ---------------------------------------------------------------------------
 
-describe("EntityNameFilterPlugin (wiring)", () => {
+describe("EntityComputedTextFilterPlugin (wiring)", () => {
 	it("wraps connectionFilterRegisterResolver and substitutes for EntityFilter.name / .description", () => {
 		const original = vi.fn()
 		const build = {
@@ -217,7 +217,7 @@ describe("EntityNameFilterPlugin (wiring)", () => {
 			},
 		}
 
-		EntityNameFilterPlugin(builder)
+		EntityComputedTextFilterPlugin(builder)
 		const result = buildHook(build)
 		expect(result).toBe(build)
 
@@ -258,7 +258,7 @@ describe("EntityNameFilterPlugin (wiring)", () => {
 				buildHook = fn
 			},
 		}
-		EntityNameFilterPlugin(builder)
+		EntityComputedTextFilterPlugin(builder)
 		const result = buildHook(build)
 		expect(result).toBe(build)
 		expect((result as Record<string, unknown>).connectionFilterRegisterResolver).toBeUndefined()
@@ -274,7 +274,7 @@ describe("EntityNameFilterPlugin (wiring)", () => {
 				buildHook = fn
 			},
 		}
-		EntityNameFilterPlugin(builder)
+		EntityComputedTextFilterPlugin(builder)
 		const result = buildHook(build)
 		expect(result).toBe(build)
 	})
@@ -290,7 +290,7 @@ describe("EntityNameFilterPlugin (wiring)", () => {
 				buildHook = fn
 			},
 		}
-		EntityNameFilterPlugin(builder)
+		EntityComputedTextFilterPlugin(builder)
 		const result = buildHook(build)
 
 		const someOtherDefault = vi.fn()

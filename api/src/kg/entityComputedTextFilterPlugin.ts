@@ -211,7 +211,7 @@ function buildResolver(propertyId: string, sql: Sql) {
  * with our EXISTS-based resolvers. All other registrations pass through.
  */
 // biome-ignore lint/suspicious/noExplicitAny: graphile builder is untyped
-export const EntityNameFilterPlugin = (builder: any) => {
+export const EntityComputedTextFilterPlugin = (builder: any) => {
 	// biome-ignore lint/suspicious/noExplicitAny: build hook is untyped
 	builder.hook("build", (build: any) => {
 		const sql = build.pgSql
@@ -244,7 +244,7 @@ export const EntityNameFilterPlugin = (builder: any) => {
 	})
 }
 
-export default EntityNameFilterPlugin
+export default EntityComputedTextFilterPlugin
 
 // Test-only exports — used by unit tests to verify the SQL fragments.
 export const __testExports = {
