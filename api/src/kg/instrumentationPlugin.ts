@@ -104,6 +104,8 @@ const RESPONSE_SIZE_BUCKET_EDGES: readonly number[] = [
 	10_000_000, // 10 MB
 	25_000_000, // 25 MB
 	50_000_000, // 50 MB
+	75_000_000, // 75 MB
+	100_000_000, // 100 MB
 ]
 
 const responseSizeBucketCounts = new Map<number, number>()

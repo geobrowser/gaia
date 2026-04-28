@@ -303,11 +303,11 @@ describe("response size histogram", () => {
 	})
 
 	it("very large responses land beyond the top bucket (+Inf only)", () => {
-		// 60 MB exceeds the 50 MB top bucket
-		runRequest({durationMs: 1500, responseData: {data: "x".repeat(60_000_000)}})
+		// 110 MB exceeds the 100 MB top bucket
+		runRequest({durationMs: 1500, responseData: {data: "x".repeat(110_000_000)}})
 
 		const out = renderResponseSizeHistogram()
-		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="50000000"} 0$/m)
+		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="100000000"} 0$/m)
 		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="\+Inf"} 1$/m)
 	})
 })
