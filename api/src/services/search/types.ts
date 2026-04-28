@@ -34,6 +34,19 @@ export interface SearchQuery {
 	type_ids?: string[]
 	/** Set of type IDs to exclude from results. Entities with any of these types will be filtered out. */
 	exclude_type_ids?: string[]
+	/**
+	 * Additional space IDs to widen the eligibility set on `GLOBAL`-family scopes.
+	 *
+	 * Caller passes the spaces they want results from. If the canonical-graph
+	 * root space ID is included in the list, it is rewritten into the
+	 * `in_canonical_graph: true` filter (i.e. "all canonical-graph spaces");
+	 * remaining IDs become a `space_id IN (...)` clause. The two are OR'd to
+	 * form one eligibility filter. Empty/absent → behavior unchanged.
+	 *
+	 * Not valid with `SPACE` or `SPACE_SINGLE` scopes — those scopes already
+	 * define their own space set.
+	 */
+	additional_space_ids?: string[]
 	/** Maximum number of results to return (default: 20, max: 100). */
 	limit?: number
 	/** Offset for pagination (default: 0). */
