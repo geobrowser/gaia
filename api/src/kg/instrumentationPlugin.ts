@@ -11,9 +11,9 @@ import {
 	print,
 } from "graphql"
 import type {Plugin} from "graphql-yoga"
-import {extractClientIp} from "../utils/clientIp"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
+import {extractClientIp} from "../utils/clientIp"
 import {GRAPHQL_QUERY_COST_CONTEXT_KEY, type GraphqlCostContext} from "./costLoggerPlugin"
 
 // GraphQL error codes that always indicate a client-side problem (bad input,
@@ -85,6 +85,69 @@ const LARGE_RESPONSE_THRESHOLD_BYTES = 1_000_000 // 1 MB
 // Cap for query/variable strings sent to Sentry extras + OTEL span attributes.
 // Sentry truncates strings server-side around 8 KB. Logs are uncapped.
 const SENTRY_PAYLOAD_CHAR_LIMIT = 5000
+
+// ---------------------------------------------------------------------------
+// Prometheus histogram metric — gaia_api_graphql_response_size_bytes
+// ---------------------------------------------------------------------------
+// Exposed via /health/metrics. Selection bias: we only stringify the response
+// for queries with durationMs >= 1000 (the existing gate that avoids the
+// stringify cost on fast queries), so this histogram represents the size
+// distribution of slow-ish responses, not all responses. That's the
+// population we care about for OOM / payload triage anyway.
+const RESPONSE_SIZE_BUCKET_EDGES: readonly number[] = [
+	500_000, // 500 KB
+	1_000_000, // 1 MB
+	2_000_000, // 2 MB
+	5_000_000, // 5 MB
+	10_000_000, // 10 MB
+	25_000_000, // 25 MB
+	50_000_000, // 50 MB
+	75_000_000, // 75 MB
+	100_000_000, // 100 MB
+]
+
+const responseSizeBucketCounts = new Map<number, number>()
+let responseSizeTotalCount = 0
+let responseSizeTotalSum = 0
+
+function recordResponseSize(bytes: number): void {
+	if (!Number.isFinite(bytes) || bytes < 0) return
+	responseSizeTotalCount++
+	responseSizeTotalSum += bytes
+	for (const edge of RESPONSE_SIZE_BUCKET_EDGES) {
+		if (bytes <= edge) {
+			responseSizeBucketCounts.set(edge, (responseSizeBucketCounts.get(edge) ?? 0) + 1)
+		}
+	}
+}
+
+/**
+ * Render the response-size histogram in Prometheus text format.
+ */
+export function renderResponseSizeHistogram(): string {
+	const lines = [
+		"# HELP gaia_api_graphql_response_size_bytes Serialized GraphQL response size in bytes (sampled only for queries with durationMs >= 1000ms).",
+		"# TYPE gaia_api_graphql_response_size_bytes histogram",
+	]
+	for (const edge of RESPONSE_SIZE_BUCKET_EDGES) {
+		lines.push(
+			`gaia_api_graphql_response_size_bytes_bucket{le="${edge}"} ${responseSizeBucketCounts.get(edge) ?? 0}`,
+		)
+	}
+	lines.push(`gaia_api_graphql_response_size_bytes_bucket{le="+Inf"} ${responseSizeTotalCount}`)
+	lines.push(`gaia_api_graphql_response_size_bytes_sum ${responseSizeTotalSum}`)
+	lines.push(`gaia_api_graphql_response_size_bytes_count ${responseSizeTotalCount}`)
+	return `${lines.join("\n")}\n`
+}
+
+/**
+ * Reset accumulated histogram state. Tests only.
+ */
+export function __resetResponseSizeHistogramForTests(): void {
+	responseSizeBucketCounts.clear()
+	responseSizeTotalCount = 0
+	responseSizeTotalSum = 0
+}
 
 type TraceContext = {
 	traceId: string
@@ -236,6 +299,10 @@ export function useGraphQLInstrumentation(): Plugin {
 						} catch {
 							// If stringify fails (circular refs, etc.), skip size measurement
 						}
+					}
+
+					if (responseSizeBytes !== undefined) {
+						recordResponseSize(responseSizeBytes)
 					}
 
 					if (responseSizeBytes !== undefined && responseSizeBytes >= LARGE_RESPONSE_THRESHOLD_BYTES) {
