@@ -869,4 +869,191 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain(`* ${SCORE_BOOST}`)
 		})
 	})
+
+	// ------------------------------------------------------------------
+	// additional_space_ids — eligibility-set widening on GLOBAL queries
+	// ------------------------------------------------------------------
+	describe("buildAdditionalSpacesFilter", () => {
+		const ROOT_ID = "00000000-0000-0000-0000-000000000001"
+		const SPACE_A = "11111111-1111-1111-1111-111111111111"
+		const SPACE_B = "22222222-2222-2222-2222-222222222222"
+
+		// Inject a known root ID for the helper to detect.
+		const setRoot = (c: OpenSearchClient, id: string | null) => {
+			;(c as unknown as {rootSpaceId: string | null}).rootSpaceId = id
+		}
+
+		it("returns null when no IDs are supplied", () => {
+			expect(client.buildAdditionalSpacesFilter(undefined)).toBeNull()
+			expect(client.buildAdditionalSpacesFilter([])).toBeNull()
+		})
+
+		it("returns a single terms clause when no root ID is in the list", () => {
+			setRoot(client, ROOT_ID)
+			const filter = client.buildAdditionalSpacesFilter([SPACE_A, SPACE_B]) as {
+				terms: {space_id: string[]}
+			}
+			expect(filter).not.toBeNull()
+			expect(filter).not.toHaveProperty("bool")
+			expect(filter.terms.space_id).toContain(SPACE_A)
+			expect(filter.terms.space_id).toContain(SPACE_B)
+			// includes both dashed and dashless variants
+			expect(filter.terms.space_id).toContain(SPACE_A.replace(/-/g, ""))
+		})
+
+		it("returns the single canonical term when only the root ID is supplied", () => {
+			setRoot(client, ROOT_ID)
+			expect(client.buildAdditionalSpacesFilter([ROOT_ID])).toEqual({
+				term: {in_canonical_graph: true},
+			})
+		})
+
+		it("returns a bool.should OR-ing canonical + non-root terms when both are present", () => {
+			setRoot(client, ROOT_ID)
+			const filter = client.buildAdditionalSpacesFilter([ROOT_ID, SPACE_A, SPACE_B]) as {
+				bool: {should: object[]; minimum_should_match: number}
+			}
+			expect(filter.bool.minimum_should_match).toBe(1)
+			expect(filter.bool.should).toHaveLength(2)
+			expect(filter.bool.should).toContainEqual({term: {in_canonical_graph: true}})
+			const termsClause = filter.bool.should.find(
+				(c): c is {terms: {space_id: string[]}} => "terms" in c,
+			) as {terms: {space_id: string[]}}
+			expect(termsClause.terms.space_id).toContain(SPACE_A)
+			expect(termsClause.terms.space_id).toContain(SPACE_B)
+			// Root ID is rewritten, not duplicated as a terms entry
+			expect(termsClause.terms.space_id).not.toContain(ROOT_ID)
+		})
+
+		it("treats list as plain space IDs when the root is not yet known", () => {
+			setRoot(client, null)
+			const filter = client.buildAdditionalSpacesFilter([ROOT_ID, SPACE_A]) as {
+				terms: {space_id: string[]}
+			}
+			expect(filter).not.toHaveProperty("bool")
+			// Without a known root the would-be-root ID stays as a regular term
+			expect(filter.terms.space_id).toContain(ROOT_ID)
+			expect(filter.terms.space_id).toContain(SPACE_A)
+		})
+	})
+
+	describe("buildSearchBody — additional_space_ids integration", () => {
+		const ROOT_ID = "00000000-0000-0000-0000-000000000001"
+		const SPACE_A = "11111111-1111-1111-1111-111111111111"
+		const SPACE_B = "22222222-2222-2222-2222-222222222222"
+
+		const setRoot = (c: OpenSearchClient, id: string | null) => {
+			;(c as unknown as {rootSpaceId: string | null}).rootSpaceId = id
+		}
+
+		// Drill into the body shape to get the filter array we care about.
+		// Body shape: { query: { function_score: { query: { bool: { filter: [...] } } } } }
+		const extractFunctionScoreFilters = (body: Record<string, unknown>): Array<Record<string, unknown>> => {
+			const fs = (body.query as {function_score: {query: {bool: {filter: Array<Record<string, unknown>>}}}})
+				.function_score
+			return fs.query.bool.filter
+		}
+
+		it("widens GLOBAL eligibility to canonical OR listed spaces when root + extras are passed", async () => {
+			setRoot(client, ROOT_ID)
+			const body = (await client.buildSearchBody({
+				query: "test",
+				scope: "GLOBAL",
+				additional_space_ids: [ROOT_ID, SPACE_A, SPACE_B],
+				// disable canonical-only restriction so the explicit filter is the
+				// only one shaping eligibility — keeps the assertion focused.
+				include_non_canonical: true,
+			})) as Record<string, unknown>
+
+			const bodyStr = JSON.stringify(body)
+			// The bool.should from buildAdditionalSpacesFilter must be present
+			expect(bodyStr).toContain('"in_canonical_graph":true')
+			expect(bodyStr).toContain('"minimum_should_match":1')
+			expect(bodyStr).toContain(SPACE_A)
+			expect(bodyStr).toContain(SPACE_B)
+		})
+
+		it("emits only the canonical term when GLOBAL is called with just the root ID", async () => {
+			setRoot(client, ROOT_ID)
+			const body = (await client.buildSearchBody({
+				query: "test",
+				scope: "GLOBAL",
+				additional_space_ids: [ROOT_ID],
+				include_non_canonical: true,
+			})) as Record<string, unknown>
+
+			const filters = extractFunctionScoreFilters(body)
+			// The eligibility-filter for additional_space_ids must be the bare
+			// canonical term — having `{term: {in_canonical_graph: true}}` directly
+			// in the filters array proves we didn't wrap a single clause in bool.should.
+			expect(filters).toContainEqual({term: {in_canonical_graph: true}})
+		})
+
+		it("emits only a terms clause when GLOBAL is called with non-root spaces only", async () => {
+			setRoot(client, ROOT_ID)
+			const body = (await client.buildSearchBody({
+				query: "test",
+				scope: "GLOBAL",
+				additional_space_ids: [SPACE_A, SPACE_B],
+				include_non_canonical: true,
+			})) as Record<string, unknown>
+
+			const filters = extractFunctionScoreFilters(body)
+			// No canonical anchor at the filters level (canonical not in list).
+			expect(
+				filters.find((f) => "term" in f && (f.term as {in_canonical_graph?: unknown}).in_canonical_graph),
+			).toBeUndefined()
+			// The additional-spaces filter is a bare terms clause (single non-root group).
+			const termsFilter = filters.find((f) => "terms" in f && (f.terms as {space_id?: unknown}).space_id) as
+				| {terms: {space_id: string[]}}
+				| undefined
+			expect(termsFilter).toBeDefined()
+			expect(termsFilter!.terms.space_id).toEqual(expect.arrayContaining([SPACE_A, SPACE_B]))
+		})
+
+		it("threads additional_space_ids through buildTopRankedQuery (empty query)", async () => {
+			setRoot(client, ROOT_ID)
+			const body = (await client.buildSearchBody({
+				query: "   ",
+				scope: "GLOBAL",
+				additional_space_ids: [ROOT_ID, SPACE_A],
+				include_non_canonical: true,
+			})) as Record<string, unknown>
+
+			const bodyStr = JSON.stringify(body)
+			expect(bodyStr).toContain('"in_canonical_graph":true')
+			expect(bodyStr).toContain(SPACE_A)
+		})
+
+		it("threads additional_space_ids through buildUuidQuery (UUID-shaped query)", async () => {
+			setRoot(client, ROOT_ID)
+			const entityId = "123e4567-e89b-12d3-a456-426614174000"
+			const body = (await client.buildSearchBody({
+				query: entityId,
+				scope: "GLOBAL",
+				additional_space_ids: [SPACE_A],
+				include_non_canonical: true,
+			})) as Record<string, unknown>
+
+			const bodyStr = JSON.stringify(body)
+			expect(bodyStr).toContain(entityId)
+			expect(bodyStr).toContain(SPACE_A)
+		})
+
+		it("preserves existing behavior when additional_space_ids is absent", async () => {
+			setRoot(client, ROOT_ID)
+			const before = await client.buildSearchBody({
+				query: "test",
+				scope: "GLOBAL",
+				include_non_canonical: true,
+			})
+			const after = await client.buildSearchBody({
+				query: "test",
+				scope: "GLOBAL",
+				additional_space_ids: [],
+				include_non_canonical: true,
+			})
+			expect(JSON.stringify(after)).toBe(JSON.stringify(before))
+		})
+	})
 })

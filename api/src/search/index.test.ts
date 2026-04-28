@@ -389,6 +389,124 @@ describe("Search Router - Integration Tests", () => {
 		})
 	})
 
+	describe("additional_space_ids", () => {
+		const SPACE_A = "11111111-1111-1111-1111-111111111111"
+		const SPACE_B = "22222222-2222-2222-2222-222222222222"
+		const ROOT_ID = "00000000-0000-0000-0000-000000000001"
+
+		it("parses CSV and forwards as a string array on GLOBAL scope", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&additional_space_ids=${ROOT_ID},${SPACE_A},${SPACE_B}`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					scope: "GLOBAL",
+					additional_space_ids: [ROOT_ID, SPACE_A, SPACE_B],
+				}),
+			)
+		})
+
+		it("works with GLOBAL_BY_SPACE_SCORE scope", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&scope=GLOBAL_BY_SPACE_SCORE&additional_space_ids=${SPACE_A}`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					scope: "GLOBAL_BY_SPACE_SCORE",
+					additional_space_ids: [SPACE_A],
+				}),
+			)
+		})
+
+		it("trims whitespace and skips empty entries", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&additional_space_ids=${SPACE_A}, ${SPACE_B}`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additional_space_ids: [SPACE_A, SPACE_B],
+				}),
+			)
+		})
+
+		it("does not pass the field through when param is absent", async () => {
+			const request = new Request("http://localhost/search?query=test")
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			const callArg = (mockSearchClient.search as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+				| Record<string, unknown>
+				| undefined
+			expect(callArg).toBeDefined()
+			expect(callArg).not.toHaveProperty("additional_space_ids")
+		})
+
+		it("does not pass the field through when param is the empty string", async () => {
+			const request = new Request("http://localhost/search?query=test&additional_space_ids=")
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			const callArg = (mockSearchClient.search as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+				| Record<string, unknown>
+				| undefined
+			expect(callArg).toBeDefined()
+			expect(callArg).not.toHaveProperty("additional_space_ids")
+		})
+
+		it("returns 400 when used with SPACE scope", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&scope=SPACE&space_id=${SPACE_A}&additional_space_ids=${SPACE_B}`,
+			)
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.error).toBe("Invalid parameter")
+			expect(result.message).toContain("additional_space_ids is not valid with SPACE scope")
+		})
+
+		it("returns 400 when used with SPACE_SINGLE scope", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&scope=SPACE_SINGLE&space_id=${SPACE_A}&additional_space_ids=${SPACE_B}`,
+			)
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.message).toContain("SPACE_SINGLE")
+		})
+
+		it("returns 400 when an entry is not a valid UUID", async () => {
+			const request = new Request(`http://localhost/search?query=test&additional_space_ids=not-a-uuid`)
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.message).toContain("valid UUIDs")
+		})
+
+		it("returns 400 when more than 10 IDs are supplied", async () => {
+			const ids = Array.from({length: 11}, (_, i) =>
+				`${i.toString().padStart(8, "0")}-0000-0000-0000-000000000000`,
+			).join(",")
+			const request = new Request(`http://localhost/search?query=test&additional_space_ids=${ids}`)
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.message).toContain("more than 10 IDs")
+		})
+	})
+
 	describe("exclude_type_ids", () => {
 		it("applies default excluded type IDs when param is not provided", async () => {
 			const request = new Request("http://localhost/search?query=test")
