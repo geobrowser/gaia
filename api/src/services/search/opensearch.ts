@@ -238,9 +238,25 @@ export class OpenSearchClient implements SearchClient {
 
 	/**
 	 * Check if a space ID is the cached root space.
+	 *
+	 * Both sides are normalized to dashless before comparison so the check
+	 * works regardless of which format the caller supplied or which format
+	 * the topology service returned. Without this, a caller passing the
+	 * dashed root ID would fail to match a dashless cached root (and vice
+	 * versa) — silently dropping the canonical-graph rewrite in
+	 * `buildAdditionalSpacesFilter` and the SPACE-scope short-circuits.
+	 *
+	 * Falls back to strict equality if either value isn't a valid UUID
+	 * (shouldn't happen in normal flow — route handlers validate UUIDs
+	 * upstream — but the cache could be set from an unvalidated source).
 	 */
 	private isRootSpace(spaceId: string): boolean {
-		return this.rootSpaceId !== null && spaceId === this.rootSpaceId
+		if (this.rootSpaceId === null) return false
+		try {
+			return normalizeUuid(spaceId) === normalizeUuid(this.rootSpaceId)
+		} catch {
+			return spaceId === this.rootSpaceId
+		}
 	}
 
 	/**

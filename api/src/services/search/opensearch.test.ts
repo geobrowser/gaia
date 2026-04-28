@@ -935,6 +935,43 @@ describe("OpenSearchClient", () => {
 			expect(filter.terms.space_id).toContain(ROOT_ID)
 			expect(filter.terms.space_id).toContain(SPACE_A)
 		})
+
+		it("matches the root when caller passes dashless and cache is dashed", () => {
+			// Cache holds dashed; caller supplies dashless
+			setRoot(client, ROOT_ID) // dashed
+			const dashlessRoot = ROOT_ID.replace(/-/g, "")
+			expect(client.buildAdditionalSpacesFilter([dashlessRoot])).toEqual({
+				term: {in_canonical_graph: true},
+			})
+		})
+
+		it("matches the root when caller passes dashed and cache is dashless", () => {
+			// Cache holds dashless; caller supplies dashed
+			setRoot(client, ROOT_ID.replace(/-/g, ""))
+			expect(client.buildAdditionalSpacesFilter([ROOT_ID])).toEqual({
+				term: {in_canonical_graph: true},
+			})
+		})
+
+		it("rewrites mixed-form root + extras into bool.should without leaking the root into terms", () => {
+			setRoot(client, ROOT_ID) // dashed cache
+			const dashlessRoot = ROOT_ID.replace(/-/g, "")
+			const filter = client.buildAdditionalSpacesFilter([dashlessRoot, SPACE_A]) as {
+				bool: {should: object[]; minimum_should_match: number}
+			}
+			expect(filter.bool.minimum_should_match).toBe(1)
+			expect(filter.bool.should).toContainEqual({term: {in_canonical_graph: true}})
+			const termsClause = filter.bool.should.find((c): c is {terms: {space_id: string[]}} => "terms" in c) as {
+				terms: {space_id: string[]}
+			}
+			// Root must NOT appear in the terms clause (in either form) — it should
+			// have been rewritten to the canonical anchor only.
+			expect(termsClause.terms.space_id).not.toContain(dashlessRoot)
+			expect(termsClause.terms.space_id).not.toContain(ROOT_ID)
+			// SPACE_A must still appear in both dashed and dashless forms
+			expect(termsClause.terms.space_id).toContain(SPACE_A)
+			expect(termsClause.terms.space_id).toContain(SPACE_A.replace(/-/g, ""))
+		})
 	})
 
 	describe("buildSearchBody — additional_space_ids integration", () => {
