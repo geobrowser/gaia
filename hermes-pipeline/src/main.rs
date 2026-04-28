@@ -292,6 +292,7 @@ impl Pipeline {
                 max_sequence(&governance.proposals_voted),
                 max_sequence(&governance.proposals_executed),
                 max_sequence(&governance.proposals_settings_updated),
+                max_sequence(&governance.voting_settings_updated),
                 max_sequence(&voting.votes),
                 max_sequence(&edits.events),
             ]
@@ -315,6 +316,7 @@ impl Pipeline {
                 || mark_sequence_as_last(&mut governance.proposals_voted, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_executed, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_settings_updated, max_seq)
+                || mark_sequence_as_last(&mut governance.voting_settings_updated, max_seq)
                 || mark_sequence_as_last(&mut voting.votes, max_seq)
                 || mark_sequence_as_last(&mut edits.events, max_seq);
         }
@@ -426,6 +428,10 @@ impl Pipeline {
         counts_by_event_type.insert(
             "PROPOSAL_SETTINGS_UPDATED".to_string(),
             governance.proposals_settings_updated.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "VOTING_SETTINGS_UPDATED".to_string(),
+            governance.voting_settings_updated.len() as u64,
         );
         counts_by_event_type.insert("VOTE_CAST".to_string(), voting.votes.len() as u64);
 
@@ -590,6 +596,13 @@ impl Pipeline {
                         space_id = %hex::encode(&event.space_id),
                         proposal_id = %hex::encode(&event.proposal_id),
                         "Proposal settings updated"
+                    );
+                }
+                for event in &governance.voting_settings_updated {
+                    self.emitter.emit(event).await?;
+                    debug!(
+                        space_id = %hex::encode(&event.space_id),
+                        "Voting settings updated"
                     );
                 }
             }
