@@ -1,20 +1,33 @@
 import {parse} from "graphql"
-import {beforeEach, describe, expect, it} from "vitest"
+import {beforeEach, describe, expect, it, vi} from "vitest"
+
+// Mock Sentry so we can assert on the new metric emission without a real
+// Sentry init. Order matters: this mock must precede the import of the
+// module under test.
+vi.mock("@sentry/node", () => ({
+	metrics: {
+		distribution: vi.fn(),
+	},
+}))
+
+import * as Sentry from "@sentry/node"
 import {
 	__resetQueryCostHistogramForTests,
 	compressCost,
 	computeQueryCost,
 	computeQueryCostRaw,
+	GRAPHQL_QUERY_COST_CONTEXT_KEY,
 	renderQueryCostHistogram,
 	useCostLogger,
 } from "../costLoggerPlugin"
-import {MAX_PAGINATION_LIMIT} from "../paginationCapPlugin"
 
 /** Compressed-score helper (what gets recorded and logged). */
-const cost = (query: string, variables: Record<string, unknown> = {}) => computeQueryCost(parse(query), variables)
+const cost = (query: string, variables: Record<string, unknown> = {}, operationName?: string) =>
+	computeQueryCost(parse(query), variables, operationName)
 
 /** Raw BigInt-cost helper — for tests that care about the exact multiplier math. */
-const rawCost = (query: string, variables: Record<string, unknown> = {}) => computeQueryCostRaw(parse(query), variables)
+const rawCost = (query: string, variables: Record<string, unknown> = {}, operationName?: string) =>
+	computeQueryCostRaw(parse(query), variables, operationName)
 
 // --------------------------------------------------------------------------
 // compressCost — log₁₀×10 compression primitive
@@ -64,8 +77,8 @@ describe("computeQueryCost — compressed scores", () => {
 	})
 
 	it("simple single-entity lookup → ~30", () => {
-		// raw = 1000 × 2 + 1 = 2001, log10 ≈ 3.301 → 33
-		expect(cost(`{ entity(id: "...") { id name } }`)).toBe(33)
+		// raw = 1000 × (id=1 + name=2) + 1 = 3001, log10 ≈ 3.477 → 35
+		expect(cost(`{ entity(id: "...") { id name } }`)).toBe(35)
 	})
 
 	it("first:50 single scalar → 17", () => {
@@ -78,10 +91,11 @@ describe("computeQueryCost — compressed scores", () => {
 		expect(cost(`{ entities(last: 25) { id } }`)).toBe(14)
 	})
 
-	it("nested-list with explicit pagination → 24", () => {
+	it("nested-list with explicit pagination → 30", () => {
 		// inner relations(first:10){id} = 11
-		// outer entities(first:20){id + inner} = 20 × (1 + 11) + 1 = 241
-		// log10(241) ≈ 2.382 → 24
+		// relations payload factor = ×4, so inner = 44
+		// outer entities(first:20){id + inner} = 20 × (1 + 44) + 1 = 901
+		// log10(901) ≈ 2.955 → 30
 		expect(
 			cost(`{
 				entities(first: 20) {
@@ -89,7 +103,7 @@ describe("computeQueryCost — compressed scores", () => {
 					relations(first: 10) { id }
 				}
 			}`),
-		).toBe(24)
+		).toBe(30)
 	})
 })
 
@@ -98,7 +112,7 @@ describe("computeQueryCost — compressed scores", () => {
 // --------------------------------------------------------------------------
 
 describe("computeQueryCostRaw — multiplier math", () => {
-	it("explicit-pagination nested: `entities(first:20) { id, relations(first:10){id} }` → 241n", () => {
+	it("explicit-pagination nested: `entities(first:20) { id, relations(first:10){id} }` → 901n", () => {
 		expect(
 			rawCost(`{
 				entities(first: 20) {
@@ -106,14 +120,15 @@ describe("computeQueryCostRaw — multiplier math", () => {
 					relations(first: 10) { id }
 				}
 			}`),
-		).toBe(241n)
+		).toBe(901n)
 	})
 
 	it("implicit-default heavy query: three unpaginated levels compound at 1000×", () => {
-		// valuesList { 2 scalars }             = 1000 × 2 + 1   = 2001
-		// toEntity { valuesList }              = 1000 × 2001 + 1 = 2_001_001
-		// relationsList { toEntity }           = 1000 × 2_001_001 + 1 = 2_001_001_001
-		// entities { id, relationsList }       = 1000 × 2_001_001_002 + 1 = 2_001_001_002_001
+		// Payload-size risk now matters too:
+		// - text scalar is heavier than id-like fields
+		// - valuesList / relationsList have response-size factors
+		// - nested toEntity is a duplication path
+		// - broad cap-sized root entities gets root SQL + payload factors
 		expect(
 			rawCost(`{
 				entities {
@@ -123,7 +138,7 @@ describe("computeQueryCostRaw — multiplier math", () => {
 					}
 				}
 			}`),
-		).toBe(2_001_001_002_001n)
+		).toBe(46_801_800_360_150_030n)
 	})
 
 	it("real prod shape: `entitiesConnection` with 3-level nested relations", () => {
@@ -174,13 +189,13 @@ describe("computeQueryCostRaw — multiplier math", () => {
 			}
 		`
 		const raw = rawCost(query, {type: ["7ed45f2bc48b419e8e4664d5ff680b0d"], first: 1000, after: null})
-		// Raw is a 22-digit BigInt. Exact value is stable across runs since
-		// the walker is deterministic.
-		expect(raw.toString().length).toBeGreaterThanOrEqual(22)
-		expect(raw.toString().length).toBeLessThanOrEqual(23)
-		// Compressed score of the prod cap-hitter: ~220 (≈10²² raw cost).
-		expect(compressCost(raw)).toBeGreaterThanOrEqual(215)
-		expect(compressCost(raw)).toBeLessThanOrEqual(225)
+		// Raw now includes SQL-risk and payload-size factors: broad root
+		// collection, relation filter, cursor pagination, values/relations
+		// fan-out, entity duplication, and cap-sized root page.
+		expect(raw.toString().length).toBeGreaterThanOrEqual(28)
+		expect(raw.toString().length).toBeLessThanOrEqual(29)
+		expect(compressCost(raw)).toBeGreaterThanOrEqual(270)
+		expect(compressCost(raw)).toBeLessThanOrEqual(280)
 	})
 })
 
@@ -190,56 +205,54 @@ describe("computeQueryCostRaw — multiplier math", () => {
 // --------------------------------------------------------------------------
 
 describe("computeQueryCost — adversarial inputs", () => {
-	it("50-level deeply nested `entities(first:1000)` → score ~1500, no throw", () => {
-		// raw = 1000^50 ≈ 10^150 → compressed = 1500.
+	it("50-level deeply nested `entities(first:1000)` → score ~1515, no throw", () => {
+		// raw is still dominated by 1000^50; root payload factors add about 15 points.
 		let q = "{ id }"
 		for (let i = 0; i < 50; i++) q = `{ entities(first: 1000) ${q} }`
 		const c = cost(q)
 		expect(Number.isFinite(c)).toBe(true)
-		expect(c).toBeGreaterThanOrEqual(1500)
-		expect(c).toBeLessThanOrEqual(1510)
+		expect(c).toBeGreaterThanOrEqual(1510)
+		expect(c).toBeLessThanOrEqual(1520)
 	})
 
 	it("100-level nesting — BigInt walker handles it, score scales linearly with depth", () => {
-		// raw = 1000^100 = 10^300 → compressed = 3000.
+		// raw is still dominated by 1000^100; root payload factors add about 15 points.
 		let q = "{ id }"
 		for (let i = 0; i < 100; i++) q = `{ entities(first: 1000) ${q} }`
 		const c = cost(q)
-		expect(c).toBeGreaterThanOrEqual(3000)
-		expect(c).toBeLessThanOrEqual(3010)
+		expect(c).toBeGreaterThanOrEqual(3010)
+		expect(c).toBeLessThanOrEqual(3020)
 	})
 
 	it("wide fan-out: 100 sibling aliased collections → modest score, linear in width", () => {
-		// Each sibling: entities(first:1000){id} = 1001 → 100 siblings sum = ~100_100.
-		// log10(100_100) ≈ 5.0 → compressed ≈ 50.
+		// Each sibling is root cap-sized and gets root page factors; still
+		// linear in width rather than multiplicative across aliases.
 		const aliases = Array.from({length: 100}, (_, i) => `a${i}: entities(first: 1000) { id }`).join(" ")
 		const c = cost(`{ ${aliases} }`)
-		expect(c).toBeGreaterThanOrEqual(45)
-		expect(c).toBeLessThanOrEqual(55)
+		expect(c).toBeGreaterThanOrEqual(60)
+		expect(c).toBeLessThanOrEqual(70)
 	})
 
 	it("attacker attempts `first: 0` to sneak nested work past the estimator", () => {
 		// first:0 is non-positive → fallback to MAX_PAGINATION_LIMIT. Nested
 		// relations(first:50){id} still charged.
-		// inner = 51, outer = 1000 × (1 + 51) + 1 = 52001 → compressed ~47.
+		// relations payload factor and root cap-sized payload factor both apply.
 		const raw = rawCost(`{
 			entities(first: 0) {
 				id
 				relations(first: 50) { id }
 			}
 		}`)
-		expect(raw).toBe(BigInt(MAX_PAGINATION_LIMIT) * 52n + 1n)
-		expect(compressCost(raw)).toBe(47)
+		expect(raw).toBe(6_150_030n)
+		expect(compressCost(raw)).toBe(68)
 	})
 
 	it("attacker attempts negative `first`", () => {
-		expect(rawCost(`{ entities(first: -100) { id } }`)).toBe(BigInt(MAX_PAGINATION_LIMIT) + 1n)
+		expect(rawCost(`{ entities(first: -100) { id } }`)).toBe(30_030n)
 	})
 
 	it("unresolved variable in `first:` falls back to MAX_PAGINATION_LIMIT", () => {
-		expect(rawCost(`query Q($first: Int) { entities(first: $first) { id } }`, {})).toBe(
-			BigInt(MAX_PAGINATION_LIMIT) + 1n,
-		)
+		expect(rawCost(`query Q($first: Int) { entities(first: $first) { id } }`, {})).toBe(30_030n)
 	})
 
 	it("fragment cycle terminates cleanly (defence-in-depth vs skipped validation)", () => {
@@ -274,12 +287,13 @@ describe("computeQueryCost — adversarial inputs", () => {
 
 describe("computeQueryCost — pagination + variables", () => {
 	it("resolves pagination args supplied via variables", () => {
-		expect(rawCost(`query Q($first: Int!) { entities(first: $first) { id } }`, {first: 100})).toBe(101n)
+		expect(rawCost(`query Q($first: Int!) { entities(first: $first) { id } }`, {first: 100})).toBe(303n)
 	})
 
 	it("sibling with negative outer still charges for valid nested first", () => {
 		// Inner relations(first:50){id} = 51.
-		// Outer entities(first:-5) → MAX_PAGINATION_LIMIT × (1 + 51) + 1 = 52_001
+		// Outer invalid first falls back to cap; relation payload and root page
+		// factors both apply.
 		expect(
 			rawCost(`{
 				entities(first: -5) {
@@ -287,7 +301,114 @@ describe("computeQueryCost — pagination + variables", () => {
 					relations(first: 50) { id }
 				}
 			}`),
-		).toBe(BigInt(MAX_PAGINATION_LIMIT) * 52n + 1n)
+		).toBe(6_150_030n)
+	})
+})
+
+// --------------------------------------------------------------------------
+// Operation selection, directives, and SQL-risk signals
+// --------------------------------------------------------------------------
+
+describe("computeQueryCost — operation selection, directives, and SQL-risk signals", () => {
+	it("uses the selected operationName instead of always walking the first operation", () => {
+		const query = `
+			query Cheap { entities(first: 1) { id } }
+			query Expensive { entities(first: 1000) { id } }
+		`
+		expect(rawCost(query, {}, "Cheap")).toBe(2n)
+		expect(rawCost(query, {}, "Expensive")).toBe(30_030n)
+	})
+
+	it("honors @skip and @include when variable values are available", () => {
+		const query = `
+			query Q($includeRelations: Boolean!) {
+				entities(first: 10) {
+					id
+					relations(first: 50) @include(if: $includeRelations) { id }
+				}
+			}
+		`
+		expect(rawCost(query, {includeRelations: false})).toBe(11n)
+		expect(rawCost(query, {includeRelations: true})).toBe(2_051n)
+	})
+
+	it("charges offset as skipped rows plus returned rows", () => {
+		expect(rawCost(`{ entities(first: 25, offset: 100) { id } }`)).toBe(378n)
+	})
+
+	it("treats offset zero as a valid no-skip value", () => {
+		expect(rawCost(`{ entities(first: 25) { id } }`)).toBe(26n)
+		expect(rawCost(`{ entities(first: 25, offset: 0) { id } }`)).toBe(26n)
+	})
+
+	it("charges totalCount as an extra connection-wide count", () => {
+		expect(rawCost(`{ entitiesConnection(first: 1) { totalCount } }`)).toBe(10_001n)
+		expect(cost(`{ entitiesConnection(first: 1) { totalCount } }`)).toBe(40)
+	})
+
+	it("adds SQL-risk factor for expensive string filter operators", () => {
+		const cheap = rawCost(`{ entitiesConnection(first: 20) { nodes { id } } }`)
+		const expensive = rawCost(`{
+			entitiesConnection(first: 20, filter: { name: { includesInsensitive: "geo" } }) {
+				nodes { id }
+			}
+		}`)
+		expect(expensive).toBeGreaterThan(cheap * 1_000n)
+		expect(compressCost(expensive)).toBeGreaterThan(compressCost(cheap) + 25)
+	})
+
+	it("adds SQL-risk factor for overlaps filters", () => {
+		const cheap = rawCost(`{ entitiesConnection(first: 20) { nodes { id } } }`)
+		const expensive = rawCost(`{
+			entitiesConnection(first: 20, filter: { spaceIds: { overlaps: ["00000000000000000000000000000000"] } }) {
+				nodes { id }
+			}
+		}`)
+		expect(expensive).toBeGreaterThan(cheap * 500n)
+	})
+
+	it("adds field/argument weights for known expensive GraphQL fields and orderings", () => {
+		expect(cost(`{ search(query: "geo", first: 10) { id } }`)).toBeGreaterThan(20)
+		expect(
+			cost(`{ entitiesOrderedByProperty(propertyId: "00000000000000000000000000000000", first: 10) { id } }`),
+		).toBeGreaterThan(25)
+		expect(cost(`{ valuesConnection(orderBy: RAW_SCORE_DESC, first: 5) { nodes { id } } }`)).toBeGreaterThan(60)
+	})
+
+	it("adds payload-size cost for large entity pages with heavy scalar fields", () => {
+		const leanPage = cost(`{ entitiesConnection(first: 1000) { nodes { id } } }`)
+		const payloadHeavyPage = cost(`{
+			entitiesConnection(first: 1000) {
+				nodes {
+					id
+					name
+					description
+					values(first: 50) {
+						nodes { text schedule embedding bytes }
+					}
+					relations(first: 100) {
+						nodes {
+							toEntity {
+								id
+								name
+								description
+								values(first: 5) { nodes { text } }
+							}
+						}
+					}
+				}
+			}
+		}`)
+
+		expect(leanPage).toBe(75)
+		expect(payloadHeavyPage).toBeGreaterThanOrEqual(220)
+		expect(payloadHeavyPage).toBeGreaterThan(leanPage + 100)
+	})
+
+	it("adds a step-up payload factor for large root entitiesConnection pages", () => {
+		expect(rawCost(`{ entitiesConnection(first: 99) { nodes { id } } }`)).toBe(99_100n)
+		expect(rawCost(`{ entitiesConnection(first: 100) { nodes { id } } }`)).toBe(300_303n)
+		expect(rawCost(`{ entitiesConnection(first: 500) { nodes { id } } }`)).toBe(15_015_030n)
 	})
 })
 
@@ -298,8 +419,8 @@ describe("computeQueryCost — pagination + variables", () => {
 describe("computeQueryCost — fragments", () => {
 	it("inline fragments contribute to parent's childComplexity", () => {
 		// entities(first:10) { ... on Entity { id name } }
-		// inline frag = 2 → 10 × 2 + 1 = 21
-		expect(rawCost(`{ entities(first: 10) { ... on Entity { id name } } }`)).toBe(21n)
+		// inline frag = id(1) + name(2) → 10 × 3 + 1 = 31
+		expect(rawCost(`{ entities(first: 10) { ... on Entity { id name } } }`)).toBe(31n)
 	})
 
 	it("fragment spreads follow the definition", () => {
@@ -308,7 +429,7 @@ describe("computeQueryCost — fragments", () => {
 				query { entities(first: 10) { ...F } }
 				fragment F on Entity { id name }
 			`),
-		).toBe(21n)
+		).toBe(31n)
 	})
 
 	it("allows a fragment to be used multiple times at sibling positions (not a cycle)", () => {
@@ -358,13 +479,13 @@ describe("query cost histogram", () => {
 
 		// Score 0 — trivial.
 		runQuery(`{ __typename }`)
-		// Score 33 — simple entity.
+		// Score 35 — simple entity with `name` weighted as a larger scalar.
 		runQuery(`{ entity(id: "...") { id name } }`)
 
 		const out = renderQueryCostHistogram()
 		expect(out).toContain("gaia_api_graphql_query_cost_count 2")
-		expect(out).toContain(`gaia_api_graphql_query_cost_sum ${0 + 33}`)
-		// le=30: only the trivial observation (33 > 30)
+		expect(out).toContain(`gaia_api_graphql_query_cost_sum ${0 + 35}`)
+		// le=30: only the trivial observation (35 > 30)
 		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="30"} 1$/m)
 		// le=60: both
 		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="60"} 2$/m)
@@ -390,12 +511,109 @@ describe("query cost histogram", () => {
 		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
 		onExecute({
 			args: {
-				document: parse(`{ __typename }`),
+				document: parse(`query IntrospectionQuery { __schema { queryType { name } } }`),
 				variableValues: {},
 				operationName: "IntrospectionQuery",
 			},
 		})
 		expect(renderQueryCostHistogram()).toContain("gaia_api_graphql_query_cost_count 0")
+	})
+
+	it("does not skip a normal query just because it is named IntrospectionQuery", () => {
+		const plugin = useCostLogger()
+		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
+		onExecute({
+			args: {
+				document: parse(`query IntrospectionQuery { entity(id: "...") { id name } }`),
+				variableValues: {},
+				operationName: "IntrospectionQuery",
+			},
+		})
+		expect(renderQueryCostHistogram()).toContain("gaia_api_graphql_query_cost_count 1")
+	})
+})
+
+// --------------------------------------------------------------------------
+// Sentry metric emission + cross-plugin cost sharing via contextValue
+// --------------------------------------------------------------------------
+
+describe("useCostLogger — Sentry metric + context cost-sharing", () => {
+	beforeEach(() => {
+		__resetQueryCostHistogramForTests()
+		vi.clearAllMocks()
+	})
+
+	it("emits a Sentry distribution metric on every (non-introspection) query", () => {
+		const plugin = useCostLogger()
+		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
+		onExecute({
+			args: {
+				document: parse(`{ entity(id: "...") { id name } }`),
+				variableValues: {},
+				operationName: null,
+				contextValue: {},
+			},
+		})
+
+		expect(Sentry.metrics.distribution).toHaveBeenCalledTimes(1)
+		expect(Sentry.metrics.distribution).toHaveBeenCalledWith(
+			"graphql.query_cost",
+			expect.any(Number),
+			expect.objectContaining({attributes: expect.objectContaining({operation: "query entity"})}),
+		)
+	})
+
+	it("does not emit a Sentry metric for introspection queries", () => {
+		const plugin = useCostLogger()
+		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
+		onExecute({
+			args: {
+				document: parse(`query IntrospectionQuery { __schema { queryType { name } } }`),
+				variableValues: {},
+				operationName: "IntrospectionQuery",
+				contextValue: {},
+			},
+		})
+
+		expect(Sentry.metrics.distribution).not.toHaveBeenCalled()
+	})
+
+	it("stashes cost on contextValue for downstream plugins to read", () => {
+		const plugin = useCostLogger()
+		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
+		const ctx: Record<string, unknown> = {}
+
+		onExecute({
+			args: {
+				document: parse(`{ entity(id: "...") { id name } }`),
+				variableValues: {},
+				operationName: null,
+				contextValue: ctx,
+			},
+		})
+
+		// Same compressed score the histogram bucketing test asserts (35 for
+		// a simple entity lookup).
+		expect(ctx[GRAPHQL_QUERY_COST_CONTEXT_KEY]).toBe(35)
+	})
+
+	it("does not stash cost when computation fails (shadow-mode safety)", () => {
+		const plugin = useCostLogger()
+		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
+		const ctx: Record<string, unknown> = {}
+
+		onExecute({
+			args: {
+				// biome-ignore lint/suspicious/noExplicitAny: deliberately malformed
+				document: null as any,
+				variableValues: {},
+				operationName: null,
+				contextValue: ctx,
+			},
+		})
+
+		expect(ctx[GRAPHQL_QUERY_COST_CONTEXT_KEY]).toBeUndefined()
+		expect(Sentry.metrics.distribution).not.toHaveBeenCalled()
 	})
 })
 
