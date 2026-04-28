@@ -107,9 +107,11 @@ describe("operatorFragment", () => {
 		expect(flatten(f)).toContain("v.text = ANY(")
 	})
 
-	it("notIn → NOT EXISTS with v.text = ANY(...)", () => {
+	it("notIn → EXISTS asserting non-null AND NOT v.text = ANY(...)", () => {
 		const f = operatorFragment(sql, sourceAlias, propertyId, "notIn", ["Alice", "Bob"])
 		const s = flatten(f)
+		expect(s).toContain("EXISTS")
+		expect(s).toContain("v.text IS NOT NULL")
 		expect(s).toContain("NOT")
 		expect(s).toContain("v.text = ANY(")
 	})
@@ -154,6 +156,40 @@ describe("operatorFragment", () => {
 		expect(NAME_PROPERTY_ID).toMatch(/^a126ca53-?0c8e-?48d5-?b888-?82c734c38935$/)
 		expect(DESCRIPTION_PROPERTY_ID).toMatch(/^9b1f76ff-?9711-?404c-?861e-?59dc3fa7d037$/)
 	})
+
+	// -----------------------------------------------------------------
+	// NULL-exclusion semantics for negative operators.
+	//
+	// The unrewritten `WHERE entities_name(e) NOT LIKE 'foo'` form returns
+	// FALSE for entities with no name (NULL NOT LIKE x → NULL → excluded).
+	// Our rewrite must preserve that — i.e., a name-less entity must NOT
+	// match a `notLike` / `notIn` / `notIncludes*` filter.
+	//
+	// We assert this via the SQL shape: every negative operator must emit
+	// an `EXISTS (… v.text IS NOT NULL AND NOT (…))` form, never a bare
+	// `NOT EXISTS (…)` (which would include name-less entities).
+	// -----------------------------------------------------------------
+
+	const NEGATIVE_OP_FIXTURES: ReadonlyArray<readonly [string, unknown]> = [
+		["notIn", ["a", "b"]],
+		["notIncludes", "foo"],
+		["notIncludesInsensitive", "foo"],
+		["notLike", "%foo%"],
+		["notLikeInsensitive", "%foo%"],
+	]
+
+	for (const [op, val] of NEGATIVE_OP_FIXTURES) {
+		it(`${op} requires v.text IS NOT NULL so name-less entities are excluded`, () => {
+			const s = flatten(operatorFragment(sql, sourceAlias, NAME_PROPERTY_ID, op, val))
+			// Must be the EXISTS-with-non-null-check shape, not bare NOT EXISTS.
+			expect(s).toContain("EXISTS")
+			expect(s).toContain("v.text IS NOT NULL")
+			expect(s).toContain("AND NOT (")
+			// Should NOT begin with a top-level NOT — that would be the
+			// buggy `NOT EXISTS (…)` shape that includes null rows.
+			expect(s).not.toMatch(/^\s*NOT\s+EXISTS/)
+		})
+	}
 })
 
 // ---------------------------------------------------------------------------

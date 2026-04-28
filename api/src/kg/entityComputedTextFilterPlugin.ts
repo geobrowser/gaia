@@ -100,11 +100,27 @@ const negate = (sql: Sql, fragment: Sql) => sql.fragment`NOT ${fragment}`
  *
  * Returns `null` for unknown operators so the caller skips them rather
  * than failing the whole filter.
+ *
+ * NULL / missing-value semantics for negative operators:
+ *   The unrewritten `WHERE entities_name(e) NOT LIKE 'foo'` form excludes
+ *   entities without a name, because `NULL NOT LIKE x` evaluates to NULL
+ *   under SQL three-valued logic. To preserve that, every "not <op>"
+ *   form below uses `EXISTS (… v.text IS NOT NULL AND NOT (<op>))` rather
+ *   than `NOT EXISTS (… <op>)` — so a name-less entity (no row) returns
+ *   FALSE and is correctly excluded. `isNot` / `notEqualTo` already get
+ *   this for free because `v.text <> $val` is NULL on NULL rows.
  */
 function operatorFragment(sql: Sql, sourceAlias: Sql, propertyId: string, op: string, val: unknown): Sql | null {
 	const exists = (textPred: Sql | null) => existsFragment(sql, sourceAlias, propertyId, textPred)
 
 	const textPred = (cond: Sql) => sql.fragment`AND ${cond}`
+
+	/**
+	 * "Has at least one non-null value where `<inner>` is FALSE." Used by
+	 * negative operators (notIn, notLike, notIncludes, …) so that an
+	 * entity with no value at all does NOT spuriously match.
+	 */
+	const notMatching = (inner: Sql) => exists(textPred(sql.fragment`v.text IS NOT NULL AND NOT (${inner})`))
 
 	const valLiteral = (v: unknown) => sql.value(v as string)
 
@@ -132,7 +148,7 @@ function operatorFragment(sql: Sql, sourceAlias: Sql, propertyId: string, op: st
 		case "in":
 			return exists(textPred(sql.fragment`v.text = ANY(${sql.value(val)}::text[])`))
 		case "notIn":
-			return negate(sql, exists(textPred(sql.fragment`v.text = ANY(${sql.value(val)}::text[])`)))
+			return notMatching(sql.fragment`v.text = ANY(${sql.value(val)}::text[])`)
 
 		// --- Comparisons ---
 		case "lessThan":
@@ -150,9 +166,9 @@ function operatorFragment(sql: Sql, sourceAlias: Sql, propertyId: string, op: st
 		case "includesInsensitive":
 			return exists(textPred(sql.fragment`v.text ILIKE ${sql.value(`%${val}%`)}`))
 		case "notIncludes":
-			return negate(sql, exists(textPred(sql.fragment`v.text LIKE ${sql.value(`%${val}%`)}`)))
+			return notMatching(sql.fragment`v.text LIKE ${sql.value(`%${val}%`)}`)
 		case "notIncludesInsensitive":
-			return negate(sql, exists(textPred(sql.fragment`v.text ILIKE ${sql.value(`%${val}%`)}`)))
+			return notMatching(sql.fragment`v.text ILIKE ${sql.value(`%${val}%`)}`)
 		case "startsWith":
 			return exists(textPred(sql.fragment`v.text LIKE ${sql.value(`${val}%`)}`))
 		case "startsWithInsensitive":
@@ -166,9 +182,9 @@ function operatorFragment(sql: Sql, sourceAlias: Sql, propertyId: string, op: st
 		case "likeInsensitive":
 			return exists(textPred(sql.fragment`v.text ILIKE ${valLiteral(val)}`))
 		case "notLike":
-			return negate(sql, exists(textPred(sql.fragment`v.text LIKE ${valLiteral(val)}`)))
+			return notMatching(sql.fragment`v.text LIKE ${valLiteral(val)}`)
 		case "notLikeInsensitive":
-			return negate(sql, exists(textPred(sql.fragment`v.text ILIKE ${valLiteral(val)}`)))
+			return notMatching(sql.fragment`v.text ILIKE ${valLiteral(val)}`)
 
 		default:
 			// Unknown operator (e.g. distinctFrom, range ops). Fall through
