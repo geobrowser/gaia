@@ -916,9 +916,9 @@ describe("OpenSearchClient", () => {
 			expect(filter.bool.minimum_should_match).toBe(1)
 			expect(filter.bool.should).toHaveLength(2)
 			expect(filter.bool.should).toContainEqual({term: {in_canonical_graph: true}})
-			const termsClause = filter.bool.should.find(
-				(c): c is {terms: {space_id: string[]}} => "terms" in c,
-			) as {terms: {space_id: string[]}}
+			const termsClause = filter.bool.should.find((c): c is {terms: {space_id: string[]}} => "terms" in c) as {
+				terms: {space_id: string[]}
+			}
 			expect(termsClause.terms.space_id).toContain(SPACE_A)
 			expect(termsClause.terms.space_id).toContain(SPACE_B)
 			// Root ID is rewritten, not duplicated as a terms entry

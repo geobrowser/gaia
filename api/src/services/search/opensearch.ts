@@ -1422,8 +1422,7 @@ export class OpenSearchClient implements SearchClient {
 		const nonRootIds = additionalSpaceIds.filter((id) => !this.isRootSpace(id))
 
 		const canonicalClause = rootIncluded ? this.buildCanonicalFilter() : null
-		const spaceIdsClause =
-			nonRootIds.length > 0 ? {terms: {space_id: nonRootIds.flatMap(uuidTermVariants)}} : null
+		const spaceIdsClause = nonRootIds.length > 0 ? {terms: {space_id: nonRootIds.flatMap(uuidTermVariants)}} : null
 
 		if (canonicalClause && spaceIdsClause) {
 			return {bool: {should: [canonicalClause, spaceIdsClause], minimum_should_match: 1}}
