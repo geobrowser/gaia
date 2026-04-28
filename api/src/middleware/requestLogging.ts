@@ -16,6 +16,29 @@ import {log} from "../services/telemetry"
 import {extractClientIp} from "../utils/clientIp"
 
 /**
+ * HTTP status code used for "client closed request" — matches nginx's
+ * `499` convention. The client is already gone, so the status is purely
+ * for our own metrics/logs (it never reaches a wire).
+ */
+const CLIENT_CLOSED_REQUEST_STATUS = 499
+
+/**
+ * Detect a client-side connection-close. graphql-yoga's
+ * `useExecutionCancellation` propagates the request's AbortSignal as a
+ * `DOMException` with `name === "AbortError"` and `code === 20` (ABORT_ERR).
+ * Node's stdlib variant uses `code === "ABORT_ERR"`. Treat all of these as
+ * "the client hung up" — they are not server faults.
+ */
+export function isClientAbortError(error: unknown): boolean {
+	if (typeof error !== "object" || error === null) return false
+	const candidate = error as {name?: unknown; code?: unknown}
+	if (candidate.name === "AbortError") return true
+	if (candidate.code === 20) return true
+	if (candidate.code === "ABORT_ERR") return true
+	return false
+}
+
+/**
  * Extract or generate a request ID.
  * Checks common headers, falls back to generating a UUID.
  */
@@ -125,19 +148,33 @@ export function canonicalRequestLogging() {
 					span.setAttribute("graphql.operation_name", graphqlOperationName)
 				}
 
-				if (status >= 400) {
+				// 499 is "client closed request" — by design not a server fault, so
+				// leave the span Unset (OK). Otherwise SentrySpanProcessor would
+				// flag the transaction as failed and inflate error-rate metrics
+				// alongside genuine 4xx/5xx responses.
+				if (status >= 400 && status !== CLIENT_CLOSED_REQUEST_STATUS) {
 					span.setStatus({code: SpanStatusCode.ERROR, message: `HTTP ${status}`})
 				}
 
-				// Canonical END log
-				log.info(`${method} ${path} completed`, {
+				// Canonical END log — promote to error level for 5xx responses
+				// so handlers that return a 5xx without throwing (e.g. c.text("…", 500),
+				// GraphQL errors surfaced by graphql-yoga) still produce a Sentry
+				// issue. 499 (client closed request, set by `app.onError` for
+				// AbortErrors) falls through to the default info path — the status
+				// field is enough; we don't want to flood logs for non-faults.
+				const endLogFields = {
 					requestId,
 					method,
 					path,
 					status,
 					durationMs: duration,
 					...(graphqlOperationName ? {graphqlOperationName} : {}),
-				})
+				}
+				if (status >= 500) {
+					log.error(`${method} ${path} returned ${status}`, endLogFields)
+				} else {
+					log.info(`${method} ${path} completed`, endLogFields)
+				}
 			} catch (error) {
 				const duration = Date.now() - startTime
 				const failureClass = detectDbFailureClass(error)

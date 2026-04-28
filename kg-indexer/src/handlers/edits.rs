@@ -10,7 +10,7 @@ use grc_20::{
     UnsetRelationField, Value as Grc20Value,
 };
 use hermes_schema::pb::knowledge::HermesEdit;
-use sdk::core::ids::{PROTECTED_PROPERTY_IDS, PROTECTED_RELATION_TYPE_IDS};
+use sdk::core::ids::{PROTECTED_PROPERTY_IDS, PROTECTED_RELATION_TYPE_IDS, ROOT_SPACE_ID};
 use tracing::{debug_span, warn};
 use uuid::Uuid;
 
@@ -36,6 +36,9 @@ static PROTECTED_RELATION_TYPES: LazyLock<HashSet<Uuid>> = LazyLock::new(|| {
         .map(|id| Uuid::parse_str(id).expect("invalid protected relation type ID"))
         .collect()
 });
+
+static ROOT_SPACE_UUID: LazyLock<Uuid> =
+    LazyLock::new(|| Uuid::parse_str(ROOT_SPACE_ID).expect("invalid ROOT_SPACE_ID"));
 
 /// Result of processing an edit message
 pub struct EditResult {
@@ -110,21 +113,35 @@ fn extract_context(ctx: &Option<Context>) -> (Option<Uuid>, Option<Uuid>) {
 }
 
 /// Filter out value operations targeting protected property IDs.
+///
+/// Values for `SpaceAddress` / `VotingMode` / `SpaceId` / `CreatedAtBlock` are
+/// written directly by `handlers::system_entities::map_space_registered` from
+/// onchain events. Allowing edit-pipeline writes — even from the root space —
+/// would let two writers race for the same value rows. Always drop, regardless
+/// of `space_id`.
 fn filter_protected_values(ops: Vec<ValueOp>) -> Vec<ValueOp> {
     ops.into_iter()
         .filter(|op| !PROTECTED_PROPERTIES.contains(&op.property_id))
         .collect()
 }
 
-/// Filter out relation operations targeting protected relation types or property entities.
-fn filter_protected_relations(ops: Vec<RelationOp>) -> Vec<RelationOp> {
+/// Filter `Create` relation ops against system-protected state.
+///
+/// - `SYSTEM_TYPES_RELATION_TYPE_ID` is always dropped — owned by
+///   `map_space_registered`, never authored via edits (even from root).
+/// - Relations whose `from`/`to` is in `PROTECTED_PROPERTY_IDS` are dropped
+///   unless the publishing space is the root space, which authors the
+///   schema-defining seed edit (e.g. `SpaceAddress -types-> Property`).
+/// - `Update` / `Delete` / `Unset` pass through; tightened separately.
+fn filter_protected_relations(ops: Vec<RelationOp>, edit_space_id: &Uuid) -> Vec<RelationOp> {
+    let is_root = edit_space_id == &*ROOT_SPACE_UUID;
     ops.into_iter()
         .filter(|op| match op {
             RelationOp::Create(rel) => {
                 let type_protected = PROTECTED_RELATION_TYPES.contains(&rel.type_id);
                 let from_protected = PROTECTED_PROPERTIES.contains(&rel.from_id);
                 let to_protected = PROTECTED_PROPERTIES.contains(&rel.to_id);
-                !type_protected && !from_protected && !to_protected
+                !type_protected && (is_root || (!from_protected && !to_protected))
             }
             _ => true,
         })
@@ -156,7 +173,7 @@ pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
 
     // Filter out operations targeting system-protected properties and relation types
     let value_ops = filter_protected_values(value_ops);
-    let relation_ops = filter_protected_relations(relation_ops);
+    let relation_ops = filter_protected_relations(relation_ops, &space_id);
 
     // Squash operations within this edit to resolve conflicts
     let values = squash_values(&value_ops);
@@ -1343,7 +1360,7 @@ mod tests {
             score,
             Uuid::new_v4(),
         ))];
-        let result = filter_protected_relations(ops);
+        let result = filter_protected_relations(ops, &NON_ROOT_SPACE_ID);
         assert!(result.is_empty());
     }
 
@@ -1355,7 +1372,7 @@ mod tests {
             Uuid::new_v4(),
             score,
         ))];
-        let result = filter_protected_relations(ops);
+        let result = filter_protected_relations(ops, &NON_ROOT_SPACE_ID);
         assert!(result.is_empty());
     }
 
@@ -1382,6 +1399,11 @@ mod tests {
         assert_eq!(result[0].property_id, normal);
     }
 
+    /// Arbitrary non-root space ID for tests that exercise the
+    /// "publishing space is not root" branch of `filter_protected_relations`.
+    /// Must NOT collide with `ROOT_SPACE_UUID`.
+    const NON_ROOT_SPACE_ID: Uuid = Uuid::from_bytes([1; 16]);
+
     #[test]
     fn filter_relations_drops_protected_type() {
         let protected_type =
@@ -1391,7 +1413,7 @@ mod tests {
             Uuid::new_v4(),
             Uuid::new_v4(),
         ))];
-        let result = filter_protected_relations(ops);
+        let result = filter_protected_relations(ops, &NON_ROOT_SPACE_ID);
         assert!(result.is_empty());
     }
 
@@ -1403,7 +1425,7 @@ mod tests {
             protected_entity,
             Uuid::new_v4(),
         ))];
-        let result = filter_protected_relations(ops);
+        let result = filter_protected_relations(ops, &NON_ROOT_SPACE_ID);
         assert!(result.is_empty());
     }
 
@@ -1415,7 +1437,7 @@ mod tests {
             Uuid::new_v4(),
             protected_entity,
         ))];
-        let result = filter_protected_relations(ops);
+        let result = filter_protected_relations(ops, &NON_ROOT_SPACE_ID);
         assert!(result.is_empty());
     }
 
@@ -1426,7 +1448,7 @@ mod tests {
             Uuid::new_v4(),
             Uuid::new_v4(),
         ))];
-        let result = filter_protected_relations(ops);
+        let result = filter_protected_relations(ops, &NON_ROOT_SPACE_ID);
         assert_eq!(result.len(), 1);
     }
 
@@ -1439,8 +1461,106 @@ mod tests {
             RelationOp::Delete(make_delete_relation(id, space_id)),
             RelationOp::Unset(make_unset_relation(id, space_id)),
         ];
-        let result = filter_protected_relations(ops);
+        let result = filter_protected_relations(ops, &NON_ROOT_SPACE_ID);
         assert_eq!(result.len(), 3);
+    }
+
+    // ===================
+    // Root-space gating tests
+    // ===================
+
+    #[test]
+    fn root_space_can_create_relation_with_protected_from() {
+        // Seed-edit shape: `SpaceAddress -types-> <Property>` from root.
+        // `from` is protected, but `type` is not in PROTECTED_RELATION_TYPES
+        // and we are publishing from the root space, so the relation is kept.
+        let protected_from = Uuid::parse_str(sdk::core::ids::SPACE_ADDRESS_PROPERTY_ID).unwrap();
+        let unprotected_type = Uuid::parse_str(sdk::core::ids::TYPE_RELATION_TYPE_ID).unwrap();
+        let ops = vec![RelationOp::Create(make_create_relation_with_ids(
+            unprotected_type,
+            protected_from,
+            Uuid::new_v4(),
+        ))];
+        let result = filter_protected_relations(ops, &ROOT_SPACE_UUID);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn root_space_can_create_relation_with_protected_to() {
+        // Symmetric: `<something> -<unprotected>-> VotingMode` from root.
+        let protected_to = Uuid::parse_str(sdk::core::ids::VOTING_MODE_PROPERTY_ID).unwrap();
+        let unprotected_type = Uuid::parse_str(sdk::core::ids::TYPE_RELATION_TYPE_ID).unwrap();
+        let ops = vec![RelationOp::Create(make_create_relation_with_ids(
+            unprotected_type,
+            Uuid::new_v4(),
+            protected_to,
+        ))];
+        let result = filter_protected_relations(ops, &ROOT_SPACE_UUID);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn root_space_still_blocked_from_system_types_relation() {
+        // Type-level protection is unconditional. Even root cannot author
+        // SYSTEM_TYPES via the edit pipeline — that relation type is owned
+        // by `map_space_registered`.
+        let protected_type =
+            Uuid::parse_str(sdk::core::ids::SYSTEM_TYPES_RELATION_TYPE_ID).unwrap();
+        let ops = vec![RelationOp::Create(make_create_relation_with_ids(
+            protected_type,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        ))];
+        let result = filter_protected_relations(ops, &ROOT_SPACE_UUID);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn root_space_still_blocked_from_protected_value() {
+        // `filter_protected_values` is space-agnostic — values for protected
+        // properties are managed by `map_space_registered`, not the edit
+        // pipeline. Confirm the value filter did NOT get relaxed alongside
+        // the relation change.
+        let protected = Uuid::parse_str(sdk::core::ids::SPACE_ADDRESS_PROPERTY_ID).unwrap();
+        let ops = vec![make_value_op_with_property(protected)];
+        let result = filter_protected_values(ops);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn seed_edit_smoke_root_space_passes_property_schema() {
+        let property = Uuid::parse_str(sdk::core::ids::SPACE_ADDRESS_PROPERTY_ID).unwrap();
+        let type_rel_type = Uuid::parse_str(sdk::core::ids::TYPE_RELATION_TYPE_ID).unwrap();
+
+        // SDK doesn't export constants for these — use deterministic
+        // placeholders. Test asserts gating behavior, not endpoint UUIDs.
+        let property_type = Uuid::from_bytes([0xAA; 16]); // "Property" type entity
+        let data_type_rel = Uuid::from_bytes([0xBB; 16]); // `DataType` relation type
+        let text_type = Uuid::from_bytes([0xCC; 16]); // `Text` data type entity
+
+        let ops = vec![
+            // `<property> -types-> Property`
+            RelationOp::Create(make_create_relation_with_ids(
+                type_rel_type,
+                property,
+                property_type,
+            )),
+            // `<property> -DataType-> Text`
+            RelationOp::Create(make_create_relation_with_ids(
+                data_type_rel,
+                property,
+                text_type,
+            )),
+        ];
+
+        let from_root = filter_protected_relations(ops.clone(), &ROOT_SPACE_UUID);
+        assert_eq!(from_root.len(), 2, "root space must pass schema relations");
+
+        let from_other = filter_protected_relations(ops, &NON_ROOT_SPACE_ID);
+        assert!(
+            from_other.is_empty(),
+            "non-root space must not author relations whose endpoints are protected",
+        );
     }
 
     #[test]
