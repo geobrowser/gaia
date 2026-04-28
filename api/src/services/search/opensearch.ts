@@ -1415,15 +1415,17 @@ export class OpenSearchClient implements SearchClient {
 	/**
 	 * Build the additional-spaces eligibility filter.
 	 *
-	 * If the canonical-graph root space ID appears in the list, it is rewritten
-	 * to `in_canonical_graph: true` (i.e. "the whole canonical graph"); other
-	 * IDs become a `terms: {space_id: ...}` clause. The two are OR'd via
-	 * `bool.should` so the caller's full set is treated as a single
-	 * eligibility filter.
+	 *   filter = (in_canonical_graph: true) OR (space_id IN <listed non-root IDs>)
 	 *
-	 * Returns `null` when there's nothing to add (no IDs supplied, or all
-	 * supplied IDs were the root and thus collapsed to one canonical clause —
-	 * caller can pick one term directly when only one clause is produced).
+	 * The canonical-graph anchor is always implicit — entities in the canonical
+	 * graph remain eligible regardless of which non-root IDs the caller passed.
+	 * The canonical-graph root, if supplied, is naturally idempotent (it would
+	 * collapse to the same canonical clause already on the OR side).
+	 *
+	 * When only the root is in the list (or the list contains only IDs that
+	 * resolve to the root), the filter degenerates to the bare canonical term.
+	 *
+	 * Returns `null` only when no IDs are supplied at all.
 	 */
 	buildAdditionalSpacesFilter(additionalSpaceIds?: string[]): object | null {
 		if (!additionalSpaceIds || additionalSpaceIds.length === 0) return null
