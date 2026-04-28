@@ -190,6 +190,28 @@ async fn main() -> Result<()> {
         Uuid::parse_str("00000000-0000-0000-0000-00000000ec05").expect("Failed to parse topo_remove_me_entity_id UUID");
     let topo_moveable_entity_id =
         Uuid::parse_str("00000000-0000-0000-0000-00000000ec06").expect("Failed to parse topo_moveable_entity_id UUID");
+
+    // additional_space_ids test fixtures
+    //
+    // Three "AsidProbeEntity" entities sharing a unique name so they can be
+    // isolated by a single text query. They are placed across one canonical
+    // space (topo_child_a) and two dedicated non-canonical spaces, exercising
+    // the eligibility-set widening:
+    //   - canonical-only baseline    → 1 result (canon entity)
+    //   - widen with extra_space_x   → 2 results
+    //   - widen with x + y           → 3 results
+    //   - widen with canonical root  → 1 result (root rewrites to canonical anchor)
+    let asid_extra_space_x_id =
+        Uuid::parse_str("00000000-0000-4000-8000-000000000d01").expect("Failed to parse asid_extra_space_x_id UUID");
+    let asid_extra_space_y_id =
+        Uuid::parse_str("00000000-0000-4000-8000-000000000d02").expect("Failed to parse asid_extra_space_y_id UUID");
+    let asid_canon_entity_id =
+        Uuid::parse_str("00000000-0000-0000-0000-00000000ad01").expect("Failed to parse asid_canon_entity_id UUID");
+    let asid_x_entity_id =
+        Uuid::parse_str("00000000-0000-0000-0000-00000000ad02").expect("Failed to parse asid_x_entity_id UUID");
+    let asid_y_entity_id =
+        Uuid::parse_str("00000000-0000-0000-0000-00000000ad03").expect("Failed to parse asid_y_entity_id UUID");
+
     info!("Test Space ID: {}", test_space);
     info!("Person Type ID: {}", person_type_id);
     info!("Organization Type ID: {}", org_type_id);
@@ -1391,6 +1413,52 @@ async fn main() -> Result<()> {
         true,
     )?;
     producer.send(&scores_topic, None, topo_entity_scores).await?;
+
+    info!("\n18.5. Creating additional_space_ids probe entities (one canonical, two non-canonical)...");
+    info!("   asid_canon_entity (in topo_child_a → becomes canonical via diff 1)");
+    info!("   asid_x_entity     (in asid_extra_space_x_id → stays non-canonical)");
+    info!("   asid_y_entity     (in asid_extra_space_y_id → stays non-canonical)");
+    for (space_id, entity_id, description) in [
+        (
+            topo_child_a_id,
+            asid_canon_entity_id,
+            "AsidProbe in canonical space (topo_child_a)",
+        ),
+        (
+            asid_extra_space_x_id,
+            asid_x_entity_id,
+            "AsidProbe in non-canonical extra space X",
+        ),
+        (
+            asid_extra_space_y_id,
+            asid_y_entity_id,
+            "AsidProbe in non-canonical extra space Y",
+        ),
+    ] {
+        let payload = edits::create_entity_edit(
+            "Create AsidProbeEntity",
+            space_id,
+            entity_id,
+            Some("AsidProbeEntity"),
+            Some(description),
+            None,
+        )?;
+        producer.send(&edits_topic, None, payload).await?;
+    }
+
+    // Give all probes the same global score so plain GLOBAL ranking is stable.
+    let asid_probe_scores = scores::create_mixed_score_batch(
+        vec![
+            (asid_canon_entity_id, 0.55),
+            (asid_x_entity_id, 0.55),
+            (asid_y_entity_id, 0.55),
+        ],
+        vec![],
+        vec![],
+        6,
+        true,
+    )?;
+    producer.send(&scores_topic, None, asid_probe_scores).await?;
 
     info!("19. Sending Diff 1: initial canonical graph (root + 4 children + grandchild)...");
     let diff1 = topology::create_canonical_graph_diff(
