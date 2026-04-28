@@ -25,6 +25,7 @@ type AppEnv = {
 
 const EMPTY_FILE_LOG_MESSAGE = "Empty file provided"
 const EMPTY_FILE_ERROR_MESSAGE = "File cannot be empty"
+const INVALID_MULTIPART_ERROR_MESSAGE = "Invalid multipart body"
 
 // OpenAPI response descriptions — kept as constants so the three routes stay
 // in lockstep without copy-paste drift.
@@ -42,9 +43,19 @@ function createUploadHandler(opts: {spanName: string; upload: UploadFn; runtime:
 	const {spanName, upload, runtime} = opts
 
 	return async (c: import("hono").Context<AppEnv>) => {
-		const formData = await c.req.formData()
-		const file = formData.get("file") as File | undefined
 		const requestId = c.get("requestId") ?? "unknown"
+
+		// Reject non-multipart bodies (bare POST, wrong content-type, malformed
+		// boundary, etc.) with 400 instead of letting the parse exception bubble
+		// up as 500. Scanners and ad-hoc curls hit this path; we don't want
+		// Sentry issues for malformed client input.
+		let formData: FormData
+		try {
+			formData = await c.req.formData()
+		} catch {
+			return new Response(INVALID_MULTIPART_ERROR_MESSAGE, {status: 400})
+		}
+		const file = formData.get("file") as File | undefined
 
 		const program = Effect.gen(function* () {
 			if (!file) {
