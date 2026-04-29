@@ -1123,7 +1123,10 @@ describe("OpenSearchClient", () => {
 			// The asid bool.should must NOT be present in the filters array.
 			const asidLeak = filters.find((f) => {
 				const should = (f as {bool?: {should?: object[]}}).bool?.should
-				return Array.isArray(should) && should.some((c) => "terms" in c && (c as {terms: {space_id?: unknown}}).terms.space_id)
+				return (
+					Array.isArray(should) &&
+					should.some((c) => "terms" in c && (c as {terms: {space_id?: unknown}}).terms.space_id)
+				)
 			})
 			expect(asidLeak).toBeUndefined()
 		})

@@ -189,9 +189,7 @@ export const values = pgTable(
 		index("values_decimal_idx").on(table.decimal),
 		// Partial B-tree index for text searches (only indexes text ≤2000 chars)
 		// Longer text will use sequential scan, but won't cause index size errors
-		index("values_text_idx")
-			.on(table.text)
-			.where(sql`length(${table.text}) <= 2000`),
+		index("values_text_idx").on(table.text).where(sql`length(${table.text}) <= 2000`),
 		index("values_date_idx").on(table.date),
 		index("values_time_idx").on(table.time),
 		index("values_datetime_idx").on(table.datetime),
