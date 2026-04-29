@@ -1,5 +1,4 @@
 import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
-import {useResponseCache} from "@graphql-yoga/plugin-response-cache"
 import * as Sentry from "@sentry/node"
 import {GraphQLError, print} from "graphql"
 import {createYoga, maskError, type Plugin, useExecutionCancellation} from "graphql-yoga"
@@ -25,7 +24,6 @@ import PaginationCapPlugin, {NoFirstAndLastRule} from "./paginationCapPlugin"
 import {useSearchInvocationLogger} from "./searchInvocationLogger"
 import {createShedEpisodeTracker} from "./shedEpisodeTracker"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
-import {createValkeyCache} from "./valkeyCache"
 import ValueOrderByScorePlugin from "./valueOrderByScorePlugin"
 import ValueScalarsPlugin from "./valueScalarsPlugin"
 
@@ -323,35 +321,14 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 	}
 }
 
-// Response cache — shared across all API pods via Valkey (Redis-compatible).
-// Disabled gracefully if VALKEY_URL is not set (no cache, direct DB queries).
-// Valkey maxmemory + allkeys-lru eviction prevents unbounded memory growth.
-const DEFAULT_TTL_MS = 10_000
-// Longer TTL for expensive, rarely-changing queries identified in production logs.
-// These queries are identical across all users and produce large responses (2-15 MB).
-const LONG_TTL_MS = 60_000
-const responseCachePlugin = (() => {
-	const valkeyUrl = process.env.VALKEY_URL
-	if (!valkeyUrl) {
-		log.info("Response cache disabled (VALKEY_URL not set)")
-		return null
-	}
-	log.info("Response cache enabled", {valkeyUrl: valkeyUrl.replace(/\/\/.*@/, "//<redacted>@")})
-	return useResponseCache({
-		session: () => null,
-		ttl: DEFAULT_TTL_MS,
-		ttlPerSchemaCoordinate: {
-			// All DAO spaces list — 12 MB, called on 5+ pages, near-static
-			"Query.spaces": LONG_TTL_MS,
-			"Query.spacesConnection": LONG_TTL_MS,
-			// Bounties/entity lists — 2-15 MB, same result for all users
-			"Query.entities": LONG_TTL_MS,
-			"Query.entitiesConnection": LONG_TTL_MS,
-			"Query.entitiesOrderedByProperty": LONG_TTL_MS,
-		},
-		cache: createValkeyCache(valkeyUrl),
-	})
-})()
+// Response cache disabled — the 60s TTL on Query.spaces was serving stale
+// empty results to per-user filtered lookups (e.g. Spaces(filter:{address}))
+// while the user waited for the kg-indexer to write the row from a fresh
+// on-chain personal-space registration. Symptom: 60-second-stuck "Create
+// Personal Space" modal even though the chain + indexer were both fast.
+// Re-enable with a stricter cache key (filter-aware) before turning back on.
+log.info("Response cache disabled (hardcoded)")
+const responseCachePlugin = null
 
 // Shared plugins for GraphQL server.
 // Yoga plugin that registers custom GraphQL validation rules.
