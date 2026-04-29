@@ -151,6 +151,11 @@ fn main() -> anyhow::Result<()> {
 async fn async_main() -> anyhow::Result<()> {
     info!("Hermes IPFS Cache starting");
 
+    // Install Prometheus /metrics listener. Default port 9464 lives in the
+    // metrics module; override with METRICS_PORT for local runs.
+    let metrics_port: Option<u16> = env::var("METRICS_PORT").ok().and_then(|s| s.parse().ok());
+    hermes_instrumentation::metrics::install("hermes-ipfs-cache", metrics_port)?;
+
     // Determine mode: mock (default for backwards compat during dev) or live
     let use_mock = env::var("USE_MOCK")
         .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
