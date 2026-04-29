@@ -251,9 +251,7 @@ async function main() {
 	}
 
 	if (!warmupResult.isGraphql) {
-		console.error(
-			`[${ts()}] FATAL: endpoint did not return a GraphQL response (no JSON with data/errors).`,
-		)
+		console.error(`[${ts()}] FATAL: endpoint did not return a GraphQL response (no JSON with data/errors).`)
 		console.error(`Check ENDPOINT — it may be pointing at a frontend dev server, a docs site,`)
 		console.error(`or a different service. The repro requires a real /graphql endpoint.`)
 		console.error(`To target a single api pod via port-forward:`)
@@ -298,11 +296,7 @@ async function main() {
 	for (let i = 1; i <= ATTEMPTS; i++) {
 		const offset = START_OFFSET + i // unique per request to force cache miss
 		const {outcome, durationMs} = await abortRun(i, offset)
-		const tag = outcome.startsWith("aborted")
-			? "abort"
-			: outcome.startsWith("unexpectedly")
-				? "compl"
-				: "error"
+		const tag = outcome.startsWith("aborted") ? "abort" : outcome.startsWith("unexpectedly") ? "compl" : "error"
 		console.log(`[${ts()}] ${String(i).padStart(2)}/${ATTEMPTS} [${tag}] ${outcome} after ${durationMs}ms`)
 		if (outcome.startsWith("aborted")) stats.aborted++
 		else if (outcome.startsWith("unexpectedly")) stats.unexpectedCompletion++
