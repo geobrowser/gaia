@@ -1331,6 +1331,52 @@ mod tests {
     }
 
     #[test]
+    fn filter_values_drops_score_property() {
+        let protected = Uuid::parse_str(sdk::core::ids::SCORE_PROPERTY_ID).unwrap();
+        let ops = vec![make_value_op_with_property(protected)];
+        let result = filter_protected_values(ops);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_values_mixed_batch_drops_score_keeps_normal() {
+        let score = Uuid::parse_str(sdk::core::ids::SCORE_PROPERTY_ID).unwrap();
+        let normal = Uuid::parse_str(sdk::core::ids::NAME_PROPERTY_ID).unwrap();
+        let ops = vec![
+            make_value_op_with_property(score),
+            make_value_op_with_property(normal),
+            make_value_op_with_property(score),
+        ];
+        let result = filter_protected_values(ops);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].property_id, normal);
+    }
+
+    #[test]
+    fn filter_relations_drops_score_as_from_id() {
+        let score = Uuid::parse_str(sdk::core::ids::SCORE_PROPERTY_ID).unwrap();
+        let ops = vec![RelationOp::Create(make_create_relation_with_ids(
+            Uuid::new_v4(),
+            score,
+            Uuid::new_v4(),
+        ))];
+        let result = filter_protected_relations(ops, &NON_ROOT_SPACE_ID);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_relations_drops_score_as_to_id() {
+        let score = Uuid::parse_str(sdk::core::ids::SCORE_PROPERTY_ID).unwrap();
+        let ops = vec![RelationOp::Create(make_create_relation_with_ids(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            score,
+        ))];
+        let result = filter_protected_relations(ops, &NON_ROOT_SPACE_ID);
+        assert!(result.is_empty());
+    }
+
+    #[test]
     fn filter_values_keeps_normal_property() {
         let normal = Uuid::parse_str(sdk::core::ids::NAME_PROPERTY_ID).unwrap();
         let ops = vec![make_value_op_with_property(normal)];

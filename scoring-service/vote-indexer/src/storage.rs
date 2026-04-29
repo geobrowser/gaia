@@ -1,12 +1,13 @@
 //! Storage layer for vote data.
 
 use hermes_instrumentation::instrument;
+use sdk::core::ids::SCORE_PROPERTY_ID;
 use sqlx::{PgPool, Postgres, Row};
 use uuid::Uuid;
 
 use crate::error::StorageError;
 use crate::models::voting::{
-    UserVoteCriteria, UserVoteItem, VoteCountCriteria, VoteItem, VotesCountItem,
+    ScoreValueItem, UserVoteCriteria, UserVoteItem, VoteCountCriteria, VoteItem, VotesCountItem,
 };
 
 /// Storage for vote-related database operations.
@@ -186,6 +187,65 @@ impl Storage {
             .bind(&space_ids)
             .bind(&upvotes)
             .bind(&downvotes)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Mirror net scores into the `values` table under the Score system property.
+    ///
+    /// Enables sorting entities by `upvotes - downvotes` through the existing
+    /// `entities_ordered_by_property` function without any SQL changes.
+    /// Upserts on `id` — a deterministic UUIDv5 of `score:<entity>:<space>`
+    /// under `GEO_SYSTEM_NAMESPACE`, stored as text. The `score:` tag keeps
+    /// these ids disjoint from kg-indexer-minted value ids and any other
+    /// `(entity_id, space_id)` scheme.
+    #[instrument(name = "vote_indexer.storage.upsert_score_values", skip(self, rows, tx), fields(count = rows.len()))]
+    pub async fn upsert_score_values(
+        &self,
+        rows: &[ScoreValueItem],
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), StorageError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let property_id = Uuid::parse_str(SCORE_PROPERTY_ID)
+            .expect("SCORE_PROPERTY_ID is a valid UUID constant");
+
+        let mut ids = Vec::with_capacity(rows.len());
+        let mut entity_ids = Vec::with_capacity(rows.len());
+        let mut space_ids = Vec::with_capacity(rows.len());
+        let mut integers = Vec::with_capacity(rows.len());
+
+        for row in rows {
+            // `values.id` column is text, so serialize the UUID at the bind boundary.
+            ids.push(row.id.to_string());
+            entity_ids.push(row.entity_id);
+            space_ids.push(row.space_id);
+            integers.push(row.integer);
+        }
+
+        let query = r#"
+            INSERT INTO values (id, entity_id, space_id, property_id, integer)
+            SELECT id, entity_id, space_id, $5::uuid, integer
+            FROM UNNEST(
+                $1::text[], $2::uuid[], $3::uuid[], $4::bigint[]
+            ) AS t(id, entity_id, space_id, integer)
+            ON CONFLICT (id) DO UPDATE SET
+                integer = EXCLUDED.integer,
+                property_id = EXCLUDED.property_id,
+                entity_id = EXCLUDED.entity_id,
+                space_id = EXCLUDED.space_id
+        "#;
+
+        sqlx::query(query)
+            .bind(&ids)
+            .bind(&entity_ids)
+            .bind(&space_ids)
+            .bind(&integers)
+            .bind(property_id)
             .execute(&mut **tx)
             .await?;
 

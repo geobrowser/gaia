@@ -3,12 +3,13 @@
 use std::collections::HashMap;
 
 use hermes_schema::pb::voting::{HermesVoteCast, VoteDirection};
+use sdk::core::ids::GEO_SYSTEM_NAMESPACE;
 use uuid::Uuid;
 
 use crate::error::HandlerError;
 use crate::models::voting::{
-    UserVoteCriteria, UserVoteItem, VoteCountCriteria, VoteItem, VoteObjectType, VoteValue,
-    VotesCountItem,
+    ScoreValueItem, UserVoteCriteria, UserVoteItem, VoteCountCriteria, VoteItem, VoteObjectType,
+    VoteValue, VotesCountItem,
 };
 
 /// Object type discriminator values (big-endian 4-byte encoding)
@@ -165,6 +166,33 @@ pub fn calculate_vote_counts(
     }
 
     vote_counts_map.into_values().collect()
+}
+
+/// Build the `values`-table rows mirroring net scores for entities.
+///
+/// Skips relation votes: only entities (`object_type == Entity`) get a score row.
+/// The row `id` is a deterministic UUIDv5 over the name `score:<entity>:<space>`
+/// under `GEO_SYSTEM_NAMESPACE` — the `score:` tag keeps these ids disjoint from
+/// any other scheme that might hash `(entity_id, space_id)`.
+pub fn build_score_values(counts: &[VotesCountItem]) -> Vec<ScoreValueItem> {
+    let ns = Uuid::parse_str(GEO_SYSTEM_NAMESPACE)
+        .expect("GEO_SYSTEM_NAMESPACE is a valid UUID constant");
+    counts
+        .iter()
+        .filter(|c| c.object_type == VoteObjectType::Entity)
+        .map(|c| ScoreValueItem {
+            id: derive_score_value_id(&ns, &c.object_id, &c.space_id),
+            entity_id: c.object_id,
+            space_id: c.space_id,
+            integer: c.upvotes - c.downvotes,
+        })
+        .collect()
+}
+
+/// Derive the `values.id` for a score row as UUIDv5 of `score:<entity>:<space>`.
+fn derive_score_value_id(namespace: &Uuid, entity_id: &Uuid, space_id: &Uuid) -> Uuid {
+    let name = format!("score:{entity_id}:{space_id}");
+    Uuid::new_v5(namespace, name.as_bytes())
 }
 
 #[cfg(test)]
@@ -686,5 +714,132 @@ mod tests {
         assert_eq!(counts.len(), 1);
         assert_eq!(counts[0].upvotes, 1);
         assert_eq!(counts[0].downvotes, 1);
+    }
+
+    // ============================================================================
+    // build_score_values Tests
+    // ============================================================================
+
+    #[test]
+    fn test_build_score_values_entity_net_score() {
+        let entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+        let counts = vec![VotesCountItem {
+            object_id: entity_id,
+            object_type: VoteObjectType::Entity,
+            space_id,
+            upvotes: 5,
+            downvotes: 2,
+        }];
+
+        let rows = build_score_values(&counts);
+
+        let ns = Uuid::parse_str(GEO_SYSTEM_NAMESPACE).unwrap();
+        let expected_id = derive_score_value_id(&ns, &entity_id, &space_id);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, expected_id);
+        assert_eq!(rows[0].entity_id, entity_id);
+        assert_eq!(rows[0].space_id, space_id);
+        assert_eq!(rows[0].integer, 3);
+    }
+
+    #[test]
+    fn test_build_score_values_id_is_deterministic() {
+        let entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+        let count = VotesCountItem {
+            object_id: entity_id,
+            object_type: VoteObjectType::Entity,
+            space_id,
+            upvotes: 1,
+            downvotes: 0,
+        };
+
+        let first = build_score_values(&[count.clone()]);
+        let second = build_score_values(&[count]);
+
+        assert_eq!(first[0].id, second[0].id);
+    }
+
+    #[test]
+    fn test_build_score_values_negative_score() {
+        let counts = vec![VotesCountItem {
+            object_id: Uuid::new_v4(),
+            object_type: VoteObjectType::Entity,
+            space_id: Uuid::new_v4(),
+            upvotes: 1,
+            downvotes: 4,
+        }];
+
+        let rows = build_score_values(&counts);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].integer, -3);
+    }
+
+    #[test]
+    fn test_build_score_values_filters_out_relations() {
+        let counts = vec![
+            VotesCountItem {
+                object_id: Uuid::new_v4(),
+                object_type: VoteObjectType::Relation,
+                space_id: Uuid::new_v4(),
+                upvotes: 10,
+                downvotes: 0,
+            },
+            VotesCountItem {
+                object_id: Uuid::new_v4(),
+                object_type: VoteObjectType::Entity,
+                space_id: Uuid::new_v4(),
+                upvotes: 2,
+                downvotes: 1,
+            },
+        ];
+
+        let rows = build_score_values(&counts);
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].integer, 1);
+    }
+
+    #[test]
+    fn test_build_score_values_empty_input() {
+        let rows = build_score_values(&[]);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_build_score_values_preserves_per_space_rows() {
+        let entity_id = Uuid::new_v4();
+        let space_a = Uuid::new_v4();
+        let space_b = Uuid::new_v4();
+        let counts = vec![
+            VotesCountItem {
+                object_id: entity_id,
+                object_type: VoteObjectType::Entity,
+                space_id: space_a,
+                upvotes: 3,
+                downvotes: 0,
+            },
+            VotesCountItem {
+                object_id: entity_id,
+                object_type: VoteObjectType::Entity,
+                space_id: space_b,
+                upvotes: 0,
+                downvotes: 5,
+            },
+        ];
+
+        let rows = build_score_values(&counts);
+
+        let ns = Uuid::parse_str(GEO_SYSTEM_NAMESPACE).unwrap();
+        assert_eq!(rows.len(), 2);
+        let row_a = rows.iter().find(|r| r.space_id == space_a).unwrap();
+        let row_b = rows.iter().find(|r| r.space_id == space_b).unwrap();
+        assert_eq!(row_a.integer, 3);
+        assert_eq!(row_a.id, derive_score_value_id(&ns, &entity_id, &space_a));
+        assert_eq!(row_b.integer, -5);
+        assert_eq!(row_b.id, derive_score_value_id(&ns, &entity_id, &space_b));
+        assert_ne!(row_a.id, row_b.id);
     }
 }

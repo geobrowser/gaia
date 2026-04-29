@@ -37,6 +37,7 @@ pub const SPACE_ADDRESS_PROPERTY_ID: &str = "8f65b58c-d001-5bac-b1d3-3a66ae23193
 pub const VOTING_MODE_PROPERTY_ID: &str = "af26ed41-de0f-5b4f-a093-e9d3f683db07";
 pub const SPACE_ID_PROPERTY_ID: &str = "712adc1f-e950-5d14-bbd8-bf2166fe59c1";
 pub const CREATED_AT_BLOCK_PROPERTY_ID: &str = "da2952fb-17d6-53f3-b521-52e254106e0b";
+pub const SCORE_PROPERTY_ID: &str = "85a4668a-42fa-4f48-8969-c0a9de0c294b";
 
 /// Onchain-derived ID of the "root" space whose editors are authorized to
 /// publish edits that mutate the system property-definition entities — i.e.
@@ -59,6 +60,7 @@ pub const PROTECTED_PROPERTY_IDS: &[&str] = &[
     VOTING_MODE_PROPERTY_ID,
     SPACE_ID_PROPERTY_ID,
     CREATED_AT_BLOCK_PROPERTY_ID,
+    SCORE_PROPERTY_ID,
 ];
 
 pub const PROTECTED_RELATION_TYPE_IDS: &[&str] = &[SYSTEM_TYPES_RELATION_TYPE_ID];
@@ -129,6 +131,7 @@ mod tests {
             VOTING_MODE_PROPERTY_ID,
             SPACE_ID_PROPERTY_ID,
             CREATED_AT_BLOCK_PROPERTY_ID,
+            SCORE_PROPERTY_ID,
         ];
         assert_eq!(PROTECTED_PROPERTY_IDS.len(), expected.len());
         for id in &expected {

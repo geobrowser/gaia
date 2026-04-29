@@ -13,7 +13,7 @@ use rdkafka::message::Message;
 use vote_indexer::consumer::{parse_vote, KafkaConsumer};
 use vote_indexer::error::IndexerError;
 use vote_indexer::handlers::voting::{
-    calculate_vote_counts, get_latest_user_votes, handle_vote_cast,
+    build_score_values, calculate_vote_counts, get_latest_user_votes, handle_vote_cast,
 };
 use vote_indexer::models::voting::{UserVoteCriteria, VoteCountCriteria, VoteItem};
 use vote_indexer::storage::Storage;
@@ -319,6 +319,11 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
         storage
             .upsert_votes_counts(&updated_vote_counts, &mut tx)
             .await?;
+
+        // Mirror entity net scores into `values` under the Score system property
+        // so `entities_ordered_by_property` can sort by raw score with no SQL changes.
+        let score_values = build_score_values(&updated_vote_counts);
+        storage.upsert_score_values(&score_values, &mut tx).await?;
 
         tx.commit().await?;
 
