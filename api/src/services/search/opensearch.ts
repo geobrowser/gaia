@@ -296,7 +296,9 @@ export class OpenSearchClient implements SearchClient {
 			const typeIds = relations
 				?.filter((rel) => normalizeUuid(rel.relation_type) === TYPE_RELATION_TYPE_ID)
 				.map((rel) => normalizeUuid(rel.to_entity_id) as string)
-			typeIds?.forEach((id) => allTypeEntityIds.add(id))
+			typeIds?.forEach((id) => {
+				allTypeEntityIds.add(id)
+			})
 
 			// Extract avatar/cover image entity IDs from relations
 			const avatarImageEntityId = relations?.find(
