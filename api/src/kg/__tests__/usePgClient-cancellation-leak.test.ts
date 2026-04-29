@@ -248,14 +248,14 @@ describe("usePgClient cleanup contract under cancellation", () => {
 
 		// Fire the request with the abortable signal. We do NOT await it yet —
 		// we need to abort *during* execution.
-		const fetchPromise = yoga
-			.fetch("http://localhost/graphql", {
+		const fetchPromise = Promise.resolve(
+			yoga.fetch("http://localhost/graphql", {
 				method: "POST",
 				headers: {"content-type": "application/json"},
 				body: JSON.stringify({query: "{ slow }"}),
 				signal: controller.signal,
-			})
-			.catch((err) => err) // swallow the AbortError so the test can proceed
+			}),
+		).catch((err: unknown) => err) // swallow the AbortError so the test can proceed
 
 		// Wait for the resolver to actually call pgClient.query(). Until this
 		// resolves, the request hasn't reached the leak window.
