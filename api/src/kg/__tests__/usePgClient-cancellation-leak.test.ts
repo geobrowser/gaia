@@ -271,29 +271,24 @@ describe("usePgClient cleanup contract under cancellation", () => {
 		// cancels execute().
 		controller.abort()
 
-		// Give yoga generous time to run any cleanup. If onExecuteDone fires on
-		// abort, release() will be called inside this window. If it doesn't,
-		// nothing further changes — the client is leaked.
+		// Give yoga generous time to run any cleanup. If the abort path
+		// releases the pgClient (via onResponse cleanup), it happens inside
+		// this window — *before* the query settles.
 		await new Promise((r) => setTimeout(r, 200))
 
-		// Drain any still-pending queries (simulates Postgres' statement_timeout
-		// firing later). This proves the leak isn't just "release happens
-		// after the query settles" — it never fires, period.
-		pool.resolvePendingQueries()
-		await new Promise((r) => setTimeout(r, 200))
-
-		// Wait for the fetch to settle so the test exits cleanly.
-		await fetchPromise
-
-		// Post-fix: the WeakMap+onResponse cleanup releases the pgClient even
-		// when execute() was aborted. The connection should be back in the pool
-		// and exactly one release call should have happened (either via
-		// onExecuteDone with errors, or via the onResponse fallback in destroy
-		// mode — depending on Yoga's internal abort handling, but exactly one).
-		// If this test ever fails again with checkedOutCount > 0, the leak has
-		// regressed.
+		// Load-bearing assertion: release must have happened from the abort
+		// path, NOT from the query settling later. We assert *before* draining
+		// the deferred query so an implementation that only releases after the
+		// query completes (e.g. onExecuteDone firing late once the resolver
+		// finishes) cannot silently pass this test.
 		expect(pool.connectCount).toBe(1)
 		expect(pool.checkedOutCount).toBe(0)
 		expect(pool.releaseCount).toBe(1)
+
+		// Cleanup: drain the still-pending query so the resolver unblocks and
+		// the fetch promise can settle, letting the test exit. Not part of the
+		// regression assertion.
+		pool.resolvePendingQueries()
+		await fetchPromise
 	})
 })
