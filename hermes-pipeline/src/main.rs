@@ -403,8 +403,11 @@ impl Pipeline {
             "CONTENT_UNFLAGGED".to_string(),
             moderation.content_unflagged.len() as u64,
         );
+        // Summary key matches the wire-format Kafka `event-type` header
+        // (see emit.rs:491) — kept as TOPIC_DECLARED for kg-indexer's
+        // EXPECTED_EVENT_TYPES completeness check (kg-indexer/src/main.rs:685).
         counts_by_event_type.insert(
-            "TOPIC_SET".to_string(),
+            "TOPIC_DECLARED".to_string(),
             topics.topics_declared.len() as u64,
         );
         counts_by_event_type.insert(
