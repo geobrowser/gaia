@@ -108,13 +108,13 @@ Events are identified by keccak256 hashes of action name strings:
 | Editor Flagged | `GOVERNANCE.EDITOR_FLAGGED` |
 | Editor Unflagged | `GOVERNANCE.EDITOR_UNFLAGGED` |
 | Space Left | `GOVERNANCE.SPACE_LEFT` |
-| Topic Declared | `GOVERNANCE.TOPIC_DECLARED` |
+| Topic Set | `GOVERNANCE.TOPIC_SET` |
 | Edits Published | `GOVERNANCE.EDITS_PUBLISHED` |
 | Content Flagged | `GOVERNANCE.FLAGGED` |
 | Content Unflagged | `GOVERNANCE.UNFLAGGED` |
 | Subspace Verified | `GOVERNANCE.SUBSPACE_VERIFIED` |
 | Subspace Related | `GOVERNANCE.SUBSPACE_RELATED` |
-| Subspace Topic Declared | `GOVERNANCE.SUBSPACE_TOPIC_DECLARED` |
+| Subspace Topic Set | `GOVERNANCE.SUBSPACE_TOPIC_SET` |
 | Space Type Declared | `GOVERNANCE.SPACE_TYPE_DECLARED` |
 | Space ID Cleared | `GOVERNANCE.SPACE_ID_CLEARED` |
 | Proposal Settings Used | `GOVERNANCE.PROPOSAL_SETTINGS_USED` |

@@ -1,6 +1,8 @@
-//! Pipeline: TOPIC_DECLARED → space.topics
+//! Pipeline: TOPIC_SET → space.topics
 //!
-//! Converts topic declaration actions to typed Hermes events with decoded data.
+//! Converts topic set actions to typed `HermesTopicDeclared` events with decoded data.
+//! (Wire format keeps the legacy `HermesTopicDeclared` name; the contract selector renamed
+//! from `TOPIC_DECLARED` to `TOPIC_SET` in Governance V2.)
 
 use anyhow::Result;
 use hermes_instrumentation::{debug_span, warn};
@@ -34,7 +36,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
         let action_type = action.action.as_slice();
         let sequence = index as u32;
 
-        if actions::matches(action_type, &actions::TOPIC_DECLARED) {
+        if actions::matches(action_type, &actions::TOPIC_SET) {
             let event = debug_span!(
                 "convert.topics.declared",
                 space_id = %hex::encode(&action.from_id),
@@ -48,7 +50,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
     Ok(result)
 }
 
-/// Convert a TOPIC_DECLARED action to HermesTopicDeclared proto.
+/// Convert a TOPIC_SET action to HermesTopicDeclared proto.
 ///
 /// The action structure:
 /// - from_id: space_id (16 bytes) - space declaring topic
@@ -98,7 +100,7 @@ mod tests {
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
-            action: actions::TOPIC_DECLARED.to_vec(),
+            action: actions::TOPIC_SET.to_vec(),
             topic,
             data: vec![9; 32],
         };
@@ -113,7 +115,7 @@ mod tests {
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
-            action: actions::TOPIC_DECLARED.to_vec(),
+            action: actions::TOPIC_SET.to_vec(),
             topic: vec![],
             data: vec![9; 32],
         };
@@ -129,14 +131,14 @@ mod tests {
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![],
-                action: actions::TOPIC_DECLARED.to_vec(),
+                action: actions::TOPIC_SET.to_vec(),
                 topic: vec![2; 32],
                 data: vec![],
             },
             Action {
                 from_id: vec![3; 16],
                 to_id: vec![],
-                action: actions::TOPIC_DECLARED.to_vec(),
+                action: actions::TOPIC_SET.to_vec(),
                 topic: vec![4; 32],
                 data: vec![],
             },

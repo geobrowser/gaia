@@ -2,12 +2,12 @@
 //!
 //! Each pipeline handles a specific action type:
 //! - `spaces`: SPACE_REGISTERED → space.creations
-//! - `trust`: SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED/REMOVED → space.trust.extensions
+//! - `trust`: SUBSPACE_VERIFIED/RELATED/TOPIC_SET/UNSET → space.trust.extensions
 //! - `edits`: EDITS_PUBLISHED → knowledge.edits
 //! - `governance`: PROPOSAL_CREATED/UPDATED/VOTED/EXECUTED → space.governance
 //! - `membership`: EDITOR/MEMBER ADDED/REMOVED, SPACE_LEFT → space.membership
 //! - `moderation`: SPACE_FAST_PATH_RESTRICTED/UNRESTRICTED, FLAGGED/UNFLAGGED → space.moderation
-//! - `topics`: TOPIC_DECLARED → space.topics
+//! - `topics`: TOPIC_SET → space.topics
 //! - `voting`: UPVOTED/DOWNVOTED/UNVOTED → curation.votes
 
 pub mod edits;

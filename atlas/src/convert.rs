@@ -19,7 +19,7 @@
 //! - `SPACE_REGISTERED`: New space creation
 //! - `SUBSPACE_VERIFIED`: Verified trust extension (explicit canonical trust)
 //! - `SUBSPACE_RELATED`: Related trust extension (explicit non-canonical trust)
-//! - `SUBSPACE_TOPIC_DECLARED`: Topic-based trust extension
+//! - `SUBSPACE_TOPIC_SET`: Topic-based trust extension
 
 use crate::events::{
     BlockMetadata, SpaceCreated, SpaceTopologyEvent, SpaceTopologyPayload, SpaceType,
@@ -47,14 +47,14 @@ fn warn_missing_field(action_type: &str, field: &str, actual_len: usize, expecte
 /// - `SPACE_REGISTERED` actions → SpaceCreated
 /// - `SUBSPACE_VERIFIED` actions → TrustExtended (Verified)
 /// - `SUBSPACE_RELATED` actions → TrustExtended (Related)
-/// - `SUBSPACE_TOPIC_DECLARED` actions → TrustExtended (Subtopic)
+/// - `SUBSPACE_TOPIC_SET` actions → TrustExtended (Subtopic)
 /// - `EDITOR_ADDED` actions → TrustExtended (EditorAdded)
 /// - `MEMBER_ADDED` actions → TrustExtended (MemberAdded)
 /// - `SUBSPACE_UNVERIFIED` actions → TrustExtended (VerifiedRemoved)
 /// - `SUBSPACE_UNRELATED` actions → TrustExtended (RelatedRemoved)
 /// - `EDITOR_REMOVED` actions → TrustExtended (EditorRemoved)
 /// - `MEMBER_REMOVED` actions → TrustExtended (MemberRemoved)
-/// - `SUBSPACE_TOPIC_REMOVED` actions → TrustExtended (SubtopicRemoved)
+/// - `SUBSPACE_TOPIC_UNSET` actions → TrustExtended (SubtopicRemoved)
 ///
 /// Returns `None` for other action types (edits, proposals, etc.)
 pub fn convert_action(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
@@ -69,7 +69,7 @@ pub fn convert_action(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopo
         convert_subspace_verified(action, meta)
     } else if actions::matches(action_type, &actions::SUBSPACE_RELATED) {
         convert_subspace_related(action, meta)
-    } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_DECLARED) {
+    } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_SET) {
         convert_subspace_topic_declared(action, meta)
     } else if actions::matches(action_type, &actions::EDITOR_ADDED) {
         convert_editor_added(action, meta)
@@ -85,7 +85,7 @@ pub fn convert_action(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopo
         convert_editor_removed(action, meta)
     } else if actions::matches(action_type, &actions::MEMBER_REMOVED) {
         convert_member_removed(action, meta)
-    } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_REMOVED) {
+    } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_UNSET) {
         convert_subspace_topic_removed(action, meta)
     } else {
         None
@@ -339,8 +339,8 @@ fn convert_member_removed(action: &Action, meta: &BlockMetadata) -> Option<Space
 mod tests {
     use super::*;
     use hermes_relay::source::mock_events::{
-        self, make_address, make_id, space_id_registered, subspace_related,
-        subspace_topic_declared, subspace_verified,
+        self, make_address, make_id, space_id_registered, subspace_related, subspace_topic_set,
+        subspace_verified,
     };
 
     fn test_meta() -> BlockMetadata {
@@ -417,8 +417,8 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_subspace_topic_declared() {
-        let action = subspace_topic_declared(make_id(0x01), make_id(0x02), make_id(0x8A));
+    fn test_convert_subspace_topic_set() {
+        let action = subspace_topic_set(make_id(0x01), make_id(0x02), make_id(0x8A));
         let meta = test_meta();
 
         let event = convert_action(&action, &meta).expect("should convert");
