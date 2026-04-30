@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chain-tip-exporter
+  namespace: knowledge
+  labels:
+    app: chain-tip-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chain-tip-exporter
+  template:
+    metadata:
+      labels:
+        app: chain-tip-exporter
+    spec:
+      restartPolicy: Always
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: chain-tip-exporter
+          image: registry.digitalocean.com/geo/chain-tip-exporter:latest
+          imagePullPolicy: Always
+          ports:
+            - name: metrics
+              containerPort: 9464
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: chain-tip-exporter-secrets
+                  key: RPC_URL
+            - name: POLL_INTERVAL_SECS
+              value: "30"
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: chain-tip-exporter-secrets
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              value: "production"
+            - name: SENTRY_RELEASE
+              valueFrom:
+                secretKeyRef:
+                  name: chain-tip-exporter-secrets
+                  key: SENTRY_RELEASE
+                  optional: true
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chain-tip-exporter
+  namespace: knowledge
+  labels:
+    app: chain-tip-exporter
+spec:
+  type: ClusterIP
+  selector:
+    app: chain-tip-exporter
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: metrics
+      protocol: TCP

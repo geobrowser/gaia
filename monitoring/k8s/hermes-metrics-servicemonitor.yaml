@@ -17,6 +17,7 @@ spec:
         values:
           - hermes-pipeline
           - hermes-ipfs-cache
+          - chain-tip-exporter
   endpoints:
     - port: metrics
       path: /metrics

@@ -1,0 +1,70 @@
+name: Deploy Chain Tip Exporter (Production)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'chain-tip-exporter/**'
+      - 'hermes-instrumentation/**'
+      - '.github/workflows/chain-tip-exporter-deploy.yml'
+
+concurrency:
+  group: chain-tip-exporter-production
+  cancel-in-progress: true
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: chain-tip-exporter
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.2
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@3cb3953159719656269e044e0e24ca16dd2a690f # v2.5.2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -f chain-tip-exporter/Dockerfile .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          # Update image tag to use SHA and apply
+          sed -i 's|image: registry.digitalocean.com/geo/chain-tip-exporter:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' chain-tip-exporter/k8s/production/chain-tip-exporter.yaml
+          kubectl apply -f chain-tip-exporter/k8s/production/chain-tip-exporter.yaml
+
+      - name: Restart deployment to pick up new image
+        run: |
+          kubectl rollout restart deployment/chain-tip-exporter -n knowledge
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/chain-tip-exporter -n knowledge --timeout=120s
+
+      - name: Show deployment status
+        run: |
+          echo "=== Chain Tip Exporter Deployment ==="
+          kubectl get deployment chain-tip-exporter -n knowledge
+          echo ""
+          echo "=== Chain Tip Exporter Pods ==="
+          kubectl get pods -n knowledge -l app=chain-tip-exporter

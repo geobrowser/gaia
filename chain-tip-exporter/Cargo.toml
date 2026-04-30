@@ -1,0 +1,21 @@
+[package]
+name = "chain-tip-exporter"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "chain-tip-exporter"
+path = "src/main.rs"
+
+[dependencies]
+hermes-instrumentation = { path = "../hermes-instrumentation" }
+
+anyhow = "1"
+dotenv = "0.15"
+metrics = "0.24"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rustls = { version = "0.23.36", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
