@@ -40,9 +40,14 @@ export interface GroupedEntities {
  * - Entities with null contextEdgeTypeId (from relation fallback) go into `blocks`
  *   if discovered via BLOCKS relation lookup
  *
+ * When the same entityId appears in both context discovery (non-null
+ * contextEdgeTypeId) and BLOCKS-relation fallback (null contextEdgeTypeId),
+ * the context entry wins the type bucket per RFC 0003, and position is
+ * inherited from whichever entry has one. Diffs without context metadata
+ * behave identically to pre-RFC behavior (pure BLOCKS fallback path).
+ *
  * @param entities - Entities discovered via context or relation lookup
- * @param fallbackTypeId - The relation type used for fallback discovery (e.g., BLOCKS)
- *                         Entities with null contextEdgeTypeId are assumed to be this type
+ * @param blocksTypeId - The relation type used for the static `blocks` bucket (default: BLOCKS)
  * @returns Grouped entities with static blocks and dynamic groups
  */
 export function groupEntitiesByContext(
@@ -52,10 +57,26 @@ export function groupEntitiesByContext(
 	return Effect.sync(() => {
 		const blocks: NormalizedUuid[] = []
 		const dynamicGroups = new Map<NormalizedUuid, NormalizedUuid[]>()
-		const seen = new Set<NormalizedUuid>()
 
-		// Sort by position (nulls last) to maintain ordering
-		const sorted = [...entities].sort((a, b) => {
+		// Pass 1: dedupe. Context discovery wins over BLOCKS-relation fallback
+		// so the RFC's edges[0].type_id grouping takes precedence. Position is
+		// inherited from whichever entry has one.
+		const deduped = new Map<NormalizedUuid, DiscoveredEntity>()
+		for (const entity of entities) {
+			const existing = deduped.get(entity.entityId)
+			if (!existing) {
+				deduped.set(entity.entityId, entity)
+				continue
+			}
+			deduped.set(entity.entityId, {
+				entityId: entity.entityId,
+				contextEdgeTypeId: existing.contextEdgeTypeId ?? entity.contextEdgeTypeId,
+				position: existing.position ?? entity.position,
+			})
+		}
+
+		// Pass 2: sort by position (nulls last) so block ordering is stable.
+		const sorted = Array.from(deduped.values()).sort((a, b) => {
 			if (a.position === null && b.position === null) return 0
 			if (a.position === null) return 1
 			if (b.position === null) return -1
@@ -63,12 +84,7 @@ export function groupEntitiesByContext(
 		})
 
 		for (const entity of sorted) {
-			// Skip duplicates
-			if (seen.has(entity.entityId)) continue
-			seen.add(entity.entityId)
-
-			// Determine the effective type ID
-			// null contextEdgeTypeId means it came from relation fallback
+			// null contextEdgeTypeId means discovery was via BLOCKS fallback only.
 			const typeId = entity.contextEdgeTypeId ?? blocksTypeId
 
 			if (typeId === blocksTypeId) {

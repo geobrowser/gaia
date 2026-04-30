@@ -169,6 +169,49 @@ describe("groupEntitiesByContext", () => {
 			expect(result.blocks).toEqual([nuuid("entity-1")])
 			expect(result.dynamicGroups.size).toBe(0)
 		})
+
+		it("context discovery wins over BLOCKS-relation fallback (fallback first)", () => {
+			const customType = nuuid("custom-type")
+			const entities = [
+				// Relation fallback arrives first with a position
+				makeEntity(nuuid("entity-1"), null, "pos-a"),
+				// Then context metadata pins it to a dynamic type
+				makeEntity(nuuid("entity-1"), customType, null),
+			]
+
+			const result = run(groupEntitiesByContext(entities))
+
+			expect(result.blocks).toEqual([])
+			expect(result.dynamicGroups.get(customType)).toEqual([nuuid("entity-1")])
+		})
+
+		it("context discovery wins over BLOCKS-relation fallback (context first)", () => {
+			const customType = nuuid("custom-type")
+			const entities = [
+				makeEntity(nuuid("entity-1"), customType, null),
+				makeEntity(nuuid("entity-1"), null, "pos-a"),
+			]
+
+			const result = run(groupEntitiesByContext(entities))
+
+			expect(result.dynamicGroups.get(customType)).toEqual([nuuid("entity-1")])
+		})
+
+		it("inherits position from relation entry when context entry has none", () => {
+			const customTypeA = nuuid("type-a")
+			const entities = [
+				makeEntity(nuuid("e1"), customTypeA, null),
+				// Same ID with a position
+				makeEntity(nuuid("e1"), null, "pos-1"),
+				// Another in the same group sorts after via position
+				makeEntity(nuuid("e2"), customTypeA, "pos-2"),
+			]
+
+			const result = run(groupEntitiesByContext(entities))
+
+			// e1 inherited pos-1 so it comes before e2 (pos-2)
+			expect(result.dynamicGroups.get(customTypeA)).toEqual([nuuid("e1"), nuuid("e2")])
+		})
 	})
 
 	describe("position-based ordering", () => {

@@ -216,6 +216,10 @@ export function getRelationsAtVersion(
 /**
  * Query entities discovered via context metadata.
  * Returns ALL entities where context_root_id = entityId, regardless of edge type.
+ *
+ * Scoped to the request's spaceId when provided — cross-space context edges
+ * are intentionally excluded. The RFC does not cover cross-space diffs, and
+ * scoping here prevents a context in space A from leaking children from space B.
  */
 function queryContextEntities(
 	db: Database,
