@@ -31,25 +31,26 @@ data:
             }
           },
           {
-            "name": "namespace",
-            "label": "Namespace",
+            "name": "env",
+            "label": "Environment",
+            "description": "Suffix appended to namespaces (api, knowledge, search, scoring) and the ingress host. Empty for production, '-staging' for staging.",
             "type": "custom",
-            "query": "knowledge,knowledge-staging",
+            "query": "Production : (?:),Staging : -staging",
             "current": {
               "selected": true,
-              "text": "knowledge",
-              "value": "knowledge"
+              "text": "Production",
+              "value": "(?:)"
             },
             "options": [
               {
                 "selected": true,
-                "text": "knowledge",
-                "value": "knowledge"
+                "text": "Production",
+                "value": "(?:)"
               },
               {
                 "selected": false,
-                "text": "knowledge-staging",
-                "value": "knowledge-staging"
+                "text": "Staging",
+                "value": "-staging"
               }
             ]
           }
@@ -85,7 +86,7 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_requests_per_second:rate5m",
+              "expr": "api:ingress_requests_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "rps",
               "refId": "A"
             }
@@ -137,7 +138,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "sum(increase(nginx_ingress_controller_requests{host=\"testnet-api.geobrowser.io\",status=~\"5..\"}[$__range]))",
+              "expr": "sum(increase(nginx_ingress_controller_requests{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\",status=~\"5..\"}[$__range]))",
               "instant": true
             }
           ],
@@ -194,7 +195,7 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_p99_latency_seconds:5m",
+              "expr": "api:ingress_p99_latency_seconds:5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "p99",
               "refId": "A"
             }
@@ -248,7 +249,7 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_5xx_ratio:rate5m",
+              "expr": "api:ingress_5xx_ratio:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "5xx",
               "refId": "A"
             }
@@ -303,12 +304,12 @@ data:
           },
           "targets": [
             {
-              "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"api\", horizontalpodautoscaler=\"api\"}",
+              "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=~\"^api${env:raw}$\", horizontalpodautoscaler=\"api\"}",
               "legendFormat": "current",
               "refId": "A"
             },
             {
-              "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"api\", horizontalpodautoscaler=\"api\"}",
+              "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=~\"^api${env:raw}$\", horizontalpodautoscaler=\"api\"}",
               "legendFormat": "max",
               "refId": "B"
             }
@@ -354,7 +355,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max(gaia_api_graphql_pool_saturated)",
+              "expr": "max(gaia_api_graphql_pool_saturated{namespace=~\"^api${env:raw}$\"})",
               "legendFormat": "saturated",
               "refId": "A"
             }
@@ -430,12 +431,12 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_requests_per_second:rate5m",
+              "expr": "api:ingress_requests_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "total",
               "refId": "A"
             },
             {
-              "expr": "api:ingress_5xx_per_second:rate5m",
+              "expr": "api:ingress_5xx_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "5xx",
               "refId": "B"
             }
@@ -489,22 +490,22 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_p50_latency_seconds:5m",
+              "expr": "api:ingress_p50_latency_seconds:5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "p50",
               "refId": "A"
             },
             {
-              "expr": "api:ingress_p75_latency_seconds:5m",
+              "expr": "api:ingress_p75_latency_seconds:5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "p75",
               "refId": "B"
             },
             {
-              "expr": "api:ingress_p95_latency_seconds:5m",
+              "expr": "api:ingress_p95_latency_seconds:5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "p95",
               "refId": "C"
             },
             {
-              "expr": "api:ingress_p99_latency_seconds:5m",
+              "expr": "api:ingress_p99_latency_seconds:5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "p99",
               "refId": "D"
             }
@@ -542,17 +543,17 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_499_per_second:rate5m",
+              "expr": "api:ingress_499_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "499 (client cancel)",
               "refId": "A"
             },
             {
-              "expr": "api:ingress_500_per_second:rate5m",
+              "expr": "api:ingress_500_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "500 (server error)",
               "refId": "B"
             },
             {
-              "expr": "api:ingress_503_per_second:rate5m",
+              "expr": "api:ingress_503_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "503 (unavailable)",
               "refId": "C"
             }
@@ -621,7 +622,7 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_status_requests_per_second:rate5m",
+              "expr": "api:ingress_status_requests_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "{{status}}",
               "refId": "A"
             }
@@ -672,7 +673,7 @@ data:
           },
           "targets": [
             {
-              "expr": "avg(gaia_api_db_pool_utilization_ratio)",
+              "expr": "avg(gaia_api_db_pool_utilization_ratio{namespace=~\"^api${env:raw}$\"})",
               "legendFormat": "utilization",
               "refId": "A"
             }
@@ -734,7 +735,7 @@ data:
           },
           "targets": [
             {
-              "expr": "avg(gaia_api_graphql_pool_utilization_ratio)",
+              "expr": "avg(gaia_api_graphql_pool_utilization_ratio{namespace=~\"^api${env:raw}$\"})",
               "legendFormat": "utilization",
               "refId": "A"
             }
@@ -796,17 +797,17 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(gaia_api_db_pool_waiting_count)",
+              "expr": "sum(gaia_api_db_pool_waiting_count{namespace=~\"^api${env:raw}$\"})",
               "legendFormat": "REST waiting",
               "refId": "A"
             },
             {
-              "expr": "sum(gaia_api_graphql_pool_waiting_count)",
+              "expr": "sum(gaia_api_graphql_pool_waiting_count{namespace=~\"^api${env:raw}$\"})",
               "legendFormat": "GQL waiting",
               "refId": "B"
             },
             {
-              "expr": "sum(gaia_api_graphql_pool_recent_acquire_timeouts)",
+              "expr": "sum(gaia_api_graphql_pool_recent_acquire_timeouts{namespace=~\"^api${env:raw}$\"})",
               "legendFormat": "GQL acquire timeouts",
               "refId": "C"
             }
@@ -855,7 +856,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"api\",container=\"api\"}) / sum(kube_pod_container_resource_limits{namespace=\"api\",container=\"api\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=~\"^api${env:raw}$\",container=\"api\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^api${env:raw}$\",container=\"api\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -885,7 +886,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22api%5C%22,container%3D%5C%22api%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D~%5C%22%5Eapi%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22api%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -918,7 +919,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"atlas\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=~\"^knowledge${env:raw}$\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"atlas\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -948,7 +949,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22atlas%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D~%5C%22%5Eknowledge%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22atlas%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -981,7 +982,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-pipeline\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-pipeline\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -1011,7 +1012,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D~%5C%22%5Eknowledge%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1044,7 +1045,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"kg-indexer\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=~\"^knowledge${env:raw}$\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"kg-indexer\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -1074,7 +1075,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22kg-indexer%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D~%5C%22%5Eknowledge%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22kg-indexer%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1107,7 +1108,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"search\",container=\"search-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"search\",container=\"search-indexer\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=~\"^search${env:raw}$\",container=\"search-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^search${env:raw}$\",container=\"search-indexer\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -1137,7 +1138,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22search%5C%22,container%3D%5C%22search-indexer%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D~%5C%22%5Esearch%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22search-indexer%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1170,7 +1171,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-ipfs-cache\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-ipfs-cache\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -1200,7 +1201,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D~%5C%22%5Eknowledge%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1233,7 +1234,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"scoring\",container=\"scoring-service\"}) / sum(kube_pod_container_resource_limits{namespace=\"scoring\",container=\"scoring-service\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=~\"^scoring${env:raw}$\",container=\"scoring-service\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^scoring${env:raw}$\",container=\"scoring-service\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -1263,7 +1264,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22scoring%5C%22,container%3D%5C%22scoring-service%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D~%5C%22%5Escoring%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22scoring-service%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1296,7 +1297,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"api\",container=\"api\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"api\",container=\"api\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=~\"^api${env:raw}$\",container=\"api\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^api${env:raw}$\",container=\"api\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1326,7 +1327,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22api%5C%22,container%3D%5C%22api%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D~%5C%22%5Eapi%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22api%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1359,7 +1360,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"atlas\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=~\"^knowledge${env:raw}$\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"atlas\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1389,7 +1390,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22atlas%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D~%5C%22%5Eknowledge%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22atlas%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1422,7 +1423,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-pipeline\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-pipeline\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1452,7 +1453,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D~%5C%22%5Eknowledge%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1485,7 +1486,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"kg-indexer\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=~\"^knowledge${env:raw}$\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"kg-indexer\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1515,7 +1516,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22kg-indexer%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D~%5C%22%5Eknowledge%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22kg-indexer%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1548,7 +1549,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"search\",container=\"search-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"search\",container=\"search-indexer\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=~\"^search${env:raw}$\",container=\"search-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^search${env:raw}$\",container=\"search-indexer\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1578,7 +1579,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22search%5C%22,container%3D%5C%22search-indexer%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D~%5C%22%5Esearch%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22search-indexer%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1611,7 +1612,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-ipfs-cache\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-ipfs-cache\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1641,7 +1642,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D~%5C%22%5Eknowledge%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1674,7 +1675,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"scoring\",container=\"scoring-service\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"scoring\",container=\"scoring-service\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=~\"^scoring${env:raw}$\",container=\"scoring-service\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^scoring${env:raw}$\",container=\"scoring-service\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1704,7 +1705,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22scoring%5C%22,container%3D%5C%22scoring-service%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D~%5C%22%5Escoring%24%7Benv%3Araw%7D%24%5C%22,container%3D%5C%22scoring-service%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1752,7 +1753,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"api\",container=\"api\"}) / sum(kube_pod_container_resource_limits{namespace=\"api\",container=\"api\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=~\"^api${env:raw}$\",container=\"api\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^api${env:raw}$\",container=\"api\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -1808,7 +1809,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"atlas\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=~\"^knowledge${env:raw}$\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"atlas\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -1864,7 +1865,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-pipeline\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-pipeline\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -1920,7 +1921,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"kg-indexer\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=~\"^knowledge${env:raw}$\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"kg-indexer\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -1976,7 +1977,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"search\",container=\"search-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"search\",container=\"search-indexer\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=~\"^search${env:raw}$\",container=\"search-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^search${env:raw}$\",container=\"search-indexer\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2032,7 +2033,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-ipfs-cache\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-ipfs-cache\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2088,7 +2089,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"scoring\",container=\"scoring-service\"}) / sum(kube_pod_container_resource_limits{namespace=\"scoring\",container=\"scoring-service\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=~\"^scoring${env:raw}$\",container=\"scoring-service\"}) / sum(kube_pod_container_resource_limits{namespace=~\"^scoring${env:raw}$\",container=\"scoring-service\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2144,7 +2145,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"api\",container=\"api\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"api\",container=\"api\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=~\"^api${env:raw}$\",container=\"api\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^api${env:raw}$\",container=\"api\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2200,7 +2201,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"atlas\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=~\"^knowledge${env:raw}$\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"atlas\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2256,7 +2257,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-pipeline\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-pipeline\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2312,7 +2313,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"kg-indexer\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=~\"^knowledge${env:raw}$\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"kg-indexer\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2368,7 +2369,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"search\",container=\"search-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"search\",container=\"search-indexer\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=~\"^search${env:raw}$\",container=\"search-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^search${env:raw}$\",container=\"search-indexer\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2424,7 +2425,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-ipfs-cache\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^knowledge${env:raw}$\",container=\"hermes-ipfs-cache\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2480,7 +2481,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"scoring\",container=\"scoring-service\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"scoring\",container=\"scoring-service\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=~\"^scoring${env:raw}$\",container=\"scoring-service\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=~\"^scoring${env:raw}$\",container=\"scoring-service\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2550,7 +2551,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (container) (increase(kube_pod_container_status_restarts_total{namespace=~\"api|knowledge|search|scoring\", container=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}[5m]))",
+              "expr": "sum by (container) (increase(kube_pod_container_status_restarts_total{namespace=~\"^(api|knowledge|search|scoring)${env:raw}$\", container=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}[5m]))",
               "legendFormat": "{{container}}",
               "refId": "A"
             }
@@ -2587,13 +2588,13 @@ data:
           },
           "targets": [
             {
-              "expr": "kube_deployment_status_replicas_available{namespace=~\"api|knowledge|search|scoring\", deployment=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}",
+              "expr": "kube_deployment_status_replicas_available{namespace=~\"^(api|knowledge|search|scoring)${env:raw}$\", deployment=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}",
               "format": "table",
               "instant": true,
               "refId": "A"
             },
             {
-              "expr": "kube_deployment_spec_replicas{namespace=~\"api|knowledge|search|scoring\", deployment=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}",
+              "expr": "kube_deployment_spec_replicas{namespace=~\"^(api|knowledge|search|scoring)${env:raw}$\", deployment=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}",
               "format": "table",
               "instant": true,
               "refId": "B"
@@ -2649,7 +2650,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{namespace=~\"api|knowledge|search|scoring\", container=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}[5m]))",
+              "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{namespace=~\"^(api|knowledge|search|scoring)${env:raw}$\", container=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}[5m]))",
               "legendFormat": "{{container}}",
               "refId": "A"
             }
@@ -2687,7 +2688,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (container) (container_memory_working_set_bytes{namespace=~\"api|knowledge|search|scoring\", container=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"})",
+              "expr": "sum by (container) (container_memory_working_set_bytes{namespace=~\"^(api|knowledge|search|scoring)${env:raw}$\", container=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"})",
               "legendFormat": "{{container}}",
               "refId": "A"
             }
@@ -2725,7 +2726,7 @@ data:
           },
           "targets": [
             {
-              "expr": "kube_deployment_status_replicas_available{namespace=\"$namespace\",deployment=\"atlas\"}",
+              "expr": "kube_deployment_status_replicas_available{namespace=~\"^knowledge${env:raw}$\",deployment=\"atlas\"}",
               "refId": "A"
             }
           ],
@@ -2772,7 +2773,7 @@ data:
           },
           "targets": [
             {
-              "expr": "kube_deployment_spec_replicas{namespace=\"$namespace\",deployment=\"atlas\"}",
+              "expr": "kube_deployment_spec_replicas{namespace=~\"^knowledge${env:raw}$\",deployment=\"atlas\"}",
               "refId": "A"
             }
           ],
@@ -3433,7 +3434,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "sum by (le) (rate(gaia_api_graphql_query_cost_bucket[5m]))",
+              "expr": "sum by (le) (rate(gaia_api_graphql_query_cost_bucket{namespace=~\"^api${env:raw}$\"}[5m]))",
               "format": "heatmap",
               "legendFormat": "{{le}}"
             }
@@ -3477,17 +3478,17 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "histogram_quantile(0.50, sum by (le) (rate(gaia_api_graphql_query_cost_bucket[5m])))",
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(gaia_api_graphql_query_cost_bucket{namespace=~\"^api${env:raw}$\"}[5m])))",
               "legendFormat": "p50"
             },
             {
               "refId": "B",
-              "expr": "histogram_quantile(0.95, sum by (le) (rate(gaia_api_graphql_query_cost_bucket[5m])))",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(gaia_api_graphql_query_cost_bucket{namespace=~\"^api${env:raw}$\"}[5m])))",
               "legendFormat": "p95"
             },
             {
               "refId": "C",
-              "expr": "histogram_quantile(0.99, sum by (le) (rate(gaia_api_graphql_query_cost_bucket[5m])))",
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(gaia_api_graphql_query_cost_bucket{namespace=~\"^api${env:raw}$\"}[5m])))",
               "legendFormat": "p99"
             }
           ],
@@ -3547,7 +3548,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket[5m]))",
+              "expr": "sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket{namespace=~\"^api${env:raw}$\"}[5m]))",
               "format": "heatmap",
               "legendFormat": "{{le}}"
             }
@@ -3591,17 +3592,17 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "histogram_quantile(0.50, sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket[5m])))",
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket{namespace=~\"^api${env:raw}$\"}[5m])))",
               "legendFormat": "p50"
             },
             {
               "refId": "B",
-              "expr": "histogram_quantile(0.95, sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket[5m])))",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket{namespace=~\"^api${env:raw}$\"}[5m])))",
               "legendFormat": "p95"
             },
             {
               "refId": "C",
-              "expr": "histogram_quantile(0.99, sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket[5m])))",
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket{namespace=~\"^api${env:raw}$\"}[5m])))",
               "legendFormat": "p99"
             }
           ],

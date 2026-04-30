@@ -9,13 +9,18 @@ spec:
   groups:
     - name: api.ingress
       rules:
+        # Recording rules preserve the `exported_namespace` label so dashboards
+        # can filter per environment (api / api-staging). The `ingress` and
+        # `exported_service` filters narrow to just the api Ingress and reject
+        # other namespaces' ingresses (e.g. monitoring/grafana). Use `sum(...)`
+        # in callers to aggregate across environments when needed.
         - record: api:ingress_requests_per_second:rate5m
           expr: |
-            sum(rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io"}[5m]))
+            sum by (exported_namespace) (rate(nginx_ingress_controller_requests{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api"}[5m]))
 
         - record: api:ingress_5xx_per_second:rate5m
           expr: |
-            sum(rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io",status=~"5.."}[5m]))
+            sum by (exported_namespace) (rate(nginx_ingress_controller_requests{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api",status=~"5.."}[5m]))
 
         - record: api:ingress_5xx_ratio:rate5m
           expr: |
@@ -25,22 +30,22 @@ spec:
 
         - record: api:ingress_status_requests_per_second:rate5m
           expr: |
-            sum by (status) (
-              rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io"}[5m])
+            sum by (exported_namespace, status) (
+              rate(nginx_ingress_controller_requests{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api"}[5m])
             )
 
         - record: api:ingress_method_requests_per_second:rate5m
           expr: |
-            sum by (method) (
-              rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io"}[5m])
+            sum by (exported_namespace, method) (
+              rate(nginx_ingress_controller_requests{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api"}[5m])
             )
 
         - record: api:ingress_method_p99_latency_seconds:5m
           expr: |
             histogram_quantile(
               0.99,
-              sum by (le, method) (
-                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[5m])
+              sum by (exported_namespace, le, method) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api"}[5m])
               )
             )
 
@@ -48,8 +53,8 @@ spec:
           expr: |
             histogram_quantile(
               0.95,
-              sum by (le) (
-                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[2m])
+              sum by (exported_namespace, le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api"}[2m])
               )
             )
 
@@ -57,28 +62,28 @@ spec:
           expr: |
             histogram_quantile(
               0.99,
-              sum by (le) (
-                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[2m])
+              sum by (exported_namespace, le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api"}[2m])
               )
             )
 
         - record: api:ingress_error_status_requests_per_second:rate5m
           expr: |
-            sum by (status) (
-              rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io",status=~"4..|5.."}[5m])
+            sum by (exported_namespace, status) (
+              rate(nginx_ingress_controller_requests{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api",status=~"4..|5.."}[5m])
             )
 
         - record: api:ingress_499_per_second:rate5m
           expr: |
-            sum(rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io",status="499"}[5m]))
+            sum by (exported_namespace) (rate(nginx_ingress_controller_requests{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api",status="499"}[5m]))
 
         - record: api:ingress_500_per_second:rate5m
           expr: |
-            sum(rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io",status="500"}[5m]))
+            sum by (exported_namespace) (rate(nginx_ingress_controller_requests{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api",status="500"}[5m]))
 
         - record: api:ingress_503_per_second:rate5m
           expr: |
-            sum(rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io",status="503"}[5m]))
+            sum by (exported_namespace) (rate(nginx_ingress_controller_requests{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api",status="503"}[5m]))
 
         - record: api:ingress_499_ratio:rate5m
           expr: |
@@ -96,8 +101,8 @@ spec:
           expr: |
             histogram_quantile(
               0.95,
-              sum by (le) (
-                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[5m])
+              sum by (exported_namespace, le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api"}[5m])
               )
             )
 
@@ -105,8 +110,8 @@ spec:
           expr: |
             histogram_quantile(
               0.50,
-              sum by (le) (
-                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[5m])
+              sum by (exported_namespace, le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api"}[5m])
               )
             )
 
@@ -114,8 +119,8 @@ spec:
           expr: |
             histogram_quantile(
               0.75,
-              sum by (le) (
-                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[5m])
+              sum by (exported_namespace, le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api"}[5m])
               )
             )
 
@@ -123,7 +128,7 @@ spec:
           expr: |
             histogram_quantile(
               0.99,
-              sum by (le) (
-                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[5m])
+              sum by (exported_namespace, le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{exported_namespace=~"api(-staging)?",ingress="api",exported_service="api"}[5m])
               )
             )
