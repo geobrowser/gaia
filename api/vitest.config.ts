@@ -16,6 +16,7 @@ export default defineConfig({
 			// Cache tests use bun:test to avoid duplicate graphql module conflicts
 			"src/kg/__tests__/valkeyCache.test.ts",
 			"src/kg/__tests__/cache-integration.test.ts",
+			"src/kg/__tests__/usePgClient-cancellation-leak.test.ts",
 		],
 		setupFiles: ["./src/test-setup.ts"],
 		env: {

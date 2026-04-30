@@ -8,6 +8,7 @@ on:
       - 'api/src/kg/postgraphile.ts'
       - 'api/src/kg/__tests__/valkeyCache.test.ts'
       - 'api/src/kg/__tests__/cache-integration.test.ts'
+      - 'api/src/kg/__tests__/usePgClient-cancellation-leak.test.ts'
       - 'api/package.json'
       - '.github/workflows/api-cache-integration-tests.yml'
   pull_request:
@@ -17,6 +18,7 @@ on:
       - 'api/src/kg/postgraphile.ts'
       - 'api/src/kg/__tests__/valkeyCache.test.ts'
       - 'api/src/kg/__tests__/cache-integration.test.ts'
+      - 'api/src/kg/__tests__/usePgClient-cancellation-leak.test.ts'
       - 'api/package.json'
       - '.github/workflows/api-cache-integration-tests.yml'
 
@@ -48,3 +50,6 @@ jobs:
 
       - name: Run cache integration tests
         run: bun test src/kg/__tests__/cache-integration.test.ts
+
+      - name: Run usePgClient cancellation-leak regression test
+        run: bun test src/kg/__tests__/usePgClient-cancellation-leak.test.ts
