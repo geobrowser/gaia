@@ -35,6 +35,7 @@
 
 mod config;
 mod init;
+pub mod metrics;
 
 // Re-export configuration types
 pub use config::{AxiomConfig, Backend, Config};

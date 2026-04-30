@@ -1,2 +1,3 @@
 [install]
-minimumReleaseAge = "14d"
+# 14 days, in seconds. Current Bun expects a number, not a duration string.
+minimumReleaseAge = 1209600

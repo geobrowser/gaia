@@ -231,6 +231,13 @@ export const postgraphileSchema = await createPostGraphileSchema(pgPool, ["publi
  * stale connections (e.g. from PgBouncer closing them) from being reused.
  */
 function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
+	// Per-request pgClient tracking. WeakMap keyed by the HTTP Request so the
+	// onResponse cleanup below can find and release the client even when
+	// onExecuteDone never fires (the leak path: useExecutionCancellation aborts
+	// execute() and the cleanup callback chain skips usePgClient).
+	// See api/docs/gql-pool-leak-investigation.md.
+	const requestPgClients = new WeakMap<Request, PoolClient>()
+
 	return {
 		async onExecute({extendContext, args}) {
 			const operationName = args.operationName || "anonymous"
@@ -313,6 +320,13 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 
 			extendContext({pgClient})
 
+			// Track this checkout against the originating request so the
+			// onResponse hook below can release it if execute() is aborted.
+			const request = (args.contextValue as {request?: Request})?.request
+			if (request) {
+				requestPgClients.set(request, pgClient)
+			}
+
 			return {
 				onExecuteDone({result}) {
 					// If the result has GraphQL errors, the underlying connection may be
@@ -324,7 +338,22 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 					} else {
 						pgClient.release()
 					}
+					if (request) requestPgClients.delete(request)
 				},
+			}
+		},
+
+		// Belt-and-braces cleanup. Yoga's onResponse fires after the HTTP
+		// response is produced, regardless of whether execute() completed
+		// normally, threw, or was aborted by useExecutionCancellation. If the
+		// pgClient is still tracked here, onExecuteDone never ran — release it
+		// in destroy mode (release(err)) since the in-flight query may still
+		// be running on this connection and the client's state is unknown.
+		onResponse({request}) {
+			const pgClient = requestPgClients.get(request)
+			if (pgClient) {
+				pgClient.release(new Error("graphql request ended without normal cleanup"))
+				requestPgClients.delete(request)
 			}
 		},
 	}
