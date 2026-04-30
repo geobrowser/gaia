@@ -15,7 +15,7 @@ For directly testing search api responses interactively: <https://0xneodev.githu
 
 1. **Sentry** — `search-indexer` and `api` projects. Errors and traces (`search_indexer.consume_entities_batch`, `…handle_entity_batch`, `…bulk_operations`).
 2. **`indexer.stats` log line** — emitted every 10s, structured. Field reference in `search-indexer/README.md`. This is the fastest way to localize a bottleneck — see triage table below.
-3. **Grafana OpenSearch Overview** — standalone Grafana in the `search` namespace, NodePort `30440`. JVM heap, thread-pool queues, indexing rate, search latency. The OpenSearch instance is provisioned with hundreds of CPUs and lots of RAM, so resource exhaustion on OpenSearch itself is rarely the actual cause — look for query/indexing patterns or upstream issues first.
+3. **Gaia Overview dashboard → OpenSearch section** for OpenSearch health metrics (JVM heap, thread-pool queues, indexing rate, search latency). The OpenSearch instance is provisioned with hundreds of CPUs and lots of RAM, so resource exhaustion on OpenSearch itself is rarely the actual cause — look for query/indexing patterns or upstream issues first.
 4. **Kafka consumer lag** — kafka-ui runs in the `kafka` namespace as ClusterIP, port-forward to access:
    ```bash
    kubectl port-forward -n kafka svc/kafka-ui 8080:8080
