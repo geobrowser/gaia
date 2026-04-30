@@ -29,6 +29,29 @@ data:
               "text": "Prometheus",
               "value": "Prometheus"
             }
+          },
+          {
+            "name": "namespace",
+            "label": "Namespace",
+            "type": "custom",
+            "query": "knowledge,knowledge-staging",
+            "current": {
+              "selected": true,
+              "text": "knowledge",
+              "value": "knowledge"
+            },
+            "options": [
+              {
+                "selected": true,
+                "text": "knowledge",
+                "value": "knowledge"
+              },
+              {
+                "selected": false,
+                "text": "knowledge-staging",
+                "value": "knowledge-staging"
+              }
+            ]
           }
         ]
       },
@@ -895,7 +918,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"atlas\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"atlas\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -925,7 +948,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22atlas%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22atlas%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -958,7 +981,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-pipeline\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-pipeline\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -988,7 +1011,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1021,7 +1044,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"kg-indexer\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"kg-indexer\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -1051,7 +1074,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22kg-indexer%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22kg-indexer%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1147,7 +1170,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-ipfs-cache\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-ipfs-cache\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -1177,7 +1200,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1336,7 +1359,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"atlas\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"atlas\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1366,7 +1389,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22atlas%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22atlas%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1399,7 +1422,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-pipeline\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-pipeline\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1429,7 +1452,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1462,7 +1485,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"kg-indexer\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"kg-indexer\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1492,7 +1515,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22kg-indexer%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22kg-indexer%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1588,7 +1611,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-ipfs-cache\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-ipfs-cache\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1618,7 +1641,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22knowledge%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1785,7 +1808,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"atlas\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"atlas\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -1841,7 +1864,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-pipeline\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-pipeline\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -1897,7 +1920,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"kg-indexer\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"kg-indexer\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2009,7 +2032,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"knowledge\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-ipfs-cache\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-ipfs-cache\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2177,7 +2200,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"atlas\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"atlas\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2233,7 +2256,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-pipeline\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-pipeline\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2289,7 +2312,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"kg-indexer\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"kg-indexer\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2401,7 +2424,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"knowledge\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"knowledge\",container=\"hermes-ipfs-cache\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-ipfs-cache\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2702,7 +2725,7 @@ data:
           },
           "targets": [
             {
-              "expr": "kube_deployment_status_replicas_available{namespace=\"knowledge\",deployment=\"atlas\"}",
+              "expr": "kube_deployment_status_replicas_available{namespace=\"$namespace\",deployment=\"atlas\"}",
               "refId": "A"
             }
           ],
@@ -2749,7 +2772,7 @@ data:
           },
           "targets": [
             {
-              "expr": "kube_deployment_spec_replicas{namespace=\"knowledge\",deployment=\"atlas\"}",
+              "expr": "kube_deployment_spec_replicas{namespace=\"$namespace\",deployment=\"atlas\"}",
               "refId": "A"
             }
           ],
