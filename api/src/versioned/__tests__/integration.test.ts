@@ -61,6 +61,14 @@ const uuid = {
 	dynamicChildA2: normalizeUuid("10000000-0003-4000-8000-000000000006"),
 	dynamicChildB1: normalizeUuid("10000000-0003-4000-8000-000000000007"),
 
+	// Relation-context discovery fixture (RFC 0003 — `from_entity_id` is the
+	// changed child, not `to_entity_id`). relCtxChild appears in a relation
+	// row whose context_root_id is entityWithDynamicGroups; relCtxTarget is
+	// the relation's `to`, which we explicitly assert is NOT surfaced under
+	// the dynamic group.
+	relCtxChild: normalizeUuid("10000000-0003-4000-8000-000000000008"),
+	relCtxTarget: normalizeUuid("10000000-0003-4000-8000-000000000009"),
+
 	// Properties (custom test properties)
 	propText: normalizeUuid("10000000-0004-4000-8000-000000000001"),
 	propBool: normalizeUuid("10000000-0004-4000-8000-000000000002"),
@@ -111,6 +119,9 @@ const uuid = {
 	relDynamicA1: normalizeUuid("10000000-0006-4000-8000-000000000013"),
 	relDynamicA2: normalizeUuid("10000000-0006-4000-8000-000000000014"),
 	relDynamicB1: normalizeUuid("10000000-0006-4000-8000-000000000015"),
+	// Relation that carries context_root_id directly (RFC 0003 relation-side
+	// context discovery). Its from_entity_id = relCtxChild, to = relCtxTarget.
+	relCtxRelation: normalizeUuid("10000000-0006-4000-8000-000000000016"),
 
 	// Edits (versions)
 	edit1: normalizeUuid("10000000-0007-4000-8000-000000000001"), // Version 1
@@ -705,6 +716,31 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			const body = await res.json()
 
 			expect(body.groupKeys).toEqual([])
+		})
+
+		it("relation-side context discovery surfaces from_entity_id, not to_entity_id", async () => {
+			// Regression test for RFC 0003: queryContextEntities must select
+			// r.from_entity_id (the changed child) from relation_versions, not
+			// r.to_entity_id (the relation's target). The fixture has
+			//   relCtxChild --[relTypeGeneric]--> relCtxTarget
+			// with context_root_id = entityWithDynamicGroups, context_edge_type_id
+			// = relTypeCustomB. We assert relCtxChild lands in the relTypeCustomB
+			// group and relCtxTarget does not.
+			const res = await app.request(
+				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+
+			expect(body.groupKeys).toContain(uuid.relTypeCustomB)
+			const groupB = body[uuid.relTypeCustomB]
+			expect(groupB).toBeInstanceOf(Array)
+
+			const ids = groupB.map((item: {entityId: string}) => item.entityId)
+			expect(ids).toContain(uuid.relCtxChild)
+			// The to-side of the relation must NOT appear; that would be the
+			// pre-fix bug.
+			expect(ids).not.toContain(uuid.relCtxTarget)
 		})
 	})
 
@@ -1366,6 +1402,38 @@ async function setupTestData(pool: Pool): Promise<void> {
 				uuid.space1,
 				versionKey2,
 			],
+		)
+
+		// Relation-side context discovery fixture (RFC 0003 from_entity_id fix).
+		//
+		// Setup:
+		//   relCtxChild  --[relCtxRelation : relTypeCustomB]-->  relCtxTarget
+		//
+		// This relation_versions row carries context_root_id = entityWithDynamicGroups,
+		// context_edge_type_id = relTypeCustomB. The "changed child" surfaced by
+		// queryContextEntities for entityWithDynamicGroups must be relCtxChild
+		// (the from-entity), NOT relCtxTarget (the relation's target).
+		await client.query(
+			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key, context_root_id, context_edge_type_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10) ON CONFLICT DO NOTHING`,
+			[
+				uuid.val(valIdx++),
+				uuid.relCtxRelation,
+				uuid.relCtxChild, // entity_id (the relation entity itself)
+				uuid.relTypeGeneric, // relation type — irrelevant for context discovery
+				uuid.relCtxChild, // from_entity_id — the changed child
+				uuid.relCtxTarget, // to_entity_id — what the buggy SQL would surface
+				uuid.space1,
+				versionKey2,
+				uuid.entityWithDynamicGroups, // context_root_id
+				uuid.relTypeCustomB, // context_edge_type_id
+			],
+		)
+		// Give relCtxChild a value change so the diff API has something to surface.
+		await client.query(
+			`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text)
+			 VALUES ($1, $2, $3, $4, $5, NULL, 'rel-ctx child content') ON CONFLICT DO NOTHING`,
+			[uuid.val(valIdx++), uuid.relCtxChild, uuid.propText, uuid.space1, versionKey2],
 		)
 
 		// 11. Create proposals

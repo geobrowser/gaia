@@ -312,6 +312,9 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             to_version_id: u.to_version_id.or(e.to_version_id),
             position: u.position.or(e.position),
             verified: u.verified.or(e.verified),
+            // Later context wins; fall back to earlier if later is None.
+            context_root_id: u.context_root_id.or(e.context_root_id),
+            context_edge_type_id: u.context_edge_type_id.or(e.context_edge_type_id),
         }),
 
         // update -> delete: Delete wins
@@ -351,6 +354,8 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             } else {
                 e.verified
             },
+            context_root_id: u.context_root_id.or(e.context_root_id),
+            context_edge_type_id: u.context_edge_type_id.or(e.context_edge_type_id),
         }),
 
         // delete -> anything: New op wins (recreation after delete)
@@ -375,6 +380,8 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             to_version_id: u.to_version_id.or(e.to_version_id),
             position: u.position.or(e.position),
             verified: u.verified.or(e.verified),
+            context_root_id: u.context_root_id.or(e.context_root_id),
+            context_edge_type_id: u.context_edge_type_id.or(e.context_edge_type_id),
         }),
     }
 }
@@ -734,6 +741,7 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
                 let from_version = updated.from_version.map(|id| id_to_uuid(&id).to_string());
                 let to_space = updated.to_space.map(|id| id_to_uuid(&id).to_string());
                 let to_version = updated.to_version.map(|id| id_to_uuid(&id).to_string());
+                let (context_root_id, context_edge_type_id) = extract_context(&updated.context);
 
                 // Check if any fields are being unset
                 let has_unset = !updated.unset.is_empty();
@@ -764,6 +772,8 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
                             .contains(&UnsetRelationField::Position)
                             .then_some(true),
                         verified: None,
+                        context_root_id,
+                        context_edge_type_id,
                     }));
                 }
 
@@ -783,10 +793,14 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
                         from_space_id: from_space,
                         from_version_id: from_version,
                         to_version_id: to_version,
+                        context_root_id,
+                        context_edge_type_id,
                     }));
                 }
             }
             Grc20Op::DeleteRelation(del) => {
+                // Delete-with-context tombstone is not yet implemented; see
+                // DeleteRelationItem doc comment.
                 relation_ops.push(RelationOp::Delete(DeleteRelationItem {
                     id: id_to_uuid(&del.id),
                     space_id: *space_id,
@@ -876,6 +890,8 @@ mod tests {
             to_version_id: None,
             position: None,
             verified: None,
+            context_root_id: None,
+            context_edge_type_id: None,
         }
     }
 
@@ -889,6 +905,8 @@ mod tests {
             to_version_id: None,
             position: None,
             verified: None,
+            context_root_id: None,
+            context_edge_type_id: None,
         }
     }
 

@@ -189,9 +189,7 @@ export const values = pgTable(
 		index("values_decimal_idx").on(table.decimal),
 		// Partial B-tree index for text searches (only indexes text ≤2000 chars)
 		// Longer text will use sequential scan, but won't cause index size errors
-		index("values_text_idx")
-			.on(table.text)
-			.where(sql`length(${table.text}) <= 2000`),
+		index("values_text_idx").on(table.text).where(sql`length(${table.text}) <= 2000`),
 		index("values_date_idx").on(table.date),
 		index("values_time_idx").on(table.time),
 		index("values_datetime_idx").on(table.datetime),
@@ -852,6 +850,12 @@ export const valueVersions = pgTable(
 		index("value_versions_entity_space_valid_to_idx")
 			.on(table.entityId, table.spaceId, table.validToKey)
 			.where(sql`${table.validToKey} IS NOT NULL`),
+		// Partial index for context-aware diff discovery (RFC 0003).
+		// queryContextEntities filters by context_root_id + valid_from_key.
+		// Most rows pre-RFC have NULL context_root_id, so a partial keeps it tight.
+		index("value_versions_context_root_idx")
+			.on(table.contextRootId, table.validFromKey)
+			.where(sql`${table.contextRootId} IS NOT NULL`),
 	],
 )
 
@@ -894,6 +898,10 @@ export const relationVersions = pgTable(
 		index("relation_versions_from_entity_valid_to_idx")
 			.on(table.fromEntityId, table.validToKey)
 			.where(sql`${table.validToKey} IS NOT NULL`),
+		// Partial index for context-aware diff discovery (RFC 0003).
+		index("relation_versions_context_root_idx")
+			.on(table.contextRootId, table.validFromKey)
+			.where(sql`${table.contextRootId} IS NOT NULL`),
 	],
 )
 

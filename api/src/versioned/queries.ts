@@ -246,8 +246,12 @@ function queryContextEntities(
 								AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
 								AND v.space_id = ${spaceId}::uuid
 							UNION
-							-- Context-based discovery from relations (to_entity_id is the child)
-							SELECT DISTINCT r.to_entity_id AS entity_id, r.context_edge_type_id
+							-- Context-based discovery from relations.
+							-- The changed child is the relation's owner (from_entity_id),
+							-- not its target. Context metadata on a relation row tags the
+							-- entity that owns/issues the relation, matching the leaf the
+							-- GRC-20 edit context's first edge points to.
+							SELECT DISTINCT r.from_entity_id AS entity_id, r.context_edge_type_id
 							FROM relation_versions r
 							WHERE r.context_root_id = ${entityId}::uuid
 								AND r.context_edge_type_id IS NOT NULL
@@ -269,8 +273,12 @@ function queryContextEntities(
 								AND v.valid_from_key <= ${versionKeyStr}::bigint
 								AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
 							UNION
-							-- Context-based discovery from relations (to_entity_id is the child)
-							SELECT DISTINCT r.to_entity_id AS entity_id, r.context_edge_type_id
+							-- Context-based discovery from relations.
+							-- The changed child is the relation's owner (from_entity_id),
+							-- not its target. Context metadata on a relation row tags the
+							-- entity that owns/issues the relation, matching the leaf the
+							-- GRC-20 edit context's first edge points to.
+							SELECT DISTINCT r.from_entity_id AS entity_id, r.context_edge_type_id
 							FROM relation_versions r
 							WHERE r.context_root_id = ${entityId}::uuid
 								AND r.context_edge_type_id IS NOT NULL
@@ -368,7 +376,7 @@ export function getGroupedEntityIdsAtVersion(
 		])
 
 		// Merge and group using pure functions
-		const merged = yield* mergeDiscoveryResults(contextEntities, relationEntities, BLOCKS_TYPE_ID)
+		const merged = yield* mergeDiscoveryResults(contextEntities, relationEntities)
 
 		return yield* groupEntitiesByContext(merged, BLOCKS_TYPE_ID)
 	}).pipe(

@@ -585,19 +585,18 @@ describe("entityComputedTextFilterPlugin — real pg-sql2 contract (CI integrati
 		["notLikeInsensitive", "%a%"],
 	]
 
-	it.each(ALL_FAST_PATH_OPS.map(([op, val]) => [op, val] as const))(
-		"operatorPredicate('%s') compiles via real pg-sql2 without throwing",
-		(op, val) => {
-			const result = operatorPredicate(realSql, realSourceAlias, NAME_PROPERTY_ID, op, val)
-			expect(result).not.toBeNull()
+	it.each(
+		ALL_FAST_PATH_OPS.map(([op, val]) => [op, val] as const),
+	)("operatorPredicate('%s') compiles via real pg-sql2 without throwing", (op, val) => {
+		const result = operatorPredicate(realSql, realSourceAlias, NAME_PROPERTY_ID, op, val)
+		expect(result).not.toBeNull()
 
-			// Whichever shape it returns, the SQL fragment inside must be
-			// compilable by real pg-sql2.
-			if (!result) return
-			const node = result.kind === "merge" ? result.innerPred : result.fragment
-			expect(() => realSql.compile(node)).not.toThrow()
-		},
-	)
+		// Whichever shape it returns, the SQL fragment inside must be
+		// compilable by real pg-sql2.
+		if (!result) return
+		const node = result.kind === "merge" ? result.innerPred : result.fragment
+		expect(() => realSql.compile(node)).not.toThrow()
+	})
 
 	it("buildResolver — single op compiles", () => {
 		const resolver = buildResolver(

@@ -907,7 +907,7 @@ Note: `type-a` is not in `groupKeys` because its content is unchanged.
 
 ## Test Coverage
 
-### Grouping Tests (17 tests)
+### Grouping Tests (21 tests)
 
 - Empty input handling
 - BLOCKS context grouping to static `blocks` array
@@ -961,7 +961,22 @@ Note: `type-a` is not in `groupKeys` because its content is unchanged.
 - groupKeys alphabetical sorting
 - Name fallback behavior
 
-## Future Work
+## Known Gaps and Deferred Work
+
+### Delete-with-Context Attribution
+
+The `Grc20Op::DeleteRelation` indexer path does not write a tombstone version
+row carrying the edit's context. The live `relations` row is removed before
+the version table is touched, so by the time `insert_relation_versions` runs
+the pre-delete state is unrecoverable in the same transaction. As a result,
+relations deleted under a contextual edit appear in diffs only via the
+closure of `valid_to_key` on the existing version row — `queryContextEntities`
+does not surface them under their context group.
+
+Fixing this requires either fetching the pre-delete state up the call chain
+or moving the version-write to run before the live-table delete. Tracked as
+follow-up work; not blocking for the create- and update-relation paths which
+this RFC fully covers.
 
 ### Response-Size Caps and Truncation
 

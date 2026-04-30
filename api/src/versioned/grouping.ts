@@ -76,11 +76,13 @@ export function groupEntitiesByContext(
 		}
 
 		// Pass 2: sort by position (nulls last) so block ordering is stable.
+		// Use plain string comparison rather than localeCompare so ordering is
+		// deterministic across hosts regardless of $LANG / ICU locale.
 		const sorted = Array.from(deduped.values()).sort((a, b) => {
 			if (a.position === null && b.position === null) return 0
 			if (a.position === null) return 1
 			if (b.position === null) return -1
-			return a.position.localeCompare(b.position)
+			return a.position < b.position ? -1 : a.position > b.position ? 1 : 0
 		})
 
 		for (const entity of sorted) {
@@ -110,18 +112,22 @@ export function groupEntitiesByContext(
 /**
  * Merge entities from context-based discovery and relation-based fallback.
  *
- * Context-based entities have contextEdgeTypeId set.
- * Relation-based entities have contextEdgeTypeId = null and use the relation type.
+ * Context-based entities already carry `contextEdgeTypeId`. Relation-based
+ * entries are converted to `DiscoveredEntity` with `contextEdgeTypeId = null`,
+ * which `groupEntitiesByContext` interprets as "use the fallback type ID
+ * (its `blocksTypeId` argument)" when bucketing.
+ *
+ * The relation type itself is not stored on the merged entries — it's only
+ * applied at grouping time, where the caller can decide which static bucket
+ * the fallback maps to.
  *
  * @param contextEntities - Entities discovered via context metadata
  * @param relationEntities - Entities discovered via relation lookup (fallback)
- * @param relationTypeId - The relation type used for fallback (e.g., BLOCKS)
  * @returns Merged list ready for grouping
  */
 export function mergeDiscoveryResults(
 	contextEntities: DiscoveredEntity[],
 	relationEntities: Array<{entityId: NormalizedUuid; position: string | null}>,
-	_relationTypeId: NormalizedUuid,
 ): Effect.Effect<DiscoveredEntity[], never, never> {
 	return Effect.sync(() => {
 		// Context entities already have contextEdgeTypeId
