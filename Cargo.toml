@@ -18,6 +18,8 @@ members = [
     "hermes-ipfs-cache",
     "hermes-instrumentation",
 
+    "chain-tip-exporter",
+
     "atlas",
     "hermes-substream",
 

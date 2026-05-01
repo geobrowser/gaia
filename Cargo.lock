@@ -1435,6 +1435,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
+name = "chain-tip-exporter"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dotenv",
+ "hermes-instrumentation",
+ "metrics",
+ "reqwest 0.12.28",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
