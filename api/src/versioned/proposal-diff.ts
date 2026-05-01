@@ -140,8 +140,13 @@ function getProposalWithPublishAction(
 					p.executed_at,
 					pa.content_uri
 				FROM proposals p
-				LEFT JOIN proposal_actions pa ON pa.proposal_id = p.id AND pa.action_type = 'Publish' and pa.proposal_version = p.current_version
-				LEFT JOIN proposal_version pv ON pv.proposal_id = p.id AND pv.proposal_version = p.current_version
+				LEFT JOIN proposal_actions pa 
+          ON pa.proposal_id = p.id
+          AND pa.proposal_version = p.current_version
+          AND pa.action_type = 'Publish' 
+				LEFT JOIN proposal_versions pv 
+          ON pv.proposal_id = p.id 
+          AND pv.proposal_version = p.current_version
 				WHERE p.id = ${proposalId}
 				LIMIT 1
 			`)

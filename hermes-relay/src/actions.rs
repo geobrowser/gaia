@@ -54,13 +54,13 @@ pub use hermes_substream::ACTION_SPACE_ID_REGISTERED as SPACE_REGISTERED;
 pub use hermes_substream::ACTION_SPACE_LEFT as SPACE_LEFT;
 pub use hermes_substream::ACTION_SPACE_TYPE_DECLARED as SPACE_TYPE_DECLARED;
 pub use hermes_substream::ACTION_SUBSPACE_RELATED as SUBSPACE_RELATED;
-pub use hermes_substream::ACTION_SUBSPACE_TOPIC_DECLARED as SUBSPACE_TOPIC_DECLARED;
-pub use hermes_substream::ACTION_SUBSPACE_TOPIC_REMOVED as SUBSPACE_TOPIC_REMOVED;
+pub use hermes_substream::ACTION_SUBSPACE_TOPIC_SET as SUBSPACE_TOPIC_SET;
+pub use hermes_substream::ACTION_SUBSPACE_TOPIC_UNSET as SUBSPACE_TOPIC_UNSET;
 pub use hermes_substream::ACTION_SUBSPACE_UNRELATED as SUBSPACE_UNRELATED;
 pub use hermes_substream::ACTION_SUBSPACE_UNVERIFIED as SUBSPACE_UNVERIFIED;
 pub use hermes_substream::ACTION_SUBSPACE_VERIFIED as SUBSPACE_VERIFIED;
-pub use hermes_substream::ACTION_TOPIC_DECLARED as TOPIC_DECLARED;
-pub use hermes_substream::ACTION_TOPIC_REMOVED as TOPIC_REMOVED;
+pub use hermes_substream::ACTION_TOPIC_SET as TOPIC_SET;
+pub use hermes_substream::ACTION_TOPIC_UNSET as TOPIC_UNSET;
 pub use hermes_substream::ACTION_UNFLAGGED as UNFLAGGED;
 pub use hermes_substream::ACTION_VOTING_SETTINGS_UPDATED as VOTING_SETTINGS_UPDATED;
 
