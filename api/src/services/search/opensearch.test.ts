@@ -77,23 +77,25 @@ describe("OpenSearchClient", () => {
 			expect(termExactName.term.name_raw.value).toBe(fullQuery)
 		})
 
-		it("includes fuzzy clause when token count <= 5", () => {
-			// 5 tokens — at the boundary
-			const query = client.buildBaseTextQuery("alpha beta gamma delta epsilon") as {
+		it("includes fuzzy clause with capped max_expansions when token count <= 3", () => {
+			// 3 tokens — at the boundary
+			const query = client.buildBaseTextQuery("alpha beta gamma") as {
 				bool: {should: Record<string, unknown>[]}
 			}
 			const fuzzy = query.bool.should.find(
 				(c) => "multi_match" in c && (c.multi_match as {fuzziness?: string}).fuzziness !== undefined,
-			) as {multi_match: {query: string; fuzziness: string}}
+			) as {multi_match: {query: string; fuzziness: string; max_expansions: number}}
 
 			expect(fuzzy).toBeDefined()
 			expect(fuzzy.multi_match.fuzziness).toBe("AUTO")
-			expect(fuzzy.multi_match.query).toBe("alpha beta gamma delta epsilon")
+			expect(fuzzy.multi_match.query).toBe("alpha beta gamma")
+			// max_expansions is capped (default OS value is 50; we pin lower for safety).
+			expect(fuzzy.multi_match.max_expansions).toBe(25)
 		})
 
-		it("drops fuzzy clause when token count > 5 (fan-out reduction)", () => {
-			// 6 tokens — just over the boundary
-			const query = client.buildBaseTextQuery("alpha beta gamma delta epsilon zeta") as {
+		it("drops fuzzy clause when token count > 3 (fan-out reduction)", () => {
+			// 4 tokens — just over the boundary
+			const query = client.buildBaseTextQuery("alpha beta gamma delta") as {
 				bool: {should: Record<string, unknown>[]}
 			}
 			const fuzzy = query.bool.should.find(
@@ -135,7 +137,8 @@ describe("OpenSearchClient", () => {
 		})
 
 		it("does not truncate when query is already short", () => {
-			const shortQuery = "five tokens or less here"
+			// 3 tokens — fuzzy is included (≤ FUZZY_MAX_TOKENS) and sees the full query.
+			const shortQuery = "three short tokens"
 			const query = client.buildBaseTextQuery(shortQuery) as {
 				bool: {should: Record<string, unknown>[]}
 			}

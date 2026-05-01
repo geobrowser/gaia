@@ -199,8 +199,22 @@ export const MAX_TEXT_TOKENS = 20
  * typo tolerance is most useful for short single- or few-word queries
  * anyway. Multi-word queries have enough token redundancy that exact
  * and prefix matches cover the typo cases sufficiently.
+ *
+ * Set to 3 (vs the more permissive 5) to keep worst-case clause count
+ * under ~480 even when fuzzy is enabled — comfortably below
+ * OpenSearch's max_clause_count = 1024.
  */
-export const FUZZY_MAX_TOKENS = 5
+export const FUZZY_MAX_TOKENS = 3
+
+/**
+ * Maximum number of edit-distance variants generated per term in the
+ * fuzzy `multi_match` clause. Default in OpenSearch is 50, which when
+ * multiplied by 2 fields × FUZZY_MAX_TOKENS gives the dominant share
+ * of the worst-case clause count. Halving to 25 nearly halves the
+ * fuzzy budget at minimal recall cost — typo correction still works
+ * for the common 1-2-edit cases.
+ */
+export const FUZZY_MAX_EXPANSIONS = 25
 
 /**
  * Count tokens in the query (drops empty splits from leading/trailing
@@ -1080,6 +1094,7 @@ export class OpenSearchClient implements SearchClient {
 										query: cappedQuery,
 										fields: ["name", "description"],
 										fuzziness: "AUTO",
+										max_expansions: FUZZY_MAX_EXPANSIONS,
 										boost: this.b("fuzzy_reduction_boost", FUZZY_REDUCTION_BOOST),
 									},
 								},
