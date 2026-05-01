@@ -79,6 +79,19 @@ export function defaultProfile(address: string, spaceId?: string): Profile {
 const TYPES_RELATION = SystemIds.TYPES_PROPERTY
 const SPACE_TYPE = SystemIds.SPACE_TYPE
 
+function frontPageEntityId() {
+	return sql`
+		SELECT front_page_relation.from_entity_id
+		FROM relations front_page_relation
+		JOIN entities front_page_entity ON front_page_entity.id = front_page_relation.from_entity_id
+		WHERE front_page_relation.space_id = s.id
+		  AND front_page_relation.type_id = ${TYPES_RELATION}::uuid
+		  AND front_page_relation.to_entity_id = ${SPACE_TYPE}::uuid
+		ORDER BY front_page_entity.created_at::numeric ASC, front_page_entity.id ASC
+		LIMIT 1
+	`
+}
+
 /**
  * SQL fragment for selecting profile fields from a space.
  * Finds the front page entity (entity with Types relation to SPACE_TYPE),
@@ -89,23 +102,13 @@ function profileSelectFields() {
 		s.id AS space_id,
 		s.address AS space_address,
 		(
-			SELECT r.from_entity_id
-			FROM relations r
-			WHERE r.space_id = s.id
-			  AND r.type_id = ${TYPES_RELATION}::uuid
-			  AND r.to_entity_id = ${SPACE_TYPE}::uuid
-			LIMIT 1
+			${frontPageEntityId()}
 		)::text AS entity_id,
 		(
 			SELECT v.text
 			FROM "values" v
 			WHERE v.entity_id = (
-				SELECT r.from_entity_id
-				FROM relations r
-				WHERE r.space_id = s.id
-				  AND r.type_id = ${TYPES_RELATION}::uuid
-				  AND r.to_entity_id = ${SPACE_TYPE}::uuid
-				LIMIT 1
+				${frontPageEntityId()}
 			)
 			  AND v.property_id = ${NAME_PROPERTY}::uuid
 			  AND v.space_id = s.id
@@ -118,12 +121,7 @@ function profileSelectFields() {
 			  AND img_val.property_id = ${IMAGE_URL_PROPERTY}::uuid
 			  AND img_val.space_id = s.id
 			WHERE r.from_entity_id = (
-				SELECT r2.from_entity_id
-				FROM relations r2
-				WHERE r2.space_id = s.id
-				  AND r2.type_id = ${TYPES_RELATION}::uuid
-				  AND r2.to_entity_id = ${SPACE_TYPE}::uuid
-				LIMIT 1
+				${frontPageEntityId()}
 			)
 			  AND r.type_id = ${AVATAR_PROPERTY}::uuid
 			  AND r.space_id = s.id

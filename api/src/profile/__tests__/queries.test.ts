@@ -10,7 +10,7 @@
 
 import {Effect} from "effect"
 import {Hono} from "hono"
-import {beforeEach, describe, expect, it, vi} from "vitest"
+import {describe, expect, it, vi} from "vitest"
 import {createProfileRouter} from "../index"
 
 // =============================================================================
@@ -46,6 +46,23 @@ function setupTestApp() {
 	const app = new Hono()
 	app.route("/profile", router)
 	return {app, db, runtime}
+}
+
+function flattenSql(query: unknown): string {
+	if (typeof query === "string") return query
+	if (!query || typeof query !== "object") return String(query)
+
+	const chunks = (query as {queryChunks?: unknown[]}).queryChunks
+	if (Array.isArray(chunks)) {
+		return chunks.map(flattenSql).join("")
+	}
+
+	const value = (query as {value?: unknown}).value
+	if (Array.isArray(value)) {
+		return value.map(flattenSql).join("")
+	}
+
+	return String(query)
 }
 
 /**
@@ -333,6 +350,20 @@ describe("POST /profile/batch", () => {
 // =============================================================================
 
 describe("Profile data resolution", () => {
+	it("should order front page entity lookups by creation time", async () => {
+		const {app, db} = setupTestApp()
+		db.execute.mockResolvedValueOnce({rows: [makeDbProfileRow()]})
+
+		await app.request("/profile/space/f3dab79c-b5a3-d9d1-7596-56dd5361d1c6")
+
+		const queryCall = db.execute.mock.calls[0]?.[0]
+		const sqlString = flattenSql(queryCall)
+		const matches = sqlString.match(
+			/ORDER BY front_page_entity\.created_at::numeric ASC, front_page_entity\.id ASC/g,
+		)
+		expect(matches).toHaveLength(3)
+	})
+
 	it("should return profile with null name when front page entity has no name", async () => {
 		const {app, db} = setupTestApp()
 		const mockRow = makeDbProfileRow({entity_name: null})

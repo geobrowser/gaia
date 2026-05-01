@@ -1,6 +1,9 @@
 import {Pool} from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
 
+const TYPES_RELATION_ID = "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+const SPACE_TYPE_ID = "362c1dbd-dc64-44bb-a3c4-652f38a642d7"
+
 describe("space helper functions", () => {
 	let pool: Pool
 
@@ -46,6 +49,7 @@ describe("space helper functions", () => {
 				JOIN entities e ON e.id = r.from_entity_id
 				WHERE r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'
 				  AND r.to_entity_id = '362c1dbd-dc64-44bb-a3c4-652f38a642d7'
+				ORDER BY e.created_at::numeric ASC, e.id ASC
 				LIMIT 1
 			`)
 
@@ -98,6 +102,68 @@ describe("space helper functions", () => {
 
 				expect(pageResult.rows).toHaveLength(1)
 				expect(pageResult.rows[0].page).toBeNull()
+			}
+		})
+
+		it("should return the earliest created front page entity when multiple candidates exist", async () => {
+			const spaceId = crypto.randomUUID()
+			const earlierPageId = crypto.randomUUID()
+			const laterPageId = crypto.randomUUID()
+			const earlierRelationId = crypto.randomUUID()
+			const laterRelationId = crypto.randomUUID()
+			const entityIds = [earlierPageId, laterPageId, earlierRelationId, laterRelationId]
+
+			try {
+				await pool.query("INSERT INTO spaces (id, type, address) VALUES ($1, 'Personal', $2)", [
+					spaceId,
+					`0x${spaceId.replaceAll("-", "").slice(0, 40)}`,
+				])
+				await pool.query(
+					`
+					INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
+					VALUES
+						($1, '100', '1', '100', '1'),
+						($2, '200', '2', '200', '2'),
+						($3, '300', '3', '300', '3'),
+						($4, '400', '4', '400', '4')
+				`,
+					entityIds,
+				)
+				await pool.query(
+					`
+					INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id, verified)
+					VALUES
+						($1, $1, $2, $3, $4, $5, true),
+						($6, $6, $2, $7, $4, $5, true)
+				`,
+					[
+						laterRelationId,
+						TYPES_RELATION_ID,
+						laterPageId,
+						SPACE_TYPE_ID,
+						spaceId,
+						earlierRelationId,
+						earlierPageId,
+					],
+				)
+
+				const result = await pool.query(
+					`
+					SELECT (spaces_page(s)).id AS page_id
+					FROM spaces s
+					WHERE id = $1
+				`,
+					[spaceId],
+				)
+
+				expect(result.rows).toHaveLength(1)
+				expect(result.rows[0].page_id).toBe(earlierPageId)
+			} finally {
+				await pool.query("DELETE FROM relations WHERE id = ANY($1::uuid[])", [
+					[earlierRelationId, laterRelationId],
+				])
+				await pool.query("DELETE FROM spaces WHERE id = $1", [spaceId])
+				await pool.query("DELETE FROM entities WHERE id = ANY($1::uuid[])", [entityIds])
 			}
 		})
 	})
