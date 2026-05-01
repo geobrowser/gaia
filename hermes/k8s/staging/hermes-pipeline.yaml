@@ -54,6 +54,10 @@ spec:
         - name: hermes-pipeline
           image: registry.digitalocean.com/geo/hermes-pipeline:latest
           imagePullPolicy: Always
+          ports:
+            - name: metrics
+              containerPort: 9464
+              protocol: TCP
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -146,3 +150,21 @@ spec:
             limits:
               memory: "1Gi"
               cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-pipeline
+  namespace: knowledge-staging
+  labels:
+    app: hermes-pipeline
+    environment: staging
+spec:
+  type: ClusterIP
+  selector:
+    app: hermes-pipeline
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: metrics
+      protocol: TCP

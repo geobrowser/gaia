@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chain-tip-exporter-production
+  namespace: monitoring
+  labels:
+    app: chain-tip-exporter
+    environment: production
+    gaia_namespace: knowledge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chain-tip-exporter
+      environment: production
+  template:
+    metadata:
+      labels:
+        app: chain-tip-exporter
+        environment: production
+        gaia_namespace: knowledge
+    spec:
+      restartPolicy: Always
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: chain-tip-exporter
+          image: registry.digitalocean.com/geo/chain-tip-exporter:latest
+          imagePullPolicy: Always
+          ports:
+            - name: metrics
+              containerPort: 9464
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: chain-tip-exporter-production-secrets
+                  key: RPC_URL
+            - name: POLL_INTERVAL_SECS
+              value: "30"
+            - name: LATEST_BLOCK_BEHIND_THRESHOLD_SECS
+              value: "300"
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: chain-tip-exporter-production-secrets
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              value: "production"
+            - name: SENTRY_RELEASE
+              valueFrom:
+                secretKeyRef:
+                  name: chain-tip-exporter-production-secrets
+                  key: SENTRY_RELEASE
+                  optional: true
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chain-tip-exporter-production
+  namespace: monitoring
+  labels:
+    app: chain-tip-exporter
+    environment: production
+    gaia_namespace: knowledge
+spec:
+  type: ClusterIP
+  selector:
+    app: chain-tip-exporter
+    environment: production
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: metrics
+      protocol: TCP

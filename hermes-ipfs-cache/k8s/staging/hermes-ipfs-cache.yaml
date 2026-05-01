@@ -53,6 +53,10 @@ spec:
         - name: hermes-ipfs-cache
           image: registry.digitalocean.com/geo/hermes-ipfs-cache:latest
           imagePullPolicy: Always
+          ports:
+            - name: metrics
+              containerPort: 9464
+              protocol: TCP
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -133,3 +137,21 @@ spec:
               memory: "1Gi"
               cpu: "500m"
       restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hermes-ipfs-cache
+  namespace: knowledge-staging
+  labels:
+    app: hermes-ipfs-cache
+    environment: staging
+spec:
+  type: ClusterIP
+  selector:
+    app: hermes-ipfs-cache
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: metrics
+      protocol: TCP
