@@ -42,9 +42,16 @@ const DEFAULT_LIMIT = 20
 const MAX_LIMIT = 100
 
 /**
- * Maximum length for search queries to prevent abuse.
+ * Maximum length for search queries to prevent abuse and OpenSearch
+ * clause explosions. The previous 500-char ceiling let long pasted text
+ * (e.g. press-release blurbs) reach OpenSearch and blow past
+ * `indices.query.bool.max_clause_count = 1024` via fuzzy + prefix
+ * expansion. 100 chars covers realistic name/title-style search inputs
+ * while keeping the worst-case clause count well under 1024 even when
+ * combined with the per-sub-query token cap and fuzzy gate (see
+ * MAX_TEXT_TOKENS, FUZZY_MAX_TOKENS in opensearch.ts).
  */
-const MAX_QUERY_LENGTH = 500
+const MAX_QUERY_LENGTH = 100
 
 /**
  * Maximum length for space_id parameter (UUID format: 36 dashed, 32 dashless).
@@ -158,14 +165,14 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					in: "query",
 					description: "Search query string (alias: q)",
 					required: false,
-					schema: {type: "string", maxLength: 500},
+					schema: {type: "string", maxLength: 100},
 				},
 				{
 					name: "q",
 					in: "query",
 					description: "Search query string (alias for query)",
 					required: false,
-					schema: {type: "string", maxLength: 500},
+					schema: {type: "string", maxLength: 100},
 				},
 				{
 					name: "scope",

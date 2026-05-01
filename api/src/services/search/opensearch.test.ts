@@ -29,6 +29,125 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("fuzziness")
 			expect(queryStr).toContain("match_phrase_prefix")
 		})
+
+		it("caps clause-heavy sub-queries to 20 tokens; exact-match clauses see full query", () => {
+			// Query of 30 tokens → cap should kick in at 20 for bool_prefix /
+			// match_phrase_prefix. The exact-match clauses (term: name_raw, match: name)
+			// must still see all 30 tokens so a full-name match isn't lost. Fuzzy is
+			// dropped entirely at this token count (see separate test).
+			const tokens = Array.from({length: 30}, (_, i) => `t${i + 1}`)
+			const fullQuery = tokens.join(" ")
+			const cappedQuery = tokens.slice(0, 20).join(" ")
+			const overflowToken = tokens[25] // would be present if cap weren't applied
+
+			const query = client.buildBaseTextQuery(fullQuery) as {
+				bool: {should: Record<string, unknown>[]}
+			}
+			const should = query.bool.should
+
+			const boolPrefix = should.find(
+				(c) => "multi_match" in c && (c.multi_match as {type?: string}).type === "bool_prefix",
+			) as {multi_match: {query: string}}
+			const phrasePrefixName = should.find(
+				(c) => "match_phrase_prefix" in c && (c.match_phrase_prefix as {name?: unknown}).name !== undefined,
+			) as {match_phrase_prefix: {name: {query: string}}}
+			const phrasePrefixDesc = should.find(
+				(c) =>
+					"match_phrase_prefix" in c &&
+					(c.match_phrase_prefix as {description?: unknown}).description !== undefined,
+			) as {match_phrase_prefix: {description: {query: string}}}
+			const matchExactToken = should.find(
+				(c) => "match" in c && (c.match as {name?: unknown}).name !== undefined,
+			) as {match: {name: {query: string}}}
+			const termExactName = should.find(
+				(c) =>
+					"term" in c &&
+					typeof (c.term as {name_raw?: {value?: string; boost?: number}}).name_raw?.value === "string",
+			) as {term: {name_raw: {value: string}}}
+
+			// Heavy sub-queries: capped to 20 tokens, must NOT contain the 26th token
+			expect(boolPrefix.multi_match.query).toBe(cappedQuery)
+			expect(boolPrefix.multi_match.query).not.toContain(overflowToken)
+			expect(phrasePrefixName.match_phrase_prefix.name.query).toBe(cappedQuery)
+			expect(phrasePrefixDesc.match_phrase_prefix.description.query).toBe(cappedQuery)
+
+			// Exact-match sub-queries: still see the full 30-token query
+			expect(matchExactToken.match.name.query).toBe(fullQuery)
+			expect(matchExactToken.match.name.query).toContain(overflowToken)
+			expect(termExactName.term.name_raw.value).toBe(fullQuery)
+		})
+
+		it("includes fuzzy clause with capped max_expansions when token count <= 3", () => {
+			// 3 tokens — at the boundary
+			const query = client.buildBaseTextQuery("alpha beta gamma") as {
+				bool: {should: Record<string, unknown>[]}
+			}
+			const fuzzy = query.bool.should.find(
+				(c) => "multi_match" in c && (c.multi_match as {fuzziness?: string}).fuzziness !== undefined,
+			) as {multi_match: {query: string; fuzziness: string; max_expansions: number}}
+
+			expect(fuzzy).toBeDefined()
+			expect(fuzzy.multi_match.fuzziness).toBe("AUTO")
+			expect(fuzzy.multi_match.query).toBe("alpha beta gamma")
+			// max_expansions is capped (default OS value is 50; we pin lower for safety).
+			expect(fuzzy.multi_match.max_expansions).toBe(25)
+		})
+
+		it("drops fuzzy clause when token count > 3 (fan-out reduction)", () => {
+			// 4 tokens — just over the boundary
+			const query = client.buildBaseTextQuery("alpha beta gamma delta") as {
+				bool: {should: Record<string, unknown>[]}
+			}
+			const fuzzy = query.bool.should.find(
+				(c) => "multi_match" in c && (c.multi_match as {fuzziness?: string}).fuzziness !== undefined,
+			)
+			expect(fuzzy).toBeUndefined()
+
+			// Other heavy clauses must still be present (they have their own cap)
+			const boolPrefix = query.bool.should.find(
+				(c) => "multi_match" in c && (c.multi_match as {type?: string}).type === "bool_prefix",
+			)
+			expect(boolPrefix).toBeDefined()
+		})
+
+		it("counts punctuation-separated tokens correctly (no whitespace bypass)", () => {
+			// Adversarial: 6 tokens separated by commas/hyphens/dots, no whitespace.
+			// Whitespace-only splitter would see this as 1 token and incorrectly
+			// keep fuzzy enabled. The analyzer-aligned splitter sees 6 → fuzzy dropped.
+			const query = client.buildBaseTextQuery("alpha,beta-gamma.delta;epsilon!zeta") as {
+				bool: {should: Record<string, unknown>[]}
+			}
+			const fuzzy = query.bool.should.find(
+				(c) => "multi_match" in c && (c.multi_match as {fuzziness?: string}).fuzziness !== undefined,
+			)
+			expect(fuzzy).toBeUndefined()
+		})
+
+		it("preserves accented Latin letters as a single token (no over-split)", () => {
+			// "café" is one token to OpenSearch's analyzer. Our splitter should agree.
+			// "café" with no punctuation → 1 token → fuzzy enabled.
+			const query = client.buildBaseTextQuery("café") as {
+				bool: {should: Record<string, unknown>[]}
+			}
+			const fuzzy = query.bool.should.find(
+				(c) => "multi_match" in c && (c.multi_match as {fuzziness?: string}).fuzziness !== undefined,
+			) as {multi_match: {query: string}}
+			expect(fuzzy).toBeDefined()
+			expect(fuzzy.multi_match.query).toBe("café")
+		})
+
+		it("does not truncate when query is already short", () => {
+			// 3 tokens — fuzzy is included (≤ FUZZY_MAX_TOKENS) and sees the full query.
+			const shortQuery = "three short tokens"
+			const query = client.buildBaseTextQuery(shortQuery) as {
+				bool: {should: Record<string, unknown>[]}
+			}
+			const fuzzy = query.bool.should.find(
+				(c) => "multi_match" in c && (c.multi_match as {fuzziness?: string}).fuzziness !== undefined,
+			) as {multi_match: {query: string}}
+
+			expect(fuzzy.multi_match.query).toBe(shortQuery)
+		})
 	})
 
 	describe("buildUuidQuery", () => {
