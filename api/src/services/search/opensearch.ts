@@ -164,27 +164,62 @@ export const DEFAULT_PAGE_SIZE = 20
 export const MAX_PAGE_SIZE = 100
 
 /**
- * Maximum number of whitespace-separated tokens fed to the clause-heavy
- * sub-queries (fuzzy multi_match, bool_prefix multi_match, and the two
- * match_phrase_prefix clauses). Excess tokens are dropped from these
- * sub-queries only — exact-match clauses (`term: name_raw`, `match: name`)
- * still see the full query so an exact full-name hit isn't lost.
+ * Approximation of OpenSearch's standard analyzer for token counting:
+ * splits on whitespace, Unicode punctuation, and Unicode symbols. Covers
+ * the basics — spaces, tabs, periods, dashes, commas, slashes, colons,
+ * semicolons, brackets, math/currency symbols, etc.
+ *
+ * Not a perfect match for Lucene's UAX #29 tokenizer, but close enough
+ * to bound clause fan-out in the heavy sub-queries when paired with
+ * MAX_QUERY_LENGTH and MAX_TEXT_TOKENS. We err on the side of OVER-
+ * splitting (more tokens than the analyzer sees) — that just means a
+ * slightly tighter cap than necessary, never a looser one.
+ */
+const TOKEN_BOUNDARY_REGEX = /[\s\p{P}\p{S}]+/u
+
+/**
+ * Maximum number of tokens fed to the clause-heavy sub-queries
+ * (bool_prefix multi_match and the two match_phrase_prefix clauses).
+ * Excess tokens are dropped from these sub-queries only — exact-match
+ * clauses (`term: name_raw`, `match: name`) still see the full query
+ * so an exact full-name hit isn't lost.
  *
  * Each token in the heavy sub-queries can multiply into many internal
- * Lucene clauses (fuzzy `AUTO` × 2 fields, bool_prefix × 6 fields, plus
- * phrase-prefix expansion of the trailing token to 50 terms by default).
- * 20 tokens keeps the upper-bound clause count comfortably under
- * `indices.query.bool.max_clause_count = 1024` for realistic queries.
+ * Lucene clauses (bool_prefix × 6 fields, plus phrase-prefix expansion
+ * of the trailing token to 50 terms by default). 20 tokens keeps the
+ * upper-bound clause count comfortably under
+ * `indices.query.bool.max_clause_count = 1024`.
  */
 export const MAX_TEXT_TOKENS = 20
 
 /**
- * Truncate a query to the first `maxTokens` whitespace-separated tokens.
- * If the query already fits, returns it as-is (no allocation). Used to
- * cap fan-out in the clause-heavy sub-queries — see MAX_TEXT_TOKENS.
+ * Maximum token count at which fuzzy `multi_match` is included in the
+ * base text query. Above this, fuzzy is skipped entirely — its
+ * per-token edit-distance fan-out is the highest of any sub-query, and
+ * typo tolerance is most useful for short single- or few-word queries
+ * anyway. Multi-word queries have enough token redundancy that exact
+ * and prefix matches cover the typo cases sufficiently.
+ */
+export const FUZZY_MAX_TOKENS = 5
+
+/**
+ * Count tokens in the query (drops empty splits from leading/trailing
+ * separators).
+ */
+function countTokens(query: string): number {
+	return query.split(TOKEN_BOUNDARY_REGEX).filter((t) => t.length > 0).length
+}
+
+/**
+ * Truncate a query to the first `maxTokens` tokens. Re-joined with
+ * single spaces — the actual analyzer at search time tokenizes again,
+ * so the rejoining is just to preserve a string shape for the
+ * OpenSearch DSL. If the query already fits, returns it as-is (no
+ * allocation). Used to cap fan-out in the clause-heavy sub-queries —
+ * see MAX_TEXT_TOKENS.
  */
 function truncateToTokens(query: string, maxTokens: number): string {
-	const tokens = query.split(/\s+/)
+	const tokens = query.split(TOKEN_BOUNDARY_REGEX).filter((t) => t.length > 0)
 	if (tokens.length <= maxTokens) return query
 	return tokens.slice(0, maxTokens).join(" ")
 }
@@ -944,6 +979,13 @@ export class OpenSearchClient implements SearchClient {
 		// sub-queries (term: name_raw, match: name) keep the full query so a
 		// full-name match still wins when available.
 		const cappedQuery = truncateToTokens(queryText, MAX_TEXT_TOKENS)
+		// Fuzzy `multi_match` AUTO is the highest-fan-out clause (each term
+		// expands into edit-distance variants × 2 fields). Drop it entirely
+		// for queries with more than FUZZY_MAX_TOKENS analyzer-aligned tokens
+		// — multi-word queries have enough redundancy that exact + prefix
+		// clauses cover the typo cases. Single- and few-word queries keep
+		// fuzzy for the typical "user typed `etereum`" case.
+		const includeFuzzy = countTokens(queryText) <= FUZZY_MAX_TOKENS
 		return {
 			bool: {
 				should: [
@@ -1024,19 +1066,25 @@ export class OpenSearchClient implements SearchClient {
 							],
 						},
 					},
-					{
-						// Fuzzy text match to tolerate minor typos.
-						// AUTO fuzziness: 1-2 chars: 0 edits, 3-4 chars: 1 edit, 5+ chars: 2 edits.
-						// Capped at MAX_TEXT_TOKENS — fuzzy AUTO expands each term into many
-						// edit-distance variants, multiplied by 2 fields. Without a cap, a long
-						// pasted query trips OpenSearch's max_clause_count = 1024 with a 500.
-						multi_match: {
-							query: cappedQuery,
-							fields: ["name", "description"],
-							fuzziness: "AUTO",
-							boost: this.b("fuzzy_reduction_boost", FUZZY_REDUCTION_BOOST),
-						},
-					},
+					// Fuzzy text match to tolerate minor typos.
+					// AUTO fuzziness: 1-2 chars: 0 edits, 3-4 chars: 1 edit, 5+ chars: 2 edits.
+					// Skipped when the query has more than FUZZY_MAX_TOKENS analyzer-aligned
+					// tokens — fuzzy AUTO expands each term into many edit-distance variants
+					// across 2 fields and is the worst per-token offender for clause fan-out.
+					// Multi-word queries have enough redundancy to find typos via the exact
+					// and prefix clauses without it.
+					...(includeFuzzy
+						? [
+								{
+									multi_match: {
+										query: cappedQuery,
+										fields: ["name", "description"],
+										fuzziness: "AUTO",
+										boost: this.b("fuzzy_reduction_boost", FUZZY_REDUCTION_BOOST),
+									},
+								},
+							]
+						: []),
 					{
 						// Strongly boost documents where the name starts with the query text.
 						// Capped — match_phrase_prefix expands the trailing token to up to 50
