@@ -42,9 +42,14 @@ const DEFAULT_LIMIT = 20
 const MAX_LIMIT = 100
 
 /**
- * Maximum length for search queries to prevent abuse.
+ * Maximum length for search queries to prevent abuse and OpenSearch
+ * clause explosions. The previous 500-char ceiling let long pasted text
+ * (e.g. press-release blurbs) reach OpenSearch and blow past
+ * `indices.query.bool.max_clause_count = 1024` via fuzzy + prefix
+ * expansion. 200 chars is comfortably under the empirical 250-char
+ * threshold while still admitting realistic search inputs.
  */
-const MAX_QUERY_LENGTH = 500
+const MAX_QUERY_LENGTH = 200
 
 /**
  * Maximum length for space_id parameter (UUID format: 36 dashed, 32 dashless).
@@ -158,14 +163,14 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					in: "query",
 					description: "Search query string (alias: q)",
 					required: false,
-					schema: {type: "string", maxLength: 500},
+					schema: {type: "string", maxLength: 200},
 				},
 				{
 					name: "q",
 					in: "query",
 					description: "Search query string (alias for query)",
 					required: false,
-					schema: {type: "string", maxLength: 500},
+					schema: {type: "string", maxLength: 200},
 				},
 				{
 					name: "scope",

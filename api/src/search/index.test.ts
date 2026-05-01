@@ -229,14 +229,22 @@ describe("Search Router - Integration Tests", () => {
 
 		// Error cases
 		it("returns 400 for query longer than maximum length", async () => {
-			const longQuery = "a".repeat(501)
+			const longQuery = "a".repeat(201)
 			const request = new Request(`http://localhost/search?query=${longQuery}`)
 			const response = await app.fetch(request)
 			const result = await response.json()
 
 			expect(response.status).toBe(400)
 			expect(result.error).toBe("Invalid parameter")
-			expect(result.message).toContain("must not exceed 500 characters")
+			expect(result.message).toContain("must not exceed 200 characters")
+		})
+
+		it("accepts query exactly at the 200-char boundary", async () => {
+			const boundaryQuery = "a".repeat(200)
+			const request = new Request(`http://localhost/search?query=${boundaryQuery}`)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
 		})
 
 		it("returns 400 for invalid scope", async () => {

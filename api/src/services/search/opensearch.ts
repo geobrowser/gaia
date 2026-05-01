@@ -163,6 +163,32 @@ export const DEFAULT_PAGE_SIZE = 20
  */
 export const MAX_PAGE_SIZE = 100
 
+/**
+ * Maximum number of whitespace-separated tokens fed to the clause-heavy
+ * sub-queries (fuzzy multi_match, bool_prefix multi_match, and the two
+ * match_phrase_prefix clauses). Excess tokens are dropped from these
+ * sub-queries only — exact-match clauses (`term: name_raw`, `match: name`)
+ * still see the full query so an exact full-name hit isn't lost.
+ *
+ * Each token in the heavy sub-queries can multiply into many internal
+ * Lucene clauses (fuzzy `AUTO` × 2 fields, bool_prefix × 6 fields, plus
+ * phrase-prefix expansion of the trailing token to 50 terms by default).
+ * 20 tokens keeps the upper-bound clause count comfortably under
+ * `indices.query.bool.max_clause_count = 1024` for realistic queries.
+ */
+export const MAX_TEXT_TOKENS = 20
+
+/**
+ * Truncate a query to the first `maxTokens` whitespace-separated tokens.
+ * If the query already fits, returns it as-is (no allocation). Used to
+ * cap fan-out in the clause-heavy sub-queries — see MAX_TEXT_TOKENS.
+ */
+function truncateToTokens(query: string, maxTokens: number): string {
+	const tokens = query.split(/\s+/)
+	if (tokens.length <= maxTokens) return query
+	return tokens.slice(0, maxTokens).join(" ")
+}
+
 // System IDs from the SDK are already dashless — use directly for OpenSearch queries
 const TYPE_RELATION_TYPE_ID = SystemIds.TYPES_PROPERTY as string
 const AVATAR_RELATION_TYPE_ID = ContentIds.AVATAR_PROPERTY as string
@@ -913,6 +939,11 @@ export class OpenSearchClient implements SearchClient {
 	}
 
 	buildBaseTextQuery(queryText: string): object {
+		// Heavy sub-queries (fuzzy + bool_prefix + match_phrase_prefix) see only
+		// the first MAX_TEXT_TOKENS tokens to bound clause fan-out. Exact-match
+		// sub-queries (term: name_raw, match: name) keep the full query so a
+		// full-name match still wins when available.
+		const cappedQuery = truncateToTokens(queryText, MAX_TEXT_TOKENS)
 		return {
 			bool: {
 				should: [
@@ -976,9 +1007,12 @@ export class OpenSearchClient implements SearchClient {
 						},
 					},
 					{
-						// Autocomplete-style match over n-grams with higher weight on name
+						// Autocomplete-style match over n-grams with higher weight on name.
+						// Capped at MAX_TEXT_TOKENS because bool_prefix expands the trailing
+						// token across 6 fields (name/description × original/_2gram/_3gram),
+						// so per-token cost is the highest among the 8 sub-queries.
 						multi_match: {
-							query: queryText,
+							query: cappedQuery,
 							type: "bool_prefix",
 							fields: [
 								`name^${this.b("name_field_boost", NAME_FIELD_BOOST)}`,
@@ -991,29 +1025,36 @@ export class OpenSearchClient implements SearchClient {
 						},
 					},
 					{
-						// Fuzzy text match to tolerate minor typos
-						// AUTO fuzziness: 1-2 chars: 0 edits, 3-4 chars: 1 edit, 5+ chars: 2 edits
+						// Fuzzy text match to tolerate minor typos.
+						// AUTO fuzziness: 1-2 chars: 0 edits, 3-4 chars: 1 edit, 5+ chars: 2 edits.
+						// Capped at MAX_TEXT_TOKENS — fuzzy AUTO expands each term into many
+						// edit-distance variants, multiplied by 2 fields. Without a cap, a long
+						// pasted query trips OpenSearch's max_clause_count = 1024 with a 500.
 						multi_match: {
-							query: queryText,
+							query: cappedQuery,
 							fields: ["name", "description"],
 							fuzziness: "AUTO",
 							boost: this.b("fuzzy_reduction_boost", FUZZY_REDUCTION_BOOST),
 						},
 					},
 					{
-						// Strongly boost documents where the name starts with the query text
+						// Strongly boost documents where the name starts with the query text.
+						// Capped — match_phrase_prefix expands the trailing token to up to 50
+						// terms (default max_expansions), and the phrase grows linearly with
+						// token count.
 						match_phrase_prefix: {
 							name: {
-								query: queryText,
+								query: cappedQuery,
 								boost: this.b("name_prefix_boost", NAME_PREFIX_BOOST),
 							},
 						},
 					},
 					{
-						// Moderately boost documents where the description starts with the query text
+						// Moderately boost documents where the description starts with the
+						// query text. Same fan-out concerns as the name phrase-prefix above.
 						match_phrase_prefix: {
 							description: {
-								query: queryText,
+								query: cappedQuery,
 								boost: this.b("description_prefix_boost", DESCRIPTION_PREFIX_BOOST),
 							},
 						},
