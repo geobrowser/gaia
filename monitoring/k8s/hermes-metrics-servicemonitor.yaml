@@ -8,6 +8,7 @@ metadata:
 spec:
   namespaceSelector:
     matchNames:
+      - monitoring
       - knowledge
       - knowledge-staging
   selector:
@@ -23,3 +24,5 @@ spec:
       path: /metrics
       interval: 15s
       scrapeTimeout: 5s
+  targetLabels:
+    - gaia_namespace

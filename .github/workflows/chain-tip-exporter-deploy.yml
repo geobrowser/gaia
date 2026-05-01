@@ -7,6 +7,9 @@ on:
     paths:
       - 'chain-tip-exporter/**'
       - 'hermes-instrumentation/**'
+      - 'monitoring/k8s/namespace.yaml'
+      - 'monitoring/k8s/hermes-metrics-servicemonitor.yaml'
+      - 'monitoring/k8s/hermes-lag-dashboard.yaml'
       - '.github/workflows/chain-tip-exporter-deploy.yml'
 
 concurrency:
@@ -22,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install doctl
         uses: digitalocean/action-doctl@3cb3953159719656269e044e0e24ca16dd2a690f # v2.5.2
@@ -41,7 +44,7 @@ jobs:
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
       - name: Set up kubectl
-        uses: azure/setup-kubectl@v5
+        uses: azure/setup-kubectl@829323503d1be3d00ca8346e5391ca0b07a9ab0d # v5
 
       - name: Configure kubectl for DigitalOcean
         run: |
@@ -51,20 +54,23 @@ jobs:
         run: |
           # Update image tag to use SHA and apply
           sed -i 's|image: registry.digitalocean.com/geo/chain-tip-exporter:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' chain-tip-exporter/k8s/production/chain-tip-exporter.yaml
+          kubectl apply -f monitoring/k8s/namespace.yaml
           kubectl apply -f chain-tip-exporter/k8s/production/chain-tip-exporter.yaml
+          kubectl apply -f monitoring/k8s/hermes-metrics-servicemonitor.yaml
+          kubectl apply -f monitoring/k8s/hermes-lag-dashboard.yaml
 
       - name: Restart deployment to pick up new image
         run: |
-          kubectl rollout restart deployment/chain-tip-exporter -n knowledge
+          kubectl rollout restart deployment/chain-tip-exporter-production -n monitoring
 
       - name: Wait for rollout
         run: |
-          kubectl rollout status deployment/chain-tip-exporter -n knowledge --timeout=120s
+          kubectl rollout status deployment/chain-tip-exporter-production -n monitoring --timeout=120s
 
       - name: Show deployment status
         run: |
           echo "=== Chain Tip Exporter Deployment ==="
-          kubectl get deployment chain-tip-exporter -n knowledge
+          kubectl get deployment chain-tip-exporter-production -n monitoring
           echo ""
           echo "=== Chain Tip Exporter Pods ==="
-          kubectl get pods -n knowledge -l app=chain-tip-exporter
+          kubectl get pods -n monitoring -l app=chain-tip-exporter,environment=production

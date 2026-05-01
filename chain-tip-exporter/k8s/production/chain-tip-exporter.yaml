@@ -1,19 +1,24 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: chain-tip-exporter
-  namespace: knowledge
+  name: chain-tip-exporter-production
+  namespace: monitoring
   labels:
     app: chain-tip-exporter
+    environment: production
+    gaia_namespace: knowledge
 spec:
   replicas: 1
   selector:
     matchLabels:
       app: chain-tip-exporter
+      environment: production
   template:
     metadata:
       labels:
         app: chain-tip-exporter
+        environment: production
+        gaia_namespace: knowledge
     spec:
       restartPolicy: Always
       securityContext:
@@ -39,14 +44,16 @@ spec:
             - name: RPC_URL
               valueFrom:
                 secretKeyRef:
-                  name: chain-tip-exporter-secrets
+                  name: chain-tip-exporter-production-secrets
                   key: RPC_URL
             - name: POLL_INTERVAL_SECS
               value: "30"
+            - name: LATEST_BLOCK_BEHIND_THRESHOLD_SECS
+              value: "300"
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
-                  name: chain-tip-exporter-secrets
+                  name: chain-tip-exporter-production-secrets
                   key: SENTRY_DSN
                   optional: true
             - name: SENTRY_ENVIRONMENT
@@ -54,7 +61,7 @@ spec:
             - name: SENTRY_RELEASE
               valueFrom:
                 secretKeyRef:
-                  name: chain-tip-exporter-secrets
+                  name: chain-tip-exporter-production-secrets
                   key: SENTRY_RELEASE
                   optional: true
           resources:
@@ -68,14 +75,17 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: chain-tip-exporter
-  namespace: knowledge
+  name: chain-tip-exporter-production
+  namespace: monitoring
   labels:
     app: chain-tip-exporter
+    environment: production
+    gaia_namespace: knowledge
 spec:
   type: ClusterIP
   selector:
     app: chain-tip-exporter
+    environment: production
   ports:
     - name: metrics
       port: 9464

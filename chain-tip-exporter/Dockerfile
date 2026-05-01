@@ -1,4 +1,4 @@
-FROM rust:1.92-bookworm as builder
+FROM rust:1.95-bookworm AS builder
 
 RUN apt-get update && \
     apt-get install -y \

@@ -10,14 +10,15 @@
 //!
 //! - `RPC_URL` — EVM JSON-RPC endpoint (required)
 //! - `POLL_INTERVAL_SECS` — polling interval (default: 30)
+//! - `LATEST_BLOCK_BEHIND_THRESHOLD_SECS` — max latest-block age in seconds before emitting an error
 //! - `METRICS_PORT` — port for the Prometheus listener (default: 9464)
 //! - `SENTRY_DSN`, `SENTRY_*`, `AXIOM_*` — telemetry (optional)
 
 use std::env;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
-use hermes_instrumentation::{Backend, Config, info, warn};
+use hermes_instrumentation::{Backend, Config, error, info, warn};
 use serde::Deserialize;
 
 fn build_telemetry_config() -> Config {
@@ -80,9 +81,17 @@ async fn async_main() -> anyhow::Result<()> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(30),
     );
+    let latest_block_behind_threshold = env::var("LATEST_BLOCK_BEHIND_THRESHOLD_SECS")
+        .ok()
+        .map(|s| {
+            s.parse::<u64>()
+                .context("LATEST_BLOCK_BEHIND_THRESHOLD_SECS must be seconds")
+                .map(Duration::from_secs)
+        })
+        .transpose()?;
     info!(
-        rpc_url = %rpc_url,
         poll_interval_secs = poll_interval.as_secs(),
+        latest_block_behind_threshold_secs = latest_block_behind_threshold.map(|d| d.as_secs()),
         "Configuration loaded"
     );
 
@@ -97,6 +106,9 @@ async fn async_main() -> anyhow::Result<()> {
             Ok((number, timestamp)) => {
                 metrics::gauge!("chain_tip_block_number").set(number as f64);
                 metrics::gauge!("chain_tip_block_number_timestamp").set(timestamp as f64);
+                if let Some(threshold) = latest_block_behind_threshold {
+                    alert_if_latest_block_is_stale(number, timestamp, threshold)?;
+                }
                 info!(
                     block_number = number,
                     block_timestamp = timestamp,
@@ -105,12 +117,44 @@ async fn async_main() -> anyhow::Result<()> {
             }
             Err(e) => {
                 // Don't reset gauges on failure — leave them at last known value
-                // so `time() - chain_tip_block_number_timestamp` correctly fires
-                // a stale-tip alert via the existing PrometheusRule.
+                // so dashboards can still show the last observed chain tip.
                 warn!(error = %e, "Failed to fetch latest block");
             }
         }
     }
+}
+
+fn alert_if_latest_block_is_stale(
+    block_number: u64,
+    block_timestamp: i64,
+    threshold: Duration,
+) -> anyhow::Result<()> {
+    let now = current_unix_timestamp()?;
+    let block_age = latest_block_age_secs(now, block_timestamp);
+    if block_age > threshold.as_secs() {
+        let block_age_minutes = block_age / 60;
+        error!(
+            block_number,
+            block_timestamp,
+            latest_block_age_secs = block_age,
+            latest_block_age_minutes = block_age_minutes,
+            threshold_secs = threshold.as_secs(),
+            "RPC latest block is behind by {} minutes",
+            block_age_minutes
+        );
+    }
+    Ok(())
+}
+
+fn current_unix_timestamp() -> anyhow::Result<i64> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before Unix epoch")?;
+    Ok(now.as_secs() as i64)
+}
+
+fn latest_block_age_secs(now: i64, block_timestamp: i64) -> u64 {
+    now.saturating_sub(block_timestamp).max(0) as u64
 }
 
 #[derive(Deserialize)]
@@ -201,5 +245,15 @@ mod tests {
         let err = resp.error.unwrap();
         assert_eq!(err.code, -32600);
         assert_eq!(err.message, "Invalid Request");
+    }
+
+    #[test]
+    fn latest_block_age_is_zero_for_future_timestamps() {
+        assert_eq!(latest_block_age_secs(1_000, 1_005), 0);
+    }
+
+    #[test]
+    fn latest_block_age_uses_unix_seconds() {
+        assert_eq!(latest_block_age_secs(1_300, 1_000), 300);
     }
 }
