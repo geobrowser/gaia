@@ -206,8 +206,14 @@ impl Sink for IpfsCacheSink {
             info!(block = block_number, "Checkpoint");
         }
 
-        // Skip empty blocks entirely - no span created
+        // Skip empty blocks entirely - no span created.
+        // Still advance the lag gauges so HermesBehindChainTip doesn't false-fire
+        // during stretches of blocks that happen to contain no IPFS URIs.
         if edit_count == 0 {
+            hermes_instrumentation::metrics::set_latest_processed_block(block_number);
+            hermes_instrumentation::metrics::set_latest_processed_block_timestamp(
+                block_timestamp_seconds,
+            );
             return Ok(());
         }
 

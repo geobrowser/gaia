@@ -1,0 +1,28 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: hermes-lag-observability
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: hermes.lag
+      rules:
+        - alert: HermesBehindChainTip
+          expr: |
+            (
+              label_replace(
+                max by (gaia_namespace) (chain_tip_block_number),
+                "namespace", "$1", "gaia_namespace", "(.*)"
+              )
+              -
+              on(namespace) group_right
+              max by (namespace, service) (hermes_latest_processed_block)
+            ) > 5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: hermes {{ $labels.service }} is behind chain tip
+            description: hermes {{ $labels.service }} in {{ $labels.namespace }} is {{ $value }} blocks behind chain tip for over 5 minutes.
