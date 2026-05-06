@@ -1368,7 +1368,7 @@ async function setupTestData(pool: Pool): Promise<void> {
 			],
 		)
 
-		// 11. Create proposals (V2: identity row + version 1 row, joined via `proposals_current` view)
+		// 11. Create proposals (V2: identity row + version 0 row, joined via `proposals_current` view)
 		const now = Math.floor(Date.now() / 1000)
 
 		const insertProposalV2 = async (
@@ -1380,13 +1380,13 @@ async function setupTestData(pool: Pool): Promise<void> {
 			if (executedAt !== null) {
 				await client.query(
 					`INSERT INTO proposals (id, space_id, proposed_by, executed_at, created_at, created_at_block, current_version)
-					 VALUES ($1, $2, $3, $4, '2024-01-01T00:00:00Z', '1000', 1) ON CONFLICT DO NOTHING`,
+					 VALUES ($1, $2, $3, $4, '2024-01-01T00:00:00Z', '1000', 0) ON CONFLICT DO NOTHING`,
 					[proposalId, uuid.space1, uuid.entityAllTypes, executedAt],
 				)
 			} else {
 				await client.query(
 					`INSERT INTO proposals (id, space_id, proposed_by, created_at, created_at_block, current_version)
-					 VALUES ($1, $2, $3, '2024-01-01T00:00:00Z', '1000', 1) ON CONFLICT DO NOTHING`,
+					 VALUES ($1, $2, $3, '2024-01-01T00:00:00Z', '1000', 0) ON CONFLICT DO NOTHING`,
 					[proposalId, uuid.space1, uuid.entityAllTypes],
 				)
 			}
@@ -1398,7 +1398,7 @@ async function setupTestData(pool: Pool): Promise<void> {
 					flat_support_threshold,
 					version_created_at, version_created_at_block
 				 )
-				 VALUES ($1, 1, 'Fast', $2, $3, 1, 1, 0, 0, 1, '2024-01-01T00:00:00Z', '1000') ON CONFLICT DO NOTHING`,
+				 VALUES ($1, 0, 'Fast', $2, $3, 1, 1, 0, 0, 1, '2024-01-01T00:00:00Z', '1000') ON CONFLICT DO NOTHING`,
 				[proposalId, startTime, endTime],
 			)
 		}
