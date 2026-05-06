@@ -507,7 +507,7 @@ export const proposals = pgTable(
 		 * here avoids a `SELECT MAX(proposal_version)` subquery on every "current
 		 * proposal" read.
 		 */
-		currentVersion: integer("current_version").notNull().default(1),
+		currentVersion: integer("current_version").notNull().default(0),
 		/**
 		 * Unix-seconds timestamp when the proposal was executed on-chain, or
 		 * `null` if not yet executed. Identity-level because only one version of
@@ -669,8 +669,8 @@ export const proposalActions = pgTable(
 /**
  * proposal_votes (V2 — version-scoped, append-only history).
  *
- * Votes are non-destructive across proposal updates — a vote cast on v1 stays
- * in the table forever, even after the proposal is updated to v2 and new votes
+ * Votes are non-destructive across proposal updates — a vote cast on v0 stays
+ * in the table forever, even after the proposal is updated to v1 and new votes
  * are cast. The composite PK `(proposal_id, proposal_version, voter_id)`
  * mirrors the on-chain contract's `votes[(proposalId, proposalVersion,
  * voterId)]` mapping. A compound FK to `proposal_versions(proposal_id,

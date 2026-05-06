@@ -956,18 +956,18 @@ async function createProposalWithEdit(client: any, options: CreateProposalOption
 		[contentUri, Buffer.from(encoded), spaceId, edit.name],
 	)
 
-	// Create proposal (V2 identity row + version 1 row).
+	// Create proposal (V2 identity row + version 0 row — versions are 0-based on-chain).
 	// `proposals_current` view joins these on current_version = proposal_version.
 	if (executedAt) {
 		await client.query(
 			`INSERT INTO proposals (id, space_id, proposed_by, executed_at, created_at, created_at_block, current_version)
-			 VALUES ($1, $2, $3, $4, '2024-01-01T00:00:00Z', '2000', 1) ON CONFLICT DO NOTHING`,
+			 VALUES ($1, $2, $3, $4, '2024-01-01T00:00:00Z', '2000', 0) ON CONFLICT DO NOTHING`,
 			[proposalId, spaceId, uuid.entityExisting1, executedAt],
 		)
 	} else {
 		await client.query(
 			`INSERT INTO proposals (id, space_id, proposed_by, created_at, created_at_block, current_version)
-			 VALUES ($1, $2, $3, '2024-01-01T00:00:00Z', '2000', 1) ON CONFLICT DO NOTHING`,
+			 VALUES ($1, $2, $3, '2024-01-01T00:00:00Z', '2000', 0) ON CONFLICT DO NOTHING`,
 			[proposalId, spaceId, uuid.entityExisting1],
 		)
 	}
@@ -980,7 +980,7 @@ async function createProposalWithEdit(client: any, options: CreateProposalOption
 			flat_support_threshold,
 			version_created_at, version_created_at_block
 		 )
-		 VALUES ($1, 1, 'Fast', $2, $3, 1, 1, 0, 0, 1, '2024-01-01T00:00:00Z', '2000') ON CONFLICT DO NOTHING`,
+		 VALUES ($1, 0, 'Fast', $2, $3, 1, 1, 0, 0, 1, '2024-01-01T00:00:00Z', '2000') ON CONFLICT DO NOTHING`,
 		[proposalId, startTime, endTime],
 	)
 
@@ -989,7 +989,7 @@ async function createProposalWithEdit(client: any, options: CreateProposalOption
 	void actionId
 	await client.query(
 		`INSERT INTO proposal_actions (proposal_id, proposal_version, index, action_type, content_uri)
-		 VALUES ($1, 1, 0, 'Publish', $2) ON CONFLICT DO NOTHING`,
+		 VALUES ($1, 0, 0, 'Publish', $2) ON CONFLICT DO NOTHING`,
 		[proposalId, contentUri],
 	)
 }

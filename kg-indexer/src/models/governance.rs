@@ -84,9 +84,10 @@ pub struct ProposalIdentity {
     pub created_at_block: i64,
 }
 
-/// Per-version proposal state. Appended on every CREATE (version 1) and UPDATE
-/// (next version). The `proposal_version` number is assigned by the storage
-/// layer — the handler produces this item version-agnostically.
+/// Per-version proposal state. Appended on every CREATE (version 0) and UPDATE
+/// (next version: 1, 2, …). Versions are 0-based to mirror the contract's
+/// on-chain numbering. The `proposal_version` number is assigned by the
+/// storage layer — the handler produces this item version-agnostically.
 ///
 /// Settings escalation (fast→slow on a NO vote) UPDATES the current version's
 /// row in place rather than appending — the contract does not bump the version
@@ -114,7 +115,7 @@ pub struct ProposalVersionItem {
     /// Human-readable name derived from this version's actions.
     pub name: Option<String>,
     /// Timestamp when THIS version was created (may be the proposal's original
-    /// creation time for v1, or an update block's time for later versions).
+    /// creation time for v0, or an update block's time for later versions).
     pub version_created_at: i64,
     pub version_created_at_block: i64,
 }
