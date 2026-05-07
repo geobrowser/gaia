@@ -68,9 +68,12 @@ pub fn install(service: &str, port: Option<u16>) -> Result<(), Error> {
 
 /// Update the `hermes_latest_processed_block` gauge.
 ///
-/// Call this each time a block has been fully processed end-to-end (e.g. block
-/// summary emitted to Kafka, or cursor durably persisted). The chain-tip
-/// distance against `chain_tip_block_number` is what drives the lag alerts.
+/// Call this each time a block has been fully processed end-to-end — block
+/// summary emitted to Kafka, cursor durably persisted, or the block was
+/// observed with no work to do (e.g. an empty IPFS-cache block). The
+/// chain-tip distance against `chain_tip_block_number` is what drives the
+/// lag alerts, so the gauge must advance on every block we successfully
+/// observed, otherwise quiet stretches will look like indexer lag.
 pub fn set_latest_processed_block(block: u64) {
     metrics::gauge!(LATEST_PROCESSED_BLOCK).set(block as f64);
 }
