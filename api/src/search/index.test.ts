@@ -502,9 +502,9 @@ describe("Search Router - Integration Tests", () => {
 			expect(result.message).toContain("valid UUIDs")
 		})
 
-		it("returns 400 when more than 10 IDs are supplied", async () => {
+		it("returns 400 when more than 100 IDs are supplied", async () => {
 			const ids = Array.from(
-				{length: 11},
+				{length: 101},
 				(_, i) => `${i.toString().padStart(8, "0")}-0000-0000-0000-000000000000`,
 			).join(",")
 			const request = new Request(`http://localhost/search?query=test&additional_space_ids=${ids}`)
@@ -512,12 +512,12 @@ describe("Search Router - Integration Tests", () => {
 			const result = await response.json()
 
 			expect(response.status).toBe(400)
-			expect(result.message).toContain("more than 10 IDs")
+			expect(result.message).toContain("more than 100 IDs")
 		})
 
-		it("accepts exactly 10 IDs at the boundary", async () => {
+		it("accepts exactly 100 IDs at the boundary", async () => {
 			const ids = Array.from(
-				{length: 10},
+				{length: 100},
 				(_, i) => `${i.toString().padStart(8, "0")}-0000-0000-0000-000000000000`,
 			)
 			const request = new Request(`http://localhost/search?query=test&additional_space_ids=${ids.join(",")}`)

@@ -120,10 +120,9 @@ const VALID_PARAMS: Set<string> = new Set([
 ])
 
 /**
- * Maximum number of additional space IDs to prevent abuse.
- * Matches MAX_TYPE_IDS — same shape (CSV of UUIDs).
+ * Maximum number of additional space IDs.
  */
-const MAX_ADDITIONAL_SPACE_IDS = 10
+const MAX_ADDITIONAL_SPACE_IDS = 100
 
 // Error types for search operations
 class SearchValidationError extends Data.TaggedError("SearchValidationError")<{
@@ -202,7 +201,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					name: "additional_space_ids",
 					in: "query",
 					description:
-						"Comma-separated list of space UUIDs (max 10) to widen the eligibility set on GLOBAL-family scopes. The result set is the UNION of (a) all canonical-graph entities and (b) entities in any listed space — listed-space entities are returned regardless of their canonical-graph membership. The canonical-graph root space is implicitly included; passing it in the list is a no-op. When include_non_canonical=false is also set, the canonical-only restriction wins and additional_space_ids is ignored (the result is just canonical-graph entities). Rejected with 400 when used with SPACE or SPACE_SINGLE scopes.",
+						"Comma-separated space UUIDs (max 100) to widen GLOBAL-family searches. Returns canonical-graph entities UNION entities in any listed space. The canonical-graph root is implicit (passing it is a no-op). Ignored when include_non_canonical=false. Rejected on SPACE / SPACE_SINGLE scopes.",
 					required: false,
 					schema: {type: "string"},
 				},
