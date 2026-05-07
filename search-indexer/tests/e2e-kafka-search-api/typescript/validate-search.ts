@@ -3290,12 +3290,12 @@ class SearchValidator {
         : `expected 400 for malformed UUID, got ${status}: ${message}`);
   }
 
-  /** More than 10 IDs returns 400. */
+  /** More than 100 IDs returns 400. */
   async test58_AdditionalSpaceIdsRejectsOverLimit(): Promise<void> {
-    console.log(`\n${BLUE}Test 58: additional_space_ids returns 400 when more than 10 IDs are supplied${NC}`);
+    console.log(`\n${BLUE}Test 58: additional_space_ids returns 400 when more than 100 IDs are supplied${NC}`);
 
     const ids = Array.from(
-      { length: 11 },
+      { length: 101 },
       (_, i) => `${i.toString().padStart(8, '0')}-0000-0000-0000-000000000000`,
     );
     const { status, body } = await this.searchRaw(
@@ -3310,8 +3310,8 @@ class SearchValidator {
         : '';
     this.addResult('test58_rejects_over_limit', correct,
       correct
-        ? `400 returned for 11 IDs; message: ${message}`
-        : `expected 400 for >10 IDs, got ${status}: ${message}`);
+        ? `400 returned for 101 IDs; message: ${message}`
+        : `expected 400 for >100 IDs, got ${status}: ${message}`);
   }
 
   /** SPACE scope (aggregated subspace search) also rejects additional_space_ids. */
@@ -3624,15 +3624,15 @@ class SearchValidator {
         : `expected blocked-with-Y/found-with-X; got wrong=${wrongSpace.results.length}, rightFinds=${rightFinds}`);
   }
 
-  /** Exactly 10 IDs at the boundary is accepted (no 400). */
-  async test71_AdditionalSpaceIdsTenIdsBoundary(): Promise<void> {
-    console.log(`\n${BLUE}Test 71: exactly 10 IDs at the boundary is accepted${NC}`);
+  /** Exactly 100 IDs at the boundary is accepted (no 400). */
+  async test71_AdditionalSpaceIdsHundredIdsBoundary(): Promise<void> {
+    console.log(`\n${BLUE}Test 71: exactly 100 IDs at the boundary is accepted${NC}`);
 
-    // Real X + Y + 8 throwaway-but-valid UUIDs that point to non-existent spaces.
+    // Real X + Y + 98 throwaway-but-valid UUIDs that point to non-existent spaces.
     // Server must accept (length === MAX). Eligibility = canonical OR in any listed,
-    // so result is canonical + ASID_X + ASID_Y (8 throwaways match no docs).
+    // so result is canonical + ASID_X + ASID_Y (98 throwaways match no docs).
     const padding = Array.from(
-      { length: 8 },
+      { length: 98 },
       (_, i) => `${i.toString().padStart(8, '0')}-0000-0000-0000-000000000000`,
     );
     const ids = [
@@ -3653,10 +3653,10 @@ class SearchValidator {
       TEST_ENTITIES.ASID_Y_ENTITY_ID,
     ]);
     const correct = got.size === expected.size && [...expected].every(id => got.has(id));
-    this.addResult('test71_ten_ids_boundary', correct,
+    this.addResult('test71_hundred_ids_boundary', correct,
       correct
-        ? `10-ID payload accepted; canonical + ASID_X + ASID_Y returned (8 throwaways match nothing)`
-        : `expected all 3 probes among 10 IDs, got [${[...got].join(', ')}]`);
+        ? `100-ID payload accepted; canonical + ASID_X + ASID_Y returned (98 throwaways match nothing)`
+        : `expected all 3 probes among 100 IDs, got [${[...got].join(', ')}]`);
   }
 
   /** Malformed UUID with extra trailing characters is rejected. */
@@ -3858,7 +3858,7 @@ async function main() {
     await validator.test68_AdditionalSpaceIdsWorksWithGlobalByEntitySpaceScore();
     await validator.test69_AdditionalSpaceIdsWorksWithEmptyQuery();
     await validator.test70_AdditionalSpaceIdsWorksWithUuidQuery();
-    await validator.test71_AdditionalSpaceIdsTenIdsBoundary();
+    await validator.test71_AdditionalSpaceIdsHundredIdsBoundary();
     await validator.test72_AdditionalSpaceIdsRejectsTrailingCharsInUuid();
     await validator.test73_AdditionalSpaceIdsUnknownSpacesFallsBackToCanonical();
     await validator.test74_AdditionalSpaceIdsRejectsNumericValue();
