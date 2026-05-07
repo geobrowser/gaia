@@ -206,8 +206,14 @@ impl Sink for IpfsCacheSink {
             info!(block = block_number, "Checkpoint");
         }
 
-        // Skip empty blocks entirely - no span created
+        // Skip empty blocks entirely - no span created.
+        // Still advance the lag gauges so HermesBehindChainTip doesn't false-fire
+        // during stretches of blocks that happen to contain no IPFS URIs.
         if edit_count == 0 {
+            hermes_instrumentation::metrics::set_latest_processed_block(block_number);
+            hermes_instrumentation::metrics::set_latest_processed_block_timestamp(
+                block_timestamp_seconds,
+            );
             return Ok(());
         }
 
@@ -308,7 +314,9 @@ impl Sink for IpfsCacheSink {
                         );
                         info!(
                             event = "ipfs_cache.batch_end",
+                            indexer_id = INDEXER_ID,
                             block_number = persist_block,
+                            cursor = %persist_cursor,
                             edit_count = total,
                             duration_ms = duration.as_millis(),
                             "Batch end"
@@ -319,7 +327,14 @@ impl Sink for IpfsCacheSink {
                             .persist_cursor(INDEXER_ID, &persist_cursor, persist_block)
                             .await
                         {
-                            error!(error = %e, "Failed to persist cursor");
+                            error!(
+                                event = "ipfs_cache.persist_cursor_failed",
+                                indexer_id = INDEXER_ID,
+                                block_number = persist_block,
+                                cursor = %persist_cursor,
+                                error = %e,
+                                "Failed to persist cursor"
+                            );
                         } else {
                             // Cursor durably persisted — update lag gauges.
                             hermes_instrumentation::metrics::set_latest_processed_block(

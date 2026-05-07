@@ -10,7 +10,7 @@
 //!
 //! - `RPC_URL` — EVM JSON-RPC endpoint (required)
 //! - `POLL_INTERVAL_SECS` — polling interval (default: 30)
-//! - `LATEST_BLOCK_BEHIND_THRESHOLD_SECS` — max latest-block age in seconds before emitting an error
+//! - `LATEST_BLOCK_BEHIND_THRESHOLD_SECS` — max latest-block age in seconds before emitting a warn
 //! - `METRICS_PORT` — port for the Prometheus listener (default: 9464)
 //! - `SENTRY_DSN`, `SENTRY_*`, `AXIOM_*` — telemetry (optional)
 
@@ -18,7 +18,7 @@ use std::env;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
-use hermes_instrumentation::{Backend, Config, error, info, warn};
+use hermes_instrumentation::{Backend, Config, info, warn};
 use serde::Deserialize;
 
 fn build_telemetry_config() -> Config {
@@ -133,7 +133,7 @@ fn alert_if_latest_block_is_stale(
     let block_age = latest_block_age_secs(now, block_timestamp);
     if block_age > threshold.as_secs() {
         let block_age_minutes = block_age / 60;
-        error!(
+        warn!(
             block_number,
             block_timestamp,
             latest_block_age_secs = block_age,
