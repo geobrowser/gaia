@@ -20,7 +20,7 @@ spec:
     - name: kafka.consumer.lag
       rules:
         - alert: KafkaConsumerLagHigh
-          expr: kafka_consumergroup_lag > 1000
+          expr: max by (consumergroup, topic) (kafka_consumergroup_lag) > 1000
           for: 2m
           labels:
             severity: warning
@@ -28,11 +28,10 @@ spec:
             summary: Kafka consumer group {{ $labels.consumergroup }} is lagging
             description: |
               Consumer group {{ $labels.consumergroup }} has lag {{ $value }}
-              messages on topic {{ $labels.topic }} partition {{ $labels.partition }}
-              for over 2 minutes.
+              messages on topic {{ $labels.topic }} for over 2 minutes.
 
         - alert: KafkaConsumerLagCritical
-          expr: kafka_consumergroup_lag > 10000
+          expr: max by (consumergroup, topic) (kafka_consumergroup_lag) > 10000
           for: 5m
           labels:
             severity: critical
@@ -40,9 +39,8 @@ spec:
             summary: Kafka consumer group {{ $labels.consumergroup }} is severely lagging
             description: |
               Consumer group {{ $labels.consumergroup }} has lag {{ $value }}
-              messages on topic {{ $labels.topic }} partition {{ $labels.partition }}
-              for over 5 minutes — consumer is falling behind faster than it can
-              catch up.
+              messages on topic {{ $labels.topic }} for over 5 minutes —
+              consumer is falling behind faster than it can catch up.
 
         # Stuck = committed offset has not advanced while there are unprocessed
         # messages. Catches a hung consumer that's still holding its group
