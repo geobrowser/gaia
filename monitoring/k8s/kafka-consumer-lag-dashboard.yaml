@@ -36,9 +36,12 @@ data:
             "type": "query",
             "datasource": { "type": "prometheus", "uid": "$datasource" },
             "query": "label_values(kafka_consumergroup_lag, consumergroup)",
+            "refresh": 2,
+            "sort": 1,
             "includeAll": true,
             "multi": true,
-            "current": { "selected": true, "text": "All", "value": "$__all" }
+            "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+            "options": []
           },
           {
             "name": "topic",
@@ -46,9 +49,12 @@ data:
             "type": "query",
             "datasource": { "type": "prometheus", "uid": "$datasource" },
             "query": "label_values(kafka_consumergroup_lag{consumergroup=~\"$consumergroup\"}, topic)",
+            "refresh": 2,
+            "sort": 1,
             "includeAll": true,
             "multi": true,
-            "current": { "selected": true, "text": "All", "value": "$__all" }
+            "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+            "options": []
           }
         ]
       },
@@ -253,63 +259,63 @@ data:
         },
         {
           "type": "timeseries",
-          "title": "Consumption Rate (committed offset / sec)",
+          "title": "Messages Consumed (rolling 1m window)",
           "id": 6,
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
           "datasource": { "type": "prometheus", "uid": "$datasource" },
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "$datasource" },
-              "expr": "sum by (consumergroup, topic) (rate(kafka_consumergroup_current_offset{consumergroup=~\"$consumergroup\",topic=~\"$topic\"}[5m]))",
+              "expr": "sum by (consumergroup, topic) (increase(kafka_consumergroup_current_offset{consumergroup=~\"$consumergroup\",topic=~\"$topic\"}[1m]))",
               "legendFormat": "{{consumergroup}} / {{topic}}",
               "refId": "A"
             }
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": "ops",
-              "decimals": 1,
+              "unit": "short",
+              "decimals": 0,
               "custom": {
                 "drawStyle": "line",
                 "lineWidth": 1,
-                "fillOpacity": 0,
+                "fillOpacity": 10,
                 "spanNulls": true
               }
             }
           },
           "options": {
-            "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] },
+            "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["sum", "max"] },
             "tooltip": { "mode": "multi" }
           }
         },
         {
           "type": "timeseries",
-          "title": "Production Rate (high watermark / sec)",
+          "title": "Messages Produced (rolling 1m window)",
           "id": 7,
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
           "datasource": { "type": "prometheus", "uid": "$datasource" },
           "targets": [
             {
               "datasource": { "type": "prometheus", "uid": "$datasource" },
-              "expr": "sum by (topic) (rate(kafka_topic_partition_current_offset{topic=~\"$topic\"}[5m]))",
+              "expr": "sum by (topic) (increase(kafka_topic_partition_current_offset{topic=~\"$topic\"}[1m]))",
               "legendFormat": "{{topic}}",
               "refId": "A"
             }
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": "ops",
-              "decimals": 1,
+              "unit": "short",
+              "decimals": 0,
               "custom": {
                 "drawStyle": "line",
                 "lineWidth": 1,
-                "fillOpacity": 0,
+                "fillOpacity": 10,
                 "spanNulls": true
               }
             }
           },
           "options": {
-            "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] },
+            "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["sum", "max"] },
             "tooltip": { "mode": "multi" }
           }
         },
