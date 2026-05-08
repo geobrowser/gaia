@@ -51,9 +51,9 @@ spec:
         - alert: KafkaConsumerStuck
           expr: |
             (
-              increase(kafka_consumergroup_current_offset[5m]) == 0
-              and
               kafka_consumergroup_lag > 0
+              and on(consumergroup, topic, partition)
+              (changes(kafka_consumergroup_current_offset[1m]) == 0)
             )
           for: 5m
           labels:
