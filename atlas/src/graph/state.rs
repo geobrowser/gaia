@@ -107,9 +107,6 @@ impl GraphState {
             TrustExtension::EditorAdded { member_space_id } => {
                 self.add_explicit_edge(source, *member_space_id, EdgeType::Editor);
             }
-            TrustExtension::MemberAdded { member_space_id } => {
-                self.add_explicit_edge(source, *member_space_id, EdgeType::Member);
-            }
 
             // --- Edge Removals ---
             TrustExtension::VerifiedRemoved { target_space_id } => {
@@ -121,16 +118,17 @@ impl GraphState {
             TrustExtension::EditorRemoved { member_space_id } => {
                 self.remove_explicit_edge(source, *member_space_id, EdgeType::Editor);
             }
-            TrustExtension::MemberRemoved { member_space_id } => {
-                self.remove_explicit_edge(source, *member_space_id, EdgeType::Member);
-            }
             TrustExtension::SubtopicRemoved { target_topic_id } => {
                 self.remove_topic_edge(source, *target_topic_id);
             }
+
+            // Member edges are ignored — see plan 0007. Variants stay in the
+            // TrustExtension enum so convert.rs (chain action parsing) is untouched.
+            TrustExtension::MemberAdded { .. } | TrustExtension::MemberRemoved { .. } => {}
         }
     }
 
-    /// Add an explicit edge (Verified, Related, Editor, Member)
+    /// Add an explicit edge (Verified, Related, Editor)
     fn add_explicit_edge(&mut self, source: SpaceId, target: SpaceId, edge_type: EdgeType) {
         // Intentionally allow duplicate entries.
         //
@@ -405,5 +403,66 @@ mod tests {
         assert_eq!(members.len(), 2);
         assert!(members.contains(&space1));
         assert!(members.contains(&space2));
+    }
+
+    // Member events must be no-ops at the state layer — see plan 0007.
+    // They still arrive from the chain via convert.rs but never produce
+    // edges in any graph view.
+
+    fn member_event(source: SpaceId, target: SpaceId, add: bool) -> SpaceTopologyEvent {
+        SpaceTopologyEvent {
+            meta: make_block_meta_at(2),
+            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+                source_space_id: source,
+                extension: if add {
+                    TrustExtension::MemberAdded {
+                        member_space_id: target,
+                    }
+                } else {
+                    TrustExtension::MemberRemoved {
+                        member_space_id: target,
+                    }
+                },
+            }),
+        }
+    }
+
+    #[test]
+    fn test_member_added_is_no_op() {
+        let mut state = GraphState::new();
+        let source = make_space_id(1);
+        let target = make_space_id(2);
+        state.apply_event(&make_space_created_event(source, make_topic_id(1)));
+        state.apply_event(&make_space_created_event(target, make_topic_id(2)));
+
+        state.apply_event(&member_event(source, target, true));
+
+        assert_eq!(
+            state.explicit_edge_count(),
+            0,
+            "MemberAdded must not produce an explicit edge"
+        );
+        assert!(state.get_explicit_edges(&source).is_none());
+    }
+
+    #[test]
+    fn test_member_removed_is_no_op() {
+        let mut state = GraphState::new();
+        let source = make_space_id(1);
+        let target = make_space_id(2);
+        state.apply_event(&make_space_created_event(source, make_topic_id(1)));
+        state.apply_event(&make_space_created_event(target, make_topic_id(2)));
+
+        // Add a verified edge so we can verify MemberRemoved doesn't disturb it.
+        state.apply_event(&make_verified_event(source, target));
+        assert_eq!(state.explicit_edge_count(), 1);
+
+        state.apply_event(&member_event(source, target, false));
+
+        assert_eq!(
+            state.explicit_edge_count(),
+            1,
+            "MemberRemoved must not remove unrelated edges"
+        );
     }
 }
