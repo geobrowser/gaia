@@ -18,8 +18,6 @@ pub enum EdgeType {
     Topic { topic_id: TopicId },
     /// Editor membership (canonical-granting)
     Editor,
-    /// Member membership (canonical-granting)
-    Member,
 }
 
 /// A node in the traversal tree
