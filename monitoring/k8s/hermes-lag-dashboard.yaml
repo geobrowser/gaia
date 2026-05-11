@@ -86,7 +86,7 @@ data:
           },
           "fieldConfig": {
             "defaults": {
-              "unit": "short",
+              "unit": "none",
               "decimals": 0,
               "color": { "mode": "thresholds" },
               "thresholds": {
@@ -120,7 +120,7 @@ data:
           },
           "fieldConfig": {
             "defaults": {
-              "unit": "short",
+              "unit": "none",
               "decimals": 0,
               "color": { "mode": "thresholds" },
               "thresholds": {
@@ -154,7 +154,7 @@ data:
           },
           "fieldConfig": {
             "defaults": {
-              "unit": "short",
+              "unit": "none",
               "decimals": 0,
               "color": { "mode": "thresholds" },
               "thresholds": {
@@ -362,7 +362,7 @@ data:
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": "short",
+              "unit": "none",
               "decimals": 0,
               "custom": {
                 "drawStyle": "line",
