@@ -901,6 +901,23 @@ pub fn topic_declared(space_id: SpaceId, topic_id: TopicId) -> Action {
     }
 }
 
+/// Create a TOPIC_REMOVED action.
+///
+/// - `space_id`: The space removing the topic
+/// - `topic_id`: The 16-byte topic UUID stored in the first 16 bytes of `topic`
+pub fn topic_removed(space_id: SpaceId, topic_id: TopicId) -> Action {
+    let mut topic = topic_id.to_vec();
+    topic.extend_from_slice(&[0u8; 16]);
+
+    Action {
+        from_id: space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::TOPIC_REMOVED.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
 /// Create an EDITS_PUBLISHED action.
 ///
 /// - `space_id`: The space publishing the edit
