@@ -248,10 +248,7 @@ async fn fetch_with_retry(
                 // Entry exists but no payload — normalize to an errored entry
                 // so the invariant `is_errored == true ⇔ in_cache_as_errored`
                 // holds for downstream consumers.
-                FetchResult::Errored(CachedEdit::errored(
-                    cached_edit.cid,
-                    cached_edit.space_id,
-                ))
+                FetchResult::Errored(CachedEdit::errored(cached_edit.cid, cached_edit.space_id))
             }
         }
         Err(CacheError::NotFound(_)) => {
@@ -341,7 +338,10 @@ mod tests {
             "errored entries must be inserted into the prefetched map so edits.rs can \
              distinguish them from cache misses",
         );
-        assert!(entry.is_errored, "inserted entry must carry is_errored=true");
+        assert!(
+            entry.is_errored,
+            "inserted entry must carry is_errored=true"
+        );
         assert_eq!(result.errored_entries, 1);
         assert_eq!(result.cache_misses, 0);
         assert_eq!(result.fetch_failures, 0);
