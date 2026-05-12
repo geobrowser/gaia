@@ -637,8 +637,15 @@ fn test_e2e_editor_add_then_remove_produces_no_diff_for_editor() {
         .editor_removed(SPACE_A, SPACE_B)
         .build();
 
-    let (_state, _transitive, _canonical, _diff_tracker, diffs, _last_graph) =
+    let (_state, _transitive, _canonical, _diff_tracker, diffs, last_graph) =
         process_with_canonical(&actions, ROOT_SPACE_ID);
+
+    // Positive assertion: the verified Root -> A edge must produce a real
+    // diff. Without this, an empty diff stream (e.g. broken canonical emission)
+    // would satisfy the absence checks below and pass silently.
+    let graph = last_graph.expect("canonical graph should be computed");
+    assert!(graph.contains(&SPACE_A), "editor_no_diff: SPACE_A should be canonical via verified edge");
+    assert_change_exists(&diffs, SPACE_A, ChangeType::Added, "editor_no_diff");
 
     assert!(
         find_change(&diffs, SPACE_B, ChangeType::Added).is_none(),
@@ -669,8 +676,15 @@ fn test_e2e_member_add_then_remove_produces_no_diff_for_member() {
         .member_removed(SPACE_A, SPACE_B)
         .build();
 
-    let (_state, _transitive, _canonical, _diff_tracker, diffs, _last_graph) =
+    let (_state, _transitive, _canonical, _diff_tracker, diffs, last_graph) =
         process_with_canonical(&actions, ROOT_SPACE_ID);
+
+    // Positive assertion: the verified Root -> A edge must produce a real
+    // diff. Without this, an empty diff stream (e.g. broken canonical emission)
+    // would satisfy the absence checks below and pass silently.
+    let graph = last_graph.expect("canonical graph should be computed");
+    assert!(graph.contains(&SPACE_A), "member_no_diff: SPACE_A should be canonical via verified edge");
+    assert_change_exists(&diffs, SPACE_A, ChangeType::Added, "member_no_diff");
 
     assert!(
         find_change(&diffs, SPACE_B, ChangeType::Added).is_none(),

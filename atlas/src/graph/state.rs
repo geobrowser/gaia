@@ -118,8 +118,14 @@ impl GraphState {
 
             // Member and Editor edges are ignored — see plan 0007. Variants stay
             // in the TrustExtension enum so convert.rs (chain action parsing) is
-            // untouched. Only Verified, Related, and Subtopic remain as
-            // canonical-granting edges.
+            // untouched.
+            //
+            // Edge types that still affect Atlas's output after this change:
+            //   • Verified / Related — grant *canonical membership* via the
+            //     explicit-only BFS in canonical.rs Phase 1.
+            //   • Subtopic           — does NOT grant canonical membership; it
+            //     attaches filtered subtrees between already-canonical members
+            //     in canonical.rs Phase 2 (collect_topic_subtrees).
             TrustExtension::MemberAdded { .. }
             | TrustExtension::MemberRemoved { .. }
             | TrustExtension::EditorAdded { .. }
