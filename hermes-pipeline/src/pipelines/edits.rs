@@ -73,9 +73,7 @@ pub fn transform(
         // Look up from prefetched cache
         match prefetched.get(&ipfs_uri) {
             Some(cached_edit) => {
-                if cached_edit.is_errored {
-                    result.errored_entries += 1;
-                } else if let Some(payload) = &cached_edit.payload {
+                if let Some(payload) = cached_edit.valid_payload() {
                     match convert(action, payload, meta, index as u32) {
                         Ok(event) => {
                             if let Err(encoded_len) =
@@ -108,7 +106,10 @@ pub fn transform(
                 }
             }
             None => {
-                // Cache miss - this shouldn't happen if prefetch worked correctly
+                // URI absent from prefetched map: writer hasn't produced a
+                // row within the prefetch retry budget (genuine indexer-side
+                // miss). Errored entries are inserted into the map by
+                // prefetch_block, so they don't land here.
                 warn!(
                     ipfs_uri = %ipfs_uri,
                     "Edit not found in prefetched cache"
@@ -253,5 +254,37 @@ mod tests {
         assert_eq!(config.factor, 2);
         assert_eq!(config.max_delay, Duration::from_secs(5));
         assert_eq!(config.max_retries, 10);
+    }
+
+    /// Pins the contract between prefetch.rs and edits.rs: an errored entry
+    /// inserted into the prefetched map must be counted as `errored_entries`,
+    /// not `cache_misses`. Before the fix this branch was dead code — errored
+    /// entries leaked through to the `None` branch and inflated `cache_misses`.
+    #[test]
+    fn errored_prefetched_entry_counts_as_errored_not_cache_miss() {
+        let ipfs_uri = "ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+        let action = Action {
+            from_id: vec![0x01; 16],
+            to_id: vec![0; 16],
+            action: actions::EDITS_PUBLISHED.to_vec(),
+            topic: vec![0; 32],
+            data: ipfs_uri.as_bytes().to_vec(),
+        };
+
+        let mut prefetched = HashMap::new();
+        prefetched.insert(
+            ipfs_uri.to_string(),
+            CachedEdit::errored(
+                "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG".to_string(),
+                vec![0x01; 16],
+            ),
+        );
+
+        let result = transform(&[action], &test_meta(), &prefetched).unwrap();
+
+        assert_eq!(result.errored_entries, 1);
+        assert_eq!(result.cache_misses, 0);
+        assert_eq!(result.oversized_events, 0);
+        assert!(result.events.is_empty());
     }
 }
