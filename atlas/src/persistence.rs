@@ -900,7 +900,6 @@ pub enum PersistedEdgeType {
     Related,
     Topic { topic_id: String },
     Root,
-    Editor,
 }
 
 impl PersistedGraphState {
@@ -1062,7 +1061,6 @@ impl PersistedEdgeType {
             EdgeType::Topic { topic_id } => Self::Topic {
                 topic_id: encode_id(topic_id),
             },
-            EdgeType::Editor => Self::Editor,
         }
     }
 
@@ -1074,7 +1072,6 @@ impl PersistedEdgeType {
             PersistedEdgeType::Topic { topic_id } => Ok(EdgeType::Topic {
                 topic_id: decode_topic_id(topic_id)?,
             }),
-            PersistedEdgeType::Editor => Ok(EdgeType::Editor),
         }
     }
 
@@ -1084,7 +1081,6 @@ impl PersistedEdgeType {
             PersistedEdgeType::Verified => 1,
             PersistedEdgeType::Related => 2,
             PersistedEdgeType::Topic { .. } => 3,
-            PersistedEdgeType::Editor => 4,
         }
     }
 }
