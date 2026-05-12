@@ -287,6 +287,7 @@ impl Pipeline {
                 max_sequence(&moderation.content_flagged),
                 max_sequence(&moderation.content_unflagged),
                 max_sequence(&topics.topics_declared),
+                max_sequence(&topics.topics_removed),
                 max_sequence(&governance.proposals_created),
                 max_sequence(&governance.proposals_updated),
                 max_sequence(&governance.proposals_voted),
@@ -310,6 +311,7 @@ impl Pipeline {
                 || mark_sequence_as_last(&mut moderation.content_flagged, max_seq)
                 || mark_sequence_as_last(&mut moderation.content_unflagged, max_seq)
                 || mark_sequence_as_last(&mut topics.topics_declared, max_seq)
+                || mark_sequence_as_last(&mut topics.topics_removed, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_created, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_updated, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_voted, max_seq)
@@ -406,6 +408,10 @@ impl Pipeline {
         counts_by_event_type.insert(
             "TOPIC_DECLARED".to_string(),
             topics.topics_declared.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "TOPIC_REMOVED".to_string(),
+            topics.topics_removed.len() as u64,
         );
         counts_by_event_type.insert(
             "PROPOSAL_CREATED".to_string(),
@@ -537,15 +543,65 @@ impl Pipeline {
                 }
             }
 
-            // 5. Emit topic declarations
+            // 5. Emit topic declarations and removals.
+            // Both vecs are individually sorted by sequence (transform iterates
+            // actions in order). Merge-sort by sequence here so that declare/
+            // remove pairs in the same block are emitted in chain order — this
+            // matters because per-partition Kafka order determines the order
+            // consumers apply the writes, and a remove emitted after a later
+            // declare for the same space would leave the indexer in NULL state
+            // when the chain ended in the declared state.
             if topics.total() > 0 {
-                for event in &topics.topics_declared {
-                    self.emitter.emit(event).await?;
-                    debug!(
-                        space_id = %hex::encode(&event.space_id),
-                        topic_id = %hex::encode(&event.topic_id),
-                        "Topic declared"
-                    );
+                let mut declared_iter = topics.topics_declared.iter().peekable();
+                let mut removed_iter = topics.topics_removed.iter().peekable();
+                loop {
+                    let next_declared_seq = declared_iter
+                        .peek()
+                        .and_then(|e| e.meta.as_ref())
+                        .map(|m| m.sequence);
+                    let next_removed_seq = removed_iter
+                        .peek()
+                        .and_then(|e| e.meta.as_ref())
+                        .map(|m| m.sequence);
+                    match (next_declared_seq, next_removed_seq) {
+                        (Some(d), Some(r)) if d <= r => {
+                            let event = declared_iter.next().unwrap();
+                            self.emitter.emit(event).await?;
+                            debug!(
+                                space_id = %hex::encode(&event.space_id),
+                                topic_id = %hex::encode(&event.topic_id),
+                                "Topic declared"
+                            );
+                        }
+                        (Some(_), Some(_)) => {
+                            let event = removed_iter.next().unwrap();
+                            self.emitter.emit(event).await?;
+                            debug!(
+                                space_id = %hex::encode(&event.space_id),
+                                topic_id = %hex::encode(&event.topic_id),
+                                "Topic removed"
+                            );
+                        }
+                        (Some(_), None) => {
+                            let event = declared_iter.next().unwrap();
+                            self.emitter.emit(event).await?;
+                            debug!(
+                                space_id = %hex::encode(&event.space_id),
+                                topic_id = %hex::encode(&event.topic_id),
+                                "Topic declared"
+                            );
+                        }
+                        (None, Some(_)) => {
+                            let event = removed_iter.next().unwrap();
+                            self.emitter.emit(event).await?;
+                            debug!(
+                                space_id = %hex::encode(&event.space_id),
+                                topic_id = %hex::encode(&event.topic_id),
+                                "Topic removed"
+                            );
+                        }
+                        (None, None) => break,
+                    }
                 }
             }
 

@@ -31,7 +31,7 @@ use hermes_schema::pb::moderation::{
     HermesContentFlagged, HermesContentUnflagged, HermesEditorFlagged, HermesEditorUnflagged,
 };
 use hermes_schema::pb::space::{HermesCreateSpace, HermesSpaceTrustExtension};
-use hermes_schema::pb::topics::HermesTopicDeclared;
+use hermes_schema::pb::topics::{HermesTopicDeclared, HermesTopicRemoved};
 use hermes_schema::pb::voting::HermesVoteCast;
 
 /// Trait for event types that have blockchain metadata.
@@ -66,6 +66,7 @@ impl_has_meta!(
     HermesContentFlagged,
     HermesContentUnflagged,
     HermesTopicDeclared,
+    HermesTopicRemoved,
     HermesProposalCreated,
     HermesProposalUpdated,
     HermesProposalVoted,
