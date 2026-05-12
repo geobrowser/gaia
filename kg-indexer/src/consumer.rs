@@ -115,6 +115,7 @@ pub enum KgMessage {
     RoleRevoked(hermes_schema::pb::membership::HermesRoleRevoked),
     TrustExtension(hermes_schema::pb::space::HermesSpaceTrustExtension),
     TopicDeclared(hermes_schema::pb::topics::HermesTopicDeclared),
+    TopicRemoved(hermes_schema::pb::topics::HermesTopicRemoved),
     ProposalCreated(hermes_schema::pb::governance::HermesProposalCreated),
     ProposalUpdated(hermes_schema::pb::governance::HermesProposalUpdated),
     ProposalVoted(hermes_schema::pb::governance::HermesProposalVoted),
@@ -133,6 +134,7 @@ impl KgMessage {
             KgMessage::RoleRevoked(r) => r.meta.as_ref(),
             KgMessage::TrustExtension(t) => t.meta.as_ref(),
             KgMessage::TopicDeclared(t) => t.meta.as_ref(),
+            KgMessage::TopicRemoved(t) => t.meta.as_ref(),
             KgMessage::ProposalCreated(p) => p.meta.as_ref(),
             KgMessage::ProposalUpdated(p) => p.meta.as_ref(),
             KgMessage::ProposalVoted(v) => v.meta.as_ref(),
@@ -218,9 +220,18 @@ pub fn parse_message(
             Ok(KgMessage::TrustExtension(extension))
         }
         "space.topics" => {
-            let declared = hermes_schema::pb::topics::HermesTopicDeclared::decode(payload)
-                .map_err(|e| IndexerError::decode(format!("HermesTopicDeclared: {}", e)))?;
-            Ok(KgMessage::TopicDeclared(declared))
+            match event_type {
+                Some("TOPIC_REMOVED") => {
+                    let removed = hermes_schema::pb::topics::HermesTopicRemoved::decode(payload)
+                        .map_err(|e| IndexerError::decode(format!("HermesTopicRemoved: {}", e)))?;
+                    Ok(KgMessage::TopicRemoved(removed))
+                }
+                _ => {
+                    let declared = hermes_schema::pb::topics::HermesTopicDeclared::decode(payload)
+                        .map_err(|e| IndexerError::decode(format!("HermesTopicDeclared: {}", e)))?;
+                    Ok(KgMessage::TopicDeclared(declared))
+                }
+            }
         }
         "space.governance" => {
             // Use event-type header to determine message type
