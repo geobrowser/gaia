@@ -221,16 +221,20 @@ pub fn parse_message(
         }
         "space.topics" => {
             match event_type {
+                Some("TOPIC_DECLARED") | None => {
+                    let declared = hermes_schema::pb::topics::HermesTopicDeclared::decode(payload)
+                        .map_err(|e| IndexerError::decode(format!("HermesTopicDeclared: {}", e)))?;
+                    Ok(KgMessage::TopicDeclared(declared))
+                }
                 Some("TOPIC_REMOVED") => {
                     let removed = hermes_schema::pb::topics::HermesTopicRemoved::decode(payload)
                         .map_err(|e| IndexerError::decode(format!("HermesTopicRemoved: {}", e)))?;
                     Ok(KgMessage::TopicRemoved(removed))
                 }
-                _ => {
-                    let declared = hermes_schema::pb::topics::HermesTopicDeclared::decode(payload)
-                        .map_err(|e| IndexerError::decode(format!("HermesTopicDeclared: {}", e)))?;
-                    Ok(KgMessage::TopicDeclared(declared))
-                }
+                Some(other) => Err(IndexerError::decode(format!(
+                    "unknown topics event type: {}",
+                    other
+                ))),
             }
         }
         "space.governance" => {
@@ -306,6 +310,67 @@ mod tests {
                 assert_eq!(event.topic_id, vec![2; 16]);
             }
             _ => panic!("expected TopicDeclared"),
+        }
+    }
+
+    #[test]
+    fn test_parse_space_topics_declared_without_header() {
+        // Back-compat: a message without an event-type header is decoded as TopicDeclared.
+        let msg = hermes_schema::pb::topics::HermesTopicDeclared {
+            space_id: vec![3; 16],
+            topic_id: vec![4; 16],
+            meta: None,
+        };
+        let payload = msg.encode_to_vec();
+
+        let parsed = parse_message("space.topics", &payload, None).unwrap();
+
+        match parsed {
+            KgMessage::TopicDeclared(event) => {
+                assert_eq!(event.space_id, vec![3; 16]);
+                assert_eq!(event.topic_id, vec![4; 16]);
+            }
+            _ => panic!("expected TopicDeclared"),
+        }
+    }
+
+    #[test]
+    fn test_parse_space_topics_removed_message() {
+        let msg = hermes_schema::pb::topics::HermesTopicRemoved {
+            space_id: vec![5; 16],
+            topic_id: vec![6; 16],
+            meta: None,
+        };
+        let payload = msg.encode_to_vec();
+
+        let parsed = parse_message("space.topics", &payload, Some("TOPIC_REMOVED")).unwrap();
+
+        match parsed {
+            KgMessage::TopicRemoved(event) => {
+                assert_eq!(event.space_id, vec![5; 16]);
+                assert_eq!(event.topic_id, vec![6; 16]);
+            }
+            _ => panic!("expected TopicRemoved"),
+        }
+    }
+
+    #[test]
+    fn test_parse_space_topics_unknown_event_type_errors() {
+        let parsed = parse_message("space.topics", &[], Some("TOPIC_BOGUS"));
+
+        match parsed {
+            Err(IndexerError::Decode(msg)) => {
+                assert!(
+                    msg.contains("unknown topics event type"),
+                    "expected unknown-event-type error, got: {msg}"
+                );
+                assert!(
+                    msg.contains("TOPIC_BOGUS"),
+                    "error should name the offending value, got: {msg}"
+                );
+            }
+            Err(other) => panic!("expected Decode error, got: {other:?}"),
+            Ok(_) => panic!("expected error for unknown event type, got Ok"),
         }
     }
 }
