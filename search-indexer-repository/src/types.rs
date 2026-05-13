@@ -198,6 +198,27 @@ pub struct UpdateSpaceTopicEntityIdRequest {
     pub topic_entity_id: String,
 }
 
+/// Request to clear `space_topic_entity_id` from a single document.
+///
+/// Mirrors `UpdateSpaceTopicEntityIdByDocRequest` but removes the field
+/// instead of setting it. Uses the bulk API with a painless script —
+/// removing (not nulling) keeps the cache-warmup aggregator clean.
+#[derive(Debug, Clone)]
+pub struct ClearSpaceTopicEntityIdByDocRequest {
+    /// The document ID (`{entity_id}_{space_id}`).
+    pub doc_id: String,
+}
+
+/// Request to clear `space_topic_entity_id` from all entities in a space.
+///
+/// Mirrors `UpdateSpaceTopicEntityIdRequest` but removes the field instead
+/// of setting it. Uses `update_by_query` with a painless script.
+#[derive(Debug, Clone)]
+pub struct ClearSpaceTopicEntityIdRequest {
+    /// The space's unique identifier.
+    pub space_id: String,
+}
+
 /// Request to update in_canonical_graph for all entities in a space.
 ///
 /// This will set the `in_canonical_graph` field for ALL documents
@@ -249,6 +270,12 @@ pub enum EntityOperation {
     /// Update space_topic_entity_id by direct doc ID (resolved via Postgres lookup).
     /// Uses the bulk API instead of update_by_query.
     UpdateSpaceTopicEntityIdByDoc(UpdateSpaceTopicEntityIdByDocRequest),
+    /// Clear `space_topic_entity_id` from all entities in a space (slow path).
+    /// Uses `update_by_query` with a painless `remove` script.
+    ClearSpaceTopicEntityId(ClearSpaceTopicEntityIdRequest),
+    /// Clear `space_topic_entity_id` from a single document (fast path).
+    /// Uses the bulk API with a painless `remove` script.
+    ClearSpaceTopicEntityIdByDoc(ClearSpaceTopicEntityIdByDocRequest),
     /// Update in_canonical_graph for all entities in a space.
     /// Uses update_by_query to set the boolean field on all documents in the space.
     UpdateInCanonicalGraph(UpdateInCanonicalGraphRequest),
@@ -274,6 +301,8 @@ impl EntityOperation {
             EntityOperation::UpdateSpaceScoreByDoc(_) => "",
             EntityOperation::UpdateSpaceTopicEntityId(_) => "",
             EntityOperation::UpdateSpaceTopicEntityIdByDoc(_) => "",
+            EntityOperation::ClearSpaceTopicEntityId(_) => "",
+            EntityOperation::ClearSpaceTopicEntityIdByDoc(_) => "",
             EntityOperation::UpdateInCanonicalGraph(_) => "",
             EntityOperation::UpdateInCanonicalGraphByDoc(_) => "",
         }
@@ -295,6 +324,8 @@ impl EntityOperation {
             EntityOperation::UpdateSpaceScoreByDoc(_) => "",
             EntityOperation::UpdateSpaceTopicEntityId(r) => &r.space_id,
             EntityOperation::UpdateSpaceTopicEntityIdByDoc(_) => "",
+            EntityOperation::ClearSpaceTopicEntityId(r) => &r.space_id,
+            EntityOperation::ClearSpaceTopicEntityIdByDoc(_) => "",
             EntityOperation::UpdateInCanonicalGraph(r) => &r.space_id,
             EntityOperation::UpdateInCanonicalGraphByDoc(_) => "",
         }
@@ -315,6 +346,8 @@ impl EntityOperation {
             EntityOperation::UpdateSpaceScoreByDoc(_) => "UpdateSpaceScoreByDoc",
             EntityOperation::UpdateSpaceTopicEntityId(_) => "UpdateSpaceTopicEntityId",
             EntityOperation::UpdateSpaceTopicEntityIdByDoc(_) => "UpdateSpaceTopicEntityIdByDoc",
+            EntityOperation::ClearSpaceTopicEntityId(_) => "ClearSpaceTopicEntityId",
+            EntityOperation::ClearSpaceTopicEntityIdByDoc(_) => "ClearSpaceTopicEntityIdByDoc",
             EntityOperation::UpdateInCanonicalGraph(_) => "UpdateInCanonicalGraph",
             EntityOperation::UpdateInCanonicalGraphByDoc(_) => "UpdateInCanonicalGraphByDoc",
         }
