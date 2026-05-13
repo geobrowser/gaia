@@ -133,7 +133,11 @@ fn mutate_tree(tree: &TreeNode, change_rate: f64, seed: u64) -> TreeNode {
         nodes[parent_idx].2.push(new_id);
 
         let edge_types = [EdgeType::Verified, EdgeType::Related];
-        nodes.push((new_id, edge_types[rng.gen_range(0..edge_types.len())], vec![]));
+        nodes.push((
+            new_id,
+            edge_types[rng.gen_range(0..edge_types.len())],
+            vec![],
+        ));
 
         // Ensure parent exists (it should, we just selected it)
         let _ = parent_id;

@@ -44,8 +44,8 @@ use hermes_instrumentation::{debug_span, warn};
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata as ProtoBlockchainMetadata;
 use hermes_schema::pb::topology::{
     canonical_tree_node::Edge, edge_info, CanonicalGraphDiff, CanonicalGraphUpdated,
-    CanonicalTreeNode, ChangeType as ProtoChangeType, EdgeInfo,
-    NodeChange as ProtoNodeChange, RelatedEdge, RootEdge, TopicEdge, VerifiedEdge,
+    CanonicalTreeNode, ChangeType as ProtoChangeType, EdgeInfo, NodeChange as ProtoNodeChange,
+    RelatedEdge, RootEdge, TopicEdge, VerifiedEdge,
 };
 use prost::Message;
 

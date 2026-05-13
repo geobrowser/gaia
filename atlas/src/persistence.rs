@@ -817,8 +817,8 @@ impl Checkpoint {
     }
 
     pub fn graph_state(&self) -> Result<GraphState, CheckpointError> {
-        let persisted: PersistedGraphState =
-            serde_json::from_value(self.graph_state_blob.clone()).map_err(|err| {
+        let persisted: PersistedGraphState = serde_json::from_value(self.graph_state_blob.clone())
+            .map_err(|err| {
                 CheckpointError::Serialization(format!("decode graph_state_blob: {err}"))
             })?;
         persisted.to_graph_state()
