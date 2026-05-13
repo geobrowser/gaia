@@ -2,20 +2,21 @@
 
 Remove member-of-space and editor-of-space relationships from Atlas's traversal and canonical graphs. Both edge types should have zero effect on any computed output.
 
-After this plan lands, the only canonical-granting edge types in Atlas are **Verified**, **Related**, and **Subtopic** (the last is topic-based, not explicit).
+After this plan lands, the only canonical-granting edge types in Atlas are **Verified** and **Related**. **Subtopic** edges appear in the canonical graph too, but they do not grant canonical membership: Phase 1 of canonical computation derives the canonical set from explicit (Verified/Related) edges only, and Phase 2 then attaches Subtopic edges filtered to nodes that are already canonical. See [`atlas/src/graph/canonical.rs`](../../../src/graph/canonical.rs) for the two-phase implementation.
 
 Tracks Linear issue [GEO-618](https://linear.app/defi-wonderland/issue/GEO-618/remove-member-relationships-from-canonical-graph).
 
-> **Status (updated 2026-05-12)**
-> - PR [#194](https://github.com/defi-wonderland/gaia/pull/194) implements the **Member** portion of this plan. Approved by automated review, not yet merged.
-> - Product team has confirmed **Editor** edges are also in scope. This plan is updated to cover both edge types symmetrically.
-> - **Decision needed** (see [Open decisions](#open-decisions)): extend PR #194 to drop Editor in the same change, or land #194 first and ship Editor as a follow-up PR. Recommendation: extend #194.
+> **Status (updated 2026-05-13)**
+> - PR [#194](https://github.com/defi-wonderland/gaia/pull/194) is **merged** (2026-05-12) into the integration branch `geo-618-remove-member-edges`. Per the resolved decision below (option A), it drops **both Member and Editor** edges in a single change and bumps the checkpoint marker `atlas-v1 → atlas-v2`. Closes [GEO-624](https://linear.app/defi-wonderland/issue/GEO-624).
+> - PR [#197](https://github.com/defi-wonderland/gaia/pull/197) is the docs follow-up — it updates `atlas/docs/graph-concepts.md` and this plan to reflect the post-merge state. Tracks [GEO-625](https://linear.app/defi-wonderland/issue/GEO-625).
+> - Operational rollout (fresh bootstrap to `atlas-v2` on staging and prod) is tracked by [GEO-626](https://linear.app/defi-wonderland/issue/GEO-626).
 
 ## Background
 
-Atlas currently treats `MEMBER_ADDED` / `MEMBER_REMOVED` and `EDITOR_ADDED` / `EDITOR_REMOVED` chain actions as topology edges that grant canonical membership. The conversion paths are structurally identical:
+Atlas previously treated `MEMBER_ADDED` / `MEMBER_REMOVED` and `EDITOR_ADDED` / `EDITOR_REMOVED` chain actions as topology edges that granted canonical membership (historical behavior, pre-0007). The conversion paths were structurally identical:
 
 ```
+// Historical behavior (pre-0007):
 chain Action (MEMBER_ADDED or EDITOR_ADDED)
   → convert.rs::convert_member_added | convert_editor_added
   → TrustExtension::MemberAdded | TrustExtension::EditorAdded
@@ -23,9 +24,9 @@ chain Action (MEMBER_ADDED or EDITOR_ADDED)
   → explicit_edges[source].push((target, EdgeType::Member | EdgeType::Editor))
 ```
 
-Once stored as explicit edges, Member and Editor edges are indistinguishable from `Verified` / `Related` in both the transitive BFS (`transitive.rs::compute`) and the canonical Phase-1 BFS (`canonical.rs::compute_if_changed`). They expand the canonical set and the transitive reachable set.
+Once stored as explicit edges, Member and Editor edges were indistinguishable from `Verified` / `Related` in both the transitive BFS (`transitive.rs::compute`) and the canonical Phase-1 BFS (`canonical.rs::compute_if_changed`). They expanded the canonical set and the transitive reachable set.
 
-This was introduced by plan [0006: Live Substream, Membership, and Graph Diffing](./0006-live-substream-membership-diffing-plan.md). We're undoing the membership portion of that plan in full.
+This was introduced by plan [0006: Live Substream, Membership, and Graph Diffing](./0006-live-substream-membership-diffing-plan.md). Plan 0007 reverses the membership portion of that plan in full.
 
 ## Goal
 
@@ -102,7 +103,7 @@ Hard-cut the checkpoint format. No Member or Editor data persists past this chan
 
 3. **Update test fixtures** that hardcode the marker string.
 
-**Marker version coordination**: see [Open decisions](#open-decisions). If we extend PR #194 to also cover Editor, the marker stays `atlas-v2` and covers both removals in a single fresh bootstrap. If Editor lands as a follow-up PR after #194 merges, the follow-up must bump to `atlas-v3` (and triggers a second fresh bootstrap).
+**Marker version coordination**: the marker is `atlas-v2` and covers both the Member and Editor removals in a single fresh bootstrap (see [Resolved decisions](#resolved-decisions)).
 
 Combined with `ATLAS_CHECKPOINT_ALLOW_FRESH_START=true` during deploy (see Rollout below), Atlas detects the marker mismatch, logs `Checkpoint rejected; … starting fresh`, and rebuilds graph state from `SUBSTREAMS_START_BLOCK`. The first new checkpoint stamps as the new marker.
 
@@ -176,7 +177,7 @@ No new "reset" signal required. No new topic version required.
 
 ## Rollout
 
-The marker bump (to `atlas-v2` if Editor lands with #194, or to `atlas-v3` if it ships as a follow-up) makes every existing checkpoint incompatible by construction. Atlas will refuse to start unless we permit a fresh bootstrap.
+The marker bump to `atlas-v2` makes every existing checkpoint incompatible by construction. Atlas will refuse to start unless we permit a fresh bootstrap.
 
 1. Land code change + tests + docs.
 2. On every environment running Atlas (staging, prod, anywhere with `ATLAS_CHECKPOINT_DATABASE_URL` set): set `ATLAS_CHECKPOINT_ALLOW_FRESH_START=true` **before** deploying the new image.
@@ -184,28 +185,17 @@ The marker bump (to `atlas-v2` if Editor lands with #194, or to `atlas-v3` if it
 4. Watch during replay:
    - Atlas `latest_block` metric catches up to chain head.
    - `topology.canonical` consumer-group lag spikes as kg-indexer / search-indexer process the rebuild stream — should settle once replay completes. Existing diff-apply logic is idempotent so no special handling required.
-   - First new checkpoint row written with `runtime_compatibility_marker = atlas-v2` (or `atlas-v3` if sequential).
+   - First new checkpoint row written with `runtime_compatibility_marker = atlas-v2`.
 5. Spot-check known Member-only and Editor-only canonical spaces: confirm they're gone from canonical queries.
 6. After Atlas is stable on the new marker, **revert `ATLAS_CHECKPOINT_ALLOW_FRESH_START` to `false`** so future checkpoint corruption fails loud instead of silently bootstrapping from genesis.
 
 **Replay-cost caveat:** default `SUBSTREAMS_START_BLOCK=82655`. Confirm acceptable replay wall-time per environment before scheduling the deploy.
 
-## Open decisions
+## Resolved decisions
 
 ### 1. Sequencing of Editor relative to PR #194
 
-PR #194 currently removes Member only and bumps to `atlas-v2`. Two paths:
-
-| Option | Description | Marker bumps | Fresh bootstraps |
-|--------|-------------|--------------|------------------|
-| **A. Extend #194** (recommended) | Add Editor changes as commits onto the existing `geo-618-remove-member-edges` branch. Single PR removes both. | `atlas-v1 → atlas-v2` (one) | 1 |
-| **B. Sequential** | Land #194 as-is. Open a follow-up PR for Editor that bumps `atlas-v2 → atlas-v3`. | Two bumps | 2 |
-
-**Recommendation: A.** Rebootstrapping is operationally expensive (replay from block 82655, downstream consumer lag spike). One bootstrap is materially better than two. Cost of option A: the approved PR may need re-review since the scope changes.
-
-If choosing A: rebase `geo-618-remove-member-edges` onto current `origin/dev`, add a second commit with the Editor changes, push, and request re-review.
-
-If choosing B: open a fresh Linear subissue (e.g. GEO-XXX) and a fresh worktree off the merged #194. Document that the team accepts a second fresh bootstrap.
+**Outcome: option A was chosen.** PR [#194](https://github.com/defi-wonderland/gaia/pull/194) was extended on the `geo-618-remove-member-edges` branch to drop **both** Member and Editor edges in a single change, and the checkpoint marker was bumped once (`atlas-v1 → atlas-v2`) to cover both removals via a single fresh bootstrap.
 
 ## File checklist
 
@@ -213,23 +203,24 @@ Reflects total scope (Member + Editor). Items already shipped by PR #194 are mar
 
 | File | Member change | Editor change |
 |------|---------------|---------------|
-| `atlas/src/graph/state.rs` | No-op (✅ #194) | No-op (new) |
-| `atlas/src/graph/tree.rs` | Remove `EdgeType::Member` (✅ #194) | Remove `EdgeType::Editor` (new) |
-| `atlas/src/graph/transitive.rs` | Move to no-op arm (✅ #194) | Move to no-op arm (new) |
-| `atlas/src/kafka/emitter.rs` | Drop match arms + fixture (✅ #194) | Drop match arms + fixture (new) |
-| `atlas/src/persistence.rs` | Drop `PersistedEdgeType::Member` + bump marker (✅ #194 → `atlas-v2`) | Drop `PersistedEdgeType::Editor`; marker stays `atlas-v2` if extending #194, else bump to `atlas-v3` |
+| `atlas/src/graph/state.rs` | No-op (✅ #194) | No-op (✅ #194) |
+| `atlas/src/graph/tree.rs` | Remove `EdgeType::Member` (✅ #194) | Remove `EdgeType::Editor` (✅ #194) |
+| `atlas/src/graph/transitive.rs` | Move to no-op arm (✅ #194) | Move to no-op arm (✅ #194) |
+| `atlas/src/kafka/emitter.rs` | Drop match arms + fixture (✅ #194) | Drop match arms + fixture (✅ #194) |
+| `atlas/src/persistence.rs` | Drop `PersistedEdgeType::Member` + bump marker (✅ #194 → `atlas-v2`) | Drop `PersistedEdgeType::Editor` (✅ #194, single marker bump to `atlas-v2` covers both) |
 | `atlas/src/main.rs` | Optional log annotation | Optional log annotation |
-| `atlas/tests/e2e.rs` | Flip Member expectations (✅ #194) | Flip Editor expectations (new) |
-| `atlas/benches/graph_diff.rs` | Drop `Member` fixture (✅ #194) | Drop `Editor` fixture (new) |
-| `atlas/src/graph/state.rs` (tests) | `test_member_*_is_no_op` (✅ #194) | `test_editor_*_is_no_op` (new) |
-| `atlas/src/graph/canonical.rs` (tests) | Member canonical assertion (✅ #194) | Editor canonical assertion (new) |
-| `atlas/src/graph/transitive.rs` (tests) | Member transitive assertion (✅ #194) | Editor transitive assertion (new) |
-| `atlas/docs/graph-concepts.md` | Drop Member from Explicit Edges (pending — GEO-625) | Drop Editor from Explicit Edges (new) |
-| `~/knowledge-base/projects/geo/concepts/atlas-canonical-graph.md` | Drop Member from canonical-granting edges (pending) | Drop Editor from canonical-granting edges (new) |
+| `atlas/tests/e2e.rs` | Flip Member expectations (✅ #194) | Flip Editor expectations (✅ #194) |
+| `atlas/benches/graph_diff.rs` | Drop `Member` fixture (✅ #194) | Drop `Editor` fixture (✅ #194) |
+| `atlas/src/graph/state.rs` (tests) | `test_member_*_is_no_op` (✅ #194) | `test_editor_*_is_no_op` (✅ #194) |
+| `atlas/src/graph/canonical.rs` (tests) | Member canonical assertion (✅ #194) | Editor canonical assertion (✅ #194) |
+| `atlas/src/graph/transitive.rs` (tests) | Member transitive assertion (✅ #194) | Editor transitive assertion (✅ #194) |
+| `atlas/docs/graph-concepts.md` | Drop Member from Explicit Edges (✅ PR #197 — GEO-625) | Drop Editor from Explicit Edges (✅ PR #197 — GEO-625) |
+| `~/knowledge-base/projects/geo/concepts/atlas-canonical-graph.md` | Drop Member from canonical-granting edges (✅ wiki) | Drop Editor from canonical-granting edges (✅ wiki) |
 
 ## Related
 
 - [0006: Live Substream, Membership, and Graph Diffing](./0006-live-substream-membership-diffing-plan.md) — introduced Member and Editor edges; this plan reverses the membership portion in full.
 - [Graph Concepts](../../graph-concepts.md)
 - [Known Issues](../../known-issues.md)
-- PR [#194](https://github.com/defi-wonderland/gaia/pull/194) — implements the Member portion of this plan.
+- PR [#194](https://github.com/defi-wonderland/gaia/pull/194) — drops both Member and Editor edges, bumps checkpoint marker to `atlas-v2`.
+- PR [#197](https://github.com/defi-wonderland/gaia/pull/197) — this docs PR; updates `atlas/docs/graph-concepts.md` and commits plan 0007.
