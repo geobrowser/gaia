@@ -69,6 +69,17 @@ const uuid = {
 	relCtxChild: normalizeUuid("10000000-0003-4000-8000-000000000008"),
 	relCtxTarget: normalizeUuid("10000000-0003-4000-8000-000000000009"),
 
+	// RFC 0006 fixture: a relation whose from_entity_id is NOT the changed
+	// child. Models the canonical breaking case from the RFC: an edit
+	// authored inside `rfc0006Leaf` (a TextBlock of entityWithDynamicGroups)
+	// creates a relation between two foreign entities (`rfc0006Source` and
+	// `rfc0006Target`). The persisted `context_last_to_entity_id = rfc0006Leaf`
+	// must surface the leaf — inference from `from_entity_id` would surface
+	// `rfc0006Source` (the bug).
+	rfc0006Leaf: normalizeUuid("10000000-0003-4000-8000-000000000010"),
+	rfc0006Source: normalizeUuid("10000000-0003-4000-8000-000000000011"),
+	rfc0006Target: normalizeUuid("10000000-0003-4000-8000-000000000012"),
+
 	// Properties (custom test properties)
 	propText: normalizeUuid("10000000-0004-4000-8000-000000000001"),
 	propBool: normalizeUuid("10000000-0004-4000-8000-000000000002"),
@@ -122,6 +133,9 @@ const uuid = {
 	// Relation that carries context_root_id directly (RFC 0003 relation-side
 	// context discovery). Its from_entity_id = relCtxChild, to = relCtxTarget.
 	relCtxRelation: normalizeUuid("10000000-0006-4000-8000-000000000016"),
+	// RFC 0006 fixture relation. from=rfc0006Source, to=rfc0006Target,
+	// context_last_to_entity_id=rfc0006Leaf (distinct from both endpoints).
+	rfc0006Relation: normalizeUuid("10000000-0006-4000-8000-000000000017"),
 
 	// Edits (versions)
 	edit1: normalizeUuid("10000000-0007-4000-8000-000000000001"), // Version 1
@@ -742,6 +756,41 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			// pre-fix bug.
 			expect(ids).not.toContain(uuid.relCtxTarget)
 		})
+
+		it("relation-side context discovery surfaces context_last_to_entity_id, not from_entity_id (RFC 0006)", async () => {
+			// The canonical breaking case from RFC 0006: a relation authored
+			// under a context, where from_entity_id is NOT the changed child.
+			// Pre-RFC-0006, queryContextEntities inferred the changed child
+			// from from_entity_id — correct only when the from-entity happens
+			// to coincide with the context leaf. The fixture is:
+			//
+			//   relation: rfc0006Source --[relTypeGeneric]--> rfc0006Target
+			//   context:  root=entityWithDynamicGroups,
+			//             edges[0].type_id=relTypeCustomA,
+			//             edges.last().to_entity_id=rfc0006Leaf
+			//
+			// Per the RFC, the changed child is rfc0006Leaf (the persisted
+			// leaf), not rfc0006Source (the relation's from-entity).
+			const res = await app.request(
+				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+
+			expect(body.groupKeys).toContain(uuid.relTypeCustomA)
+			const groupA = body[uuid.relTypeCustomA]
+			expect(groupA).toBeInstanceOf(Array)
+
+			const ids = groupA.map((item: {entityId: string}) => item.entityId)
+			// The leaf must appear (this is what the new column enables).
+			expect(ids).toContain(uuid.rfc0006Leaf)
+			// The relation's from-entity must NOT appear; that would be the
+			// pre-RFC-0006 inference bug.
+			expect(ids).not.toContain(uuid.rfc0006Source)
+			// And the to-entity definitely never appears (regression coverage
+			// for the earlier RFC 0003 fix).
+			expect(ids).not.toContain(uuid.rfc0006Target)
+		})
 	})
 
 	// ==========================================================================
@@ -1021,6 +1070,9 @@ async function setupTestData(pool: Pool): Promise<void> {
 			uuid.dynamicChildA1,
 			uuid.dynamicChildA2,
 			uuid.dynamicChildB1,
+			uuid.rfc0006Leaf,
+			uuid.rfc0006Source,
+			uuid.rfc0006Target,
 		]
 		for (const entityId of entities) {
 			await client.query(
@@ -1434,6 +1486,37 @@ async function setupTestData(pool: Pool): Promise<void> {
 			`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text)
 			 VALUES ($1, $2, $3, $4, $5, NULL, 'rel-ctx child content') ON CONFLICT DO NOTHING`,
 			[uuid.val(valIdx++), uuid.relCtxChild, uuid.propText, uuid.space1, versionKey2],
+		)
+
+		// RFC 0006 fixture: a relation row whose `context_last_to_entity_id`
+		// is distinct from `from_entity_id`. Models the canonical breaking
+		// case from the RFC's "Why Context `to_entity_id` Must Be Persisted":
+		// the edit was authored inside `rfc0006Leaf` (a child of
+		// entityWithDynamicGroups via relTypeCustomA), but it created a
+		// relation between two foreign entities. The diff must surface the
+		// leaf, not the relation's `from_entity_id`.
+		await client.query(
+			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key, context_root_id, context_edge_type_id, context_last_to_entity_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11) ON CONFLICT DO NOTHING`,
+			[
+				uuid.val(valIdx++),
+				uuid.rfc0006Relation,
+				uuid.rfc0006Source, // entity_id (the reified relation itself)
+				uuid.relTypeGeneric, // relation type — irrelevant for context discovery
+				uuid.rfc0006Source, // from_entity_id — would be surfaced by the buggy pre-RFC-0006 inference
+				uuid.rfc0006Target, // to_entity_id
+				uuid.space1,
+				versionKey2,
+				uuid.entityWithDynamicGroups, // context_root_id
+				uuid.relTypeCustomA, // context_edge_type_id
+				uuid.rfc0006Leaf, // context_last_to_entity_id — the actual changed child
+			],
+		)
+		// Give rfc0006Leaf a value change at v2 so the diff has content.
+		await client.query(
+			`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text)
+			 VALUES ($1, $2, $3, $4, $5, NULL, 'rfc 0006 leaf content') ON CONFLICT DO NOTHING`,
+			[uuid.val(valIdx++), uuid.rfc0006Leaf, uuid.propText, uuid.space1, versionKey2],
 		)
 
 		// 11. Create proposals

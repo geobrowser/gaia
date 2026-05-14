@@ -237,8 +237,15 @@ function queryContextEntities(
 						context_edge_type_id: string | null
 					}>(sql`
 						SELECT DISTINCT entity_id, context_edge_type_id FROM (
-							-- Context-based discovery from values
-							SELECT DISTINCT v.entity_id, v.context_edge_type_id
+							-- Context-based discovery from values.
+							-- RFC 0006: prefer context_last_to_entity_id (the GRC-20 context
+							-- leaf, edges.last().to_entity_id) as the "changed child" when
+							-- present. Fall back to entity_id for rows written before
+							-- migration 0058 — original inference path, correct by structural
+							-- coincidence with the leaf in well-formed cases.
+							SELECT DISTINCT
+								COALESCE(v.context_last_to_entity_id, v.entity_id) AS entity_id,
+								v.context_edge_type_id
 							FROM value_versions v
 							WHERE v.context_root_id = ${entityId}::uuid
 								AND v.context_edge_type_id IS NOT NULL
@@ -247,11 +254,15 @@ function queryContextEntities(
 								AND v.space_id = ${spaceId}::uuid
 							UNION
 							-- Context-based discovery from relations.
-							-- The changed child is the relation's owner (from_entity_id),
-							-- not its target. Context metadata on a relation row tags the
-							-- entity that owns/issues the relation, matching the leaf the
-							-- GRC-20 edit context's first edge points to.
-							SELECT DISTINCT r.from_entity_id AS entity_id, r.context_edge_type_id
+							-- RFC 0006: prefer the persisted context leaf
+							-- (context_last_to_entity_id, = edges.last().to_entity_id) over
+							-- inferring the changed child from from_entity_id. The old path
+							-- worked only by structural coincidence — a reified relation
+							-- between foreign entities authored under a context surfaced the
+							-- wrong child. Fall back to from_entity_id for pre-RFC-0006 rows.
+							SELECT DISTINCT
+								COALESCE(r.context_last_to_entity_id, r.from_entity_id) AS entity_id,
+								r.context_edge_type_id
 							FROM relation_versions r
 							WHERE r.context_root_id = ${entityId}::uuid
 								AND r.context_edge_type_id IS NOT NULL
@@ -265,8 +276,15 @@ function queryContextEntities(
 						context_edge_type_id: string | null
 					}>(sql`
 						SELECT DISTINCT entity_id, context_edge_type_id FROM (
-							-- Context-based discovery from values
-							SELECT DISTINCT v.entity_id, v.context_edge_type_id
+							-- Context-based discovery from values.
+							-- RFC 0006: prefer context_last_to_entity_id (the GRC-20 context
+							-- leaf, edges.last().to_entity_id) as the "changed child" when
+							-- present. Fall back to entity_id for rows written before
+							-- migration 0058 — original inference path, correct by structural
+							-- coincidence with the leaf in well-formed cases.
+							SELECT DISTINCT
+								COALESCE(v.context_last_to_entity_id, v.entity_id) AS entity_id,
+								v.context_edge_type_id
 							FROM value_versions v
 							WHERE v.context_root_id = ${entityId}::uuid
 								AND v.context_edge_type_id IS NOT NULL
@@ -274,11 +292,15 @@ function queryContextEntities(
 								AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
 							UNION
 							-- Context-based discovery from relations.
-							-- The changed child is the relation's owner (from_entity_id),
-							-- not its target. Context metadata on a relation row tags the
-							-- entity that owns/issues the relation, matching the leaf the
-							-- GRC-20 edit context's first edge points to.
-							SELECT DISTINCT r.from_entity_id AS entity_id, r.context_edge_type_id
+							-- RFC 0006: prefer the persisted context leaf
+							-- (context_last_to_entity_id, = edges.last().to_entity_id) over
+							-- inferring the changed child from from_entity_id. The old path
+							-- worked only by structural coincidence — a reified relation
+							-- between foreign entities authored under a context surfaced the
+							-- wrong child. Fall back to from_entity_id for pre-RFC-0006 rows.
+							SELECT DISTINCT
+								COALESCE(r.context_last_to_entity_id, r.from_entity_id) AS entity_id,
+								r.context_edge_type_id
 							FROM relation_versions r
 							WHERE r.context_root_id = ${entityId}::uuid
 								AND r.context_edge_type_id IS NOT NULL
