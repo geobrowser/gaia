@@ -169,6 +169,71 @@ describe("groupEntitiesByContext", () => {
 			expect(result.blocks).toEqual([nuuid("entity-1")])
 			expect(result.dynamicGroups.size).toBe(0)
 		})
+
+		it("context discovery wins over BLOCKS-relation fallback (fallback first)", () => {
+			const customType = nuuid("custom-type")
+			const entities = [
+				// Relation fallback arrives first with a position
+				makeEntity(nuuid("entity-1"), null, "pos-a"),
+				// Then context metadata pins it to a dynamic type
+				makeEntity(nuuid("entity-1"), customType, null),
+			]
+
+			const result = run(groupEntitiesByContext(entities))
+
+			expect(result.blocks).toEqual([])
+			expect(result.dynamicGroups.get(customType)).toEqual([nuuid("entity-1")])
+		})
+
+		it("context discovery wins over BLOCKS-relation fallback (context first)", () => {
+			const customType = nuuid("custom-type")
+			const entities = [
+				makeEntity(nuuid("entity-1"), customType, null),
+				makeEntity(nuuid("entity-1"), null, "pos-a"),
+			]
+
+			const result = run(groupEntitiesByContext(entities))
+
+			expect(result.dynamicGroups.get(customType)).toEqual([nuuid("entity-1")])
+		})
+
+		it("three-way collision: first non-null contextEdgeTypeId wins", () => {
+			// Same entityId surfaces three ways: context-A first, then context-B,
+			// then a relation fallback (null). Pin first-non-null-wins so a
+			// future refactor can't silently flip the winner.
+			const typeA = nuuid("type-a")
+			const typeB = nuuid("type-b")
+			const entities = [
+				makeEntity(nuuid("entity-1"), typeA, null),
+				makeEntity(nuuid("entity-1"), typeB, "pos-b"),
+				makeEntity(nuuid("entity-1"), null, "pos-c"),
+			]
+
+			const result = run(groupEntitiesByContext(entities))
+
+			// typeA wins (it was the first non-null type seen).
+			expect(result.dynamicGroups.get(typeA)).toEqual([nuuid("entity-1")])
+			expect(result.dynamicGroups.get(typeB)).toBeUndefined()
+			// Position inherited from the second entry (first non-null position).
+			// We can't directly observe that here, but it determines sort order;
+			// covered indirectly by the existing inherits-position tests.
+		})
+
+		it("inherits position from relation entry when context entry has none", () => {
+			const customTypeA = nuuid("type-a")
+			const entities = [
+				makeEntity(nuuid("e1"), customTypeA, null),
+				// Same ID with a position
+				makeEntity(nuuid("e1"), null, "pos-1"),
+				// Another in the same group sorts after via position
+				makeEntity(nuuid("e2"), customTypeA, "pos-2"),
+			]
+
+			const result = run(groupEntitiesByContext(entities))
+
+			// e1 inherited pos-1 so it comes before e2 (pos-2)
+			expect(result.dynamicGroups.get(customTypeA)).toEqual([nuuid("e1"), nuuid("e2")])
+		})
 	})
 
 	describe("position-based ordering", () => {
@@ -217,7 +282,7 @@ describe("groupEntitiesByContext", () => {
 
 describe("mergeDiscoveryResults", () => {
 	it("returns empty array for empty inputs", () => {
-		const result = run(mergeDiscoveryResults([], [], norm(SystemIds.BLOCKS)))
+		const result = run(mergeDiscoveryResults([], []))
 		expect(result).toEqual([])
 	})
 
@@ -227,7 +292,7 @@ describe("mergeDiscoveryResults", () => {
 			makeEntity(nuuid("e2"), nuuid("type-b"), "pos-2"),
 		]
 
-		const result = run(mergeDiscoveryResults(contextEntities, [], norm(SystemIds.BLOCKS)))
+		const result = run(mergeDiscoveryResults(contextEntities, []))
 
 		expect(result).toEqual(contextEntities)
 	})
@@ -238,7 +303,7 @@ describe("mergeDiscoveryResults", () => {
 			{entityId: nuuid("e2"), position: null},
 		]
 
-		const result = run(mergeDiscoveryResults([], relationEntities, norm(SystemIds.BLOCKS)))
+		const result = run(mergeDiscoveryResults([], relationEntities))
 
 		expect(result).toEqual([
 			{entityId: nuuid("e1"), contextEdgeTypeId: null, position: "pos-1"},
@@ -250,7 +315,7 @@ describe("mergeDiscoveryResults", () => {
 		const contextEntities = [makeEntity(nuuid("context-1"), nuuid("type-a"))]
 		const relationEntities = [{entityId: nuuid("relation-1"), position: "pos-1"}]
 
-		const result = run(mergeDiscoveryResults(contextEntities, relationEntities, norm(SystemIds.BLOCKS)))
+		const result = run(mergeDiscoveryResults(contextEntities, relationEntities))
 
 		expect(result).toHaveLength(2)
 		expect(result[0]).toEqual(contextEntities[0])

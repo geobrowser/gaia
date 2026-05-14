@@ -30,6 +30,11 @@ pub struct UpdateRelationItem {
     pub position: Option<String>,
     pub space_id: Uuid,
     pub verified: Option<bool>,
+    // Context columns for grouping (GRC-20 Section 4.5). Without these,
+    // relation_versions rows written for updates land with NULL context and
+    // become invisible to context-aware diff discovery.
+    pub context_root_id: Option<Uuid>,
+    pub context_edge_type_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug)]
@@ -42,9 +47,20 @@ pub struct UnsetRelationItem {
     pub position: Option<bool>,
     pub space_id: Uuid,
     pub verified: Option<bool>,
+    // Context columns — same rationale as UpdateRelationItem.
+    pub context_root_id: Option<Uuid>,
+    pub context_edge_type_id: Option<Uuid>,
 }
 
-/// Delete relation item with space context
+/// Delete relation item with space context.
+///
+/// NOTE: Delete ops do not currently write a tombstone version row carrying
+/// context, because the live `relations` row is removed before the version
+/// table is touched. Adding delete-with-context attribution would require
+/// fetching the relation's pre-delete state up the call chain — tracked
+/// separately. Until then, deletions made under a contextual edit appear in
+/// diffs only via the closure of `valid_to_key` on the existing version row,
+/// without context surfacing in `queryContextEntities`.
 #[derive(Clone, Debug)]
 pub struct DeleteRelationItem {
     pub id: Uuid,

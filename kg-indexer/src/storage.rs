@@ -1585,49 +1585,93 @@ impl Storage {
         .execute(&mut **tx)
         .await?;
 
-        // Filter to only Create operations for inserting new versions
-        let creates: Vec<&SetRelationItem> = relations
-            .iter()
-            .filter_map(|r| match r {
-                RelationOp::Create(item) => Some(item),
-                _ => None,
-            })
-            .collect();
+        // Build the rows to insert. Three sources:
+        //
+        //   - Create ops: synthesize from the SetRelationItem in-memory.
+        //   - Update / Unset ops: read post-mutation state from `relations`
+        //     (callers run live-table mutations before us in the same tx) and
+        //     attach the op's context columns. Without this path, an update
+        //     would close the existing version row but write no new row, so
+        //     queries at `version_key` would treat the relation as deleted.
+        //   - Delete ops: skip — closing valid_to_key already represents the
+        //     deletion in the temporal table.
+        let mut rows: Vec<VersionRow> = Vec::new();
 
-        if creates.is_empty() {
+        for r in relations {
+            match r {
+                RelationOp::Create(item) => rows.push(VersionRow {
+                    relation_id: item.id,
+                    entity_id: item.entity_id,
+                    type_id: item.type_id,
+                    from_id: item.from_id,
+                    from_space_id: item.from_space_id.as_ref().and_then(|s| s.parse().ok()),
+                    to_id: item.to_id,
+                    to_space_id: item.to_space_id.as_ref().and_then(|s| s.parse().ok()),
+                    position: item.position.clone(),
+                    space_id: item.space_id,
+                    verified: item.verified,
+                    context_root_id: item.context_root_id,
+                    context_edge_type_id: item.context_edge_type_id,
+                }),
+                RelationOp::Update(item) => {
+                    if let Some(row) = Self::fetch_relation_state(item.id, item.space_id, tx)
+                        .await?
+                    {
+                        rows.push(VersionRow {
+                            context_root_id: item.context_root_id,
+                            context_edge_type_id: item.context_edge_type_id,
+                            ..row
+                        });
+                    }
+                }
+                RelationOp::Unset(item) => {
+                    if let Some(row) = Self::fetch_relation_state(item.id, item.space_id, tx)
+                        .await?
+                    {
+                        rows.push(VersionRow {
+                            context_root_id: item.context_root_id,
+                            context_edge_type_id: item.context_edge_type_id,
+                            ..row
+                        });
+                    }
+                }
+                RelationOp::Delete(_) => {}
+            }
+        }
+
+        if rows.is_empty() {
             return Ok(());
         }
 
         // Prepare arrays for bulk insert
-        let mut ids = Vec::with_capacity(creates.len());
-        let mut r_relation_ids = Vec::with_capacity(creates.len());
-        let mut r_entity_ids = Vec::with_capacity(creates.len());
-        let mut r_type_ids = Vec::with_capacity(creates.len());
-        let mut r_from_entity_ids = Vec::with_capacity(creates.len());
-        let mut r_from_space_ids: Vec<Option<Uuid>> = Vec::with_capacity(creates.len());
-        let mut r_to_entity_ids = Vec::with_capacity(creates.len());
-        let mut r_to_space_ids: Vec<Option<Uuid>> = Vec::with_capacity(creates.len());
-        let mut r_positions = Vec::with_capacity(creates.len());
-        let mut r_space_ids = Vec::with_capacity(creates.len());
-        let mut r_verified = Vec::with_capacity(creates.len());
-        let mut valid_from_keys = Vec::with_capacity(creates.len());
-        let mut context_root_ids = Vec::with_capacity(creates.len());
-        let mut context_edge_type_ids = Vec::with_capacity(creates.len());
+        let mut ids = Vec::with_capacity(rows.len());
+        let mut r_relation_ids = Vec::with_capacity(rows.len());
+        let mut r_entity_ids = Vec::with_capacity(rows.len());
+        let mut r_type_ids = Vec::with_capacity(rows.len());
+        let mut r_from_entity_ids = Vec::with_capacity(rows.len());
+        let mut r_from_space_ids: Vec<Option<Uuid>> = Vec::with_capacity(rows.len());
+        let mut r_to_entity_ids = Vec::with_capacity(rows.len());
+        let mut r_to_space_ids: Vec<Option<Uuid>> = Vec::with_capacity(rows.len());
+        let mut r_positions = Vec::with_capacity(rows.len());
+        let mut r_space_ids = Vec::with_capacity(rows.len());
+        let mut r_verified = Vec::with_capacity(rows.len());
+        let mut valid_from_keys = Vec::with_capacity(rows.len());
+        let mut context_root_ids = Vec::with_capacity(rows.len());
+        let mut context_edge_type_ids = Vec::with_capacity(rows.len());
 
-        for r in &creates {
-            // Derive deterministic ID for idempotency
+        for r in &rows {
             ids.push(Self::derive_relation_version_id(
-                &r.id,
+                &r.relation_id,
                 &r.space_id,
                 version_key,
             ));
-            r_relation_ids.push(r.id);
+            r_relation_ids.push(r.relation_id);
             r_entity_ids.push(r.entity_id);
             r_type_ids.push(r.type_id);
             r_from_entity_ids.push(r.from_id);
-            r_from_space_ids.push(r.from_space_id.as_ref().and_then(|s| s.parse().ok()));
+            r_from_space_ids.push(r.from_space_id);
             r_to_entity_ids.push(r.to_id);
-            r_to_space_ids.push(r.to_space_id.as_ref().and_then(|s| s.parse().ok()));
+            r_to_space_ids.push(r.to_space_id);
             r_positions.push(r.position.as_deref());
             r_space_ids.push(r.space_id);
             r_verified.push(r.verified);
@@ -1670,4 +1714,72 @@ impl Storage {
 
         Ok(())
     }
+
+    /// Read the current state of a relation from the live `relations` table.
+    /// Used by `insert_relation_versions` to materialize a new version row
+    /// after Update/Unset live-table mutations have already been applied.
+    async fn fetch_relation_state(
+        relation_id: Uuid,
+        space_id: Uuid,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<Option<VersionRow>, IndexerError> {
+        let row = sqlx::query_as::<_, RelationStateRow>(
+            r#"
+            SELECT id, entity_id, type_id, from_entity_id, from_space_id,
+                   to_entity_id, to_space_id, position, space_id, verified
+            FROM relations
+            WHERE id = $1 AND space_id = $2
+            "#,
+        )
+        .bind(relation_id)
+        .bind(space_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+
+        Ok(row.map(|r| VersionRow {
+            relation_id: r.id,
+            entity_id: r.entity_id,
+            type_id: r.type_id,
+            from_id: r.from_entity_id,
+            from_space_id: r.from_space_id,
+            to_id: r.to_entity_id,
+            to_space_id: r.to_space_id,
+            position: r.position,
+            space_id: r.space_id,
+            verified: r.verified,
+            // Caller fills in op's context columns.
+            context_root_id: None,
+            context_edge_type_id: None,
+        }))
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct RelationStateRow {
+    id: Uuid,
+    entity_id: Uuid,
+    type_id: Uuid,
+    from_entity_id: Uuid,
+    from_space_id: Option<Uuid>,
+    to_entity_id: Uuid,
+    to_space_id: Option<Uuid>,
+    position: Option<String>,
+    space_id: Uuid,
+    verified: Option<bool>,
+}
+
+/// Internal helper struct used by `insert_relation_versions`.
+struct VersionRow {
+    relation_id: Uuid,
+    entity_id: Uuid,
+    type_id: Uuid,
+    from_id: Uuid,
+    from_space_id: Option<Uuid>,
+    to_id: Uuid,
+    to_space_id: Option<Uuid>,
+    position: Option<String>,
+    space_id: Uuid,
+    verified: Option<bool>,
+    context_root_id: Option<Uuid>,
+    context_edge_type_id: Option<Uuid>,
 }
