@@ -4,13 +4,6 @@ Remove member-of-space and editor-of-space relationships from Atlas's traversal 
 
 After this plan lands, the only canonical-granting edge types in Atlas are **Verified** and **Related**. **Subtopic** edges appear in the canonical graph too, but they do not grant canonical membership: Phase 1 of canonical computation derives the canonical set from explicit (Verified/Related) edges only, and Phase 2 then attaches Subtopic edges filtered to nodes that are already canonical. See [`atlas/src/graph/canonical.rs`](../../../src/graph/canonical.rs) for the two-phase implementation.
 
-Tracks Linear issue [GEO-618](https://linear.app/defi-wonderland/issue/GEO-618/remove-member-relationships-from-canonical-graph).
-
-> **Status (updated 2026-05-13)**
-> - PR [#194](https://github.com/defi-wonderland/gaia/pull/194) is **merged** (2026-05-12) into the integration branch `geo-618-remove-member-edges`. Per the resolved decision below (option A), it drops **both Member and Editor** edges in a single change and bumps the checkpoint marker `atlas-v1 → atlas-v2`. Closes [GEO-624](https://linear.app/defi-wonderland/issue/GEO-624).
-> - PR [#197](https://github.com/defi-wonderland/gaia/pull/197) is the docs follow-up — it updates `atlas/docs/graph-concepts.md` and this plan to reflect the post-merge state. Tracks [GEO-625](https://linear.app/defi-wonderland/issue/GEO-625).
-> - Operational rollout (fresh bootstrap to `atlas-v2` on staging and prod) is tracked by [GEO-626](https://linear.app/defi-wonderland/issue/GEO-626).
-
 ## Background
 
 Atlas previously treated `MEMBER_ADDED` / `MEMBER_REMOVED` and `EDITOR_ADDED` / `EDITOR_REMOVED` chain actions as topology edges that granted canonical membership (historical behavior, pre-0007). The conversion paths were structurally identical:
@@ -132,12 +125,12 @@ The diagnostic logging for `MemberAdded` / `MemberRemoved` / `EditorAdded` / `Ed
 - Cases where Member/Editor is the only path to a node: assert that node is NOT in canonical and NOT in the transitive set.
 - Cases where Member/Editor is one of multiple paths: assert the node is still present via the non-Member, non-Editor path.
 
-Specific tests known to need updates (relative to current state — some Member tests may already be flipped by PR #194):
+Specific tests known to need updates:
 - Tests using `.editor(...)` to grant canonical membership.
 - Tests asserting `editor_removed` produces a `Removed` change.
 - Tests asserting transitive reachability through an Editor edge.
 
-### New tests to add (symmetric to the Member tests added in PR #194)
+### New tests to add (symmetric to the Member tests)
 
 In `atlas/src/graph/state.rs` tests:
 
@@ -193,28 +186,28 @@ The marker bump to `atlas-v2` makes every existing checkpoint incompatible by co
 
 ## Resolved decisions
 
-### 1. Sequencing of Editor relative to PR #194
+### 1. Sequencing of Member and Editor removal
 
-**Outcome: option A was chosen.** PR [#194](https://github.com/defi-wonderland/gaia/pull/194) was extended on the `geo-618-remove-member-edges` branch to drop **both** Member and Editor edges in a single change, and the checkpoint marker was bumped once (`atlas-v1 → atlas-v2`) to cover both removals via a single fresh bootstrap.
+**Outcome: option A was chosen.** Member and Editor edges are dropped in a single change, and the checkpoint marker is bumped once (`atlas-v1 → atlas-v2`) to cover both removals via a single fresh bootstrap.
 
 ## File checklist
 
-Reflects total scope (Member + Editor). Items already shipped by PR #194 are marked as such.
+Reflects total scope (Member + Editor).
 
 | File | Member change | Editor change |
 |------|---------------|---------------|
-| `atlas/src/graph/state.rs` | No-op (✅ #194) | No-op (✅ #194) |
-| `atlas/src/graph/tree.rs` | Remove `EdgeType::Member` (✅ #194) | Remove `EdgeType::Editor` (✅ #194) |
-| `atlas/src/graph/transitive.rs` | Move to no-op arm (✅ #194) | Move to no-op arm (✅ #194) |
-| `atlas/src/kafka/emitter.rs` | Drop match arms + fixture (✅ #194) | Drop match arms + fixture (✅ #194) |
-| `atlas/src/persistence.rs` | Drop `PersistedEdgeType::Member` + bump marker (✅ #194 → `atlas-v2`) | Drop `PersistedEdgeType::Editor` (✅ #194, single marker bump to `atlas-v2` covers both) |
+| `atlas/src/graph/state.rs` | No-op (✅) | No-op (✅) |
+| `atlas/src/graph/tree.rs` | Remove `EdgeType::Member` (✅) | Remove `EdgeType::Editor` (✅) |
+| `atlas/src/graph/transitive.rs` | Move to no-op arm (✅) | Move to no-op arm (✅) |
+| `atlas/src/kafka/emitter.rs` | Drop match arms + fixture (✅) | Drop match arms + fixture (✅) |
+| `atlas/src/persistence.rs` | Drop `PersistedEdgeType::Member` + bump marker (✅ → `atlas-v2`) | Drop `PersistedEdgeType::Editor` (✅, single marker bump to `atlas-v2` covers both) |
 | `atlas/src/main.rs` | Optional log annotation | Optional log annotation |
-| `atlas/tests/e2e.rs` | Flip Member expectations (✅ #194) | Flip Editor expectations (✅ #194) |
-| `atlas/benches/graph_diff.rs` | Drop `Member` fixture (✅ #194) | Drop `Editor` fixture (✅ #194) |
-| `atlas/src/graph/state.rs` (tests) | `test_member_*_is_no_op` (✅ #194) | `test_editor_*_is_no_op` (✅ #194) |
-| `atlas/src/graph/canonical.rs` (tests) | Member canonical assertion (✅ #194) | Editor canonical assertion (✅ #194) |
-| `atlas/src/graph/transitive.rs` (tests) | Member transitive assertion (✅ #194) | Editor transitive assertion (✅ #194) |
-| `atlas/docs/graph-concepts.md` | Drop Member from Explicit Edges (✅ PR #197 — GEO-625) | Drop Editor from Explicit Edges (✅ PR #197 — GEO-625) |
+| `atlas/tests/e2e.rs` | Flip Member expectations (✅) | Flip Editor expectations (✅) |
+| `atlas/benches/graph_diff.rs` | Drop `Member` fixture (✅) | Drop `Editor` fixture (✅) |
+| `atlas/src/graph/state.rs` (tests) | `test_member_*_is_no_op` (✅) | `test_editor_*_is_no_op` (✅) |
+| `atlas/src/graph/canonical.rs` (tests) | Member canonical assertion (✅) | Editor canonical assertion (✅) |
+| `atlas/src/graph/transitive.rs` (tests) | Member transitive assertion (✅) | Editor transitive assertion (✅) |
+| `atlas/docs/graph-concepts.md` | Drop Member from Explicit Edges (✅) | Drop Editor from Explicit Edges (✅) |
 | `~/knowledge-base/projects/geo/concepts/atlas-canonical-graph.md` | Drop Member from canonical-granting edges (✅ wiki) | Drop Editor from canonical-granting edges (✅ wiki) |
 
 ## Related
@@ -222,5 +215,3 @@ Reflects total scope (Member + Editor). Items already shipped by PR #194 are mar
 - [0006: Live Substream, Membership, and Graph Diffing](./0006-live-substream-membership-diffing-plan.md) — introduced Member and Editor edges; this plan reverses the membership portion in full.
 - [Graph Concepts](../../graph-concepts.md)
 - [Known Issues](../../known-issues.md)
-- PR [#194](https://github.com/defi-wonderland/gaia/pull/194) — drops both Member and Editor edges, bumps checkpoint marker to `atlas-v2`.
-- PR [#197](https://github.com/defi-wonderland/gaia/pull/197) — this docs PR; updates `atlas/docs/graph-concepts.md` and commits plan 0007.
