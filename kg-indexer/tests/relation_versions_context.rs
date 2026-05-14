@@ -71,6 +71,7 @@ struct VersionRow {
     valid_to_key: Option<i64>,
     context_root_id: Option<Uuid>,
     context_edge_type_id: Option<Uuid>,
+    context_last_to_entity_id: Option<Uuid>,
     position: Option<String>,
 }
 
@@ -79,7 +80,8 @@ async fn fetch_versions(
     relation_id: Uuid,
 ) -> Vec<VersionRow> {
     sqlx::query_as::<_, VersionRow>(
-        "SELECT valid_from_key, valid_to_key, context_root_id, context_edge_type_id, position
+        "SELECT valid_from_key, valid_to_key, context_root_id, context_edge_type_id,
+                context_last_to_entity_id, position
          FROM relation_versions
          WHERE relation_id = $1
          ORDER BY valid_from_key",
@@ -135,6 +137,7 @@ async fn update_with_context_inserts_new_version_row() {
         is_system: false,
         context_root_id: None,
         context_edge_type_id: None,
+        context_last_to_entity_id: None,
     };
     let mut tx = pool.begin().await.unwrap();
     storage
@@ -159,6 +162,7 @@ async fn update_with_context_inserts_new_version_row() {
         verified: None,
         context_root_id: Some(root_id),
         context_edge_type_id: Some(edge_type_id),
+        context_last_to_entity_id: None,
     };
     let mut tx = pool.begin().await.unwrap();
     storage
@@ -238,6 +242,7 @@ async fn unset_with_context_inserts_new_version_row() {
         is_system: false,
         context_root_id: None,
         context_edge_type_id: None,
+        context_last_to_entity_id: None,
     };
     let mut tx = pool.begin().await.unwrap();
     storage
@@ -262,6 +267,7 @@ async fn unset_with_context_inserts_new_version_row() {
         verified: None,
         context_root_id: Some(root_id),
         context_edge_type_id: Some(edge_type_id),
+        context_last_to_entity_id: None,
     };
     let mut tx = pool.begin().await.unwrap();
     storage
@@ -331,6 +337,7 @@ async fn create_with_context_writes_version_row() {
         is_system: false,
         context_root_id: Some(root_id),
         context_edge_type_id: Some(edge_type_id),
+        context_last_to_entity_id: None,
     };
     let mut tx = pool.begin().await.unwrap();
     storage
@@ -349,6 +356,92 @@ async fn create_with_context_writes_version_row() {
     assert_eq!(rows[0].context_edge_type_id, Some(edge_type_id));
     assert_eq!(rows[0].valid_from_key, v1_key);
     assert_eq!(rows[0].valid_to_key, None);
+
+    cleanup(&pool, rel_id).await;
+}
+
+// --------------------------------------------------------------------------
+// Test (RFC 0006): the context leaf entity (`edges.last().to_entity_id`) is
+// persisted on the version row alongside root_id and first_edge_type_id.
+//
+// Covers the breaking case from the RFC: an edit authored under a context
+// rooted at Byron (BLOCKS --> TextBlock_9) creates a `LINK` relation between
+// two foreign entities (Source_A -> Source_B). The relation row's
+// `from_entity_id = Source_A` is NOT the changed child — `TextBlock_9` is.
+// Persisting `context_last_to_entity_id` lets the diff query surface the
+// correct entity without inferring from row-local columns.
+// --------------------------------------------------------------------------
+#[tokio::test]
+#[ignore]
+async fn create_persists_context_last_to_entity_id() {
+    let pool = get_pool().await;
+    let storage = setup_storage().await;
+
+    let rel_id = Uuid::new_v4();
+    let space_id = Uuid::new_v4();
+    let entity_id = Uuid::new_v4();
+    // Mirror the RFC's breaking case: from/to are foreign entities; the
+    // context leaf is something else entirely (the TextBlock the edit was
+    // authored from).
+    let source_a = Uuid::new_v4();
+    let source_b = Uuid::new_v4();
+    let type_id = Uuid::new_v4(); // imagine LINK
+    let byron = Uuid::new_v4(); // context root
+    let blocks_type = Uuid::new_v4(); // context first-edge type (BLOCKS)
+    let textblock_9 = Uuid::new_v4(); // context leaf
+
+    for id in [
+        entity_id,
+        source_a,
+        source_b,
+        type_id,
+        byron,
+        blocks_type,
+        textblock_9,
+    ] {
+        ensure_entity(&pool, id).await;
+    }
+
+    cleanup(&pool, rel_id).await;
+
+    let v1_key: i64 = (4_000_i64) << 32;
+
+    let create = SetRelationItem {
+        id: rel_id,
+        entity_id,
+        type_id,
+        from_id: source_a,
+        from_space_id: None,
+        from_version_id: None,
+        to_id: source_b,
+        to_space_id: None,
+        to_version_id: None,
+        position: None,
+        space_id,
+        verified: None,
+        is_system: false,
+        context_root_id: Some(byron),
+        context_edge_type_id: Some(blocks_type),
+        context_last_to_entity_id: Some(textblock_9),
+    };
+    let mut tx = pool.begin().await.unwrap();
+    storage
+        .insert_relations(std::slice::from_ref(&create), &mut tx)
+        .await
+        .unwrap();
+    storage
+        .insert_relation_versions(&[RelationOp::Create(create)], v1_key, &mut tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let rows = fetch_versions(&pool, rel_id).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].context_root_id, Some(byron));
+    assert_eq!(rows[0].context_edge_type_id, Some(blocks_type));
+    // The point of this test: the leaf entity is persisted and is distinct
+    // from any column on the relation row (entity_id / from_id / to_id).
+    assert_eq!(rows[0].context_last_to_entity_id, Some(textblock_9));
 
     cleanup(&pool, rel_id).await;
 }

@@ -837,6 +837,10 @@ export const valueVersions = pgTable(
 		// GRC-20 edit context (for context-aware diff grouping)
 		contextRootId: uuid("context_root_id"), // Parent entity in edit context
 		contextEdgeTypeId: uuid("context_edge_type_id"), // Relation type from context edge
+		// RFC 0006: the context's leaf entity (edges.last().to_entity_id).
+		// Populated forward-only; NULL on rows written before the column existed.
+		// queryContextEntities prefers this over inferring from entity_id.
+		contextLastToEntityId: uuid("context_last_to_entity_id"),
 	},
 	(table) => [
 		index("value_versions_entity_idx").on(table.entityId),
@@ -886,6 +890,10 @@ export const relationVersions = pgTable(
 		// GRC-20 edit context (for context-aware diff grouping)
 		contextRootId: uuid("context_root_id"), // Parent entity in edit context
 		contextEdgeTypeId: uuid("context_edge_type_id"), // Relation type from context edge
+		// RFC 0006: the context's leaf entity (edges.last().to_entity_id).
+		// Populated forward-only; NULL on rows written before the column existed.
+		// queryContextEntities prefers this over inferring from from_entity_id.
+		contextLastToEntityId: uuid("context_last_to_entity_id"),
 	},
 	(table) => [
 		index("relation_versions_relation_idx").on(table.relationId),

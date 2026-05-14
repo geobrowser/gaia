@@ -18,6 +18,8 @@ pub struct SetRelationItem {
     // Context columns for grouping changes (GRC-20 Section 4.5)
     pub context_root_id: Option<Uuid>,
     pub context_edge_type_id: Option<Uuid>,
+    // RFC 0006: the context's leaf entity (edges.last().to_entity_id).
+    pub context_last_to_entity_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug)]
@@ -35,6 +37,8 @@ pub struct UpdateRelationItem {
     // become invisible to context-aware diff discovery.
     pub context_root_id: Option<Uuid>,
     pub context_edge_type_id: Option<Uuid>,
+    // RFC 0006: the context's leaf entity (edges.last().to_entity_id).
+    pub context_last_to_entity_id: Option<Uuid>,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +54,8 @@ pub struct UnsetRelationItem {
     // Context columns — same rationale as UpdateRelationItem.
     pub context_root_id: Option<Uuid>,
     pub context_edge_type_id: Option<Uuid>,
+    // RFC 0006: the context's leaf entity (edges.last().to_entity_id).
+    pub context_last_to_entity_id: Option<Uuid>,
 }
 
 /// Delete relation item with space context.

@@ -1466,6 +1466,7 @@ impl Storage {
         let mut datetime_utcs = Vec::with_capacity(set_values.len());
         let mut context_root_ids = Vec::with_capacity(set_values.len());
         let mut context_edge_type_ids = Vec::with_capacity(set_values.len());
+        let mut context_last_to_entity_ids = Vec::with_capacity(set_values.len());
 
         for v in &set_values {
             // Derive deterministic ID for idempotency
@@ -1498,6 +1499,7 @@ impl Storage {
             datetime_utcs.push(v.datetime_utc.as_deref());
             context_root_ids.push(v.context_root_id);
             context_edge_type_ids.push(v.context_edge_type_id);
+            context_last_to_entity_ids.push(v.context_last_to_entity_id);
         }
 
         sqlx::query(
@@ -1506,14 +1508,16 @@ impl Storage {
                 id, entity_id, property_id, space_id, valid_from_key,
                 language, unit, text, boolean, decimal, time, point, rect,
                 integer, float, bytes, date, datetime, schedule, embedding,
-                time_utc, datetime_utc, context_root_id, context_edge_type_id
+                time_utc, datetime_utc, context_root_id, context_edge_type_id,
+                context_last_to_entity_id
             )
             SELECT * FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::bigint[],
                 $6::text[], $7::text[], $8::text[], $9::boolean[], $10::numeric[],
                 $11::text[], $12::text[], $13::text[], $14::bigint[], $15::double precision[],
                 $16::bytea[], $17::text[], $18::text[], $19::jsonb[], $20::jsonb[],
-                $21::timetz[], $22::timestamptz[], $23::uuid[], $24::uuid[]
+                $21::timetz[], $22::timestamptz[], $23::uuid[], $24::uuid[],
+                $25::uuid[]
             )
             ON CONFLICT (id) DO NOTHING
             "#,
@@ -1542,6 +1546,7 @@ impl Storage {
         .bind(&datetime_utcs)
         .bind(&context_root_ids)
         .bind(&context_edge_type_ids)
+        .bind(&context_last_to_entity_ids)
         .execute(&mut **tx)
         .await?;
 
@@ -1612,6 +1617,7 @@ impl Storage {
                     verified: item.verified,
                     context_root_id: item.context_root_id,
                     context_edge_type_id: item.context_edge_type_id,
+                    context_last_to_entity_id: item.context_last_to_entity_id,
                 }),
                 RelationOp::Update(item) => {
                     if let Some(row) = Self::fetch_relation_state(item.id, item.space_id, tx)
@@ -1620,6 +1626,7 @@ impl Storage {
                         rows.push(VersionRow {
                             context_root_id: item.context_root_id,
                             context_edge_type_id: item.context_edge_type_id,
+                            context_last_to_entity_id: item.context_last_to_entity_id,
                             ..row
                         });
                     }
@@ -1631,6 +1638,7 @@ impl Storage {
                         rows.push(VersionRow {
                             context_root_id: item.context_root_id,
                             context_edge_type_id: item.context_edge_type_id,
+                            context_last_to_entity_id: item.context_last_to_entity_id,
                             ..row
                         });
                     }
@@ -1658,6 +1666,7 @@ impl Storage {
         let mut valid_from_keys = Vec::with_capacity(rows.len());
         let mut context_root_ids = Vec::with_capacity(rows.len());
         let mut context_edge_type_ids = Vec::with_capacity(rows.len());
+        let mut context_last_to_entity_ids = Vec::with_capacity(rows.len());
 
         for r in &rows {
             ids.push(Self::derive_relation_version_id(
@@ -1678,6 +1687,7 @@ impl Storage {
             valid_from_keys.push(version_key);
             context_root_ids.push(r.context_root_id);
             context_edge_type_ids.push(r.context_edge_type_id);
+            context_last_to_entity_ids.push(r.context_last_to_entity_id);
         }
 
         sqlx::query(
@@ -1685,12 +1695,12 @@ impl Storage {
             INSERT INTO relation_versions (
                 id, relation_id, entity_id, type_id, from_entity_id, from_space_id,
                 to_entity_id, to_space_id, position, space_id, verified, valid_from_key,
-                context_root_id, context_edge_type_id
+                context_root_id, context_edge_type_id, context_last_to_entity_id
             )
             SELECT * FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::uuid[], $6::uuid[],
                 $7::uuid[], $8::uuid[], $9::text[], $10::uuid[], $11::boolean[], $12::bigint[],
-                $13::uuid[], $14::uuid[]
+                $13::uuid[], $14::uuid[], $15::uuid[]
             )
             ON CONFLICT (id) DO NOTHING
             "#,
@@ -1709,6 +1719,7 @@ impl Storage {
         .bind(&valid_from_keys)
         .bind(&context_root_ids)
         .bind(&context_edge_type_ids)
+        .bind(&context_last_to_entity_ids)
         .execute(&mut **tx)
         .await?;
 
@@ -1750,6 +1761,7 @@ impl Storage {
             // Caller fills in op's context columns.
             context_root_id: None,
             context_edge_type_id: None,
+            context_last_to_entity_id: None,
         }))
     }
 }
@@ -1782,4 +1794,5 @@ struct VersionRow {
     verified: Option<bool>,
     context_root_id: Option<Uuid>,
     context_edge_type_id: Option<Uuid>,
+    context_last_to_entity_id: Option<Uuid>,
 }
