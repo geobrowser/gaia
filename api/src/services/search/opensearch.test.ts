@@ -1,6 +1,15 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest"
 
-import {DEFAULT_AVERAGE_SCORE, MIN_SCORE_THRESHOLD, OpenSearchClient, SCORE_BOOST, SCORE_SHIFT} from "./opensearch"
+import {
+	FUZZY_MAX_EXPANSIONS,
+	MAX_NAME_MATCH_TEXT_TOKENS,
+	MAX_TEXT_TOKENS,
+	MIN_SCORE_THRESHOLD,
+	OpenSearchClient,
+	PHRASE_PREFIX_MAX_EXPANSIONS,
+	SCORE_BOOST,
+	SCORE_SHIFT,
+} from "./opensearch"
 
 describe("OpenSearchClient", () => {
 	let client: OpenSearchClient
@@ -30,14 +39,14 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("match_phrase_prefix")
 		})
 
-		it("caps clause-heavy sub-queries to 20 tokens; exact-match clauses see full query", () => {
+		it("caps clause-heavy sub-queries to 20 tokens; exact-match clauses see full query within name cap", () => {
 			// Query of 30 tokens → cap should kick in at 20 for bool_prefix /
 			// match_phrase_prefix. The exact-match clauses (term: name_raw, match: name)
-			// must still see all 30 tokens so a full-name match isn't lost. Fuzzy is
-			// dropped entirely at this token count (see separate test).
+			// still see all 30 tokens because this is below MAX_NAME_MATCH_TEXT_TOKENS.
+			// Fuzzy is dropped entirely at this token count (see separate test).
 			const tokens = Array.from({length: 30}, (_, i) => `t${i + 1}`)
 			const fullQuery = tokens.join(" ")
-			const cappedQuery = tokens.slice(0, 20).join(" ")
+			const cappedQuery = tokens.slice(0, MAX_TEXT_TOKENS).join(" ")
 			const overflowToken = tokens[25] // would be present if cap weren't applied
 
 			const query = client.buildBaseTextQuery(fullQuery) as {
@@ -70,10 +79,67 @@ describe("OpenSearchClient", () => {
 			expect(boolPrefix.multi_match.query).not.toContain(overflowToken)
 			expect(phrasePrefixName.match_phrase_prefix.name.query).toBe(cappedQuery)
 			expect(phrasePrefixDesc.match_phrase_prefix.description.query).toBe(cappedQuery)
+			expect(phrasePrefixName.match_phrase_prefix.name).toHaveProperty(
+				"max_expansions",
+				PHRASE_PREFIX_MAX_EXPANSIONS,
+			)
+			expect(phrasePrefixDesc.match_phrase_prefix.description).toHaveProperty(
+				"max_expansions",
+				PHRASE_PREFIX_MAX_EXPANSIONS,
+			)
 
 			// Exact-match sub-queries: still see the full 30-token query
 			expect(matchExactToken.match.name.query).toBe(fullQuery)
 			expect(matchExactToken.match.name.query).toContain(overflowToken)
+			expect(termExactName.term.name_raw.value).toBe(fullQuery)
+		})
+
+		it("caps a 250-character adversarial token query to bounded OpenSearch clauses", () => {
+			const tokens = [...Array.from({length: 64}, (_, i) => `t${i + 1}`), "zzz"]
+			const fullQuery = tokens.join(" ")
+			expect(fullQuery).toHaveLength(250)
+
+			const cappedQuery = tokens.slice(0, MAX_TEXT_TOKENS).join(" ")
+			const nameMatchQuery = tokens.slice(0, MAX_NAME_MATCH_TEXT_TOKENS).join(" ")
+			const overflowToken = tokens[55]
+
+			const query = client.buildBaseTextQuery(fullQuery) as {
+				bool: {should: Record<string, unknown>[]}
+			}
+			const should = query.bool.should
+
+			const fuzzy = should.find(
+				(c) => "multi_match" in c && (c.multi_match as {fuzziness?: string}).fuzziness !== undefined,
+			)
+			const boolPrefix = should.find(
+				(c) => "multi_match" in c && (c.multi_match as {type?: string}).type === "bool_prefix",
+			) as {multi_match: {query: string}}
+			const phrasePrefixName = should.find(
+				(c) => "match_phrase_prefix" in c && (c.match_phrase_prefix as {name?: unknown}).name !== undefined,
+			) as {match_phrase_prefix: {name: {query: string; max_expansions: number}}}
+			const phrasePrefixDesc = should.find(
+				(c) =>
+					"match_phrase_prefix" in c &&
+					(c.match_phrase_prefix as {description?: unknown}).description !== undefined,
+			) as {match_phrase_prefix: {description: {query: string; max_expansions: number}}}
+			const matchExactToken = should.find(
+				(c) => "match" in c && (c.match as {name?: unknown}).name !== undefined,
+			) as {match: {name: {query: string}}}
+			const termExactName = should.find(
+				(c) =>
+					"term" in c &&
+					typeof (c.term as {name_raw?: {value?: string; boost?: number}}).name_raw?.value === "string",
+			) as {term: {name_raw: {value: string}}}
+
+			expect(fuzzy).toBeUndefined()
+			expect(boolPrefix.multi_match.query).toBe(cappedQuery)
+			expect(boolPrefix.multi_match.query).not.toContain(overflowToken)
+			expect(phrasePrefixName.match_phrase_prefix.name.query).toBe(cappedQuery)
+			expect(phrasePrefixName.match_phrase_prefix.name.max_expansions).toBe(PHRASE_PREFIX_MAX_EXPANSIONS)
+			expect(phrasePrefixDesc.match_phrase_prefix.description.query).toBe(cappedQuery)
+			expect(phrasePrefixDesc.match_phrase_prefix.description.max_expansions).toBe(PHRASE_PREFIX_MAX_EXPANSIONS)
+			expect(matchExactToken.match.name.query).toBe(nameMatchQuery)
+			expect(matchExactToken.match.name.query).not.toContain(overflowToken)
 			expect(termExactName.term.name_raw.value).toBe(fullQuery)
 		})
 
@@ -90,7 +156,24 @@ describe("OpenSearchClient", () => {
 			expect(fuzzy.multi_match.fuzziness).toBe("AUTO")
 			expect(fuzzy.multi_match.query).toBe("alpha beta gamma")
 			// max_expansions is capped (default OS value is 50; we pin lower for safety).
-			expect(fuzzy.multi_match.max_expansions).toBe(25)
+			expect(fuzzy.multi_match.max_expansions).toBe(FUZZY_MAX_EXPANSIONS)
+		})
+
+		it("keeps fuzzy enabled for a 250-character query when token count is within the fuzzy gate", () => {
+			const fullQuery = `${"a".repeat(80)} ${"b".repeat(80)} ${"c".repeat(88)}`
+			expect(fullQuery).toHaveLength(250)
+
+			const query = client.buildBaseTextQuery(fullQuery) as {
+				bool: {should: Record<string, unknown>[]}
+			}
+			const fuzzy = query.bool.should.find(
+				(c) => "multi_match" in c && (c.multi_match as {fuzziness?: string}).fuzziness !== undefined,
+			) as {multi_match: {query: string; fuzziness: string; max_expansions: number}}
+
+			expect(fuzzy).toBeDefined()
+			expect(fuzzy.multi_match.fuzziness).toBe("AUTO")
+			expect(fuzzy.multi_match.query).toBe(fullQuery)
+			expect(fuzzy.multi_match.max_expansions).toBe(FUZZY_MAX_EXPANSIONS)
 		})
 
 		it("drops fuzzy clause when token count > 3 (fan-out reduction)", () => {
