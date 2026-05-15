@@ -44,8 +44,8 @@ use hermes_instrumentation::{debug_span, warn};
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata as ProtoBlockchainMetadata;
 use hermes_schema::pb::topology::{
     canonical_tree_node::Edge, edge_info, CanonicalGraphDiff, CanonicalGraphUpdated,
-    CanonicalTreeNode, ChangeType as ProtoChangeType, EdgeInfo, NodeChange as ProtoNodeChange,
-    RelatedEdge, RootEdge, TopicEdge, VerifiedEdge,
+    CanonicalTreeNode, ChangeType as ProtoChangeType, EdgeInfo, EditorEdge, MemberEdge,
+    NodeChange as ProtoNodeChange, RelatedEdge, RootEdge, TopicEdge, VerifiedEdge,
 };
 use prost::Message;
 
@@ -186,6 +186,8 @@ fn edge_type_to_proto_edge(edge_type: EdgeType) -> Edge {
         EdgeType::Topic { topic_id } => Edge::Topic(TopicEdge {
             topic_id: topic_id.to_vec(),
         }),
+        EdgeType::Editor => Edge::Editor(EditorEdge {}),
+        EdgeType::Member => Edge::Member(MemberEdge {}),
     }
 }
 
@@ -220,6 +222,8 @@ fn position_to_edge_info(pos: &Position) -> Option<EdgeInfo> {
         EdgeType::Topic { topic_id } => edge_info::EdgeType::Topic(TopicEdge {
             topic_id: topic_id.to_vec(),
         }),
+        EdgeType::Editor => edge_info::EdgeType::Editor(EditorEdge {}),
+        EdgeType::Member => edge_info::EdgeType::Member(MemberEdge {}),
         EdgeType::Root => {
             warn!(
                 parent = ?pos.parent,
@@ -288,18 +292,22 @@ mod tests {
         let mut root = TreeNode::new_root(make_space_id(1));
         root.add_child(TreeNode::new(make_space_id(2), EdgeType::Verified));
         root.add_child(TreeNode::new(make_space_id(3), EdgeType::Related));
+        root.add_child(TreeNode::new(make_space_id(4), EdgeType::Editor));
+        root.add_child(TreeNode::new(make_space_id(5), EdgeType::Member));
         root.add_child(TreeNode::new_with_topic(
-            make_space_id(4),
+            make_space_id(6),
             make_topic_id(0x8A),
         ));
 
         let proto = tree_node_to_proto(&root);
-        assert_eq!(proto.children.len(), 3);
+        assert_eq!(proto.children.len(), 5);
 
         assert!(matches!(proto.children[0].edge, Some(Edge::Verified(_))));
         assert!(matches!(proto.children[1].edge, Some(Edge::Related(_))));
+        assert!(matches!(proto.children[2].edge, Some(Edge::Editor(_))));
+        assert!(matches!(proto.children[3].edge, Some(Edge::Member(_))));
 
-        match &proto.children[2].edge {
+        match &proto.children[4].edge {
             Some(Edge::Topic(TopicEdge { topic_id })) => {
                 assert_eq!(*topic_id, make_topic_id(0x8A).to_vec());
             }

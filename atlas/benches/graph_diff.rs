@@ -31,7 +31,12 @@ fn build_random_tree(node_count: usize, seed: u64) -> TreeNode {
     }
 
     // Build nodes with random edge types
-    let edge_types = [EdgeType::Verified, EdgeType::Related];
+    let edge_types = [
+        EdgeType::Verified,
+        EdgeType::Related,
+        EdgeType::Editor,
+        EdgeType::Member,
+    ];
 
     // Build tree recursively from parent indices
     fn add_children(
@@ -132,12 +137,13 @@ fn mutate_tree(tree: &TreeNode, change_rate: f64, seed: u64) -> TreeNode {
         let parent_id = nodes[parent_idx].0;
         nodes[parent_idx].2.push(new_id);
 
-        let edge_types = [EdgeType::Verified, EdgeType::Related];
-        nodes.push((
-            new_id,
-            edge_types[rng.gen_range(0..edge_types.len())],
-            vec![],
-        ));
+        let edge_types = [
+            EdgeType::Verified,
+            EdgeType::Related,
+            EdgeType::Editor,
+            EdgeType::Member,
+        ];
+        nodes.push((new_id, edge_types[rng.gen_range(0..4)], vec![]));
 
         // Ensure parent exists (it should, we just selected it)
         let _ = parent_id;
