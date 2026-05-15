@@ -296,11 +296,8 @@ fn test_e2e_canonical_set_from_test_topology() {
 
     let graph = last_graph.expect("Should have computed canonical graph");
 
-    // After plan 0007: Member and Editor edges are no-ops, so spaces reachable
-    // only through them are no longer canonical.
-    // - SPACE_H = make_id(0x11): added as member of A via Proposal 1, but also
-    //   verified by Root elsewhere in the topology — stays canonical via that path.
-    // - 0x50: added only as editor of B via Proposal 3, no other path — now non-canonical.
+    // Verify expected canonical spaces
+    // Note: SPACE_H = make_id(0x11), so member added by Proposal 1 is the same as SPACE_H
     let expected_canonical: Vec<SpaceId> = vec![
         ROOT_SPACE_ID,
         SPACE_A,
@@ -310,23 +307,17 @@ fn test_e2e_canonical_set_from_test_topology() {
         SPACE_E,
         SPACE_F,
         SPACE_G,
-        SPACE_H, // verified elsewhere, not via Member
+        SPACE_H, // Also added as member of A via Proposal 1 (0x11)
         SPACE_I,
         SPACE_J,
+        mock_events::make_id(0x50), // Added as editor of B via Proposal 3
     ];
 
     assert_all_canonical(&graph, &expected_canonical, "test_topology");
 
     // Verify non-canonical spaces
     let expected_non_canonical: Vec<SpaceId> = vec![
-        SPACE_X,
-        SPACE_Y,
-        SPACE_Z,
-        SPACE_W,
-        SPACE_P,
-        SPACE_Q,
-        SPACE_S,
-        mock_events::make_id(0x50), // editor-only — now non-canonical
+        SPACE_X, SPACE_Y, SPACE_Z, SPACE_W, SPACE_P, SPACE_Q, SPACE_S,
     ];
 
     assert_none_canonical(&graph, &expected_non_canonical, "test_topology");
@@ -464,9 +455,8 @@ fn test_e2e_moved_diff_when_parent_changes() {
 }
 
 #[test]
-fn test_e2e_moved_diff_when_edge_type_changes_between_canonical_types() {
-    // B changes from verified child to related (both canonical-granting per plan 0007).
-    // Previously this test exercised verified -> editor, but editor is now a no-op.
+fn test_e2e_moved_diff_when_edge_type_changes() {
+    // B changes from verified child to editor
     let actions = TopologyBuilder::new()
         .space(ROOT_SPACE_ID, test_topology::ROOT_OWNER)
         .space(SPACE_A, test_topology::USER_1)
@@ -474,9 +464,9 @@ fn test_e2e_moved_diff_when_edge_type_changes_between_canonical_types() {
         // Initial: Root -> A, A -> B (verified)
         .verified(ROOT_SPACE_ID, SPACE_A)
         .verified(SPACE_A, SPACE_B)
-        // Remove verified, add related (same parent, different canonical-granting edge type)
+        // Remove verified, add editor (same parent, different edge type)
         .unverified(SPACE_A, SPACE_B)
-        .related(SPACE_A, SPACE_B)
+        .editor(SPACE_A, SPACE_B)
         .build();
 
     let (_state, _transitive, _canonical, _diff_tracker, diffs, last_graph) =
@@ -485,7 +475,7 @@ fn test_e2e_moved_diff_when_edge_type_changes_between_canonical_types() {
     let graph = last_graph.expect("Should have canonical graph");
     assert!(graph.contains(&SPACE_B), "B should still be canonical");
 
-    // B should have been REMOVED when verified edge removed, then ADDED when related added
+    // B should have been REMOVED when verified edge removed, then ADDED when editor added
     // OR have a MOVED if the implementation tracks edge type changes
     let b_removed = find_change(&diffs, SPACE_B, ChangeType::Removed);
     let b_added_count = diffs
@@ -494,6 +484,8 @@ fn test_e2e_moved_diff_when_edge_type_changes_between_canonical_types() {
         .filter(|c| c.space_id == SPACE_B && c.change_type == ChangeType::Added)
         .count();
 
+    // Either: B was removed then re-added, or B was moved
+    // Both are valid behaviors for edge type change
     assert!(
         b_removed.is_some() || b_added_count >= 1,
         "B should have REMOVED then ADDED, or MOVED when edge type changes"
@@ -505,12 +497,7 @@ fn test_e2e_moved_diff_when_edge_type_changes_between_canonical_types() {
 // =============================================================================
 
 #[test]
-fn test_e2e_editor_and_member_edges_do_not_grant_canonical() {
-    // Plan 0007: neither Editor nor Member edges grant canonical membership.
-    // Only Verified, Related, and Subtopic do.
-    // Topology: Root --verified--> A --editor--> B,
-    //                              A --member-->  C
-    // Expected: only Root and A are canonical.
+fn test_e2e_editor_member_edges_grant_canonical() {
     let actions = TopologyBuilder::new()
         .space(ROOT_SPACE_ID, test_topology::ROOT_OWNER)
         .space(SPACE_A, test_topology::USER_1)
@@ -526,11 +513,10 @@ fn test_e2e_editor_and_member_edges_do_not_grant_canonical() {
 
     let graph = last_graph.expect("Should have computed canonical graph");
 
-    assert_all_canonical(&graph, &[ROOT_SPACE_ID, SPACE_A], "verified_only");
-    assert_none_canonical(
+    assert_all_canonical(
         &graph,
-        &[SPACE_B, SPACE_C],
-        "editor_and_member_do_not_grant_canonical",
+        &[ROOT_SPACE_ID, SPACE_A, SPACE_B, SPACE_C],
+        "editor_member",
     );
 }
 
@@ -553,14 +539,11 @@ fn test_e2e_topic_edges_dont_grant_canonical() {
 }
 
 // =============================================================================
-// Test: Member edges are ignored by canonical computation (plan 0007)
+// Test: Transitive Edges from Members
 // =============================================================================
 
 #[test]
-fn test_e2e_member_edges_do_not_propagate_to_subspaces() {
-    // Root --verified--> A --member--> B --verified--> C
-    // Member edges are no-ops, so the canonical graph stops at A.
-    // Neither B (reached only via member) nor C (only reachable through B) is canonical.
+fn test_e2e_member_spaces_edges_are_followed() {
     let actions = TopologyBuilder::new()
         .space(ROOT_SPACE_ID, test_topology::ROOT_OWNER)
         .space(SPACE_A, test_topology::USER_1)
@@ -576,9 +559,13 @@ fn test_e2e_member_edges_do_not_propagate_to_subspaces() {
 
     let graph = last_graph.expect("Should have computed canonical graph");
 
-    assert_all_canonical(&graph, &[ROOT_SPACE_ID, SPACE_A], "member_ignored");
-    assert_none_canonical(&graph, &[SPACE_B, SPACE_C], "member_ignored");
-    assert_eq!(graph.len(), 2);
+    // All should be canonical: Root -> A -> B -> C
+    assert_all_canonical(
+        &graph,
+        &[ROOT_SPACE_ID, SPACE_A, SPACE_B, SPACE_C],
+        "member_transitive",
+    );
+    assert_eq!(graph.len(), 4);
 }
 
 // =============================================================================
@@ -623,11 +610,7 @@ fn test_e2e_related_edge_removal() {
 }
 
 #[test]
-fn test_e2e_editor_add_then_remove_produces_no_diff_for_editor() {
-    // Editor edges are no-ops in canonical computation (plan 0007). An
-    // Editor-add followed by an Editor-remove must not produce any Added,
-    // Moved, or Removed change for the editor space — only the verified
-    // edge from Root -> A should show up.
+fn test_e2e_editor_removal_causes_removed_diff() {
     let actions = TopologyBuilder::new()
         .space(ROOT_SPACE_ID, test_topology::ROOT_OWNER)
         .space(SPACE_A, test_topology::USER_1)
@@ -637,39 +620,14 @@ fn test_e2e_editor_add_then_remove_produces_no_diff_for_editor() {
         .editor_removed(SPACE_A, SPACE_B)
         .build();
 
-    let (_state, _transitive, _canonical, _diff_tracker, diffs, last_graph) =
+    let (_state, _transitive, _canonical, _diff_tracker, diffs, _last_graph) =
         process_with_canonical(&actions, ROOT_SPACE_ID);
 
-    // Positive assertion: the verified Root -> A edge must produce a real
-    // diff. Without this, an empty diff stream (e.g. broken canonical emission)
-    // would satisfy the absence checks below and pass silently.
-    let graph = last_graph.expect("canonical graph should be computed");
-    assert!(
-        graph.contains(&SPACE_A),
-        "editor_no_diff: SPACE_A should be canonical via verified edge"
-    );
-    assert_change_exists(&diffs, SPACE_A, ChangeType::Added, "editor_no_diff");
-
-    assert!(
-        find_change(&diffs, SPACE_B, ChangeType::Added).is_none(),
-        "editor_no_diff: SPACE_B should not appear as Added"
-    );
-    assert!(
-        find_change(&diffs, SPACE_B, ChangeType::Removed).is_none(),
-        "editor_no_diff: SPACE_B should not appear as Removed"
-    );
-    assert!(
-        find_change(&diffs, SPACE_B, ChangeType::Moved).is_none(),
-        "editor_no_diff: SPACE_B should not appear as Moved"
-    );
+    assert_change_exists(&diffs, SPACE_B, ChangeType::Removed, "editor_removal");
 }
 
 #[test]
-fn test_e2e_member_add_then_remove_produces_no_diff_for_member() {
-    // Member edges are no-ops in canonical computation (plan 0007). A
-    // Member-add followed by a Member-remove must not produce any Added,
-    // Moved, or Removed change for the member space — only the verified
-    // edge from Root -> A should show up.
+fn test_e2e_member_removal_causes_removed_diff() {
     let actions = TopologyBuilder::new()
         .space(ROOT_SPACE_ID, test_topology::ROOT_OWNER)
         .space(SPACE_A, test_topology::USER_1)
@@ -679,31 +637,10 @@ fn test_e2e_member_add_then_remove_produces_no_diff_for_member() {
         .member_removed(SPACE_A, SPACE_B)
         .build();
 
-    let (_state, _transitive, _canonical, _diff_tracker, diffs, last_graph) =
+    let (_state, _transitive, _canonical, _diff_tracker, diffs, _last_graph) =
         process_with_canonical(&actions, ROOT_SPACE_ID);
 
-    // Positive assertion: the verified Root -> A edge must produce a real
-    // diff. Without this, an empty diff stream (e.g. broken canonical emission)
-    // would satisfy the absence checks below and pass silently.
-    let graph = last_graph.expect("canonical graph should be computed");
-    assert!(
-        graph.contains(&SPACE_A),
-        "member_no_diff: SPACE_A should be canonical via verified edge"
-    );
-    assert_change_exists(&diffs, SPACE_A, ChangeType::Added, "member_no_diff");
-
-    assert!(
-        find_change(&diffs, SPACE_B, ChangeType::Added).is_none(),
-        "member_no_diff: SPACE_B should not appear as Added"
-    );
-    assert!(
-        find_change(&diffs, SPACE_B, ChangeType::Removed).is_none(),
-        "member_no_diff: SPACE_B should not appear as Removed"
-    );
-    assert!(
-        find_change(&diffs, SPACE_B, ChangeType::Moved).is_none(),
-        "member_no_diff: SPACE_B should not appear as Moved"
-    );
+    assert_change_exists(&diffs, SPACE_B, ChangeType::Removed, "member_removal");
 }
 
 // =============================================================================
@@ -740,10 +677,10 @@ fn test_e2e_cascading_removal_disconnects_subtree() {
 }
 
 #[test]
-fn test_e2e_member_removal_does_not_cascade_because_member_is_noop() {
-    // Plan 0007: Member edges never enter the graph, so a Member-remove
-    // also has no effect. Root -> A is canonical; B and C are never reachable
-    // through Member; no Member-related diff is emitted.
+fn test_e2e_member_removal_cascades_to_member_subspaces() {
+    // P2: Member removal cascading
+    // Root -> A (verified), A -> B (member), B -> C (verified)
+    // Remove B as member, C should also become non-canonical
     let actions = TopologyBuilder::new()
         .space(ROOT_SPACE_ID, test_topology::ROOT_OWNER)
         .space(SPACE_A, test_topology::USER_1)
@@ -760,21 +697,10 @@ fn test_e2e_member_removal_does_not_cascade_because_member_is_noop() {
 
     let graph = last_graph.expect("Should have canonical graph");
 
-    assert_all_canonical(&graph, &[ROOT_SPACE_ID, SPACE_A], "member_noop");
-    assert_none_canonical(&graph, &[SPACE_B, SPACE_C], "member_noop");
-
-    for space in [SPACE_B, SPACE_C] {
-        assert!(
-            find_change(&diffs, space, ChangeType::Added).is_none(),
-            "member_noop: 0x{:02x} should not appear as Added",
-            space[15]
-        );
-        assert!(
-            find_change(&diffs, space, ChangeType::Removed).is_none(),
-            "member_noop: 0x{:02x} should not appear as Removed",
-            space[15]
-        );
-    }
+    // B and C should be non-canonical
+    assert_none_canonical(&graph, &[SPACE_B, SPACE_C], "member_cascade");
+    assert_change_exists(&diffs, SPACE_B, ChangeType::Removed, "member_cascade");
+    assert_change_exists(&diffs, SPACE_C, ChangeType::Removed, "member_cascade");
 }
 
 #[test]
