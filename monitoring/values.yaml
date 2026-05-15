@@ -79,14 +79,26 @@ alertmanager:
   config:
     global:
       resolve_timeout: 5m
-      slack_api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/url
     receivers:
       - name: "null"
-      - name: "slack"
+      - name: "slack-prod"
         slack_configs:
-          - channel: "#alerts"
+          - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/url-prod
+            channel: "#alerts-prod"
             send_resolved: true
-            title: '{{ if eq .Status "firing" }}:fire:{{ else }}:white_check_mark:{{ end }} [{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+            title: '{{ if eq .Status "firing" }}:fire:{{ else }}:white_check_mark:{{ end }} [PROD] [{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+            text: >-
+              {{ range .Alerts }}
+              *{{ .Labels.severity | toUpper }}* — {{ .Labels.namespace }}/{{ .Labels.alertname }}
+              {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
+              {{ if .Annotations.summary }}{{ .Annotations.summary }}{{ end }}
+              {{ end }}
+      - name: "slack-staging"
+        slack_configs:
+          - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/url-staging
+            channel: "#alerts-staging"
+            send_resolved: true
+            title: '{{ if eq .Status "firing" }}:fire:{{ else }}:white_check_mark:{{ end }} [STAGING] [{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
             text: >-
               {{ range .Alerts }}
               *{{ .Labels.severity | toUpper }}* — {{ .Labels.namespace }}/{{ .Labels.alertname }}
@@ -94,7 +106,7 @@ alertmanager:
               {{ if .Annotations.summary }}{{ .Annotations.summary }}{{ end }}
               {{ end }}
     route:
-      receiver: "slack"
+      receiver: "slack-prod"
       group_by: [namespace, alertname]
       group_wait: 30s
       group_interval: 5m
@@ -106,6 +118,9 @@ alertmanager:
         - matchers:
             - alertname = "InfoInhibitor"
           receiver: "null"
+        - matchers:
+            - namespace =~ ".*-staging"
+          receiver: "slack-staging"
     inhibit_rules:
       - equal: [namespace, alertname]
         source_matchers:
