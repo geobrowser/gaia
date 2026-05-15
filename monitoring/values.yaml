@@ -79,14 +79,14 @@ alertmanager:
   config:
     global:
       resolve_timeout: 5m
+      slack_api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/url
     receivers:
       - name: "null"
-      - name: "slack-prod"
+      - name: "slack"
         slack_configs:
-          - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/url-prod
-            channel: "#alerts-prod"
+          - channel: "#alerts"
             send_resolved: true
-            title: '{{ if eq .Status "firing" }}:fire:{{ else }}:white_check_mark:{{ end }} [PROD] [{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+            title: '{{ if eq .Status "firing" }}:fire:{{ else }}:white_check_mark:{{ end }} [{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
             text: >-
               {{ range .Alerts }}
               *{{ .Labels.severity | toUpper }}* — {{ .Labels.namespace }}/{{ .Labels.alertname }}
@@ -106,7 +106,7 @@ alertmanager:
               {{ if .Annotations.summary }}{{ .Annotations.summary }}{{ end }}
               {{ end }}
     route:
-      receiver: "slack-prod"
+      receiver: "slack"
       group_by: [namespace, alertname]
       group_wait: 30s
       group_interval: 5m
