@@ -57,7 +57,7 @@ Access Kafka UI at http://localhost:8080 to view messages.
 | `SUBSTREAMS_END_BLOCK` | No | `u64::MAX` | End block for live stream |
 | `ATLAS_CHECKPOINT_DATABASE_URL` | No | - | PostgreSQL URL for checkpoint persistence |
 | `ATLAS_INDEXER_ID` | Conditional | - | Required and non-empty when checkpoint persistence is enabled |
-| `ATLAS_RUNTIME_COMPATIBILITY_MARKER` | No | `atlas-v1` | Runtime marker used for checkpoint compatibility validation |
+| `ATLAS_RUNTIME_COMPATIBILITY_MARKER` | No | `atlas-v2` | Runtime marker used for checkpoint compatibility validation |
 | `ATLAS_CHECKPOINT_ALLOW_FRESH_START` | No | `false` | If true, incompatible/corrupt checkpoints fall back to fresh bootstrap |
 | `ATLAS_FAIL_OPEN_BOUND` | No | `10` | Max uncheckpointed blocks before Atlas pauses processing |
 | `ATLAS_CHECKPOINT_RETRY_ATTEMPTS` | No | `3` | Retry attempts for checkpoint writes |

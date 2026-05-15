@@ -176,7 +176,7 @@ impl CheckpointConfig {
             graph_state_version,
             indexer_id,
             runtime_compatibility_marker: std::env::var("ATLAS_RUNTIME_COMPATIBILITY_MARKER")
-                .unwrap_or_else(|_| "atlas-v1".to_string()),
+                .unwrap_or_else(|_| "atlas-v2".to_string()),
             fail_open_bound,
             checkpoint_retry_attempts: retry_attempts,
             checkpoint_retry_backoff_ms: retry_backoff_ms,
@@ -611,8 +611,12 @@ impl PostgresCheckpointStore {
             return Ok(None);
         };
 
-        let graph_state_blob: PersistedGraphState = row
-            .try_get::<sqlx::types::Json<PersistedGraphState>, _>("graph_state_blob")
+        // Fetch the graph state blob as raw JSON without decoding into
+        // `PersistedGraphState`. Decoding happens lazily in `Checkpoint::graph_state()`
+        // so `restore_checkpoint_on_startup` can run `validate_compatibility()` first
+        // and route decode failures through the fresh-start fallback path.
+        let graph_state_blob: serde_json::Value = row
+            .try_get::<sqlx::types::Json<serde_json::Value>, _>("graph_state_blob")
             .map_err(|err| {
                 CheckpointError::Serialization(format!("decode graph_state_blob: {err}"))
             })?
@@ -753,7 +757,12 @@ pub struct Checkpoint {
     pub indexer_id: String,
     pub cursor: String,
     pub block_number: u64,
-    pub graph_state_blob: PersistedGraphState,
+    // Stored as raw JSON so loading can verify the runtime_compatibility_marker
+    // before paying the cost (and risk) of decoding into `PersistedGraphState`.
+    // This lets `restore_checkpoint_on_startup` route decode failures through
+    // the `ATLAS_CHECKPOINT_ALLOW_FRESH_START` fallback path rather than
+    // hard-failing in `PostgresCheckpointStore::load`.
+    pub graph_state_blob: serde_json::Value,
     pub graph_state_version: u32,
     pub runtime_compatibility_marker: String,
     pub root_space_id: String,
@@ -770,6 +779,10 @@ impl Checkpoint {
         runtime_compatibility_marker: String,
         root_space_id: SpaceId,
     ) -> Self {
+        // `PersistedGraphState` is a plain struct of `String`/`Vec`/enum fields,
+        // so serialization to `serde_json::Value` cannot fail in practice.
+        let graph_state_blob = serde_json::to_value(graph_state_blob)
+            .expect("PersistedGraphState always serializes to valid JSON");
         Self {
             schema_version: CHECKPOINT_SCHEMA_VERSION,
             indexer_id,
@@ -804,7 +817,11 @@ impl Checkpoint {
     }
 
     pub fn graph_state(&self) -> Result<GraphState, CheckpointError> {
-        self.graph_state_blob.to_graph_state()
+        let persisted =
+            PersistedGraphState::deserialize(&self.graph_state_blob).map_err(|err| {
+                CheckpointError::Serialization(format!("decode graph_state_blob: {err}"))
+            })?;
+        persisted.to_graph_state()
     }
 
     pub fn validate_compatibility(
@@ -900,8 +917,6 @@ pub enum PersistedEdgeType {
     Related,
     Topic { topic_id: String },
     Root,
-    Editor,
-    Member,
 }
 
 impl PersistedGraphState {
@@ -1063,8 +1078,6 @@ impl PersistedEdgeType {
             EdgeType::Topic { topic_id } => Self::Topic {
                 topic_id: encode_id(topic_id),
             },
-            EdgeType::Editor => Self::Editor,
-            EdgeType::Member => Self::Member,
         }
     }
 
@@ -1076,8 +1089,6 @@ impl PersistedEdgeType {
             PersistedEdgeType::Topic { topic_id } => Ok(EdgeType::Topic {
                 topic_id: decode_topic_id(topic_id)?,
             }),
-            PersistedEdgeType::Editor => Ok(EdgeType::Editor),
-            PersistedEdgeType::Member => Ok(EdgeType::Member),
         }
     }
 
@@ -1087,8 +1098,6 @@ impl PersistedEdgeType {
             PersistedEdgeType::Verified => 1,
             PersistedEdgeType::Related => 2,
             PersistedEdgeType::Topic { .. } => 3,
-            PersistedEdgeType::Editor => 4,
-            PersistedEdgeType::Member => 5,
         }
     }
 }
@@ -1203,7 +1212,7 @@ mod tests {
             root_space_id: make_space_id(1),
             graph_state_version: 1,
             indexer_id: "idx-test".to_string(),
-            runtime_compatibility_marker: "atlas-v1".to_string(),
+            runtime_compatibility_marker: "atlas-v2".to_string(),
             fail_open_bound,
             checkpoint_retry_attempts: 1,
             checkpoint_retry_backoff_ms: 50,
@@ -1220,7 +1229,7 @@ mod tests {
             block_number,
             &GraphState::new(),
             1,
-            "atlas-v1".to_string(),
+            "atlas-v2".to_string(),
             make_space_id(1),
         )
     }
@@ -1274,18 +1283,70 @@ mod tests {
             10,
             &GraphState::new(),
             1,
-            "atlas-v1".to_string(),
+            "atlas-v2".to_string(),
             make_space_id(1),
         );
 
         checkpoint
-            .validate_compatibility("idx-test", "atlas-v1", make_space_id(1), 1)
+            .validate_compatibility("idx-test", "atlas-v2", make_space_id(1), 1)
             .unwrap();
 
         let err = checkpoint
-            .validate_compatibility("idx-other", "atlas-v1", make_space_id(1), 1)
+            .validate_compatibility("idx-other", "atlas-v2", make_space_id(1), 1)
             .unwrap_err();
         assert!(matches!(err, CheckpointError::Incompatible(_)));
+    }
+
+    #[test]
+    fn checkpoint_with_unknown_edge_variant_validates_marker_before_decode() {
+        // Regression: a checkpoint blob containing a now-removed edge variant
+        // (e.g. "Member" from atlas-v1) must not fail to construct just because
+        // the blob can't decode into the current `PersistedGraphState`. The
+        // raw-JSON storage lets `validate_compatibility()` reject the checkpoint
+        // on its marker first, and `graph_state()` is the only path that can
+        // surface a decode failure — letting the caller route it through the
+        // fresh-start fallback.
+        let blob_with_member = serde_json::json!({
+            "spaces": ["00000000000000000000000000000001"],
+            "space_topics": [],
+            "topic_spaces": [],
+            "explicit_edges": [{
+                "source_space_id": "00000000000000000000000000000001",
+                "edges": [{
+                    "target_space_id": "00000000000000000000000000000002",
+                    "edge_type": "Member"
+                }]
+            }],
+            "topic_edges": [],
+            "topic_edge_sources": []
+        });
+
+        let checkpoint = Checkpoint {
+            schema_version: CHECKPOINT_SCHEMA_VERSION,
+            indexer_id: "idx-test".to_string(),
+            cursor: "cursor-1".to_string(),
+            block_number: 1,
+            graph_state_blob: blob_with_member,
+            graph_state_version: 1,
+            runtime_compatibility_marker: "atlas-v1".to_string(),
+            root_space_id: encode_id(make_space_id(1)),
+        };
+
+        // Marker validation runs against the in-memory marker field — no decode
+        // needed, so the incompatible marker is reported cleanly.
+        let err = checkpoint
+            .validate_compatibility("idx-test", "atlas-v2", make_space_id(1), 1)
+            .expect_err("atlas-v1 marker must be rejected against atlas-v2 expected");
+        assert!(matches!(err, CheckpointError::Incompatible(_)));
+
+        // Only `graph_state()` (called after marker validation passes) surfaces
+        // the decode failure — and only via `CheckpointError::Serialization`,
+        // which is the path `restore_checkpoint_on_startup` already routes
+        // through `ATLAS_CHECKPOINT_ALLOW_FRESH_START`.
+        let err = checkpoint
+            .graph_state()
+            .expect_err("Member variant is no longer decodable into PersistedGraphState");
+        assert!(matches!(err, CheckpointError::Serialization(_)));
     }
 
     #[test]

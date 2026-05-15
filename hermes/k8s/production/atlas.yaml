@@ -75,7 +75,7 @@ spec:
             - name: ATLAS_INDEXER_ID
               value: "atlas-production"
             - name: ATLAS_RUNTIME_COMPATIBILITY_MARKER
-              value: "atlas-v1"
+              value: "atlas-v2"
             - name: ATLAS_FAIL_OPEN_BOUND
               value: "10"
             - name: ATLAS_CHECKPOINT_RETRY_ATTEMPTS
@@ -84,8 +84,11 @@ spec:
               value: "200"
             - name: ATLAS_PAUSE_RECOVERY_MAX_ATTEMPTS
               value: "120"
+            # Set to "true" for the atlas-v1 → atlas-v2 rollout window so the
+            # incompatible checkpoint is rejected and Atlas bootstraps fresh.
+            # Revert to "false" once Atlas has stamped a new atlas-v2 checkpoint.
             - name: ATLAS_CHECKPOINT_ALLOW_FRESH_START
-              value: "false"
+              value: "true"
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
