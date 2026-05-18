@@ -93,6 +93,18 @@ alertmanager:
               {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
               {{ if .Annotations.summary }}{{ .Annotations.summary }}{{ end }}
               {{ end }}
+      - name: "slack-staging"
+        slack_configs:
+          - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/url-staging
+            channel: "#infra-alerts-staging"
+            send_resolved: true
+            title: '{{ if eq .Status "firing" }}:fire:{{ else }}:white_check_mark:{{ end }} [STAGING] [{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+            text: >-
+              {{ range .Alerts }}
+              *{{ .Labels.severity | toUpper }}* — {{ .Labels.namespace }}/{{ .Labels.alertname }}
+              {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
+              {{ if .Annotations.summary }}{{ .Annotations.summary }}{{ end }}
+              {{ end }}
     route:
       receiver: "slack"
       group_by: [namespace, alertname]
@@ -106,6 +118,9 @@ alertmanager:
         - matchers:
             - alertname = "InfoInhibitor"
           receiver: "null"
+        - matchers:
+            - namespace =~ ".*-staging"
+          receiver: "slack-staging"
     inhibit_rules:
       - equal: [namespace, alertname]
         source_matchers:
