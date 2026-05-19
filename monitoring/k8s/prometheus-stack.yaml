@@ -74500,6 +74500,7 @@ metadata:
     app.kubernetes.io/version: "12.3.1"
   name: kube-prometheus-stack-grafana
   namespace: monitoring
+
 ---
 # Source: kube-prometheus-stack/charts/kube-state-metrics/templates/serviceaccount.yaml
 apiVersion: v1
@@ -74554,6 +74555,7 @@ metadata:
     release: "kube-prometheus-stack"
     heritage: "Helm"
 automountServiceAccountToken: true
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/serviceaccount.yaml
 apiVersion: v1
@@ -74574,6 +74576,7 @@ metadata:
     app.kubernetes.io/name: kube-prometheus-stack-prometheus-operator
     app.kubernetes.io/component: prometheus-operator
 automountServiceAccountToken: true
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus/serviceaccount.yaml
 apiVersion: v1
@@ -74594,6 +74597,7 @@ metadata:
     release: "kube-prometheus-stack"
     heritage: "Helm"
 automountServiceAccountToken: true
+
 ---
 # Source: kube-prometheus-stack/charts/grafana/templates/secret.yaml
 apiVersion: v1
@@ -74613,6 +74617,7 @@ data:
   admin-user: "YWRtaW4="
   admin-password: "dGVGZ3Zyc080MHNOMklmejBOZU0xemVlZWs1cFBTYmxvRUJUekJkWQ=="
   ldap-toml: ""
+
 ---
 # Source: kube-prometheus-stack/templates/alertmanager/secret.yaml
 apiVersion: v1
@@ -74631,7 +74636,8 @@ metadata:
     release: "kube-prometheus-stack"
     heritage: "Helm"
 data:
-  alertmanager.yaml: "Z2xvYmFsOgogIHJlc29sdmVfdGltZW91dDogNW0KICBzbGFja19hcGlfdXJsX2ZpbGU6IC9ldGMvYWxlcnRtYW5hZ2VyL3NlY3JldHMvYWxlcnRtYW5hZ2VyLXNsYWNrLXdlYmhvb2svdXJsCmluaGliaXRfcnVsZXM6Ci0gZXF1YWw6CiAgLSBuYW1lc3BhY2UKICAtIGFsZXJ0bmFtZQogIHNvdXJjZV9tYXRjaGVyczoKICAtIHNldmVyaXR5ID0gY3JpdGljYWwKICB0YXJnZXRfbWF0Y2hlcnM6CiAgLSBzZXZlcml0eSA9fiB3YXJuaW5nfGluZm8KLSBlcXVhbDoKICAtIG5hbWVzcGFjZQogIC0gYWxlcnRuYW1lCiAgc291cmNlX21hdGNoZXJzOgogIC0gc2V2ZXJpdHkgPSB3YXJuaW5nCiAgdGFyZ2V0X21hdGNoZXJzOgogIC0gc2V2ZXJpdHkgPSBpbmZvCnJlY2VpdmVyczoKLSBuYW1lOiAibnVsbCIKLSBuYW1lOiBzbGFjawogIHNsYWNrX2NvbmZpZ3M6CiAgLSBjaGFubmVsOiAnI2FsZXJ0cycKICAgIHNlbmRfcmVzb2x2ZWQ6IHRydWUKICAgIHRleHQ6ICd7eyByYW5nZSAuQWxlcnRzIH19ICp7eyAuTGFiZWxzLnNldmVyaXR5IHwgdG9VcHBlciB9fSog4oCUIHt7IC5MYWJlbHMubmFtZXNwYWNlCiAgICAgIH19L3t7IC5MYWJlbHMuYWxlcnRuYW1lIH19IHt7IGlmIC5Bbm5vdGF0aW9ucy5kZXNjcmlwdGlvbiB9fXt7IC5Bbm5vdGF0aW9ucy5kZXNjcmlwdGlvbgogICAgICB9fXt7IGVuZCB9fSB7eyBpZiAuQW5ub3RhdGlvbnMuc3VtbWFyeSB9fXt7IC5Bbm5vdGF0aW9ucy5zdW1tYXJ5IH19e3sgZW5kIH19CiAgICAgIHt7IGVuZCB9fScKICAgIHRpdGxlOiAne3sgaWYgZXEgLlN0YXR1cyAiZmlyaW5nIiB9fTpmaXJlOnt7IGVsc2UgfX06d2hpdGVfY2hlY2tfbWFyazp7eyBlbmQgfX0KICAgICAgW3t7IC5TdGF0dXMgfCB0b1VwcGVyIH19XSB7eyAuR3JvdXBMYWJlbHMuYWxlcnRuYW1lIH19JwotIG5hbWU6IHNsYWNrLXN0YWdpbmcKICBzbGFja19jb25maWdzOgogIC0gYXBpX3VybF9maWxlOiAvZXRjL2FsZXJ0bWFuYWdlci9zZWNyZXRzL2FsZXJ0bWFuYWdlci1zbGFjay13ZWJob29rL3VybC1zdGFnaW5nCiAgICBjaGFubmVsOiAnI2luZnJhLWFsZXJ0cy1zdGFnaW5nJwogICAgc2VuZF9yZXNvbHZlZDogdHJ1ZQogICAgdGV4dDogJ3t7IHJhbmdlIC5BbGVydHMgfX0gKnt7IC5MYWJlbHMuc2V2ZXJpdHkgfCB0b1VwcGVyIH19KiDigJQge3sgLkxhYmVscy5uYW1lc3BhY2UKICAgICAgfX0ve3sgLkxhYmVscy5hbGVydG5hbWUgfX0ge3sgaWYgLkFubm90YXRpb25zLmRlc2NyaXB0aW9uIH19e3sgLkFubm90YXRpb25zLmRlc2NyaXB0aW9uCiAgICAgIH19e3sgZW5kIH19IHt7IGlmIC5Bbm5vdGF0aW9ucy5zdW1tYXJ5IH19e3sgLkFubm90YXRpb25zLnN1bW1hcnkgfX17eyBlbmQgfX0KICAgICAge3sgZW5kIH19JwogICAgdGl0bGU6ICd7eyBpZiBlcSAuU3RhdHVzICJmaXJpbmciIH19OmZpcmU6e3sgZWxzZSB9fTp3aGl0ZV9jaGVja19tYXJrOnt7IGVuZCB9fQogICAgICBbU1RBR0lOR10gW3t7IC5TdGF0dXMgfCB0b1VwcGVyIH19XSB7eyAuR3JvdXBMYWJlbHMuYWxlcnRuYW1lIH19Jwpyb3V0ZToKICBncm91cF9ieToKICAtIG5hbWVzcGFjZQogIC0gYWxlcnRuYW1lCiAgZ3JvdXBfaW50ZXJ2YWw6IDVtCiAgZ3JvdXBfd2FpdDogMzBzCiAgcmVjZWl2ZXI6IHNsYWNrCiAgcmVwZWF0X2ludGVydmFsOiAxMmgKICByb3V0ZXM6CiAgLSBtYXRjaGVyczoKICAgIC0gYWxlcnRuYW1lID0gIldhdGNoZG9nIgogICAgcmVjZWl2ZXI6ICJudWxsIgogIC0gbWF0Y2hlcnM6CiAgICAtIGFsZXJ0bmFtZSA9ICJJbmZvSW5oaWJpdG9yIgogICAgcmVjZWl2ZXI6ICJudWxsIgogIC0gbWF0Y2hlcnM6CiAgICAtIG5hbWVzcGFjZSA9fiAiLiotc3RhZ2luZyIKICAgIHJlY2VpdmVyOiBzbGFjay1zdGFnaW5nCnRlbXBsYXRlczoKLSAvZXRjL2FsZXJ0bWFuYWdlci9jb25maWcvKi50bXBsCg=="
+  alertmanager.yaml: "Z2xvYmFsOgogIHJlc29sdmVfdGltZW91dDogNW0KICBzbGFja19hcGlfdXJsX2ZpbGU6IC9ldGMvYWxlcnRtYW5hZ2VyL3NlY3JldHMvYWxlcnRtYW5hZ2VyLXNsYWNrLXdlYmhvb2svdXJsCmluaGliaXRfcnVsZXM6Ci0gZXF1YWw6CiAgLSBuYW1lc3BhY2UKICAtIGFsZXJ0bmFtZQogIHNvdXJjZV9tYXRjaGVyczoKICAtIHNldmVyaXR5ID0gY3JpdGljYWwKICB0YXJnZXRfbWF0Y2hlcnM6CiAgLSBzZXZlcml0eSA9fiB3YXJuaW5nfGluZm8KLSBlcXVhbDoKICAtIG5hbWVzcGFjZQogIC0gYWxlcnRuYW1lCiAgc291cmNlX21hdGNoZXJzOgogIC0gc2V2ZXJpdHkgPSB3YXJuaW5nCiAgdGFyZ2V0X21hdGNoZXJzOgogIC0gc2V2ZXJpdHkgPSBpbmZvCnJlY2VpdmVyczoKLSBuYW1lOiAibnVsbCIKLSBuYW1lOiBzbGFjawogIHNsYWNrX2NvbmZpZ3M6CiAgLSBjaGFubmVsOiAnI2FsZXJ0cycKICAgIHNlbmRfcmVzb2x2ZWQ6IHRydWUKICAgIHRleHQ6ICd7eyByYW5nZSAuQWxlcnRzIH19ICp7eyAuTGFiZWxzLnNldmVyaXR5IHwgdG9VcHBlciB9fSog4oCUIHt7IC5MYWJlbHMubmFtZXNwYWNlCiAgICAgIH19L3t7IC5MYWJlbHMuYWxlcnRuYW1lIH19IHt7IGlmIC5Bbm5vdGF0aW9ucy5kZXNjcmlwdGlvbiB9fXt7IC5Bbm5vdGF0aW9ucy5kZXNjcmlwdGlvbgogICAgICB9fXt7IGVuZCB9fSB7eyBpZiAuQW5ub3RhdGlvbnMuc3VtbWFyeSB9fXt7IC5Bbm5vdGF0aW9ucy5zdW1tYXJ5IH19e3sgZW5kIH19CiAgICAgIHt7IGVuZCB9fScKICAgIHRpdGxlOiAne3sgaWYgZXEgLlN0YXR1cyAiZmlyaW5nIiB9fTpmaXJlOnt7IGVsc2UgfX06d2hpdGVfY2hlY2tfbWFyazp7eyBlbmQgfX0KICAgICAgW3t7IC5TdGF0dXMgfCB0b1VwcGVyIH19XSB7eyAuR3JvdXBMYWJlbHMuYWxlcnRuYW1lIH19JwotIG5hbWU6IHNsYWNrLXN0YWdpbmcKICBzbGFja19jb25maWdzOgogIC0gYXBpX3VybF9maWxlOiAvZXRjL2FsZXJ0bWFuYWdlci9zZWNyZXRzL2FsZXJ0bWFuYWdlci1zbGFjay13ZWJob29rL3VybC1zdGFnaW5nCiAgICBjaGFubmVsOiAnI2luZnJhLWFsZXJ0cy1zdGFnaW5nJwogICAgc2VuZF9yZXNvbHZlZDogdHJ1ZQogICAgdGV4dDogJ3t7IHJhbmdlIC5BbGVydHMgfX0gKnt7IC5MYWJlbHMuc2V2ZXJpdHkgfCB0b1VwcGVyIH19KiDigJQge3sgLkxhYmVscy5uYW1lc3BhY2UKICAgICAgfX0ve3sgLkxhYmVscy5hbGVydG5hbWUgfX0ge3sgaWYgLkFubm90YXRpb25zLmRlc2NyaXB0aW9uIH19e3sgLkFubm90YXRpb25zLmRlc2NyaXB0aW9uCiAgICAgIH19e3sgZW5kIH19IHt7IGlmIC5Bbm5vdGF0aW9ucy5zdW1tYXJ5IH19e3sgLkFubm90YXRpb25zLnN1bW1hcnkgfX17eyBlbmQgfX0KICAgICAge3sgZW5kIH19JwogICAgdGl0bGU6ICd7eyBpZiBlcSAuU3RhdHVzICJmaXJpbmciIH19OmZpcmU6e3sgZWxzZSB9fTp3aGl0ZV9jaGVja19tYXJrOnt7IGVuZCB9fQogICAgICBbU1RBR0lOR10gW3t7IC5TdGF0dXMgfCB0b1VwcGVyIH19XSB7eyAuR3JvdXBMYWJlbHMuYWxlcnRuYW1lIH19Jwpyb3V0ZToKICBncm91cF9ieToKICAtIG5hbWVzcGFjZQogIC0gYWxlcnRuYW1lCiAgZ3JvdXBfaW50ZXJ2YWw6IDVtCiAgZ3JvdXBfd2FpdDogMzBzCiAgcmVjZWl2ZXI6IHNsYWNrCiAgcmVwZWF0X2ludGVydmFsOiAxMmgKICByb3V0ZXM6CiAgLSBtYXRjaGVyczoKICAgIC0gYWxlcnRuYW1lID0gIldhdGNoZG9nIgogICAgcmVjZWl2ZXI6ICJudWxsIgogIC0gbWF0Y2hlcnM6CiAgICAtIGFsZXJ0bmFtZSA9ICJJbmZvSW5oaWJpdG9yIgogICAgcmVjZWl2ZXI6ICJudWxsIgogIC0gbWF0Y2hlcnM6CiAgICAtIG5hbWVzcGFjZSA9fiAiLiotc3RhZ2luZyIKICAgIHJlY2VpdmVyOiBzbGFjay1zdGFnaW5nCiAgLSBtYXRjaGVyczoKICAgIC0gdG9waWMgPX4gInN0YWdpbmdcXC4uKiIKICAgIHJlY2VpdmVyOiBzbGFjay1zdGFnaW5nCnRlbXBsYXRlczoKLSAvZXRjL2FsZXJ0bWFuYWdlci9jb25maWcvKi50bXBs"
+
 ---
 # Source: kube-prometheus-stack/charts/grafana/templates/configmap-dashboard-provider.yaml
 apiVersion: v1
@@ -74659,6 +74665,7 @@ data:
         options:
           foldersFromFilesStructure: false
           path: /tmp/dashboards
+
 ---
 # Source: kube-prometheus-stack/charts/grafana/templates/configmap.yaml
 apiVersion: v1
@@ -74687,6 +74694,7 @@ data:
     domain = ''
     [unified_storage]
     index_path = /var/lib/grafana-search/bleve
+
 ---
 # Source: kube-prometheus-stack/templates/grafana/configmaps-datasources.yaml
 apiVersion: v1
@@ -74726,6 +74734,7 @@ data:
       jsonData:
         handleGrafanaManagedAlerts: false
         implementation: prometheus
+
 ---
 # Source: kube-prometheus-stack/templates/grafana/dashboards-1.14/alertmanager-overview.yaml
 apiVersion: v1
@@ -75293,6 +75302,7 @@ rules:
   - apiGroups: [""] # "" indicates the core API group
     resources: ["configmaps", "secrets"]
     verbs: ["get", "watch", "list"]
+
 ---
 # Source: kube-prometheus-stack/charts/kube-state-metrics/templates/role.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -75449,6 +75459,8 @@ rules:
   resources:
     - volumeattachments
   verbs: ["list", "watch"]
+
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/clusterrole.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -75575,6 +75587,7 @@ rules:
   - watch
   - update
   - delete
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus/clusterrole.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -75614,6 +75627,8 @@ rules:
   verbs: ["get", "list", "watch"]
 - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
   verbs: ["get"]
+
+
 ---
 # Source: kube-prometheus-stack/charts/grafana/templates/clusterrolebinding.yaml
 kind: ClusterRoleBinding
@@ -75633,6 +75648,7 @@ roleRef:
   kind: ClusterRole
   name: kube-prometheus-stack-grafana-clusterrole
   apiGroup: rbac.authorization.k8s.io
+
 ---
 # Source: kube-prometheus-stack/charts/kube-state-metrics/templates/clusterrolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -75682,6 +75698,7 @@ subjects:
 - kind: ServiceAccount
   name: kube-prometheus-stack-operator
   namespace: monitoring
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus/clusterrolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -75706,6 +75723,8 @@ subjects:
   - kind: ServiceAccount
     name: kube-prometheus-stack-prometheus
     namespace: monitoring
+
+
 ---
 # Source: kube-prometheus-stack/charts/grafana/templates/role.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -75719,6 +75738,7 @@ metadata:
     app.kubernetes.io/instance: kube-prometheus-stack
     app.kubernetes.io/version: "12.3.1"
 rules: []
+
 ---
 # Source: kube-prometheus-stack/charts/grafana/templates/rolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -75739,6 +75759,7 @@ subjects:
 - kind: ServiceAccount
   name: kube-prometheus-stack-grafana
   namespace: monitoring
+
 ---
 # Source: kube-prometheus-stack/charts/grafana/templates/service.yaml
 apiVersion: v1
@@ -75761,6 +75782,7 @@ spec:
   selector:
     app.kubernetes.io/name: grafana
     app.kubernetes.io/instance: kube-prometheus-stack
+
 ---
 # Source: kube-prometheus-stack/charts/kube-state-metrics/templates/service.yaml
 apiVersion: v1
@@ -75789,6 +75811,7 @@ spec:
   selector:    
     app.kubernetes.io/name: kube-state-metrics
     app.kubernetes.io/instance: kube-prometheus-stack
+
 ---
 # Source: kube-prometheus-stack/charts/prometheus-node-exporter/templates/service.yaml
 apiVersion: v1
@@ -75818,6 +75841,7 @@ spec:
   selector:
     app.kubernetes.io/name: prometheus-node-exporter
     app.kubernetes.io/instance: kube-prometheus-stack
+
 ---
 # Source: kube-prometheus-stack/templates/alertmanager/service.yaml
 apiVersion: v1
@@ -75878,6 +75902,7 @@ spec:
       targetPort: 9153
   selector:
     k8s-app: kube-dns
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/service.yaml
 apiVersion: v1
@@ -75906,6 +75931,7 @@ spec:
     app: kube-prometheus-stack-operator
     release: "kube-prometheus-stack"
   type: "ClusterIP"
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus/service.yaml
 apiVersion: v1
@@ -75939,6 +75965,7 @@ spec:
     operator.prometheus.io/name: kube-prometheus-stack-prometheus
   sessionAffinity: None
   type: "ClusterIP"
+
 ---
 # Source: kube-prometheus-stack/charts/prometheus-node-exporter/templates/daemonset.yaml
 apiVersion: apps/v1
@@ -76072,6 +76099,7 @@ spec:
         - name: root
           hostPath:
             path: /
+
 ---
 # Source: kube-prometheus-stack/charts/grafana/templates/deployment.yaml
 apiVersion: apps/v1
@@ -76297,6 +76325,7 @@ spec:
             name: kube-prometheus-stack-grafana-config-dashboards
         - name: sc-datasources-volume
           emptyDir: {}
+
 ---
 # Source: kube-prometheus-stack/charts/kube-state-metrics/templates/deployment.yaml
 apiVersion: apps/v1
@@ -76392,6 +76421,7 @@ spec:
             drop:
             - ALL
           readOnlyRootFilesystem: true
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/deployment.yaml
 apiVersion: apps/v1
@@ -76512,6 +76542,7 @@ spec:
       serviceAccountName: kube-prometheus-stack-operator
       automountServiceAccountToken: true
       terminationGracePeriodSeconds: 30
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/admission-webhooks/mutatingWebhookConfiguration.yaml
 apiVersion: admissionregistration.k8s.io/v1
@@ -76553,6 +76584,7 @@ webhooks:
     timeoutSeconds: 10
     admissionReviewVersions: ["v1", "v1beta1"]
     sideEffects: None
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/admission-webhooks/validatingWebhookConfiguration.yaml
 apiVersion: admissionregistration.k8s.io/v1
@@ -76614,6 +76646,7 @@ webhooks:
     timeoutSeconds: 10
     admissionReviewVersions: ["v1", "v1beta1"]
     sideEffects: None
+
 ---
 # Source: kube-prometheus-stack/templates/alertmanager/alertmanager.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -76675,6 +76708,7 @@ spec:
               - {key: app.kubernetes.io/name, operator: In, values: [alertmanager]}
               - {key: alertmanager, operator: In, values: [kube-prometheus-stack-alertmanager]}
   portName: http-web
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus/prometheus.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -76770,6 +76804,7 @@ spec:
             - {key: app.kubernetes.io/instance, operator: In, values: [kube-prometheus-stack-prometheus]}
   portName: http-web
   hostNetwork: false
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus/rules-1.14/alertmanager.rules.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -79946,6 +79981,7 @@ spec:
   namespaceSelector:
     matchNames:
       - monitoring
+
 ---
 # Source: kube-prometheus-stack/charts/kube-state-metrics/templates/servicemonitor.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -79971,6 +80007,7 @@ spec:
   endpoints:
     - port: http
       honorLabels: true
+
 ---
 # Source: kube-prometheus-stack/charts/prometheus-node-exporter/templates/servicemonitor.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -79999,6 +80036,7 @@ spec:
   endpoints:
     - port: http-metrics
       scheme: http
+
 ---
 # Source: kube-prometheus-stack/templates/alertmanager/servicemonitor.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -80032,6 +80070,7 @@ spec:
     path: "/metrics"
   - port: reloader-web
     path: "/metrics"
+
 ---
 # Source: kube-prometheus-stack/templates/exporters/core-dns/servicemonitor.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -80062,6 +80101,7 @@ spec:
   endpoints:
   - port: http-metrics
     bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+
 ---
 # Source: kube-prometheus-stack/templates/exporters/kube-api-server/servicemonitor.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -80103,6 +80143,7 @@ spec:
     matchLabels:
       component: apiserver
       provider: kubernetes
+
 ---
 # Source: kube-prometheus-stack/templates/exporters/kubelet/servicemonitor.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -80217,6 +80258,7 @@ spec:
       sourceLabels:
       - __metrics_path__
       targetLabel: metrics_path
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/servicemonitor.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -80256,6 +80298,7 @@ spec:
   namespaceSelector:
     matchNames:
       - "monitoring"
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus/servicemonitor.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -80303,6 +80346,7 @@ metadata:
   annotations:
     "helm.sh/hook": test
     "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded"
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/admission-webhooks/job-patch/serviceaccount.yaml
 apiVersion: v1
@@ -80326,6 +80370,7 @@ metadata:
     app.kubernetes.io/name: kube-prometheus-stack-prometheus-operator
     app.kubernetes.io/component: prometheus-operator-webhook
 automountServiceAccountToken: true
+
 ---
 # Source: kube-prometheus-stack/charts/grafana/templates/tests/test-configmap.yaml
 apiVersion: v1
@@ -80349,6 +80394,7 @@ data:
       code=$(wget --server-response --spider --timeout 90 --tries 10 ${url} 2>&1 | awk '/^  HTTP/{print $2}')
       [ "$code" == "200" ]
     }
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/admission-webhooks/job-patch/clusterrole.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -80380,6 +80426,7 @@ rules:
       - get
       - update
       - patch
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/admission-webhooks/job-patch/clusterrolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -80409,6 +80456,7 @@ subjects:
   - kind: ServiceAccount
     name: kube-prometheus-stack-admission
     namespace: monitoring
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/admission-webhooks/job-patch/role.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -80439,6 +80487,7 @@ rules:
     verbs:
       - get
       - create
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/admission-webhooks/job-patch/rolebinding.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -80469,6 +80518,7 @@ subjects:
   - kind: ServiceAccount
     name: kube-prometheus-stack-admission
     namespace: monitoring
+
 ---
 # Source: kube-prometheus-stack/charts/grafana/templates/tests/test.yaml
 apiVersion: v1
@@ -80500,6 +80550,7 @@ spec:
       configMap:
         name: kube-prometheus-stack-grafana-test
   restartPolicy: Never
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/admission-webhooks/job-patch/job-createSecret.yaml
 apiVersion: batch/v1
@@ -80566,6 +80617,7 @@ spec:
         runAsUser: 2000
         seccompProfile:
           type: RuntimeDefault
+
 ---
 # Source: kube-prometheus-stack/templates/prometheus-operator/admission-webhooks/job-patch/job-patchWebhook.yaml
 apiVersion: batch/v1
@@ -80633,3 +80685,4 @@ spec:
         runAsUser: 2000
         seccompProfile:
           type: RuntimeDefault
+
