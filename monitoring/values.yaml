@@ -121,6 +121,12 @@ alertmanager:
         - matchers:
             - namespace =~ ".*-staging"
           receiver: "slack-staging"
+        # Kafka lag alerts come from kafka-exporter in the `monitoring`
+        # namespace, so the namespace matcher above doesn't catch them. Topics
+        # are env-prefixed (`production.*` / `staging.*`), so route on that.
+        - matchers:
+            - topic =~ "staging\\..*"
+          receiver: "slack-staging"
     inhibit_rules:
       - equal: [namespace, alertname]
         source_matchers:

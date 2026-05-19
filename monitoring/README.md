@@ -58,6 +58,7 @@ To update the stack, modify `values.yaml` and regenerate:
 
 ```bash
 helm template kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+  --version 81.2.2 \
   --namespace monitoring \
   --include-crds \
   -f monitoring/values.yaml \
@@ -65,6 +66,8 @@ helm template kube-prometheus-stack prometheus-community/kube-prometheus-stack \
 
 kubectl apply -f monitoring/k8s/prometheus-stack.yaml --server-side
 ```
+
+Last rendered with helm `v4.2.0` and chart `kube-prometheus-stack@81.2.2`; use the same versions to keep diffs minimal.
 
 ## Values
 
