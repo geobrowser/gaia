@@ -193,6 +193,15 @@ const TOKEN_BOUNDARY_REGEX = /[\s\p{P}\p{S}]+/u
 export const MAX_TEXT_TOKENS = 20
 
 /**
+ * Maximum number of tokens fed to the analyzed exact-token `match` query
+ * on `name`. This query does not have fuzzy or prefix expansion, but it
+ * still rewrites analyzed input into term clauses. Keep raw exact-name
+ * keyword clauses on the full query, and cap only this analyzed path so
+ * adversarial one-character-token input cannot add unbounded clauses.
+ */
+export const MAX_NAME_MATCH_TEXT_TOKENS = 50
+
+/**
  * Maximum token count at which fuzzy `multi_match` is included in the
  * base text query. Above this, fuzzy is skipped entirely — its
  * per-token edit-distance fan-out is the highest of any sub-query, and
@@ -215,6 +224,13 @@ export const FUZZY_MAX_TOKENS = 3
  * for the common 1-2-edit cases.
  */
 export const FUZZY_MAX_EXPANSIONS = 25
+
+/**
+ * Maximum number of terms the trailing token can expand to in
+ * `match_phrase_prefix` queries. This matches OpenSearch's default, but
+ * keeping it explicit makes the clause budget auditable.
+ */
+export const PHRASE_PREFIX_MAX_EXPANSIONS = 50
 
 /**
  * Count tokens in the query (drops empty splits from leading/trailing
@@ -989,10 +1005,11 @@ export class OpenSearchClient implements SearchClient {
 
 	buildBaseTextQuery(queryText: string): object {
 		// Heavy sub-queries (fuzzy + bool_prefix + match_phrase_prefix) see only
-		// the first MAX_TEXT_TOKENS tokens to bound clause fan-out. Exact-match
-		// sub-queries (term: name_raw, match: name) keep the full query so a
-		// full-name match still wins when available.
+		// the first MAX_TEXT_TOKENS tokens to bound clause fan-out. The analyzed
+		// name match gets its own larger cap, while raw exact-name keyword clauses
+		// keep the full query so a full-name match still wins when available.
 		const cappedQuery = truncateToTokens(queryText, MAX_TEXT_TOKENS)
+		const nameMatchQuery = truncateToTokens(queryText, MAX_NAME_MATCH_TEXT_TOKENS)
 		// Fuzzy `multi_match` AUTO is the highest-fan-out clause (each term
 		// expands into edit-distance variants × 2 fields). Drop it entirely
 		// for queries with more than FUZZY_MAX_TOKENS analyzer-aligned tokens
@@ -1053,11 +1070,13 @@ export class OpenSearchClient implements SearchClient {
 						// underscores, etc.), so "world-affairs" and "World affairs" both
 						// match as tokens ["world", "affairs"]. Unlike name.raw above,
 						// this does not differentiate based on punctuation or casing.
+						// Capped separately from prefix/fuzzy queries so adversarial input
+						// cannot add more than MAX_NAME_MATCH_TEXT_TOKENS term clauses here.
 						// e.g. query "geo" matches name "Geo" (token "geo") but NOT
 						// "geojson_preview_tool" (token "geojson" ≠ "geo").
 						match: {
 							name: {
-								query: queryText,
+								query: nameMatchQuery,
 								boost: this.b("name_exact_token_boost", NAME_EXACT_TOKEN_BOOST),
 							},
 						},
@@ -1108,6 +1127,7 @@ export class OpenSearchClient implements SearchClient {
 						match_phrase_prefix: {
 							name: {
 								query: cappedQuery,
+								max_expansions: PHRASE_PREFIX_MAX_EXPANSIONS,
 								boost: this.b("name_prefix_boost", NAME_PREFIX_BOOST),
 							},
 						},
@@ -1118,6 +1138,7 @@ export class OpenSearchClient implements SearchClient {
 						match_phrase_prefix: {
 							description: {
 								query: cappedQuery,
+								max_expansions: PHRASE_PREFIX_MAX_EXPANSIONS,
 								boost: this.b("description_prefix_boost", DESCRIPTION_PREFIX_BOOST),
 							},
 						},
