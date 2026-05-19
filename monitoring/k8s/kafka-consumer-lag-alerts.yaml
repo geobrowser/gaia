@@ -22,7 +22,7 @@ spec:
         - alert: KafkaConsumerLagHigh
           expr: |
             max by (consumergroup, topic) (
-              kafka_consumergroup_lag{consumergroup!~".*-scores-.*"}
+              kafka_consumergroup_lag{consumergroup!~".*search-indexer-group-scores-.*"}
             ) > 1000
           for: 2m
           labels:
@@ -40,7 +40,7 @@ spec:
         - alert: KafkaConsumerLagHigh
           expr: |
             max by (consumergroup, topic) (
-              kafka_consumergroup_lag{consumergroup=~".*-scores-.*"}
+              kafka_consumergroup_lag{consumergroup=~".*search-indexer-group-scores-.*"}
             ) > 1000
           for: 2h
           labels:
