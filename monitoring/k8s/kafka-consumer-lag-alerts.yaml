@@ -37,7 +37,7 @@ spec:
         # which can dump thousands of messages at once. Use a longer `for:` so
         # the burst drains before alerting, while keeping the same lag
         # threshold as other consumers.
-        - alert: KafkaConsumerLagHigh
+        - alert: KafkaSearchIndexerScoresLagHigh
           expr: |
             max by (consumergroup, topic) (
               kafka_consumergroup_lag{consumergroup=~".*search-indexer-group-scores-.*"}
