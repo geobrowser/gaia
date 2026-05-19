@@ -4,9 +4,16 @@
 # Grafana configuration
 grafana:
   enabled: true
-  adminUser: admin
-  # Password will be auto-generated and stored in a Secret
-  # Retrieve with: kubectl get secret kube-prometheus-stack-grafana -n monitoring -o jsonpath="{.data.admin-password}" | base64 -d
+  # Read admin user/password from the existing Secret instead of letting the
+  # chart regenerate the password on every `helm template` run. The Secret
+  # was originally created by the chart and lives in the cluster — we just
+  # stop overwriting it. Retrieve the password with:
+  #   kubectl -n monitoring get secret kube-prometheus-stack-grafana \
+  #     -o jsonpath="{.data.admin-password}" | base64 -d
+  admin:
+    existingSecret: kube-prometheus-stack-grafana
+    userKey: admin-user
+    passwordKey: admin-password
 
   service:
     type: ClusterIP
