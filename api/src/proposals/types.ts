@@ -108,7 +108,7 @@ export interface ProposalWithVotes {
 	name: string | null
 	/** Member space ID of the proposer */
 	proposedBy: string
-	/** Proposal version number (0-based: CREATE → 0, incremented on each update) */
+	/** Proposal version number (incremented on each update; starts at 1) */
 	proposalVersion: number
 	votingMode: VotingMode
 	/** Unix timestamp in seconds when voting starts */
@@ -365,7 +365,7 @@ interface ProposalResponseBase {
 	name: string | null
 	/** Member space ID of the proposer (dashless UUID) */
 	proposedBy: string
-	/** Proposal version number (0-based: CREATE → 0, incremented on each update) */
+	/** Proposal version number (incremented on each update; starts at 1) */
 	proposalVersion: number
 	/** Execution deadline (Unix seconds) — past this, the proposal is REJECTED. Null on legacy rows. */
 	executeBy: number | null

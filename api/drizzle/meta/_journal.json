@@ -428,13 +428,6 @@
       "when": 1776893368776,
       "tag": "0060_absurd_martin_li",
       "breakpoints": true
-    },
-    {
-      "idx": 61,
-      "version": "7",
-      "when": 1778078466990,
-      "tag": "0061_proposal_version_zero_default",
-      "breakpoints": true
     }
   ]
 }

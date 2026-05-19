@@ -14,23 +14,20 @@ use crate::models::governance::{
 
 /// Result of processing a `HermesProposalCreated` event: the immutable
 /// identity (inserted on first encounter), the initial version's state, and
-/// the actions for v0. Storage composes all three into a single transaction.
-///
-/// Versions are 0-based to mirror the on-chain numbering: CREATE → v0,
-/// first UPDATE → v1, etc.
+/// the actions for v1. Storage composes all three into a single transaction.
 #[allow(dead_code)]
 pub struct ProposalCreatedResult {
     pub identity: ProposalIdentity,
     pub version: ProposalVersionItem,
-    /// Actions with `proposal_version = 0` pre-set, ready for storage insert.
+    /// Actions with `proposal_version = 1` pre-set, ready for storage insert.
     pub actions: Vec<ProposalActionItem>,
 }
 
 /// Result of processing a `HermesProposalUpdated` event: a new version's
 /// state + the new action set. Storage atomically inserts the version row
-/// (assigning the next `proposal_version` number — 1, 2, …), bumps
+/// (assigning the next `proposal_version` number), bumps
 /// `proposals.current_version`, then inserts the actions against that new
-/// version. Actions returned here carry an unstamped `proposal_version`
+/// version. Actions returned here carry `proposal_version = 0` as a sentinel
 /// — storage overwrites it with the assigned version before writing.
 #[allow(dead_code)]
 pub struct ProposalUpdatedResult {
@@ -49,7 +46,7 @@ pub struct ProposalExecutionResult {
 
 /// Process a HermesProposalCreated message.
 ///
-/// Produces identity + v0 version + actions (pre-stamped with version 0).
+/// Produces identity + v1 version + actions (pre-stamped with version 1).
 pub fn handle_proposal_created(
     msg: &HermesProposalCreated,
 ) -> Result<ProposalCreatedResult, HandlerError> {
@@ -63,11 +60,11 @@ pub fn handle_proposal_created(
         msg.meta.as_ref(),
     )?;
 
-    // Stamp version=0 on all actions for this CREATE (matches on-chain numbering).
+    // Stamp version=1 on all actions for this CREATE.
     let actions: Vec<ProposalActionItem> = actions
         .into_iter()
         .map(|mut a| {
-            a.proposal_version = 0;
+            a.proposal_version = 1;
             a
         })
         .collect();
@@ -90,9 +87,8 @@ pub fn handle_proposal_created(
 /// Process a HermesProposalUpdated message.
 ///
 /// Returns the proposal_id + the new version's state + actions with
-/// `proposal_version` left unstamped — storage assigns the real version
-/// number (≥ 1) atomically when the version row is inserted, then stamps
-/// it back onto the actions.
+/// `proposal_version = 0` as a sentinel — storage assigns the real version
+/// number atomically when the version row is inserted.
 pub fn handle_proposal_updated(
     msg: &HermesProposalUpdated,
 ) -> Result<ProposalUpdatedResult, HandlerError> {
@@ -133,9 +129,9 @@ pub fn handle_proposal_voted(msg: &HermesProposalVoted) -> Result<ProposalVoteIt
         .map(|m| (m.created_at as i64, m.block_number as i64))
         .unwrap_or((0, 0));
 
-    // Versions are 0-based on-chain (CREATE → 0, UPDATE → 1, 2, …); the
-    // contract always emits the real version on a vote, so pass it through.
-    let proposal_version = msg.proposal_version as i32;
+    // proto3 scalars can't distinguish "unset" from "zero"; the contract
+    // says proposal versions start at 1, so treat 0 as unset and default to 1.
+    let proposal_version = normalize_proposal_version(msg.proposal_version);
 
     Ok(ProposalVoteItem {
         proposal_id,
@@ -146,6 +142,16 @@ pub fn handle_proposal_voted(msg: &HermesProposalVoted) -> Result<ProposalVoteIt
         created_at_block,
         proposal_version,
     })
+}
+
+/// Normalize a proto3 `proposal_version` scalar: treat 0 as "unset" and
+/// default to 1 (per the documented "versions start at 1" contract).
+fn normalize_proposal_version(raw: u32) -> i32 {
+    if raw == 0 {
+        1
+    } else {
+        raw as i32
+    }
 }
 
 /// Normalize a proto3 `execute_by` scalar: treat 0 as "no deadline" (None)
@@ -380,8 +386,7 @@ fn map_proposal_message(
     let name = derive_proposal_name(actions);
 
     // Map proto actions to internal types. `proposal_version` is left as 0
-    // here. CREATE re-stamps it to 0 (the v0 row); UPDATE leaves it unstamped
-    // for storage to overwrite with the assigned version (1, 2, …).
+    // here — the CREATE handler stamps 1; the UPDATE handler defers to storage.
     let actions: Vec<ProposalActionItem> = actions
         .iter()
         .enumerate()
@@ -504,7 +509,7 @@ fn map_proposal_action(
 
     ProposalActionItem {
         proposal_id,
-        // Stamped by the handler layer (CREATE → 0; UPDATE → set by storage).
+        // Stamped by the handler layer (CREATE → 1; UPDATE → set by storage).
         proposal_version: 0,
         index,
         payload,
@@ -840,9 +845,9 @@ mod tests {
     }
 
     #[test]
-    fn handle_proposal_voted_preserves_zero_version() {
-        // Versions are 0-based on-chain: a vote on the initial CREATE carries
-        // proposal_version == 0 and must be preserved (no coercion to 1).
+    fn handle_proposal_voted_defaults_proposal_version_to_one_when_zero() {
+        // proto3 scalars can't distinguish unset from 0, so a 0 on the wire
+        // should be normalized to the documented starting version of 1.
         let msg = HermesProposalVoted {
             voter_id: Uuid::new_v4().as_bytes().to_vec(),
             space_id: Uuid::new_v4().as_bytes().to_vec(),
@@ -854,7 +859,7 @@ mod tests {
 
         let item = handle_proposal_voted(&msg).unwrap();
 
-        assert_eq!(item.proposal_version, 0);
+        assert_eq!(item.proposal_version, 1);
     }
 
     #[test]

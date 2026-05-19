@@ -746,15 +746,12 @@ impl Storage {
         Ok(())
     }
 
-    /// Insert version 0 of a newly-created proposal.
+    /// Insert version 1 of a newly-created proposal.
     ///
     /// Paired with [`insert_proposal_identity`] on the CREATE path: identity
-    /// row goes in first (idempotent), then the v0 version row. Also
+    /// row goes in first (idempotent), then the v1 version row. Also
     /// idempotent via `ON CONFLICT DO NOTHING` so CREATE replay doesn't
-    /// clobber an existing row (which could be a v1+ that arrived first).
-    ///
-    /// Versions are 0-based to mirror the contract's on-chain numbering
-    /// (CREATE → v0, first UPDATE → v1, …).
+    /// clobber an existing row (which could be a v2+ that arrived first).
     #[allow(dead_code)]
     pub async fn insert_proposal_version_initial(
         &self,
@@ -778,7 +775,7 @@ impl Storage {
                 version_created_at, version_created_at_block
             )
             VALUES (
-                $1, 0, $2::"votingMode", $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+                $1, 1, $2::"votingMode", $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
             )
             ON CONFLICT (proposal_id, proposal_version) DO NOTHING
             "#,

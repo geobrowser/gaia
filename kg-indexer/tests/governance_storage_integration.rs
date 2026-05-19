@@ -148,7 +148,7 @@ fn version_fast(flat_threshold: i64, execute_by: Option<i64>) -> ProposalVersion
     }
 }
 
-/// Insert identity + version-0 row in a single transaction. Returns committed state.
+/// Insert identity + version-1 row in a single transaction. Returns committed state.
 async fn seed_proposal_v1(
     storage: &Storage,
     pool: &sqlx::Pool<sqlx::Postgres>,
@@ -228,7 +228,7 @@ async fn test_upsert_space_voting_settings_overwrites_on_conflict() {
 }
 
 // --------------------------------------------------------------------------
-// CREATE writes identity + version-0 with V2 columns
+// CREATE writes identity + version-1 with V2 columns
 // --------------------------------------------------------------------------
 #[tokio::test]
 #[ignore]
@@ -245,15 +245,15 @@ async fn test_create_writes_identity_and_v1() {
     let v1 = version_slow(Some("Test"));
     seed_proposal_v1(&storage, &pool, proposal_id, space_id, proposer_id, &v1).await;
 
-    // Identity row has current_version = 0 (versions are 0-based on-chain).
+    // Identity row has current_version = 1.
     let cv: (i32,) = sqlx::query_as("SELECT current_version FROM proposals WHERE id = $1")
         .bind(proposal_id)
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(cv.0, 0, "current_version must be 0 on create");
+    assert_eq!(cv.0, 1, "current_version must be 1 on create");
 
-    // Version-0 row has the V2 columns.
+    // Version-1 row has the V2 columns.
     let v: (i32, i64, i64, i64, Option<i64>, Option<String>) = sqlx::query_as(
         r#"SELECT proposal_version,
                   partial_percentage_support_threshold,
@@ -268,7 +268,7 @@ async fn test_create_writes_identity_and_v1() {
     .await
     .unwrap();
 
-    assert_eq!(v.0, 0);
+    assert_eq!(v.0, 1);
     assert_eq!(v.1, 500_000);
     assert_eq!(v.2, 750_000);
     assert_eq!(v.3, 3);
@@ -298,7 +298,7 @@ async fn test_update_appends_new_version() {
     let v1 = version_slow(Some("V1"));
     seed_proposal_v1(&storage, &pool, proposal_id, space_id, proposer_id, &v1).await;
 
-    // Seed 3 v0 votes.
+    // Seed 3 v1 votes.
     let voter_ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
     for voter_id in &voter_ids {
         ensure_space(&pool, *voter_id).await;
@@ -312,7 +312,7 @@ async fn test_update_appends_new_version() {
             vote: VoteOption::Yes,
             created_at: 1_700_000_100,
             created_at_block: 2,
-            proposal_version: 0,
+            proposal_version: 1,
         };
         storage
             .insert_proposal_votes(std::slice::from_ref(&vote), &mut tx)
@@ -321,10 +321,10 @@ async fn test_update_appends_new_version() {
     }
     tx.commit().await.unwrap();
 
-    // Simulate tally worker having populated v0 yes_count.
+    // Simulate tally worker having populated v1 yes_count.
     sqlx::query(
         r#"UPDATE proposal_versions SET yes_count = 3
-           WHERE proposal_id = $1 AND proposal_version = 0"#,
+           WHERE proposal_id = $1 AND proposal_version = 1"#,
     )
     .bind(proposal_id)
     .execute(&pool)
@@ -344,9 +344,9 @@ async fn test_update_appends_new_version() {
         .expect("insert_new_proposal_version failed");
     tx.commit().await.unwrap();
 
-    assert_eq!(new_version, 1, "append must return the new version number");
+    assert_eq!(new_version, 2, "append must return the new version number");
 
-    // current_version bumped; new version row has fresh counts.
+    // current_version bumped; version-2 row has fresh counts.
     let (cv, v2_yes, v2_partial, v2_name): (i32, i64, i64, Option<String>) = sqlx::query_as(
         r#"SELECT p.current_version, pv.yes_count, pv.partial_percentage_support_threshold, pv.name
            FROM proposals p
@@ -358,24 +358,24 @@ async fn test_update_appends_new_version() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(cv, 1, "current_version should be bumped");
+    assert_eq!(cv, 2, "current_version should be bumped");
     assert_eq!(v2_yes, 0, "new-version yes_count must start at 0");
     assert_eq!(v2_partial, 600_000);
     assert_eq!(v2_name, Some("V2".into()));
 
-    // v0 row + its votes remain as history.
+    // v1 row + its votes remain as history.
     let (v1_yes_hist, v1_vote_count): (i64, i64) = sqlx::query_as(
         r#"SELECT (SELECT yes_count FROM proposal_versions
-                   WHERE proposal_id = $1 AND proposal_version = 0),
+                   WHERE proposal_id = $1 AND proposal_version = 1),
                   (SELECT COUNT(*) FROM proposal_votes
-                   WHERE proposal_id = $1 AND proposal_version = 0)"#,
+                   WHERE proposal_id = $1 AND proposal_version = 1)"#,
     )
     .bind(proposal_id)
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(v1_yes_hist, 3, "v0 tally must be preserved as history");
-    assert_eq!(v1_vote_count, 3, "v0 votes must be preserved as history");
+    assert_eq!(v1_yes_hist, 3, "v1 tally must be preserved as history");
+    assert_eq!(v1_vote_count, 3, "v1 votes must be preserved as history");
 
     let mut all_spaces = vec![space_id, proposer_id];
     all_spaces.extend(voter_ids);
@@ -403,7 +403,7 @@ async fn test_votes_scoped_by_version_across_proposal_update() {
     let v1 = version_slow(None);
     seed_proposal_v1(&storage, &pool, proposal_id, space_id, proposer_id, &v1).await;
 
-    // v0 vote.
+    // v1 vote.
     let vote_v1 = ProposalVoteItem {
         proposal_id,
         voter_id,
@@ -411,7 +411,7 @@ async fn test_votes_scoped_by_version_across_proposal_update() {
         vote: VoteOption::Yes,
         created_at: 1_700_000_100,
         created_at_block: 2,
-        proposal_version: 0,
+        proposal_version: 1,
     };
     let mut tx = pool.begin().await.unwrap();
     storage
@@ -420,7 +420,7 @@ async fn test_votes_scoped_by_version_across_proposal_update() {
         .unwrap();
     tx.commit().await.unwrap();
 
-    // Append v1. Must use a distinct `version_created_at_block` since that's
+    // Append v2. Must use a distinct `version_created_at_block` since that's
     // the replay idempotency key (see `proposal_versions_idempotency_key`).
     let mut v2 = v1.clone();
     v2.version_created_at_block = 2;
@@ -430,19 +430,19 @@ async fn test_votes_scoped_by_version_across_proposal_update() {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    assert_eq!(new_version, 1);
+    assert_eq!(new_version, 2);
 
-    // v0 vote survives.
+    // v1 vote survives.
     let v1_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM proposal_votes WHERE proposal_id = $1 AND proposal_version = 0",
+        "SELECT COUNT(*) FROM proposal_votes WHERE proposal_id = $1 AND proposal_version = 1",
     )
     .bind(proposal_id)
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(v1_count.0, 1, "v0 vote must survive as history");
+    assert_eq!(v1_count.0, 1, "v1 vote must survive as history");
 
-    // Same voter votes on v1 — inserts cleanly (different PK component).
+    // Same voter votes on v2 — inserts cleanly (different PK component).
     let vote_v2 = ProposalVoteItem {
         proposal_id,
         voter_id,
@@ -450,7 +450,7 @@ async fn test_votes_scoped_by_version_across_proposal_update() {
         vote: VoteOption::No,
         created_at: 1_700_000_200,
         created_at_block: 3,
-        proposal_version: 1,
+        proposal_version: 2,
     };
     let mut tx = pool.begin().await.unwrap();
     storage
@@ -465,7 +465,7 @@ async fn test_votes_scoped_by_version_across_proposal_update() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(total.0, 2, "v0 and v1 votes must coexist");
+    assert_eq!(total.0, 2, "v1 and v2 votes must coexist");
 
     cleanup_proposal(&pool, proposal_id, &[space_id, proposer_id, voter_id]).await;
 }
@@ -497,7 +497,7 @@ async fn test_insert_proposal_votes_writes_when_version_matches() {
         vote: VoteOption::Yes,
         created_at: 1_700_000_100,
         created_at_block: 2,
-        proposal_version: 0,
+        proposal_version: 1,
     };
     let mut tx = pool.begin().await.unwrap();
     storage
@@ -555,7 +555,7 @@ async fn test_update_proposal_settings_preserves_version() {
         .expect("update_proposal_settings failed");
     tx.commit().await.unwrap();
 
-    // current_version still 0; version-0 row updated in place.
+    // current_version still 1; version-1 row updated in place.
     let (cv, pv_ver, mode, partial, execute_by): (i32, i32, String, i64, Option<i64>) =
         sqlx::query_as(
             r#"SELECT p.current_version, pv.proposal_version,
@@ -571,8 +571,8 @@ async fn test_update_proposal_settings_preserves_version() {
         .await
         .unwrap();
 
-    assert_eq!(cv, 0, "escalation must NOT bump current_version");
-    assert_eq!(pv_ver, 0);
+    assert_eq!(cv, 1, "escalation must NOT bump current_version");
+    assert_eq!(pv_ver, 1);
     assert_eq!(mode, "Slow");
     assert_eq!(partial, 500_000);
     assert_eq!(execute_by, Some(4_000));
@@ -581,8 +581,8 @@ async fn test_update_proposal_settings_preserves_version() {
 }
 
 // --------------------------------------------------------------------------
-// process_tally_queue counts only votes on the current version. A v0 vote
-// is history after a v1 append and must not contribute to v1 tallies.
+// process_tally_queue counts only votes on the current version. A v1 vote
+// is history after a v2 append and must not contribute to v2 tallies.
 // --------------------------------------------------------------------------
 #[tokio::test]
 #[ignore]
@@ -603,7 +603,7 @@ async fn test_process_tally_queue_counts_only_current_version() {
     v1.execute_by = Some(9_999_999_999);
     seed_proposal_v1(&storage, &pool, proposal_id, space_id, proposer_id, &v1).await;
 
-    // v0 yes vote.
+    // v1 yes vote.
     let v1_vote = ProposalVoteItem {
         proposal_id,
         voter_id,
@@ -611,7 +611,7 @@ async fn test_process_tally_queue_counts_only_current_version() {
         vote: VoteOption::Yes,
         created_at: 1_700_000_100,
         created_at_block: 2,
-        proposal_version: 0,
+        proposal_version: 1,
     };
     let mut tx = pool.begin().await.unwrap();
     storage
@@ -620,7 +620,7 @@ async fn test_process_tally_queue_counts_only_current_version() {
         .unwrap();
     tx.commit().await.unwrap();
 
-    // Append v1. Must use a distinct `version_created_at_block` since that's
+    // Append v2. Must use a distinct `version_created_at_block` since that's
     // the replay idempotency key (see `proposal_versions_idempotency_key`).
     let mut v2 = v1.clone();
     v2.version_created_at_block = 2;
@@ -631,7 +631,7 @@ async fn test_process_tally_queue_counts_only_current_version() {
         .unwrap();
     tx.commit().await.unwrap();
 
-    // Queue + process. No v1 votes exist yet — current-version tally should be 0.
+    // Queue + process. No v2 votes exist yet — current-version tally should be 0.
     let mut tx = pool.begin().await.unwrap();
     storage
         .queue_tally_update(proposal_id, &mut tx)
@@ -654,11 +654,11 @@ async fn test_process_tally_queue_counts_only_current_version() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(yes, 0, "v0 vote is history — must not count for v1");
+    assert_eq!(yes, 0, "v1 vote is history — must not count for v2");
     assert_eq!(no, 0);
     assert_eq!(abstain, 0);
 
-    // Cast a v1 vote and re-tally.
+    // Cast a v2 vote and re-tally.
     let v2_vote = ProposalVoteItem {
         proposal_id,
         voter_id,
@@ -666,7 +666,7 @@ async fn test_process_tally_queue_counts_only_current_version() {
         vote: VoteOption::Yes,
         created_at: 1_700_000_200,
         created_at_block: 3,
-        proposal_version: 1,
+        proposal_version: 2,
     };
     let mut tx = pool.begin().await.unwrap();
     storage
@@ -691,7 +691,7 @@ async fn test_process_tally_queue_counts_only_current_version() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(yes_v2.0, 1, "v1 vote must count in current-version tally");
+    assert_eq!(yes_v2.0, 1, "v2 vote must count in current-version tally");
 
     cleanup_proposal(&pool, proposal_id, &[space_id, proposer_id, voter_id]).await;
 }
@@ -720,23 +720,23 @@ async fn test_insert_new_proposal_version_is_idempotent_on_replay() {
     ensure_space(&pool, space_id).await;
     ensure_space(&pool, proposer_id).await;
 
-    // v0 seeded at block 1 (via insert_proposal_version_initial).
+    // v1 seeded at block 1 (via insert_proposal_version_initial).
     let v1 = version_slow(Some("V1"));
     seed_proposal_v1(&storage, &pool, proposal_id, space_id, proposer_id, &v1).await;
 
-    // v1 at block 2.
+    // v2 at block 2.
     let mut v2 = version_slow(Some("V2"));
     v2.partial_percentage_support_threshold = 600_000;
     v2.version_created_at_block = 2;
 
-    // First call: fresh event → inserts v1, bumps current_version to 1.
+    // First call: fresh event → inserts v2, bumps current_version to 2.
     let mut tx = pool.begin().await.unwrap();
     let returned_first = storage
         .insert_new_proposal_version(proposal_id, &v2, &mut tx)
         .await
         .expect("first insert_new_proposal_version failed");
     tx.commit().await.unwrap();
-    assert_eq!(returned_first, 1, "first call must return version 1");
+    assert_eq!(returned_first, 2, "first call must return version 2");
 
     // Second call with IDENTICAL input: simulated Kafka replay. Must NOT
     // insert a new row, NOT bump current_version, and MUST return the same
@@ -748,11 +748,11 @@ async fn test_insert_new_proposal_version_is_idempotent_on_replay() {
         .expect("replay insert_new_proposal_version failed");
     tx.commit().await.unwrap();
     assert_eq!(
-        returned_replay, 1,
+        returned_replay, 2,
         "replay must return the already-assigned version number"
     );
 
-    // current_version must still be 1 (not 2) after replay.
+    // current_version must still be 2 (not 3) after replay.
     let (current_version,): (i32,) =
         sqlx::query_as("SELECT current_version FROM proposals WHERE id = $1")
             .bind(proposal_id)
@@ -760,14 +760,14 @@ async fn test_insert_new_proposal_version_is_idempotent_on_replay() {
             .await
             .unwrap();
     assert_eq!(
-        current_version, 1,
+        current_version, 2,
         "current_version must not bump on replay"
     );
 
-    // Exactly one row in proposal_versions for version 1.
+    // Exactly one row in proposal_versions for version 2.
     let (v2_row_count,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM proposal_versions
-         WHERE proposal_id = $1 AND proposal_version = 1",
+         WHERE proposal_id = $1 AND proposal_version = 2",
     )
     .bind(proposal_id)
     .fetch_one(&pool)
@@ -778,7 +778,7 @@ async fn test_insert_new_proposal_version_is_idempotent_on_replay() {
         "replay must not duplicate the proposal_versions row"
     );
 
-    // And only 2 total rows for this proposal (v0 + v1, no spurious v2).
+    // And only 2 total rows for this proposal (v1 + v2, no spurious v3).
     let (total_rows,): (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM proposal_versions WHERE proposal_id = $1")
             .bind(proposal_id)
@@ -787,7 +787,7 @@ async fn test_insert_new_proposal_version_is_idempotent_on_replay() {
             .unwrap();
     assert_eq!(
         total_rows, 2,
-        "replay must not create a spurious v2 (or any additional version)"
+        "replay must not create a spurious v3 (or any additional version)"
     );
 
     cleanup_proposal(&pool, proposal_id, &[space_id, proposer_id]).await;

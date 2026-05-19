@@ -31,7 +31,7 @@ function makeProposal(overrides: Partial<ProposalWithVotes> = {}): ProposalWithV
 		spaceId: "test-space-id",
 		name: "Test Proposal",
 		proposedBy: "test-proposer-id",
-		proposalVersion: 0,
+		proposalVersion: 1,
 		votingMode,
 		startTime: now - 3600n, // Started 1 hour ago
 		endTime: now + 3600n, // Ends in 1 hour
