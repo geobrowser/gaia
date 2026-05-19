@@ -20,7 +20,10 @@ spec:
     - name: kafka.consumer.lag
       rules:
         - alert: KafkaConsumerLagHigh
-          expr: max by (consumergroup, topic) (kafka_consumergroup_lag) > 1000
+          expr: |
+            max by (consumergroup, topic) (
+              kafka_consumergroup_lag{consumergroup!~".*-scores-.*"}
+            ) > 1000
           for: 2m
           labels:
             severity: warning
@@ -29,6 +32,24 @@ spec:
             description: |
               Consumer group {{ $labels.consumergroup }} has lag {{ $value }}
               messages on topic {{ $labels.topic }} for over 2 minutes.
+
+        # Scores consumers receive bursty input from the daily scoring cron,
+        # which can dump thousands of messages at once. Use a longer `for:` so
+        # the burst drains before alerting, while keeping the same lag
+        # threshold as other consumers.
+        - alert: KafkaConsumerLagHigh
+          expr: |
+            max by (consumergroup, topic) (
+              kafka_consumergroup_lag{consumergroup=~".*-scores-.*"}
+            ) > 1000
+          for: 2h
+          labels:
+            severity: warning
+          annotations:
+            summary: Kafka consumer group {{ $labels.consumergroup }} is lagging
+            description: |
+              Consumer group {{ $labels.consumergroup }} has lag {{ $value }}
+              messages on topic {{ $labels.topic }} for over 2 hours.
 
         - alert: KafkaConsumerLagCritical
           expr: max by (consumergroup, topic) (kafka_consumergroup_lag) > 10000
