@@ -67,9 +67,9 @@ spec:
             - name: ENVIRONMENT
               value: "staging"
             - name: KAFKA_GROUP_ID_GOVERNANCE
-              value: "notification-indexer-governance-v1"
+              value: "notification-indexer-governance-v1-staging"
             - name: KAFKA_GROUP_ID_KNOWLEDGE_EDITS
-              value: "notification-indexer-knowledge-edits-v1"
+              value: "notification-indexer-knowledge-edits-v1-staging"
             - name: REJECTION_POLL_INTERVAL_SECS
               value: "60"
             # Logging
