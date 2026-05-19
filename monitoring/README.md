@@ -39,11 +39,31 @@ kubectl port-forward svc/kube-prometheus-stack-grafana 3000:80 -n monitoring
 
 **Credentials:**
 - Username: `admin`
-- Password: Run this to retrieve:
-  ```bash
-  kubectl get secret kube-prometheus-stack-grafana -n monitoring \
-    -o jsonpath="{.data.admin-password}" | base64 -d && echo
-  ```
+- Password lives in the `kube-prometheus-stack-grafana` Secret (managed manually — the chart no longer renders it, see `values.yaml` `grafana.admin.existingSecret`).
+
+Retrieve:
+```bash
+kubectl -n monitoring get secret kube-prometheus-stack-grafana \
+  -o jsonpath="{.data.admin-password}" | base64 -d && echo
+```
+
+Create on a fresh cluster (Grafana pod CrashLoops until this exists):
+```bash
+PW=$(openssl rand -base64 24)
+kubectl -n monitoring create secret generic kube-prometheus-stack-grafana \
+  --from-literal=admin-user=admin \
+  --from-literal=admin-password="$PW"
+echo "save to password manager: $PW"
+```
+
+Rotate:
+```bash
+PW=$(openssl rand -base64 24)
+kubectl -n monitoring patch secret kube-prometheus-stack-grafana --type=json \
+  -p="[{\"op\":\"replace\",\"path\":\"/data/admin-password\",\"value\":\"$(printf %s "$PW" | base64)\"}]"
+kubectl -n monitoring rollout restart deployment/kube-prometheus-stack-grafana
+echo "save to password manager: $PW"
+```
 
 ## Access Prometheus UI
 
