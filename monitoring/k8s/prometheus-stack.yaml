@@ -74599,26 +74599,6 @@ metadata:
 automountServiceAccountToken: true
 
 ---
-# Source: kube-prometheus-stack/charts/grafana/templates/secret.yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: kube-prometheus-stack-grafana
-  namespace: monitoring
-  labels:
-    helm.sh/chart: grafana-10.5.12
-    app.kubernetes.io/name: grafana
-    app.kubernetes.io/instance: kube-prometheus-stack
-    app.kubernetes.io/version: "12.3.1"
-    app.kubernetes.io/component: admin-secret
-type: Opaque
-data:
-  
-  admin-user: "YWRtaW4="
-  admin-password: "dGVGZ3Zyc080MHNOMklmejBOZU0xemVlZWs1cFBTYmxvRUJUekJkWQ=="
-  ldap-toml: ""
-
----
 # Source: kube-prometheus-stack/templates/alertmanager/secret.yaml
 apiVersion: v1
 kind: Secret
@@ -76131,7 +76111,6 @@ spec:
       annotations:
         checksum/config: 5bceeca3808849664f09f642547ce17fdf495522238ef9ce952b20cfa36b7de5
         checksum/sc-dashboard-provider-config: e70bf6a851099d385178a76de9757bb0bef8299da6d8443602590e44f05fdf24
-        checksum/secret: 7ca6374aec4ac2e2302144a2b142aa41295e31a6795b36b890ecd86b3f4e7df1
         kubectl.kubernetes.io/default-container: grafana
     spec:
       
