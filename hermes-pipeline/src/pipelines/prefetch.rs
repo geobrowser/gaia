@@ -59,8 +59,10 @@ struct FetchRequest {
 /// Result of prefetching all IPFS URIs for a block.
 #[derive(Debug, Default)]
 pub struct PrefetchResult {
-    /// Map of IPFS URI to cached edit (successful lookups only).
-    /// Errored entries and cache misses are not included.
+    /// Map of IPFS URI to cached edit. Includes both successful lookups and
+    /// errored entries — consumers must check `cached_edit.is_errored` (or
+    /// use `valid_payload()`) before reading payload. Cache misses (NotFound
+    /// after retries) are not inserted.
     pub cache: HashMap<String, CachedEdit>,
     /// Number of cache misses (after all retries exhausted).
     pub cache_misses: u64,
@@ -170,8 +172,9 @@ pub async fn prefetch_block(
                 tracing::warn!(uri = %uri, "Prefetch cache miss after retries");
                 result.cache_misses += 1;
             }
-            FetchResult::Errored => {
+            FetchResult::Errored(cached_edit) => {
                 tracing::warn!(uri = %uri, "Prefetch found errored entry in cache");
+                result.cache.insert(uri, cached_edit);
                 result.errored_entries += 1;
             }
             FetchResult::FetchFailed => {
@@ -188,7 +191,7 @@ pub async fn prefetch_block(
 enum FetchResult {
     Success(CachedEdit),
     CacheMiss,
-    Errored,
+    Errored(CachedEdit),
     FetchFailed,
 }
 
@@ -238,12 +241,14 @@ async fn fetch_with_retry(
     match result {
         Ok(cached_edit) => {
             if cached_edit.is_errored {
-                FetchResult::Errored
+                FetchResult::Errored(cached_edit)
             } else if cached_edit.payload.is_some() {
                 FetchResult::Success(cached_edit)
             } else {
-                // Entry exists but no payload
-                FetchResult::Errored
+                // Entry exists but no payload — normalize to an errored entry
+                // so the invariant `is_errored == true ⇔ in_cache_as_errored`
+                // holds for downstream consumers.
+                FetchResult::Errored(CachedEdit::errored(cached_edit.cid, cached_edit.space_id))
             }
         }
         Err(CacheError::NotFound(_)) => {
@@ -263,6 +268,7 @@ async fn fetch_with_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::MockIpfsCache;
 
     #[test]
     fn test_collect_uris_deduplicates() {
@@ -289,5 +295,76 @@ mod tests {
             .collect();
 
         assert_eq!(deduped.len(), 2);
+    }
+
+    /// Fast retry config so cache-miss tests don't sit on the default 10-retry
+    /// exponential backoff.
+    fn fast_retry_config() -> RetryConfig {
+        RetryConfig {
+            initial_delay_ms: 1,
+            factor: 1,
+            max_delay: Duration::from_millis(1),
+            max_retries: 1,
+        }
+    }
+
+    fn edits_published_action(ipfs_uri: &str, space_id: u8) -> Action {
+        Action {
+            from_id: vec![space_id; 16],
+            to_id: vec![0; 16],
+            action: actions::EDITS_PUBLISHED.to_vec(),
+            topic: vec![0; 32],
+            data: format!("ipfs://{}", ipfs_uri).into_bytes(),
+        }
+    }
+
+    /// A valid 46-char CIDv0 hash that's not in the MockIpfsCache.
+    /// Reused across the two prefetch tests below for symmetry.
+    const ERRORED_HASH: &str = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+    const MISSING_HASH: &str = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdH";
+
+    #[tokio::test]
+    async fn errored_entries_are_inserted_into_cache_map() {
+        // prefetch_block calls cache.get(uri, ...) with the full "ipfs://..."
+        // URI as the lookup key, so the errored set must use the full URI too.
+        let key = format!("ipfs://{}", ERRORED_HASH);
+        let cache: Arc<dyn IpfsCache> =
+            Arc::new(MockIpfsCache::with_errored_hashes(vec![key.clone()]));
+        let actions = [edits_published_action(ERRORED_HASH, 0x01)];
+
+        let result = prefetch_block(&actions, &cache, &fast_retry_config()).await;
+
+        let entry = result.cache.get(&key).expect(
+            "errored entries must be inserted into the prefetched map so edits.rs can \
+             distinguish them from cache misses",
+        );
+        assert!(
+            entry.is_errored,
+            "inserted entry must carry is_errored=true"
+        );
+        assert_eq!(result.errored_entries, 1);
+        assert_eq!(result.cache_misses, 0);
+        assert_eq!(result.fetch_failures, 0);
+    }
+
+    #[tokio::test]
+    async fn cache_misses_are_not_inserted_into_cache_map() {
+        // MockIpfsCache returns NotFound for hashes it doesn't know about, and
+        // we don't mark this hash as errored. So `fetch_with_retry` exhausts
+        // its 1 retry and lands on FetchResult::CacheMiss.
+        let cache: Arc<dyn IpfsCache> = Arc::new(MockIpfsCache::new());
+        let actions = [edits_published_action(MISSING_HASH, 0x01)];
+
+        let result = prefetch_block(&actions, &cache, &fast_retry_config()).await;
+
+        let key = format!("ipfs://{}", MISSING_HASH);
+        assert!(
+            !result.cache.contains_key(&key),
+            "cache misses must NOT be inserted into the prefetched map; \
+             edits.rs uses the `None` branch as the live indicator of a genuine miss"
+        );
+        assert_eq!(result.cache_misses, 1);
+        assert_eq!(result.errored_entries, 0);
+        assert_eq!(result.fetch_failures, 0);
     }
 }

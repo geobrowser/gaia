@@ -47,3 +47,57 @@ spec:
           annotations:
             summary: API 5xx ratio is elevated
             description: More than 2% of API ingress requests are returning 5xx over 10 minutes.
+
+    - name: api.capacity.staging
+      rules:
+        - alert: ApiReadinessDegraded
+          expr: |
+            (
+              sum(kube_pod_status_ready{namespace="api-staging", condition="true", pod=~"api-.*"})
+              /
+              clamp_min(sum(kube_pod_status_phase{namespace="api-staging", phase="Running", pod=~"api-.*"}), 1)
+            ) < 0.75
+          for: 5m
+          labels:
+            severity: warning
+            service: api
+            namespace: api-staging
+          annotations:
+            summary: API readiness ratio is degraded (staging)
+            description: Fewer than 75% of running staging API pods are ready for 5 minutes.
+
+        - alert: ApiHpaMaxedWithHighP99
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{namespace="api-staging", horizontalpodautoscaler="api"}
+            >=
+            kube_horizontalpodautoscaler_spec_max_replicas{namespace="api-staging", horizontalpodautoscaler="api"}
+            and
+            histogram_quantile(
+              0.99,
+              sum by (le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api-staging.geobrowser.io"}[5m])
+              )
+            ) > 2
+          for: 10m
+          labels:
+            severity: critical
+            service: api
+            namespace: api-staging
+          annotations:
+            summary: API HPA is maxed while p99 latency is high (staging)
+            description: Staging API is at max replicas with sustained p99 latency above 2s.
+
+        - alert: Api5xxRateHigh
+          expr: |
+            sum(rate(nginx_ingress_controller_requests{host="testnet-api-staging.geobrowser.io",status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(nginx_ingress_controller_requests{host="testnet-api-staging.geobrowser.io"}[5m])), 1)
+            > 0.02
+          for: 10m
+          labels:
+            severity: warning
+            service: api
+            namespace: api-staging
+          annotations:
+            summary: API 5xx ratio is elevated (staging)
+            description: More than 2% of staging API ingress requests are returning 5xx over 10 minutes.

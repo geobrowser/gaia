@@ -661,11 +661,15 @@ impl Pipeline {
             error!(
                 block_number = meta.block_number,
                 count = total_cache_misses,
-                "Cache misses (retries exhausted) — edits dropped"
+                "Edits dropped: IPFS payload not found in cache (indexer pipeline issue)"
             );
         }
         if total_errored_entries > 0 {
-            warn!(count = total_errored_entries, "Errored entries in cache");
+            error!(
+                block_number = meta.block_number,
+                count = total_errored_entries,
+                "Edits dropped: IPFS payload errored (invalid user content)"
+            );
         }
         if total_fetch_failures > 0 {
             warn!(count = total_fetch_failures, "Cache fetch failures");

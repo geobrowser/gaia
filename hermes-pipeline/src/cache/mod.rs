@@ -60,6 +60,9 @@ pub struct CachedEdit {
     /// Raw GRC2/GRC2Z payload bytes, if available.
     /// These have been validated by hermes-ipfs-cache.
     /// Will be `None` if the entry is errored or has no data.
+    ///
+    /// **Always check `is_errored` first, or use `valid_payload()`** —
+    /// reading payload from an errored entry is meaningless.
     pub payload: Option<Vec<u8>>,
 
     /// Whether the cache entry is marked as errored.
@@ -104,6 +107,16 @@ impl CachedEdit {
     #[allow(dead_code)] // Used in tests and future use
     pub fn has_content(&self) -> bool {
         !self.is_errored && self.payload.is_some()
+    }
+
+    /// Returns the payload bytes only if the entry is valid.
+    /// Prefer this over reading `payload` directly — it can't forget the
+    /// `is_errored` check.
+    pub fn valid_payload(&self) -> Option<&[u8]> {
+        if self.is_errored {
+            return None;
+        }
+        self.payload.as_deref()
     }
 }
 

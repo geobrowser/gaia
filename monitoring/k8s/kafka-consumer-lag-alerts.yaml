@@ -1,0 +1,100 @@
+# Alert rules for Kafka consumer-group lag.
+#
+# Sourced from kafka_exporter (see monitoring/k8s/kafka-exporter.yaml). Lag
+# observability is centralised in the exporter so these rules fire even when
+# the consumer pod itself is dead — exactly when in-process gauges go silent.
+#
+# Thresholds: aggressive defaults — tune after observing staging for a week.
+#
+# Apply:
+#   kubectl apply -f monitoring/k8s/kafka-consumer-lag-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: kafka-consumer-lag
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: kafka.consumer.lag
+      rules:
+        - alert: KafkaConsumerLagHigh
+          expr: |
+            max by (consumergroup, topic) (
+              kafka_consumergroup_lag{consumergroup!~".*search-indexer-group-scores-.*"}
+            ) > 1000
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: Kafka consumer group {{ $labels.consumergroup }} is lagging
+            description: |
+              Consumer group {{ $labels.consumergroup }} has lag {{ $value }}
+              messages on topic {{ $labels.topic }} for over 2 minutes.
+
+        # Scores consumers receive bursty input from the daily scoring cron,
+        # which can dump thousands of messages at once. Use a longer `for:` so
+        # the burst drains before alerting, while keeping the same lag
+        # threshold as other consumers.
+        - alert: KafkaSearchIndexerScoresLagHigh
+          expr: |
+            max by (consumergroup, topic) (
+              kafka_consumergroup_lag{consumergroup=~".*search-indexer-group-scores-.*"}
+            ) > 1000
+          for: 2h
+          labels:
+            severity: warning
+          annotations:
+            summary: Kafka consumer group {{ $labels.consumergroup }} is lagging
+            description: |
+              Consumer group {{ $labels.consumergroup }} has lag {{ $value }}
+              messages on topic {{ $labels.topic }} for over 2 hours.
+
+        - alert: KafkaConsumerLagCritical
+          expr: max by (consumergroup, topic) (kafka_consumergroup_lag) > 10000
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Kafka consumer group {{ $labels.consumergroup }} is severely lagging
+            description: |
+              Consumer group {{ $labels.consumergroup }} has lag {{ $value }}
+              messages on topic {{ $labels.topic }} for over 5 minutes —
+              consumer is falling behind faster than it can catch up.
+
+        # Stuck = committed offset has not advanced while there are unprocessed
+        # messages. Catches a hung consumer that's still holding its group
+        # membership but not making progress (deadlock, long-running query,
+        # external dependency outage).
+        - alert: KafkaConsumerStuck
+          expr: |
+            (
+              kafka_consumergroup_lag > 0
+              and on(consumergroup, topic, partition)
+              (changes(kafka_consumergroup_current_offset[1m]) == 0)
+            )
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Kafka consumer group {{ $labels.consumergroup }} is stuck
+            description: |
+              Consumer group {{ $labels.consumergroup }} has not advanced its
+              committed offset for topic {{ $labels.topic }} partition
+              {{ $labels.partition }} in 5 minutes, but {{ $value }} messages
+              are unprocessed.
+
+        # Group is registered with the broker but has no active members. Means
+        # all consumers crashed or were scaled to 0 — distinct from "stuck"
+        # because there's no heartbeat at all.
+        - alert: KafkaConsumerGroupEmpty
+          expr: kafka_consumergroup_members == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: Kafka consumer group {{ $labels.consumergroup }} has no members
+            description: |
+              Consumer group {{ $labels.consumergroup }} has zero active members
+              for over 2 minutes. Consumer pods are likely down or scaled to 0.

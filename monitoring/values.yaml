@@ -4,9 +4,16 @@
 # Grafana configuration
 grafana:
   enabled: true
-  adminUser: admin
-  # Password will be auto-generated and stored in a Secret
-  # Retrieve with: kubectl get secret kube-prometheus-stack-grafana -n monitoring -o jsonpath="{.data.admin-password}" | base64 -d
+  # Read admin user/password from the existing Secret instead of letting the
+  # chart regenerate the password on every `helm template` run. The Secret
+  # was originally created by the chart and lives in the cluster — we just
+  # stop overwriting it. Retrieve the password with:
+  #   kubectl -n monitoring get secret kube-prometheus-stack-grafana \
+  #     -o jsonpath="{.data.admin-password}" | base64 -d
+  admin:
+    existingSecret: kube-prometheus-stack-grafana
+    userKey: admin-user
+    passwordKey: admin-password
 
   service:
     type: ClusterIP
@@ -93,6 +100,18 @@ alertmanager:
               {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
               {{ if .Annotations.summary }}{{ .Annotations.summary }}{{ end }}
               {{ end }}
+      - name: "slack-staging"
+        slack_configs:
+          - api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/url-staging
+            channel: "#infra-alerts-staging"
+            send_resolved: true
+            title: '{{ if eq .Status "firing" }}:fire:{{ else }}:white_check_mark:{{ end }} [STAGING] [{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+            text: >-
+              {{ range .Alerts }}
+              *{{ .Labels.severity | toUpper }}* — {{ .Labels.namespace }}/{{ .Labels.alertname }}
+              {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
+              {{ if .Annotations.summary }}{{ .Annotations.summary }}{{ end }}
+              {{ end }}
     route:
       receiver: "slack"
       group_by: [namespace, alertname]
@@ -106,6 +125,15 @@ alertmanager:
         - matchers:
             - alertname = "InfoInhibitor"
           receiver: "null"
+        - matchers:
+            - namespace =~ ".*-staging"
+          receiver: "slack-staging"
+        # Kafka lag alerts come from kafka-exporter in the `monitoring`
+        # namespace, so the namespace matcher above doesn't catch them. Topics
+        # are env-prefixed (`production.*` / `staging.*`), so route on that.
+        - matchers:
+            - topic =~ "staging\\..*"
+          receiver: "slack-staging"
     inhibit_rules:
       - equal: [namespace, alertname]
         source_matchers:
