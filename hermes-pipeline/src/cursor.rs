@@ -97,8 +97,14 @@ fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
 
 /// PostgreSQL-backed cursor store.
 ///
-/// Pool tuning honors the same env vars `hermes-ipfs-cache` reads so a single
-/// set of operator knobs governs both pools in the pipeline pod.
+/// Timeout knobs (idle / acquire) honor the same env vars `hermes-ipfs-cache`
+/// reads — same DB, same connection-behavior expectations. `max_connections`
+/// is **not** shared: cursor writes are ~1 per block (sequential, one persist
+/// per successful block), so 2 connections covers the steady state plus retry
+/// headroom. Inheriting `PG_POOL_MAX` (default 20) would double the pipeline
+/// pod's Postgres footprint for no real concurrency.
+const CURSOR_POOL_MAX_CONNECTIONS: u32 = 2;
+
 pub struct PostgresCursorStore {
     pool: sqlx::Pool<Postgres>,
 }
@@ -106,7 +112,7 @@ pub struct PostgresCursorStore {
 impl PostgresCursorStore {
     pub async fn new(database_url: &str) -> Result<Self, CursorStoreError> {
         let pool = PgPoolOptions::new()
-            .max_connections(env_or("PG_POOL_MAX", 20))
+            .max_connections(CURSOR_POOL_MAX_CONNECTIONS)
             // Close idle connections after 30s to free PgBouncer slots.
             .idle_timeout(Duration::from_secs(env_or("PG_IDLE_TIMEOUT_SECS", 30)))
             // Fail fast when pool is saturated.
