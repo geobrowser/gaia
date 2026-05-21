@@ -1166,9 +1166,7 @@ mod sink_tests {
         // return Ok so the trait's `run_live` loop keeps processing
         // blocks. The next block's persist_cursor call will retry the
         // write. See the comment on `impl Sink for Pipeline::persist_cursor`.
-        let result = pipeline
-            .persist_cursor("any_cursor".to_string(), 1)
-            .await;
+        let result = pipeline.persist_cursor("any_cursor".to_string(), 1).await;
         assert!(
             result.is_ok(),
             "persist_cursor must not halt the stream loop on store failure; got {result:?}"
