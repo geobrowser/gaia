@@ -87,7 +87,7 @@ This transformer is part of the Hermes architecture (see `docs/architecture.md`)
 | `USE_MOCK` | Set to "true" or "1" to use mock data | `false` |
 | `SUBSTREAMS_ENDPOINT` | Substreams gRPC endpoint URL | `geotest.substreams.pinax.network:443` |
 | `SUBSTREAMS_API_TOKEN` | Auth token for substreams | - |
-| `SUBSTREAMS_START_BLOCK` | Block number to start from | `88109` |
+| `SUBSTREAMS_START_BLOCK` | Block to start from on cold start (ignored when a persisted cursor exists) | `138000` |
 | `SUBSTREAMS_END_BLOCK` | Block number to stop at | `u64::MAX` (continuous) |
 
 ### Kafka Environment Variables
@@ -122,7 +122,7 @@ docker compose --profile infra up -d
 
 # Run with live substreams data (default)
 SUBSTREAMS_API_TOKEN=your-token \
-SUBSTREAMS_START_BLOCK=81809 \
+SUBSTREAMS_START_BLOCK=138000 \
 KAFKA_BROKER=localhost:9092 \
 cargo run --package hermes-pipeline
 ```

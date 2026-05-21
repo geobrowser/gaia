@@ -28,7 +28,8 @@
 //! - `USE_MOCK` - Set to "true" or "1" to use mock data (default: false)
 //! - `SUBSTREAMS_ENDPOINT` - Substreams endpoint URL (default: geotest.substreams.pinax.network:443)
 //! - `SUBSTREAMS_API_TOKEN` - API token for substreams authentication
-//! - `SUBSTREAMS_START_BLOCK` - First block to consume (default: 82655)
+//! - `SUBSTREAMS_START_BLOCK` - First block to consume on cold start (default: 138000).
+//!   Ignored when a persisted cursor exists in the `meta` table.
 //! - `SUBSTREAMS_END_BLOCK` - Last block to consume (default: u64::MAX for continuous)
 //! - `KAFKA_BROKER` - Kafka broker address (default: localhost:9092)
 //! - `KAFKA_USERNAME` - SASL username for managed Kafka (optional)
@@ -42,6 +43,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use hermes_instrumentation::{Instrument, debug, error, info, info_span, warn};
 use prost::Message;
@@ -53,6 +55,7 @@ use hermes_relay::stream::utils;
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 
 use hermes_pipeline::cache::{CacheSource, IpfsCache};
+use hermes_pipeline::cursor::{self, CursorStore, MockCursorStore, PostgresCursorStore};
 use hermes_pipeline::pipelines;
 use hermes_pipeline::pipelines::BlockMetadata;
 use hermes_pipeline::pipelines::prefetch::{self, RetryConfig};
@@ -106,14 +109,26 @@ impl From<prost::DecodeError> for PipelineError {
 pub struct Pipeline {
     emitter: Emitter,
     cache: Arc<dyn IpfsCache>,
+    cursor_store: Arc<dyn CursorStore>,
+    /// Clock timestamp (Unix seconds) of the most recently processed block.
+    /// Stashed by `process_block_impl` so `persist_cursor` can update lag
+    /// gauges only after the cursor has been durably written. Zero means
+    /// "no block processed yet this run" (e.g., right after startup).
+    last_block_timestamp: AtomicI64,
     retry_config: RetryConfig,
 }
 
 impl Pipeline {
-    pub fn new(emitter: Emitter, cache: Arc<dyn IpfsCache>) -> Self {
+    pub fn new(
+        emitter: Emitter,
+        cache: Arc<dyn IpfsCache>,
+        cursor_store: Arc<dyn CursorStore>,
+    ) -> Self {
         Self {
             emitter,
             cache,
+            cursor_store,
+            last_block_timestamp: AtomicI64::new(0),
             retry_config: RetryConfig::default(),
         }
     }
@@ -123,11 +138,14 @@ impl Pipeline {
     pub fn with_retry_config(
         emitter: Emitter,
         cache: Arc<dyn IpfsCache>,
+        cursor_store: Arc<dyn CursorStore>,
         retry_config: RetryConfig,
     ) -> Self {
         Self {
             emitter,
             cache,
+            cursor_store,
+            last_block_timestamp: AtomicI64::new(0),
             retry_config,
         }
     }
@@ -694,13 +712,13 @@ impl Pipeline {
         };
         self.emitter.emit(&summary).await?;
 
-        // Block fully ack'd to Kafka — update lag gauges. The timestamp is
-        // the block's clock time, not now(); time-based lag alerts depend on
-        // that distinction.
-        hermes_instrumentation::metrics::set_latest_processed_block(meta.block_number);
-        hermes_instrumentation::metrics::set_latest_processed_block_timestamp(
-            meta.timestamp.parse().unwrap_or(0),
-        );
+        // Block fully ack'd to Kafka. Stash the block's clock time so
+        // `persist_cursor` can update the lag gauges only after the cursor
+        // is durably persisted — keeping the gauges consistent with what a
+        // restart would actually resume from. Mirrors the pattern in
+        // hermes-ipfs-cache/src/lib.rs:340-346.
+        self.last_block_timestamp
+            .store(meta.timestamp.parse().unwrap_or(0), Ordering::Relaxed);
 
         // Log block summary
         if total > 0 || total_cache_misses > 0 || total_errored_entries > 0 {
@@ -752,21 +770,85 @@ impl Sink for Pipeline {
         &self,
         undo_signal: &hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockUndoSignal,
     ) -> std::result::Result<(), Self::Error> {
-        // For now, just log the undo signal
-        // In a production system, we would delete any data recorded after this block
+        // We don't implement structural rollback. Kafka messages for the now-
+        // invalid blocks have already been published and cannot be unsent;
+        // emitting an undo signal that downstream consumers can act on is
+        // out of scope here. The trait's `run_live` will rewind the cursor
+        // (via `persist_cursor(undo_signal.last_valid_cursor, ...)`) so
+        // substreams replays the reorged blocks with their new canonical
+        // contents — kg-indexer's event_id dedup makes the replay safe for
+        // net-new state. Stale events from the orphaned chain remain — a
+        // known correctness gap acknowledged in the cursor-persistence
+        // design.
         let last_valid_block = undo_signal
             .last_valid_block
             .as_ref()
             .map_or(0, |b| b.number);
         warn!(
+            event = "hermes_pipeline.undo_signal",
+            indexer_id = cursor::INDEXER_ID,
             last_valid_block,
-            "Block undo signal received, rollback required"
+            "Block undo signal received — cursor will rewind on persist"
         );
-
-        // TODO: Implement actual rollback logic when cursor persistence is added
-        // This would involve deleting Kafka messages or updating state
-
         Ok(())
+    }
+
+    async fn persist_cursor(&self, cursor: String, block: u64) -> Result<(), Self::Error> {
+        // Log BEFORE the write so the cursor is recoverable from Axiom/Sentry
+        // even if the DB write fails (the failure surfaces separately as
+        // `event = "hermes_pipeline.persist_cursor_failed"` with the same
+        // fields). Mirrors hermes-ipfs-cache/README.md:154-167.
+        info!(
+            event = "hermes_pipeline.batch_end",
+            indexer_id = cursor::INDEXER_ID,
+            block_number = block,
+            cursor = %cursor,
+            "Cursor persist"
+        );
+        if let Err(e) = self.cursor_store.persist(&cursor, block).await {
+            warn!(
+                event = "hermes_pipeline.persist_cursor_failed",
+                indexer_id = cursor::INDEXER_ID,
+                block_number = block,
+                cursor = %cursor,
+                error = %e,
+                "Failed to persist cursor"
+            );
+            return Err(anyhow::Error::from(e).into());
+        }
+        // Cursor durably persisted — update lag gauges. We always update the
+        // block gauge (from the trait argument), but only update the
+        // timestamp gauge if a normal block has been processed this run;
+        // otherwise (e.g. an undo signal arrives before any block) the
+        // timestamp would be zero, which would corrupt the lag dashboard.
+        hermes_instrumentation::metrics::set_latest_processed_block(block);
+        let ts = self.last_block_timestamp.load(Ordering::Relaxed);
+        if ts > 0 {
+            hermes_instrumentation::metrics::set_latest_processed_block_timestamp(ts);
+        }
+        Ok(())
+    }
+
+    async fn load_persisted_cursor(&self) -> Result<Option<String>, Self::Error> {
+        let cursor = self
+            .cursor_store
+            .load()
+            .await
+            .map_err(anyhow::Error::from)?;
+        match &cursor {
+            Some(c) => info!(
+                event = "hermes_pipeline.resume",
+                indexer_id = cursor::INDEXER_ID,
+                cursor = %c,
+                "Resuming from persisted cursor"
+            ),
+            None => info!(
+                event = "hermes_pipeline.cold_start",
+                indexer_id = cursor::INDEXER_ID,
+                "No persisted cursor — starting from SUBSTREAMS_START_BLOCK"
+            ),
+        }
+        Ok(cursor)
     }
 }
 
@@ -875,20 +957,26 @@ async fn async_main() -> anyhow::Result<()> {
     let emitter = Emitter::new(producer);
     info!("Connected to Kafka broker");
 
-    // Create the IPFS cache: mock for testing, PostgreSQL for production
-    let cache = if use_mock {
-        info!("Using mock IPFS cache");
-        CacheSource::mock().into_cache().await?
+    // Create the IPFS cache and cursor store. Both are mock for testing,
+    // PostgreSQL for production — and they share the same DATABASE_URL.
+    let (cache, cursor_store): (Arc<dyn IpfsCache>, Arc<dyn CursorStore>) = if use_mock {
+        info!("Using mock IPFS cache and cursor store");
+        (
+            CacheSource::mock().into_cache().await?,
+            Arc::new(MockCursorStore::new()),
+        )
     } else {
         let database_url =
             env::var("DATABASE_URL").expect("DATABASE_URL must be set when USE_MOCK is not true");
         info!("Connecting to IPFS cache database");
-        CacheSource::live(&database_url).into_cache().await?
+        let cache = CacheSource::live(&database_url).into_cache().await?;
+        let cursor_store = Arc::new(PostgresCursorStore::new(&database_url).await?);
+        (cache, cursor_store)
     };
-    info!("IPFS cache initialized");
+    info!("IPFS cache and cursor store initialized");
 
     // Create the pipeline
-    let pipeline = Pipeline::new(emitter, cache);
+    let pipeline = Pipeline::new(emitter, cache, cursor_store);
 
     // Determine stream source: mock or live substreams
     let source = if use_mock {
@@ -899,7 +987,7 @@ async fn async_main() -> anyhow::Result<()> {
         let start_block: i64 = env::var("SUBSTREAMS_START_BLOCK")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(82655);
+            .unwrap_or(138000);
         let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
             .ok()
             .and_then(|s| s.parse().ok())
