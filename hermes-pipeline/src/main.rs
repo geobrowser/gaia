@@ -770,14 +770,14 @@ impl Sink for Pipeline {
         &self,
         undo_signal: &hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockUndoSignal,
     ) -> std::result::Result<(), Self::Error> {
-        // We don't implement structural rollback. Kafka messages for the now-
-        // invalid blocks have already been published and cannot be unsent;
-        // emitting an undo signal that downstream consumers can act on is
-        // out of scope here. The trait's `run_live` will rewind the cursor
-        // (via `persist_cursor(undo_signal.last_valid_cursor, ...)`) so
-        // substreams replays the reorged blocks with their new canonical
-        // contents — kg-indexer's event_id dedup makes the replay safe for
-        // net-new state. Stale events from the orphaned chain remain — a
+        // For now, just log the undo signal.
+        // In a production system, we would delete any data recorded after this block.
+        //
+        // The trait's `run_live` will still rewind the cursor (via
+        // `persist_cursor(undo_signal.last_valid_cursor, ...)`) so substreams
+        // replays the reorged blocks with their new canonical contents —
+        // kg-indexer's event_id dedup makes the replay safe for net-new
+        // state. Stale events from the orphaned chain remain in Kafka — a
         // known correctness gap acknowledged in the cursor-persistence
         // design.
         let last_valid_block = undo_signal
@@ -1045,4 +1045,133 @@ async fn async_main() -> anyhow::Result<()> {
     info!("Pipeline finished");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod sink_tests {
+    //! Sink-level integration tests exercising the cursor hooks on a real
+    //! `Pipeline` instance wired to a `MockCursorStore`. Validates the
+    //! `Sink` trait override path end-to-end without needing Kafka or a
+    //! database — `process_block_scoped_data` is bypassed here; we call
+    //! the cursor hooks directly to verify they delegate to the store
+    //! correctly and handle errors per the documented contract.
+    //!
+    //! `PostgresCursorStore` is covered separately in `cursor::tests`
+    //! (run via `cargo test -p hermes-pipeline -- --ignored postgres_cursor`).
+    use super::*;
+    use async_trait::async_trait;
+    use hermes_pipeline::cursor::CursorStoreError;
+
+    async fn make_pipeline(cursor_store: Arc<dyn CursorStore>) -> Pipeline {
+        // hermes-kafka's create_producer reads ENVIRONMENT for the message
+        // timeout config. rdkafka's FutureProducer is lazy — it doesn't
+        // connect at construction — so a bogus broker is fine; we never
+        // call send() in these tests.
+        unsafe {
+            std::env::set_var("ENVIRONMENT", "production");
+        }
+        let producer = create_producer("localhost:1", "test-sink").expect("create producer");
+        let emitter = Emitter::new(producer);
+        let cache = CacheSource::mock().into_cache().await.expect("mock cache");
+        Pipeline::new(emitter, cache, cursor_store)
+    }
+
+    #[tokio::test]
+    async fn cold_start_load_returns_none() {
+        let store = Arc::new(MockCursorStore::new());
+        let pipeline = make_pipeline(store).await;
+
+        let loaded = pipeline
+            .load_persisted_cursor()
+            .await
+            .expect("load_persisted_cursor");
+        assert!(loaded.is_none(), "empty store must report cold start");
+    }
+
+    #[tokio::test]
+    async fn persist_cursor_writes_to_store() {
+        let store = Arc::new(MockCursorStore::new());
+        let pipeline = make_pipeline(store.clone()).await;
+
+        pipeline
+            .persist_cursor("cursor_abc".to_string(), 12345)
+            .await
+            .expect("persist_cursor");
+
+        let loaded = store.load().await.expect("store.load");
+        assert_eq!(loaded, Some("cursor_abc".to_string()));
+    }
+
+    #[tokio::test]
+    async fn load_after_persist_round_trips_via_sink_hook() {
+        let store = Arc::new(MockCursorStore::new());
+        let pipeline = make_pipeline(store).await;
+
+        pipeline
+            .persist_cursor("cursor_xyz".to_string(), 999)
+            .await
+            .expect("persist_cursor");
+
+        // Same Pipeline reading the cursor back through the trait surface.
+        let loaded = pipeline
+            .load_persisted_cursor()
+            .await
+            .expect("load_persisted_cursor");
+        assert_eq!(loaded, Some("cursor_xyz".to_string()));
+    }
+
+    #[tokio::test]
+    async fn persist_cursor_overwrites_previous_value() {
+        let store = Arc::new(MockCursorStore::new());
+        let pipeline = make_pipeline(store.clone()).await;
+
+        pipeline
+            .persist_cursor("cursor_first".to_string(), 100)
+            .await
+            .expect("first persist");
+        pipeline
+            .persist_cursor("cursor_second".to_string(), 200)
+            .await
+            .expect("second persist");
+
+        assert_eq!(
+            store.load().await.expect("store.load"),
+            Some("cursor_second".to_string())
+        );
+    }
+
+    /// A `CursorStore` that always fails to persist — used to verify that
+    /// the Sink-level override does not propagate the error and halt the
+    /// stream loop. Matches the failure-policy contract documented on
+    /// `Sink::persist_cursor` and mirrors `hermes-ipfs-cache`.
+    struct FailingCursorStore;
+
+    #[async_trait]
+    impl CursorStore for FailingCursorStore {
+        async fn load(&self) -> Result<Option<String>, CursorStoreError> {
+            Ok(None)
+        }
+
+        async fn persist(&self, _cursor: &str, _block: u64) -> Result<(), CursorStoreError> {
+            Err(CursorStoreError::Database(sqlx::Error::PoolClosed))
+        }
+    }
+
+    #[tokio::test]
+    async fn persist_failure_does_not_halt_pipeline() {
+        let store: Arc<dyn CursorStore> = Arc::new(FailingCursorStore);
+        let pipeline = make_pipeline(store).await;
+
+        // Even though the store fails internally, the Sink-level hook must
+        // return Ok so the trait's `run_live` loop keeps processing
+        // blocks. The next block's persist_cursor call will retry the
+        // write. See the comment on `impl Sink for Pipeline::persist_cursor`.
+        let result = pipeline
+            .persist_cursor("any_cursor".to_string(), 1)
+            .await;
+        assert!(
+            result.is_ok(),
+            "persist_cursor must not halt the stream loop on store failure; got {result:?}"
+        );
+    }
 }
