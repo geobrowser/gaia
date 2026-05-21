@@ -1063,15 +1063,15 @@ mod sink_tests {
     use hermes_pipeline::cursor::CursorStoreError;
 
     async fn make_pipeline(cursor_store: Arc<dyn CursorStore>) -> Pipeline {
-        // hermes-kafka's create_producer reads ENVIRONMENT for the message
-        // timeout config. rdkafka's FutureProducer is lazy — it doesn't
-        // connect at construction — so a bogus broker is fine; we never
-        // call send() in these tests.
-        unsafe {
-            std::env::set_var("ENVIRONMENT", "production");
-        }
+        // rdkafka's FutureProducer is lazy — construction doesn't connect,
+        // so a bogus broker is fine; we never call send() in these tests.
         let producer = create_producer("localhost:1", "test-sink").expect("create producer");
-        let emitter = Emitter::new(producer);
+        // Use Emitter::new_with_prefix to bypass the ENVIRONMENT lookup
+        // inside Emitter::new — that path calls hermes_kafka::get_topic_prefix
+        // which caches the prefix in a process-wide OnceLock, leaking state
+        // between tests in an order-dependent way. Tests don't emit anything,
+        // so the prefix value doesn't matter — empty is fine.
+        let emitter = Emitter::new_with_prefix(producer, "");
         let cache = CacheSource::mock().into_cache().await.expect("mock cache");
         Pipeline::new(emitter, cache, cursor_store)
     }

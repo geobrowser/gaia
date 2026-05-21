@@ -615,7 +615,16 @@ impl Emitter {
     /// Reads `ENVIRONMENT` from environment to support environment isolation.
     /// If set to "staging", all topics will be prefixed with "staging.".
     pub fn new(producer: FutureProducer) -> Self {
-        let topic_prefix = get_topic_prefix();
+        Self::new_with_prefix(producer, get_topic_prefix())
+    }
+
+    /// Create an emitter with an explicit topic prefix. Bypasses the
+    /// `ENVIRONMENT` env-var lookup that `Emitter::new` performs via
+    /// `get_topic_prefix`. Useful for tests so they don't have to mutate
+    /// the process-wide ENVIRONMENT variable to satisfy the prefix
+    /// `OnceLock` cache (which is initialized exactly once for the
+    /// lifetime of the process and would otherwise leak between tests).
+    pub fn new_with_prefix(producer: FutureProducer, topic_prefix: &'static str) -> Self {
         info!(
             topic_prefix = %topic_prefix,
             "Kafka topic prefix configured"
