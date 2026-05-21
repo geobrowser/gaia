@@ -805,26 +805,41 @@ impl Sink for Pipeline {
             cursor = %cursor,
             "Cursor persist"
         );
-        if let Err(e) = self.cursor_store.persist(&cursor, block).await {
-            warn!(
-                event = "hermes_pipeline.persist_cursor_failed",
-                indexer_id = cursor::INDEXER_ID,
-                block_number = block,
-                cursor = %cursor,
-                error = %e,
-                "Failed to persist cursor"
-            );
-            return Err(anyhow::Error::from(e).into());
-        }
-        // Cursor durably persisted — update lag gauges. We always update the
-        // block gauge (from the trait argument), but only update the
-        // timestamp gauge if a normal block has been processed this run;
-        // otherwise (e.g. an undo signal arrives before any block) the
-        // timestamp would be zero, which would corrupt the lag dashboard.
-        hermes_instrumentation::metrics::set_latest_processed_block(block);
-        let ts = self.last_block_timestamp.load(Ordering::Relaxed);
-        if ts > 0 {
-            hermes_instrumentation::metrics::set_latest_processed_block_timestamp(ts);
+        match self.cursor_store.persist(&cursor, block).await {
+            Ok(()) => {
+                // Cursor durably persisted — update lag gauges. We always
+                // update the block gauge (from the trait argument), but
+                // only update the timestamp gauge if a normal block has
+                // been processed this run; otherwise (e.g. an undo signal
+                // arrives before any block) the timestamp would be zero
+                // and corrupt the lag dashboard.
+                hermes_instrumentation::metrics::set_latest_processed_block(block);
+                let ts = self.last_block_timestamp.load(Ordering::Relaxed);
+                if ts > 0 {
+                    hermes_instrumentation::metrics::set_latest_processed_block_timestamp(ts);
+                }
+            }
+            Err(e) => {
+                // Persist failure is non-fatal: keep processing blocks and
+                // retry on the next persist_cursor call (called per-block
+                // by the Sink trait). The cursor in the batch_end log above
+                // is enough to manually recover the row if it stays missing
+                // — see hermes-ipfs-cache/README.md:154-167 for the
+                // procedure; ours mirrors it under event="batch_end".
+                // Lag gauges intentionally stay at the last *durably*
+                // persisted block so they reflect resume-from state, not
+                // in-memory state. Matches the hermes-ipfs-cache failure
+                // policy (lib.rs:330-346) — halting here would multiply
+                // the disruption on transient DB blips.
+                error!(
+                    event = "hermes_pipeline.persist_cursor_failed",
+                    indexer_id = cursor::INDEXER_ID,
+                    block_number = block,
+                    cursor = %cursor,
+                    error = %e,
+                    "Failed to persist cursor — continuing; will retry on next block"
+                );
+            }
         }
         Ok(())
     }
