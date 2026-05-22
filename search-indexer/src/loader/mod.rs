@@ -16,8 +16,9 @@ use crate::orchestrator::{BatchSource, ProcessedBatch};
 use crate::processor::ProcessedEvent;
 use crate::relation_map::RelationMap;
 use search_indexer_repository::{
-    EntityOperation, RelationData, RemoveRelationByDocRequest, RemoveRelationData,
-    SearchIndexProvider, UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreByDocRequest,
+    ClearSpaceTopicEntityIdByDocRequest, ClearSpaceTopicEntityIdRequest, EntityOperation,
+    RelationData, RemoveRelationByDocRequest, RemoveRelationData, SearchIndexProvider,
+    UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreByDocRequest,
     UpdateEntityGlobalScoreRequest, UpdateEntityRequest, UpdateEntitySpaceScoreRequest,
     UpdateInCanonicalGraphByDocRequest, UpdateInCanonicalGraphRequest,
     UpdateSpaceScoreByDocRequest, UpdateSpaceScoreRequest, UpdateSpaceTopicEntityIdByDocRequest,
@@ -231,6 +232,20 @@ impl SearchLoader {
                             },
                         ));
                 }
+                ProcessedEvent::ClearSpaceTopicEntityId { space_id } => {
+                    self.pending_operations
+                        .push(EntityOperation::ClearSpaceTopicEntityId(
+                            ClearSpaceTopicEntityIdRequest {
+                                space_id: space_id.to_string(),
+                            },
+                        ));
+                }
+                ProcessedEvent::ClearSpaceTopicEntityIdByDoc { doc_id } => {
+                    self.pending_operations
+                        .push(EntityOperation::ClearSpaceTopicEntityIdByDoc(
+                            ClearSpaceTopicEntityIdByDocRequest { doc_id },
+                        ));
+                }
                 ProcessedEvent::UpdateInCanonicalGraph {
                     space_id,
                     in_canonical_graph,
@@ -405,7 +420,9 @@ impl SearchLoader {
                             metrics.total_score_updates.fetch_add(1, Ordering::Relaxed);
                         }
                         ProcessedEvent::UpdateSpaceTopicEntityId { .. }
-                        | ProcessedEvent::UpdateSpaceTopicEntityIdByDoc { .. } => {
+                        | ProcessedEvent::UpdateSpaceTopicEntityIdByDoc { .. }
+                        | ProcessedEvent::ClearSpaceTopicEntityId { .. }
+                        | ProcessedEvent::ClearSpaceTopicEntityIdByDoc { .. } => {
                             metrics
                                 .total_space_topic_updates
                                 .fetch_add(1, Ordering::Relaxed);
@@ -626,6 +643,8 @@ mod tests {
                     | EntityOperation::RemoveRelationByDoc(_)
                     | EntityOperation::UpdateSpaceTopicEntityId(_)
                     | EntityOperation::UpdateSpaceTopicEntityIdByDoc(_)
+                    | EntityOperation::ClearSpaceTopicEntityId(_)
+                    | EntityOperation::ClearSpaceTopicEntityIdByDoc(_)
                     | EntityOperation::UpdateInCanonicalGraph(_)
                     | EntityOperation::UpdateInCanonicalGraphByDoc(_) => {
                         // Pass through - no special tracking needed

@@ -10,7 +10,10 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::consumer::StreamMessage;
-use crate::consumer::{EntityEvent, EntityEventType, ScoreEvent, ScoreEventType, SpaceTopicEvent};
+use crate::consumer::{
+    EntityEvent, EntityEventType, ScoreEvent, ScoreEventType, SpaceTopicEvent,
+    SpaceTopicEventKind,
+};
 use crate::errors::IngestError;
 use crate::lookup::EntitySpaceLookup;
 use crate::metrics::SearchIndexerMetrics;
@@ -82,6 +85,12 @@ pub enum ProcessedEvent {
         doc_id: String,
         topic_entity_id: String,
     },
+    /// Clear `space_topic_entity_id` for all entities in a space (slow path).
+    /// Used when Postgres lookup is unavailable.
+    ClearSpaceTopicEntityId { space_id: uuid::Uuid },
+    /// Clear `space_topic_entity_id` for a single doc (fast path — bulk API).
+    /// Resolved via Postgres lookup (plus an explicit clear of the topic entity's stub doc).
+    ClearSpaceTopicEntityIdByDoc { doc_id: String },
     /// Update in_canonical_graph by direct doc ID (fast path — bulk API).
     /// Resolved via Postgres lookup.
     UpdateInCanonicalGraphByDoc {
@@ -502,12 +511,16 @@ impl Processor {
     /// Process a batch of space topic events.
     ///
     /// For each event this:
-    /// 1. Updates the in-memory cache so subsequent entity upserts get `space_topic_entity_id` set.
-    /// 2. Emits an `UpdateSpaceTopicEntityId` to backfill existing docs via `update_by_query`.
-    /// 3. Upserts a stub document for the topic entity itself. This ensures the mapping
-    ///    survives indexer restarts (the cache warm-up query will find this document) even
-    ///    if no other entities in the space have been indexed yet. When the full entity data
-    ///    arrives via `knowledge.edits`, the upsert merges into this stub.
+    /// 1. Updates (declared) or clears (removed) the in-memory `space_id → topic_entity_id`
+    ///    cache so subsequent entity upserts get `space_topic_entity_id` set correctly.
+    /// 2. Emits an `UpdateSpaceTopicEntityId` / `ClearSpaceTopicEntityId` to backfill /
+    ///    clear existing docs via `update_by_query`, or a per-doc fast-path equivalent
+    ///    when a Postgres entity-space lookup is available.
+    /// 3. For declarations: upserts a stub document for the topic entity. For removals:
+    ///    explicitly clears the topic entity's stub doc — the entity may not appear
+    ///    in the Postgres entity-space lookup if it has no knowledge-edit content yet.
+    ///    Either way the document itself is preserved; only `space_topic_entity_id`
+    ///    is cleared, so any knowledge-edit content (name, description, …) survives.
     #[instrument(skip(self, events), fields(event_count = events.len()))]
     pub async fn process_space_topic_batch(
         &mut self,
@@ -515,98 +528,153 @@ impl Processor {
     ) -> Result<Vec<ProcessedEvent>, IngestError> {
         let mut processed = Vec::with_capacity(events.len() * 2);
 
-        // Collect space_id → topic_entity_id mappings for batch resolution
-        let mut topic_updates: Vec<(Uuid, Uuid)> = Vec::new();
+        // Collect space_id → topic_entity_id mappings per kind for batch resolution.
+        let mut declared_updates: Vec<(Uuid, Uuid)> = Vec::new();
+        let mut removed_spaces: Vec<Uuid> = Vec::new();
 
         for event in events {
-            // Update the cache before creating the processed events
-            self.space_topic_cache
-                .insert(event.space_id, event.topic_entity_id);
+            match event.kind {
+                SpaceTopicEventKind::Declared => {
+                    self.space_topic_cache
+                        .insert(event.space_id, event.topic_entity_id);
 
-            if self.should_sample(SampleCategory::UpdateSpaceTopicEntityId) {
-                info!(
-                    space_id = %event.space_id,
-                    topic_entity_id = %event.topic_entity_id,
-                    "[sample] UpdateSpaceTopicEntityId"
-                );
+                    if self.should_sample(SampleCategory::UpdateSpaceTopicEntityId) {
+                        info!(
+                            space_id = %event.space_id,
+                            topic_entity_id = %event.topic_entity_id,
+                            "[sample] UpdateSpaceTopicEntityId"
+                        );
+                    }
+
+                    declared_updates.push((event.space_id, event.topic_entity_id));
+
+                    // Upsert a stub document for the topic entity itself. This is
+                    // necessary for two reasons:
+                    //
+                    // 1. Restart resilience: if the indexer restarts before any entities
+                    //    in this space are indexed, the in-memory cache is lost. The
+                    //    cache warm-up query (`get_space_topic_mappings`) reads
+                    //    `space_topic_entity_id` from the index — without this stub
+                    //    document, there would be nothing to warm from.
+                    //
+                    // 2. Pipeline emit ordering: within a single block, hermes-pipeline
+                    //    emits `space.topics` BEFORE `knowledge.edits`, so the topic
+                    //    entity's full data (name, description, avatar) could arrive
+                    //    AFTER this event. The None fields (name, description, etc.) are
+                    //    ignored by build_update_doc in the loader, so only entity_id,
+                    //    space_id, and space_topic_entity_id are written to the index.
+                    let mut doc =
+                        EntityDocument::new(event.topic_entity_id, event.space_id, None, None);
+                    doc.space_topic_entity_id = Some(event.topic_entity_id.to_string());
+                    processed.push(ProcessedEvent::Index(doc));
+                }
+                SpaceTopicEventKind::Removed => {
+                    self.space_topic_cache.remove(&event.space_id);
+
+                    if self.should_sample(SampleCategory::UpdateSpaceTopicEntityId) {
+                        info!(
+                            space_id = %event.space_id,
+                            topic_entity_id = %event.topic_entity_id,
+                            "[sample] ClearSpaceTopicEntityId"
+                        );
+                    }
+
+                    removed_spaces.push(event.space_id);
+
+                    // Explicitly clear the topic entity's own stub doc. The topic
+                    // entity may have been added via space.topics-only (no
+                    // knowledge.edits content yet), in which case the Postgres
+                    // entity-space lookup below will not return it.
+                    processed.push(ProcessedEvent::ClearSpaceTopicEntityIdByDoc {
+                        doc_id: format!("{}_{}", event.topic_entity_id, event.space_id),
+                    });
+                }
             }
-
-            topic_updates.push((event.space_id, event.topic_entity_id));
-
-            // Upsert a stub document for the topic entity itself. This is
-            // necessary for two reasons:
-            //
-            // 1. Restart resilience: if the indexer restarts before any entities
-            //    in this space are indexed, the in-memory cache is lost. The
-            //    cache warm-up query (`get_space_topic_mappings`) reads
-            //    `space_topic_entity_id` from the index — without this stub
-            //    document, there would be nothing to warm from.
-            //
-            // 2. Pipeline emit ordering: within a single block, hermes-pipeline
-            //    emits `space.topics` BEFORE `knowledge.edits`, so the topic
-            //    entity's full data (name, description, avatar) could arrive
-            //    AFTER this event. The None fields (name, description, etc.) are
-            //    ignored by build_update_doc in the loader, so only entity_id,
-            //    space_id, and space_topic_entity_id are written to the index.
-            let mut doc = EntityDocument::new(event.topic_entity_id, event.space_id, None, None);
-            doc.space_topic_entity_id = Some(event.topic_entity_id.to_string());
-            processed.push(ProcessedEvent::Index(doc));
         }
 
-        // Resolve space_id → entity docs via Postgres, or fall back to update_by_query
-        if !topic_updates.is_empty() {
-            if let Some(lookup) = &self.entity_space_lookup {
-                let space_ids: Vec<Uuid> = topic_updates.iter().map(|(sid, _)| *sid).collect();
-                let topic_map: HashMap<Uuid, Uuid> = topic_updates.into_iter().collect();
+        // Resolve space_id → entity docs via Postgres, or fall back to update_by_query.
+        // Use the same Postgres call for both kinds so we don't double-query when a
+        // declare + remove for different spaces land in the same batch.
+        let mut fast_path_spaces: Vec<Uuid> = declared_updates.iter().map(|(sid, _)| *sid).collect();
+        fast_path_spaces.extend(removed_spaces.iter().copied());
 
-                match lookup.entities_for_spaces(&space_ids).await {
+        if !fast_path_spaces.is_empty() {
+            if let Some(lookup) = &self.entity_space_lookup {
+                let declared_map: HashMap<Uuid, Uuid> = declared_updates.iter().copied().collect();
+                let removed_set: std::collections::HashSet<Uuid> =
+                    removed_spaces.iter().copied().collect();
+
+                match lookup.entities_for_spaces(&fast_path_spaces).await {
                     Ok(pairs) => {
-                        let mut resolved = 0usize;
+                        let mut resolved_declared = 0usize;
+                        let mut resolved_removed = 0usize;
                         for (entity_id, space_id) in &pairs {
-                            if let Some(&topic_entity_id) = topic_map.get(space_id) {
+                            if let Some(&topic_entity_id) = declared_map.get(space_id) {
                                 processed.push(ProcessedEvent::UpdateSpaceTopicEntityIdByDoc {
                                     doc_id: format!("{}_{}", entity_id, space_id),
                                     topic_entity_id: topic_entity_id.to_string(),
                                 });
-                                resolved += 1;
+                                resolved_declared += 1;
+                            } else if removed_set.contains(space_id) {
+                                processed.push(ProcessedEvent::ClearSpaceTopicEntityIdByDoc {
+                                    doc_id: format!("{}_{}", entity_id, space_id),
+                                });
+                                resolved_removed += 1;
                             }
                         }
 
                         let found_spaces: std::collections::HashSet<Uuid> =
                             pairs.iter().map(|(_, sid)| *sid).collect();
-                        let skipped = topic_map
+                        let skipped_declared = declared_map
                             .keys()
                             .filter(|sid| !found_spaces.contains(sid))
                             .count();
+                        let skipped_removed = removed_set
+                            .iter()
+                            .filter(|sid| !found_spaces.contains(sid))
+                            .count();
 
-                        if resolved > 0 || skipped > 0 {
+                        if resolved_declared > 0
+                            || resolved_removed > 0
+                            || skipped_declared > 0
+                            || skipped_removed > 0
+                        {
                             info!(
-                                resolved = resolved,
-                                skipped = skipped,
-                                "UpdateSpaceTopicEntityId batch resolved via Postgres"
+                                resolved_declared = resolved_declared,
+                                resolved_removed = resolved_removed,
+                                skipped_declared = skipped_declared,
+                                skipped_removed = skipped_removed,
+                                "Space topic batch resolved via Postgres"
                             );
                         }
                     }
                     Err(e) => {
                         error!(
                             error = %e,
-                            space_count = topic_map.len(),
-                            "Postgres lookup failed for UpdateSpaceTopicEntityId — falling back to slow update_by_query"
+                            declared = declared_map.len(),
+                            removed = removed_set.len(),
+                            "Postgres lookup failed for space topic batch — falling back to slow update_by_query"
                         );
-                        for (space_id, topic_entity_id) in topic_map {
+                        for (space_id, topic_entity_id) in declared_updates {
                             processed.push(ProcessedEvent::UpdateSpaceTopicEntityId {
                                 space_id,
                                 topic_entity_id,
                             });
                         }
+                        for space_id in removed_spaces {
+                            processed.push(ProcessedEvent::ClearSpaceTopicEntityId { space_id });
+                        }
                     }
                 }
             } else {
-                for (space_id, topic_entity_id) in topic_updates {
+                for (space_id, topic_entity_id) in declared_updates {
                     processed.push(ProcessedEvent::UpdateSpaceTopicEntityId {
                         space_id,
                         topic_entity_id,
                     });
+                }
+                for space_id in removed_spaces {
+                    processed.push(ProcessedEvent::ClearSpaceTopicEntityId { space_id });
                 }
             }
         }
@@ -1819,6 +1887,7 @@ mod tests {
         let events = vec![SpaceTopicEvent {
             space_id,
             topic_entity_id,
+            kind: SpaceTopicEventKind::Declared,
         }];
         let processed = processor.process_space_topic_batch(events).await.unwrap();
 
@@ -1873,6 +1942,68 @@ mod tests {
                 doc.space_topic_entity_id,
                 Some(topic_entity_id.to_string()),
                 "After processing a SpaceTopicEvent, subsequent upserts should have the topic set"
+            );
+        } else {
+            panic!("Expected ProcessedEvent::Index");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_space_topic_batch_removed_clears_cache_and_emits_clear_events() {
+        // Seed the cache to mirror a prior Declared event.
+        let space_id = Uuid::new_v4();
+        let topic_entity_id = Uuid::new_v4();
+        let mut cache = HashMap::new();
+        cache.insert(space_id, topic_entity_id);
+        let mut processor = Processor::with_space_topic_cache(cache, 0);
+        assert_eq!(processor.space_topic_cache_len(), 1);
+
+        let events = vec![SpaceTopicEvent {
+            space_id,
+            topic_entity_id,
+            kind: SpaceTopicEventKind::Removed,
+        }];
+        let processed = processor.process_space_topic_batch(events).await.unwrap();
+
+        // Removed branch should emit 2 events with no Postgres lookup:
+        // (1) ClearSpaceTopicEntityIdByDoc for the topic entity's own stub doc,
+        // (2) ClearSpaceTopicEntityId slow-path fallback for the rest of the space.
+        assert_eq!(processed.len(), 2);
+
+        let expected_stub_doc_id = format!("{}_{}", topic_entity_id, space_id);
+        assert!(
+            processed.iter().any(|e| matches!(
+                e,
+                ProcessedEvent::ClearSpaceTopicEntityIdByDoc { doc_id } if doc_id == &expected_stub_doc_id
+            )),
+            "Expected ClearSpaceTopicEntityIdByDoc for the topic entity's stub doc, got: {processed:?}"
+        );
+        assert!(
+            processed.iter().any(|e| matches!(
+                e,
+                ProcessedEvent::ClearSpaceTopicEntityId { space_id: s } if s == &space_id
+            )),
+            "Expected ClearSpaceTopicEntityId fallback for the rest of the space, got: {processed:?}"
+        );
+
+        // Cache should no longer carry the mapping.
+        assert_eq!(processor.space_topic_cache_len(), 0);
+
+        // A subsequent upsert in that space should NOT carry space_topic_entity_id.
+        let event = EntityEvent::upsert(
+            Uuid::new_v4(),
+            space_id,
+            Some("Post-removal Entity".to_string()),
+            None,
+            None,
+            None,
+            None,
+        );
+        let result = processor.process_event(event).unwrap();
+        if let Some(ProcessedEvent::Index(doc)) = result {
+            assert_eq!(
+                doc.space_topic_entity_id, None,
+                "After Removed, subsequent upserts must not auto-tag the removed topic"
             );
         } else {
             panic!("Expected ProcessedEvent::Index");
