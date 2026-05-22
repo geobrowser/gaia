@@ -25,6 +25,7 @@ use atlas::graph::{
     CanonicalGraph, CanonicalProcessor, ChangeType, DiffTracker, EdgeType, GraphDiff, GraphState,
     TransitiveProcessor,
 };
+use atlas::persistence::{BaselineNode, PersistedEmissionBaseline};
 use hermes_relay::source::mock_events::test_topology::{
     ROOT_SPACE_ID, SPACE_A, SPACE_B, SPACE_C, SPACE_D, SPACE_E, SPACE_F, SPACE_G, SPACE_H, SPACE_I,
     SPACE_J, SPACE_P, SPACE_Q, SPACE_S, SPACE_W, SPACE_X, SPACE_Y, SPACE_Z,
@@ -1476,4 +1477,156 @@ fn test_e2e_diff_tracker_reset() {
             "After reset, should produce bootstrap-like diff"
         );
     }
+}
+
+// =============================================================================
+// Deploy-flow simulation (GEO-645)
+// =============================================================================
+//
+// Models the load-bearing rollout from the issue: phase 1 atlas writes a
+// baseline reflecting v1 canonical rules; phase 2 atlas — with smaller
+// canonical rules — primes its DiffTracker from that persisted baseline and
+// emits REMOVED for every space that was canonical under v1 but is not
+// canonical under v2.
+//
+// The atlas crate on this branch already runs the "v2" rules (Member/Editor
+// edges no longer grant canonical inclusion). To simulate the deploy, we
+// build a baseline that includes spaces that *would* have been canonical
+// under v1 — including a synthetic orphan that the current pipeline cannot
+// reach — and assert the first track() after restart REMOVEs them all.
+
+/// Build a canonical graph from a topology and pull its current positions
+/// out as a persistable baseline. Mirrors what an atlas would persist after
+/// a steady run: every space that was canonical *and* its position.
+fn baseline_from_canonical(graph: &CanonicalGraph) -> PersistedEmissionBaseline {
+    let mut tracker = DiffTracker::new();
+    let _ = tracker.track(graph);
+    PersistedEmissionBaseline::from_diff_tracker(&tracker)
+        .expect("freshly-tracked tracker must have emission state")
+}
+
+#[test]
+fn test_e2e_baseline_simulation_phase2_removes_orphans() {
+    // Phase 1 (simulated): build a baseline reflecting v1 canonical rules.
+    // We piggy-back on the existing v2 test topology to seed a realistic
+    // canonical set, then inject a synthetic "orphan" space — modelling a
+    // node that v1 considered canonical (via Member/Editor) but v2 does not.
+    let v1_actions = test_topology::generate();
+    let (_v1_state, _v1_transitive, _v1_canonical, _v1_tracker, _v1_diffs, v1_last_graph) =
+        process_with_canonical(&v1_actions, ROOT_SPACE_ID);
+    let v1_graph = v1_last_graph.expect("v1 simulation must produce a canonical graph");
+
+    // Pull the v1 baseline out and add a synthetic orphan that the v2
+    // pipeline will *not* re-discover. This represents a space that was
+    // canonical only through edges v2 has removed.
+    let orphan = make_orphan_space(0xEE);
+    let baseline = {
+        let mut snapshot = baseline_from_canonical(&v1_graph);
+        // Push the orphan in via a fresh `from_nodes` call so the sort/dedup
+        // invariants are preserved.
+        let mut nodes: Vec<BaselineNode> = snapshot.nodes().to_vec();
+        nodes.push(BaselineNode {
+            space_id: orphan,
+            distance: 1,
+            parent: ROOT_SPACE_ID,
+        });
+        snapshot = PersistedEmissionBaseline::from_nodes(nodes);
+        // Sanity: encode/decode round-trips through the schema-stable shape,
+        // so this is genuinely modelling "loaded back from the DB".
+        let bytes = snapshot.encode();
+        PersistedEmissionBaseline::decode(&bytes).expect("baseline round-trips")
+    };
+    assert!(
+        baseline.nodes().iter().any(|n| n.space_id == orphan),
+        "test setup: orphan must be in the baseline before phase 2"
+    );
+
+    // Phase 2: a fresh atlas starts up with the same v2 topology. Its
+    // DiffTracker is primed from the (v1) baseline above. The first track()
+    // against the v2 canonical must emit REMOVED for the orphan because it
+    // is no longer reachable; all other v1 canonical spaces are still in
+    // the v2 set, so they should emit nothing (positions unchanged).
+    let mut state = GraphState::new();
+    let mut transitive = TransitiveProcessor::new();
+    let mut canonical = CanonicalProcessor::new(ROOT_SPACE_ID);
+    let mut tracker = DiffTracker::from_baseline(&baseline);
+
+    for (i, action) in v1_actions.iter().enumerate() {
+        let meta = make_meta(i as u64);
+        if let Some(event) = convert_action(action, &meta) {
+            transitive.handle_event(&event, &state);
+            state.apply_event(&event);
+        }
+    }
+
+    let v2_graph = canonical
+        .compute_if_changed(&state, &mut transitive)
+        .expect("v2 canonical compute must produce a graph");
+
+    let diff = tracker.track(&v2_graph);
+
+    // The orphan must be removed. Nothing else should be — every v1
+    // canonical space (other than the orphan) is also v2 canonical because
+    // the topology generator's edges all happen to be Verified/Related/Topic
+    // (no Member/Editor in test_topology). Position-stable spaces emit no
+    // event because the baseline-aware diff path drops `edge_type` from the
+    // MOVED check.
+    let removed_ids: Vec<SpaceId> = diff
+        .changes
+        .iter()
+        .filter(|c| c.change_type == ChangeType::Removed)
+        .map(|c| c.space_id)
+        .collect();
+    assert!(
+        removed_ids.contains(&orphan),
+        "orphan must be REMOVED; diff was: {:?}",
+        diff.changes
+    );
+
+    // No spurious ADDED for spaces that were already in the baseline at the
+    // same (distance, parent). This is the key correctness property: the
+    // restored baseline suppresses bootstrap-all-ADDED.
+    for change in &diff.changes {
+        if change.change_type == ChangeType::Added {
+            // Anything ADDED here would mean we lost the contract with
+            // consumers — they'd see ADDED for spaces they already think are
+            // canonical. Fail loudly.
+            panic!(
+                "no ADDED expected, but got space {:?} as ADDED",
+                change.space_id
+            );
+        }
+    }
+}
+
+#[test]
+fn test_e2e_baseline_simulation_steady_state_restart_emits_nothing() {
+    // The flip side of the deploy test: a routine restart (no rules change)
+    // loads a baseline that exactly matches what the new compute produces.
+    // First track must emit zero events — otherwise restart would
+    // continuously churn consumer state.
+    let actions = test_topology::generate();
+    let (_, _, _, _, _, last_graph) = process_with_canonical(&actions, ROOT_SPACE_ID);
+    let graph = last_graph.expect("topology must produce a canonical graph");
+
+    let baseline = baseline_from_canonical(&graph);
+    // Round-trip through the persisted bytes — restart loads from disk.
+    let baseline = PersistedEmissionBaseline::decode(&baseline.encode())
+        .expect("baseline round-trips through encode/decode");
+
+    let mut tracker = DiffTracker::from_baseline(&baseline);
+    let diff = tracker.track(&graph);
+    assert!(
+        diff.is_empty(),
+        "steady-state restart must emit zero events, got: {:?}",
+        diff.changes
+    );
+}
+
+// Tiny helper so the simulation test stays self-contained without exposing
+// crate-internal test_utils.
+fn make_orphan_space(last: u8) -> SpaceId {
+    let mut id = [0u8; 16];
+    id[15] = last;
+    id
 }

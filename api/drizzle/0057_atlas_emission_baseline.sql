@@ -1,0 +1,1 @@
+ALTER TABLE "atlas_checkpoints" ADD COLUMN "emission_baseline_blob" "bytea";
