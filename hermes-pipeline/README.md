@@ -87,7 +87,7 @@ This transformer is part of the Hermes architecture (see `docs/architecture.md`)
 | `USE_MOCK` | Set to "true" or "1" to use mock data | `false` |
 | `SUBSTREAMS_ENDPOINT` | Substreams gRPC endpoint URL | `geotest.substreams.pinax.network:443` |
 | `SUBSTREAMS_API_TOKEN` | Auth token for substreams | - |
-| `SUBSTREAMS_START_BLOCK` | Block number to start from | `88109` |
+| `SUBSTREAMS_START_BLOCK` | Block to start from on cold start (ignored when a persisted cursor exists) | `138000` |
 | `SUBSTREAMS_END_BLOCK` | Block number to stop at | `u64::MAX` (continuous) |
 
 ### Kafka Environment Variables
@@ -122,7 +122,7 @@ docker compose --profile infra up -d
 
 # Run with live substreams data (default)
 SUBSTREAMS_API_TOKEN=your-token \
-SUBSTREAMS_START_BLOCK=81809 \
+SUBSTREAMS_START_BLOCK=138000 \
 KAFKA_BROKER=localhost:9092 \
 cargo run --package hermes-pipeline
 ```
@@ -308,9 +308,33 @@ The pipeline transform is not a bottleneck. Network I/O (substreams, Kafka, IPFS
 - The system remains at-least-once at block level.
 - If a block partially emits and then fails, a retry can re-emit previously delivered events from that block.
 - Consumers should treat `event-id` as an idempotency key and deduplicate accordingly.
-- Reorg undo handling and persistent cursor recovery are still future work.
+- Cursor persistence: the pipeline writes the substreams cursor to the shared `meta` table (`id='hermes_pipeline'`) after every successfully-emitted block and resumes from it on restart. See [Cursor Persistence](#cursor-persistence) below.
+- Reorg undo handling: on a `BlockUndoSignal` the cursor rewinds automatically via the trait's `run_live`, so substreams re-streams the reorged blocks; downstream consumers must dedupe by `event_id`. Stale events from the orphaned chain remain in Kafka — a known correctness gap.
+
+## Cursor Persistence
+
+Cursors are persisted to the `meta` table after every block via `PostgresCursorStore` (see `src/cursor.rs`). On startup the pipeline reads the row (`id = 'hermes_pipeline'`) and resumes from that cursor; otherwise it falls back to `SUBSTREAMS_START_BLOCK`.
+
+### Recovery
+
+If the `meta.cursor` row for `id = 'hermes_pipeline'` is corrupted or lost, the most recent safe cursor can be reconstructed from logs. Every persist emits an `info!` line with `event = "hermes_pipeline.batch_end"` carrying `indexer_id`, `block_number`, and `cursor` *before* the database write — the line reaches stdout / Sentry / Axiom even when the persist itself fails (the failure surfaces separately as `event = "hermes_pipeline.persist_cursor_failed"` with the same fields, and the pipeline keeps processing).
+
+To recover:
+
+1. In Axiom (or Sentry / your log store) filter for `event = "hermes_pipeline.batch_end"` sorted by time descending. Take the most recent entry.
+2. Note its `cursor` and `block_number`.
+3. Restore the `meta` row:
+
+   ```sql
+   INSERT INTO meta (id, cursor, block_number)
+   VALUES ('hermes_pipeline', '<cursor from log>', '<block_number from log>')
+   ON CONFLICT (id) DO UPDATE
+     SET cursor = EXCLUDED.cursor,
+         block_number = EXCLUDED.block_number;
+   ```
+
+4. Restart the service. It will log `event = "hermes_pipeline.resume"` and continue from there.
 
 ## Future Work
 
-- **Cursor persistence**: Add PostgreSQL/Redis storage for cursor to resume from last processed block
 - **Metrics**: Add Prometheus metrics for monitoring
