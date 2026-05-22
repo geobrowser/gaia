@@ -163,6 +163,97 @@ export const DEFAULT_PAGE_SIZE = 20
  */
 export const MAX_PAGE_SIZE = 100
 
+/**
+ * Approximation of OpenSearch's standard analyzer for token counting:
+ * splits on whitespace, Unicode punctuation, and Unicode symbols. Covers
+ * the basics — spaces, tabs, periods, dashes, commas, slashes, colons,
+ * semicolons, brackets, math/currency symbols, etc.
+ *
+ * Not a perfect match for Lucene's UAX #29 tokenizer, but close enough
+ * to bound clause fan-out in the heavy sub-queries when paired with
+ * MAX_QUERY_LENGTH and MAX_TEXT_TOKENS. We err on the side of OVER-
+ * splitting (more tokens than the analyzer sees) — that just means a
+ * slightly tighter cap than necessary, never a looser one.
+ */
+const TOKEN_BOUNDARY_REGEX = /[\s\p{P}\p{S}]+/u
+
+/**
+ * Maximum number of tokens fed to the clause-heavy sub-queries
+ * (bool_prefix multi_match and the two match_phrase_prefix clauses).
+ * Excess tokens are dropped from these sub-queries only — exact-match
+ * clauses (`term: name_raw`, `match: name`) still see the full query
+ * so an exact full-name hit isn't lost.
+ *
+ * Each token in the heavy sub-queries can multiply into many internal
+ * Lucene clauses (bool_prefix × 6 fields, plus phrase-prefix expansion
+ * of the trailing token to 50 terms by default). 20 tokens keeps the
+ * upper-bound clause count comfortably under
+ * `indices.query.bool.max_clause_count = 1024`.
+ */
+export const MAX_TEXT_TOKENS = 20
+
+/**
+ * Maximum number of tokens fed to the analyzed exact-token `match` query
+ * on `name`. This query does not have fuzzy or prefix expansion, but it
+ * still rewrites analyzed input into term clauses. Keep raw exact-name
+ * keyword clauses on the full query, and cap only this analyzed path so
+ * adversarial one-character-token input cannot add unbounded clauses.
+ */
+export const MAX_NAME_MATCH_TEXT_TOKENS = 50
+
+/**
+ * Maximum token count at which fuzzy `multi_match` is included in the
+ * base text query. Above this, fuzzy is skipped entirely — its
+ * per-token edit-distance fan-out is the highest of any sub-query, and
+ * typo tolerance is most useful for short single- or few-word queries
+ * anyway. Multi-word queries have enough token redundancy that exact
+ * and prefix matches cover the typo cases sufficiently.
+ *
+ * Set to 3 (vs the more permissive 5) to keep worst-case clause count
+ * under ~480 even when fuzzy is enabled — comfortably below
+ * OpenSearch's max_clause_count = 1024.
+ */
+export const FUZZY_MAX_TOKENS = 3
+
+/**
+ * Maximum number of edit-distance variants generated per term in the
+ * fuzzy `multi_match` clause. Default in OpenSearch is 50, which when
+ * multiplied by 2 fields × FUZZY_MAX_TOKENS gives the dominant share
+ * of the worst-case clause count. Halving to 25 nearly halves the
+ * fuzzy budget at minimal recall cost — typo correction still works
+ * for the common 1-2-edit cases.
+ */
+export const FUZZY_MAX_EXPANSIONS = 25
+
+/**
+ * Maximum number of terms the trailing token can expand to in
+ * `match_phrase_prefix` queries. This matches OpenSearch's default, but
+ * keeping it explicit makes the clause budget auditable.
+ */
+export const PHRASE_PREFIX_MAX_EXPANSIONS = 50
+
+/**
+ * Count tokens in the query (drops empty splits from leading/trailing
+ * separators).
+ */
+function countTokens(query: string): number {
+	return query.split(TOKEN_BOUNDARY_REGEX).filter((t) => t.length > 0).length
+}
+
+/**
+ * Truncate a query to the first `maxTokens` tokens. Re-joined with
+ * single spaces — the actual analyzer at search time tokenizes again,
+ * so the rejoining is just to preserve a string shape for the
+ * OpenSearch DSL. If the query already fits, returns it as-is (no
+ * allocation). Used to cap fan-out in the clause-heavy sub-queries —
+ * see MAX_TEXT_TOKENS.
+ */
+function truncateToTokens(query: string, maxTokens: number): string {
+	const tokens = query.split(TOKEN_BOUNDARY_REGEX).filter((t) => t.length > 0)
+	if (tokens.length <= maxTokens) return query
+	return tokens.slice(0, maxTokens).join(" ")
+}
+
 // System IDs from the SDK are already dashless — use directly for OpenSearch queries
 const TYPE_RELATION_TYPE_ID = SystemIds.TYPES_PROPERTY as string
 const AVATAR_RELATION_TYPE_ID = ContentIds.AVATAR_PROPERTY as string
@@ -238,9 +329,25 @@ export class OpenSearchClient implements SearchClient {
 
 	/**
 	 * Check if a space ID is the cached root space.
+	 *
+	 * Both sides are normalized to dashless before comparison so the check
+	 * works regardless of which format the caller supplied or which format
+	 * the topology service returned. Without this, a caller passing the
+	 * dashed root ID would fail to match a dashless cached root (and vice
+	 * versa) — silently dropping the canonical-graph rewrite in
+	 * `buildAdditionalSpacesFilter` and the SPACE-scope short-circuits.
+	 *
+	 * Falls back to strict equality if either value isn't a valid UUID
+	 * (shouldn't happen in normal flow — route handlers validate UUIDs
+	 * upstream — but the cache could be set from an unvalidated source).
 	 */
 	private isRootSpace(spaceId: string): boolean {
-		return this.rootSpaceId !== null && spaceId === this.rootSpaceId
+		if (this.rootSpaceId === null) return false
+		try {
+			return normalizeUuid(spaceId) === normalizeUuid(this.rootSpaceId)
+		} catch {
+			return spaceId === this.rootSpaceId
+		}
 	}
 
 	/**
@@ -280,7 +387,9 @@ export class OpenSearchClient implements SearchClient {
 			const typeIds = relations
 				?.filter((rel) => normalizeUuid(rel.relation_type) === TYPE_RELATION_TYPE_ID)
 				.map((rel) => normalizeUuid(rel.to_entity_id) as string)
-			typeIds?.forEach((id) => allTypeEntityIds.add(id))
+			typeIds?.forEach((id) => {
+				allTypeEntityIds.add(id)
+			})
 
 			// Extract avatar/cover image entity IDs from relations
 			const avatarImageEntityId = relations?.find(
@@ -537,6 +646,7 @@ export class OpenSearchClient implements SearchClient {
 		// Check if the query is empty or whitespace-only
 		const trimmedQuery = query.query.trim()
 		const excludeTypeIds = query.exclude_type_ids
+		const additionalSpaceIds = query.additional_space_ids
 		if (trimmedQuery.length === 0) {
 			// For empty queries, return top ranked results based on scope
 			return await this.buildTopRankedQuery(
@@ -546,6 +656,7 @@ export class OpenSearchClient implements SearchClient {
 				includeDeleted,
 				excludeTypeIds,
 				includeNonCanonical,
+				additionalSpaceIds,
 			)
 		}
 
@@ -559,6 +670,7 @@ export class OpenSearchClient implements SearchClient {
 				includeDeleted,
 				excludeTypeIds,
 				includeNonCanonical,
+				additionalSpaceIds,
 			)
 		}
 
@@ -574,6 +686,7 @@ export class OpenSearchClient implements SearchClient {
 					includeDeleted,
 					excludeTypeIds,
 					includeNonCanonical,
+					additionalSpaceIds,
 				)
 
 			case "GLOBAL_BY_SPACE_SCORE":
@@ -583,6 +696,7 @@ export class OpenSearchClient implements SearchClient {
 					includeDeleted,
 					excludeTypeIds,
 					includeNonCanonical,
+					additionalSpaceIds,
 				)
 
 			case "GLOBAL_BY_ENTITY_SPACE_SCORE":
@@ -592,6 +706,7 @@ export class OpenSearchClient implements SearchClient {
 					includeDeleted,
 					excludeTypeIds,
 					includeNonCanonical,
+					additionalSpaceIds,
 				)
 
 			case "SPACE_SINGLE": {
@@ -643,6 +758,7 @@ export class OpenSearchClient implements SearchClient {
 					includeDeleted,
 					excludeTypeIds,
 					includeNonCanonical,
+					additionalSpaceIds,
 				)
 		}
 	}
@@ -663,6 +779,7 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
+		additionalSpaceIds?: string[],
 	): Promise<object> {
 		// Match both dashed and dashless forms (index may contain either during migration)
 		const baseUuidQuery = {
@@ -671,11 +788,18 @@ export class OpenSearchClient implements SearchClient {
 
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
+		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		// include_non_canonical=false is the more restrictive constraint: when set,
+		// the result is canonical-only regardless of additional_space_ids. The asid
+		// filter (canonical OR listed) AND'd with canonical-only collapses to just
+		// canonical-only — skip the asid filter entirely to save the bool.should
+		// evaluation in OpenSearch.
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		const buildBoolQuery = () => ({
@@ -732,14 +856,22 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
+		additionalSpaceIds?: string[],
 	): Promise<object> {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
+		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		// include_non_canonical=false is the more restrictive constraint: when set,
+		// the result is canonical-only regardless of additional_space_ids. The asid
+		// filter (canonical OR listed) AND'd with canonical-only collapses to just
+		// canonical-only — skip the asid filter entirely to save the bool.should
+		// evaluation in OpenSearch.
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		const buildBoolClause = () => ({
@@ -872,6 +1004,19 @@ export class OpenSearchClient implements SearchClient {
 	}
 
 	buildBaseTextQuery(queryText: string): object {
+		// Heavy sub-queries (fuzzy + bool_prefix + match_phrase_prefix) see only
+		// the first MAX_TEXT_TOKENS tokens to bound clause fan-out. The analyzed
+		// name match gets its own larger cap, while raw exact-name keyword clauses
+		// keep the full query so a full-name match still wins when available.
+		const cappedQuery = truncateToTokens(queryText, MAX_TEXT_TOKENS)
+		const nameMatchQuery = truncateToTokens(queryText, MAX_NAME_MATCH_TEXT_TOKENS)
+		// Fuzzy `multi_match` AUTO is the highest-fan-out clause (each term
+		// expands into edit-distance variants × 2 fields). Drop it entirely
+		// for queries with more than FUZZY_MAX_TOKENS analyzer-aligned tokens
+		// — multi-word queries have enough redundancy that exact + prefix
+		// clauses cover the typo cases. Single- and few-word queries keep
+		// fuzzy for the typical "user typed `etereum`" case.
+		const includeFuzzy = countTokens(queryText) <= FUZZY_MAX_TOKENS
 		return {
 			bool: {
 				should: [
@@ -925,19 +1070,24 @@ export class OpenSearchClient implements SearchClient {
 						// underscores, etc.), so "world-affairs" and "World affairs" both
 						// match as tokens ["world", "affairs"]. Unlike name.raw above,
 						// this does not differentiate based on punctuation or casing.
+						// Capped separately from prefix/fuzzy queries so adversarial input
+						// cannot add more than MAX_NAME_MATCH_TEXT_TOKENS term clauses here.
 						// e.g. query "geo" matches name "Geo" (token "geo") but NOT
 						// "geojson_preview_tool" (token "geojson" ≠ "geo").
 						match: {
 							name: {
-								query: queryText,
+								query: nameMatchQuery,
 								boost: this.b("name_exact_token_boost", NAME_EXACT_TOKEN_BOOST),
 							},
 						},
 					},
 					{
-						// Autocomplete-style match over n-grams with higher weight on name
+						// Autocomplete-style match over n-grams with higher weight on name.
+						// Capped at MAX_TEXT_TOKENS because bool_prefix expands the trailing
+						// token across 6 fields (name/description × original/_2gram/_3gram),
+						// so per-token cost is the highest among the 8 sub-queries.
 						multi_match: {
-							query: queryText,
+							query: cappedQuery,
 							type: "bool_prefix",
 							fields: [
 								`name^${this.b("name_field_boost", NAME_FIELD_BOOST)}`,
@@ -949,30 +1099,46 @@ export class OpenSearchClient implements SearchClient {
 							],
 						},
 					},
+					// Fuzzy text match to tolerate minor typos.
+					// AUTO fuzziness: 1-2 chars: 0 edits, 3-4 chars: 1 edit, 5+ chars: 2 edits.
+					// Skipped when the query has more than FUZZY_MAX_TOKENS analyzer-aligned
+					// tokens — fuzzy AUTO expands each term into many edit-distance variants
+					// across 2 fields and is the worst per-token offender for clause fan-out.
+					// Multi-word queries have enough redundancy to find typos via the exact
+					// and prefix clauses without it.
+					...(includeFuzzy
+						? [
+								{
+									multi_match: {
+										query: cappedQuery,
+										fields: ["name", "description"],
+										fuzziness: "AUTO",
+										max_expansions: FUZZY_MAX_EXPANSIONS,
+										boost: this.b("fuzzy_reduction_boost", FUZZY_REDUCTION_BOOST),
+									},
+								},
+							]
+						: []),
 					{
-						// Fuzzy text match to tolerate minor typos
-						// AUTO fuzziness: 1-2 chars: 0 edits, 3-4 chars: 1 edit, 5+ chars: 2 edits
-						multi_match: {
-							query: queryText,
-							fields: ["name", "description"],
-							fuzziness: "AUTO",
-							boost: this.b("fuzzy_reduction_boost", FUZZY_REDUCTION_BOOST),
-						},
-					},
-					{
-						// Strongly boost documents where the name starts with the query text
+						// Strongly boost documents where the name starts with the query text.
+						// Capped — match_phrase_prefix expands the trailing token to up to 50
+						// terms (default max_expansions), and the phrase grows linearly with
+						// token count.
 						match_phrase_prefix: {
 							name: {
-								query: queryText,
+								query: cappedQuery,
+								max_expansions: PHRASE_PREFIX_MAX_EXPANSIONS,
 								boost: this.b("name_prefix_boost", NAME_PREFIX_BOOST),
 							},
 						},
 					},
 					{
-						// Moderately boost documents where the description starts with the query text
+						// Moderately boost documents where the description starts with the
+						// query text. Same fan-out concerns as the name phrase-prefix above.
 						match_phrase_prefix: {
 							description: {
-								query: queryText,
+								query: cappedQuery,
+								max_expansions: PHRASE_PREFIX_MAX_EXPANSIONS,
 								boost: this.b("description_prefix_boost", DESCRIPTION_PREFIX_BOOST),
 							},
 						},
@@ -1069,14 +1235,22 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
+		additionalSpaceIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
+		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		// include_non_canonical=false is the more restrictive constraint: when set,
+		// the result is canonical-only regardless of additional_space_ids. The asid
+		// filter (canonical OR listed) AND'd with canonical-only collapses to just
+		// canonical-only — skip the asid filter entirely to save the bool.should
+		// evaluation in OpenSearch.
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
@@ -1108,14 +1282,22 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
+		additionalSpaceIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
+		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		// include_non_canonical=false is the more restrictive constraint: when set,
+		// the result is canonical-only regardless of additional_space_ids. The asid
+		// filter (canonical OR listed) AND'd with canonical-only collapses to just
+		// canonical-only — skip the asid filter entirely to save the bool.should
+		// evaluation in OpenSearch.
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
@@ -1147,14 +1329,22 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
+		additionalSpaceIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
+		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		// include_non_canonical=false is the more restrictive constraint: when set,
+		// the result is canonical-only regardless of additional_space_ids. The asid
+		// filter (canonical OR listed) AND'd with canonical-only collapses to just
+		// canonical-only — skip the asid filter entirely to save the bool.should
+		// evaluation in OpenSearch.
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
@@ -1362,6 +1552,39 @@ export class OpenSearchClient implements SearchClient {
 	 */
 	buildCanonicalFilter(): object {
 		return {term: {in_canonical_graph: true}}
+	}
+
+	/**
+	 * Build the additional-spaces eligibility filter.
+	 *
+	 *   filter = (in_canonical_graph: true) OR (space_id IN <listed non-root IDs>)
+	 *
+	 * The canonical-graph anchor is always implicit — entities in the canonical
+	 * graph remain eligible regardless of which non-root IDs the caller passed.
+	 * The canonical-graph root, if supplied, is naturally idempotent (it would
+	 * collapse to the same canonical clause already on the OR side).
+	 *
+	 * When only the root is in the list (or the list contains only IDs that
+	 * resolve to the root), the filter degenerates to the bare canonical term.
+	 *
+	 * Returns `null` only when no IDs are supplied at all.
+	 */
+	buildAdditionalSpacesFilter(additionalSpaceIds?: string[]): object | null {
+		if (!additionalSpaceIds || additionalSpaceIds.length === 0) return null
+
+		// The canonical-graph anchor is always implicit when additional_space_ids is set:
+		// the eligibility set is "entities in the canonical graph OR entities in any listed
+		// non-root space". This means a caller can pass a single non-root space and get
+		// canonical-graph results PLUS that space's entities — whether canonical or not.
+		// The root ID, if supplied, is naturally idempotent (canonical OR canonical = canonical).
+		const nonRootIds = additionalSpaceIds.filter((id) => !this.isRootSpace(id))
+		const canonicalClause = this.buildCanonicalFilter()
+		const spaceIdsClause = nonRootIds.length > 0 ? {terms: {space_id: nonRootIds.flatMap(uuidTermVariants)}} : null
+
+		if (spaceIdsClause) {
+			return {bool: {should: [canonicalClause, spaceIdsClause], minimum_should_match: 1}}
+		}
+		return canonicalClause
 	}
 
 	/**

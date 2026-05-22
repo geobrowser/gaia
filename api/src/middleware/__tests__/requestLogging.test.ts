@@ -1,0 +1,205 @@
+import {Hono} from "hono"
+import {beforeEach, describe, expect, it, vi} from "vitest"
+
+// Mock the structured logger so we can assert on log levels.
+vi.mock("../../services/telemetry", () => ({
+	log: {
+		debug: vi.fn(),
+		info: vi.fn(),
+		warn: vi.fn(),
+		error: vi.fn(),
+	},
+}))
+
+// Capture span status / attribute calls so we can assert them. The middleware
+// calls trace.getTracer(...).startSpan(...) at request time.
+const spanSetStatus = vi.fn()
+const spanSetAttribute = vi.fn()
+const spanEnd = vi.fn()
+vi.mock("@opentelemetry/api", async () => {
+	const actual = await vi.importActual<typeof import("@opentelemetry/api")>("@opentelemetry/api")
+	return {
+		...actual,
+		trace: {
+			...actual.trace,
+			getTracer: () => ({
+				startSpan: () => ({
+					setStatus: spanSetStatus,
+					setAttribute: spanSetAttribute,
+					end: spanEnd,
+					spanContext: () => ({traceId: "0".repeat(32), spanId: "0".repeat(16), traceFlags: 0}),
+				}),
+			}),
+		},
+	}
+})
+
+import {SpanStatusCode} from "@opentelemetry/api"
+import {log} from "../../services/telemetry"
+import {canonicalRequestLogging, isClientAbortError, requestId} from "../requestLogging"
+
+/**
+ * Mirror the production app wiring: requestId + canonicalRequestLogging,
+ * plus an `app.onError` that converts AbortErrors to 499 (matching main.ts).
+ * The default Hono error handler turns everything else into 500.
+ */
+function setupApp(handler: () => Promise<Response> | Response) {
+	const app = new Hono()
+	app.onError((err, c) => {
+		if (isClientAbortError(err)) {
+			return new Response(null, {status: 499})
+		}
+		return c.text("Internal Server Error", 500)
+	})
+	app.use("*", requestId())
+	app.use("*", canonicalRequestLogging())
+	app.all("/test", handler)
+	return app
+}
+
+/**
+ * Mirror the production AbortError shape: graphql-yoga / @whatwg-node/server
+ * throw a `DOMException` (which extends Error in modern Node/Bun) with
+ * `name === "AbortError"`, `code === 20`, empty stack. We can't construct a
+ * DOMException directly in vitest's environment, so we forge an Error subclass
+ * with the same surface — Hono's compose only routes `instanceof Error`
+ * throws through `app.onError`.
+ */
+function makeAbortError(): Error {
+	const err = new Error("The connection was closed.")
+	Object.defineProperty(err, "name", {value: "AbortError"})
+	Object.defineProperty(err, "code", {value: 20})
+	err.stack = ""
+	return err
+}
+const ABORT_ERROR_LIKE = {
+	name: "AbortError",
+	code: 20,
+	message: "The connection was closed.",
+}
+
+describe("isClientAbortError", () => {
+	it("recognizes DOMException-shape AbortError (code 20)", () => {
+		expect(isClientAbortError(ABORT_ERROR_LIKE)).toBe(true)
+	})
+
+	it("recognizes Node-style AbortError (code 'ABORT_ERR')", () => {
+		expect(isClientAbortError({name: "AbortError", code: "ABORT_ERR"})).toBe(true)
+	})
+
+	it("recognizes by name alone (defensive)", () => {
+		expect(isClientAbortError({name: "AbortError"})).toBe(true)
+	})
+
+	it("does not match arbitrary errors", () => {
+		expect(isClientAbortError(new Error("boom"))).toBe(false)
+		expect(isClientAbortError({code: 20})).toBe(true) // code-only is enough — DOMException pattern
+		expect(isClientAbortError({name: "TypeError"})).toBe(false)
+		expect(isClientAbortError(null)).toBe(false)
+		expect(isClientAbortError(undefined)).toBe(false)
+		expect(isClientAbortError("string error")).toBe(false)
+	})
+})
+
+describe("canonicalRequestLogging — client abort handling", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("client abort → 499 status, info-level log, no error/warn, no Sentry issue", async () => {
+		const app = setupApp(() => {
+			throw makeAbortError()
+		})
+
+		const res = await app.request("/test")
+
+		expect(res.status).toBe(499)
+		// 499 falls through to the default "completed" path at info level —
+		// no warn/error means no Sentry issue and minimal log noise.
+		expect(log.info).toHaveBeenCalledWith(
+			"GET /test completed",
+			expect.objectContaining({method: "GET", path: "/test", status: 499}),
+		)
+		expect(log.warn).not.toHaveBeenCalled()
+		expect(log.error).not.toHaveBeenCalled()
+	})
+
+	it("Node-style AbortError also yields 499 with no error/warn", async () => {
+		const app = setupApp(() => {
+			throw Object.assign(new Error("aborted"), {name: "AbortError", code: "ABORT_ERR"})
+		})
+
+		const res = await app.request("/test")
+
+		expect(res.status).toBe(499)
+		expect(log.warn).not.toHaveBeenCalled()
+		expect(log.error).not.toHaveBeenCalled()
+	})
+
+	it("non-abort errors still surface as 500 with log.error", async () => {
+		const app = setupApp(() => {
+			throw new Error("database exploded")
+		})
+
+		const res = await app.request("/test")
+
+		expect(res.status).toBe(500)
+		expect(log.error).toHaveBeenCalledWith(
+			"GET /test returned 500",
+			expect.objectContaining({method: "GET", path: "/test", status: 500}),
+		)
+	})
+
+	it("successful requests log info as before", async () => {
+		const app = setupApp(() => new Response("ok", {status: 200}))
+
+		const res = await app.request("/test")
+
+		expect(res.status).toBe(200)
+		expect(log.info).toHaveBeenCalledWith("GET /test completed", expect.objectContaining({status: 200}))
+		expect(log.warn).not.toHaveBeenCalled()
+		expect(log.error).not.toHaveBeenCalled()
+	})
+})
+
+describe("canonicalRequestLogging — span status", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("does NOT mark span as ERROR for 499 (client abort)", async () => {
+		const app = setupApp(() => {
+			throw makeAbortError()
+		})
+		await app.request("/test")
+
+		// Critical: SentrySpanProcessor turns ERROR spans into failed
+		// transactions in the Sentry Performance dashboard. Client aborts
+		// must not pollute that signal.
+		expect(spanSetStatus).not.toHaveBeenCalled()
+		expect(spanSetAttribute).toHaveBeenCalledWith("http.status_code", 499)
+	})
+
+	it("DOES mark span as ERROR for genuine 5xx", async () => {
+		const app = setupApp(() => {
+			throw new Error("database exploded")
+		})
+		await app.request("/test")
+
+		expect(spanSetStatus).toHaveBeenCalledWith({code: SpanStatusCode.ERROR, message: "HTTP 500"})
+	})
+
+	it("DOES mark span as ERROR for 4xx (non-499)", async () => {
+		const app = setupApp(() => new Response("bad", {status: 400}))
+		await app.request("/test")
+
+		expect(spanSetStatus).toHaveBeenCalledWith({code: SpanStatusCode.ERROR, message: "HTTP 400"})
+	})
+
+	it("does NOT mark span as ERROR for 2xx", async () => {
+		const app = setupApp(() => new Response("ok", {status: 200}))
+		await app.request("/test")
+
+		expect(spanSetStatus).not.toHaveBeenCalled()
+	})
+})

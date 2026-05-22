@@ -677,11 +677,15 @@ impl Pipeline {
             error!(
                 block_number = meta.block_number,
                 count = total_cache_misses,
-                "Cache misses (retries exhausted) — edits dropped"
+                "Edits dropped: IPFS payload not found in cache (indexer pipeline issue)"
             );
         }
         if total_errored_entries > 0 {
-            warn!(count = total_errored_entries, "Errored entries in cache");
+            error!(
+                block_number = meta.block_number,
+                count = total_errored_entries,
+                "Edits dropped: IPFS payload errored (invalid user content)"
+            );
         }
         if total_fetch_failures > 0 {
             warn!(count = total_fetch_failures, "Cache fetch failures");
@@ -705,6 +709,14 @@ impl Pipeline {
             counts_by_event_type,
         };
         self.emitter.emit(&summary).await?;
+
+        // Block fully ack'd to Kafka — update lag gauges. The timestamp is
+        // the block's clock time, not now(); time-based lag alerts depend on
+        // that distinction.
+        hermes_instrumentation::metrics::set_latest_processed_block(meta.block_number);
+        hermes_instrumentation::metrics::set_latest_processed_block_timestamp(
+            meta.timestamp.parse().unwrap_or(0),
+        );
 
         // Log block summary
         if total > 0 || total_cache_misses > 0 || total_errored_entries > 0 {
@@ -859,6 +871,11 @@ fn main() -> anyhow::Result<()> {
 
 async fn async_main() -> anyhow::Result<()> {
     info!("Hermes Pipeline starting");
+
+    // Install Prometheus /metrics listener. Default port 9464 lives in the
+    // metrics module; override with METRICS_PORT for local runs.
+    let metrics_port: Option<u16> = env::var("METRICS_PORT").ok().and_then(|s| s.parse().ok());
+    hermes_instrumentation::metrics::install("hermes-pipeline", metrics_port)?;
 
     // Determine if we're using mock data
     let use_mock = env::var("USE_MOCK")

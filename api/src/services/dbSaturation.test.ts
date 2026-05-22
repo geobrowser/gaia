@@ -25,7 +25,7 @@ function uniquePoolName(prefix: string): string {
 describe("dbSaturation hysteresis", () => {
 	it("activates saturation only after sustained pressure window", () => {
 		const poolName = uniquePoolName("activate")
-		const pressuredStats: PoolStats = {...baseStats, waitingCount: 1}
+		const pressuredStats: PoolStats = {...baseStats, waitingCount: 5}
 
 		const atStart = getPoolSaturationSnapshot(poolName, pressuredStats, 1_000)
 		expect(atStart.isPressured).toBe(true)
@@ -41,7 +41,7 @@ describe("dbSaturation hysteresis", () => {
 
 	it("keeps saturated state until release window elapses", () => {
 		const poolName = uniquePoolName("release")
-		const pressuredStats: PoolStats = {...baseStats, waitingCount: 1}
+		const pressuredStats: PoolStats = {...baseStats, waitingCount: 5}
 
 		getPoolSaturationSnapshot(poolName, pressuredStats, 10_000)
 		const saturated = getPoolSaturationSnapshot(poolName, pressuredStats, 25_000)
@@ -99,7 +99,7 @@ describe("dbSaturation pressure reasons", () => {
 describe("dbSaturation load shedding", () => {
 	it("does not shed on a momentary waiting client before activation", () => {
 		const poolName = uniquePoolName("waiting")
-		const snapshot = getPoolSaturationSnapshot(poolName, {...baseStats, waitingCount: 1}, 1_000)
+		const snapshot = getPoolSaturationSnapshot(poolName, {...baseStats, waitingCount: 5}, 1_000)
 
 		expect(snapshot.isPressured).toBe(true)
 		expect(snapshot.isSaturated).toBe(false)
@@ -120,7 +120,7 @@ describe("dbSaturation load shedding", () => {
 
 	it("sheds once saturation has activated", () => {
 		const poolName = uniquePoolName("saturated")
-		const pressuredStats: PoolStats = {...baseStats, waitingCount: 1}
+		const pressuredStats: PoolStats = {...baseStats, waitingCount: 5}
 
 		getPoolSaturationSnapshot(poolName, pressuredStats, 10_000)
 		const snapshot = getPoolSaturationSnapshot(poolName, pressuredStats, 25_000)
@@ -131,7 +131,7 @@ describe("dbSaturation load shedding", () => {
 
 	it("continues shedding while saturated even after raw signals drop", () => {
 		const poolName = uniquePoolName("sticky-saturated")
-		const pressuredStats: PoolStats = {...baseStats, waitingCount: 1}
+		const pressuredStats: PoolStats = {...baseStats, waitingCount: 5}
 
 		getPoolSaturationSnapshot(poolName, pressuredStats, 10_000)
 		const atSaturation = getPoolSaturationSnapshot(poolName, pressuredStats, 25_000)
@@ -164,7 +164,7 @@ describe("dbSaturation load shedding", () => {
 
 	it("stops shedding after the release window elapses", () => {
 		const poolName = uniquePoolName("release-shed")
-		const pressuredStats: PoolStats = {...baseStats, waitingCount: 1}
+		const pressuredStats: PoolStats = {...baseStats, waitingCount: 5}
 
 		getPoolSaturationSnapshot(poolName, pressuredStats, 10_000)
 		const saturated = getPoolSaturationSnapshot(poolName, pressuredStats, 25_000)

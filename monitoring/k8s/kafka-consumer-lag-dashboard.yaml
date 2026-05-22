@@ -1,0 +1,421 @@
+apiVersion: v1
+data:
+  kafka-consumer-lag.json: |-
+    {
+      "id": null,
+      "uid": "kafka-consumer-lag",
+      "title": "Kafka Consumer Lag",
+      "tags": [
+        "kafka",
+        "lag",
+        "observability"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {
+              "selected": true,
+              "text": "Prometheus",
+              "value": "Prometheus"
+            }
+          },
+          {
+            "name": "consumergroup",
+            "label": "Consumer Group",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "$datasource" },
+            "query": "label_values(kafka_consumergroup_lag, consumergroup)",
+            "refresh": 2,
+            "sort": 1,
+            "includeAll": true,
+            "multi": true,
+            "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+            "options": []
+          },
+          {
+            "name": "topic",
+            "label": "Topic",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "$datasource" },
+            "query": "label_values(kafka_consumergroup_lag{consumergroup=~\"$consumergroup\"}, topic)",
+            "refresh": 2,
+            "sort": 1,
+            "includeAll": true,
+            "multi": true,
+            "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+            "options": []
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "title": "Current State",
+          "id": 100,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "stat",
+          "title": "Active Consumer Groups",
+          "id": 1,
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "count(count by (consumergroup) (kafka_consumergroup_lag))",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "blue", "value": null }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Max Lag (single partition)",
+          "id": 2,
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "max(kafka_consumergroup_lag{consumergroup=~\"$consumergroup\",topic=~\"$topic\"})",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 1000 },
+                  { "color": "red", "value": 10000 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Total Lag (all partitions)",
+          "id": 3,
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum(kafka_consumergroup_lag{consumergroup=~\"$consumergroup\",topic=~\"$topic\"})",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 5000 },
+                  { "color": "red", "value": 50000 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Empty Groups (no members)",
+          "id": 4,
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "count(kafka_consumergroup_members == 0)",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 1 }
+                ]
+              },
+              "noValue": "0"
+            }
+          }
+        },
+        {
+          "type": "row",
+          "title": "Lag",
+          "id": 101,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "Lag by Group + Topic (sum across partitions)",
+          "id": 5,
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 6 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum by (consumergroup, topic) (kafka_consumergroup_lag{consumergroup=~\"$consumergroup\",topic=~\"$topic\"})",
+              "legendFormat": "{{consumergroup}} / {{topic}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "spanNulls": true
+              }
+            }
+          },
+          "options": {
+            "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max", "lastNotNull"] },
+            "tooltip": { "mode": "multi", "sort": "desc" }
+          }
+        },
+        {
+          "type": "row",
+          "title": "Throughput",
+          "id": 102,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 15 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "Messages Consumed (rolling 1m window)",
+          "id": 6,
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum by (consumergroup, topic) (increase(kafka_consumergroup_current_offset{consumergroup=~\"$consumergroup\",topic=~\"$topic\"}[1m]))",
+              "legendFormat": "{{consumergroup}} / {{topic}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "spanNulls": true
+              }
+            }
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["sum", "max"] },
+            "tooltip": { "mode": "multi" }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Messages Produced (rolling 1m window)",
+          "id": 7,
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "sum by (topic) (increase(kafka_topic_partition_current_offset{topic=~\"$topic\"}[1m]))",
+              "legendFormat": "{{topic}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "spanNulls": true
+              }
+            }
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["sum", "max"] },
+            "tooltip": { "mode": "multi" }
+          }
+        },
+        {
+          "type": "row",
+          "title": "Detail",
+          "id": 103,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "table",
+          "title": "Top Lagging Partitions",
+          "id": 8,
+          "gridPos": { "h": 9, "w": 12, "x": 0, "y": 25 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "topk(20, kafka_consumergroup_lag{consumergroup=~\"$consumergroup\",topic=~\"$topic\"} > 0)",
+              "instant": true,
+              "format": "table",
+              "refId": "A"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "endpoint": true, "service": true, "container": true, "namespace": true, "pod": true },
+                "renameByName": { "Value": "lag", "consumergroup": "group", "topic": "topic", "partition": "partition" },
+                "indexByName": { "consumergroup": 0, "topic": 1, "partition": 2, "Value": 3 }
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0
+            }
+          },
+          "options": {
+            "showHeader": true,
+            "sortBy": [{ "displayName": "lag", "desc": true }]
+          }
+        },
+        {
+          "type": "table",
+          "title": "Consumer Group Members",
+          "id": 9,
+          "gridPos": { "h": 9, "w": 12, "x": 12, "y": 25 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "kafka_consumergroup_members{consumergroup=~\"$consumergroup\"}",
+              "instant": true,
+              "format": "table",
+              "refId": "A"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true, "endpoint": true, "service": true, "container": true, "namespace": true, "pod": true },
+                "renameByName": { "Value": "members", "consumergroup": "group" },
+                "indexByName": { "consumergroup": 0, "Value": 1 }
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "green", "value": 1 }
+                ]
+              },
+              "custom": {
+                "cellOptions": { "type": "color-text" }
+              }
+            }
+          },
+          "options": {
+            "showHeader": true,
+            "sortBy": [{ "displayName": "members", "desc": false }]
+          }
+        }
+      ]
+    }
+kind: ConfigMap
+metadata:
+  labels:
+    app: kube-prometheus-stack-grafana
+    grafana_dashboard: "1"
+    release: kube-prometheus-stack
+  name: kafka-consumer-lag-dashboard
+  namespace: monitoring

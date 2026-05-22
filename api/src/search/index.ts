@@ -42,9 +42,16 @@ const DEFAULT_LIMIT = 20
 const MAX_LIMIT = 100
 
 /**
- * Maximum length for search queries to prevent abuse.
+ * Maximum length for search queries to prevent abuse and OpenSearch
+ * clause explosions. The previous 500-char ceiling let long pasted text
+ * (e.g. press-release blurbs) reach OpenSearch and blow past
+ * `indices.query.bool.max_clause_count = 1024` via fuzzy + prefix
+ * expansion. 250 chars admits longer name/title-style search inputs
+ * while keeping expanded query clauses bounded by the token caps and
+ * fuzzy gate in opensearch.ts (see MAX_TEXT_TOKENS,
+ * MAX_NAME_MATCH_TEXT_TOKENS, FUZZY_MAX_TOKENS, FUZZY_MAX_EXPANSIONS).
  */
-const MAX_QUERY_LENGTH = 500
+const MAX_QUERY_LENGTH = 250
 
 /**
  * Maximum length for space_id parameter (UUID format: 36 dashed, 32 dashless).
@@ -102,6 +109,7 @@ const VALID_PARAMS: Set<string> = new Set([
 	"q",
 	"scope",
 	"space_id",
+	"additional_space_ids",
 	"type_ids",
 	"exclude_type_ids",
 	"limit",
@@ -110,6 +118,11 @@ const VALID_PARAMS: Set<string> = new Set([
 	"include_non_canonical",
 	...BOOST_PARAMS,
 ])
+
+/**
+ * Maximum number of additional space IDs.
+ */
+const MAX_ADDITIONAL_SPACE_IDS = 100
 
 // Error types for search operations
 class SearchValidationError extends Data.TaggedError("SearchValidationError")<{
@@ -151,14 +164,14 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					in: "query",
 					description: "Search query string (alias: q)",
 					required: false,
-					schema: {type: "string", maxLength: 500},
+					schema: {type: "string", maxLength: MAX_QUERY_LENGTH},
 				},
 				{
 					name: "q",
 					in: "query",
 					description: "Search query string (alias for query)",
 					required: false,
-					schema: {type: "string", maxLength: 500},
+					schema: {type: "string", maxLength: MAX_QUERY_LENGTH},
 				},
 				{
 					name: "scope",
@@ -183,6 +196,14 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					description: "Space UUID (required for SPACE_SINGLE and SPACE scopes)",
 					required: false,
 					schema: {type: "string", format: "uuid"},
+				},
+				{
+					name: "additional_space_ids",
+					in: "query",
+					description:
+						"Comma-separated space UUIDs (max 100) to widen GLOBAL-family searches. Returns canonical-graph entities UNION entities in any listed space. The canonical-graph root is implicit (passing it is a no-op). Ignored when include_non_canonical=false. Rejected on SPACE / SPACE_SINGLE scopes.",
+					required: false,
+					schema: {type: "string"},
 				},
 				{
 					name: "type_ids",
@@ -347,6 +368,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 				const query = c.req.query("query") ?? c.req.query("q")
 				const scopeParam = c.req.query("scope") ?? "GLOBAL"
 				const spaceId = c.req.query("space_id")
+				const additionalSpaceIdsParam = c.req.query("additional_space_ids")
 				const typeIdsParam = c.req.query("type_ids")
 				const excludeTypeIdsParam = c.req.query("exclude_type_ids")
 				const limitParam = c.req.query("limit")
@@ -404,6 +426,47 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 							}),
 						)
 					}
+				}
+
+				// Parse and validate additional_space_ids (CSV of UUIDs, GLOBAL-family scopes only)
+				let additionalSpaceIds: string[] | undefined
+				if (additionalSpaceIdsParam !== undefined && additionalSpaceIdsParam !== "") {
+					if (scope === "SPACE_SINGLE" || scope === "SPACE") {
+						return yield* Effect.fail(
+							new SearchValidationError({
+								message: `additional_space_ids is not valid with ${scope} scope; use a GLOBAL-family scope instead`,
+								status: 400,
+							}),
+						)
+					}
+
+					additionalSpaceIds = additionalSpaceIdsParam
+						.split(",")
+						.map((id) => id.trim())
+						.filter((id) => id.length > 0)
+
+					if (additionalSpaceIds.length > MAX_ADDITIONAL_SPACE_IDS) {
+						return yield* Effect.fail(
+							new SearchValidationError({
+								message: `additional_space_ids must not contain more than ${MAX_ADDITIONAL_SPACE_IDS} IDs`,
+								status: 400,
+							}),
+						)
+					}
+
+					for (const id of additionalSpaceIds) {
+						if (!isValidUuid(id)) {
+							return yield* Effect.fail(
+								new SearchValidationError({
+									message: `additional_space_ids must contain valid UUIDs, got invalid ID: ${id}`,
+									status: 400,
+								}),
+							)
+						}
+					}
+
+					// Empty after trimming → treat as if not provided
+					if (additionalSpaceIds.length === 0) additionalSpaceIds = undefined
 				}
 
 				// Parse and validate limit
@@ -565,6 +628,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					limit,
 					offset,
 					...(spaceId && {space_id: spaceId}),
+					...(additionalSpaceIds && {additional_space_ids: additionalSpaceIds}),
 					...(typeIds && {type_ids: typeIds}),
 					...(excludeTypeIds && excludeTypeIds.length > 0 && {exclude_type_ids: excludeTypeIds}),
 					...(includeDeleted && {include_deleted: true}),

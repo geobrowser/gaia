@@ -126,11 +126,12 @@ spec:
                   key: OPENSEARCH_URL
             - name: TOPOLOGY_SERVICE_URL
               value: "http://search-indexer.search.svc.cluster.local:8080"
-            - name: VALKEY_URL
-              valueFrom:
-                secretKeyRef:
-                  name: api-cache-secrets
-                  key: VALKEY_URL
+            # Response cache disabled — uncomment to re-enable.
+            # - name: VALKEY_URL
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: api-cache-secrets
+            #       key: VALKEY_URL
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:

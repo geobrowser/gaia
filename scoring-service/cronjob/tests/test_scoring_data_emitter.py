@@ -3,6 +3,8 @@
 from datetime import datetime
 from unittest.mock import MagicMock, call, patch
 
+import logging
+
 import pytest
 
 from src.algorithm.models import Entity, Perspective, Space
@@ -117,6 +119,30 @@ class TestScoringDataEmitterInit:
             assert config["sasl.password"] == "secret"
             assert "-----BEGIN CERTIFICATE-----" in config["ssl.ca.pem"]
 
+    @pytest.mark.parametrize("bad_batch_size", [0, -1])
+    def test_init_rejects_non_positive_batch_size(self, bad_batch_size):
+        """batch_size <= 0 must raise ValueError, not silently produce empty batches."""
+        with patch("src.scoring_data_emitter.scoring_data_emitter.Producer"):
+            with pytest.raises(ValueError, match="batch_size must be >= 1"):
+                ScoringDataEmitter(
+                    broker="localhost:9092",
+                    topic="test.scores",
+                    batch_size=bad_batch_size,
+                )
+
+    @pytest.mark.parametrize("bad_interval", [0, -1])
+    def test_init_rejects_non_positive_emit_progress_every(self, bad_interval):
+        """emit_progress_every <= 0 must raise ValueError to avoid ZeroDivisionError in emit_all."""
+        with patch("src.scoring_data_emitter.scoring_data_emitter.Producer"):
+            with pytest.raises(ValueError, match="emit_progress_every must be >= 1"):
+                ScoringDataEmitter(
+                    broker="localhost:9092",
+                    topic="test.scores",
+                    batch_size=100,
+                    emit_progress_every=bad_interval,
+                )
+
+
 class TestUuidConversion:
     """Tests for UUID string to bytes conversion."""
 
@@ -135,67 +161,6 @@ class TestUuidConversion:
 
         assert len(result) == 16
         assert result == bytes.fromhex("22222222222222222222222222222222")
-
-
-class TestPrepareScores:
-    """Tests for score preparation methods."""
-
-    def test_prepare_entity_scores(self, emitter, sample_entities):
-        """Test EntityScore preparation."""
-        updated_at = 1704067200
-        scores = emitter._prepare_entity_scores(sample_entities, updated_at)
-
-        assert len(scores) == 2
-
-        # First entity
-        assert scores[0].entity_id == bytes.fromhex("11111111111111111111111111111111")
-        assert scores[0].score == 0.85
-        assert scores[0].updated_at == updated_at
-
-        # Second entity
-        assert scores[1].entity_id == bytes.fromhex("33333333333333333333333333333333")
-        assert scores[1].score == 0.65
-
-    def test_prepare_perspective_scores(self, emitter, sample_entities):
-        """Test PerspectiveScore preparation."""
-        updated_at = 1704067200
-        scores = emitter._prepare_perspective_scores(sample_entities, updated_at)
-
-        # 1 perspective from entity1 + 2 perspectives from entity2
-        assert len(scores) == 3
-
-        # First perspective
-        assert scores[0].entity_id == bytes.fromhex("11111111111111111111111111111111")
-        assert scores[0].space_id == bytes.fromhex("22222222222222222222222222222222")
-        assert scores[0].score == 0.9
-
-        # Second perspective (from entity2)
-        assert scores[1].entity_id == bytes.fromhex("33333333333333333333333333333333")
-        assert scores[1].space_id == bytes.fromhex("22222222222222222222222222222222")
-        assert scores[1].score == 0.7
-
-    def test_prepare_space_scores(self, emitter, sample_spaces):
-        """Test SpaceScore preparation."""
-        updated_at = 1704067200
-        scores = emitter._prepare_space_scores(sample_spaces, updated_at)
-
-        assert len(scores) == 2
-
-        assert scores[0].space_id == bytes.fromhex("22222222222222222222222222222222")
-        assert scores[0].score == 0.8
-
-        assert scores[1].space_id == bytes.fromhex("44444444444444444444444444444444")
-        assert scores[1].score == 0.64
-
-    def test_prepare_empty_entities(self, emitter):
-        """Test preparation with empty entity list."""
-        scores = emitter._prepare_entity_scores([], 1704067200)
-        assert scores == []
-
-    def test_prepare_empty_spaces(self, emitter):
-        """Test preparation with empty space list."""
-        scores = emitter._prepare_space_scores([], 1704067200)
-        assert scores == []
 
 
 class TestEmitAll:
@@ -281,6 +246,198 @@ class TestEmitAll:
         first_batch = HermesScoresBatch()
         first_batch.ParseFromString(first_message)
         assert first_batch.is_final is False
+
+class TestEmittedContent:
+    """Verify the bytes we produce to Kafka via the public emit_all interface.
+
+    These tests deserialize the serialized protobuf payloads and assert the
+    field values — the same coverage TestPrepareScores used to provide, but
+    through the public interface so the tests survive internal refactors.
+    """
+
+    def _deserialize_batches(self, mock_producer):
+        from src.pb import HermesScoresBatch
+
+        batches = []
+        for call_args in mock_producer.produce.call_args_list:
+            batch = HermesScoresBatch()
+            batch.ParseFromString(call_args.kwargs["value"])
+            batches.append(batch)
+        return batches
+
+    def test_emit_all_encodes_entity_scores(self, emitter, mock_producer, sample_entities, sample_spaces):
+        emitter.emit_all(sample_entities, sample_spaces)
+        batches = self._deserialize_batches(mock_producer)
+
+        entity_scores = [s for b in batches for s in b.entity_scores]
+        assert len(entity_scores) == 2
+
+        assert entity_scores[0].entity_id == bytes.fromhex("11111111111111111111111111111111")
+        assert entity_scores[0].score == pytest.approx(0.85)
+        assert entity_scores[0].updated_at > 0
+
+        assert entity_scores[1].entity_id == bytes.fromhex("33333333333333333333333333333333")
+        assert entity_scores[1].score == pytest.approx(0.65)
+
+    def test_emit_all_encodes_perspective_scores(self, emitter, mock_producer, sample_entities, sample_spaces):
+        emitter.emit_all(sample_entities, sample_spaces)
+        batches = self._deserialize_batches(mock_producer)
+
+        persp_scores = [s for b in batches for s in b.perspective_scores]
+        assert len(persp_scores) == 3
+
+        assert persp_scores[0].entity_id == bytes.fromhex("11111111111111111111111111111111")
+        assert persp_scores[0].space_id == bytes.fromhex("22222222222222222222222222222222")
+        assert persp_scores[0].score == pytest.approx(0.9)
+
+        assert persp_scores[1].entity_id == bytes.fromhex("33333333333333333333333333333333")
+        assert persp_scores[1].space_id == bytes.fromhex("22222222222222222222222222222222")
+        assert persp_scores[1].score == pytest.approx(0.7)
+
+        assert persp_scores[2].space_id == bytes.fromhex("44444444444444444444444444444444")
+        assert persp_scores[2].score == pytest.approx(0.6)
+
+    def test_emit_all_encodes_space_scores(self, emitter, mock_producer, sample_entities, sample_spaces):
+        emitter.emit_all(sample_entities, sample_spaces)
+        batches = self._deserialize_batches(mock_producer)
+
+        space_scores = [s for b in batches for s in b.space_scores]
+        assert len(space_scores) == 2
+
+        assert space_scores[0].space_id == bytes.fromhex("22222222222222222222222222222222")
+        assert space_scores[0].score == pytest.approx(0.8)
+
+        assert space_scores[1].space_id == bytes.fromhex("44444444444444444444444444444444")
+        assert space_scores[1].score == pytest.approx(0.64)
+
+    def test_emit_all_empty_inputs_produces_nothing(self, emitter, mock_producer):
+        emitter.emit_all([], [])
+        assert mock_producer.produce.call_count == 0
+
+    def test_emit_all_sequence_is_monotonic(self, mock_producer):
+        from src.pb import HermesScoresBatch
+
+        emitter = ScoringDataEmitter(broker="localhost:9092", topic="test.scores", batch_size=2)
+        now = datetime.now()
+        entities = [Entity(id=f"{i:032x}", created_at=now) for i in range(5)]
+        for e in entities:
+            e.normalized_score = 0.5
+            e.perspectives = []
+
+        emitter.emit_all(entities, [])
+
+        sequences = []
+        computed_ats = set()
+        for call_args in mock_producer.produce.call_args_list:
+            batch = HermesScoresBatch()
+            batch.ParseFromString(call_args.kwargs["value"])
+            sequences.append(batch.batch_sequence)
+            computed_ats.add(batch.computed_at)
+
+        assert sequences == list(range(len(sequences)))
+        assert len(computed_ats) == 1  # same computed_at across all batches
+
+    def test_emit_all_last_batch_exactly_full_is_final(self, mock_producer):
+        """Edge case: when the last item exactly fills a batch, that batch must be is_final=True."""
+        from src.pb import HermesScoresBatch
+
+        emitter = ScoringDataEmitter(broker="localhost:9092", topic="test.scores", batch_size=2)
+        now = datetime.now()
+        # Exactly 4 entities with batch_size=2 -> 2 batches, second exactly full
+        entities = [Entity(id=f"{i:032x}", created_at=now) for i in range(4)]
+        for e in entities:
+            e.normalized_score = 0.5
+            e.perspectives = []
+
+        emitter.emit_all(entities, [])
+
+        assert mock_producer.produce.call_count == 2
+        last_message = mock_producer.produce.call_args_list[-1].kwargs["value"]
+        last_batch = HermesScoresBatch()
+        last_batch.ParseFromString(last_message)
+        assert last_batch.is_final is True
+        assert len(last_batch.entity_scores) == 2  # exactly full
+
+        first_message = mock_producer.produce.call_args_list[0].kwargs["value"]
+        first_batch = HermesScoresBatch()
+        first_batch.ParseFromString(first_message)
+        assert first_batch.is_final is False
+
+
+class TestEmitProgressLogging:
+    """Verify the emit phase emits transition and periodic progress logs.
+
+    Rationale: the emit phase in production handles ~5M items and previously
+    logged nothing between "Emitting scores to Kafka" and "Scores emitted to
+    Kafka successfully" — when it OOMed mid-phase there was no way to tell
+    which item kind was the culprit.
+    """
+
+    def test_transition_log_fires_after_each_non_empty_kind(self, caplog, mock_producer, sample_entities, sample_spaces):
+        emitter = ScoringDataEmitter(broker="localhost:9092", topic="test.scores", batch_size=100)
+        with caplog.at_level(logging.INFO, logger="src.scoring_data_emitter.scoring_data_emitter"):
+            emitter.emit_all(sample_entities, sample_spaces)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("Finished emitting entity scores" in m and "2 items" in m for m in messages), messages
+        assert any("Finished emitting perspective scores" in m and "3 items" in m for m in messages), messages
+        assert any("Finished emitting space scores" in m and "2 items" in m for m in messages), messages
+
+    def test_transition_log_is_skipped_for_empty_kind(self, caplog, mock_producer):
+        """Don't emit noise lines for kinds that had no items."""
+        emitter = ScoringDataEmitter(broker="localhost:9092", topic="test.scores", batch_size=100)
+        now = datetime.now()
+        # Only entities, no perspectives, no spaces
+        entities = [Entity(id=f"{i:032x}", created_at=now) for i in range(3)]
+        for e in entities:
+            e.normalized_score = 0.5
+            e.perspectives = []
+
+        with caplog.at_level(logging.INFO, logger="src.scoring_data_emitter.scoring_data_emitter"):
+            emitter.emit_all(entities, [])
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("Finished emitting entity scores" in m for m in messages)
+        assert not any("Finished emitting perspective scores" in m for m in messages)
+        assert not any("Finished emitting space scores" in m for m in messages)
+
+    def test_progress_log_fires_at_configured_interval(self, caplog, mock_producer):
+        """With emit_progress_every=2 and 5 batches, we expect 2 progress lines
+        (after the 2nd and 4th non-final produce). The final batch is not
+        counted — it's covered by the summary log."""
+        emitter = ScoringDataEmitter(
+            broker="localhost:9092",
+            topic="test.scores",
+            batch_size=2,
+            emit_progress_every=2,
+        )
+        now = datetime.now()
+        # 9 items / batch_size=2 → 5 batches (4 non-final + 1 final)
+        entities = [Entity(id=f"{i:032x}", created_at=now) for i in range(9)]
+        for e in entities:
+            e.normalized_score = 0.5
+            e.perspectives = []
+
+        with caplog.at_level(logging.INFO, logger="src.scoring_data_emitter.scoring_data_emitter"):
+            emitter.emit_all(entities, [])
+
+        progress_messages = [r.getMessage() for r in caplog.records if "Emit progress" in r.getMessage()]
+        assert len(progress_messages) == 2, progress_messages
+        # First progress log fires after 2 non-final batches (4 entities emitted in flushed batches)
+        assert "4 entities" in progress_messages[0]
+        # Second fires after 4 non-final batches (8 entities in flushed batches)
+        assert "8 entities" in progress_messages[1]
+
+    def test_progress_log_silent_for_small_runs(self, caplog, mock_producer, sample_entities, sample_spaces):
+        """With default interval of 500 and only a handful of items, no progress
+        logs should fire — the transition and summary logs are enough."""
+        emitter = ScoringDataEmitter(broker="localhost:9092", topic="test.scores", batch_size=100)
+        with caplog.at_level(logging.INFO, logger="src.scoring_data_emitter.scoring_data_emitter"):
+            emitter.emit_all(sample_entities, sample_spaces)
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert not any("Emit progress" in m for m in messages)
+
 
 class TestDeliveryCallback:
     """Tests for delivery callback handling."""

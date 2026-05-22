@@ -91,8 +91,9 @@ class ScoringDataProvider:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, created_at
-                FROM entities
+                SELECT e.id, e.created_at
+                FROM entities e
+                WHERE EXISTS (SELECT 1 FROM "values" v WHERE v.entity_id = e.id)
                 """
             )
             rows = cur.fetchall()

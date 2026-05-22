@@ -72,32 +72,42 @@ pub enum IpfsCacheError {
 /// This ensures correctness while maintaining parallelism across blocks.
 #[derive(Default)]
 struct PendingFetches {
-    /// Map of block number -> (cursor, pending count)
-    blocks: BTreeMap<u64, (String, usize, usize, Instant)>,
+    /// Map of block number -> (cursor, block timestamp seconds, pending count, total count, started at)
+    blocks: BTreeMap<u64, (String, i64, usize, usize, Instant)>,
 }
 
 impl PendingFetches {
     /// Register pending fetches for a block.
-    fn add_block(&mut self, block: u64, cursor: String, count: usize) {
+    fn add_block(&mut self, block: u64, cursor: String, timestamp_seconds: i64, count: usize) {
         if count > 0 {
-            self.blocks
-                .insert(block, (cursor, count, count, Instant::now()));
+            self.blocks.insert(
+                block,
+                (cursor, timestamp_seconds, count, count, Instant::now()),
+            );
         }
     }
 
     /// Mark one fetch as complete for a block.
     ///
-    /// Returns `Some((block, cursor))` if this block is now fully complete
-    /// AND it's the minimum block (safe to persist).
-    fn complete_one(&mut self, block: u64) -> Option<(u64, String, usize, Duration)> {
+    /// Returns `Some((block, cursor, timestamp_seconds, total, duration))` if
+    /// this block is now fully complete AND it's the minimum block (safe to
+    /// persist).
+    fn complete_one(&mut self, block: u64) -> Option<(u64, String, i64, usize, Duration)> {
         // First check if this block exists and decrement
-        let (is_complete, cursor, total, started_at) = match self.blocks.get_mut(&block) {
-            Some((cursor, remaining, total, started_at)) => {
-                *remaining = remaining.saturating_sub(1);
-                (*remaining == 0, cursor.clone(), *total, *started_at)
-            }
-            None => return None,
-        };
+        let (is_complete, cursor, timestamp_seconds, total, started_at) =
+            match self.blocks.get_mut(&block) {
+                Some((cursor, timestamp_seconds, remaining, total, started_at)) => {
+                    *remaining = remaining.saturating_sub(1);
+                    (
+                        *remaining == 0,
+                        cursor.clone(),
+                        *timestamp_seconds,
+                        *total,
+                        *started_at,
+                    )
+                }
+                None => return None,
+            };
 
         if !is_complete {
             return None;
@@ -108,7 +118,13 @@ impl PendingFetches {
         self.blocks.remove(&block);
 
         if is_min {
-            Some((block, cursor, total, started_at.elapsed()))
+            Some((
+                block,
+                cursor,
+                timestamp_seconds,
+                total,
+                started_at.elapsed(),
+            ))
         } else {
             None
         }
@@ -176,6 +192,12 @@ impl Sink for IpfsCacheSink {
 
         // Get block metadata
         let block_number = data.clock.as_ref().map(|c| c.number).unwrap_or(0);
+        let block_timestamp_seconds: i64 = data
+            .clock
+            .as_ref()
+            .and_then(|c| c.timestamp.as_ref())
+            .map(|t| t.seconds)
+            .unwrap_or(0);
         let cursor = data.cursor.clone();
         let edit_count = uri_list.uris.len();
 
@@ -184,8 +206,14 @@ impl Sink for IpfsCacheSink {
             info!(block = block_number, "Checkpoint");
         }
 
-        // Skip empty blocks entirely - no span created
+        // Skip empty blocks entirely - no span created.
+        // Still advance the lag gauges so HermesBehindChainTip doesn't false-fire
+        // during stretches of blocks that happen to contain no IPFS URIs.
         if edit_count == 0 {
+            hermes_instrumentation::metrics::set_latest_processed_block(block_number);
+            hermes_instrumentation::metrics::set_latest_processed_block_timestamp(
+                block_timestamp_seconds,
+            );
             return Ok(());
         }
 
@@ -209,10 +237,12 @@ impl Sink for IpfsCacheSink {
         info!(block = block_number, edits = edit_count, "Processing edits");
 
         // Register all pending fetches for this block upfront
-        self.pending
-            .lock()
-            .await
-            .add_block(block_number, cursor.clone(), edit_count);
+        self.pending.lock().await.add_block(
+            block_number,
+            cursor.clone(),
+            block_timestamp_seconds,
+            edit_count,
+        );
 
         // Process each IPFS URI
         for ipfs_uri in uri_list.uris {
@@ -270,8 +300,13 @@ impl Sink for IpfsCacheSink {
                     // Mark this fetch as complete - persist cursor if block fully completed
                     let cursor_to_persist = pending.lock().await.complete_one(block_num);
 
-                    if let Some((persist_block, persist_cursor, total, duration)) =
-                        cursor_to_persist
+                    if let Some((
+                        persist_block,
+                        persist_cursor,
+                        persist_timestamp,
+                        total,
+                        duration,
+                    )) = cursor_to_persist
                     {
                         debug!(
                             block = persist_block,
@@ -279,7 +314,9 @@ impl Sink for IpfsCacheSink {
                         );
                         info!(
                             event = "ipfs_cache.batch_end",
+                            indexer_id = INDEXER_ID,
                             block_number = persist_block,
+                            cursor = %persist_cursor,
                             edit_count = total,
                             duration_ms = duration.as_millis(),
                             "Batch end"
@@ -290,7 +327,22 @@ impl Sink for IpfsCacheSink {
                             .persist_cursor(INDEXER_ID, &persist_cursor, persist_block)
                             .await
                         {
-                            error!(error = %e, "Failed to persist cursor");
+                            error!(
+                                event = "ipfs_cache.persist_cursor_failed",
+                                indexer_id = INDEXER_ID,
+                                block_number = persist_block,
+                                cursor = %persist_cursor,
+                                error = %e,
+                                "Failed to persist cursor"
+                            );
+                        } else {
+                            // Cursor durably persisted — update lag gauges.
+                            hermes_instrumentation::metrics::set_latest_processed_block(
+                                persist_block,
+                            );
+                            hermes_instrumentation::metrics::set_latest_processed_block_timestamp(
+                                persist_timestamp,
+                            );
                         }
                     }
 
@@ -435,17 +487,23 @@ async fn process_ipfs_uri(
 mod tests {
     use super::*;
 
+    /// Synthetic Unix-seconds timestamps for tests. Distinct from block numbers
+    /// so a regression that swaps the two would surface.
+    const TS_100: i64 = 1_700_000_100;
+    const TS_101: i64 = 1_700_000_101;
+    const TS_102: i64 = 1_700_000_102;
+
     #[test]
     fn pending_fetches_single_block_single_edit() {
         let mut pending = PendingFetches::default();
 
-        pending.add_block(100, "cursor_100".to_string(), 1);
+        pending.add_block(100, "cursor_100".to_string(), TS_100, 1);
 
         // Completing the only fetch should return the cursor
         let result = pending.complete_one(100);
         assert!(matches!(
             result,
-            Some((100, ref cursor, 1, _)) if cursor == "cursor_100"
+            Some((100, ref cursor, TS_100, 1, _)) if cursor == "cursor_100"
         ));
 
         // No more pending
@@ -456,7 +514,7 @@ mod tests {
     fn pending_fetches_single_block_multiple_edits() {
         let mut pending = PendingFetches::default();
 
-        pending.add_block(100, "cursor_100".to_string(), 3);
+        pending.add_block(100, "cursor_100".to_string(), TS_100, 3);
 
         // First two completions should not persist
         assert_eq!(pending.complete_one(100), None);
@@ -465,7 +523,7 @@ mod tests {
         // Third completion should persist
         assert!(matches!(
             pending.complete_one(100),
-            Some((100, ref cursor, 3, _)) if cursor == "cursor_100"
+            Some((100, ref cursor, TS_100, 3, _)) if cursor == "cursor_100"
         ));
 
         assert!(pending.blocks.is_empty());
@@ -475,20 +533,20 @@ mod tests {
     fn pending_fetches_multiple_blocks_complete_in_order() {
         let mut pending = PendingFetches::default();
 
-        pending.add_block(100, "cursor_100".to_string(), 2);
-        pending.add_block(101, "cursor_101".to_string(), 1);
+        pending.add_block(100, "cursor_100".to_string(), TS_100, 2);
+        pending.add_block(101, "cursor_101".to_string(), TS_101, 1);
 
         // Complete block 100 first
         assert_eq!(pending.complete_one(100), None); // 1 remaining
         assert!(matches!(
             pending.complete_one(100),
-            Some((100, ref cursor, 2, _)) if cursor == "cursor_100"
+            Some((100, ref cursor, TS_100, 2, _)) if cursor == "cursor_100"
         ));
 
         // Now complete block 101
         assert!(matches!(
             pending.complete_one(101),
-            Some((101, ref cursor, 1, _)) if cursor == "cursor_101"
+            Some((101, ref cursor, TS_101, 1, _)) if cursor == "cursor_101"
         ));
 
         assert!(pending.blocks.is_empty());
@@ -498,8 +556,8 @@ mod tests {
     fn pending_fetches_multiple_blocks_complete_out_of_order() {
         let mut pending = PendingFetches::default();
 
-        pending.add_block(100, "cursor_100".to_string(), 2);
-        pending.add_block(101, "cursor_101".to_string(), 1);
+        pending.add_block(100, "cursor_100".to_string(), TS_100, 2);
+        pending.add_block(101, "cursor_101".to_string(), TS_101, 1);
 
         // Complete block 101 first - should NOT persist (100 still pending)
         assert_eq!(pending.complete_one(101), None);
@@ -511,7 +569,7 @@ mod tests {
         assert_eq!(pending.complete_one(100), None); // 1 remaining
         assert!(matches!(
             pending.complete_one(100),
-            Some((100, ref cursor, 2, _)) if cursor == "cursor_100"
+            Some((100, ref cursor, TS_100, 2, _)) if cursor == "cursor_100"
         ));
 
         assert!(pending.blocks.is_empty());
@@ -521,9 +579,9 @@ mod tests {
     fn pending_fetches_three_blocks_middle_completes_first() {
         let mut pending = PendingFetches::default();
 
-        pending.add_block(100, "cursor_100".to_string(), 1);
-        pending.add_block(101, "cursor_101".to_string(), 1);
-        pending.add_block(102, "cursor_102".to_string(), 1);
+        pending.add_block(100, "cursor_100".to_string(), TS_100, 1);
+        pending.add_block(101, "cursor_101".to_string(), TS_101, 1);
+        pending.add_block(102, "cursor_102".to_string(), TS_102, 1);
 
         // Complete middle block - should NOT persist
         assert_eq!(pending.complete_one(101), None);
@@ -534,7 +592,7 @@ mod tests {
         // Complete first block - should persist
         assert!(matches!(
             pending.complete_one(100),
-            Some((100, ref cursor, 1, _)) if cursor == "cursor_100"
+            Some((100, ref cursor, TS_100, 1, _)) if cursor == "cursor_100"
         ));
 
         // 101 and 102 were already removed, nothing left
@@ -546,7 +604,7 @@ mod tests {
         let mut pending = PendingFetches::default();
 
         // Adding a block with 0 edits should not add it
-        pending.add_block(100, "cursor_100".to_string(), 0);
+        pending.add_block(100, "cursor_100".to_string(), TS_100, 0);
 
         assert!(pending.blocks.is_empty());
     }
@@ -555,7 +613,7 @@ mod tests {
     fn pending_fetches_complete_unknown_block() {
         let mut pending = PendingFetches::default();
 
-        pending.add_block(100, "cursor_100".to_string(), 1);
+        pending.add_block(100, "cursor_100".to_string(), TS_100, 1);
 
         // Completing an unknown block should return None
         assert_eq!(pending.complete_one(999), None);
@@ -568,9 +626,9 @@ mod tests {
     fn pending_fetches_later_blocks_complete_then_first() {
         let mut pending = PendingFetches::default();
 
-        pending.add_block(100, "cursor_100".to_string(), 1);
-        pending.add_block(101, "cursor_101".to_string(), 1);
-        pending.add_block(102, "cursor_102".to_string(), 1);
+        pending.add_block(100, "cursor_100".to_string(), TS_100, 1);
+        pending.add_block(101, "cursor_101".to_string(), TS_101, 1);
+        pending.add_block(102, "cursor_102".to_string(), TS_102, 1);
 
         // Complete 102 first - no persist (100 still pending)
         assert_eq!(pending.complete_one(102), None);
@@ -583,7 +641,7 @@ mod tests {
         // Complete 100 - persist cursor 100 (it's now the min and complete)
         assert!(matches!(
             pending.complete_one(100),
-            Some((100, ref cursor, 1, _)) if cursor == "cursor_100"
+            Some((100, ref cursor, TS_100, 1, _)) if cursor == "cursor_100"
         ));
 
         // All blocks removed
@@ -594,8 +652,8 @@ mod tests {
     fn pending_fetches_interleaved_completions() {
         let mut pending = PendingFetches::default();
 
-        pending.add_block(100, "cursor_100".to_string(), 3);
-        pending.add_block(101, "cursor_101".to_string(), 2);
+        pending.add_block(100, "cursor_100".to_string(), TS_100, 3);
+        pending.add_block(101, "cursor_101".to_string(), TS_101, 2);
 
         // Interleaved completions
         assert_eq!(pending.complete_one(100), None); // 100: 2 remaining
@@ -604,7 +662,7 @@ mod tests {
         assert_eq!(pending.complete_one(101), None); // 101: 0 remaining, but 100 still pending
         assert!(matches!(
             pending.complete_one(100),
-            Some((100, ref cursor, 3, _)) if cursor == "cursor_100"
+            Some((100, ref cursor, TS_100, 3, _)) if cursor == "cursor_100"
         )); // 100: 0 remaining
 
         assert!(pending.blocks.is_empty());

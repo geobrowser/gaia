@@ -1,6 +1,11 @@
 import {Pool} from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
-import {applyDefaultFirstIfOmitted, assertPaginationWithinLimit, MAX_PAGINATION_LIMIT} from "../paginationCapPlugin"
+import {
+	applyDefaultFirstIfOmitted,
+	assertPaginationWithinLimit,
+	DEFAULT_PAGINATION_LIMIT,
+	MAX_PAGINATION_LIMIT,
+} from "../paginationCapPlugin"
 import {graphqlServer} from "../postgraphile"
 
 async function executeGraphQL(query: string, variables?: Record<string, unknown>) {
@@ -32,14 +37,14 @@ describe("assertPaginationWithinLimit", () => {
 
 describe("applyDefaultFirstIfOmitted", () => {
 	it("injects default first when neither first nor last is supplied", () => {
-		expect(applyDefaultFirstIfOmitted({})).toEqual({first: MAX_PAGINATION_LIMIT})
+		expect(applyDefaultFirstIfOmitted({})).toEqual({first: DEFAULT_PAGINATION_LIMIT})
 	})
 
 	it("preserves other args while injecting the default first", () => {
 		expect(applyDefaultFirstIfOmitted({offset: 10, filter: {name: "x"}})).toEqual({
 			offset: 10,
 			filter: {name: "x"},
-			first: MAX_PAGINATION_LIMIT,
+			first: DEFAULT_PAGINATION_LIMIT,
 		})
 	})
 
@@ -55,7 +60,7 @@ describe("applyDefaultFirstIfOmitted", () => {
 		// if `first` came through as anything non-numeric (shouldn't happen at runtime
 		// due to Int scalar validation) we still shouldn't silently override it
 		expect(applyDefaultFirstIfOmitted({first: null as unknown as number})).toEqual({
-			first: MAX_PAGINATION_LIMIT,
+			first: DEFAULT_PAGINATION_LIMIT,
 		})
 	})
 })
@@ -154,9 +159,9 @@ describe("PaginationCapPlugin", () => {
 
 	it("accepts queries with no pagination argument (cap enforced via injected default)", async () => {
 		// When `first` is omitted we still succeed, but the plugin injects a
-		// default `first = MAX_PAGINATION_LIMIT` so PostGraphile cannot resolve
-		// an unbounded collection. See the seeded integration block below for
-		// the length assertion.
+		// default `first = DEFAULT_PAGINATION_LIMIT` so PostGraphile cannot
+		// resolve an unbounded collection. See the seeded integration block
+		// below for the length assertion.
 		const result = await executeGraphQL(`
 			{
 				entities { id }
@@ -189,6 +194,25 @@ describe("PaginationCapPlugin", () => {
 		expect(result.body.errors[0]?.extensions?.code).toBe("BAD_USER_INPUT")
 	})
 
+	it("rejects a connection query that supplies both first and last", async () => {
+		// Previously surfaced as a plain Error from PostGraphile
+		// ("We don't support setting both first and last"), which reached Sentry
+		// as a server-side issue. Now intercepted by assertPaginationWithinLimit
+		// and tagged BAD_USER_INPUT.
+		const result = await executeGraphQL(`
+			{
+				entitiesConnection(first: 5, last: 5) {
+					nodes { id }
+				}
+			}
+		`)
+
+		expect(result.status).toBe(400)
+		expect(result.body.errors).toBeDefined()
+		expect(result.body.errors[0]?.extensions?.code).toBe("BAD_USER_INPUT")
+		expect(result.body.errors[0]?.message).toMatch(/both "first" and "last"/)
+	})
+
 	it("rejects oversized last on nested sub-collections", async () => {
 		// `last` is only exposed on the Relay connection form — on Entity the
 		// connection form of the from_entity_id back-ref is `relations` (per the
@@ -213,9 +237,12 @@ describe("PaginationCapPlugin", () => {
 /**
  * Integration test that seeds MAX_PAGINATION_LIMIT+N rows directly into the
  * entities table and verifies that a bare collection query resolves at most
- * MAX_PAGINATION_LIMIT rows — i.e. that applyDefaultFirstIfOmitted actually
- * propagates a LIMIT into the generated SQL. Runs against the test DB
- * configured in vitest.config.ts.
+ * DEFAULT_PAGINATION_LIMIT rows — i.e. that applyDefaultFirstIfOmitted
+ * actually propagates a LIMIT into the generated SQL. Runs against the test
+ * DB configured in vitest.config.ts.
+ *
+ * The seeded row count exceeds MAX (not just DEFAULT) so the same fixture can
+ * exercise the cap-rejection paths below.
  */
 describe("PaginationCapPlugin default-first injection (seeded)", () => {
 	const OVER_LIMIT = MAX_PAGINATION_LIMIT + 5
@@ -239,7 +266,7 @@ describe("PaginationCapPlugin default-first injection (seeded)", () => {
 		await pool.end()
 	})
 
-	it("returns at most MAX_PAGINATION_LIMIT rows when first is omitted", async () => {
+	it("returns at most DEFAULT_PAGINATION_LIMIT rows when first is omitted", async () => {
 		const result = await executeGraphQL(`
 			{
 				entities { id }
@@ -248,7 +275,7 @@ describe("PaginationCapPlugin default-first injection (seeded)", () => {
 		expect(result.status).toBe(200)
 		expect(result.body.errors).toBeUndefined()
 		const rows: Array<{id: string}> = result.body.data.entities
-		expect(rows.length).toBe(MAX_PAGINATION_LIMIT)
+		expect(rows.length).toBe(DEFAULT_PAGINATION_LIMIT)
 	})
 
 	it("returns exactly first rows when a first < cap is specified", async () => {
@@ -263,7 +290,7 @@ describe("PaginationCapPlugin default-first injection (seeded)", () => {
 		expect(rows.length).toBe(50)
 	})
 
-	it("returns at most MAX_PAGINATION_LIMIT rows via the connection form when first is omitted", async () => {
+	it("returns at most DEFAULT_PAGINATION_LIMIT rows via the connection form when first is omitted", async () => {
 		const result = await executeGraphQL(`
 			{
 				entitiesConnection {
@@ -274,7 +301,7 @@ describe("PaginationCapPlugin default-first injection (seeded)", () => {
 		expect(result.status).toBe(200)
 		expect(result.body.errors).toBeUndefined()
 		const nodes: Array<{id: string}> = result.body.data.entitiesConnection.nodes
-		expect(nodes.length).toBe(MAX_PAGINATION_LIMIT)
+		expect(nodes.length).toBe(DEFAULT_PAGINATION_LIMIT)
 	})
 
 	// --- Boundary tests: at-cap vs just-over-cap ---
@@ -459,7 +486,7 @@ describe("PaginationCapPlugin nested default-first injection (seeded)", () => {
 		await pool.end()
 	})
 
-	it("caps nested relations at MAX when first is omitted on the nested field", async () => {
+	it("caps nested relations at DEFAULT when first is omitted on the nested field", async () => {
 		const result = await executeGraphQL(
 			`
 				query NestedDefault($id: UUID!) {
@@ -475,7 +502,7 @@ describe("PaginationCapPlugin nested default-first injection (seeded)", () => {
 		expect(result.status).toBe(200)
 		expect(result.body.errors).toBeUndefined()
 		const nested: Array<{id: string}> = result.body.data.entity.relationsList
-		expect(nested.length).toBe(MAX_PAGINATION_LIMIT)
+		expect(nested.length).toBe(DEFAULT_PAGINATION_LIMIT)
 	})
 
 	it("honors explicit first < cap on the nested field", async () => {

@@ -1,0 +1,390 @@
+apiVersion: v1
+data:
+  hermes-lag.json: |-
+    {
+      "id": null,
+      "uid": "hermes-lag",
+      "title": "Hermes Lag",
+      "tags": [
+        "hermes",
+        "lag",
+        "observability"
+      ],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {
+              "selected": true,
+              "text": "Prometheus",
+              "value": "Prometheus"
+            }
+          },
+          {
+            "name": "namespace",
+            "label": "Environment",
+            "type": "custom",
+            "query": "production : knowledge, staging : knowledge-staging",
+            "current": {
+              "selected": true,
+              "text": "production",
+              "value": "knowledge"
+            },
+            "options": [
+              {
+                "selected": true,
+                "text": "production",
+                "value": "knowledge"
+              },
+              {
+                "selected": false,
+                "text": "staging",
+                "value": "knowledge-staging"
+              }
+            ]
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "row",
+          "title": "Current State",
+          "id": 100,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "stat",
+          "title": "Chain Tip Block",
+          "id": 1,
+          "gridPos": { "h": 4, "w": 5, "x": 0, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "max(chain_tip_block_number{gaia_namespace=\"$namespace\"})",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "decimals": 0,
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "blue", "value": null }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Pipeline Block",
+          "id": 2,
+          "gridPos": { "h": 4, "w": 5, "x": 5, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "max(hermes_latest_processed_block{service=\"hermes-pipeline\",namespace=\"$namespace\"})",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "decimals": 0,
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Cache Block",
+          "id": 3,
+          "gridPos": { "h": 4, "w": 5, "x": 10, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "max(hermes_latest_processed_block{service=\"hermes-ipfs-cache\",namespace=\"$namespace\"})",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "decimals": 0,
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Pipeline Lag (blocks)",
+          "id": 4,
+          "gridPos": { "h": 4, "w": 4, "x": 15, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "max(chain_tip_block_number{gaia_namespace=\"$namespace\"}) - max(hermes_latest_processed_block{service=\"hermes-pipeline\",namespace=\"$namespace\"})",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "background",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 50 },
+                  { "color": "red", "value": 200 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "stat",
+          "title": "Cache Lag (blocks)",
+          "id": 5,
+          "gridPos": { "h": 4, "w": 5, "x": 19, "y": 1 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "max(chain_tip_block_number{gaia_namespace=\"$namespace\"}) - max(hermes_latest_processed_block{service=\"hermes-ipfs-cache\",namespace=\"$namespace\"})",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "colorMode": "background",
+            "graphMode": "none"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "color": { "mode": "thresholds" },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 100 },
+                  { "color": "red", "value": 400 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "row",
+          "title": "Lag Over Time",
+          "id": 200,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "Lag in Blocks (chain tip − processed)",
+          "id": 6,
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "max(chain_tip_block_number{gaia_namespace=\"$namespace\"}) - max(hermes_latest_processed_block{service=\"hermes-pipeline\",namespace=\"$namespace\"})",
+              "legendFormat": "hermes-pipeline",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "max(chain_tip_block_number{gaia_namespace=\"$namespace\"}) - max(hermes_latest_processed_block{service=\"hermes-ipfs-cache\",namespace=\"$namespace\"})",
+              "legendFormat": "hermes-ipfs-cache",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "decimals": 0,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "spanNulls": true
+              }
+            }
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] },
+            "tooltip": { "mode": "multi" }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Lag in Seconds (now − block timestamp)",
+          "id": 7,
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "time() - max(hermes_latest_processed_block_timestamp{service=\"hermes-pipeline\",namespace=\"$namespace\"})",
+              "legendFormat": "hermes-pipeline",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "time() - max(hermes_latest_processed_block_timestamp{service=\"hermes-ipfs-cache\",namespace=\"$namespace\"})",
+              "legendFormat": "hermes-ipfs-cache",
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "time() - max(chain_tip_block_number_timestamp{gaia_namespace=\"$namespace\"})",
+              "legendFormat": "chain tip",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "decimals": 0,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "spanNulls": true
+              }
+            }
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] },
+            "tooltip": { "mode": "multi" }
+          }
+        },
+        {
+          "type": "row",
+          "title": "Block Progression",
+          "id": 300,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "type": "timeseries",
+          "title": "Latest Block Number Over Time",
+          "id": 8,
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 15 },
+          "datasource": { "type": "prometheus", "uid": "$datasource" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "max(chain_tip_block_number{gaia_namespace=\"$namespace\"})",
+              "legendFormat": "chain tip",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "max(hermes_latest_processed_block{service=\"hermes-pipeline\",namespace=\"$namespace\"})",
+              "legendFormat": "hermes-pipeline",
+              "refId": "B"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "$datasource" },
+              "expr": "max(hermes_latest_processed_block{service=\"hermes-ipfs-cache\",namespace=\"$namespace\"})",
+              "legendFormat": "hermes-ipfs-cache",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none",
+              "decimals": 0,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "spanNulls": true
+              }
+            }
+          },
+          "options": {
+            "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] },
+            "tooltip": { "mode": "multi" }
+          }
+        }
+      ]
+    }
+kind: ConfigMap
+metadata:
+  labels:
+    app: kube-prometheus-stack-grafana
+    grafana_dashboard: "1"
+    release: kube-prometheus-stack
+  name: hermes-lag-dashboard
+  namespace: monitoring

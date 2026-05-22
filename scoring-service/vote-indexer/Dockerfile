@@ -16,6 +16,7 @@ WORKDIR /app
 COPY hermes-schema ./hermes-schema
 COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-kafka ./hermes-kafka
+COPY sdk ./sdk
 COPY scoring-service/vote-indexer ./scoring-service/vote-indexer
 
 # Build from the crate directory (standalone, not as workspace member)

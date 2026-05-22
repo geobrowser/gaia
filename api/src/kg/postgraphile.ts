@@ -8,13 +8,23 @@ import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
 import {classifyDbFailure} from "../services/dbFailures"
-import {getGraphqlPressureSnapshot, recordGraphqlAcquireTimeout, shouldShedPoolTraffic} from "../services/dbSaturation"
+import {
+	getGraphqlPressureSnapshot,
+	recordGraphqlAcquireTimeout,
+	type SaturationSnapshot,
+	shouldShedPoolTraffic,
+} from "../services/dbSaturation"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
+import {useCostLogger} from "./costLoggerPlugin"
+import EntityComputedTextFilterPlugin from "./entityComputedTextFilterPlugin"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
+import {shouldUnmaskError} from "./errorMasking"
+import HideProceduresPlugin from "./hideProceduresPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
-import PaginationCapPlugin from "./paginationCapPlugin"
+import PaginationCapPlugin, {NoFirstAndLastRule} from "./paginationCapPlugin"
 import {useSearchInvocationLogger} from "./searchInvocationLogger"
+import {createShedEpisodeTracker} from "./shedEpisodeTracker"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 import {createValkeyCache} from "./valkeyCache"
 import ValueOrderByScorePlugin from "./valueOrderByScorePlugin"
@@ -65,16 +75,48 @@ export function getGraphqlPoolPressure() {
 	return getGraphqlPressureSnapshot(getGraphqlPoolStats())
 }
 
-function isUserInputGraphQLError(error: unknown): error is GraphQLError {
-	if (!(error instanceof GraphQLError)) {
-		return false
-	}
+// Rising-edge log tracker: remembers the last logged saturation episode so
+// we emit an onset log on the first shed of each new episode and skip the
+// rest (avoiding log storms under load).
+const shedEpisodeTracker = createShedEpisodeTracker()
 
-	if (error.extensions?.code === "BAD_USER_INPUT") {
-		return true
-	}
+function emitShedSignal(args: {
+	poolPressure: SaturationSnapshot
+	operationName: string
+	queryFingerprint: string
+	query: string
+}) {
+	const {poolPressure, operationName, queryFingerprint, query} = args
 
-	return error.originalError instanceof GraphQLError && error.originalError.extensions?.code === "BAD_USER_INPUT"
+	Sentry.metrics.count("graphql.pool_shed", 1, {
+		attributes: {
+			operation: operationName,
+			reasons: poolPressure.reasons.length > 0 ? poolPressure.reasons.join(",") : "saturated_no_signal",
+		},
+	})
+
+	if (shedEpisodeTracker.shouldLogOnset(poolPressure)) {
+		log.warn("GraphQL pool pressure shedding started", {
+			operationName,
+			queryFingerprint,
+			query,
+			poolStats: getGraphqlPoolStats(),
+			poolPressure,
+		})
+	}
+}
+
+// Push pool utilization as Sentry gauges every 10s for dashboards. Independent
+// of the request path, so it continues reporting even when traffic is shed.
+// `.unref()` allows process exit when nothing else is holding the event loop.
+const POOL_METRICS_INTERVAL_MS = 10_000
+if (process.env.SENTRY_DSN) {
+	setInterval(() => {
+		const stats = getGraphqlPoolStats()
+		Sentry.metrics.gauge("graphql.pool.total_connections", stats.totalConnections)
+		Sentry.metrics.gauge("graphql.pool.idle_connections", stats.idleConnections)
+		Sentry.metrics.gauge("graphql.pool.waiting_count", stats.waitingCount)
+	}, POOL_METRICS_INTERVAL_MS).unref()
 }
 
 // SQLSTATE codes raised intentionally by Postgres functions to signal user input errors.
@@ -131,6 +173,11 @@ const postgraphileOptions = {
 	// - ValueScalarsPlugin registers custom scalars (GeoPoint, GeoRect, Date, etc.)
 	//   and remaps Value fields to use them for self-documenting schema
 	// - EntitySpaceFilterPlugin adds efficient spaceId filter using EXISTS instead of computed column
+	// - EntityComputedTextFilterPlugin rewrites EntityFilter.name / .description filters
+	//   (and any other computed text fields backed by entities_<field>() STABLE functions)
+	//   as indexed EXISTS subqueries on values, replacing per-row function calls.
+	//   Must run AFTER ConnectionFilterPlugin so its build hook can wrap
+	//   `connectionFilterRegisterResolver` before the computed-columns sub-plugin uses it.
 	// - PaginationCapPlugin clamps first/last/offset on collection fields
 	appendPlugins: [
 		UndashedUuidPlugin,
@@ -138,8 +185,10 @@ const postgraphileOptions = {
 		ConnectionFilterPlugin,
 		SimplifyInflectionPlugin,
 		EntitySpaceFilterPlugin,
+		EntityComputedTextFilterPlugin,
 		ValueOrderByScorePlugin,
 		PaginationCapPlugin,
+		HideProceduresPlugin,
 	],
 	disableDefaultMutations: true,
 	simpleCollections: "both" as const,
@@ -159,8 +208,11 @@ const postgraphileOptions = {
 	},
 }
 
-// Create PostGraphile schemas
-const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], postgraphileOptions)
+// Create PostGraphile schemas. Exported so cost-estimator / query-shape tests
+// can run complexity calculations against the real schema instead of a fake
+// minimal one — catches schema-level surprises (NonNull wrapping, Connection
+// naming, auto-generated field shapes) that mocks don't.
+export const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], postgraphileOptions)
 
 /**
  * Yoga plugin that manages the pgClient lifecycle for PostGraphile resolvers.
@@ -179,11 +231,19 @@ const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], po
  * stale connections (e.g. from PgBouncer closing them) from being reused.
  */
 function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
+	// Per-request pgClient tracking. WeakMap keyed by the HTTP Request so the
+	// onResponse cleanup below can find and release the client even when
+	// onExecuteDone never fires (the leak path: useExecutionCancellation aborts
+	// execute() and the cleanup callback chain skips usePgClient).
+	// See api/docs/gql-pool-leak-investigation.md.
+	const requestPgClients = new WeakMap<Request, PoolClient>()
+
 	return {
 		async onExecute({extendContext, args}) {
 			const operationName = args.operationName || "anonymous"
 			const fullQuery = print(args.document)
-			const query = fullQuery.slice(0, 2000)
+			// Truncated for Sentry extras (server-side cap ~8 KB).
+			const truncatedQuery = fullQuery.slice(0, 5000)
 			const queryFingerprint = graphqlQueryFingerprint(fullQuery)
 			const acquireStartMs = Date.now()
 
@@ -191,7 +251,18 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 			// cache misses — cached responses skip usePgClient entirely.
 			const poolPressure = getGraphqlPressureSnapshot(getGraphqlPoolStats())
 			if (shouldShedPoolTraffic(poolPressure)) {
-				throw new Error("pool_pressure_shed")
+				emitShedSignal({poolPressure, operationName, queryFingerprint, query: fullQuery})
+				throw new GraphQLError("Service temporarily unavailable due to database pressure; please retry.", {
+					extensions: {
+						code: "SERVICE_UNAVAILABLE",
+						http: {
+							status: 503,
+							headers: {
+								"Retry-After": "2",
+							},
+						},
+					},
+				})
 			}
 
 			let pgClient: PoolClient
@@ -211,7 +282,7 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 					failureClass,
 					operationName,
 					queryFingerprint,
-					query,
+					query: fullQuery,
 					acquireWaitMs,
 					poolStats,
 					poolPressure,
@@ -225,7 +296,7 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 					},
 					extra: {
 						queryFingerprint,
-						query,
+						query: truncatedQuery,
 						variables: args.variableValues,
 						acquireWaitMs,
 						poolStats,
@@ -249,6 +320,13 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 
 			extendContext({pgClient})
 
+			// Track this checkout against the originating request so the
+			// onResponse hook below can release it if execute() is aborted.
+			const request = (args.contextValue as {request?: Request})?.request
+			if (request) {
+				requestPgClients.set(request, pgClient)
+			}
+
 			return {
 				onExecuteDone({result}) {
 					// If the result has GraphQL errors, the underlying connection may be
@@ -260,7 +338,22 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 					} else {
 						pgClient.release()
 					}
+					if (request) requestPgClients.delete(request)
 				},
+			}
+		},
+
+		// Belt-and-braces cleanup. Yoga's onResponse fires after the HTTP
+		// response is produced, regardless of whether execute() completed
+		// normally, threw, or was aborted by useExecutionCancellation. If the
+		// pgClient is still tracked here, onExecuteDone never ran — release it
+		// in destroy mode (release(err)) since the in-flight query may still
+		// be running on this connection and the client's state is unknown.
+		onResponse({request}) {
+			const pgClient = requestPgClients.get(request)
+			if (pgClient) {
+				pgClient.release(new Error("graphql request ended without normal cleanup"))
+				requestPgClients.delete(request)
 			}
 		},
 	}
@@ -297,12 +390,24 @@ const responseCachePlugin = (() => {
 })()
 
 // Shared plugins for GraphQL server.
+// Yoga plugin that registers custom GraphQL validation rules.
+// Validation runs before execute, so rules like NoFirstAndLastRule surface
+// misuse as a structured BAD_USER_INPUT response (with http.status 400) and
+// never reach resolvers — or the instrumentation plugin's Sentry capture.
+const customValidationRules: Plugin = {
+	onValidate({addValidationRule}) {
+		addValidationRule(NoFirstAndLastRule)
+	},
+}
+
 // Response cache is first so cache hits skip pgClient checkout entirely.
 // Search-invocation logger runs per request (AST walk only, no DB) and
 // warns on every `search` / `searchConnection` invocation so we can
 // observe usage + caller IP without adding a separate metrics pipeline.
 const sharedPlugins = [
 	...(responseCachePlugin ? [responseCachePlugin] : []),
+	customValidationRules,
+	useCostLogger(),
 	useGraphQLInstrumentation(),
 	useSearchInvocationLogger(),
 	usePgClient(pgPool),
@@ -317,7 +422,7 @@ export const graphqlServer = createYoga<GraphQLServerContext>({
 	},
 	maskedErrors: {
 		maskError(error, message, isDev) {
-			if (isUserInputGraphQLError(error)) {
+			if (shouldUnmaskError(error)) {
 				return error
 			}
 			if (error instanceof GraphQLError) {

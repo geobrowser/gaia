@@ -229,14 +229,22 @@ describe("Search Router - Integration Tests", () => {
 
 		// Error cases
 		it("returns 400 for query longer than maximum length", async () => {
-			const longQuery = "a".repeat(501)
+			const longQuery = "a".repeat(251)
 			const request = new Request(`http://localhost/search?query=${longQuery}`)
 			const response = await app.fetch(request)
 			const result = await response.json()
 
 			expect(response.status).toBe(400)
 			expect(result.error).toBe("Invalid parameter")
-			expect(result.message).toContain("must not exceed 500 characters")
+			expect(result.message).toContain("must not exceed 250 characters")
+		})
+
+		it("accepts query exactly at the 250-char boundary", async () => {
+			const boundaryQuery = "a".repeat(250)
+			const request = new Request(`http://localhost/search?query=${boundaryQuery}`)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
 		})
 
 		it("returns 400 for invalid scope", async () => {
@@ -386,6 +394,322 @@ describe("Search Router - Integration Tests", () => {
 
 			expect(response.status).toBe(500)
 			expect(result.message).toBe("Custom error message")
+		})
+	})
+
+	describe("additional_space_ids", () => {
+		const SPACE_A = "11111111-1111-1111-1111-111111111111"
+		const SPACE_B = "22222222-2222-2222-2222-222222222222"
+		const ROOT_ID = "00000000-0000-0000-0000-000000000001"
+
+		it("parses CSV and forwards as a string array on GLOBAL scope", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&additional_space_ids=${ROOT_ID},${SPACE_A},${SPACE_B}`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					scope: "GLOBAL",
+					additional_space_ids: [ROOT_ID, SPACE_A, SPACE_B],
+				}),
+			)
+		})
+
+		it("works with GLOBAL_BY_SPACE_SCORE scope", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&scope=GLOBAL_BY_SPACE_SCORE&additional_space_ids=${SPACE_A}`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					scope: "GLOBAL_BY_SPACE_SCORE",
+					additional_space_ids: [SPACE_A],
+				}),
+			)
+		})
+
+		it("trims whitespace and skips empty entries", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&additional_space_ids=${SPACE_A}, ${SPACE_B}`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additional_space_ids: [SPACE_A, SPACE_B],
+				}),
+			)
+		})
+
+		it("does not pass the field through when param is absent", async () => {
+			const request = new Request("http://localhost/search?query=test")
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			const callArg = (mockSearchClient.search as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+				| Record<string, unknown>
+				| undefined
+			expect(callArg).toBeDefined()
+			expect(callArg).not.toHaveProperty("additional_space_ids")
+		})
+
+		it("does not pass the field through when param is the empty string", async () => {
+			const request = new Request("http://localhost/search?query=test&additional_space_ids=")
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			const callArg = (mockSearchClient.search as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+				| Record<string, unknown>
+				| undefined
+			expect(callArg).toBeDefined()
+			expect(callArg).not.toHaveProperty("additional_space_ids")
+		})
+
+		it("returns 400 when used with SPACE scope", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&scope=SPACE&space_id=${SPACE_A}&additional_space_ids=${SPACE_B}`,
+			)
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.error).toBe("Invalid parameter")
+			expect(result.message).toContain("additional_space_ids is not valid with SPACE scope")
+		})
+
+		it("returns 400 when used with SPACE_SINGLE scope", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&scope=SPACE_SINGLE&space_id=${SPACE_A}&additional_space_ids=${SPACE_B}`,
+			)
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.message).toContain("SPACE_SINGLE")
+		})
+
+		it("returns 400 when an entry is not a valid UUID", async () => {
+			const request = new Request(`http://localhost/search?query=test&additional_space_ids=not-a-uuid`)
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.message).toContain("valid UUIDs")
+		})
+
+		it("returns 400 when more than 100 IDs are supplied", async () => {
+			const ids = Array.from(
+				{length: 101},
+				(_, i) => `${i.toString().padStart(8, "0")}-0000-0000-0000-000000000000`,
+			).join(",")
+			const request = new Request(`http://localhost/search?query=test&additional_space_ids=${ids}`)
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.message).toContain("more than 100 IDs")
+		})
+
+		it("accepts exactly 100 IDs at the boundary", async () => {
+			const ids = Array.from(
+				{length: 100},
+				(_, i) => `${i.toString().padStart(8, "0")}-0000-0000-0000-000000000000`,
+			)
+			const request = new Request(`http://localhost/search?query=test&additional_space_ids=${ids.join(",")}`)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additional_space_ids: ids,
+				}),
+			)
+		})
+
+		it("accepts a single space ID", async () => {
+			const request = new Request(`http://localhost/search?query=test&additional_space_ids=${SPACE_A}`)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additional_space_ids: [SPACE_A],
+				}),
+			)
+		})
+
+		it("works with GLOBAL_BY_ENTITY_SPACE_SCORE scope", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&scope=GLOBAL_BY_ENTITY_SPACE_SCORE&additional_space_ids=${SPACE_A}`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					scope: "GLOBAL_BY_ENTITY_SPACE_SCORE",
+					additional_space_ids: [SPACE_A],
+				}),
+			)
+		})
+
+		it("accepts dashless UUIDs", async () => {
+			const dashlessA = SPACE_A.replace(/-/g, "")
+			const dashlessB = SPACE_B.replace(/-/g, "")
+			const request = new Request(
+				`http://localhost/search?query=test&additional_space_ids=${dashlessA},${dashlessB}`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additional_space_ids: [dashlessA, dashlessB],
+				}),
+			)
+		})
+
+		it("accepts mixed dashed and dashless UUIDs in the same call", async () => {
+			const dashlessB = SPACE_B.replace(/-/g, "")
+			const request = new Request(
+				`http://localhost/search?query=test&additional_space_ids=${SPACE_A},${dashlessB}`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additional_space_ids: [SPACE_A, dashlessB],
+				}),
+			)
+		})
+
+		it("treats a CSV of only commas/whitespace as absent (no 400, param dropped)", async () => {
+			const request = new Request("http://localhost/search?query=test&additional_space_ids=,%20,%20,")
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			const callArg = (mockSearchClient.search as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+				| Record<string, unknown>
+				| undefined
+			expect(callArg).toBeDefined()
+			expect(callArg).not.toHaveProperty("additional_space_ids")
+		})
+
+		it("drops trailing/leading commas while keeping valid entries", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&additional_space_ids=,${SPACE_A},${SPACE_B},`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additional_space_ids: [SPACE_A, SPACE_B],
+				}),
+			)
+		})
+
+		it("returns 400 naming the invalid entry when one of multiple IDs is malformed", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&additional_space_ids=${SPACE_A},not-a-uuid,${SPACE_B}`,
+			)
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.message).toContain("not-a-uuid")
+		})
+
+		it("forwards duplicate IDs as-is (router does not dedupe)", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&additional_space_ids=${SPACE_A},${SPACE_A},${SPACE_B}`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additional_space_ids: [SPACE_A, SPACE_A, SPACE_B],
+				}),
+			)
+		})
+
+		it("coexists with type_ids and custom exclude_type_ids", async () => {
+			const TYPE_X = "33333333-3333-3333-3333-333333333333"
+			const TYPE_Y = "44444444-4444-4444-4444-444444444444"
+			const request = new Request(
+				`http://localhost/search?query=test&additional_space_ids=${SPACE_A}&type_ids=${TYPE_X}&exclude_type_ids=${TYPE_Y}`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additional_space_ids: [SPACE_A],
+					type_ids: [TYPE_X],
+					exclude_type_ids: [TYPE_Y],
+				}),
+			)
+		})
+
+		it("coexists with include_non_canonical=false (canonical-only + extra spaces)", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&additional_space_ids=${SPACE_A}&include_non_canonical=false`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additional_space_ids: [SPACE_A],
+					include_non_canonical: false,
+				}),
+			)
+		})
+
+		it("coexists with limit and offset", async () => {
+			const request = new Request(
+				`http://localhost/search?query=test&additional_space_ids=${SPACE_A}&limit=42&offset=7`,
+			)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					additional_space_ids: [SPACE_A],
+					limit: 42,
+					offset: 7,
+				}),
+			)
+		})
+
+		it("coexists with the q alias and an empty query (top-ranked path)", async () => {
+			const request = new Request(`http://localhost/search?q=&additional_space_ids=${SPACE_A}`)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith(
+				expect.objectContaining({
+					query: "",
+					additional_space_ids: [SPACE_A],
+				}),
+			)
+		})
+
+		it("returns 400 when an entry contains a UUID-shaped string with extra characters", async () => {
+			// Tail-padded — looks UUID-ish but isn't a valid UUID
+			const request = new Request(`http://localhost/search?query=test&additional_space_ids=${SPACE_A}xx`)
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.message).toContain("valid UUIDs")
 		})
 	})
 

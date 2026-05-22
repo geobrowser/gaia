@@ -151,6 +151,28 @@ The cache tracks pending fetches per block and only persists the cursor when:
 
 This ensures that on restart, processing resumes from the oldest incomplete block, even if later blocks completed first. Duplicate fetches are handled efficiently by the upsert - already-cached content is simply skipped.
 
+### Recovery
+
+If the `meta.cursor` row for `id = 'hermes_ipfs_cache'` is corrupted or lost, the most recent safe cursor can be reconstructed from logs without reprocessing history from a much earlier checkpoint. Every persist emits an `info!` line with `event = "ipfs_cache.batch_end"` carrying `indexer_id`, `block_number`, and `cursor` — and that line fires *before* the database write, so it reaches stdout / Sentry / Axiom even when the persist itself fails (the failure surfaces separately as `event = "ipfs_cache.persist_cursor_failed"` with the same fields).
+
+To recover:
+
+1. In Axiom (or Sentry / your log store), filter for `event = "ipfs_cache.batch_end"` and `indexer_id = "hermes_ipfs_cache"`, sorted by time descending. Take the most recent entry.
+2. Note its `cursor` and `block_number`.
+3. Restore the `meta` row, e.g.:
+
+   ```sql
+   INSERT INTO meta (id, cursor, block_number)
+   VALUES ('hermes_ipfs_cache', '<cursor from log>', '<block_number from log>')
+   ON CONFLICT (id) DO UPDATE
+     SET cursor = EXCLUDED.cursor,
+         block_number = EXCLUDED.block_number;
+   ```
+
+4. Restart the service. It will log `Resuming from persisted cursor` and continue from there.
+
+The recovered cursor lags real progress by however many in-flight blocks were behind the minimum at crash time — restart will reprocess those blocks, but the `ON CONFLICT DO NOTHING` upsert on `ipfs_cache` makes the replay cheap.
+
 ## Cache Miss Behavior
 
 Downstream consumers (like `hermes-pipeline`) should retry on cache miss. Since this service runs ahead, misses indicate the cache is catching up. The retry should eventually succeed once the content is fetched and stored.

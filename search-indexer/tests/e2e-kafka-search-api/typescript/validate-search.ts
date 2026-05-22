@@ -101,6 +101,15 @@ const TEST_ENTITIES = {
   TOPO_GRANDCHILD_ENTITY_ID: '0000000000000000000000000000ec04',
   TOPO_REMOVE_ME_ENTITY_ID: '0000000000000000000000000000ec05',
   TOPO_MOVEABLE_ENTITY_ID: '0000000000000000000000000000ec06',
+  // additional_space_ids probe entities (all named "AsidProbeEntity")
+  // - canon: in topo_child_a (canonical via diff 1)
+  // - x: in non-canonical asid_extra_space_x
+  // - y: in non-canonical asid_extra_space_y
+  ASID_CANON_ENTITY_ID: '0000000000000000000000000000ad01',
+  ASID_X_ENTITY_ID: '0000000000000000000000000000ad02',
+  ASID_Y_ENTITY_ID: '0000000000000000000000000000ad03',
+  ASID_EXTRA_SPACE_X_ID: '00000000000040008000000000000d01',
+  ASID_EXTRA_SPACE_Y_ID: '00000000000040008000000000000d02',
 };
 
 interface TestResult {
@@ -119,7 +128,56 @@ class SearchValidator {
     this.indexerUrl = indexerUrl;
   }
 
-  private async search(query: Partial<SearchQuery> & { exclude_type_ids?: string[] }): Promise<SearchResponse> {
+  private async search(
+    query: Partial<SearchQuery> & {
+      exclude_type_ids?: string[];
+      additional_space_ids?: string[];
+    },
+  ): Promise<SearchResponse> {
+    const params = this.buildSearchParams(query);
+    const url = `${this.baseUrl}/search?${params.toString()}`;
+    const response = await fetch(url, {
+      headers: {
+        'Accept-Encoding': 'gzip, deflate',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`API returned ${response.status}: ${await response.text()}`);
+    }
+
+    return response.json() as Promise<SearchResponse>;
+  }
+
+  /**
+   * Variant of search() that does NOT throw on non-2xx, used for tests that
+   * assert the API returns a specific 4xx for invalid parameters.
+   */
+  private async searchRaw(
+    query: Partial<SearchQuery> & {
+      exclude_type_ids?: string[];
+      additional_space_ids?: string[];
+    },
+    rawAdditionalSpaceIds?: string,
+  ): Promise<{ status: number; body: unknown }> {
+    const params = this.buildSearchParams(query);
+    if (rawAdditionalSpaceIds !== undefined) {
+      params.set('additional_space_ids', rawAdditionalSpaceIds);
+    }
+    const url = `${this.baseUrl}/search?${params.toString()}`;
+    const response = await fetch(url, {
+      headers: { 'Accept-Encoding': 'gzip, deflate' },
+    });
+    const body = (await response.json().catch(() => null)) as unknown;
+    return { status: response.status, body };
+  }
+
+  private buildSearchParams(
+    query: Partial<SearchQuery> & {
+      exclude_type_ids?: string[];
+      additional_space_ids?: string[];
+    },
+  ): URLSearchParams {
     const params = new URLSearchParams();
 
     if (query.query) params.append('query', query.query);
@@ -133,6 +191,10 @@ class SearchValidator {
     if (query.include_non_canonical === false) {
       params.append('include_non_canonical', 'false');
     }
+    // Server expects a single CSV value for additional_space_ids
+    if (query.additional_space_ids && query.additional_space_ids.length > 0) {
+      params.append('additional_space_ids', query.additional_space_ids.join(','));
+    }
     // Pass exclude_type_ids if provided; default to empty (disable default exclusions)
     // so existing e2e tests are unaffected by the new default filtering behavior.
     if (query.exclude_type_ids !== undefined) {
@@ -140,19 +202,7 @@ class SearchValidator {
     } else {
       params.append('exclude_type_ids', '');
     }
-
-    const url = `${this.baseUrl}/search?${params.toString()}`;
-    const response = await fetch(url, {
-      headers: {
-        'Accept-Encoding': 'gzip, deflate',
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`API returned ${response.status}: ${await response.text()}`);
-    }
-
-    return response.json() as Promise<SearchResponse>;
+    return params;
   }
 
   private addResult(name: string, passed: boolean, message: string) {
@@ -3017,6 +3067,663 @@ class SearchValidator {
     }
   }
 
+  // -----------------------------------------------------------------------
+  // additional_space_ids — canonical graph + extra spaces
+  //
+  // Three "AsidProbeEntity" fixtures live across one canonical
+  // (topo_child_a) and two non-canonical spaces (asid_extra_space_x,
+  // asid_extra_space_y). The unique name lets a single text query enumerate
+  // all three, and the per-space placement makes the eligibility filter
+  // observable in the result set.
+  //
+  // Semantics under test:
+  //   - additional_space_ids ALWAYS includes the canonical graph implicitly:
+  //       result = canonical-graph entities ∪ (entities in any listed space)
+  //   - listed-space entities appear regardless of their canonical-graph status
+  //   - the canonical-graph root is naturally idempotent (already implicit)
+  //   - include_non_canonical=false is the more restrictive constraint and
+  //     wins over additional_space_ids: when both are set, the result is just
+  //     canonical-only (asid is suppressed).
+  // -----------------------------------------------------------------------
+
+  /** Baseline: include_non_canonical=false — only the canonical AsidProbe is returned. */
+  async test51_AdditionalSpaceIdsCanonicalOnlyBaseline(): Promise<void> {
+    console.log(`\n${BLUE}Test 51: include_non_canonical=false alone returns only the canonical AsidProbe${NC}`);
+
+    const response = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL',
+      include_non_canonical: false,
+    });
+
+    const ids = response.results.map(r => r.entityId);
+    const onlyCanonical =
+      ids.length === 1 && ids[0] === TEST_ENTITIES.ASID_CANON_ENTITY_ID;
+
+    this.addResult('test51_canonical_only_baseline', onlyCanonical,
+      onlyCanonical
+        ? `canonical-only AsidProbe baseline returns the 1 canonical entity (${TEST_ENTITIES.ASID_CANON_ENTITY_ID})`
+        : `expected exactly [ASID_CANON], got ${ids.length} ids: ${ids.join(', ')}`);
+  }
+
+  /** additional_space_ids=[X] returns canonical entities + entities in X. */
+  async test52_AdditionalSpaceIdsCanonicalPlusOneExtraSpace(): Promise<void> {
+    console.log(`\n${BLUE}Test 52: additional_space_ids=[X] returns canonical ∪ X${NC}`);
+
+    const response = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL',
+      additional_space_ids: [TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID],
+    });
+
+    const ids = new Set(response.results.map(r => r.entityId));
+    const expected = new Set([
+      TEST_ENTITIES.ASID_CANON_ENTITY_ID,
+      TEST_ENTITIES.ASID_X_ENTITY_ID,
+    ]);
+    const correct = ids.size === expected.size && [...expected].every(id => ids.has(id));
+
+    this.addResult('test52_canonical_plus_one_extra_space', correct,
+      correct
+        ? `asid=[X] returns canonical (ASID_CANON) + entities in X (ASID_X)`
+        : `expected {ASID_CANON, ASID_X}, got [${[...ids].join(', ')}]`);
+
+    // Y must be excluded (not canonical, not in additional_space_ids)
+    const yLeaked = ids.has(TEST_ENTITIES.ASID_Y_ENTITY_ID);
+    this.addResult('test52_y_not_leaked', !yLeaked,
+      yLeaked
+        ? `ASID_Y leaked into result despite not being canonical and not in additional_space_ids`
+        : `ASID_Y correctly absent (only canonical + listed spaces are eligible)`);
+  }
+
+  /** additional_space_ids=[X, Y] returns canonical entities + entities in X + entities in Y. */
+  async test53_AdditionalSpaceIdsCanonicalPlusMultipleExtraSpaces(): Promise<void> {
+    console.log(`\n${BLUE}Test 53: additional_space_ids=[X, Y] returns canonical ∪ X ∪ Y${NC}`);
+
+    const response = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL',
+      additional_space_ids: [
+        TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID,
+        TEST_ENTITIES.ASID_EXTRA_SPACE_Y_ID,
+      ],
+    });
+
+    const ids = new Set(response.results.map(r => r.entityId));
+    const expected = new Set([
+      TEST_ENTITIES.ASID_CANON_ENTITY_ID,
+      TEST_ENTITIES.ASID_X_ENTITY_ID,
+      TEST_ENTITIES.ASID_Y_ENTITY_ID,
+    ]);
+    const correct = ids.size === expected.size && [...expected].every(id => ids.has(id));
+
+    this.addResult('test53_canonical_plus_multiple_extras', correct,
+      correct
+        ? `asid=[X, Y] returns canonical + ASID_X + ASID_Y (all 3 probes)`
+        : `expected {ASID_CANON, ASID_X, ASID_Y}, got [${[...ids].join(', ')}]`);
+  }
+
+  /**
+   * additional_space_ids=[<canonical-root>] — the root ID is rewritten to
+   * {term: {in_canonical_graph: true}}, so eligibility = all canonical spaces.
+   * Among AsidProbe entities only ASID_CANON lives in a canonical space.
+   */
+  async test54_AdditionalSpaceIdsCanonicalRootRewrite(): Promise<void> {
+    console.log(`\n${BLUE}Test 54: additional_space_ids=[canonical-root] rewrites to in_canonical_graph filter${NC}`);
+
+    const response = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL',
+      additional_space_ids: [TEST_ENTITIES.TOPO_ROOT_SPACE_ID],
+    });
+
+    const ids = response.results.map(r => r.entityId);
+    const onlyCanonical =
+      ids.length === 1 && ids[0] === TEST_ENTITIES.ASID_CANON_ENTITY_ID;
+
+    this.addResult('test54_canonical_root_rewrite', onlyCanonical,
+      onlyCanonical
+        ? `canonical-root rewrite restricts AsidProbe set to ASID_CANON (1 result)`
+        : `expected only ASID_CANON via canonical-root rewrite, got [${ids.join(', ')}]`);
+  }
+
+  /**
+   * additional_space_ids=[<canonical-root>, X] — canonical anchor OR'd with X.
+   * Among AsidProbe entities: ASID_CANON (canonical) + ASID_X (in X). Y must
+   * remain absent.
+   */
+  async test55_AdditionalSpaceIdsCanonicalRootPlusExtra(): Promise<void> {
+    console.log(`\n${BLUE}Test 55: additional_space_ids=[canonical-root, X] OR's canonical anchor with extra space${NC}`);
+
+    const response = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL',
+      additional_space_ids: [
+        TEST_ENTITIES.TOPO_ROOT_SPACE_ID,
+        TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID,
+      ],
+    });
+
+    const ids = new Set(response.results.map(r => r.entityId));
+    const expected = new Set([
+      TEST_ENTITIES.ASID_CANON_ENTITY_ID,
+      TEST_ENTITIES.ASID_X_ENTITY_ID,
+    ]);
+    const correct =
+      ids.size === expected.size && [...expected].every(id => ids.has(id));
+
+    this.addResult('test55_canonical_root_plus_extra', correct,
+      correct
+        ? `canonical anchor OR'd with extra_space_x returns ASID_CANON + ASID_X`
+        : `expected {ASID_CANON, ASID_X}, got [${[...ids].join(', ')}]`);
+
+    const yLeaked = ids.has(TEST_ENTITIES.ASID_Y_ENTITY_ID);
+    this.addResult('test55_y_not_leaked', !yLeaked,
+      yLeaked
+        ? `ASID_Y leaked despite not being canonical and not in additional_space_ids`
+        : `ASID_Y correctly absent`);
+  }
+
+  /**
+   * include_non_canonical=false is the more restrictive constraint and wins
+   * over additional_space_ids: when both are set, the result is canonical-only
+   * (the asid filter is suppressed entirely as an OpenSearch optimisation —
+   * canonical AND (canonical OR listed) collapses to canonical).
+   */
+  async test55b_IncludeNonCanonicalFalseSuppressesAsid(): Promise<void> {
+    console.log(`\n${BLUE}Test 55b: include_non_canonical=false suppresses additional_space_ids (canonical-only wins)${NC}`);
+
+    const response = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL',
+      include_non_canonical: false,
+      additional_space_ids: [TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID],
+    });
+
+    const ids = response.results.map(r => r.entityId);
+    const onlyCanonical = ids.length === 1 && ids[0] === TEST_ENTITIES.ASID_CANON_ENTITY_ID;
+    this.addResult('test55b_include_non_canonical_false_suppresses_asid', onlyCanonical,
+      onlyCanonical
+        ? `include_non_canonical=false wins: returns canonical-only (ASID_X suppressed despite being in additional_space_ids)`
+        : `expected only ASID_CANON, got [${ids.join(', ')}]`);
+  }
+
+  /** SPACE_SINGLE scope rejects additional_space_ids. */
+  async test56_AdditionalSpaceIdsRejectedOnSpaceScope(): Promise<void> {
+    console.log(`\n${BLUE}Test 56: additional_space_ids returns 400 with SPACE_SINGLE scope${NC}`);
+
+    const { status, body } = await this.searchRaw({
+      query: 'AsidProbeEntity',
+      scope: 'SPACE_SINGLE',
+      space_id: TEST_ENTITIES.TOPO_CHILD_A_SPACE_ID,
+      additional_space_ids: [TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID],
+    });
+
+    const correct = status === 400;
+    const message =
+      typeof body === 'object' && body !== null && 'message' in body
+        ? String((body as { message: unknown }).message)
+        : '';
+    this.addResult('test56_rejected_on_space_scope', correct,
+      correct
+        ? `400 returned with message: ${message}`
+        : `expected 400, got ${status}: ${message}`);
+  }
+
+  /** Invalid UUID inside additional_space_ids returns 400. */
+  async test57_AdditionalSpaceIdsRejectsInvalidUuid(): Promise<void> {
+    console.log(`\n${BLUE}Test 57: additional_space_ids returns 400 when an entry is not a valid UUID${NC}`);
+
+    const { status, body } = await this.searchRaw(
+      { query: 'AsidProbeEntity', scope: 'GLOBAL' },
+      'not-a-uuid',
+    );
+
+    const correct = status === 400;
+    const message =
+      typeof body === 'object' && body !== null && 'message' in body
+        ? String((body as { message: unknown }).message)
+        : '';
+    this.addResult('test57_rejects_invalid_uuid', correct,
+      correct
+        ? `400 returned for invalid UUID; message: ${message}`
+        : `expected 400 for malformed UUID, got ${status}: ${message}`);
+  }
+
+  /** More than 100 IDs returns 400. */
+  async test58_AdditionalSpaceIdsRejectsOverLimit(): Promise<void> {
+    console.log(`\n${BLUE}Test 58: additional_space_ids returns 400 when more than 100 IDs are supplied${NC}`);
+
+    const ids = Array.from(
+      { length: 101 },
+      (_, i) => `${i.toString().padStart(8, '0')}-0000-0000-0000-000000000000`,
+    );
+    const { status, body } = await this.searchRaw(
+      { query: 'AsidProbeEntity', scope: 'GLOBAL' },
+      ids.join(','),
+    );
+
+    const correct = status === 400;
+    const message =
+      typeof body === 'object' && body !== null && 'message' in body
+        ? String((body as { message: unknown }).message)
+        : '';
+    this.addResult('test58_rejects_over_limit', correct,
+      correct
+        ? `400 returned for 101 IDs; message: ${message}`
+        : `expected 400 for >100 IDs, got ${status}: ${message}`);
+  }
+
+  /** SPACE scope (aggregated subspace search) also rejects additional_space_ids. */
+  async test59_AdditionalSpaceIdsRejectedOnAggregatedSpaceScope(): Promise<void> {
+    console.log(`\n${BLUE}Test 59: additional_space_ids returns 400 with SPACE scope${NC}`);
+
+    const { status, body } = await this.searchRaw({
+      query: 'AsidProbeEntity',
+      scope: 'SPACE',
+      space_id: TEST_ENTITIES.TOPO_ROOT_SPACE_ID,
+      additional_space_ids: [TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID],
+    });
+
+    const correct = status === 400;
+    const message =
+      typeof body === 'object' && body !== null && 'message' in body
+        ? String((body as { message: unknown }).message)
+        : '';
+    this.addResult('test59_rejected_on_aggregated_space_scope', correct,
+      correct ? `400 with SPACE scope; message: ${message}` : `expected 400, got ${status}: ${message}`);
+  }
+
+  /** Dashless UUID format is accepted (server normalizes both forms). */
+  async test60_AdditionalSpaceIdsAcceptsDashlessUuid(): Promise<void> {
+    console.log(`\n${BLUE}Test 60: additional_space_ids accepts dashless UUID format${NC}`);
+
+    const dashlessX = TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID; // already dashless
+    const response = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL',
+      additional_space_ids: [dashlessX],
+    });
+
+    const ids = new Set(response.results.map(r => r.entityId));
+    const expected = new Set([
+      TEST_ENTITIES.ASID_CANON_ENTITY_ID,
+      TEST_ENTITIES.ASID_X_ENTITY_ID,
+    ]);
+    const correct = ids.size === expected.size && [...expected].every(id => ids.has(id));
+    this.addResult('test60_accepts_dashless_uuid', correct,
+      correct
+        ? `dashless UUID resolved to extra_space_x → canonical + ASID_X returned`
+        : `expected {ASID_CANON, ASID_X} via dashless form, got [${[...ids].join(', ')}]`);
+  }
+
+  /** Mixed dashed + dashless UUIDs in one CSV. */
+  async test61_AdditionalSpaceIdsAcceptsMixedFormatUuids(): Promise<void> {
+    console.log(`\n${BLUE}Test 61: additional_space_ids accepts mixed dashed/dashless UUIDs${NC}`);
+
+    const dashedX = `${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(0, 8)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(8, 12)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(12, 16)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(16, 20)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(20)}`;
+    const dashlessY = TEST_ENTITIES.ASID_EXTRA_SPACE_Y_ID;
+    const response = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL',
+      additional_space_ids: [dashedX, dashlessY],
+    });
+
+    const ids = new Set(response.results.map(r => r.entityId));
+    const expected = new Set([
+      TEST_ENTITIES.ASID_CANON_ENTITY_ID,
+      TEST_ENTITIES.ASID_X_ENTITY_ID,
+      TEST_ENTITIES.ASID_Y_ENTITY_ID,
+    ]);
+    const correct = ids.size === expected.size && [...expected].every(id => ids.has(id));
+    this.addResult('test61_accepts_mixed_format_uuids', correct,
+      correct
+        ? `mixed dashed-X + dashless-Y returns canonical + ASID_X + ASID_Y`
+        : `expected all 3 probes via mixed form, got [${[...ids].join(', ')}]`);
+  }
+
+  /**
+   * include_non_canonical=true (default) baseline returns all 3 AsidProbe
+   * entities; adding additional_space_ids=[X] excludes Y (which is neither
+   * canonical nor in X) but keeps canonical + X.
+   */
+  async test62_AdditionalSpaceIdsExcludesUnlisted(): Promise<void> {
+    console.log(`\n${BLUE}Test 62: additional_space_ids=[X] keeps canonical + X, excludes Y${NC}`);
+
+    const baseline = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL',
+    });
+    const narrowed = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL',
+      additional_space_ids: [TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID],
+    });
+
+    const baselineIds = new Set(baseline.results.map(r => r.entityId));
+    const narrowedIds = new Set(narrowed.results.map(r => r.entityId));
+    const baselineHasAll =
+      baselineIds.has(TEST_ENTITIES.ASID_CANON_ENTITY_ID) &&
+      baselineIds.has(TEST_ENTITIES.ASID_X_ENTITY_ID) &&
+      baselineIds.has(TEST_ENTITIES.ASID_Y_ENTITY_ID);
+    const expected = new Set([
+      TEST_ENTITIES.ASID_CANON_ENTITY_ID,
+      TEST_ENTITIES.ASID_X_ENTITY_ID,
+    ]);
+    const narrowedCorrect =
+      narrowedIds.size === expected.size && [...expected].every(id => narrowedIds.has(id));
+
+    this.addResult('test62_default_baseline_returns_all_three', baselineHasAll,
+      baselineHasAll
+        ? `default include_non_canonical=true returns all 3 AsidProbe entities`
+        : `expected baseline to contain all 3 probes, got [${[...baselineIds].join(', ')}]`);
+    this.addResult('test62_asid_excludes_unlisted_noncanonical', narrowedCorrect,
+      narrowedCorrect
+        ? `asid=[X] returns canonical + ASID_X; ASID_Y (non-canonical, not in list) excluded`
+        : `expected {ASID_CANON, ASID_X}, got [${[...narrowedIds].join(', ')}]`);
+  }
+
+  /** Empty `additional_space_ids=` query string is treated as absent (200, canonical-only). */
+  async test63_AdditionalSpaceIdsEmptyStringTreatedAsAbsent(): Promise<void> {
+    console.log(`\n${BLUE}Test 63: empty additional_space_ids= is treated as absent (no 400)${NC}`);
+
+    const { status, body } = await this.searchRaw(
+      { query: 'AsidProbeEntity', scope: 'GLOBAL', include_non_canonical: false },
+      '',
+    );
+
+    if (status !== 200) {
+      this.addResult('test63_empty_treated_as_absent', false,
+        `expected 200 for empty additional_space_ids=, got ${status}`);
+      return;
+    }
+    const results = (body as { results: Array<{ entityId: string }> }).results;
+    const ids = results.map(r => r.entityId);
+    const onlyCanonical = ids.length === 1 && ids[0] === TEST_ENTITIES.ASID_CANON_ENTITY_ID;
+    this.addResult('test63_empty_treated_as_absent', onlyCanonical,
+      onlyCanonical
+        ? `empty additional_space_ids= behaves identically to omitting the param (canonical-only)`
+        : `expected only ASID_CANON, got [${ids.join(', ')}]`);
+  }
+
+  /** CSV containing only commas/whitespace is treated as absent. */
+  async test64_AdditionalSpaceIdsWhitespaceCsvTreatedAsAbsent(): Promise<void> {
+    console.log(`\n${BLUE}Test 64: CSV of only commas/whitespace is treated as absent${NC}`);
+
+    const { status, body } = await this.searchRaw(
+      { query: 'AsidProbeEntity', scope: 'GLOBAL', include_non_canonical: false },
+      ', ,  ,',
+    );
+
+    if (status !== 200) {
+      this.addResult('test64_whitespace_csv_treated_as_absent', false,
+        `expected 200 for whitespace-only CSV, got ${status}`);
+      return;
+    }
+    const results = (body as { results: Array<{ entityId: string }> }).results;
+    const ids = results.map(r => r.entityId);
+    const onlyCanonical = ids.length === 1 && ids[0] === TEST_ENTITIES.ASID_CANON_ENTITY_ID;
+    this.addResult('test64_whitespace_csv_treated_as_absent', onlyCanonical,
+      onlyCanonical
+        ? `whitespace-only CSV degenerates to canonical-only baseline`
+        : `expected only ASID_CANON, got [${ids.join(', ')}]`);
+  }
+
+  /** Leading/trailing/embedded commas around valid IDs are tolerated. */
+  async test65_AdditionalSpaceIdsTrailingCommasTolerated(): Promise<void> {
+    console.log(`\n${BLUE}Test 65: leading/trailing commas + whitespace around CSV entries are tolerated${NC}`);
+
+    const csv = `,${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID}, ${TEST_ENTITIES.ASID_EXTRA_SPACE_Y_ID},`;
+    const { status, body } = await this.searchRaw(
+      { query: 'AsidProbeEntity', scope: 'GLOBAL' },
+      csv,
+    );
+
+    if (status !== 200) {
+      this.addResult('test65_trailing_commas_tolerated', false,
+        `expected 200 for CSV with leading/trailing commas, got ${status}`);
+      return;
+    }
+    const results = (body as { results: Array<{ entityId: string }> }).results;
+    const ids = new Set(results.map(r => r.entityId));
+    const expected = new Set([
+      TEST_ENTITIES.ASID_CANON_ENTITY_ID,
+      TEST_ENTITIES.ASID_X_ENTITY_ID,
+      TEST_ENTITIES.ASID_Y_ENTITY_ID,
+    ]);
+    const correct = ids.size === expected.size && [...expected].every(id => ids.has(id));
+    this.addResult('test65_trailing_commas_tolerated', correct,
+      correct
+        ? `leading/trailing commas stripped; canonical + ASID_X + ASID_Y returned`
+        : `expected {ASID_CANON, ASID_X, ASID_Y}, got [${[...ids].join(', ')}]`);
+  }
+
+  /** Duplicate IDs in additional_space_ids do not error and produce the same result set. */
+  async test66_AdditionalSpaceIdsDuplicatesTolerated(): Promise<void> {
+    console.log(`\n${BLUE}Test 66: duplicate IDs in additional_space_ids are tolerated${NC}`);
+
+    const response = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL',
+      additional_space_ids: [
+        TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID,
+        TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID,
+        TEST_ENTITIES.ASID_EXTRA_SPACE_Y_ID,
+      ],
+    });
+
+    const ids = new Set(response.results.map(r => r.entityId));
+    const expected = new Set([
+      TEST_ENTITIES.ASID_CANON_ENTITY_ID,
+      TEST_ENTITIES.ASID_X_ENTITY_ID,
+      TEST_ENTITIES.ASID_Y_ENTITY_ID,
+    ]);
+    const correct = ids.size === expected.size && [...expected].every(id => ids.has(id));
+    this.addResult('test66_duplicates_tolerated', correct,
+      correct
+        ? `duplicate X passed alongside Y → canonical + ASID_X + ASID_Y, no duplicate entities`
+        : `expected all 3 probes, got [${[...ids].join(', ')}]`);
+  }
+
+  /** GLOBAL_BY_SPACE_SCORE scope accepts additional_space_ids. */
+  async test67_AdditionalSpaceIdsWorksWithGlobalBySpaceScore(): Promise<void> {
+    console.log(`\n${BLUE}Test 67: additional_space_ids works with GLOBAL_BY_SPACE_SCORE scope${NC}`);
+
+    const response = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL_BY_SPACE_SCORE',
+      additional_space_ids: [TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID],
+    });
+
+    const ids = new Set(response.results.map(r => r.entityId));
+    const expected = new Set([
+      TEST_ENTITIES.ASID_CANON_ENTITY_ID,
+      TEST_ENTITIES.ASID_X_ENTITY_ID,
+    ]);
+    const correct = ids.size === expected.size && [...expected].every(id => ids.has(id));
+    this.addResult('test67_global_by_space_score', correct,
+      correct
+        ? `GLOBAL_BY_SPACE_SCORE + asid=[X]: canonical + ASID_X returned`
+        : `expected {ASID_CANON, ASID_X}, got [${[...ids].join(', ')}]`);
+  }
+
+  /** GLOBAL_BY_ENTITY_SPACE_SCORE scope accepts additional_space_ids. */
+  async test68_AdditionalSpaceIdsWorksWithGlobalByEntitySpaceScore(): Promise<void> {
+    console.log(`\n${BLUE}Test 68: additional_space_ids works with GLOBAL_BY_ENTITY_SPACE_SCORE scope${NC}`);
+
+    const response = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL_BY_ENTITY_SPACE_SCORE',
+      additional_space_ids: [TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID],
+    });
+
+    const ids = new Set(response.results.map(r => r.entityId));
+    const expected = new Set([
+      TEST_ENTITIES.ASID_CANON_ENTITY_ID,
+      TEST_ENTITIES.ASID_X_ENTITY_ID,
+    ]);
+    const correct = ids.size === expected.size && [...expected].every(id => ids.has(id));
+    this.addResult('test68_global_by_entity_space_score', correct,
+      correct
+        ? `GLOBAL_BY_ENTITY_SPACE_SCORE + asid=[X]: canonical + ASID_X returned`
+        : `expected {ASID_CANON, ASID_X}, got [${[...ids].join(', ')}]`);
+  }
+
+  /** Empty query (top-ranked path) + additional_space_ids honors the filter. */
+  async test69_AdditionalSpaceIdsWorksWithEmptyQuery(): Promise<void> {
+    console.log(`\n${BLUE}Test 69: empty-query top-ranked path respects additional_space_ids${NC}`);
+
+    // Empty query → top-ranked path. With additional_space_ids=[X], eligibility
+    // is canonical OR in X. Both ASID_CANON and ASID_X must be reachable;
+    // ASID_Y (non-canonical, not in list) must be filtered out. Wide limit
+    // because top-ranked sorts globally and our entities may not be near the top.
+    const response = await this.search({
+      query: '',
+      scope: 'GLOBAL',
+      additional_space_ids: [TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID],
+      limit: 100,
+    });
+
+    const ids = new Set(response.results.map(r => r.entityId));
+    const correct =
+      ids.has(TEST_ENTITIES.ASID_CANON_ENTITY_ID) &&
+      ids.has(TEST_ENTITIES.ASID_X_ENTITY_ID) &&
+      !ids.has(TEST_ENTITIES.ASID_Y_ENTITY_ID);
+    this.addResult('test69_empty_query_top_ranked', correct,
+      correct
+        ? `empty-query path: canonical + ASID_X reachable; ASID_Y excluded`
+        : `expected ASID_CANON + ASID_X present, ASID_Y absent, got [${[...ids].slice(0, 10).join(', ')}${ids.size > 10 ? `, …(${ids.size} total)` : ''}]`);
+  }
+
+  /** UUID-shaped query (entity-id lookup) + additional_space_ids honours the eligibility filter. */
+  async test70_AdditionalSpaceIdsWorksWithUuidQuery(): Promise<void> {
+    console.log(`\n${BLUE}Test 70: UUID-shaped query (entity ID lookup) + additional_space_ids${NC}`);
+
+    // Looking up ASID_X by UUID. ASID_X is non-canonical, lives in space X.
+    // Eligibility = canonical OR in listed-spaces:
+    //   - asid=[Y] → ASID_X is non-canonical and not in Y → filtered out (0 results)
+    //   - asid=[X] → ASID_X is in X → admitted (1 result)
+    const dashedXEntity = `${TEST_ENTITIES.ASID_X_ENTITY_ID.slice(0, 8)}-${TEST_ENTITIES.ASID_X_ENTITY_ID.slice(8, 12)}-${TEST_ENTITIES.ASID_X_ENTITY_ID.slice(12, 16)}-${TEST_ENTITIES.ASID_X_ENTITY_ID.slice(16, 20)}-${TEST_ENTITIES.ASID_X_ENTITY_ID.slice(20)}`;
+
+    const wrongSpace = await this.search({
+      query: dashedXEntity,
+      scope: 'GLOBAL',
+      additional_space_ids: [TEST_ENTITIES.ASID_EXTRA_SPACE_Y_ID],
+    });
+    const rightSpace = await this.search({
+      query: dashedXEntity,
+      scope: 'GLOBAL',
+      additional_space_ids: [TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID],
+    });
+
+    const wrongBlocked = wrongSpace.results.length === 0;
+    const rightFinds = rightSpace.results.some(r => r.entityId === TEST_ENTITIES.ASID_X_ENTITY_ID);
+    this.addResult('test70_uuid_query_path', wrongBlocked && rightFinds,
+      wrongBlocked && rightFinds
+        ? `UUID-query: blocked when entity isn't canonical and its space isn't listed; found when its space is listed`
+        : `expected blocked-with-Y/found-with-X; got wrong=${wrongSpace.results.length}, rightFinds=${rightFinds}`);
+  }
+
+  /** Exactly 100 IDs at the boundary is accepted (no 400). */
+  async test71_AdditionalSpaceIdsHundredIdsBoundary(): Promise<void> {
+    console.log(`\n${BLUE}Test 71: exactly 100 IDs at the boundary is accepted${NC}`);
+
+    // Real X + Y + 98 throwaway-but-valid UUIDs that point to non-existent spaces.
+    // Server must accept (length === MAX). Eligibility = canonical OR in any listed,
+    // so result is canonical + ASID_X + ASID_Y (98 throwaways match no docs).
+    const padding = Array.from(
+      { length: 98 },
+      (_, i) => `${i.toString().padStart(8, '0')}-0000-0000-0000-000000000000`,
+    );
+    const ids = [
+      `${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(0, 8)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(8, 12)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(12, 16)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(16, 20)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(20)}`,
+      `${TEST_ENTITIES.ASID_EXTRA_SPACE_Y_ID.slice(0, 8)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_Y_ID.slice(8, 12)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_Y_ID.slice(12, 16)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_Y_ID.slice(16, 20)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_Y_ID.slice(20)}`,
+      ...padding,
+    ];
+    const response = await this.search({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL',
+      additional_space_ids: ids,
+    });
+
+    const got = new Set(response.results.map(r => r.entityId));
+    const expected = new Set([
+      TEST_ENTITIES.ASID_CANON_ENTITY_ID,
+      TEST_ENTITIES.ASID_X_ENTITY_ID,
+      TEST_ENTITIES.ASID_Y_ENTITY_ID,
+    ]);
+    const correct = got.size === expected.size && [...expected].every(id => got.has(id));
+    this.addResult('test71_hundred_ids_boundary', correct,
+      correct
+        ? `100-ID payload accepted; canonical + ASID_X + ASID_Y returned (98 throwaways match nothing)`
+        : `expected all 3 probes among 100 IDs, got [${[...got].join(', ')}]`);
+  }
+
+  /** Malformed UUID with extra trailing characters is rejected. */
+  async test72_AdditionalSpaceIdsRejectsTrailingCharsInUuid(): Promise<void> {
+    console.log(`\n${BLUE}Test 72: UUID with trailing characters returns 400${NC}`);
+
+    const dashedX = `${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(0, 8)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(8, 12)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(12, 16)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(16, 20)}-${TEST_ENTITIES.ASID_EXTRA_SPACE_X_ID.slice(20)}`;
+    const { status, body } = await this.searchRaw(
+      { query: 'AsidProbeEntity', scope: 'GLOBAL' },
+      `${dashedX}xx`,
+    );
+    const correct = status === 400;
+    const message =
+      typeof body === 'object' && body !== null && 'message' in body
+        ? String((body as { message: unknown }).message)
+        : '';
+    this.addResult('test72_rejects_trailing_chars', correct,
+      correct ? `400 returned for UUID+xx; message: ${message}` : `expected 400, got ${status}: ${message}`);
+  }
+
+  /**
+   * additional_space_ids referencing only phantom spaces returns just the
+   * canonical-graph entities — the canonical anchor is implicit, and the
+   * phantom-spaces clause matches no documents.
+   */
+  async test73_AdditionalSpaceIdsUnknownSpacesFallsBackToCanonical(): Promise<void> {
+    console.log(`\n${BLUE}Test 73: additional_space_ids referencing only empty spaces returns canonical-graph entities${NC}`);
+
+    const phantomA = '11111111-1111-1111-1111-111111111111';
+    const phantomB = '22222222-2222-2222-2222-222222222222';
+    const { status, body } = await this.searchRaw({
+      query: 'AsidProbeEntity',
+      scope: 'GLOBAL',
+      additional_space_ids: [phantomA, phantomB],
+    });
+
+    if (status !== 200) {
+      this.addResult('test73_unknown_spaces_fall_back_to_canonical', false,
+        `expected 200 for phantom IDs, got ${status}`);
+      return;
+    }
+    const results = (body as { results: Array<{ entityId: string }> }).results;
+    const ids = results.map(r => r.entityId);
+    const onlyCanonical = ids.length === 1 && ids[0] === TEST_ENTITIES.ASID_CANON_ENTITY_ID;
+    this.addResult('test73_unknown_spaces_fall_back_to_canonical', onlyCanonical,
+      onlyCanonical
+        ? `phantom IDs match no docs; canonical anchor still admits ASID_CANON`
+        : `expected only ASID_CANON, got [${ids.join(', ')}]`);
+  }
+
+  /** Numeric (non-UUID) values in additional_space_ids are rejected. */
+  async test74_AdditionalSpaceIdsRejectsNumericValue(): Promise<void> {
+    console.log(`\n${BLUE}Test 74: numeric (non-UUID) value returns 400${NC}`);
+
+    const { status, body } = await this.searchRaw(
+      { query: 'AsidProbeEntity', scope: 'GLOBAL' },
+      '12345',
+    );
+    const correct = status === 400;
+    const message =
+      typeof body === 'object' && body !== null && 'message' in body
+        ? String((body as { message: unknown }).message)
+        : '';
+    this.addResult('test74_rejects_numeric_value', correct,
+      correct ? `400 returned for numeric value; message: ${message}` : `expected 400, got ${status}`);
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -3130,6 +3837,31 @@ async function main() {
     await validator.test48_UserSuppliedExcludeTypeIds();
     await validator.test49_ConflictingIncludeExcludeReturns400();
     await validator.test50_ExplicitIncludeOverridesDefaultExclusion();
+    await validator.test51_AdditionalSpaceIdsCanonicalOnlyBaseline();
+    await validator.test52_AdditionalSpaceIdsCanonicalPlusOneExtraSpace();
+    await validator.test53_AdditionalSpaceIdsCanonicalPlusMultipleExtraSpaces();
+    await validator.test54_AdditionalSpaceIdsCanonicalRootRewrite();
+    await validator.test55_AdditionalSpaceIdsCanonicalRootPlusExtra();
+    await validator.test55b_IncludeNonCanonicalFalseSuppressesAsid();
+    await validator.test56_AdditionalSpaceIdsRejectedOnSpaceScope();
+    await validator.test57_AdditionalSpaceIdsRejectsInvalidUuid();
+    await validator.test58_AdditionalSpaceIdsRejectsOverLimit();
+    await validator.test59_AdditionalSpaceIdsRejectedOnAggregatedSpaceScope();
+    await validator.test60_AdditionalSpaceIdsAcceptsDashlessUuid();
+    await validator.test61_AdditionalSpaceIdsAcceptsMixedFormatUuids();
+    await validator.test62_AdditionalSpaceIdsExcludesUnlisted();
+    await validator.test63_AdditionalSpaceIdsEmptyStringTreatedAsAbsent();
+    await validator.test64_AdditionalSpaceIdsWhitespaceCsvTreatedAsAbsent();
+    await validator.test65_AdditionalSpaceIdsTrailingCommasTolerated();
+    await validator.test66_AdditionalSpaceIdsDuplicatesTolerated();
+    await validator.test67_AdditionalSpaceIdsWorksWithGlobalBySpaceScore();
+    await validator.test68_AdditionalSpaceIdsWorksWithGlobalByEntitySpaceScore();
+    await validator.test69_AdditionalSpaceIdsWorksWithEmptyQuery();
+    await validator.test70_AdditionalSpaceIdsWorksWithUuidQuery();
+    await validator.test71_AdditionalSpaceIdsHundredIdsBoundary();
+    await validator.test72_AdditionalSpaceIdsRejectsTrailingCharsInUuid();
+    await validator.test73_AdditionalSpaceIdsUnknownSpacesFallsBackToCanonical();
+    await validator.test74_AdditionalSpaceIdsRejectsNumericValue();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

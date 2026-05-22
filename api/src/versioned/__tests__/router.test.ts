@@ -947,6 +947,9 @@ describe("GET /versioned/proposals/:id/diff", () => {
 			// Mock 6: batchGetBlockRelationsForEntities — no block relations
 			db.execute.mockResolvedValueOnce({rows: []})
 
+			// Mock 7: batchGetEntityNames (enrichment)
+			db.execute.mockResolvedValueOnce({rows: []})
+
 			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
 
 			expect(res.status).toBe(200)
@@ -1035,6 +1038,285 @@ describe("GET /versioned/proposals/:id/diff", () => {
 			const body = await res.json()
 			expect(body.error).toBe("Internal server error")
 			expect(body.message).toBe("An unexpected error occurred")
+			expect(body.message).not.toContain("Connection refused")
+		})
+	})
+})
+
+// =============================================================================
+// GET /versioned/proposal-groups/diff Tests
+// =============================================================================
+
+describe("GET /versioned/proposal-groups/diff", () => {
+	let app: Hono
+	let db: ReturnType<typeof createMockDb>
+
+	beforeEach(() => {
+		const setup = setupTestApp()
+		app = setup.app
+		db = setup.db
+	})
+
+	const SPACE_1 = "00000000-0000-0000-0000-000000000b01"
+	const PROPOSAL_1 = "00000000-0000-0000-0000-000000000001"
+	const PROPOSAL_2 = "00000000-0000-0000-0000-000000000002"
+
+	describe("validation errors", () => {
+		it("returns 400 when spaceId is missing", async () => {
+			const res = await app.request(`/versioned/proposal-groups/diff?proposalIds=${PROPOSAL_1},${PROPOSAL_2}`)
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.error).toBe("Invalid parameter")
+			expect(body.message).toContain("spaceId")
+		})
+
+		it("returns 400 when proposalIds is missing", async () => {
+			const res = await app.request(`/versioned/proposal-groups/diff?spaceId=${SPACE_1}`)
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.error).toBe("Invalid parameter")
+			expect(body.message).toContain("proposalIds")
+		})
+
+		it("returns 400 when fewer than 2 proposal IDs are provided", async () => {
+			const res = await app.request(
+				`/versioned/proposal-groups/diff?spaceId=${SPACE_1}&proposalIds=${PROPOSAL_1}`,
+			)
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.message).toContain("at least 2")
+		})
+
+		it("returns 400 when proposalIds contains invalid UUID", async () => {
+			const res = await app.request(
+				`/versioned/proposal-groups/diff?spaceId=${SPACE_1}&proposalIds=${PROPOSAL_1},not-a-uuid`,
+			)
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.message).toContain("Invalid UUID")
+		})
+
+		it("returns 400 when spaceId is not a valid UUID", async () => {
+			const res = await app.request(
+				`/versioned/proposal-groups/diff?spaceId=bad&proposalIds=${PROPOSAL_1},${PROPOSAL_2}`,
+			)
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.message).toContain("spaceId")
+		})
+
+		it("returns 400 when limit is invalid", async () => {
+			const res = await app.request(
+				`/versioned/proposal-groups/diff?spaceId=${SPACE_1}&proposalIds=${PROPOSAL_1},${PROPOSAL_2}&limit=-1`,
+			)
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.message).toContain("limit")
+		})
+
+		it("returns 400 for duplicate proposal IDs", async () => {
+			// Mock: batch load returns both (since validation happens after load)
+			const now = Math.floor(Date.now() / 1000)
+			// No DB call needed — duplicates are caught before any DB query
+
+			const res = await app.request(
+				`/versioned/proposal-groups/diff?spaceId=${SPACE_1}&proposalIds=${PROPOSAL_1},${PROPOSAL_1}`,
+			)
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.message).toContain("Duplicate")
+		})
+	})
+
+	describe("proposal lookup errors", () => {
+		it("returns 404 when one proposal is not found", async () => {
+			// Mock: batch query returns only one of the two proposals
+			const now = Math.floor(Date.now() / 1000)
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: PROPOSAL_1,
+						space_id: SPACE_1,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: "ipfs://QmTest1",
+					},
+					// PROPOSAL_2 is missing
+				],
+			})
+
+			const res = await app.request(
+				`/versioned/proposal-groups/diff?spaceId=${SPACE_1}&proposalIds=${PROPOSAL_1},${PROPOSAL_2}`,
+			)
+			expect(res.status).toBe(404)
+			const body = await res.json()
+			expect(body.error).toBe("Not found")
+		})
+
+		it("returns 422 when a proposal has no Publish action", async () => {
+			const now = Math.floor(Date.now() / 1000)
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: PROPOSAL_1,
+						space_id: SPACE_1,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: "ipfs://QmTest1",
+					},
+					{
+						proposal_id: PROPOSAL_2,
+						space_id: SPACE_1,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: null, // No Publish action
+					},
+				],
+			})
+
+			const res = await app.request(
+				`/versioned/proposal-groups/diff?spaceId=${SPACE_1}&proposalIds=${PROPOSAL_1},${PROPOSAL_2}`,
+			)
+			expect(res.status).toBe(422)
+			const body = await res.json()
+			expect(body.message).toContain("Publish action")
+		})
+
+		it("returns 400 for mixed active and historical proposals", async () => {
+			const now = Math.floor(Date.now() / 1000)
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: PROPOSAL_1,
+						space_id: SPACE_1,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(), // Active (future end)
+						executed_at: null,
+						content_uri: "ipfs://QmTest1",
+					},
+					{
+						proposal_id: PROPOSAL_2,
+						space_id: SPACE_1,
+						start_time: (now - 2000).toString(),
+						end_time: (now - 1000).toString(), // Closed (past end)
+						executed_at: null,
+						content_uri: "ipfs://QmTest2",
+					},
+				],
+			})
+
+			const res = await app.request(
+				`/versioned/proposal-groups/diff?spaceId=${SPACE_1}&proposalIds=${PROPOSAL_1},${PROPOSAL_2}`,
+			)
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.message).toContain("mix")
+		})
+
+		it("returns 400 when a proposal belongs to a different space", async () => {
+			const now = Math.floor(Date.now() / 1000)
+			const OTHER_SPACE = "00000000-0000-0000-0000-000000000099"
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: PROPOSAL_1,
+						space_id: SPACE_1,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: "ipfs://QmTest1",
+					},
+					{
+						proposal_id: PROPOSAL_2,
+						space_id: OTHER_SPACE, // Wrong space
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: "ipfs://QmTest2",
+					},
+				],
+			})
+
+			const res = await app.request(
+				`/versioned/proposal-groups/diff?spaceId=${SPACE_1}&proposalIds=${PROPOSAL_1},${PROPOSAL_2}`,
+			)
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.message).toContain("do not belong")
+		})
+	})
+
+	describe("successful responses", () => {
+		it("returns grouped diff with correct mode and proposalIds for active proposals", async () => {
+			const now = Math.floor(Date.now() / 1000)
+
+			// Mock 1: batchGetProposalsWithPublishActions
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: PROPOSAL_1,
+						space_id: SPACE_1,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: "ipfs://QmTest1",
+					},
+					{
+						proposal_id: PROPOSAL_2,
+						space_id: SPACE_1,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: "ipfs://QmTest2",
+					},
+				],
+			})
+
+			// Mock 2-3: getIpfsCacheData for each proposal (valid GRC-20 edits with no ops)
+			const emptyEditBlob = Buffer.from(
+				encodeEdit({
+					id: randomId(),
+					name: "empty",
+					ops: [],
+					authors: [],
+					createdAt: BigInt(now) * 1000n,
+				}),
+			)
+			db.execute.mockResolvedValueOnce({rows: [{data: emptyEditBlob, is_errored: false}]})
+			db.execute.mockResolvedValueOnce({rows: [{data: emptyEditBlob, is_errored: false}]})
+
+			const res = await app.request(
+				`/versioned/proposal-groups/diff?spaceId=${SPACE_1}&proposalIds=${PROPOSAL_1},${PROPOSAL_2}`,
+			)
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body.mode).toBe("active")
+			expect(body.proposalIds).toHaveLength(2)
+			expect(body.spaceId).toBe(normalizeUuid(SPACE_1))
+			expect(body.entities).toEqual([])
+			expect(body.pagination).toEqual({
+				cursor: null,
+				hasMore: false,
+				totalEntities: 0,
+			})
+		})
+	})
+
+	describe("database errors", () => {
+		it("returns 500 for database errors without leaking details", async () => {
+			db.execute.mockRejectedValueOnce(new Error("Connection refused"))
+
+			const res = await app.request(
+				`/versioned/proposal-groups/diff?spaceId=${SPACE_1}&proposalIds=${PROPOSAL_1},${PROPOSAL_2}`,
+			)
+
+			expect(res.status).toBe(500)
+			const body = await res.json()
+			expect(body.error).toBe("Internal server error")
 			expect(body.message).not.toContain("Connection refused")
 		})
 	})
