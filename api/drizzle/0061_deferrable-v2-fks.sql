@@ -1,11 +1,5 @@
 -- Hand-edited: added DEFERRABLE INITIALLY IMMEDIATE so SET CONSTRAINTS ALL DEFERRED
 -- in the kg-indexer block transaction can defer these FKs until commit time.
--- Drizzle doesn't model DEFERRABLE (see drizzle-orm#1429), so the generator
--- that emitted migration 0057 silently dropped the deferrable property on the
--- V2 versioning FKs. Without this, a PROPOSAL_VOTED / PROPOSAL_EXECUTED /
--- PROPOSAL_SETTINGS_UPDATED event processed before its PROPOSAL_CREATED in
--- the same block causes an immediate FK violation
--- (e.g. "violates foreign key constraint proposal_votes_version_fk").
 -- Same pattern as migrations 0012, 0037, 0048.
 
 ALTER TABLE "proposal_versions" DROP CONSTRAINT "proposal_versions_proposal_id_proposals_id_fk";--> statement-breakpoint
