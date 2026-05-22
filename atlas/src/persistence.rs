@@ -7,6 +7,186 @@ use hermes_instrumentation::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
+/// Persisted shape of atlas's emission contract: every (non-root) canonical
+/// node we last told consumers about, as a `(space_id, distance, parent)`
+/// triple.
+///
+/// This is the part of the checkpoint that must survive `GraphState` /
+/// `EdgeType` schema bumps. It is encoded as a length-prefixed flat binary
+/// blob with no field names, no enum tags, no edge-type identifier — only
+/// consumer-observable primitives — so a future change to internal graph
+/// types cannot break baseline restore.
+///
+/// On startup, `DiffTracker::from_baseline(...)` uses this to prime the
+/// emission state so the first `track()` call after a rules change produces
+/// the correct `REMOVED` events for orphaned spaces and `MOVED` events for
+/// repositioned ones. See GEO-645 for the failure mode this guards against.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PersistedEmissionBaseline {
+    /// Sorted by `space_id`, unique by `space_id` (the closest-to-root entry
+    /// wins on duplicates, matching `DiffTracker`'s collapse semantics).
+    nodes: Vec<BaselineNode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BaselineNode {
+    pub space_id: SpaceId,
+    pub distance: u32,
+    pub parent: SpaceId,
+}
+
+// Magic prefix isolates baseline blobs from any other bytea we might store on
+// the row in the future. The trailing `\x01` is the format version: bumping it
+// is the contract for "the on-disk shape of this blob changed in a
+// non-backwards-compatible way", and old atlas builds must reject anything
+// they don't recognise rather than silently misread.
+const BASELINE_MAGIC: &[u8; 8] = b"ATLBL\x00\x00\x01";
+const BASELINE_FORMAT_VERSION: u8 = 1;
+// magic (8) + version (1) + node count u32 LE (4)
+const BASELINE_HEADER_LEN: usize = 13;
+// space_id (16) + distance u32 LE (4) + parent space_id (16)
+const BASELINE_NODE_LEN: usize = 36;
+
+impl PersistedEmissionBaseline {
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
+    pub fn nodes(&self) -> &[BaselineNode] {
+        &self.nodes
+    }
+
+    /// Build a baseline from an arbitrary iterator of node entries. The
+    /// constructor sorts by `space_id` and deduplicates, picking the entry
+    /// with the smallest `distance` on collisions — same "closest to root
+    /// wins" rule `DiffTracker` applies to in-memory positions.
+    pub fn from_nodes<I: IntoIterator<Item = BaselineNode>>(nodes: I) -> Self {
+        let mut nodes: Vec<BaselineNode> = nodes.into_iter().collect();
+        nodes.sort_unstable_by(|a, b| {
+            a.space_id
+                .cmp(&b.space_id)
+                .then_with(|| a.distance.cmp(&b.distance))
+        });
+        nodes.dedup_by_key(|n| n.space_id);
+        Self { nodes }
+    }
+
+    /// Snapshot a diff tracker's current emission state as a persistable
+    /// baseline. Returns `None` if the tracker has nothing to persist (no
+    /// canonical compute has ever produced output and no prior baseline was
+    /// loaded), in which case the caller should not write a baseline column —
+    /// writing an empty baseline would let a fresh-start atlas advertise
+    /// "consumers have nothing canonical" and force a spurious wipe on the
+    /// next restart.
+    pub fn from_diff_tracker(tracker: &crate::graph::DiffTracker) -> Option<Self> {
+        let iter = tracker.iter_emission_state()?;
+        let nodes: Vec<BaselineNode> = iter
+            .map(|(space_id, distance, parent)| BaselineNode {
+                space_id,
+                distance,
+                parent,
+            })
+            .collect();
+        // The tracker's emission state is already sorted+deduped by SpaceId,
+        // so skip the normalisation cost.
+        Some(Self { nodes })
+    }
+
+    /// Encode as a flat little-endian binary blob.
+    ///
+    /// Layout (header followed by `count` fixed-size node entries):
+    ///   bytes  0..8  : magic `ATLBL\0\0\x01`
+    ///   byte   8     : format version (currently 1)
+    ///   bytes  9..13 : node count, u32 LE
+    ///   for each node (36 bytes):
+    ///       16 bytes : space_id
+    ///        4 bytes : distance, u32 LE
+    ///       16 bytes : parent space_id
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out =
+            Vec::with_capacity(BASELINE_HEADER_LEN + self.nodes.len() * BASELINE_NODE_LEN);
+        out.extend_from_slice(BASELINE_MAGIC);
+        out.push(BASELINE_FORMAT_VERSION);
+        let count: u32 = self
+            .nodes
+            .len()
+            .try_into()
+            .expect("baseline node count fits in u32");
+        out.extend_from_slice(&count.to_le_bytes());
+        for node in &self.nodes {
+            out.extend_from_slice(&node.space_id);
+            out.extend_from_slice(&node.distance.to_le_bytes());
+            out.extend_from_slice(&node.parent);
+        }
+        out
+    }
+
+    /// Decode a baseline blob. Rejects unknown magic / version / truncated
+    /// payloads explicitly so a corrupted column can't be silently misread.
+    pub fn decode(bytes: &[u8]) -> Result<Self, CheckpointError> {
+        if bytes.len() < BASELINE_HEADER_LEN {
+            return Err(CheckpointError::Serialization(format!(
+                "baseline blob too short: {} bytes, expected at least {}",
+                bytes.len(),
+                BASELINE_HEADER_LEN
+            )));
+        }
+        if &bytes[0..8] != BASELINE_MAGIC {
+            return Err(CheckpointError::Serialization(format!(
+                "baseline blob magic mismatch: {:02x?}",
+                &bytes[0..8]
+            )));
+        }
+        let version = bytes[8];
+        if version != BASELINE_FORMAT_VERSION {
+            return Err(CheckpointError::Serialization(format!(
+                "unsupported baseline format version: {version}"
+            )));
+        }
+        let mut count_bytes = [0u8; 4];
+        count_bytes.copy_from_slice(&bytes[9..13]);
+        let count = u32::from_le_bytes(count_bytes) as usize;
+
+        let expected_len = BASELINE_HEADER_LEN + count * BASELINE_NODE_LEN;
+        if bytes.len() != expected_len {
+            return Err(CheckpointError::Serialization(format!(
+                "baseline blob length {} does not match header count {} (expected {})",
+                bytes.len(),
+                count,
+                expected_len
+            )));
+        }
+
+        let mut nodes = Vec::with_capacity(count);
+        let mut offset = BASELINE_HEADER_LEN;
+        for _ in 0..count {
+            let mut space_id = [0u8; 16];
+            space_id.copy_from_slice(&bytes[offset..offset + 16]);
+            let mut dist_bytes = [0u8; 4];
+            dist_bytes.copy_from_slice(&bytes[offset + 16..offset + 20]);
+            let distance = u32::from_le_bytes(dist_bytes);
+            let mut parent = [0u8; 16];
+            parent.copy_from_slice(&bytes[offset + 20..offset + 36]);
+            nodes.push(BaselineNode {
+                space_id,
+                distance,
+                parent,
+            });
+            offset += BASELINE_NODE_LEN;
+        }
+
+        Ok(Self { nodes })
+    }
+}
+
 const CHECKPOINT_SCHEMA_VERSION: u32 = 1;
 const FAIL_OPEN_BOUND_DEFAULT: u64 = 10;
 const FAIL_OPEN_BOUND_MIN: u64 = 1;
@@ -192,6 +372,19 @@ pub struct CheckpointManager {
     config: CheckpointConfig,
     fail_open: std::sync::Mutex<FailOpenState>,
     restored_cursor: Option<String>,
+    restored_block_number: Option<u64>,
+}
+
+/// Result of `CheckpointManager::restore_checkpoint_on_startup`.
+///
+/// `graph_state` and `baseline` decode independently. In particular, a
+/// missing/invalid `graph_state` (marker mismatch, unknown enum variant,
+/// fresh-start) must not suppress a valid `baseline` — that's how a
+/// rules-change deploy gets the contract from the previous deploy.
+#[derive(Debug, Default)]
+pub struct RestoredCheckpoint {
+    pub graph_state: Option<GraphState>,
+    pub baseline: Option<PersistedEmissionBaseline>,
 }
 
 #[derive(Debug, Default)]
@@ -208,6 +401,7 @@ impl CheckpointManager {
             config,
             fail_open: std::sync::Mutex::new(FailOpenState::default()),
             restored_cursor: None,
+            restored_block_number: None,
         }
     }
 
@@ -225,16 +419,78 @@ impl CheckpointManager {
         self.restored_cursor.clone()
     }
 
+    /// Block number associated with the restored checkpoint cursor, when
+    /// one was loaded. Used by the force-write-on-startup path to write a
+    /// baseline using the existing checkpoint coordinates rather than
+    /// inventing a synthetic one.
+    pub fn restored_block_number(&self) -> Option<u64> {
+        self.restored_block_number
+    }
+
+    /// Restore graph state and the persisted emission baseline.
+    ///
+    /// The two are independently decoded so that a `GraphState` schema bump
+    /// (runtime marker mismatch, unknown enum variant in the JSON blob) does
+    /// *not* prevent the baseline from being restored — that's the whole
+    /// point of the schema-stable baseline shape. See GEO-645.
+    ///
+    /// Returns `(graph_state, baseline)`. Either side can be `None`:
+    /// - `graph_state` is `None` on fresh-start (no checkpoint, marker
+    ///   mismatch with `ATLAS_CHECKPOINT_ALLOW_FRESH_START`, or unreadable
+    ///   graph blob with the same env flag set).
+    /// - `baseline` is `None` for a brand-new indexer that has never written
+    ///   one, or when the baseline column is `NULL` on the existing row
+    ///   (e.g. the first time this code runs against a pre-existing
+    ///   checkpoint). Callers should force-write a baseline once they have
+    ///   one to persist.
     pub async fn restore_checkpoint_on_startup(
         &mut self,
-    ) -> Result<Option<GraphState>, CheckpointError> {
+    ) -> Result<RestoredCheckpoint, CheckpointError> {
         let Some(store) = &self.config.store else {
             info!("Checkpoint persistence disabled (no ATLAS_CHECKPOINT_DATABASE_URL)");
-            return Ok(None);
+            return Ok(RestoredCheckpoint::default());
         };
 
         match store.load(&self.config.indexer_id).await {
             Ok(Some(checkpoint)) => {
+                // Decode the baseline first and unconditionally — even when
+                // the graph_state path bails out, the caller still needs the
+                // baseline so DiffTracker can be primed.
+                let baseline = match checkpoint.emission_baseline() {
+                    Ok(Some(baseline)) => {
+                        info!(
+                            indexer_id = %self.config.indexer_id,
+                            root_space_id = %encode_id(self.config.root_space_id),
+                            baseline_node_count = baseline.len(),
+                            block_number = checkpoint.block_number,
+                            cursor = %checkpoint.cursor,
+                            "Emission baseline restored"
+                        );
+                        Some(baseline)
+                    }
+                    Ok(None) => {
+                        info!(
+                            indexer_id = %self.config.indexer_id,
+                            block_number = checkpoint.block_number,
+                            "No emission baseline on existing checkpoint; will force-write on first canonical compute"
+                        );
+                        None
+                    }
+                    Err(err) => {
+                        // A bad baseline blob is a serious operational
+                        // signal — surface it, but don't block startup.
+                        // Treating it as "no baseline" triggers the
+                        // force-write path on next compute, which will
+                        // replace the bad blob with a known-good one.
+                        error!(
+                            indexer_id = %self.config.indexer_id,
+                            reason = %err,
+                            "Emission baseline failed to decode; proceeding without prime (will force-write)"
+                        );
+                        None
+                    }
+                };
+
                 if let Err(err) = checkpoint.validate_compatibility(
                     &self.config.indexer_id,
                     &self.config.runtime_compatibility_marker,
@@ -249,9 +505,13 @@ impl CheckpointManager {
                             reason = %err,
                             block_number = checkpoint.block_number,
                             cursor = %checkpoint.cursor,
-                            "Checkpoint rejected; ATLAS_CHECKPOINT_ALLOW_FRESH_START enabled, starting fresh"
+                            baseline_node_count = baseline.as_ref().map(|b| b.len()).unwrap_or(0),
+                            "Checkpoint rejected; ATLAS_CHECKPOINT_ALLOW_FRESH_START enabled, starting fresh (baseline retained if present)"
                         );
-                        return Ok(None);
+                        return Ok(RestoredCheckpoint {
+                            graph_state: None,
+                            baseline,
+                        });
                     }
 
                     error!(
@@ -277,9 +537,13 @@ impl CheckpointManager {
                                 reason = %err,
                                 block_number = checkpoint.block_number,
                                 cursor = %checkpoint.cursor,
-                                "Checkpoint graph state unreadable; ATLAS_CHECKPOINT_ALLOW_FRESH_START enabled, starting fresh"
+                                baseline_node_count = baseline.as_ref().map(|b| b.len()).unwrap_or(0),
+                                "Checkpoint graph state unreadable; ATLAS_CHECKPOINT_ALLOW_FRESH_START enabled, starting fresh (baseline retained if present)"
                             );
-                            return Ok(None);
+                            return Ok(RestoredCheckpoint {
+                                graph_state: None,
+                                baseline,
+                            });
                         }
 
                         error!(
@@ -296,6 +560,7 @@ impl CheckpointManager {
                 };
 
                 self.restored_cursor = Some(checkpoint.cursor.clone());
+                self.restored_block_number = Some(checkpoint.block_number);
                 info!(
                     indexer_id = %self.config.indexer_id,
                     root_space_id = %encode_id(self.config.root_space_id),
@@ -304,7 +569,10 @@ impl CheckpointManager {
                     cursor = %checkpoint.cursor,
                     "Checkpoint restored"
                 );
-                Ok(Some(graph_state))
+                Ok(RestoredCheckpoint {
+                    graph_state: Some(graph_state),
+                    baseline,
+                })
             }
             Ok(None) => {
                 info!(
@@ -313,7 +581,7 @@ impl CheckpointManager {
                     graph_state_version = self.config.graph_state_version,
                     "No checkpoint found; starting fresh"
                 );
-                Ok(None)
+                Ok(RestoredCheckpoint::default())
             }
             Err(err) => {
                 error!(
@@ -405,6 +673,7 @@ impl CheckpointManager {
         block_number: u64,
         cursor: String,
         graph_state_blob: PersistedGraphState,
+        emission_baseline: Option<&PersistedEmissionBaseline>,
     ) {
         if self.config.store.is_none() {
             return;
@@ -415,6 +684,7 @@ impl CheckpointManager {
             cursor,
             block_number,
             graph_state_blob,
+            emission_baseline,
             self.config.graph_state_version,
             self.config.runtime_compatibility_marker.clone(),
             self.config.root_space_id,
@@ -598,7 +868,8 @@ impl PostgresCheckpointStore {
                 graph_state_blob,
                 graph_state_version,
                 runtime_compatibility_marker,
-                root_space_id
+                root_space_id,
+                emission_baseline_blob
              FROM atlas_checkpoints
              WHERE indexer_id = $1",
         )
@@ -621,6 +892,18 @@ impl PostgresCheckpointStore {
                 CheckpointError::Serialization(format!("decode graph_state_blob: {err}"))
             })?
             .0;
+
+        // Baseline column is nullable: pre-existing rows from before this
+        // migration shipped will return None here, which triggers the
+        // force-write-on-startup path on the caller. Decoding is lazy
+        // (`Checkpoint::emission_baseline()`) for the same reason graph
+        // state decode is lazy — keep raw bytes here so a bad blob doesn't
+        // prevent the rest of the checkpoint from loading.
+        let emission_baseline_blob: Option<Vec<u8>> = row
+            .try_get::<Option<Vec<u8>>, _>("emission_baseline_blob")
+            .map_err(|err| {
+                CheckpointError::Serialization(format!("decode emission_baseline_blob: {err}"))
+            })?;
 
         let schema_version_i16 = row.try_get::<i16, _>("schema_version").map_err(|err| {
             CheckpointError::Serialization(format!("decode schema_version: {err}"))
@@ -672,6 +955,7 @@ impl PostgresCheckpointStore {
             root_space_id: row.try_get("root_space_id").map_err(|err| {
                 CheckpointError::Serialization(format!("decode root_space_id: {err}"))
             })?,
+            emission_baseline_blob,
         }))
     }
 
@@ -700,6 +984,10 @@ impl PostgresCheckpointStore {
             ))
         })?;
 
+        // The baseline column is written in the *same* INSERT as the graph
+        // state, so they cannot diverge — they share the row's transaction.
+        // Passing `None` (when the caller has no baseline yet) preserves any
+        // existing value, since COALESCE keeps the prior row's bytes.
         let row = sqlx::query(
             "INSERT INTO atlas_checkpoints (
                 indexer_id,
@@ -710,8 +998,9 @@ impl PostgresCheckpointStore {
                 runtime_compatibility_marker,
                 root_space_id,
                 schema_version,
+                emission_baseline_blob,
                 updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
             ON CONFLICT (indexer_id) DO UPDATE SET
                 cursor = EXCLUDED.cursor,
                 block_number = EXCLUDED.block_number,
@@ -720,8 +1009,10 @@ impl PostgresCheckpointStore {
                 runtime_compatibility_marker = EXCLUDED.runtime_compatibility_marker,
                 root_space_id = EXCLUDED.root_space_id,
                 schema_version = EXCLUDED.schema_version,
+                emission_baseline_blob = COALESCE(EXCLUDED.emission_baseline_blob, atlas_checkpoints.emission_baseline_blob),
                 updated_at = NOW()
-            RETURNING pg_column_size(graph_state_blob) AS snapshot_size_bytes",
+            RETURNING pg_column_size(graph_state_blob) AS snapshot_size_bytes,
+                      pg_column_size(emission_baseline_blob) AS baseline_size_bytes",
         )
         .bind(&checkpoint.indexer_id)
         .bind(&checkpoint.cursor)
@@ -731,6 +1022,7 @@ impl PostgresCheckpointStore {
         .bind(&checkpoint.runtime_compatibility_marker)
         .bind(&checkpoint.root_space_id)
         .bind(db_schema_version)
+        .bind(checkpoint.emission_baseline_blob.as_deref())
         .fetch_one(&self.pool)
         .await
         .map_err(|err| CheckpointError::Io(format!("save checkpoint: {err}")))?;
@@ -766,6 +1058,13 @@ pub struct Checkpoint {
     pub graph_state_version: u32,
     pub runtime_compatibility_marker: String,
     pub root_space_id: String,
+    // Raw bytes of the persisted emission baseline (see
+    // `PersistedEmissionBaseline`). Stored as a separate column so a
+    // `graph_state_blob` decode failure cannot prevent the baseline from
+    // loading. `None` for indexers that haven't written one yet (either
+    // pre-migration rows or a brand-new fresh-start).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emission_baseline_blob: Option<Vec<u8>>,
 }
 
 impl Checkpoint {
@@ -775,6 +1074,7 @@ impl Checkpoint {
         cursor: String,
         block_number: u64,
         graph_state_blob: PersistedGraphState,
+        emission_baseline: Option<&PersistedEmissionBaseline>,
         graph_state_version: u32,
         runtime_compatibility_marker: String,
         root_space_id: SpaceId,
@@ -783,6 +1083,7 @@ impl Checkpoint {
         // so serialization to `serde_json::Value` cannot fail in practice.
         let graph_state_blob = serde_json::to_value(graph_state_blob)
             .expect("PersistedGraphState always serializes to valid JSON");
+        let emission_baseline_blob = emission_baseline.map(|b| b.encode());
         Self {
             schema_version: CHECKPOINT_SCHEMA_VERSION,
             indexer_id,
@@ -792,6 +1093,7 @@ impl Checkpoint {
             graph_state_version,
             runtime_compatibility_marker,
             root_space_id: encode_id(root_space_id),
+            emission_baseline_blob,
         }
     }
 
@@ -801,6 +1103,7 @@ impl Checkpoint {
         cursor: String,
         block_number: u64,
         graph_state: &GraphState,
+        emission_baseline: Option<&PersistedEmissionBaseline>,
         graph_state_version: u32,
         runtime_compatibility_marker: String,
         root_space_id: SpaceId,
@@ -810,6 +1113,7 @@ impl Checkpoint {
             cursor,
             block_number,
             PersistedGraphState::from(graph_state),
+            emission_baseline,
             graph_state_version,
             runtime_compatibility_marker,
             root_space_id,
@@ -822,6 +1126,18 @@ impl Checkpoint {
                 CheckpointError::Serialization(format!("decode graph_state_blob: {err}"))
             })?;
         persisted.to_graph_state()
+    }
+
+    /// Lazily decode the persisted emission baseline. Returns `Ok(None)` when
+    /// the column is `NULL` (no baseline persisted yet). Decode failures are
+    /// returned as `Err` so the caller can choose whether to abort or treat
+    /// the row as "no baseline" (the startup path takes the latter approach
+    /// and force-writes a fresh one).
+    pub fn emission_baseline(&self) -> Result<Option<PersistedEmissionBaseline>, CheckpointError> {
+        let Some(blob) = self.emission_baseline_blob.as_deref() else {
+            return Ok(None);
+        };
+        PersistedEmissionBaseline::decode(blob).map(Some)
     }
 
     pub fn validate_compatibility(
@@ -1228,6 +1544,7 @@ mod tests {
             format!("cursor-{block_number}"),
             block_number,
             &GraphState::new(),
+            None,
             1,
             "atlas-v2".to_string(),
             make_space_id(1),
@@ -1282,6 +1599,7 @@ mod tests {
             "cursor-10".to_string(),
             10,
             &GraphState::new(),
+            None,
             1,
             "atlas-v2".to_string(),
             make_space_id(1),
@@ -1330,6 +1648,7 @@ mod tests {
             graph_state_version: 1,
             runtime_compatibility_marker: "atlas-v1".to_string(),
             root_space_id: encode_id(make_space_id(1)),
+            emission_baseline_blob: None,
         };
 
         // Marker validation runs against the in-memory marker field — no decode
@@ -1392,5 +1711,171 @@ mod tests {
         assert_eq!(state.consecutive_uncheckpointed_blocks, 0);
         assert!(!state.paused);
         assert!(state.pending_checkpoint.is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // PersistedEmissionBaseline (GEO-645)
+    // ------------------------------------------------------------------
+
+    fn baseline_node(space: u8, distance: u32, parent: u8) -> BaselineNode {
+        BaselineNode {
+            space_id: make_space_id(space),
+            distance,
+            parent: make_space_id(parent),
+        }
+    }
+
+    #[test]
+    fn baseline_round_trips_through_encode_decode() {
+        let baseline = PersistedEmissionBaseline::from_nodes([
+            baseline_node(0x0A, 1, 0x01),
+            baseline_node(0x0B, 2, 0x0A),
+            baseline_node(0x0C, 1, 0x01),
+        ]);
+        let bytes = baseline.encode();
+        let decoded = PersistedEmissionBaseline::decode(&bytes).unwrap();
+        assert_eq!(decoded, baseline);
+        // Ordering invariant: sorted by space_id.
+        let ids: Vec<u8> = decoded.nodes().iter().map(|n| n.space_id[15]).collect();
+        assert_eq!(ids, vec![0x0A, 0x0B, 0x0C]);
+    }
+
+    #[test]
+    fn baseline_empty_encoding_is_just_header() {
+        let bytes = PersistedEmissionBaseline::empty().encode();
+        // 8 magic + 1 version + 4 count
+        assert_eq!(bytes.len(), 13);
+        let decoded = PersistedEmissionBaseline::decode(&bytes).unwrap();
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn baseline_byte_pinned_layout() {
+        // Pin the on-disk layout against a hand-built expected byte sequence.
+        // If this test fails, a future change has broken the schema-stable
+        // promise — bump BASELINE_FORMAT_VERSION and write a compat reader
+        // before merging.
+        let baseline =
+            PersistedEmissionBaseline::from_nodes([baseline_node(0x0A, 0x01020304, 0x0B)]);
+        let bytes = baseline.encode();
+
+        let mut expected = Vec::new();
+        // magic: ATLBL\0\0\x01
+        expected.extend_from_slice(b"ATLBL\x00\x00\x01");
+        // version byte
+        expected.push(1);
+        // count = 1, LE
+        expected.extend_from_slice(&1u32.to_le_bytes());
+        // node: space_id (0x0A in last byte), distance LE, parent (0x0B in last byte)
+        expected.extend_from_slice(&make_space_id(0x0A));
+        expected.extend_from_slice(&0x01020304u32.to_le_bytes());
+        expected.extend_from_slice(&make_space_id(0x0B));
+
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn baseline_rejects_bad_magic() {
+        let mut bytes = PersistedEmissionBaseline::empty().encode();
+        bytes[0] = b'X';
+        let err = PersistedEmissionBaseline::decode(&bytes).unwrap_err();
+        assert!(
+            matches!(err, CheckpointError::Serialization(ref msg) if msg.contains("magic mismatch")),
+            "expected magic mismatch, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn baseline_rejects_unknown_version() {
+        let mut bytes = PersistedEmissionBaseline::empty().encode();
+        bytes[8] = 2; // pretend a future version wrote this
+        let err = PersistedEmissionBaseline::decode(&bytes).unwrap_err();
+        assert!(
+            matches!(err, CheckpointError::Serialization(ref msg) if msg.contains("unsupported baseline format version")),
+            "expected version error, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn baseline_rejects_truncated_payload() {
+        let baseline = PersistedEmissionBaseline::from_nodes([baseline_node(0x0A, 1, 0x01)]);
+        let mut bytes = baseline.encode();
+        bytes.pop(); // drop one byte from the node payload
+        let err = PersistedEmissionBaseline::decode(&bytes).unwrap_err();
+        assert!(
+            matches!(err, CheckpointError::Serialization(ref msg) if msg.contains("does not match header count")),
+            "expected length-mismatch error, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn baseline_dedupe_keeps_smallest_distance() {
+        // Same space_id appearing twice at different distances: the smaller
+        // distance must win (closest-to-root rule, matches DiffTracker).
+        let baseline = PersistedEmissionBaseline::from_nodes([
+            baseline_node(0x0B, 5, 0x0A),
+            baseline_node(0x0B, 1, 0x01),
+        ]);
+        assert_eq!(baseline.len(), 1);
+        let node = &baseline.nodes()[0];
+        assert_eq!(node.distance, 1);
+        assert_eq!(node.parent, make_space_id(0x01));
+    }
+
+    #[test]
+    fn checkpoint_carries_baseline_through_struct_constructor() {
+        let baseline = PersistedEmissionBaseline::from_nodes([baseline_node(0x0A, 1, 0x01)]);
+        let cp = Checkpoint::from_graph_state(
+            "idx-test".to_string(),
+            "cursor-1".to_string(),
+            1,
+            &GraphState::new(),
+            Some(&baseline),
+            1,
+            "atlas-v2".to_string(),
+            make_space_id(1),
+        );
+        let restored = cp
+            .emission_baseline()
+            .expect("baseline decodes")
+            .expect("baseline present");
+        assert_eq!(restored, baseline);
+    }
+
+    #[test]
+    fn checkpoint_omits_baseline_when_none() {
+        let cp = Checkpoint::from_graph_state(
+            "idx-test".to_string(),
+            "cursor-1".to_string(),
+            1,
+            &GraphState::new(),
+            None,
+            1,
+            "atlas-v2".to_string(),
+            make_space_id(1),
+        );
+        assert!(cp.emission_baseline_blob.is_none());
+        assert!(cp.emission_baseline().unwrap().is_none());
+    }
+
+    #[test]
+    fn baseline_decode_failure_surfaces_serialization_error() {
+        // A `Checkpoint` with a corrupted baseline blob must report the
+        // failure as `Serialization` so the startup path can route it
+        // through the "treat as no baseline, force-write" fallback rather
+        // than aborting.
+        let cp = Checkpoint {
+            schema_version: CHECKPOINT_SCHEMA_VERSION,
+            indexer_id: "idx-test".to_string(),
+            cursor: "cursor-1".to_string(),
+            block_number: 1,
+            graph_state_blob: serde_json::Value::Null,
+            graph_state_version: 1,
+            runtime_compatibility_marker: "atlas-v2".to_string(),
+            root_space_id: encode_id(make_space_id(1)),
+            emission_baseline_blob: Some(b"not a baseline".to_vec()),
+        };
+        let err = cp.emission_baseline().unwrap_err();
+        assert!(matches!(err, CheckpointError::Serialization(_)));
     }
 }

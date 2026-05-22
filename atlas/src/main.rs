@@ -37,7 +37,10 @@ use atlas::convert::convert_action;
 use atlas::events::{BlockMetadata, SpaceId, SpaceTopologyEvent, SpaceTopologyPayload};
 use atlas::graph::{CanonicalProcessor, DiffTracker, GraphState, TransitiveProcessor};
 use atlas::kafka::{AtlasProducer, CanonicalGraphEmitter};
-use atlas::persistence::{CheckpointConfig, CheckpointManager, PersistedGraphState};
+use atlas::persistence::{
+    CheckpointConfig, CheckpointManager, PersistedEmissionBaseline, PersistedGraphState,
+    RestoredCheckpoint,
+};
 use hermes_instrumentation::{debug, info, info_span, Instrument};
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 use prost::Message;
@@ -54,6 +57,11 @@ struct PipelineState {
     diff_tracker: DiffTracker,
     event_count: usize,
     emit_count: usize,
+    /// True until atlas has persisted an emission baseline at least once.
+    /// Drives the "force-write on first canonical compute" requirement: a
+    /// quiet startup must still leave a baseline on disk so the next deploy
+    /// has something to load. See GEO-645.
+    baseline_force_write_pending: bool,
 }
 
 /// Atlas topology processor that implements the hermes-relay Sink trait.
@@ -69,25 +77,63 @@ struct AtlasSink {
 impl AtlasSink {
     async fn new(root_space: SpaceId, emitter: CanonicalGraphEmitter) -> anyhow::Result<Self> {
         let mut checkpoint_manager = CheckpointManager::from_env(root_space, 1)?;
-        let restored_state = checkpoint_manager.restore_checkpoint_on_startup().await?;
+        let RestoredCheckpoint {
+            graph_state,
+            baseline,
+        } = checkpoint_manager.restore_checkpoint_on_startup().await?;
 
-        let graph = restored_state.unwrap_or_else(GraphState::new);
+        let graph = graph_state.unwrap_or_else(GraphState::new);
         let mut transitive = TransitiveProcessor::new();
         let mut canonical = CanonicalProcessor::new(root_space);
-        let mut diff_tracker = DiffTracker::new();
+
+        // If we restored a baseline, prime DiffTracker from it — the first
+        // post-restart track() will diff against what consumers last saw,
+        // emitting REMOVED for orphans across a rules change. Otherwise the
+        // tracker starts empty; we'll fall back to "warm from restored
+        // canonical" below (legacy behaviour) and mark a force-write so the
+        // baseline gets persisted ASAP.
+        let baseline_initially_present = baseline.is_some();
+        let mut diff_tracker = match &baseline {
+            Some(b) => {
+                info!(
+                    baseline_node_count = b.len(),
+                    "DiffTracker primed from persisted emission baseline"
+                );
+                DiffTracker::from_baseline(b)
+            }
+            None => DiffTracker::new(),
+        };
 
         if checkpoint_manager.restored_cursor().is_some() {
             if let Some(restored_graph) = canonical.compute_if_changed(&graph, &mut transitive) {
-                let _ = diff_tracker.track(&restored_graph);
-                info!(
-                    restored_cursor = checkpoint_manager.restored_cursor().is_some(),
-                    warmed_nodes = restored_graph.len(),
-                    "Warmed canonical/transitive/diff caches from restored checkpoint state"
-                );
+                if baseline.is_none() {
+                    // No persisted baseline. Use the just-computed canonical
+                    // as the emission baseline so we don't emit a spurious
+                    // bootstrap-all-ADDED diff on the next track(). This
+                    // matches the pre-GEO-645 behaviour for the
+                    // "checkpoint exists, no baseline column yet" case
+                    // (i.e. the first run after this migration ships).
+                    let _ = diff_tracker.track(&restored_graph);
+                    info!(
+                        warmed_nodes = restored_graph.len(),
+                        "Warmed DiffTracker from restored canonical (no persisted baseline yet)"
+                    );
+                } else {
+                    // Baseline already loaded; don't burn the one-shot
+                    // pending_baseline diff on the warming compute. The
+                    // first real per-block track() handles it.
+                    info!(
+                        restored_canonical_nodes = restored_graph.len(),
+                        baseline_node_count = baseline.as_ref().map(|b| b.len()).unwrap_or(0),
+                        "Restored canonical computed; DiffTracker stays primed from persisted baseline"
+                    );
+                }
             }
         }
 
-        Ok(Self {
+        let baseline_force_write_pending = !baseline_initially_present;
+
+        let mut sink = Self {
             state: Mutex::new(PipelineState {
                 graph,
                 transitive,
@@ -95,10 +141,68 @@ impl AtlasSink {
                 diff_tracker,
                 event_count: 0,
                 emit_count: 0,
+                baseline_force_write_pending,
             }),
             emitter,
             checkpoint_manager,
-        })
+        };
+
+        // Force-write on startup: if there's no baseline on disk yet but we
+        // already have an emission state (from warming above), persist it
+        // immediately. Without this, an atlas with no incoming events between
+        // startup and the next restart would never write a baseline, leaving
+        // the next rules-change deploy nothing to load. See GEO-645.
+        sink.force_write_baseline_if_pending().await;
+
+        Ok(sink)
+    }
+
+    /// Persist the current emission state as a baseline if one hasn't been
+    /// persisted yet. Idempotent — clears the pending flag on success and is
+    /// safe to call repeatedly. Skips if there is no restored cursor (fresh
+    /// start; the first per-block persist handles it instead).
+    async fn force_write_baseline_if_pending(&mut self) {
+        let needs_write = {
+            let state = self.state.lock().unwrap();
+            state.baseline_force_write_pending
+        };
+        if !needs_write {
+            return;
+        }
+        let Some(cursor) = self.checkpoint_manager.restored_cursor() else {
+            // Fresh start: no cursor yet, defer to the per-block persist path.
+            return;
+        };
+        let Some(block_number) = self.checkpoint_manager.restored_block_number() else {
+            return;
+        };
+
+        let (snapshot, baseline) = {
+            let state = self.state.lock().unwrap();
+            (
+                PersistedGraphState::from(&state.graph),
+                PersistedEmissionBaseline::from_diff_tracker(&state.diff_tracker),
+            )
+        };
+
+        let Some(baseline) = baseline else {
+            // Nothing to persist yet (no canonical compute has happened).
+            return;
+        };
+
+        info!(
+            block_number,
+            cursor = %cursor,
+            baseline_node_count = baseline.len(),
+            "Force-writing emission baseline on startup (none persisted before)"
+        );
+
+        self.checkpoint_manager
+            .persist_block_checkpoint(block_number, cursor, snapshot, Some(&baseline))
+            .await;
+
+        let mut state = self.state.lock().unwrap();
+        state.baseline_force_write_pending = false;
     }
 
     fn summary(&self) {
@@ -193,6 +297,11 @@ impl Sink for AtlasSink {
                 diff_tracker,
                 event_count,
                 emit_count,
+                // The force-write flag is read/written on the per-block
+                // persist path below, which re-locks the state — not in this
+                // event loop. Keeping it out of the destructure documents
+                // that intent.
+                baseline_force_write_pending: _,
             } = &mut *s;
 
             // Phase 1: Apply all events to graph state and transitive cache.
@@ -294,14 +403,44 @@ impl Sink for AtlasSink {
         .await?;
 
         if processed_events > 0 {
-            let persisted_snapshot = {
+            let (persisted_snapshot, emission_baseline) = {
                 let state = self.state.lock().unwrap();
-                PersistedGraphState::from(&state.graph)
+                (
+                    PersistedGraphState::from(&state.graph),
+                    PersistedEmissionBaseline::from_diff_tracker(&state.diff_tracker),
+                )
             };
 
+            // Atomicity: graph_state and baseline are written in the same
+            // INSERT, so they cannot diverge. If `emission_baseline` is None
+            // (no canonical compute has ever happened yet, e.g. on a
+            // fresh-start atlas waiting for the first canonical-affecting
+            // event), the SQL `COALESCE` preserves whatever baseline is
+            // already on disk — so we never overwrite a good baseline with
+            // NULL.
             self.checkpoint_manager
-                .persist_block_checkpoint(block_number, meta.cursor.clone(), persisted_snapshot)
+                .persist_block_checkpoint(
+                    block_number,
+                    meta.cursor.clone(),
+                    persisted_snapshot,
+                    emission_baseline.as_ref(),
+                )
                 .await;
+
+            // Clear the force-write flag once we've actually written a
+            // baseline. Cheap, idempotent — the flag exists only to drive
+            // the explicit startup force-write; once the per-block path
+            // is keeping the baseline current there's nothing further to do.
+            if let Some(baseline) = emission_baseline.as_ref() {
+                let mut state = self.state.lock().unwrap();
+                if state.baseline_force_write_pending {
+                    state.baseline_force_write_pending = false;
+                    info!(
+                        baseline_node_count = baseline.len(),
+                        block_number, "Emission baseline persisted for the first time"
+                    );
+                }
+            }
         }
 
         Ok(())
