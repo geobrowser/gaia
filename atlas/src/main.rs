@@ -41,7 +41,7 @@ use atlas::persistence::{
     CheckpointConfig, CheckpointManager, PersistedEmissionBaseline, PersistedGraphState,
     RestoredCheckpoint,
 };
-use hermes_instrumentation::{debug, info, info_span, Instrument};
+use hermes_instrumentation::{debug, info, info_span, warn, Instrument};
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 use prost::Message;
 
@@ -158,9 +158,14 @@ impl AtlasSink {
     }
 
     /// Persist the current emission state as a baseline if one hasn't been
-    /// persisted yet. Idempotent — clears the pending flag on success and is
-    /// safe to call repeatedly. Skips if there is no restored cursor (fresh
-    /// start; the first per-block persist handles it instead).
+    /// persisted yet. Idempotent — clears the pending flag only on a
+    /// confirmed successful DB write, and is safe to call repeatedly. Skips
+    /// if there is no restored cursor (fresh start; the first per-block
+    /// persist handles it instead).
+    ///
+    /// On persist failure the pending flag stays `true` so the per-block
+    /// retry path in `process_block_scoped_data` can try again on a quiet
+    /// stream, even when no canonical-affecting events arrive.
     async fn force_write_baseline_if_pending(&mut self) {
         let needs_write = {
             let state = self.state.lock().unwrap();
@@ -197,12 +202,31 @@ impl AtlasSink {
             "Force-writing emission baseline on startup (none persisted before)"
         );
 
-        self.checkpoint_manager
+        match self
+            .checkpoint_manager
             .persist_block_checkpoint(block_number, cursor, snapshot, Some(&baseline))
-            .await;
-
-        let mut state = self.state.lock().unwrap();
-        state.baseline_force_write_pending = false;
+            .await
+        {
+            Ok(()) => {
+                let mut state = self.state.lock().unwrap();
+                state.baseline_force_write_pending = false;
+                info!(
+                    block_number,
+                    baseline_node_count = baseline.len(),
+                    "Emission baseline persisted for the first time"
+                );
+            }
+            Err(err) => {
+                // Keep `baseline_force_write_pending = true` so the per-block
+                // retry path can try again. CheckpointManager has already
+                // recorded the failure for fail-open accounting.
+                warn!(
+                    block_number,
+                    reason = %err,
+                    "Startup force-write of emission baseline failed; will retry on next block"
+                );
+            }
+        }
     }
 
     fn summary(&self) {
@@ -418,7 +442,8 @@ impl Sink for AtlasSink {
             // event), the SQL `COALESCE` preserves whatever baseline is
             // already on disk — so we never overwrite a good baseline with
             // NULL.
-            self.checkpoint_manager
+            let persist_result = self
+                .checkpoint_manager
                 .persist_block_checkpoint(
                     block_number,
                     meta.cursor.clone(),
@@ -427,18 +452,88 @@ impl Sink for AtlasSink {
                 )
                 .await;
 
-            // Clear the force-write flag once we've actually written a
-            // baseline. Cheap, idempotent — the flag exists only to drive
-            // the explicit startup force-write; once the per-block path
-            // is keeping the baseline current there's nothing further to do.
-            if let Some(baseline) = emission_baseline.as_ref() {
-                let mut state = self.state.lock().unwrap();
-                if state.baseline_force_write_pending {
-                    state.baseline_force_write_pending = false;
+            // Clear the force-write flag only after a confirmed successful
+            // write. Cheap, idempotent — the flag exists to drive the
+            // explicit startup force-write; once the per-block path has
+            // actually persisted a baseline there's nothing further to do.
+            // On failure we leave the flag set so a subsequent quiet block
+            // (handled below) or the next eventful block can retry.
+            if persist_result.is_ok() {
+                if let Some(baseline) = emission_baseline.as_ref() {
+                    let mut state = self.state.lock().unwrap();
+                    if state.baseline_force_write_pending {
+                        state.baseline_force_write_pending = false;
+                        info!(
+                            baseline_node_count = baseline.len(),
+                            block_number, "Emission baseline persisted for the first time"
+                        );
+                    }
+                }
+            }
+        } else {
+            // Quiet block: per-block persist is gated on processed_events > 0,
+            // so the startup force-write is the only persistence attempt in
+            // a fully quiet stream. If the force-write failed (e.g. transient
+            // DB outage) the pending flag is still true and the baseline is
+            // still NULL on disk — without this retry path, a quiet stream
+            // would never recover until an eventful block arrived.
+            //
+            // We reuse the restored cursor / block_number because the cursor
+            // has not advanced on a quiet block. Only attempt this when an
+            // emission baseline is available (canonical compute has run at
+            // least once during startup warming).
+            let (needs_retry, snapshot_and_baseline, retry_cursor, retry_block_number) = {
+                let state = self.state.lock().unwrap();
+                if !state.baseline_force_write_pending {
+                    (false, None, None, None)
+                } else {
+                    let baseline =
+                        PersistedEmissionBaseline::from_diff_tracker(&state.diff_tracker);
+                    let snapshot = PersistedGraphState::from(&state.graph);
+                    (
+                        baseline.is_some(),
+                        baseline.map(|b| (snapshot, b)),
+                        self.checkpoint_manager.restored_cursor(),
+                        self.checkpoint_manager.restored_block_number(),
+                    )
+                }
+            };
+
+            if needs_retry {
+                if let (Some((snapshot, baseline)), Some(cursor), Some(retry_block)) =
+                    (snapshot_and_baseline, retry_cursor, retry_block_number)
+                {
                     info!(
+                        block_number = retry_block,
+                        cursor = %cursor,
                         baseline_node_count = baseline.len(),
-                        block_number, "Emission baseline persisted for the first time"
+                        "Retrying force-write of emission baseline on quiet block"
                     );
+
+                    match self
+                        .checkpoint_manager
+                        .persist_block_checkpoint(retry_block, cursor, snapshot, Some(&baseline))
+                        .await
+                    {
+                        Ok(()) => {
+                            let mut state = self.state.lock().unwrap();
+                            if state.baseline_force_write_pending {
+                                state.baseline_force_write_pending = false;
+                                info!(
+                                    block_number = retry_block,
+                                    baseline_node_count = baseline.len(),
+                                    "Emission baseline persisted for the first time"
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            warn!(
+                                block_number = retry_block,
+                                reason = %err,
+                                "Quiet-block retry of emission baseline force-write failed; will retry on next block"
+                            );
+                        }
+                    }
                 }
             }
         }

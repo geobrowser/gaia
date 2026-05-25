@@ -668,15 +668,29 @@ impl CheckpointManager {
         }
     }
 
+    /// Persist a per-block checkpoint. Returns `Ok(())` on a confirmed
+    /// successful DB write, `Err(_)` if every retry failed.
+    ///
+    /// Fail-open semantics are unchanged: failures still go through
+    /// `record_persist_failure` (which feeds the consecutive-failure counter,
+    /// pause logic, and pending checkpoint). Callers that don't care about
+    /// the result can ignore the returned `Result` — this is the case on
+    /// the per-block hot path, where the next block's persist would anyway
+    /// supersede this one.
+    ///
+    /// The signal exists for callers that need to know whether a baseline
+    /// actually reached disk (e.g. the GEO-645 startup force-write and its
+    /// quiet-stream retry) before clearing pending flags or emitting a
+    /// "persisted for the first time" log.
     pub async fn persist_block_checkpoint(
         &self,
         block_number: u64,
         cursor: String,
         graph_state_blob: PersistedGraphState,
         emission_baseline: Option<&PersistedEmissionBaseline>,
-    ) {
+    ) -> Result<(), CheckpointError> {
         if self.config.store.is_none() {
-            return;
+            return Ok(());
         }
 
         let checkpoint = Checkpoint::new(
@@ -693,9 +707,11 @@ impl CheckpointManager {
         match self.try_persist_with_retries(&checkpoint).await {
             Ok(()) => {
                 self.record_persist_success();
+                Ok(())
             }
             Err(err) => {
                 self.record_persist_failure(block_number, &checkpoint, &err);
+                Err(CheckpointError::Io(err))
             }
         }
     }
