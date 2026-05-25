@@ -155,7 +155,25 @@ impl PersistedEmissionBaseline {
         count_bytes.copy_from_slice(&bytes[9..13]);
         let count = u32::from_le_bytes(count_bytes) as usize;
 
-        let expected_len = BASELINE_HEADER_LEN + count * BASELINE_NODE_LEN;
+        // Use checked arithmetic so a corrupted `count` header on a 32-bit
+        // target (or a pathological value on 64-bit) cannot wrap or trigger
+        // an OOM-sized allocation attempt before we get to the
+        // length-vs-payload check below. On overflow we surface
+        // `CheckpointError::Serialization`, which the startup path treats as
+        // a recoverable "no baseline" condition rather than a panic.
+        let expected_payload =
+            count
+                .checked_mul(BASELINE_NODE_LEN)
+                .ok_or_else(|| {
+                    CheckpointError::Serialization(format!(
+                        "baseline blob header count {count} overflows usize when multiplied by node size {BASELINE_NODE_LEN}"
+                    ))
+                })?;
+        let expected_len = BASELINE_HEADER_LEN.checked_add(expected_payload).ok_or_else(|| {
+            CheckpointError::Serialization(format!(
+                "baseline blob header count {count} overflows usize when added to header size {BASELINE_HEADER_LEN}"
+            ))
+        })?;
         if bytes.len() != expected_len {
             return Err(CheckpointError::Serialization(format!(
                 "baseline blob length {} does not match header count {} (expected {})",
@@ -1821,6 +1839,32 @@ mod tests {
         assert!(
             matches!(err, CheckpointError::Serialization(ref msg) if msg.contains("does not match header count")),
             "expected length-mismatch error, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn baseline_rejects_count_that_would_overflow_or_overallocate() {
+        // A corrupted header with `count = u32::MAX` would, on a 32-bit
+        // target, wrap `count * BASELINE_NODE_LEN` past `usize::MAX`, and on
+        // a 64-bit target would request a ~140 GB allocation. The decode
+        // path must reject this with `CheckpointError::Serialization`
+        // rather than panicking or hitting the allocator. We hand-build a
+        // header with the pathological count and a truncated body so the
+        // arithmetic / length-mismatch check fires before any slice indexing
+        // into the (absent) node payload.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(BASELINE_MAGIC);
+        bytes.push(BASELINE_FORMAT_VERSION);
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        // Intentionally no node payload follows.
+        let err = PersistedEmissionBaseline::decode(&bytes).unwrap_err();
+        // On 32-bit `usize`, this hits the `checked_mul` overflow branch;
+        // on 64-bit, it falls through to the length-vs-payload mismatch.
+        // Either way the contract is the same: surface as `Serialization`
+        // (never panic / OOM) so the startup path can recover.
+        assert!(
+            matches!(err, CheckpointError::Serialization(_)),
+            "expected Serialization error, got: {err:?}"
         );
     }
 
