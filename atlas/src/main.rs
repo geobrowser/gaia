@@ -240,6 +240,76 @@ impl AtlasSink {
             "Processing complete"
         );
     }
+
+    /// Per-block retry of the GEO-645 baseline force-write.
+    ///
+    /// Runs on every incoming block (empty-output blocks, quiet blocks with no
+    /// decoded actions, and quiet blocks where `processed_events == 0`) so a
+    /// fully quiet stream can still recover from a transient DB failure that
+    /// caused the startup force-write (and any earlier per-block writes) to
+    /// fail. Without this hoist, a stream that produced no events after a
+    /// failed startup force-write would never persist a baseline.
+    ///
+    /// The current block's `block_number` / `cursor` are passed in so the
+    /// persisted checkpoint cursor matches the in-memory graph_state +
+    /// baseline snapshot we are writing — using `restored_cursor` /
+    /// `restored_block_number` here would rewind the resume cursor on disk
+    /// even though earlier blocks may have mutated the graph (fail-open).
+    ///
+    /// Semantics:
+    /// - No-op when `baseline_force_write_pending` is already false.
+    /// - No-op when no emission baseline is available yet (canonical compute
+    ///   has not produced output, so `from_diff_tracker` returns None).
+    /// - On success: clears the flag and logs
+    ///   `"Emission baseline persisted for the first time"`.
+    /// - On failure: leaves the flag set; the next block will try again.
+    async fn retry_force_write_baseline(&self, block_number: u64, cursor: &str) {
+        let (snapshot, baseline) = {
+            let state = self.state.lock().unwrap();
+            if !state.baseline_force_write_pending {
+                return;
+            }
+            let baseline = PersistedEmissionBaseline::from_diff_tracker(&state.diff_tracker);
+            let Some(baseline) = baseline else {
+                // No canonical compute yet — nothing to persist.
+                return;
+            };
+            let snapshot = PersistedGraphState::from(&state.graph);
+            (snapshot, baseline)
+        };
+
+        info!(
+            block_number,
+            cursor = %cursor,
+            baseline_node_count = baseline.len(),
+            "Retrying force-write of emission baseline on quiet block"
+        );
+
+        match self
+            .checkpoint_manager
+            .persist_block_checkpoint(block_number, cursor.to_string(), snapshot, Some(&baseline))
+            .await
+        {
+            Ok(()) => {
+                let mut state = self.state.lock().unwrap();
+                if state.baseline_force_write_pending {
+                    state.baseline_force_write_pending = false;
+                    info!(
+                        block_number,
+                        baseline_node_count = baseline.len(),
+                        "Emission baseline persisted for the first time"
+                    );
+                }
+            }
+            Err(err) => {
+                warn!(
+                    block_number,
+                    reason = %err,
+                    "Quiet-block retry of emission baseline force-write failed; will retry on next block"
+                );
+            }
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -292,6 +362,12 @@ impl Sink for AtlasSink {
             .unwrap_or(&[]);
 
         if output.is_empty() {
+            // Empty-output block: no decoded actions at all. Still attempt the
+            // baseline force-write retry so a fully quiet stream can recover
+            // from a failed startup force-write without waiting for an
+            // eventful block.
+            self.retry_force_write_baseline(block_number, &meta.cursor)
+                .await;
             return Ok(());
         }
 
@@ -471,71 +547,14 @@ impl Sink for AtlasSink {
                 }
             }
         } else {
-            // Quiet block: per-block persist is gated on processed_events > 0,
-            // so the startup force-write is the only persistence attempt in
-            // a fully quiet stream. If the force-write failed (e.g. transient
-            // DB outage) the pending flag is still true and the baseline is
-            // still NULL on disk — without this retry path, a quiet stream
-            // would never recover until an eventful block arrived.
-            //
-            // We reuse the restored cursor / block_number because the cursor
-            // has not advanced on a quiet block. Only attempt this when an
-            // emission baseline is available (canonical compute has run at
-            // least once during startup warming).
-            let (needs_retry, snapshot_and_baseline, retry_cursor, retry_block_number) = {
-                let state = self.state.lock().unwrap();
-                if !state.baseline_force_write_pending {
-                    (false, None, None, None)
-                } else {
-                    let baseline =
-                        PersistedEmissionBaseline::from_diff_tracker(&state.diff_tracker);
-                    let snapshot = PersistedGraphState::from(&state.graph);
-                    (
-                        baseline.is_some(),
-                        baseline.map(|b| (snapshot, b)),
-                        self.checkpoint_manager.restored_cursor(),
-                        self.checkpoint_manager.restored_block_number(),
-                    )
-                }
-            };
-
-            if needs_retry {
-                if let (Some((snapshot, baseline)), Some(cursor), Some(retry_block)) =
-                    (snapshot_and_baseline, retry_cursor, retry_block_number)
-                {
-                    info!(
-                        block_number = retry_block,
-                        cursor = %cursor,
-                        baseline_node_count = baseline.len(),
-                        "Retrying force-write of emission baseline on quiet block"
-                    );
-
-                    match self
-                        .checkpoint_manager
-                        .persist_block_checkpoint(retry_block, cursor, snapshot, Some(&baseline))
-                        .await
-                    {
-                        Ok(()) => {
-                            let mut state = self.state.lock().unwrap();
-                            if state.baseline_force_write_pending {
-                                state.baseline_force_write_pending = false;
-                                info!(
-                                    block_number = retry_block,
-                                    baseline_node_count = baseline.len(),
-                                    "Emission baseline persisted for the first time"
-                                );
-                            }
-                        }
-                        Err(err) => {
-                            warn!(
-                                block_number = retry_block,
-                                reason = %err,
-                                "Quiet-block retry of emission baseline force-write failed; will retry on next block"
-                            );
-                        }
-                    }
-                }
-            }
+            // Quiet block (decoded actions present but none were convertible):
+            // per-block persist is gated on `processed_events > 0`, so without
+            // this retry a fully quiet stream that hit a transient DB failure
+            // during the startup force-write would never recover. The helper
+            // uses the CURRENT block's cursor/number to match the in-memory
+            // snapshot it persists.
+            self.retry_force_write_baseline(block_number, &meta.cursor)
+                .await;
         }
 
         Ok(())
