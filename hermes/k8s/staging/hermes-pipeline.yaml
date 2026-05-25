@@ -107,6 +107,8 @@ spec:
                 secretKeyRef:
                   name: hermes-ipfs-cache-secrets
                   key: SUBSTREAMS_API_TOKEN
+            - name: SUBSTREAMS_START_BLOCK
+              value: "138000"
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:

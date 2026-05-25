@@ -11,3 +11,11 @@ message HermesTopicDeclared {
   bytes topic_id = 2;             // 16 bytes - topic UUID
   blockchain_metadata.BlockchainMetadata meta = 3;
 }
+
+// HermesTopicRemoved - space removes a previously declared topic
+// Data encoding: abi.encode(bytes16(topicId))
+message HermesTopicRemoved {
+  bytes space_id = 1;             // 16 bytes - space removing topic
+  bytes topic_id = 2;             // 16 bytes - topic UUID
+  blockchain_metadata.BlockchainMetadata meta = 3;
+}
