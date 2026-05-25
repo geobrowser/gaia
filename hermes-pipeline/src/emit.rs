@@ -29,7 +29,7 @@ use hermes_schema::pb::{
         HermesCreateSpace, HermesSpaceTrustExtension, hermes_create_space,
         hermes_space_trust_extension,
     },
-    topics::HermesTopicDeclared,
+    topics::{HermesTopicDeclared, HermesTopicRemoved},
     voting::{HermesVoteCast, VoteDirection},
 };
 
@@ -499,6 +499,27 @@ impl HasMeta for HermesTopicDeclared {
     }
 }
 
+impl KafkaEvent for HermesTopicRemoved {
+    const TOPIC: &'static str = topics::TOPICS;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("TOPIC_REMOVED"),
+        })
+    }
+}
+
+impl HasMeta for HermesTopicRemoved {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
 // =============================================================================
 // Voting events
 // =============================================================================
@@ -615,7 +636,16 @@ impl Emitter {
     /// Reads `ENVIRONMENT` from environment to support environment isolation.
     /// If set to "staging", all topics will be prefixed with "staging.".
     pub fn new(producer: FutureProducer) -> Self {
-        let topic_prefix = get_topic_prefix();
+        Self::new_with_prefix(producer, get_topic_prefix())
+    }
+
+    /// Create an emitter with an explicit topic prefix. Bypasses the
+    /// `ENVIRONMENT` env-var lookup that `Emitter::new` performs via
+    /// `get_topic_prefix`. Useful for tests so they don't have to mutate
+    /// the process-wide ENVIRONMENT variable to satisfy the prefix
+    /// `OnceLock` cache (which is initialized exactly once for the
+    /// lifetime of the process and would otherwise leak between tests).
+    pub fn new_with_prefix(producer: FutureProducer, topic_prefix: &'static str) -> Self {
         info!(
             topic_prefix = %topic_prefix,
             "Kafka topic prefix configured"
@@ -815,6 +845,21 @@ mod tests {
     #[test]
     fn test_topic_declared_topic() {
         assert_eq!(HermesTopicDeclared::TOPIC, "space.topics");
+    }
+
+    #[test]
+    fn test_topic_removed_topic() {
+        assert_eq!(HermesTopicRemoved::TOPIC, "space.topics");
+    }
+
+    #[test]
+    fn test_topic_removed_key() {
+        let event = HermesTopicRemoved {
+            space_id: vec![0xAB; 16],
+            topic_id: vec![0xCD; 16],
+            meta: None,
+        };
+        assert_eq!(event.key(), vec![0xAB; 16]);
     }
 
     #[test]

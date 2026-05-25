@@ -4,6 +4,7 @@
 //! integration tests and other consumers.
 
 pub mod cache;
+pub mod cursor;
 pub mod decode;
 pub mod pipelines;
 

@@ -14,7 +14,8 @@
 //! - `SUBSTREAMS_API_TOKEN` - API token for substreams authentication
 //!
 //! Optional:
-//! - `SUBSTREAMS_START_BLOCK` - First block to consume (default: 82655)
+//! - `SUBSTREAMS_START_BLOCK` - First block to consume on cold start (default: 138000).
+//!   Ignored when a persisted cursor exists in the `meta` table.
 //! - `SUBSTREAMS_END_BLOCK` - Last block to consume (default: u64::MAX for continuous)
 
 use std::borrow::Cow;
@@ -187,7 +188,7 @@ async fn async_main() -> anyhow::Result<()> {
         let start_block: i64 = env::var("SUBSTREAMS_START_BLOCK")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(82655);
+            .unwrap_or(138000);
 
         let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
             .ok()
