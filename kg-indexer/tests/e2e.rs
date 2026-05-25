@@ -81,6 +81,10 @@ mod expected {
     pub const TOPIC_Q: [u8; 16] = make_id(0xB1);
     pub const TOPIC_REMOVED: [u8; 16] = make_id(0x92);
 
+    // Top-level space topic IDs (declared / removed via TOPIC_DECLARED & TOPIC_REMOVED actions).
+    pub const SPACE_TOPIC_KEPT: [u8; 16] = make_id(0x93);
+    pub const SPACE_TOPIC_CLEARED: [u8; 16] = make_id(0x94);
+
     /// All 18 space IDs that should be created
     pub fn all_space_ids() -> Vec<Uuid> {
         vec![
@@ -533,6 +537,68 @@ async fn test_subspace_topics() {
         "Expected 5 subspace_topics (6 declared - 1 removed), found {}",
         count.0
     );
+}
+
+/// Verify the top-level `spaces.topic_id` flow for TOPIC_DECLARED + TOPIC_REMOVED.
+///
+/// The mock topology emits:
+///   - topic_declared(SPACE_J, SPACE_TOPIC_KEPT)
+///   - topic_declared(SPACE_I, SPACE_TOPIC_CLEARED)
+///   - topic_removed(SPACE_I, SPACE_TOPIC_CLEARED)
+///
+/// Expected final state:
+///   - SPACE_J.topic_id = SPACE_TOPIC_KEPT
+///   - SPACE_I.topic_id IS NULL (declared then cleared)
+///   - The `entities` row for SPACE_TOPIC_CLEARED still exists (we only clear
+///     the assignment, never delete the topic concept itself).
+#[tokio::test]
+async fn test_space_topic_declared_and_removed() {
+    let pool = get_pool().await;
+
+    let space_j = uuid_from_bytes(expected::SPACE_J);
+    let space_i = uuid_from_bytes(expected::SPACE_I);
+    let kept = uuid_from_bytes(expected::SPACE_TOPIC_KEPT);
+    let cleared = uuid_from_bytes(expected::SPACE_TOPIC_CLEARED);
+
+    // SPACE_J: topic_id should be set
+    let kept_row: (Option<Uuid>,) = sqlx::query_as("SELECT topic_id FROM spaces WHERE id = $1")
+        .bind(space_j)
+        .fetch_one(&pool)
+        .await
+        .expect("Failed to query SPACE_J.topic_id");
+
+    assert_eq!(
+        kept_row.0,
+        Some(kept),
+        "SPACE_J.topic_id should be SPACE_TOPIC_KEPT"
+    );
+
+    // SPACE_I: topic_id should be NULL after declare + remove
+    let cleared_row: (Option<Uuid>,) = sqlx::query_as("SELECT topic_id FROM spaces WHERE id = $1")
+        .bind(space_i)
+        .fetch_one(&pool)
+        .await
+        .expect("Failed to query SPACE_I.topic_id");
+
+    assert!(
+        cleared_row.0.is_none(),
+        "SPACE_I.topic_id should be NULL after TOPIC_REMOVED, got {:?}",
+        cleared_row.0
+    );
+
+    // The topic concept entities must persist regardless of the assignment state.
+    for topic_id in [kept, cleared] {
+        let exists: (bool,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM entities WHERE id = $1)")
+            .bind(topic_id)
+            .fetch_one(&pool)
+            .await
+            .expect("Failed to query entities");
+        assert!(
+            exists.0,
+            "entities row for topic {} should exist after TOPIC_REMOVED",
+            topic_id
+        );
+    }
 }
 
 /// Verify proposal action types and target IDs for all 15 proposals.

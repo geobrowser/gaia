@@ -1228,6 +1228,25 @@ impl SearchIndexProvider for OpenSearchProvider {
                     });
                     flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
                 }
+                EntityOperation::ClearSpaceTopicEntityIdByDoc(request) => {
+                    // Direct doc-ID clear of `space_topic_entity_id` using a painless
+                    // remove (not null-assignment) so the cache-warmup aggregator at
+                    // `get_space_topic_mappings` doesn't see the field at all.
+                    // 404 is treated as success in parse_bulk_response.
+                    let body = json!({
+                        "script": {
+                            "source": "ctx._source.remove('space_topic_entity_id')",
+                            "lang": "painless"
+                        }
+                    });
+                    bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: request.doc_id.clone(),
+                        space_id: String::new(),
+                        operation_type: "ClearSpaceTopicEntityIdByDoc".to_string(),
+                    });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                }
                 EntityOperation::UpdateSpaceTopicEntityId(request) => {
                     // Flush before executing the update_by_query to maintain ordering
                     flush_pending_bulk!(
@@ -1295,6 +1314,73 @@ impl SearchIndexProvider for OpenSearchProvider {
                                 success: false,
                                 error: Some(SearchIndexError::update(format!(
                                     "Update space topic entity ID failed: {}",
+                                    error_body
+                                ))),
+                            });
+                        }
+                    }
+                }
+                EntityOperation::ClearSpaceTopicEntityId(request) => {
+                    // Slow-path mirror of `UpdateSpaceTopicEntityId`. Used when the
+                    // Postgres entity-space lookup is unavailable. Removes (not nulls)
+                    // the field so the cache-warmup aggregator doesn't see it.
+                    flush_pending_bulk!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
+
+                    let space_uuid = uuid::Uuid::parse_str(&request.space_id).map_err(|_| {
+                        SearchIndexError::validation(format!(
+                            "Invalid space_id: {}",
+                            request.space_id
+                        ))
+                    })?;
+
+                    let body = json!({
+                        "query": {
+                            "term": {
+                                "space_id": space_uuid.to_string()
+                            }
+                        },
+                        "script": {
+                            "source": "ctx._source.remove('space_topic_entity_id')",
+                            "lang": "painless"
+                        }
+                    });
+
+                    match self
+                        .update_by_query_with_retry(body, "ClearSpaceTopicEntityId")
+                        .await?
+                    {
+                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
+                            total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "ClearSpaceTopicEntityId".to_string(),
+                                success: true,
+                                error: None,
+                            });
+                        }
+                        UpdateByQueryOutcome::Failed(error_body) => {
+                            total_failed += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "ClearSpaceTopicEntityId".to_string(),
+                                success: false,
+                                error: Some(SearchIndexError::update(format!(
+                                    "Clear space topic entity ID failed: {}",
                                     error_body
                                 ))),
                             });

@@ -1,13 +1,16 @@
 //! Kafka consumer for space topic events from the space.topics topic.
 //!
-//! Consumes HermesTopicDeclared messages and forwards space topic events to the ingest.
+//! Consumes HermesTopicDeclared and HermesTopicRemoved messages and forwards
+//! space topic events to the ingest. The two event types share a Kafka topic
+//! and are distinguished by the `event-type` header (`TOPIC_DECLARED` /
+//! `TOPIC_REMOVED`; `None` is treated as `TOPIC_DECLARED` for back-compat).
 
 use hermes_instrumentation::{debug, error, info, info_span, instrument, warn, Instrument};
 use hermes_kafka::get_topic_prefix;
 use prost::Message;
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
-    message::Message as KafkaMessage,
+    message::{Headers, Message as KafkaMessage},
     TopicPartitionList,
 };
 use std::env;
@@ -15,11 +18,11 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::consumer::messages::{SpaceTopicEvent, StreamMessage};
+use crate::consumer::messages::{SpaceTopicEvent, SpaceTopicEventKind, StreamMessage};
 use crate::errors::IngestError;
 use crate::orchestrator::SpaceTopicProcessingBatch;
 
-use hermes_schema::pb::topics::HermesTopicDeclared;
+use hermes_schema::pb::topics::{HermesTopicDeclared, HermesTopicRemoved};
 
 /// Pending space topic messages for batching.
 struct PendingSpaceTopicMessage {
@@ -322,6 +325,14 @@ impl SpaceTopicsConsumer {
     }
 
     /// Parse a Kafka message into a space topic event.
+    ///
+    /// Dispatches on the `event-type` header:
+    /// - `Some("TOPIC_DECLARED") | None` → decode `HermesTopicDeclared`,
+    ///   emit `SpaceTopicEvent { kind: Declared }`.
+    /// - `Some("TOPIC_REMOVED")` → decode `HermesTopicRemoved`,
+    ///   emit `SpaceTopicEvent { kind: Removed }`.
+    /// - `Some(other)` → error (matches the kg-indexer's fail-fast behavior so
+    ///   typos or newly introduced event types surface loudly).
     fn parse_message(
         &self,
         msg: &rdkafka::message::BorrowedMessage<'_>,
@@ -334,53 +345,106 @@ impl SpaceTopicsConsumer {
             }
         };
 
-        let topic_declared = HermesTopicDeclared::decode(payload).map_err(|e| {
-            IngestError::parse(format!("Failed to decode HermesTopicDeclared: {}", e))
-        })?;
+        let event_type = get_event_type(msg);
 
-        if topic_declared.space_id.len() != 16 {
-            warn!(
-                space_id_len = topic_declared.space_id.len(),
-                "Invalid space_id length in HermesTopicDeclared, expected 16 bytes"
-            );
-            return Ok(None);
+        match event_type.as_deref() {
+            Some("TOPIC_REMOVED") => {
+                let removed = HermesTopicRemoved::decode(payload).map_err(|e| {
+                    IngestError::parse(format!("Failed to decode HermesTopicRemoved: {}", e))
+                })?;
+                let event = match decode_space_topic_event(
+                    &removed.space_id,
+                    &removed.topic_id,
+                    SpaceTopicEventKind::Removed,
+                )? {
+                    Some(e) => e,
+                    None => return Ok(None),
+                };
+                debug!(
+                    space_id = %event.space_id,
+                    topic_entity_id = %event.topic_entity_id,
+                    "Parsed HermesTopicRemoved"
+                );
+                Ok(Some(PendingSpaceTopicMessage {
+                    events: vec![event],
+                }))
+            }
+            Some("TOPIC_DECLARED") | None => {
+                let declared = HermesTopicDeclared::decode(payload).map_err(|e| {
+                    IngestError::parse(format!("Failed to decode HermesTopicDeclared: {}", e))
+                })?;
+                let event = match decode_space_topic_event(
+                    &declared.space_id,
+                    &declared.topic_id,
+                    SpaceTopicEventKind::Declared,
+                )? {
+                    Some(e) => e,
+                    None => return Ok(None),
+                };
+                debug!(
+                    space_id = %event.space_id,
+                    topic_entity_id = %event.topic_entity_id,
+                    "Parsed HermesTopicDeclared"
+                );
+                Ok(Some(PendingSpaceTopicMessage {
+                    events: vec![event],
+                }))
+            }
+            Some(other) => Err(IngestError::parse(format!(
+                "Unknown space.topics event-type header: {}",
+                other
+            ))),
         }
-
-        if topic_declared.topic_id.len() != 16 {
-            warn!(
-                topic_id_len = topic_declared.topic_id.len(),
-                "Invalid topic_id length in HermesTopicDeclared, expected 16 bytes"
-            );
-            return Ok(None);
-        }
-
-        let space_bytes: [u8; 16] = topic_declared
-            .space_id
-            .as_slice()
-            .try_into()
-            .map_err(|_| IngestError::parse("Failed to convert space_id bytes".to_string()))?;
-        let topic_bytes: [u8; 16] = topic_declared
-            .topic_id
-            .as_slice()
-            .try_into()
-            .map_err(|_| IngestError::parse("Failed to convert topic_id bytes".to_string()))?;
-
-        let space_id = Uuid::from_bytes(space_bytes);
-        let topic_entity_id = Uuid::from_bytes(topic_bytes);
-
-        debug!(
-            space_id = %space_id,
-            topic_entity_id = %topic_entity_id,
-            "Parsed HermesTopicDeclared"
-        );
-
-        Ok(Some(PendingSpaceTopicMessage {
-            events: vec![SpaceTopicEvent {
-                space_id,
-                topic_entity_id,
-            }],
-        }))
     }
+}
+
+/// Read the `event-type` Kafka header, if present.
+fn get_event_type(msg: &rdkafka::message::BorrowedMessage<'_>) -> Option<String> {
+    let headers = msg.headers()?;
+    for i in 0..headers.count() {
+        let header = headers.get(i);
+        if header.key == "event-type" {
+            if let Some(value) = header.value {
+                return String::from_utf8(value.to_vec()).ok();
+            }
+        }
+    }
+    None
+}
+
+/// Validate the 16-byte space/topic IDs and build a `SpaceTopicEvent`.
+fn decode_space_topic_event(
+    space_id: &[u8],
+    topic_id: &[u8],
+    kind: SpaceTopicEventKind,
+) -> Result<Option<SpaceTopicEvent>, IngestError> {
+    if space_id.len() != 16 {
+        warn!(
+            space_id_len = space_id.len(),
+            kind = ?kind,
+            "Invalid space_id length, expected 16 bytes"
+        );
+        return Ok(None);
+    }
+    if topic_id.len() != 16 {
+        warn!(
+            topic_id_len = topic_id.len(),
+            kind = ?kind,
+            "Invalid topic_id length, expected 16 bytes"
+        );
+        return Ok(None);
+    }
+    let space_bytes: [u8; 16] = space_id
+        .try_into()
+        .map_err(|_| IngestError::parse("Failed to convert space_id bytes".to_string()))?;
+    let topic_bytes: [u8; 16] = topic_id
+        .try_into()
+        .map_err(|_| IngestError::parse("Failed to convert topic_id bytes".to_string()))?;
+    Ok(Some(SpaceTopicEvent {
+        space_id: Uuid::from_bytes(space_bytes),
+        topic_entity_id: Uuid::from_bytes(topic_bytes),
+        kind,
+    }))
 }
 
 #[cfg(test)]

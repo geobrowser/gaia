@@ -683,6 +683,7 @@ const EXPECTED_EVENT_TYPES: &[&str] = &[
     "ROLE_REVOKED",
     "TRUST_EXTENSION",
     "TOPIC_DECLARED",
+    "TOPIC_REMOVED",
     "PROPOSAL_CREATED",
     "PROPOSAL_UPDATED",
     "PROPOSAL_VOTED",
@@ -725,6 +726,7 @@ fn event_type_label(event: &BufferedEvent) -> String {
         KgMessage::RoleRevoked(_) => "ROLE_REVOKED".to_string(),
         KgMessage::TrustExtension(_) => "TRUST_EXTENSION".to_string(),
         KgMessage::TopicDeclared(_) => "TOPIC_DECLARED".to_string(),
+        KgMessage::TopicRemoved(_) => "TOPIC_REMOVED".to_string(),
         KgMessage::ProposalCreated(_) => "PROPOSAL_CREATED".to_string(),
         KgMessage::ProposalUpdated(_) => "PROPOSAL_UPDATED".to_string(),
         KgMessage::ProposalVoted(_) => "PROPOSAL_VOTED".to_string(),
@@ -760,10 +762,10 @@ fn make_topic_entity(
 
 fn apply_pending_space_topic(
     space: &mut models::spaces::SpaceItem,
-    pending_space_topics: &HashMap<uuid::Uuid, uuid::Uuid>,
+    pending_space_topics: &HashMap<uuid::Uuid, Option<uuid::Uuid>>,
 ) {
     if let Some(topic_id) = pending_space_topics.get(&space.id).copied() {
-        space.topic_id = Some(topic_id);
+        space.topic_id = topic_id;
     }
 }
 
@@ -1140,6 +1142,11 @@ async fn process_message(
                 .await?;
             2
         }
+        KgMessage::TopicRemoved(event) => {
+            let removal = handlers::topics::handle_topic_removed(&event)?;
+            storage.clear_space_topic(removal.space_id, &mut tx).await?;
+            1
+        }
         KgMessage::ProposalCreated(event) => {
             let result = handlers::governance::handle_proposal_created(&event)?;
             debug!(
@@ -1279,7 +1286,7 @@ async fn process_block(
         .await?;
     let mut total_ops = 0;
     let tx_start = Instant::now();
-    let mut pending_space_topics: HashMap<uuid::Uuid, uuid::Uuid> = HashMap::new();
+    let mut pending_space_topics: HashMap<uuid::Uuid, Option<uuid::Uuid>> = HashMap::new();
 
     // Process each message in sequence order
     for event in &events {
@@ -1323,6 +1330,14 @@ async fn process_block(
             ),
             KgMessage::TopicDeclared(_) => info_span!(
                 "kg_indexer.handle_topic_declared",
+                event_id = event_id,
+                space_id = tracing::field::Empty,
+                topic_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::TopicRemoved(_) => info_span!(
+                "kg_indexer.handle_topic_removed",
                 event_id = event_id,
                 space_id = tracing::field::Empty,
                 topic_id = tracing::field::Empty,
@@ -1603,8 +1618,18 @@ async fn process_block(
                     storage
                         .update_space_topic(assignment.space_id, assignment.topic_id, &mut tx)
                         .await?;
-                    pending_space_topics.insert(assignment.space_id, assignment.topic_id);
+                    pending_space_topics.insert(assignment.space_id, Some(assignment.topic_id));
                     2
+                }
+                KgMessage::TopicRemoved(topic_event) => {
+                    let removal = handlers::topics::handle_topic_removed(topic_event)?;
+
+                    event_span.record("space_id", display(removal.space_id));
+                    event_span.record("topic_id", display(removal.topic_id));
+
+                    storage.clear_space_topic(removal.space_id, &mut tx).await?;
+                    pending_space_topics.insert(removal.space_id, None);
+                    1
                 }
                 KgMessage::ProposalCreated(proposal_event) => {
                     let result = handlers::governance::handle_proposal_created(proposal_event)?;
@@ -1799,13 +1824,56 @@ mod tests {
         let space_id = uuid::Uuid::new_v4();
         let topic_id = uuid::Uuid::new_v4();
         let mut pending = HashMap::new();
-        pending.insert(space_id, topic_id);
+        pending.insert(space_id, Some(topic_id));
 
         let mut space = SpaceItem {
             id: space_id,
             space_type: SpaceType::Dao,
             address: "0x123".to_string(),
             topic_id: None,
+        };
+
+        apply_pending_space_topic(&mut space, &pending);
+
+        assert_eq!(space.topic_id, Some(topic_id));
+    }
+
+    /// A `TOPIC_REMOVED` for a space that's also being registered in the same
+    /// batch must override any prior declared value (start `topic_id = Some(X)`
+    /// on the in-memory SpaceItem, end with `None`).
+    #[test]
+    fn test_apply_pending_space_topic_clears_topic_id_on_removal() {
+        let space_id = uuid::Uuid::new_v4();
+        let prior_topic = uuid::Uuid::new_v4();
+        let mut pending = HashMap::new();
+        pending.insert(space_id, None);
+
+        let mut space = SpaceItem {
+            id: space_id,
+            space_type: SpaceType::Dao,
+            address: "0x123".to_string(),
+            topic_id: Some(prior_topic),
+        };
+
+        apply_pending_space_topic(&mut space, &pending);
+
+        assert_eq!(space.topic_id, None);
+    }
+
+    /// Spaces with no in-batch topic event are untouched.
+    #[test]
+    fn test_apply_pending_space_topic_noop_when_absent() {
+        let space_id = uuid::Uuid::new_v4();
+        let other_space_id = uuid::Uuid::new_v4();
+        let topic_id = uuid::Uuid::new_v4();
+        let mut pending = HashMap::new();
+        pending.insert(other_space_id, Some(topic_id));
+
+        let mut space = SpaceItem {
+            id: space_id,
+            space_type: SpaceType::Dao,
+            address: "0x123".to_string(),
+            topic_id: Some(topic_id),
         };
 
         apply_pending_space_topic(&mut space, &pending);

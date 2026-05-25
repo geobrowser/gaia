@@ -29,7 +29,7 @@ use hermes_schema::pb::{
         HermesCreateSpace, HermesSpaceTrustExtension, hermes_create_space,
         hermes_space_trust_extension,
     },
-    topics::HermesTopicDeclared,
+    topics::{HermesTopicDeclared, HermesTopicRemoved},
     voting::{HermesVoteCast, VoteDirection},
 };
 
@@ -499,6 +499,27 @@ impl HasMeta for HermesTopicDeclared {
     }
 }
 
+impl KafkaEvent for HermesTopicRemoved {
+    const TOPIC: &'static str = topics::TOPICS;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("TOPIC_REMOVED"),
+        })
+    }
+}
+
+impl HasMeta for HermesTopicRemoved {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
 // =============================================================================
 // Voting events
 // =============================================================================
@@ -824,6 +845,21 @@ mod tests {
     #[test]
     fn test_topic_declared_topic() {
         assert_eq!(HermesTopicDeclared::TOPIC, "space.topics");
+    }
+
+    #[test]
+    fn test_topic_removed_topic() {
+        assert_eq!(HermesTopicRemoved::TOPIC, "space.topics");
+    }
+
+    #[test]
+    fn test_topic_removed_key() {
+        let event = HermesTopicRemoved {
+            space_id: vec![0xAB; 16],
+            topic_id: vec![0xCD; 16],
+            meta: None,
+        };
+        assert_eq!(event.key(), vec![0xAB; 16]);
     }
 
     #[test]

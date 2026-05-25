@@ -270,6 +270,7 @@ pub fn parse_bulk_response(
                     || meta.operation_type == "UpdateSpaceScoreByDoc"
                     || meta.operation_type == "UpdateEntitySpaceScore"
                     || meta.operation_type == "UpdateSpaceTopicEntityIdByDoc"
+                    || meta.operation_type == "ClearSpaceTopicEntityIdByDoc"
                     || meta.operation_type == "UpdateInCanonicalGraphByDoc");
             let is_success =
                 (200..300).contains(&(status as u16)) || is_not_found_ok;
