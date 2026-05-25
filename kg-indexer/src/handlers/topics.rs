@@ -26,9 +26,7 @@ pub fn handle_topic_declared(
 }
 
 /// Process a HermesTopicRemoved message and return the space/topic removal.
-pub fn handle_topic_removed(
-    event: &HermesTopicRemoved,
-) -> Result<SpaceTopicRemoval, HandlerError> {
+pub fn handle_topic_removed(event: &HermesTopicRemoved) -> Result<SpaceTopicRemoval, HandlerError> {
     let space_id = Uuid::from_slice(&event.space_id)?;
     let topic_id = Uuid::from_slice(&event.topic_id)?;
 

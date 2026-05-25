@@ -588,12 +588,11 @@ async fn test_space_topic_declared_and_removed() {
 
     // The topic concept entities must persist regardless of the assignment state.
     for topic_id in [kept, cleared] {
-        let exists: (bool,) =
-            sqlx::query_as("SELECT EXISTS(SELECT 1 FROM entities WHERE id = $1)")
-                .bind(topic_id)
-                .fetch_one(&pool)
-                .await
-                .expect("Failed to query entities");
+        let exists: (bool,) = sqlx::query_as("SELECT EXISTS(SELECT 1 FROM entities WHERE id = $1)")
+            .bind(topic_id)
+            .fetch_one(&pool)
+            .await
+            .expect("Failed to query entities");
         assert!(
             exists.0,
             "entities row for topic {} should exist after TOPIC_REMOVED",

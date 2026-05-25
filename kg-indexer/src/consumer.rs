@@ -219,24 +219,22 @@ pub fn parse_message(
                 .map_err(|e| IndexerError::decode(format!("HermesSpaceTrustExtension: {}", e)))?;
             Ok(KgMessage::TrustExtension(extension))
         }
-        "space.topics" => {
-            match event_type {
-                Some("TOPIC_DECLARED") | None => {
-                    let declared = hermes_schema::pb::topics::HermesTopicDeclared::decode(payload)
-                        .map_err(|e| IndexerError::decode(format!("HermesTopicDeclared: {}", e)))?;
-                    Ok(KgMessage::TopicDeclared(declared))
-                }
-                Some("TOPIC_REMOVED") => {
-                    let removed = hermes_schema::pb::topics::HermesTopicRemoved::decode(payload)
-                        .map_err(|e| IndexerError::decode(format!("HermesTopicRemoved: {}", e)))?;
-                    Ok(KgMessage::TopicRemoved(removed))
-                }
-                Some(other) => Err(IndexerError::decode(format!(
-                    "unknown topics event type: {}",
-                    other
-                ))),
+        "space.topics" => match event_type {
+            Some("TOPIC_DECLARED") | None => {
+                let declared = hermes_schema::pb::topics::HermesTopicDeclared::decode(payload)
+                    .map_err(|e| IndexerError::decode(format!("HermesTopicDeclared: {}", e)))?;
+                Ok(KgMessage::TopicDeclared(declared))
             }
-        }
+            Some("TOPIC_REMOVED") => {
+                let removed = hermes_schema::pb::topics::HermesTopicRemoved::decode(payload)
+                    .map_err(|e| IndexerError::decode(format!("HermesTopicRemoved: {}", e)))?;
+                Ok(KgMessage::TopicRemoved(removed))
+            }
+            Some(other) => Err(IndexerError::decode(format!(
+                "unknown topics event type: {}",
+                other
+            ))),
+        },
         "space.governance" => {
             // Use event-type header to determine message type
             match event_type {
