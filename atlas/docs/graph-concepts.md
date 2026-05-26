@@ -39,16 +39,20 @@ The system tracks four different graph views:
 The system supports two categories of edges:
 
 **Explicit Edges** - Direct node-to-node connections with semantic types:
-- Editor relationships
-- Member relationships
-- Trust relationships
-- Generic related relationships
+- Trust relationships (Verified)
+- Generic related relationships (Related)
 
 **Topic Edges** - Indirect connections through group membership:
-- A node references an entire topic/group
+- A node references an entire topic/group (Subtopic)
 - Resolves dynamically to current group members at query time
 - Membership can change without updating the edge
 - Provides abstraction over bulk relationships
+
+**No-op chain events:** `EDITOR_ADDED` / `EDITOR_REMOVED` / `MEMBER_ADDED` /
+`MEMBER_REMOVED` chain events still arrive at Atlas via `convert.rs`, but the
+storage layer ignores them — they produce no edges in any graph view (transitive
+or canonical). See [plan 0007](agents/plans/0007-remove-member-edges-plan.md)
+for the rationale and the canonical-granting edge set after the change.
 
 ### Update Operations
 

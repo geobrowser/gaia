@@ -254,13 +254,11 @@ impl TransitiveProcessor {
                         self.cache.invalidate(target_space_id);
                     }
 
-                    // Membership edges: invalidate member space
-                    TrustExtension::EditorAdded { member_space_id }
-                    | TrustExtension::MemberAdded { member_space_id }
-                    | TrustExtension::EditorRemoved { member_space_id }
-                    | TrustExtension::MemberRemoved { member_space_id } => {
-                        self.cache.invalidate(member_space_id);
-                    }
+                    // Member and Editor edges: no-op — these events do not mutate state (plan 0007).
+                    TrustExtension::MemberAdded { .. }
+                    | TrustExtension::MemberRemoved { .. }
+                    | TrustExtension::EditorAdded { .. }
+                    | TrustExtension::EditorRemoved { .. } => {}
 
                     // Topic edges: invalidate all spaces that announced this topic
                     TrustExtension::Subtopic { target_topic_id }
@@ -616,5 +614,65 @@ mod tests {
             stats_after.reverse_deps_count, 0,
             "stale reverse_deps should be cleaned up"
         );
+    }
+
+    #[test]
+    fn test_member_edge_not_in_transitive() {
+        // Plan 0007: Member edges are no-ops. A space reachable only via a
+        // Member edge must not appear in the transitive graph rooted at the
+        // source — neither in the flat membership set nor in the tree.
+        let mut state = GraphState::new();
+        let a = create_space(&mut state, 1);
+        let b = create_space(&mut state, 2);
+
+        let member_event = SpaceTopologyEvent {
+            meta: make_block_meta(),
+            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+                source_space_id: a,
+                extension: TrustExtension::MemberAdded { member_space_id: b },
+            }),
+        };
+        state.apply_event(&member_event);
+
+        let mut processor = TransitiveProcessor::new();
+        let graph = processor.get_full(a, &state);
+
+        assert_eq!(graph.len(), 1, "A reaches only itself");
+        assert!(graph.contains(&a));
+        assert!(
+            !graph.contains(&b),
+            "B must not be reachable through a Member edge"
+        );
+        assert_eq!(graph.tree.node_count(), 1);
+    }
+
+    #[test]
+    fn test_editor_edge_not_in_transitive() {
+        // Plan 0007: Editor edges are no-ops. A space reachable only via an
+        // Editor edge must not appear in the transitive graph rooted at the
+        // source — neither in the flat membership set nor in the tree.
+        let mut state = GraphState::new();
+        let a = create_space(&mut state, 1);
+        let b = create_space(&mut state, 2);
+
+        let editor_event = SpaceTopologyEvent {
+            meta: make_block_meta(),
+            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+                source_space_id: a,
+                extension: TrustExtension::EditorAdded { member_space_id: b },
+            }),
+        };
+        state.apply_event(&editor_event);
+
+        let mut processor = TransitiveProcessor::new();
+        let graph = processor.get_full(a, &state);
+
+        assert_eq!(graph.len(), 1, "A reaches only itself");
+        assert!(graph.contains(&a));
+        assert!(
+            !graph.contains(&b),
+            "B must not be reachable through an Editor edge"
+        );
+        assert_eq!(graph.tree.node_count(), 1);
     }
 }
