@@ -18,13 +18,18 @@ pub struct KafkaConsumer {
 
 impl KafkaConsumer {
     pub fn new(brokers: &str, group_id: &str) -> Result<Self, IndexerError> {
+        let session_timeout_ms = env::var("KAFKA_SESSION_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(6000);
+
         let mut config = ClientConfig::new();
         config
             .set("bootstrap.servers", brokers)
             .set("group.id", group_id)
             .set("enable.auto.commit", "false")
             .set("auto.offset.reset", "earliest")
-            .set("session.timeout.ms", "6000");
+            .set("session.timeout.ms", session_timeout_ms.to_string());
 
         // Optional SASL/SSL configuration
         if let Ok(username) = env::var("KAFKA_USERNAME") {
