@@ -92,6 +92,7 @@ export const atlasCheckpoints = pgTable("atlas_checkpoints", {
 	rootSpaceId: text("root_space_id").notNull(),
 	schemaVersion: smallint("schema_version").notNull(),
 	graphStateBlob: jsonb("graph_state_blob").notNull(),
+	emissionBaselineBlob: bytea("emission_baseline_blob"),
 	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
 })
 

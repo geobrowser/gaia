@@ -37,8 +37,11 @@ use atlas::convert::convert_action;
 use atlas::events::{BlockMetadata, SpaceId, SpaceTopologyEvent, SpaceTopologyPayload};
 use atlas::graph::{CanonicalProcessor, DiffTracker, GraphState, TransitiveProcessor};
 use atlas::kafka::{AtlasProducer, CanonicalGraphEmitter};
-use atlas::persistence::{CheckpointConfig, CheckpointManager, PersistedGraphState};
-use hermes_instrumentation::{debug, info, info_span, Instrument};
+use atlas::persistence::{
+    CheckpointConfig, CheckpointManager, PersistedEmissionBaseline, PersistedGraphState,
+    RestoredCheckpoint,
+};
+use hermes_instrumentation::{debug, info, info_span, warn, Instrument};
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 use prost::Message;
 
@@ -54,6 +57,11 @@ struct PipelineState {
     diff_tracker: DiffTracker,
     event_count: usize,
     emit_count: usize,
+    /// True until atlas has persisted an emission baseline at least once.
+    /// Drives the "force-write on first canonical compute" requirement: a
+    /// quiet startup must still leave a baseline on disk so the next deploy
+    /// has something to load. See GEO-645.
+    baseline_force_write_pending: bool,
 }
 
 /// Atlas topology processor that implements the hermes-relay Sink trait.
@@ -69,25 +77,63 @@ struct AtlasSink {
 impl AtlasSink {
     async fn new(root_space: SpaceId, emitter: CanonicalGraphEmitter) -> anyhow::Result<Self> {
         let mut checkpoint_manager = CheckpointManager::from_env(root_space, 1)?;
-        let restored_state = checkpoint_manager.restore_checkpoint_on_startup().await?;
+        let RestoredCheckpoint {
+            graph_state,
+            baseline,
+        } = checkpoint_manager.restore_checkpoint_on_startup().await?;
 
-        let graph = restored_state.unwrap_or_else(GraphState::new);
+        let graph = graph_state.unwrap_or_else(GraphState::new);
         let mut transitive = TransitiveProcessor::new();
         let mut canonical = CanonicalProcessor::new(root_space);
-        let mut diff_tracker = DiffTracker::new();
+
+        // If we restored a baseline, prime DiffTracker from it — the first
+        // post-restart track() will diff against what consumers last saw,
+        // emitting REMOVED for orphans across a rules change. Otherwise the
+        // tracker starts empty; we'll fall back to "warm from restored
+        // canonical" below (legacy behaviour) and mark a force-write so the
+        // baseline gets persisted ASAP.
+        let baseline_initially_present = baseline.is_some();
+        let mut diff_tracker = match &baseline {
+            Some(b) => {
+                info!(
+                    baseline_node_count = b.len(),
+                    "DiffTracker primed from persisted emission baseline"
+                );
+                DiffTracker::from_baseline(b)
+            }
+            None => DiffTracker::new(),
+        };
 
         if checkpoint_manager.restored_cursor().is_some() {
             if let Some(restored_graph) = canonical.compute_if_changed(&graph, &mut transitive) {
-                let _ = diff_tracker.track(&restored_graph);
-                info!(
-                    restored_cursor = checkpoint_manager.restored_cursor().is_some(),
-                    warmed_nodes = restored_graph.len(),
-                    "Warmed canonical/transitive/diff caches from restored checkpoint state"
-                );
+                if baseline.is_none() {
+                    // No persisted baseline. Use the just-computed canonical
+                    // as the emission baseline so we don't emit a spurious
+                    // bootstrap-all-ADDED diff on the next track(). This
+                    // matches the pre-GEO-645 behaviour for the
+                    // "checkpoint exists, no baseline column yet" case
+                    // (i.e. the first run after this migration ships).
+                    let _ = diff_tracker.track(&restored_graph);
+                    info!(
+                        warmed_nodes = restored_graph.len(),
+                        "Warmed DiffTracker from restored canonical (no persisted baseline yet)"
+                    );
+                } else {
+                    // Baseline already loaded; don't burn the one-shot
+                    // pending_baseline diff on the warming compute. The
+                    // first real per-block track() handles it.
+                    info!(
+                        restored_canonical_nodes = restored_graph.len(),
+                        baseline_node_count = baseline.as_ref().map(|b| b.len()).unwrap_or(0),
+                        "Restored canonical computed; DiffTracker stays primed from persisted baseline"
+                    );
+                }
             }
         }
 
-        Ok(Self {
+        let baseline_force_write_pending = !baseline_initially_present;
+
+        let mut sink = Self {
             state: Mutex::new(PipelineState {
                 graph,
                 transitive,
@@ -95,10 +141,92 @@ impl AtlasSink {
                 diff_tracker,
                 event_count: 0,
                 emit_count: 0,
+                baseline_force_write_pending,
             }),
             emitter,
             checkpoint_manager,
-        })
+        };
+
+        // Force-write on startup: if there's no baseline on disk yet but we
+        // already have an emission state (from warming above), persist it
+        // immediately. Without this, an atlas with no incoming events between
+        // startup and the next restart would never write a baseline, leaving
+        // the next rules-change deploy nothing to load. See GEO-645.
+        sink.force_write_baseline_if_pending().await;
+
+        Ok(sink)
+    }
+
+    /// Persist the current emission state as a baseline if one hasn't been
+    /// persisted yet. Idempotent — clears the pending flag only on a
+    /// confirmed successful DB write, and is safe to call repeatedly. Skips
+    /// if there is no restored cursor (fresh start; the first per-block
+    /// persist handles it instead).
+    ///
+    /// On persist failure the pending flag stays `true` so the per-block
+    /// retry path in `process_block_scoped_data` can try again on a quiet
+    /// stream, even when no canonical-affecting events arrive.
+    async fn force_write_baseline_if_pending(&mut self) {
+        let needs_write = {
+            let state = self.state.lock().unwrap();
+            state.baseline_force_write_pending
+        };
+        if !needs_write {
+            return;
+        }
+        let Some(cursor) = self.checkpoint_manager.restored_cursor() else {
+            // Fresh start: no cursor yet, defer to the per-block persist path.
+            return;
+        };
+        let Some(block_number) = self.checkpoint_manager.restored_block_number() else {
+            return;
+        };
+
+        let (snapshot, baseline) = {
+            let state = self.state.lock().unwrap();
+            (
+                PersistedGraphState::from(&state.graph),
+                PersistedEmissionBaseline::from_diff_tracker(&state.diff_tracker),
+            )
+        };
+
+        let Some(baseline) = baseline else {
+            // Nothing to persist yet (no canonical compute has happened).
+            return;
+        };
+
+        info!(
+            block_number,
+            cursor = %cursor,
+            baseline_node_count = baseline.len(),
+            "Force-writing emission baseline on startup (none persisted before)"
+        );
+
+        match self
+            .checkpoint_manager
+            .persist_block_checkpoint(block_number, cursor, snapshot, Some(&baseline))
+            .await
+        {
+            Ok(()) => {
+                let mut state = self.state.lock().unwrap();
+                state.baseline_force_write_pending = false;
+                info!(
+                    block_number,
+                    baseline_node_count = baseline.len(),
+                    "Emission baseline persisted for the first time"
+                );
+            }
+            Err(err) => {
+                // Keep `baseline_force_write_pending = true` so the per-block
+                // retry path can try again. CheckpointManager has already
+                // recorded the failure for fail-open accounting.
+                warn!(
+                    block_number,
+                    reason = %err,
+                    "Startup force-write of emission baseline failed; will retry on next block"
+                );
+            }
+        }
     }
 
     fn summary(&self) {
@@ -111,6 +239,76 @@ impl AtlasSink {
             kafka_messages = s.emit_count,
             "Processing complete"
         );
+    }
+
+    /// Per-block retry of the GEO-645 baseline force-write.
+    ///
+    /// Runs on every incoming block (empty-output blocks, quiet blocks with no
+    /// decoded actions, and quiet blocks where `processed_events == 0`) so a
+    /// fully quiet stream can still recover from a transient DB failure that
+    /// caused the startup force-write (and any earlier per-block writes) to
+    /// fail. Without this hoist, a stream that produced no events after a
+    /// failed startup force-write would never persist a baseline.
+    ///
+    /// The current block's `block_number` / `cursor` are passed in so the
+    /// persisted checkpoint cursor matches the in-memory graph_state +
+    /// baseline snapshot we are writing — using `restored_cursor` /
+    /// `restored_block_number` here would rewind the resume cursor on disk
+    /// even though earlier blocks may have mutated the graph (fail-open).
+    ///
+    /// Semantics:
+    /// - No-op when `baseline_force_write_pending` is already false.
+    /// - No-op when no emission baseline is available yet (canonical compute
+    ///   has not produced output, so `from_diff_tracker` returns None).
+    /// - On success: clears the flag and logs
+    ///   `"Emission baseline persisted for the first time"`.
+    /// - On failure: leaves the flag set; the next block will try again.
+    async fn retry_force_write_baseline(&self, block_number: u64, cursor: &str) {
+        let (snapshot, baseline) = {
+            let state = self.state.lock().unwrap();
+            if !state.baseline_force_write_pending {
+                return;
+            }
+            let baseline = PersistedEmissionBaseline::from_diff_tracker(&state.diff_tracker);
+            let Some(baseline) = baseline else {
+                // No canonical compute yet — nothing to persist.
+                return;
+            };
+            let snapshot = PersistedGraphState::from(&state.graph);
+            (snapshot, baseline)
+        };
+
+        info!(
+            block_number,
+            cursor = %cursor,
+            baseline_node_count = baseline.len(),
+            "Retrying force-write of emission baseline on quiet block"
+        );
+
+        match self
+            .checkpoint_manager
+            .persist_block_checkpoint(block_number, cursor.to_string(), snapshot, Some(&baseline))
+            .await
+        {
+            Ok(()) => {
+                let mut state = self.state.lock().unwrap();
+                if state.baseline_force_write_pending {
+                    state.baseline_force_write_pending = false;
+                    info!(
+                        block_number,
+                        baseline_node_count = baseline.len(),
+                        "Emission baseline persisted for the first time"
+                    );
+                }
+            }
+            Err(err) => {
+                warn!(
+                    block_number,
+                    reason = %err,
+                    "Quiet-block retry of emission baseline force-write failed; will retry on next block"
+                );
+            }
+        }
     }
 }
 
@@ -164,6 +362,12 @@ impl Sink for AtlasSink {
             .unwrap_or(&[]);
 
         if output.is_empty() {
+            // Empty-output block: no decoded actions at all. Still attempt the
+            // baseline force-write retry so a fully quiet stream can recover
+            // from a failed startup force-write without waiting for an
+            // eventful block.
+            self.retry_force_write_baseline(block_number, &meta.cursor)
+                .await;
             return Ok(());
         }
 
@@ -193,6 +397,11 @@ impl Sink for AtlasSink {
                 diff_tracker,
                 event_count,
                 emit_count,
+                // The force-write flag is read/written on the per-block
+                // persist path below, which re-locks the state — not in this
+                // event loop. Keeping it out of the destructure documents
+                // that intent.
+                baseline_force_write_pending: _,
             } = &mut *s;
 
             // Phase 1: Apply all events to graph state and transitive cache.
@@ -294,13 +503,57 @@ impl Sink for AtlasSink {
         .await?;
 
         if processed_events > 0 {
-            let persisted_snapshot = {
+            let (persisted_snapshot, emission_baseline) = {
                 let state = self.state.lock().unwrap();
-                PersistedGraphState::from(&state.graph)
+                (
+                    PersistedGraphState::from(&state.graph),
+                    PersistedEmissionBaseline::from_diff_tracker(&state.diff_tracker),
+                )
             };
 
-            self.checkpoint_manager
-                .persist_block_checkpoint(block_number, meta.cursor.clone(), persisted_snapshot)
+            // Atomicity: graph_state and baseline are written in the same
+            // INSERT, so they cannot diverge. If `emission_baseline` is None
+            // (no canonical compute has ever happened yet, e.g. on a
+            // fresh-start atlas waiting for the first canonical-affecting
+            // event), the SQL `COALESCE` preserves whatever baseline is
+            // already on disk — so we never overwrite a good baseline with
+            // NULL.
+            let persist_result = self
+                .checkpoint_manager
+                .persist_block_checkpoint(
+                    block_number,
+                    meta.cursor.clone(),
+                    persisted_snapshot,
+                    emission_baseline.as_ref(),
+                )
+                .await;
+
+            // Clear the force-write flag only after a confirmed successful
+            // write. Cheap, idempotent — the flag exists to drive the
+            // explicit startup force-write; once the per-block path has
+            // actually persisted a baseline there's nothing further to do.
+            // On failure we leave the flag set so a subsequent quiet block
+            // (handled below) or the next eventful block can retry.
+            if persist_result.is_ok() {
+                if let Some(baseline) = emission_baseline.as_ref() {
+                    let mut state = self.state.lock().unwrap();
+                    if state.baseline_force_write_pending {
+                        state.baseline_force_write_pending = false;
+                        info!(
+                            baseline_node_count = baseline.len(),
+                            block_number, "Emission baseline persisted for the first time"
+                        );
+                    }
+                }
+            }
+        } else {
+            // Quiet block (decoded actions present but none were convertible):
+            // per-block persist is gated on `processed_events > 0`, so without
+            // this retry a fully quiet stream that hit a transient DB failure
+            // during the startup force-write would never recover. The helper
+            // uses the CURRENT block's cursor/number to match the in-memory
+            // snapshot it persists.
+            self.retry_force_write_baseline(block_number, &meta.cursor)
                 .await;
         }
 
