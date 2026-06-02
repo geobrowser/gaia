@@ -88,25 +88,31 @@ impl Storage {
         Ok(rows.iter().map(|r| r.get("member_space_id")).collect())
     }
 
-    /// Insert per-editor notifications into the outbox and fan out deliveries.
+    /// Insert per-user notifications into the outbox and fan out deliveries.
     ///
-    /// For each editor in the space, creates an outbox row with that editor's
+    /// For each recipient user, creates an outbox row with that user's
     /// `user_space_id` stamped into the payload, then fans out delivery rows
-    /// to all registered webhooks. Idempotency keys include the editor ID.
+    /// to all registered webhooks. Idempotency keys include the user ID.
+    ///
+    /// Recipients are the relevant *superset* for the event (e.g. a space's
+    /// editors, plus the proposer or prior voters for targeted governance
+    /// events). The caller is responsible for de-duplicating the slice; the
+    /// `ON CONFLICT (idempotency_key) DO NOTHING` clause also makes duplicate
+    /// recipients a no-op. Filtering to a specific audience is done app-side.
     ///
     /// Returns the number of new outbox rows inserted (0 if all were duplicates).
     #[instrument(
-        name = "notification_indexer.storage.insert_notifications_for_editors",
-        skip(self, event, editors)
+        name = "notification_indexer.storage.insert_notifications_for_users",
+        skip(self, event, users)
     )]
-    pub async fn insert_notifications_for_editors(
+    pub async fn insert_notifications_for_users(
         &self,
         event: &NotificationEvent,
-        editors: &[Uuid],
+        users: &[Uuid],
     ) -> Result<u64, StorageError> {
         let mut inserted_count: u64 = 0;
 
-        // Serialize the payload once before the editor loop. Per-editor fields
+        // Serialize the payload once before the recipient loop. Per-user fields
         // (user_space_id, idempotency_key) are stamped into the Value clone,
         // avoiding N struct clones + N serializations.
         let base_value = serde_json::to_value(&event.payload).map_err(|e| {
@@ -116,27 +122,27 @@ impl Storage {
             )))
         })?;
 
-        // Single transaction for all editors — either all fan-out rows are
+        // Single transaction for all recipients — either all fan-out rows are
         // committed or none are. On error the transaction is dropped (implicit
         // rollback), and the Kafka offset is not committed so the message
         // will be reprocessed. The ON CONFLICT DO NOTHING clause on the outbox
-        // insert ensures safe reprocessing of already-committed editors.
+        // insert ensures safe reprocessing of already-committed recipients.
         let mut tx = self.pool.begin().await?;
 
-        for editor_id in editors {
-            // Raw key for debugging: e.g. "12345:0:proposal_created:editor-uuid"
-            let raw_key = format!("{}:{}", event.idempotency_key, editor_id);
+        for user_id in users {
+            // Raw key for debugging: e.g. "12345:0:proposal_created:user-uuid"
+            let raw_key = format!("{}:{}", event.idempotency_key, user_id);
             // SHA-256 hash for the DB UNIQUE constraint (fixed-length, collision-resistant)
             let db_key = hex::encode(Sha256::digest(raw_key.as_bytes()));
 
-            // Clone the pre-serialized Value and stamp per-editor fields.
+            // Clone the pre-serialized Value and stamp per-user fields.
             // The payload sends the raw string so app servers can debug/log it;
             // the DB stores the hash for indexing.
             let mut serialized_payload = base_value.clone();
             if let serde_json::Value::Object(ref mut map) = serialized_payload {
                 map.insert(
                     "user_space_id".to_string(),
-                    serde_json::Value::String(editor_id.to_string()),
+                    serde_json::Value::String(user_id.to_string()),
                 );
                 map.insert(
                     "idempotency_key".to_string(),
@@ -162,7 +168,7 @@ impl Storage {
             let outbox_id: Uuid = match result {
                 Some(row) => row.get("id"),
                 None => {
-                    // Duplicate — already processed, skip this editor
+                    // Duplicate — already processed, skip this recipient
                     continue;
                 }
             };
@@ -252,7 +258,7 @@ impl Storage {
     /// Insert a notification for a single user (curator) into the outbox.
     ///
     /// Used for bounty_allocated and bounty_payout where there's one recipient.
-    /// Delegates to `insert_notifications_for_editors` with a single-element slice.
+    /// Delegates to `insert_notifications_for_users` with a single-element slice.
     #[instrument(
         name = "notification_indexer.storage.insert_notification_for_user",
         skip(self, event)
@@ -262,8 +268,53 @@ impl Storage {
         event: &NotificationEvent,
         user_space_id: Uuid,
     ) -> Result<u64, StorageError> {
-        self.insert_notifications_for_editors(event, &[user_space_id])
+        self.insert_notifications_for_users(event, &[user_space_id])
             .await
+    }
+
+    /// Resolve the proposer (`proposed_by`) of a proposal as a recipient
+    /// `user_space_id`.
+    ///
+    /// `proposals.proposed_by` is the proposer's personal-space UUID (the proto
+    /// `proposer_id` is "the space creating the proposal"), so it is directly
+    /// usable as a notification recipient — no entity→space resolution needed.
+    /// Used to deliver "your proposal was voted on / approved / rejected".
+    #[instrument(
+        name = "notification_indexer.storage.find_proposer_for_proposal",
+        skip(self)
+    )]
+    pub async fn find_proposer_for_proposal(
+        &self,
+        proposal_id: Uuid,
+    ) -> Result<Option<Uuid>, StorageError> {
+        let result =
+            sqlx::query_scalar::<_, Uuid>("SELECT proposed_by FROM proposals WHERE id = $1")
+                .bind(proposal_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(result)
+    }
+
+    /// Resolve the distinct voters of a proposal as recipient `user_space_id`s.
+    ///
+    /// `proposal_votes.voter_id` is the voter's personal-space UUID (the proto
+    /// `voter_id` is "the space casting the vote"), so it is directly usable as
+    /// a notification recipient. Used to deliver "a new version of a proposal
+    /// you voted on was submitted" to prior voters.
+    #[instrument(
+        name = "notification_indexer.storage.find_voters_for_proposal",
+        skip(self)
+    )]
+    pub async fn find_voters_for_proposal(
+        &self,
+        proposal_id: Uuid,
+    ) -> Result<Vec<Uuid>, StorageError> {
+        let rows =
+            sqlx::query("SELECT DISTINCT voter_id FROM proposal_votes WHERE proposal_id = $1")
+                .bind(proposal_id)
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows.iter().map(|r| r.get("voter_id")).collect())
     }
 
     /// Find proposals that have expired (end_time < now) without being executed,

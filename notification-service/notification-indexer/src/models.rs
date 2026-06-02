@@ -54,6 +54,52 @@ impl NotificationEventType {
             | NotificationEventType::BountyPayout => "bounty",
         }
     }
+
+    /// Recipients to notify *in addition to* the event space's editors.
+    ///
+    /// Editors always receive the base governance event; these targeted
+    /// recipients are delivered on top so the colleague's user-centric asks are
+    /// covered. Filtering to a precise audience is done app-side, so we resolve
+    /// and deliver the relevant superset.
+    pub fn targeted_recipients(&self) -> TargetedRecipients {
+        match self {
+            // "your proposal was voted on / approved / rejected"
+            NotificationEventType::ProposalVoted
+            | NotificationEventType::ProposalExecuted
+            | NotificationEventType::ProposalRejected => TargetedRecipients::Proposer,
+            // "a new version of a proposal you voted on was submitted"
+            NotificationEventType::ProposalUpdated => TargetedRecipients::Voters,
+            // proposal_created / settings_updated and all bounty events: editors
+            // (or the bounty's own single recipient) only.
+            _ => TargetedRecipients::None,
+        }
+    }
+}
+
+/// Recipients to resolve *in addition to* a space's editors for a governance
+/// event. The variant determines which DB resolver the consumer calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetedRecipients {
+    /// The proposer (`proposals.proposed_by`).
+    Proposer,
+    /// Prior voters of the proposal (`proposal_votes.voter_id`).
+    Voters,
+    /// Editors only — no additional targeted recipients.
+    None,
+}
+
+/// Merge targeted recipients into the editor set, returning a sorted,
+/// de-duplicated recipient list.
+///
+/// Pure so the fan-out audience is unit-testable without a database. A user who
+/// is both an editor and the proposer/a voter appears exactly once; the storage
+/// layer's `ON CONFLICT (idempotency_key) DO NOTHING` is a second line of
+/// defense against duplicates.
+pub fn merge_recipients(mut editors: Vec<Uuid>, extra: Vec<Uuid>) -> Vec<Uuid> {
+    editors.extend(extra);
+    editors.sort();
+    editors.dedup();
+    editors
 }
 
 /// Webhook payload version. Increment when the payload schema changes
@@ -202,6 +248,20 @@ pub struct NotificationEvent {
     pub event_type: NotificationEventType,
     pub idempotency_key: String,
     pub payload: NotificationPayload,
+}
+
+impl NotificationEvent {
+    /// The governance proposal id this event concerns, parsed from the payload.
+    ///
+    /// Returns `None` for non-governance events or an unparseable id. Used to
+    /// resolve targeted recipients (the proposer for voted/executed events, the
+    /// prior voters for an updated proposal).
+    pub fn governance_proposal_id(&self) -> Option<Uuid> {
+        match &self.payload.data {
+            NotificationData::Governance(gov) => Uuid::parse_str(&gov.proposal_id).ok(),
+            NotificationData::Bounty(_) => None,
+        }
+    }
 }
 
 /// Build a notification event from a PROPOSAL_CREATED protobuf message.
@@ -2293,5 +2353,104 @@ mod tests {
 
         let result = extract_bounty_relations(&hermes_edit, &config).expect("should succeed");
         assert!(result.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // governance_proposal_id (drives targeted proposer/voter recipients)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn governance_proposal_id_extracts_from_governance_event() {
+        let msg = HermesProposalCreated {
+            space_id: make_test_uuid(0x01),
+            proposer_id: make_test_uuid(0x02),
+            proposal_id: make_test_uuid(0x03),
+            voting_mode: 0,
+            actions: vec![],
+            settings: None,
+            meta: Some(make_metadata(1, 1)),
+        };
+        let event = handle_proposal_created(&msg).expect("should parse");
+        let expected = Uuid::from_slice(&make_test_uuid(0x03)).expect("valid uuid");
+        assert_eq!(event.governance_proposal_id(), Some(expected));
+    }
+
+    #[test]
+    fn governance_proposal_id_is_none_for_bounty_event() {
+        let info = BountyRelationInfo {
+            relation_id: Uuid::nil(),
+            bounty_entity_id: Uuid::nil(),
+            curator_entity_id: Uuid::nil(),
+            curator_space_id: Uuid::nil(),
+            bounty_space_id: Uuid::nil(),
+            proposal_id: None,
+            block_number: 1,
+            sequence: 0,
+            timestamp: 1,
+        };
+        let event = handle_bounty_interest(&info);
+        assert_eq!(event.governance_proposal_id(), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // targeted_recipients + merge_recipients (recipient routing & dedup)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn targeted_recipients_routes_by_event_type() {
+        use NotificationEventType::*;
+        // "your proposal was voted on / approved / rejected" -> proposer
+        assert_eq!(
+            ProposalVoted.targeted_recipients(),
+            TargetedRecipients::Proposer
+        );
+        assert_eq!(
+            ProposalExecuted.targeted_recipients(),
+            TargetedRecipients::Proposer
+        );
+        assert_eq!(
+            ProposalRejected.targeted_recipients(),
+            TargetedRecipients::Proposer
+        );
+        // "a new version of a proposal you voted on" -> prior voters
+        assert_eq!(
+            ProposalUpdated.targeted_recipients(),
+            TargetedRecipients::Voters
+        );
+        // editors-only (or single-recipient bounty) events get no targeted extras
+        assert_eq!(
+            ProposalCreated.targeted_recipients(),
+            TargetedRecipients::None
+        );
+        assert_eq!(
+            ProposalSettingsUpdated.targeted_recipients(),
+            TargetedRecipients::None
+        );
+        assert_eq!(
+            BountyInterest.targeted_recipients(),
+            TargetedRecipients::None
+        );
+        assert_eq!(
+            BountyAllocated.targeted_recipients(),
+            TargetedRecipients::None
+        );
+    }
+
+    #[test]
+    fn merge_recipients_dedups_and_sorts() {
+        let a = Uuid::from_bytes([0x01; 16]);
+        let b = Uuid::from_bytes([0x02; 16]);
+        let c = Uuid::from_bytes([0x03; 16]);
+        // editors = [b, a]; extra = proposer b (already an editor) + new voter c.
+        let merged = merge_recipients(vec![b, a], vec![b, c]);
+        // sorted, and b (editor ∩ targeted) appears exactly once.
+        assert_eq!(merged, vec![a, b, c]);
+    }
+
+    #[test]
+    fn merge_recipients_dedups_editor_duplicates_with_empty_extra() {
+        let a = Uuid::from_bytes([0x01; 16]);
+        let merged = merge_recipients(vec![a, a], vec![]);
+        assert_eq!(merged, vec![a]);
     }
 }

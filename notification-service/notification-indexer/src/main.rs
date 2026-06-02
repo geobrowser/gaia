@@ -29,7 +29,8 @@ use notification_indexer::models::{
     build_rejection_event, extract_bounty_relations, handle_bounty_allocated,
     handle_bounty_interest, handle_bounty_payout, handle_proposal_created,
     handle_proposal_executed, handle_proposal_settings_updated, handle_proposal_updated,
-    handle_proposal_voted, BountyConfig, NotificationEventType,
+    handle_proposal_voted, merge_recipients, BountyConfig, NotificationEventType,
+    TargetedRecipients,
 };
 use notification_indexer::storage::Storage;
 
@@ -230,14 +231,18 @@ async fn async_main() -> Result<(), IndexerError> {
                                             continue;
                                         }
                                     };
-                                    if editors.is_empty() {
+                                    // Notify the proposer that their proposal was rejected, even if
+                                    // they are not an editor. `proposed_by` is the proposer's
+                                    // personal-space UUID, usable directly as a recipient.
+                                    let recipients = merge_recipients(editors, vec![proposal.proposed_by]);
+                                    if recipients.is_empty() {
                                         continue;
                                     }
-                                    match poller_storage.insert_notifications_for_editors(&event, &editors).await {
+                                    match poller_storage.insert_notifications_for_users(&event, &recipients).await {
                                         Ok(count) if count > 0 => {
                                             info!(
                                                 proposal_id = %proposal.id,
-                                                editors = editors.len(),
+                                                recipients = recipients.len(),
                                                 inserted = count,
                                                 "Inserted rejection notifications"
                                             );
@@ -460,7 +465,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     continue;
                                                 }
 
-                                                ke_stor.insert_notifications_for_editors(&event, &editors).await.map(|count| {
+                                                ke_stor.insert_notifications_for_users(&event, &editors).await.map(|count| {
                                                     if count > 0 {
                                                         info!(
                                                             event_type = "bounty_interest",
@@ -759,20 +764,53 @@ async fn async_main() -> Result<(), IndexerError> {
                                         }
                                     };
 
-                                    if editors.is_empty() {
-                                        // Genuinely no editors — this is normal, not an error
+                                    // Targeted recipients beyond the space's editors (see
+                                    // NotificationEventType::targeted_recipients). Filtering to a
+                                    // specific audience is done app-side, so we deliver the relevant
+                                    // superset. Best-effort: a lookup miss only drops the targeted
+                                    // extra — editors always get the base event, and the proposer
+                                    // is usually also an editor.
+                                    let extra: Vec<uuid::Uuid> = match event.governance_proposal_id() {
+                                        Some(pid) => match event.event_type.targeted_recipients() {
+                                            TargetedRecipients::Proposer => {
+                                                match storage.find_proposer_for_proposal(pid).await {
+                                                    Ok(Some(proposer)) => vec![proposer],
+                                                    Ok(None) => vec![],
+                                                    Err(e) => {
+                                                        warn!(error = %e, proposal_id = %pid, "Failed to resolve proposer; notifying editors only");
+                                                        vec![]
+                                                    }
+                                                }
+                                            }
+                                            TargetedRecipients::Voters => {
+                                                match storage.find_voters_for_proposal(pid).await {
+                                                    Ok(voters) => voters,
+                                                    Err(e) => {
+                                                        warn!(error = %e, proposal_id = %pid, "Failed to resolve voters; notifying editors only");
+                                                        vec![]
+                                                    }
+                                                }
+                                            }
+                                            TargetedRecipients::None => vec![],
+                                        },
+                                        None => vec![],
+                                    };
+                                    let recipients = merge_recipients(editors, extra);
+
+                                    if recipients.is_empty() {
+                                        // Genuinely no recipients — this is normal, not an error
                                         processed_count += 1;
                                         should_commit = true;
                                     } else {
-                                        match storage.insert_notifications_for_editors(&event, &editors).await {
+                                        match storage.insert_notifications_for_users(&event, &recipients).await {
                                             Ok(count) => {
                                                 if count > 0 {
                                                     info!(
                                                         event_type = %event.payload.event_type,
                                                         category = %event.payload.category,
-                                                        editors = editors.len(),
+                                                        recipients = recipients.len(),
                                                         inserted = count,
-                                                        "Inserted per-editor notifications"
+                                                        "Inserted per-user notifications"
                                                     );
                                                 }
                                                 processed_count += 1;
