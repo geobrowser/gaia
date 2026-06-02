@@ -223,21 +223,27 @@ async fn async_main() -> Result<(), IndexerError> {
                                     // Enrich rejection with names (proposal is guaranteed to exist)
                                     enrich_payload(&poller_storage, &mut event, proposal.space_id).await;
 
-                                    let editors = match poller_storage.find_editors_for_space(proposal.space_id).await {
+                                    let mut recipients = match poller_storage.find_editors_for_space(proposal.space_id).await {
                                         Ok(eds) => eds,
                                         Err(e) => {
                                             error!(error = %e, space_id = %proposal.space_id, "Failed to look up editors for rejection, will retry next poll");
                                             continue;
                                         }
                                     };
-                                    if editors.is_empty() {
+                                    // Notify the proposer that their proposal was rejected, even
+                                    // if they are not an editor. `proposed_by` is the proposer's
+                                    // personal-space UUID, usable directly as a recipient.
+                                    recipients.push(proposal.proposed_by);
+                                    recipients.sort();
+                                    recipients.dedup();
+                                    if recipients.is_empty() {
                                         continue;
                                     }
-                                    match poller_storage.insert_notifications_for_editors(&event, &editors).await {
+                                    match poller_storage.insert_notifications_for_users(&event, &recipients).await {
                                         Ok(count) if count > 0 => {
                                             info!(
                                                 proposal_id = %proposal.id,
-                                                editors = editors.len(),
+                                                recipients = recipients.len(),
                                                 inserted = count,
                                                 "Inserted rejection notifications"
                                             );
@@ -460,7 +466,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     continue;
                                                 }
 
-                                                ke_stor.insert_notifications_for_editors(&event, &editors).await.map(|count| {
+                                                ke_stor.insert_notifications_for_users(&event, &editors).await.map(|count| {
                                                     if count > 0 {
                                                         info!(
                                                             event_type = "bounty_interest",
@@ -744,7 +750,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     // Enrich payload with human-readable names (best-effort)
                                     enrich_payload(&storage, &mut event, space_id).await;
 
-                                    let editors = match storage.find_editors_for_space(space_id).await {
+                                    let mut recipients = match storage.find_editors_for_space(space_id).await {
                                         Ok(eds) => eds,
                                         Err(e) => {
                                             // DB error — don't commit offset so we retry on restart
@@ -759,20 +765,60 @@ async fn async_main() -> Result<(), IndexerError> {
                                         }
                                     };
 
-                                    if editors.is_empty() {
-                                        // Genuinely no editors — this is normal, not an error
+                                    // Targeted recipients beyond the space's editors. Filtering to
+                                    // a specific audience is done app-side, so we deliver the
+                                    // relevant superset:
+                                    //   - "your proposal was voted on / approved" -> the proposer
+                                    //   - "a new version of a proposal you voted on" -> prior voters
+                                    // proposer_id / voter_id are personal-space UUIDs (same
+                                    // namespace as editors), usable directly as recipients.
+                                    // Best-effort: a lookup miss only drops the *targeted*
+                                    // recipient — the proposer is usually also an editor and is
+                                    // still notified, and editors always get the base event.
+                                    if let Some(pid) = event.governance_proposal_id() {
+                                        match event.event_type {
+                                            NotificationEventType::ProposalVoted
+                                            | NotificationEventType::ProposalExecuted => {
+                                                match storage.find_proposer_for_proposal(pid).await {
+                                                    Ok(Some(proposer)) => recipients.push(proposer),
+                                                    Ok(None) => {}
+                                                    Err(e) => warn!(
+                                                        error = %e,
+                                                        proposal_id = %pid,
+                                                        "Failed to resolve proposer; notifying editors only"
+                                                    ),
+                                                }
+                                            }
+                                            NotificationEventType::ProposalUpdated => {
+                                                match storage.find_voters_for_proposal(pid).await {
+                                                    Ok(voters) => recipients.extend(voters),
+                                                    Err(e) => warn!(
+                                                        error = %e,
+                                                        proposal_id = %pid,
+                                                        "Failed to resolve voters; notifying editors only"
+                                                    ),
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    recipients.sort();
+                                    recipients.dedup();
+
+                                    if recipients.is_empty() {
+                                        // Genuinely no recipients — this is normal, not an error
                                         processed_count += 1;
                                         should_commit = true;
                                     } else {
-                                        match storage.insert_notifications_for_editors(&event, &editors).await {
+                                        match storage.insert_notifications_for_users(&event, &recipients).await {
                                             Ok(count) => {
                                                 if count > 0 {
                                                     info!(
                                                         event_type = %event.payload.event_type,
                                                         category = %event.payload.category,
-                                                        editors = editors.len(),
+                                                        recipients = recipients.len(),
                                                         inserted = count,
-                                                        "Inserted per-editor notifications"
+                                                        "Inserted per-user notifications"
                                                     );
                                                 }
                                                 processed_count += 1;

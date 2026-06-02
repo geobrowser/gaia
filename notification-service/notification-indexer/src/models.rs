@@ -204,6 +204,20 @@ pub struct NotificationEvent {
     pub payload: NotificationPayload,
 }
 
+impl NotificationEvent {
+    /// The governance proposal id this event concerns, parsed from the payload.
+    ///
+    /// Returns `None` for non-governance events or an unparseable id. Used to
+    /// resolve targeted recipients (the proposer for voted/executed events, the
+    /// prior voters for an updated proposal).
+    pub fn governance_proposal_id(&self) -> Option<Uuid> {
+        match &self.payload.data {
+            NotificationData::Governance(gov) => Uuid::parse_str(&gov.proposal_id).ok(),
+            NotificationData::Bounty(_) => None,
+        }
+    }
+}
+
 /// Build a notification event from a PROPOSAL_CREATED protobuf message.
 pub fn handle_proposal_created(
     msg: &HermesProposalCreated,
@@ -2293,5 +2307,42 @@ mod tests {
 
         let result = extract_bounty_relations(&hermes_edit, &config).expect("should succeed");
         assert!(result.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // governance_proposal_id (drives targeted proposer/voter recipients)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn governance_proposal_id_extracts_from_governance_event() {
+        let msg = HermesProposalCreated {
+            space_id: make_test_uuid(0x01),
+            proposer_id: make_test_uuid(0x02),
+            proposal_id: make_test_uuid(0x03),
+            voting_mode: 0,
+            actions: vec![],
+            settings: None,
+            meta: Some(make_metadata(1, 1)),
+        };
+        let event = handle_proposal_created(&msg).expect("should parse");
+        let expected = Uuid::from_slice(&make_test_uuid(0x03)).expect("valid uuid");
+        assert_eq!(event.governance_proposal_id(), Some(expected));
+    }
+
+    #[test]
+    fn governance_proposal_id_is_none_for_bounty_event() {
+        let info = BountyRelationInfo {
+            relation_id: Uuid::nil(),
+            bounty_entity_id: Uuid::nil(),
+            curator_entity_id: Uuid::nil(),
+            curator_space_id: Uuid::nil(),
+            bounty_space_id: Uuid::nil(),
+            proposal_id: None,
+            block_number: 1,
+            sequence: 0,
+            timestamp: 1,
+        };
+        let event = handle_bounty_interest(&info);
+        assert_eq!(event.governance_proposal_id(), None);
     }
 }
