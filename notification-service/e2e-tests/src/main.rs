@@ -96,6 +96,19 @@ const PAYOUT_TYPE_BYTES: [u8; 16] = [
     0xfd, 0xda, 0xca, 0xae, 0x85, 0x13, 0x8a, 0x43, 0xec, 0x1a, 0x50, 0xff, 0x71, 0x56, 0x4d, 0x42,
 ];
 
+// Phase 3a — bounty created: a NEW bounty entity created in the bounty space.
+const NEW_BOUNTY_ENTITY_BYTES: [u8; 16] = [0xBC; 16];
+
+// Phase 2a — proposal comment fixtures (isolated in their own space so the
+// 3-editor space counts are unaffected).
+const COMMENT_SPACE_BYTES: [u8; 16] = [0x71; 16];
+const COMMENT_PROPOSAL_BYTES: [u8; 16] = [0x72; 16];
+const COMMENT_PROPOSER_BYTES: [u8; 16] = [0x73; 16]; // recipient of the comment notification
+const COMMENT_MEMBER_BYTES: [u8; 16] = [0x74; 16]; // member of COMMENT_SPACE (allowed commenter)
+const COMMENT_NONMEMBER_BYTES: [u8; 16] = [0x75; 16]; // NOT a member (commenter must be filtered out)
+const COMMENT_ENTITY_BYTES: [u8; 16] = [0x76; 16]; // the comment entity (allowed)
+const COMMENT_ENTITY_2_BYTES: [u8; 16] = [0x78; 16]; // the comment entity (non-member, filtered)
+
 const GOVERNANCE_TOPIC: &str = "space.governance";
 const KNOWLEDGE_EDITS_TOPIC: &str = "knowledge.edits";
 const NUM_WEBHOOKS: usize = 3;
@@ -113,10 +126,14 @@ const NUM_WEBHOOKS: usize = 3;
 // Bounty interest:  1 event × 2 editors × 3 = 6
 // Bounty allocated: 1 event × 1 curator × 3 = 3
 // Bounty payout:    1 event × 1 curator × 3 = 3
+// Bounty created:   1 event × 2 bounty editors × 3 = 6   (Phase 3a)
+// Proposal comment: 1 event × 1 proposer × 3 = 3         (Phase 2a; the non-member
+//                   comment is filtered out and produces 0 calls)
 //
-// The proposer (0x02) and the prior voter (0x0B) are intentionally NOT editors,
-// so these counts also prove targeted delivery reaches non-editors.
-const EXPECTED_CALLS: usize = 66 + 3 + 6 + 3 + 3;
+// The proposer (0x02), prior voter (0x0B), and comment proposer (0x73) are
+// intentionally NOT editors, so these counts also prove targeted delivery
+// reaches non-editors.
+const EXPECTED_CALLS: usize = 66 + 3 + 6 + 3 + 3 + 6 + 3;
 
 const GOVERNANCE_EVENT_TYPES: &[&str] = &[
     "proposal_created",
@@ -137,6 +154,8 @@ const ALL_EVENT_TYPES: &[&str] = &[
     "bounty_interest",
     "bounty_allocated",
     "bounty_payout",
+    "bounty_created",
+    "proposal_comment",
 ];
 
 // ---------------------------------------------------------------------------
@@ -392,6 +411,31 @@ async fn seed_database(
     )
     .bind(curator_space)
     .bind(curator_space)
+    .execute(pool)
+    .await?;
+
+    // Phase 2a: a proposal in its own space for the comment test. end_time in the
+    // future so the rejection poller ignores it. The recipient is the proposer.
+    sqlx::query(
+        "INSERT INTO proposals (id, space_id, proposed_by, start_time, end_time, created_at, created_at_block) \
+         VALUES ($1, $2, $3, $4, $5, '0', '0') ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(COMMENT_PROPOSAL_BYTES))
+    .bind(Uuid::from_bytes(COMMENT_SPACE_BYTES))
+    .bind(Uuid::from_bytes(COMMENT_PROPOSER_BYTES))
+    .bind(now - 3600)
+    .bind(now + 3600)
+    .execute(pool)
+    .await?;
+
+    // The allowed commenter is a *member* (not editor) of the proposal's space,
+    // exercising the members branch of is_member_or_editor.
+    sqlx::query(
+        "INSERT INTO members (member_space_id, space_id) VALUES ($1, $2) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(COMMENT_MEMBER_BYTES))
+    .bind(Uuid::from_bytes(COMMENT_SPACE_BYTES))
     .execute(pool)
     .await?;
 
@@ -658,6 +702,78 @@ async fn produce_test_events(kafka_broker: &str) -> Result<(), Box<dyn std::erro
         .await
         .map_err(|(e, _)| e)?;
 
+    // Phase 3a: a NEW bounty created in the bounty space (entity → Types → Bounty).
+    let types_bytes = Uuid::parse_str("8f151ba4-de20-4e3c-9cb4-99ddf96f48f1")
+        .expect("valid Types id")
+        .into_bytes();
+    let bounty_type_bytes = Uuid::parse_str("808af0ba-d588-4e33-91f0-9dd4b25e18be")
+        .expect("valid Bounty type id")
+        .into_bytes();
+    let bounty_created_edit = make_bounty_hermes_edit(
+        [0xBD; 16],
+        types_bytes,
+        NEW_BOUNTY_ENTITY_BYTES,
+        bounty_type_bytes,
+        BOUNTY_SPACE_BYTES,
+        None,
+        40004,
+        1700033000,
+        4,
+    );
+    let headers = rdkafka::message::OwnedHeaders::new();
+    producer
+        .send(
+            FutureRecord::to(&ke_topic)
+                .payload(&bounty_created_edit.encode_to_vec())
+                .key("bounty-created")
+                .headers(headers),
+            Duration::from_secs(10),
+        )
+        .await
+        .map_err(|(e, _)| e)?;
+
+    // Phase 2a: a comment on COMMENT_PROPOSAL by a member (allowed → proposer
+    // notified) and by a non-member (must be filtered out → no notification).
+    let comment_allowed = make_comment_hermes_edit(
+        COMMENT_ENTITY_BYTES,
+        COMMENT_PROPOSAL_BYTES,
+        COMMENT_MEMBER_BYTES,
+        40005,
+        1700034000,
+        5,
+    );
+    let headers = rdkafka::message::OwnedHeaders::new();
+    producer
+        .send(
+            FutureRecord::to(&ke_topic)
+                .payload(&comment_allowed.encode_to_vec())
+                .key("comment-allowed")
+                .headers(headers),
+            Duration::from_secs(10),
+        )
+        .await
+        .map_err(|(e, _)| e)?;
+
+    let comment_blocked = make_comment_hermes_edit(
+        COMMENT_ENTITY_2_BYTES,
+        COMMENT_PROPOSAL_BYTES,
+        COMMENT_NONMEMBER_BYTES,
+        40006,
+        1700035000,
+        6,
+    );
+    let headers = rdkafka::message::OwnedHeaders::new();
+    producer
+        .send(
+            FutureRecord::to(&ke_topic)
+                .payload(&comment_blocked.encode_to_vec())
+                .key("comment-blocked")
+                .headers(headers),
+            Duration::from_secs(10),
+        )
+        .await
+        .map_err(|(e, _)| e)?;
+
     Ok(())
 }
 
@@ -706,6 +822,79 @@ fn make_bounty_hermes_edit(
         authors: vec![from.to_vec()],
         language: None,
         space_id: space_id.to_vec(),
+        is_canonical: true,
+        meta: Some(hermes_schema::pb::blockchain_metadata::BlockchainMetadata {
+            created_at,
+            created_by: vec![],
+            block_number,
+            cursor: String::new(),
+            sequence,
+            is_last: false,
+        }),
+    }
+}
+
+/// Build a HermesEdit for a comment: a Comment entity (`Types → Comment`) that
+/// replies to `parent` (`Reply to → parent`), published from `commenter_space`.
+fn make_comment_hermes_edit(
+    comment_entity: [u8; 16],
+    parent: [u8; 16],
+    commenter_space: [u8; 16],
+    block_number: u64,
+    created_at: u64,
+    sequence: u32,
+) -> hermes_schema::pb::knowledge::HermesEdit {
+    use std::borrow::Cow;
+
+    let types = Uuid::parse_str("8f151ba4-de20-4e3c-9cb4-99ddf96f48f1")
+        .expect("valid Types id")
+        .into_bytes();
+    let comment_type = Uuid::parse_str("82f6123a-0323-4c6c-a811-701c5bc026e9")
+        .expect("valid Comment type id")
+        .into_bytes();
+    let reply_to = Uuid::parse_str("310d4a24-0e5b-451c-b215-1bfce40d0fe6")
+        .expect("valid Reply-to id")
+        .into_bytes();
+
+    let mk = |id: [u8; 16], rt: [u8; 16], from: [u8; 16], to: [u8; 16]| {
+        grc_20::Op::CreateRelation(grc_20::CreateRelation {
+            id,
+            relation_type: rt,
+            from,
+            from_is_value_ref: false,
+            to,
+            to_is_value_ref: false,
+            from_space: None,
+            from_version: None,
+            to_space: None,
+            to_version: None,
+            entity: None,
+            position: None,
+            context: None,
+        })
+    };
+
+    let edit = grc_20::Edit {
+        id: comment_entity,
+        name: Cow::Borrowed("comment edit"),
+        authors: vec![commenter_space],
+        created_at: created_at as i64,
+        ops: vec![
+            // Comment entity is typed as Comment...
+            mk([0xA1; 16], types, comment_entity, comment_type),
+            // ...and replies to its parent.
+            mk([0xA2; 16], reply_to, comment_entity, parent),
+        ],
+    };
+    let payload = grc_20::encode_edit(&edit).expect("GRC-20 encode should succeed");
+
+    hermes_schema::pb::knowledge::HermesEdit {
+        id: comment_entity.to_vec(),
+        name: "comment edit".into(),
+        payload,
+        authors: vec![commenter_space.to_vec()],
+        language: None,
+        space_id: commenter_space.to_vec(),
         is_canonical: true,
         meta: Some(hermes_schema::pb::blockchain_metadata::BlockchainMetadata {
             created_at,
@@ -894,6 +1083,8 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
     let bounty_editor_1 = Uuid::from_bytes(BOUNTY_EDITOR_1_BYTES).to_string();
     let bounty_editor_2 = Uuid::from_bytes(BOUNTY_EDITOR_2_BYTES).to_string();
     let curator_space = Uuid::from_bytes(CURATOR_SPACE_BYTES).to_string();
+    // Phase 2a: the proposal-comment recipient (the proposer; not an editor).
+    let comment_proposer = Uuid::from_bytes(COMMENT_PROPOSER_BYTES).to_string();
 
     let all_known: Vec<String> = editors_3e
         .iter()
@@ -904,6 +1095,8 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         // Phase 1 targeted recipients (non-editors):
         .chain(std::iter::once(&proposer_uid))
         .chain(std::iter::once(&update_voter_uid))
+        // Phase 2a: proposal-comment recipient (proposer):
+        .chain(std::iter::once(&comment_proposer))
         .cloned()
         .collect();
 
@@ -994,8 +1187,10 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         // Bounty interest: 1 event × 2 editors = 2
         // Bounty allocated: 1 event × 1 curator = 1
         // Bounty payout: 1 event × 1 curator = 1
-        // Total: 27
-        keys.len() == 27
+        // Bounty created: 1 event × 2 bounty editors = 2
+        // Proposal comment: 1 event × 1 proposer = 1
+        // Total: 30
+        keys.len() == 30
     });
 
     // ===================================================================
@@ -1499,6 +1694,75 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         r.check(
             "bounty_payout: curator is recipient",
             call.body["user_space_id"].as_str() == Some(curator_space.as_str()),
+        );
+    }
+
+    // --- Phase 3a: bounty_created — 2 bounty-space editors × 3 webhooks = 6 ---
+    let new_bounty_entity = Uuid::from_bytes(NEW_BOUNTY_ENTITY_BYTES).to_string();
+    let bounty_space = Uuid::from_bytes(BOUNTY_SPACE_BYTES).to_string();
+    let created_calls: Vec<_> = calls
+        .iter()
+        .filter(|c| c.body["event_type"].as_str() == Some("bounty_created"))
+        .collect();
+    r.check(
+        "bounty_created: 6 calls (2 bounty editors x 3 webhooks)",
+        created_calls.len() == 6,
+    );
+    if let Some(call) = created_calls.first() {
+        r.check(
+            "bounty_created: category is 'bounty'",
+            call.body["category"].as_str() == Some("bounty"),
+        );
+        r.check(
+            "bounty_created: correct bounty_entity_id",
+            call.body["bounty_entity_id"].as_str() == Some(new_bounty_entity.as_str()),
+        );
+        r.check(
+            "bounty_created: correct bounty_space_id",
+            call.body["bounty_space_id"].as_str() == Some(bounty_space.as_str()),
+        );
+    }
+    for editor in [&bounty_editor_1, &bounty_editor_2] {
+        let n = created_calls
+            .iter()
+            .filter(|c| c.body["user_space_id"].as_str() == Some(editor.as_str()))
+            .count();
+        r.check(
+            &format!("bounty_created: editor {}.. got 3 deliveries", &editor[..8]),
+            n == 3,
+        );
+    }
+
+    // --- Phase 2a: proposal_comment — proposer × 3 webhooks = 3, and the
+    //     non-member comment is filtered out (exactly 3 total proves it). ---
+    let comment_proposal = Uuid::from_bytes(COMMENT_PROPOSAL_BYTES).to_string();
+    let comment_member = Uuid::from_bytes(COMMENT_MEMBER_BYTES).to_string();
+    let comment_calls: Vec<_> = calls
+        .iter()
+        .filter(|c| c.body["event_type"].as_str() == Some("proposal_comment"))
+        .collect();
+    r.check(
+        "proposal_comment: exactly 3 calls (proposer x 3; non-member comment filtered out)",
+        comment_calls.len() == 3,
+    );
+    r.check(
+        "proposal_comment: all delivered to the proposer",
+        comment_calls
+            .iter()
+            .all(|c| c.body["user_space_id"].as_str() == Some(comment_proposer.as_str())),
+    );
+    if let Some(call) = comment_calls.first() {
+        r.check(
+            "proposal_comment: category is 'comment'",
+            call.body["category"].as_str() == Some("comment"),
+        );
+        r.check(
+            "proposal_comment: correct proposal_id",
+            call.body["proposal_id"].as_str() == Some(comment_proposal.as_str()),
+        );
+        r.check(
+            "proposal_comment: commenter_space_id is the member commenter",
+            call.body["commenter_space_id"].as_str() == Some(comment_member.as_str()),
         );
     }
 

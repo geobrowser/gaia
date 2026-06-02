@@ -26,8 +26,9 @@ use notification_indexer::consumer::{
 use notification_indexer::consumer_lag::LagMonitor;
 use notification_indexer::error::IndexerError;
 use notification_indexer::models::{
-    build_rejection_event, extract_bounty_relations, handle_bounty_allocated,
-    handle_bounty_interest, handle_bounty_payout, handle_proposal_created,
+    build_rejection_event, extract_bounty_created, extract_bounty_relations,
+    extract_proposal_comments, handle_bounty_allocated, handle_bounty_created,
+    handle_bounty_interest, handle_bounty_payout, handle_proposal_comment, handle_proposal_created,
     handle_proposal_executed, handle_proposal_settings_updated, handle_proposal_updated,
     handle_proposal_voted, merge_recipients, BountyConfig, NotificationEventType,
     TargetedRecipients,
@@ -406,8 +407,36 @@ async fn async_main() -> Result<(), IndexerError> {
                                     }
                                 };
 
-                                if relations.is_empty() {
-                                    // No bounty relations in this edit — commit and continue
+                                // Also detect newly-created bounties (Phase 3a) and comments on
+                                // proposals (Phase 2a) in the same edit.
+                                let bounties_created = match extract_bounty_created(&hermes_edit) {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        warn!(error = %e, partition = partition, offset = offset, "Failed to extract bounty-created, committing to skip");
+                                        ke_errors += 1;
+                                        if let Err(e) = kec.commit_message(&topic, partition, offset) {
+                                            error!(error = %e, "Failed to commit knowledge edits offset");
+                                        }
+                                        continue;
+                                    }
+                                };
+                                let comments = match extract_proposal_comments(&hermes_edit) {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        warn!(error = %e, partition = partition, offset = offset, "Failed to extract proposal comments, committing to skip");
+                                        ke_errors += 1;
+                                        if let Err(e) = kec.commit_message(&topic, partition, offset) {
+                                            error!(error = %e, "Failed to commit knowledge edits offset");
+                                        }
+                                        continue;
+                                    }
+                                };
+
+                                if relations.is_empty()
+                                    && bounties_created.is_empty()
+                                    && comments.is_empty()
+                                {
+                                    // Nothing relevant in this edit — commit and continue
                                     if let Err(e) = kec.commit_message(&topic, partition, offset) {
                                         error!(error = %e, "Failed to commit knowledge edits offset");
                                     }
@@ -537,6 +566,92 @@ async fn async_main() -> Result<(), IndexerError> {
                                             }
                                         }
                                     }
+
+                                    // Phase 3a: newly-created bounties → notify the space's editors.
+                                    for info in bounties_created {
+                                        if ke_bd > 0 {
+                                            wait_for_kg_catchup(&ke_stor, info.block_number, ke_bd, ke_bd_timeout).await;
+                                        }
+                                        let mut event = handle_bounty_created(&info);
+                                        enrich_payload(&ke_stor, &mut event, info.space_id).await;
+                                        let editors = ke_stor.find_editors_for_space(info.space_id).await.map_err(|e| {
+                                            error!(error = %e, "DB error looking up editors for bounty_created, will retry");
+                                            ke_errors += 1;
+                                        })?;
+                                        if editors.is_empty() {
+                                            ke_processed += 1;
+                                            continue;
+                                        }
+                                        ke_stor.insert_notifications_for_users(&event, &editors).await.map(|count| {
+                                            if count > 0 {
+                                                info!(
+                                                    event_type = "bounty_created",
+                                                    space_id = %info.space_id,
+                                                    editors = editors.len(),
+                                                    inserted = count,
+                                                    "Inserted bounty_created notifications"
+                                                );
+                                            }
+                                            ke_processed += 1;
+                                        }).map_err(|e| {
+                                            error!(error = %e, "DB error inserting bounty_created notifications, will retry");
+                                            ke_errors += 1;
+                                        })?;
+                                    }
+
+                                    // Phase 2a: comments on a proposal → notify the proposer, but
+                                    // only when the commenter is a member/editor of the proposal's
+                                    // space. A reply whose parent is not a proposal is a general
+                                    // comment (out of scope here) and is skipped.
+                                    for mut info in comments {
+                                        if ke_bd > 0 {
+                                            wait_for_kg_catchup(&ke_stor, info.block_number, ke_bd, ke_bd_timeout).await;
+                                        }
+                                        let (proposer, proposal_space) = match ke_stor.find_proposal_proposer_and_space(info.proposal_id).await {
+                                            Ok(Some(pair)) => pair,
+                                            Ok(None) => {
+                                                ke_skipped += 1;
+                                                continue;
+                                            }
+                                            Err(e) => {
+                                                error!(error = %e, "DB error resolving proposal for comment, will retry");
+                                                ke_errors += 1;
+                                                return Err(());
+                                            }
+                                        };
+                                        let allowed = ke_stor.is_member_or_editor(proposal_space, info.commenter_space_id).await.map_err(|e| {
+                                            error!(error = %e, "DB error checking commenter membership, will retry");
+                                            ke_errors += 1;
+                                        })?;
+                                        if !allowed {
+                                            debug!(
+                                                proposal_id = %info.proposal_id,
+                                                commenter = %info.commenter_space_id,
+                                                "Comment author is not a member/editor of the proposal space, skipping"
+                                            );
+                                            ke_skipped += 1;
+                                            continue;
+                                        }
+                                        info.proposal_space_id = proposal_space;
+                                        let mut event = handle_proposal_comment(&info);
+                                        enrich_payload(&ke_stor, &mut event, proposal_space).await;
+                                        ke_stor.insert_notification_for_user(&event, proposer).await.map(|count| {
+                                            if count > 0 {
+                                                info!(
+                                                    event_type = "proposal_comment",
+                                                    proposal_id = %info.proposal_id,
+                                                    proposer = %proposer,
+                                                    inserted = count,
+                                                    "Inserted proposal_comment notification"
+                                                );
+                                            }
+                                            ke_processed += 1;
+                                        }).map_err(|e| {
+                                            error!(error = %e, "DB error inserting proposal_comment notification, will retry");
+                                            ke_errors += 1;
+                                        })?;
+                                    }
+
                                     Ok(())
                                 }.await;
 
@@ -1007,6 +1122,21 @@ async fn enrich_payload(
             // Curator display name
             if let Ok(cid) = uuid::Uuid::parse_str(&bounty.curator_space_id) {
                 bounty.curator_name = storage.lookup_entity_name(cid, cid).await;
+            }
+        }
+        NotificationData::BountyCreated(ref mut bc) => {
+            // Bounty entity name (looked up in the bounty's space).
+            if let (Ok(bid), Ok(bsid)) = (
+                uuid::Uuid::parse_str(&bc.bounty_entity_id),
+                uuid::Uuid::parse_str(&bc.bounty_space_id),
+            ) {
+                bc.bounty_name = storage.lookup_entity_name(bid, bsid).await;
+            }
+        }
+        NotificationData::Comment(ref mut comment) => {
+            // Proposal name (the proposal being commented on).
+            if let Ok(pid) = uuid::Uuid::parse_str(&comment.proposal_id) {
+                comment.proposal_name = storage.lookup_proposal_name(pid).await;
             }
         }
     }

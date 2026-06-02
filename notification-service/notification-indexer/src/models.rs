@@ -8,6 +8,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::error::HandlerError;
+use crate::ids;
 
 /// Notification event types sent to webhooks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +24,11 @@ pub enum NotificationEventType {
     BountyInterest,
     BountyAllocated,
     BountyPayout,
+    /// A new Bounty entity was created in a space (from `knowledge.edits`).
+    BountyCreated,
+    // Comment events
+    /// A comment was posted on a proposal (from `knowledge.edits`).
+    ProposalComment,
 }
 
 impl NotificationEventType {
@@ -37,6 +43,8 @@ impl NotificationEventType {
             NotificationEventType::BountyInterest => "bounty_interest",
             NotificationEventType::BountyAllocated => "bounty_allocated",
             NotificationEventType::BountyPayout => "bounty_payout",
+            NotificationEventType::BountyCreated => "bounty_created",
+            NotificationEventType::ProposalComment => "proposal_comment",
         }
     }
 
@@ -51,7 +59,9 @@ impl NotificationEventType {
             | NotificationEventType::ProposalRejected => "governance",
             NotificationEventType::BountyInterest
             | NotificationEventType::BountyAllocated
-            | NotificationEventType::BountyPayout => "bounty",
+            | NotificationEventType::BountyPayout
+            | NotificationEventType::BountyCreated => "bounty",
+            NotificationEventType::ProposalComment => "comment",
         }
     }
 
@@ -141,6 +151,8 @@ pub struct NotificationPayload {
 pub enum NotificationData {
     Governance(GovernanceData),
     Bounty(BountyData),
+    BountyCreated(BountyCreatedData),
+    Comment(CommentData),
 }
 
 /// Governance-specific payload fields.
@@ -242,6 +254,33 @@ pub struct BountyData {
     pub curator_name: Option<String>,
 }
 
+/// Payload fields for a newly-created bounty (`bounty_created`).
+#[derive(Debug, Clone, Serialize)]
+pub struct BountyCreatedData {
+    /// The new bounty entity.
+    pub bounty_entity_id: String,
+    /// The space the bounty was created in (recipients are its editors).
+    pub bounty_space_id: String,
+    /// Human-readable bounty name (best-effort, from KG values table).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounty_name: Option<String>,
+}
+
+/// Payload fields for a comment on a proposal (`proposal_comment`).
+#[derive(Debug, Clone, Serialize)]
+pub struct CommentData {
+    /// The comment entity that was created.
+    pub comment_entity_id: String,
+    /// The proposal the comment replies to.
+    pub proposal_id: String,
+    /// The commenter's personal space (the `HermesEdit.space_id` the comment was
+    /// published from).
+    pub commenter_space_id: String,
+    /// Human-readable proposal name (best-effort, from proposals table).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposal_name: Option<String>,
+}
+
 /// Result of handling a governance event: payload + idempotency key.
 #[derive(Debug)]
 pub struct NotificationEvent {
@@ -259,7 +298,9 @@ impl NotificationEvent {
     pub fn governance_proposal_id(&self) -> Option<Uuid> {
         match &self.payload.data {
             NotificationData::Governance(gov) => Uuid::parse_str(&gov.proposal_id).ok(),
-            NotificationData::Bounty(_) => None,
+            NotificationData::Bounty(_)
+            | NotificationData::BountyCreated(_)
+            | NotificationData::Comment(_) => None,
         }
     }
 }
@@ -950,6 +991,199 @@ pub fn extract_bounty_relations(
                     _ => continue,
                 };
                 results.push((info, event_type));
+            }
+        }
+    }
+    Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Bounty created (Phase 3a) — a new Bounty entity created in a space
+// ---------------------------------------------------------------------------
+
+/// A new bounty detected in a `HermesEdit` (entity → Types → Bounty).
+#[derive(Debug, Clone)]
+pub struct BountyCreatedInfo {
+    pub bounty_entity_id: Uuid,
+    /// The space the bounty was created in (the edit's space). Recipients are
+    /// this space's editors.
+    pub space_id: Uuid,
+    pub block_number: u64,
+    pub sequence: u64,
+    pub timestamp: u64,
+}
+
+/// Build a notification event for a newly-created bounty.
+pub fn handle_bounty_created(info: &BountyCreatedInfo) -> NotificationEvent {
+    let idempotency_base = format!("{}:{}:bounty_created", info.block_number, info.sequence);
+
+    NotificationEvent {
+        event_type: NotificationEventType::BountyCreated,
+        idempotency_key: idempotency_base,
+        payload: NotificationPayload {
+            version: PAYLOAD_VERSION,
+            event_type: NotificationEventType::BountyCreated.as_str().to_string(),
+            category: NotificationEventType::BountyCreated.category().to_string(),
+            space_id: info.space_id.to_string(),
+            user_space_id: None,
+            idempotency_key: None,
+            block_number: Some(info.block_number),
+            timestamp: Some(info.timestamp),
+            space_name: None,
+            data: NotificationData::BountyCreated(BountyCreatedData {
+                bounty_entity_id: info.bounty_entity_id.to_string(),
+                bounty_space_id: info.space_id.to_string(),
+                bounty_name: None,
+            }),
+        },
+    }
+}
+
+/// Extract newly-created bounties from a `HermesEdit`.
+///
+/// Matches `CreateRelation` ops that type an entity as a Bounty
+/// (`relation_type == Types`, `to == Bounty type`); the relation's `from` is the
+/// new bounty entity.
+pub fn extract_bounty_created(
+    edit: &hermes_schema::pb::knowledge::HermesEdit,
+) -> Result<Vec<BountyCreatedInfo>, crate::error::HandlerError> {
+    use crate::error::HandlerError;
+
+    let meta = edit.meta.as_ref().ok_or(HandlerError::MissingMetadata)?;
+    let block_number = meta.block_number;
+    let sequence = u64::from(meta.sequence);
+    let timestamp = meta.created_at;
+    let edit_space_id = Uuid::from_slice(&edit.space_id).map_err(HandlerError::Uuid)?;
+
+    let decoded = grc_20::decode_edit(&edit.payload)
+        .map_err(|e| HandlerError::Grc20Decode(format!("{}", e)))?;
+
+    let types_rel = ids::types_relation_type();
+    let bounty_type = ids::bounty_type();
+
+    let mut results = Vec::new();
+    for op in &decoded.ops {
+        if let grc_20::Op::CreateRelation(rel) = op {
+            if Uuid::from_bytes(rel.relation_type) == types_rel
+                && Uuid::from_bytes(rel.to) == bounty_type
+            {
+                results.push(BountyCreatedInfo {
+                    bounty_entity_id: Uuid::from_bytes(rel.from),
+                    space_id: edit_space_id,
+                    block_number,
+                    sequence,
+                    timestamp,
+                });
+            }
+        }
+    }
+    Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Proposal comments (Phase 2a) — a comment posted on a proposal
+// ---------------------------------------------------------------------------
+
+/// A comment (Comment entity that replies to a parent) detected in a
+/// `HermesEdit`. The parent is a *candidate* proposal — the consumer confirms it
+/// is a proposal (and resolves the recipient/space) via the DB.
+#[derive(Debug, Clone)]
+pub struct ProposalCommentInfo {
+    pub comment_entity_id: Uuid,
+    /// The entity the comment replies to (candidate proposal id).
+    pub proposal_id: Uuid,
+    /// The commenter's personal space (the edit's space).
+    pub commenter_space_id: Uuid,
+    /// The proposal's owning space — `nil` until resolved by the consumer
+    /// (`find_proposal_proposer_and_space`).
+    pub proposal_space_id: Uuid,
+    pub block_number: u64,
+    pub sequence: u64,
+    pub timestamp: u64,
+}
+
+/// Build a notification event for a comment on a proposal.
+pub fn handle_proposal_comment(info: &ProposalCommentInfo) -> NotificationEvent {
+    let idempotency_base = format!("{}:{}:proposal_comment", info.block_number, info.sequence);
+
+    NotificationEvent {
+        event_type: NotificationEventType::ProposalComment,
+        idempotency_key: idempotency_base,
+        payload: NotificationPayload {
+            version: PAYLOAD_VERSION,
+            event_type: NotificationEventType::ProposalComment.as_str().to_string(),
+            category: NotificationEventType::ProposalComment
+                .category()
+                .to_string(),
+            space_id: info.proposal_space_id.to_string(),
+            user_space_id: None,
+            idempotency_key: None,
+            block_number: Some(info.block_number),
+            timestamp: Some(info.timestamp),
+            space_name: None,
+            data: NotificationData::Comment(CommentData {
+                comment_entity_id: info.comment_entity_id.to_string(),
+                proposal_id: info.proposal_id.to_string(),
+                commenter_space_id: info.commenter_space_id.to_string(),
+                proposal_name: None,
+            }),
+        },
+    }
+}
+
+/// Extract proposal comments from a `HermesEdit`.
+///
+/// A comment is a `Comment`-typed entity (`Types → Comment`) with a `Reply to`
+/// relation pointing at its parent. This returns one [`ProposalCommentInfo`] per
+/// such reply; the consumer then checks whether the parent is actually a
+/// proposal (general comments on non-proposal entities are a later phase).
+pub fn extract_proposal_comments(
+    edit: &hermes_schema::pb::knowledge::HermesEdit,
+) -> Result<Vec<ProposalCommentInfo>, crate::error::HandlerError> {
+    use crate::error::HandlerError;
+    use std::collections::HashSet;
+
+    let meta = edit.meta.as_ref().ok_or(HandlerError::MissingMetadata)?;
+    let block_number = meta.block_number;
+    let sequence = u64::from(meta.sequence);
+    let timestamp = meta.created_at;
+    let edit_space_id = Uuid::from_slice(&edit.space_id).map_err(HandlerError::Uuid)?;
+
+    let decoded = grc_20::decode_edit(&edit.payload)
+        .map_err(|e| HandlerError::Grc20Decode(format!("{}", e)))?;
+
+    let types_rel = ids::types_relation_type();
+    let comment_type = ids::comment_type();
+    let reply_to = ids::reply_to_property();
+
+    // Pass 1: entities typed as Comment in this edit (from → Types → Comment).
+    let mut comment_entities: HashSet<[u8; 16]> = HashSet::new();
+    for op in &decoded.ops {
+        if let grc_20::Op::CreateRelation(rel) = op {
+            if Uuid::from_bytes(rel.relation_type) == types_rel
+                && Uuid::from_bytes(rel.to) == comment_type
+            {
+                comment_entities.insert(rel.from);
+            }
+        }
+    }
+
+    // Pass 2: Reply-to relations originating from a Comment entity → its parent.
+    let mut results = Vec::new();
+    for op in &decoded.ops {
+        if let grc_20::Op::CreateRelation(rel) = op {
+            if Uuid::from_bytes(rel.relation_type) == reply_to
+                && comment_entities.contains(&rel.from)
+            {
+                results.push(ProposalCommentInfo {
+                    comment_entity_id: Uuid::from_bytes(rel.from),
+                    proposal_id: Uuid::from_bytes(rel.to),
+                    commenter_space_id: edit_space_id,
+                    proposal_space_id: Uuid::nil(), // resolved via DB in the consumer
+                    block_number,
+                    sequence,
+                    timestamp,
+                });
             }
         }
     }
@@ -2452,5 +2686,179 @@ mod tests {
         let a = Uuid::from_bytes([0x01; 16]);
         let merged = merge_recipients(vec![a, a], vec![]);
         assert_eq!(merged, vec![a]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3a / 2a: bounty-created + proposal-comment extraction
+    // -----------------------------------------------------------------------
+
+    /// Build a HermesEdit whose GRC-20 payload contains the given relations,
+    /// each as `(relation_type, from, to)`.
+    fn make_hermes_edit_with_relations(
+        relations: &[([u8; 16], [u8; 16], [u8; 16])],
+        space_id: [u8; 16],
+    ) -> hermes_schema::pb::knowledge::HermesEdit {
+        use std::borrow::Cow;
+
+        let ops = relations
+            .iter()
+            .enumerate()
+            .map(|(i, (relation_type, from, to))| {
+                grc_20::Op::CreateRelation(grc_20::CreateRelation {
+                    id: [i as u8 + 1; 16],
+                    relation_type: *relation_type,
+                    from: *from,
+                    from_is_value_ref: false,
+                    to: *to,
+                    to_is_value_ref: false,
+                    from_space: None,
+                    from_version: None,
+                    to_space: None,
+                    to_version: None,
+                    entity: None,
+                    position: None,
+                    context: None,
+                })
+            })
+            .collect();
+
+        let edit = grc_20::Edit {
+            id: [0x99; 16],
+            name: Cow::Borrowed("test edit"),
+            authors: vec![[0xAA; 16]],
+            created_at: 1700000000,
+            ops,
+        };
+        let payload = grc_20::encode_edit(&edit).expect("encode should succeed");
+
+        hermes_schema::pb::knowledge::HermesEdit {
+            id: vec![0x88; 16],
+            name: "test".into(),
+            payload,
+            authors: vec![vec![0xAA; 16]],
+            language: None,
+            space_id: space_id.to_vec(),
+            is_canonical: true,
+            meta: Some(make_metadata(12345, 1700000000)),
+        }
+    }
+
+    #[test]
+    fn extract_bounty_created_matches_types_to_bounty() {
+        let types = ids::types_relation_type().into_bytes();
+        let bounty_type = ids::bounty_type().into_bytes();
+        // from = the new bounty entity, to = Bounty type.
+        let edit = make_hermes_edit_with_relations(
+            &[(types, [0xB0; 16], bounty_type)],
+            [0x5E; 16], // edit space
+        );
+        let out = extract_bounty_created(&edit).expect("extract");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].bounty_entity_id, Uuid::from_bytes([0xB0; 16]));
+        assert_eq!(out[0].space_id, Uuid::from_bytes([0x5E; 16]));
+        assert_eq!(out[0].block_number, 12345);
+    }
+
+    #[test]
+    fn extract_bounty_created_ignores_other_types_and_relations() {
+        let types = ids::types_relation_type().into_bytes();
+        // A Types relation to a *non-bounty* type, plus an unrelated relation.
+        let edit = make_hermes_edit_with_relations(
+            &[
+                (types, [0xB0; 16], [0xAA; 16]),      // Types -> some other type
+                ([0xCC; 16], [0xB0; 16], [0xDD; 16]), // non-Types relation
+            ],
+            [0x5E; 16],
+        );
+        let out = extract_bounty_created(&edit).expect("extract");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn extract_proposal_comments_matches_comment_reply() {
+        let types = ids::types_relation_type().into_bytes();
+        let comment_type = ids::comment_type().into_bytes();
+        let reply_to = ids::reply_to_property().into_bytes();
+        let comment_entity = [0xC0; 16];
+        let proposal = [0x9A; 16];
+        // Comment entity typed as Comment, replying to the proposal.
+        let edit = make_hermes_edit_with_relations(
+            &[
+                (types, comment_entity, comment_type),
+                (reply_to, comment_entity, proposal),
+            ],
+            [0x5E; 16], // commenter's personal space
+        );
+        let out = extract_proposal_comments(&edit).expect("extract");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].comment_entity_id, Uuid::from_bytes(comment_entity));
+        assert_eq!(out[0].proposal_id, Uuid::from_bytes(proposal));
+        assert_eq!(out[0].commenter_space_id, Uuid::from_bytes([0x5E; 16]));
+        assert_eq!(out[0].proposal_space_id, Uuid::nil()); // resolved later via DB
+    }
+
+    #[test]
+    fn extract_proposal_comments_ignores_reply_from_non_comment() {
+        let reply_to = ids::reply_to_property().into_bytes();
+        // A Reply-to relation whose `from` is NOT typed as a Comment in this edit.
+        let edit =
+            make_hermes_edit_with_relations(&[(reply_to, [0xC0; 16], [0x9A; 16])], [0x5E; 16]);
+        let out = extract_proposal_comments(&edit).expect("extract");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn handle_bounty_created_payload_structure() {
+        let info = BountyCreatedInfo {
+            bounty_entity_id: Uuid::from_bytes([0xB0; 16]),
+            space_id: Uuid::from_bytes([0x5E; 16]),
+            block_number: 100,
+            sequence: 0,
+            timestamp: 1700000000,
+        };
+        let event = handle_bounty_created(&info);
+        assert_eq!(event.event_type, NotificationEventType::BountyCreated);
+        let json = serde_json::to_value(&event.payload).expect("serialize");
+        assert_eq!(json["event_type"], "bounty_created");
+        assert_eq!(json["category"], "bounty");
+        assert_eq!(
+            json["bounty_entity_id"],
+            Uuid::from_bytes([0xB0; 16]).to_string()
+        );
+        assert_eq!(json["space_id"], Uuid::from_bytes([0x5E; 16]).to_string());
+        // governance/comment fields absent
+        assert!(json.get("proposal_id").is_none());
+        assert!(json.get("comment_entity_id").is_none());
+    }
+
+    #[test]
+    fn handle_proposal_comment_payload_structure() {
+        let info = ProposalCommentInfo {
+            comment_entity_id: Uuid::from_bytes([0xC0; 16]),
+            proposal_id: Uuid::from_bytes([0x9A; 16]),
+            commenter_space_id: Uuid::from_bytes([0x11; 16]),
+            proposal_space_id: Uuid::from_bytes([0x5E; 16]),
+            block_number: 100,
+            sequence: 2,
+            timestamp: 1700000000,
+        };
+        let event = handle_proposal_comment(&info);
+        assert_eq!(event.event_type, NotificationEventType::ProposalComment);
+        let json = serde_json::to_value(&event.payload).expect("serialize");
+        assert_eq!(json["event_type"], "proposal_comment");
+        assert_eq!(json["category"], "comment");
+        assert_eq!(json["space_id"], Uuid::from_bytes([0x5E; 16]).to_string()); // proposal's space
+        assert_eq!(
+            json["proposal_id"],
+            Uuid::from_bytes([0x9A; 16]).to_string()
+        );
+        assert_eq!(
+            json["comment_entity_id"],
+            Uuid::from_bytes([0xC0; 16]).to_string()
+        );
+        assert_eq!(
+            json["commenter_space_id"],
+            Uuid::from_bytes([0x11; 16]).to_string()
+        );
     }
 }
