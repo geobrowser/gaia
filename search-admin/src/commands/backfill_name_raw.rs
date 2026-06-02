@@ -109,7 +109,10 @@ impl BackfillNameRawCommand {
 
         if self.dry_run {
             println!();
-            println!("Dry run complete. {} documents would be updated.", docs_to_update);
+            println!(
+                "Dry run complete. {} documents would be updated.",
+                docs_to_update
+            );
             println!("Run without --dry-run to apply changes.");
             return Ok(());
         }
@@ -147,7 +150,11 @@ impl BackfillNameRawCommand {
         let status = response.status_code();
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
-            anyhow::bail!("update_by_query failed with status {}: {}", status, error_body);
+            anyhow::bail!(
+                "update_by_query failed with status {}: {}",
+                status,
+                error_body
+            );
         }
 
         let response_json: serde_json::Value = response
@@ -183,13 +190,15 @@ impl BackfillNameRawCommand {
 
                     if !resp_status.is_success() {
                         let error_body = resp.text().await.unwrap_or_default();
-                        anyhow::bail!("Failed to get task status: {} - {}", resp_status, error_body);
+                        anyhow::bail!(
+                            "Failed to get task status: {} - {}",
+                            resp_status,
+                            error_body
+                        );
                     }
 
-                    let task_json: serde_json::Value = resp
-                        .json()
-                        .await
-                        .context("Failed to parse task response")?;
+                    let task_json: serde_json::Value =
+                        resp.json().await.context("Failed to parse task response")?;
 
                     let completed = task_json["completed"].as_bool().unwrap_or(false);
 

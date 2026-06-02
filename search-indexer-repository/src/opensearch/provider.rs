@@ -96,7 +96,11 @@ macro_rules! flush_bulk_if_full {
     ($self:expr, $bulk_ops:expr, $metas:expr, $total_succeeded:expr, $total_failed:expr, $all_results:expr, $total_wall_ms:expr, $total_took_ms:expr, $bulk_call_count:expr) => {
         if $bulk_ops.len() >= opensearch_max_bulk_size() {
             let chunk_size = $bulk_ops.len();
-            debug!(chunk_size, max_bulk_size = opensearch_max_bulk_size(), "Flushing bulk chunk (size limit reached)");
+            debug!(
+                chunk_size,
+                max_bulk_size = opensearch_max_bulk_size(),
+                "Flushing bulk chunk (size limit reached)"
+            );
             let batch_ops = std::mem::take(&mut $bulk_ops);
             let batch_metas = std::mem::take(&mut $metas);
             let summary = execute_bulk(
@@ -122,7 +126,13 @@ macro_rules! flush_bulk_if_full {
 /// Outcome of an `update_by_query` call with retry.
 enum UpdateByQueryOutcome {
     /// The query succeeded. Contains response stats and timing.
-    Success { updated: u64, total: u64, conflicts: u64, took_ms: u64, wall_ms: u64 },
+    Success {
+        updated: u64,
+        total: u64,
+        conflicts: u64,
+        took_ms: u64,
+        wall_ms: u64,
+    },
     /// The query failed after all retries. Contains the error body.
     Failed(String),
 }
@@ -260,12 +270,17 @@ impl OpenSearchProvider {
                     "update_by_query completed"
                 );
 
-                return Ok(UpdateByQueryOutcome::Success { updated, total, conflicts, took_ms, wall_ms });
+                return Ok(UpdateByQueryOutcome::Success {
+                    updated,
+                    total,
+                    conflicts,
+                    took_ms,
+                    wall_ms,
+                });
             }
 
             let status_code = status.as_u16();
-            let is_retryable = status_code == 409
-                || retry::is_retryable_status(status_code);
+            let is_retryable = status_code == 409 || retry::is_retryable_status(status_code);
 
             if is_retryable && attempt < self.retry_config.max_retries {
                 let error_body = response.text().await.unwrap_or_default();
@@ -783,8 +798,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     });
 
-                    match self.update_by_query_with_retry(body, "RemoveRelationById").await? {
-                        UpdateByQueryOutcome::Success { updated, total, conflicts, took_ms, wall_ms } => {
+                    match self
+                        .update_by_query_with_retry(body, "RemoveRelationById")
+                        .await?
+                    {
+                        UpdateByQueryOutcome::Success {
+                            updated,
+                            total,
+                            conflicts,
+                            took_ms,
+                            wall_ms,
+                        } => {
                             if updated == 0 {
                                 warn!(
                                     relation_id = %relation_uuid,
@@ -882,7 +906,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                             space_id: request.space_id.clone(),
                             operation_type: "AddRelation".to_string(),
                         });
-                        flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                        flush_bulk_if_full!(
+                            self,
+                            bulk_ops,
+                            metas,
+                            total_succeeded,
+                            total_failed,
+                            all_results,
+                            total_wall_ms,
+                            total_took_ms,
+                            _bulk_call_count
+                        );
                         has_operation = true;
                     }
 
@@ -913,7 +947,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                             space_id: request.space_id.clone(),
                             operation_type: "Update".to_string(),
                         });
-                        flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                        flush_bulk_if_full!(
+                            self,
+                            bulk_ops,
+                            metas,
+                            total_succeeded,
+                            total_failed,
+                            all_results,
+                            total_wall_ms,
+                            total_took_ms,
+                            _bulk_call_count
+                        );
                         has_operation = true;
                     }
 
@@ -940,7 +984,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: request.space_id.clone(),
                         operation_type: "Delete".to_string(),
                     });
-                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                    flush_bulk_if_full!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
                 }
                 EntityOperation::Unset(request) => {
                     if request.property_keys.is_empty() {
@@ -983,7 +1037,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: request.space_id.clone(),
                         operation_type: "Unset".to_string(),
                     });
-                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                    flush_bulk_if_full!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
                 }
                 EntityOperation::UpdateEntityGlobalScore(request) => {
                     // Flush before executing the update_by_query to maintain ordering
@@ -1021,8 +1085,13 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     });
 
-                    match self.update_by_query_with_retry(body, "UpdateEntityGlobalScore").await? {
-                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
+                    match self
+                        .update_by_query_with_retry(body, "UpdateEntityGlobalScore")
+                        .await?
+                    {
+                        UpdateByQueryOutcome::Success {
+                            took_ms, wall_ms, ..
+                        } => {
                             total_succeeded += 1;
                             total_wall_ms += wall_ms;
                             total_took_ms += took_ms;
@@ -1086,8 +1155,13 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     });
 
-                    match self.update_by_query_with_retry(body, "UpdateSpaceScore").await? {
-                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
+                    match self
+                        .update_by_query_with_retry(body, "UpdateSpaceScore")
+                        .await?
+                    {
+                        UpdateByQueryOutcome::Success {
+                            took_ms, wall_ms, ..
+                        } => {
                             total_succeeded += 1;
                             total_wall_ms += wall_ms;
                             total_took_ms += took_ms;
@@ -1137,7 +1211,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: request.space_id.clone(),
                         operation_type: "UpdateEntitySpaceScore".to_string(),
                     });
-                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                    flush_bulk_if_full!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
                 }
                 EntityOperation::UpdateEntityGlobalScoreByDoc(request) => {
                     // Direct doc-ID update for entity global score (resolved via Postgres lookup).
@@ -1154,7 +1238,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: String::new(),
                         operation_type: "UpdateEntityGlobalScoreByDoc".to_string(),
                     });
-                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                    flush_bulk_if_full!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
                 }
                 EntityOperation::UpdateSpaceScoreByDoc(request) => {
                     // Direct doc-ID update for space score (resolved via Postgres lookup).
@@ -1171,7 +1265,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: String::new(),
                         operation_type: "UpdateSpaceScoreByDoc".to_string(),
                     });
-                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                    flush_bulk_if_full!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
                 }
                 EntityOperation::RemoveRelationByDoc(request) => {
                     // Direct doc-ID update for relation removal (resolved via Postgres lookup).
@@ -1192,7 +1296,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: request.relation_id.clone(),
                         operation_type: "RemoveRelationByDoc".to_string(),
                     });
-                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                    flush_bulk_if_full!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
                 }
                 EntityOperation::UpdateSpaceTopicEntityIdByDoc(request) => {
                     // Direct doc-ID update for space topic entity ID (resolved via Postgres lookup).
@@ -1209,7 +1323,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: request.topic_entity_id.clone(),
                         operation_type: "UpdateSpaceTopicEntityIdByDoc".to_string(),
                     });
-                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                    flush_bulk_if_full!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
                 }
                 EntityOperation::UpdateInCanonicalGraphByDoc(request) => {
                     // Direct doc-ID update for canonical graph flag (resolved via Postgres lookup).
@@ -1226,7 +1350,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: String::new(),
                         operation_type: "UpdateInCanonicalGraphByDoc".to_string(),
                     });
-                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                    flush_bulk_if_full!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
                 }
                 EntityOperation::ClearSpaceTopicEntityIdByDoc(request) => {
                     // Direct doc-ID clear of `space_topic_entity_id` using a painless
@@ -1245,7 +1379,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: String::new(),
                         operation_type: "ClearSpaceTopicEntityIdByDoc".to_string(),
                     });
-                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                    flush_bulk_if_full!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
                 }
                 EntityOperation::UpdateSpaceTopicEntityId(request) => {
                     // Flush before executing the update_by_query to maintain ordering
@@ -1291,8 +1435,13 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     });
 
-                    match self.update_by_query_with_retry(body, "UpdateSpaceTopicEntityId").await? {
-                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
+                    match self
+                        .update_by_query_with_retry(body, "UpdateSpaceTopicEntityId")
+                        .await?
+                    {
+                        UpdateByQueryOutcome::Success {
+                            took_ms, wall_ms, ..
+                        } => {
                             total_succeeded += 1;
                             total_wall_ms += wall_ms;
                             total_took_ms += took_ms;
@@ -1359,7 +1508,9 @@ impl SearchIndexProvider for OpenSearchProvider {
                         .update_by_query_with_retry(body, "ClearSpaceTopicEntityId")
                         .await?
                     {
-                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
+                        UpdateByQueryOutcome::Success {
+                            took_ms, wall_ms, ..
+                        } => {
                             total_succeeded += 1;
                             total_wall_ms += wall_ms;
                             total_took_ms += took_ms;
@@ -1423,8 +1574,13 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     });
 
-                    match self.update_by_query_with_retry(body, "UpdateInCanonicalGraph").await? {
-                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
+                    match self
+                        .update_by_query_with_retry(body, "UpdateInCanonicalGraph")
+                        .await?
+                    {
+                        UpdateByQueryOutcome::Success {
+                            took_ms, wall_ms, ..
+                        } => {
                             total_succeeded += 1;
                             total_wall_ms += wall_ms;
                             total_took_ms += took_ms;

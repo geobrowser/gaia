@@ -11,8 +11,7 @@ use tokio::task::JoinHandle;
 
 use crate::consumer::StreamMessage;
 use crate::consumer::{
-    EntityEvent, EntityEventType, ScoreEvent, ScoreEventType, SpaceTopicEvent,
-    SpaceTopicEventKind,
+    EntityEvent, EntityEventType, ScoreEvent, ScoreEventType, SpaceTopicEvent, SpaceTopicEventKind,
 };
 use crate::errors::IngestError;
 use crate::lookup::EntitySpaceLookup;
@@ -573,9 +572,7 @@ impl Processor {
                     // one currently set for this space. Guards against a stale or
                     // out-of-order removal clearing a newer topic. A cache miss means
                     // no topic is currently set, so the removal is a no-op.
-                    if self.space_topic_cache.get(&event.space_id)
-                        != Some(&event.topic_entity_id)
-                    {
+                    if self.space_topic_cache.get(&event.space_id) != Some(&event.topic_entity_id) {
                         if self.should_sample(SampleCategory::UpdateSpaceTopicEntityId) {
                             info!(
                                 space_id = %event.space_id,
@@ -613,7 +610,8 @@ impl Processor {
         // Resolve space_id → entity docs via Postgres, or fall back to update_by_query.
         // Use the same Postgres call for both kinds so we don't double-query when a
         // declare + remove for different spaces land in the same batch.
-        let mut fast_path_spaces: Vec<Uuid> = declared_updates.iter().map(|(sid, _)| *sid).collect();
+        let mut fast_path_spaces: Vec<Uuid> =
+            declared_updates.iter().map(|(sid, _)| *sid).collect();
         fast_path_spaces.extend(removed_spaces.iter().copied());
 
         if !fast_path_spaces.is_empty() {
