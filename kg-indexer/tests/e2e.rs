@@ -72,6 +72,7 @@ mod expected {
     pub const SUBSPACE_TARGET_TOPIC_DECLARED: [u8; 16] = make_id(0xC5);
     pub const SUBSPACE_TARGET_TOPIC_REMOVED: [u8; 16] = make_id(0xC6);
     pub const SPACE_TARGET_TOPIC_SET: [u8; 16] = make_id(0xD1);
+    pub const SPACE_TARGET_TOPIC_REMOVED: [u8; 16] = make_id(0xD2);
 
     // Topic IDs for trust pipeline subtopic tests
     pub const TOPIC_H: [u8; 16] = make_id(0x91);
@@ -84,6 +85,7 @@ mod expected {
     // Top-level space topic IDs (declared / removed via TOPIC_DECLARED & TOPIC_REMOVED actions).
     pub const SPACE_TOPIC_KEPT: [u8; 16] = make_id(0x93);
     pub const SPACE_TOPIC_CLEARED: [u8; 16] = make_id(0x94);
+    pub const SPACE_TOPIC_STALE: [u8; 16] = make_id(0x95);
 
     /// All 18 space IDs that should be created
     pub fn all_space_ids() -> Vec<Uuid> {
@@ -218,7 +220,11 @@ mod expected {
                 "SetTopic",
                 Some(uuid_from_bytes(SPACE_TARGET_TOPIC_SET)),
             ),
-            (uuid_from_bytes(PROPOSAL_15), "UnsetTopic", None),
+            (
+                uuid_from_bytes(PROPOSAL_15),
+                "UnsetTopic",
+                Some(uuid_from_bytes(SPACE_TARGET_TOPIC_REMOVED)),
+            ),
         ]
     }
 }
@@ -570,7 +576,7 @@ async fn test_space_topic_declared_and_removed() {
     assert_eq!(
         kept_row.0,
         Some(kept),
-        "SPACE_J.topic_id should be SPACE_TOPIC_KEPT"
+        "SPACE_J.topic_id should be SPACE_TOPIC_KEPT (and survive the stale TOPIC_REMOVED)"
     );
 
     // SPACE_I: topic_id should be NULL after declare + remove
@@ -599,6 +605,33 @@ async fn test_space_topic_declared_and_removed() {
             topic_id
         );
     }
+}
+
+/// Verify the conditional `clear_space_topic`: a TOPIC_REMOVED whose topicId does
+/// NOT match the space's current topic must be a no-op.
+///
+/// The mock topology declares SPACE_TOPIC_KEPT on SPACE_J, then emits a
+/// `topic_removed(SPACE_J, SPACE_TOPIC_STALE)`. Because SPACE_TOPIC_STALE is not
+/// the current topic, the clear must not fire and SPACE_J must retain
+/// SPACE_TOPIC_KEPT.
+#[tokio::test]
+async fn test_space_topic_stale_removal_is_noop() {
+    let pool = get_pool().await;
+
+    let space_j = uuid_from_bytes(expected::SPACE_J);
+    let kept = uuid_from_bytes(expected::SPACE_TOPIC_KEPT);
+
+    let row: (Option<Uuid>,) = sqlx::query_as("SELECT topic_id FROM spaces WHERE id = $1")
+        .bind(space_j)
+        .fetch_one(&pool)
+        .await
+        .expect("Failed to query SPACE_J.topic_id");
+
+    assert_eq!(
+        row.0,
+        Some(kept),
+        "A TOPIC_REMOVED for a non-current topic must not clear SPACE_J.topic_id"
+    );
 }
 
 /// Verify proposal action types and target IDs for all 15 proposals.
