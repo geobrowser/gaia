@@ -85,7 +85,6 @@ mod expected {
     // Top-level space topic IDs (declared / removed via TOPIC_DECLARED & TOPIC_REMOVED actions).
     pub const SPACE_TOPIC_KEPT: [u8; 16] = make_id(0x93);
     pub const SPACE_TOPIC_CLEARED: [u8; 16] = make_id(0x94);
-    pub const SPACE_TOPIC_STALE: [u8; 16] = make_id(0x95);
 
     /// All 18 space IDs that should be created
     pub fn all_space_ids() -> Vec<Uuid> {
