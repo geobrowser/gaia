@@ -28,10 +28,10 @@ use notification_indexer::error::IndexerError;
 use notification_indexer::models::{
     build_rejection_event, extract_bounty_created, extract_bounty_relations,
     extract_proposal_comments, handle_bounty_allocated, handle_bounty_created,
-    handle_bounty_interest, handle_bounty_payout, handle_proposal_comment, handle_proposal_created,
-    handle_proposal_executed, handle_proposal_settings_updated, handle_proposal_updated,
-    handle_proposal_voted, merge_recipients, BountyConfig, NotificationEventType,
-    TargetedRecipients,
+    handle_bounty_interest, handle_bounty_payout, handle_comment, handle_proposal_comment,
+    handle_proposal_created, handle_proposal_executed, handle_proposal_settings_updated,
+    handle_proposal_updated, handle_proposal_voted, merge_recipients, BountyConfig,
+    CommentThreadInfo, NotificationEventType, TargetedRecipients,
 };
 use notification_indexer::storage::Storage;
 
@@ -599,10 +599,11 @@ async fn async_main() -> Result<(), IndexerError> {
                                         })?;
                                     }
 
-                                    // Phase 2a: comments on a proposal → notify the proposer, but
-                                    // only when the commenter is a member/editor of the proposal's
-                                    // space. A reply whose parent is not a proposal is a general
-                                    // comment (out of scope here) and is skipped.
+                                    // Comments. If the comment replies *directly* to a proposal,
+                                    // notify the proposer gated on member/editor (Phase 2a). Otherwise
+                                    // it's a general comment / reply in a thread: notify all thread
+                                    // participants plus the thread root's creator (Phase 2b).
+                                    // App servers handle per-user muting/snoozing.
                                     for mut info in comments {
                                         if ke_bd > 0 {
                                             wait_for_kg_catchup(&ke_stor, info.block_number, ke_bd, ke_bd_timeout).await;
@@ -610,7 +611,72 @@ async fn async_main() -> Result<(), IndexerError> {
                                         let (proposer, proposal_space) = match ke_stor.find_proposal_proposer_and_space(info.proposal_id).await {
                                             Ok(Some(pair)) => pair,
                                             Ok(None) => {
-                                                ke_skipped += 1;
+                                                // Phase 2b: general comment thread.
+                                                let root = ke_stor.resolve_thread_root(info.proposal_id).await.map_err(|e| {
+                                                    error!(error = %e, "DB error resolving comment thread root, will retry");
+                                                    ke_errors += 1;
+                                                })?;
+                                                let mut recipients = ke_stor.find_thread_participants(root).await.map_err(|e| {
+                                                    error!(error = %e, "DB error resolving thread participants, will retry");
+                                                    ke_errors += 1;
+                                                })?;
+                                                // Root creator: exact for proposals (proposer),
+                                                // best-effort home space otherwise.
+                                                let root_space = match ke_stor.find_proposal_proposer_and_space(root).await.map_err(|e| {
+                                                    error!(error = %e, "DB error resolving thread root proposal, will retry");
+                                                    ke_errors += 1;
+                                                })? {
+                                                    Some((root_proposer, space)) => {
+                                                        recipients.push(root_proposer);
+                                                        space
+                                                    }
+                                                    None => match ke_stor.find_entity_home_space(root).await.map_err(|e| {
+                                                        error!(error = %e, "DB error resolving thread root home space, will retry");
+                                                        ke_errors += 1;
+                                                    })? {
+                                                        Some(home) => {
+                                                            recipients.push(home);
+                                                            home
+                                                        }
+                                                        None => info.commenter_space_id,
+                                                    },
+                                                };
+                                                // Don't notify the comment's own author.
+                                                let recipients: Vec<uuid::Uuid> = merge_recipients(recipients, vec![])
+                                                    .into_iter()
+                                                    .filter(|r| *r != info.commenter_space_id)
+                                                    .collect();
+                                                if recipients.is_empty() {
+                                                    ke_processed += 1;
+                                                    continue;
+                                                }
+                                                let cinfo = CommentThreadInfo {
+                                                    comment_entity_id: info.comment_entity_id,
+                                                    parent_id: info.proposal_id,
+                                                    root_id: root,
+                                                    commenter_space_id: info.commenter_space_id,
+                                                    root_space_id: root_space,
+                                                    block_number: info.block_number,
+                                                    sequence: info.sequence,
+                                                    timestamp: info.timestamp,
+                                                };
+                                                let mut event = handle_comment(&cinfo);
+                                                enrich_payload(&ke_stor, &mut event, root_space).await;
+                                                ke_stor.insert_notifications_for_users(&event, &recipients).await.map(|count| {
+                                                    if count > 0 {
+                                                        info!(
+                                                            event_type = "comment",
+                                                            root_id = %root,
+                                                            recipients = recipients.len(),
+                                                            inserted = count,
+                                                            "Inserted comment thread notifications"
+                                                        );
+                                                    }
+                                                    ke_processed += 1;
+                                                }).map_err(|e| {
+                                                    error!(error = %e, "DB error inserting comment notifications, will retry");
+                                                    ke_errors += 1;
+                                                })?;
                                                 continue;
                                             }
                                             Err(e) => {
@@ -1137,6 +1203,12 @@ async fn enrich_payload(
             // Proposal name (the proposal being commented on).
             if let Ok(pid) = uuid::Uuid::parse_str(&comment.proposal_id) {
                 comment.proposal_name = storage.lookup_proposal_name(pid).await;
+            }
+        }
+        NotificationData::GeneralComment(ref mut c) => {
+            // Name of the thread root (looked up in its home space, == `space_id`).
+            if let Ok(rid) = uuid::Uuid::parse_str(&c.root_id) {
+                c.root_name = storage.lookup_entity_name(rid, space_id).await;
             }
         }
     }

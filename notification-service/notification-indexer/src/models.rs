@@ -29,6 +29,8 @@ pub enum NotificationEventType {
     // Comment events
     /// A comment was posted on a proposal (from `knowledge.edits`).
     ProposalComment,
+    /// A comment or reply in a (non-proposal) thread (from `knowledge.edits`).
+    Comment,
 }
 
 impl NotificationEventType {
@@ -45,6 +47,7 @@ impl NotificationEventType {
             NotificationEventType::BountyPayout => "bounty_payout",
             NotificationEventType::BountyCreated => "bounty_created",
             NotificationEventType::ProposalComment => "proposal_comment",
+            NotificationEventType::Comment => "comment",
         }
     }
 
@@ -61,7 +64,7 @@ impl NotificationEventType {
             | NotificationEventType::BountyAllocated
             | NotificationEventType::BountyPayout
             | NotificationEventType::BountyCreated => "bounty",
-            NotificationEventType::ProposalComment => "comment",
+            NotificationEventType::ProposalComment | NotificationEventType::Comment => "comment",
         }
     }
 
@@ -153,6 +156,7 @@ pub enum NotificationData {
     Bounty(BountyData),
     BountyCreated(BountyCreatedData),
     Comment(CommentData),
+    GeneralComment(GeneralCommentData),
 }
 
 /// Governance-specific payload fields.
@@ -281,6 +285,23 @@ pub struct CommentData {
     pub proposal_name: Option<String>,
 }
 
+/// Payload fields for a comment/reply in a non-proposal thread (`comment`).
+#[derive(Debug, Clone, Serialize)]
+pub struct GeneralCommentData {
+    /// The comment entity that was created.
+    pub comment_entity_id: String,
+    /// The entity the comment directly replies to (a comment, for a reply, or the
+    /// commented-on entity for a top-level comment).
+    pub parent_id: String,
+    /// The thread root — the entity the whole thread hangs off of.
+    pub root_id: String,
+    /// The commenter's personal space (the `HermesEdit.space_id`).
+    pub commenter_space_id: String,
+    /// Human-readable name of the thread root (best-effort).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_name: Option<String>,
+}
+
 /// Result of handling a governance event: payload + idempotency key.
 #[derive(Debug)]
 pub struct NotificationEvent {
@@ -300,7 +321,8 @@ impl NotificationEvent {
             NotificationData::Governance(gov) => Uuid::parse_str(&gov.proposal_id).ok(),
             NotificationData::Bounty(_)
             | NotificationData::BountyCreated(_)
-            | NotificationData::Comment(_) => None,
+            | NotificationData::Comment(_)
+            | NotificationData::GeneralComment(_) => None,
         }
     }
 }
@@ -1188,6 +1210,58 @@ pub fn extract_proposal_comments(
         }
     }
     Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// General comment threads (Phase 2b) — comments/replies not directly on a proposal
+// ---------------------------------------------------------------------------
+
+/// A comment in a (non-proposal) thread, with the thread context resolved by the
+/// consumer. Recipients are the thread participants plus the root's creator.
+#[derive(Debug, Clone)]
+pub struct CommentThreadInfo {
+    pub comment_entity_id: Uuid,
+    /// The entity the comment directly replies to.
+    pub parent_id: Uuid,
+    /// The thread root (the "thing being commented on"), resolved by walking
+    /// `Reply to` up from `parent_id`.
+    pub root_id: Uuid,
+    /// The commenter's personal space (the edit's space).
+    pub commenter_space_id: Uuid,
+    /// The root's home/owning space — used as the payload `space_id` and for
+    /// name enrichment. Resolved by the consumer.
+    pub root_space_id: Uuid,
+    pub block_number: u64,
+    pub sequence: u64,
+    pub timestamp: u64,
+}
+
+/// Build a notification event for a comment/reply in a thread.
+pub fn handle_comment(info: &CommentThreadInfo) -> NotificationEvent {
+    let idempotency_base = format!("{}:{}:comment", info.block_number, info.sequence);
+
+    NotificationEvent {
+        event_type: NotificationEventType::Comment,
+        idempotency_key: idempotency_base,
+        payload: NotificationPayload {
+            version: PAYLOAD_VERSION,
+            event_type: NotificationEventType::Comment.as_str().to_string(),
+            category: NotificationEventType::Comment.category().to_string(),
+            space_id: info.root_space_id.to_string(),
+            user_space_id: None,
+            idempotency_key: None,
+            block_number: Some(info.block_number),
+            timestamp: Some(info.timestamp),
+            space_name: None,
+            data: NotificationData::GeneralComment(GeneralCommentData {
+                comment_entity_id: info.comment_entity_id.to_string(),
+                parent_id: info.parent_id.to_string(),
+                root_id: info.root_id.to_string(),
+                commenter_space_id: info.commenter_space_id.to_string(),
+                root_name: None,
+            }),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -2860,5 +2934,36 @@ mod tests {
             json["commenter_space_id"],
             Uuid::from_bytes([0x11; 16]).to_string()
         );
+    }
+
+    #[test]
+    fn handle_comment_payload_structure() {
+        let info = CommentThreadInfo {
+            comment_entity_id: Uuid::from_bytes([0xC0; 16]),
+            parent_id: Uuid::from_bytes([0x91; 16]), // parent (a comment or entity)
+            root_id: Uuid::from_bytes([0x9A; 16]),
+            commenter_space_id: Uuid::from_bytes([0x11; 16]),
+            root_space_id: Uuid::from_bytes([0x5E; 16]),
+            block_number: 100,
+            sequence: 4,
+            timestamp: 1700000000,
+        };
+        let event = handle_comment(&info);
+        assert_eq!(event.event_type, NotificationEventType::Comment);
+        let json = serde_json::to_value(&event.payload).expect("serialize");
+        assert_eq!(json["event_type"], "comment");
+        assert_eq!(json["category"], "comment");
+        assert_eq!(json["space_id"], Uuid::from_bytes([0x5E; 16]).to_string()); // root's space
+        assert_eq!(json["root_id"], Uuid::from_bytes([0x9A; 16]).to_string());
+        assert_eq!(
+            json["comment_entity_id"],
+            Uuid::from_bytes([0xC0; 16]).to_string()
+        );
+        assert_eq!(
+            json["commenter_space_id"],
+            Uuid::from_bytes([0x11; 16]).to_string()
+        );
+        // not a governance/proposal payload
+        assert!(json.get("proposal_id").is_none());
     }
 }

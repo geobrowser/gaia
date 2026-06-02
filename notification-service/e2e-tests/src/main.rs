@@ -109,6 +109,15 @@ const COMMENT_NONMEMBER_BYTES: [u8; 16] = [0x75; 16]; // NOT a member (commenter
 const COMMENT_ENTITY_BYTES: [u8; 16] = [0x76; 16]; // the comment entity (allowed)
 const COMMENT_ENTITY_2_BYTES: [u8; 16] = [0x78; 16]; // the comment entity (non-member, filtered)
 
+// Phase 2b — general comment thread fixtures (a reply into a seeded thread).
+const THREAD_ROOT_BYTES: [u8; 16] = [0x86; 16]; // the (non-proposal) thing being commented on
+const THREAD_HOME_SPACE_BYTES: [u8; 16] = [0x87; 16]; // root's home space == creator (recipient)
+const THREAD_GENERIC_TYPE_BYTES: [u8; 16] = [0x8F; 16]; // an arbitrary (non-bounty) type for the root
+const EXISTING_COMMENT_BYTES: [u8; 16] = [0x88; 16]; // a prior comment on the root (seeded)
+const THREAD_PARTICIPANT_SPACE_BYTES: [u8; 16] = [0x89; 16]; // author of the prior comment (recipient)
+const REPLY_COMMENT_BYTES: [u8; 16] = [0x8a; 16]; // the NEW reply (produced)
+const REPLY_AUTHOR_SPACE_BYTES: [u8; 16] = [0x8b; 16]; // author of the reply (must NOT be notified)
+
 const GOVERNANCE_TOPIC: &str = "space.governance";
 const KNOWLEDGE_EDITS_TOPIC: &str = "knowledge.edits";
 const NUM_WEBHOOKS: usize = 3;
@@ -129,11 +138,13 @@ const NUM_WEBHOOKS: usize = 3;
 // Bounty created:   1 event × 2 bounty editors × 3 = 6   (Phase 3a)
 // Proposal comment: 1 event × 1 proposer × 3 = 3         (Phase 2a; the non-member
 //                   comment is filtered out and produces 0 calls)
+// Comment thread:   1 reply × 2 recipients × 3 = 6       (Phase 2b; prior participant
+//                   + root creator; the reply author is excluded)
 //
 // The proposer (0x02), prior voter (0x0B), and comment proposer (0x73) are
 // intentionally NOT editors, so these counts also prove targeted delivery
 // reaches non-editors.
-const EXPECTED_CALLS: usize = 66 + 3 + 6 + 3 + 3 + 6 + 3;
+const EXPECTED_CALLS: usize = 66 + 3 + 6 + 3 + 3 + 6 + 3 + 6;
 
 const GOVERNANCE_EVENT_TYPES: &[&str] = &[
     "proposal_created",
@@ -156,6 +167,7 @@ const ALL_EVENT_TYPES: &[&str] = &[
     "bounty_payout",
     "bounty_created",
     "proposal_comment",
+    "comment",
 ];
 
 // ---------------------------------------------------------------------------
@@ -436,6 +448,35 @@ async fn seed_database(
     )
     .bind(Uuid::from_bytes(COMMENT_MEMBER_BYTES))
     .bind(Uuid::from_bytes(COMMENT_SPACE_BYTES))
+    .execute(pool)
+    .await?;
+
+    // Phase 2b: seed an existing comment thread. The notification-indexer reads
+    // these relations to resolve the thread root and its participants (kg-indexer
+    // isn't running in the e2e, so we seed the relations directly).
+    // (a) The thread root's Types relation → gives it a home space (== creator).
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, $3, $4) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::from_bytes(THREAD_HOME_SPACE_BYTES))
+    .bind(Uuid::from_bytes(THREAD_ROOT_BYTES))
+    .bind(Uuid::from_bytes(THREAD_GENERIC_TYPE_BYTES))
+    .execute(pool)
+    .await?;
+    // (b) A prior comment on the root, authored from a participant's space
+    //     (Reply-to → root). Its space_id is that participant.
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '310d4a24-0e5b-451c-b215-1bfce40d0fe6'::uuid, $3, $4) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::from_bytes(THREAD_PARTICIPANT_SPACE_BYTES))
+    .bind(Uuid::from_bytes(EXISTING_COMMENT_BYTES))
+    .bind(Uuid::from_bytes(THREAD_ROOT_BYTES))
     .execute(pool)
     .await?;
 
@@ -774,6 +815,29 @@ async fn produce_test_events(kafka_broker: &str) -> Result<(), Box<dyn std::erro
         .await
         .map_err(|(e, _)| e)?;
 
+    // Phase 2b: a reply into the seeded thread (reply → EXISTING_COMMENT). The
+    // indexer walks to the root, notifying the prior participant + the root's
+    // creator (home space), but NOT the reply's own author.
+    let thread_reply = make_comment_hermes_edit(
+        REPLY_COMMENT_BYTES,
+        EXISTING_COMMENT_BYTES,
+        REPLY_AUTHOR_SPACE_BYTES,
+        40007,
+        1700036000,
+        7,
+    );
+    let headers = rdkafka::message::OwnedHeaders::new();
+    producer
+        .send(
+            FutureRecord::to(&ke_topic)
+                .payload(&thread_reply.encode_to_vec())
+                .key("comment-thread-reply")
+                .headers(headers),
+            Duration::from_secs(10),
+        )
+        .await
+        .map_err(|(e, _)| e)?;
+
     Ok(())
 }
 
@@ -1085,6 +1149,9 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
     let curator_space = Uuid::from_bytes(CURATOR_SPACE_BYTES).to_string();
     // Phase 2a: the proposal-comment recipient (the proposer; not an editor).
     let comment_proposer = Uuid::from_bytes(COMMENT_PROPOSER_BYTES).to_string();
+    // Phase 2b: comment-thread recipients (prior participant + root creator).
+    let thread_participant = Uuid::from_bytes(THREAD_PARTICIPANT_SPACE_BYTES).to_string();
+    let thread_home = Uuid::from_bytes(THREAD_HOME_SPACE_BYTES).to_string();
 
     let all_known: Vec<String> = editors_3e
         .iter()
@@ -1097,6 +1164,9 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         .chain(std::iter::once(&update_voter_uid))
         // Phase 2a: proposal-comment recipient (proposer):
         .chain(std::iter::once(&comment_proposer))
+        // Phase 2b: comment-thread recipients (participant + root creator):
+        .chain(std::iter::once(&thread_participant))
+        .chain(std::iter::once(&thread_home))
         .cloned()
         .collect();
 
@@ -1189,8 +1259,9 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         // Bounty payout: 1 event × 1 curator = 1
         // Bounty created: 1 event × 2 bounty editors = 2
         // Proposal comment: 1 event × 1 proposer = 1
-        // Total: 30
-        keys.len() == 30
+        // Comment thread: 1 reply × 2 recipients = 2
+        // Total: 32
+        keys.len() == 32
     });
 
     // ===================================================================
@@ -1765,6 +1836,50 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
             call.body["commenter_space_id"].as_str() == Some(comment_member.as_str()),
         );
     }
+
+    // --- Phase 2b: comment thread — a reply notifies the prior participant and
+    //     the root's creator (home space), but NOT the reply's author. ---
+    let thread_root = Uuid::from_bytes(THREAD_ROOT_BYTES).to_string();
+    let reply_author = Uuid::from_bytes(REPLY_AUTHOR_SPACE_BYTES).to_string();
+    let comment_calls: Vec<_> = calls
+        .iter()
+        .filter(|c| c.body["event_type"].as_str() == Some("comment"))
+        .collect();
+    r.check(
+        "comment: 6 calls (prior participant + root creator) x 3 webhooks",
+        comment_calls.len() == 6,
+    );
+    if let Some(call) = comment_calls.first() {
+        r.check(
+            "comment: category is 'comment'",
+            call.body["category"].as_str() == Some("comment"),
+        );
+        r.check(
+            "comment: correct thread root_id",
+            call.body["root_id"].as_str() == Some(thread_root.as_str()),
+        );
+    }
+    // The prior participant and the root's creator each get 3 (one per webhook).
+    for (label, who) in [
+        ("prior participant", &thread_participant),
+        ("root creator", &thread_home),
+    ] {
+        let n = comment_calls
+            .iter()
+            .filter(|c| c.body["user_space_id"].as_str() == Some(who.as_str()))
+            .count();
+        r.check(
+            &format!("comment: {} notified on 3 webhooks", label),
+            n == 3,
+        );
+    }
+    // The reply's own author must NOT be notified.
+    r.check(
+        "comment: reply author is not notified (self-exclusion)",
+        !comment_calls
+            .iter()
+            .any(|c| c.body["user_space_id"].as_str() == Some(reply_author.as_str())),
+    );
 
     r
 }

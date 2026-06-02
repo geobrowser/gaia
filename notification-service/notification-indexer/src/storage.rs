@@ -348,6 +348,94 @@ impl Storage {
         Ok(exists)
     }
 
+    // -----------------------------------------------------------------------
+    // Comment-thread resolution (Phase 2b)
+    // -----------------------------------------------------------------------
+
+    /// Walk `Reply to` relations upward from `parent` to the thread root.
+    ///
+    /// A comment replies to its parent; that parent may itself be a comment that
+    /// replies to another, and so on. The root is the first ancestor with no
+    /// outgoing `Reply to` relation (the actual "thing being commented on").
+    /// Bounded to a fixed depth as a cycle/abuse guard.
+    #[instrument(name = "notification_indexer.storage.resolve_thread_root", skip(self))]
+    pub async fn resolve_thread_root(&self, parent: Uuid) -> Result<Uuid, StorageError> {
+        let reply_to = ids::reply_to_property();
+        let mut current = parent;
+        for _ in 0..64 {
+            let next: Option<Uuid> = sqlx::query_scalar::<_, Uuid>(
+                "SELECT to_entity_id FROM relations WHERE type_id = $1 AND from_entity_id = $2 LIMIT 1",
+            )
+            .bind(reply_to)
+            .bind(current)
+            .fetch_optional(&self.pool)
+            .await?;
+            match next {
+                Some(n) if n != current => current = n,
+                _ => break,
+            }
+        }
+        Ok(current)
+    }
+
+    /// All distinct participant spaces in the thread rooted at `root`.
+    ///
+    /// Participants are the authors of every comment in the thread — derived
+    /// from the `space_id` of each `Reply to` relation in the subtree (a
+    /// relation's `space_id` is the space it was published from, i.e. the
+    /// comment author's personal space). `UNION` (not `UNION ALL`) makes the
+    /// recursion cycle-safe.
+    #[instrument(
+        name = "notification_indexer.storage.find_thread_participants",
+        skip(self)
+    )]
+    pub async fn find_thread_participants(&self, root: Uuid) -> Result<Vec<Uuid>, StorageError> {
+        let reply_to = ids::reply_to_property();
+        let rows = sqlx::query(
+            r#"
+            WITH RECURSIVE thread AS (
+                SELECT from_entity_id AS comment_id, space_id
+                FROM relations
+                WHERE type_id = $1 AND to_entity_id = $2
+                UNION
+                SELECT r.from_entity_id, r.space_id
+                FROM relations r
+                JOIN thread t ON r.to_entity_id = t.comment_id
+                WHERE r.type_id = $1
+            )
+            SELECT DISTINCT space_id FROM thread
+            "#,
+        )
+        .bind(reply_to)
+        .bind(root)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(|r| r.get("space_id")).collect())
+    }
+
+    /// Best-effort "home" space of an entity — the `space_id` of its `Types`
+    /// relation (where it was created). For entities created in a personal space
+    /// this equals the creator. Used as the root-creator recipient for
+    /// non-proposal comment threads (proposals resolve their creator exactly via
+    /// `find_proposal_proposer_and_space`).
+    #[instrument(
+        name = "notification_indexer.storage.find_entity_home_space",
+        skip(self)
+    )]
+    pub async fn find_entity_home_space(
+        &self,
+        entity_id: Uuid,
+    ) -> Result<Option<Uuid>, StorageError> {
+        let result = sqlx::query_scalar::<_, Uuid>(
+            "SELECT space_id FROM relations WHERE from_entity_id = $1 AND type_id = $2 LIMIT 1",
+        )
+        .bind(entity_id)
+        .bind(ids::types_relation_type())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(result)
+    }
+
     /// Find proposals that have expired (end_time < now) without being executed,
     /// and for which we haven't yet sent a rejection notification.
     ///
