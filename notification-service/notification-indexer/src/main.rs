@@ -29,7 +29,8 @@ use notification_indexer::models::{
     build_rejection_event, extract_bounty_relations, handle_bounty_allocated,
     handle_bounty_interest, handle_bounty_payout, handle_proposal_created,
     handle_proposal_executed, handle_proposal_settings_updated, handle_proposal_updated,
-    handle_proposal_voted, BountyConfig, NotificationEventType,
+    handle_proposal_voted, merge_recipients, BountyConfig, NotificationEventType,
+    TargetedRecipients,
 };
 use notification_indexer::storage::Storage;
 
@@ -223,19 +224,17 @@ async fn async_main() -> Result<(), IndexerError> {
                                     // Enrich rejection with names (proposal is guaranteed to exist)
                                     enrich_payload(&poller_storage, &mut event, proposal.space_id).await;
 
-                                    let mut recipients = match poller_storage.find_editors_for_space(proposal.space_id).await {
+                                    let editors = match poller_storage.find_editors_for_space(proposal.space_id).await {
                                         Ok(eds) => eds,
                                         Err(e) => {
                                             error!(error = %e, space_id = %proposal.space_id, "Failed to look up editors for rejection, will retry next poll");
                                             continue;
                                         }
                                     };
-                                    // Notify the proposer that their proposal was rejected, even
-                                    // if they are not an editor. `proposed_by` is the proposer's
+                                    // Notify the proposer that their proposal was rejected, even if
+                                    // they are not an editor. `proposed_by` is the proposer's
                                     // personal-space UUID, usable directly as a recipient.
-                                    recipients.push(proposal.proposed_by);
-                                    recipients.sort();
-                                    recipients.dedup();
+                                    let recipients = merge_recipients(editors, vec![proposal.proposed_by]);
                                     if recipients.is_empty() {
                                         continue;
                                     }
@@ -750,7 +749,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     // Enrich payload with human-readable names (best-effort)
                                     enrich_payload(&storage, &mut event, space_id).await;
 
-                                    let mut recipients = match storage.find_editors_for_space(space_id).await {
+                                    let editors = match storage.find_editors_for_space(space_id).await {
                                         Ok(eds) => eds,
                                         Err(e) => {
                                             // DB error — don't commit offset so we retry on restart
@@ -765,45 +764,38 @@ async fn async_main() -> Result<(), IndexerError> {
                                         }
                                     };
 
-                                    // Targeted recipients beyond the space's editors. Filtering to
-                                    // a specific audience is done app-side, so we deliver the
-                                    // relevant superset:
-                                    //   - "your proposal was voted on / approved" -> the proposer
-                                    //   - "a new version of a proposal you voted on" -> prior voters
-                                    // proposer_id / voter_id are personal-space UUIDs (same
-                                    // namespace as editors), usable directly as recipients.
-                                    // Best-effort: a lookup miss only drops the *targeted*
-                                    // recipient — the proposer is usually also an editor and is
-                                    // still notified, and editors always get the base event.
-                                    if let Some(pid) = event.governance_proposal_id() {
-                                        match event.event_type {
-                                            NotificationEventType::ProposalVoted
-                                            | NotificationEventType::ProposalExecuted => {
+                                    // Targeted recipients beyond the space's editors (see
+                                    // NotificationEventType::targeted_recipients). Filtering to a
+                                    // specific audience is done app-side, so we deliver the relevant
+                                    // superset. Best-effort: a lookup miss only drops the targeted
+                                    // extra — editors always get the base event, and the proposer
+                                    // is usually also an editor.
+                                    let extra: Vec<uuid::Uuid> = match event.governance_proposal_id() {
+                                        Some(pid) => match event.event_type.targeted_recipients() {
+                                            TargetedRecipients::Proposer => {
                                                 match storage.find_proposer_for_proposal(pid).await {
-                                                    Ok(Some(proposer)) => recipients.push(proposer),
-                                                    Ok(None) => {}
-                                                    Err(e) => warn!(
-                                                        error = %e,
-                                                        proposal_id = %pid,
-                                                        "Failed to resolve proposer; notifying editors only"
-                                                    ),
+                                                    Ok(Some(proposer)) => vec![proposer],
+                                                    Ok(None) => vec![],
+                                                    Err(e) => {
+                                                        warn!(error = %e, proposal_id = %pid, "Failed to resolve proposer; notifying editors only");
+                                                        vec![]
+                                                    }
                                                 }
                                             }
-                                            NotificationEventType::ProposalUpdated => {
+                                            TargetedRecipients::Voters => {
                                                 match storage.find_voters_for_proposal(pid).await {
-                                                    Ok(voters) => recipients.extend(voters),
-                                                    Err(e) => warn!(
-                                                        error = %e,
-                                                        proposal_id = %pid,
-                                                        "Failed to resolve voters; notifying editors only"
-                                                    ),
+                                                    Ok(voters) => voters,
+                                                    Err(e) => {
+                                                        warn!(error = %e, proposal_id = %pid, "Failed to resolve voters; notifying editors only");
+                                                        vec![]
+                                                    }
                                                 }
                                             }
-                                            _ => {}
-                                        }
-                                    }
-                                    recipients.sort();
-                                    recipients.dedup();
+                                            TargetedRecipients::None => vec![],
+                                        },
+                                        None => vec![],
+                                    };
+                                    let recipients = merge_recipients(editors, extra);
 
                                     if recipients.is_empty() {
                                         // Genuinely no recipients — this is normal, not an error
