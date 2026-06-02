@@ -2400,19 +2400,40 @@ mod tests {
     fn targeted_recipients_routes_by_event_type() {
         use NotificationEventType::*;
         // "your proposal was voted on / approved / rejected" -> proposer
-        assert_eq!(ProposalVoted.targeted_recipients(), TargetedRecipients::Proposer);
-        assert_eq!(ProposalExecuted.targeted_recipients(), TargetedRecipients::Proposer);
-        assert_eq!(ProposalRejected.targeted_recipients(), TargetedRecipients::Proposer);
+        assert_eq!(
+            ProposalVoted.targeted_recipients(),
+            TargetedRecipients::Proposer
+        );
+        assert_eq!(
+            ProposalExecuted.targeted_recipients(),
+            TargetedRecipients::Proposer
+        );
+        assert_eq!(
+            ProposalRejected.targeted_recipients(),
+            TargetedRecipients::Proposer
+        );
         // "a new version of a proposal you voted on" -> prior voters
-        assert_eq!(ProposalUpdated.targeted_recipients(), TargetedRecipients::Voters);
+        assert_eq!(
+            ProposalUpdated.targeted_recipients(),
+            TargetedRecipients::Voters
+        );
         // editors-only (or single-recipient bounty) events get no targeted extras
-        assert_eq!(ProposalCreated.targeted_recipients(), TargetedRecipients::None);
+        assert_eq!(
+            ProposalCreated.targeted_recipients(),
+            TargetedRecipients::None
+        );
         assert_eq!(
             ProposalSettingsUpdated.targeted_recipients(),
             TargetedRecipients::None
         );
-        assert_eq!(BountyInterest.targeted_recipients(), TargetedRecipients::None);
-        assert_eq!(BountyAllocated.targeted_recipients(), TargetedRecipients::None);
+        assert_eq!(
+            BountyInterest.targeted_recipients(),
+            TargetedRecipients::None
+        );
+        assert_eq!(
+            BountyAllocated.targeted_recipients(),
+            TargetedRecipients::None
+        );
     }
 
     #[test]

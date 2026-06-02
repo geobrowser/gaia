@@ -279,17 +279,19 @@ impl Storage {
     /// `proposer_id` is "the space creating the proposal"), so it is directly
     /// usable as a notification recipient — no entity→space resolution needed.
     /// Used to deliver "your proposal was voted on / approved / rejected".
-    #[instrument(name = "notification_indexer.storage.find_proposer_for_proposal", skip(self))]
+    #[instrument(
+        name = "notification_indexer.storage.find_proposer_for_proposal",
+        skip(self)
+    )]
     pub async fn find_proposer_for_proposal(
         &self,
         proposal_id: Uuid,
     ) -> Result<Option<Uuid>, StorageError> {
-        let result = sqlx::query_scalar::<_, Uuid>(
-            "SELECT proposed_by FROM proposals WHERE id = $1",
-        )
-        .bind(proposal_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let result =
+            sqlx::query_scalar::<_, Uuid>("SELECT proposed_by FROM proposals WHERE id = $1")
+                .bind(proposal_id)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(result)
     }
 
@@ -299,17 +301,19 @@ impl Storage {
     /// `voter_id` is "the space casting the vote"), so it is directly usable as
     /// a notification recipient. Used to deliver "a new version of a proposal
     /// you voted on was submitted" to prior voters.
-    #[instrument(name = "notification_indexer.storage.find_voters_for_proposal", skip(self))]
+    #[instrument(
+        name = "notification_indexer.storage.find_voters_for_proposal",
+        skip(self)
+    )]
     pub async fn find_voters_for_proposal(
         &self,
         proposal_id: Uuid,
     ) -> Result<Vec<Uuid>, StorageError> {
-        let rows = sqlx::query(
-            "SELECT DISTINCT voter_id FROM proposal_votes WHERE proposal_id = $1",
-        )
-        .bind(proposal_id)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows =
+            sqlx::query("SELECT DISTINCT voter_id FROM proposal_votes WHERE proposal_id = $1")
+                .bind(proposal_id)
+                .fetch_all(&self.pool)
+                .await?;
         Ok(rows.iter().map(|r| r.get("voter_id")).collect())
     }
 

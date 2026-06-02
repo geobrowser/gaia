@@ -54,6 +54,9 @@ const SPACE_0E_BYTES: [u8; 16] = [0x22; 16];
 
 const PROPOSER_ID_BYTES: [u8; 16] = [0x02; 16];
 const VOTER_ID_BYTES: [u8; 16] = [0x0A; 16];
+// A prior voter on the 3-editor space's UPDATED proposal who is NOT an editor —
+// proves voter-targeted delivery of "a new version of a proposal you voted on".
+const UPDATE_VOTER_BYTES: [u8; 16] = [0x0B; 16];
 
 // Proposal IDs for 3-editor space (one per on-chain event type + rejection)
 const PROP_3E_CREATED_BYTES: [u8; 16] = [0x03; 16];
@@ -97,14 +100,23 @@ const GOVERNANCE_TOPIC: &str = "space.governance";
 const KNOWLEDGE_EDITS_TOPIC: &str = "knowledge.edits";
 const NUM_WEBHOOKS: usize = 3;
 
-// Expected calls:
-// 3-editor space: 6 event types × 3 editors × 3 webhooks = 54
-// 1-editor space: 1 event type  × 1 editor  × 3 webhooks = 3
-// 0-editor space: 1 event type  × 0 editors × 3 webhooks = 0
-// Bounty interest: 1 event × 2 editors × 3 webhooks = 6
-// Bounty allocated: 1 event × 1 curator × 3 webhooks = 3
-// Bounty payout: 1 event × 1 curator × 3 webhooks = 3
-const EXPECTED_CALLS: usize = 54 + 3 + 6 + 3 + 3;
+// Expected calls (3 webhooks each):
+// 3-editor space (66):
+//   proposal_created            3 editors                  × 3 = 9
+//   proposal_updated            3 editors + 1 prior voter  × 3 = 12
+//   proposal_voted              3 editors + proposer       × 3 = 12
+//   proposal_executed           3 editors + proposer       × 3 = 12
+//   proposal_settings_updated   3 editors                  × 3 = 9
+//   proposal_rejected           3 editors + proposer       × 3 = 12
+// 1-editor space: 1 event type  × 1 editor  × 3 = 3
+// 0-editor space: 1 event type  × 0 editors × 3 = 0
+// Bounty interest:  1 event × 2 editors × 3 = 6
+// Bounty allocated: 1 event × 1 curator × 3 = 3
+// Bounty payout:    1 event × 1 curator × 3 = 3
+//
+// The proposer (0x02) and the prior voter (0x0B) are intentionally NOT editors,
+// so these counts also prove targeted delivery reaches non-editors.
+const EXPECTED_CALLS: usize = 66 + 3 + 6 + 3 + 3;
 
 const GOVERNANCE_EVENT_TYPES: &[&str] = &[
     "proposal_created",
@@ -246,6 +258,36 @@ async fn seed_database(
     .bind(proposer)
     .bind(now - 7200)
     .bind(now - 3600)
+    .execute(pool)
+    .await?;
+
+    // Proposals for the VOTED and EXECUTED events so the indexer can resolve the
+    // proposer (find_proposer_for_proposal) and deliver "your proposal was voted
+    // on / approved" to them. end_time is in the FUTURE so the rejection poller
+    // does NOT also reject these (it only rejects end_time < now).
+    for prop in [PROP_3E_VOTED_BYTES, PROP_3E_EXECUTED_BYTES] {
+        sqlx::query(
+            "INSERT INTO proposals (id, space_id, proposed_by, start_time, end_time, created_at, created_at_block) \
+             VALUES ($1, $2, $3, $4, $5, '0', '0') ON CONFLICT DO NOTHING",
+        )
+        .bind(Uuid::from_bytes(prop))
+        .bind(space_3e)
+        .bind(proposer)
+        .bind(now - 3600)
+        .bind(now + 3600)
+        .execute(pool)
+        .await?;
+    }
+
+    // A prior vote on the UPDATED proposal by a NON-editor, so the indexer
+    // delivers "a new version of a proposal you voted on" to that voter.
+    sqlx::query(
+        "INSERT INTO proposal_votes (proposal_id, voter_id, space_id, vote) \
+         VALUES ($1, $2, $3, 'yes') ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(PROP_3E_UPDATED_BYTES))
+    .bind(Uuid::from_bytes(UPDATE_VOTER_BYTES))
+    .bind(space_3e)
     .execute(pool)
     .await?;
 
@@ -716,6 +758,9 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         .map(|b| Uuid::from_bytes(*b).to_string())
         .collect();
     let editor_solo = Uuid::from_bytes(EDITOR_SOLO_BYTES).to_string();
+    // Phase 1 targeted recipients (intentionally NOT editors):
+    let proposer_uid = Uuid::from_bytes(PROPOSER_ID_BYTES).to_string();
+    let update_voter_uid = Uuid::from_bytes(UPDATE_VOTER_BYTES).to_string();
 
     // ===================================================================
     // Total count
@@ -776,28 +821,35 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
     }
 
     // ===================================================================
-    // 3-editor space: 6 event types × 3 editors × 3 webhooks = 54 calls
+    // 3-editor space: 66 calls (editors on every event + targeted recipients)
     // ===================================================================
     let calls_3e: Vec<_> = calls
         .iter()
         .filter(|c| c.body["space_id"].as_str() == Some(space_3e.as_str()))
         .collect();
     r.check(
-        "3-editor space: exactly 54 calls (6 events x 3 editors x 3 webhooks)",
-        calls_3e.len() == 54,
+        "3-editor space: exactly 66 calls (editors + proposer/voter targeting)",
+        calls_3e.len() == 66,
     );
 
-    // Per governance event-type fan-out (3-editor space)
+    // Per governance event-type fan-out (3-editor space). Targeted events add one
+    // non-editor recipient: the proposer (voted/executed/rejected) or a prior
+    // voter (updated).
     for et in GOVERNANCE_EVENT_TYPES {
         let et_calls: Vec<_> = calls_3e
             .iter()
             .filter(|c| c.body["event_type"].as_str() == Some(et))
             .collect();
+        let expected_recipients = match *et {
+            "proposal_voted" | "proposal_executed" | "proposal_rejected" => editors_3e.len() + 1, // + proposer
+            "proposal_updated" => editors_3e.len() + 1, // + prior voter
+            _ => editors_3e.len(),
+        };
         r.check(
-            &format!("3e {}: 9 calls (3 editors x 3 webhooks)", et),
-            et_calls.len() == 9,
+            &format!("3e {}: {} calls", et, expected_recipients * NUM_WEBHOOKS),
+            et_calls.len() == expected_recipients * NUM_WEBHOOKS,
         );
-        // Each editor gets exactly 3 (one per webhook)
+        // Each editor still gets exactly 3 (one per webhook) on every event type.
         for editor_str in &editors_3e {
             let n = et_calls
                 .iter()
@@ -809,6 +861,32 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
             );
         }
     }
+
+    // Phase 1: targeted recipients beyond editors reach non-editors.
+    for et in ["proposal_voted", "proposal_executed", "proposal_rejected"] {
+        let n = calls_3e
+            .iter()
+            .filter(|c| {
+                c.body["event_type"].as_str() == Some(et)
+                    && c.body["user_space_id"].as_str() == Some(proposer_uid.as_str())
+            })
+            .count();
+        r.check(
+            &format!("3e {}: proposer (non-editor) notified on 3 webhooks", et),
+            n == 3,
+        );
+    }
+    let upd_voter_calls = calls_3e
+        .iter()
+        .filter(|c| {
+            c.body["event_type"].as_str() == Some("proposal_updated")
+                && c.body["user_space_id"].as_str() == Some(update_voter_uid.as_str())
+        })
+        .count();
+    r.check(
+        "3e proposal_updated: prior voter (non-editor) notified on 3 webhooks",
+        upd_voter_calls == 3,
+    );
 
     // ===================================================================
     // Every call has user_space_id and it's a known editor
@@ -823,6 +901,9 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         .chain(std::iter::once(&bounty_editor_1))
         .chain(std::iter::once(&bounty_editor_2))
         .chain(std::iter::once(&curator_space))
+        // Phase 1 targeted recipients (non-editors):
+        .chain(std::iter::once(&proposer_uid))
+        .chain(std::iter::once(&update_voter_uid))
         .cloned()
         .collect();
 
@@ -907,13 +988,14 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
     r.check("idempotency keys are unique per (event, user) pair", {
         let keys: std::collections::HashSet<&str> =
             calls.iter().map(|c| c.idempotency_key.as_str()).collect();
-        // 3-editor space: 6 events × 3 editors = 18 distinct keys
-        // 1-editor space: 1 event × 1 editor = 1 distinct key
-        // Bounty interest: 1 event × 2 editors = 2 distinct keys
-        // Bounty allocated: 1 event × 1 curator = 1 distinct key
-        // Bounty payout: 1 event × 1 curator = 1 distinct key
-        // Total: 23
-        keys.len() == 23
+        // 3-editor space: per (event, user) pair —
+        //   created 3 + settings 3 + updated 4 + voted 4 + executed 4 + rejected 4 = 22
+        // 1-editor space: 1 event × 1 editor = 1
+        // Bounty interest: 1 event × 2 editors = 2
+        // Bounty allocated: 1 event × 1 curator = 1
+        // Bounty payout: 1 event × 1 curator = 1
+        // Total: 27
+        keys.len() == 27
     });
 
     // ===================================================================
