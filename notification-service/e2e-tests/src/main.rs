@@ -101,7 +101,8 @@ const NEW_BOUNTY_ENTITY_BYTES: [u8; 16] = [0xBC; 16];
 // A SECOND bounty created in the *same* HermesEdit as the first. This is the
 // idempotency regression fixture: both bounties share (block, sequence), so a
 // per-instance idempotency key is required for both notifications to survive.
-const SECOND_NEW_BOUNTY_ENTITY_BYTES: [u8; 16] = [0xBE; 16];
+// Must differ from every other entity id (notably BOUNTY_ENTITY_BYTES = 0xBE).
+const SECOND_NEW_BOUNTY_ENTITY_BYTES: [u8; 16] = [0xCB; 16];
 
 // Phase 2a — proposal comment fixtures (isolated in their own space so the
 // 3-editor space counts are unaffected).
@@ -763,6 +764,7 @@ async fn produce_test_events(kafka_broker: &str) -> Result<(), Box<dyn std::erro
         SECOND_NEW_BOUNTY_ENTITY_BYTES,
         bounty_type_bytes,
         BOUNTY_SPACE_BYTES,
+        BOUNTY_EDITOR_1_BYTES, // actor/publisher space
         40004,
         1700033000,
         4,
@@ -915,6 +917,10 @@ fn make_two_bounty_created_hermes_edit(
     bounty_b: [u8; 16],
     bounty_type: [u8; 16],
     space_id: [u8; 16],
+    // The actor/publisher space of the edit, used for `authors` (matches the
+    // convention in the other fixtures, where authors is the publisher space —
+    // not the entity being created).
+    author_space: [u8; 16],
     block_number: u64,
     created_at: u64,
     sequence: u32,
@@ -943,7 +949,7 @@ fn make_two_bounty_created_hermes_edit(
     let edit = grc_20::Edit {
         id: edit_id,
         name: Cow::Borrowed("two bounty edit"),
-        authors: vec![bounty_a],
+        authors: vec![author_space],
         created_at: created_at as i64,
         ops: vec![mk_op(bounty_a, [0xD1; 16]), mk_op(bounty_b, [0xD2; 16])],
     };
@@ -953,7 +959,7 @@ fn make_two_bounty_created_hermes_edit(
         id: edit_id.to_vec(),
         name: "two bounty edit".into(),
         payload,
-        authors: vec![bounty_a.to_vec()],
+        authors: vec![author_space.to_vec()],
         language: None,
         space_id: space_id.to_vec(),
         is_canonical: true,
@@ -1287,18 +1293,35 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
             );
         }
     }
-    // Bounty HMAC spot-checks
-    for et in &["bounty_interest", "bounty_allocated", "bounty_payout"] {
+    // Bounty + new-type (bounty_created / proposal_comment / comment) HMAC spot-checks
+    for et in &[
+        "bounty_interest",
+        "bounty_allocated",
+        "bounty_payout",
+        "bounty_created",
+        "proposal_comment",
+        "comment",
+    ] {
         if let Some(call) = calls
             .iter()
             .find(|c| c.body["event_type"].as_str() == Some(et))
         {
             r.check(
-                &format!("bounty {}: valid HMAC", et),
+                &format!("{}: valid HMAC", et),
                 verify_hmac(webhook_secret, &call.raw_body, &call.signature),
             );
         }
     }
+
+    // Blanket check: EVERY delivered webhook carries a valid signature. This is
+    // the root-cause guard — any current or future event type is covered, so a
+    // new type can't silently ship without signature verification.
+    r.check(
+        "all webhook calls have a valid HMAC signature",
+        calls
+            .iter()
+            .all(|c| verify_hmac(webhook_secret, &c.raw_body, &c.signature)),
+    );
 
     // ===================================================================
     // All calls have idempotency key (raw string format: base:user_space_id)
