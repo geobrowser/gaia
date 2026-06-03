@@ -198,6 +198,7 @@ impl Storage {
             WHERE r.from_entity_id = $1
               AND r.type_id = $2
               AND r.to_entity_id = $3
+            ORDER BY r.space_id
             LIMIT 1
             "#,
         )
@@ -226,6 +227,7 @@ impl Storage {
             WHERE from_entity_id = $1
               AND type_id = $2
               AND to_entity_id = $3
+            ORDER BY space_id
             LIMIT 1
             "#,
         )
@@ -363,8 +365,11 @@ impl Storage {
         let reply_to = ids::reply_to_property();
         let mut current = parent;
         for _ in 0..64 {
+            // Deterministic parent choice: an entity could carry multiple `Reply to`
+            // relations; ORDER BY keeps the resolved thread root stable across runs.
             let next: Option<Uuid> = sqlx::query_scalar::<_, Uuid>(
-                "SELECT to_entity_id FROM relations WHERE type_id = $1 AND from_entity_id = $2 LIMIT 1",
+                "SELECT to_entity_id FROM relations WHERE type_id = $1 AND from_entity_id = $2 \
+                 ORDER BY to_entity_id LIMIT 1",
             )
             .bind(reply_to)
             .bind(current)
@@ -418,6 +423,11 @@ impl Storage {
     /// this equals the creator. Used as the root-creator recipient for
     /// non-proposal comment threads (proposals resolve their creator exactly via
     /// `find_proposal_proposer_and_space`).
+    ///
+    /// An entity may have several `Types` relations (multi-typed, or re-typed in
+    /// a later edit). `ORDER BY space_id` makes the choice deterministic across
+    /// runs — still best-effort, but stable, so recipients and the payload
+    /// `space_id` don't flap between replays.
     #[instrument(
         name = "notification_indexer.storage.find_entity_home_space",
         skip(self)
@@ -427,7 +437,8 @@ impl Storage {
         entity_id: Uuid,
     ) -> Result<Option<Uuid>, StorageError> {
         let result = sqlx::query_scalar::<_, Uuid>(
-            "SELECT space_id FROM relations WHERE from_entity_id = $1 AND type_id = $2 LIMIT 1",
+            "SELECT space_id FROM relations WHERE from_entity_id = $1 AND type_id = $2 \
+             ORDER BY space_id LIMIT 1",
         )
         .bind(entity_id)
         .bind(ids::types_relation_type())
@@ -460,6 +471,7 @@ impl Storage {
             WHERE p.end_time < EXTRACT(EPOCH FROM now())
               AND p.executed_at IS NULL
               AND o.id IS NULL
+            ORDER BY p.end_time ASC, p.id
             LIMIT $1
             "#,
         )
