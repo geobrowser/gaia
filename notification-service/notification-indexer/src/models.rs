@@ -859,7 +859,13 @@ pub struct BountyRelationInfo {
 
 /// Build a notification event for a bounty interest expression.
 pub fn handle_bounty_interest(info: &BountyRelationInfo) -> NotificationEvent {
-    let idempotency_base = format!("{}:{}:bounty_interest", info.block_number, info.sequence);
+    // Include relation_id: a single edit can carry multiple interest relations,
+    // all sharing (block, sequence). Without the relation id they'd hash to the
+    // same per-user key and all but one would be silently dropped on insert.
+    let idempotency_base = format!(
+        "{}:{}:bounty_interest:{}",
+        info.block_number, info.sequence, info.relation_id
+    );
 
     NotificationEvent {
         event_type: NotificationEventType::BountyInterest,
@@ -890,7 +896,12 @@ pub fn handle_bounty_interest(info: &BountyRelationInfo) -> NotificationEvent {
 
 /// Build a notification event for a bounty allocation.
 pub fn handle_bounty_allocated(info: &BountyRelationInfo) -> NotificationEvent {
-    let idempotency_base = format!("{}:{}:bounty_allocated", info.block_number, info.sequence);
+    // Include relation_id — a single edit can carry multiple allocation
+    // relations sharing (block, sequence); see handle_bounty_interest.
+    let idempotency_base = format!(
+        "{}:{}:bounty_allocated:{}",
+        info.block_number, info.sequence, info.relation_id
+    );
 
     NotificationEvent {
         event_type: NotificationEventType::BountyAllocated,
@@ -923,7 +934,12 @@ pub fn handle_bounty_allocated(info: &BountyRelationInfo) -> NotificationEvent {
 
 /// Build a notification event for a bounty payout.
 pub fn handle_bounty_payout(info: &BountyRelationInfo) -> NotificationEvent {
-    let idempotency_base = format!("{}:{}:bounty_payout", info.block_number, info.sequence);
+    // Include relation_id — a single edit can carry multiple payout relations
+    // sharing (block, sequence); see handle_bounty_interest.
+    let idempotency_base = format!(
+        "{}:{}:bounty_payout:{}",
+        info.block_number, info.sequence, info.relation_id
+    );
 
     NotificationEvent {
         event_type: NotificationEventType::BountyPayout,
@@ -1037,7 +1053,13 @@ pub struct BountyCreatedInfo {
 
 /// Build a notification event for a newly-created bounty.
 pub fn handle_bounty_created(info: &BountyCreatedInfo) -> NotificationEvent {
-    let idempotency_base = format!("{}:{}:bounty_created", info.block_number, info.sequence);
+    // Include bounty_entity_id: extract_bounty_created can return several new
+    // bounties from one edit, all sharing (block, sequence). The entity id makes
+    // each logical event unique so none are dropped as false duplicates.
+    let idempotency_base = format!(
+        "{}:{}:bounty_created:{}",
+        info.block_number, info.sequence, info.bounty_entity_id
+    );
 
     NotificationEvent {
         event_type: NotificationEventType::BountyCreated,
@@ -1126,7 +1148,13 @@ pub struct ProposalCommentInfo {
 
 /// Build a notification event for a comment on a proposal.
 pub fn handle_proposal_comment(info: &ProposalCommentInfo) -> NotificationEvent {
-    let idempotency_base = format!("{}:{}:proposal_comment", info.block_number, info.sequence);
+    // Include comment_entity_id: extract_proposal_comments can return multiple
+    // comments from one edit, all sharing (block, sequence). The comment entity
+    // id makes each logical event unique so none are dropped as false duplicates.
+    let idempotency_base = format!(
+        "{}:{}:proposal_comment:{}",
+        info.block_number, info.sequence, info.comment_entity_id
+    );
 
     NotificationEvent {
         event_type: NotificationEventType::ProposalComment,
@@ -1238,7 +1266,13 @@ pub struct CommentThreadInfo {
 
 /// Build a notification event for a comment/reply in a thread.
 pub fn handle_comment(info: &CommentThreadInfo) -> NotificationEvent {
-    let idempotency_base = format!("{}:{}:comment", info.block_number, info.sequence);
+    // Include comment_entity_id: a single edit can carry multiple thread
+    // comments sharing (block, sequence). The comment entity id (globally unique)
+    // makes each logical event unique so none are dropped as false duplicates.
+    let idempotency_base = format!(
+        "{}:{}:comment:{}",
+        info.block_number, info.sequence, info.comment_entity_id
+    );
 
     NotificationEvent {
         event_type: NotificationEventType::Comment,
@@ -1720,7 +1754,10 @@ mod tests {
         let event = handle_bounty_interest(&info);
 
         assert_eq!(event.event_type, NotificationEventType::BountyInterest);
-        assert_eq!(event.idempotency_key, "50000:7:bounty_interest");
+        assert_eq!(
+            event.idempotency_key,
+            format!("50000:7:bounty_interest:{}", info.relation_id)
+        );
 
         let json = serde_json::to_value(&event.payload).expect("should serialize");
         assert_eq!(json["event_type"], "bounty_interest");
@@ -1748,7 +1785,10 @@ mod tests {
         let event = handle_bounty_allocated(&info);
 
         assert_eq!(event.event_type, NotificationEventType::BountyAllocated);
-        assert_eq!(event.idempotency_key, "50000:7:bounty_allocated");
+        assert_eq!(
+            event.idempotency_key,
+            format!("50000:7:bounty_allocated:{}", info.relation_id)
+        );
 
         let json = serde_json::to_value(&event.payload).expect("should serialize");
         assert_eq!(json["event_type"], "bounty_allocated");
@@ -1768,7 +1808,10 @@ mod tests {
         let event = handle_bounty_payout(&info);
 
         assert_eq!(event.event_type, NotificationEventType::BountyPayout);
-        assert_eq!(event.idempotency_key, "50000:7:bounty_payout");
+        assert_eq!(
+            event.idempotency_key,
+            format!("50000:7:bounty_payout:{}", info.relation_id)
+        );
 
         let json = serde_json::to_value(&event.payload).expect("should serialize");
         assert_eq!(json["event_type"], "bounty_payout");
@@ -1892,7 +1935,10 @@ mod tests {
         let event = handle_bounty_interest(&info);
 
         assert_eq!(event.event_type, NotificationEventType::BountyInterest);
-        assert_eq!(event.idempotency_key, "50000:7:bounty_interest");
+        assert_eq!(
+            event.idempotency_key,
+            format!("50000:7:bounty_interest:{}", info.relation_id)
+        );
 
         let json = serde_json::to_value(&event.payload).expect("should serialize");
         assert_eq!(json["event_type"], "bounty_interest");
@@ -1943,7 +1989,10 @@ mod tests {
         let event = handle_bounty_allocated(&info);
 
         assert_eq!(event.event_type, NotificationEventType::BountyAllocated);
-        assert_eq!(event.idempotency_key, "50000:7:bounty_allocated");
+        assert_eq!(
+            event.idempotency_key,
+            format!("50000:7:bounty_allocated:{}", info.relation_id)
+        );
 
         let json = serde_json::to_value(&event.payload).expect("should serialize");
         assert_eq!(json["event_type"], "bounty_allocated");
@@ -2001,7 +2050,10 @@ mod tests {
         let event = handle_bounty_payout(&info);
 
         assert_eq!(event.event_type, NotificationEventType::BountyPayout);
-        assert_eq!(event.idempotency_key, "50000:7:bounty_payout");
+        assert_eq!(
+            event.idempotency_key,
+            format!("50000:7:bounty_payout:{}", info.relation_id)
+        );
 
         let json = serde_json::to_value(&event.payload).expect("should serialize");
         assert_eq!(json["event_type"], "bounty_payout");
@@ -2082,7 +2134,7 @@ mod tests {
 
     #[test]
     fn test_bounty_idempotency_keys_differ_by_block() {
-        let mut info1 = make_bounty_info();
+        let info1 = make_bounty_info();
         let mut info2 = make_bounty_info();
         info2.block_number = 50001;
 
@@ -2093,13 +2145,114 @@ mod tests {
 
     #[test]
     fn test_bounty_idempotency_keys_differ_by_sequence() {
-        let mut info1 = make_bounty_info();
+        let info1 = make_bounty_info();
         let mut info2 = make_bounty_info();
         info2.sequence = 8;
 
         let event1 = handle_bounty_interest(&info1);
         let event2 = handle_bounty_interest(&info2);
         assert_ne!(event1.idempotency_key, event2.idempotency_key);
+    }
+
+    // -----------------------------------------------------------------------
+    // Same-edit uniqueness: multiple logical events of the same type from one
+    // HermesEdit share (block, sequence) but must NOT collide on the idempotency
+    // key, or all-but-one would be silently dropped by the outbox ON CONFLICT.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bounty_relations_same_edit_differ_by_relation_id() {
+        // Two interest relations in one edit: same block/sequence, different
+        // relation_id (and even the same bounty/curator) must yield distinct keys.
+        let mut a = make_bounty_info();
+        let mut b = make_bounty_info();
+        a.relation_id = Uuid::from_bytes([0xA1; 16]);
+        b.relation_id = Uuid::from_bytes([0xB2; 16]);
+
+        for build in [
+            handle_bounty_interest,
+            handle_bounty_allocated,
+            handle_bounty_payout,
+        ] {
+            let ka = build(&a).idempotency_key;
+            let kb = build(&b).idempotency_key;
+            assert_ne!(
+                ka, kb,
+                "same-edit relations must not share an idempotency key"
+            );
+            assert!(ka.contains(&a.relation_id.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_bounty_created_same_edit_differ_by_entity() {
+        // Two bounties created in one edit must not collide.
+        let base = BountyCreatedInfo {
+            bounty_entity_id: Uuid::from_bytes([0x01; 16]),
+            space_id: Uuid::from_bytes([0x5E; 16]),
+            block_number: 100,
+            sequence: 0,
+            timestamp: 1700000000,
+        };
+        let other = BountyCreatedInfo {
+            bounty_entity_id: Uuid::from_bytes([0x02; 16]),
+            ..base.clone()
+        };
+        let k1 = handle_bounty_created(&base).idempotency_key;
+        let k2 = handle_bounty_created(&other).idempotency_key;
+        assert_ne!(k1, k2);
+        assert_eq!(
+            k1,
+            format!("100:0:bounty_created:{}", base.bounty_entity_id)
+        );
+    }
+
+    #[test]
+    fn test_proposal_comment_same_edit_differ_by_comment() {
+        // Two proposal comments in one edit must not collide.
+        let base = ProposalCommentInfo {
+            comment_entity_id: Uuid::from_bytes([0xC1; 16]),
+            proposal_id: Uuid::from_bytes([0x9A; 16]),
+            commenter_space_id: Uuid::from_bytes([0x11; 16]),
+            proposal_space_id: Uuid::from_bytes([0x5E; 16]),
+            block_number: 100,
+            sequence: 2,
+            timestamp: 1700000000,
+        };
+        let other = ProposalCommentInfo {
+            comment_entity_id: Uuid::from_bytes([0xC2; 16]),
+            ..base.clone()
+        };
+        let k1 = handle_proposal_comment(&base).idempotency_key;
+        let k2 = handle_proposal_comment(&other).idempotency_key;
+        assert_ne!(k1, k2);
+        assert_eq!(
+            k1,
+            format!("100:2:proposal_comment:{}", base.comment_entity_id)
+        );
+    }
+
+    #[test]
+    fn test_comment_thread_same_edit_differ_by_comment() {
+        // Two thread comments in one edit must not collide.
+        let base = CommentThreadInfo {
+            comment_entity_id: Uuid::from_bytes([0xC1; 16]),
+            parent_id: Uuid::from_bytes([0x91; 16]),
+            root_id: Uuid::from_bytes([0x9A; 16]),
+            commenter_space_id: Uuid::from_bytes([0x11; 16]),
+            root_space_id: Uuid::from_bytes([0x5E; 16]),
+            block_number: 100,
+            sequence: 4,
+            timestamp: 1700000000,
+        };
+        let other = CommentThreadInfo {
+            comment_entity_id: Uuid::from_bytes([0xC2; 16]),
+            ..base.clone()
+        };
+        let k1 = handle_comment(&base).idempotency_key;
+        let k2 = handle_comment(&other).idempotency_key;
+        assert_ne!(k1, k2);
+        assert_eq!(k1, format!("100:4:comment:{}", base.comment_entity_id));
     }
 
     // -----------------------------------------------------------------------
@@ -2965,5 +3118,186 @@ mod tests {
         );
         // not a governance/proposal payload
         assert!(json.get("proposal_id").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Adversarial: try to BREAK idempotency by packing multiple same-type
+    // events into one HermesEdit payload (they share block+sequence). These go
+    // through the real decode -> extract -> handle path, not hand-built Info
+    // structs, so they guard the fix against regressions at the seam where the
+    // old {block}:{seq}:{event_type} key collided.
+    // -----------------------------------------------------------------------
+
+    /// Wrap a set of GRC-20 ops into a HermesEdit at a fixed block/sequence.
+    fn make_edit_with_ops(
+        ops: Vec<grc_20::Op<'static>>,
+        space_id: [u8; 16],
+        block_number: u64,
+        sequence: u32,
+    ) -> hermes_schema::pb::knowledge::HermesEdit {
+        use std::borrow::Cow;
+        let edit = grc_20::Edit {
+            id: [0x77; 16],
+            name: Cow::Borrowed("adversarial edit"),
+            authors: vec![[0xAA; 16]],
+            created_at: 1700000000,
+            ops,
+        };
+        let payload = grc_20::encode_edit(&edit).expect("encode should succeed");
+        hermes_schema::pb::knowledge::HermesEdit {
+            id: vec![0x77; 16],
+            name: "adversarial".into(),
+            payload,
+            authors: vec![vec![0xAA; 16]],
+            language: None,
+            space_id: space_id.to_vec(),
+            is_canonical: true,
+            meta: Some(BlockchainMetadata {
+                block_number,
+                created_at: 1700000000,
+                created_by: vec![],
+                cursor: String::new(),
+                sequence,
+                is_last: false,
+            }),
+        }
+    }
+
+    fn create_relation(
+        id: [u8; 16],
+        relation_type: [u8; 16],
+        from: [u8; 16],
+        to: [u8; 16],
+    ) -> grc_20::Op<'static> {
+        grc_20::Op::CreateRelation(grc_20::CreateRelation {
+            id,
+            relation_type,
+            from,
+            from_is_value_ref: false,
+            to,
+            to_is_value_ref: false,
+            from_space: None,
+            from_version: None,
+            to_space: None,
+            to_version: None,
+            entity: None,
+            position: None,
+            context: None,
+        })
+    }
+
+    #[test]
+    fn idempotency_break_many_bounty_interest_in_one_edit() {
+        // Three interest relations in ONE edit for the SAME bounty by the SAME
+        // curator — the worst case: everything identical except relation_id.
+        let config = BountyConfig::default();
+        let interest = *Uuid::parse_str(DEFAULT_INTEREST_TYPE_ID)
+            .expect("valid")
+            .as_bytes();
+        let bounty = [0x20; 16];
+        let curator = [0x10; 16];
+        let ops = vec![
+            create_relation([0x01; 16], interest, curator, bounty),
+            create_relation([0x02; 16], interest, curator, bounty),
+            create_relation([0x03; 16], interest, curator, bounty),
+        ];
+        let edit = make_edit_with_ops(ops, [0x40; 16], 100, 0);
+
+        let relations = extract_bounty_relations(&edit, &config).expect("extract");
+        assert_eq!(relations.len(), 3, "all three interest relations extracted");
+
+        let keys: std::collections::HashSet<String> = relations
+            .iter()
+            .map(|(info, _)| handle_bounty_interest(info).idempotency_key)
+            .collect();
+        assert_eq!(
+            keys.len(),
+            3,
+            "three same-edit interest relations must yield three distinct keys"
+        );
+        // All share the old prefix — proving relation_id is what disambiguates.
+        assert!(keys.iter().all(|k| k.starts_with("100:0:bounty_interest:")));
+    }
+
+    #[test]
+    fn idempotency_break_many_bounties_created_in_one_edit() {
+        let types = crate::ids::types_relation_type().into_bytes();
+        let bounty_type = crate::ids::bounty_type().into_bytes();
+        // Four new bounties typed in one edit.
+        let ops: Vec<grc_20::Op> = (0u8..4)
+            .map(|i| create_relation([0xF0 + i; 16], types, [0xB0 + i; 16], bounty_type))
+            .collect();
+        let edit = make_edit_with_ops(ops, [0x40; 16], 200, 1);
+
+        let created = extract_bounty_created(&edit).expect("extract");
+        assert_eq!(created.len(), 4);
+
+        let keys: std::collections::HashSet<String> = created
+            .iter()
+            .map(|info| handle_bounty_created(info).idempotency_key)
+            .collect();
+        assert_eq!(
+            keys.len(),
+            4,
+            "four bounties created in one edit must yield four distinct keys"
+        );
+        assert!(keys.iter().all(|k| k.starts_with("200:1:bounty_created:")));
+    }
+
+    #[test]
+    fn idempotency_break_many_comments_in_one_edit() {
+        let types = crate::ids::types_relation_type().into_bytes();
+        let comment_type = crate::ids::comment_type().into_bytes();
+        let reply_to = crate::ids::reply_to_property().into_bytes();
+        let parent = [0x9A; 16];
+        // Two distinct comment entities, each typed as Comment and replying to
+        // the same parent, in one edit.
+        let c1 = [0xC1; 16];
+        let c2 = [0xC2; 16];
+        let ops = vec![
+            create_relation([0x01; 16], types, c1, comment_type),
+            create_relation([0x02; 16], reply_to, c1, parent),
+            create_relation([0x03; 16], types, c2, comment_type),
+            create_relation([0x04; 16], reply_to, c2, parent),
+        ];
+        let edit = make_edit_with_ops(ops, [0x50; 16], 300, 2);
+
+        let comments = extract_proposal_comments(&edit).expect("extract");
+        assert_eq!(comments.len(), 2, "both comments extracted");
+
+        // proposal_comment path
+        let pc_keys: std::collections::HashSet<String> = comments
+            .iter()
+            .map(|info| handle_proposal_comment(info).idempotency_key)
+            .collect();
+        assert_eq!(
+            pc_keys.len(),
+            2,
+            "two comments -> two proposal_comment keys"
+        );
+        assert!(pc_keys
+            .iter()
+            .all(|k| k.starts_with("300:2:proposal_comment:")));
+
+        // general comment-thread path (Phase 2b / #706) — same edit, must also
+        // produce distinct keys.
+        let thread_keys: std::collections::HashSet<String> = comments
+            .iter()
+            .map(|info| {
+                let cinfo = CommentThreadInfo {
+                    comment_entity_id: info.comment_entity_id,
+                    parent_id: info.proposal_id,
+                    root_id: Uuid::from_bytes(parent),
+                    commenter_space_id: info.commenter_space_id,
+                    root_space_id: Uuid::from_bytes([0x5E; 16]),
+                    block_number: info.block_number,
+                    sequence: info.sequence,
+                    timestamp: info.timestamp,
+                };
+                handle_comment(&cinfo).idempotency_key
+            })
+            .collect();
+        assert_eq!(thread_keys.len(), 2, "two comments -> two comment keys");
+        assert!(thread_keys.iter().all(|k| k.starts_with("300:2:comment:")));
     }
 }

@@ -98,6 +98,10 @@ const PAYOUT_TYPE_BYTES: [u8; 16] = [
 
 // Phase 3a — bounty created: a NEW bounty entity created in the bounty space.
 const NEW_BOUNTY_ENTITY_BYTES: [u8; 16] = [0xBC; 16];
+// A SECOND bounty created in the *same* HermesEdit as the first. This is the
+// idempotency regression fixture: both bounties share (block, sequence), so a
+// per-instance idempotency key is required for both notifications to survive.
+const SECOND_NEW_BOUNTY_ENTITY_BYTES: [u8; 16] = [0xBE; 16];
 
 // Phase 2a — proposal comment fixtures (isolated in their own space so the
 // 3-editor space counts are unaffected).
@@ -135,7 +139,8 @@ const NUM_WEBHOOKS: usize = 3;
 // Bounty interest:  1 event × 2 editors × 3 = 6
 // Bounty allocated: 1 event × 1 curator × 3 = 3
 // Bounty payout:    1 event × 1 curator × 3 = 3
-// Bounty created:   1 event × 2 bounty editors × 3 = 6   (Phase 3a)
+// Bounty created:   2 bounties (one edit) × 2 bounty editors × 3 = 12  (Phase 3a;
+//                   both survive only because idempotency keys are per-bounty)
 // Proposal comment: 1 event × 1 proposer × 3 = 3         (Phase 2a; the non-member
 //                   comment is filtered out and produces 0 calls)
 // Comment thread:   1 reply × 2 recipients × 3 = 6       (Phase 2b; prior participant
@@ -144,7 +149,7 @@ const NUM_WEBHOOKS: usize = 3;
 // The proposer (0x02), prior voter (0x0B), and comment proposer (0x73) are
 // intentionally NOT editors, so these counts also prove targeted delivery
 // reaches non-editors.
-const EXPECTED_CALLS: usize = 66 + 3 + 6 + 3 + 3 + 6 + 3 + 6;
+const EXPECTED_CALLS: usize = 66 + 3 + 6 + 3 + 3 + 12 + 3 + 6;
 
 const GOVERNANCE_EVENT_TYPES: &[&str] = &[
     "proposal_created",
@@ -750,13 +755,14 @@ async fn produce_test_events(kafka_broker: &str) -> Result<(), Box<dyn std::erro
     let bounty_type_bytes = Uuid::parse_str("808af0ba-d588-4e33-91f0-9dd4b25e18be")
         .expect("valid Bounty type id")
         .into_bytes();
-    let bounty_created_edit = make_bounty_hermes_edit(
-        [0xBD; 16],
+    // Two bounties created in ONE edit (shared block/sequence) — exercises the
+    // idempotency-key fix: without per-bounty keys the second would be dropped.
+    let bounty_created_edit = make_two_bounty_created_hermes_edit(
         types_bytes,
         NEW_BOUNTY_ENTITY_BYTES,
+        SECOND_NEW_BOUNTY_ENTITY_BYTES,
         bounty_type_bytes,
         BOUNTY_SPACE_BYTES,
-        None,
         40004,
         1700033000,
         4,
@@ -884,6 +890,70 @@ fn make_bounty_hermes_edit(
         name: "bounty edit".into(),
         payload,
         authors: vec![from.to_vec()],
+        language: None,
+        space_id: space_id.to_vec(),
+        is_canonical: true,
+        meta: Some(hermes_schema::pb::blockchain_metadata::BlockchainMetadata {
+            created_at,
+            created_by: vec![],
+            block_number,
+            cursor: String::new(),
+            sequence,
+            is_last: false,
+        }),
+    }
+}
+
+/// Build a HermesEdit that creates *two* bounties (two `Types → Bounty`
+/// relations) in a single edit. Both ops share the edit's (block, sequence),
+/// which is exactly the condition under which the old `{block}:{seq}:bounty_created`
+/// idempotency key collided and silently dropped the second notification.
+#[allow(clippy::too_many_arguments)]
+fn make_two_bounty_created_hermes_edit(
+    relation_type: [u8; 16],
+    bounty_a: [u8; 16],
+    bounty_b: [u8; 16],
+    bounty_type: [u8; 16],
+    space_id: [u8; 16],
+    block_number: u64,
+    created_at: u64,
+    sequence: u32,
+) -> hermes_schema::pb::knowledge::HermesEdit {
+    use std::borrow::Cow;
+
+    let mk_op = |entity: [u8; 16], rel_id: [u8; 16]| {
+        grc_20::Op::CreateRelation(grc_20::CreateRelation {
+            id: rel_id,
+            relation_type,
+            from: entity,
+            from_is_value_ref: false,
+            to: bounty_type,
+            to_is_value_ref: false,
+            from_space: None,
+            from_version: None,
+            to_space: None,
+            to_version: None,
+            entity: None,
+            position: None,
+            context: None,
+        })
+    };
+
+    let edit_id = [0xBF; 16];
+    let edit = grc_20::Edit {
+        id: edit_id,
+        name: Cow::Borrowed("two bounty edit"),
+        authors: vec![bounty_a],
+        created_at: created_at as i64,
+        ops: vec![mk_op(bounty_a, [0xD1; 16]), mk_op(bounty_b, [0xD2; 16])],
+    };
+    let payload = grc_20::encode_edit(&edit).expect("GRC-20 encode should succeed");
+
+    hermes_schema::pb::knowledge::HermesEdit {
+        id: edit_id.to_vec(),
+        name: "two bounty edit".into(),
+        payload,
+        authors: vec![bounty_a.to_vec()],
         language: None,
         space_id: space_id.to_vec(),
         is_canonical: true,
@@ -1257,11 +1327,11 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         // Bounty interest: 1 event × 2 editors = 2
         // Bounty allocated: 1 event × 1 curator = 1
         // Bounty payout: 1 event × 1 curator = 1
-        // Bounty created: 1 event × 2 bounty editors = 2
+        // Bounty created: 2 bounties (one edit) × 2 bounty editors = 4
         // Proposal comment: 1 event × 1 proposer = 1
         // Comment thread: 1 reply × 2 recipients = 2
-        // Total: 32
-        keys.len() == 32
+        // Total: 34
+        keys.len() == 34
     });
 
     // ===================================================================
@@ -1768,16 +1838,19 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         );
     }
 
-    // --- Phase 3a: bounty_created — 2 bounty-space editors × 3 webhooks = 6 ---
+    // --- Phase 3a: bounty_created — TWO bounties in one edit, 2 bounty-space
+    //     editors × 3 webhooks each = 12. Both bounties surviving proves the
+    //     per-bounty idempotency key fix (the old key dropped the second). ---
     let new_bounty_entity = Uuid::from_bytes(NEW_BOUNTY_ENTITY_BYTES).to_string();
+    let second_bounty_entity = Uuid::from_bytes(SECOND_NEW_BOUNTY_ENTITY_BYTES).to_string();
     let bounty_space = Uuid::from_bytes(BOUNTY_SPACE_BYTES).to_string();
     let created_calls: Vec<_> = calls
         .iter()
         .filter(|c| c.body["event_type"].as_str() == Some("bounty_created"))
         .collect();
     r.check(
-        "bounty_created: 6 calls (2 bounty editors x 3 webhooks)",
-        created_calls.len() == 6,
+        "bounty_created: 12 calls (2 bounties x 2 editors x 3 webhooks)",
+        created_calls.len() == 12,
     );
     if let Some(call) = created_calls.first() {
         r.check(
@@ -1785,12 +1858,22 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
             call.body["category"].as_str() == Some("bounty"),
         );
         r.check(
-            "bounty_created: correct bounty_entity_id",
-            call.body["bounty_entity_id"].as_str() == Some(new_bounty_entity.as_str()),
-        );
-        r.check(
             "bounty_created: correct bounty_space_id",
             call.body["bounty_space_id"].as_str() == Some(bounty_space.as_str()),
+        );
+    }
+    // Both bounties from the single edit must each produce notifications.
+    for (label, entity) in [
+        ("first", &new_bounty_entity),
+        ("second", &second_bounty_entity),
+    ] {
+        let n = created_calls
+            .iter()
+            .filter(|c| c.body["bounty_entity_id"].as_str() == Some(entity.as_str()))
+            .count();
+        r.check(
+            &format!("bounty_created: {label} bounty delivered (2 editors x 3 webhooks = 6)"),
+            n == 6,
         );
     }
     for editor in [&bounty_editor_1, &bounty_editor_2] {
@@ -1799,8 +1882,11 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
             .filter(|c| c.body["user_space_id"].as_str() == Some(editor.as_str()))
             .count();
         r.check(
-            &format!("bounty_created: editor {}.. got 3 deliveries", &editor[..8]),
-            n == 3,
+            &format!(
+                "bounty_created: editor {}.. got 6 deliveries (2 bounties x 3)",
+                &editor[..8]
+            ),
+            n == 6,
         );
     }
 
