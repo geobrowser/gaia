@@ -109,7 +109,9 @@ message SetTopicAction {
 }
 
 // Decoded action: unset the current space topic
-message UnsetTopicAction {}
+message UnsetTopicAction {
+  bytes target_topic_id = 1;  // 16 bytes - topic entity ID
+}
 
 // Action to be executed when proposal passes
 message ProposalAction {

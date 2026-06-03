@@ -472,13 +472,18 @@ impl Storage {
     }
 
     /// Clear the topic assignment from a space.
+    ///
+    /// Only clears when the removed `topic_id` matches the currently-set topic,
+    /// guarding against a stale/out-of-order unset clearing a newer topic.
     pub async fn clear_space_topic(
         &self,
         space_id: Uuid,
+        topic_id: Uuid,
         tx: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<(), IndexerError> {
-        sqlx::query("UPDATE spaces SET topic_id = NULL WHERE id = $1")
+        sqlx::query("UPDATE spaces SET topic_id = NULL WHERE id = $1 AND topic_id = $2")
             .bind(space_id)
+            .bind(topic_id)
             .execute(&mut **tx)
             .await?;
 
@@ -998,7 +1003,12 @@ impl Storage {
                     target_id = Some(*id);
                     "SetTopic"
                 }
-                ProposalActionPayload::UnsetTopic => "UnsetTopic",
+                ProposalActionPayload::UnsetTopic {
+                    target_topic_id: id,
+                } => {
+                    target_id = Some(*id);
+                    "UnsetTopic"
+                }
                 ProposalActionPayload::Unknown => "Unknown",
             };
 

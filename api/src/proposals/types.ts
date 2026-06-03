@@ -265,6 +265,8 @@ export interface SetTopicAction {
  */
 export interface UnsetTopicAction {
 	actionType: "UNSET_TOPIC"
+	/** Topic entity ID */
+	targetTopicId: string
 }
 
 /**

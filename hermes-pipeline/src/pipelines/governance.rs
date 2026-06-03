@@ -367,7 +367,9 @@ fn decode_ping_governance_action(calldata: &[u8]) -> Option<proposal_action::Act
                 warn!("All-zero target ID in ping unset-topic action, storing as Unknown");
                 return None;
             }
-            Some(proposal_action::Action::UnsetTopic(UnsetTopicAction {}))
+            Some(proposal_action::Action::UnsetTopic(UnsetTopicAction {
+                target_topic_id: target,
+            }))
         }
         x if x == actions::SUBSPACE_VERIFIED
             || x == actions::SUBSPACE_UNVERIFIED
@@ -1624,7 +1626,9 @@ mod tests {
 
         let result = decode_ping_governance_action(&calldata);
         match result {
-            Some(proposal_action::Action::UnsetTopic(_)) => {}
+            Some(proposal_action::Action::UnsetTopic(action)) => {
+                assert_eq!(action.target_topic_id, target_id.to_vec());
+            }
             other => panic!("Expected UnsetTopic, got {other:?}"),
         }
     }

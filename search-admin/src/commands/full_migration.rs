@@ -108,7 +108,10 @@ impl FullMigrationCommand {
         println!();
         println!("Next steps:");
         println!("  1. Monitor the search-indexer logs for any issues:");
-        println!("     kubectl logs -n {} -l app={} -f", self.namespace, self.statefulset_name);
+        println!(
+            "     kubectl logs -n {} -l app={} -f",
+            self.namespace, self.statefulset_name
+        );
         println!();
         println!("  2. Verify search functionality in your application");
         println!();
@@ -240,7 +243,10 @@ impl FullMigrationCommand {
                 .context("Failed to get statefulset status")?;
 
             if let Some(status) = sts.status {
-                let ready_replicas = status.ready_replicas.or(status.available_replicas).unwrap_or(0);
+                let ready_replicas = status
+                    .ready_replicas
+                    .or(status.available_replicas)
+                    .unwrap_or(0);
 
                 if ready_replicas == 0 {
                     info!("All replicas terminated");
@@ -592,7 +598,10 @@ impl FullMigrationCommand {
             .await
             .context("Failed to update statefulset")?;
 
-        println!("✓ Updated ENTITIES_INDEX_VERSION to {}", self.target_version);
+        println!(
+            "✓ Updated ENTITIES_INDEX_VERSION to {}",
+            self.target_version
+        );
         println!("✓ Scaled up {} to 1 replica", self.statefulset_name);
         println!();
         println!("⏳ Waiting for pod to be ready...");

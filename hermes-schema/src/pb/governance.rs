@@ -85,8 +85,12 @@ pub struct SetTopicAction {
     pub target_topic_id: ::prost::alloc::vec::Vec<u8>,
 }
 /// Decoded action: unset the current space topic
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct UnsetTopicAction {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnsetTopicAction {
+    /// 16 bytes - topic entity ID
+    #[prost(bytes = "vec", tag = "1")]
+    pub target_topic_id: ::prost::alloc::vec::Vec<u8>,
+}
 /// Decoded action: update voting settings
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct UpdateVotingSettingsAction {

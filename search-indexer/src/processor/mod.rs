@@ -11,8 +11,7 @@ use tokio::task::JoinHandle;
 
 use crate::consumer::StreamMessage;
 use crate::consumer::{
-    EntityEvent, EntityEventType, ScoreEvent, ScoreEventType, SpaceTopicEvent,
-    SpaceTopicEventKind,
+    EntityEvent, EntityEventType, ScoreEvent, ScoreEventType, SpaceTopicEvent, SpaceTopicEventKind,
 };
 use crate::errors::IngestError;
 use crate::lookup::EntitySpaceLookup;
@@ -569,6 +568,22 @@ impl Processor {
                     processed.push(ProcessedEvent::Index(doc));
                 }
                 SpaceTopicEventKind::Removed => {
+                    // Topic-aware removal: only clear when the removed topic is the
+                    // one currently set for this space. Guards against a stale or
+                    // out-of-order removal clearing a newer topic. A cache miss means
+                    // no topic is currently set, so the removal is a no-op.
+                    if self.space_topic_cache.get(&event.space_id) != Some(&event.topic_entity_id) {
+                        if self.should_sample(SampleCategory::UpdateSpaceTopicEntityId) {
+                            info!(
+                                space_id = %event.space_id,
+                                topic_entity_id = %event.topic_entity_id,
+                                cached_topic_entity_id = ?self.space_topic_cache.get(&event.space_id),
+                                "[sample] Skipping ClearSpaceTopicEntityId — removed topic does not match current"
+                            );
+                        }
+                        continue;
+                    }
+
                     self.space_topic_cache.remove(&event.space_id);
 
                     if self.should_sample(SampleCategory::UpdateSpaceTopicEntityId) {
@@ -595,7 +610,8 @@ impl Processor {
         // Resolve space_id → entity docs via Postgres, or fall back to update_by_query.
         // Use the same Postgres call for both kinds so we don't double-query when a
         // declare + remove for different spaces land in the same batch.
-        let mut fast_path_spaces: Vec<Uuid> = declared_updates.iter().map(|(sid, _)| *sid).collect();
+        let mut fast_path_spaces: Vec<Uuid> =
+            declared_updates.iter().map(|(sid, _)| *sid).collect();
         fast_path_spaces.extend(removed_spaces.iter().copied());
 
         if !fast_path_spaces.is_empty() {
@@ -2004,6 +2020,56 @@ mod tests {
             assert_eq!(
                 doc.space_topic_entity_id, None,
                 "After Removed, subsequent upserts must not auto-tag the removed topic"
+            );
+        } else {
+            panic!("Expected ProcessedEvent::Index");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_space_topic_batch_removed_non_matching_topic_is_noop() {
+        // The space currently has `current_topic`; a Removed event arrives for a
+        // different (stale) topic. The current topic must be preserved.
+        let space_id = Uuid::new_v4();
+        let current_topic = Uuid::new_v4();
+        let stale_topic = Uuid::new_v4();
+        let mut cache = HashMap::new();
+        cache.insert(space_id, current_topic);
+        let mut processor = Processor::with_space_topic_cache(cache, 0);
+        assert_eq!(processor.space_topic_cache_len(), 1);
+
+        let events = vec![SpaceTopicEvent {
+            space_id,
+            topic_entity_id: stale_topic,
+            kind: SpaceTopicEventKind::Removed,
+        }];
+        let processed = processor.process_space_topic_batch(events).await.unwrap();
+
+        // Non-matching removal must not emit any clear ops.
+        assert!(
+            processed.is_empty(),
+            "Non-matching Removed must not emit clear events, got: {processed:?}"
+        );
+
+        // Cache must still carry the current topic.
+        assert_eq!(processor.space_topic_cache_len(), 1);
+
+        // A subsequent upsert in that space should still carry the current topic.
+        let event = EntityEvent::upsert(
+            Uuid::new_v4(),
+            space_id,
+            Some("Entity".to_string()),
+            None,
+            None,
+            None,
+            None,
+        );
+        let result = processor.process_event(event).unwrap();
+        if let Some(ProcessedEvent::Index(doc)) = result {
+            assert_eq!(
+                doc.space_topic_entity_id,
+                Some(current_topic.to_string()),
+                "A stale Removed must not clear the still-current topic"
             );
         } else {
             panic!("Expected ProcessedEvent::Index");

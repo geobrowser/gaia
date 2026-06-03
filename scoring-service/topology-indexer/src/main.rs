@@ -113,8 +113,7 @@ async fn async_main() -> Result<(), IndexerError> {
         tokio::time::interval(tokio::time::Duration::from_millis(batch_timeout_ms));
     let mut processed_count: u64 = 0;
     let mut error_count: u64 = 0;
-    let mut heartbeat_timer =
-        tokio::time::interval(tokio::time::Duration::from_secs(60));
+    let mut heartbeat_timer = tokio::time::interval(tokio::time::Duration::from_secs(60));
     heartbeat_timer.tick().await; // skip immediate first tick
 
     info!(

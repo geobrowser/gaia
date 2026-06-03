@@ -1144,7 +1144,9 @@ async fn process_message(
         }
         KgMessage::TopicRemoved(event) => {
             let removal = handlers::topics::handle_topic_removed(&event)?;
-            storage.clear_space_topic(removal.space_id, &mut tx).await?;
+            storage
+                .clear_space_topic(removal.space_id, removal.topic_id, &mut tx)
+                .await?;
             1
         }
         KgMessage::ProposalCreated(event) => {
@@ -1627,7 +1629,9 @@ async fn process_block(
                     event_span.record("space_id", display(removal.space_id));
                     event_span.record("topic_id", display(removal.topic_id));
 
-                    storage.clear_space_topic(removal.space_id, &mut tx).await?;
+                    storage
+                        .clear_space_topic(removal.space_id, removal.topic_id, &mut tx)
+                        .await?;
                     pending_space_topics.insert(removal.space_id, None);
                     1
                 }
