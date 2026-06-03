@@ -75,8 +75,7 @@ mod tests {
     /// and ensures the derivation inputs in the design doc stay correct.
     #[test]
     fn system_ids_match_derivations() {
-        let namespace_url =
-            Uuid::parse_str("6ba7b811-9dad-11d1-80b4-00c04fd430c8").unwrap();
+        let namespace_url = Uuid::parse_str("6ba7b811-9dad-11d1-80b4-00c04fd430c8").unwrap();
         let ns = Uuid::new_v5(&namespace_url, b"geo:system");
         assert_eq!(GEO_SYSTEM_NAMESPACE, ns.to_string());
 

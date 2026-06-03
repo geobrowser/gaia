@@ -407,6 +407,13 @@
       "when": 1779459255335,
       "tag": "0057_atlas_emission_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1780517292041,
+      "tag": "0058_notification_outbox_rejected_idx",
+      "breakpoints": true
     }
   ]
 }

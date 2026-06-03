@@ -30,6 +30,30 @@ CREATE TABLE IF NOT EXISTS editors (
 );
 CREATE INDEX IF NOT EXISTS editors_space_id_idx ON editors (space_id);
 
+-- Required by notification-indexer's proposal-comment membership gate
+-- (is_member_or_editor). Simplified version of the full members table.
+CREATE TABLE IF NOT EXISTS members (
+    member_space_id uuid NOT NULL,
+    space_id uuid NOT NULL,
+    PRIMARY KEY (member_space_id, space_id)
+);
+CREATE INDEX IF NOT EXISTS members_space_id_idx ON members (space_id);
+
+-- Required by notification-indexer to resolve prior voters of a proposal
+-- (recipients of "a new version of a proposal you voted on was submitted").
+-- Simplified version of the full proposal_votes table. voter_id is the voter's
+-- personal-space UUID, usable directly as a notification recipient.
+CREATE TABLE IF NOT EXISTS proposal_votes (
+    proposal_id uuid NOT NULL,
+    voter_id uuid NOT NULL,
+    space_id uuid,
+    vote text,
+    created_at text NOT NULL DEFAULT '0',
+    created_at_block text NOT NULL DEFAULT '0',
+    PRIMARY KEY (proposal_id, voter_id)
+);
+CREATE INDEX IF NOT EXISTS proposal_votes_proposal_id_idx ON proposal_votes (proposal_id);
+
 -- Notification service tables (matches migration 0050)
 CREATE TABLE IF NOT EXISTS app_webhooks (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -211,8 +211,8 @@ impl Storage {
             return Ok(());
         }
 
-        let property_id = Uuid::parse_str(SCORE_PROPERTY_ID)
-            .expect("SCORE_PROPERTY_ID is a valid UUID constant");
+        let property_id =
+            Uuid::parse_str(SCORE_PROPERTY_ID).expect("SCORE_PROPERTY_ID is a valid UUID constant");
 
         let mut ids = Vec::with_capacity(rows.len());
         let mut entity_ids = Vec::with_capacity(rows.len());

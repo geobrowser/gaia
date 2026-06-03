@@ -1168,6 +1168,9 @@ pub mod test_topology {
     // column ends up NULL on the affected space.
     pub const SPACE_TOPIC_KEPT: TopicId = make_id(0x93);
     pub const SPACE_TOPIC_CLEARED: TopicId = make_id(0x94);
+    // A topic that is never the current topic of SPACE_J; a TOPIC_REMOVED for it
+    // must be a no-op (conditional clear) and leave SPACE_TOPIC_KEPT in place.
+    pub const SPACE_TOPIC_STALE: TopicId = make_id(0x95);
 
     // Object types for voting
     pub const OBJECT_TYPE_ENTITY: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
@@ -1259,6 +1262,9 @@ pub mod test_topology {
         actions.push(topic_declared(SPACE_J, SPACE_TOPIC_KEPT));
         actions.push(topic_declared(SPACE_I, SPACE_TOPIC_CLEARED));
         actions.push(topic_removed(SPACE_I, SPACE_TOPIC_CLEARED));
+        // Stale removal: SPACE_J's current topic is SPACE_TOPIC_KEPT, so a
+        // TOPIC_REMOVED for SPACE_TOPIC_STALE must NOT clear it (conditional clear).
+        actions.push(topic_removed(SPACE_J, SPACE_TOPIC_STALE));
 
         // Phase 5: Editor/member operations
         actions.push(editor_added(SPACE_A, SPACE_B));
