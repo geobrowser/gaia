@@ -26,11 +26,12 @@ use notification_indexer::consumer::{
 use notification_indexer::consumer_lag::LagMonitor;
 use notification_indexer::error::IndexerError;
 use notification_indexer::models::{
-    build_rejection_event, extract_bounty_relations, handle_bounty_allocated,
-    handle_bounty_interest, handle_bounty_payout, handle_proposal_created,
-    handle_proposal_executed, handle_proposal_settings_updated, handle_proposal_updated,
-    handle_proposal_voted, merge_recipients, BountyConfig, NotificationEventType,
-    TargetedRecipients,
+    build_rejection_event, extract_bounty_created, extract_bounty_relations,
+    extract_proposal_comments, handle_bounty_allocated, handle_bounty_created,
+    handle_bounty_interest, handle_bounty_payout, handle_comment, handle_proposal_comment,
+    handle_proposal_created, handle_proposal_executed, handle_proposal_settings_updated,
+    handle_proposal_updated, handle_proposal_voted, merge_recipients, BountyConfig,
+    CommentThreadInfo, NotificationEventType, TargetedRecipients,
 };
 use notification_indexer::storage::Storage;
 
@@ -406,8 +407,36 @@ async fn async_main() -> Result<(), IndexerError> {
                                     }
                                 };
 
-                                if relations.is_empty() {
-                                    // No bounty relations in this edit — commit and continue
+                                // Also detect newly-created bounties (Phase 3a) and comments on
+                                // proposals (Phase 2a) in the same edit.
+                                let bounties_created = match extract_bounty_created(&hermes_edit) {
+                                    Ok(b) => b,
+                                    Err(e) => {
+                                        warn!(error = %e, partition = partition, offset = offset, "Failed to extract bounty-created, committing to skip");
+                                        ke_errors += 1;
+                                        if let Err(e) = kec.commit_message(&topic, partition, offset) {
+                                            error!(error = %e, "Failed to commit knowledge edits offset");
+                                        }
+                                        continue;
+                                    }
+                                };
+                                let comments = match extract_proposal_comments(&hermes_edit) {
+                                    Ok(c) => c,
+                                    Err(e) => {
+                                        warn!(error = %e, partition = partition, offset = offset, "Failed to extract proposal comments, committing to skip");
+                                        ke_errors += 1;
+                                        if let Err(e) = kec.commit_message(&topic, partition, offset) {
+                                            error!(error = %e, "Failed to commit knowledge edits offset");
+                                        }
+                                        continue;
+                                    }
+                                };
+
+                                if relations.is_empty()
+                                    && bounties_created.is_empty()
+                                    && comments.is_empty()
+                                {
+                                    // Nothing relevant in this edit — commit and continue
                                     if let Err(e) = kec.commit_message(&topic, partition, offset) {
                                         error!(error = %e, "Failed to commit knowledge edits offset");
                                     }
@@ -537,6 +566,158 @@ async fn async_main() -> Result<(), IndexerError> {
                                             }
                                         }
                                     }
+
+                                    // Phase 3a: newly-created bounties → notify the space's editors.
+                                    for info in bounties_created {
+                                        if ke_bd > 0 {
+                                            wait_for_kg_catchup(&ke_stor, info.block_number, ke_bd, ke_bd_timeout).await;
+                                        }
+                                        let mut event = handle_bounty_created(&info);
+                                        enrich_payload(&ke_stor, &mut event, info.space_id).await;
+                                        let editors = ke_stor.find_editors_for_space(info.space_id).await.map_err(|e| {
+                                            error!(error = %e, "DB error looking up editors for bounty_created, will retry");
+                                            ke_errors += 1;
+                                        })?;
+                                        if editors.is_empty() {
+                                            ke_processed += 1;
+                                            continue;
+                                        }
+                                        ke_stor.insert_notifications_for_users(&event, &editors).await.map(|count| {
+                                            if count > 0 {
+                                                info!(
+                                                    event_type = "bounty_created",
+                                                    space_id = %info.space_id,
+                                                    editors = editors.len(),
+                                                    inserted = count,
+                                                    "Inserted bounty_created notifications"
+                                                );
+                                            }
+                                            ke_processed += 1;
+                                        }).map_err(|e| {
+                                            error!(error = %e, "DB error inserting bounty_created notifications, will retry");
+                                            ke_errors += 1;
+                                        })?;
+                                    }
+
+                                    // Comments. If the comment replies *directly* to a proposal,
+                                    // notify the proposer gated on member/editor (Phase 2a). Otherwise
+                                    // it's a general comment / reply in a thread: notify all thread
+                                    // participants plus the thread root's creator (Phase 2b).
+                                    // App servers handle per-user muting/snoozing.
+                                    for mut info in comments {
+                                        if ke_bd > 0 {
+                                            wait_for_kg_catchup(&ke_stor, info.block_number, ke_bd, ke_bd_timeout).await;
+                                        }
+                                        let (proposer, proposal_space) = match ke_stor.find_proposal_proposer_and_space(info.proposal_id).await {
+                                            Ok(Some(pair)) => pair,
+                                            Ok(None) => {
+                                                // Phase 2b: general comment thread.
+                                                let root = ke_stor.resolve_thread_root(info.proposal_id).await.map_err(|e| {
+                                                    error!(error = %e, "DB error resolving comment thread root, will retry");
+                                                    ke_errors += 1;
+                                                })?;
+                                                let mut recipients = ke_stor.find_thread_participants(root).await.map_err(|e| {
+                                                    error!(error = %e, "DB error resolving thread participants, will retry");
+                                                    ke_errors += 1;
+                                                })?;
+                                                // Root creator: exact for proposals (proposer),
+                                                // best-effort home space otherwise.
+                                                let root_space = match ke_stor.find_proposal_proposer_and_space(root).await.map_err(|e| {
+                                                    error!(error = %e, "DB error resolving thread root proposal, will retry");
+                                                    ke_errors += 1;
+                                                })? {
+                                                    Some((root_proposer, space)) => {
+                                                        recipients.push(root_proposer);
+                                                        space
+                                                    }
+                                                    None => match ke_stor.find_entity_home_space(root).await.map_err(|e| {
+                                                        error!(error = %e, "DB error resolving thread root home space, will retry");
+                                                        ke_errors += 1;
+                                                    })? {
+                                                        Some(home) => {
+                                                            recipients.push(home);
+                                                            home
+                                                        }
+                                                        None => info.commenter_space_id,
+                                                    },
+                                                };
+                                                // Don't notify the comment's own author.
+                                                let recipients: Vec<uuid::Uuid> = merge_recipients(recipients, vec![])
+                                                    .into_iter()
+                                                    .filter(|r| *r != info.commenter_space_id)
+                                                    .collect();
+                                                if recipients.is_empty() {
+                                                    ke_processed += 1;
+                                                    continue;
+                                                }
+                                                let cinfo = CommentThreadInfo {
+                                                    comment_entity_id: info.comment_entity_id,
+                                                    parent_id: info.proposal_id,
+                                                    root_id: root,
+                                                    commenter_space_id: info.commenter_space_id,
+                                                    root_space_id: root_space,
+                                                    block_number: info.block_number,
+                                                    sequence: info.sequence,
+                                                    timestamp: info.timestamp,
+                                                };
+                                                let mut event = handle_comment(&cinfo);
+                                                enrich_payload(&ke_stor, &mut event, root_space).await;
+                                                ke_stor.insert_notifications_for_users(&event, &recipients).await.map(|count| {
+                                                    if count > 0 {
+                                                        info!(
+                                                            event_type = "comment",
+                                                            root_id = %root,
+                                                            recipients = recipients.len(),
+                                                            inserted = count,
+                                                            "Inserted comment thread notifications"
+                                                        );
+                                                    }
+                                                    ke_processed += 1;
+                                                }).map_err(|e| {
+                                                    error!(error = %e, "DB error inserting comment notifications, will retry");
+                                                    ke_errors += 1;
+                                                })?;
+                                                continue;
+                                            }
+                                            Err(e) => {
+                                                error!(error = %e, "DB error resolving proposal for comment, will retry");
+                                                ke_errors += 1;
+                                                return Err(());
+                                            }
+                                        };
+                                        let allowed = ke_stor.is_member_or_editor(proposal_space, info.commenter_space_id).await.map_err(|e| {
+                                            error!(error = %e, "DB error checking commenter membership, will retry");
+                                            ke_errors += 1;
+                                        })?;
+                                        if !allowed {
+                                            debug!(
+                                                proposal_id = %info.proposal_id,
+                                                commenter = %info.commenter_space_id,
+                                                "Comment author is not a member/editor of the proposal space, skipping"
+                                            );
+                                            ke_skipped += 1;
+                                            continue;
+                                        }
+                                        info.proposal_space_id = proposal_space;
+                                        let mut event = handle_proposal_comment(&info);
+                                        enrich_payload(&ke_stor, &mut event, proposal_space).await;
+                                        ke_stor.insert_notification_for_user(&event, proposer).await.map(|count| {
+                                            if count > 0 {
+                                                info!(
+                                                    event_type = "proposal_comment",
+                                                    proposal_id = %info.proposal_id,
+                                                    proposer = %proposer,
+                                                    inserted = count,
+                                                    "Inserted proposal_comment notification"
+                                                );
+                                            }
+                                            ke_processed += 1;
+                                        }).map_err(|e| {
+                                            error!(error = %e, "DB error inserting proposal_comment notification, will retry");
+                                            ke_errors += 1;
+                                        })?;
+                                    }
+
                                     Ok(())
                                 }.await;
 
@@ -593,8 +774,13 @@ async fn async_main() -> Result<(), IndexerError> {
             }
 
             _ = heartbeat_timer.tick() => {
-                let outbox_total = sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM notification_outbox"
+                // Approximate outbox size from planner statistics (reltuples) —
+                // an O(1) catalog lookup, rather than a count(*) seq-scan over
+                // the unbounded, ever-growing outbox on every heartbeat. The
+                // estimate is refreshed by autovacuum/ANALYZE; -1 before the
+                // first analyze, which is fine for a log gauge.
+                let outbox_total_approx = sqlx::query_scalar::<_, i64>(
+                    "SELECT reltuples::bigint FROM pg_class WHERE oid = 'notification_outbox'::regclass"
                 )
                 .fetch_one(storage.pool())
                 .await
@@ -607,7 +793,7 @@ async fn async_main() -> Result<(), IndexerError> {
                 info!(
                     processed = processed_count,
                     errors = error_count,
-                    outbox_total = outbox_total,
+                    outbox_total_approx = outbox_total_approx,
                     consumer_lag = consumer_lag,
                     pool_size = pool_size,
                     pool_idle = pool_idle,
@@ -1007,6 +1193,27 @@ async fn enrich_payload(
             // Curator display name
             if let Ok(cid) = uuid::Uuid::parse_str(&bounty.curator_space_id) {
                 bounty.curator_name = storage.lookup_entity_name(cid, cid).await;
+            }
+        }
+        NotificationData::BountyCreated(ref mut bc) => {
+            // Bounty entity name (looked up in the bounty's space).
+            if let (Ok(bid), Ok(bsid)) = (
+                uuid::Uuid::parse_str(&bc.bounty_entity_id),
+                uuid::Uuid::parse_str(&bc.bounty_space_id),
+            ) {
+                bc.bounty_name = storage.lookup_entity_name(bid, bsid).await;
+            }
+        }
+        NotificationData::Comment(ref mut comment) => {
+            // Proposal name (the proposal being commented on).
+            if let Ok(pid) = uuid::Uuid::parse_str(&comment.proposal_id) {
+                comment.proposal_name = storage.lookup_proposal_name(pid).await;
+            }
+        }
+        NotificationData::GeneralComment(ref mut c) => {
+            // Name of the thread root (looked up in its home space, == `space_id`).
+            if let Ok(rid) = uuid::Uuid::parse_str(&c.root_id) {
+                c.root_name = storage.lookup_entity_name(rid, space_id).await;
             }
         }
     }

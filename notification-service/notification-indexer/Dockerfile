@@ -16,6 +16,8 @@ WORKDIR /app
 COPY hermes-schema ./hermes-schema
 COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-kafka ./hermes-kafka
+# Canonical knowledge-graph IDs (sdk crate) — path dep of notification-indexer.
+COPY sdk ./sdk
 COPY notification-service/notification-indexer ./notification-service/notification-indexer
 
 # Build from the crate directory (standalone, not as workspace member)

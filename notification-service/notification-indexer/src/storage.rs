@@ -9,20 +9,8 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::error::StorageError;
+use crate::ids;
 use crate::models::NotificationEvent;
-
-// Well-known system IDs from the knowledge graph.
-// Sourced from geo-sdk (src/core/ids/system.ts) and curator-app (packages/curator-utils/src/ids.ts).
-// These are being upstreamed to the grc-20 Rust crate — once available, import from there instead.
-
-/// The "Types" relation type ID — used for entity type membership (e.g. entity → Bounty type).
-const TYPE_RELATION_TYPE_ID: &str = "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1";
-/// The "Space" type entity ID — used to identify space entities via Types relations.
-const SPACE_TYPE_ID: &str = "362c1dbd-dc64-44bb-a3c4-652f38a642d7";
-/// The "Bounty" type entity ID — used to identify bounty entities via Types relations.
-const BOUNTY_TYPE_ID: &str = "808af0ba-d588-4e33-91f0-9dd4b25e18be";
-/// The "Name" property ID — used to look up entity display names.
-const NAME_PROPERTY_ID: &str = "a126ca53-0c8e-48d5-b888-82c734c38935";
 
 /// Storage for notification-related database operations.
 pub struct Storage {
@@ -202,9 +190,6 @@ impl Storage {
     /// that has a Types relation pointing from the entity to SPACE_TYPE.
     #[instrument(name = "notification_indexer.storage.lookup_entity_space", skip(self))]
     pub async fn lookup_entity_space(&self, entity_id: Uuid) -> Result<Option<Uuid>, StorageError> {
-        let type_rel_id =
-            Uuid::parse_str(TYPE_RELATION_TYPE_ID).expect("valid TYPE_RELATION_TYPE_ID");
-        let space_type_id = Uuid::parse_str(SPACE_TYPE_ID).expect("valid SPACE_TYPE_ID");
         let result = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT r.space_id
@@ -213,12 +198,13 @@ impl Storage {
             WHERE r.from_entity_id = $1
               AND r.type_id = $2
               AND r.to_entity_id = $3
+            ORDER BY r.space_id
             LIMIT 1
             "#,
         )
         .bind(entity_id)
-        .bind(type_rel_id)
-        .bind(space_type_id)
+        .bind(ids::types_relation_type())
+        .bind(ids::space_type())
         .fetch_optional(&self.pool)
         .await?;
         Ok(result)
@@ -234,9 +220,6 @@ impl Storage {
         &self,
         bounty_entity_id: Uuid,
     ) -> Result<Option<Uuid>, StorageError> {
-        let type_rel_id =
-            Uuid::parse_str(TYPE_RELATION_TYPE_ID).expect("valid TYPE_RELATION_TYPE_ID");
-        let bounty_type_id = Uuid::parse_str(BOUNTY_TYPE_ID).expect("valid BOUNTY_TYPE_ID");
         let result = sqlx::query_scalar::<_, Uuid>(
             r#"
             SELECT space_id
@@ -244,12 +227,13 @@ impl Storage {
             WHERE from_entity_id = $1
               AND type_id = $2
               AND to_entity_id = $3
+            ORDER BY space_id
             LIMIT 1
             "#,
         )
         .bind(bounty_entity_id)
-        .bind(type_rel_id)
-        .bind(bounty_type_id)
+        .bind(ids::types_relation_type())
+        .bind(ids::bounty_type())
         .fetch_optional(&self.pool)
         .await?;
         Ok(result)
@@ -317,6 +301,152 @@ impl Storage {
         Ok(rows.iter().map(|r| r.get("voter_id")).collect())
     }
 
+    /// Resolve a proposal's proposer (`proposed_by`) and owning `space_id`.
+    ///
+    /// Returns `None` if no proposal with that id exists — which is how the
+    /// proposal-comment path distinguishes "comment replies to a proposal" from
+    /// "comment replies to some other entity" (the latter is a general comment,
+    /// handled in a later phase). The proposer is the recipient; the space
+    /// scopes the "commenter must be a member/editor" filter.
+    #[instrument(
+        name = "notification_indexer.storage.find_proposal_proposer_and_space",
+        skip(self)
+    )]
+    pub async fn find_proposal_proposer_and_space(
+        &self,
+        proposal_id: Uuid,
+    ) -> Result<Option<(Uuid, Uuid)>, StorageError> {
+        let row = sqlx::query("SELECT proposed_by, space_id FROM proposals WHERE id = $1")
+            .bind(proposal_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| (r.get("proposed_by"), r.get("space_id"))))
+    }
+
+    /// Whether `user_space_id` is a member or editor of `space_id`.
+    ///
+    /// Gates proposal-comment notifications on the commenter being a member or
+    /// editor of the proposal's space (per the product requirement that proposal
+    /// comments come from a space member/editor).
+    #[instrument(name = "notification_indexer.storage.is_member_or_editor", skip(self))]
+    pub async fn is_member_or_editor(
+        &self,
+        space_id: Uuid,
+        user_space_id: Uuid,
+    ) -> Result<bool, StorageError> {
+        let exists = sqlx::query_scalar::<_, bool>(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM editors WHERE space_id = $1 AND member_space_id = $2
+                UNION ALL
+                SELECT 1 FROM members WHERE space_id = $1 AND member_space_id = $2
+            )
+            "#,
+        )
+        .bind(space_id)
+        .bind(user_space_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(exists)
+    }
+
+    // -----------------------------------------------------------------------
+    // Comment-thread resolution (Phase 2b)
+    // -----------------------------------------------------------------------
+
+    /// Walk `Reply to` relations upward from `parent` to the thread root.
+    ///
+    /// A comment replies to its parent; that parent may itself be a comment that
+    /// replies to another, and so on. The root is the first ancestor with no
+    /// outgoing `Reply to` relation (the actual "thing being commented on").
+    /// Bounded to a fixed depth as a cycle/abuse guard.
+    #[instrument(name = "notification_indexer.storage.resolve_thread_root", skip(self))]
+    pub async fn resolve_thread_root(&self, parent: Uuid) -> Result<Uuid, StorageError> {
+        let reply_to = ids::reply_to_property();
+        let mut current = parent;
+        for _ in 0..64 {
+            // Deterministic parent choice: an entity could carry multiple `Reply to`
+            // relations; ORDER BY keeps the resolved thread root stable across runs.
+            let next: Option<Uuid> = sqlx::query_scalar::<_, Uuid>(
+                "SELECT to_entity_id FROM relations WHERE type_id = $1 AND from_entity_id = $2 \
+                 ORDER BY to_entity_id LIMIT 1",
+            )
+            .bind(reply_to)
+            .bind(current)
+            .fetch_optional(&self.pool)
+            .await?;
+            match next {
+                Some(n) if n != current => current = n,
+                _ => break,
+            }
+        }
+        Ok(current)
+    }
+
+    /// All distinct participant spaces in the thread rooted at `root`.
+    ///
+    /// Participants are the authors of every comment in the thread — derived
+    /// from the `space_id` of each `Reply to` relation in the subtree (a
+    /// relation's `space_id` is the space it was published from, i.e. the
+    /// comment author's personal space). `UNION` (not `UNION ALL`) makes the
+    /// recursion cycle-safe.
+    #[instrument(
+        name = "notification_indexer.storage.find_thread_participants",
+        skip(self)
+    )]
+    pub async fn find_thread_participants(&self, root: Uuid) -> Result<Vec<Uuid>, StorageError> {
+        let reply_to = ids::reply_to_property();
+        let rows = sqlx::query(
+            r#"
+            WITH RECURSIVE thread AS (
+                SELECT from_entity_id AS comment_id, space_id
+                FROM relations
+                WHERE type_id = $1 AND to_entity_id = $2
+                UNION
+                SELECT r.from_entity_id, r.space_id
+                FROM relations r
+                JOIN thread t ON r.to_entity_id = t.comment_id
+                WHERE r.type_id = $1
+            )
+            SELECT DISTINCT space_id FROM thread
+            "#,
+        )
+        .bind(reply_to)
+        .bind(root)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(|r| r.get("space_id")).collect())
+    }
+
+    /// Best-effort "home" space of an entity — the `space_id` of its `Types`
+    /// relation (where it was created). For entities created in a personal space
+    /// this equals the creator. Used as the root-creator recipient for
+    /// non-proposal comment threads (proposals resolve their creator exactly via
+    /// `find_proposal_proposer_and_space`).
+    ///
+    /// An entity may have several `Types` relations (multi-typed, or re-typed in
+    /// a later edit). `ORDER BY space_id` makes the choice deterministic across
+    /// runs — still best-effort, but stable, so recipients and the payload
+    /// `space_id` don't flap between replays.
+    #[instrument(
+        name = "notification_indexer.storage.find_entity_home_space",
+        skip(self)
+    )]
+    pub async fn find_entity_home_space(
+        &self,
+        entity_id: Uuid,
+    ) -> Result<Option<Uuid>, StorageError> {
+        let result = sqlx::query_scalar::<_, Uuid>(
+            "SELECT space_id FROM relations WHERE from_entity_id = $1 AND type_id = $2 \
+             ORDER BY space_id LIMIT 1",
+        )
+        .bind(entity_id)
+        .bind(ids::types_relation_type())
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(result)
+    }
+
     /// Find proposals that have expired (end_time < now) without being executed,
     /// and for which we haven't yet sent a rejection notification.
     ///
@@ -341,6 +471,7 @@ impl Storage {
             WHERE p.end_time < EXTRACT(EPOCH FROM now())
               AND p.executed_at IS NULL
               AND o.id IS NULL
+            ORDER BY p.end_time ASC, p.id
             LIMIT $1
             "#,
         )
@@ -369,7 +500,6 @@ impl Storage {
     ///
     /// Returns `None` if the entity has no name or the query fails.
     pub async fn lookup_entity_name(&self, entity_id: Uuid, space_id: Uuid) -> Option<String> {
-        let name_prop_id = Uuid::parse_str(NAME_PROPERTY_ID).expect("valid NAME_PROPERTY_ID");
         sqlx::query_scalar::<_, String>(
             r#"
             SELECT v.text
@@ -383,7 +513,7 @@ impl Storage {
         )
         .bind(entity_id)
         .bind(space_id)
-        .bind(name_prop_id)
+        .bind(ids::name_property())
         .fetch_optional(&self.pool)
         .await
         .ok()
