@@ -774,8 +774,13 @@ async fn async_main() -> Result<(), IndexerError> {
             }
 
             _ = heartbeat_timer.tick() => {
-                let outbox_total = sqlx::query_scalar::<_, i64>(
-                    "SELECT count(*) FROM notification_outbox"
+                // Approximate outbox size from planner statistics (reltuples) —
+                // an O(1) catalog lookup, rather than a count(*) seq-scan over
+                // the unbounded, ever-growing outbox on every heartbeat. The
+                // estimate is refreshed by autovacuum/ANALYZE; -1 before the
+                // first analyze, which is fine for a log gauge.
+                let outbox_total_approx = sqlx::query_scalar::<_, i64>(
+                    "SELECT reltuples::bigint FROM pg_class WHERE oid = 'notification_outbox'::regclass"
                 )
                 .fetch_one(storage.pool())
                 .await
@@ -788,7 +793,7 @@ async fn async_main() -> Result<(), IndexerError> {
                 info!(
                     processed = processed_count,
                     errors = error_count,
-                    outbox_total = outbox_total,
+                    outbox_total_approx = outbox_total_approx,
                     consumer_lag = consumer_lag,
                     pool_size = pool_size,
                     pool_idle = pool_idle,
