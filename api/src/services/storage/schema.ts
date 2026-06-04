@@ -764,16 +764,12 @@ export const votesCount = pgTable(
 		downvotes: bigint("downvotes", {mode: "number"}).notNull().default(0),
 		// Bumped on every upsert so the notification-indexer can poll only the
 		// rows whose counts changed since its last poll (keyset on updated_at,id).
-		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"})
-			.notNull()
-			.defaultNow(),
+		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
 	},
 	(table) => ({
 		uniqueConstraint: unique().on(table.objectId, table.objectType, table.spaceId),
 		// Partial keyset index for the notification-indexer's entity-vote poller.
-		updatedAtIdx: index("idx_votes_count_updated_at")
-			.on(table.updatedAt, table.id)
-			.where(sql`object_type = 0`),
+		updatedAtIdx: index("idx_votes_count_updated_at").on(table.updatedAt, table.id).where(sql`object_type = 0`),
 	}),
 )
 
