@@ -38,6 +38,9 @@ pub struct EntityVoteCount {
     pub downvotes: i64,
     /// `updated_at` — the keyset primary key and cursor high-water mark.
     pub updated_at: DateTime<Utc>,
+    /// Whether this (entity, space) was already notified at the queried threshold.
+    /// The poller skips notifying these but still advances the cursor over them.
+    pub already_notified: bool,
 }
 
 impl Storage {
@@ -585,6 +588,12 @@ impl Storage {
     /// check is done by the caller so the cursor can advance over *every* scanned
     /// row (not just those over the threshold), preventing skips. Backed by the
     /// partial index `idx_votes_count_updated_at (updated_at, id) WHERE object_type = 0`.
+    ///
+    /// Each row carries `already_notified`: whether an `entity_votes_threshold`
+    /// notification already exists for this `(entity, space)` at `threshold` (via
+    /// the `idx_outbox_entity_votes_threshold` expression index). The poller skips
+    /// those — avoiding a redundant creator lookup + insert — while still advancing
+    /// the cursor past them.
     #[instrument(
         name = "notification_indexer.storage.find_entity_vote_counts_since",
         skip(self)
@@ -593,20 +602,30 @@ impl Storage {
         &self,
         cursor_updated_at: DateTime<Utc>,
         cursor_id: i64,
+        threshold: i64,
         limit: i64,
     ) -> Result<Vec<EntityVoteCount>, StorageError> {
         let rows = sqlx::query(
             r#"
-            SELECT id::bigint AS id, object_id, space_id, upvotes, downvotes, updated_at
-            FROM votes_count
-            WHERE object_type = 0
-              AND (updated_at, id) > ($1, $2)
-            ORDER BY updated_at, id
-            LIMIT $3
+            SELECT vc.id::bigint AS id, vc.object_id, vc.space_id, vc.upvotes, vc.downvotes,
+                   vc.updated_at,
+                   EXISTS (
+                       SELECT 1 FROM notification_outbox o
+                       WHERE o.event_type = 'entity_votes_threshold'
+                         AND (o.payload->>'entity_id')::uuid = vc.object_id
+                         AND (o.payload->>'vote_space_id')::uuid = vc.space_id
+                         AND (o.payload->>'threshold')::bigint = $3
+                   ) AS already_notified
+            FROM votes_count vc
+            WHERE vc.object_type = 0
+              AND (vc.updated_at, vc.id) > ($1, $2)
+            ORDER BY vc.updated_at, vc.id
+            LIMIT $4
             "#,
         )
         .bind(cursor_updated_at)
         .bind(cursor_id)
+        .bind(threshold)
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
@@ -620,6 +639,7 @@ impl Storage {
                 upvotes: r.get("upvotes"),
                 downvotes: r.get("downvotes"),
                 updated_at: r.get("updated_at"),
+                already_notified: r.get("already_notified"),
             })
             .collect())
     }

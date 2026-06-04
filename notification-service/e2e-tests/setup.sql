@@ -147,3 +147,8 @@ CREATE TABLE IF NOT EXISTS notification_poll_cursors (
     cursor_id bigint NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- Anti-check index for the vote poller's "already notified?" guard (matches migration 0060).
+CREATE INDEX IF NOT EXISTS idx_outbox_entity_votes_threshold
+    ON notification_outbox (((payload->>'entity_id')::uuid), ((payload->>'vote_space_id')::uuid))
+    WHERE event_type = 'entity_votes_threshold';

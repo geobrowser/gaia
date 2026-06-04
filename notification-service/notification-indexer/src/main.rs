@@ -327,7 +327,7 @@ async fn async_main() -> Result<(), IndexerError> {
 
                         loop {
                             let rows = match vote_storage
-                                .find_entity_vote_counts_since(cur_ts, cur_id, BATCH_LIMIT)
+                                .find_entity_vote_counts_since(cur_ts, cur_id, vote_threshold, BATCH_LIMIT)
                                 .await
                             {
                                 Ok(r) => r,
@@ -348,7 +348,9 @@ async fn async_main() -> Result<(), IndexerError> {
                             let mut last_id = cur_id;
                             let mut had_error = false;
                             for row in &rows {
-                                if row.upvotes >= vote_threshold {
+                                // Skip entities already notified at this threshold
+                                // (the anti-check) — but still advance the cursor.
+                                if row.upvotes >= vote_threshold && !row.already_notified {
                                     match vote_storage.find_entity_home_space(row.entity_id).await {
                                         Ok(Some(creator)) => {
                                             let mut event = build_vote_threshold_event(
