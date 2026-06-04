@@ -169,9 +169,14 @@ impl Storage {
             downvotes.push(count.downvotes);
         }
 
+        // updated_at is set with clock_timestamp() (the actual statement wall-clock),
+        // NOT now()/transaction_timestamp(): now() is fixed at transaction start, so
+        // under concurrent writers a row can commit with an updated_at behind another
+        // already-committed row, slipping past the notification-indexer's keyset cursor.
+        // clock_timestamp() narrows that window (the poller's overlap closes the rest).
         let query = r#"
-            INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes)
-            SELECT object_id, object_type, space_id, upvotes, downvotes
+            INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes, updated_at)
+            SELECT object_id, object_type, space_id, upvotes, downvotes, clock_timestamp()
             FROM UNNEST(
                 $1::uuid[], $2::smallint[], $3::uuid[], $4::bigint[], $5::bigint[]
             ) AS t(object_id, object_type, space_id, upvotes, downvotes)
@@ -179,9 +184,7 @@ impl Storage {
             DO UPDATE SET
                 upvotes = EXCLUDED.upvotes,
                 downvotes = EXCLUDED.downvotes,
-                -- Bump so the notification-indexer's vote poller sees this row as
-                -- changed since its last poll (inserts get the column default).
-                updated_at = now()
+                updated_at = clock_timestamp()
         "#;
 
         sqlx::query(query)

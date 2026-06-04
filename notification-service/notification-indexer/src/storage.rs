@@ -618,7 +618,9 @@ impl Storage {
                    ) AS already_notified
             FROM votes_count vc
             WHERE vc.object_type = 0
-              AND (vc.updated_at, vc.id) > ($1, $2)
+              -- $2::int matches vc.id (int4) so the (updated_at, id) keyset index is
+              -- used as-is; cursor_id is always within int4 range (from votes_count.id).
+              AND (vc.updated_at, vc.id) > ($1, $2::int)
             ORDER BY vc.updated_at, vc.id
             LIMIT $4
             "#,

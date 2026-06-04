@@ -149,6 +149,16 @@ async fn async_main() -> Result<(), IndexerError> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(60);
 
+    // Overlap window (seconds) the vote poller backs its scan up by each tick.
+    // votes_count.updated_at is a wall-clock stamp, but rows can still commit
+    // slightly behind the cursor under concurrent writers; re-scanning a short
+    // trailing window catches them (already_notified + idempotency dedupe the
+    // re-scan). Set to 0 to disable.
+    let vote_poll_overlap_secs: i64 = env::var("VOTE_POLL_OVERLAP_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10);
+
     // Initialize storage
     let storage = Storage::connect(&database_url).await?;
     info!("Connected to database");
@@ -316,7 +326,7 @@ async fn async_main() -> Result<(), IndexerError> {
                     }
                     _ = interval.tick() => {
                         // Resume from the persisted cursor (epoch/0 on first run).
-                        let (mut cur_ts, mut cur_id) = match vote_storage.get_poll_cursor(CURSOR_NAME).await {
+                        let (persisted_ts, persisted_id) = match vote_storage.get_poll_cursor(CURSOR_NAME).await {
                             Ok(Some(c)) => c,
                             Ok(None) => (sqlx::types::chrono::DateTime::<sqlx::types::chrono::Utc>::default(), 0i64),
                             Err(e) => {
@@ -324,6 +334,20 @@ async fn async_main() -> Result<(), IndexerError> {
                                 continue;
                             }
                         };
+
+                        // Back the scan start up by the overlap window so rows that
+                        // committed slightly behind the cursor are re-examined. The
+                        // persisted high-water (hw_*) never moves backward, so the
+                        // overlap only re-scans a bounded trailing window each tick;
+                        // already_notified + idempotency make the re-scan a no-op.
+                        let mut cur_ts = sqlx::types::chrono::DateTime::<sqlx::types::chrono::Utc>::from_timestamp(
+                            persisted_ts.timestamp() - vote_poll_overlap_secs,
+                            0,
+                        )
+                        .unwrap_or(persisted_ts);
+                        let mut cur_id = 0i64;
+                        let mut hw_ts = persisted_ts;
+                        let mut hw_id = persisted_id;
 
                         loop {
                             let rows = match vote_storage
@@ -341,11 +365,6 @@ async fn async_main() -> Result<(), IndexerError> {
                                 break;
                             }
 
-                            // Advance over every scanned row; persist only after the
-                            // whole batch succeeds, so a mid-batch DB error retries the
-                            // batch (idempotency keys make re-inserts a no-op).
-                            let mut last_ts = cur_ts;
-                            let mut last_id = cur_id;
                             let mut had_error = false;
                             for row in &rows {
                                 // Skip entities already notified at this threshold
@@ -388,20 +407,27 @@ async fn async_main() -> Result<(), IndexerError> {
                                         }
                                     }
                                 }
-                                last_ts = row.updated_at;
-                                last_id = row.cursor_id;
+                                // Page forward over every scanned row...
+                                cur_ts = row.updated_at;
+                                cur_id = row.cursor_id;
+                                // ...and track the high-water (never below the previous cursor).
+                                if (row.updated_at, row.cursor_id) > (hw_ts, hw_id) {
+                                    hw_ts = row.updated_at;
+                                    hw_id = row.cursor_id;
+                                }
                             }
 
                             if had_error {
                                 // Don't persist — retry this batch on the next tick.
                                 break;
                             }
-                            if let Err(e) = vote_storage.set_poll_cursor(CURSOR_NAME, last_ts, last_id).await {
+                            // Persist the high-water after the batch succeeds, so a
+                            // mid-batch DB error retries (idempotency makes re-inserts
+                            // a no-op).
+                            if let Err(e) = vote_storage.set_poll_cursor(CURSOR_NAME, hw_ts, hw_id).await {
                                 error!(error = %e, "Failed to persist vote poll cursor");
                                 break;
                             }
-                            cur_ts = last_ts;
-                            cur_id = last_id;
 
                             if (batch_len as i64) < BATCH_LIMIT {
                                 break;
