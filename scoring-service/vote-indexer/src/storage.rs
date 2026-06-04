@@ -178,7 +178,10 @@ impl Storage {
             ON CONFLICT (object_id, object_type, space_id)
             DO UPDATE SET
                 upvotes = EXCLUDED.upvotes,
-                downvotes = EXCLUDED.downvotes
+                downvotes = EXCLUDED.downvotes,
+                -- Bump so the notification-indexer's vote poller sees this row as
+                -- changed since its last poll (inserts get the column default).
+                updated_at = now()
         "#;
 
         sqlx::query(query)

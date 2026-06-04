@@ -124,3 +124,26 @@ CREATE TABLE IF NOT EXISTS spaces (
 CREATE INDEX IF NOT EXISTS idx_outbox_rejected_proposal
     ON notification_outbox (((payload->>'proposal_id')::uuid))
     WHERE event_type = 'proposal_rejected';
+
+-- Vote aggregate table for the entity-vote-threshold poller (matches migration 0018
+-- + 0059). updated_at drives the poller's keyset scan.
+CREATE TABLE IF NOT EXISTS votes_count (
+    id serial PRIMARY KEY,
+    object_id uuid NOT NULL,
+    object_type smallint NOT NULL,
+    space_id uuid NOT NULL,
+    upvotes bigint NOT NULL DEFAULT 0,
+    downvotes bigint NOT NULL DEFAULT 0,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE(object_id, object_type, space_id)
+);
+CREATE INDEX IF NOT EXISTS idx_votes_count_updated_at
+    ON votes_count (updated_at, id) WHERE object_type = 0;
+
+-- Persistent keyset cursors for the notification-indexer's pollers (vote poller).
+CREATE TABLE IF NOT EXISTS notification_poll_cursors (
+    name text PRIMARY KEY,
+    cursor_updated_at timestamptz NOT NULL,
+    cursor_id bigint NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);

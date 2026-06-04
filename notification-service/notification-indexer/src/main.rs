@@ -26,12 +26,12 @@ use notification_indexer::consumer::{
 use notification_indexer::consumer_lag::LagMonitor;
 use notification_indexer::error::IndexerError;
 use notification_indexer::models::{
-    build_rejection_event, extract_bounty_created, extract_bounty_relations,
-    extract_proposal_comments, handle_bounty_allocated, handle_bounty_created,
-    handle_bounty_interest, handle_bounty_payout, handle_comment, handle_proposal_comment,
-    handle_proposal_created, handle_proposal_executed, handle_proposal_settings_updated,
-    handle_proposal_updated, handle_proposal_voted, merge_recipients, BountyConfig,
-    CommentThreadInfo, NotificationEventType, TargetedRecipients,
+    build_rejection_event, build_vote_threshold_event, extract_bounty_created,
+    extract_bounty_relations, extract_proposal_comments, handle_bounty_allocated,
+    handle_bounty_created, handle_bounty_interest, handle_bounty_payout, handle_comment,
+    handle_proposal_comment, handle_proposal_created, handle_proposal_executed,
+    handle_proposal_settings_updated, handle_proposal_updated, handle_proposal_voted,
+    merge_recipients, BountyConfig, CommentThreadInfo, NotificationEventType, TargetedRecipients,
 };
 use notification_indexer::storage::Storage;
 
@@ -137,6 +137,18 @@ async fn async_main() -> Result<(), IndexerError> {
         );
     }
 
+    // Entity-vote-threshold notifications: notify an entity's creator when its
+    // upvotes reach this value. Set to 0 to disable the vote poller entirely.
+    let vote_threshold: i64 = env::var("VOTE_NOTIFICATION_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10);
+
+    let vote_poll_interval_secs: u64 = env::var("VOTE_POLL_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+
     // Initialize storage
     let storage = Storage::connect(&database_url).await?;
     info!("Connected to database");
@@ -184,6 +196,7 @@ async fn async_main() -> Result<(), IndexerError> {
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
     let mut shutdown_rx2 = shutdown_tx.subscribe();
     let mut shutdown_rx3 = shutdown_tx.subscribe();
+    let mut shutdown_rx4 = shutdown_tx.subscribe();
 
     let _signal_handle = tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
@@ -275,6 +288,131 @@ async fn async_main() -> Result<(), IndexerError> {
             }
         }
     });
+
+    // Spawn entity-vote-threshold poller task.
+    //
+    // Polls votes_count for entities whose upvotes reached VOTE_NOTIFICATION_THRESHOLD
+    // and notifies each entity's creator. Uses a persisted keyset cursor on
+    // (updated_at, id) so each poll only scans rows whose counts changed since the
+    // last poll. Disabled when the threshold is <= 0.
+    let vote_poller_handle: Option<tokio::task::JoinHandle<()>> = if vote_threshold > 0 {
+        let vote_storage = Storage::new(storage.pool().clone());
+        info!(
+            threshold = vote_threshold,
+            interval_secs = vote_poll_interval_secs,
+            "Entity-vote-threshold poller enabled"
+        );
+        Some(tokio::spawn(async move {
+            const CURSOR_NAME: &str = "entity_votes_threshold";
+            const BATCH_LIMIT: i64 = 1000;
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(vote_poll_interval_secs));
+
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx4.recv() => {
+                        info!("Vote poller shutting down");
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        // Resume from the persisted cursor (epoch/0 on first run).
+                        let (mut cur_ts, mut cur_id) = match vote_storage.get_poll_cursor(CURSOR_NAME).await {
+                            Ok(Some(c)) => c,
+                            Ok(None) => (sqlx::types::chrono::DateTime::<sqlx::types::chrono::Utc>::default(), 0i64),
+                            Err(e) => {
+                                error!(error = %e, "Failed to read vote poll cursor; skipping tick");
+                                continue;
+                            }
+                        };
+
+                        loop {
+                            let rows = match vote_storage
+                                .find_entity_vote_counts_since(cur_ts, cur_id, BATCH_LIMIT)
+                                .await
+                            {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    error!(error = %e, "Failed to query entity vote counts");
+                                    break;
+                                }
+                            };
+                            let batch_len = rows.len();
+                            if batch_len == 0 {
+                                break;
+                            }
+
+                            // Advance over every scanned row; persist only after the
+                            // whole batch succeeds, so a mid-batch DB error retries the
+                            // batch (idempotency keys make re-inserts a no-op).
+                            let mut last_ts = cur_ts;
+                            let mut last_id = cur_id;
+                            let mut had_error = false;
+                            for row in &rows {
+                                if row.upvotes >= vote_threshold {
+                                    match vote_storage.find_entity_home_space(row.entity_id).await {
+                                        Ok(Some(creator)) => {
+                                            let mut event = build_vote_threshold_event(
+                                                row.entity_id,
+                                                row.space_id,
+                                                row.upvotes,
+                                                row.downvotes,
+                                                vote_threshold,
+                                            );
+                                            enrich_payload(&vote_storage, &mut event, row.space_id).await;
+                                            match vote_storage.insert_notification_for_user(&event, creator).await {
+                                                Ok(c) if c > 0 => {
+                                                    info!(
+                                                        entity_id = %row.entity_id,
+                                                        upvotes = row.upvotes,
+                                                        threshold = vote_threshold,
+                                                        "Inserted entity vote-threshold notification"
+                                                    );
+                                                }
+                                                Ok(_) => { /* already notified at this threshold */ }
+                                                Err(e) => {
+                                                    error!(error = %e, entity_id = %row.entity_id, "Failed to insert vote-threshold notification");
+                                                    had_error = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        Ok(None) => {
+                                            debug!(entity_id = %row.entity_id, "No creator/home space; skipping vote-threshold notification");
+                                        }
+                                        Err(e) => {
+                                            error!(error = %e, entity_id = %row.entity_id, "DB error resolving entity creator");
+                                            had_error = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                last_ts = row.updated_at;
+                                last_id = row.cursor_id;
+                            }
+
+                            if had_error {
+                                // Don't persist — retry this batch on the next tick.
+                                break;
+                            }
+                            if let Err(e) = vote_storage.set_poll_cursor(CURSOR_NAME, last_ts, last_id).await {
+                                error!(error = %e, "Failed to persist vote poll cursor");
+                                break;
+                            }
+                            cur_ts = last_ts;
+                            cur_id = last_id;
+
+                            if (batch_len as i64) < BATCH_LIMIT {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+    } else {
+        info!("Entity-vote-threshold poller disabled (VOTE_NOTIFICATION_THRESHOLD <= 0)");
+        None
+    };
 
     // Spawn knowledge edits consumer task
     let ke_handle: tokio::task::JoinHandle<()> = {
@@ -1073,6 +1211,15 @@ async fn async_main() -> Result<(), IndexerError> {
         }
     }
 
+    // Wait for the vote poller to finish (if enabled)
+    if let Some(handle) = vote_poller_handle {
+        match tokio::time::timeout(tokio::time::Duration::from_secs(5), handle).await {
+            Ok(Ok(())) => info!("Vote poller stopped"),
+            Ok(Err(e)) => warn!(error = %e, "Vote poller task failed"),
+            Err(_) => warn!("Vote poller did not stop within 5s, aborting"),
+        }
+    }
+
     info!(
         processed = processed_count,
         errors = error_count,
@@ -1214,6 +1361,12 @@ async fn enrich_payload(
             // Name of the thread root (looked up in its home space, == `space_id`).
             if let Ok(rid) = uuid::Uuid::parse_str(&c.root_id) {
                 c.root_name = storage.lookup_entity_name(rid, space_id).await;
+            }
+        }
+        NotificationData::VoteThreshold(ref mut vt) => {
+            // Name of the entity that hit the threshold (looked up in its vote space).
+            if let Ok(eid) = uuid::Uuid::parse_str(&vt.entity_id) {
+                vt.entity_name = storage.lookup_entity_name(eid, space_id).await;
             }
         }
     }
