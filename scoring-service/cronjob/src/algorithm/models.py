@@ -239,7 +239,6 @@ class RankingConfig:
 
     # Anti-sybil
     filter_non_members: bool = True
-    require_space_membership: bool = True
 
     def __post_init__(self) -> None:
         """Validate configuration after initialisation."""
