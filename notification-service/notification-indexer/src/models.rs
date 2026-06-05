@@ -3373,6 +3373,64 @@ mod tests {
         assert!(thread_keys.iter().all(|k| k.starts_with("300:2:comment:")));
     }
 
+    #[test]
+    fn extract_proposal_comments_cascade_reply_emits_edge_per_target_in_op_order() {
+        // Mirrors curator-app's cascade: a reply carries a `Reply to` edge to the
+        // whole ancestor chain — the root target FIRST (carried forward) and the
+        // immediate parent LAST (appended). extract_proposal_comments emits one
+        // ProposalCommentInfo per reply-to edge, in op order.
+        let types = crate::ids::types_relation_type().into_bytes();
+        let comment_type = crate::ids::comment_type().into_bytes();
+        let reply_to = crate::ids::reply_to_property().into_bytes();
+        let root_target = [0xA0; 16]; // e.g. the bounty (thread root)
+        let immediate_parent = [0xB0; 16]; // the comment being replied to
+        let reply = [0xC0; 16]; // the new reply
+        let ops = vec![
+            create_relation([0x01; 16], types, reply, comment_type),
+            create_relation([0x02; 16], reply_to, reply, root_target), // carried-forward (first)
+            create_relation([0x03; 16], reply_to, reply, immediate_parent), // immediate parent (last)
+        ];
+        let edit = make_edit_with_ops(ops, [0x50; 16], 400, 0);
+
+        let out = extract_proposal_comments(&edit).expect("extract");
+        // One info per reply-to edge, all for the same comment, in op order.
+        assert_eq!(out.len(), 2);
+        assert!(out
+            .iter()
+            .all(|i| i.comment_entity_id == Uuid::from_bytes(reply)));
+        assert_eq!(
+            out[0].proposal_id,
+            Uuid::from_bytes(root_target),
+            "first edge targets the root"
+        );
+        assert_eq!(
+            out[1].proposal_id,
+            Uuid::from_bytes(immediate_parent),
+            "last edge targets the immediate parent"
+        );
+        // Both edges share one idempotency key (keyed on comment_entity_id), so the
+        // consumer dedups to a single notification. The consumer therefore must pick
+        // the immediate parent deliberately (via find_deepest_reply_target) rather
+        // than letting the first-processed edge (the root) decide parent_id.
+        let keys: std::collections::HashSet<String> = out
+            .iter()
+            .map(|i| {
+                let c = CommentThreadInfo {
+                    comment_entity_id: i.comment_entity_id,
+                    parent_id: i.proposal_id,
+                    root_id: Uuid::from_bytes(root_target),
+                    commenter_space_id: i.commenter_space_id,
+                    root_space_id: Uuid::from_bytes([0x5E; 16]),
+                    block_number: i.block_number,
+                    sequence: i.sequence,
+                    timestamp: i.timestamp,
+                };
+                handle_comment(&c).idempotency_key
+            })
+            .collect();
+        assert_eq!(keys.len(), 1, "cascade edges of one comment share one key");
+    }
+
     // -----------------------------------------------------------------------
     // Entity vote-threshold (vote poller)
     // -----------------------------------------------------------------------

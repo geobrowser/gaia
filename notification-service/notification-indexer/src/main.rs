@@ -797,7 +797,28 @@ async fn async_main() -> Result<(), IndexerError> {
                                     // it's a general comment / reply in a thread: notify all thread
                                     // participants plus the thread root's creator (Phase 2b).
                                     // App servers handle per-user muting/snoozing.
+                                    //
+                                    // A single comment can produce several `Reply to` edges (curator-app
+                                    // cascades them up the ancestor chain), surfacing as one info per
+                                    // edge. Group the edges per comment so we resolve the thread once and
+                                    // can pick the *immediate* parent for the payload, rather than letting
+                                    // the first-processed edge (the root) win.
+                                    let mut reply_targets_by_comment: std::collections::HashMap<uuid::Uuid, Vec<uuid::Uuid>> =
+                                        std::collections::HashMap::new();
+                                    for info in &comments {
+                                        reply_targets_by_comment
+                                            .entry(info.comment_entity_id)
+                                            .or_default()
+                                            .push(info.proposal_id);
+                                    }
+                                    let mut processed_comments: std::collections::HashSet<uuid::Uuid> =
+                                        std::collections::HashSet::new();
+
                                     for mut info in comments {
+                                        // Cascade edges share a comment; process each comment once.
+                                        if !processed_comments.insert(info.comment_entity_id) {
+                                            continue;
+                                        }
                                         if ke_bd > 0 {
                                             wait_for_kg_catchup(&ke_stor, info.block_number, ke_bd, ke_bd_timeout).await;
                                         }
@@ -843,9 +864,27 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     ke_processed += 1;
                                                     continue;
                                                 }
+                                                // Immediate parent for the payload. With a cascade the
+                                                // comment has several reply-to targets; the immediate
+                                                // parent is the deepest of them. With a single target it
+                                                // IS the parent — skip the query.
+                                                let parent_id = match reply_targets_by_comment.get(&info.comment_entity_id) {
+                                                    Some(targets) if targets.len() > 1 => {
+                                                        match ke_stor.find_deepest_reply_target(targets).await {
+                                                            Ok(Some(p)) => p,
+                                                            Ok(None) => info.proposal_id,
+                                                            Err(e) => {
+                                                                error!(error = %e, "DB error resolving immediate comment parent, will retry");
+                                                                ke_errors += 1;
+                                                                return Err(());
+                                                            }
+                                                        }
+                                                    }
+                                                    _ => info.proposal_id,
+                                                };
                                                 let cinfo = CommentThreadInfo {
                                                     comment_entity_id: info.comment_entity_id,
-                                                    parent_id: info.proposal_id,
+                                                    parent_id,
                                                     root_id: root,
                                                     commenter_space_id: info.commenter_space_id,
                                                     root_space_id: root_space,

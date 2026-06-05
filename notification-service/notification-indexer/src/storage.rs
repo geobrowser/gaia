@@ -436,6 +436,41 @@ impl Storage {
         Ok(rows.iter().map(|r| r.get("space_id")).collect())
     }
 
+    /// The immediate parent among a comment's `Reply to` targets.
+    ///
+    /// Curator-app cascades `Reply to` edges across the whole ancestor chain, so a
+    /// reply points at the root, every ancestor comment, AND its immediate parent.
+    /// The immediate parent is the deepest of those — the target that itself
+    /// replies to the most of the *other* targets. Returns `None` when there is no
+    /// such relation among the set (e.g. a single-target / non-cascade comment),
+    /// so the caller can fall back to the lone target.
+    #[instrument(
+        name = "notification_indexer.storage.find_deepest_reply_target",
+        skip(self, targets)
+    )]
+    pub async fn find_deepest_reply_target(
+        &self,
+        targets: &[Uuid],
+    ) -> Result<Option<Uuid>, StorageError> {
+        let result = sqlx::query_scalar::<_, Uuid>(
+            r#"
+            SELECT from_entity_id
+            FROM relations
+            WHERE type_id = $1
+              AND from_entity_id = ANY($2)
+              AND to_entity_id = ANY($2)
+            GROUP BY from_entity_id
+            ORDER BY count(*) DESC, from_entity_id
+            LIMIT 1
+            "#,
+        )
+        .bind(ids::reply_to_property())
+        .bind(targets)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(result)
+    }
+
     /// Best-effort "home" space of an entity — the `space_id` of its `Types`
     /// relation (where it was created). For entities created in a personal space
     /// this equals the creator. Used as the root-creator recipient for
