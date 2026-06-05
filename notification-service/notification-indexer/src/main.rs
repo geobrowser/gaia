@@ -159,6 +159,15 @@ async fn async_main() -> Result<(), IndexerError> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
 
+    // Cold-start lookback (seconds): on the very first poll (no persisted cursor),
+    // only consider entities whose votes changed within this trailing window
+    // instead of replaying all history. Prevents a deploy-time backfill storm that
+    // would notify every already-over-threshold entity. Default 1 day.
+    let vote_cold_start_lookback_secs: i64 = env::var("VOTE_COLD_START_LOOKBACK_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(86_400);
+
     // Initialize storage
     let storage = Storage::connect(&database_url).await?;
     info!("Connected to database");
@@ -325,10 +334,28 @@ async fn async_main() -> Result<(), IndexerError> {
                         break;
                     }
                     _ = interval.tick() => {
-                        // Resume from the persisted cursor (epoch/0 on first run).
+                        // Resume from the persisted cursor. On the very first run
+                        // (no cursor) start a bounded lookback behind now instead of
+                        // epoch, so a fresh deploy doesn't replay every historical
+                        // over-threshold entity (backfill storm).
                         let (persisted_ts, persisted_id) = match vote_storage.get_poll_cursor(CURSOR_NAME).await {
                             Ok(Some(c)) => c,
-                            Ok(None) => (sqlx::types::chrono::DateTime::<sqlx::types::chrono::Utc>::default(), 0i64),
+                            Ok(None) => {
+                                let now_secs = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .map(|d| d.as_secs() as i64)
+                                    .unwrap_or(0);
+                                let start = sqlx::types::chrono::DateTime::<sqlx::types::chrono::Utc>::from_timestamp(
+                                    now_secs - vote_cold_start_lookback_secs,
+                                    0,
+                                )
+                                .unwrap_or_default();
+                                info!(
+                                    lookback_secs = vote_cold_start_lookback_secs,
+                                    "Vote poller cold start — scanning from the lookback window"
+                                );
+                                (start, 0i64)
+                            }
                             Err(e) => {
                                 error!(error = %e, "Failed to read vote poll cursor; skipping tick");
                                 continue;

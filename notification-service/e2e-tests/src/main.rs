@@ -130,6 +130,7 @@ const VOTE_CREATOR_SPACE_BYTES: [u8; 16] = [0x9d; 16]; // the entity's creator/h
 const VOTE_SPACE_BYTES: [u8; 16] = [0x9e; 16]; // the space votes are counted in (payload vote_space_id)
 const VOTE_ENTITY_BELOW_BYTES: [u8; 16] = [0x9f; 16]; // upvotes < threshold -> no notification
 const VOTE_ENTITY_NOCREATOR_BYTES: [u8; 16] = [0xa1; 16]; // over threshold but no creator -> no notification
+const VOTE_ENTITY_STALE_BYTES: [u8; 16] = [0xa2; 16]; // over threshold + creator, but updated_at older than the cold-start lookback -> no notification
 
 const GOVERNANCE_TOPIC: &str = "space.governance";
 const KNOWLEDGE_EDITS_TOPIC: &str = "knowledge.edits";
@@ -536,6 +537,28 @@ async fn seed_database(
     )
     .bind(Uuid::from_bytes(VOTE_ENTITY_NOCREATOR_BYTES))
     .bind(Uuid::from_bytes(VOTE_SPACE_BYTES))
+    .execute(pool)
+    .await?;
+    // (d) Over-threshold entity WITH a creator, but updated_at is older than the
+    //     cold-start lookback (2 days ago) -> excluded by the cold-start window
+    //     -> no notification. Proves the exclusion is the lookback, not a missing creator.
+    sqlx::query(
+        "INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes, updated_at) \
+         VALUES ($1, 0, $2, 8, 0, now() - interval '2 days') ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(VOTE_ENTITY_STALE_BYTES))
+    .bind(Uuid::from_bytes(VOTE_SPACE_BYTES))
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, $3, $4) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::from_bytes(VOTE_CREATOR_SPACE_BYTES))
+    .bind(Uuid::from_bytes(VOTE_ENTITY_STALE_BYTES))
+    .bind(Uuid::from_bytes(THREAD_GENERIC_TYPE_BYTES))
     .execute(pool)
     .await?;
 
@@ -2054,6 +2077,7 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
     let vote_entity_over = Uuid::from_bytes(VOTE_ENTITY_OVER_BYTES).to_string();
     let vote_below = Uuid::from_bytes(VOTE_ENTITY_BELOW_BYTES).to_string();
     let vote_nocreator = Uuid::from_bytes(VOTE_ENTITY_NOCREATOR_BYTES).to_string();
+    let vote_stale = Uuid::from_bytes(VOTE_ENTITY_STALE_BYTES).to_string();
     let vote_calls: Vec<_> = calls
         .iter()
         .filter(|c| c.body["event_type"].as_str() == Some("entity_votes_threshold"))
@@ -2085,6 +2109,12 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         !vote_calls
             .iter()
             .any(|c| c.body["entity_id"].as_str() == Some(vote_nocreator.as_str())),
+    );
+    r.check(
+        "entity_votes_threshold: stale entity (older than cold-start lookback) is NOT notified",
+        !vote_calls
+            .iter()
+            .any(|c| c.body["entity_id"].as_str() == Some(vote_stale.as_str())),
     );
     if let Some(call) = vote_calls.first() {
         r.check(

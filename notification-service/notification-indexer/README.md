@@ -66,6 +66,7 @@ Recipient resolution is intentionally a **superset** and **best-effort**: a fail
 | `VOTE_NOTIFICATION_THRESHOLD` | `10` | Upvote count at which an entity's creator is notified (`entity_votes_threshold`). Set to `0` to disable the vote poller. |
 | `VOTE_POLL_INTERVAL_SECS` | `60` | How often the vote poller scans `votes_count` (seconds) |
 | `VOTE_POLL_OVERLAP_SECS` | `10` | Trailing window the vote poll re-scans each tick so rows that committed just behind the cursor aren't missed (re-scans are deduped by the already-notified anti-check). `0` disables. |
+| `VOTE_COLD_START_LOOKBACK_SECS` | `86400` | On the first poll (no persisted cursor), only consider entities whose votes changed within this trailing window — avoids a deploy-time backfill that would notify every already-over-threshold entity. Default 1 day. |
 | `HEARTBEAT_INTERVAL_SECS` | `60` | How often to log heartbeat stats (seconds) |
 
 ### Telemetry (all optional)

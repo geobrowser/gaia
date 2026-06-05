@@ -169,11 +169,8 @@ impl Storage {
             downvotes.push(count.downvotes);
         }
 
-        // updated_at is set with clock_timestamp() (the actual statement wall-clock),
-        // NOT now()/transaction_timestamp(): now() is fixed at transaction start, so
-        // under concurrent writers a row can commit with an updated_at behind another
-        // already-committed row, slipping past the notification-indexer's keyset cursor.
-        // clock_timestamp() narrows that window (the poller's overlap closes the rest).
+        // updated_at uses clock_timestamp() (the statement's wall-clock time, closer
+        // to the actual write) rather than now() (fixed at transaction start).
         let query = r#"
             INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes, updated_at)
             SELECT object_id, object_type, space_id, upvotes, downvotes, clock_timestamp()
