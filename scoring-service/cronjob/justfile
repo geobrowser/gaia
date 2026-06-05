@@ -12,7 +12,7 @@ run:
 
 # Run tests
 test:
-    uv run pytest
+    uv run --extra dev pytest
 
 # Run with Docker Compose
 docker-run:
