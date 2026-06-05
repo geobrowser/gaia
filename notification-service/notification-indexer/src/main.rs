@@ -26,12 +26,12 @@ use notification_indexer::consumer::{
 use notification_indexer::consumer_lag::LagMonitor;
 use notification_indexer::error::IndexerError;
 use notification_indexer::models::{
-    build_rejection_event, extract_bounty_created, extract_bounty_relations,
-    extract_proposal_comments, handle_bounty_allocated, handle_bounty_created,
-    handle_bounty_interest, handle_bounty_payout, handle_comment, handle_proposal_comment,
-    handle_proposal_created, handle_proposal_executed, handle_proposal_settings_updated,
-    handle_proposal_updated, handle_proposal_voted, merge_recipients, BountyConfig,
-    CommentThreadInfo, NotificationEventType, TargetedRecipients,
+    build_rejection_event, build_vote_threshold_event, extract_bounty_created,
+    extract_bounty_relations, extract_proposal_comments, handle_bounty_allocated,
+    handle_bounty_created, handle_bounty_interest, handle_bounty_payout, handle_comment,
+    handle_proposal_comment, handle_proposal_created, handle_proposal_executed,
+    handle_proposal_settings_updated, handle_proposal_updated, handle_proposal_voted,
+    merge_recipients, BountyConfig, CommentThreadInfo, NotificationEventType, TargetedRecipients,
 };
 use notification_indexer::storage::Storage;
 
@@ -137,6 +137,37 @@ async fn async_main() -> Result<(), IndexerError> {
         );
     }
 
+    // Entity-vote-threshold notifications: notify an entity's creator when its
+    // upvotes reach this value. Set to 0 to disable the vote poller entirely.
+    let vote_threshold: i64 = env::var("VOTE_NOTIFICATION_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10);
+
+    let vote_poll_interval_secs: u64 = env::var("VOTE_POLL_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+
+    // Overlap window (seconds) the vote poller backs its scan up by each tick.
+    // votes_count.updated_at is a wall-clock stamp, but rows can still commit
+    // slightly behind the cursor under concurrent writers; re-scanning a short
+    // trailing window catches them (already_notified + idempotency dedupe the
+    // re-scan). Set to 0 to disable.
+    let vote_poll_overlap_secs: i64 = env::var("VOTE_POLL_OVERLAP_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10);
+
+    // Cold-start lookback (seconds): on the very first poll (no persisted cursor),
+    // only consider entities whose votes changed within this trailing window
+    // instead of replaying all history. Prevents a deploy-time backfill storm that
+    // would notify every already-over-threshold entity. Default 1 day.
+    let vote_cold_start_lookback_secs: i64 = env::var("VOTE_COLD_START_LOOKBACK_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(86_400);
+
     // Initialize storage
     let storage = Storage::connect(&database_url).await?;
     info!("Connected to database");
@@ -184,6 +215,7 @@ async fn async_main() -> Result<(), IndexerError> {
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
     let mut shutdown_rx2 = shutdown_tx.subscribe();
     let mut shutdown_rx3 = shutdown_tx.subscribe();
+    let mut shutdown_rx4 = shutdown_tx.subscribe();
 
     let _signal_handle = tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
@@ -275,6 +307,167 @@ async fn async_main() -> Result<(), IndexerError> {
             }
         }
     });
+
+    // Spawn entity-vote-threshold poller task.
+    //
+    // Polls votes_count for entities whose upvotes reached VOTE_NOTIFICATION_THRESHOLD
+    // and notifies each entity's creator. Uses a persisted keyset cursor on
+    // (updated_at, id) so each poll only scans rows whose counts changed since the
+    // last poll. Disabled when the threshold is <= 0.
+    let vote_poller_handle: Option<tokio::task::JoinHandle<()>> = if vote_threshold > 0 {
+        let vote_storage = Storage::new(storage.pool().clone());
+        info!(
+            threshold = vote_threshold,
+            interval_secs = vote_poll_interval_secs,
+            "Entity-vote-threshold poller enabled"
+        );
+        Some(tokio::spawn(async move {
+            const CURSOR_NAME: &str = "entity_votes_threshold";
+            const BATCH_LIMIT: i64 = 1000;
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(vote_poll_interval_secs));
+
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx4.recv() => {
+                        info!("Vote poller shutting down");
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        // Resume from the persisted cursor. On the very first run
+                        // (no cursor) start a bounded lookback behind now instead of
+                        // epoch, so a fresh deploy doesn't replay every historical
+                        // over-threshold entity (backfill storm).
+                        let (persisted_ts, persisted_id) = match vote_storage.get_poll_cursor(CURSOR_NAME).await {
+                            Ok(Some(c)) => c,
+                            Ok(None) => {
+                                let now_secs = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .map(|d| d.as_secs() as i64)
+                                    .unwrap_or(0);
+                                let start = sqlx::types::chrono::DateTime::<sqlx::types::chrono::Utc>::from_timestamp(
+                                    now_secs - vote_cold_start_lookback_secs,
+                                    0,
+                                )
+                                .unwrap_or_default();
+                                info!(
+                                    lookback_secs = vote_cold_start_lookback_secs,
+                                    "Vote poller cold start — scanning from the lookback window"
+                                );
+                                (start, 0i64)
+                            }
+                            Err(e) => {
+                                error!(error = %e, "Failed to read vote poll cursor; skipping tick");
+                                continue;
+                            }
+                        };
+
+                        // Back the scan start up by the overlap window so rows that
+                        // committed slightly behind the cursor are re-examined. The
+                        // persisted high-water (hw_*) never moves backward, so the
+                        // overlap only re-scans a bounded trailing window each tick;
+                        // already_notified + idempotency make the re-scan a no-op.
+                        let mut cur_ts = sqlx::types::chrono::DateTime::<sqlx::types::chrono::Utc>::from_timestamp(
+                            persisted_ts.timestamp() - vote_poll_overlap_secs,
+                            0,
+                        )
+                        .unwrap_or(persisted_ts);
+                        let mut cur_id = 0i64;
+                        let mut hw_ts = persisted_ts;
+                        let mut hw_id = persisted_id;
+
+                        loop {
+                            let rows = match vote_storage
+                                .find_entity_vote_counts_since(cur_ts, cur_id, vote_threshold, BATCH_LIMIT)
+                                .await
+                            {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    error!(error = %e, "Failed to query entity vote counts");
+                                    break;
+                                }
+                            };
+                            let batch_len = rows.len();
+                            if batch_len == 0 {
+                                break;
+                            }
+
+                            let mut had_error = false;
+                            for row in &rows {
+                                // Skip entities already notified at this threshold
+                                // (the anti-check) — but still advance the cursor.
+                                if row.upvotes >= vote_threshold && !row.already_notified {
+                                    match vote_storage.find_entity_home_space(row.entity_id).await {
+                                        Ok(Some(creator)) => {
+                                            let mut event = build_vote_threshold_event(
+                                                row.entity_id,
+                                                row.space_id,
+                                                row.upvotes,
+                                                row.downvotes,
+                                                vote_threshold,
+                                            );
+                                            enrich_payload(&vote_storage, &mut event, row.space_id).await;
+                                            match vote_storage.insert_notification_for_user(&event, creator).await {
+                                                Ok(c) if c > 0 => {
+                                                    info!(
+                                                        entity_id = %row.entity_id,
+                                                        upvotes = row.upvotes,
+                                                        threshold = vote_threshold,
+                                                        "Inserted entity vote-threshold notification"
+                                                    );
+                                                }
+                                                Ok(_) => { /* already notified at this threshold */ }
+                                                Err(e) => {
+                                                    error!(error = %e, entity_id = %row.entity_id, "Failed to insert vote-threshold notification");
+                                                    had_error = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        Ok(None) => {
+                                            debug!(entity_id = %row.entity_id, "No creator/home space; skipping vote-threshold notification");
+                                        }
+                                        Err(e) => {
+                                            error!(error = %e, entity_id = %row.entity_id, "DB error resolving entity creator");
+                                            had_error = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                // Page forward over every scanned row...
+                                cur_ts = row.updated_at;
+                                cur_id = row.cursor_id;
+                                // ...and track the high-water (never below the previous cursor).
+                                if (row.updated_at, row.cursor_id) > (hw_ts, hw_id) {
+                                    hw_ts = row.updated_at;
+                                    hw_id = row.cursor_id;
+                                }
+                            }
+
+                            if had_error {
+                                // Don't persist — retry this batch on the next tick.
+                                break;
+                            }
+                            // Persist the high-water after the batch succeeds, so a
+                            // mid-batch DB error retries (idempotency makes re-inserts
+                            // a no-op).
+                            if let Err(e) = vote_storage.set_poll_cursor(CURSOR_NAME, hw_ts, hw_id).await {
+                                error!(error = %e, "Failed to persist vote poll cursor");
+                                break;
+                            }
+
+                            if (batch_len as i64) < BATCH_LIMIT {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+    } else {
+        info!("Entity-vote-threshold poller disabled (VOTE_NOTIFICATION_THRESHOLD <= 0)");
+        None
+    };
 
     // Spawn knowledge edits consumer task
     let ke_handle: tokio::task::JoinHandle<()> = {
@@ -1073,6 +1266,15 @@ async fn async_main() -> Result<(), IndexerError> {
         }
     }
 
+    // Wait for the vote poller to finish (if enabled)
+    if let Some(handle) = vote_poller_handle {
+        match tokio::time::timeout(tokio::time::Duration::from_secs(5), handle).await {
+            Ok(Ok(())) => info!("Vote poller stopped"),
+            Ok(Err(e)) => warn!(error = %e, "Vote poller task failed"),
+            Err(_) => warn!("Vote poller did not stop within 5s, aborting"),
+        }
+    }
+
     info!(
         processed = processed_count,
         errors = error_count,
@@ -1214,6 +1416,12 @@ async fn enrich_payload(
             // Name of the thread root (looked up in its home space, == `space_id`).
             if let Ok(rid) = uuid::Uuid::parse_str(&c.root_id) {
                 c.root_name = storage.lookup_entity_name(rid, space_id).await;
+            }
+        }
+        NotificationData::VoteThreshold(ref mut vt) => {
+            // Name of the entity that hit the threshold (looked up in its vote space).
+            if let Ok(eid) = uuid::Uuid::parse_str(&vt.entity_id) {
+                vt.entity_name = storage.lookup_entity_name(eid, space_id).await;
             }
         }
     }

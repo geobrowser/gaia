@@ -31,6 +31,9 @@ pub enum NotificationEventType {
     ProposalComment,
     /// A comment or reply in a (non-proposal) thread (from `knowledge.edits`).
     Comment,
+    // Vote events
+    /// An entity reached a configured upvote threshold (from the vote poller).
+    EntityVotesThreshold,
 }
 
 impl NotificationEventType {
@@ -48,6 +51,7 @@ impl NotificationEventType {
             NotificationEventType::BountyCreated => "bounty_created",
             NotificationEventType::ProposalComment => "proposal_comment",
             NotificationEventType::Comment => "comment",
+            NotificationEventType::EntityVotesThreshold => "entity_votes_threshold",
         }
     }
 
@@ -65,6 +69,7 @@ impl NotificationEventType {
             | NotificationEventType::BountyPayout
             | NotificationEventType::BountyCreated => "bounty",
             NotificationEventType::ProposalComment | NotificationEventType::Comment => "comment",
+            NotificationEventType::EntityVotesThreshold => "votes",
         }
     }
 
@@ -157,6 +162,7 @@ pub enum NotificationData {
     BountyCreated(BountyCreatedData),
     Comment(CommentData),
     GeneralComment(GeneralCommentData),
+    VoteThreshold(VoteThresholdData),
 }
 
 /// Governance-specific payload fields.
@@ -302,6 +308,24 @@ pub struct GeneralCommentData {
     pub root_name: Option<String>,
 }
 
+/// Payload fields for an entity reaching an upvote threshold (`entity_votes_threshold`).
+#[derive(Debug, Clone, Serialize)]
+pub struct VoteThresholdData {
+    /// The entity that reached the threshold (the recipient is its creator).
+    pub entity_id: String,
+    /// The space the votes were counted in (also the payload `space_id`).
+    pub vote_space_id: String,
+    /// Current upvote total for the entity in that space.
+    pub upvotes: i64,
+    /// Current downvote total for the entity in that space.
+    pub downvotes: i64,
+    /// The configured threshold that was reached.
+    pub threshold: i64,
+    /// Human-readable entity name (best-effort, from KG values table).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity_name: Option<String>,
+}
+
 /// Result of handling a governance event: payload + idempotency key.
 #[derive(Debug)]
 pub struct NotificationEvent {
@@ -322,7 +346,8 @@ impl NotificationEvent {
             NotificationData::Bounty(_)
             | NotificationData::BountyCreated(_)
             | NotificationData::Comment(_)
-            | NotificationData::GeneralComment(_) => None,
+            | NotificationData::GeneralComment(_)
+            | NotificationData::VoteThreshold(_) => None,
         }
     }
 }
@@ -768,6 +793,53 @@ pub fn build_rejection_event(
                 yes_count: None,
                 no_count: None,
                 abstain_count: None,
+            }),
+        },
+    }
+}
+
+/// Build a notification event for an entity that reached an upvote threshold.
+///
+/// Synthesized by the vote poller (not from Kafka). The idempotency key includes
+/// the entity, the vote space, and the threshold, so each entity fires at most
+/// once per space per threshold value — raising the threshold later (a new env
+/// value) re-arms it at the new level.
+pub fn build_vote_threshold_event(
+    entity_id: Uuid,
+    vote_space_id: Uuid,
+    upvotes: i64,
+    downvotes: i64,
+    threshold: i64,
+) -> NotificationEvent {
+    let idempotency_base = format!(
+        "{}:{}:entity_votes_threshold:{}",
+        entity_id, vote_space_id, threshold
+    );
+
+    NotificationEvent {
+        event_type: NotificationEventType::EntityVotesThreshold,
+        idempotency_key: idempotency_base,
+        payload: NotificationPayload {
+            version: PAYLOAD_VERSION,
+            event_type: NotificationEventType::EntityVotesThreshold
+                .as_str()
+                .to_string(),
+            category: NotificationEventType::EntityVotesThreshold
+                .category()
+                .to_string(),
+            space_id: vote_space_id.to_string(),
+            user_space_id: None,
+            idempotency_key: None,
+            block_number: None,
+            timestamp: None,
+            space_name: None,
+            data: NotificationData::VoteThreshold(VoteThresholdData {
+                entity_id: entity_id.to_string(),
+                vote_space_id: vote_space_id.to_string(),
+                upvotes,
+                downvotes,
+                threshold,
+                entity_name: None,
             }),
         },
     }
@@ -3299,5 +3371,77 @@ mod tests {
             .collect();
         assert_eq!(thread_keys.len(), 2, "two comments -> two comment keys");
         assert!(thread_keys.iter().all(|k| k.starts_with("300:2:comment:")));
+    }
+
+    // -----------------------------------------------------------------------
+    // Entity vote-threshold (vote poller)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn entity_votes_threshold_type_strings() {
+        assert_eq!(
+            NotificationEventType::EntityVotesThreshold.as_str(),
+            "entity_votes_threshold"
+        );
+        assert_eq!(
+            NotificationEventType::EntityVotesThreshold.category(),
+            "votes"
+        );
+    }
+
+    #[test]
+    fn build_vote_threshold_event_payload_and_key() {
+        let entity = Uuid::from_bytes([0xE1; 16]);
+        let space = Uuid::from_bytes([0x5E; 16]);
+        let event = build_vote_threshold_event(entity, space, 12, 3, 10);
+
+        assert_eq!(
+            event.event_type,
+            NotificationEventType::EntityVotesThreshold
+        );
+        assert_eq!(
+            event.idempotency_key,
+            format!("{}:{}:entity_votes_threshold:10", entity, space)
+        );
+
+        let json = serde_json::to_value(&event.payload).expect("serialize");
+        assert_eq!(json["event_type"], "entity_votes_threshold");
+        assert_eq!(json["category"], "votes");
+        assert_eq!(json["space_id"], space.to_string()); // vote space
+        assert_eq!(json["entity_id"], entity.to_string());
+        assert_eq!(json["vote_space_id"], space.to_string());
+        assert_eq!(json["upvotes"], 12);
+        assert_eq!(json["downvotes"], 3);
+        assert_eq!(json["threshold"], 10);
+        // user_space_id stamped later by storage during per-user fan-out
+        assert!(json.get("user_space_id").is_none());
+    }
+
+    #[test]
+    fn vote_threshold_keys_differ_by_entity_space_and_threshold() {
+        let e1 = Uuid::from_bytes([0x01; 16]);
+        let e2 = Uuid::from_bytes([0x02; 16]);
+        let s1 = Uuid::from_bytes([0xA1; 16]);
+        let s2 = Uuid::from_bytes([0xA2; 16]);
+
+        let base = build_vote_threshold_event(e1, s1, 10, 0, 10).idempotency_key;
+        // same inputs -> same key (idempotent: fires once per entity/space/threshold)
+        assert_eq!(
+            base,
+            build_vote_threshold_event(e1, s1, 99, 1, 10).idempotency_key
+        );
+        // different entity / space / threshold -> distinct keys
+        assert_ne!(
+            base,
+            build_vote_threshold_event(e2, s1, 10, 0, 10).idempotency_key
+        );
+        assert_ne!(
+            base,
+            build_vote_threshold_event(e1, s2, 10, 0, 10).idempotency_key
+        );
+        assert_ne!(
+            base,
+            build_vote_threshold_event(e1, s1, 10, 0, 25).idempotency_key
+        );
     }
 }
