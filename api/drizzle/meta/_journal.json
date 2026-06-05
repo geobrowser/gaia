@@ -421,6 +421,13 @@
       "when": 1780606712912,
       "tag": "0059_vote_count_updated_at",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1780679566128,
+      "tag": "0060_optimize-entities-ordered-by-property",
+      "breakpoints": true
     }
   ]
 }
