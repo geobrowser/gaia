@@ -17,7 +17,7 @@ import type {AppRuntime} from "../../services/runtime"
 import {isValidUuid, type NormalizedUuid, normalizeUuid, toDashedUuid} from "../../utils/uuid"
 import {diffGroupedEntitySnapshots} from "../diff"
 import {getGroupedEntitySnapshotAtVersion, type QueryError, resolveVersionKey} from "../queries"
-import type {DiffResponse} from "../types"
+import type {DiffResponse, GroupedEntitySnapshot} from "../types"
 import {enrichWithMediaUrls} from "./enrich"
 import {enrichNames} from "./enrich-names"
 import type {DiffResponseV2} from "./types"
@@ -71,17 +71,11 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 			if (!isValidUuid(rawEntityId)) {
 				return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid UUID"}))
 			}
-			if (!rawFromEditId) {
-				return yield* Effect.fail(new ValidationError({message: "fromEditId query parameter is required"}))
-			}
 			if (!rawToEditId) {
 				return yield* Effect.fail(new ValidationError({message: "toEditId query parameter is required"}))
 			}
 			if (!rawSpaceId) {
 				return yield* Effect.fail(new ValidationError({message: "spaceId query parameter is required for diffs"}))
-			}
-			if (!isValidUuid(rawFromEditId)) {
-				return yield* Effect.fail(new ValidationError({message: "fromEditId must be a valid UUID"}))
 			}
 			if (!isValidUuid(rawToEditId)) {
 				return yield* Effect.fail(new ValidationError({message: "toEditId must be a valid UUID"}))
@@ -89,37 +83,53 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 			if (!isValidUuid(rawSpaceId)) {
 				return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
 			}
+			// fromEditId is OPTIONAL: when omitted the endpoint runs in snapshot
+			// mode, returning the entity's state at toEditId as an all-added diff.
+			if (rawFromEditId && !isValidUuid(rawFromEditId)) {
+				return yield* Effect.fail(new ValidationError({message: "fromEditId must be a valid UUID"}))
+			}
 
 			const entityId = normalizeUuid(rawEntityId)
-			const fromEditId = normalizeUuid(rawFromEditId)
 			const toEditId = normalizeUuid(rawToEditId)
 			const spaceId = normalizeUuid(rawSpaceId)
+			const fromEditId = rawFromEditId ? normalizeUuid(rawFromEditId) : null
 
-			const [fromResolved, toResolved] = yield* Effect.all([
-				resolveVersionKey(db, fromEditId),
-				resolveVersionKey(db, toEditId),
-			])
-			if (fromResolved === null) {
-				return yield* Effect.fail(new NotFoundError({message: `Edit '${fromEditId}' not found`}))
-			}
+			const toResolved = yield* resolveVersionKey(db, toEditId)
 			if (toResolved === null) {
 				return yield* Effect.fail(new NotFoundError({message: `Edit '${toEditId}' not found`}))
 			}
+			const fromResolved = fromEditId ? yield* resolveVersionKey(db, fromEditId) : null
+			if (fromEditId && fromResolved === null) {
+				return yield* Effect.fail(new NotFoundError({message: `Edit '${fromEditId}' not found`}))
+			}
 
+			// Snapshot mode (no fromEditId) diffs against an empty "before" → all added.
+			const emptyBefore: GroupedEntitySnapshot = {
+				id: entityId,
+				values: [],
+				relations: [],
+				blocks: [],
+				groupKeys: [],
+				groups: {},
+			}
 			const [beforeSnapshot, afterSnapshot] = yield* Effect.all([
-				getGroupedEntitySnapshotAtVersion(db, entityId, fromResolved.versionKey, spaceId),
+				fromResolved
+					? getGroupedEntitySnapshotAtVersion(db, entityId, fromResolved.versionKey, spaceId)
+					: Effect.succeed(emptyBefore),
 				getGroupedEntitySnapshotAtVersion(db, entityId, toResolved.versionKey, spaceId),
 			])
 
 			const rawDiff = yield* diffGroupedEntitySnapshots(entityId, beforeSnapshot, afterSnapshot)
 			const namedDiff = yield* enrichNames(db, rawDiff)
 			const enrichedDiff = yield* enrichWithMediaUrls(db, namedDiff, {
-				fromVersionKey: fromResolved.versionKey,
+				// In snapshot mode there is no before side, so the from key is unused;
+				// fall back to the to version key to keep the lookup well-formed.
+				fromVersionKey: fromResolved?.versionKey ?? toResolved.versionKey,
 				toVersionKey: toResolved.versionKey,
 				spaceId,
 			})
 
-			const profileMap = yield* resolveCreatorProfiles(db, [fromResolved.createdById, toResolved.createdById])
+			const profileMap = yield* resolveCreatorProfiles(db, [fromResolved?.createdById ?? null, toResolved.createdById])
 
 			// Spread groups at root level to match v1 DiffResponse shape (groups is
 			// recorded as Record<NormalizedUuid, DynamicGroupItem[]> at the JSON root).
@@ -127,9 +137,9 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 			const response = {
 				...rest,
 				...groups,
-				fromEditName: fromResolved.name,
-				fromCreatedById: fromResolved.createdById,
-				fromCreatedBy: fromResolved.createdById ? (profileMap.get(fromResolved.createdById) ?? null) : null,
+				fromEditName: fromResolved?.name ?? null,
+				fromCreatedById: fromResolved?.createdById ?? null,
+				fromCreatedBy: fromResolved?.createdById ? (profileMap.get(fromResolved.createdById) ?? null) : null,
 				toEditName: toResolved.name,
 				toCreatedById: toResolved.createdById,
 				toCreatedBy: toResolved.createdById ? (profileMap.get(toResolved.createdById) ?? null) : null,
