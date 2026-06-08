@@ -17,6 +17,46 @@ const IMAGE_TYPE_ID = normalizeUuid(SystemIds.IMAGE_TYPE)
 const VIDEO_TYPE_ID = normalizeUuid(SystemIds.VIDEO_TYPE)
 const IMAGE_URL_PROPERTY_ID = normalizeUuid(SystemIds.IMAGE_URL_PROPERTY)
 const TYPES_PROPERTY_ID = normalizeUuid(SystemIds.TYPES_PROPERTY)
+const BLOCKS_TYPE_ID = normalizeUuid(SystemIds.BLOCKS)
+
+/**
+ * For a parent entity's BLOCKS relations at `versionKey`, map each target
+ * (data) block id → the BLOCKS relation's reified-relation entity id (= the
+ * "block relation entity" / config entity that holds view/columns/sort).
+ */
+export function getBlockConfigEntityIds(
+	db: NodePgDatabase<Record<string, unknown>>,
+	parentId: NormalizedUuid,
+	blockIds: NormalizedUuid[],
+	versionKey: bigint,
+	spaceId: NormalizedUuid,
+): Effect.Effect<Map<NormalizedUuid, NormalizedUuid>, QueryError> {
+	if (blockIds.length === 0) {
+		return Effect.succeed(new Map())
+	}
+	return Effect.tryPromise({
+		try: async () => {
+			const idsArray = `{${blockIds.join(",")}}`
+			const vk = versionKey.toString()
+			const result = await db.execute<{relation_id: string; to_entity_id: string}>(sql`
+				SELECT relation_id, to_entity_id
+				FROM relation_versions
+				WHERE from_entity_id = ${parentId}::uuid
+				  AND type_id = ${BLOCKS_TYPE_ID}::uuid
+				  AND to_entity_id = ANY(${idsArray}::uuid[])
+				  AND space_id = ${spaceId}::uuid
+				  AND valid_from_key <= ${vk}::bigint
+				  AND (valid_to_key IS NULL OR valid_to_key > ${vk}::bigint)
+			`)
+			const out = new Map<NormalizedUuid, NormalizedUuid>()
+			for (const row of result.rows) {
+				out.set(normalizeUuid(row.to_entity_id), normalizeUuid(row.relation_id))
+			}
+			return out
+		},
+		catch: (error) => new QueryError("getBlockConfigEntityIds", error),
+	}).pipe(Effect.withSpan("queries-v2.getBlockConfigEntityIds", {attributes: {count: blockIds.length}}))
+}
 
 /**
  * Batch-lookup media URLs for entity IDs.

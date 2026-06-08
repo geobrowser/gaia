@@ -31,6 +31,7 @@ const IMAGE_TYPE = "ba4e4146-0010-499d-a0a3-caaa7f579d0e"
 const VIDEO_TYPE = "d7a4817c-9795-405b-93e2-12df759c43f8"
 const IMAGE_URL = "8a743832-c094-4a62-b665-0c3cc2f9c7bc"
 const DATA_BLOCK = "b8803a86-65de-412b-bb35-7e0c84adf473"
+const VIEW_PROPERTY = "1907fd1c-8111-4a3c-a378-b1f353425b65"
 
 // Fixture ids — prefix 90000000-* for isolation + cleanup
 const SPACE = "90000000-0001-4000-8000-000000000001"
@@ -52,6 +53,8 @@ const T_TRAILER = "90000000-0008-4000-8000-000000000002"
 const T_TOPIC = "90000000-0008-4000-8000-000000000003"
 const T_COLLECTION_ITEM = "90000000-0008-4000-8000-000000000004"
 const R_COVER = "90000000-0009-4000-8000-000000000001" // stable relationId → swap
+const CONFIG_ENTITY = "90000000-000b-4000-8000-000000000001" // reified BLOCKS relation entity (holds config)
+const VIEW_TARGET = "90000000-000c-4000-8000-000000000001"
 
 const NAMES: Record<string, string> = {
 	[NAME_PROPERTY]: "Name",
@@ -64,8 +67,9 @@ const NAMES: Record<string, string> = {
 	[TARGET1]: "Target One",
 	[TARGET2]: "Target Two",
 	[PAGE]: "Demo Page",
+	[VIEW_TARGET]: "Gallery View",
 }
-const ALL_IDS = [SPACE, EDIT1, EDIT2, PAGE, OLD_IMG, NEW_IMG, VID, TOPIC, BLOCK_DATA, TARGET1, TARGET2, FILTER_PROP, T_COVER, T_TRAILER, T_TOPIC, T_COLLECTION_ITEM]
+const ALL_IDS = [SPACE, EDIT1, EDIT2, PAGE, OLD_IMG, NEW_IMG, VID, TOPIC, BLOCK_DATA, TARGET1, TARGET2, FILTER_PROP, T_COVER, T_TRAILER, T_TOPIC, T_COLLECTION_ITEM, CONFIG_ENTITY, VIEW_TARGET]
 
 const base = `/v2/versioned/entities/${PAGE}/diff?spaceId=${SPACE}`
 
@@ -74,7 +78,7 @@ async function seed(pool: Pool) {
 	try {
 		await c.query("BEGIN")
 		await c.query(`INSERT INTO spaces (id, type, address) VALUES ($1,'DAO','0x0000000000000000000000000000000000000099') ON CONFLICT (id) DO NOTHING`, [SPACE])
-		for (const id of [PAGE, OLD_IMG, NEW_IMG, VID, TOPIC, BLOCK_DATA, TARGET1, TARGET2, FILTER_PROP, T_COVER, T_TRAILER, T_TOPIC, T_COLLECTION_ITEM]) {
+		for (const id of [PAGE, OLD_IMG, NEW_IMG, VID, TOPIC, BLOCK_DATA, TARGET1, TARGET2, FILTER_PROP, T_COVER, T_TRAILER, T_TOPIC, T_COLLECTION_ITEM, CONFIG_ENTITY, VIEW_TARGET]) {
 			await c.query(`INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block) VALUES ($1,'2026-05-25T00:00:00Z','1',$2,'1') ON CONFLICT DO NOTHING`, [id, "2026-05-25T00:00:00Z"])
 		}
 		await c.query(`INSERT INTO edit_versions (edit_id, block_number, sequence, version_key, created_at, name) VALUES ($1,1,0,$2,'2026-05-25T00:00:00Z','Before') ON CONFLICT DO NOTHING`, [EDIT1, V1])
@@ -107,8 +111,11 @@ async function seed(pool: Pool) {
 		await relVer(crypto.randomUUID(), PAGE, T_TRAILER, VID, V2, null, "b")
 		await relVer(crypto.randomUUID(), PAGE, T_TOPIC, TOPIC, V2, null, "c")
 
-		// data block added at V2: Name + Filter values, Collection-item relations
-		await relVer(crypto.randomUUID(), PAGE, BLOCKS, BLOCK_DATA, V2, null, "d")
+		// data block added at V2: Name + Filter values, Collection-item relations.
+		// The BLOCKS relation's reified-relation entity is CONFIG_ENTITY, which holds
+		// the view/columns config (A2) — must be folded into the data block.
+		await relVer(CONFIG_ENTITY, PAGE, BLOCKS, BLOCK_DATA, V2, null, "d")
+		await relVer(crypto.randomUUID(), CONFIG_ENTITY, VIEW_PROPERTY, VIEW_TARGET, V2, null, "cfg0")
 		await relVer(crypto.randomUUID(), BLOCK_DATA, TYPES, DATA_BLOCK, V2, null, "t")
 		await valVer(BLOCK_DATA, NAME_PROPERTY, V2, null, "Benchmarks")
 		await valVer(BLOCK_DATA, FILTER_PROP, V2, null, '{"filter":"x"}')
@@ -189,10 +196,21 @@ describe.skipIf(SKIP)("v2 entity-diff enrichment", () => {
 		const filter = block?.values?.find((v: any) => v.propertyId === normalizeUuid(FILTER_PROP))
 		expect(filter?.propertyName).toBe("Filter")
 		// Collection-item relations folded in, with spaceId + resolved names; TYPES stripped
-		expect(block?.relations?.length).toBe(2)
+		const items = block?.relations?.filter((r: any) => r.typeId === normalizeUuid(T_COLLECTION_ITEM))
+		expect(items?.length).toBe(2)
 		expect(block?.relations?.every((r: any) => r.spaceId === normalizeUuid(SPACE))).toBe(true)
 		expect(block?.relations?.some((r: any) => r.after?.toEntityName === "Target One")).toBe(true)
 		expect(block?.relations?.some((r: any) => r.typeId === normalizeUuid(TYPES))).toBe(false)
+	})
+
+	it("merges data-block config (view/columns) from the reified BLOCKS relation entity (A2)", async () => {
+		const d = await fullDiff()
+		const block = d.blocks.find((b: any) => b.id === normalizeUuid(BLOCK_DATA))
+		// VIEW_PROPERTY config lives on the BLOCKS relation entity, not the block —
+		// it must be folded into block.relations.
+		const viewRel = block?.relations?.find((r: any) => r.typeId === normalizeUuid(VIEW_PROPERTY))
+		expect(viewRel).toBeDefined()
+		expect(viewRel?.after?.toEntityName).toBe("Gallery View")
 	})
 
 	it("supports snapshot mode (no fromEditId → all-added)", async () => {
