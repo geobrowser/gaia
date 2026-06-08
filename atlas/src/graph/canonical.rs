@@ -741,4 +741,70 @@ mod tests {
         // All explicitly connected nodes are canonical
         assert_eq!(graph.len(), 5);
     }
+
+    #[test]
+    fn test_member_edge_from_root_does_not_grant_canonical() {
+        // Plan 0007: Member edges no longer grant canonical membership.
+        // A MemberAdded(root, X) event must leave X outside the canonical set.
+        let mut state = GraphState::new();
+        let root = create_space(&mut state, 1);
+        let x = create_space(&mut state, 2);
+
+        // Apply a MemberAdded event directly — bypasses the test helpers
+        // so we exercise the same path the chain takes.
+        let member_event = SpaceTopologyEvent {
+            meta: make_block_meta(),
+            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+                source_space_id: root,
+                extension: TrustExtension::MemberAdded { member_space_id: x },
+            }),
+        };
+        state.apply_event(&member_event);
+
+        let mut transitive = TransitiveProcessor::new();
+        let mut processor = CanonicalProcessor::new(root);
+
+        let graph = processor
+            .compute_if_changed(&state, &mut transitive)
+            .unwrap();
+
+        assert_eq!(graph.len(), 1, "canonical set must contain only root");
+        assert!(graph.contains(&root));
+        assert!(
+            !graph.contains(&x),
+            "Member-only reachable space must not be canonical"
+        );
+    }
+
+    #[test]
+    fn test_editor_edge_from_root_does_not_grant_canonical() {
+        // Plan 0007: Editor edges no longer grant canonical membership.
+        // An EditorAdded(root, X) event must leave X outside the canonical set.
+        let mut state = GraphState::new();
+        let root = create_space(&mut state, 1);
+        let x = create_space(&mut state, 2);
+
+        let editor_event = SpaceTopologyEvent {
+            meta: make_block_meta(),
+            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+                source_space_id: root,
+                extension: TrustExtension::EditorAdded { member_space_id: x },
+            }),
+        };
+        state.apply_event(&editor_event);
+
+        let mut transitive = TransitiveProcessor::new();
+        let mut processor = CanonicalProcessor::new(root);
+
+        let graph = processor
+            .compute_if_changed(&state, &mut transitive)
+            .unwrap();
+
+        assert_eq!(graph.len(), 1, "canonical set must contain only root");
+        assert!(graph.contains(&root));
+        assert!(
+            !graph.contains(&x),
+            "Editor-only reachable space must not be canonical"
+        );
+    }
 }

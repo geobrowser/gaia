@@ -59,7 +59,7 @@ pub enum ProposalActionPayload {
     /// Set the space topic
     SetTopic { target_topic_id: Uuid },
     /// Unset the current space topic
-    UnsetTopic,
+    UnsetTopic { target_topic_id: Uuid },
     /// Unknown or undecoded action
     Unknown,
 }

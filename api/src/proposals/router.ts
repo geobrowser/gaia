@@ -150,7 +150,8 @@ function mapToActionResponse(action: ProposalWithVotes["actions"][number]): Acti
 			if (!action.targetId) return {actionType: "UNKNOWN"}
 			return {actionType: "SET_TOPIC", targetTopicId: action.targetId}
 		case "UnsetTopic":
-			return {actionType: "UNSET_TOPIC"}
+			if (!action.targetId) return {actionType: "UNKNOWN"}
+			return {actionType: "UNSET_TOPIC", targetTopicId: action.targetId}
 		default:
 			return {actionType: "UNKNOWN"}
 	}

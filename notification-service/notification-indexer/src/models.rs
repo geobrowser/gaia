@@ -8,6 +8,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::error::HandlerError;
+use crate::ids;
 
 /// Notification event types sent to webhooks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +24,16 @@ pub enum NotificationEventType {
     BountyInterest,
     BountyAllocated,
     BountyPayout,
+    /// A new Bounty entity was created in a space (from `knowledge.edits`).
+    BountyCreated,
+    // Comment events
+    /// A comment was posted on a proposal (from `knowledge.edits`).
+    ProposalComment,
+    /// A comment or reply in a (non-proposal) thread (from `knowledge.edits`).
+    Comment,
+    // Vote events
+    /// An entity reached a configured upvote threshold (from the vote poller).
+    EntityVotesThreshold,
 }
 
 impl NotificationEventType {
@@ -37,6 +48,10 @@ impl NotificationEventType {
             NotificationEventType::BountyInterest => "bounty_interest",
             NotificationEventType::BountyAllocated => "bounty_allocated",
             NotificationEventType::BountyPayout => "bounty_payout",
+            NotificationEventType::BountyCreated => "bounty_created",
+            NotificationEventType::ProposalComment => "proposal_comment",
+            NotificationEventType::Comment => "comment",
+            NotificationEventType::EntityVotesThreshold => "entity_votes_threshold",
         }
     }
 
@@ -51,9 +66,58 @@ impl NotificationEventType {
             | NotificationEventType::ProposalRejected => "governance",
             NotificationEventType::BountyInterest
             | NotificationEventType::BountyAllocated
-            | NotificationEventType::BountyPayout => "bounty",
+            | NotificationEventType::BountyPayout
+            | NotificationEventType::BountyCreated => "bounty",
+            NotificationEventType::ProposalComment | NotificationEventType::Comment => "comment",
+            NotificationEventType::EntityVotesThreshold => "votes",
         }
     }
+
+    /// Recipients to notify *in addition to* the event space's editors.
+    ///
+    /// Editors always receive the base governance event; these targeted
+    /// recipients are delivered on top so the colleague's user-centric asks are
+    /// covered. Filtering to a precise audience is done app-side, so we resolve
+    /// and deliver the relevant superset.
+    pub fn targeted_recipients(&self) -> TargetedRecipients {
+        match self {
+            // "your proposal was voted on / approved / rejected"
+            NotificationEventType::ProposalVoted
+            | NotificationEventType::ProposalExecuted
+            | NotificationEventType::ProposalRejected => TargetedRecipients::Proposer,
+            // "a new version of a proposal you voted on was submitted"
+            NotificationEventType::ProposalUpdated => TargetedRecipients::Voters,
+            // proposal_created / settings_updated and all bounty events: editors
+            // (or the bounty's own single recipient) only.
+            _ => TargetedRecipients::None,
+        }
+    }
+}
+
+/// Recipients to resolve *in addition to* a space's editors for a governance
+/// event. The variant determines which DB resolver the consumer calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetedRecipients {
+    /// The proposer (`proposals.proposed_by`).
+    Proposer,
+    /// Prior voters of the proposal (`proposal_votes.voter_id`).
+    Voters,
+    /// Editors only — no additional targeted recipients.
+    None,
+}
+
+/// Merge targeted recipients into the editor set, returning a sorted,
+/// de-duplicated recipient list.
+///
+/// Pure so the fan-out audience is unit-testable without a database. A user who
+/// is both an editor and the proposer/a voter appears exactly once; the storage
+/// layer's `ON CONFLICT (idempotency_key) DO NOTHING` is a second line of
+/// defense against duplicates.
+pub fn merge_recipients(mut editors: Vec<Uuid>, extra: Vec<Uuid>) -> Vec<Uuid> {
+    editors.extend(extra);
+    editors.sort();
+    editors.dedup();
+    editors
 }
 
 /// Webhook payload version. Increment when the payload schema changes
@@ -95,6 +159,10 @@ pub struct NotificationPayload {
 pub enum NotificationData {
     Governance(GovernanceData),
     Bounty(BountyData),
+    BountyCreated(BountyCreatedData),
+    Comment(CommentData),
+    GeneralComment(GeneralCommentData),
+    VoteThreshold(VoteThresholdData),
 }
 
 /// Governance-specific payload fields.
@@ -196,12 +264,92 @@ pub struct BountyData {
     pub curator_name: Option<String>,
 }
 
+/// Payload fields for a newly-created bounty (`bounty_created`).
+#[derive(Debug, Clone, Serialize)]
+pub struct BountyCreatedData {
+    /// The new bounty entity.
+    pub bounty_entity_id: String,
+    /// The space the bounty was created in (recipients are its editors).
+    pub bounty_space_id: String,
+    /// Human-readable bounty name (best-effort, from KG values table).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounty_name: Option<String>,
+}
+
+/// Payload fields for a comment on a proposal (`proposal_comment`).
+#[derive(Debug, Clone, Serialize)]
+pub struct CommentData {
+    /// The comment entity that was created.
+    pub comment_entity_id: String,
+    /// The proposal the comment replies to.
+    pub proposal_id: String,
+    /// The commenter's personal space (the `HermesEdit.space_id` the comment was
+    /// published from).
+    pub commenter_space_id: String,
+    /// Human-readable proposal name (best-effort, from proposals table).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposal_name: Option<String>,
+}
+
+/// Payload fields for a comment/reply in a non-proposal thread (`comment`).
+#[derive(Debug, Clone, Serialize)]
+pub struct GeneralCommentData {
+    /// The comment entity that was created.
+    pub comment_entity_id: String,
+    /// The entity the comment directly replies to (a comment, for a reply, or the
+    /// commented-on entity for a top-level comment).
+    pub parent_id: String,
+    /// The thread root — the entity the whole thread hangs off of.
+    pub root_id: String,
+    /// The commenter's personal space (the `HermesEdit.space_id`).
+    pub commenter_space_id: String,
+    /// Human-readable name of the thread root (best-effort).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_name: Option<String>,
+}
+
+/// Payload fields for an entity reaching an upvote threshold (`entity_votes_threshold`).
+#[derive(Debug, Clone, Serialize)]
+pub struct VoteThresholdData {
+    /// The entity that reached the threshold (the recipient is its creator).
+    pub entity_id: String,
+    /// The space the votes were counted in (also the payload `space_id`).
+    pub vote_space_id: String,
+    /// Current upvote total for the entity in that space.
+    pub upvotes: i64,
+    /// Current downvote total for the entity in that space.
+    pub downvotes: i64,
+    /// The configured threshold that was reached.
+    pub threshold: i64,
+    /// Human-readable entity name (best-effort, from KG values table).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entity_name: Option<String>,
+}
+
 /// Result of handling a governance event: payload + idempotency key.
 #[derive(Debug)]
 pub struct NotificationEvent {
     pub event_type: NotificationEventType,
     pub idempotency_key: String,
     pub payload: NotificationPayload,
+}
+
+impl NotificationEvent {
+    /// The governance proposal id this event concerns, parsed from the payload.
+    ///
+    /// Returns `None` for non-governance events or an unparseable id. Used to
+    /// resolve targeted recipients (the proposer for voted/executed events, the
+    /// prior voters for an updated proposal).
+    pub fn governance_proposal_id(&self) -> Option<Uuid> {
+        match &self.payload.data {
+            NotificationData::Governance(gov) => Uuid::parse_str(&gov.proposal_id).ok(),
+            NotificationData::Bounty(_)
+            | NotificationData::BountyCreated(_)
+            | NotificationData::Comment(_)
+            | NotificationData::GeneralComment(_)
+            | NotificationData::VoteThreshold(_) => None,
+        }
+    }
 }
 
 /// Build a notification event from a PROPOSAL_CREATED protobuf message.
@@ -650,6 +798,53 @@ pub fn build_rejection_event(
     }
 }
 
+/// Build a notification event for an entity that reached an upvote threshold.
+///
+/// Synthesized by the vote poller (not from Kafka). The idempotency key includes
+/// the entity, the vote space, and the threshold, so each entity fires at most
+/// once per space per threshold value — raising the threshold later (a new env
+/// value) re-arms it at the new level.
+pub fn build_vote_threshold_event(
+    entity_id: Uuid,
+    vote_space_id: Uuid,
+    upvotes: i64,
+    downvotes: i64,
+    threshold: i64,
+) -> NotificationEvent {
+    let idempotency_base = format!(
+        "{}:{}:entity_votes_threshold:{}",
+        entity_id, vote_space_id, threshold
+    );
+
+    NotificationEvent {
+        event_type: NotificationEventType::EntityVotesThreshold,
+        idempotency_key: idempotency_base,
+        payload: NotificationPayload {
+            version: PAYLOAD_VERSION,
+            event_type: NotificationEventType::EntityVotesThreshold
+                .as_str()
+                .to_string(),
+            category: NotificationEventType::EntityVotesThreshold
+                .category()
+                .to_string(),
+            space_id: vote_space_id.to_string(),
+            user_space_id: None,
+            idempotency_key: None,
+            block_number: None,
+            timestamp: None,
+            space_name: None,
+            data: NotificationData::VoteThreshold(VoteThresholdData {
+                entity_id: entity_id.to_string(),
+                vote_space_id: vote_space_id.to_string(),
+                upvotes,
+                downvotes,
+                threshold,
+                entity_name: None,
+            }),
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Bounty configuration and handlers
 // ---------------------------------------------------------------------------
@@ -736,7 +931,13 @@ pub struct BountyRelationInfo {
 
 /// Build a notification event for a bounty interest expression.
 pub fn handle_bounty_interest(info: &BountyRelationInfo) -> NotificationEvent {
-    let idempotency_base = format!("{}:{}:bounty_interest", info.block_number, info.sequence);
+    // Include relation_id: a single edit can carry multiple interest relations,
+    // all sharing (block, sequence). Without the relation id they'd hash to the
+    // same per-user key and all but one would be silently dropped on insert.
+    let idempotency_base = format!(
+        "{}:{}:bounty_interest:{}",
+        info.block_number, info.sequence, info.relation_id
+    );
 
     NotificationEvent {
         event_type: NotificationEventType::BountyInterest,
@@ -767,7 +968,12 @@ pub fn handle_bounty_interest(info: &BountyRelationInfo) -> NotificationEvent {
 
 /// Build a notification event for a bounty allocation.
 pub fn handle_bounty_allocated(info: &BountyRelationInfo) -> NotificationEvent {
-    let idempotency_base = format!("{}:{}:bounty_allocated", info.block_number, info.sequence);
+    // Include relation_id — a single edit can carry multiple allocation
+    // relations sharing (block, sequence); see handle_bounty_interest.
+    let idempotency_base = format!(
+        "{}:{}:bounty_allocated:{}",
+        info.block_number, info.sequence, info.relation_id
+    );
 
     NotificationEvent {
         event_type: NotificationEventType::BountyAllocated,
@@ -800,7 +1006,12 @@ pub fn handle_bounty_allocated(info: &BountyRelationInfo) -> NotificationEvent {
 
 /// Build a notification event for a bounty payout.
 pub fn handle_bounty_payout(info: &BountyRelationInfo) -> NotificationEvent {
-    let idempotency_base = format!("{}:{}:bounty_payout", info.block_number, info.sequence);
+    // Include relation_id — a single edit can carry multiple payout relations
+    // sharing (block, sequence); see handle_bounty_interest.
+    let idempotency_base = format!(
+        "{}:{}:bounty_payout:{}",
+        info.block_number, info.sequence, info.relation_id
+    );
 
     NotificationEvent {
         event_type: NotificationEventType::BountyPayout,
@@ -894,6 +1105,269 @@ pub fn extract_bounty_relations(
         }
     }
     Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Bounty created (Phase 3a) — a new Bounty entity created in a space
+// ---------------------------------------------------------------------------
+
+/// A new bounty detected in a `HermesEdit` (entity → Types → Bounty).
+#[derive(Debug, Clone)]
+pub struct BountyCreatedInfo {
+    pub bounty_entity_id: Uuid,
+    /// The space the bounty was created in (the edit's space). Recipients are
+    /// this space's editors.
+    pub space_id: Uuid,
+    pub block_number: u64,
+    pub sequence: u64,
+    pub timestamp: u64,
+}
+
+/// Build a notification event for a newly-created bounty.
+pub fn handle_bounty_created(info: &BountyCreatedInfo) -> NotificationEvent {
+    // Include bounty_entity_id: extract_bounty_created can return several new
+    // bounties from one edit, all sharing (block, sequence). The entity id makes
+    // each logical event unique so none are dropped as false duplicates.
+    let idempotency_base = format!(
+        "{}:{}:bounty_created:{}",
+        info.block_number, info.sequence, info.bounty_entity_id
+    );
+
+    NotificationEvent {
+        event_type: NotificationEventType::BountyCreated,
+        idempotency_key: idempotency_base,
+        payload: NotificationPayload {
+            version: PAYLOAD_VERSION,
+            event_type: NotificationEventType::BountyCreated.as_str().to_string(),
+            category: NotificationEventType::BountyCreated.category().to_string(),
+            space_id: info.space_id.to_string(),
+            user_space_id: None,
+            idempotency_key: None,
+            block_number: Some(info.block_number),
+            timestamp: Some(info.timestamp),
+            space_name: None,
+            data: NotificationData::BountyCreated(BountyCreatedData {
+                bounty_entity_id: info.bounty_entity_id.to_string(),
+                bounty_space_id: info.space_id.to_string(),
+                bounty_name: None,
+            }),
+        },
+    }
+}
+
+/// Extract newly-created bounties from a `HermesEdit`.
+///
+/// Matches `CreateRelation` ops that type an entity as a Bounty
+/// (`relation_type == Types`, `to == Bounty type`); the relation's `from` is the
+/// new bounty entity.
+pub fn extract_bounty_created(
+    edit: &hermes_schema::pb::knowledge::HermesEdit,
+) -> Result<Vec<BountyCreatedInfo>, crate::error::HandlerError> {
+    use crate::error::HandlerError;
+
+    let meta = edit.meta.as_ref().ok_or(HandlerError::MissingMetadata)?;
+    let block_number = meta.block_number;
+    let sequence = u64::from(meta.sequence);
+    let timestamp = meta.created_at;
+    let edit_space_id = Uuid::from_slice(&edit.space_id).map_err(HandlerError::Uuid)?;
+
+    let decoded = grc_20::decode_edit(&edit.payload)
+        .map_err(|e| HandlerError::Grc20Decode(format!("{}", e)))?;
+
+    let types_rel = ids::types_relation_type();
+    let bounty_type = ids::bounty_type();
+
+    let mut results = Vec::new();
+    for op in &decoded.ops {
+        if let grc_20::Op::CreateRelation(rel) = op {
+            if Uuid::from_bytes(rel.relation_type) == types_rel
+                && Uuid::from_bytes(rel.to) == bounty_type
+            {
+                results.push(BountyCreatedInfo {
+                    bounty_entity_id: Uuid::from_bytes(rel.from),
+                    space_id: edit_space_id,
+                    block_number,
+                    sequence,
+                    timestamp,
+                });
+            }
+        }
+    }
+    Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Proposal comments (Phase 2a) — a comment posted on a proposal
+// ---------------------------------------------------------------------------
+
+/// A comment (Comment entity that replies to a parent) detected in a
+/// `HermesEdit`. The parent is a *candidate* proposal — the consumer confirms it
+/// is a proposal (and resolves the recipient/space) via the DB.
+#[derive(Debug, Clone)]
+pub struct ProposalCommentInfo {
+    pub comment_entity_id: Uuid,
+    /// The entity the comment replies to (candidate proposal id).
+    pub proposal_id: Uuid,
+    /// The commenter's personal space (the edit's space).
+    pub commenter_space_id: Uuid,
+    /// The proposal's owning space — `nil` until resolved by the consumer
+    /// (`find_proposal_proposer_and_space`).
+    pub proposal_space_id: Uuid,
+    pub block_number: u64,
+    pub sequence: u64,
+    pub timestamp: u64,
+}
+
+/// Build a notification event for a comment on a proposal.
+pub fn handle_proposal_comment(info: &ProposalCommentInfo) -> NotificationEvent {
+    // Include comment_entity_id: extract_proposal_comments can return multiple
+    // comments from one edit, all sharing (block, sequence). The comment entity
+    // id makes each logical event unique so none are dropped as false duplicates.
+    let idempotency_base = format!(
+        "{}:{}:proposal_comment:{}",
+        info.block_number, info.sequence, info.comment_entity_id
+    );
+
+    NotificationEvent {
+        event_type: NotificationEventType::ProposalComment,
+        idempotency_key: idempotency_base,
+        payload: NotificationPayload {
+            version: PAYLOAD_VERSION,
+            event_type: NotificationEventType::ProposalComment.as_str().to_string(),
+            category: NotificationEventType::ProposalComment
+                .category()
+                .to_string(),
+            space_id: info.proposal_space_id.to_string(),
+            user_space_id: None,
+            idempotency_key: None,
+            block_number: Some(info.block_number),
+            timestamp: Some(info.timestamp),
+            space_name: None,
+            data: NotificationData::Comment(CommentData {
+                comment_entity_id: info.comment_entity_id.to_string(),
+                proposal_id: info.proposal_id.to_string(),
+                commenter_space_id: info.commenter_space_id.to_string(),
+                proposal_name: None,
+            }),
+        },
+    }
+}
+
+/// Extract proposal comments from a `HermesEdit`.
+///
+/// A comment is a `Comment`-typed entity (`Types → Comment`) with a `Reply to`
+/// relation pointing at its parent. This returns one [`ProposalCommentInfo`] per
+/// such reply; the consumer then checks whether the parent is actually a
+/// proposal (general comments on non-proposal entities are a later phase).
+pub fn extract_proposal_comments(
+    edit: &hermes_schema::pb::knowledge::HermesEdit,
+) -> Result<Vec<ProposalCommentInfo>, crate::error::HandlerError> {
+    use crate::error::HandlerError;
+    use std::collections::HashSet;
+
+    let meta = edit.meta.as_ref().ok_or(HandlerError::MissingMetadata)?;
+    let block_number = meta.block_number;
+    let sequence = u64::from(meta.sequence);
+    let timestamp = meta.created_at;
+    let edit_space_id = Uuid::from_slice(&edit.space_id).map_err(HandlerError::Uuid)?;
+
+    let decoded = grc_20::decode_edit(&edit.payload)
+        .map_err(|e| HandlerError::Grc20Decode(format!("{}", e)))?;
+
+    let types_rel = ids::types_relation_type();
+    let comment_type = ids::comment_type();
+    let reply_to = ids::reply_to_property();
+
+    // Pass 1: entities typed as Comment in this edit (from → Types → Comment).
+    let mut comment_entities: HashSet<[u8; 16]> = HashSet::new();
+    for op in &decoded.ops {
+        if let grc_20::Op::CreateRelation(rel) = op {
+            if Uuid::from_bytes(rel.relation_type) == types_rel
+                && Uuid::from_bytes(rel.to) == comment_type
+            {
+                comment_entities.insert(rel.from);
+            }
+        }
+    }
+
+    // Pass 2: Reply-to relations originating from a Comment entity → its parent.
+    let mut results = Vec::new();
+    for op in &decoded.ops {
+        if let grc_20::Op::CreateRelation(rel) = op {
+            if Uuid::from_bytes(rel.relation_type) == reply_to
+                && comment_entities.contains(&rel.from)
+            {
+                results.push(ProposalCommentInfo {
+                    comment_entity_id: Uuid::from_bytes(rel.from),
+                    proposal_id: Uuid::from_bytes(rel.to),
+                    commenter_space_id: edit_space_id,
+                    proposal_space_id: Uuid::nil(), // resolved via DB in the consumer
+                    block_number,
+                    sequence,
+                    timestamp,
+                });
+            }
+        }
+    }
+    Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// General comment threads (Phase 2b) — comments/replies not directly on a proposal
+// ---------------------------------------------------------------------------
+
+/// A comment in a (non-proposal) thread, with the thread context resolved by the
+/// consumer. Recipients are the thread participants plus the root's creator.
+#[derive(Debug, Clone)]
+pub struct CommentThreadInfo {
+    pub comment_entity_id: Uuid,
+    /// The entity the comment directly replies to.
+    pub parent_id: Uuid,
+    /// The thread root (the "thing being commented on"), resolved by walking
+    /// `Reply to` up from `parent_id`.
+    pub root_id: Uuid,
+    /// The commenter's personal space (the edit's space).
+    pub commenter_space_id: Uuid,
+    /// The root's home/owning space — used as the payload `space_id` and for
+    /// name enrichment. Resolved by the consumer.
+    pub root_space_id: Uuid,
+    pub block_number: u64,
+    pub sequence: u64,
+    pub timestamp: u64,
+}
+
+/// Build a notification event for a comment/reply in a thread.
+pub fn handle_comment(info: &CommentThreadInfo) -> NotificationEvent {
+    // Include comment_entity_id: a single edit can carry multiple thread
+    // comments sharing (block, sequence). The comment entity id (globally unique)
+    // makes each logical event unique so none are dropped as false duplicates.
+    let idempotency_base = format!(
+        "{}:{}:comment:{}",
+        info.block_number, info.sequence, info.comment_entity_id
+    );
+
+    NotificationEvent {
+        event_type: NotificationEventType::Comment,
+        idempotency_key: idempotency_base,
+        payload: NotificationPayload {
+            version: PAYLOAD_VERSION,
+            event_type: NotificationEventType::Comment.as_str().to_string(),
+            category: NotificationEventType::Comment.category().to_string(),
+            space_id: info.root_space_id.to_string(),
+            user_space_id: None,
+            idempotency_key: None,
+            block_number: Some(info.block_number),
+            timestamp: Some(info.timestamp),
+            space_name: None,
+            data: NotificationData::GeneralComment(GeneralCommentData {
+                comment_entity_id: info.comment_entity_id.to_string(),
+                parent_id: info.parent_id.to_string(),
+                root_id: info.root_id.to_string(),
+                commenter_space_id: info.commenter_space_id.to_string(),
+                root_name: None,
+            }),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -1352,7 +1826,10 @@ mod tests {
         let event = handle_bounty_interest(&info);
 
         assert_eq!(event.event_type, NotificationEventType::BountyInterest);
-        assert_eq!(event.idempotency_key, "50000:7:bounty_interest");
+        assert_eq!(
+            event.idempotency_key,
+            format!("50000:7:bounty_interest:{}", info.relation_id)
+        );
 
         let json = serde_json::to_value(&event.payload).expect("should serialize");
         assert_eq!(json["event_type"], "bounty_interest");
@@ -1380,7 +1857,10 @@ mod tests {
         let event = handle_bounty_allocated(&info);
 
         assert_eq!(event.event_type, NotificationEventType::BountyAllocated);
-        assert_eq!(event.idempotency_key, "50000:7:bounty_allocated");
+        assert_eq!(
+            event.idempotency_key,
+            format!("50000:7:bounty_allocated:{}", info.relation_id)
+        );
 
         let json = serde_json::to_value(&event.payload).expect("should serialize");
         assert_eq!(json["event_type"], "bounty_allocated");
@@ -1400,7 +1880,10 @@ mod tests {
         let event = handle_bounty_payout(&info);
 
         assert_eq!(event.event_type, NotificationEventType::BountyPayout);
-        assert_eq!(event.idempotency_key, "50000:7:bounty_payout");
+        assert_eq!(
+            event.idempotency_key,
+            format!("50000:7:bounty_payout:{}", info.relation_id)
+        );
 
         let json = serde_json::to_value(&event.payload).expect("should serialize");
         assert_eq!(json["event_type"], "bounty_payout");
@@ -1524,7 +2007,10 @@ mod tests {
         let event = handle_bounty_interest(&info);
 
         assert_eq!(event.event_type, NotificationEventType::BountyInterest);
-        assert_eq!(event.idempotency_key, "50000:7:bounty_interest");
+        assert_eq!(
+            event.idempotency_key,
+            format!("50000:7:bounty_interest:{}", info.relation_id)
+        );
 
         let json = serde_json::to_value(&event.payload).expect("should serialize");
         assert_eq!(json["event_type"], "bounty_interest");
@@ -1575,7 +2061,10 @@ mod tests {
         let event = handle_bounty_allocated(&info);
 
         assert_eq!(event.event_type, NotificationEventType::BountyAllocated);
-        assert_eq!(event.idempotency_key, "50000:7:bounty_allocated");
+        assert_eq!(
+            event.idempotency_key,
+            format!("50000:7:bounty_allocated:{}", info.relation_id)
+        );
 
         let json = serde_json::to_value(&event.payload).expect("should serialize");
         assert_eq!(json["event_type"], "bounty_allocated");
@@ -1633,7 +2122,10 @@ mod tests {
         let event = handle_bounty_payout(&info);
 
         assert_eq!(event.event_type, NotificationEventType::BountyPayout);
-        assert_eq!(event.idempotency_key, "50000:7:bounty_payout");
+        assert_eq!(
+            event.idempotency_key,
+            format!("50000:7:bounty_payout:{}", info.relation_id)
+        );
 
         let json = serde_json::to_value(&event.payload).expect("should serialize");
         assert_eq!(json["event_type"], "bounty_payout");
@@ -1714,7 +2206,7 @@ mod tests {
 
     #[test]
     fn test_bounty_idempotency_keys_differ_by_block() {
-        let mut info1 = make_bounty_info();
+        let info1 = make_bounty_info();
         let mut info2 = make_bounty_info();
         info2.block_number = 50001;
 
@@ -1725,13 +2217,114 @@ mod tests {
 
     #[test]
     fn test_bounty_idempotency_keys_differ_by_sequence() {
-        let mut info1 = make_bounty_info();
+        let info1 = make_bounty_info();
         let mut info2 = make_bounty_info();
         info2.sequence = 8;
 
         let event1 = handle_bounty_interest(&info1);
         let event2 = handle_bounty_interest(&info2);
         assert_ne!(event1.idempotency_key, event2.idempotency_key);
+    }
+
+    // -----------------------------------------------------------------------
+    // Same-edit uniqueness: multiple logical events of the same type from one
+    // HermesEdit share (block, sequence) but must NOT collide on the idempotency
+    // key, or all-but-one would be silently dropped by the outbox ON CONFLICT.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bounty_relations_same_edit_differ_by_relation_id() {
+        // Two interest relations in one edit: same block/sequence, different
+        // relation_id (and even the same bounty/curator) must yield distinct keys.
+        let mut a = make_bounty_info();
+        let mut b = make_bounty_info();
+        a.relation_id = Uuid::from_bytes([0xA1; 16]);
+        b.relation_id = Uuid::from_bytes([0xB2; 16]);
+
+        for build in [
+            handle_bounty_interest,
+            handle_bounty_allocated,
+            handle_bounty_payout,
+        ] {
+            let ka = build(&a).idempotency_key;
+            let kb = build(&b).idempotency_key;
+            assert_ne!(
+                ka, kb,
+                "same-edit relations must not share an idempotency key"
+            );
+            assert!(ka.contains(&a.relation_id.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_bounty_created_same_edit_differ_by_entity() {
+        // Two bounties created in one edit must not collide.
+        let base = BountyCreatedInfo {
+            bounty_entity_id: Uuid::from_bytes([0x01; 16]),
+            space_id: Uuid::from_bytes([0x5E; 16]),
+            block_number: 100,
+            sequence: 0,
+            timestamp: 1700000000,
+        };
+        let other = BountyCreatedInfo {
+            bounty_entity_id: Uuid::from_bytes([0x02; 16]),
+            ..base.clone()
+        };
+        let k1 = handle_bounty_created(&base).idempotency_key;
+        let k2 = handle_bounty_created(&other).idempotency_key;
+        assert_ne!(k1, k2);
+        assert_eq!(
+            k1,
+            format!("100:0:bounty_created:{}", base.bounty_entity_id)
+        );
+    }
+
+    #[test]
+    fn test_proposal_comment_same_edit_differ_by_comment() {
+        // Two proposal comments in one edit must not collide.
+        let base = ProposalCommentInfo {
+            comment_entity_id: Uuid::from_bytes([0xC1; 16]),
+            proposal_id: Uuid::from_bytes([0x9A; 16]),
+            commenter_space_id: Uuid::from_bytes([0x11; 16]),
+            proposal_space_id: Uuid::from_bytes([0x5E; 16]),
+            block_number: 100,
+            sequence: 2,
+            timestamp: 1700000000,
+        };
+        let other = ProposalCommentInfo {
+            comment_entity_id: Uuid::from_bytes([0xC2; 16]),
+            ..base.clone()
+        };
+        let k1 = handle_proposal_comment(&base).idempotency_key;
+        let k2 = handle_proposal_comment(&other).idempotency_key;
+        assert_ne!(k1, k2);
+        assert_eq!(
+            k1,
+            format!("100:2:proposal_comment:{}", base.comment_entity_id)
+        );
+    }
+
+    #[test]
+    fn test_comment_thread_same_edit_differ_by_comment() {
+        // Two thread comments in one edit must not collide.
+        let base = CommentThreadInfo {
+            comment_entity_id: Uuid::from_bytes([0xC1; 16]),
+            parent_id: Uuid::from_bytes([0x91; 16]),
+            root_id: Uuid::from_bytes([0x9A; 16]),
+            commenter_space_id: Uuid::from_bytes([0x11; 16]),
+            root_space_id: Uuid::from_bytes([0x5E; 16]),
+            block_number: 100,
+            sequence: 4,
+            timestamp: 1700000000,
+        };
+        let other = CommentThreadInfo {
+            comment_entity_id: Uuid::from_bytes([0xC2; 16]),
+            ..base.clone()
+        };
+        let k1 = handle_comment(&base).idempotency_key;
+        let k2 = handle_comment(&other).idempotency_key;
+        assert_ne!(k1, k2);
+        assert_eq!(k1, format!("100:4:comment:{}", base.comment_entity_id));
     }
 
     // -----------------------------------------------------------------------
@@ -2293,5 +2886,562 @@ mod tests {
 
         let result = extract_bounty_relations(&hermes_edit, &config).expect("should succeed");
         assert!(result.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // governance_proposal_id (drives targeted proposer/voter recipients)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn governance_proposal_id_extracts_from_governance_event() {
+        let msg = HermesProposalCreated {
+            space_id: make_test_uuid(0x01),
+            proposer_id: make_test_uuid(0x02),
+            proposal_id: make_test_uuid(0x03),
+            voting_mode: 0,
+            actions: vec![],
+            settings: None,
+            meta: Some(make_metadata(1, 1)),
+        };
+        let event = handle_proposal_created(&msg).expect("should parse");
+        let expected = Uuid::from_slice(&make_test_uuid(0x03)).expect("valid uuid");
+        assert_eq!(event.governance_proposal_id(), Some(expected));
+    }
+
+    #[test]
+    fn governance_proposal_id_is_none_for_bounty_event() {
+        let info = BountyRelationInfo {
+            relation_id: Uuid::nil(),
+            bounty_entity_id: Uuid::nil(),
+            curator_entity_id: Uuid::nil(),
+            curator_space_id: Uuid::nil(),
+            bounty_space_id: Uuid::nil(),
+            proposal_id: None,
+            block_number: 1,
+            sequence: 0,
+            timestamp: 1,
+        };
+        let event = handle_bounty_interest(&info);
+        assert_eq!(event.governance_proposal_id(), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // targeted_recipients + merge_recipients (recipient routing & dedup)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn targeted_recipients_routes_by_event_type() {
+        use NotificationEventType::*;
+        // "your proposal was voted on / approved / rejected" -> proposer
+        assert_eq!(
+            ProposalVoted.targeted_recipients(),
+            TargetedRecipients::Proposer
+        );
+        assert_eq!(
+            ProposalExecuted.targeted_recipients(),
+            TargetedRecipients::Proposer
+        );
+        assert_eq!(
+            ProposalRejected.targeted_recipients(),
+            TargetedRecipients::Proposer
+        );
+        // "a new version of a proposal you voted on" -> prior voters
+        assert_eq!(
+            ProposalUpdated.targeted_recipients(),
+            TargetedRecipients::Voters
+        );
+        // editors-only (or single-recipient bounty) events get no targeted extras
+        assert_eq!(
+            ProposalCreated.targeted_recipients(),
+            TargetedRecipients::None
+        );
+        assert_eq!(
+            ProposalSettingsUpdated.targeted_recipients(),
+            TargetedRecipients::None
+        );
+        assert_eq!(
+            BountyInterest.targeted_recipients(),
+            TargetedRecipients::None
+        );
+        assert_eq!(
+            BountyAllocated.targeted_recipients(),
+            TargetedRecipients::None
+        );
+    }
+
+    #[test]
+    fn merge_recipients_dedups_and_sorts() {
+        let a = Uuid::from_bytes([0x01; 16]);
+        let b = Uuid::from_bytes([0x02; 16]);
+        let c = Uuid::from_bytes([0x03; 16]);
+        // editors = [b, a]; extra = proposer b (already an editor) + new voter c.
+        let merged = merge_recipients(vec![b, a], vec![b, c]);
+        // sorted, and b (editor ∩ targeted) appears exactly once.
+        assert_eq!(merged, vec![a, b, c]);
+    }
+
+    #[test]
+    fn merge_recipients_dedups_editor_duplicates_with_empty_extra() {
+        let a = Uuid::from_bytes([0x01; 16]);
+        let merged = merge_recipients(vec![a, a], vec![]);
+        assert_eq!(merged, vec![a]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3a / 2a: bounty-created + proposal-comment extraction
+    // -----------------------------------------------------------------------
+
+    /// Build a HermesEdit whose GRC-20 payload contains the given relations,
+    /// each as `(relation_type, from, to)`.
+    fn make_hermes_edit_with_relations(
+        relations: &[([u8; 16], [u8; 16], [u8; 16])],
+        space_id: [u8; 16],
+    ) -> hermes_schema::pb::knowledge::HermesEdit {
+        use std::borrow::Cow;
+
+        let ops = relations
+            .iter()
+            .enumerate()
+            .map(|(i, (relation_type, from, to))| {
+                grc_20::Op::CreateRelation(grc_20::CreateRelation {
+                    id: [i as u8 + 1; 16],
+                    relation_type: *relation_type,
+                    from: *from,
+                    from_is_value_ref: false,
+                    to: *to,
+                    to_is_value_ref: false,
+                    from_space: None,
+                    from_version: None,
+                    to_space: None,
+                    to_version: None,
+                    entity: None,
+                    position: None,
+                    context: None,
+                })
+            })
+            .collect();
+
+        let edit = grc_20::Edit {
+            id: [0x99; 16],
+            name: Cow::Borrowed("test edit"),
+            authors: vec![[0xAA; 16]],
+            created_at: 1700000000,
+            ops,
+        };
+        let payload = grc_20::encode_edit(&edit).expect("encode should succeed");
+
+        hermes_schema::pb::knowledge::HermesEdit {
+            id: vec![0x88; 16],
+            name: "test".into(),
+            payload,
+            authors: vec![vec![0xAA; 16]],
+            language: None,
+            space_id: space_id.to_vec(),
+            is_canonical: true,
+            meta: Some(make_metadata(12345, 1700000000)),
+        }
+    }
+
+    #[test]
+    fn extract_bounty_created_matches_types_to_bounty() {
+        let types = ids::types_relation_type().into_bytes();
+        let bounty_type = ids::bounty_type().into_bytes();
+        // from = the new bounty entity, to = Bounty type.
+        let edit = make_hermes_edit_with_relations(
+            &[(types, [0xB0; 16], bounty_type)],
+            [0x5E; 16], // edit space
+        );
+        let out = extract_bounty_created(&edit).expect("extract");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].bounty_entity_id, Uuid::from_bytes([0xB0; 16]));
+        assert_eq!(out[0].space_id, Uuid::from_bytes([0x5E; 16]));
+        assert_eq!(out[0].block_number, 12345);
+    }
+
+    #[test]
+    fn extract_bounty_created_ignores_other_types_and_relations() {
+        let types = ids::types_relation_type().into_bytes();
+        // A Types relation to a *non-bounty* type, plus an unrelated relation.
+        let edit = make_hermes_edit_with_relations(
+            &[
+                (types, [0xB0; 16], [0xAA; 16]),      // Types -> some other type
+                ([0xCC; 16], [0xB0; 16], [0xDD; 16]), // non-Types relation
+            ],
+            [0x5E; 16],
+        );
+        let out = extract_bounty_created(&edit).expect("extract");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn extract_proposal_comments_matches_comment_reply() {
+        let types = ids::types_relation_type().into_bytes();
+        let comment_type = ids::comment_type().into_bytes();
+        let reply_to = ids::reply_to_property().into_bytes();
+        let comment_entity = [0xC0; 16];
+        let proposal = [0x9A; 16];
+        // Comment entity typed as Comment, replying to the proposal.
+        let edit = make_hermes_edit_with_relations(
+            &[
+                (types, comment_entity, comment_type),
+                (reply_to, comment_entity, proposal),
+            ],
+            [0x5E; 16], // commenter's personal space
+        );
+        let out = extract_proposal_comments(&edit).expect("extract");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].comment_entity_id, Uuid::from_bytes(comment_entity));
+        assert_eq!(out[0].proposal_id, Uuid::from_bytes(proposal));
+        assert_eq!(out[0].commenter_space_id, Uuid::from_bytes([0x5E; 16]));
+        assert_eq!(out[0].proposal_space_id, Uuid::nil()); // resolved later via DB
+    }
+
+    #[test]
+    fn extract_proposal_comments_ignores_reply_from_non_comment() {
+        let reply_to = ids::reply_to_property().into_bytes();
+        // A Reply-to relation whose `from` is NOT typed as a Comment in this edit.
+        let edit =
+            make_hermes_edit_with_relations(&[(reply_to, [0xC0; 16], [0x9A; 16])], [0x5E; 16]);
+        let out = extract_proposal_comments(&edit).expect("extract");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn handle_bounty_created_payload_structure() {
+        let info = BountyCreatedInfo {
+            bounty_entity_id: Uuid::from_bytes([0xB0; 16]),
+            space_id: Uuid::from_bytes([0x5E; 16]),
+            block_number: 100,
+            sequence: 0,
+            timestamp: 1700000000,
+        };
+        let event = handle_bounty_created(&info);
+        assert_eq!(event.event_type, NotificationEventType::BountyCreated);
+        let json = serde_json::to_value(&event.payload).expect("serialize");
+        assert_eq!(json["event_type"], "bounty_created");
+        assert_eq!(json["category"], "bounty");
+        assert_eq!(
+            json["bounty_entity_id"],
+            Uuid::from_bytes([0xB0; 16]).to_string()
+        );
+        assert_eq!(json["space_id"], Uuid::from_bytes([0x5E; 16]).to_string());
+        // governance/comment fields absent
+        assert!(json.get("proposal_id").is_none());
+        assert!(json.get("comment_entity_id").is_none());
+    }
+
+    #[test]
+    fn handle_proposal_comment_payload_structure() {
+        let info = ProposalCommentInfo {
+            comment_entity_id: Uuid::from_bytes([0xC0; 16]),
+            proposal_id: Uuid::from_bytes([0x9A; 16]),
+            commenter_space_id: Uuid::from_bytes([0x11; 16]),
+            proposal_space_id: Uuid::from_bytes([0x5E; 16]),
+            block_number: 100,
+            sequence: 2,
+            timestamp: 1700000000,
+        };
+        let event = handle_proposal_comment(&info);
+        assert_eq!(event.event_type, NotificationEventType::ProposalComment);
+        let json = serde_json::to_value(&event.payload).expect("serialize");
+        assert_eq!(json["event_type"], "proposal_comment");
+        assert_eq!(json["category"], "comment");
+        assert_eq!(json["space_id"], Uuid::from_bytes([0x5E; 16]).to_string()); // proposal's space
+        assert_eq!(
+            json["proposal_id"],
+            Uuid::from_bytes([0x9A; 16]).to_string()
+        );
+        assert_eq!(
+            json["comment_entity_id"],
+            Uuid::from_bytes([0xC0; 16]).to_string()
+        );
+        assert_eq!(
+            json["commenter_space_id"],
+            Uuid::from_bytes([0x11; 16]).to_string()
+        );
+    }
+
+    #[test]
+    fn handle_comment_payload_structure() {
+        let info = CommentThreadInfo {
+            comment_entity_id: Uuid::from_bytes([0xC0; 16]),
+            parent_id: Uuid::from_bytes([0x91; 16]), // parent (a comment or entity)
+            root_id: Uuid::from_bytes([0x9A; 16]),
+            commenter_space_id: Uuid::from_bytes([0x11; 16]),
+            root_space_id: Uuid::from_bytes([0x5E; 16]),
+            block_number: 100,
+            sequence: 4,
+            timestamp: 1700000000,
+        };
+        let event = handle_comment(&info);
+        assert_eq!(event.event_type, NotificationEventType::Comment);
+        let json = serde_json::to_value(&event.payload).expect("serialize");
+        assert_eq!(json["event_type"], "comment");
+        assert_eq!(json["category"], "comment");
+        assert_eq!(json["space_id"], Uuid::from_bytes([0x5E; 16]).to_string()); // root's space
+        assert_eq!(json["root_id"], Uuid::from_bytes([0x9A; 16]).to_string());
+        assert_eq!(
+            json["comment_entity_id"],
+            Uuid::from_bytes([0xC0; 16]).to_string()
+        );
+        assert_eq!(
+            json["commenter_space_id"],
+            Uuid::from_bytes([0x11; 16]).to_string()
+        );
+        // not a governance/proposal payload
+        assert!(json.get("proposal_id").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Adversarial: try to BREAK idempotency by packing multiple same-type
+    // events into one HermesEdit payload (they share block+sequence). These go
+    // through the real decode -> extract -> handle path, not hand-built Info
+    // structs, so they guard the fix against regressions at the seam where the
+    // old {block}:{seq}:{event_type} key collided.
+    // -----------------------------------------------------------------------
+
+    /// Wrap a set of GRC-20 ops into a HermesEdit at a fixed block/sequence.
+    fn make_edit_with_ops(
+        ops: Vec<grc_20::Op<'static>>,
+        space_id: [u8; 16],
+        block_number: u64,
+        sequence: u32,
+    ) -> hermes_schema::pb::knowledge::HermesEdit {
+        use std::borrow::Cow;
+        let edit = grc_20::Edit {
+            id: [0x77; 16],
+            name: Cow::Borrowed("adversarial edit"),
+            authors: vec![[0xAA; 16]],
+            created_at: 1700000000,
+            ops,
+        };
+        let payload = grc_20::encode_edit(&edit).expect("encode should succeed");
+        hermes_schema::pb::knowledge::HermesEdit {
+            id: vec![0x77; 16],
+            name: "adversarial".into(),
+            payload,
+            authors: vec![vec![0xAA; 16]],
+            language: None,
+            space_id: space_id.to_vec(),
+            is_canonical: true,
+            meta: Some(BlockchainMetadata {
+                block_number,
+                created_at: 1700000000,
+                created_by: vec![],
+                cursor: String::new(),
+                sequence,
+                is_last: false,
+            }),
+        }
+    }
+
+    fn create_relation(
+        id: [u8; 16],
+        relation_type: [u8; 16],
+        from: [u8; 16],
+        to: [u8; 16],
+    ) -> grc_20::Op<'static> {
+        grc_20::Op::CreateRelation(grc_20::CreateRelation {
+            id,
+            relation_type,
+            from,
+            from_is_value_ref: false,
+            to,
+            to_is_value_ref: false,
+            from_space: None,
+            from_version: None,
+            to_space: None,
+            to_version: None,
+            entity: None,
+            position: None,
+            context: None,
+        })
+    }
+
+    #[test]
+    fn idempotency_break_many_bounty_interest_in_one_edit() {
+        // Three interest relations in ONE edit for the SAME bounty by the SAME
+        // curator — the worst case: everything identical except relation_id.
+        let config = BountyConfig::default();
+        let interest = *Uuid::parse_str(DEFAULT_INTEREST_TYPE_ID)
+            .expect("valid")
+            .as_bytes();
+        let bounty = [0x20; 16];
+        let curator = [0x10; 16];
+        let ops = vec![
+            create_relation([0x01; 16], interest, curator, bounty),
+            create_relation([0x02; 16], interest, curator, bounty),
+            create_relation([0x03; 16], interest, curator, bounty),
+        ];
+        let edit = make_edit_with_ops(ops, [0x40; 16], 100, 0);
+
+        let relations = extract_bounty_relations(&edit, &config).expect("extract");
+        assert_eq!(relations.len(), 3, "all three interest relations extracted");
+
+        let keys: std::collections::HashSet<String> = relations
+            .iter()
+            .map(|(info, _)| handle_bounty_interest(info).idempotency_key)
+            .collect();
+        assert_eq!(
+            keys.len(),
+            3,
+            "three same-edit interest relations must yield three distinct keys"
+        );
+        // All share the old prefix — proving relation_id is what disambiguates.
+        assert!(keys.iter().all(|k| k.starts_with("100:0:bounty_interest:")));
+    }
+
+    #[test]
+    fn idempotency_break_many_bounties_created_in_one_edit() {
+        let types = crate::ids::types_relation_type().into_bytes();
+        let bounty_type = crate::ids::bounty_type().into_bytes();
+        // Four new bounties typed in one edit.
+        let ops: Vec<grc_20::Op> = (0u8..4)
+            .map(|i| create_relation([0xF0 + i; 16], types, [0xB0 + i; 16], bounty_type))
+            .collect();
+        let edit = make_edit_with_ops(ops, [0x40; 16], 200, 1);
+
+        let created = extract_bounty_created(&edit).expect("extract");
+        assert_eq!(created.len(), 4);
+
+        let keys: std::collections::HashSet<String> = created
+            .iter()
+            .map(|info| handle_bounty_created(info).idempotency_key)
+            .collect();
+        assert_eq!(
+            keys.len(),
+            4,
+            "four bounties created in one edit must yield four distinct keys"
+        );
+        assert!(keys.iter().all(|k| k.starts_with("200:1:bounty_created:")));
+    }
+
+    #[test]
+    fn idempotency_break_many_comments_in_one_edit() {
+        let types = crate::ids::types_relation_type().into_bytes();
+        let comment_type = crate::ids::comment_type().into_bytes();
+        let reply_to = crate::ids::reply_to_property().into_bytes();
+        let parent = [0x9A; 16];
+        // Two distinct comment entities, each typed as Comment and replying to
+        // the same parent, in one edit.
+        let c1 = [0xC1; 16];
+        let c2 = [0xC2; 16];
+        let ops = vec![
+            create_relation([0x01; 16], types, c1, comment_type),
+            create_relation([0x02; 16], reply_to, c1, parent),
+            create_relation([0x03; 16], types, c2, comment_type),
+            create_relation([0x04; 16], reply_to, c2, parent),
+        ];
+        let edit = make_edit_with_ops(ops, [0x50; 16], 300, 2);
+
+        let comments = extract_proposal_comments(&edit).expect("extract");
+        assert_eq!(comments.len(), 2, "both comments extracted");
+
+        // proposal_comment path
+        let pc_keys: std::collections::HashSet<String> = comments
+            .iter()
+            .map(|info| handle_proposal_comment(info).idempotency_key)
+            .collect();
+        assert_eq!(
+            pc_keys.len(),
+            2,
+            "two comments -> two proposal_comment keys"
+        );
+        assert!(pc_keys
+            .iter()
+            .all(|k| k.starts_with("300:2:proposal_comment:")));
+
+        // general comment-thread path (Phase 2b / #706) — same edit, must also
+        // produce distinct keys.
+        let thread_keys: std::collections::HashSet<String> = comments
+            .iter()
+            .map(|info| {
+                let cinfo = CommentThreadInfo {
+                    comment_entity_id: info.comment_entity_id,
+                    parent_id: info.proposal_id,
+                    root_id: Uuid::from_bytes(parent),
+                    commenter_space_id: info.commenter_space_id,
+                    root_space_id: Uuid::from_bytes([0x5E; 16]),
+                    block_number: info.block_number,
+                    sequence: info.sequence,
+                    timestamp: info.timestamp,
+                };
+                handle_comment(&cinfo).idempotency_key
+            })
+            .collect();
+        assert_eq!(thread_keys.len(), 2, "two comments -> two comment keys");
+        assert!(thread_keys.iter().all(|k| k.starts_with("300:2:comment:")));
+    }
+
+    // -----------------------------------------------------------------------
+    // Entity vote-threshold (vote poller)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn entity_votes_threshold_type_strings() {
+        assert_eq!(
+            NotificationEventType::EntityVotesThreshold.as_str(),
+            "entity_votes_threshold"
+        );
+        assert_eq!(
+            NotificationEventType::EntityVotesThreshold.category(),
+            "votes"
+        );
+    }
+
+    #[test]
+    fn build_vote_threshold_event_payload_and_key() {
+        let entity = Uuid::from_bytes([0xE1; 16]);
+        let space = Uuid::from_bytes([0x5E; 16]);
+        let event = build_vote_threshold_event(entity, space, 12, 3, 10);
+
+        assert_eq!(
+            event.event_type,
+            NotificationEventType::EntityVotesThreshold
+        );
+        assert_eq!(
+            event.idempotency_key,
+            format!("{}:{}:entity_votes_threshold:10", entity, space)
+        );
+
+        let json = serde_json::to_value(&event.payload).expect("serialize");
+        assert_eq!(json["event_type"], "entity_votes_threshold");
+        assert_eq!(json["category"], "votes");
+        assert_eq!(json["space_id"], space.to_string()); // vote space
+        assert_eq!(json["entity_id"], entity.to_string());
+        assert_eq!(json["vote_space_id"], space.to_string());
+        assert_eq!(json["upvotes"], 12);
+        assert_eq!(json["downvotes"], 3);
+        assert_eq!(json["threshold"], 10);
+        // user_space_id stamped later by storage during per-user fan-out
+        assert!(json.get("user_space_id").is_none());
+    }
+
+    #[test]
+    fn vote_threshold_keys_differ_by_entity_space_and_threshold() {
+        let e1 = Uuid::from_bytes([0x01; 16]);
+        let e2 = Uuid::from_bytes([0x02; 16]);
+        let s1 = Uuid::from_bytes([0xA1; 16]);
+        let s2 = Uuid::from_bytes([0xA2; 16]);
+
+        let base = build_vote_threshold_event(e1, s1, 10, 0, 10).idempotency_key;
+        // same inputs -> same key (idempotent: fires once per entity/space/threshold)
+        assert_eq!(
+            base,
+            build_vote_threshold_event(e1, s1, 99, 1, 10).idempotency_key
+        );
+        // different entity / space / threshold -> distinct keys
+        assert_ne!(
+            base,
+            build_vote_threshold_event(e2, s1, 10, 0, 10).idempotency_key
+        );
+        assert_ne!(
+            base,
+            build_vote_threshold_event(e1, s2, 10, 0, 10).idempotency_key
+        );
+        assert_ne!(
+            base,
+            build_vote_threshold_event(e1, s1, 10, 0, 25).idempotency_key
+        );
     }
 }

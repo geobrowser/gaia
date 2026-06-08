@@ -88,6 +88,26 @@ pub struct DiffTracker {
     scratch: Vec<(SpaceId, Position)>,
     /// Whether we've seen the first graph (for bootstrap detection)
     initialized: bool,
+    /// Set by [`DiffTracker::from_baseline`] and consumed by the first
+    /// [`DiffTracker::track`] call. Carries the persisted emission state
+    /// (`(space_id, distance, parent)` — no `EdgeType`, by design) so
+    /// the first diff after restart can be computed against what we last
+    /// told consumers rather than against an empty bootstrap baseline.
+    ///
+    /// Sorted by `space_id`, unique by `space_id` (closest-to-root wins on
+    /// duplicates — same rule [`track`] applies to in-memory positions).
+    pending_baseline: Option<Vec<(SpaceId, BaselinePos)>>,
+}
+
+/// Subset of [`Position`] that survives schema bumps. Used internally for the
+/// one-shot diff against a restored baseline; not exposed in the public diff
+/// output. Notably omits `edge_type` — see [`PersistedEmissionBaseline`].
+///
+/// [`PersistedEmissionBaseline`]: crate::persistence::PersistedEmissionBaseline
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BaselinePos {
+    distance: u32,
+    parent: SpaceId,
 }
 
 impl DiffTracker {
@@ -105,12 +125,73 @@ impl DiffTracker {
             last_positions: Vec::with_capacity(capacity),
             scratch: Vec::with_capacity(capacity),
             initialized: false,
+            pending_baseline: None,
+        }
+    }
+
+    /// Prime the tracker from a persisted emission baseline.
+    ///
+    /// Used on startup so the first `track()` call produces the correct diff
+    /// against what was last emitted to consumers — typically across a deploy
+    /// that changes canonical rules and discards `GraphState`. The baseline
+    /// carries `(space_id, distance, parent)` only; `edge_type` is *not*
+    /// compared in the first diff, because the persisted shape intentionally
+    /// drops it to remain schema-stable (see
+    /// [`PersistedEmissionBaseline`]).
+    ///
+    /// Implications for the first track:
+    /// - REMOVED is emitted for any space in the baseline but not in the new
+    ///   canonical graph.
+    /// - MOVED is emitted only when `distance` or `parent` changes (an
+    ///   `edge_type`-only change is not enough to qualify, since we do not
+    ///   know the old `edge_type` — assuming "unchanged" is the conservative
+    ///   choice that minimises spurious events).
+    /// - ADDED is emitted for any space in the new graph but not in the
+    ///   baseline.
+    ///
+    /// Subsequent `track()` calls behave normally (full `Position` equality).
+    ///
+    /// [`PersistedEmissionBaseline`]: crate::persistence::PersistedEmissionBaseline
+    pub fn from_baseline(baseline: &crate::persistence::PersistedEmissionBaseline) -> Self {
+        let mut entries: Vec<(SpaceId, BaselinePos)> = baseline
+            .nodes()
+            .iter()
+            .map(|n| {
+                (
+                    n.space_id,
+                    BaselinePos {
+                        distance: n.distance,
+                        parent: n.parent,
+                    },
+                )
+            })
+            .collect();
+        // `PersistedEmissionBaseline::from_nodes` already sorts and dedups,
+        // but a hand-built baseline (or a future shape that doesn't enforce
+        // the invariant) might not — so normalise defensively. The merge-join
+        // diff below relies on unique-and-sorted-by-SpaceId on both sides.
+        entries.sort_unstable_by(|(id_a, pos_a), (id_b, pos_b)| {
+            id_a.cmp(id_b)
+                .then_with(|| pos_a.distance.cmp(&pos_b.distance))
+        });
+        entries.dedup_by_key(|(id, _)| *id);
+
+        let capacity = entries.len();
+        Self {
+            last_positions: Vec::with_capacity(capacity),
+            scratch: Vec::with_capacity(capacity),
+            // Treat the tracker as initialized so the next `track()` doesn't
+            // fall into the bootstrap-all-ADDED branch.
+            initialized: true,
+            pending_baseline: Some(entries),
         }
     }
 
     /// Track a new graph and compute diff from previous state.
     ///
-    /// On first call (bootstrap), returns a diff with all nodes as ADDED.
+    /// On first call (bootstrap), returns a diff with all nodes as ADDED —
+    /// unless the tracker was constructed via [`DiffTracker::from_baseline`],
+    /// in which case the first call diffs against the restored baseline.
     /// On subsequent calls, returns changes between previous and current state.
     ///
     /// When a SpaceId appears at multiple positions in the tree (e.g., via
@@ -141,7 +222,13 @@ impl DiffTracker {
         // The merge-join diff requires unique SpaceIds.
         self.scratch.dedup_by_key(|(id, _)| *id);
 
-        let diff = if self.initialized {
+        let diff = if let Some(baseline) = self.pending_baseline.take() {
+            // One-shot path: compare against the restored baseline, which has
+            // no edge_type. After this call, last_positions carries the full
+            // current Position (including edge_type), so subsequent diffs go
+            // through the regular compute_diff path.
+            compute_diff_against_baseline(&baseline, &self.scratch)
+        } else if self.initialized {
             compute_diff(&self.last_positions, &self.scratch)
         } else {
             self.initialized = true;
@@ -161,11 +248,65 @@ impl DiffTracker {
         self.last_positions.clear();
         self.scratch.clear();
         self.initialized = false;
+        self.pending_baseline = None;
     }
 
     /// Returns the number of positions currently tracked
     pub fn position_count(&self) -> usize {
         self.last_positions.len()
+    }
+
+    /// Iterate the tracker's current emission state as
+    /// `(space_id, distance, parent)` triples — the persistable shape of a
+    /// [`PersistedEmissionBaseline`]. Order matches `last_positions`
+    /// (sorted by `space_id`, unique).
+    ///
+    /// Returns `None` when nothing has been tracked yet *and* no baseline has
+    /// been primed (i.e. there is no contract with consumers to persist).
+    /// When a baseline has been primed but `track()` hasn't been called yet,
+    /// returns the pending baseline so the force-write path on startup can
+    /// re-persist what was already on disk without losing data.
+    ///
+    /// [`PersistedEmissionBaseline`]: crate::persistence::PersistedEmissionBaseline
+    pub fn iter_emission_state(&self) -> Option<EmissionStateIter<'_>> {
+        if let Some(baseline) = self.pending_baseline.as_deref() {
+            Some(EmissionStateIter {
+                inner: EmissionStateIterInner::Pending(baseline.iter()),
+            })
+        } else if self.initialized {
+            Some(EmissionStateIter {
+                inner: EmissionStateIterInner::Live(self.last_positions.iter()),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// Iterator over a [`DiffTracker`]'s current emission state. The internal
+/// variant is intentionally opaque so the in-memory `BaselinePos` shape (and
+/// `Position`'s `edge_type`) stay implementation details.
+pub struct EmissionStateIter<'a> {
+    inner: EmissionStateIterInner<'a>,
+}
+
+enum EmissionStateIterInner<'a> {
+    Pending(std::slice::Iter<'a, (SpaceId, BaselinePos)>),
+    Live(std::slice::Iter<'a, (SpaceId, Position)>),
+}
+
+impl<'a> Iterator for EmissionStateIter<'a> {
+    type Item = (SpaceId, u32, SpaceId);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.inner {
+            EmissionStateIterInner::Pending(it) => {
+                it.next().map(|(id, pos)| (*id, pos.distance, pos.parent))
+            }
+            EmissionStateIterInner::Live(it) => {
+                it.next().map(|(id, pos)| (*id, pos.distance, pos.parent))
+            }
+        }
     }
 }
 
@@ -192,6 +333,79 @@ fn build_position_vec_into(tree: &TreeNode, vec: &mut Vec<(SpaceId, Position)>) 
             stack.push((child, distance + 1, node.space_id));
         }
     }
+}
+
+/// One-shot merge-join diff between a restored baseline (no `edge_type`) and
+/// the current canonical positions. Used by [`DiffTracker::track`] on the
+/// first call when the tracker was constructed with
+/// [`DiffTracker::from_baseline`].
+///
+/// Differs from [`compute_diff`] in exactly one place: the MOVED check
+/// compares only `distance` + `parent`, never `edge_type`. The persisted
+/// baseline drops `edge_type` for schema stability, so we can't know what it
+/// was previously — and "edge_type-only change" would otherwise be flagged
+/// as MOVED for every restored node, which is exactly the spurious-event
+/// storm we are trying to avoid.
+fn compute_diff_against_baseline(
+    old: &[(SpaceId, BaselinePos)],
+    new: &[(SpaceId, Position)],
+) -> GraphDiff {
+    let mut changes = Vec::new();
+    let mut old_iter = old.iter().peekable();
+    let mut new_iter = new.iter().peekable();
+
+    loop {
+        match (old_iter.peek(), new_iter.peek()) {
+            (None, None) => break,
+            (Some(_), None) => {
+                let (space_id, _) = old_iter.next().unwrap();
+                changes.push(NodeChange {
+                    space_id: *space_id,
+                    change_type: ChangeType::Removed,
+                    position: None,
+                });
+            }
+            (None, Some(_)) => {
+                let (space_id, pos) = new_iter.next().unwrap();
+                changes.push(NodeChange {
+                    space_id: *space_id,
+                    change_type: ChangeType::Added,
+                    position: Some(*pos),
+                });
+            }
+            (Some((old_id, _)), Some((new_id, _))) => match old_id.cmp(new_id) {
+                std::cmp::Ordering::Less => {
+                    let (space_id, _) = old_iter.next().unwrap();
+                    changes.push(NodeChange {
+                        space_id: *space_id,
+                        change_type: ChangeType::Removed,
+                        position: None,
+                    });
+                }
+                std::cmp::Ordering::Greater => {
+                    let (space_id, pos) = new_iter.next().unwrap();
+                    changes.push(NodeChange {
+                        space_id: *space_id,
+                        change_type: ChangeType::Added,
+                        position: Some(*pos),
+                    });
+                }
+                std::cmp::Ordering::Equal => {
+                    let (space_id, old_pos) = old_iter.next().unwrap();
+                    let (_, new_pos) = new_iter.next().unwrap();
+                    if old_pos.distance != new_pos.distance || old_pos.parent != new_pos.parent {
+                        changes.push(NodeChange {
+                            space_id: *space_id,
+                            change_type: ChangeType::Moved,
+                            position: Some(*new_pos),
+                        });
+                    }
+                }
+            },
+        }
+    }
+
+    GraphDiff { changes }
 }
 
 /// Compute diff between old and new position slices using merge-join.
@@ -706,5 +920,231 @@ mod tests {
         assert_eq!(pos.edge_type, EdgeType::Verified);
 
         assert_eq!(tracker.position_count(), 2);
+    }
+
+    // ------------------------------------------------------------------
+    // from_baseline / pending_baseline behaviour (GEO-645)
+    // ------------------------------------------------------------------
+
+    use crate::persistence::{BaselineNode, PersistedEmissionBaseline};
+
+    fn baseline_with(nodes: &[(u8, u32, u8)]) -> PersistedEmissionBaseline {
+        PersistedEmissionBaseline::from_nodes(nodes.iter().map(|(s, d, p)| BaselineNode {
+            space_id: make_space_id(*s),
+            distance: *d,
+            parent: make_space_id(*p),
+        }))
+    }
+
+    fn one_node_graph(child: u8, edge: EdgeType) -> CanonicalGraph {
+        let mut root = TreeNode::new_root(make_space_id(0x01));
+        root.add_child(TreeNode::new(make_space_id(child), edge));
+        CanonicalGraph::new(
+            make_space_id(0x01),
+            root,
+            [make_space_id(0x01), make_space_id(child)]
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn from_baseline_first_track_emits_removed_for_orphans() {
+        // Models the GEO-645 happy path: baseline contains a space that the
+        // new rules no longer treat as canonical (e.g. previously reachable
+        // only via a Member edge, which v2 removes). The first track() must
+        // emit REMOVED for that orphan, not silently drop it.
+        let baseline = baseline_with(&[
+            (0x0A, 1, 0x01), // still canonical
+            (0x0B, 1, 0x01), // orphaned in the new rules
+        ]);
+        let mut tracker = DiffTracker::from_baseline(&baseline);
+
+        let graph = one_node_graph(0x0A, EdgeType::Verified);
+        let diff = tracker.track(&graph);
+
+        // Only B should appear in the diff, and as REMOVED.
+        assert_eq!(diff.len(), 1);
+        let removed = &diff.changes[0];
+        assert_eq!(removed.space_id, make_space_id(0x0B));
+        assert_eq!(removed.change_type, ChangeType::Removed);
+        assert!(removed.position.is_none());
+    }
+
+    #[test]
+    fn from_baseline_first_track_emits_added_for_new() {
+        let baseline = baseline_with(&[(0x0A, 1, 0x01)]);
+        let mut tracker = DiffTracker::from_baseline(&baseline);
+
+        // Graph now has A + a brand-new C (was not in baseline).
+        let mut root = TreeNode::new_root(make_space_id(0x01));
+        root.add_child(TreeNode::new(make_space_id(0x0A), EdgeType::Verified));
+        root.add_child(TreeNode::new(make_space_id(0x0C), EdgeType::Verified));
+        let graph = CanonicalGraph::new(
+            make_space_id(0x01),
+            root,
+            [
+                make_space_id(0x01),
+                make_space_id(0x0A),
+                make_space_id(0x0C),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let diff = tracker.track(&graph);
+        assert_eq!(diff.len(), 1);
+        assert_eq!(diff.changes[0].space_id, make_space_id(0x0C));
+        assert_eq!(diff.changes[0].change_type, ChangeType::Added);
+    }
+
+    #[test]
+    fn from_baseline_emits_moved_only_on_distance_or_parent_change() {
+        // Baseline says A is at distance 1, parent = root.
+        let baseline = baseline_with(&[(0x0A, 1, 0x01)]);
+
+        // Case 1: distance/parent unchanged, edge_type differs — must NOT
+        // emit MOVED. The baseline has no edge_type by design (schema
+        // stability), so we cannot know whether edge_type changed. The
+        // conservative choice is to suppress the event.
+        {
+            let mut tracker = DiffTracker::from_baseline(&baseline);
+            let graph = one_node_graph(0x0A, EdgeType::Related); // edge_type differs
+            let diff = tracker.track(&graph);
+            assert!(
+                diff.is_empty(),
+                "edge_type-only delta against a baseline must not produce MOVED, got: {:?}",
+                diff.changes
+            );
+        }
+
+        // Case 2: distance changes — MOVED.
+        {
+            let mut tracker = DiffTracker::from_baseline(&baseline);
+            // Build graph where A is now at distance 2 (root -> B -> A).
+            let mut root = TreeNode::new_root(make_space_id(0x01));
+            let mut b = TreeNode::new(make_space_id(0x0B), EdgeType::Verified);
+            b.add_child(TreeNode::new(make_space_id(0x0A), EdgeType::Verified));
+            root.add_child(b);
+            let graph = CanonicalGraph::new(
+                make_space_id(0x01),
+                root,
+                [
+                    make_space_id(0x01),
+                    make_space_id(0x0A),
+                    make_space_id(0x0B),
+                ]
+                .into_iter()
+                .collect(),
+            );
+            let diff = tracker.track(&graph);
+            let a_change = diff
+                .changes
+                .iter()
+                .find(|c| c.space_id == make_space_id(0x0A))
+                .expect("A must appear in diff after distance change");
+            assert_eq!(a_change.change_type, ChangeType::Moved);
+            assert_eq!(a_change.position.unwrap().distance, 2);
+        }
+
+        // Case 3: parent changes (distance same).
+        {
+            // Build graph where A is still distance 1 but parent is now B.
+            // (Forced by making B the root via a sibling — simulate by having
+            // A attached to a new parent with distance 1. To do this with
+            // distance 1, the parent must be root, so this case overlaps
+            // with the baseline. Instead simulate by changing the baseline
+            // parent and showing parent change at the same distance.)
+            let baseline2 = baseline_with(&[(0x0A, 1, 0x0B)]); // claim A had parent=B
+            let mut tracker2 = DiffTracker::from_baseline(&baseline2);
+            let graph = one_node_graph(0x0A, EdgeType::Verified); // actual parent = root (0x01)
+            let diff = tracker2.track(&graph);
+            let a_change = diff
+                .changes
+                .iter()
+                .find(|c| c.space_id == make_space_id(0x0A))
+                .expect("A must appear in diff after parent change");
+            assert_eq!(a_change.change_type, ChangeType::Moved);
+            assert_eq!(a_change.position.unwrap().parent, make_space_id(0x01));
+        }
+    }
+
+    #[test]
+    fn from_baseline_second_track_uses_full_position_equality() {
+        // After the one-shot baseline-aware diff, subsequent track() calls
+        // must include edge_type in MOVED detection (regular compute_diff
+        // semantics). This guards against accidentally leaving the
+        // edge_type-blind comparison in place forever.
+        let baseline = baseline_with(&[(0x0A, 1, 0x01)]);
+        let mut tracker = DiffTracker::from_baseline(&baseline);
+
+        // First track: edge_type-only change is suppressed (as established
+        // above).
+        let graph_v1 = one_node_graph(0x0A, EdgeType::Verified);
+        let diff = tracker.track(&graph_v1);
+        assert!(diff.is_empty());
+
+        // Second track: change edge_type only. compute_diff (not the
+        // baseline variant) should now flag this as MOVED.
+        let graph_v2 = one_node_graph(0x0A, EdgeType::Related);
+        let diff = tracker.track(&graph_v2);
+        assert_eq!(diff.len(), 1);
+        assert_eq!(diff.changes[0].change_type, ChangeType::Moved);
+        assert_eq!(
+            diff.changes[0].position.unwrap().edge_type,
+            EdgeType::Related
+        );
+    }
+
+    #[test]
+    fn iter_emission_state_returns_pending_baseline_before_first_track() {
+        // Force-write-on-startup path: when a tracker is freshly primed but
+        // no track() has run, iter_emission_state must still expose the
+        // baseline so it can be re-persisted (idempotent rewrite).
+        let baseline = baseline_with(&[(0x0A, 1, 0x01), (0x0B, 2, 0x0A)]);
+        let tracker = DiffTracker::from_baseline(&baseline);
+        let collected: Vec<_> = tracker.iter_emission_state().unwrap().collect();
+        assert_eq!(collected.len(), 2);
+        assert!(collected.contains(&(make_space_id(0x0A), 1, make_space_id(0x01))));
+        assert!(collected.contains(&(make_space_id(0x0B), 2, make_space_id(0x0A))));
+    }
+
+    #[test]
+    fn iter_emission_state_returns_none_when_uninitialized() {
+        // A brand-new tracker (no baseline, no track) has no contract with
+        // consumers to persist — iter_emission_state must signal this so the
+        // caller doesn't write an empty baseline by accident.
+        let tracker = DiffTracker::new();
+        assert!(tracker.iter_emission_state().is_none());
+    }
+
+    #[test]
+    fn iter_emission_state_reflects_live_positions_after_track() {
+        let mut tracker = DiffTracker::new();
+        let graph = one_node_graph(0x0A, EdgeType::Verified);
+        let _ = tracker.track(&graph);
+
+        let collected: Vec<_> = tracker.iter_emission_state().unwrap().collect();
+        assert_eq!(
+            collected,
+            vec![(make_space_id(0x0A), 1, make_space_id(0x01))]
+        );
+    }
+
+    #[test]
+    fn from_baseline_no_op_when_baseline_matches_current() {
+        // Sanity: priming from a baseline that exactly matches the next
+        // canonical graph must produce zero events. This is the steady-state
+        // restart case (Phase 1 restart, no rules change between deploys).
+        let baseline = baseline_with(&[(0x0A, 1, 0x01)]);
+        let mut tracker = DiffTracker::from_baseline(&baseline);
+
+        let graph = one_node_graph(0x0A, EdgeType::Verified);
+        let diff = tracker.track(&graph);
+        assert!(
+            diff.is_empty(),
+            "baseline matching current must emit no events, got: {:?}",
+            diff.changes
+        );
     }
 }
