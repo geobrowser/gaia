@@ -19,6 +19,7 @@ import {diffGroupedEntitySnapshots} from "../diff"
 import {getGroupedEntitySnapshotAtVersion, type QueryError, resolveVersionKey} from "../queries"
 import type {DiffResponse, GroupedEntitySnapshot} from "../types"
 import {enrichWithMediaUrls} from "./enrich"
+import {enrichBlocks} from "./enrich-blocks"
 import {enrichNames} from "./enrich-names"
 import type {DiffResponseV2} from "./types"
 
@@ -120,7 +121,8 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 			])
 
 			const rawDiff = yield* diffGroupedEntitySnapshots(entityId, beforeSnapshot, afterSnapshot)
-			const namedDiff = yield* enrichNames(db, rawDiff)
+			const richBlocksDiff = yield* enrichBlocks(rawDiff, beforeSnapshot, afterSnapshot)
+			const namedDiff = yield* enrichNames(db, richBlocksDiff)
 			const enrichedDiff = yield* enrichWithMediaUrls(db, namedDiff, {
 				// In snapshot mode there is no before side, so the from key is unused;
 				// fall back to the to version key to keep the lookup well-formed.
