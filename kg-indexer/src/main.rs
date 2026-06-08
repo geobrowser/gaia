@@ -89,10 +89,6 @@ impl BlockBuffer {
         self.summaries.remove(&block_number)
     }
 
-    fn summary(&self, block_number: u64) -> Option<BlockSummaryInfo> {
-        self.summaries.get(&block_number).cloned()
-    }
-
     fn buffered_count(&self, block_number: u64) -> usize {
         self.events.get(&block_number).map(|e| e.len()).unwrap_or(0)
     }
@@ -105,26 +101,40 @@ impl BlockBuffer {
         events
     }
 
-    /// Get block numbers that have been buffered longer than the stale timeout.
-    fn stale_blocks(&self) -> Vec<u64> {
+    /// Lowest block number still buffered (has events and/or a summary).
+    /// Used to enforce strict in-order flushing across blocks.
+    fn min_pending_block(&self) -> Option<u64> {
+        self.first_seen
+            .keys()
+            .chain(self.summaries.keys())
+            .min()
+            .copied()
+    }
+
+    /// A block is complete once its summary has arrived and every expected
+    /// event for the indexed topics has been buffered.
+    fn is_complete(&self, block_number: u64) -> bool {
+        match self.summaries.get(&block_number) {
+            Some(info) => self.buffered_count(block_number) >= info.expected_count,
+            None => false,
+        }
+    }
+
+    /// A block is stale once it (or its summary) has been buffered longer than
+    /// the stale timeout, the fallback that guarantees forward progress.
+    fn is_stale(&self, block_number: u64) -> bool {
         let now = Instant::now();
-        let mut blocks = Vec::new();
-
-        for (block, first_seen) in &self.first_seen {
-            if now.duration_since(*first_seen) > self.stale_timeout {
-                blocks.push(*block);
-            }
-        }
-
-        for (block, summary) in &self.summaries {
-            if now.duration_since(summary.received_at) > self.stale_timeout {
-                blocks.push(*block);
-            }
-        }
-
-        blocks.sort();
-        blocks.dedup();
-        blocks
+        let events_stale = self
+            .first_seen
+            .get(&block_number)
+            .map(|first_seen| now.duration_since(*first_seen) > self.stale_timeout)
+            .unwrap_or(false);
+        let summary_stale = self
+            .summaries
+            .get(&block_number)
+            .map(|summary| now.duration_since(summary.received_at) > self.stale_timeout)
+            .unwrap_or(false);
+        events_stale || summary_stale
     }
 }
 
@@ -336,35 +346,11 @@ async fn async_main() -> Result<(), IndexerError> {
             }
 
             _ = stale_check_interval.tick() => {
-                // Periodically check for stale blocks and force-process them
-                for block_number in buffer.stale_blocks() {
-                    let events = buffer.take_block(block_number);
-                    let event_count = events.len();
-                    if event_count == 0 {
-                        // Nothing buffered; don't emit noisy stale logs.
-                        continue;
-                    }
-                    warn!(
-                        block_number = block_number,
-                        event_count = event_count,
-                        stale_timeout_ms = stale_timeout_ms,
-                        "Force-processing stale block"
-                    );
-                    let summary = buffer.take_summary(block_number);
-                    let result = process_buffered_block(
-                        events,
-                        &storage,
-                        &consumer,
-                        summary,
-                        BlockProcessReason::Stale,
-                    )
-                    .await;
-                    if let Some((processed, errors)) = result {
-                        processed_count += processed;
-                        error_count += errors;
-                        blocks_processed += 1;
-                    }
-                }
+                let (processed, errors, blocks) =
+                    drain_ready_blocks(&mut buffer, &storage, &consumer).await;
+                processed_count += processed;
+                error_count += errors;
+                blocks_processed += blocks;
             }
 
             message = stream.next() => {
@@ -468,23 +454,11 @@ async fn async_main() -> Result<(), IndexerError> {
 
                                 buffer.insert_summary(summary_block_number, summary, expected_count);
 
-                                if buffer.buffered_count(summary_block_number) >= expected_count {
-                                    let summary_info = buffer.take_summary(summary_block_number);
-                                    let events = buffer.take_block(summary_block_number);
-                                    let result = process_buffered_block(
-                                        events,
-                                        &storage,
-                                        &consumer,
-                                        summary_info,
-                                        BlockProcessReason::Summary,
-                                    )
-                                    .await;
-                                    if let Some((processed, errors)) = result {
-                                        processed_count += processed;
-                                        error_count += errors;
-                                        blocks_processed += 1;
-                                    }
-                                }
+                                let (processed, errors, blocks) =
+                                    drain_ready_blocks(&mut buffer, &storage, &consumer).await;
+                                processed_count += processed;
+                                error_count += errors;
+                                blocks_processed += blocks;
 
                                 return;
                             }
@@ -572,26 +546,11 @@ async fn async_main() -> Result<(), IndexerError> {
                                 },
                             );
 
-                            if let Some(summary) = buffer.summary(block_number) {
-                                if buffer.buffered_count(block_number) >= summary.expected_count {
-                                    let summary_info = buffer.take_summary(block_number);
-                                    let events = buffer.take_block(block_number);
-                                    let result = process_buffered_block(
-                                        events,
-                                        &storage,
-                                        &consumer,
-                                        summary_info,
-                                        BlockProcessReason::Summary,
-                                    )
-                                    .await;
-                                    if let Some((processed, errors)) = result {
-                                        processed_count += processed;
-                                        error_count += errors;
-                                        blocks_processed += 1;
-                                    }
-                                    return;
-                                }
-                            }
+                            let (processed, errors, blocks) =
+                                drain_ready_blocks(&mut buffer, &storage, &consumer).await;
+                            processed_count += processed;
+                            error_count += errors;
+                            blocks_processed += blocks;
 
                             // `is_last` is assigned by the producer, but Kafka can still deliver
                             // that event before lower-sequence messages from other topics in the
@@ -796,6 +755,54 @@ fn extract_edit_metadata(
         .and_then(|a| uuid::Uuid::from_slice(a).ok());
 
     (name, created_by_id)
+}
+
+/// Flush buffered blocks in strict ascending order, lowest first, while ready.
+/// Returns the `(processed, errors, blocks_processed)` deltas for the caller.
+async fn drain_ready_blocks(
+    buffer: &mut BlockBuffer,
+    storage: &Storage,
+    consumer: &KafkaConsumer,
+) -> (u64, u64, u64) {
+    let mut processed_count = 0;
+    let mut error_count = 0;
+    let mut blocks_processed = 0;
+
+    while let Some(block_number) = buffer.min_pending_block() {
+        let reason = if buffer.is_complete(block_number) {
+            BlockProcessReason::Summary
+        } else if buffer.is_stale(block_number) {
+            BlockProcessReason::Stale
+        } else {
+            break;
+        };
+
+        let is_stale = matches!(reason, BlockProcessReason::Stale);
+        let summary = buffer.take_summary(block_number);
+        let events = buffer.take_block(block_number);
+
+        if events.is_empty() {
+            continue;
+        }
+
+        if is_stale {
+            warn!(
+                block_number = block_number,
+                event_count = events.len(),
+                "Force-processing stale block"
+            );
+        }
+
+        if let Some((processed, errors)) =
+            process_buffered_block(events, storage, consumer, summary, reason).await
+        {
+            processed_count += processed;
+            error_count += errors;
+            blocks_processed += 1;
+        }
+    }
+
+    (processed_count, error_count, blocks_processed)
 }
 
 async fn process_buffered_block(
@@ -1917,9 +1924,8 @@ mod tests {
         );
 
         std::thread::sleep(Duration::from_millis(7));
-        assert_eq!(
-            buffer.stale_blocks(),
-            vec![block_number],
+        assert!(
+            buffer.is_stale(block_number),
             "timeout should be measured from first block sighting, not reset by later summary arrival"
         );
     }
@@ -1943,6 +1949,70 @@ mod tests {
         );
 
         std::thread::sleep(Duration::from_millis(11));
-        assert_eq!(buffer.stale_blocks(), vec![block_number]);
+        assert!(buffer.is_stale(block_number));
+    }
+
+    fn make_event(block_number: u64) -> BufferedEvent {
+        BufferedEvent {
+            msg: KgMessage::CreateSpace(hermes_schema::pb::space::HermesCreateSpace {
+                meta: Some(BlockchainMetadata {
+                    created_at: 0,
+                    created_by: vec![],
+                    block_number,
+                    cursor: "cursor".to_string(),
+                    sequence: 0,
+                    is_last: false,
+                }),
+                space_id: vec![0; 16],
+                payload: None,
+            }),
+            topic: "space.creations".to_string(),
+            partition: 0,
+            offset: 0,
+            event_type: Some("SPACE_REGISTERED".to_string()),
+            event_id: None,
+        }
+    }
+
+    fn make_summary(block_number: u64) -> hermes_schema::pb::block_summary::HermesBlockSummary {
+        hermes_schema::pb::block_summary::HermesBlockSummary {
+            block_number,
+            cursor: "cursor".to_string(),
+            created_at: 0,
+            total_events: 1,
+            counts_by_topic: HashMap::new(),
+            counts_by_event_type: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_min_pending_block_tracks_lowest_buffered_block() {
+        let mut buffer = BlockBuffer::new(Duration::from_secs(60));
+        assert_eq!(buffer.min_pending_block(), None);
+
+        buffer.push(10, make_event(10));
+        buffer.push(8, make_event(8));
+        buffer.insert_summary(5, make_summary(5), 1);
+
+        assert_eq!(buffer.min_pending_block(), Some(5));
+
+        buffer.take_summary(5);
+        buffer.take_block(5);
+        assert_eq!(buffer.min_pending_block(), Some(8));
+    }
+
+    #[test]
+    fn test_is_complete_requires_summary_and_all_events() {
+        let mut buffer = BlockBuffer::new(Duration::from_secs(60));
+        let block_number = 3;
+
+        buffer.push(block_number, make_event(block_number));
+        assert!(!buffer.is_complete(block_number));
+
+        buffer.insert_summary(block_number, make_summary(block_number), 2);
+        assert!(!buffer.is_complete(block_number));
+
+        buffer.push(block_number, make_event(block_number));
+        assert!(buffer.is_complete(block_number));
     }
 }
