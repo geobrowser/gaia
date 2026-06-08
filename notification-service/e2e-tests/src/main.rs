@@ -123,6 +123,15 @@ const THREAD_PARTICIPANT_SPACE_BYTES: [u8; 16] = [0x89; 16]; // author of the pr
 const REPLY_COMMENT_BYTES: [u8; 16] = [0x8a; 16]; // the NEW reply (produced)
 const REPLY_AUTHOR_SPACE_BYTES: [u8; 16] = [0x8b; 16]; // author of the reply (must NOT be notified)
 
+// Votes — entity vote-threshold poller fixtures. The e2e runs the indexer with
+// VOTE_NOTIFICATION_THRESHOLD=3 and a short VOTE_POLL_INTERVAL_SECS.
+const VOTE_ENTITY_OVER_BYTES: [u8; 16] = [0x9c; 16]; // upvotes >= threshold + has a creator -> notifies
+const VOTE_CREATOR_SPACE_BYTES: [u8; 16] = [0x9d; 16]; // the entity's creator/home space (recipient)
+const VOTE_SPACE_BYTES: [u8; 16] = [0x9e; 16]; // the space votes are counted in (payload vote_space_id)
+const VOTE_ENTITY_BELOW_BYTES: [u8; 16] = [0x9f; 16]; // upvotes < threshold -> no notification
+const VOTE_ENTITY_NOCREATOR_BYTES: [u8; 16] = [0xa1; 16]; // over threshold but no creator -> no notification
+const VOTE_ENTITY_STALE_BYTES: [u8; 16] = [0xa2; 16]; // over threshold + creator, but updated_at older than the cold-start lookback -> no notification
+
 const GOVERNANCE_TOPIC: &str = "space.governance";
 const KNOWLEDGE_EDITS_TOPIC: &str = "knowledge.edits";
 const NUM_WEBHOOKS: usize = 3;
@@ -146,11 +155,14 @@ const NUM_WEBHOOKS: usize = 3;
 //                   comment is filtered out and produces 0 calls)
 // Comment thread:   1 reply × 2 recipients × 3 = 6       (Phase 2b; prior participant
 //                   + root creator; the reply author is excluded)
+// Vote threshold:   1 entity × 1 creator × 3 = 3         (Votes; the over-threshold
+//                   entity with a resolvable creator. The below-threshold and
+//                   no-creator entities produce 0.)
 //
 // The proposer (0x02), prior voter (0x0B), and comment proposer (0x73) are
 // intentionally NOT editors, so these counts also prove targeted delivery
 // reaches non-editors.
-const EXPECTED_CALLS: usize = 66 + 3 + 6 + 3 + 3 + 12 + 3 + 6;
+const EXPECTED_CALLS: usize = 66 + 3 + 6 + 3 + 3 + 12 + 3 + 6 + 3;
 
 const GOVERNANCE_EVENT_TYPES: &[&str] = &[
     "proposal_created",
@@ -174,6 +186,7 @@ const ALL_EVENT_TYPES: &[&str] = &[
     "bounty_created",
     "proposal_comment",
     "comment",
+    "entity_votes_threshold",
 ];
 
 // ---------------------------------------------------------------------------
@@ -483,6 +496,69 @@ async fn seed_database(
     .bind(Uuid::from_bytes(THREAD_PARTICIPANT_SPACE_BYTES))
     .bind(Uuid::from_bytes(EXISTING_COMMENT_BYTES))
     .bind(Uuid::from_bytes(THREAD_ROOT_BYTES))
+    .execute(pool)
+    .await?;
+
+    // Votes: seed votes_count rows for the entity-vote-threshold poller.
+    // (a) Over-threshold entity (upvotes=5 >= 3) WITH a Types relation that resolves
+    //     its creator/home space -> the poller notifies VOTE_CREATOR_SPACE.
+    sqlx::query(
+        "INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes) \
+         VALUES ($1, 0, $2, 5, 0) ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(VOTE_ENTITY_OVER_BYTES))
+    .bind(Uuid::from_bytes(VOTE_SPACE_BYTES))
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, $3, $4) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::from_bytes(VOTE_CREATOR_SPACE_BYTES)) // relation space_id == creator/home space
+    .bind(Uuid::from_bytes(VOTE_ENTITY_OVER_BYTES))
+    .bind(Uuid::from_bytes(THREAD_GENERIC_TYPE_BYTES))
+    .execute(pool)
+    .await?;
+    // (b) Below-threshold entity (upvotes=1 < 3) -> no notification.
+    sqlx::query(
+        "INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes) \
+         VALUES ($1, 0, $2, 1, 0) ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(VOTE_ENTITY_BELOW_BYTES))
+    .bind(Uuid::from_bytes(VOTE_SPACE_BYTES))
+    .execute(pool)
+    .await?;
+    // (c) Over-threshold entity with NO Types relation -> creator unresolved -> no notification.
+    sqlx::query(
+        "INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes) \
+         VALUES ($1, 0, $2, 9, 0) ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(VOTE_ENTITY_NOCREATOR_BYTES))
+    .bind(Uuid::from_bytes(VOTE_SPACE_BYTES))
+    .execute(pool)
+    .await?;
+    // (d) Over-threshold entity WITH a creator, but updated_at is older than the
+    //     cold-start lookback (2 days ago) -> excluded by the cold-start window
+    //     -> no notification. Proves the exclusion is the lookback, not a missing creator.
+    sqlx::query(
+        "INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes, updated_at) \
+         VALUES ($1, 0, $2, 8, 0, now() - interval '2 days') ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(VOTE_ENTITY_STALE_BYTES))
+    .bind(Uuid::from_bytes(VOTE_SPACE_BYTES))
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, $3, $4) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::from_bytes(VOTE_CREATOR_SPACE_BYTES))
+    .bind(Uuid::from_bytes(VOTE_ENTITY_STALE_BYTES))
+    .bind(Uuid::from_bytes(THREAD_GENERIC_TYPE_BYTES))
     .execute(pool)
     .await?;
 
@@ -1228,6 +1304,8 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
     // Phase 2b: comment-thread recipients (prior participant + root creator).
     let thread_participant = Uuid::from_bytes(THREAD_PARTICIPANT_SPACE_BYTES).to_string();
     let thread_home = Uuid::from_bytes(THREAD_HOME_SPACE_BYTES).to_string();
+    // Votes: the over-threshold entity's creator (recipient of entity_votes_threshold).
+    let vote_creator = Uuid::from_bytes(VOTE_CREATOR_SPACE_BYTES).to_string();
 
     let all_known: Vec<String> = editors_3e
         .iter()
@@ -1243,6 +1321,8 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         // Phase 2b: comment-thread recipients (participant + root creator):
         .chain(std::iter::once(&thread_participant))
         .chain(std::iter::once(&thread_home))
+        // Votes: the over-threshold entity's creator:
+        .chain(std::iter::once(&vote_creator))
         .cloned()
         .collect();
 
@@ -1353,8 +1433,9 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         // Bounty created: 2 bounties (one edit) × 2 bounty editors = 4
         // Proposal comment: 1 event × 1 proposer = 1
         // Comment thread: 1 reply × 2 recipients = 2
-        // Total: 34
-        keys.len() == 34
+        // Vote threshold: 1 entity × 1 creator = 1
+        // Total: 35
+        keys.len() == 35
     });
 
     // ===================================================================
@@ -1990,6 +2071,62 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
             .any(|c| c.body["user_space_id"].as_str() == Some(reply_author.as_str())),
     );
 
+    // --- Votes: entity_votes_threshold — the over-threshold entity with a
+    //     resolvable creator notifies that creator exactly once (× 3 webhooks).
+    //     The below-threshold and no-creator entities produce nothing. ---
+    let vote_entity_over = Uuid::from_bytes(VOTE_ENTITY_OVER_BYTES).to_string();
+    let vote_below = Uuid::from_bytes(VOTE_ENTITY_BELOW_BYTES).to_string();
+    let vote_nocreator = Uuid::from_bytes(VOTE_ENTITY_NOCREATOR_BYTES).to_string();
+    let vote_stale = Uuid::from_bytes(VOTE_ENTITY_STALE_BYTES).to_string();
+    let vote_calls: Vec<_> = calls
+        .iter()
+        .filter(|c| c.body["event_type"].as_str() == Some("entity_votes_threshold"))
+        .collect();
+    r.check(
+        "entity_votes_threshold: exactly 3 calls (1 entity x 1 creator x 3 webhooks)",
+        vote_calls.len() == 3,
+    );
+    r.check(
+        "entity_votes_threshold: only the over-threshold entity fires",
+        vote_calls
+            .iter()
+            .all(|c| c.body["entity_id"].as_str() == Some(vote_entity_over.as_str())),
+    );
+    r.check(
+        "entity_votes_threshold: delivered to the entity's creator",
+        vote_calls
+            .iter()
+            .all(|c| c.body["user_space_id"].as_str() == Some(vote_creator.as_str())),
+    );
+    r.check(
+        "entity_votes_threshold: below-threshold entity is NOT notified",
+        !vote_calls
+            .iter()
+            .any(|c| c.body["entity_id"].as_str() == Some(vote_below.as_str())),
+    );
+    r.check(
+        "entity_votes_threshold: entity with no resolvable creator is NOT notified",
+        !vote_calls
+            .iter()
+            .any(|c| c.body["entity_id"].as_str() == Some(vote_nocreator.as_str())),
+    );
+    r.check(
+        "entity_votes_threshold: stale entity (older than cold-start lookback) is NOT notified",
+        !vote_calls
+            .iter()
+            .any(|c| c.body["entity_id"].as_str() == Some(vote_stale.as_str())),
+    );
+    if let Some(call) = vote_calls.first() {
+        r.check(
+            "entity_votes_threshold: category is 'votes'",
+            call.body["category"].as_str() == Some("votes"),
+        );
+        r.check(
+            "entity_votes_threshold: payload carries threshold + upvotes",
+            call.body["threshold"].as_i64() == Some(3) && call.body["upvotes"].as_i64() == Some(5),
+        );
+    }
+
     r
 }
 
@@ -2126,6 +2263,42 @@ async fn main() {
                     "  !! extra call: {} (space: {}, editor: {})",
                     call.body["event_type"].as_str().unwrap_or("?"),
                     call.body["space_id"].as_str().unwrap_or("?"),
+                    call.body["user_space_id"].as_str().unwrap_or("?"),
+                );
+                calls.push(call);
+            }
+            _ => break,
+        }
+    }
+
+    // No-repeat probe: bump the already-notified over-threshold entity's votes
+    // (new upvotes + updated_at) so the poller re-scans it on its next tick, then
+    // drain ~6s (>= 2 poll cycles at VOTE_POLL_INTERVAL_SECS=2). A correct poller
+    // emits nothing more; a regression would push calls beyond EXPECTED_CALLS and
+    // bump the entity_votes_threshold count, failing verification below.
+    println!("  No-repeat probe: bumping votes for the already-notified entity...");
+    if let Err(e) = sqlx::query(
+        "UPDATE votes_count SET upvotes = upvotes + 10, updated_at = now() \
+         WHERE object_id = $1 AND object_type = 0",
+    )
+    .bind(Uuid::from_bytes(VOTE_ENTITY_OVER_BYTES))
+    .execute(&pool)
+    .await
+    {
+        eprintln!("  !! failed to bump votes_count for no-repeat probe: {}", e);
+    }
+    let probe_deadline = tokio::time::Instant::now() + Duration::from_secs(6);
+    loop {
+        let remaining = probe_deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(call)) => {
+                eprintln!(
+                    "  !! post-bump call: {} (entity: {}, user: {})",
+                    call.body["event_type"].as_str().unwrap_or("?"),
+                    call.body["entity_id"].as_str().unwrap_or("?"),
                     call.body["user_space_id"].as_str().unwrap_or("?"),
                 );
                 calls.push(call);

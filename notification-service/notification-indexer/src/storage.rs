@@ -5,6 +5,7 @@ use std::time::Duration;
 use hermes_instrumentation::instrument;
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
+use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -23,6 +24,23 @@ pub struct ExpiredProposal {
     pub space_id: Uuid,
     pub proposed_by: Uuid,
     pub end_time: i64,
+}
+
+/// A `votes_count` row for an entity, returned by the vote poller's keyset scan.
+pub struct EntityVoteCount {
+    /// `votes_count.id` (serial) — the keyset tiebreaker and cursor component.
+    pub cursor_id: i64,
+    /// `object_id` — the entity that was voted on (recipient = its creator).
+    pub entity_id: Uuid,
+    /// The space the votes were counted in.
+    pub space_id: Uuid,
+    pub upvotes: i64,
+    pub downvotes: i64,
+    /// `updated_at` — the keyset primary key and cursor high-water mark.
+    pub updated_at: DateTime<Utc>,
+    /// Whether this (entity, space) was already notified at the queried threshold.
+    /// The poller skips notifying these but still advances the cursor over them.
+    pub already_notified: bool,
 }
 
 impl Storage {
@@ -557,5 +575,115 @@ impl Storage {
         .ok()
         .flatten()
         .map(|b| b as u64)
+    }
+
+    // -----------------------------------------------------------------------
+    // Entity-vote threshold poller
+    // -----------------------------------------------------------------------
+
+    /// Entity `votes_count` rows changed since the keyset cursor.
+    ///
+    /// Returns rows with `object_type = 0` (entities) ordered by `(updated_at, id)`
+    /// strictly greater than the cursor, capped at `limit`. The upvote-threshold
+    /// check is done by the caller so the cursor can advance over *every* scanned
+    /// row (not just those over the threshold), preventing skips. Backed by the
+    /// partial index `idx_votes_count_updated_at (updated_at, id) WHERE object_type = 0`.
+    ///
+    /// Each row carries `already_notified`: whether an `entity_votes_threshold`
+    /// notification already exists for this `(entity, space)` at `threshold` (via
+    /// the `idx_outbox_entity_votes_threshold` expression index). The poller skips
+    /// those — avoiding a redundant creator lookup + insert — while still advancing
+    /// the cursor past them.
+    #[instrument(
+        name = "notification_indexer.storage.find_entity_vote_counts_since",
+        skip(self)
+    )]
+    pub async fn find_entity_vote_counts_since(
+        &self,
+        cursor_updated_at: DateTime<Utc>,
+        cursor_id: i64,
+        threshold: i64,
+        limit: i64,
+    ) -> Result<Vec<EntityVoteCount>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT vc.id::bigint AS id, vc.object_id, vc.space_id, vc.upvotes, vc.downvotes,
+                   vc.updated_at,
+                   EXISTS (
+                       SELECT 1 FROM notification_outbox o
+                       WHERE o.event_type = 'entity_votes_threshold'
+                         AND (o.payload->>'entity_id')::uuid = vc.object_id
+                         AND (o.payload->>'vote_space_id')::uuid = vc.space_id
+                         AND (o.payload->>'threshold')::bigint = $3
+                   ) AS already_notified
+            FROM votes_count vc
+            WHERE vc.object_type = 0
+              -- $2::int matches vc.id (int4) so the (updated_at, id) keyset index is
+              -- used as-is; cursor_id is always within int4 range (from votes_count.id).
+              AND (vc.updated_at, vc.id) > ($1, $2::int)
+            ORDER BY vc.updated_at, vc.id
+            LIMIT $4
+            "#,
+        )
+        .bind(cursor_updated_at)
+        .bind(cursor_id)
+        .bind(threshold)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|r| EntityVoteCount {
+                cursor_id: r.get("id"),
+                entity_id: r.get("object_id"),
+                space_id: r.get("space_id"),
+                upvotes: r.get("upvotes"),
+                downvotes: r.get("downvotes"),
+                updated_at: r.get("updated_at"),
+                already_notified: r.get("already_notified"),
+            })
+            .collect())
+    }
+
+    /// Read a named poll cursor. Returns `None` if the poller has never run.
+    #[instrument(name = "notification_indexer.storage.get_poll_cursor", skip(self))]
+    pub async fn get_poll_cursor(
+        &self,
+        name: &str,
+    ) -> Result<Option<(DateTime<Utc>, i64)>, StorageError> {
+        let row = sqlx::query(
+            "SELECT cursor_updated_at, cursor_id FROM notification_poll_cursors WHERE name = $1",
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| (r.get("cursor_updated_at"), r.get("cursor_id"))))
+    }
+
+    /// Persist a named poll cursor (high-water `(updated_at, id)`).
+    #[instrument(name = "notification_indexer.storage.set_poll_cursor", skip(self))]
+    pub async fn set_poll_cursor(
+        &self,
+        name: &str,
+        cursor_updated_at: DateTime<Utc>,
+        cursor_id: i64,
+    ) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"
+            INSERT INTO notification_poll_cursors (name, cursor_updated_at, cursor_id, updated_at)
+            VALUES ($1, $2, $3, now())
+            ON CONFLICT (name) DO UPDATE SET
+                cursor_updated_at = EXCLUDED.cursor_updated_at,
+                cursor_id = EXCLUDED.cursor_id,
+                updated_at = now()
+            "#,
+        )
+        .bind(name)
+        .bind(cursor_updated_at)
+        .bind(cursor_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
