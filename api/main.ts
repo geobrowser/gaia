@@ -16,7 +16,7 @@ import {OpenSearchClient} from "./src/services/search"
 import {db} from "./src/services/storage/storage"
 import {log} from "./src/services/telemetry"
 import {createVersionedRouter} from "./src/versioned"
-import {createVersionedV2Router} from "./src/versioned-v2"
+import {createVersionedV2Router} from "./src/versioned/v2"
 
 type AppEnv = {
 	Variables: {

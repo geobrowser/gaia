@@ -9,8 +9,8 @@
  * since the added fields are optional.
  */
 
-import type {NormalizedUuid} from "../utils/uuid"
-import type {DiffResponse, RelationChange} from "../versioned/types"
+import type {NormalizedUuid} from "../../utils/uuid"
+import type {DiffResponse, RelationChange} from "../types"
 
 /**
  * v2 relation-change endpoint payload.

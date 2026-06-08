@@ -11,14 +11,15 @@ import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
 
-import type {Profile} from "../profile/types"
-import {getProfilesBySpaceIds} from "../profile/queries"
-import type {AppRuntime} from "../services/runtime"
-import {isValidUuid, type NormalizedUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
-import {diffGroupedEntitySnapshots} from "../versioned/diff"
-import {getGroupedEntitySnapshotAtVersion, type QueryError, resolveVersionKey} from "../versioned/queries"
-import type {DiffResponse} from "../versioned/types"
+import type {Profile} from "../../profile/types"
+import {getProfilesBySpaceIds} from "../../profile/queries"
+import type {AppRuntime} from "../../services/runtime"
+import {isValidUuid, type NormalizedUuid, normalizeUuid, toDashedUuid} from "../../utils/uuid"
+import {diffGroupedEntitySnapshots} from "../diff"
+import {getGroupedEntitySnapshotAtVersion, type QueryError, resolveVersionKey} from "../queries"
+import type {DiffResponse} from "../types"
 import {enrichWithMediaUrls} from "./enrich"
+import {enrichNames} from "./enrich-names"
 import type {DiffResponseV2} from "./types"
 
 type AppEnv = {
@@ -111,7 +112,12 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 			])
 
 			const rawDiff = yield* diffGroupedEntitySnapshots(entityId, beforeSnapshot, afterSnapshot)
-			const enrichedDiff = yield* enrichWithMediaUrls(db, rawDiff)
+			const namedDiff = yield* enrichNames(db, rawDiff)
+			const enrichedDiff = yield* enrichWithMediaUrls(db, namedDiff, {
+				fromVersionKey: fromResolved.versionKey,
+				toVersionKey: toResolved.versionKey,
+				spaceId,
+			})
 
 			const profileMap = yield* resolveCreatorProfiles(db, [fromResolved.createdById, toResolved.createdById])
 
