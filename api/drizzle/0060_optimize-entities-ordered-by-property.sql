@@ -7,7 +7,9 @@
 -- property's DATA_TYPE relation (ORDER BY r.id for determinism; empty set on an
 -- unsupported/unresolved type). Predicates are appended only for the args present (no
 -- "arg IS NULL OR ..." guards) so the planner can use indexes and the type semi-join.
--- `type_ids` is an optional, space-scoped NECESSARY type superset (OR semantics) — the app
+-- `space_ids` is an optional set of spaces to restrict the sort to (OR semantics:
+-- v.space_id = ANY(space_ids)); omitting it sorts across all spaces. `type_ids` is an
+-- optional, space-scoped NECESSARY type superset (OR semantics) — the app
 -- still applies the exact filter as a PostGraphile residual, and omitting it reproduces the
 -- prior no-type behavior (backward compatible). DISTINCT ON returns one row per entity; the
 -- e.id tie-break keeps pagination stable.
@@ -20,9 +22,11 @@ DROP FUNCTION IF EXISTS public.entities_ordered_by_property(uuid, uuid, sort_ord
 --> statement-breakpoint
 DROP FUNCTION IF EXISTS public.entities_ordered_by_property(uuid, uuid, sort_order, text, uuid);
 --> statement-breakpoint
+DROP FUNCTION IF EXISTS public.entities_ordered_by_property(uuid, uuid, sort_order, text, uuid[]);
+--> statement-breakpoint
 CREATE OR REPLACE FUNCTION public.entities_ordered_by_property(
   property_id uuid,
-  space_id uuid DEFAULT NULL,
+  space_ids uuid[] DEFAULT NULL,
   sort_direction sort_order DEFAULT 'ASC',
   data_type text DEFAULT NULL,
   type_ids uuid[] DEFAULT NULL
@@ -67,8 +71,8 @@ BEGIN
 
   dir := CASE WHEN sort_direction::text = 'DESC' THEN 'DESC' ELSE 'ASC' END;
 
-  IF space_id IS NOT NULL THEN
-    space_pred := format(' AND v.space_id = %L', space_id);
+  IF space_ids IS NOT NULL AND cardinality(space_ids) > 0 THEN
+    space_pred := format(' AND v.space_id = ANY(%L::uuid[])', space_ids);
   END IF;
 
   IF type_ids IS NOT NULL AND cardinality(type_ids) > 0 THEN
