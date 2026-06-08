@@ -16,6 +16,7 @@ import {OpenSearchClient} from "./src/services/search"
 import {db} from "./src/services/storage/storage"
 import {log} from "./src/services/telemetry"
 import {createVersionedRouter} from "./src/versioned"
+import {createVersionedV2Router} from "./src/versioned-v2"
 
 type AppEnv = {
 	Variables: {
@@ -107,6 +108,10 @@ if (opensearchUrl) {
 // Mount versioned entities router
 app.route("/versioned", createVersionedRouter(db, runtime))
 log.info("Versioned entity routes enabled")
+
+// Mount v2 versioned entities router (additive enrichments over v1)
+app.route("/v2/versioned", createVersionedV2Router(db, runtime))
+log.info("Versioned v2 entity routes enabled")
 
 // Mount profile router
 app.route("/profile", createProfileRouter(db, runtime))
