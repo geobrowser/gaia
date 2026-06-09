@@ -1,15 +1,9 @@
 //! ranking-indexer binary entrypoint.
 //!
-//! Consumes `knowledge.edits`, keeps the rank-relevant ops, and upserts them
-//! into the private `ranks` working schema. Per-edit processing (the design
-//! allows either per-edit or per-block batching, §10).
-//!
-//! NOT YET WIRED (follow-ups, gated on the design's open questions):
-//!   - `detect()` op extraction (the rank op-pattern matching)
-//!   - per-block recompute: dedup -> eligibility -> scoring
-//!   - projection of `RANK_POSITION` relations into `public.relations`
+//! Consumes `knowledge.edits`, keeps the rank-relevant ops, and runs the full
+//! pipeline per edit (decode -> detect -> upsert -> recompute -> publish). The
+//! design allows either per-edit or per-block batching (§10); this uses per-edit.
 
-use std::collections::HashMap;
 use std::env;
 
 use futures::StreamExt;
@@ -20,7 +14,6 @@ use uuid::Uuid;
 use ranking_indexer::consumer::{decode_grc20, parse_edit, KafkaConsumer};
 use ranking_indexer::detect::detect;
 use ranking_indexer::error::IndexerError;
-use ranking_indexer::models::RankingItem;
 use ranking_indexer::recompute;
 use ranking_indexer::storage::Storage;
 
@@ -93,41 +86,5 @@ async fn process_edit(payload: &[u8], storage: &Storage) -> Result<(), IndexerEr
         .map(|m| (m.block_number as i64, m.created_at as i64))
         .unwrap_or((0, 0));
     let detected = detect(&grc20_edit, space_id, block_number, block_timestamp);
-    if detected.is_empty() {
-        return Ok(());
-    }
-
-    for block in &detected.blocks {
-        storage.upsert_ranking_block(block).await?;
-    }
-    for ranking in &detected.rankings {
-        storage.upsert_ranking(ranking).await?;
-    }
-
-    // Re-submission rebuilds a rank's items, so replace per ranking. Clone into
-    // the per-ranking groups so `detected` stays intact for affected_blocks.
-    let mut items_by_ranking: HashMap<Uuid, Vec<RankingItem>> = HashMap::new();
-    for item in &detected.items {
-        items_by_ranking
-            .entry(item.ranking_id)
-            .or_default()
-            .push(item.clone());
-    }
-    for (ranking_id, items) in &items_by_ranking {
-        storage.replace_ranking_items(*ranking_id, items).await?;
-    }
-
-    for (ranking_id, block_id) in &detected.block_links {
-        // The RANK_BLOCK relation is authored in the ranking's space, so the
-        // edit's `space_id` is the rank row's space.
-        storage.set_ranking_block(*ranking_id, *block_id, space_id).await?;
-    }
-
-    // Recompute every block this edit may have affected
-    // (dedup -> eligibility -> [scoring/publish stubs]).
-    for block_id in recompute::affected_blocks(&detected, storage).await? {
-        recompute::recompute_block(block_id, storage).await?;
-    }
-
-    Ok(())
+    recompute::apply_detected_edit(&detected, space_id, storage).await
 }

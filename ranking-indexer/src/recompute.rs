@@ -106,3 +106,44 @@ pub async fn recompute_block(block_id: Uuid, storage: &Storage) -> Result<(), In
 
     Ok(())
 }
+
+/// Apply a detected edit end to end: upsert its rank ops into the working
+/// tables, then recompute every block it may have affected. Shared by the main
+/// consumer loop and integration tests.
+pub async fn apply_detected_edit(
+    detected: &DetectedEdit,
+    storage: &Storage,
+) -> Result<(), IndexerError> {
+    if detected.is_empty() {
+        return Ok(());
+    }
+
+    for block in &detected.blocks {
+        storage.upsert_ranking_block(block).await?;
+    }
+    for ranking in &detected.rankings {
+        storage.upsert_ranking(ranking).await?;
+    }
+
+    // Re-submission rebuilds a rank's items, so replace per ranking.
+    let mut items_by_ranking: HashMap<Uuid, Vec<RankingItem>> = HashMap::new();
+    for item in &detected.items {
+        items_by_ranking
+            .entry(item.ranking_id)
+            .or_default()
+            .push(item.clone());
+    }
+    for (ranking_id, items) in &items_by_ranking {
+        storage.replace_ranking_items(*ranking_id, items).await?;
+    }
+
+    for (ranking_id, block_id) in &detected.block_links {
+        storage.set_ranking_block(*ranking_id, *block_id).await?;
+    }
+
+    for block_id in affected_blocks(detected, storage).await? {
+        recompute_block(block_id, storage).await?;
+    }
+
+    Ok(())
+}
