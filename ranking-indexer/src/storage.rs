@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::eligibility::SpaceKind;
 use crate::error::IndexerError;
 use crate::models::{Ranking, RankingBlock, RankingItem};
+use crate::publish::{provenance_ids, RankPositionRow};
 use crate::scoring::ScoreRow;
 
 #[derive(Clone)]
@@ -263,6 +264,100 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
         }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Replace a block's public `RANK_POSITION` projection atomically:
+    /// the ordered relations (with the integer rank-position value on each
+    /// reified entity) and the `Aggregated rankings` provenance relations.
+    pub async fn replace_rank_position_projection(
+        &self,
+        block_id: Uuid,
+        block_space_id: Uuid,
+        rows: &[RankPositionRow],
+        contributing_rankings: &[Uuid],
+    ) -> Result<(), IndexerError> {
+        use sdk::core::ids::{
+            AGGREGATED_RANKINGS_RELATION_TYPE_ID, RANK_POSITION_RELATION_TYPE_ID,
+            RANK_POSITION_VALUE_PROPERTY_ID,
+        };
+        let pid = |s: &str| Uuid::parse_str(s).expect("valid system ID constant");
+        let rank_position = pid(RANK_POSITION_RELATION_TYPE_ID);
+        let aggregated = pid(AGGREGATED_RANKINGS_RELATION_TYPE_ID);
+        let value_prop = pid(RANK_POSITION_VALUE_PROPERTY_ID);
+
+        let mut tx = self.pool.begin().await?;
+
+        // 1. Drop prior value rows on this block's reified RANK_POSITION entities
+        //    (before the relations they hang off are deleted).
+        sqlx::query(
+            "DELETE FROM values WHERE property_id = $1 AND entity_id IN \
+             (SELECT entity_id FROM relations WHERE type_id = $2 AND from_entity_id = $3)",
+        )
+        .bind(value_prop)
+        .bind(rank_position)
+        .bind(block_id)
+        .execute(&mut *tx)
+        .await?;
+
+        // 2. Drop prior projection relations (RANK_POSITION + Aggregated rankings).
+        sqlx::query("DELETE FROM relations WHERE from_entity_id = $1 AND type_id = ANY($2)")
+            .bind(block_id)
+            .bind(&[rank_position, aggregated][..])
+            .execute(&mut *tx)
+            .await?;
+
+        // 3. Insert the ordered RANK_POSITION relations + their value rows.
+        for r in rows {
+            sqlx::query(
+                "INSERT INTO relations \
+                 (id, entity_id, type_id, from_entity_id, to_entity_id, to_space_id, space_id, position) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(r.relation_id)
+            .bind(r.reified_entity_id)
+            .bind(rank_position)
+            .bind(block_id)
+            .bind(r.entity_id)
+            .bind(r.space_id)
+            .bind(block_space_id)
+            .bind(&r.position)
+            .execute(&mut *tx)
+            .await?;
+
+            // `values.id` is a text column — serialize the UUID at the bind boundary.
+            sqlx::query(
+                "INSERT INTO values (id, entity_id, space_id, property_id, integer) \
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(r.value_row_id.to_string())
+            .bind(r.reified_entity_id)
+            .bind(block_space_id)
+            .bind(value_prop)
+            .bind(r.value)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        // 4. Insert Aggregated rankings provenance relations (block -> submission).
+        for ranking_id in contributing_rankings {
+            let (relation_id, reified) = provenance_ids(block_id, *ranking_id);
+            sqlx::query(
+                "INSERT INTO relations \
+                 (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(relation_id)
+            .bind(reified)
+            .bind(aggregated)
+            .bind(block_id)
+            .bind(ranking_id)
+            .bind(block_space_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
         tx.commit().await?;
         Ok(())
     }

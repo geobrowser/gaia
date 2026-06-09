@@ -4,9 +4,7 @@
 //! (design §7): `dedup -> eligibility -> scoring -> publish`. A full recompute
 //! is always correct regardless of edit arrival order.
 //!
-//! Publish is still a stub, gated on the rank-position-value property ID
-//! (Preston) and projection details. Dedup, eligibility, and scoring are wired
-//! in and exercised.
+//! All four stages are wired: dedup -> eligibility -> scoring -> publish.
 
 use std::collections::{HashMap, HashSet};
 
@@ -17,7 +15,7 @@ use crate::detect::DetectedEdit;
 use crate::eligibility::{filter_eligible, SpaceKind};
 use crate::error::IndexerError;
 use crate::models::{Ranking, RankingItem};
-use crate::scoring;
+use crate::{publish, scoring};
 use crate::storage::Storage;
 
 /// Block ids whose aggregate may have changed as a result of this edit:
@@ -90,20 +88,21 @@ pub async fn recompute_block(block_id: Uuid, storage: &Storage) -> Result<(), In
     let scores = scoring::aggregate(&ballots, scoring::NORM_LO, scoring::NORM_HI);
     storage.replace_ranking_scores(block_id, &scores).await?;
 
+    // 4. Publish: project RANK_POSITION relations (+ the integer rank-position
+    //    value on each reified entity) and Aggregated rankings provenance into
+    //    the public graph, replacing the prior projection atomically.
+    let projection = publish::build_projection(block_id, &scores);
+    let contributing: Vec<Uuid> = ballots.iter().map(|(r, _)| r.id).collect();
+    storage
+        .replace_rank_position_projection(block_id, block.space_id, &projection, &contributing)
+        .await?;
+
     tracing::debug!(
         block_id = %block_id,
         eligible_submissions = ballots.len(),
         ranked_entities = scores.len(),
-        "ranking-indexer recompute: scored (publish not yet wired)"
+        "ranking-indexer recompute: scored + published"
     );
-
-    // 4. TODO(publish): project RANK_POSITION relations (+ Aggregated rankings
-    //    provenance + the integer rank-position value on the reified relation
-    //    entity) into public.relations, atomically replacing the prior
-    //    projection. Gated on Preston minting the rank-position-value property.
-    //
-    // When publish lands, scoring + projection should run in one transaction and
-    // the Kafka offset commit (in main) should follow it.
 
     Ok(())
 }
