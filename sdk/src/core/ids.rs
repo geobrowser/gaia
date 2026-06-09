@@ -64,6 +64,12 @@ pub const RANK_END_DATE_PROPERTY_ID: &str = "b08b8f63-dc1e-4156-8b08-19946f2b011
 pub const RANK_AGGREGATION_RESTRICTION_PROPERTY_ID: &str = "1e4caa2d-e331-4efa-8ac2-4e8d9d3e9fe9";
 pub const RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID: &str = "10a7b103-90f9-4a72-8087-935052ffaa69";
 pub const RANK_FILTER_PROPERTY_ID: &str = "14a46854-bfd1-4b18-8215-2785c2dab9f3";
+// The 8th ranking-block property in the canonical ontology: a Relation -> a
+// "Data source" entity describing how the block sources its candidate set
+// (query vs collection). V1 aggregation works off the submitted Rank entities
+// and the Filter string, so the indexer does not read this yet; defined for
+// completeness so the full block ontology is pinned in one place.
+pub const RANK_DATA_SOURCE_TYPE_PROPERTY_ID: &str = "1f69cc98-80d4-44ab-ad49-3df6a7b15ee4";
 
 // Indexer-owned ranking output IDs. System-minted (not SDK shapes), assigned as
 // a random v4 like SCORE_PROPERTY_ID. `RANK_POSITION` is the relation type the
