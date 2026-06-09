@@ -39,6 +39,32 @@ pub const SPACE_ID_PROPERTY_ID: &str = "712adc1f-e950-5d14-bbd8-bf2166fe59c1";
 pub const CREATED_AT_BLOCK_PROPERTY_ID: &str = "da2952fb-17d6-53f3-b521-52e254106e0b";
 pub const SCORE_PROPERTY_ID: &str = "85a4668a-42fa-4f48-8969-c0a9de0c294b";
 
+// Rank submission IDs. Canonical values mirrored from the grc-20 SDK
+// (`@graphprotocol/grc-20` core/ids/system) — these are the user-authored
+// shapes the ranking-indexer detects on the `knowledge.edits` stream.
+//
+// NOTE: the indexer-owned output relation type (`RANK_POSITION`) is
+// intentionally NOT defined here yet — it is not part of the SDK and needs a
+// canonical system-ID assignment before it can be added to
+// `PROTECTED_RELATION_TYPE_IDS`.
+pub const RANK_TYPE_ID: &str = "5c74731d-fabb-4dc8-b5c5-3346521c639a";
+pub const RANK_TYPE_PROPERTY_ID: &str = "48e01bc8-324e-48c2-a6c9-cab3f49290c6";
+pub const RANK_VOTES_RELATION_TYPE_ID: &str = "19a4cfff-45f2-4150-abf2-af0f43eb2eec";
+pub const VOTE_ORDINAL_VALUE_PROPERTY_ID: &str = "49ee1b89-1820-4e75-a1ae-38a2dcaad4a5";
+pub const VOTE_WEIGHTED_VALUE_PROPERTY_ID: &str = "103701dd-cabe-4a8e-835b-10345327b647";
+
+// Ranking-block IDs. PROVISIONAL — sourced from geo-sdk#89
+// (feat/ranks-create-update), which is not yet merged; pin to the released
+// values once it lands. These are the user-authored ranking-block shapes the
+// indexer detects (block type, rank→block link, submission window, and the
+// aggregation restriction with its default "Members and editors" value).
+pub const RANKING_BLOCK_TYPE_ID: &str = "150db6de-fe23-44f0-805a-fa57502e2c32";
+pub const RANK_BLOCK_RELATION_TYPE_ID: &str = "09c219c1-03d1-4d2a-a5c7-8edbf2d0182a";
+pub const RANK_START_DATE_PROPERTY_ID: &str = "eed03a04-0acd-4a9e-81e0-8272ed70a817";
+pub const RANK_END_DATE_PROPERTY_ID: &str = "b08b8f63-dc1e-4156-8b08-19946f2b011c";
+pub const RANK_AGGREGATION_RESTRICTION_PROPERTY_ID: &str = "1e4caa2d-e331-4efa-8ac2-4e8d9d3e9fe9";
+pub const RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID: &str = "10a7b103-90f9-4a72-8087-935052ffaa69";
+
 /// Onchain-derived ID of the "root" space whose editors are authorized to
 /// publish edits that mutate the system property-definition entities — i.e.
 /// relations whose `from` or `to` is in `PROTECTED_PROPERTY_IDS`. Edits from
