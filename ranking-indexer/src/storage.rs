@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::eligibility::SpaceKind;
 use crate::error::IndexerError;
 use crate::models::{Ranking, RankingBlock, RankingItem};
+use crate::scoring::ScoreRow;
 
 #[derive(Clone)]
 pub struct Storage {
@@ -213,6 +214,52 @@ impl Storage {
             .bind(it.space_id)
             .bind(&it.position)
             .bind(it.weight)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Load the items of a set of rankings (the eligible submissions for a block).
+    pub async fn get_items_for_rankings(
+        &self,
+        ranking_ids: &[Uuid],
+    ) -> Result<Vec<RankingItem>, IndexerError> {
+        if ranking_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query_as::<_, RankingItem>(
+            "SELECT ranking_id, entity_id, space_id, position, weight \
+             FROM ranks.ranking_items WHERE ranking_id = ANY($1)",
+        )
+        .bind(ranking_ids)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Replace a block's computed aggregate wholesale (atomic full recompute).
+    pub async fn replace_ranking_scores(
+        &self,
+        block_id: Uuid,
+        rows: &[ScoreRow],
+    ) -> Result<(), IndexerError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM ranks.ranking_scores WHERE block_id = $1")
+            .bind(block_id)
+            .execute(&mut *tx)
+            .await?;
+        for r in rows {
+            sqlx::query(
+                "INSERT INTO ranks.ranking_scores (block_id, entity_id, space_id, score, position) \
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(block_id)
+            .bind(r.entity_id)
+            .bind(r.space_id)
+            .bind(r.score)
+            .bind(r.position)
             .execute(&mut *tx)
             .await?;
         }

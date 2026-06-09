@@ -4,11 +4,11 @@
 //! (design §7): `dedup -> eligibility -> scoring -> publish`. A full recompute
 //! is always correct regardless of edit arrival order.
 //!
-//! Scoring and publish are stubs pending the open design questions (the ballot
-//! normalization method, and the aggregate-weight property + atlas inclusion
-//! for the projection). Dedup and eligibility are wired in and exercised.
+//! Publish is still a stub, gated on the rank-position-value property ID
+//! (Preston) and projection details. Dedup, eligibility, and scoring are wired
+//! in and exercised.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use uuid::Uuid;
 
@@ -16,6 +16,8 @@ use crate::dedup::dedup_latest;
 use crate::detect::DetectedEdit;
 use crate::eligibility::{filter_eligible, SpaceKind};
 use crate::error::IndexerError;
+use crate::models::{Ranking, RankingItem};
+use crate::scoring;
 use crate::storage::Storage;
 
 /// Block ids whose aggregate may have changed as a result of this edit:
@@ -74,22 +76,34 @@ pub async fn recompute_block(block_id: Uuid, storage: &Storage) -> Result<(), In
     };
     let eligible = filter_eligible(&block, space_kind, &eligible_member_spaces, deduped);
 
+    // 3. Scoring: normalize each ballot to [0.5, 1] and aggregate per (entity, space).
+    let eligible_ids: Vec<Uuid> = eligible.iter().map(|r| r.id).collect();
+    let items = storage.get_items_for_rankings(&eligible_ids).await?;
+    let mut items_by_ranking: HashMap<Uuid, Vec<RankingItem>> = HashMap::new();
+    for item in items {
+        items_by_ranking.entry(item.ranking_id).or_default().push(item);
+    }
+    let ballots: Vec<(&Ranking, Vec<RankingItem>)> = eligible
+        .iter()
+        .map(|r| (r, items_by_ranking.remove(&r.id).unwrap_or_default()))
+        .collect();
+    let scores = scoring::aggregate(&ballots, scoring::NORM_LO, scoring::NORM_HI);
+    storage.replace_ranking_scores(block_id, &scores).await?;
+
     tracing::debug!(
         block_id = %block_id,
-        eligible_submissions = eligible.len(),
-        "ranking-indexer recompute: dedup + eligibility done (scoring/publish not yet wired)"
+        eligible_submissions = ballots.len(),
+        ranked_entities = scores.len(),
+        "ranking-indexer recompute: scored (publish not yet wired)"
     );
 
-    // 3. TODO(scoring): load each eligible submission's items, convert to
-    //    per-(entity, space) contributions with per-ballot normalization
-    //    (method pending Jagger), sum, sort, and upsert ranks.ranking_scores.
     // 4. TODO(publish): project RANK_POSITION relations (+ Aggregated rankings
-    //    provenance + the aggregate weight on the reified relation entity) into
-    //    public.relations, atomically replacing the prior projection. Gated on
-    //    the weight-property and atlas-inclusion decisions.
+    //    provenance + the integer rank-position value on the reified relation
+    //    entity) into public.relations, atomically replacing the prior
+    //    projection. Gated on Preston minting the rank-position-value property.
     //
-    // When scoring/publish land, steps 3–4 should run in a single transaction
-    // and the Kafka offset commit (in main) should follow that transaction.
+    // When publish lands, scoring + projection should run in one transaction and
+    // the Kafka offset commit (in main) should follow it.
 
     Ok(())
 }

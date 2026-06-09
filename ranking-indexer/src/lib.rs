@@ -9,4 +9,5 @@ pub mod eligibility;
 pub mod error;
 pub mod models;
 pub mod recompute;
+pub mod scoring;
 pub mod storage;
