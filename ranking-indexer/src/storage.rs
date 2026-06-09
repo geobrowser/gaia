@@ -64,6 +64,50 @@ impl Storage {
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
+    /// The block a rank is currently linked to (the link may have been set in an
+    /// earlier edit).
+    pub async fn block_id_for_ranking(
+        &self,
+        ranking_id: Uuid,
+    ) -> Result<Option<Uuid>, IndexerError> {
+        let row: Option<(Option<Uuid>,)> =
+            sqlx::query_as("SELECT block_id FROM ranks.rankings WHERE id = $1")
+                .bind(ranking_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.and_then(|(block_id,)| block_id))
+    }
+
+    /// Load a Ranking Block, if known.
+    pub async fn get_ranking_block(
+        &self,
+        block_id: Uuid,
+    ) -> Result<Option<RankingBlock>, IndexerError> {
+        let block = sqlx::query_as::<_, RankingBlock>(
+            "SELECT id, space_id, name, filter, start_date, end_date, restriction_id \
+             FROM ranks.ranking_blocks WHERE id = $1",
+        )
+        .bind(block_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(block)
+    }
+
+    /// Load all submissions currently linked to a block (pre-dedup).
+    pub async fn get_rankings_for_block(
+        &self,
+        block_id: Uuid,
+    ) -> Result<Vec<Ranking>, IndexerError> {
+        let rows = sqlx::query_as::<_, Ranking>(
+            "SELECT id, block_id, space_id, author_address, rank_type, submitted_at, \
+             updated_at_block, update_index FROM ranks.rankings WHERE block_id = $1",
+        )
+        .bind(block_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Upsert a Ranking Block.
     pub async fn upsert_ranking_block(&self, b: &RankingBlock) -> Result<(), IndexerError> {
         sqlx::query(

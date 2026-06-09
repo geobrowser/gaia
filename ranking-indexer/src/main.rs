@@ -20,6 +20,8 @@ use uuid::Uuid;
 use ranking_indexer::consumer::{decode_grc20, parse_edit, KafkaConsumer};
 use ranking_indexer::detect::detect;
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::models::RankingItem;
+use ranking_indexer::recompute;
 use ranking_indexer::storage::Storage;
 
 #[tokio::main]
@@ -102,25 +104,30 @@ async fn process_edit(payload: &[u8], storage: &Storage) -> Result<(), IndexerEr
         storage.upsert_ranking(ranking).await?;
     }
 
-    // Re-submission rebuilds a rank's items, so replace per ranking.
-    let mut items_by_ranking: HashMap<Uuid, Vec<_>> = HashMap::new();
-    for item in detected.items {
-        items_by_ranking.entry(item.ranking_id).or_default().push(item);
+    // Re-submission rebuilds a rank's items, so replace per ranking. Clone into
+    // the per-ranking groups so `detected` stays intact for affected_blocks.
+    let mut items_by_ranking: HashMap<Uuid, Vec<RankingItem>> = HashMap::new();
+    for item in &detected.items {
+        items_by_ranking
+            .entry(item.ranking_id)
+            .or_default()
+            .push(item.clone());
     }
-    for (ranking_id, items) in items_by_ranking {
-        storage.replace_ranking_items(ranking_id, &items).await?;
+    for (ranking_id, items) in &items_by_ranking {
+        storage.replace_ranking_items(*ranking_id, items).await?;
     }
 
-    for (ranking_id, block_id) in detected.block_links {
+    for (ranking_id, block_id) in &detected.block_links {
         // The RANK_BLOCK relation is authored in the ranking's space, so the
         // edit's `space_id` is the rank row's space.
-        storage.set_ranking_block(ranking_id, block_id, space_id).await?;
+        storage.set_ranking_block(*ranking_id, *block_id, space_id).await?;
     }
 
-    // TODO(ranking-indexer): recompute affected blocks (dedup -> eligibility ->
-    // scoring) and project RANK_POSITION relations. Gated on the design's open
-    // questions (eligibility for personal spaces, scoring normalization, the
-    // public-projection / atlas coordination).
+    // Recompute every block this edit may have affected
+    // (dedup -> eligibility -> [scoring/publish stubs]).
+    for block_id in recompute::affected_blocks(&detected, storage).await? {
+        recompute::recompute_block(block_id, storage).await?;
+    }
 
     Ok(())
 }

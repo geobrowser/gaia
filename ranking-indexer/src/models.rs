@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 /// A `ranks.ranking_blocks` row — one per Ranking Block entity.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct RankingBlock {
     pub id: Uuid,
     pub space_id: Uuid,
@@ -17,7 +17,7 @@ pub struct RankingBlock {
 }
 
 /// A `ranks.rankings` row — one per Rank submission.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Ranking {
     pub id: Uuid,
     /// `None` until the `RANK_BLOCK` link arrives (partial-state model).
@@ -33,7 +33,7 @@ pub struct Ranking {
 }
 
 /// A `ranks.ranking_items` row — keyed on (ranking, entity, space).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct RankingItem {
     pub ranking_id: Uuid,
     pub entity_id: Uuid,
