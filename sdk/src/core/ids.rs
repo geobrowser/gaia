@@ -43,10 +43,9 @@ pub const SCORE_PROPERTY_ID: &str = "85a4668a-42fa-4f48-8969-c0a9de0c294b";
 // (`@graphprotocol/grc-20` core/ids/system) — these are the user-authored
 // shapes the ranking-indexer detects on the `knowledge.edits` stream.
 //
-// NOTE: the indexer-owned output relation type (`RANK_POSITION`) is
-// intentionally NOT defined here yet — it is not part of the SDK and needs a
-// canonical system-ID assignment before it can be added to
-// `PROTECTED_RELATION_TYPE_IDS`.
+// The indexer-owned output IDs (`RANK_POSITION` etc.) are defined below: they
+// are system-minted (not SDK shapes), assigned as a random v4 like
+// `SCORE_PROPERTY_ID` rather than derived.
 pub const RANK_TYPE_ID: &str = "5c74731d-fabb-4dc8-b5c5-3346521c639a";
 pub const RANK_TYPE_PROPERTY_ID: &str = "48e01bc8-324e-48c2-a6c9-cab3f49290c6";
 pub const RANK_VOTES_RELATION_TYPE_ID: &str = "19a4cfff-45f2-4150-abf2-af0f43eb2eec";
@@ -64,6 +63,16 @@ pub const RANK_START_DATE_PROPERTY_ID: &str = "eed03a04-0acd-4a9e-81e0-8272ed70a
 pub const RANK_END_DATE_PROPERTY_ID: &str = "b08b8f63-dc1e-4156-8b08-19946f2b011c";
 pub const RANK_AGGREGATION_RESTRICTION_PROPERTY_ID: &str = "1e4caa2d-e331-4efa-8ac2-4e8d9d3e9fe9";
 pub const RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID: &str = "10a7b103-90f9-4a72-8087-935052ffaa69";
+
+// Indexer-owned ranking output IDs. System-minted (not SDK shapes), assigned as
+// a random v4 like SCORE_PROPERTY_ID. `RANK_POSITION` is the relation type the
+// ranking-indexer publishes per ranked target — no user edit may author it, so
+// it is reserved in `PROTECTED_RELATION_TYPE_IDS` below.
+pub const RANK_POSITION_RELATION_TYPE_ID: &str = "890deffb-3843-49fa-8269-74000e3dcef6";
+// Aggregated-rankings property — canonical id captured, but its exact role in
+// the (still-gated) publish stage vs the RANK_POSITION relation is pending
+// confirmation, so it is intentionally NOT yet added to PROTECTED_PROPERTY_IDS.
+pub const AGGREGATED_RANKINGS_PROPERTY_ID: &str = "67651da6-11a9-4246-9ff4-039aafbe9e43";
 
 /// Onchain-derived ID of the "root" space whose editors are authorized to
 /// publish edits that mutate the system property-definition entities — i.e.
@@ -89,7 +98,8 @@ pub const PROTECTED_PROPERTY_IDS: &[&str] = &[
     SCORE_PROPERTY_ID,
 ];
 
-pub const PROTECTED_RELATION_TYPE_IDS: &[&str] = &[SYSTEM_TYPES_RELATION_TYPE_ID];
+pub const PROTECTED_RELATION_TYPE_IDS: &[&str] =
+    &[SYSTEM_TYPES_RELATION_TYPE_ID, RANK_POSITION_RELATION_TYPE_ID];
 
 #[cfg(test)]
 mod tests {
@@ -170,7 +180,8 @@ mod tests {
 
     #[test]
     fn protected_relation_type_ids_contains_system_types() {
-        assert_eq!(PROTECTED_RELATION_TYPE_IDS.len(), 1);
+        assert_eq!(PROTECTED_RELATION_TYPE_IDS.len(), 2);
         assert!(PROTECTED_RELATION_TYPE_IDS.contains(&SYSTEM_TYPES_RELATION_TYPE_ID));
+        assert!(PROTECTED_RELATION_TYPE_IDS.contains(&RANK_POSITION_RELATION_TYPE_ID));
     }
 }
