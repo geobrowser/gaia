@@ -51,12 +51,22 @@ Affected endpoints (each gets a `/v2/...` enriched variant):
 
 | # | Ask | Entity-diff `/v2/versioned/entities/:id/diff` | Where |
 |---|-----|------------------------------------------------|-------|
-| 3 | Name resolution | ✅ done | `enrich-names.ts` (`enrichNames`) — `42b3af76` |
+| 3 | Name resolution | ✅ done | `enrich-names.ts` (`enrichNames`) — `42b3af76`. Space-scoped with global fallback (`4037c0d6`, see note below) |
 | 4 | Media URL inlining | ✅ done (versioned before/after + group-nested) | `enrich.ts` (`enrichWithMediaUrls`), `queries.ts` (`batchGetMediaUrlsAtVersion`) — `42b3af76` |
 | 5 | Block synthesis + snapshot mode | ✅ done | snapshot mode in `router.ts` (`6d6a944b`); blocks come from the grouped snapshot's versioned discovery |
 | 1 | Block folding | ✅ for the single-entity path (rich shape) | `enrich-blocks.ts` (`enrichBlocks`) — `5f5ebf8a`. Also surfaces blocks whose own values/relations changed under an **unchanged headline** (`cb42b866`). Cross-parent folding = proposal-only (TODO) |
 | 6 | Data-block config merge | ✅ done | `enrich-block-config.ts` (`enrichBlockConfig`), `queries.ts` (`getBlockConfigEntityIds`) — `51903d3f`. Discovers data blocks from the snapshots, so a **config-only change** (columns/view/filter, no rename) still surfaces the block (`cb42b866`) |
 | 2 | Media-property filtering | n/a for single-entity; proposal-only | TODO (proposal endpoints) |
+
+### Note — name resolution prefers the request space, then falls back to global
+
+Names are resolved with the request `spaceId` preferred but a fallback to the entity's
+NAME in any other space. The fallback is necessary because entities are **global**: a
+diff in space A routinely references properties, types, and relation targets whose
+canonical NAME was authored in a *different* (often shared/system) space. Scoping
+strictly to the request space would null those names and surface raw UUIDs. Preferring
+the request space still prevents a foreign space's NAME from overriding a local one, and
+a deterministic tiebreaker (`space_id, id`) keeps multi-space collisions stable.
 
 ## The 9 `postProcessDiffs` steps vs v2 (entity-diff)
 
