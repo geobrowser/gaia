@@ -136,7 +136,7 @@ For the authenticated user (R = read, W = write):
 - **Mark read** (W) — accepts one or more notification IDs.
 - **Mark all read** (W) — marks all of the user's notifications read.
 - **Preferences** (R/W) — read or update per-channel enable/disable (in-app, push, email).
-- **Upsert user** (W) — register/update the caller's identity record: `privy_user_id`, `user_space_id` (personal space), email, and optional push token. Called by the front-end on sign-up/login.
+- **Upsert user** (W) — register/update the caller's identity record. The front-end sends `user_space_id` (personal space) and an optional push token; the **`privy_user_id` and email are derived server-side from the verified Privy token** (see Authentication) — the email is **never** trusted from the request body. Called by the front-end on sign-up/login.
 - **Register / unregister push token** (W) — add or remove an SNS device token for the user.
 
 Plus an **inbound webhook receiver** (not user-facing): verifies `X-Geo-Signature`, dedupes on `idempotency_key`, persists, and fans out to enabled channels.
@@ -159,10 +159,12 @@ sequenceDiagram
     participant DB as App Postgres
 
     Note over FE,DB: Phase 1 — on sign-up / login
-    FE->>Privy: login (email) → user.id, email, embedded wallet
+    FE->>Privy: login (email) → user.id, embedded wallet
     FE->>FE: usePersonalSpaceId() → user_space_id
-    FE->>AS: POST upsert user {privy_user_id, user_space_id, email, push token?}
-    AS->>DB: store identity record
+    FE->>AS: POST upsert user {user_space_id, push token?} + Bearer access token
+    AS->>AS: verify token → privy_user_id (sub claim)
+    AS->>Privy: getUserById(privy_user_id) → email
+    AS->>DB: store identity record (privy_user_id, user_space_id, email)
 
     Note over FE,DB: Phase 2 — any user-scoped API call
     FE->>Privy: getAccessToken()
@@ -190,13 +192,13 @@ Integration points that need a joint technical design before implementation. Nam
 - All three MVP types are `proposal_created` events distinguished by `actions`; the indexer already fans out to editors and the payload already carries `actions`, so no indexer or contract change is needed for MVP. *(Verified against `notification-indexer/src/models.rs`.)*
 - Geo Browser authenticates via Privy with **email login**, so every user has a Privy email and an embedded wallet — both available to the front-end to send in the upsert.
 - The front-end's `usePersonalSpaceId()` returns the user's personal space ID and this equals the `user_space_id` notifications are addressed to.
-- Push tokens come from device/browser registration on the front-end; email comes from Privy (or the upsert). MailerSend is already configured; AWS SNS is the push provider.
+- Push tokens come from device/browser registration on the front-end. Email is **resolved server-side from Privy** via the verified `privy_user_id` (`getUserById`) at upsert and saved — not accepted from the client. Email-login means Privy's email is verified, so the saved value is trustworthy. MailerSend is already configured; AWS SNS is the push provider.
 - The Geo Browser webhook is seeded manually into `app_webhooks` (no registration API in v1).
 - Privy issues a verifiable access token (`getAccessToken()`) and `@privy-io/server-auth` + `PRIVY_APP_SECRET` can validate it server-side. No existing Geo backend verifies Privy today, so the app server adds this from scratch.
 
 ## Open questions
 - [product] **Labeling/copy** for membership request vs. editorship request vs. generic proposal (classification rule recommended above is the default).
-- [backend] **Email source per send:** read the user's email from the stored identity record, or fetch live from Privy via stored `privy_user_id` at send time? (Storing it on upsert is simplest; Privy stays the fallback.)
+- [backend] **Email freshness:** the email is resolved server-side from Privy (`getUserById`) at upsert and stored (decided — never trusted from the client). Remaining detail is the refresh policy: re-fetch on every login upsert is the recommended default, plus a re-fetch on hard bounce. Confirm that's sufficient vs. needing a periodic resync.
 - [backend] **Push token lifecycle:** how web push tokens are obtained/refreshed and registered with SNS (browser push vs. native), and how stale tokens are pruned.
 - [backend/ui] **Auth — resolved direction:** verify a Privy access token server-side (Bearer + `@privy-io/server-auth` + `PRIVY_APP_SECRET`), derive the user from the token, and require it on all write/POST endpoints. Note this is **net-new** — nothing in the Geo stack verifies Privy server-side today. Remaining detail: token-refresh/expiry handling on the UI and whether reads also require it (recommended: yes).
 - [product] Confirm requester-facing outcome notifications ("your request was approved/rejected") are out of MVP. *(Treated as out per current scope.)*
