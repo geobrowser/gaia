@@ -290,23 +290,30 @@ impl Storage {
         let mut tx = self.pool.begin().await?;
 
         // 1. Drop prior value rows on this block's reified RANK_POSITION entities
-        //    (before the relations they hang off are deleted).
+        //    (before the relations they hang off are deleted). Scoped to this
+        //    block's space so a same-id block perspectived into another space
+        //    keeps its own projection.
         sqlx::query(
-            "DELETE FROM values WHERE property_id = $1 AND entity_id IN \
-             (SELECT entity_id FROM relations WHERE type_id = $2 AND from_entity_id = $3)",
+            "DELETE FROM values WHERE property_id = $1 AND space_id = $4 AND entity_id IN \
+             (SELECT entity_id FROM relations \
+              WHERE type_id = $2 AND from_entity_id = $3 AND space_id = $4)",
         )
         .bind(value_prop)
         .bind(rank_position)
         .bind(block_id)
+        .bind(block_space_id)
         .execute(&mut *tx)
         .await?;
 
         // 2. Drop prior projection relations (RANK_POSITION + Aggregated rankings).
-        sqlx::query("DELETE FROM relations WHERE from_entity_id = $1 AND type_id = ANY($2)")
-            .bind(block_id)
-            .bind(&[rank_position, aggregated][..])
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "DELETE FROM relations WHERE from_entity_id = $1 AND type_id = ANY($2) AND space_id = $3",
+        )
+        .bind(block_id)
+        .bind(&[rank_position, aggregated][..])
+        .bind(block_space_id)
+        .execute(&mut *tx)
+        .await?;
 
         // 3. Insert the ordered RANK_POSITION relations + their value rows.
         for r in rows {
