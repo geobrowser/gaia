@@ -62,6 +62,12 @@ const PERSIST_CONFIG = "90000000-000b-4000-8000-000000000002" // its BLOCKS rela
 const COL_A = "90000000-000d-4000-8000-000000000001"
 const COL_B = "90000000-000d-4000-8000-000000000002"
 const R_VIEW = "90000000-0009-4000-8000-000000000002" // stable relationId → view swap
+// Name-scoping (Option 2): TARGET1 gets a conflicting NAME in OTHER_SPACE (request
+// space must win); FOREIGN_TARGET has a NAME only in OTHER_SPACE (must still resolve
+// via fallback — properties/types are often defined in a shared space).
+const OTHER_SPACE = "90000000-0001-4000-8000-000000000002"
+const FOREIGN_TARGET = "90000000-0006-4000-8000-000000000003"
+const T_FOREIGN = "90000000-0008-4000-8000-000000000005"
 
 const NAMES: Record<string, string> = {
 	[NAME_PROPERTY]: "Name",
@@ -78,6 +84,7 @@ const NAMES: Record<string, string> = {
 	[PERSIST_BLOCK]: "Persistent Table",
 	[COL_A]: "Column A",
 	[COL_B]: "Column B",
+	[T_FOREIGN]: "Foreign Ref",
 }
 const ALL_IDS = [
 	SPACE,
@@ -102,6 +109,8 @@ const ALL_IDS = [
 	PERSIST_CONFIG,
 	COL_A,
 	COL_B,
+	FOREIGN_TARGET,
+	T_FOREIGN,
 ]
 
 const base = `/v2/versioned/entities/${PAGE}/diff?spaceId=${SPACE}`
@@ -134,6 +143,8 @@ async function seed(pool: Pool) {
 			PERSIST_CONFIG,
 			COL_A,
 			COL_B,
+			FOREIGN_TARGET,
+			T_FOREIGN,
 		]) {
 			await c.query(
 				`INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block) VALUES ($1,'2026-05-25T00:00:00Z','1',$2,'1') ON CONFLICT DO NOTHING`,
@@ -217,6 +228,24 @@ async function seed(pool: Pool) {
 		await valVer(PERSIST_BLOCK, NAME_PROPERTY, V1, null, "Persistent Table") // name unchanged across V1→V2
 		await relVer(R_VIEW, PERSIST_CONFIG, VIEW_PROPERTY, COL_A, V1, V2, "cfg") // view = COL_A at V1
 		await relVer(R_VIEW, PERSIST_CONFIG, VIEW_PROPERTY, COL_B, V2, null, "cfg") // view = COL_B at V2 (swap)
+
+		// Name-scoping fixtures (Option 2). OTHER_SPACE is a different space.
+		await c.query(
+			`INSERT INTO spaces (id, type, address) VALUES ($1,'DAO','0x00000000000000000000000000000000000000aa') ON CONFLICT (id) DO NOTHING`,
+			[OTHER_SPACE],
+		)
+		// TARGET1 already has "Target One" in SPACE; add a conflicting name in OTHER_SPACE.
+		await c.query(
+			`INSERT INTO "values" (id, property_id, entity_id, space_id, text) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO UPDATE SET text=EXCLUDED.text`,
+			[`v2t-nm-other-${TARGET1}`, NAME_PROPERTY, TARGET1, OTHER_SPACE, "WRONG SPACE NAME"],
+		)
+		// FOREIGN_TARGET has a name ONLY in OTHER_SPACE (no SPACE row) — fallback case.
+		await c.query(
+			`INSERT INTO "values" (id, property_id, entity_id, space_id, text) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO UPDATE SET text=EXCLUDED.text`,
+			[`v2t-nm-other-${FOREIGN_TARGET}`, NAME_PROPERTY, FOREIGN_TARGET, OTHER_SPACE, "Foreign Name"],
+		)
+		// PAGE gains a relation to FOREIGN_TARGET at V2 → appears in the diff.
+		await relVer(crypto.randomUUID(), PAGE, T_FOREIGN, FOREIGN_TARGET, V2, null, "f")
 
 		await c.query("COMMIT")
 	} catch (e) {
@@ -327,6 +356,19 @@ describe.skipIf(SKIP)("v2 entity-diff enrichment", () => {
 		expect(viewRel).toBeDefined()
 		expect(viewRel?.before?.toEntityName).toBe("Column A")
 		expect(viewRel?.after?.toEntityName).toBe("Column B")
+	})
+
+	it("scopes name resolution to the request space, with cross-space fallback (Option 2)", async () => {
+		const d = await fullDiff()
+		// Collision: TARGET1 has a NAME in both SPACE ("Target One") and OTHER_SPACE
+		// ("WRONG SPACE NAME"). The request space must win.
+		const block = d.blocks.find((b: any) => b.id === normalizeUuid(BLOCK_DATA))
+		const target1Rel = block?.relations?.find((r: any) => r.after?.toEntityId === normalizeUuid(TARGET1))
+		expect(target1Rel?.after?.toEntityName).toBe("Target One")
+		expect(target1Rel?.after?.toEntityName).not.toBe("WRONG SPACE NAME")
+		// Fallback: FOREIGN_TARGET has a NAME only in OTHER_SPACE — must still resolve.
+		const foreignRel = d.relations.find((r: any) => r.typeId === normalizeUuid(T_FOREIGN))
+		expect(foreignRel?.after?.toEntityName).toBe("Foreign Name")
 	})
 
 	it("supports snapshot mode (no fromEditId → all-added)", async () => {

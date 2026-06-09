@@ -952,6 +952,7 @@ const NAME_PROPERTY_ID = normalizeUuid(SystemIds.NAME_PROPERTY)
 export function batchGetEntityNames(
 	db: NodePgDatabase<Record<string, unknown>>,
 	entityIds: NormalizedUuid[],
+	spaceId?: NormalizedUuid,
 ): Effect.Effect<Map<NormalizedUuid, string>, QueryError> {
 	if (entityIds.length === 0) {
 		return Effect.succeed(new Map())
@@ -960,13 +961,28 @@ export function batchGetEntityNames(
 	return Effect.tryPromise({
 		try: async () => {
 			const idsArray = `{${entityIds.join(",")}}`
-			const result = await db.execute<{entity_id: string; text: string}>(sql`
-				SELECT entity_id, text
-				FROM "values"
-				WHERE entity_id = ANY(${idsArray}::uuid[])
-				  AND property_id = ${NAME_PROPERTY_ID}::uuid
-				  AND text IS NOT NULL
-			`)
+			// When a request space is given, prefer that space's NAME but fall back to
+			// the entity's name in any other space (properties/types are often defined
+			// in a shared/system space). DISTINCT ON + the ordering also makes the result
+			// deterministic when an entity has NAME rows in several spaces. The WHERE
+			// predicate is unchanged from the unscoped path, so the existing
+			// (entity_id, property_id, space_id) index still covers it.
+			const result = spaceId
+				? await db.execute<{entity_id: string; text: string}>(sql`
+						SELECT DISTINCT ON (entity_id) entity_id, text
+						FROM "values"
+						WHERE entity_id = ANY(${idsArray}::uuid[])
+						  AND property_id = ${NAME_PROPERTY_ID}::uuid
+						  AND text IS NOT NULL
+						ORDER BY entity_id, (space_id = ${spaceId}::uuid) DESC, space_id
+					`)
+				: await db.execute<{entity_id: string; text: string}>(sql`
+						SELECT entity_id, text
+						FROM "values"
+						WHERE entity_id = ANY(${idsArray}::uuid[])
+						  AND property_id = ${NAME_PROPERTY_ID}::uuid
+						  AND text IS NOT NULL
+					`)
 
 			const names = new Map<NormalizedUuid, string>()
 			for (const row of result.rows) {
@@ -977,7 +993,7 @@ export function batchGetEntityNames(
 		catch: (error) => new QueryError("batchGetEntityNames", error),
 	}).pipe(
 		Effect.withSpan("queries.batchGetEntityNames", {
-			attributes: {count: entityIds.length},
+			attributes: {count: entityIds.length, "query.space_id": spaceId ?? "all"},
 		}),
 	)
 }

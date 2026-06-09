@@ -140,7 +140,7 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 					toResolved.versionKey,
 					spaceId,
 				)
-				const namedDiff = yield* enrichNames(db, blockConfigDiff)
+				const namedDiff = yield* enrichNames(db, blockConfigDiff, spaceId)
 				return yield* enrichWithMediaUrls(db, namedDiff, {
 					// In snapshot mode there is no before side, so the from key is unused;
 					// fall back to the to version key to keep the lookup well-formed.

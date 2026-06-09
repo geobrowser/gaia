@@ -17,7 +17,11 @@ import type {GroupedEntityDiff, RelationChange, ValueChange} from "../types"
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
-export function enrichNames(db: Database, diff: GroupedEntityDiff): Effect.Effect<GroupedEntityDiff, QueryError> {
+export function enrichNames(
+	db: Database,
+	diff: GroupedEntityDiff,
+	spaceId: NormalizedUuid,
+): Effect.Effect<GroupedEntityDiff, QueryError> {
 	return Effect.gen(function* () {
 		const ids = new Set<NormalizedUuid>()
 		const collectValues = (vals: ValueChange[]) => {
@@ -47,7 +51,7 @@ export function enrichNames(db: Database, diff: GroupedEntityDiff): Effect.Effec
 
 		if (ids.size === 0) return diff
 
-		const names = yield* batchGetEntityNames(db, Array.from(ids))
+		const names = yield* batchGetEntityNames(db, Array.from(ids), spaceId)
 
 		const stampValues = (vals: ValueChange[]): ValueChange[] =>
 			vals.map((v) => ({...v, propertyName: names.get(v.propertyId) ?? null}))
