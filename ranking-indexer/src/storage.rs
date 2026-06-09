@@ -5,10 +5,13 @@
 //! `sqlx::query` (not the compile-time macro) so the crate builds without a
 //! live database.
 
+use std::collections::HashSet;
+
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::eligibility::SpaceKind;
 use crate::error::IndexerError;
 use crate::models::{Ranking, RankingBlock, RankingItem};
 
@@ -28,6 +31,37 @@ impl Storage {
 
     pub fn pool(&self) -> &PgPool {
         &self.pool
+    }
+
+    /// Resolve a space's kind from `public.spaces.type` (`DAO` / `Personal`).
+    /// Returns `None` if the space isn't known yet; callers treat unknown
+    /// conservatively (as `Dao`, i.e. membership-restricted).
+    pub async fn space_kind(&self, space_id: Uuid) -> Result<Option<SpaceKind>, IndexerError> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT type::text FROM spaces WHERE id = $1")
+            .bind(space_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|(t,)| match t.as_str() {
+            "Personal" => SpaceKind::Personal,
+            _ => SpaceKind::Dao,
+        }))
+    }
+
+    /// The set of personal-space ids that are members OR editors of `space_id`
+    /// — the eligible voters for a DAO-space block.
+    pub async fn member_and_editor_spaces(
+        &self,
+        space_id: Uuid,
+    ) -> Result<HashSet<Uuid>, IndexerError> {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT member_space_id FROM members WHERE space_id = $1
+             UNION
+             SELECT member_space_id FROM editors WHERE space_id = $1",
+        )
+        .bind(space_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
     /// Upsert a Ranking Block.

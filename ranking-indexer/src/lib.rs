@@ -5,6 +5,7 @@
 pub mod consumer;
 pub mod dedup;
 pub mod detect;
+pub mod eligibility;
 pub mod error;
 pub mod models;
 pub mod storage;
