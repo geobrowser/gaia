@@ -24,6 +24,7 @@ members = [
     "hermes-substream",
 
     "kg-indexer",
+    "ranking-indexer",
     "scoring-service/vote-indexer",
     "scoring-service/topology-indexer",
 

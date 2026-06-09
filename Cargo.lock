@@ -5235,6 +5235,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "ranking-indexer"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dotenv",
+ "futures 0.3.31",
+ "grc-20",
+ "hermes-instrumentation",
+ "hermes-kafka",
+ "hermes-schema",
+ "indexer_utils",
+ "prost 0.13.5",
+ "rdkafka 0.38.0",
+ "sdk",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "rapidhash"
 version = "4.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
