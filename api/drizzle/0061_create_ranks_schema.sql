@@ -18,28 +18,32 @@ CREATE SCHEMA IF NOT EXISTS ranks;
 
 -- One row per Ranking Block entity.
 CREATE TABLE IF NOT EXISTS ranks.ranking_blocks (
-	"id" uuid PRIMARY KEY NOT NULL,                -- Ranking Block entity id
-	"space_id" uuid NOT NULL,                      -- space the block lives in
+	"id" uuid NOT NULL,                            -- Ranking Block entity id
+	"space_id" uuid NOT NULL,                      -- space the block lives in (an entity can be perspectived across spaces)
 	"name" text,
 	"filter" text,                                 -- query-data-block filter string (optional)
 	"start_date" timestamp with time zone,         -- optional submission window (inclusive)
 	"end_date" timestamp with time zone,
 	"restriction_id" uuid,                         -- aggregation restriction value entity; NULL => default "Members and editors"
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	-- Composite key: the same block id can be perspectived under multiple spaces.
+	CONSTRAINT "ranking_blocks_pkey" PRIMARY KEY ("id", "space_id")
 );
 --> statement-breakpoint
 
 -- One row per Rank submission entity.
 CREATE TABLE IF NOT EXISTS ranks.rankings (
-	"id" uuid PRIMARY KEY NOT NULL,                -- Rank entity id
+	"id" uuid NOT NULL,                            -- Rank entity id
 	"block_id" uuid,                               -- nullable until the RANK_BLOCK link arrives (partial-state model)
-	"space_id" uuid NOT NULL,                      -- submitter's personal space
+	"space_id" uuid NOT NULL,                      -- submitter's personal space (a rank can be perspectived across spaces)
 	"author_address" text,                         -- submitter address resolved from the personal space
 	"rank_type" text,                              -- 'ORDINAL' | 'WEIGHTED'
 	"submitted_at" timestamp with time zone,       -- submission timestamp used for the window check
 	"updated_at_block" bigint DEFAULT 0 NOT NULL,  -- update markers for dedup: most-recently-updated rank per (block, space) wins
 	"update_index" bigint DEFAULT 0 NOT NULL,
-	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	-- Composite key: the same rank id can be perspectived under multiple spaces.
+	CONSTRAINT "rankings_pkey" PRIMARY KEY ("id", "space_id")
 );
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "rankings_block_id_idx" ON ranks.rankings ("block_id");
