@@ -974,7 +974,7 @@ export function batchGetEntityNames(
 						WHERE entity_id = ANY(${idsArray}::uuid[])
 						  AND property_id = ${NAME_PROPERTY_ID}::uuid
 						  AND text IS NOT NULL
-						ORDER BY entity_id, (space_id = ${spaceId}::uuid) DESC, space_id
+						ORDER BY entity_id, (space_id = ${spaceId}::uuid) DESC, space_id, id
 					`)
 				: await db.execute<{entity_id: string; text: string}>(sql`
 						SELECT entity_id, text

@@ -61,19 +61,19 @@ export function enrichBlockConfig(
 
 		const dataBlockIdList = Array.from(dataBlockIds)
 
-		// Map each data block → its config entity (BLOCKS relation's relation_id),
-		// checking both versions (covers added/removed/persistent blocks).
+		// Map each data block → its config entity (BLOCKS relation's relation_id) at
+		// EACH version separately. The relation_id can differ between versions if the
+		// BLOCKS relation was deleted and recreated, so we must diff the from-side
+		// config entity (at `from`) against the to-side one (at `to`) — collapsing to
+		// a single id would misdiff a recreate as an all-add/all-remove.
 		const [toMap, fromMap] = yield* Effect.all([
 			getBlockConfigEntityIds(db, parentId, dataBlockIdList, toVersionKey, spaceId),
 			fromVersionKey === null
 				? Effect.succeed(new Map<NormalizedUuid, NormalizedUuid>())
 				: getBlockConfigEntityIds(db, parentId, dataBlockIdList, fromVersionKey, spaceId),
 		])
-		const configByBlock = new Map<NormalizedUuid, NormalizedUuid>()
-		for (const [b, cfg] of fromMap) configByBlock.set(b, cfg)
-		for (const [b, cfg] of toMap) configByBlock.set(b, cfg) // `to` takes precedence
 
-		const configIds = Array.from(new Set(configByBlock.values()))
+		const configIds = Array.from(new Set([...fromMap.values(), ...toMap.values()]))
 		if (configIds.length === 0) return diff
 
 		const [beforeSnaps, afterSnaps] = yield* Effect.all([
@@ -91,10 +91,12 @@ export function enrichBlockConfig(
 			{values: GroupedEntityDiff["values"]; relations: GroupedEntityDiff["relations"]}
 		>()
 		for (const blockId of dataBlockIds) {
-			const configId = configByBlock.get(blockId)
-			if (!configId) continue
-			const b = beforeById.get(configId) ?? emptySnap(configId)
-			const a = afterById.get(configId) ?? emptySnap(configId)
+			const fromConfigId = fromMap.get(blockId)
+			const toConfigId = toMap.get(blockId)
+			if (!fromConfigId && !toConfigId) continue
+			// before = the from-version config entity @ from; after = the to-version one @ to.
+			const b = (fromConfigId && beforeById.get(fromConfigId)) || emptySnap(fromConfigId ?? blockId)
+			const a = (toConfigId && afterById.get(toConfigId)) || emptySnap(toConfigId ?? blockId)
 			const [configRelations, configValues] = yield* Effect.all([
 				diffRelations(
 					b.relations.filter((r) => CONFIG_RELATION_TYPES.has(r.typeId)),
