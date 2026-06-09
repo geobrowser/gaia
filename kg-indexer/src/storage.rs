@@ -1614,16 +1614,14 @@ impl Storage {
         .execute(&mut **tx)
         .await?;
 
-        // Build the rows to insert. Three sources:
+        // Build the rows to insert. Only Create ops are versioned here; the
+        // Create row carries the context columns (incl. context_last_to_entity_id)
+        // synthesized in-memory — no reads.
         //
-        //   - Create ops: synthesize from the SetRelationItem in-memory.
-        //   - Update / Unset ops: read post-mutation state from `relations`
-        //     (callers run live-table mutations before us in the same tx) and
-        //     attach the op's context columns. Without this path, an update
-        //     would close the existing version row but write no new row, so
-        //     queries at `version_key` would treat the relation as deleted.
-        //   - Delete ops: skip — closing valid_to_key already represents the
-        //     deletion in the temporal table.
+        // NOTE: versioning Update/Unset ops (so an in-place relation field change
+        // is reflected in the temporal table rather than reading as deleted at the
+        // new version_key) is a separate write-path correctness fix tracked in its
+        // own PR — intentionally not bundled here to keep this change read-free.
         let mut rows: Vec<VersionRow> = Vec::new();
 
         for r in relations {
@@ -1643,31 +1641,7 @@ impl Storage {
                     context_edge_type_id: item.context_edge_type_id,
                     context_last_to_entity_id: item.context_last_to_entity_id,
                 }),
-                RelationOp::Update(item) => {
-                    if let Some(row) = Self::fetch_relation_state(item.id, item.space_id, tx)
-                        .await?
-                    {
-                        rows.push(VersionRow {
-                            context_root_id: item.context_root_id,
-                            context_edge_type_id: item.context_edge_type_id,
-                            context_last_to_entity_id: item.context_last_to_entity_id,
-                            ..row
-                        });
-                    }
-                }
-                RelationOp::Unset(item) => {
-                    if let Some(row) = Self::fetch_relation_state(item.id, item.space_id, tx)
-                        .await?
-                    {
-                        rows.push(VersionRow {
-                            context_root_id: item.context_root_id,
-                            context_edge_type_id: item.context_edge_type_id,
-                            context_last_to_entity_id: item.context_last_to_entity_id,
-                            ..row
-                        });
-                    }
-                }
-                RelationOp::Delete(_) => {}
+                RelationOp::Update(_) | RelationOp::Unset(_) | RelationOp::Delete(_) => {}
             }
         }
 
@@ -1749,59 +1723,6 @@ impl Storage {
 
         Ok(())
     }
-
-    /// Read the current state of a relation from the live `relations` table.
-    /// Used by `insert_relation_versions` to materialize a new version row
-    /// after Update/Unset live-table mutations have already been applied.
-    async fn fetch_relation_state(
-        relation_id: Uuid,
-        space_id: Uuid,
-        tx: &mut sqlx::Transaction<'_, Postgres>,
-    ) -> Result<Option<VersionRow>, IndexerError> {
-        let row = sqlx::query_as::<_, RelationStateRow>(
-            r#"
-            SELECT id, entity_id, type_id, from_entity_id, from_space_id,
-                   to_entity_id, to_space_id, position, space_id, verified
-            FROM relations
-            WHERE id = $1 AND space_id = $2
-            "#,
-        )
-        .bind(relation_id)
-        .bind(space_id)
-        .fetch_optional(&mut **tx)
-        .await?;
-
-        Ok(row.map(|r| VersionRow {
-            relation_id: r.id,
-            entity_id: r.entity_id,
-            type_id: r.type_id,
-            from_id: r.from_entity_id,
-            from_space_id: r.from_space_id,
-            to_id: r.to_entity_id,
-            to_space_id: r.to_space_id,
-            position: r.position,
-            space_id: r.space_id,
-            verified: r.verified,
-            // Caller fills in op's context columns.
-            context_root_id: None,
-            context_edge_type_id: None,
-            context_last_to_entity_id: None,
-        }))
-    }
-}
-
-#[derive(sqlx::FromRow)]
-struct RelationStateRow {
-    id: Uuid,
-    entity_id: Uuid,
-    type_id: Uuid,
-    from_entity_id: Uuid,
-    from_space_id: Option<Uuid>,
-    to_entity_id: Uuid,
-    to_space_id: Option<Uuid>,
-    position: Option<String>,
-    space_id: Uuid,
-    verified: Option<bool>,
 }
 
 /// Internal helper struct used by `insert_relation_versions`.

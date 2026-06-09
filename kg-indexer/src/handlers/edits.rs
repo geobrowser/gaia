@@ -258,7 +258,10 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             is_system: c.is_system,
             context_root_id: c.context_root_id,
             context_edge_type_id: c.context_edge_type_id,
-            context_last_to_entity_id: c.context_last_to_entity_id,
+            // Prefer the update's leaf-context, falling back to the create's — an
+            // update can carry a newer context_last_to_entity_id, and like the other
+            // merged fields above it should not be silently dropped.
+            context_last_to_entity_id: u.context_last_to_entity_id.or(c.context_last_to_entity_id),
         }),
 
         // create -> delete: Delete wins
@@ -1297,7 +1300,10 @@ mod tests {
 
         assert_eq!(extracted_root, Some(Uuid::from_bytes(root_id)));
         assert_eq!(extracted_edge_type, Some(Uuid::from_bytes(edge_type_id)));
-        assert_eq!(extracted_last_to_entity, Some(Uuid::from_bytes(to_entity_id)));
+        assert_eq!(
+            extracted_last_to_entity,
+            Some(Uuid::from_bytes(to_entity_id))
+        );
     }
 
     #[test]
@@ -1331,7 +1337,10 @@ mod tests {
         // Bucket key is first edge's type_id, not last.
         assert_eq!(extracted_edge_type, Some(Uuid::from_bytes(first_type)));
         // Leaf is last edge's to_entity_id, not the middle one.
-        assert_eq!(extracted_last_to_entity, Some(Uuid::from_bytes(leaf_target)));
+        assert_eq!(
+            extracted_last_to_entity,
+            Some(Uuid::from_bytes(leaf_target))
+        );
     }
 
     #[test]
