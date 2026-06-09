@@ -428,6 +428,13 @@
       "when": 1780679566128,
       "tag": "0060_optimize-entities-ordered-by-property",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1780963771035,
+      "tag": "0061_create_ranks_schema",
+      "breakpoints": true
     }
   ]
 }
