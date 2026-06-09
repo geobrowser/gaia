@@ -1614,71 +1614,57 @@ impl Storage {
         .execute(&mut **tx)
         .await?;
 
-        // Build the rows to insert. Only Create ops are versioned here; the
-        // Create row carries the context columns (incl. context_last_to_entity_id)
+        // Filter to only Create operations for inserting new versions. The Create
+        // row carries the context columns (incl. context_last_to_entity_id)
         // synthesized in-memory — no reads.
         //
         // NOTE: versioning Update/Unset ops (so an in-place relation field change
         // is reflected in the temporal table rather than reading as deleted at the
         // new version_key) is a separate write-path correctness fix tracked in its
         // own PR — intentionally not bundled here to keep this change read-free.
-        let mut rows: Vec<VersionRow> = Vec::new();
+        let creates: Vec<&SetRelationItem> = relations
+            .iter()
+            .filter_map(|r| match r {
+                RelationOp::Create(item) => Some(item),
+                _ => None,
+            })
+            .collect();
 
-        for r in relations {
-            match r {
-                RelationOp::Create(item) => rows.push(VersionRow {
-                    relation_id: item.id,
-                    entity_id: item.entity_id,
-                    type_id: item.type_id,
-                    from_id: item.from_id,
-                    from_space_id: item.from_space_id.as_ref().and_then(|s| s.parse().ok()),
-                    to_id: item.to_id,
-                    to_space_id: item.to_space_id.as_ref().and_then(|s| s.parse().ok()),
-                    position: item.position.clone(),
-                    space_id: item.space_id,
-                    verified: item.verified,
-                    context_root_id: item.context_root_id,
-                    context_edge_type_id: item.context_edge_type_id,
-                    context_last_to_entity_id: item.context_last_to_entity_id,
-                }),
-                RelationOp::Update(_) | RelationOp::Unset(_) | RelationOp::Delete(_) => {}
-            }
-        }
-
-        if rows.is_empty() {
+        if creates.is_empty() {
             return Ok(());
         }
 
         // Prepare arrays for bulk insert
-        let mut ids = Vec::with_capacity(rows.len());
-        let mut r_relation_ids = Vec::with_capacity(rows.len());
-        let mut r_entity_ids = Vec::with_capacity(rows.len());
-        let mut r_type_ids = Vec::with_capacity(rows.len());
-        let mut r_from_entity_ids = Vec::with_capacity(rows.len());
-        let mut r_from_space_ids: Vec<Option<Uuid>> = Vec::with_capacity(rows.len());
-        let mut r_to_entity_ids = Vec::with_capacity(rows.len());
-        let mut r_to_space_ids: Vec<Option<Uuid>> = Vec::with_capacity(rows.len());
-        let mut r_positions = Vec::with_capacity(rows.len());
-        let mut r_space_ids = Vec::with_capacity(rows.len());
-        let mut r_verified = Vec::with_capacity(rows.len());
-        let mut valid_from_keys = Vec::with_capacity(rows.len());
-        let mut context_root_ids = Vec::with_capacity(rows.len());
-        let mut context_edge_type_ids = Vec::with_capacity(rows.len());
-        let mut context_last_to_entity_ids = Vec::with_capacity(rows.len());
+        let mut ids = Vec::with_capacity(creates.len());
+        let mut r_relation_ids = Vec::with_capacity(creates.len());
+        let mut r_entity_ids = Vec::with_capacity(creates.len());
+        let mut r_type_ids = Vec::with_capacity(creates.len());
+        let mut r_from_entity_ids = Vec::with_capacity(creates.len());
+        let mut r_from_space_ids: Vec<Option<Uuid>> = Vec::with_capacity(creates.len());
+        let mut r_to_entity_ids = Vec::with_capacity(creates.len());
+        let mut r_to_space_ids: Vec<Option<Uuid>> = Vec::with_capacity(creates.len());
+        let mut r_positions = Vec::with_capacity(creates.len());
+        let mut r_space_ids = Vec::with_capacity(creates.len());
+        let mut r_verified = Vec::with_capacity(creates.len());
+        let mut valid_from_keys = Vec::with_capacity(creates.len());
+        let mut context_root_ids = Vec::with_capacity(creates.len());
+        let mut context_edge_type_ids = Vec::with_capacity(creates.len());
+        let mut context_last_to_entity_ids = Vec::with_capacity(creates.len());
 
-        for r in &rows {
+        for r in &creates {
+            // Derive deterministic ID for idempotency
             ids.push(Self::derive_relation_version_id(
-                &r.relation_id,
+                &r.id,
                 &r.space_id,
                 version_key,
             ));
-            r_relation_ids.push(r.relation_id);
+            r_relation_ids.push(r.id);
             r_entity_ids.push(r.entity_id);
             r_type_ids.push(r.type_id);
             r_from_entity_ids.push(r.from_id);
-            r_from_space_ids.push(r.from_space_id);
+            r_from_space_ids.push(r.from_space_id.as_ref().and_then(|s| s.parse().ok()));
             r_to_entity_ids.push(r.to_id);
-            r_to_space_ids.push(r.to_space_id);
+            r_to_space_ids.push(r.to_space_id.as_ref().and_then(|s| s.parse().ok()));
             r_positions.push(r.position.as_deref());
             r_space_ids.push(r.space_id);
             r_verified.push(r.verified);
@@ -1723,21 +1709,4 @@ impl Storage {
 
         Ok(())
     }
-}
-
-/// Internal helper struct used by `insert_relation_versions`.
-struct VersionRow {
-    relation_id: Uuid,
-    entity_id: Uuid,
-    type_id: Uuid,
-    from_id: Uuid,
-    from_space_id: Option<Uuid>,
-    to_id: Uuid,
-    to_space_id: Option<Uuid>,
-    position: Option<String>,
-    space_id: Uuid,
-    verified: Option<bool>,
-    context_root_id: Option<Uuid>,
-    context_edge_type_id: Option<Uuid>,
-    context_last_to_entity_id: Option<Uuid>,
 }
