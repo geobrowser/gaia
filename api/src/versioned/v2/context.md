@@ -54,8 +54,8 @@ Affected endpoints (each gets a `/v2/...` enriched variant):
 | 3 | Name resolution | ✅ done | `enrich-names.ts` (`enrichNames`) — `42b3af76` |
 | 4 | Media URL inlining | ✅ done (versioned before/after + group-nested) | `enrich.ts` (`enrichWithMediaUrls`), `queries.ts` (`batchGetMediaUrlsAtVersion`) — `42b3af76` |
 | 5 | Block synthesis + snapshot mode | ✅ done | snapshot mode in `router.ts` (`6d6a944b`); blocks come from the grouped snapshot's versioned discovery |
-| 1 | Block folding | ✅ for the single-entity path (rich shape) | `enrich-blocks.ts` (`enrichBlocks`) — `5f5ebf8a`. Cross-parent folding = proposal-only (TODO) |
-| 6 | Data-block config merge | ✅ done | `enrich-block-config.ts` (`enrichBlockConfig`), `queries.ts` (`getBlockConfigEntityIds`) — `51903d3f` |
+| 1 | Block folding | ✅ for the single-entity path (rich shape) | `enrich-blocks.ts` (`enrichBlocks`) — `5f5ebf8a`. Also surfaces blocks whose own values/relations changed under an **unchanged headline** (`cb42b866`). Cross-parent folding = proposal-only (TODO) |
+| 6 | Data-block config merge | ✅ done | `enrich-block-config.ts` (`enrichBlockConfig`), `queries.ts` (`getBlockConfigEntityIds`) — `51903d3f`. Discovers data blocks from the snapshots, so a **config-only change** (columns/view/filter, no rename) still surfaces the block (`cb42b866`) |
 | 2 | Media-property filtering | n/a for single-entity; proposal-only | TODO (proposal endpoints) |
 
 ## The 9 `postProcessDiffs` steps vs v2 (entity-diff)
@@ -68,7 +68,7 @@ Affected endpoints (each gets a `/v2/...` enriched variant):
 | 4. Batch-fetch names | ✅ `enrichNames` → `batchGetEntityNames` |
 | 5. Merge config into data block | ✅ `enrichBlockConfig` |
 | 6. Inject orphan BLOCKS + resolve media URLs | ✅ media URLs `enrichWithMediaUrls`. Orphan-BLOCKS injection / media-property filtering = proposal-only |
-| 7. Synthesize missing block diffs | ✅ grouped snapshot discovers + diffs blocks (add/update/remove) from `relation_versions` |
+| 7. Synthesize missing block diffs | ✅ grouped snapshot discovers + diffs blocks (add/update/remove) from `relation_versions`. The shared `diffBlocks` only emits on a *headline* change (name/markdown/url), so v2 additionally surfaces blocks with own-internal or config-only changes under an unchanged headline (`enrichBlocks` + `enrichBlockConfig`, `cb42b866`) |
 | 8. Group blocks under parents | ✅ native (single parent). Cross-parent = proposal-only |
 | 9. Apply resolved names | ✅ `enrichNames` stamps names on values + relations (top-level, grouped, and block values/relations) |
 
@@ -80,9 +80,9 @@ proposal-groups** endpoints, which don't exist in v2 yet.
 ## Pipeline (router.ts)
 
 ```
-diffGroupedEntitySnapshots(before, after)   // shared v1 diff (Byron)
-  → enrichBlocks(before, after)             // A1: blockName + block.values/relations
-  → enrichBlockConfig(parent, from, to)     // A2/#6: fold config from the BLOCKS relation entity
+diffGroupedEntitySnapshots(before, after)   // shared v1 diff (Byron) — emits blocks only on headline change
+  → enrichBlocks(before, after)             // A1: blockName + block.values/relations; also surfaces own-changed blocks w/ unchanged headline
+  → enrichBlockConfig(parent, before, after, from, to)  // A2/#6: fold config from the BLOCKS relation entity; surfaces config-only-changed data blocks
   → enrichNames(db)                          // #3/#9: propertyName/typeName/toEntityName (incl. blocks)
   → enrichWithMediaUrls(db, from, to)        // #4: imageUrl/videoUrl, versioned before/after
 ```
@@ -93,6 +93,7 @@ Snapshot mode: omit `fromEditId` → empty "before" → all-added diff (then sam
 `api/src/versioned/__tests__/v2-entity-diff.test.ts` (vitest, real DB, `DATABASE_URL`-gated).
 Covers: names, versioned media before/after via a **cover swap**, `videoUrl`, rich data-block
 (blockName + values + relations w/ `spaceId`), **config merge from the relation entity (A2)**,
+a **data block whose config changed under an unchanged headline** (P1 — must still surface),
 and snapshot mode. Run in CI by `.github/workflows/api-integration-tests.yml` (now includes
 `src/versioned/__tests__/`).
 
