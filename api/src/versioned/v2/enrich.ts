@@ -16,8 +16,8 @@
 
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Effect} from "effect"
-import type {QueryError} from "../queries"
 import type {NormalizedUuid} from "../../utils/uuid"
+import type {QueryError} from "../queries"
 import type {GroupedEntityDiff, RelationChange} from "../types"
 import {batchGetMediaUrls, batchGetMediaUrlsAtVersion} from "./queries"
 import type {MediaEntity, RelationChangeV2} from "./types"

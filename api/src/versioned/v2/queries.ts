@@ -6,11 +6,11 @@
  */
 
 import {SystemIds} from "@graphprotocol/grc-20"
-import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {sql} from "drizzle-orm"
+import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Effect} from "effect"
+import {type NormalizedUuid, normalizeUuid} from "../../utils/uuid"
 import {QueryError} from "../queries"
-import {normalizeUuid, type NormalizedUuid} from "../../utils/uuid"
 import type {MediaEntity} from "./types"
 
 const IMAGE_TYPE_ID = normalizeUuid(SystemIds.IMAGE_TYPE)

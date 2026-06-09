@@ -20,8 +20,8 @@
 
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
+import {type NormalizedUuid, normalizeUuid} from "../../utils/uuid"
 import {diffRelations, diffValues} from "../diff"
-import {normalizeUuid, type NormalizedUuid} from "../../utils/uuid"
 import type {BlockSnapshot, GroupedEntityDiff, GroupedEntitySnapshot} from "../types"
 
 const NAME_PROPERTY = normalizeUuid(SystemIds.NAME_PROPERTY)

@@ -10,9 +10,8 @@
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
-
-import type {Profile} from "../../profile/types"
 import {getProfilesBySpaceIds} from "../../profile/queries"
+import type {Profile} from "../../profile/types"
 import type {AppRuntime} from "../../services/runtime"
 import {isValidUuid, type NormalizedUuid, normalizeUuid, toDashedUuid} from "../../utils/uuid"
 import {diffGroupedEntitySnapshots} from "../diff"

@@ -15,8 +15,8 @@
 
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
+import {type NormalizedUuid, normalizeUuid} from "../../utils/uuid"
 import {diffRelations, diffValues} from "../diff"
-import {normalizeUuid, type NormalizedUuid} from "../../utils/uuid"
 import {batchGetBlockSnapshotsAtVersion, type QueryError} from "../queries"
 import type {BlockSnapshot, GroupedEntityDiff} from "../types"
 import {getBlockConfigEntityIds} from "./queries"
