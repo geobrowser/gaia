@@ -74,6 +74,10 @@ pub const RANK_POSITION_RELATION_TYPE_ID: &str = "890deffb-3843-49fa-8269-74000e
 // aggregated to produce its ordering (provenance). Reserved below so user edits
 // can't forge it.
 pub const AGGREGATED_RANKINGS_RELATION_TYPE_ID: &str = "67651da6-11a9-4246-9ff4-039aafbe9e43";
+// `Rank position value` is the indexer-owned integer property carrying an
+// entity's aggregated score within a ranking block (surfaced on the published
+// RANK_POSITION relation's reified entity). Reserved in PROTECTED_PROPERTY_IDS.
+pub const RANK_POSITION_VALUE_PROPERTY_ID: &str = "e1ffac9f-beb4-4654-8a50-00e1d6c662fb";
 
 /// Onchain-derived ID of the "root" space whose editors are authorized to
 /// publish edits that mutate the system property-definition entities — i.e.
@@ -97,6 +101,7 @@ pub const PROTECTED_PROPERTY_IDS: &[&str] = &[
     SPACE_ID_PROPERTY_ID,
     CREATED_AT_BLOCK_PROPERTY_ID,
     SCORE_PROPERTY_ID,
+    RANK_POSITION_VALUE_PROPERTY_ID,
 ];
 
 pub const PROTECTED_RELATION_TYPE_IDS: &[&str] = &[
@@ -171,6 +176,7 @@ mod tests {
             SPACE_ID_PROPERTY_ID,
             CREATED_AT_BLOCK_PROPERTY_ID,
             SCORE_PROPERTY_ID,
+            RANK_POSITION_VALUE_PROPERTY_ID,
         ];
         assert_eq!(PROTECTED_PROPERTY_IDS.len(), expected.len());
         for id in &expected {
