@@ -14,6 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
+use chrono::{DateTime, Utc};
 use grc_20::{Id as Grc20Id, Op as Grc20Op, PropertyValue, Value as Grc20Value};
 use uuid::Uuid;
 
@@ -98,8 +99,16 @@ impl DetectedEdit {
 /// `space_id` is the edit's space (a Rank/Ranking Block lives in it).
 /// `block_number` seeds the dedup update markers ("most recently updated rank
 /// per (block, space) wins"); `update_index` is the op position within the edit.
-pub fn detect(edit: &grc_20::Edit, space_id: Uuid, block_number: i64) -> DetectedEdit {
+/// `block_timestamp` is the edit's on-chain time (Unix seconds), recorded as the
+/// submission timestamp for the window check.
+pub fn detect(
+    edit: &grc_20::Edit,
+    space_id: Uuid,
+    block_number: i64,
+    block_timestamp: i64,
+) -> DetectedEdit {
     let ids = &*IDS;
+    let submitted_at = DateTime::<Utc>::from_timestamp(block_timestamp, 0);
     let mut out = DetectedEdit::default();
 
     // Pass 1: index entity property-values and resolve TYPES membership, and
@@ -143,7 +152,7 @@ pub fn detect(edit: &grc_20::Edit, space_id: Uuid, block_number: i64) -> Detecte
                         space_id,
                         author_address: None, // resolved from the personal space during aggregation
                         rank_type: text_value(&entity.values, ids.rank_type_property),
-                        submitted_at: None, // TODO: derive from edit/block timestamp
+                        submitted_at,
                         updated_at_block: block_number,
                         update_index: op_index as i64,
                     });
@@ -209,4 +218,142 @@ pub fn detect(edit: &grc_20::Edit, space_id: Uuid, block_number: i64) -> Detecte
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grc_20::model::builder::EditBuilder;
+    use sdk::core::ids::*;
+
+    /// grc_20 Id ([u8; 16]) from an arbitrary u128.
+    fn gid(n: u128) -> [u8; 16] {
+        *Uuid::from_u128(n).as_bytes()
+    }
+    /// grc_20 Id from a system-ID string constant.
+    fn sid(s: &str) -> [u8; 16] {
+        *Uuid::parse_str(s).unwrap().as_bytes()
+    }
+
+    const SPACE: u128 = 7000;
+    const RANK: u128 = 1;
+    const BLOCK: u128 = 2;
+    const RANKED_ENTITY: u128 = 3;
+    const VOTE_ENTITY: u128 = 4;
+    const PERSPECTIVE: u128 = 8000;
+
+    fn space_uuid() -> Uuid {
+        Uuid::from_u128(SPACE)
+    }
+
+    #[test]
+    fn detects_weighted_rank_with_item_and_submitted_at() {
+        let edit = EditBuilder::new(gid(0))
+            // entity RANK is typed `Rank` via a TYPES relation
+            .create_relation(|r| {
+                r.id(gid(10))
+                    .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                    .from(gid(RANK))
+                    .to(sid(RANK_TYPE_ID))
+            })
+            .create_entity(gid(RANK), |e| {
+                e.text(sid(RANK_TYPE_PROPERTY_ID), "WEIGHTED", None)
+            })
+            // a RANK_VOTES item: rank -> ranked entity, with perspective + position
+            // and an explicit reified vote entity
+            .create_relation(|r| {
+                r.id(gid(11))
+                    .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                    .from(gid(RANK))
+                    .to(gid(RANKED_ENTITY))
+                    .to_space(gid(PERSPECTIVE))
+                    .position("a0")
+                    .entity(gid(VOTE_ENTITY))
+            })
+            // the reified vote entity carries the weighted value
+            .create_entity(gid(VOTE_ENTITY), |e| {
+                e.float(sid(VOTE_WEIGHTED_VALUE_PROPERTY_ID), 0.9, None)
+            })
+            .build();
+
+        let detected = detect(&edit, space_uuid(), 100, 1_700_000_000);
+
+        assert_eq!(detected.rankings.len(), 1);
+        let r = &detected.rankings[0];
+        assert_eq!(r.id, Uuid::from_u128(RANK));
+        assert_eq!(r.rank_type.as_deref(), Some("WEIGHTED"));
+        assert_eq!(r.space_id, space_uuid());
+        assert_eq!(
+            r.submitted_at,
+            DateTime::<Utc>::from_timestamp(1_700_000_000, 0)
+        );
+
+        assert_eq!(detected.items.len(), 1);
+        let it = &detected.items[0];
+        assert_eq!(it.ranking_id, Uuid::from_u128(RANK));
+        assert_eq!(it.entity_id, Uuid::from_u128(RANKED_ENTITY));
+        assert_eq!(it.space_id, Uuid::from_u128(PERSPECTIVE));
+        assert_eq!(it.position.as_deref(), Some("a0"));
+        assert_eq!(it.weight, Some(0.9));
+    }
+
+    #[test]
+    fn detects_ranking_block() {
+        let edit = EditBuilder::new(gid(0))
+            .create_relation(|r| {
+                r.id(gid(20))
+                    .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                    .from(gid(BLOCK))
+                    .to(sid(RANKING_BLOCK_TYPE_ID))
+            })
+            .create_entity(gid(BLOCK), |e| e.text(sid(NAME_PROPERTY_ID), "Top Films", None))
+            .build();
+
+        let detected = detect(&edit, space_uuid(), 100, 0);
+        assert_eq!(detected.blocks.len(), 1);
+        assert_eq!(detected.blocks[0].id, Uuid::from_u128(BLOCK));
+        assert_eq!(detected.blocks[0].name.as_deref(), Some("Top Films"));
+        assert!(detected.rankings.is_empty());
+    }
+
+    #[test]
+    fn detects_rank_block_link() {
+        let edit = EditBuilder::new(gid(0))
+            .create_relation(|r| {
+                r.id(gid(30))
+                    .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
+                    .from(gid(RANK))
+                    .to(gid(BLOCK))
+            })
+            .build();
+
+        let detected = detect(&edit, space_uuid(), 100, 0);
+        assert_eq!(
+            detected.block_links,
+            vec![(Uuid::from_u128(RANK), Uuid::from_u128(BLOCK))]
+        );
+    }
+
+    #[test]
+    fn ignores_unrelated_ops() {
+        let edit = EditBuilder::new(gid(0))
+            .create_entity(gid(999), |e| {
+                e.text(sid(NAME_PROPERTY_ID), "Just an entity", None)
+            })
+            .build();
+        let detected = detect(&edit, space_uuid(), 100, 0);
+        assert!(detected.is_empty());
+    }
+
+    #[test]
+    fn untyped_rank_entity_is_not_detected() {
+        // A Rank-shaped entity WITHOUT the TYPES relation isn't classified as a rank.
+        let edit = EditBuilder::new(gid(0))
+            .create_entity(gid(RANK), |e| {
+                e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None)
+            })
+            .build();
+        let detected = detect(&edit, space_uuid(), 100, 0);
+        assert!(detected.rankings.is_empty());
+    }
 }
