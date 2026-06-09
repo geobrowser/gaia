@@ -134,6 +134,8 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 					db,
 					richBlocksDiff,
 					entityId,
+					beforeSnapshot,
+					afterSnapshot,
 					fromResolved?.versionKey ?? null,
 					toResolved.versionKey,
 					spaceId,

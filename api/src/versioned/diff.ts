@@ -325,7 +325,7 @@ export function diffRelations(
 /**
  * Determine block type from its relations.
  */
-function getBlockType(block: BlockSnapshot): "textBlock" | "imageBlock" | "dataBlock" | null {
+export function getBlockType(block: BlockSnapshot): "textBlock" | "imageBlock" | "dataBlock" | null {
 	// Check relations for type indicators
 	for (const rel of block.relations) {
 		if (rel.typeId === TYPES_PROPERTY) {
@@ -340,7 +340,7 @@ function getBlockType(block: BlockSnapshot): "textBlock" | "imageBlock" | "dataB
 /**
  * Extract markdown content from a text block.
  */
-function getMarkdownContent(block: BlockSnapshot): string {
+export function getMarkdownContent(block: BlockSnapshot): string {
 	const markdownValue = block.values.find((v) => v.propertyId === MARKDOWN_CONTENT)
 	return markdownValue?.text ?? ""
 }
@@ -348,7 +348,7 @@ function getMarkdownContent(block: BlockSnapshot): string {
 /**
  * Extract image URL from an image block.
  */
-function getImageUrl(block: BlockSnapshot): string | null {
+export function getImageUrl(block: BlockSnapshot): string | null {
 	const imageValue = block.values.find((v) => v.propertyId === IMAGE_URL_PROPERTY)
 	return imageValue?.text ?? null
 }
@@ -356,7 +356,7 @@ function getImageUrl(block: BlockSnapshot): string | null {
 /**
  * Extract name from a data block.
  */
-function getBlockName(block: BlockSnapshot): string | null {
+export function getBlockName(block: BlockSnapshot): string | null {
 	const nameValue = block.values.find((v) => v.propertyId === NAME_PROPERTY)
 	return nameValue?.text ?? null
 }

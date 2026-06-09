@@ -55,6 +55,13 @@ const T_COLLECTION_ITEM = "90000000-0008-4000-8000-000000000004"
 const R_COVER = "90000000-0009-4000-8000-000000000001" // stable relationId → swap
 const CONFIG_ENTITY = "90000000-000b-4000-8000-000000000001" // reified BLOCKS relation entity (holds config)
 const VIEW_TARGET = "90000000-000c-4000-8000-000000000001"
+// P1: a data block that PERSISTS across V1→V2 with an unchanged name, whose config
+// (view) changes. No headline change → absent from the flat diff; must still surface.
+const PERSIST_BLOCK = "90000000-0005-4000-8000-000000000002"
+const PERSIST_CONFIG = "90000000-000b-4000-8000-000000000002" // its BLOCKS relation entity
+const COL_A = "90000000-000d-4000-8000-000000000001"
+const COL_B = "90000000-000d-4000-8000-000000000002"
+const R_VIEW = "90000000-0009-4000-8000-000000000002" // stable relationId → view swap
 
 const NAMES: Record<string, string> = {
 	[NAME_PROPERTY]: "Name",
@@ -68,6 +75,9 @@ const NAMES: Record<string, string> = {
 	[TARGET2]: "Target Two",
 	[PAGE]: "Demo Page",
 	[VIEW_TARGET]: "Gallery View",
+	[PERSIST_BLOCK]: "Persistent Table",
+	[COL_A]: "Column A",
+	[COL_B]: "Column B",
 }
 const ALL_IDS = [
 	SPACE,
@@ -88,6 +98,10 @@ const ALL_IDS = [
 	T_COLLECTION_ITEM,
 	CONFIG_ENTITY,
 	VIEW_TARGET,
+	PERSIST_BLOCK,
+	PERSIST_CONFIG,
+	COL_A,
+	COL_B,
 ]
 
 const base = `/v2/versioned/entities/${PAGE}/diff?spaceId=${SPACE}`
@@ -116,6 +130,10 @@ async function seed(pool: Pool) {
 			T_COLLECTION_ITEM,
 			CONFIG_ENTITY,
 			VIEW_TARGET,
+			PERSIST_BLOCK,
+			PERSIST_CONFIG,
+			COL_A,
+			COL_B,
 		]) {
 			await c.query(
 				`INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block) VALUES ($1,'2026-05-25T00:00:00Z','1',$2,'1') ON CONFLICT DO NOTHING`,
@@ -189,6 +207,16 @@ async function seed(pool: Pool) {
 		await valVer(BLOCK_DATA, FILTER_PROP, V2, null, '{"filter":"x"}')
 		await relVer(crypto.randomUUID(), BLOCK_DATA, T_COLLECTION_ITEM, TARGET1, V2, null, "i0")
 		await relVer(crypto.randomUUID(), BLOCK_DATA, T_COLLECTION_ITEM, TARGET2, V2, null, "i1")
+
+		// P1 fixture: PERSIST_BLOCK is a data block present at BOTH V1 and V2 with an
+		// unchanged name. Its config entity's VIEW relation swaps COL_A → COL_B at V2.
+		// Headline + own values/relations are unchanged, so the flat diff omits the
+		// block entirely — v2 must still surface it via the config change.
+		await relVer(PERSIST_CONFIG, PAGE, BLOCKS, PERSIST_BLOCK, V1, null, "e") // BLOCKS persists; relId = config entity
+		await relVer(crypto.randomUUID(), PERSIST_BLOCK, TYPES, DATA_BLOCK, V1, null, "t")
+		await valVer(PERSIST_BLOCK, NAME_PROPERTY, V1, null, "Persistent Table") // name unchanged across V1→V2
+		await relVer(R_VIEW, PERSIST_CONFIG, VIEW_PROPERTY, COL_A, V1, V2, "cfg") // view = COL_A at V1
+		await relVer(R_VIEW, PERSIST_CONFIG, VIEW_PROPERTY, COL_B, V2, null, "cfg") // view = COL_B at V2 (swap)
 
 		await c.query("COMMIT")
 	} catch (e) {
@@ -282,6 +310,23 @@ describe.skipIf(SKIP)("v2 entity-diff enrichment", () => {
 		const viewRel = block?.relations?.find((r: any) => r.typeId === normalizeUuid(VIEW_PROPERTY))
 		expect(viewRel).toBeDefined()
 		expect(viewRel?.after?.toEntityName).toBe("Gallery View")
+	})
+
+	it("surfaces a data block whose config changed without a headline change (P1)", async () => {
+		const d = await fullDiff()
+		// PERSIST_BLOCK's name is unchanged across V1→V2, so the flat diff omits it.
+		// The v2 enrichment must still surface it because its view config changed.
+		const block = d.blocks.find((b: any) => b.id === normalizeUuid(PERSIST_BLOCK))
+		expect(block).toBeDefined()
+		expect(block?.type).toBe("dataBlock")
+		// headline unchanged → before === after
+		expect(block?.before).toBe("Persistent Table")
+		expect(block?.after).toBe("Persistent Table")
+		// the VIEW config swap (COL_A → COL_B) is folded into the block's relations
+		const viewRel = block?.relations?.find((r: any) => r.typeId === normalizeUuid(VIEW_PROPERTY))
+		expect(viewRel).toBeDefined()
+		expect(viewRel?.before?.toEntityName).toBe("Column A")
+		expect(viewRel?.after?.toEntityName).toBe("Column B")
 	})
 
 	it("supports snapshot mode (no fromEditId → all-added)", async () => {
