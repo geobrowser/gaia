@@ -69,10 +69,11 @@ pub const RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID: &str = "10a7b103-90f9-4a72-80
 // ranking-indexer publishes per ranked target — no user edit may author it, so
 // it is reserved in `PROTECTED_RELATION_TYPE_IDS` below.
 pub const RANK_POSITION_RELATION_TYPE_ID: &str = "890deffb-3843-49fa-8269-74000e3dcef6";
-// Aggregated-rankings property — canonical id captured, but its exact role in
-// the (still-gated) publish stage vs the RANK_POSITION relation is pending
-// confirmation, so it is intentionally NOT yet added to PROTECTED_PROPERTY_IDS.
-pub const AGGREGATED_RANKINGS_PROPERTY_ID: &str = "67651da6-11a9-4246-9ff4-039aafbe9e43";
+// `Aggregated rankings` is an indexer-owned relation type: from a published
+// RANK_POSITION result back to the individual Rank submissions that were
+// aggregated to produce its ordering (provenance). Reserved below so user edits
+// can't forge it.
+pub const AGGREGATED_RANKINGS_RELATION_TYPE_ID: &str = "67651da6-11a9-4246-9ff4-039aafbe9e43";
 
 /// Onchain-derived ID of the "root" space whose editors are authorized to
 /// publish edits that mutate the system property-definition entities — i.e.
@@ -98,8 +99,11 @@ pub const PROTECTED_PROPERTY_IDS: &[&str] = &[
     SCORE_PROPERTY_ID,
 ];
 
-pub const PROTECTED_RELATION_TYPE_IDS: &[&str] =
-    &[SYSTEM_TYPES_RELATION_TYPE_ID, RANK_POSITION_RELATION_TYPE_ID];
+pub const PROTECTED_RELATION_TYPE_IDS: &[&str] = &[
+    SYSTEM_TYPES_RELATION_TYPE_ID,
+    RANK_POSITION_RELATION_TYPE_ID,
+    AGGREGATED_RANKINGS_RELATION_TYPE_ID,
+];
 
 #[cfg(test)]
 mod tests {
@@ -180,8 +184,9 @@ mod tests {
 
     #[test]
     fn protected_relation_type_ids_contains_system_types() {
-        assert_eq!(PROTECTED_RELATION_TYPE_IDS.len(), 2);
+        assert_eq!(PROTECTED_RELATION_TYPE_IDS.len(), 3);
         assert!(PROTECTED_RELATION_TYPE_IDS.contains(&SYSTEM_TYPES_RELATION_TYPE_ID));
         assert!(PROTECTED_RELATION_TYPE_IDS.contains(&RANK_POSITION_RELATION_TYPE_ID));
+        assert!(PROTECTED_RELATION_TYPE_IDS.contains(&AGGREGATED_RANKINGS_RELATION_TYPE_ID));
     }
 }
