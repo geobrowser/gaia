@@ -12,7 +12,7 @@
 
 ## Scope
 **In:**
-- A new **Geo Browser app server** with its own Postgres DB that receives signed webhooks from the Gaia delivery worker and stores notifications.
+- A new **Geo Browser app server** with its own Postgres DB that receives webhooks from the Gaia delivery worker and stores notifications.
 - Three notification types (all are `proposal_created` events; see "Who gets what" below): **membership requests**, **editorship requests**, **new proposals for editors**.
 - Three delivery channels — **in-app feed**, **push (AWS SNS)**, **email (MailerSend)** — abstracted behind a provider interface so the concrete services are swappable. **All channels default on.**
 - Per-user, per-channel **preferences**: a user can enable/disable each channel.
@@ -35,10 +35,10 @@ flowchart LR
     A[On-Chain Event<br/>proposal_created] --> K[Kafka<br/>space.governance]
     K --> NI[notification-indexer<br/>resolve editors, fan out]
     NI --> OB[(notification_outbox)]
-    OB --> DW[delivery-worker<br/>POST + X-Geo-Signature]
+    OB --> DW[delivery-worker<br/>POST webhook]
 
     subgraph NEW["Geo Browser app server (NEW)"]
-        WR[Webhook receiver<br/>verify HMAC, dedupe] --> DB[(App Postgres<br/>notifications · identity · prefs)]
+        WR[Webhook receiver<br/>verify + dedupe] --> DB[(App Postgres<br/>notifications · identity · prefs)]
         DB --> PA{Provider abstraction<br/>per-user prefs}
         API[Read/Write APIs<br/>Privy-auth]
         DB <--> API
@@ -80,8 +80,8 @@ All three MVP types originate from a single on-chain event the indexer already h
 
 ## User flow
 - An on-chain governance event (a new proposal — e.g. someone requests membership/editorship) is indexed by the Gaia notification-indexer, which creates one outbox row per editor of the space.
-- The delivery worker POSTs a signed webhook to the Geo Browser app server, one call per editor per event.
-- The app server verifies the HMAC signature, deduplicates on `idempotency_key`, resolves the `user_space_id` to a local user, and persists the notification.
+- The delivery worker POSTs a webhook to the Geo Browser app server, one call per editor per event.
+- The app server verifies the webhook is authentic, deduplicates, resolves the `user_space_id` to a local user, and persists the notification.
 - The app server fans the notification out to the user's **enabled** channels: writes it to the in-app feed, and/or sends a push via SNS, and/or an email via MailerSend.
 - In Geo Browser, the user sees the notification (feed and/or unread badge) and can mark it read; reads sync back to the app server.
 
@@ -98,8 +98,8 @@ sequenceDiagram
     NI->>NI: resolve editors of space → fan out (1 per editor)
     NI->>DW: outbox rows
     loop per editor
-        DW->>AS: POST webhook (signed)
-        AS->>AS: verify signature
+        DW->>AS: POST webhook
+        AS->>AS: authenticate webhook
         AS->>DB: persist notification (for user_space_id)
         AS->>DB: read user's channel preferences
         AS->>CH: deliver to enabled channels only
@@ -124,7 +124,7 @@ Product drives the decisions here — the open questions below should be resolve
 
 ### Backend
 - **Gaia notification-service:** already emits `proposal_created` → editors; no indexer change expected for MVP. Seed the Geo Browser webhook into `app_webhooks`. (Confirm the payload detail in Open questions.)
-- **New Geo Browser app server:** webhook receiver (HMAC verify + idempotency), Postgres persistence, Privy↔user identity mapping, **server-side Privy access-token verification on user-scoped endpoints (net-new for the Geo stack)**, per-channel preferences, a provider-abstracted last-mile delivery layer (MailerSend for email, AWS SNS for push), and the read APIs. Unblocked once the identity-mapping source of truth (below) is decided.
+- **New Geo Browser app server:** webhook receiver (authenticate + dedupe), Postgres persistence, Privy↔user identity mapping, **server-side Privy access-token verification on user-scoped endpoints (net-new for the Geo stack)**, per-channel preferences, a provider-abstracted last-mile delivery layer (MailerSend for email, AWS SNS for push), and the read APIs. Unblocked once the identity-mapping source of truth (below) is decided.
 
 ### Smart contracts
 - **No work.** The required events already exist on-chain and the indexer already consumes them.
@@ -139,7 +139,7 @@ For the authenticated user (R = read, W = write):
 - **Upsert user** (W) — register/update the caller's identity record. The front-end sends `user_space_id` (personal space) and an optional push token; the **`privy_user_id` and email are derived server-side from the verified Privy token** (see Authentication) — the email is **never** trusted from the request body. Called by the front-end on sign-up/login.
 - **Register / unregister push token** (W) — add or remove an SNS device token for the user.
 
-Plus an **inbound webhook receiver** (not user-facing): verifies `X-Geo-Signature`, dedupes on `idempotency_key`, persists, and fans out to enabled channels.
+Plus an **inbound webhook receiver** (not user-facing): authenticates the webhook, dedupes, persists, and fans out to enabled channels.
 
 ### Authentication (Privy server-side verification — new capability)
 Every user-scoped endpoint identifies the caller by **verifying a Privy access token server-side** — a capability that **does not exist anywhere in the Geo stack today** (geobrowser only validates a Privy session client-side; its Next.js server trusts an `httpOnly` wallet-address cookie that carries no proof-of-possession and is scoped to the geobrowser origin, so it cannot be reused by a separate app server).
@@ -147,7 +147,7 @@ Every user-scoped endpoint identifies the caller by **verifying a Privy access t
 - The front-end calls Privy's `getAccessToken()` and sends it as a `Bearer` token.
 - The app server verifies the JWT with `@privy-io/server-auth` + `PRIVY_APP_SECRET`, extracts the Privy user ID from the verified token, and resolves it to a `user_space_id` via the identity store.
 - **All write/POST endpoints (preferences update, mark-read, mark-all-read, upsert user, push-token register/unregister) MUST verify the token before mutating, and MUST derive the acting user from the verified token — never from a client-supplied user/space ID in the request body.** Reads are scoped to the same verified identity.
-- The inbound **webhook receiver is exempt** from Privy auth — it is authenticated by the delivery worker's `X-Geo-Signature` HMAC instead.
+- The inbound **webhook receiver is exempt** from Privy auth — it is authenticated as a webhook from the delivery worker instead (see `WEBHOOK_INTEGRATION.md`).
 
 Exact request/response schemas and pagination beyond the 100-item cap are for the app server's own tech-design doc.
 
@@ -177,7 +177,7 @@ sequenceDiagram
 ## Cross-team interfaces
 Integration points that need a joint technical design before implementation. Name the touchpoint; the shapes live in the follow-up tech design.
 
-- **Delivery Worker → App Server (webhook):** Already specified in `notification-service/WEBHOOK_INTEGRATION.md` (payload, `X-Geo-Signature` HMAC, `idempotency_key`, retry/409 semantics). Integration items: (a) seed the Geo Browser row in `app_webhooks`; (b) confirm the `proposal_created` payload carries the `actions` array so the app server can tell membership vs. editorship vs. generic proposal apart.
+- **Delivery Worker → App Server (webhook):** Already specified in `notification-service/WEBHOOK_INTEGRATION.md` (payload, authentication, idempotency, and retry semantics). Integration items: (a) seed the Geo Browser row in `app_webhooks`; (b) confirm the `proposal_created` payload carries the `actions` array so the app server can tell membership vs. editorship vs. generic proposal apart.
 - **Identity mapping (App Server DB):** the app server is the source of truth — Geo has no identity service today. The front-end already has the user's Privy identity, email, and personal space ID, and upserts it on sign-up/login. Interface item: the upsert payload shape and when it fires.
 - **App Server → UI:** the front-end presents a **Privy access token** (`getAccessToken()`) as a Bearer credential; the app server verifies it server-side (`@privy-io/server-auth` + `PRIVY_APP_SECRET`) and derives the acting user from the token. Interface item: token format/claims the app server expects and error/refresh handling on the UI side. (See [Authentication](#authentication-privy-server-side-verification--new-capability).)
 - **App Server → Providers:** a provider abstraction in app-server code with two concrete implementations for MVP — **MailerSend** (email) and **AWS SNS** (push) — so providers can be swapped without touching delivery logic. (Note: SES is reserved for calendar events; not used here.)
