@@ -37,8 +37,7 @@ impl Storage {
             INSERT INTO ranks.ranking_blocks
                 (id, space_id, name, filter, start_date, end_date, restriction_id, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-            ON CONFLICT (id) DO UPDATE SET
-                space_id = EXCLUDED.space_id,
+            ON CONFLICT (id, space_id) DO UPDATE SET
                 name = EXCLUDED.name,
                 filter = EXCLUDED.filter,
                 start_date = EXCLUDED.start_date,
@@ -68,9 +67,8 @@ impl Storage {
                 (id, block_id, space_id, author_address, rank_type, submitted_at,
                  updated_at_block, update_index, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
-            ON CONFLICT (id) DO UPDATE SET
+            ON CONFLICT (id, space_id) DO UPDATE SET
                 block_id = COALESCE(EXCLUDED.block_id, ranks.rankings.block_id),
-                space_id = EXCLUDED.space_id,
                 author_address = EXCLUDED.author_address,
                 rank_type = EXCLUDED.rank_type,
                 submitted_at = EXCLUDED.submitted_at,
