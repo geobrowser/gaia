@@ -75,7 +75,7 @@ All three MVP types originate from a single on-chain event the indexer already h
 **Classification rule (recommended):** if the proposal's `actions` contain an `add_editor` → *editorship request*; else if they contain an `add_member` → *membership request*; else → *new proposal*. A proposal with both is labeled by the higher-privilege action (editor > member). Final labeling/copy is a product decision.
 
 ### Implementation status (what exists today)
-- ✅ **Indexer already emits all three.** The notification-indexer emits `proposal_created` → editors of the space, and the payload **includes the `actions` array** with `type` (`add_member`/`add_editor`/…) and `target_address` (`notification-indexer/src/models.rs`). No indexer or contract change is needed for the MVP. *(Note: `TECH_DESIGN.md`'s field table omits `actions`; the code and `WEBHOOK_INTEGRATION.md` are authoritative — worth a one-line doc fix.)*
+- ✅ **Indexer already emits all three.** The notification-indexer emits `proposal_created` → editors of the space, and the payload **includes the `actions` array** with `type` (`add_member`/`add_editor`/…) and `target_address` (`notification-indexer/src/models.rs`). No indexer or contract change is needed for the MVP.
 - 🔨 **To build:** the Geo Browser app server (everything downstream of the webhook) and the Geo Browser UI surfaces. The app server's webhook row must be seeded into `app_webhooks`.
 
 ## User flow
@@ -98,12 +98,12 @@ sequenceDiagram
     NI->>NI: resolve editors of space → fan out (1 per editor)
     NI->>DW: outbox rows
     loop per editor
-        DW->>AS: POST webhook + X-Geo-Signature
-        AS->>AS: verify HMAC, dedupe on idempotency_key
+        DW->>AS: POST webhook (signed)
+        AS->>AS: verify signature
         AS->>DB: persist notification (for user_space_id)
         AS->>DB: read user's channel preferences
         AS->>CH: deliver to enabled channels only
-        AS-->>DW: 2xx (or 409 if duplicate)
+        AS-->>DW: 2xx (ack)
     end
 ```
 
@@ -160,7 +160,7 @@ sequenceDiagram
 
     Note over FE,DB: Phase 1 — on sign-up / login
     FE->>Privy: login (email) → user.id, embedded wallet
-    FE->>FE: usePersonalSpaceId() → user_space_id
+    FE->>FE: resolve personal space → user_space_id
     FE->>AS: POST upsert user {user_space_id, push token?} + Bearer access token
     AS->>AS: verify token → privy_user_id (sub claim)
     AS->>Privy: getUserById(privy_user_id) → email
@@ -178,7 +178,7 @@ sequenceDiagram
 Integration points that need a joint technical design before implementation. Name the touchpoint; the shapes live in the follow-up tech design.
 
 - **Delivery Worker → App Server (webhook):** Already specified in `notification-service/WEBHOOK_INTEGRATION.md` (payload, `X-Geo-Signature` HMAC, `idempotency_key`, retry/409 semantics). Integration items: (a) seed the Geo Browser row in `app_webhooks`; (b) confirm the `proposal_created` payload carries the `actions` array so the app server can tell membership vs. editorship vs. generic proposal apart.
-- **Identity mapping (App Server DB):** the app server is the source of truth — Geo has no identity service today. The front-end already holds the full binding (`usePrivy()` → Privy `user.id` + email; `usePersonalSpaceId()` → `user_space_id`; embedded wallet address) and upserts it on sign-up/login. Interface item: the upsert payload shape and when it fires.
+- **Identity mapping (App Server DB):** the app server is the source of truth — Geo has no identity service today. The front-end already has the user's Privy identity, email, and personal space ID, and upserts it on sign-up/login. Interface item: the upsert payload shape and when it fires.
 - **App Server → UI:** the front-end presents a **Privy access token** (`getAccessToken()`) as a Bearer credential; the app server verifies it server-side (`@privy-io/server-auth` + `PRIVY_APP_SECRET`) and derives the acting user from the token. Interface item: token format/claims the app server expects and error/refresh handling on the UI side. (See [Authentication](#authentication-privy-server-side-verification--new-capability).)
 - **App Server → Providers:** a provider abstraction in app-server code with two concrete implementations for MVP — **MailerSend** (email) and **AWS SNS** (push) — so providers can be swapped without touching delivery logic. (Note: SES is reserved for calendar events; not used here.)
 
@@ -191,16 +191,16 @@ Integration points that need a joint technical design before implementation. Nam
 ## Assumptions
 - All three MVP types are `proposal_created` events distinguished by `actions`; the indexer already fans out to editors and the payload already carries `actions`, so no indexer or contract change is needed for MVP. *(Verified against `notification-indexer/src/models.rs`.)*
 - Geo Browser authenticates via Privy with **email login**, so every user has a Privy email and an embedded wallet — both available to the front-end to send in the upsert.
-- The front-end's `usePersonalSpaceId()` returns the user's personal space ID and this equals the `user_space_id` notifications are addressed to.
+- The front-end can resolve the user's personal space ID, and this equals the `user_space_id` notifications are addressed to.
 - Push tokens come from device/browser registration on the front-end. Email is **resolved server-side from Privy** via the verified `privy_user_id` (`getUserById`) at upsert and saved — not accepted from the client. Email-login means Privy's email is verified, so the saved value is trustworthy. MailerSend is already configured; AWS SNS is the push provider.
 - The Geo Browser webhook is seeded manually into `app_webhooks` (no registration API in v1).
 - Privy issues a verifiable access token (`getAccessToken()`) and `@privy-io/server-auth` + `PRIVY_APP_SECRET` can validate it server-side. No existing Geo backend verifies Privy today, so the app server adds this from scratch.
 
 ## Open questions
 - [product] **Labeling/copy** for membership request vs. editorship request vs. generic proposal (classification rule recommended above is the default).
-- [backend] **Email freshness:** the email is resolved server-side from Privy (`getUserById`) at upsert and stored (decided — never trusted from the client). Remaining detail is the refresh policy: re-fetch on every login upsert is the recommended default, plus a re-fetch on hard bounce. Confirm that's sufficient vs. needing a periodic resync.
+- [backend] **Email freshness:** the email is resolved server-side from Privy at upsert and stored (decided — never trusted from the client). Remaining detail is the refresh policy: re-fetch on every login upsert is the recommended default, plus a re-fetch on hard bounce. Confirm that's sufficient vs. needing a periodic resync.
 - [backend] **Push token lifecycle:** how web push tokens are obtained/refreshed and registered with SNS (browser push vs. native), and how stale tokens are pruned.
-- [backend/ui] **Auth — resolved direction:** verify a Privy access token server-side (Bearer + `@privy-io/server-auth` + `PRIVY_APP_SECRET`), derive the user from the token, and require it on all write/POST endpoints. Note this is **net-new** — nothing in the Geo stack verifies Privy server-side today. Remaining detail: token-refresh/expiry handling on the UI and whether reads also require it (recommended: yes).
+- [ui] **Auth — remaining detail:** token-refresh/expiry handling on the UI (approach decided — see Authentication), and confirm reads require auth too (recommended: yes).
 - [product] Confirm requester-facing outcome notifications ("your request was approved/rejected") are out of MVP. *(Treated as out per current scope.)*
 - [all] Each cross-team interface above needs a joint tech-design session before implementation starts.
 
