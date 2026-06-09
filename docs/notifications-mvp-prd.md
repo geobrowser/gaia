@@ -68,31 +68,39 @@ Product drives the decisions here — the open questions below should be resolve
 
 ### Backend
 - **Gaia notification-service:** already emits `proposal_created` → editors; no indexer change expected for MVP. Seed the Geo Browser webhook into `app_webhooks`. (Confirm the payload detail in Open questions.)
-- **New Geo Browser app server:** webhook receiver (HMAC verify + idempotency), Postgres persistence, Privy↔user identity mapping, per-channel preferences, a provider-abstracted last-mile delivery layer (MailerSend for email, AWS SNS for push), and the read APIs. Unblocked once the identity-mapping source of truth (below) is decided.
+- **New Geo Browser app server:** webhook receiver (HMAC verify + idempotency), Postgres persistence, Privy↔user identity mapping, **server-side Privy access-token verification on user-scoped endpoints (net-new for the Geo stack)**, per-channel preferences, a provider-abstracted last-mile delivery layer (MailerSend for email, AWS SNS for push), and the read APIs. Unblocked once the identity-mapping source of truth (below) is decided.
 
 ### Smart contracts
 - **No work.** The required events already exist on-chain and the indexer already consumes them.
 
 ## App server API (feature-level)
-For the authenticated user:
-- **List notifications** — the user's notifications, newest first, limit 100.
-- **Unread count** — count of unread notifications (backs the badge).
-- **Mark read** — accepts one or more notification IDs.
-- **Mark all read** — marks all of the user's notifications read.
-- **Preferences** — read/update per-channel enable/disable (in-app, push, email).
-- **Upsert user** — register/update the caller's identity record: `privy_user_id`, `user_space_id` (personal space), email, and optional push token. Called by the front-end on sign-up/login.
-- **Register / unregister push token** — add or remove an SNS device token for the user.
+For the authenticated user (R = read, W = write):
+- **List notifications** (R) — the user's notifications, newest first, limit 100.
+- **Unread count** (R) — count of unread notifications (backs the badge).
+- **Mark read** (W) — accepts one or more notification IDs.
+- **Mark all read** (W) — marks all of the user's notifications read.
+- **Preferences** (R/W) — read or update per-channel enable/disable (in-app, push, email).
+- **Upsert user** (W) — register/update the caller's identity record: `privy_user_id`, `user_space_id` (personal space), email, and optional push token. Called by the front-end on sign-up/login.
+- **Register / unregister push token** (W) — add or remove an SNS device token for the user.
 
 Plus an **inbound webhook receiver** (not user-facing): verifies `X-Geo-Signature`, dedupes on `idempotency_key`, persists, and fans out to enabled channels.
 
-Exact request/response schemas, auth, and pagination beyond the 100-item cap are for the app server's own tech-design doc.
+### Authentication (Privy server-side verification — new capability)
+Every user-scoped endpoint identifies the caller by **verifying a Privy access token server-side** — a capability that **does not exist anywhere in the Geo stack today** (geobrowser only validates a Privy session client-side; its Next.js server trusts an `httpOnly` wallet-address cookie that carries no proof-of-possession and is scoped to the geobrowser origin, so it cannot be reused by a separate app server).
+
+- The front-end calls Privy's `getAccessToken()` and sends it as a `Bearer` token.
+- The app server verifies the JWT with `@privy-io/server-auth` + `PRIVY_APP_SECRET`, extracts the Privy user ID from the verified token, and resolves it to a `user_space_id` via the identity store.
+- **All write/POST endpoints (preferences update, mark-read, mark-all-read, upsert user, push-token register/unregister) MUST verify the token before mutating, and MUST derive the acting user from the verified token — never from a client-supplied user/space ID in the request body.** Reads are scoped to the same verified identity.
+- The inbound **webhook receiver is exempt** from Privy auth — it is authenticated by the delivery worker's `X-Geo-Signature` HMAC instead.
+
+Exact request/response schemas and pagination beyond the 100-item cap are for the app server's own tech-design doc.
 
 ## Cross-team interfaces
 Integration points that need a joint technical design before implementation. Name the touchpoint; the shapes live in the follow-up tech design.
 
 - **Delivery Worker → App Server (webhook):** Already specified in `notification-service/WEBHOOK_INTEGRATION.md` (payload, `X-Geo-Signature` HMAC, `idempotency_key`, retry/409 semantics). Integration items: (a) seed the Geo Browser row in `app_webhooks`; (b) confirm the `proposal_created` payload carries the `actions` array so the app server can tell membership vs. editorship vs. generic proposal apart.
 - **Identity mapping (App Server DB):** the app server is the source of truth — Geo has no identity service today. The front-end already holds the full binding (`usePrivy()` → Privy `user.id` + email; `usePersonalSpaceId()` → `user_space_id`; embedded wallet address) and upserts it on sign-up/login. Interface item: the upsert payload shape and when it fires.
-- **App Server → UI:** how the front-end authenticates "my notifications" / unread-count / mark-read calls and how preferences are read/updated.
+- **App Server → UI:** the front-end presents a **Privy access token** (`getAccessToken()`) as a Bearer credential; the app server verifies it server-side (`@privy-io/server-auth` + `PRIVY_APP_SECRET`) and derives the acting user from the token. Interface item: token format/claims the app server expects and error/refresh handling on the UI side. (See [Authentication](#authentication-privy-server-side-verification--new-capability).)
 - **App Server → Providers:** a provider abstraction in app-server code with two concrete implementations for MVP — **MailerSend** (email) and **AWS SNS** (push) — so providers can be swapped without touching delivery logic. (Note: SES is reserved for calendar events; not used here.)
 
 ## Dependencies & sequencing
@@ -107,17 +115,18 @@ Integration points that need a joint technical design before implementation. Nam
 - The front-end's `usePersonalSpaceId()` returns the user's personal space ID and this equals the `user_space_id` notifications are addressed to.
 - Push tokens come from device/browser registration on the front-end; email comes from Privy (or the upsert). MailerSend is already configured; AWS SNS is the push provider.
 - The Geo Browser webhook is seeded manually into `app_webhooks` (no registration API in v1).
+- Privy issues a verifiable access token (`getAccessToken()`) and `@privy-io/server-auth` + `PRIVY_APP_SECRET` can validate it server-side. No existing Geo backend verifies Privy today, so the app server adds this from scratch.
 
 ## Open questions
 - [product] **Labeling/copy** for membership request vs. editorship request vs. generic proposal (classification rule recommended above is the default).
 - [backend] **Email source per send:** read the user's email from the stored identity record, or fetch live from Privy via stored `privy_user_id` at send time? (Storing it on upsert is simplest; Privy stays the fallback.)
 - [backend] **Push token lifecycle:** how web push tokens are obtained/refreshed and registered with SNS (browser push vs. native), and how stale tokens are pruned.
-- [ui] **Auth for app-server calls:** what credential the front-end presents (Privy access token verified server-side?) so the app server can trust the caller's identity.
+- [backend/ui] **Auth — resolved direction:** verify a Privy access token server-side (Bearer + `@privy-io/server-auth` + `PRIVY_APP_SECRET`), derive the user from the token, and require it on all write/POST endpoints. Note this is **net-new** — nothing in the Geo stack verifies Privy server-side today. Remaining detail: token-refresh/expiry handling on the UI and whether reads also require it (recommended: yes).
 - [product] Confirm requester-facing outcome notifications ("your request was approved/rejected") are out of MVP. *(Treated as out per current scope.)*
 - [all] Each cross-team interface above needs a joint tech-design session before implementation starts.
 
 ## Out of scope for this PRD
-- App-server data model (table columns), auth scheme, and concrete API schemas — belong in the app server tech-design doc.
+- App-server data model (table columns) and concrete API schemas — belong in the app server tech-design doc. (Auth *direction* is decided here; detailed token validation/refresh handling is for that doc.)
 - The other GEO-2172 notification types (bounties, points, votes, comments, trending, proposal-outcome).
 - Multi-app-server fan-out (additional front-ends each get their own app server later).
 - Webhook self-registration API, subscription/event-type filtering, and per-webhook rate limiting (tracked as open questions in the notification-service tech design).
