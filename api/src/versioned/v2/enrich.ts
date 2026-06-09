@@ -68,12 +68,18 @@ export function enrichWithMediaUrls(
 			return diff as GroupedEntityDiff & {relations: RelationChangeV2[]}
 		}
 
-		const liveIds = Array.from(new Set([...before, ...after]))
-		const [fromMap, toMap, liveMap] = yield* Effect.all([
+		const [fromMap, toMap] = yield* Effect.all([
 			batchGetMediaUrlsAtVersion(db, Array.from(before), versions.fromVersionKey, versions.spaceId),
 			batchGetMediaUrlsAtVersion(db, Array.from(after), versions.toVersionKey, versions.spaceId),
-			batchGetMediaUrls(db, liveIds),
 		])
+
+		// Live fallback only for ids the versioned lookup didn't resolve (e.g. entities
+		// with no versioned rows). In prod the indexer writes versioned rows, so this set
+		// is usually empty and the extra live query is skipped entirely.
+		const unresolved = new Set<NormalizedUuid>()
+		for (const id of before) if (!fromMap.has(id)) unresolved.add(id)
+		for (const id of after) if (!toMap.has(id)) unresolved.add(id)
+		const liveMap = unresolved.size > 0 ? yield* batchGetMediaUrls(db, Array.from(unresolved)) : new Map()
 
 		const beforeMedia = (id: NormalizedUuid) => fromMap.get(id) ?? liveMap.get(id)
 		const afterMedia = (id: NormalizedUuid) => toMap.get(id) ?? liveMap.get(id)
