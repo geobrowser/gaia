@@ -27,6 +27,40 @@
 - Changes to the on-chain contracts or the Gaia notification-indexer/delivery-worker (they already emit what we need — see Open questions for the one payload detail to confirm).
 - A webhook self-registration API (the Geo Browser webhook is seeded manually into `app_webhooks`, per current v1).
 
+## Architecture
+The Gaia notification-service (left of the dashed line) already exists. Everything in the **Geo Browser app server** and the channels/UI (right) is new for this MVP.
+
+```mermaid
+flowchart LR
+    A[On-Chain Event<br/>proposal_created] --> K[Kafka<br/>space.governance]
+    K --> NI[notification-indexer<br/>resolve editors, fan out]
+    NI --> OB[(notification_outbox)]
+    OB --> DW[delivery-worker<br/>POST + X-Geo-Signature]
+
+    subgraph NEW["Geo Browser app server (NEW)"]
+        WR[Webhook receiver<br/>verify HMAC, dedupe] --> DB[(App Postgres<br/>notifications · identity · prefs)]
+        DB --> PA{Provider abstraction<br/>per-user prefs}
+        API[Read/Write APIs<br/>Privy-auth]
+        DB <--> API
+    end
+
+    DW -->|webhook per editor| WR
+
+    PA -->|in-app| FEED[Feed + Badge]
+    PA -->|push| SNS[AWS SNS]
+    PA -->|email| MS[MailerSend]
+
+    FEED --> U((Editor))
+    SNS --> U
+    MS --> U
+    API <-->|Bearer Privy token| FE[Geo Browser UI]
+    FE --> U
+
+    class A,K,NI,OB,DW exist
+    classDef exist fill:#eee,stroke:#999,color:#333
+    style NEW fill:#f0f7ff,stroke:#3b82f6
+```
+
 ## Who gets what (MVP notification types)
 All three MVP types originate from a single on-chain event the indexer already handles — `proposal_created` — and the indexer fans out **one notification per editor of the proposal's space**. They differ only by what the proposal *does* (its `actions`):
 
@@ -50,6 +84,28 @@ All three MVP types originate from a single on-chain event the indexer already h
 - The app server verifies the HMAC signature, deduplicates on `idempotency_key`, resolves the `user_space_id` to a local user, and persists the notification.
 - The app server fans the notification out to the user's **enabled** channels: writes it to the in-app feed, and/or sends a push via SNS, and/or an email via MailerSend.
 - In Geo Browser, the user sees the notification (feed and/or unread badge) and can mark it read; reads sync back to the app server.
+
+```mermaid
+sequenceDiagram
+    participant Chain as On-Chain
+    participant NI as notification-indexer
+    participant DW as delivery-worker
+    participant AS as App server
+    participant DB as App Postgres
+    participant CH as Channels (in-app / SNS / MailerSend)
+
+    Chain->>NI: proposal_created (space_id, actions)
+    NI->>NI: resolve editors of space → fan out (1 per editor)
+    NI->>DW: outbox rows
+    loop per editor
+        DW->>AS: POST webhook + X-Geo-Signature
+        AS->>AS: verify HMAC, dedupe on idempotency_key
+        AS->>DB: persist notification (for user_space_id)
+        AS->>DB: read user's channel preferences
+        AS->>CH: deliver to enabled channels only
+        AS-->>DW: 2xx (or 409 if duplicate)
+    end
+```
 
 ## Team breakdown
 Product drives the decisions here — the open questions below should be resolved before backend/UI lock their own designs.
@@ -94,6 +150,27 @@ Every user-scoped endpoint identifies the caller by **verifying a Privy access t
 - The inbound **webhook receiver is exempt** from Privy auth — it is authenticated by the delivery worker's `X-Geo-Signature` HMAC instead.
 
 Exact request/response schemas and pagination beyond the 100-item cap are for the app server's own tech-design doc.
+
+```mermaid
+sequenceDiagram
+    participant FE as Geo Browser UI
+    participant Privy as Privy
+    participant AS as App server
+    participant DB as App Postgres
+
+    Note over FE,DB: Phase 1 — on sign-up / login
+    FE->>Privy: login (email) → user.id, email, embedded wallet
+    FE->>FE: usePersonalSpaceId() → user_space_id
+    FE->>AS: POST upsert user {privy_user_id, user_space_id, email, push token?}
+    AS->>DB: store identity record
+
+    Note over FE,DB: Phase 2 — any user-scoped API call
+    FE->>Privy: getAccessToken()
+    FE->>AS: GET/POST + Bearer access token
+    AS->>AS: verify JWT (@privy-io/server-auth + PRIVY_APP_SECRET)
+    AS->>DB: resolve privy_user_id → user_space_id
+    AS-->>FE: notifications / unread count / ack (scoped to verified user)
+```
 
 ## Cross-team interfaces
 Integration points that need a joint technical design before implementation. Name the touchpoint; the shapes live in the follow-up tech design.
