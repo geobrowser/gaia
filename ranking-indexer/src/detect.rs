@@ -30,6 +30,10 @@ struct DetectIds {
     rank_votes_relation: Uuid,
     rank_block_relation: Uuid,
     vote_weighted_value_property: Uuid,
+    filter_property: Uuid,
+    start_date_property: Uuid,
+    end_date_property: Uuid,
+    aggregation_restriction_relation: Uuid,
 }
 
 static IDS: LazyLock<DetectIds> = LazyLock::new(|| {
@@ -44,6 +48,10 @@ static IDS: LazyLock<DetectIds> = LazyLock::new(|| {
         rank_votes_relation: uid(RANK_VOTES_RELATION_TYPE_ID),
         rank_block_relation: uid(RANK_BLOCK_RELATION_TYPE_ID),
         vote_weighted_value_property: uid(VOTE_WEIGHTED_VALUE_PROPERTY_ID),
+        filter_property: uid(RANK_FILTER_PROPERTY_ID),
+        start_date_property: uid(RANK_START_DATE_PROPERTY_ID),
+        end_date_property: uid(RANK_END_DATE_PROPERTY_ID),
+        aggregation_restriction_relation: uid(RANK_AGGREGATION_RESTRICTION_PROPERTY_ID),
     }
 });
 
@@ -73,6 +81,35 @@ fn float_value(values: &[PropertyValue], property: Uuid) -> Option<f64> {
             _ => None,
         }
     })
+}
+
+/// Read a `Date`/`Datetime` property and parse it to a UTC instant.
+fn date_value(values: &[PropertyValue], property: Uuid) -> Option<DateTime<Utc>> {
+    let raw = values.iter().find_map(|pv| {
+        if id_to_uuid(&pv.property) != property {
+            return None;
+        }
+        match &pv.value {
+            Grc20Value::Date(v) | Grc20Value::Datetime(v) => Some(v.to_string()),
+            _ => None,
+        }
+    })?;
+    parse_date(&raw)
+}
+
+/// Parse a date/datetime string defensively: RFC3339 first, then a bare
+/// `YYYY-MM-DD` date (taken as midnight UTC). Unparseable values yield `None`
+/// rather than a wrong bound (so the window check just doesn't constrain).
+fn parse_date(s: &str) -> Option<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    if let Ok(d) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return d
+            .and_hms_opt(0, 0, 0)
+            .map(|ndt| DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc));
+    }
+    None
 }
 
 /// The rank-relevant ops extracted from a single edit.
@@ -115,6 +152,8 @@ pub fn detect(
     // collect the rank relations (votes + block links).
     let mut entity_values: HashMap<Uuid, &[PropertyValue]> = HashMap::new();
     let mut types_of: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
+    // block -> aggregation-restriction value entity (e.g. "Members and editors").
+    let mut restriction_of: HashMap<Uuid, Uuid> = HashMap::new();
 
     for op in &edit.ops {
         match op {
@@ -128,6 +167,8 @@ pub fn detect(
                         .entry(id_to_uuid(&relation.from))
                         .or_default()
                         .insert(id_to_uuid(&relation.to));
+                } else if type_id == ids.aggregation_restriction_relation {
+                    restriction_of.insert(id_to_uuid(&relation.from), id_to_uuid(&relation.to));
                 }
             }
             _ => {}
@@ -157,19 +198,16 @@ pub fn detect(
                         update_index: op_index as i64,
                     });
                 } else if is_block {
-                    // NOTE: only id/space_id/name are confidently extractable today.
-                    // The block's window dates, filter, and aggregation restriction
-                    // emission shapes aren't in the merged SDK yet (geo-sdk#89 adds
-                    // the IDs; block creation lands separately). Left as TODO so we
-                    // don't guess the wrong op shape.
+                    // Block config (Name/Filter/Start/End as properties; the
+                    // aggregation restriction as a relation collected in pass 1).
                     out.blocks.push(RankingBlock {
                         id: entity_id,
                         space_id,
                         name: text_value(&entity.values, ids.name_property),
-                        filter: None,
-                        start_date: None,
-                        end_date: None,
-                        restriction_id: None,
+                        filter: text_value(&entity.values, ids.filter_property),
+                        start_date: date_value(&entity.values, ids.start_date_property),
+                        end_date: date_value(&entity.values, ids.end_date_property),
+                        restriction_id: restriction_of.get(&entity_id).copied(),
                     });
                 }
             }
@@ -314,6 +352,44 @@ mod tests {
         assert_eq!(detected.blocks[0].id, Uuid::from_u128(BLOCK));
         assert_eq!(detected.blocks[0].name.as_deref(), Some("Top Films"));
         assert!(detected.rankings.is_empty());
+    }
+
+    #[test]
+    fn detects_full_block_config() {
+        use chrono::TimeZone;
+        let edit = EditBuilder::new(gid(0))
+            .create_relation(|r| {
+                r.id(gid(50))
+                    .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                    .from(gid(BLOCK))
+                    .to(sid(RANKING_BLOCK_TYPE_ID))
+            })
+            // aggregation restriction relation -> "Members and editors"
+            .create_relation(|r| {
+                r.id(gid(51))
+                    .relation_type(sid(RANK_AGGREGATION_RESTRICTION_PROPERTY_ID))
+                    .from(gid(BLOCK))
+                    .to(sid(RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID))
+            })
+            .create_entity(gid(BLOCK), |e| {
+                e.text(sid(NAME_PROPERTY_ID), "Top Films", None)
+                    .text(sid(RANK_FILTER_PROPERTY_ID), "types: Movie", None)
+                    .value(sid(RANK_START_DATE_PROPERTY_ID), Grc20Value::Date("2026-06-01".into()))
+                    .value(sid(RANK_END_DATE_PROPERTY_ID), Grc20Value::Date("2026-06-30".into()))
+            })
+            .build();
+
+        let detected = detect(&edit, space_uuid(), 100, 0);
+        assert_eq!(detected.blocks.len(), 1);
+        let b = &detected.blocks[0];
+        assert_eq!(b.name.as_deref(), Some("Top Films"));
+        assert_eq!(b.filter.as_deref(), Some("types: Movie"));
+        assert_eq!(b.start_date, Some(Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap()));
+        assert_eq!(b.end_date, Some(Utc.with_ymd_and_hms(2026, 6, 30, 0, 0, 0).unwrap()));
+        assert_eq!(
+            b.restriction_id,
+            Some(Uuid::parse_str(RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID).unwrap())
+        );
     }
 
     #[test]

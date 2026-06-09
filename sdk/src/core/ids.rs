@@ -63,6 +63,7 @@ pub const RANK_START_DATE_PROPERTY_ID: &str = "eed03a04-0acd-4a9e-81e0-8272ed70a
 pub const RANK_END_DATE_PROPERTY_ID: &str = "b08b8f63-dc1e-4156-8b08-19946f2b011c";
 pub const RANK_AGGREGATION_RESTRICTION_PROPERTY_ID: &str = "1e4caa2d-e331-4efa-8ac2-4e8d9d3e9fe9";
 pub const RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID: &str = "10a7b103-90f9-4a72-8087-935052ffaa69";
+pub const RANK_FILTER_PROPERTY_ID: &str = "14a46854-bfd1-4b18-8215-2785c2dab9f3";
 
 // Indexer-owned ranking output IDs. System-minted (not SDK shapes), assigned as
 // a random v4 like SCORE_PROPERTY_ID. `RANK_POSITION` is the relation type the
