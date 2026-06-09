@@ -85,7 +85,12 @@ async fn process_edit(payload: &[u8], storage: &Storage) -> Result<(), IndexerEr
         .map_err(|e| IndexerError::decode(format!("space_id: {e}")))?;
 
     let grc20_edit = decode_grc20(&edit.payload)?;
-    let detected = detect(&grc20_edit, space_id);
+    let block_number = edit
+        .meta
+        .as_ref()
+        .map(|m| m.block_number as i64)
+        .unwrap_or(0);
+    let detected = detect(&grc20_edit, space_id, block_number);
     if detected.is_empty() {
         return Ok(());
     }
