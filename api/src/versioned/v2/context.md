@@ -106,6 +106,50 @@ and snapshot mode. Run in CI by `.github/workflows/api-integration-tests.yml` (n
 
 ---
 
+# v2 response format (reference)
+
+Same top-level shape as v1 `DiffResponse` (entity-diff endpoint), with **optional, additive**
+fields. Anything v2 adds is absent on v1. Authoritative types: `src/versioned/v2/types.ts`
+(`DiffResponseV2`, `RelationChangeV2`) + the optional fields on `BlockChange` in `src/versioned/types.ts`.
+
+**Top level** (unchanged from v1): `entityId`, `name`, `values[]`, `relations[]`, `blocks[]`,
+`groupKeys[]`, dynamic group keys spread at root, and edit metadata
+`fromEditName` / `fromCreatedById` / `fromCreatedBy` / `toEditName` / `toCreatedById` / `toCreatedBy`.
+In **snapshot mode** (no `fromEditId`) the `from*` fields are `null` and every change is all-added.
+
+**ValueChange** — v1: `propertyId`, `spaceId`, `type`, `before`, `after`, `diff?`.
+v2 adds:
+| field | type | when |
+|---|---|---|
+| `propertyName` | `string \| null` | always (resolved name; null if none) |
+
+**RelationChange** — v1: `relationId`, `typeId`, `spaceId`, `changeType`, `before`, `after`.
+v2 adds:
+| field | type | when |
+|---|---|---|
+| `typeName` | `string \| null` | always |
+
+**RelationChange.before / .after** (endpoint) — v1: `toEntityId`, `toSpaceId`, `position`.
+v2 adds:
+| field | type | when |
+|---|---|---|
+| `toEntityName` | `string \| null` | always |
+| `imageUrl` | `string \| null` | target is an `IMAGE_TYPE` entity (mutually exclusive with `videoUrl`); resolved at that side's version |
+| `videoUrl` | `string \| null` | target is a `VIDEO_TYPE` entity |
+
+**BlockChange** (`textBlock` / `imageBlock` / `dataBlock`) — v1: `id`, `type`, `before`, `after`, `diff?` (text).
+v2 adds:
+| field | type | when |
+|---|---|---|
+| `blockName` | `string \| null` | always (block entity's NAME) |
+| `values` | `ValueChange[]` | present when the block has non-headline value changes (NAME/MARKDOWN/IMAGE_URL excluded) |
+| `relations` | `RelationChange[]` | present when the block has relation changes (TYPES stripped, BLOCKS excluded); for data blocks, includes the merged config (VIEW_PROPERTY/SHOWN_COLUMNS/PROPERTIES) from the reified BLOCKS relation entity |
+
+Notes: `imageUrl`/`videoUrl` use exactly those field names (not `mediaUrl`+`mediaType`); image
+width/height are not inlined. `block.relations[]` carry `spaceId` at the relation level.
+
+---
+
 # v2 response examples
 
 Real captures + the v2 target shape. The plan: `/v2/...` emits the AFTER directly.
