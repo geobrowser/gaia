@@ -71,6 +71,7 @@ export function getBlockConfigEntityIds(
 export function batchGetMediaUrls(
 	db: NodePgDatabase<Record<string, unknown>>,
 	entityIds: NormalizedUuid[],
+	spaceId: NormalizedUuid,
 ): Effect.Effect<Map<NormalizedUuid, MediaEntity>, QueryError> {
 	if (entityIds.length === 0) {
 		return Effect.succeed(new Map())
@@ -79,6 +80,9 @@ export function batchGetMediaUrls(
 	return Effect.tryPromise({
 		try: async () => {
 			const idsArray = `{${entityIds.join(",")}}`
+			// Scope both the IMAGE_URL value and the TYPES relation to the request's
+			// space — entity IDs are global, so an unscoped join can attach a URL or
+			// type from a different space for the same entity ID.
 			const result = await db.execute<{
 				entity_id: string
 				url: string
@@ -90,9 +94,11 @@ export function batchGetMediaUrls(
 				  ON r.from_entity_id = v.entity_id
 				 AND r.type_id = ${TYPES_PROPERTY_ID}::uuid
 				 AND r.to_entity_id IN (${IMAGE_TYPE_ID}::uuid, ${VIDEO_TYPE_ID}::uuid)
+				 AND r.space_id = ${spaceId}::uuid
 				WHERE v.entity_id = ANY(${idsArray}::uuid[])
 				  AND v.property_id = ${IMAGE_URL_PROPERTY_ID}::uuid
 				  AND v.text IS NOT NULL
+				  AND v.space_id = ${spaceId}::uuid
 			`)
 
 			const out = new Map<NormalizedUuid, MediaEntity>()
@@ -146,6 +152,7 @@ export function batchGetMediaUrlsAtVersion(
 				  ON r.from_entity_id = v.entity_id
 				 AND r.type_id = ${TYPES_PROPERTY_ID}::uuid
 				 AND r.to_entity_id IN (${IMAGE_TYPE_ID}::uuid, ${VIDEO_TYPE_ID}::uuid)
+				 AND r.space_id = ${spaceId}::uuid
 				 AND r.valid_from_key <= ${vk}::bigint
 				 AND (r.valid_to_key IS NULL OR r.valid_to_key > ${vk}::bigint)
 				WHERE v.entity_id = ANY(${idsArray}::uuid[])

@@ -43,8 +43,12 @@ function collectSideIds(diff: GroupedEntityDiff): {before: Set<NormalizedUuid>; 
 	visit(diff.relations)
 	for (const items of Object.values(diff.groups)) {
 		for (const item of items) {
-			if ("relations" in item) visit(item.relations)
+			if ("relations" in item && item.relations) visit(item.relations)
 		}
+	}
+	// Rich block relations (added by enrichBlocks) can also target media entities.
+	for (const block of diff.blocks) {
+		if (block.relations) visit(block.relations)
 	}
 	return {before, after}
 }
@@ -79,7 +83,8 @@ export function enrichWithMediaUrls(
 		const unresolved = new Set<NormalizedUuid>()
 		for (const id of before) if (!fromMap.has(id)) unresolved.add(id)
 		for (const id of after) if (!toMap.has(id)) unresolved.add(id)
-		const liveMap = unresolved.size > 0 ? yield* batchGetMediaUrls(db, Array.from(unresolved)) : new Map()
+		const liveMap =
+			unresolved.size > 0 ? yield* batchGetMediaUrls(db, Array.from(unresolved), versions.spaceId) : new Map()
 
 		const beforeMedia = (id: NormalizedUuid) => fromMap.get(id) ?? liveMap.get(id)
 		const afterMedia = (id: NormalizedUuid) => toMap.get(id) ?? liveMap.get(id)
@@ -103,9 +108,14 @@ export function enrichWithMediaUrls(
 			groups: Object.fromEntries(
 				Object.entries(diff.groups).map(([k, items]) => [
 					k,
-					items.map((item) => ("relations" in item ? {...item, relations: item.relations.map(attach)} : item)),
+					items.map((item) =>
+						"relations" in item && item.relations ? {...item, relations: item.relations.map(attach)} : item,
+					),
 				]),
 			) as GroupedEntityDiff["groups"],
+			blocks: diff.blocks.map((block) =>
+				block.relations ? {...block, relations: block.relations.map(attach)} : block,
+			),
 		}
 	}).pipe(Effect.withSpan("enrich-v2.enrichWithMediaUrls"))
 }

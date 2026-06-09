@@ -36,7 +36,8 @@ export function enrichNames(db: Database, diff: GroupedEntityDiff): Effect.Effec
 		collectRelations(diff.relations)
 		for (const items of Object.values(diff.groups)) {
 			for (const item of items) {
-				if ("relations" in item) collectRelations(item.relations)
+				if ("values" in item && item.values) collectValues(item.values)
+				if ("relations" in item && item.relations) collectRelations(item.relations)
 			}
 		}
 		for (const block of diff.blocks) {
@@ -66,7 +67,15 @@ export function enrichNames(db: Database, diff: GroupedEntityDiff): Effect.Effec
 			groups: Object.fromEntries(
 				Object.entries(diff.groups).map(([k, items]) => [
 					k,
-					items.map((item) => ("relations" in item ? {...item, relations: stampRelations(item.relations)} : item)),
+					items.map((item) => {
+						// Grouped EntityDiff items carry both values and relations; stamp both.
+						// BlockChange items only have optional relations.
+						const withValues =
+							"values" in item && item.values ? {...item, values: stampValues(item.values)} : item
+						return "relations" in withValues && withValues.relations
+							? {...withValues, relations: stampRelations(withValues.relations)}
+							: withValues
+					}),
 				]),
 			),
 			blocks: diff.blocks.map((block) => ({

@@ -69,7 +69,26 @@ const NAMES: Record<string, string> = {
 	[PAGE]: "Demo Page",
 	[VIEW_TARGET]: "Gallery View",
 }
-const ALL_IDS = [SPACE, EDIT1, EDIT2, PAGE, OLD_IMG, NEW_IMG, VID, TOPIC, BLOCK_DATA, TARGET1, TARGET2, FILTER_PROP, T_COVER, T_TRAILER, T_TOPIC, T_COLLECTION_ITEM, CONFIG_ENTITY, VIEW_TARGET]
+const ALL_IDS = [
+	SPACE,
+	EDIT1,
+	EDIT2,
+	PAGE,
+	OLD_IMG,
+	NEW_IMG,
+	VID,
+	TOPIC,
+	BLOCK_DATA,
+	TARGET1,
+	TARGET2,
+	FILTER_PROP,
+	T_COVER,
+	T_TRAILER,
+	T_TOPIC,
+	T_COLLECTION_ITEM,
+	CONFIG_ENTITY,
+	VIEW_TARGET,
+]
 
 const base = `/v2/versioned/entities/${PAGE}/diff?spaceId=${SPACE}`
 
@@ -77,25 +96,74 @@ async function seed(pool: Pool) {
 	const c = await pool.connect()
 	try {
 		await c.query("BEGIN")
-		await c.query(`INSERT INTO spaces (id, type, address) VALUES ($1,'DAO','0x0000000000000000000000000000000000000099') ON CONFLICT (id) DO NOTHING`, [SPACE])
-		for (const id of [PAGE, OLD_IMG, NEW_IMG, VID, TOPIC, BLOCK_DATA, TARGET1, TARGET2, FILTER_PROP, T_COVER, T_TRAILER, T_TOPIC, T_COLLECTION_ITEM, CONFIG_ENTITY, VIEW_TARGET]) {
-			await c.query(`INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block) VALUES ($1,'2026-05-25T00:00:00Z','1',$2,'1') ON CONFLICT DO NOTHING`, [id, "2026-05-25T00:00:00Z"])
+		await c.query(
+			`INSERT INTO spaces (id, type, address) VALUES ($1,'DAO','0x0000000000000000000000000000000000000099') ON CONFLICT (id) DO NOTHING`,
+			[SPACE],
+		)
+		for (const id of [
+			PAGE,
+			OLD_IMG,
+			NEW_IMG,
+			VID,
+			TOPIC,
+			BLOCK_DATA,
+			TARGET1,
+			TARGET2,
+			FILTER_PROP,
+			T_COVER,
+			T_TRAILER,
+			T_TOPIC,
+			T_COLLECTION_ITEM,
+			CONFIG_ENTITY,
+			VIEW_TARGET,
+		]) {
+			await c.query(
+				`INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block) VALUES ($1,'2026-05-25T00:00:00Z','1',$2,'1') ON CONFLICT DO NOTHING`,
+				[id, "2026-05-25T00:00:00Z"],
+			)
 		}
-		await c.query(`INSERT INTO edit_versions (edit_id, block_number, sequence, version_key, created_at, name) VALUES ($1,1,0,$2,'2026-05-25T00:00:00Z','Before') ON CONFLICT DO NOTHING`, [EDIT1, V1])
-		await c.query(`INSERT INTO edit_versions (edit_id, block_number, sequence, version_key, created_at, name) VALUES ($1,2,0,$2,'2026-05-25T00:00:01Z','After') ON CONFLICT DO NOTHING`, [EDIT2, V2])
+		await c.query(
+			`INSERT INTO edit_versions (edit_id, block_number, sequence, version_key, created_at, name) VALUES ($1,1,0,$2,'2026-05-25T00:00:00Z','Before') ON CONFLICT DO NOTHING`,
+			[EDIT1, V1],
+		)
+		await c.query(
+			`INSERT INTO edit_versions (edit_id, block_number, sequence, version_key, created_at, name) VALUES ($1,2,0,$2,'2026-05-25T00:00:01Z','After') ON CONFLICT DO NOTHING`,
+			[EDIT2, V2],
+		)
 
 		// live NAME values → name resolution
 		for (const [id, name] of Object.entries(NAMES)) {
-			await c.query(`INSERT INTO "values" (id, property_id, entity_id, space_id, text) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO UPDATE SET text=EXCLUDED.text`, [`v2t-nm-${id}`, NAME_PROPERTY, id, SPACE, name])
+			await c.query(
+				`INSERT INTO "values" (id, property_id, entity_id, space_id, text) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (id) DO UPDATE SET text=EXCLUDED.text`,
+				[`v2t-nm-${id}`, NAME_PROPERTY, id, SPACE, name],
+			)
 		}
 
 		const valVer = (entity: string, prop: string, vfrom: number, vto: number | null, text: string) =>
-			c.query(`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text) VALUES ($1,$2,$3,$4,$5,$6,$7)`, [crypto.randomUUID(), entity, prop, SPACE, vfrom, vto, text])
-		const relVer = (relId: string, from: string, type: string, to: string, vfrom: number, vto: number | null, pos: string) =>
-			c.query(`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, position, valid_from_key, valid_to_key) VALUES ($1,$2,$3,$4,$3,$5,$6,$7,$8,$9)`, [crypto.randomUUID(), relId, from, type, to, SPACE, pos, vfrom, vto])
+			c.query(
+				`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+				[crypto.randomUUID(), entity, prop, SPACE, vfrom, vto, text],
+			)
+		const relVer = (
+			relId: string,
+			from: string,
+			type: string,
+			to: string,
+			vfrom: number,
+			vto: number | null,
+			pos: string,
+		) =>
+			c.query(
+				`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, position, valid_from_key, valid_to_key) VALUES ($1,$2,$3,$4,$3,$5,$6,$7,$8,$9)`,
+				[crypto.randomUUID(), relId, from, type, to, SPACE, pos, vfrom, vto],
+			)
 
 		// media entities: type + url, valid from V1 (immutable, versioned)
-		for (const [img, type] of [[OLD_IMG, IMAGE_TYPE], [NEW_IMG, IMAGE_TYPE], [VID, VIDEO_TYPE]] as const) {
+		for (const [img, type] of [
+			[OLD_IMG, IMAGE_TYPE],
+			[NEW_IMG, IMAGE_TYPE],
+			[VID, VIDEO_TYPE],
+		] as const) {
 			await relVer(crypto.randomUUID(), img, TYPES, type, V1, null, "t")
 			await valVer(img, IMAGE_URL, V1, null, `https://example.com/${img.slice(-4)}.media`)
 		}
@@ -133,7 +201,10 @@ async function seed(pool: Pool) {
 
 async function cleanup(pool: Pool) {
 	const ids = ALL_IDS
-	await pool.query(`DELETE FROM relation_versions WHERE entity_id = ANY($1::uuid[]) OR from_entity_id = ANY($1::uuid[]) OR to_entity_id = ANY($1::uuid[])`, [ids])
+	await pool.query(
+		`DELETE FROM relation_versions WHERE entity_id = ANY($1::uuid[]) OR from_entity_id = ANY($1::uuid[]) OR to_entity_id = ANY($1::uuid[])`,
+		[ids],
+	)
 	await pool.query(`DELETE FROM value_versions WHERE entity_id = ANY($1::uuid[])`, [ids])
 	await pool.query(`DELETE FROM "values" WHERE entity_id = ANY($1::uuid[])`, [ids])
 	await pool.query(`DELETE FROM edit_versions WHERE edit_id = ANY($1::uuid[])`, [[EDIT1, EDIT2]])

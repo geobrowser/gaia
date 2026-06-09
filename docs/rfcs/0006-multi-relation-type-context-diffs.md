@@ -326,9 +326,9 @@ type_id        = LINK
 The edit context still describes "this happened inside Byron's TextBlock_9":
 
 ```text
-root_id            = Byron
-edges[0].type_id   = BLOCKS_ID
-edges[last].to_id  = TextBlock_9
+root_id                  = Byron
+edges[0].type_id         = BLOCKS_ID
+edges[last].to_entity_id = TextBlock_9
 ```
 
 By the RFC rule, the changed child to render under Byron's `BLOCKS_ID`

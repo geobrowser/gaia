@@ -34,7 +34,7 @@ Move six client transforms to the backend (each independent, additive to the dif
    "blocks relation entity"; merge it into the parent data block so it's one change.
 
 Affected endpoints (each gets a `/v2/...` enriched variant):
-- `GET /v2/versioned/entities/:id/diff` (all six apply; #5 = the no-`fromEditId` snapshot path)
+- `GET /v2/versioned/entities/:id/diff` (#1, #3–#6 apply; #2 media-property filtering is proposal-only since it needs multiple top-level entities; #5 = the no-`fromEditId` snapshot path)
 - `GET /v2/versioned/entities/:id` (snapshot)
 - `GET /v2/versioned/proposals/:id/diff` (flat `EntityDiff[]` across many roots)
 - `GET /v2/versioned/proposal-groups/diff`

@@ -76,6 +76,7 @@ app.use("/ipfs/*", canonicalRequestLogging())
 app.use("/profile/*", canonicalRequestLogging())
 app.use("/search/*", canonicalRequestLogging())
 app.use("/versioned/*", canonicalRequestLogging())
+app.use("/v2/versioned/*", canonicalRequestLogging())
 app.use("/proposals/*", canonicalRequestLogging())
 app.use("/graphql", canonicalRequestLogging())
 

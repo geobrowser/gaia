@@ -77,7 +77,9 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 				return yield* Effect.fail(new ValidationError({message: "toEditId query parameter is required"}))
 			}
 			if (!rawSpaceId) {
-				return yield* Effect.fail(new ValidationError({message: "spaceId query parameter is required for diffs"}))
+				return yield* Effect.fail(
+					new ValidationError({message: "spaceId query parameter is required for diffs"}),
+				)
 			}
 			if (!isValidUuid(rawToEditId)) {
 				return yield* Effect.fail(new ValidationError({message: "toEditId must be a valid UUID"}))
@@ -121,26 +123,39 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 				getGroupedEntitySnapshotAtVersion(db, entityId, toResolved.versionKey, spaceId),
 			])
 
-			const rawDiff = yield* diffGroupedEntitySnapshots(entityId, beforeSnapshot, afterSnapshot)
-			const richBlocksDiff = yield* enrichBlocks(rawDiff, beforeSnapshot, afterSnapshot)
-			const blockConfigDiff = yield* enrichBlockConfig(
-				db,
-				richBlocksDiff,
-				entityId,
-				fromResolved?.versionKey ?? null,
-				toResolved.versionKey,
-				spaceId,
-			)
-			const namedDiff = yield* enrichNames(db, blockConfigDiff)
-			const enrichedDiff = yield* enrichWithMediaUrls(db, namedDiff, {
-				// In snapshot mode there is no before side, so the from key is unused;
-				// fall back to the to version key to keep the lookup well-formed.
-				fromVersionKey: fromResolved?.versionKey ?? toResolved.versionKey,
-				toVersionKey: toResolved.versionKey,
-				spaceId,
+			// The enrichment chain (blocks → blockConfig → names → media) is a true
+			// pipeline — each step folds into the diff the previous produced — so it stays
+			// sequential. Creator-profile resolution depends only on the resolved edit
+			// metadata, not the diff, so run it concurrently to keep its DB round trip off
+			// the enrichment critical path.
+			const enrichmentChain = Effect.gen(function* () {
+				const rawDiff = yield* diffGroupedEntitySnapshots(entityId, beforeSnapshot, afterSnapshot)
+				const richBlocksDiff = yield* enrichBlocks(rawDiff, beforeSnapshot, afterSnapshot)
+				const blockConfigDiff = yield* enrichBlockConfig(
+					db,
+					richBlocksDiff,
+					entityId,
+					fromResolved?.versionKey ?? null,
+					toResolved.versionKey,
+					spaceId,
+				)
+				const namedDiff = yield* enrichNames(db, blockConfigDiff)
+				return yield* enrichWithMediaUrls(db, namedDiff, {
+					// In snapshot mode there is no before side, so the from key is unused;
+					// fall back to the to version key to keep the lookup well-formed.
+					fromVersionKey: fromResolved?.versionKey ?? toResolved.versionKey,
+					toVersionKey: toResolved.versionKey,
+					spaceId,
+				})
 			})
 
-			const profileMap = yield* resolveCreatorProfiles(db, [fromResolved?.createdById ?? null, toResolved.createdById])
+			const [enrichedDiff, profileMap] = yield* Effect.all(
+				[
+					enrichmentChain,
+					resolveCreatorProfiles(db, [fromResolved?.createdById ?? null, toResolved.createdById]),
+				],
+				{concurrency: "unbounded"},
+			)
 
 			// Spread groups at root level to match v1 DiffResponse shape (groups is
 			// recorded as Record<NormalizedUuid, DynamicGroupItem[]> at the JSON root).

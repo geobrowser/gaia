@@ -56,7 +56,8 @@ export function enrichBlocks(
 
 				// Name from the snapshot (present even when unchanged), after preferred.
 				const nameRow =
-					a.values.find((v) => v.propertyId === NAME_PROPERTY) ?? b.values.find((v) => v.propertyId === NAME_PROPERTY)
+					a.values.find((v) => v.propertyId === NAME_PROPERTY) ??
+					b.values.find((v) => v.propertyId === NAME_PROPERTY)
 				const blockName = nameRow?.text ?? null
 
 				const values = allValues.filter((v) => !HEADLINE_PROPERTIES.has(v.propertyId))
