@@ -16,7 +16,7 @@
 - Three notification types (all are `proposal_created` events; see "Who gets what" below): **membership requests**, **editorship requests**, **new proposals for editors**.
 - Three delivery channels — **in-app feed**, **push (AWS SNS)**, **email (MailerSend)** — abstracted behind a provider interface so the concrete services are swappable. **All channels default on.**
 - Per-user, per-channel **preferences**: a user can enable/disable each channel.
-- An **identity store** owned by the app server (Geo has no identity service today): the front-end upserts the user on sign-up/login, persisting `privy_user_id` ↔ `user_space_id` (their personal space) ↔ email ↔ push token(s). This is what lets the app server resolve an inbound webhook's `user_space_id` to a reachable user and lets the front-end fetch "my notifications".
+- An **identity store** owned by the app server (Geo has no identity service today): the front-end upserts the user on sign-up/login, persisting `privy_user_id` ↔ `user_space_id` (their personal space) ↔ email, plus **0..N SNS device tokens (one per device/browser)**. This is what lets the app server resolve an inbound webhook's `user_space_id` to a reachable user and lets the front-end fetch "my notifications".
 - Read APIs: list notifications (newest first, limit 100), unread count (for the badge), mark one-or-many read, mark all read.
 - Identity/registration APIs: upsert user, register/unregister a push token.
 
@@ -82,7 +82,7 @@ All three MVP types originate from a single on-chain event the indexer already h
 - An on-chain governance event (a new proposal — e.g. someone requests membership/editorship) is indexed by the Gaia notification-indexer, which creates one outbox row per editor of the space.
 - The delivery worker POSTs a webhook to the Geo Browser app server, one call per editor per event.
 - The app server verifies the webhook is authentic, deduplicates, resolves the `user_space_id` to a local user, and persists the notification.
-- The app server fans the notification out to the user's **enabled** channels: writes it to the in-app feed, and/or sends a push via SNS, and/or an email via MailerSend.
+- The app server fans the notification out to the user's **enabled** channels: writes it to the in-app feed, and/or sends a push via SNS to every registered device, and/or an email via MailerSend.
 - In Geo Browser, the user sees the notification (feed and/or unread badge) and can mark it read; reads sync back to the app server.
 
 ```mermaid
@@ -102,7 +102,7 @@ sequenceDiagram
         AS->>AS: authenticate webhook
         AS->>DB: persist notification (for user_space_id)
         AS->>DB: read user's channel preferences
-        AS->>CH: deliver to enabled channels only
+        AS->>CH: deliver to enabled channels (push → all devices)
         AS-->>DW: 2xx (ack)
     end
 ```
@@ -136,8 +136,8 @@ For the authenticated user (R = read, W = write):
 - **Mark read** (W) — accepts one or more notification IDs.
 - **Mark all read** (W) — marks all of the user's notifications read.
 - **Preferences** (R/W) — read or update per-channel enable/disable (in-app, push, email).
-- **Upsert user** (W) — register/update the caller's identity record. The front-end sends `user_space_id` (personal space) and an optional push token; the **`privy_user_id` and email are derived server-side from the verified Privy token** (see Authentication) — the email is **never** trusted from the request body. Called by the front-end on sign-up/login.
-- **Register / unregister push token** (W) — add or remove an SNS device token for the user.
+- **Upsert user** (W) — register/update the caller's identity record. The front-end sends `user_space_id` (personal space); the **`privy_user_id` and email are derived server-side from the verified Privy token** (see Authentication) — the email is **never** trusted from the request body. (Push tokens are managed via the register endpoint below.) Called by the front-end on sign-up/login.
+- **Register / unregister push token** (W) — *register* adds an SNS device token (idempotent; dedupe by token), *unregister* removes one. A user can have **multiple registered at once** (one per device).
 
 Plus an **inbound webhook receiver** (not user-facing): authenticates the webhook, dedupes, persists, and fans out to enabled channels.
 
@@ -161,10 +161,12 @@ sequenceDiagram
     Note over FE,DB: Phase 1 — on sign-up / login
     FE->>Privy: login (email) → user.id, embedded wallet
     FE->>FE: resolve personal space → user_space_id
-    FE->>AS: POST upsert user {user_space_id, push token?} + Bearer access token
+    FE->>AS: POST upsert user {user_space_id} + Bearer access token
     AS->>AS: verify token → privy_user_id (sub claim)
     AS->>Privy: getUserById(privy_user_id) → email
-    AS->>DB: store identity record (privy_user_id, user_space_id, email)
+    AS->>DB: store identity (privy_user_id, user_space_id, email)
+    FE->>AS: POST register push token (per device) + Bearer
+    AS->>DB: add SNS token to user (0..N)
 
     Note over FE,DB: Phase 2 — any user-scoped API call
     FE->>Privy: getAccessToken()
@@ -199,7 +201,7 @@ Integration points that need a joint technical design before implementation. Nam
 ## Open questions
 - [product] **Labeling/copy** for membership request vs. editorship request vs. generic proposal (classification rule recommended above is the default).
 - [backend] **Email freshness:** the email is resolved server-side from Privy at upsert and stored (decided — never trusted from the client). Remaining detail is the refresh policy: re-fetch on every login upsert is the recommended default, plus a re-fetch on hard bounce. Confirm that's sufficient vs. needing a periodic resync.
-- [backend] **Push token lifecycle:** how web push tokens are obtained/refreshed and registered with SNS (browser push vs. native), and how stale tokens are pruned.
+- [backend] **Push token lifecycle (approach decided):** the front-end registers a device's SNS token on login and on rotation; SNS auto-disables dead endpoints (`Enabled=false`), so the app prunes a token when a publish hits `EndpointDisabledException`, keeping the user's other devices. Detection mechanics live in the tech-design doc.
 - [ui] **Auth — remaining detail:** token-refresh/expiry handling on the UI (approach decided — see Authentication), and confirm reads require auth too (recommended: yes).
 - [product] Confirm requester-facing outcome notifications ("your request was approved/rejected") are out of MVP. *(Treated as out per current scope.)*
 - [all] Each cross-team interface above needs a joint tech-design session before implementation starts.
