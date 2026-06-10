@@ -203,6 +203,7 @@ Integration points that need a joint technical design before implementation. Nam
 - [backend] **Push token lifecycle (approach decided):** the front-end registers a device's SNS token on login and on rotation; SNS auto-disables dead endpoints (`Enabled=false`), so the app prunes a token when a publish hits `EndpointDisabledException`, keeping the user's other devices. Detection mechanics live in the tech-design doc.
 - [ui] **Auth — remaining detail:** token-refresh/expiry handling on the UI (approach decided — see Authentication)
 - [product] Confirm requester-facing outcome notifications ("your request was approved/rejected") are out of MVP. *(Treated as out per current scope.)*
+- [backend] **App server hosting:** where should the Geo Browser app server run? Recommendation: **co-locate it on the same infrastructure as the Geo Browser front-end** — shared deploy/ops pipeline, same region/network, and simpler secrets and on-call — rather than standing up separate infra.
 
 ## Out of scope for this PRD
 - App-server data model (table columns) and concrete API schemas — belong in the app server tech-design doc. (Auth *direction* is decided here; detailed token validation/refresh handling is for that doc.)
