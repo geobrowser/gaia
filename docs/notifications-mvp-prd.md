@@ -199,12 +199,10 @@ Integration points that need a joint technical design before implementation. Nam
 - Privy issues a verifiable access token (`getAccessToken()`) and `@privy-io/server-auth` + `PRIVY_APP_SECRET` can validate it server-side. No existing Geo backend verifies Privy today, so the app server adds this from scratch.
 
 ## Open questions
-- [product] **Labeling/copy** for membership request vs. editorship request vs. generic proposal (classification rule recommended above is the default).
-- [backend] **Email freshness:** the email is resolved server-side from Privy at upsert and stored (decided — never trusted from the client). Remaining detail is the refresh policy: re-fetch on every login upsert is the recommended default, plus a re-fetch on hard bounce. Confirm that's sufficient vs. needing a periodic resync.
+- [backend] **Email freshness:** can users change their email with privy + Geo login?
 - [backend] **Push token lifecycle (approach decided):** the front-end registers a device's SNS token on login and on rotation; SNS auto-disables dead endpoints (`Enabled=false`), so the app prunes a token when a publish hits `EndpointDisabledException`, keeping the user's other devices. Detection mechanics live in the tech-design doc.
-- [ui] **Auth — remaining detail:** token-refresh/expiry handling on the UI (approach decided — see Authentication), and confirm reads require auth too (recommended: yes).
+- [ui] **Auth — remaining detail:** token-refresh/expiry handling on the UI (approach decided — see Authentication)
 - [product] Confirm requester-facing outcome notifications ("your request was approved/rejected") are out of MVP. *(Treated as out per current scope.)*
-- [all] Each cross-team interface above needs a joint tech-design session before implementation starts.
 
 ## Out of scope for this PRD
 - App-server data model (table columns) and concrete API schemas — belong in the app server tech-design doc. (Auth *direction* is decided here; detailed token validation/refresh handling is for that doc.)
