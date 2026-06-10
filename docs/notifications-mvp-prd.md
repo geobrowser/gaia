@@ -204,6 +204,7 @@ Integration points that need a joint technical design before implementation. Nam
 - [ui] **Auth — remaining detail:** token-refresh/expiry handling on the UI (approach decided — see Authentication)
 - [product] Confirm requester-facing outcome notifications ("your request was approved/rejected") are out of MVP. *(Treated as out per current scope.)*
 - [backend] **App server hosting:** where should the Geo Browser app server run? Recommendation: **co-locate it on the same infrastructure as the Geo Browser front-end** — shared deploy/ops pipeline, same region/network, and simpler secrets and on-call — rather than standing up separate infra.
+- [product] **When should an email be sent?** Assume every notification lands in the in-app feed/badge. Email is the noisier channel — should it fire for every notification, only certain types, or as a batched digest / only when still unread after a delay? Needs a triggering policy (subject to the user's email toggle).
 
 ## Out of scope for this PRD
 - App-server data model (table columns) and concrete API schemas — belong in the app server tech-design doc. (Auth *direction* is decided here; detailed token validation/refresh handling is for that doc.)
