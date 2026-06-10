@@ -208,5 +208,5 @@ Integration points that need a joint technical design before implementation. Nam
 ## Out of scope for this PRD
 - App-server data model (table columns) and concrete API schemas — belong in the app server tech-design doc. (Auth *direction* is decided here; detailed token validation/refresh handling is for that doc.)
 - The other GEO-2172 notification types (bounties, points, votes, comments, trending, proposal-outcome).
-- Multi-app-server fan-out (additional front-ends each get their own app server later).
+- Notifications for anyone other than Geo Browser users — the MVP covers Geo Browser users only (other front-ends each get their own app server later).
 - Webhook self-registration API, subscription/event-type filtering, and per-webhook rate limiting (tracked as open questions in the notification-service tech design).
