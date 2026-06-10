@@ -172,6 +172,23 @@ pub fn detect(edit: &grc_20::Edit, space_id: Uuid, block_number: i64) -> Detecte
                     // A ranked item: position is the fractional index, to_space the
                     // perspective, and the weighted value lives on the reified vote
                     // entity (ordinal ranks carry only the fractional index).
+                    //
+                    // `to_space` is the ranked entity's perspective and is required:
+                    // the SDK sets it on every vote (buildVoteOps keys uniqueness on
+                    // (entityId, spaceId)), and both aggregation and the published
+                    // projection key on it. It is normally *not* the ranking's own
+                    // (personal) space — it's wherever the ranked entity lives. A
+                    // missing one is a malformed vote we can't place in a perspective,
+                    // so skip the item rather than mis-bucketing it into the ranking's
+                    // space (which would create an aggregate row readers can't resolve).
+                    let Some(item_space) = relation.to_space.map(|id| id_to_uuid(&id)) else {
+                        tracing::warn!(
+                            ranking = %from,
+                            entity = %id_to_uuid(&relation.to),
+                            "RANK_VOTES relation missing to_space; skipping item"
+                        );
+                        continue;
+                    };
                     let reified = id_to_uuid(&relation.entity_id());
                     let weight = entity_values
                         .get(&reified)
@@ -179,7 +196,7 @@ pub fn detect(edit: &grc_20::Edit, space_id: Uuid, block_number: i64) -> Detecte
                     out.items.push(RankingItem {
                         ranking_id: from,
                         entity_id: id_to_uuid(&relation.to),
-                        space_id: relation.to_space.map(|id| id_to_uuid(&id)).unwrap_or(space_id),
+                        space_id: item_space,
                         position: relation.position.as_ref().map(|p| p.to_string()),
                         weight,
                     });

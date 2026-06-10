@@ -91,16 +91,24 @@ impl Storage {
     }
 
     /// Set a rank's block link (the `RANK_BLOCK` relation may land in a later edit).
+    /// `ranks.rankings` is keyed on `(id, space_id)`, so the update is scoped to
+    /// the rank's space — a same-id rank perspectived into another space is left
+    /// untouched.
     pub async fn set_ranking_block(
         &self,
         ranking_id: Uuid,
         block_id: Uuid,
+        space_id: Uuid,
     ) -> Result<(), IndexerError> {
-        sqlx::query("UPDATE ranks.rankings SET block_id = $2, updated_at = now() WHERE id = $1")
-            .bind(ranking_id)
-            .bind(block_id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE ranks.rankings SET block_id = $2, updated_at = now() \
+             WHERE id = $1 AND space_id = $3",
+        )
+        .bind(ranking_id)
+        .bind(block_id)
+        .bind(space_id)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

@@ -112,7 +112,9 @@ async fn process_edit(payload: &[u8], storage: &Storage) -> Result<(), IndexerEr
     }
 
     for (ranking_id, block_id) in detected.block_links {
-        storage.set_ranking_block(ranking_id, block_id).await?;
+        // The RANK_BLOCK relation is authored in the ranking's space, so the
+        // edit's `space_id` is the rank row's space.
+        storage.set_ranking_block(ranking_id, block_id, space_id).await?;
     }
 
     // TODO(ranking-indexer): recompute affected blocks (dedup -> eligibility ->
