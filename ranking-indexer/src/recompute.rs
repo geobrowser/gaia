@@ -112,6 +112,7 @@ pub async fn recompute_block(block_id: Uuid, storage: &Storage) -> Result<(), In
 /// consumer loop and integration tests.
 pub async fn apply_detected_edit(
     detected: &DetectedEdit,
+    space_id: Uuid,
     storage: &Storage,
 ) -> Result<(), IndexerError> {
     if detected.is_empty() {
@@ -138,7 +139,9 @@ pub async fn apply_detected_edit(
     }
 
     for (ranking_id, block_id) in &detected.block_links {
-        storage.set_ranking_block(*ranking_id, *block_id).await?;
+        // The RANK_BLOCK relation is authored in the ranking's space, so the
+        // edit's `space_id` is the rank row's space.
+        storage.set_ranking_block(*ranking_id, *block_id, space_id).await?;
     }
 
     for block_id in affected_blocks(detected, storage).await? {

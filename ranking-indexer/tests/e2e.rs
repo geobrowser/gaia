@@ -101,7 +101,7 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
         })
         .create_entity(gid(BLOCK), |e| e.text(sid(NAME_PROPERTY_ID), "Top Films", None))
         .build();
-    apply_detected_edit(&detect(&block_edit, u(BLOCK_SPACE), 1, 0), &storage)
+    apply_detected_edit(&detect(&block_edit, u(BLOCK_SPACE), 1, 0), u(BLOCK_SPACE), &storage)
         .await
         .unwrap();
 
@@ -141,14 +141,14 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
             .build()
     };
 
-    apply_detected_edit(&detect(&submit(RANK1, 0x200, ENTITY_A, ENTITY_B), u(MEMBER1), 2, 0), &storage)
+    apply_detected_edit(&detect(&submit(RANK1, 0x200, ENTITY_A, ENTITY_B), u(MEMBER1), 2, 0), u(MEMBER1), &storage)
         .await
         .unwrap();
-    apply_detected_edit(&detect(&submit(RANK2, 0x210, ENTITY_A, ENTITY_B), u(MEMBER2), 3, 0), &storage)
+    apply_detected_edit(&detect(&submit(RANK2, 0x210, ENTITY_A, ENTITY_B), u(MEMBER2), 3, 0), u(MEMBER2), &storage)
         .await
         .unwrap();
     // non-member ranks B above A — must be filtered out
-    apply_detected_edit(&detect(&submit(RANK3, 0x220, ENTITY_B, ENTITY_A), u(NONMEMBER), 4, 0), &storage)
+    apply_detected_edit(&detect(&submit(RANK3, 0x220, ENTITY_B, ENTITY_A), u(NONMEMBER), 4, 0), u(NONMEMBER), &storage)
         .await
         .unwrap();
 
