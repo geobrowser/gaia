@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ranking-indexer
+  namespace: knowledge-staging
+  labels:
+    app: ranking-indexer
+    environment: staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ranking-indexer
+  template:
+    metadata:
+      labels:
+        app: ranking-indexer
+        environment: staging
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: regcred
+      volumes:
+        - name: ssl-certs
+          emptyDir: {}
+      initContainers:
+        - name: setup-certs
+          image: registry.digitalocean.com/geo/ranking-indexer:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - |
+              echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+          env:
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: ranking-indexer
+          image: registry.digitalocean.com/geo/ranking-indexer:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
+          env:
+            - name: PGSSLROOTCERT
+              value: /ssl/ca.crt
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: ranking-indexer-secrets
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: ranking-indexer-secrets
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ranking-indexer-secrets
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: ranking-indexer-secrets
+                  key: KAFKA_SSL_CA_PEM
+            - name: ENVIRONMENT
+              value: "staging"
+            - name: KAFKA_GROUP_ID
+              value: "ranking-indexer-v1-staging"
+            - name: RUST_LOG
+              value: "ranking_indexer=info"
+          resources:
+            requests:
+              memory: "768Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "500m"
+      restartPolicy: Always
