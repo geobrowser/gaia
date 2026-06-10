@@ -64,7 +64,10 @@ fn normalize_weighted(items: &[RankingItem], lo: f64, hi: f64) -> Vec<((Uuid, Uu
     if weighted.is_empty() {
         return Vec::new();
     }
-    let min = weighted.iter().map(|i| i.weight.unwrap()).fold(f64::INFINITY, f64::min);
+    let min = weighted
+        .iter()
+        .map(|i| i.weight.unwrap())
+        .fold(f64::INFINITY, f64::min);
     let max = weighted
         .iter()
         .map(|i| i.weight.unwrap())
@@ -89,7 +92,9 @@ fn normalize_weighted(items: &[RankingItem], lo: f64, hi: f64) -> Vec<((Uuid, Uu
 fn normalize_ordinal(items: &[RankingItem], lo: f64, hi: f64) -> Vec<((Uuid, Uuid), f64)> {
     let mut ordered: Vec<&RankingItem> = items.iter().collect();
     // Sort by fractional index; items missing a position sort last (deterministic).
-    ordered.sort_by(|a, b| (a.position.is_none(), &a.position).cmp(&(b.position.is_none(), &b.position)));
+    ordered.sort_by(|a, b| {
+        (a.position.is_none(), &a.position).cmp(&(b.position.is_none(), &b.position))
+    });
 
     let n = ordered.len();
     ordered
@@ -107,11 +112,7 @@ fn normalize_ordinal(items: &[RankingItem], lo: f64, hi: f64) -> Vec<((Uuid, Uui
 }
 
 /// Aggregate eligible ballots into the block's ordered result.
-pub fn aggregate(
-    ballots: &[(&Ranking, Vec<RankingItem>)],
-    lo: f64,
-    hi: f64,
-) -> Vec<ScoreRow> {
+pub fn aggregate(ballots: &[(&Ranking, Vec<RankingItem>)], lo: f64, hi: f64) -> Vec<ScoreRow> {
     let mut totals: HashMap<(Uuid, Uuid), f64> = HashMap::new();
     for (ranking, items) in ballots {
         for (key, value) in normalize_ballot(ranking, items, lo, hi) {
@@ -198,7 +199,7 @@ mod tests {
         let out = normalize_ballot(&r, &items, NORM_LO, NORM_HI);
         assert_eq!(value_for(&out, 10), 1.0); // max -> hi
         assert_eq!(value_for(&out, 12), 0.5); // min -> lo
-        // 65 is 15/40 of the way: 0.5 + 0.5*0.375 = 0.6875
+                                              // 65 is 15/40 of the way: 0.5 + 0.5*0.375 = 0.6875
         assert!((value_for(&out, 11) - 0.6875).abs() < 1e-9);
     }
 

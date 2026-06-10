@@ -183,8 +183,7 @@ pub fn detect(
                 let entity_types = types_of.get(&entity_id);
 
                 let is_rank = entity_types.is_some_and(|t| t.contains(&ids.rank_type));
-                let is_block =
-                    entity_types.is_some_and(|t| t.contains(&ids.ranking_block_type));
+                let is_block = entity_types.is_some_and(|t| t.contains(&ids.ranking_block_type));
 
                 if is_rank {
                     out.rankings.push(Ranking {
@@ -378,7 +377,9 @@ mod tests {
                     .from(gid(BLOCK))
                     .to(sid(RANKING_BLOCK_TYPE_ID))
             })
-            .create_entity(gid(BLOCK), |e| e.text(sid(NAME_PROPERTY_ID), "Top Films", None))
+            .create_entity(gid(BLOCK), |e| {
+                e.text(sid(NAME_PROPERTY_ID), "Top Films", None)
+            })
             .build();
 
         let detected = detect(&edit, space_uuid(), 100, 0);
@@ -408,8 +409,14 @@ mod tests {
             .create_entity(gid(BLOCK), |e| {
                 e.text(sid(NAME_PROPERTY_ID), "Top Films", None)
                     .text(sid(RANK_FILTER_PROPERTY_ID), "types: Movie", None)
-                    .value(sid(RANK_START_DATE_PROPERTY_ID), Grc20Value::Date("2026-06-01".into()))
-                    .value(sid(RANK_END_DATE_PROPERTY_ID), Grc20Value::Date("2026-06-30".into()))
+                    .value(
+                        sid(RANK_START_DATE_PROPERTY_ID),
+                        Grc20Value::Date("2026-06-01".into()),
+                    )
+                    .value(
+                        sid(RANK_END_DATE_PROPERTY_ID),
+                        Grc20Value::Date("2026-06-30".into()),
+                    )
             })
             .build();
 
@@ -418,8 +425,14 @@ mod tests {
         let b = &detected.blocks[0];
         assert_eq!(b.name.as_deref(), Some("Top Films"));
         assert_eq!(b.filter.as_deref(), Some("types: Movie"));
-        assert_eq!(b.start_date, Some(Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap()));
-        assert_eq!(b.end_date, Some(Utc.with_ymd_and_hms(2026, 6, 30, 0, 0, 0).unwrap()));
+        assert_eq!(
+            b.start_date,
+            Some(Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap())
+        );
+        assert_eq!(
+            b.end_date,
+            Some(Utc.with_ymd_and_hms(2026, 6, 30, 0, 0, 0).unwrap())
+        );
         assert_eq!(
             b.restriction_id,
             Some(Uuid::parse_str(RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID).unwrap())

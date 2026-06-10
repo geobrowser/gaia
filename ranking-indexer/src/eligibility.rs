@@ -124,8 +124,16 @@ mod tests {
     fn dao_block_admits_only_members_or_editors() {
         let mut members = HashSet::new();
         members.insert(Uuid::from_u128(42));
-        assert!(restriction_admits(SpaceKind::Dao, Uuid::from_u128(42), &members));
-        assert!(!restriction_admits(SpaceKind::Dao, Uuid::from_u128(99), &members));
+        assert!(restriction_admits(
+            SpaceKind::Dao,
+            Uuid::from_u128(42),
+            &members
+        ));
+        assert!(!restriction_admits(
+            SpaceKind::Dao,
+            Uuid::from_u128(99),
+            &members
+        ));
     }
 
     #[test]

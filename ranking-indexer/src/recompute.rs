@@ -15,8 +15,8 @@ use crate::detect::DetectedEdit;
 use crate::eligibility::{filter_eligible, SpaceKind};
 use crate::error::IndexerError;
 use crate::models::{Ranking, RankingItem};
-use crate::{publish, scoring};
 use crate::storage::Storage;
+use crate::{publish, scoring};
 
 /// Block ids whose aggregate may have changed as a result of this edit:
 /// blocks whose own settings changed, blocks newly linked from a rank, and the
@@ -79,7 +79,10 @@ pub async fn recompute_block(block_id: Uuid, storage: &Storage) -> Result<(), In
     let items = storage.get_items_for_rankings(&eligible_ids).await?;
     let mut items_by_ranking: HashMap<Uuid, Vec<RankingItem>> = HashMap::new();
     for item in items {
-        items_by_ranking.entry(item.ranking_id).or_default().push(item);
+        items_by_ranking
+            .entry(item.ranking_id)
+            .or_default()
+            .push(item);
     }
     let ballots: Vec<(&Ranking, Vec<RankingItem>)> = eligible
         .iter()
@@ -141,7 +144,9 @@ pub async fn apply_detected_edit(
     for (ranking_id, block_id) in &detected.block_links {
         // The RANK_BLOCK relation is authored in the ranking's space, so the
         // edit's `space_id` is the rank row's space.
-        storage.set_ranking_block(*ranking_id, *block_id, space_id).await?;
+        storage
+            .set_ranking_block(*ranking_id, *block_id, space_id)
+            .await?;
     }
 
     for block_id in affected_blocks(detected, storage).await? {

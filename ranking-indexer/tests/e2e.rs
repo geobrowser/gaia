@@ -52,7 +52,11 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
         "DELETE FROM relations WHERE space_id = $1",
         "DELETE FROM values WHERE space_id = $1",
     ] {
-        sqlx::query(sql).bind(u(BLOCK_SPACE)).execute(pool).await.unwrap();
+        sqlx::query(sql)
+            .bind(u(BLOCK_SPACE))
+            .execute(pool)
+            .await
+            .unwrap();
     }
     sqlx::query("DELETE FROM ranks.ranking_items WHERE ranking_id = ANY($1)")
         .bind(&[u(RANK1), u(RANK2), u(RANK3)][..])
@@ -64,10 +68,26 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM ranks.ranking_scores WHERE block_id = $1").bind(u(BLOCK)).execute(pool).await.unwrap();
-    sqlx::query("DELETE FROM ranks.ranking_blocks WHERE id = $1").bind(u(BLOCK)).execute(pool).await.unwrap();
-    sqlx::query("DELETE FROM members WHERE space_id = $1").bind(u(BLOCK_SPACE)).execute(pool).await.unwrap();
-    sqlx::query("DELETE FROM spaces WHERE id = $1").bind(u(BLOCK_SPACE)).execute(pool).await.unwrap();
+    sqlx::query("DELETE FROM ranks.ranking_scores WHERE block_id = $1")
+        .bind(u(BLOCK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.ranking_blocks WHERE id = $1")
+        .bind(u(BLOCK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM members WHERE space_id = $1")
+        .bind(u(BLOCK_SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM spaces WHERE id = $1")
+        .bind(u(BLOCK_SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
 
     // --- seed public prerequisites -----------------------------------------
     // The block lives in a DAO space; member1/member2 are members, nonmember isn't.
@@ -99,11 +119,17 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
                 .from(gid(BLOCK))
                 .to(sid(RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID))
         })
-        .create_entity(gid(BLOCK), |e| e.text(sid(NAME_PROPERTY_ID), "Top Films", None))
+        .create_entity(gid(BLOCK), |e| {
+            e.text(sid(NAME_PROPERTY_ID), "Top Films", None)
+        })
         .build();
-    apply_detected_edit(&detect(&block_edit, u(BLOCK_SPACE), 1, 0), u(BLOCK_SPACE), &storage)
-        .await
-        .unwrap();
+    apply_detected_edit(
+        &detect(&block_edit, u(BLOCK_SPACE), 1, 0),
+        u(BLOCK_SPACE),
+        &storage,
+    )
+    .await
+    .unwrap();
 
     // --- ordinal submission helper (rank -> [first, second]) ----------------
     // Two members rank A above B; the non-member ranks B above A.
@@ -115,7 +141,9 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
                     .from(gid(rank))
                     .to(sid(RANK_TYPE_ID))
             })
-            .create_entity(gid(rank), |e| e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None))
+            .create_entity(gid(rank), |e| {
+                e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None)
+            })
             .create_relation(|r| {
                 r.id(gid(rel_base + 1))
                     .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
@@ -141,19 +169,38 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
             .build()
     };
 
-    apply_detected_edit(&detect(&submit(RANK1, 0x200, ENTITY_A, ENTITY_B), u(MEMBER1), 2, 0), u(MEMBER1), &storage)
-        .await
-        .unwrap();
-    apply_detected_edit(&detect(&submit(RANK2, 0x210, ENTITY_A, ENTITY_B), u(MEMBER2), 3, 0), u(MEMBER2), &storage)
-        .await
-        .unwrap();
+    apply_detected_edit(
+        &detect(&submit(RANK1, 0x200, ENTITY_A, ENTITY_B), u(MEMBER1), 2, 0),
+        u(MEMBER1),
+        &storage,
+    )
+    .await
+    .unwrap();
+    apply_detected_edit(
+        &detect(&submit(RANK2, 0x210, ENTITY_A, ENTITY_B), u(MEMBER2), 3, 0),
+        u(MEMBER2),
+        &storage,
+    )
+    .await
+    .unwrap();
     // non-member ranks B above A — must be filtered out
-    apply_detected_edit(&detect(&submit(RANK3, 0x220, ENTITY_B, ENTITY_A), u(NONMEMBER), 4, 0), u(NONMEMBER), &storage)
-        .await
-        .unwrap();
+    apply_detected_edit(
+        &detect(
+            &submit(RANK3, 0x220, ENTITY_B, ENTITY_A),
+            u(NONMEMBER),
+            4,
+            0,
+        ),
+        u(NONMEMBER),
+        &storage,
+    )
+    .await
+    .unwrap();
 
     // --- assert the published RANK_POSITION projection ----------------------
-    let rank_position = u(Uuid::parse_str(RANK_POSITION_RELATION_TYPE_ID).unwrap().as_u128());
+    let rank_position = u(Uuid::parse_str(RANK_POSITION_RELATION_TYPE_ID)
+        .unwrap()
+        .as_u128());
     let value_prop = Uuid::parse_str(RANK_POSITION_VALUE_PROPERTY_ID).unwrap();
 
     let rows = sqlx::query(
@@ -178,7 +225,11 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
     let s0: Uuid = rows[0].get("space");
     assert_eq!(e0, u(ENTITY_A), "top-ranked entity should be A");
     assert_eq!(v0, 100, "top entity scaled to 100");
-    assert_eq!(s0, u(BLOCK_SPACE), "ranked perspective carried on to_space_id");
+    assert_eq!(
+        s0,
+        u(BLOCK_SPACE),
+        "ranked perspective carried on to_space_id"
+    );
 
     let e1: Uuid = rows[1].get("entity");
     let v1: i64 = rows[1].get("value");
@@ -195,5 +246,8 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
     .fetch_one(pool)
     .await
     .unwrap();
-    assert_eq!(prov, 2, "non-member submission must be excluded from provenance");
+    assert_eq!(
+        prov, 2,
+        "non-member submission must be excluded from provenance"
+    );
 }

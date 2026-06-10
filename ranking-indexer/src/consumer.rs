@@ -95,7 +95,9 @@ impl KafkaConsumer {
 }
 
 /// Decode the `HermesEdit` envelope from a Kafka payload.
-pub fn parse_edit(payload: &[u8]) -> Result<hermes_schema::pb::knowledge::HermesEdit, IndexerError> {
+pub fn parse_edit(
+    payload: &[u8],
+) -> Result<hermes_schema::pb::knowledge::HermesEdit, IndexerError> {
     Ok(hermes_schema::pb::knowledge::HermesEdit::decode(payload)?)
 }
 

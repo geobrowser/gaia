@@ -51,7 +51,8 @@ pub fn build_projection(block_id: Uuid, scores: &[ScoreRow]) -> Vec<RankPosition
             } else {
                 0
             };
-            let tag = |kind: &str| derive(&format!("{kind}:{block_id}:{}:{}", s.entity_id, s.space_id));
+            let tag =
+                |kind: &str| derive(&format!("{kind}:{block_id}:{}:{}", s.entity_id, s.space_id));
             RankPositionRow {
                 entity_id: s.entity_id,
                 space_id: s.space_id,
@@ -70,7 +71,9 @@ pub fn build_projection(block_id: Uuid, scores: &[ScoreRow]) -> Vec<RankPosition
 pub fn provenance_ids(block_id: Uuid, ranking_id: Uuid) -> (Uuid, Uuid) {
     (
         derive(&format!("aggregated_rankings:{block_id}:{ranking_id}")),
-        derive(&format!("aggregated_rankings_entity:{block_id}:{ranking_id}")),
+        derive(&format!(
+            "aggregated_rankings_entity:{block_id}:{ranking_id}"
+        )),
     )
 }
 
@@ -90,7 +93,11 @@ mod tests {
     #[test]
     fn scales_top_to_100_and_orders_by_position() {
         let block = Uuid::from_u128(1);
-        let scores = vec![score(10, 1, 2.5, 1), score(11, 1, 2.0, 2), score(12, 1, 1.0, 3)];
+        let scores = vec![
+            score(10, 1, 2.5, 1),
+            score(11, 1, 2.0, 2),
+            score(12, 1, 1.0, 3),
+        ];
         let proj = build_projection(block, &scores);
         assert_eq!(proj.len(), 3);
         assert_eq!(proj[0].value, 100); // 2.5/2.5

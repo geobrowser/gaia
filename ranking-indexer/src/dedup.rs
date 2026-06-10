@@ -19,8 +19,7 @@ pub fn dedup_latest(rankings: Vec<Ranking>) -> Vec<Ranking> {
         let key = (block_id, r.space_id);
         let incoming = (r.updated_at_block, r.update_index);
         match latest.get(&key) {
-            Some(existing)
-                if (existing.updated_at_block, existing.update_index) >= incoming => {}
+            Some(existing) if (existing.updated_at_block, existing.update_index) >= incoming => {}
             _ => {
                 latest.insert(key, r);
             }
