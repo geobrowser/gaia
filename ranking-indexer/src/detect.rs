@@ -336,6 +336,40 @@ mod tests {
     }
 
     #[test]
+    fn rank_vote_without_to_space_is_skipped() {
+        // A RANK_VOTES relation with no `to_space` can't be placed in a
+        // perspective, so detect() drops the item rather than defaulting it to
+        // the ranking's own space (which would mis-bucket the aggregate).
+        let edit = EditBuilder::new(gid(0))
+            .create_relation(|r| {
+                r.id(gid(10))
+                    .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                    .from(gid(RANK))
+                    .to(sid(RANK_TYPE_ID))
+            })
+            .create_entity(gid(RANK), |e| {
+                e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None)
+            })
+            // RANK_VOTES item with position but NO to_space
+            .create_relation(|r| {
+                r.id(gid(11))
+                    .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                    .from(gid(RANK))
+                    .to(gid(RANKED_ENTITY))
+                    .position("a0")
+                    .entity(gid(VOTE_ENTITY))
+            })
+            .build();
+
+        let detected = detect(&edit, space_uuid(), 100, 0);
+
+        // the ranking itself is still detected...
+        assert_eq!(detected.rankings.len(), 1);
+        // ...but the perspective-less item is dropped (not bucketed into SPACE).
+        assert!(detected.items.is_empty());
+    }
+
+    #[test]
     fn detects_ranking_block() {
         let edit = EditBuilder::new(gid(0))
             .create_relation(|r| {
