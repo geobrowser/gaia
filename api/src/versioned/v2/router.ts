@@ -117,9 +117,9 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 			}
 			const [beforeSnapshot, afterSnapshot] = yield* Effect.all([
 				fromResolved
-					? getGroupedEntitySnapshotAtVersion(db, entityId, fromResolved.versionKey, spaceId)
+					? getGroupedEntitySnapshotAtVersion(db, entityId, fromResolved.versionKey, spaceId, "v2")
 					: Effect.succeed(emptyBefore),
-				getGroupedEntitySnapshotAtVersion(db, entityId, toResolved.versionKey, spaceId),
+				getGroupedEntitySnapshotAtVersion(db, entityId, toResolved.versionKey, spaceId, "v2"),
 			])
 
 			// The enrichment chain (blocks → blockConfig → names → media) is a true

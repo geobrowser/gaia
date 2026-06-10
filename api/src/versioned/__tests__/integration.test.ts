@@ -25,6 +25,7 @@ import {afterAll, beforeAll, describe, expect, it} from "vitest"
 import {runtime} from "../../services/runtime"
 import {normalizeUuid} from "../../utils/uuid"
 import {createVersionedRouter} from "../router"
+import {createVersionedV2Router} from "../v2"
 
 // Skip integration tests if DATABASE_URL is not set
 const DATABASE_URL = process.env.DATABASE_URL
@@ -170,6 +171,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 		const db = drizzle(pool)
 		app = new Hono()
 		app.route("/versioned", createVersionedRouter(db as any, runtime))
+		app.route("/v2/versioned", createVersionedV2Router(db as any, runtime))
 
 		await setupTestData(pool)
 	})
@@ -732,16 +734,17 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			expect(body.groupKeys).toEqual([])
 		})
 
-		it("relation-side context discovery surfaces from_entity_id, not to_entity_id", async () => {
-			// Regression test for RFC 0003: queryContextEntities must select
-			// r.from_entity_id (the changed child) from relation_versions, not
-			// r.to_entity_id (the relation's target). The fixture has
+		it("v2: relation-side context discovery surfaces from_entity_id, not to_entity_id", async () => {
+			// Regression test for RFC 0003 (v2 behavior): queryContextEntities must
+			// select r.from_entity_id (the changed child) from relation_versions,
+			// not r.to_entity_id (the relation's target). The fixture has
 			//   relCtxChild --[relTypeGeneric]--> relCtxTarget
 			// with context_root_id = entityWithDynamicGroups, context_edge_type_id
 			// = relTypeCustomB. We assert relCtxChild lands in the relTypeCustomB
-			// group and relCtxTarget does not.
+			// group and relCtxTarget does not. v1 (frozen) still surfaces
+			// to_entity_id; this corrected behavior is v2-only.
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+				`/v2/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -757,7 +760,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			expect(ids).not.toContain(uuid.relCtxTarget)
 		})
 
-		it("relation-side context discovery surfaces context_last_to_entity_id, not from_entity_id (RFC 0006)", async () => {
+		it("v2: relation-side context discovery surfaces context_last_to_entity_id, not from_entity_id (RFC 0006)", async () => {
 			// The canonical breaking case from RFC 0006: a relation authored
 			// under a context, where from_entity_id is NOT the changed child.
 			// Pre-RFC-0006, queryContextEntities inferred the changed child
@@ -770,9 +773,10 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			//             edges.last().to_entity_id=rfc0006Leaf
 			//
 			// Per the RFC, the changed child is rfc0006Leaf (the persisted
-			// leaf), not rfc0006Source (the relation's from-entity).
+			// leaf), not rfc0006Source (the relation's from-entity). This corrected
+			// behavior is v2-only; v1 (frozen) surfaces to_entity_id.
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+				`/v2/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -790,6 +794,24 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			// And the to-entity definitely never appears (regression coverage
 			// for the earlier RFC 0003 fix).
 			expect(ids).not.toContain(uuid.rfc0006Target)
+		})
+
+		it("v1 (frozen): relation-side context discovery still surfaces to_entity_id", async () => {
+			// Pins the intentionally-frozen prod behavior of the /versioned (v1)
+			// endpoint: the relation-side of queryContextEntities selects
+			// r.to_entity_id, so for the relCtxChild --> relCtxTarget fixture the
+			// TARGET surfaces under relTypeCustomB and the child does not. The
+			// corrected (from_entity_id / context-leaf) behavior is v2-only.
+			const res = await app.request(
+				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+
+			expect(body.groupKeys).toContain(uuid.relTypeCustomB)
+			const ids = body[uuid.relTypeCustomB].map((item: {entityId: string}) => item.entityId)
+			expect(ids).toContain(uuid.relCtxTarget)
+			expect(ids).not.toContain(uuid.relCtxChild)
 		})
 	})
 

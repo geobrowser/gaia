@@ -9,7 +9,13 @@ import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Effect} from "effect"
 import {type NormalizedUuid, normalizeUuid} from "../utils/uuid"
-import {type DiscoveredEntity, type GroupedEntities, groupEntitiesByContext, mergeDiscoveryResults} from "./grouping"
+import {
+	type DiffVariant,
+	type DiscoveredEntity,
+	type GroupedEntities,
+	groupEntitiesByContext,
+	mergeDiscoveryResults,
+} from "./grouping"
 import type {
 	BlockSnapshot,
 	EntitySnapshot,
@@ -226,10 +232,23 @@ function queryContextEntities(
 	entityId: string,
 	versionKey: bigint,
 	spaceId?: string,
+	variant: DiffVariant = "v1",
 ): Effect.Effect<DiscoveredEntity[], QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
 			const versionKeyStr = versionKey.toString()
+
+			// How the "changed child" is surfaced per variant:
+			// - v1 (frozen prod behavior): infer it from the row's own id —
+			//   value-side `v.entity_id`, relation-side `r.to_entity_id`.
+			// - v2 (RFC 0006): prefer the persisted context leaf
+			//   (context_last_to_entity_id = edges.last().to_entity_id), falling
+			//   back to the structural inference (from_entity_id on the relation
+			//   side) for pre-column rows.
+			const valueChild =
+				variant === "v2" ? sql`COALESCE(v.context_last_to_entity_id, v.entity_id)` : sql`v.entity_id`
+			const relationChild =
+				variant === "v2" ? sql`COALESCE(r.context_last_to_entity_id, r.from_entity_id)` : sql`r.to_entity_id`
 
 			const result = spaceId
 				? await db.execute<{
@@ -238,14 +257,7 @@ function queryContextEntities(
 					}>(sql`
 						SELECT DISTINCT entity_id, context_edge_type_id FROM (
 							-- Context-based discovery from values.
-							-- RFC 0006: prefer context_last_to_entity_id (the GRC-20 context
-							-- leaf, edges.last().to_entity_id) as the "changed child" when
-							-- present. Fall back to entity_id for rows written before
-							-- migration 0058 — original inference path, correct by structural
-							-- coincidence with the leaf in well-formed cases.
-							SELECT DISTINCT
-								COALESCE(v.context_last_to_entity_id, v.entity_id) AS entity_id,
-								v.context_edge_type_id
+							SELECT DISTINCT ${valueChild} AS entity_id, v.context_edge_type_id
 							FROM value_versions v
 							WHERE v.context_root_id = ${entityId}::uuid
 								AND v.context_edge_type_id IS NOT NULL
@@ -254,15 +266,7 @@ function queryContextEntities(
 								AND v.space_id = ${spaceId}::uuid
 							UNION
 							-- Context-based discovery from relations.
-							-- RFC 0006: prefer the persisted context leaf
-							-- (context_last_to_entity_id, = edges.last().to_entity_id) over
-							-- inferring the changed child from from_entity_id. The old path
-							-- worked only by structural coincidence — a reified relation
-							-- between foreign entities authored under a context surfaced the
-							-- wrong child. Fall back to from_entity_id for pre-RFC-0006 rows.
-							SELECT DISTINCT
-								COALESCE(r.context_last_to_entity_id, r.from_entity_id) AS entity_id,
-								r.context_edge_type_id
+							SELECT DISTINCT ${relationChild} AS entity_id, r.context_edge_type_id
 							FROM relation_versions r
 							WHERE r.context_root_id = ${entityId}::uuid
 								AND r.context_edge_type_id IS NOT NULL
@@ -277,14 +281,7 @@ function queryContextEntities(
 					}>(sql`
 						SELECT DISTINCT entity_id, context_edge_type_id FROM (
 							-- Context-based discovery from values.
-							-- RFC 0006: prefer context_last_to_entity_id (the GRC-20 context
-							-- leaf, edges.last().to_entity_id) as the "changed child" when
-							-- present. Fall back to entity_id for rows written before
-							-- migration 0058 — original inference path, correct by structural
-							-- coincidence with the leaf in well-formed cases.
-							SELECT DISTINCT
-								COALESCE(v.context_last_to_entity_id, v.entity_id) AS entity_id,
-								v.context_edge_type_id
+							SELECT DISTINCT ${valueChild} AS entity_id, v.context_edge_type_id
 							FROM value_versions v
 							WHERE v.context_root_id = ${entityId}::uuid
 								AND v.context_edge_type_id IS NOT NULL
@@ -292,15 +289,7 @@ function queryContextEntities(
 								AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
 							UNION
 							-- Context-based discovery from relations.
-							-- RFC 0006: prefer the persisted context leaf
-							-- (context_last_to_entity_id, = edges.last().to_entity_id) over
-							-- inferring the changed child from from_entity_id. The old path
-							-- worked only by structural coincidence — a reified relation
-							-- between foreign entities authored under a context surfaced the
-							-- wrong child. Fall back to from_entity_id for pre-RFC-0006 rows.
-							SELECT DISTINCT
-								COALESCE(r.context_last_to_entity_id, r.from_entity_id) AS entity_id,
-								r.context_edge_type_id
+							SELECT DISTINCT ${relationChild} AS entity_id, r.context_edge_type_id
 							FROM relation_versions r
 							WHERE r.context_root_id = ${entityId}::uuid
 								AND r.context_edge_type_id IS NOT NULL
@@ -390,17 +379,18 @@ export function getGroupedEntityIdsAtVersion(
 	entityId: string,
 	versionKey: bigint,
 	spaceId?: string,
+	variant: DiffVariant = "v1",
 ): Effect.Effect<GroupedEntities, QueryError> {
 	return Effect.gen(function* () {
 		const [contextEntities, relationEntities] = yield* Effect.all([
-			queryContextEntities(db, entityId, versionKey, spaceId),
+			queryContextEntities(db, entityId, versionKey, spaceId, variant),
 			queryBlocksRelationEntities(db, entityId, versionKey, spaceId),
 		])
 
 		// Merge and group using pure functions
 		const merged = yield* mergeDiscoveryResults(contextEntities, relationEntities)
 
-		return yield* groupEntitiesByContext(merged, BLOCKS_TYPE_ID)
+		return yield* groupEntitiesByContext(merged, BLOCKS_TYPE_ID, variant)
 	}).pipe(
 		Effect.withSpan("queries.getGroupedEntityIdsAtVersion", {
 			attributes: {
@@ -788,12 +778,13 @@ export function getGroupedEntitySnapshotAtVersion(
 	entityId: NormalizedUuid,
 	versionKey: bigint,
 	spaceId?: string,
+	variant: DiffVariant = "v1",
 ): Effect.Effect<GroupedEntitySnapshot, QueryError> {
 	return Effect.gen(function* () {
 		const [values, allRelations, grouped] = yield* Effect.all([
 			getValuesAtVersion(db, entityId, versionKey, spaceId),
 			getRelationsAtVersion(db, entityId, versionKey, spaceId),
-			getGroupedEntityIdsAtVersion(db, entityId, versionKey, spaceId),
+			getGroupedEntityIdsAtVersion(db, entityId, versionKey, spaceId, variant),
 		])
 
 		// Filter out relations that are used for grouping (BLOCKS + dynamic types)

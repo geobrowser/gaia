@@ -170,6 +170,9 @@ describe("groupEntitiesByContext", () => {
 			expect(result.dynamicGroups.size).toBe(0)
 		})
 
+		// The collision-resolution tests below exercise the v2 behavior (context
+		// discovery wins the bucket). v1 freezes the original prod behavior
+		// (first-in-sorted-order wins) — pinned separately further down.
 		it("context discovery wins over BLOCKS-relation fallback (fallback first)", () => {
 			const customType = nuuid("custom-type")
 			const entities = [
@@ -179,7 +182,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity(nuuid("entity-1"), customType, null),
 			]
 
-			const result = run(groupEntitiesByContext(entities))
+			const result = run(groupEntitiesByContext(entities, undefined, "v2"))
 
 			expect(result.blocks).toEqual([])
 			expect(result.dynamicGroups.get(customType)).toEqual([nuuid("entity-1")])
@@ -192,7 +195,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity(nuuid("entity-1"), null, "pos-a"),
 			]
 
-			const result = run(groupEntitiesByContext(entities))
+			const result = run(groupEntitiesByContext(entities, undefined, "v2"))
 
 			expect(result.dynamicGroups.get(customType)).toEqual([nuuid("entity-1")])
 		})
@@ -209,7 +212,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity(nuuid("entity-1"), null, "pos-c"),
 			]
 
-			const result = run(groupEntitiesByContext(entities))
+			const result = run(groupEntitiesByContext(entities, undefined, "v2"))
 
 			// typeA wins (it was the first non-null type seen).
 			expect(result.dynamicGroups.get(typeA)).toEqual([nuuid("entity-1")])
@@ -229,10 +232,28 @@ describe("groupEntitiesByContext", () => {
 				makeEntity(nuuid("e2"), customTypeA, "pos-2"),
 			]
 
-			const result = run(groupEntitiesByContext(entities))
+			const result = run(groupEntitiesByContext(entities, undefined, "v2"))
 
 			// e1 inherited pos-1 so it comes before e2 (pos-2)
 			expect(result.dynamicGroups.get(customTypeA)).toEqual([nuuid("e1"), nuuid("e2")])
+		})
+
+		it("v1 (frozen prod behavior): first-in-sorted-order wins the bucket", () => {
+			// Same collision as the "fallback first" case above. Under v1 the
+			// fallback entry (real position) sorts ahead of the context entry
+			// (null position) and wins via first-seen dedupe, so the entity lands
+			// in `blocks` — NOT the dynamic group. This pins the frozen behavior
+			// the /versioned endpoint ships to prod.
+			const customType = nuuid("custom-type")
+			const entities = [
+				makeEntity(nuuid("entity-1"), null, "pos-a"),
+				makeEntity(nuuid("entity-1"), customType, null),
+			]
+
+			const result = run(groupEntitiesByContext(entities, undefined, "v1"))
+
+			expect(result.blocks).toEqual([nuuid("entity-1")])
+			expect(result.dynamicGroups.get(customType)).toBeUndefined()
 		})
 	})
 
