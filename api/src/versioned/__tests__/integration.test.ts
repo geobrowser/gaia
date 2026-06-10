@@ -796,21 +796,25 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			expect(ids).not.toContain(uuid.rfc0006Target)
 		})
 
-		it("v1 (frozen): relation-side context discovery still surfaces to_entity_id", async () => {
+		it("v1 (frozen): relation-side context discovery does NOT surface the from-entity child", async () => {
 			// Pins the intentionally-frozen prod behavior of the /versioned (v1)
 			// endpoint: the relation-side of queryContextEntities selects
-			// r.to_entity_id, so for the relCtxChild --> relCtxTarget fixture the
-			// TARGET surfaces under relTypeCustomB and the child does not. The
-			// corrected (from_entity_id / context-leaf) behavior is v2-only.
+			// r.to_entity_id, so for the relCtxChild --> relCtxTarget fixture it
+			// discovers relCtxTarget (which has no value change, so it drops out of
+			// the diff) and never relCtxChild. The corrected from_entity_id /
+			// context-leaf behavior that surfaces relCtxChild is v2-only — see the
+			// matching "v2:" test above, which asserts the opposite on /v2.
 			const res = await app.request(
 				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 
+			// The pre-existing dynamic-group member is still present...
 			expect(body.groupKeys).toContain(uuid.relTypeCustomB)
 			const ids = body[uuid.relTypeCustomB].map((item: {entityId: string}) => item.entityId)
-			expect(ids).toContain(uuid.relCtxTarget)
+			expect(ids).toContain(uuid.dynamicChildB1)
+			// ...but the relation's from-entity child is NOT (v2-only behavior).
 			expect(ids).not.toContain(uuid.relCtxChild)
 		})
 	})
