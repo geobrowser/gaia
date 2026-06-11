@@ -27,7 +27,7 @@ export {InfraError, RevertError} from "./contracts.js"
 // Config parsing — uses Effect Config module (matches API + geo-cli patterns)
 // ---------------------------------------------------------------------------
 
-interface ExecutorEnv {
+export interface ExecutorEnv {
 	/** Redacted — unwrap with Redacted.value() only at the point of use */
 	databaseUrl: Redacted.Redacted
 	privateKey: `0x${string}`
@@ -38,6 +38,17 @@ interface ExecutorEnv {
 	/** Redacted — may contain API keys in the path */
 	rpcUrl: Redacted.Redacted
 	chainId: SupportedChainId
+
+	// --- Membership-accept path (dedicated bot identity, distinct from the executor) ---
+	/** Dedicated bot signing key — MUST differ from `privateKey`. Auto-prefixed 0x. */
+	membershipBotPrivateKey: `0x${string}`
+	/** Bot's registered personal space (bytes16) — MUST differ from `executorSpaceId`. */
+	membershipBotSpaceId: Hex
+	/**
+	 * Spaces whose request-to-join proposals are auto-admitted. Empty ⇒ kill switch
+	 * (no detection, no votes). Trimmed, validated, and de-duplicated at parse time.
+	 */
+	membershipAutoacceptSpaceIds: Hex[]
 }
 
 /** bytes16 hex: 0x-prefixed, 32 hex chars, 34 total */
@@ -46,11 +57,12 @@ const BYTES16_RE = /^0x[0-9a-fA-F]{32}$/
 /** 0x-prefixed 64 hex chars (32 bytes) */
 const PRIVATE_KEY_RE = /^0x[0-9a-fA-F]{64}$/
 
-const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function* () {
+export const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function* () {
 	// Sensitive — wrapped in Redacted to prevent accidental logging/serialization
 	const databaseUrl = yield* Config.redacted("DATABASE_URL")
 	const rawPrivateKey = yield* Config.redacted("EXECUTOR_PRIVATE_KEY")
 	const pimlicoApiKey = yield* Config.redacted("PIMLICO_API_KEY")
+	const rawMembershipBotPrivateKey = yield* Config.redacted("MEMBERSHIP_BOT_PRIVATE_KEY")
 
 	const rpcUrl = yield* Config.redacted("RPC_URL")
 
@@ -58,6 +70,11 @@ const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function*
 	const rawExecutorSpaceId = yield* Config.string("EXECUTOR_SPACE_ID")
 	const rawSpaceRegistryAddress = yield* Config.string("SPACE_REGISTRY_ADDRESS")
 	const chainId = yield* Config.integer("CHAIN_ID")
+	const rawMembershipBotSpaceId = yield* Config.string("MEMBERSHIP_BOT_SPACE_ID")
+	// Empty/unset is valid — it is the kill switch (no detection, no votes).
+	const rawMembershipAutoacceptSpaceIds = yield* Config.string("MEMBERSHIP_AUTOACCEPT_SPACE_IDS").pipe(
+		Config.withDefault(""),
+	)
 
 	// --- Validate private key ---
 	let privateKey = Redacted.value(rawPrivateKey)
@@ -117,6 +134,71 @@ const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function*
 		)
 	}
 
+	// --- Validate membership-bot private key (auto-prefix 0x like the executor key) ---
+	let membershipBotPrivateKey = Redacted.value(rawMembershipBotPrivateKey)
+	if (!membershipBotPrivateKey.startsWith("0x")) {
+		membershipBotPrivateKey = `0x${membershipBotPrivateKey}`
+	}
+	if (!PRIVATE_KEY_RE.test(membershipBotPrivateKey)) {
+		return yield* Effect.fail(
+			new InfraError({
+				message: "Invalid MEMBERSHIP_BOT_PRIVATE_KEY: expected a 32-byte hex-encoded key with 0x prefix",
+				durationMs: 0,
+			}),
+		)
+	}
+
+	// --- Validate membership-bot space ID (bytes16) ---
+	if (!BYTES16_RE.test(rawMembershipBotSpaceId)) {
+		return yield* Effect.fail(
+			new InfraError({
+				message: `Invalid MEMBERSHIP_BOT_SPACE_ID: expected 0x-prefixed bytes16 (34 chars), got "${rawMembershipBotSpaceId}"`,
+				durationMs: 0,
+			}),
+		)
+	}
+
+	// --- Distinct-identity guard: the bot MUST NOT reuse the executor's identity ---
+	if (membershipBotPrivateKey.toLowerCase() === privateKey.toLowerCase()) {
+		return yield* Effect.fail(
+			new InfraError({
+				message:
+					"MEMBERSHIP_BOT_PRIVATE_KEY must differ from EXECUTOR_PRIVATE_KEY (distinct bot identity required)",
+				durationMs: 0,
+			}),
+		)
+	}
+	if (rawMembershipBotSpaceId.toLowerCase() === rawExecutorSpaceId.toLowerCase()) {
+		return yield* Effect.fail(
+			new InfraError({
+				message: "MEMBERSHIP_BOT_SPACE_ID must differ from EXECUTOR_SPACE_ID (distinct bot identity required)",
+				durationMs: 0,
+			}),
+		)
+	}
+
+	// --- Parse & validate the auto-accept allowlist (kill switch when empty) ---
+	// Trim each entry, drop blanks, validate as bytes16, and de-duplicate
+	// case-insensitively (first-seen casing wins).
+	const seenSpaceIds = new Set<string>()
+	const membershipAutoacceptSpaceIds: Hex[] = []
+	for (const raw of rawMembershipAutoacceptSpaceIds.split(",")) {
+		const entry = raw.trim()
+		if (entry.length === 0) continue
+		if (!BYTES16_RE.test(entry)) {
+			return yield* Effect.fail(
+				new InfraError({
+					message: `Invalid MEMBERSHIP_AUTOACCEPT_SPACE_IDS entry: expected 0x-prefixed bytes16 (34 chars), got "${entry}"`,
+					durationMs: 0,
+				}),
+			)
+		}
+		const key = entry.toLowerCase()
+		if (seenSpaceIds.has(key)) continue
+		seenSpaceIds.add(key)
+		membershipAutoacceptSpaceIds.push(entry as Hex)
+	}
+
 	return {
 		databaseUrl,
 		privateKey: privateKey as `0x${string}`,
@@ -125,6 +207,9 @@ const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function*
 		spaceRegistryAddress,
 		rpcUrl,
 		chainId: chainId as SupportedChainId,
+		membershipBotPrivateKey: membershipBotPrivateKey as `0x${string}`,
+		membershipBotSpaceId: rawMembershipBotSpaceId as Hex,
+		membershipAutoacceptSpaceIds,
 	}
 }).pipe(
 	Effect.catchTag("ConfigError", (e) =>
@@ -221,9 +306,29 @@ const main = Effect.gen(function* () {
 		chainId: config.chainId,
 	})
 
-	yield* Effect.logInfo("wallet_ready").pipe(Effect.annotateLogs({safeAddress: wallet.safeAddress}))
+	yield* Effect.logInfo("wallet_ready").pipe(
+		Effect.annotateLogs({identity: "executor", safeAddress: wallet.safeAddress}),
+	)
 
 	yield* verifyExecutorSetup(wallet, config.executorSpaceId, config.spaceRegistryAddress)
+
+	// Membership-accept bot wallet — a SECOND, distinct identity built from the
+	// dedicated bot key + space. Verified each run so a misconfigured bot fails
+	// fast; detection/voting are wired in a later PR (this path is inert for now).
+	const botWallet = yield* createSmartWallet({
+		privateKey: config.membershipBotPrivateKey,
+		pimlicoApiKey: Redacted.value(config.pimlicoApiKey),
+		executorSpaceId: config.membershipBotSpaceId,
+		spaceRegistryAddress: config.spaceRegistryAddress,
+		rpcUrl: Redacted.value(config.rpcUrl),
+		chainId: config.chainId,
+	})
+
+	yield* Effect.logInfo("wallet_ready").pipe(
+		Effect.annotateLogs({identity: "membership-bot", safeAddress: botWallet.safeAddress}),
+	)
+
+	yield* verifyExecutorSetup(botWallet, config.membershipBotSpaceId, config.spaceRegistryAddress)
 
 	const runStart = Date.now()
 	const nowSeconds = Math.floor(runStart / 1000)
@@ -325,9 +430,13 @@ const main = Effect.gen(function* () {
 
 // Total failure (all failed, none succeeded) → exit 1 so K8s marks the job as failed.
 // Partial success → exit 0; the next CronJob run will retry the remaining proposals.
-Effect.runPromise(main)
-	.then(({succeeded, failed}) => process.exit(failed > 0 && succeeded === 0 ? 1 : 0))
-	.catch((err) => {
-		console.error(JSON.stringify({level: "fatal", message: "unhandled_defect", error: String(err)}))
-		process.exit(1)
-	})
+// Guarded by import.meta.main so importing this module (e.g. from tests to exercise
+// parseConfig) does not kick off a run or call process.exit().
+if (import.meta.main) {
+	Effect.runPromise(main)
+		.then(({succeeded, failed}) => process.exit(failed > 0 && succeeded === 0 ? 1 : 0))
+		.catch((err) => {
+			console.error(JSON.stringify({level: "fatal", message: "unhandled_defect", error: String(err)}))
+			process.exit(1)
+		})
+}
