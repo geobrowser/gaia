@@ -618,7 +618,10 @@ function extractAffectedEntities(db: Database, ops: Op[]): Effect.Effect<Normali
  * GRC-20 v2 decoded values have the format: {type: "text", value: "..."}
  * We need to convert this to our VersionedValue format.
  */
-export function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, spaceId: NormalizedUuid): VersionedValue {
+export function propertyValueToVersionedValue(
+	pv: {property: Id; value: unknown},
+	spaceId: NormalizedUuid,
+): VersionedValue {
 	const propertyId = idToUuid(pv.property)
 	const value = pv.value as {type: string; value: unknown}
 

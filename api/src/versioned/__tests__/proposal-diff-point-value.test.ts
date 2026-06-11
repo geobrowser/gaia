@@ -37,7 +37,10 @@ describe("propertyValueToVersionedValue — point/rect", () => {
 	})
 
 	it("includes altitude when present: 'lat,lon,alt'", () => {
-		const result = propertyValueToVersionedValue(pv({type: "point", lat: 37.7749, lon: -122.4194, alt: 10.5}), spaceId)
+		const result = propertyValueToVersionedValue(
+			pv({type: "point", lat: 37.7749, lon: -122.4194, alt: 10.5}),
+			spaceId,
+		)
 
 		expect(result.point).toBe("37.7749,-122.4194,10.5")
 	})
