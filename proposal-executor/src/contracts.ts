@@ -47,6 +47,13 @@ export const SpaceRegistryAbi = [
 		type: "function",
 	},
 	{
+		inputs: [{internalType: "bytes16", name: "_spaceId", type: "bytes16"}],
+		name: "spaceIdToAddress",
+		outputs: [{internalType: "address", name: "_account", type: "address"}],
+		stateMutability: "view",
+		type: "function",
+	},
+	{
 		inputs: [
 			{internalType: "bytes16", name: "_fromSpaceId", type: "bytes16"},
 			{internalType: "bytes16", name: "_toSpaceId", type: "bytes16"},
@@ -58,6 +65,63 @@ export const SpaceRegistryAbi = [
 		name: "enter",
 		outputs: [],
 		stateMutability: "nonpayable",
+		type: "function",
+	},
+] as const
+
+// ---------------------------------------------------------------------------
+// DAOSpace ABI — minimal subset (only getLatestProposalInformation)
+// Source: geo-contracts-foundry/src/interfaces/IDAOSpace.sol
+//
+// The vote-tally getters live on the per-space DAOSpace contract (resolved via
+// SpaceRegistry.spaceIdToAddress), NOT on the SpaceRegistry. The membership
+// path reads this for the stage-2 authoritative "untouched" check.
+// ---------------------------------------------------------------------------
+
+export const DAOSpaceAbi = [
+	{
+		inputs: [{internalType: "bytes16", name: "_proposalId", type: "bytes16"}],
+		name: "getLatestProposalInformation",
+		outputs: [
+			{internalType: "bool", name: "_executed", type: "bool"},
+			{internalType: "bytes16", name: "_creator", type: "bytes16"},
+			{
+				components: [
+					{internalType: "uint8", name: "votingMode", type: "uint8"},
+					{internalType: "uint256", name: "partialPercentageSupportThreshold", type: "uint256"},
+					{internalType: "uint256", name: "universalPercentageSupportThreshold", type: "uint256"},
+					{internalType: "uint256", name: "flatSupportThreshold", type: "uint256"},
+					{internalType: "uint256", name: "quorum", type: "uint256"},
+					{internalType: "uint256", name: "startDate", type: "uint256"},
+					{internalType: "uint256", name: "lastDate", type: "uint256"},
+					{internalType: "uint256", name: "executeBy", type: "uint256"},
+				],
+				internalType: "struct IDAOSpace.ProposalParameters",
+				name: "_parameters",
+				type: "tuple",
+			},
+			{
+				components: [
+					{internalType: "uint256", name: "yes", type: "uint256"},
+					{internalType: "uint256", name: "no", type: "uint256"},
+					{internalType: "uint256", name: "abstain", type: "uint256"},
+				],
+				internalType: "struct IDAOSpace.Tally",
+				name: "_tally",
+				type: "tuple",
+			},
+			{
+				components: [
+					{internalType: "address", name: "to", type: "address"},
+					{internalType: "uint256", name: "value", type: "uint256"},
+					{internalType: "bytes", name: "data", type: "bytes"},
+				],
+				internalType: "struct IDAOSpace.Action[]",
+				name: "_actions",
+				type: "tuple[]",
+			},
+		],
+		stateMutability: "view",
 		type: "function",
 	},
 ] as const
@@ -117,6 +181,15 @@ export const TESTNET_SAFE_ADDRESSES = {
 
 /** keccak256('GOVERNANCE.PROPOSAL_EXECUTED') — action hash for enter() */
 export const PROPOSAL_EXECUTED_ACTION = "0x62a60c0a9681612871e0dafa0f24bb0c83cbdde8be5a6299979c88d382369e96" as Hex
+
+/** keccak256('GOVERNANCE.PROPOSAL_VOTED') — action hash for casting a vote via enter() */
+export const PROPOSAL_VOTED_ACTION = "0x4ebf5f29676cedf7e2e4d346a8433289278f95a9fda73691dc1ce24574d5819e" as Hex
+
+/**
+ * IDAOSpace.VoteOption.Yes — the on-chain enum value for a YES vote.
+ * Authoritative enum (geo-contracts-foundry IDAOSpace): None=0, Yes=1, No=2, Abstain=3.
+ */
+export const VOTE_YES = 1
 
 /** Empty signature — ignored when msg.sender == _fromSpace */
 export const EMPTY_SIGNATURE = "0x" as Hex
