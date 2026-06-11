@@ -2,7 +2,8 @@
  * Contract ABIs, chain definitions, and governance constants for the proposal executor.
  *
  * FORKED from geo-cli (v0.1.0):
- * - ABI subset: geo-cli/src/contracts.ts (SpaceRegistryAbi — enter, addressToSpaceId)
+ * - ABI subset: geo-cli/src/contracts.ts (SpaceRegistryAbi — enter, addressToSpaceId;
+ *   spaceIdToAddress added locally for the membership-accept path)
  * - Chain defs: geo-cli/src/network.ts (mainnetChain, testnetChain)
  * - Governance: geo-cli/src/governance.ts (GOVERNANCE_ACTIONS, encoding helpers)
  * - Safe addrs: geo-cli/src/wallet.ts:54-61 (TESTNET_SAFE_ADDRESSES)
@@ -34,8 +35,9 @@ export class InfraError extends Data.TaggedError("InfraError")<{
 }> {}
 
 // ---------------------------------------------------------------------------
-// SpaceRegistry ABI — minimal subset (only enter + addressToSpaceId)
-// Source: geo-cli/src/contracts.ts:125-152
+// SpaceRegistry ABI — minimal subset (enter + addressToSpaceId + spaceIdToAddress)
+// Source: geo-cli/src/contracts.ts (enter, addressToSpaceId);
+//         spaceIdToAddress added locally to resolve a space's DAOSpace address.
 // ---------------------------------------------------------------------------
 
 export const SpaceRegistryAbi = [
