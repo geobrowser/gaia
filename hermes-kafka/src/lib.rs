@@ -195,6 +195,7 @@ static TOPIC_PREFIX: OnceLock<&'static str> = OnceLock::new();
 /// of the process. Returns a `&'static str` for zero-allocation usage.
 ///
 /// - `ENVIRONMENT=staging` → returns `"staging."`
+/// - `ENVIRONMENT=testnet` → returns `"testnet."`
 /// - `ENVIRONMENT=production` → returns `""`
 ///
 /// # Panics
@@ -212,12 +213,13 @@ static TOPIC_PREFIX: OnceLock<&'static str> = OnceLock::new();
 pub fn get_topic_prefix() -> &'static str {
     TOPIC_PREFIX.get_or_init(|| {
         let environment = env::var("ENVIRONMENT")
-            .expect("ENVIRONMENT variable must be set to 'staging' or 'production'");
+            .expect("ENVIRONMENT variable must be set to 'staging', 'testnet' or 'production'");
         match environment.as_str() {
             "staging" => "staging.",
+            "testnet" => "testnet.",
             "production" => "",
             other => panic!(
-                "ENVIRONMENT must be 'staging' or 'production', got '{}'",
+                "ENVIRONMENT must be 'staging', 'testnet' or 'production', got '{}'",
                 other
             ),
         }
@@ -240,8 +242,9 @@ pub fn prefixed_topic(prefix: &str, base: &str) -> String {
 
 /// Strip the environment prefix from a topic name.
 ///
-/// In staging, topics are prefixed with "staging." (e.g., "staging.hermes.blocks").
-/// This function strips that prefix so consumers can match on canonical topic names.
+/// In staging/testnet, topics are prefixed with "staging." / "testnet."
+/// (e.g., "staging.hermes.blocks"). This function strips that prefix so
+/// consumers can match on canonical topic names.
 ///
 /// # Example
 ///
@@ -249,10 +252,14 @@ pub fn prefixed_topic(prefix: &str, base: &str) -> String {
 /// use hermes_kafka::strip_topic_prefix;
 ///
 /// assert_eq!(strip_topic_prefix("staging.hermes.blocks"), "hermes.blocks");
+/// assert_eq!(strip_topic_prefix("testnet.hermes.blocks"), "hermes.blocks");
 /// assert_eq!(strip_topic_prefix("hermes.blocks"), "hermes.blocks");
 /// ```
 pub fn strip_topic_prefix(topic: &str) -> &str {
-    topic.strip_prefix("staging.").unwrap_or(topic)
+    topic
+        .strip_prefix("staging.")
+        .or_else(|| topic.strip_prefix("testnet."))
+        .unwrap_or(topic)
 }
 
 #[cfg(test)]
@@ -297,6 +304,17 @@ mod tests {
     fn test_strip_topic_prefix_without_staging() {
         assert_eq!(strip_topic_prefix("hermes.blocks"), "hermes.blocks");
         assert_eq!(strip_topic_prefix("knowledge.edits"), "knowledge.edits");
+    }
+
+    #[test]
+    fn test_strip_topic_prefix_with_testnet() {
+        assert_eq!(strip_topic_prefix("testnet.hermes.blocks"), "hermes.blocks");
+        assert_eq!(
+            strip_topic_prefix("testnet.space.trust.extensions"),
+            "space.trust.extensions"
+        );
+        // Should NOT strip if "testnet" is not a prefix
+        assert_eq!(strip_topic_prefix("my.testnet.topic"), "my.testnet.topic");
     }
 
     #[test]

@@ -15,10 +15,12 @@ use commands::{
 /// Get the prefixed alias name based on environment.
 ///
 /// - `staging` → `staging_{base_alias}`
+/// - `testnet` → `testnet_{base_alias}`
 /// - `production` (or any other value) → `{base_alias}`
 fn get_prefixed_alias(environment: &str, base_alias: &str) -> String {
     match environment {
         "staging" => format!("staging_{}", base_alias),
+        "testnet" => format!("testnet_{}", base_alias),
         _ => base_alias.to_string(),
     }
 }
@@ -78,10 +80,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Validate environment value
-    if cli.environment != "staging" && cli.environment != "production" {
+    if cli.environment != "staging" && cli.environment != "testnet" && cli.environment != "production" {
         error!(
             environment = %cli.environment,
-            "ENVIRONMENT must be 'staging' or 'production'"
+            "ENVIRONMENT must be 'staging', 'testnet' or 'production'"
         );
         std::process::exit(1);
     }
