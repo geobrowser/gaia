@@ -182,6 +182,9 @@ export function findExecutableProposals(client: PgClient, nowSeconds: number): E
  * - Not yet executed (executed_at IS NULL)
  * - Created in the past (guards against corrupt future timestamps; no age cutoff
  *   — backlog is admitted, unlike the executor's MAX_PROPOSAL_AGE)
+ * - Voting period has not ended (now <= end_time) — the protocol rejects votes
+ *   cast after the period closes, and an untouched Fast proposal whose period
+ *   has ended is already classified REJECTED (threshold not reached)
  * - Exactly one action, an AddMember targeting the proposer itself
  *   (target_id = proposed_by) — the self-service request-to-join signature, not
  *   an editor-initiated add
@@ -202,6 +205,7 @@ WHERE p.space_id = ANY($1)
   AND p.voting_mode = 'Fast'
   AND p.executed_at IS NULL
   AND p.created_at::bigint <= $2::bigint
+  AND $2::bigint <= p.end_time
   AND a.action_type = 'AddMember'
   AND a.target_id = p.proposed_by
   AND NOT EXISTS (SELECT 1 FROM proposal_votes pv WHERE pv.proposal_id = p.id)

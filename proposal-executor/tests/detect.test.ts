@@ -132,9 +132,14 @@ describe("membership detection SQL", () => {
 
 	test("guards against corrupt future timestamps but applies no age cutoff", () => {
 		expect(membershipSql).toContain("p.created_at::bigint <= $2::bigint")
-		// Backlog is admitted: no maximum-age bound and no voting-period gate.
+		// Backlog is admitted: no maximum-age bound (unlike the executor query).
 		expect(membershipSql).not.toContain("MAX_PROPOSAL_AGE")
-		expect(membershipSql).not.toContain("end_time")
+	})
+
+	test("excludes proposals whose voting period has ended", () => {
+		// Votes cast after end_time are rejected by the protocol, and an untouched
+		// Fast proposal past its period is already classified REJECTED.
+		expect(membershipSql).toContain("$2::bigint <= p.end_time")
 	})
 })
 
