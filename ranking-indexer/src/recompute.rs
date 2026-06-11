@@ -54,9 +54,23 @@ pub async fn affected_blocks(
 
 /// Recompute a single block's aggregate end to end.
 pub async fn recompute_block(block_id: Uuid, storage: &Storage) -> Result<(), IndexerError> {
-    let Some(block) = storage.get_ranking_block(block_id).await? else {
-        // A rank may link to a block we haven't indexed yet; nothing to do.
-        return Ok(());
+    let block = match storage.get_ranking_block(block_id).await? {
+        Some(block) => block,
+        None => {
+            // The block's `TYPES -> Ranking Block` relation and its config can
+            // arrive in separate edits, so detect() never registered it and the
+            // rank would be silently never scored (issue #738). Recover the
+            // block from the indexed graph and register it. If the entity isn't
+            // a Ranking Block there (e.g. a rank linking to a not-yet-indexed
+            // block), there is genuinely nothing to recompute yet.
+            match storage.get_block_config_from_kg(block_id).await? {
+                Some(block) => {
+                    storage.upsert_ranking_block(&block).await?;
+                    block
+                }
+                None => return Ok(()),
+            }
+        }
     };
 
     // 1. Dedup: keep the latest submission per (block, personal space).
