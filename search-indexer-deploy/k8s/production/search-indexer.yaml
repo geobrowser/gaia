@@ -42,9 +42,6 @@ spec:
         app: search-indexer
     spec:
       imagePullSecrets:
-        # Pull via the DigitalOcean-managed DOCR↔DOKS integration secret
-        # (`geo`, maintained by the DOSecret operator) instead of the manually
-        # stamped, per-person `regcred`. Validated on staging first (PR #732).
         - name: geo
       securityContext:
         runAsNonRoot: true

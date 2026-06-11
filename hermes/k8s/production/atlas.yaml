@@ -17,7 +17,7 @@ spec:
     spec:
       restartPolicy: Always
       imagePullSecrets:
-        - name: regcred
+        - name: geo
       containers:
         - name: atlas
           image: registry.digitalocean.com/geo/atlas:latest

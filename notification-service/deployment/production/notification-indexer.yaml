@@ -25,7 +25,7 @@ spec:
         runAsUser: 1001
         fsGroup: 1001
       imagePullSecrets:
-        - name: regcred
+        - name: geo
       containers:
         - name: notification-indexer
           image: registry.digitalocean.com/geo/notification-indexer:latest
