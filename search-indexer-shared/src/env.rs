@@ -18,6 +18,7 @@ static CONSUMER_GROUP_PREFIX: OnceLock<&'static str> = OnceLock::new();
 /// of the process. Returns a `&'static str` for zero-allocation usage.
 ///
 /// - `ENVIRONMENT=staging` → returns `"staging_"`
+/// - `ENVIRONMENT=testnet` → returns `"testnet_"`
 /// - `ENVIRONMENT=production` → returns `""`
 ///
 /// # Panics
@@ -35,12 +36,13 @@ static CONSUMER_GROUP_PREFIX: OnceLock<&'static str> = OnceLock::new();
 pub fn get_index_prefix() -> &'static str {
     INDEX_PREFIX.get_or_init(|| {
         let environment = env::var("ENVIRONMENT")
-            .expect("ENVIRONMENT variable must be set to 'staging' or 'production'");
+            .expect("ENVIRONMENT variable must be set to 'staging', 'testnet' or 'production'");
         match environment.as_str() {
             "staging" => "staging_",
+            "testnet" => "testnet_",
             "production" => "",
             other => panic!(
-                "ENVIRONMENT must be 'staging' or 'production', got '{}'",
+                "ENVIRONMENT must be 'staging', 'testnet' or 'production', got '{}'",
                 other
             ),
         }
@@ -53,6 +55,7 @@ pub fn get_index_prefix() -> &'static str {
 /// of the process. Returns a `&'static str` for zero-allocation usage.
 ///
 /// - `ENVIRONMENT=staging` → returns `"staging-"`
+/// - `ENVIRONMENT=testnet` → returns `"testnet-"`
 /// - `ENVIRONMENT=production` → returns `""`
 ///
 /// # Panics
@@ -72,12 +75,13 @@ pub fn get_index_prefix() -> &'static str {
 pub fn get_consumer_group_prefix() -> &'static str {
     CONSUMER_GROUP_PREFIX.get_or_init(|| {
         let environment = env::var("ENVIRONMENT")
-            .expect("ENVIRONMENT variable must be set to 'staging' or 'production'");
+            .expect("ENVIRONMENT variable must be set to 'staging', 'testnet' or 'production'");
         match environment.as_str() {
             "staging" => "staging-",
+            "testnet" => "testnet-",
             "production" => "",
             other => panic!(
-                "ENVIRONMENT must be 'staging' or 'production', got '{}'",
+                "ENVIRONMENT must be 'staging', 'testnet' or 'production', got '{}'",
                 other
             ),
         }

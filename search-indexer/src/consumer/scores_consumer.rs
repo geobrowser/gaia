@@ -57,9 +57,10 @@ impl ScoresConsumer {
     /// * `group_id` - Consumer group ID (will append "-scores" suffix)
     pub fn new(brokers: &str, group_id: &str) -> Result<Self, IngestError> {
         // Scores are produced by the Python scoring cron which uses "{environment}."
-        // as the topic prefix (e.g. "production.curation.scores", "staging.curation.scores").
+        // as the topic prefix (e.g. "production.curation.scores", "staging.curation.scores",
+        // "testnet.curation.scores").
         let environment = env::var("ENVIRONMENT")
-            .expect("ENVIRONMENT variable must be set to 'staging' or 'production'");
+            .expect("ENVIRONMENT variable must be set to 'staging', 'testnet' or 'production'");
         let base_topic =
             env::var("SCORES_KAFKA_TOPIC").unwrap_or_else(|_| Self::SCORES_TOPIC.to_string());
         let topic = format!("{}.{}", environment, base_topic);
