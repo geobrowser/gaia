@@ -137,29 +137,34 @@ impl Storage {
             Option<DateTime<Utc>>,
             Option<DateTime<Utc>>,
         );
+        // Scope to the block's home space: the same entity may be perspectived
+        // into other spaces with different config, keyed on (id, space_id).
         let (name, filter, start_date, end_date): ConfigRow = sqlx::query_as(
             "SELECT \
                max(text)         FILTER (WHERE property_id = $2) AS name, \
                max(text)         FILTER (WHERE property_id = $3) AS filter, \
                max(datetime_utc) FILTER (WHERE property_id = $4) AS start_date, \
                max(datetime_utc) FILTER (WHERE property_id = $5) AS end_date \
-             FROM values WHERE entity_id = $1",
+             FROM values WHERE entity_id = $1 AND space_id = $6",
         )
         .bind(block_id)
         .bind(pid(ids::NAME_PROPERTY_ID))
         .bind(pid(ids::RANK_FILTER_PROPERTY_ID))
         .bind(pid(ids::RANK_START_DATE_PROPERTY_ID))
         .bind(pid(ids::RANK_END_DATE_PROPERTY_ID))
+        .bind(space_id)
         .fetch_one(&self.pool)
         .await?;
 
-        // Aggregation restriction is a relation (as detect() collects it).
+        // Aggregation restriction is a relation (as detect() collects it),
+        // likewise scoped to the block's home space.
         let restriction: Option<(Uuid,)> = sqlx::query_as(
             "SELECT to_entity_id FROM relations \
-             WHERE from_entity_id = $1 AND type_id = $2 LIMIT 1",
+             WHERE from_entity_id = $1 AND type_id = $2 AND space_id = $3 LIMIT 1",
         )
         .bind(block_id)
         .bind(pid(ids::RANK_AGGREGATION_RESTRICTION_PROPERTY_ID))
+        .bind(space_id)
         .fetch_optional(&self.pool)
         .await?;
 
