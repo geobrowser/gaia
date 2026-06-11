@@ -1,0 +1,78 @@
+name: Deploy Ranking Indexer (Production)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'ranking-indexer/**'
+      - 'hermes-schema/**'
+      - 'hermes-instrumentation/**'
+      - 'hermes-kafka/**'
+      - 'indexer_utils/**'
+      - 'sdk/**'
+      - '.github/workflows/ranking-indexer-deploy.yml'
+
+concurrency:
+  group: ranking-indexer-production
+  cancel-in-progress: true
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: ranking-indexer
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.2
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@3cb3953159719656269e044e0e24ca16dd2a690f # v2.5.2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -f ranking-indexer/Dockerfile .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f ranking-indexer/k8s/production/namespace.yaml
+          # Update image tag to use SHA and apply
+          sed -i 's|image: registry.digitalocean.com/geo/ranking-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' ranking-indexer/k8s/production/ranking-indexer.yaml
+          kubectl apply -f ranking-indexer/k8s/production/ranking-indexer.yaml
+
+      - name: Restart deployment to pick up new image
+        run: |
+          kubectl rollout restart deployment/ranking-indexer -n knowledge
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/ranking-indexer -n knowledge --timeout=120s
+
+      - name: Show deployment status
+        run: |
+          echo "=== Ranking Indexer Deployment ==="
+          kubectl get deployment ranking-indexer -n knowledge
+          echo ""
+          echo "=== Ranking Indexer Pods ==="
+          kubectl get pods -n knowledge -l app=ranking-indexer
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n knowledge --sort-by='.lastTimestamp' | grep ranking-indexer | tail -10
