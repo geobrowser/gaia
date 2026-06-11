@@ -1,0 +1,160 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kg-indexer
+  namespace: gaia-v2
+  labels:
+    app: kg-indexer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kg-indexer
+  template:
+    metadata:
+      labels:
+        app: kg-indexer
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: regcred
+      volumes:
+        - name: ssl-certs
+          emptyDir: {}
+      nodeSelector:
+        doks.digitalocean.com/node-pool: gaia-v2-pool
+      tolerations:
+        - key: dedicated
+          value: gaia-v2
+          effect: NoSchedule
+      initContainers:
+        - name: setup-certs
+          image: registry.digitalocean.com/geo/kg-indexer:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - |
+              echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+          env:
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: kg-indexer
+          image: registry.digitalocean.com/geo/kg-indexer:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
+          env:
+            - name: PGSSLROOTCERT
+              value: /ssl/ca.crt
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: KAFKA_SSL_CA_PEM
+            - name: ENVIRONMENT
+              value: "testnet"
+            - name: KAFKA_GROUP_ID
+              value: "kg-indexer-v8-testnet"
+            - name: BLOCK_STALE_TIMEOUT_MS
+              value: "1000"
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: SENTRY_TRACES_SAMPLE_RATE
+                  optional: true
+            - name: SENTRY_SEND_DEFAULT_PII
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: SENTRY_SEND_DEFAULT_PII
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: SENTRY_ENVIRONMENT
+                  optional: true
+            - name: SENTRY_RELEASE
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: SENTRY_RELEASE
+                  optional: true
+            - name: SENTRY_DEBUG
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: SENTRY_DEBUG
+                  optional: true
+            - name: AXIOM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: AXIOM_TOKEN
+                  optional: true
+            - name: AXIOM_DATASET
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: AXIOM_DATASET
+                  optional: true
+            - name: RUST_LOG
+              value: "kg_indexer=info"
+          resources:
+            requests:
+              memory: "768Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "500m"
+      restartPolicy: Always

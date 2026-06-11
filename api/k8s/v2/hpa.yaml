@@ -1,0 +1,87 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+  namespace: gaia-v2
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 1
+  maxReplicas: 2
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      selectPolicy: Max
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 600
+      selectPolicy: Min
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: api_ingress_p95_latency_seconds_2m
+        target:
+          type: Value
+          value: "1"
+    - type: External
+      external:
+        metric:
+          name: api_ingress_p99_latency_seconds_2m
+        target:
+          type: Value
+          value: "2"
+    # Fast capacity-loss signal from kube-state-metrics via prometheus-adapter.
+    # Returns 0.0 when all replicas are available (allows scale-down).
+    # Rises toward 1.0 as replicas become unavailable (triggers scale-up).
+    # Formula: (spec - available) / spec
+    - type: External
+      external:
+        metric:
+          name: api_ready_replica_pressure
+        target:
+          type: Value
+          value: 500m   # 0.5 — scale up when >50% of replicas are unavailable
+    # Fallback signal when requests are already failing at ingress.
+    # Target 1.5% (15m = 0.015) sustained error ratio.
+    - type: External
+      external:
+        metric:
+          name: api_ingress_503_ratio_rate5m
+        target:
+          type: Value
+          value: 15m
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+    - type: Pods
+      pods:
+        metric:
+          name: gaia_api_graphql_pool_saturated
+        target:
+          type: AverageValue
+          averageValue: 100m
