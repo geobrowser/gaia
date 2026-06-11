@@ -7,7 +7,9 @@
  */
 
 import {describe, expect, test} from "bun:test"
+import {Effect} from "effect"
 import {RATIO_BASE} from "../src/contracts.js"
+import {findMembershipRequests, MEMBERSHIP_DETECTION_SQL} from "../src/detect.js"
 
 // ---------------------------------------------------------------------------
 // RATIO_BASE cross-validation
@@ -72,5 +74,108 @@ describe("Proposal type", () => {
 		}
 		expect(proposal.id).toContain("-") // UUID with dashes
 		expect(proposal.spaceId).toContain("-") // UUID with dashes
+	})
+})
+
+// ---------------------------------------------------------------------------
+// Membership-request detection SQL (stage 1)
+// ---------------------------------------------------------------------------
+
+// Whitespace-normalized SQL for robust substring assertions.
+const membershipSql = MEMBERSHIP_DETECTION_SQL.replace(/\s+/g, " ").trim()
+
+describe("membership detection SQL", () => {
+	test("scopes to the allowlist via space_id = ANY($1)", () => {
+		expect(membershipSql).toContain("p.space_id = ANY($1)")
+	})
+
+	test("selects only Fast-mode proposals (a single YES vote can execute)", () => {
+		expect(membershipSql).toContain("p.voting_mode = 'Fast'")
+	})
+
+	test("requires the action to be a self-service AddMember (target == proposer)", () => {
+		expect(membershipSql).toContain("a.action_type = 'AddMember'")
+		expect(membershipSql).toContain("a.target_id = p.proposed_by")
+	})
+
+	test("projects the MembershipRequest row shape {id, spaceId, requesterId}", () => {
+		expect(membershipSql).toContain("p.id")
+		expect(membershipSql).toContain('p.space_id AS "spaceId"')
+		expect(membershipSql).toContain('a.target_id AS "requesterId"')
+	})
+
+	test("orders FIFO by numeric created_at", () => {
+		expect(membershipSql).toContain("ORDER BY p.created_at::bigint ASC")
+	})
+
+	test("excludes proposals with any indexed vote", () => {
+		expect(membershipSql).toContain("NOT EXISTS (SELECT 1 FROM proposal_votes pv WHERE pv.proposal_id = p.id)")
+	})
+
+	test("excludes executed proposals", () => {
+		expect(membershipSql).toContain("p.executed_at IS NULL")
+	})
+
+	test("excludes editor-initiated adds by requiring target_id = proposed_by", () => {
+		// An editor-initiated add has proposed_by != target_id, so this predicate filters it out.
+		expect(membershipSql).toContain("a.target_id = p.proposed_by")
+	})
+
+	test("excludes multi-action proposals (exactly one action required)", () => {
+		expect(membershipSql).toContain("(SELECT COUNT(*) FROM proposal_actions a2 WHERE a2.proposal_id = p.id) = 1")
+	})
+
+	test("excludes Slow-mode proposals (Fast-only filter never overlaps the executor query)", () => {
+		expect(membershipSql).toContain("p.voting_mode = 'Fast'")
+		expect(membershipSql).not.toContain("'Slow'")
+	})
+
+	test("guards against corrupt future timestamps but applies no age cutoff", () => {
+		expect(membershipSql).toContain("p.created_at::bigint <= $2::bigint")
+		// Backlog is admitted: no maximum-age bound (unlike the executor query).
+		expect(membershipSql).not.toContain("MAX_PROPOSAL_AGE")
+	})
+
+	test("excludes proposals whose voting period has ended", () => {
+		// Votes cast after end_time are rejected by the protocol, and an untouched
+		// Fast proposal past its period is already classified REJECTED.
+		expect(membershipSql).toContain("$2::bigint <= p.end_time")
+	})
+})
+
+// ---------------------------------------------------------------------------
+// findMembershipRequests — kill switch / gating
+// ---------------------------------------------------------------------------
+
+describe("findMembershipRequests", () => {
+	// An empty allowlist is the kill switch: stop all activity, do not query.
+	test("short-circuits to [] without issuing a query when the allowlist is empty", async () => {
+		let queried = false
+		const fakeClient = {
+			query: async () => {
+				queried = true
+				return {rows: []}
+			},
+		} as never
+
+		const result = await Effect.runPromise(findMembershipRequests(fakeClient, []))
+		expect(result).toEqual([])
+		expect(queried).toBe(false)
+	})
+
+	// Gating: only allowlisted spaces reach the query, bound as ANY($1).
+	test("passes the allowlist as the first bind parameter", async () => {
+		const allowlist = ["660e8400-e29b-41d4-a716-446655440000"]
+		let boundParams: unknown[] = []
+		const fakeClient = {
+			query: async (_sql: string, params: unknown[]) => {
+				boundParams = params
+				return {rows: []}
+			},
+		} as never
+
+		await Effect.runPromise(findMembershipRequests(fakeClient, allowlist))
+		expect(boundParams[0]).toEqual(allowlist)
+		expect(typeof boundParams[1]).toBe("number") // nowSeconds guard
 	})
 })
