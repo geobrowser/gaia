@@ -15,8 +15,8 @@
 
 import type {PropertyValue} from "@geoprotocol/grc-20"
 import {describe, expect, it} from "vitest"
-import {propertyValueToVersionedValue} from "../proposal-diff"
 import {normalizeUuid} from "../../utils/uuid"
+import {propertyValueToVersionedValue} from "../proposal-diff"
 
 const spaceId = normalizeUuid("20000000-0001-4000-8000-000000000001")
 const propertyId = "20000000-0004-4000-8000-000000000050"
