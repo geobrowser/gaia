@@ -6,7 +6,9 @@
  */
 
 import {describe, expect, test} from "bun:test"
+import {Cause, ConfigProvider, Effect, Exit, Option} from "effect"
 import {InfraError, RevertError} from "../src/contracts.js"
+import {type ExecutorEnv, parseConfig} from "../src/index.js"
 
 // ---------------------------------------------------------------------------
 // Tagged error construction
@@ -213,5 +215,113 @@ describe("concurrency model contracts", () => {
 		expect(succeeded).toBe(3)
 		expect(failed).toBe(1)
 		expect(skipped).toBe(1)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// parseConfig — dual-wallet + allowlist parsing (membership-accept path)
+// ---------------------------------------------------------------------------
+
+describe("parseConfig: membership-bot config & allowlist", () => {
+	const EXECUTOR_KEY: `0x${string}` = `0x${"1".repeat(64)}`
+	const BOT_KEY: `0x${string}` = `0x${"2".repeat(64)}`
+	const EXECUTOR_SPACE: `0x${string}` = `0x${"a".repeat(32)}`
+	const BOT_SPACE: `0x${string}` = `0x${"b".repeat(32)}`
+	const ALLOW_A: `0x${string}` = `0x${"c".repeat(32)}`
+	const ALLOW_B: `0x${string}` = `0x${"d".repeat(32)}`
+
+	const VALID_ENV: Record<string, string> = {
+		DATABASE_URL: "postgres://user:pass@localhost:5432/indexer",
+		EXECUTOR_PRIVATE_KEY: EXECUTOR_KEY,
+		PIMLICO_API_KEY: "pimlico-test-key",
+		RPC_URL: "https://rpc.example.com",
+		EXECUTOR_SPACE_ID: EXECUTOR_SPACE,
+		SPACE_REGISTRY_ADDRESS: "0x1111111111111111111111111111111111111111",
+		CHAIN_ID: "80451",
+		MEMBERSHIP_BOT_PRIVATE_KEY: BOT_KEY,
+		MEMBERSHIP_BOT_SPACE_ID: BOT_SPACE,
+		MEMBERSHIP_AUTOACCEPT_SPACE_IDS: `${ALLOW_A},${ALLOW_B}`,
+	}
+
+	/** Run parseConfig against an in-memory env (overrides merged, omitted keys removed). */
+	function runParse(
+		overrides: Record<string, string> = {},
+		omit: string[] = [],
+	): Promise<Exit.Exit<ExecutorEnv, InfraError>> {
+		const merged: Record<string, string> = {...VALID_ENV, ...overrides}
+		for (const key of omit) delete merged[key]
+		const provider = ConfigProvider.fromMap(new Map(Object.entries(merged)))
+		return Effect.runPromiseExit(parseConfig.pipe(Effect.withConfigProvider(provider)))
+	}
+
+	function expectSuccess(exit: Exit.Exit<ExecutorEnv, InfraError>): ExecutorEnv {
+		if (!Exit.isSuccess(exit)) {
+			throw new Error(`expected success, got failure: ${JSON.stringify(exit)}`)
+		}
+		return exit.value
+	}
+
+	function expectInfraError(exit: Exit.Exit<ExecutorEnv, InfraError>): InfraError {
+		expect(Exit.isFailure(exit)).toBe(true)
+		const failure = exit as Exit.Failure<ExecutorEnv, InfraError>
+		const err = Option.getOrThrow(Cause.failureOption(failure.cause))
+		expect(err._tag).toBe("InfraError")
+		return err
+	}
+
+	test("valid env parses bot identity + allowlist", async () => {
+		const env = expectSuccess(await runParse())
+		expect(env.membershipBotPrivateKey).toBe(BOT_KEY)
+		expect(env.membershipBotSpaceId).toBe(BOT_SPACE)
+		expect(env.membershipAutoacceptSpaceIds).toEqual([ALLOW_A, ALLOW_B])
+	})
+
+	test("auto-prefixes a bot key supplied without 0x", async () => {
+		const env = expectSuccess(await runParse({MEMBERSHIP_BOT_PRIVATE_KEY: "2".repeat(64)}))
+		expect(env.membershipBotPrivateKey).toBe(BOT_KEY)
+	})
+
+	test("rejects a malformed bot private key", async () => {
+		const err = expectInfraError(await runParse({MEMBERSHIP_BOT_PRIVATE_KEY: "0xdeadbeef"}))
+		expect(err.message).toContain("MEMBERSHIP_BOT_PRIVATE_KEY")
+	})
+
+	test("rejects a malformed bot space ID", async () => {
+		const err = expectInfraError(await runParse({MEMBERSHIP_BOT_SPACE_ID: "0xnothex"}))
+		expect(err.message).toContain("MEMBERSHIP_BOT_SPACE_ID")
+	})
+
+	test("rejects a malformed allowlist entry", async () => {
+		const err = expectInfraError(await runParse({MEMBERSHIP_AUTOACCEPT_SPACE_IDS: `${ALLOW_A},0xbogus`}))
+		expect(err.message).toContain("MEMBERSHIP_AUTOACCEPT_SPACE_IDS")
+	})
+
+	test("rejects a bot key identical to the executor key (distinct identity)", async () => {
+		const err = expectInfraError(await runParse({MEMBERSHIP_BOT_PRIVATE_KEY: EXECUTOR_KEY}))
+		expect(err.message).toContain("must differ from EXECUTOR_PRIVATE_KEY")
+	})
+
+	test("rejects a bot space identical to the executor space (distinct identity)", async () => {
+		const err = expectInfraError(await runParse({MEMBERSHIP_BOT_SPACE_ID: EXECUTOR_SPACE}))
+		expect(err.message).toContain("must differ from EXECUTOR_SPACE_ID")
+	})
+
+	test("empty allowlist is accepted — kill switch (explicit empty string)", async () => {
+		const env = expectSuccess(await runParse({MEMBERSHIP_AUTOACCEPT_SPACE_IDS: ""}))
+		expect(env.membershipAutoacceptSpaceIds).toEqual([])
+	})
+
+	test("empty allowlist is accepted — kill switch (unset var)", async () => {
+		const env = expectSuccess(await runParse({}, ["MEMBERSHIP_AUTOACCEPT_SPACE_IDS"]))
+		expect(env.membershipAutoacceptSpaceIds).toEqual([])
+	})
+
+	test("allowlist entries are trimmed and de-duplicated case-insensitively", async () => {
+		// Same space as ALLOW_A but upper-cased hex body (the 0x prefix stays lowercase).
+		const ALLOW_A_UPPER = `0x${"c".repeat(32).toUpperCase()}`
+		const env = expectSuccess(
+			await runParse({MEMBERSHIP_AUTOACCEPT_SPACE_IDS: `  ${ALLOW_A} , ${ALLOW_A_UPPER} ,${ALLOW_B}, `}),
+		)
+		expect(env.membershipAutoacceptSpaceIds).toEqual([ALLOW_A, ALLOW_B])
 	})
 })
