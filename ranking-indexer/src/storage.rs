@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 
+use chrono::{DateTime, Utc};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -93,6 +94,84 @@ impl Storage {
         .fetch_optional(&self.pool)
         .await?;
         Ok(block)
+    }
+
+    /// Reconstruct a Ranking Block's config from the indexed public graph.
+    ///
+    /// `detect()` only registers a block when its `TYPES -> Ranking Block`
+    /// relation and its config (Name/Filter/dates/restriction) arrive in the
+    /// *same* edit, because it resolves an entity's types from the current edit
+    /// alone. Real clients emit the type and the config across separate edits,
+    /// so the block is never registered and every rank linked to it is silently
+    /// never scored (issue #738). When a rank links to a block we never
+    /// registered, recover it from the graph here. Returns `None` if the entity
+    /// is not (yet) typed as a Ranking Block in `public.relations`.
+    pub async fn get_block_config_from_kg(
+        &self,
+        block_id: Uuid,
+    ) -> Result<Option<RankingBlock>, IndexerError> {
+        use sdk::core::ids;
+        let pid = |s: &str| Uuid::parse_str(s).expect("valid system ID constant");
+
+        // Must be typed as a Ranking Block in the graph; the type relation also
+        // tells us the block's home space.
+        let typed: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT space_id FROM relations \
+             WHERE from_entity_id = $1 AND type_id = $2 AND to_entity_id = $3 \
+             LIMIT 1",
+        )
+        .bind(block_id)
+        .bind(pid(ids::TYPE_RELATION_TYPE_ID))
+        .bind(pid(ids::RANKING_BLOCK_TYPE_ID))
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some((space_id,)) = typed else {
+            return Ok(None);
+        };
+
+        // Config properties: Name/Filter as text, Start/End as datetime. One row
+        // is always returned (aggregates over zero matching values yield NULLs).
+        type ConfigRow = (
+            Option<String>,
+            Option<String>,
+            Option<DateTime<Utc>>,
+            Option<DateTime<Utc>>,
+        );
+        let (name, filter, start_date, end_date): ConfigRow = sqlx::query_as(
+            "SELECT \
+               max(text)         FILTER (WHERE property_id = $2) AS name, \
+               max(text)         FILTER (WHERE property_id = $3) AS filter, \
+               max(datetime_utc) FILTER (WHERE property_id = $4) AS start_date, \
+               max(datetime_utc) FILTER (WHERE property_id = $5) AS end_date \
+             FROM values WHERE entity_id = $1",
+        )
+        .bind(block_id)
+        .bind(pid(ids::NAME_PROPERTY_ID))
+        .bind(pid(ids::RANK_FILTER_PROPERTY_ID))
+        .bind(pid(ids::RANK_START_DATE_PROPERTY_ID))
+        .bind(pid(ids::RANK_END_DATE_PROPERTY_ID))
+        .fetch_one(&self.pool)
+        .await?;
+
+        // Aggregation restriction is a relation (as detect() collects it).
+        let restriction: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT to_entity_id FROM relations \
+             WHERE from_entity_id = $1 AND type_id = $2 LIMIT 1",
+        )
+        .bind(block_id)
+        .bind(pid(ids::RANK_AGGREGATION_RESTRICTION_PROPERTY_ID))
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(Some(RankingBlock {
+            id: block_id,
+            space_id,
+            name,
+            filter,
+            start_date,
+            end_date,
+            restriction_id: restriction.map(|(r,)| r),
+        }))
     }
 
     /// Load all submissions currently linked to a block (pre-dedup).
