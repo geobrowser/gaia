@@ -2,7 +2,7 @@
 
 **One-liner:** Stand up a Geo Browser app server that ingests notifications from the Gaia delivery worker, persists them, and delivers them to users via in-app feed, push (AWS SNS), and email (MailerSend) — starting with three governance notification types.
 
-**Status:** Draft for team review · **Owner:** Yaco (eng) / Preston (product) · **Date:** 2026-06-09
+**Status:** Draft for team review · **Owner:** Neo (eng) · Yaniv & Preston (product) · **Date:** 2026-06-09
 
 ## Why
 - Geo users have no way to find out about space activity without manually opening the app and polling. ([GEO-2172](https://linear.app/geobrowser/issue/GEO-2172/notification-product-requirements))
