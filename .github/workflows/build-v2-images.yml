@@ -35,10 +35,10 @@ jobs:
             context: .
           - image: api
             dockerfile: api/Dockerfile
-            context: .
+            context: ./api
           - image: proposal-executor
             dockerfile: proposal-executor/Dockerfile
-            context: .
+            context: proposal-executor
           - image: atlas
             dockerfile: atlas/Dockerfile
             context: .
