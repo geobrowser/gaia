@@ -32,40 +32,9 @@ spec:
           value: 1
           periodSeconds: 60
   metrics:
-    - type: External
-      external:
-        metric:
-          name: api_ingress_p95_latency_seconds_2m
-        target:
-          type: Value
-          value: "1"
-    - type: External
-      external:
-        metric:
-          name: api_ingress_p99_latency_seconds_2m
-        target:
-          type: Value
-          value: "2"
-    # Fast capacity-loss signal from kube-state-metrics via prometheus-adapter.
-    # Returns 0.0 when all replicas are available (allows scale-down).
-    # Rises toward 1.0 as replicas become unavailable (triggers scale-up).
-    # Formula: (spec - available) / spec
-    - type: External
-      external:
-        metric:
-          name: api_ready_replica_pressure
-        target:
-          type: Value
-          value: 500m   # 0.5 — scale up when >50% of replicas are unavailable
-    # Fallback signal when requests are already failing at ingress.
-    # Target 1.5% (15m = 0.015) sustained error ratio.
-    - type: External
-      external:
-        metric:
-          name: api_ingress_503_ratio_rate5m
-        target:
-          type: Value
-          value: 15m
+    # v2 scales on resource metrics only — the prod External/Pods metrics
+    # (prometheus-adapter + recording rules) are scoped to the prod host and
+    # namespace and don't exist for gaia-v2 until monitoring is wired (Step 15).
     - type: Resource
       resource:
         name: cpu
@@ -78,10 +47,3 @@ spec:
         target:
           type: Utilization
           averageUtilization: 80
-    - type: Pods
-      pods:
-        metric:
-          name: gaia_api_graphql_pool_saturated
-        target:
-          type: AverageValue
-          averageValue: 100m

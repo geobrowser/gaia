@@ -82,7 +82,7 @@ spec:
                   name: api-secrets
                   key: DATABASE_URL
             - name: ATLAS_INDEXER_ID
-              value: "atlas-production"
+              value: "atlas-testnet"
             - name: ATLAS_RUNTIME_COMPATIBILITY_MARKER
               value: "atlas-v1"
             - name: ATLAS_FAIL_OPEN_BOUND
