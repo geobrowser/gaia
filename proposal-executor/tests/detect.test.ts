@@ -136,10 +136,12 @@ describe("membership detection SQL", () => {
 		expect(membershipSql).not.toContain("MAX_PROPOSAL_AGE")
 	})
 
-	test("excludes proposals whose voting period has ended", () => {
+	test("excludes proposals whose voting period has ended, with the stage-2 skew buffer", () => {
 		// Votes cast after end_time are rejected by the protocol, and an untouched
-		// Fast proposal past its period is already classified REJECTED.
-		expect(membershipSql).toContain("$2::bigint <= p.end_time")
+		// Fast proposal past its period is already classified REJECTED. The +60s buffer
+		// mirrors stage-2's isVotingOpen so detection never excludes a request the
+		// on-chain eligibility check would still vote on.
+		expect(membershipSql).toContain("$2::bigint <= p.end_time + 60")
 	})
 })
 
@@ -158,7 +160,7 @@ describe("findMembershipRequests", () => {
 			},
 		} as never
 
-		const result = await Effect.runPromise(findMembershipRequests(fakeClient, []))
+		const result = await Effect.runPromise(findMembershipRequests(fakeClient, [], 1_700_000_000))
 		expect(result).toEqual([])
 		expect(queried).toBe(false)
 	})
@@ -174,8 +176,9 @@ describe("findMembershipRequests", () => {
 			},
 		} as never
 
-		await Effect.runPromise(findMembershipRequests(fakeClient, allowlist))
+		await Effect.runPromise(findMembershipRequests(fakeClient, allowlist, 1_700_000_000))
 		expect(boundParams[0]).toEqual(allowlist)
-		expect(typeof boundParams[1]).toBe("number") // nowSeconds guard
+		// nowSeconds is the caller-supplied (chain-sourced) timestamp, bound verbatim.
+		expect(boundParams[1]).toBe(1_700_000_000)
 	})
 })

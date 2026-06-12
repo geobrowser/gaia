@@ -562,7 +562,7 @@ describe("kill switch", () => {
 			},
 			// biome-ignore lint/suspicious/noExplicitAny: minimal pg.Client stub
 		} as any
-		const rows = await Effect.runPromise(findMembershipRequests(fakeClient, []))
+		const rows = await Effect.runPromise(findMembershipRequests(fakeClient, [], 1_700_000_000))
 		expect(rows).toEqual([])
 		expect(queried).toBe(false)
 	})

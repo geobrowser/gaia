@@ -700,7 +700,22 @@ const main = Effect.gen(function* () {
 	// empty allowlist short-circuits findMembershipRequests to [] (no query). ---
 	const runMembershipPath: Effect.Effect<MembershipSummary> = Effect.gen(function* () {
 		const allowlistUuids = config.membershipAutoacceptSpaceIds.map(bytes16ToUuid)
-		const requests = yield* findMembershipRequests(db, allowlistUuids)
+
+		// Kill switch: an empty allowlist does no work at all — no chain read, no query.
+		if (allowlistUuids.length === 0) {
+			yield* Effect.logInfo("membership_start").pipe(
+				Effect.annotateLogs({allowlistSize: 0, requestsFound: 0, spaces: 0}),
+			)
+			return {admitted: 0, skipped: 0, failed: 0, total: 0, spaces: 0}
+		}
+
+		// Read chain time once, BEFORE detection, and reuse it for both stages. Stage-1
+		// detection and stage-2 eligibility must share one notion of "now" and the same
+		// +CLOCK_SKEW_BUFFER window, or a request can land where stage 2 would vote but
+		// stage 1 never surfaces it (the pod wall clock can drift from block.timestamp).
+		const chainNow = yield* readChainTimeSeconds(botWallet)
+
+		const requests = yield* findMembershipRequests(db, allowlistUuids, Number(chainNow))
 		const bySpace = Map.groupBy(requests, (r) => r.spaceId)
 
 		yield* Effect.logInfo("membership_start").pipe(
@@ -714,10 +729,6 @@ const main = Effect.gen(function* () {
 		if (requests.length === 0) {
 			return {admitted: 0, skipped: 0, failed: 0, total: 0, spaces: 0}
 		}
-
-		// Read chain time once and reuse across the batch — the voting-window check
-		// compares against block.timestamp, not the pod wall clock.
-		const chainNow = yield* readChainTimeSeconds(botWallet)
 
 		const results: MembershipSpaceResult[] = yield* Effect.forEach(
 			[...bySpace.entries()],
