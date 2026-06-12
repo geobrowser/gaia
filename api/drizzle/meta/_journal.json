@@ -435,6 +435,13 @@
       "when": 1781041240657,
       "tag": "0061_create_ranks_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1781289096597,
+      "tag": "0062_ranks_members_editors",
+      "breakpoints": true
     }
   ]
 }

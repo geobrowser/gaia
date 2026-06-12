@@ -8,11 +8,15 @@
 //! CI `DATABASE_URL` that lacks the `ranks` schema.
 
 use grc_20::model::builder::EditBuilder;
+use hermes_schema::pb::membership::{
+    HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft, MembershipRole,
+};
 use sdk::core::ids::*;
 use sqlx::Row;
 use uuid::Uuid;
 
 use ranking_indexer::detect::detect;
+use ranking_indexer::membership::{apply_membership_event, MembershipEvent};
 use ranking_indexer::recompute::apply_detected_edit;
 use ranking_indexer::storage::Storage;
 
@@ -78,7 +82,7 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM members WHERE space_id = $1")
+    sqlx::query("DELETE FROM ranks.members WHERE space_id = $1")
         .bind(u(BLOCK_SPACE))
         .execute(pool)
         .await
@@ -89,15 +93,16 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
         .await
         .unwrap();
 
-    // --- seed public prerequisites -----------------------------------------
-    // The block lives in a DAO space; member1/member2 are members, nonmember isn't.
+    // --- seed prerequisites --------------------------------------------------
+    // The block lives in a DAO space; member1/member2 are members, nonmember
+    // isn't. Membership lives in the indexer's own view (`ranks.members`).
     sqlx::query("INSERT INTO spaces (id, type, address) VALUES ($1, 'DAO', '0xe2e')")
         .bind(u(BLOCK_SPACE))
         .execute(pool)
         .await
         .unwrap();
     for m in [MEMBER1, MEMBER2] {
-        sqlx::query("INSERT INTO members (member_space_id, space_id) VALUES ($1, $2)")
+        sqlx::query("INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)")
             .bind(u(m))
             .bind(u(BLOCK_SPACE))
             .execute(pool)
@@ -305,7 +310,7 @@ async fn cross_edit_block_is_recovered_from_kg_and_scored() {
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM members WHERE space_id = $1")
+    sqlx::query("DELETE FROM ranks.members WHERE space_id = $1")
         .bind(u(SPACE))
         .execute(pool)
         .await
@@ -316,13 +321,13 @@ async fn cross_edit_block_is_recovered_from_kg_and_scored() {
         .await
         .unwrap();
 
-    // --- seed public prerequisites -----------------------------------------
+    // --- seed prerequisites --------------------------------------------------
     sqlx::query("INSERT INTO spaces (id, type, address) VALUES ($1, 'DAO', '0xe2e2')")
         .bind(u(SPACE))
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO members (member_space_id, space_id) VALUES ($1, $2)")
+    sqlx::query("INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)")
         .bind(u(MEMBER))
         .bind(u(SPACE))
         .execute(pool)
@@ -336,7 +341,7 @@ async fn cross_edit_block_is_recovered_from_kg_and_scored() {
         "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) \
          VALUES ($1, $2, $3, $4, $5, $6)",
     )
-    .bind(u(TYPE_REL).to_string())
+    .bind(u(TYPE_REL))
     .bind(u(TYPE_REL))
     .bind(su(TYPE_RELATION_TYPE_ID))
     .bind(u(BLOCK))
@@ -432,4 +437,255 @@ async fn cross_edit_block_is_recovered_from_kg_and_scored() {
         scores, 2,
         "both ranked entities scored once the block is recovered"
     );
+}
+// Membership-lifecycle scenario UUIDs (distinct namespace so both e2e tests
+// can run against the same database, even concurrently).
+const M_SPACE: u128 = 0xE2E6_0000_0001;
+const M_MEMBER: u128 = 0xE2E6_0000_0011;
+const M_LATE: u128 = 0xE2E6_0000_0012;
+const M_BLOCK: u128 = 0xE2E6_0000_0021;
+const M_ENTITY_A: u128 = 0xE2E6_0000_0031;
+const M_ENTITY_B: u128 = 0xE2E6_0000_0032;
+const M_RANK1: u128 = 0xE2E6_0000_0041;
+const M_RANK2: u128 = 0xE2E6_0000_0042;
+
+/// GEO-688: a rank submitted by a non-member must be integrated when they
+/// become a member (or editor), and dropped again when the role is revoked or
+/// they leave the space.
+#[tokio::test]
+async fn membership_events_integrate_and_drop_rankings() {
+    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
+        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+
+    // --- clean prior runs (idempotent) -------------------------------------
+    for sql in [
+        "DELETE FROM relations WHERE space_id = $1",
+        "DELETE FROM values WHERE space_id = $1",
+        "DELETE FROM ranks.members WHERE space_id = $1",
+        "DELETE FROM ranks.editors WHERE space_id = $1",
+        "DELETE FROM spaces WHERE id = $1",
+    ] {
+        sqlx::query(sql)
+            .bind(u(M_SPACE))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("DELETE FROM ranks.ranking_items WHERE ranking_id = ANY($1)")
+        .bind(&[u(M_RANK1), u(M_RANK2)][..])
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.rankings WHERE id = ANY($1)")
+        .bind(&[u(M_RANK1), u(M_RANK2)][..])
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.ranking_scores WHERE block_id = $1")
+        .bind(u(M_BLOCK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.ranking_blocks WHERE id = $1")
+        .bind(u(M_BLOCK))
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // --- seed: DAO space with one founding member ---------------------------
+    sqlx::query("INSERT INTO spaces (id, type, address) VALUES ($1, 'DAO', '0xe2e6')")
+        .bind(u(M_SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)")
+        .bind(u(M_MEMBER))
+        .bind(u(M_SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // --- create the block + two submissions ---------------------------------
+    let block_edit = EditBuilder::new(gid(0xE2E6_0001))
+        .create_relation(|r| {
+            r.id(gid(0xE2E6_0100))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(M_BLOCK))
+                .to(sid(RANKING_BLOCK_TYPE_ID))
+        })
+        .create_relation(|r| {
+            r.id(gid(0xE2E6_0101))
+                .relation_type(sid(RANK_AGGREGATION_RESTRICTION_PROPERTY_ID))
+                .from(gid(M_BLOCK))
+                .to(sid(RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID))
+        })
+        .create_entity(gid(M_BLOCK), |e| {
+            e.text(sid(NAME_PROPERTY_ID), "Top Tokens", None)
+        })
+        .build();
+    apply_detected_edit(&detect(&block_edit, u(M_SPACE), 1, 0), u(M_SPACE), &storage)
+        .await
+        .unwrap();
+
+    let submit = |rank: u128, rel_base: u128, first: u128, second: u128| {
+        EditBuilder::new(gid(rank ^ 0xED17))
+            .create_relation(|r| {
+                r.id(gid(rel_base))
+                    .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                    .from(gid(rank))
+                    .to(sid(RANK_TYPE_ID))
+            })
+            .create_entity(gid(rank), |e| {
+                e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None)
+            })
+            .create_relation(|r| {
+                r.id(gid(rel_base + 1))
+                    .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
+                    .from(gid(rank))
+                    .to(gid(M_BLOCK))
+            })
+            .create_relation(|r| {
+                r.id(gid(rel_base + 2))
+                    .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                    .from(gid(rank))
+                    .to(gid(first))
+                    .to_space(gid(M_SPACE))
+                    .position("a0")
+            })
+            .create_relation(|r| {
+                r.id(gid(rel_base + 3))
+                    .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                    .from(gid(rank))
+                    .to(gid(second))
+                    .to_space(gid(M_SPACE))
+                    .position("a1")
+            })
+            .build()
+    };
+
+    apply_detected_edit(
+        &detect(
+            &submit(M_RANK1, 0xE2E6_0200, M_ENTITY_A, M_ENTITY_B),
+            u(M_MEMBER),
+            2,
+            0,
+        ),
+        u(M_MEMBER),
+        &storage,
+    )
+    .await
+    .unwrap();
+    // The latecomer submits while NOT yet a member — must be excluded.
+    apply_detected_edit(
+        &detect(
+            &submit(M_RANK2, 0xE2E6_0210, M_ENTITY_A, M_ENTITY_B),
+            u(M_LATE),
+            3,
+            0,
+        ),
+        u(M_LATE),
+        &storage,
+    )
+    .await
+    .unwrap();
+
+    let aggregated = Uuid::parse_str(AGGREGATED_RANKINGS_RELATION_TYPE_ID).unwrap();
+    let contributing = |pool: &sqlx::PgPool| {
+        let pool = pool.clone();
+        async move {
+            let rows: Vec<(Uuid,)> = sqlx::query_as(
+                "SELECT to_entity_id FROM relations WHERE from_entity_id = $1 AND type_id = $2",
+            )
+            .bind(u(M_BLOCK))
+            .bind(aggregated)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            rows.into_iter().map(|(id,)| id).collect::<Vec<_>>()
+        }
+    };
+
+    let prov = contributing(pool).await;
+    assert_eq!(prov, vec![u(M_RANK1)], "latecomer must start excluded");
+
+    // --- ROLE_GRANTED(MEMBER): the existing rank is integrated ---------------
+    let granted = MembershipEvent::RoleGranted(HermesRoleGranted {
+        space_id: u(M_SPACE).as_bytes().to_vec(),
+        member_space_id: u(M_LATE).as_bytes().to_vec(),
+        role: MembershipRole::Member as i32,
+        meta: None,
+    });
+    apply_membership_event(&granted, &storage).await.unwrap();
+
+    let mut prov = contributing(pool).await;
+    prov.sort();
+    assert_eq!(
+        prov,
+        vec![u(M_RANK1), u(M_RANK2)],
+        "becoming a member must integrate the previously-excluded rank"
+    );
+
+    // --- ROLE_REVOKED(MEMBER): the rank drops out again ----------------------
+    let revoked = MembershipEvent::RoleRevoked(HermesRoleRevoked {
+        space_id: u(M_SPACE).as_bytes().to_vec(),
+        member_space_id: u(M_LATE).as_bytes().to_vec(),
+        role: MembershipRole::Member as i32,
+        meta: None,
+    });
+    apply_membership_event(&revoked, &storage).await.unwrap();
+
+    let prov = contributing(pool).await;
+    assert_eq!(
+        prov,
+        vec![u(M_RANK1)],
+        "revoking membership must drop the rank from the aggregate"
+    );
+
+    // --- ROLE_GRANTED(EDITOR): editors are eligible too ----------------------
+    let granted_editor = MembershipEvent::RoleGranted(HermesRoleGranted {
+        space_id: u(M_SPACE).as_bytes().to_vec(),
+        member_space_id: u(M_LATE).as_bytes().to_vec(),
+        role: MembershipRole::Editor as i32,
+        meta: None,
+    });
+    apply_membership_event(&granted_editor, &storage)
+        .await
+        .unwrap();
+
+    let mut prov = contributing(pool).await;
+    prov.sort();
+    assert_eq!(
+        prov,
+        vec![u(M_RANK1), u(M_RANK2)],
+        "an editor's rank must be integrated"
+    );
+
+    // --- SPACE_LEFT: drops both roles and the rank ---------------------------
+    let left = MembershipEvent::SpaceLeft(HermesSpaceLeft {
+        member_id: u(M_LATE).as_bytes().to_vec(),
+        space_id: u(M_SPACE).as_bytes().to_vec(),
+        meta: None,
+    });
+    apply_membership_event(&left, &storage).await.unwrap();
+
+    let prov = contributing(pool).await;
+    assert_eq!(
+        prov,
+        vec![u(M_RANK1)],
+        "leaving the space must drop the rank from the aggregate"
+    );
+    let view_rows: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM ranks.members WHERE member_space_id = $1 AND space_id = $2)
+              + (SELECT count(*) FROM ranks.editors WHERE member_space_id = $1 AND space_id = $2)",
+    )
+    .bind(u(M_LATE))
+    .bind(u(M_SPACE))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(view_rows, 0, "SPACE_LEFT must clear both view tables");
 }
