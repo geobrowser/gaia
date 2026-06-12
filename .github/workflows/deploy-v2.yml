@@ -1,0 +1,114 @@
+name: Deploy gaia-v2 service (manual)
+
+# Deploys one gaia-v2 service: seds the image tag into its k8s/v2 manifest(s)
+# and applies them to the gaia-v2 namespace, then gates on rollout status.
+#
+# Companion to "Build gaia-v2 images (manual)" — build first, then deploy with
+# the tag the build run printed. Bring-up order and per-service health gates
+# live in the GEO-664 runbook (Step 12); this workflow deploys exactly one
+# service per run so that order stays under operator control.
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Service to deploy"
+        required: true
+        type: choice
+        options:
+          - hermes-ipfs-cache
+          - hermes-pipeline
+          - kg-indexer
+          - atlas
+          - api
+          - valkey
+          - search-indexer
+          - vote-indexer
+          - topology-indexer
+          - scoring-service
+          - proposal-executor
+      tag:
+        description: "Image tag to deploy (from the build workflow, e.g. short SHA). Ignored for valkey (pinned public image)."
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-v2-${{ inputs.service }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  NAMESPACE: gaia-v2
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.2
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@3cb3953159719656269e044e0e24ca16dd2a690f # v2.5.2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v5
+
+      - name: Configure kubectl for DigitalOcean
+        run: doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Resolve service mapping
+        id: map
+        run: |
+          case "${{ inputs.service }}" in
+            hermes-ipfs-cache) manifests="hermes-ipfs-cache/k8s/v2/hermes-ipfs-cache.yaml"; rollout="deployment/hermes-ipfs-cache" ;;
+            hermes-pipeline)   manifests="hermes/k8s/v2/hermes-pipeline.yaml";              rollout="deployment/hermes-pipeline" ;;
+            kg-indexer)        manifests="kg-indexer/k8s/v2/kg-indexer.yaml";               rollout="deployment/kg-indexer" ;;
+            atlas)             manifests="hermes/k8s/v2/atlas.yaml";                        rollout="deployment/atlas" ;;
+            api)               manifests="api/k8s/v2/api.yaml api/k8s/v2/hpa.yaml";         rollout="deployment/api" ;;
+            valkey)            manifests="api/k8s/v2/valkey.yaml";                          rollout="deployment/api-cache" ;;
+            search-indexer)    manifests="search-indexer-deploy/k8s/v2/search-indexer.yaml"; rollout="statefulset/search-indexer" ;;
+            vote-indexer)      manifests="scoring-service/deployment/v2/vote-indexer.yaml"; rollout="deployment/vote-indexer" ;;
+            topology-indexer)  manifests="scoring-service/deployment/v2/topology-indexer.yaml"; rollout="deployment/topology-indexer" ;;
+            scoring-service)   manifests="scoring-service/deployment/v2/cronjob.yaml";      rollout="" ;;
+            proposal-executor) manifests="proposal-executor/deployment/v2/cronjob.yaml";    rollout="" ;;
+            *) echo "unknown service"; exit 1 ;;
+          esac
+          echo "manifests=$manifests" >> "$GITHUB_OUTPUT"
+          echo "rollout=$rollout" >> "$GITHUB_OUTPUT"
+
+      - name: Verify image tag exists in registry
+        if: inputs.service != 'valkey'
+        run: |
+          doctl registry repository list-tags ${{ inputs.service }} --format Tag --no-header | \
+            grep -qx "${{ inputs.tag }}" || {
+              echo "::error::Tag ${{ inputs.tag }} not found in $REGISTRY/${{ inputs.service }} — run the build workflow first."
+              exit 1
+            }
+
+      - name: Ensure namespace exists
+        run: kubectl apply -f kg-indexer/k8s/v2/namespace.yaml
+
+      - name: Guard against unfilled placeholders
+        run: |
+          if grep -l "REPLACE_WITH" ${{ steps.map.outputs.manifests }}; then
+            echo "::error::Manifest still contains REPLACE_WITH_* placeholders — fill the chain-specific values before deploying."
+            exit 1
+          fi
+
+      - name: Apply manifests
+        run: |
+          for m in ${{ steps.map.outputs.manifests }}; do
+            sed "s|:latest|:${{ inputs.tag }}|g" "$m" | kubectl apply -f -
+          done
+
+      - name: Wait for rollout
+        if: steps.map.outputs.rollout != ''
+        run: kubectl rollout status ${{ steps.map.outputs.rollout }} -n $NAMESPACE --timeout=180s
+
+      - name: Show result
+        if: always()
+        run: |
+          echo "## Deploy ${{ inputs.service }} @ ${{ inputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          kubectl get pods -n $NAMESPACE -o wide | tee -a "$GITHUB_STEP_SUMMARY"
