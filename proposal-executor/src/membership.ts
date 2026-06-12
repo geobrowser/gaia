@@ -99,6 +99,12 @@ export function encodeVoteData(proposalIdHex: Hex, voteOption: number): Hex {
  *
  * A zero address means the space is unregistered (misconfiguration) — surfaced as an
  * InfraError so the space is skipped and retried next cycle.
+ *
+ * TODO(caching): this helper always performs a readContract() despite the "cache per run"
+ * note above — caching is the caller's responsibility today, which is easy to get wrong once
+ * a future orchestrator reuses this module. Either (a) add a memoizing wrapper here, e.g.
+ * makeDaoSpaceResolver(wallet, registryAddr) returning a fn backed by an internal
+ * Map<Hex, Address>, or (b) reword the docstring to state explicitly that callers must cache.
  */
 export function resolveDaoSpaceAddress(
 	wallet: SmartWallet,
