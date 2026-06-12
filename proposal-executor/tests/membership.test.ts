@@ -17,7 +17,9 @@ import {
 	castMembershipVote,
 	encodeVoteData,
 	isEligibleToVote,
+	isVotingOpen,
 	type ProposalTally,
+	readChainTimeSeconds,
 	readProposalTally,
 	resolveDaoSpaceAddress,
 } from "../src/membership.js"
@@ -40,13 +42,21 @@ const REQUEST: MembershipRequest = {
 	requesterId: "880e8400-e29b-41d4-a716-446655440000",
 }
 
+// Voting-window fixtures: NOW sits comfortably inside an open window.
+const NOW = 1_700_000_000n
+const START_DATE = NOW - 3_600n // opened an hour ago
+const LAST_DATE = NOW + 3_600n // closes in an hour
+/** A ProposalParameters tuple whose only fields the read uses are startDate/lastDate. */
+const OPEN_PARAMS = {startDate: START_DATE, lastDate: LAST_DATE}
+
 /**
- * Minimal SmartWallet stub. sendTransaction / readContract are injected per-test;
- * the account is present by default so the "no account" guard does not trip.
+ * Minimal SmartWallet stub. sendTransaction / readContract / getBlock are injected
+ * per-test; the account is present by default so the "no account" guard does not trip.
  */
 function fakeWallet(overrides: {
 	sendTransaction?: (args: {data: Hex; to: Address}) => Promise<string>
 	readContract?: (args: {functionName: string; args: readonly unknown[]}) => Promise<unknown>
+	getBlock?: () => Promise<{timestamp: bigint}>
 }): SmartWallet {
 	return {
 		smartAccountClient: {
@@ -55,6 +65,7 @@ function fakeWallet(overrides: {
 		},
 		publicClient: {
 			readContract: overrides.readContract ?? (async () => undefined),
+			getBlock: overrides.getBlock ?? (async () => ({timestamp: NOW})),
 		},
 		chain: {id: 19411},
 		safeAddress: "0xsafe",
@@ -220,7 +231,7 @@ describe("readProposalTally", () => {
 				return [
 					false, // executed
 					"0xcreator", // creator
-					{}, // parameters (unused by the read)
+					OPEN_PARAMS, // parameters → startDate/lastDate
 					{yes: 3n, no: 1n, abstain: 2n}, // tally
 					[], // actions
 				]
@@ -228,7 +239,14 @@ describe("readProposalTally", () => {
 		})
 
 		const tally = await Effect.runPromise(readProposalTally(wallet, DAO_SPACE_ADDR, PROPOSAL_UUID))
-		expect(tally).toEqual({executed: false, yes: 3n, no: 1n, abstain: 2n})
+		expect(tally).toEqual({
+			executed: false,
+			yes: 3n,
+			no: 1n,
+			abstain: 2n,
+			startDate: START_DATE,
+			lastDate: LAST_DATE,
+		})
 	})
 
 	test("surfaces a read failure as an InfraError carrying the proposalId", async () => {
@@ -249,19 +267,87 @@ describe("readProposalTally", () => {
 // ---------------------------------------------------------------------------
 
 describe("isEligibleToVote", () => {
-	test("eligible iff !executed && yes + no + abstain == 0", () => {
-		const fresh: ProposalTally = {executed: false, yes: 0n, no: 0n, abstain: 0n}
-		expect(isEligibleToVote(fresh)).toBe(true)
+	const fresh: ProposalTally = {
+		executed: false,
+		yes: 0n,
+		no: 0n,
+		abstain: 0n,
+		startDate: START_DATE,
+		lastDate: LAST_DATE,
+	}
+
+	test("eligible iff !executed && zero tally && voting window open", () => {
+		expect(isEligibleToVote(fresh, NOW)).toBe(true)
 	})
 
 	test("ineligible when already executed", () => {
-		expect(isEligibleToVote({executed: true, yes: 0n, no: 0n, abstain: 0n})).toBe(false)
+		expect(isEligibleToVote({...fresh, executed: true}, NOW)).toBe(false)
 	})
 
 	test("ineligible when any vote is recorded (yes / no / abstain)", () => {
-		expect(isEligibleToVote({executed: false, yes: 1n, no: 0n, abstain: 0n})).toBe(false)
-		expect(isEligibleToVote({executed: false, yes: 0n, no: 1n, abstain: 0n})).toBe(false)
-		expect(isEligibleToVote({executed: false, yes: 0n, no: 0n, abstain: 1n})).toBe(false)
+		expect(isEligibleToVote({...fresh, yes: 1n}, NOW)).toBe(false)
+		expect(isEligibleToVote({...fresh, no: 1n}, NOW)).toBe(false)
+		expect(isEligibleToVote({...fresh, abstain: 1n}, NOW)).toBe(false)
+	})
+
+	test("ineligible once the voting window has closed (beyond the skew buffer)", () => {
+		// 61s past lastDate: outside the 60s lenient buffer ⇒ no vote.
+		expect(isEligibleToVote(fresh, LAST_DATE + 61n)).toBe(false)
+	})
+
+	test("still eligible within the lenient skew buffer past lastDate", () => {
+		// 30s past close but inside the 60s buffer: prefer voting (may revert) over skipping.
+		expect(isEligibleToVote(fresh, LAST_DATE + 30n)).toBe(true)
+	})
+
+	test("ineligible before the voting window opens", () => {
+		expect(isEligibleToVote(fresh, START_DATE - 1n)).toBe(false)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// isVotingOpen — voting-window predicate
+// ---------------------------------------------------------------------------
+
+describe("isVotingOpen", () => {
+	test("open in the middle of the window", () => {
+		expect(isVotingOpen(NOW, START_DATE, LAST_DATE)).toBe(true)
+	})
+
+	test("open at exactly startDate, closed just before it", () => {
+		expect(isVotingOpen(START_DATE, START_DATE, LAST_DATE)).toBe(true)
+		expect(isVotingOpen(START_DATE - 1n, START_DATE, LAST_DATE)).toBe(false)
+	})
+
+	test("the buffer extends the close, never shrinks it", () => {
+		// Last second of the real window is always open.
+		expect(isVotingOpen(LAST_DATE - 1n, START_DATE, LAST_DATE)).toBe(true)
+		// And the window stays open for skewSeconds past lastDate.
+		expect(isVotingOpen(LAST_DATE + 59n, START_DATE, LAST_DATE, 60n)).toBe(true)
+		expect(isVotingOpen(LAST_DATE + 60n, START_DATE, LAST_DATE, 60n)).toBe(false)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// readChainTimeSeconds — chain clock with wall-clock fallback
+// ---------------------------------------------------------------------------
+
+describe("readChainTimeSeconds", () => {
+	test("returns the latest block timestamp", async () => {
+		const wallet = fakeWallet({getBlock: async () => ({timestamp: 1_234_567n})})
+		const now = await Effect.runPromise(readChainTimeSeconds(wallet))
+		expect(now).toBe(1_234_567n)
+	})
+
+	test("falls back to the pod wall clock when the block read fails", async () => {
+		const wallet = fakeWallet({
+			getBlock: async () => {
+				throw new Error("RPC down")
+			},
+		})
+		const before = BigInt(Math.floor(Date.now() / 1000))
+		const now = await Effect.runPromise(readChainTimeSeconds(wallet))
+		expect(now).toBeGreaterThanOrEqual(before)
 	})
 })
 
@@ -274,20 +360,20 @@ describe("idempotency: the bot never double-votes", () => {
 		// After the bot votes once, yes >= 1 is visible on-chain immediately — even before
 		// the indexer surfaces it — so the next cycle reads it and must skip.
 		const wallet = fakeWallet({
-			readContract: async () => [false, "0xcreator", {}, {yes: 1n, no: 0n, abstain: 0n}, []],
+			readContract: async () => [false, "0xcreator", OPEN_PARAMS, {yes: 1n, no: 0n, abstain: 0n}, []],
 		})
 
 		const tally = await Effect.runPromise(readProposalTally(wallet, DAO_SPACE_ADDR, PROPOSAL_UUID))
-		expect(isEligibleToVote(tally)).toBe(false)
+		expect(isEligibleToVote(tally, NOW)).toBe(false)
 	})
 
 	test("a human's pre-existing vote (indexing-lag window) also blocks the cast", async () => {
 		const wallet = fakeWallet({
-			readContract: async () => [false, "0xcreator", {}, {yes: 0n, no: 2n, abstain: 0n}, []],
+			readContract: async () => [false, "0xcreator", OPEN_PARAMS, {yes: 0n, no: 2n, abstain: 0n}, []],
 		})
 
 		const tally = await Effect.runPromise(readProposalTally(wallet, DAO_SPACE_ADDR, PROPOSAL_UUID))
-		expect(isEligibleToVote(tally)).toBe(false)
+		expect(isEligibleToVote(tally, NOW)).toBe(false)
 	})
 })
 

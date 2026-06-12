@@ -31,16 +31,35 @@ import {classifyAsRevert, padBytes16ToBytes32, type SmartWallet, uuidToBytes16} 
 // Types
 // ---------------------------------------------------------------------------
 
-/** The on-chain Tally plus the executed flag from getLatestProposalInformation. */
+/**
+ * The on-chain Tally plus the executed flag and voting-window bounds from
+ * getLatestProposalInformation. startDate/lastDate come from ProposalParameters
+ * and are authoritative: the protocol rejects a vote whose block.timestamp falls
+ * outside [startDate, lastDate], so stage-2 eligibility must honour them.
+ */
 export interface ProposalTally {
 	executed: boolean
 	yes: bigint
 	no: bigint
 	abstain: bigint
+	/** Unix seconds the voting window opens (ProposalParameters.startDate). */
+	startDate: bigint
+	/** Unix seconds the voting window closes (ProposalParameters.lastDate); later votes revert. */
+	lastDate: bigint
 }
 
 /** SpaceRegistry.spaceIdToAddress returns this for an unregistered space. */
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
+/**
+ * Seconds of slack added past the on-chain voting window's close when deciding
+ * whether to vote. The buffer is applied leniently (it extends the window rather
+ * than shrinking it): missing a genuinely-open request during its final seconds
+ * is worse than casting a vote that the contract rejects. So near the boundary we
+ * prefer to vote and risk an at-most-CLOCK_SKEW_BUFFER_SECONDS-late revert over a
+ * conservative skip. Mirrors the detection query's clock-skew constant.
+ */
+export const CLOCK_SKEW_BUFFER_SECONDS = 60n
 
 // ---------------------------------------------------------------------------
 // Sanitization — never leak a bundler URL's API key into an error message.
@@ -125,13 +144,20 @@ export function readProposalTally(
 	return Effect.tryPromise({
 		try: async () => {
 			const proposalIdHex = uuidToBytes16(proposalId)
-			const [executed, , , tally] = await wallet.publicClient.readContract({
+			const [executed, , parameters, tally] = await wallet.publicClient.readContract({
 				address: daoSpaceAddress,
 				abi: DAOSpaceAbi,
 				functionName: "getLatestProposalInformation",
 				args: [proposalIdHex],
 			})
-			return {executed, yes: tally.yes, no: tally.no, abstain: tally.abstain}
+			return {
+				executed,
+				yes: tally.yes,
+				no: tally.no,
+				abstain: tally.abstain,
+				startDate: parameters.startDate,
+				lastDate: parameters.lastDate,
+			}
 		},
 		catch: (error) =>
 			new InfraError({
@@ -143,12 +169,61 @@ export function readProposalTally(
 }
 
 /**
- * A request is eligible for an auto-accept YES vote iff it has not executed and no vote of
- * any kind is recorded on-chain. A non-zero tally covers both a human's vote (indexing lag)
- * and the bot's own in-flight vote → SKIP (reason: onchain_tally_nonzero), idempotency.
+ * Read the current chain time (latest block's timestamp) as Unix seconds.
+ *
+ * The voting-window check should compare against block.timestamp — the same clock
+ * the protocol enforces — not the pod's wall clock, which can drift. If the block
+ * read fails (transient RPC hiccup), fall back to the pod wall clock rather than
+ * failing the batch; CLOCK_SKEW_BUFFER_SECONDS absorbs the drift. Read once per
+ * run and reuse across requests in the batch.
  */
-export function isEligibleToVote(tally: ProposalTally): boolean {
-	return !tally.executed && tally.yes === 0n && tally.no === 0n && tally.abstain === 0n
+export function readChainTimeSeconds(wallet: SmartWallet): Effect.Effect<bigint> {
+	return Effect.tryPromise({
+		try: async () => (await wallet.publicClient.getBlock()).timestamp,
+		catch: (error) => error,
+	}).pipe(Effect.orElseSucceed(() => BigInt(Math.floor(Date.now() / 1000))))
+}
+
+/**
+ * A proposal's voting window is open iff now is at/after startDate and before
+ * lastDate extended by the clock-skew buffer. The close is widened, not narrowed:
+ * during the final CLOCK_SKEW_BUFFER_SECONDS — and up to that long past lastDate —
+ * the bot still votes, accepting a possible late revert over wrongly skipping a
+ * still-open request. now should be a chain-sourced timestamp (readChainTimeSeconds).
+ */
+export function isVotingOpen(
+	nowSeconds: bigint,
+	startDate: bigint,
+	lastDate: bigint,
+	skewSeconds: bigint = CLOCK_SKEW_BUFFER_SECONDS,
+): boolean {
+	return startDate <= nowSeconds && nowSeconds < lastDate + skewSeconds
+}
+
+/**
+ * A request is eligible for an auto-accept YES vote iff:
+ * - it has not executed,
+ * - no vote of any kind is recorded on-chain — a non-zero tally covers both a human's
+ *   vote (indexing lag) and the bot's own in-flight vote → SKIP (onchain_tally_nonzero),
+ *   which is what makes the job idempotent across cycles, and
+ * - its on-chain voting window is still open (now within [startDate, lastDate], with the
+ *   clock-skew buffer applied to the close). The protocol rejects votes outside the
+ *   window, so this is the authoritative stage-2 guard against voting on a closed request.
+ *
+ * now should be a chain-sourced timestamp (readChainTimeSeconds).
+ */
+export function isEligibleToVote(
+	tally: ProposalTally,
+	nowSeconds: bigint,
+	skewSeconds: bigint = CLOCK_SKEW_BUFFER_SECONDS,
+): boolean {
+	return (
+		!tally.executed &&
+		tally.yes === 0n &&
+		tally.no === 0n &&
+		tally.abstain === 0n &&
+		isVotingOpen(nowSeconds, tally.startDate, tally.lastDate, skewSeconds)
+	)
 }
 
 // ---------------------------------------------------------------------------
