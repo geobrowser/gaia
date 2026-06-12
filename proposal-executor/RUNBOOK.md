@@ -371,7 +371,7 @@ If the proposals table contains a malformed proposal or space ID, `uuidToBytes16
 | `DB connect failed: [ECONNREFUSED]` | DB unreachable | Check DATABASE_URL, network policies, PgBouncer |
 | `Executor Safe ... has no registered personal space` | Personal space not created | Run `geo space create` for the Safe address |
 | `On-chain space ID ... does not match configured EXECUTOR_SPACE_ID` | Wrong EXECUTOR_SPACE_ID | Verify against on-chain `addressToSpaceId(safeAddress)` |
-| `Invalid MEMBERSHIP_BOT_PRIVATE_KEY` | Not 0x-prefixed 64 hex chars | Check key format, add 0x prefix if missing |
+| `Invalid MEMBERSHIP_BOT_PRIVATE_KEY` | Not a 32-byte (64 hex char) key | Check the key is 64 hex chars; the `0x` prefix is auto-added, so length/hex content is the real issue |
 | `Invalid MEMBERSHIP_BOT_SPACE_ID` | Not 0x-prefixed bytes16 (34 chars) | UUID → strip dashes → prefix 0x |
 | `Invalid MEMBERSHIP_AUTOACCEPT_SPACE_IDS entry` | A list entry isn't bytes16 | Comma-separated 0x-prefixed bytes16; fix or remove the bad entry |
 | `MEMBERSHIP_BOT_PRIVATE_KEY must differ from EXECUTOR_PRIVATE_KEY` | Bot reuses executor key | Use a distinct key for the bot identity |
