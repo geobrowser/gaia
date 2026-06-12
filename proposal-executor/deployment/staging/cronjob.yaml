@@ -77,7 +77,7 @@ spec:
                   value: "0xb64f2e2d69be2ddbb5e3c997cf8a7d15"
                 # Membership-bot personal space — MUST differ from EXECUTOR_SPACE_ID
                 - name: MEMBERSHIP_BOT_SPACE_ID
-                  value: ""
+                  value: "0x24208422558b4ac801e24a71a889dfad"
                 # Allowlisted DAO spaces for auto-accept (comma-separated bytes16).
                 # Empty string = kill switch: no detection, no votes.
                 - name: MEMBERSHIP_AUTOACCEPT_SPACE_IDS
