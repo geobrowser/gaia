@@ -154,7 +154,9 @@ To onboard the bot itself (one-time, mirrors the executor's First-Time Setup):
 The bot votes only on a request **no one has touched** (no vote of any kind):
 
 1. **Stage 1 (indexer):** the detection SQL excludes any request that already has a row in
-   `proposal_votes` (skip reason `indexed_vote`, never reaches stage 2).
+   `proposal_votes`. These are filtered out at detection time — they never enter the membership
+   loop, so **no skip event is emitted** for them (you won't see an `indexed_vote` reason in the
+   logs; only stage-2 reasons appear in `membership_skip`).
 2. **Stage 2 (on-chain):** the live tally is read from the DAOSpace contract. The bot votes only if
    `!executed && yes==0 && no==0 && abstain==0` **and** the voting window is still open. This closes
    the indexer-lag gap and makes the job idempotent — once the bot votes, its own vote is in the

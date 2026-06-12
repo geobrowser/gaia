@@ -185,7 +185,10 @@ in two stages, indexer first then on-chain, to be both cheap and authoritative:
 
 1. **Stage 1 — indexer (`detect.ts`, `findMembershipRequests`).** A SQL `NOT EXISTS` against
    `proposal_votes` excludes any request that already has an indexed vote. Cheap, batched, but
-   subject to indexing lag. Skip reason: `indexed_vote`.
+   subject to indexing lag. This is a *filter* at detection time — excluded requests simply never
+   enter the membership loop, so **no per-request skip event is emitted** for them. (`indexed_vote`
+   exists in the `MembershipSkipReason` taxonomy for completeness but is never logged at runtime;
+   only stage-2 reasons appear in `membership_skip`.)
 2. **Stage 2 — on-chain (`membership.ts`, `readProposalTally`).** For each stage-1 survivor, read
    the live tally from the per-space DAOSpace contract via
    `getLatestProposalInformation(bytes16) → (executed, creator, parameters, tally, actions)`. The
@@ -269,7 +272,7 @@ does nothing.
 |---|---|---|
 | `wallet_ready` (`identity: membership-bot`) | INFO | Bot wallet built + verified. Check `safeAddress`. |
 | `membership_vote_cast` | INFO | YES vote submitted. `{proposalId, spaceId, targetId, txHash}`. |
-| `membership_skip` | INFO | Ineligible at stage 2. `reason` ∈ {`already_executed`, `onchain_tally_nonzero`, `voting_window_closed`}. (`indexed_vote` skips happen at stage 1 and never reach stage 2.) |
+| `membership_skip` | INFO | Ineligible at stage 2. `reason` ∈ {`already_executed`, `onchain_tally_nonzero`, `voting_window_closed`}. (Stage-1 indexed-vote exclusions are filtered out at detection time and emit no event — `indexed_vote` is never logged.) |
 | `membership_skip_expected` | INFO | Expected revert at cast time (already executed / resolved). Not an error. |
 | `membership_vote_reverted` | INFO | Unexpected revert (e.g. bot lacks EDITOR → `CanNotVote`). Skipped, retried next cycle. |
 | `membership_path_failed` | ERROR | The membership path's own InfraError boundary tripped; the execute path is unaffected. |
