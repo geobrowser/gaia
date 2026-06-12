@@ -1029,6 +1029,7 @@ export const rankings = ranks.table(
 		primaryKey({columns: [table.id, table.spaceId]}),
 		index("rankings_block_id_idx").on(table.blockId),
 		index("rankings_block_space_idx").on(table.blockId, table.spaceId),
+		index("rankings_space_id_idx").on(table.spaceId),
 	],
 )
 

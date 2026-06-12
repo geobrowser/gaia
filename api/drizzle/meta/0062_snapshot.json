@@ -1,5 +1,5 @@
 {
-  "id": "9acc6507-6328-4fbe-85bb-f62567a4b6be",
+  "id": "1e70dfc8-9e9e-4392-83b1-cb0798aa1f53",
   "prevId": "66ae6367-a3a0-4a26-9998-a7e9914df646",
   "version": "7",
   "dialect": "postgresql",
@@ -1711,6 +1711,21 @@
               "asc": true,
               "nulls": "last"
             },
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "rankings_space_id_idx": {
+          "name": "rankings_space_id_idx",
+          "columns": [
             {
               "expression": "space_id",
               "isExpression": false,

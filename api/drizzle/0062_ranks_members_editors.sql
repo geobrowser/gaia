@@ -12,6 +12,7 @@ CREATE TABLE "ranks"."members" (
 --> statement-breakpoint
 CREATE INDEX "ranks_editors_space_id_idx" ON "ranks"."editors" USING btree ("space_id");--> statement-breakpoint
 CREATE INDEX "ranks_members_space_id_idx" ON "ranks"."members" USING btree ("space_id");--> statement-breakpoint
+CREATE INDEX "rankings_space_id_idx" ON "ranks"."rankings" USING btree ("space_id");--> statement-breakpoint
 -- Seed the ranking-indexer's membership view from the kg-indexer-maintained
 -- public tables. Eligibility reads the public tables until this migration runs,
 -- so the copy makes the switch-over a semantic no-op; only events consumed

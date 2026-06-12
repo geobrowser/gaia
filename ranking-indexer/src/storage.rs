@@ -36,6 +36,26 @@ impl Storage {
         &self.pool
     }
 
+    /// Fail-fast startup check that the membership view exists (migration
+    /// `0062_ranks_members_editors`). Without it the missing tables would only
+    /// surface sporadically — on the first DAO-space recompute — instead of
+    /// deterministically at boot with an explicit error. Deploy order matters:
+    /// the migration must be applied before this indexer version starts.
+    pub async fn check_membership_view(&self) -> Result<(), IndexerError> {
+        for table in ["ranks.members", "ranks.editors"] {
+            sqlx::query(&format!("SELECT 1 FROM {table} LIMIT 1"))
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| {
+                    IndexerError::Config(format!(
+                        "{table} not readable — has migration 0062_ranks_members_editors \
+                         been applied? ({e})"
+                    ))
+                })?;
+        }
+        Ok(())
+    }
+
     /// Resolve a space's kind from `public.spaces.type` (`DAO` / `Personal`).
     /// Returns `None` if the space isn't known yet; callers treat unknown
     /// conservatively (as `Dao`, i.e. membership-restricted).

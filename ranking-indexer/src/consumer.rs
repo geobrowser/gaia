@@ -9,12 +9,16 @@
 use hermes_kafka::get_topic_prefix;
 use prost::Message;
 use rdkafka::{
+    client::ClientContext,
     config::ClientConfig,
-    consumer::{Consumer, DefaultConsumerContext, StreamConsumer},
-    TopicPartitionList,
+    consumer::{BaseConsumer, Consumer, ConsumerContext, RebalanceProtocol, StreamConsumer},
+    error::RDKafkaErrorCode,
+    types::RDKafkaRespErr,
+    Offset, TopicPartitionList,
 };
 use std::env;
-use tracing::{debug, info};
+use std::time::Duration;
+use tracing::{debug, error, info, warn};
 
 use crate::error::IndexerError;
 use crate::membership::MembershipEvent;
@@ -32,9 +36,135 @@ pub enum TopicKind {
     Membership,
 }
 
+/// Consumer context that starts *fresh* membership partitions at the latest
+/// offset instead of replaying the topic's history.
+///
+/// The membership view (`ranks.members` / `ranks.editors`) is seeded by
+/// migration 0062 from the kg-indexer-maintained public tables, so on the
+/// first deploy — when the group has committed offsets for `knowledge.edits`
+/// but none for `space.membership` — `auto.offset.reset=earliest` would
+/// replay the membership topic's entire retained history, recomputing and
+/// *republishing* aggregates through every historical membership state along
+/// the way. Starting at the high watermark is correct because the seed
+/// already reflects everything up to migration time; events produced after
+/// the consumer joins are consumed normally. Edits partitions are untouched.
+///
+/// Caveat: if the group's committed offsets expire (group inactive longer
+/// than the broker's `offsets.retention.minutes`), membership resumes at
+/// latest and the outage window's events are skipped — re-run the 0062 seed
+/// inserts to reconcile the view before restarting.
+pub struct RankingConsumerContext {
+    membership_topic: String,
+}
+
+impl RankingConsumerContext {
+    /// For each membership partition in the assignment with no committed
+    /// offset, override the start position to the high watermark. Leaves
+    /// every other partition untouched (committed offset, or
+    /// `auto.offset.reset` if none). On lookup failure the assignment is left
+    /// as-is, falling back to `earliest` — a full replay converges (it only
+    /// flaps published aggregates), whereas wrongly skipping ahead would
+    /// silently lose events.
+    fn start_fresh_membership_partitions_at_latest(
+        &self,
+        consumer: &BaseConsumer<Self>,
+        assignment: &mut TopicPartitionList,
+    ) {
+        let partitions: Vec<i32> = assignment
+            .elements_for_topic(&self.membership_topic)
+            .iter()
+            .map(|e| e.partition())
+            .collect();
+        if partitions.is_empty() {
+            return;
+        }
+
+        let mut query = TopicPartitionList::new();
+        for partition in &partitions {
+            query.add_partition(&self.membership_topic, *partition);
+        }
+        let committed = match consumer.committed_offsets(query, Duration::from_secs(10)) {
+            Ok(committed) => committed,
+            Err(e) => {
+                error!(
+                    error = %e,
+                    topic = %self.membership_topic,
+                    "Failed to fetch committed membership offsets — falling back to \
+                     auto.offset.reset (full replay)"
+                );
+                return;
+            }
+        };
+
+        for elem in committed.elements() {
+            if elem.offset() != Offset::Invalid {
+                continue;
+            }
+            if let Some(mut assigned) =
+                assignment.find_partition(&self.membership_topic, elem.partition())
+            {
+                if let Err(e) = assigned.set_offset(Offset::End) {
+                    error!(error = %e, partition = elem.partition(), "Failed to set start offset");
+                    continue;
+                }
+                info!(
+                    topic = %self.membership_topic,
+                    partition = elem.partition(),
+                    "No committed offset for membership partition — starting at latest \
+                     (view is seeded by migration 0062)"
+                );
+            }
+        }
+    }
+}
+
+impl ClientContext for RankingConsumerContext {}
+
+impl ConsumerContext for RankingConsumerContext {
+    // Full override of the default rebalance flow (the default body can't be
+    // called from an override): identical assign/unassign behavior via the
+    // public API, plus the fresh-membership-partition offset override before
+    // partitions are assigned.
+    fn rebalance(
+        &self,
+        base_consumer: &BaseConsumer<Self>,
+        err: RDKafkaRespErr,
+        tpl: &mut TopicPartitionList,
+    ) {
+        match err {
+            RDKafkaRespErr::RD_KAFKA_RESP_ERR__ASSIGN_PARTITIONS => {
+                self.start_fresh_membership_partitions_at_latest(base_consumer, tpl);
+                let result = match base_consumer.rebalance_protocol() {
+                    RebalanceProtocol::Cooperative => base_consumer.incremental_assign(tpl),
+                    _ => base_consumer.assign(tpl),
+                };
+                if let Err(e) = result {
+                    error!(error = %e, "Failed to assign partitions during rebalance");
+                }
+            }
+            RDKafkaRespErr::RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS => {
+                let result = match base_consumer.rebalance_protocol() {
+                    RebalanceProtocol::Cooperative => base_consumer.incremental_unassign(tpl),
+                    _ => base_consumer.unassign(),
+                };
+                if let Err(e) = result {
+                    error!(error = %e, "Failed to unassign partitions during rebalance");
+                }
+            }
+            _ => {
+                let code: RDKafkaErrorCode = err.into();
+                error!(error = %code, "Kafka rebalance error");
+                if let Err(e) = base_consumer.unassign() {
+                    warn!(error = %e, "Failed to unassign partitions after rebalance error");
+                }
+            }
+        }
+    }
+}
+
 /// Kafka consumer for knowledge edits + membership events.
 pub struct KafkaConsumer {
-    consumer: StreamConsumer<DefaultConsumerContext>,
+    consumer: StreamConsumer<RankingConsumerContext>,
     edits_topic: String,
     membership_topic: String,
 }
@@ -66,11 +196,15 @@ impl KafkaConsumer {
             config.set("ssl.ca.pem", &ca_pem);
         }
 
-        let consumer: StreamConsumer = config.create()?;
-
         let prefix = get_topic_prefix();
         let edits_topic = format!("{}{}", prefix, EDITS_TOPIC);
         let membership_topic = format!("{}{}", prefix, MEMBERSHIP_TOPIC);
+
+        let context = RankingConsumerContext {
+            membership_topic: membership_topic.clone(),
+        };
+        let consumer: StreamConsumer<RankingConsumerContext> =
+            config.create_with_context(context)?;
 
         info!(
             brokers = %brokers,
@@ -110,7 +244,7 @@ impl KafkaConsumer {
         }
     }
 
-    pub fn stream(&self) -> rdkafka::consumer::MessageStream<'_, DefaultConsumerContext> {
+    pub fn stream(&self) -> rdkafka::consumer::MessageStream<'_, RankingConsumerContext> {
         self.consumer.stream()
     }
 
@@ -159,19 +293,26 @@ pub fn get_event_type(headers: Option<&rdkafka::message::BorrowedHeaders>) -> Op
 }
 
 /// Decode a `space.membership` message, dispatching on the `event-type` header.
+///
+/// `Ok(None)` means a known event type this indexer intentionally ignores —
+/// distinguished from unknown types (an error) so an expected event never
+/// logs at warn level.
 pub fn parse_membership_event(
     payload: &[u8],
     event_type: Option<&str>,
-) -> Result<MembershipEvent, IndexerError> {
+) -> Result<Option<MembershipEvent>, IndexerError> {
     match event_type {
-        Some("ROLE_GRANTED") => Ok(MembershipEvent::RoleGranted(
+        Some("ROLE_GRANTED") => Ok(Some(MembershipEvent::RoleGranted(
             hermes_schema::pb::membership::HermesRoleGranted::decode(payload)
                 .map_err(|e| IndexerError::decode(format!("HermesRoleGranted: {e}")))?,
-        )),
-        Some("ROLE_REVOKED") => Ok(MembershipEvent::RoleRevoked(
+        ))),
+        Some("ROLE_REVOKED") => Ok(Some(MembershipEvent::RoleRevoked(
             hermes_schema::pb::membership::HermesRoleRevoked::decode(payload)
                 .map_err(|e| IndexerError::decode(format!("HermesRoleRevoked: {e}")))?,
-        )),
+        ))),
+        // Emitted by the pipeline but intentionally unhandled, for parity with
+        // the kg-indexer (which also ignores it).
+        Some("SPACE_LEFT") => Ok(None),
         other => Err(IndexerError::decode(format!(
             "unknown membership event type: {other:?}"
         ))),
@@ -196,11 +337,16 @@ mod tests {
 
         assert!(matches!(
             parse_membership_event(&payload, Some("ROLE_GRANTED")),
-            Ok(MembershipEvent::RoleGranted(_))
+            Ok(Some(MembershipEvent::RoleGranted(_)))
         ));
         assert!(matches!(
             parse_membership_event(&payload, Some("ROLE_REVOKED")),
-            Ok(MembershipEvent::RoleRevoked(_))
+            Ok(Some(MembershipEvent::RoleRevoked(_)))
+        ));
+        // known-but-unhandled event type -> ignored, not an error
+        assert!(matches!(
+            parse_membership_event(&payload, Some("SPACE_LEFT")),
+            Ok(None)
         ));
         // missing or unknown header -> decode error, not a crash
         assert!(parse_membership_event(&payload, None).is_err());
