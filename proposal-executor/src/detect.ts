@@ -182,9 +182,12 @@ export function findExecutableProposals(client: PgClient, nowSeconds: number): E
  * - Not yet executed (executed_at IS NULL)
  * - Created in the past (guards against corrupt future timestamps; no age cutoff
  *   — backlog is admitted, unlike the executor's MAX_PROPOSAL_AGE)
- * - Voting period has not ended (now <= end_time) — the protocol rejects votes
- *   cast after the period closes, and an untouched Fast proposal whose period
- *   has ended is already classified REJECTED (threshold not reached)
+ * - Voting period has not ended (now <= end_time + CLOCK_SKEW_BUFFER) — the protocol
+ *   rejects votes cast after the period closes, and an untouched Fast proposal whose
+ *   period has ended is already classified REJECTED (threshold not reached). The same
+ *   60s skew buffer the stage-2 eligibility check applies (isVotingOpen, membership.ts)
+ *   is added here so detection never excludes a request that stage 2 would still vote
+ *   on — `now` must therefore be the same chain-sourced timestamp stage 2 uses.
  * - Exactly one action, an AddMember targeting the proposer itself
  *   (target_id = proposed_by) — the self-service request-to-join signature, not
  *   an editor-initiated add
@@ -205,7 +208,7 @@ WHERE p.space_id = ANY($1)
   AND p.voting_mode = 'Fast'
   AND p.executed_at IS NULL
   AND p.created_at::bigint <= $2::bigint
-  AND $2::bigint <= p.end_time
+  AND $2::bigint <= p.end_time + ${CLOCK_SKEW_BUFFER}
   AND a.action_type = 'AddMember'
   AND a.target_id = p.proposed_by
   AND NOT EXISTS (SELECT 1 FROM proposal_votes pv WHERE pv.proposal_id = p.id)
@@ -222,15 +225,19 @@ ORDER BY p.created_at::bigint ASC
  *
  * @param client - Connected pg.Client
  * @param allowlistSpaceIds - Dashed UUIDs of allowlisted DAO spaces (from bytes16 config)
+ * @param nowSeconds - Current Unix timestamp in seconds. MUST be the same chain-sourced
+ *   clock stage 2 uses (readChainTimeSeconds), so the two stages share one notion of
+ *   "now" and the same skew policy — passing the pod wall clock would reintroduce the
+ *   drift the +CLOCK_SKEW_BUFFER window is meant to absorb.
  */
 export function findMembershipRequests(
 	client: PgClient,
 	allowlistSpaceIds: string[],
+	nowSeconds: number,
 ): Effect.Effect<MembershipRequest[], InfraError> {
 	if (allowlistSpaceIds.length === 0) {
 		return Effect.succeed([])
 	}
-	const nowSeconds = Math.floor(Date.now() / 1000)
 	return Effect.tryPromise({
 		try: async () => {
 			const result = await client.query<MembershipRequest>(MEMBERSHIP_DETECTION_SQL, [
