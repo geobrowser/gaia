@@ -88,8 +88,11 @@ spec:
                 secretKeyRef:
                   name: hermes-ipfs-cache-secrets
                   key: SUBSTREAMS_API_TOKEN
+            # 0 = stream from genesis — safe on the fresh chain (non-numeric values are
+            # silently ignored and fall back to the OLD testnet block 82655).
+            # Tighten to the V2 SpaceRegistry deploy block at deploy time (runbook Step 9).
             - name: SUBSTREAMS_START_BLOCK
-              value: "82656"
+              value: "0"
             - name: IPFS_GATEWAY_URL
               valueFrom:
                 secretKeyRef:

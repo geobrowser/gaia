@@ -111,11 +111,11 @@ spec:
                 secretKeyRef:
                   name: hermes-ipfs-cache-secrets
                   key: SUBSTREAMS_API_TOKEN
-            # Sole ingestion floor (GEO-537). Must be the V2 SpaceRegistry
-            # deploy block on the new chain — the binary default is the OLD
-            # testnet block, so this must stay explicit here.
+            # 0 = stream from genesis — safe on the fresh chain (non-numeric values are
+            # silently ignored and fall back to the OLD testnet block 82655).
+            # Tighten to the V2 SpaceRegistry deploy block at deploy time (runbook Step 9).
             - name: SUBSTREAMS_START_BLOCK
-              value: "REPLACE_WITH_SPACEREGISTRY_DEPLOY_BLOCK"
+              value: "0"
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
