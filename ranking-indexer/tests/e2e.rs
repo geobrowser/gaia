@@ -8,9 +8,7 @@
 //! CI `DATABASE_URL` that lacks the `ranks` schema.
 
 use grc_20::model::builder::EditBuilder;
-use hermes_schema::pb::membership::{
-    HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft, MembershipRole,
-};
+use hermes_schema::pb::membership::{HermesRoleGranted, HermesRoleRevoked, MembershipRole};
 use sdk::core::ids::*;
 use sqlx::Row;
 use uuid::Uuid;
@@ -450,8 +448,7 @@ const M_RANK1: u128 = 0xE2E6_0000_0041;
 const M_RANK2: u128 = 0xE2E6_0000_0042;
 
 /// A rank submitted by a non-member must be integrated when they become a
-/// member (or editor), and dropped again when the role is revoked or they
-/// leave the space.
+/// member (or editor), and dropped again when the role is revoked.
 #[tokio::test]
 async fn membership_events_integrate_and_drop_rankings() {
     let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
@@ -664,19 +661,22 @@ async fn membership_events_integrate_and_drop_rankings() {
         "an editor's rank must be integrated"
     );
 
-    // --- SPACE_LEFT: drops both roles and the rank ---------------------------
-    let left = MembershipEvent::SpaceLeft(HermesSpaceLeft {
-        member_id: u(M_LATE).as_bytes().to_vec(),
+    // --- ROLE_REVOKED(EDITOR): the rank drops out again ----------------------
+    let revoked_editor = MembershipEvent::RoleRevoked(HermesRoleRevoked {
         space_id: u(M_SPACE).as_bytes().to_vec(),
+        member_space_id: u(M_LATE).as_bytes().to_vec(),
+        role: MembershipRole::Editor as i32,
         meta: None,
     });
-    apply_membership_event(&left, &storage).await.unwrap();
+    apply_membership_event(&revoked_editor, &storage)
+        .await
+        .unwrap();
 
     let prov = contributing(pool).await;
     assert_eq!(
         prov,
         vec![u(M_RANK1)],
-        "leaving the space must drop the rank from the aggregate"
+        "revoking the editor role must drop the rank from the aggregate"
     );
     let view_rows: i64 = sqlx::query_scalar(
         "SELECT (SELECT count(*) FROM ranks.members WHERE member_space_id = $1 AND space_id = $2)
@@ -687,5 +687,8 @@ async fn membership_events_integrate_and_drop_rankings() {
     .fetch_one(pool)
     .await
     .unwrap();
-    assert_eq!(view_rows, 0, "SPACE_LEFT must clear both view tables");
+    assert_eq!(
+        view_rows, 0,
+        "both roles revoked — view tables must be empty"
+    );
 }

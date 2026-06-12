@@ -6,9 +6,7 @@
 //! event recomputes the blocks where the change can matter: blocks in the
 //! affected space that hold a submission from the member's personal space.
 
-use hermes_schema::pb::membership::{
-    HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft, MembershipRole,
-};
+use hermes_schema::pb::membership::{HermesRoleGranted, HermesRoleRevoked, MembershipRole};
 use uuid::Uuid;
 
 use crate::error::IndexerError;
@@ -20,7 +18,6 @@ use crate::storage::Storage;
 pub enum MembershipEvent {
     RoleGranted(HermesRoleGranted),
     RoleRevoked(HermesRoleRevoked),
-    SpaceLeft(HermesSpaceLeft),
 }
 
 /// What an event does to the membership view.
@@ -30,9 +27,6 @@ pub enum ChangeKind {
     AddEditor,
     RemoveMember,
     RemoveEditor,
-    /// `SPACE_LEFT` carries no role — the member left voluntarily, so both
-    /// roles are dropped.
-    Left,
 }
 
 /// A membership event reduced to ids + effect.
@@ -80,14 +74,6 @@ pub fn change_for(event: &MembershipEvent) -> Result<MembershipChange, IndexerEr
                 kind,
             })
         }
-        MembershipEvent::SpaceLeft(e) => {
-            let (space_id, member_space_id) = ids(&e.space_id, &e.member_id)?;
-            Ok(MembershipChange {
-                space_id,
-                member_space_id,
-                kind: ChangeKind::Left,
-            })
-        }
     }
 }
 
@@ -120,11 +106,6 @@ pub async fn apply_membership_event(
         ChangeKind::RemoveEditor => {
             storage
                 .remove_editor(change.space_id, change.member_space_id)
-                .await?
-        }
-        ChangeKind::Left => {
-            storage
-                .remove_member_and_editor(change.space_id, change.member_space_id)
                 .await?
         }
     }
@@ -188,19 +169,6 @@ mod tests {
             });
             assert_eq!(change_for(&event).unwrap().kind, kind);
         }
-    }
-
-    #[test]
-    fn space_left_drops_both_roles() {
-        let event = MembershipEvent::SpaceLeft(HermesSpaceLeft {
-            member_id: b(2),
-            space_id: b(1),
-            meta: None,
-        });
-        let change = change_for(&event).unwrap();
-        assert_eq!(change.space_id, Uuid::from_u128(1));
-        assert_eq!(change.member_space_id, Uuid::from_u128(2));
-        assert_eq!(change.kind, ChangeKind::Left);
     }
 
     #[test]

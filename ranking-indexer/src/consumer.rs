@@ -172,10 +172,6 @@ pub fn parse_membership_event(
             hermes_schema::pb::membership::HermesRoleRevoked::decode(payload)
                 .map_err(|e| IndexerError::decode(format!("HermesRoleRevoked: {e}")))?,
         )),
-        Some("SPACE_LEFT") => Ok(MembershipEvent::SpaceLeft(
-            hermes_schema::pb::membership::HermesSpaceLeft::decode(payload)
-                .map_err(|e| IndexerError::decode(format!("HermesSpaceLeft: {e}")))?,
-        )),
         other => Err(IndexerError::decode(format!(
             "unknown membership event type: {other:?}"
         ))),

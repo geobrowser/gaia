@@ -132,26 +132,6 @@ impl Storage {
         Ok(())
     }
 
-    /// Drop both roles at once (`SPACE_LEFT` carries no role).
-    pub async fn remove_member_and_editor(
-        &self,
-        space_id: Uuid,
-        member_space_id: Uuid,
-    ) -> Result<(), IndexerError> {
-        let mut tx = self.pool.begin().await?;
-        for table in ["ranks.members", "ranks.editors"] {
-            sqlx::query(&format!(
-                "DELETE FROM {table} WHERE member_space_id = $1 AND space_id = $2"
-            ))
-            .bind(member_space_id)
-            .bind(space_id)
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
-        Ok(())
-    }
-
     /// Blocks whose aggregate a membership change for `(space_id,
     /// member_space_id)` can affect: blocks in the affected space holding a
     /// submission from that member's personal space.
