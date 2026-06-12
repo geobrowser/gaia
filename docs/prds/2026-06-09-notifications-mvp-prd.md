@@ -12,7 +12,7 @@
 
 ## Scope
 **In:**
-- A new **Geo Browser app server** with its own Postgres DB that receives webhooks from the Gaia delivery worker and stores notifications.
+- A new **Geo Browser app server** using the shared app Postgres DB (currently used solely by chat) that receives webhooks from the Gaia delivery worker and stores notifications.
 - Three notification types (all are `proposal_created` events; see "Who gets what" below): **membership requests**, **editorship requests**, **new proposals for editors**.
 - Three delivery channels — **in-app feed**, **push (AWS SNS)**, **email (MailerSend)** — abstracted behind a provider interface so the concrete services are swappable. **All channels default on.**
 - Per-user, per-channel **preferences**: a user can enable/disable each channel.
@@ -23,7 +23,7 @@
 **Out:**
 - Other notification types from GEO-2172 (bounties, points, votes, comments, proposal-outcome-to-proposer, trending) — explicitly deferred.
 - Notifying the **requester** when their membership/editorship request is approved or rejected (that's a future proposal-outcome type).
-- App servers for any front-end other than Geo Browser. (Each front-end gets its own app server later; we build one now.)
+- Front-ends other than Geo Browser are out of scope for the MVP. The plan is a single shared app server for all Geo front-ends (not one per front-end); we build it for Geo Browser first.
 - Changes to the on-chain contracts or the Gaia notification-indexer/delivery-worker (they already emit what we need — see Open questions for the one payload detail to confirm).
 - A webhook self-registration API (the Geo Browser webhook is seeded manually into `app_webhooks`, per current v1).
 
@@ -209,6 +209,6 @@ Integration points that need a joint technical design before implementation. Nam
 ## Out of scope for this PRD
 - App-server data model (table columns) and concrete API schemas — belong in the app server tech-design doc. (Auth *direction* is decided here; detailed token validation/refresh handling is for that doc.)
 - The other GEO-2172 notification types (bounties, points, votes, comments, trending, proposal-outcome).
-- Notifications for anyone other than Geo Browser users — the MVP covers Geo Browser users only (other front-ends each get their own app server later).
+- Notifications for anyone other than Geo Browser users — the MVP covers Geo Browser users only (the same shared app server will serve other Geo front-ends later).
 - Webhook self-registration API, subscription/event-type filtering, and per-webhook rate limiting (tracked as open questions in the notification-service tech design).
 - **Non-Privy / external wallet authentication.** Supporting users who interact with Geo Browser through an external wallet (e.g. MetaMask) instead of Privy email-login. The MVP assumes Privy email-login — every user has a verified Privy email and an embedded wallet, which both the identity store and the server-side email resolution depend on. Adding external wallets would require an alternative auth path — likely a **wallet-signature ownership proof (SIWE / `personal_sign`-style, as used by other DeFi front-ends)** in place of the Privy Bearer token — and treating email as optional (wallet-only users would have no email channel and would rely on in-app + push). Deferred to a future iteration.
