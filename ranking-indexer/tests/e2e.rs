@@ -449,9 +449,9 @@ const M_ENTITY_B: u128 = 0xE2E6_0000_0032;
 const M_RANK1: u128 = 0xE2E6_0000_0041;
 const M_RANK2: u128 = 0xE2E6_0000_0042;
 
-/// GEO-688: a rank submitted by a non-member must be integrated when they
-/// become a member (or editor), and dropped again when the role is revoked or
-/// they leave the space.
+/// A rank submitted by a non-member must be integrated when they become a
+/// member (or editor), and dropped again when the role is revoked or they
+/// leave the space.
 #[tokio::test]
 async fn membership_events_integrate_and_drop_rankings() {
     let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {

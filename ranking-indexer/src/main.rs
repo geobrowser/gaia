@@ -6,7 +6,7 @@
 //!
 //! Also consumes `space.membership` to maintain the indexer's own view of the
 //! space registry (`ranks.members` / `ranks.editors`) and recompute the blocks
-//! a role grant/revoke affects (GEO-688).
+//! a role grant/revoke affects.
 
 use std::env;
 

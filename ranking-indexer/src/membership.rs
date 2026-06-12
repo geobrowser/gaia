@@ -1,4 +1,4 @@
-//! Membership event handling (GEO-688).
+//! Membership event handling.
 //!
 //! The indexer maintains its own minimal view of the space registry
 //! (`ranks.members` / `ranks.editors`), fed from the `space.membership` topic,
