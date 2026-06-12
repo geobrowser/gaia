@@ -204,8 +204,11 @@ export function readChainTimeSeconds(wallet: SmartWallet): Effect.Effect<bigint>
 }
 
 /**
- * A proposal's voting window is open iff now is at/after startDate and before
- * lastDate extended by the clock-skew buffer. The close is widened, not narrowed:
+ * A proposal's voting window is open iff now is at/after startDate and at/before
+ * lastDate extended by the clock-skew buffer. The bound is inclusive on both ends,
+ * matching the inclusive upper bound in the stage-1 detection SQL ($2 <= end_time +
+ * skew) so the two stages agree at the skew boundary. The close is widened, not
+ * narrowed:
  * during the final CLOCK_SKEW_BUFFER_SECONDS — and up to that long past lastDate —
  * the bot still votes, accepting a possible late revert over wrongly skipping a
  * still-open request. now should be a chain-sourced timestamp (readChainTimeSeconds).
@@ -216,7 +219,7 @@ export function isVotingOpen(
 	lastDate: bigint,
 	skewSeconds: bigint = CLOCK_SKEW_BUFFER_SECONDS,
 ): boolean {
-	return startDate <= nowSeconds && nowSeconds < lastDate + skewSeconds
+	return startDate <= nowSeconds && nowSeconds <= lastDate + skewSeconds
 }
 
 /**

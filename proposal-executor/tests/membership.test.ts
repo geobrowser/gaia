@@ -322,9 +322,12 @@ describe("isVotingOpen", () => {
 	test("the buffer extends the close, never shrinks it", () => {
 		// Last second of the real window is always open.
 		expect(isVotingOpen(LAST_DATE - 1n, START_DATE, LAST_DATE)).toBe(true)
-		// And the window stays open for skewSeconds past lastDate.
+		// And the window stays open through skewSeconds past lastDate. The upper
+		// bound is inclusive, matching the inclusive stage-1 detection SQL, so the
+		// two stages agree exactly at the skew boundary (lastDate + skew).
 		expect(isVotingOpen(LAST_DATE + 59n, START_DATE, LAST_DATE, 60n)).toBe(true)
-		expect(isVotingOpen(LAST_DATE + 60n, START_DATE, LAST_DATE, 60n)).toBe(false)
+		expect(isVotingOpen(LAST_DATE + 60n, START_DATE, LAST_DATE, 60n)).toBe(true)
+		expect(isVotingOpen(LAST_DATE + 61n, START_DATE, LAST_DATE, 60n)).toBe(false)
 	})
 })
 
