@@ -111,23 +111,31 @@ export function resolveDaoSpaceAddress(
 	spaceRegistryAddress: Address,
 	daoSpaceId: Hex,
 ): Effect.Effect<Address, InfraError> {
-	return Effect.tryPromise({
-		try: async () => {
-			const address = await wallet.publicClient.readContract({
-				address: spaceRegistryAddress,
-				abi: SpaceRegistryAbi,
-				functionName: "spaceIdToAddress",
-				args: [daoSpaceId],
-			})
-			if (address.toLowerCase() === ZERO_ADDRESS) {
-				throw new Error(
-					`DAO space ${daoSpaceId} is not registered (spaceIdToAddress returned the zero address)`,
-				)
-			}
-			return address
-		},
-		catch: (error) =>
-			new InfraError({message: `DAO space address resolution failed: ${sanitizeError(error)}`, durationMs: 0}),
+	// Effect.suspend captures `start` fresh on each retry attempt, so durationMs
+	// reflects only the current attempt's wall time — mirrors executeProposal().
+	return Effect.suspend(() => {
+		const start = Date.now()
+		return Effect.tryPromise({
+			try: async () => {
+				const address = await wallet.publicClient.readContract({
+					address: spaceRegistryAddress,
+					abi: SpaceRegistryAbi,
+					functionName: "spaceIdToAddress",
+					args: [daoSpaceId],
+				})
+				if (address.toLowerCase() === ZERO_ADDRESS) {
+					throw new Error(
+						`DAO space ${daoSpaceId} is not registered (spaceIdToAddress returned the zero address)`,
+					)
+				}
+				return address
+			},
+			catch: (error) =>
+				new InfraError({
+					message: `DAO space address resolution failed: ${sanitizeError(error)}`,
+					durationMs: Date.now() - start,
+				}),
+		})
 	})
 }
 
@@ -147,30 +155,35 @@ export function readProposalTally(
 	daoSpaceAddress: Address,
 	proposalId: string,
 ): Effect.Effect<ProposalTally, InfraError> {
-	return Effect.tryPromise({
-		try: async () => {
-			const proposalIdHex = uuidToBytes16(proposalId)
-			const [executed, , parameters, tally] = await wallet.publicClient.readContract({
-				address: daoSpaceAddress,
-				abi: DAOSpaceAbi,
-				functionName: "getLatestProposalInformation",
-				args: [proposalIdHex],
-			})
-			return {
-				executed,
-				yes: tally.yes,
-				no: tally.no,
-				abstain: tally.abstain,
-				startDate: parameters.startDate,
-				lastDate: parameters.lastDate,
-			}
-		},
-		catch: (error) =>
-			new InfraError({
-				proposalId,
-				message: `Proposal tally read failed: ${sanitizeError(error)}`,
-				durationMs: 0,
-			}),
+	// Effect.suspend captures `start` fresh on each retry attempt, so durationMs
+	// reflects only the current attempt's wall time — mirrors executeProposal().
+	return Effect.suspend(() => {
+		const start = Date.now()
+		return Effect.tryPromise({
+			try: async () => {
+				const proposalIdHex = uuidToBytes16(proposalId)
+				const [executed, , parameters, tally] = await wallet.publicClient.readContract({
+					address: daoSpaceAddress,
+					abi: DAOSpaceAbi,
+					functionName: "getLatestProposalInformation",
+					args: [proposalIdHex],
+				})
+				return {
+					executed,
+					yes: tally.yes,
+					no: tally.no,
+					abstain: tally.abstain,
+					startDate: parameters.startDate,
+					lastDate: parameters.lastDate,
+				}
+			},
+			catch: (error) =>
+				new InfraError({
+					proposalId,
+					message: `Proposal tally read failed: ${sanitizeError(error)}`,
+					durationMs: Date.now() - start,
+				}),
+		})
 	})
 }
 
