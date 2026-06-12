@@ -12,7 +12,7 @@ on:
 
 concurrency:
   group: build-v2-images
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   REGISTRY: registry.digitalocean.com/geo
