@@ -596,24 +596,6 @@ const main = Effect.gen(function* () {
 
 	yield* verifyExecutorSetup(wallet, config.executorSpaceId, config.spaceRegistryAddress)
 
-	// Membership-accept bot wallet — a SECOND, distinct identity built from the
-	// dedicated bot key + space. Verified each run so a misconfigured bot fails
-	// fast. It casts the membership YES votes; the executor wallet never does.
-	const botWallet = yield* createSmartWallet({
-		privateKey: config.membershipBotPrivateKey,
-		pimlicoApiKey: Redacted.value(config.pimlicoApiKey),
-		executorSpaceId: config.membershipBotSpaceId,
-		spaceRegistryAddress: config.spaceRegistryAddress,
-		rpcUrl: Redacted.value(config.rpcUrl),
-		chainId: config.chainId,
-	})
-
-	yield* Effect.logInfo("wallet_ready").pipe(
-		Effect.annotateLogs({identity: "membership-bot", safeAddress: botWallet.safeAddress}),
-	)
-
-	yield* verifyExecutorSetup(botWallet, config.membershipBotSpaceId, config.spaceRegistryAddress)
-
 	const runStart = Date.now()
 	const nowSeconds = Math.floor(runStart / 1000)
 
@@ -701,13 +683,36 @@ const main = Effect.gen(function* () {
 	const runMembershipPath: Effect.Effect<MembershipSummary> = Effect.gen(function* () {
 		const allowlistUuids = config.membershipAutoacceptSpaceIds.map(bytes16ToUuid)
 
-		// Kill switch: an empty allowlist does no work at all — no chain read, no query.
+		// Kill switch: an empty allowlist does no work at all — no chain read, no query,
+		// and no bot wallet setup. This fully disables the membership-bot dependency
+		// (key, space, Pimlico/RPC), so misconfiguration there can never affect a run.
 		if (allowlistUuids.length === 0) {
 			yield* Effect.logInfo("membership_start").pipe(
 				Effect.annotateLogs({allowlistSize: 0, requestsFound: 0, spaces: 0}),
 			)
 			return {admitted: 0, skipped: 0, failed: 0, total: 0, spaces: 0}
 		}
+
+		// Membership-accept bot wallet — a SECOND, distinct identity built from the
+		// dedicated bot key + space. Built and verified inside this path (not main) so a
+		// misconfigured bot or transient infra failure (Pimlico/bundler/RPC) is caught by
+		// the membership path's own InfraError boundary and never aborts the execute path.
+		// Verified each run so a misconfigured bot fails fast. It casts the membership YES
+		// votes; the executor wallet never does.
+		const botWallet = yield* createSmartWallet({
+			privateKey: config.membershipBotPrivateKey,
+			pimlicoApiKey: Redacted.value(config.pimlicoApiKey),
+			executorSpaceId: config.membershipBotSpaceId,
+			spaceRegistryAddress: config.spaceRegistryAddress,
+			rpcUrl: Redacted.value(config.rpcUrl),
+			chainId: config.chainId,
+		})
+
+		yield* Effect.logInfo("wallet_ready").pipe(
+			Effect.annotateLogs({identity: "membership-bot", safeAddress: botWallet.safeAddress}),
+		)
+
+		yield* verifyExecutorSetup(botWallet, config.membershipBotSpaceId, config.spaceRegistryAddress)
 
 		// Read chain time once, BEFORE detection, and reuse it for both stages. Stage-1
 		// detection and stage-2 eligibility must share one notion of "now" and the same
