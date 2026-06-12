@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-cache
+  namespace: gaia-v2
+  labels:
+    app: api-cache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-cache
+  template:
+    metadata:
+      labels:
+        app: api-cache
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      nodeSelector:
+        doks.digitalocean.com/node-pool: gaia-v2-pool
+      tolerations:
+        - key: dedicated
+          value: gaia-v2
+          effect: NoSchedule
+      containers:
+        - name: valkey
+          image: valkey/valkey:8.1-alpine
+          args:
+            # Ephemeral cache — no persistence, no disk writes
+            - "--save"
+            - ""
+            - "--appendonly"
+            - "no"
+            # Memory limit: conservative for ~15 cached responses at up to 25MB each
+            - "--maxmemory"
+            - "512mb"
+            # LRU eviction: evict least-recently-used keys when memory is full
+            - "--maxmemory-policy"
+            - "allkeys-lru"
+            # Require authentication
+            - "--requirepass"
+            - "$(VALKEY_PASSWORD)"
+          env:
+            - name: VALKEY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: api-cache-secrets
+                  key: VALKEY_PASSWORD
+          ports:
+            - containerPort: 6379
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "50m"
+            limits:
+              memory: "1Gi"
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - valkey-cli -a "$VALKEY_PASSWORD" --no-auth-warning ping
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - valkey-cli -a "$VALKEY_PASSWORD" --no-auth-warning ping
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-cache
+  namespace: gaia-v2
+  labels:
+    app: api-cache
+spec:
+  type: ClusterIP
+  ports:
+    - name: valkey
+      port: 6379
+      targetPort: 6379
+      protocol: TCP
+  selector:
+    app: api-cache
+---
+# Restrict Valkey access to API pods only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-cache-ingress
+  namespace: gaia-v2
+spec:
+  podSelector:
+    matchLabels:
+      app: api-cache
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api
+      ports:
+        - port: 6379
+          protocol: TCP

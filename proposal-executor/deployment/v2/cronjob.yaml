@@ -1,0 +1,107 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: proposal-executor
+  namespace: gaia-v2
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 290 # 10s gap before next 5-min CronJob invocation
+      backoffLimit: 1 # Don't restart-loop on failure — try again in 5 min
+      template:
+        spec:
+          restartPolicy: Never # CronJob retries via next scheduled run, not restarts
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+          imagePullSecrets:
+            - name: regcred
+          volumes:
+            - name: ssl-certs
+              emptyDir: {}
+          nodeSelector:
+            doks.digitalocean.com/node-pool: gaia-v2-pool
+          tolerations:
+            - key: dedicated
+              value: gaia-v2
+              effect: NoSchedule
+          initContainers:
+            - name: setup-certs
+              image: registry.digitalocean.com/geo/proposal-executor:latest
+              command: ["sh", "-c", "echo \"$DATABASE_SSL_CA\" > /ssl/ca.crt"]
+              env:
+                - name: DATABASE_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: DATABASE_SSL_CA
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+          containers:
+            - name: proposal-executor
+              image: registry.digitalocean.com/geo/proposal-executor:latest
+              imagePullPolicy: Always
+              env:
+                # Secrets (sensitive — from K8s Secret)
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: DATABASE_URL
+                - name: EXECUTOR_PRIVATE_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: EXECUTOR_PRIVATE_KEY
+                - name: PIMLICO_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: PIMLICO_API_KEY
+                # Config (non-sensitive — plain values)
+                - name: EXECUTOR_SPACE_ID
+                  value: "REPLACE_WITH_NEW_EXECUTOR_SPACE_ID"
+                - name: SPACE_REGISTRY_ADDRESS
+                  value: "REPLACE_WITH_NEW_SPACE_REGISTRY_ADDRESS"
+                - name: RPC_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: RPC_URL
+                - name: CHAIN_ID
+                  value: "REPLACE_WITH_NEW_CHAIN_ID"
+                # Optional: Sentry error reporting
+                - name: SENTRY_DSN
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: SENTRY_DSN
+                      optional: true
+                # Trust DigitalOcean's CA cert for database SSL
+                - name: NODE_EXTRA_CA_CERTS
+                  value: "/ssl/ca.crt"
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+                  readOnly: true
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"

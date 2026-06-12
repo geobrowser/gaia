@@ -1,0 +1,124 @@
+# Vote Indexer Deployment
+#
+# Consumes vote events from Kafka and indexes them into PostgreSQL with real-time aggregation.
+# This daemon runs continuously alongside the scoring-service CronJob.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vote-indexer
+  namespace: gaia-v2
+  labels:
+    app: vote-indexer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vote-indexer
+  template:
+    metadata:
+      labels:
+        app: vote-indexer
+    spec:
+      restartPolicy: Always
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: regcred
+      nodeSelector:
+        doks.digitalocean.com/node-pool: gaia-v2-pool
+      tolerations:
+        - key: dedicated
+          value: gaia-v2
+          effect: NoSchedule
+      containers:
+        - name: vote-indexer
+          image: registry.digitalocean.com/geo/vote-indexer:latest
+          imagePullPolicy: Always
+          env:
+            # Database configuration
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: scoring-service-credentials
+                  key: DATABASE_URL
+            # Kafka configuration
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_USERNAME
+                  optional: true
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_PASSWORD
+                  optional: true
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_SSL_CA_PEM
+                  optional: true
+            # Consumer configuration
+            - name: ENVIRONMENT
+              value: "testnet"
+            - name: KAFKA_GROUP_ID
+              value: "vote-indexer-testnet"
+            - name: BATCH_SIZE
+              value: "100"
+            - name: BATCH_TIMEOUT_MS
+              value: "1000"
+            # Logging
+            - name: RUST_LOG
+              value: "info,vote_indexer=debug"
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: vote-indexer-secrets
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              valueFrom:
+                secretKeyRef:
+                  name: vote-indexer-secrets
+                  key: SENTRY_TRACES_SAMPLE_RATE
+                  optional: true
+            - name: SENTRY_SEND_DEFAULT_PII
+              valueFrom:
+                secretKeyRef:
+                  name: vote-indexer-secrets
+                  key: SENTRY_SEND_DEFAULT_PII
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: vote-indexer-secrets
+                  key: SENTRY_ENVIRONMENT
+                  optional: true
+            - name: SENTRY_RELEASE
+              valueFrom:
+                secretKeyRef:
+                  name: vote-indexer-secrets
+                  key: SENTRY_RELEASE
+                  optional: true
+            - name: SENTRY_DEBUG
+              valueFrom:
+                secretKeyRef:
+                  name: vote-indexer-secrets
+                  key: SENTRY_DEBUG
+                  optional: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
