@@ -89,14 +89,11 @@ export const DAOSpaceAbi = [
 			{internalType: "bytes16", name: "_creator", type: "bytes16"},
 			{
 				components: [
-					{internalType: "uint8", name: "votingMode", type: "uint8"},
-					{internalType: "uint256", name: "partialPercentageSupportThreshold", type: "uint256"},
-					{internalType: "uint256", name: "universalPercentageSupportThreshold", type: "uint256"},
-					{internalType: "uint256", name: "flatSupportThreshold", type: "uint256"},
+					{internalType: "enum IDAOSpace.VotingMode", name: "votingMode", type: "uint8"},
+					{internalType: "uint256", name: "supportThreshold", type: "uint256"},
 					{internalType: "uint256", name: "quorum", type: "uint256"},
 					{internalType: "uint256", name: "startDate", type: "uint256"},
 					{internalType: "uint256", name: "lastDate", type: "uint256"},
-					{internalType: "uint256", name: "executeBy", type: "uint256"},
 				],
 				internalType: "struct IDAOSpace.ProposalParameters",
 				name: "_parameters",

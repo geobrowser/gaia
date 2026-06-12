@@ -8,6 +8,7 @@
  */
 
 import {describe, expect, test} from "bun:test"
+import {decodeFunctionResult} from "viem"
 import {DAOSpaceAbi, PROPOSAL_VOTED_ACTION, SpaceRegistryAbi, VOTE_YES} from "../src/contracts.js"
 
 // ---------------------------------------------------------------------------
@@ -64,6 +65,67 @@ describe("DAOSpaceAbi", () => {
 		expect(tally?.type).toBe("tuple")
 		expect(tally?.components?.map((c) => c.name)).toEqual(["yes", "no", "abstain"])
 		expect(tally?.components?.every((c) => c.type === "uint256")).toBe(true)
+	})
+
+	test("ProposalParameters matches the deployed 5-field struct (votingMode, supportThreshold, quorum, startDate, lastDate)", () => {
+		const params = getInfo?.outputs?.[2]
+		expect(params?.type).toBe("tuple")
+		// Authoritative source: geo-contracts-foundry IDAOSpace.ProposalParameters.
+		// The struct has exactly 5 fields; an over- or under-count silently misaligns
+		// the startDate/lastDate slot reads in readProposalTally (overflow / garbage),
+		// which is what the on-chain decode regression below guards against end-to-end.
+		expect(params?.components?.map((c) => c.name)).toEqual([
+			"votingMode",
+			"supportThreshold",
+			"quorum",
+			"startDate",
+			"lastDate",
+		])
+		expect(params?.components?.map((c) => c.type)).toEqual(["uint8", "uint256", "uint256", "uint256", "uint256"])
+	})
+
+	// Regression for the ABI struct-shape bug: decode REAL on-chain return bytes (captured
+	// from getLatestProposalInformation on the Geo testnet) through DAOSpaceAbi and assert the
+	// fields land correctly. The earlier 8-field ProposalParameters misaligned the parameters
+	// slots, so startDate/lastDate read garbage and viem threw a safe-integer overflow. A
+	// fixture-based decode — not a self-consistent round-trip — is the only thing that catches
+	// an ABI that doesn't match the deployed contract. Words: executed=false, creator (bytes16),
+	// params(votingMode=1, supportThreshold=0, quorum=1, startDate, lastDate), tally(0,0,0), 1 action.
+	test("decodes a real getLatestProposalInformation return with correct startDate/lastDate", () => {
+		const raw = ("0x" +
+			"0000000000000000000000000000000000000000000000000000000000000000" + // executed = false
+			"924ac01ba0a4355f16f40e0dfdc4823000000000000000000000000000000000" + // creator (bytes16)
+			"0000000000000000000000000000000000000000000000000000000000000001" + // votingMode = Fast
+			"0000000000000000000000000000000000000000000000000000000000000000" + // supportThreshold
+			"0000000000000000000000000000000000000000000000000000000000000001" + // quorum
+			"000000000000000000000000000000000000000000000000000000006a2c457c" + // startDate = 1781286268
+			"000000000000000000000000000000000000000000000000000000006a2d96fc" + // lastDate  = 1781372668
+			"0000000000000000000000000000000000000000000000000000000000000000" + // tally.yes
+			"0000000000000000000000000000000000000000000000000000000000000000" + // tally.no
+			"0000000000000000000000000000000000000000000000000000000000000000" + // tally.abstain
+			"0000000000000000000000000000000000000000000000000000000000000160" + // actions offset
+			"0000000000000000000000000000000000000000000000000000000000000001" + // actions.length = 1
+			"0000000000000000000000000000000000000000000000000000000000000020" + // actions[0] offset
+			"0000000000000000000000007fadb2a38e44a34e6256273b149e6f436e911713" + // actions[0].to
+			"0000000000000000000000000000000000000000000000000000000000000000" + // actions[0].value
+			"0000000000000000000000000000000000000000000000000000000000000060" + // actions[0].data offset
+			"0000000000000000000000000000000000000000000000000000000000000024" + // actions[0].data length = 36
+			"2afbe350924ac01ba0a4355f16f40e0dfdc48230000000000000000000000000" + // actions[0].data
+			"0000000000000000000000000000000000000000000000000000000000000000") as `0x${string}` // data tail pad
+
+		const [executed, creator, parameters, tally] = decodeFunctionResult({
+			abi: DAOSpaceAbi,
+			functionName: "getLatestProposalInformation",
+			data: raw,
+		})
+
+		expect(executed).toBe(false)
+		expect(creator).toBe("0x924ac01ba0a4355f16f40e0dfdc48230")
+		expect(parameters.startDate).toBe(1781286268n)
+		expect(parameters.lastDate).toBe(1781372668n)
+		expect(tally.yes).toBe(0n)
+		expect(tally.no).toBe(0n)
+		expect(tally.abstain).toBe(0n)
 	})
 })
 
