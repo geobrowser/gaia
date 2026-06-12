@@ -1,0 +1,87 @@
+name: Build gaia-v2 images (manual)
+
+# Builds and pushes all images needed for the gaia-v2 (chain-migration) stack.
+# Build-and-push only — deploys stay manual per the GEO-664 runbook (Step 12:
+# sed the image tag into the k8s/v2 manifests and kubectl apply).
+#
+# Images are tagged with the full commit SHA and a short 8-char SHA; use either
+# in the manifests.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-v2-images
+  cancel-in-progress: false
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: hermes-pipeline
+            dockerfile: hermes-pipeline/Dockerfile
+            context: .
+          - image: hermes-ipfs-cache
+            dockerfile: hermes-ipfs-cache/Dockerfile
+            context: .
+          - image: kg-indexer
+            dockerfile: kg-indexer/Dockerfile
+            context: .
+          - image: api
+            dockerfile: api/Dockerfile
+            context: ./api
+          - image: proposal-executor
+            dockerfile: proposal-executor/Dockerfile
+            context: proposal-executor
+          - image: atlas
+            dockerfile: atlas/Dockerfile
+            context: .
+          - image: search-indexer
+            dockerfile: search-indexer/Dockerfile
+            context: .
+          - image: vote-indexer
+            dockerfile: scoring-service/vote-indexer/Dockerfile
+            context: .
+          - image: topology-indexer
+            dockerfile: scoring-service/topology-indexer/Dockerfile
+            context: .
+          - image: scoring-service
+            dockerfile: scoring-service/cronjob/Dockerfile
+            context: scoring-service/cronjob
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.2
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@3cb3953159719656269e044e0e24ca16dd2a690f # v2.5.2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          docker build -t ${{ env.REGISTRY }}/${{ matrix.image }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ matrix.image }}:$SHORT_SHA \
+                       -f ${{ matrix.dockerfile }} ${{ matrix.context }}
+          docker push ${{ env.REGISTRY }}/${{ matrix.image }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ matrix.image }}:$SHORT_SHA
+
+  summary:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print image tags
+        run: |
+          echo "## gaia-v2 images" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tag for manifests: \`${GITHUB_SHA:0:8}\` (or full \`${GITHUB_SHA}\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Build result: ${{ needs.build.result }}" >> "$GITHUB_STEP_SUMMARY"
