@@ -85,13 +85,15 @@ jobs:
           SERVICE: ${{ inputs.service }}
         run: |
           # Capture doctl output separately so a doctl failure is distinguishable
-          # from "tag not found", and compare whitespace-stripped exact strings
-          # (doctl's table writer can pad lines, which broke a plain grep -qx).
-          if ! tags=$(doctl registry repository list-tags "$SERVICE" --format Tag --no-header); then
+          # from "tag not found". Match the tag against the FIRST column only:
+          # the runner's doctl ignores --format/--no-header and prints the full
+          # table, and a substring grep could false-positive on the hex digest
+          # column. First-field exact match works with either output format.
+          if ! tags=$(doctl registry repository list-tags "$SERVICE"); then
             echo "::error::doctl failed listing tags for $REGISTRY/$SERVICE — registry/auth problem, not a missing tag."
             exit 1
           fi
-          if ! echo "$tags" | awk -v t="$TAG" '{gsub(/[[:space:]]+/,"")} $0==t{found=1} END{exit !found}'; then
+          if ! echo "$tags" | awk -v t="$TAG" '$1==t{found=1} END{exit !found}'; then
             echo "::error::Tag $TAG not found in $REGISTRY/$SERVICE — run the build workflow first. Tags present:"
             echo "$tags"
             exit 1
