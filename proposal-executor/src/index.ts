@@ -454,6 +454,27 @@ function readTallyWithRetry(
 }
 
 /**
+ * Resolve a space's DAOSpace address (stage-2 prerequisite) with the same per-attempt
+ * timeout + InfraError retry as the other membership RPC reads. The timeout guards
+ * against a hung lookup that never rejects — without it a single stuck call would block
+ * the fiber until the global 270s run timeout, stalling every other space.
+ */
+function resolveDaoSpaceAddressWithRetry(
+	wallet: SmartWallet,
+	spaceRegistryAddress: Address,
+	daoSpaceId: Hex,
+): Effect.Effect<Address, InfraError> {
+	return resolveDaoSpaceAddress(wallet, spaceRegistryAddress, daoSpaceId).pipe(
+		Effect.timeoutFail({
+			duration: Duration.seconds(30),
+			onTimeout: () =>
+				new InfraError({message: "DAO space address resolution timed out after 30s", durationMs: 30_000}),
+		}),
+		Effect.retry({schedule: infraRetryPolicy, while: (e) => e._tag === "InfraError"}),
+	)
+}
+
+/**
  * Process one membership request: stage-2 on-chain read → eligibility gate → vote.
  * A RevertError is caught and turned into a `reverted` outcome (logged, not fatal) so
  * it never aborts the rest of the space. An InfraError propagates to abort this space
@@ -528,8 +549,7 @@ export function processSpaceMembership(
 	spaceRegistryAddress: Address,
 	nowSeconds: bigint,
 ): Effect.Effect<MembershipOutcome[], InfraError> {
-	return resolveDaoSpaceAddress(wallet, spaceRegistryAddress, uuidToBytes16(spaceId)).pipe(
-		Effect.retry({schedule: infraRetryPolicy, while: (e) => e._tag === "InfraError"}),
+	return resolveDaoSpaceAddressWithRetry(wallet, spaceRegistryAddress, uuidToBytes16(spaceId)).pipe(
 		Effect.flatMap((daoSpaceAddress) =>
 			Effect.forEach(
 				requests,
