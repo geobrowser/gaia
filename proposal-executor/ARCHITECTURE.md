@@ -248,14 +248,26 @@ guard this value, because `docs/protocol/dao-space.md` previously documented the
 SpaceRegistry, so the address is resolved first via `SpaceRegistry.spaceIdToAddress(daoSpaceId)`
 (a zero address ⇒ unregistered space ⇒ `InfraError`).
 
-### Request-to-Join Detection Signature
+### Membership Detection Signature
 
-A membership request, per stage-1 SQL, is a proposal that is **all** of: `Fast` voting mode; a
-single action; that action is `AddMember`; the action targets the proposer itself
-(`proposals.proposed_by = proposal_actions.target_id` — a *self*-request, not an editor adding
-someone); not executed; in an allowlisted space; and with no row in `proposal_votes` (stage-1
-untouched). There is **no creation-time cutoff** — a pre-existing backlog is admitted. When the
-allowlist is empty the query short-circuits to `[]` (kill switch — no DB query issued).
+A membership candidate, per stage-1 SQL, is a proposal that is **all** of: `Fast` voting mode; a
+single action; that action is `AddMember`; not executed; in an allowlisted space; created in the
+past whose voting period has not yet ended (`created_at <= now <= end_time` + clock-skew buffer);
+and with no row in `proposal_votes` (stage-1 untouched). Note stage-1 only bounds the *close* of the
+window — the authoritative *open* check (`startDate <= now`) is enforced at stage 2 (`isVotingOpen`),
+so a not-yet-open proposal is never voted on. There is **no creation-time cutoff** — a pre-existing
+backlog is admitted. When the allowlist is empty the query short-circuits to `[]` (kill switch — no
+DB query issued).
+
+The detection does **not** distinguish a self-service request-to-join from an editor-initiated
+`AddMember`: the indexer stores `proposed_by` as the *space*, never the individual proposer, so the
+two are indistinguishable at this layer. The **allowlist is the authorization boundary** — placing
+a space in `MEMBERSHIP_AUTOACCEPT_SPACE_IDS` declares that any member proposed there should be
+auto-admitted. Combined with `fastPathFlatThreshold = 1` (where the proposer's own vote normally
+decides and touches the tally), the bot in practice only ever acts on AddMembers left completely
+unvoted. If self-service-only semantics are ever required, the authoritative on-chain `creator`
+(from `getLatestProposalInformation`) can be compared against the target at stage 2; that constraint
+is intentionally omitted today.
 
 ### Kill Switch & Blast Radius
 

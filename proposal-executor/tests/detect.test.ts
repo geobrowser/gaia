@@ -93,9 +93,12 @@ describe("membership detection SQL", () => {
 		expect(membershipSql).toContain("p.voting_mode = 'Fast'")
 	})
 
-	test("requires the action to be a self-service AddMember (target == proposer)", () => {
+	test("requires the action to be an AddMember", () => {
 		expect(membershipSql).toContain("a.action_type = 'AddMember'")
-		expect(membershipSql).toContain("a.target_id = p.proposed_by")
+	})
+
+	test("does not constrain the proposer (self-service and editor-initiated adds both match)", () => {
+		expect(membershipSql).not.toContain("a.target_id = p.proposed_by")
 	})
 
 	test("projects the MembershipRequest row shape {id, spaceId, requesterId}", () => {
@@ -114,11 +117,6 @@ describe("membership detection SQL", () => {
 
 	test("excludes executed proposals", () => {
 		expect(membershipSql).toContain("p.executed_at IS NULL")
-	})
-
-	test("excludes editor-initiated adds by requiring target_id = proposed_by", () => {
-		// An editor-initiated add has proposed_by != target_id, so this predicate filters it out.
-		expect(membershipSql).toContain("a.target_id = p.proposed_by")
 	})
 
 	test("excludes multi-action proposals (exactly one action required)", () => {
