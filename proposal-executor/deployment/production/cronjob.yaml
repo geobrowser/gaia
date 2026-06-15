@@ -76,7 +76,7 @@ spec:
                 # Allowlisted DAO spaces for auto-accept (comma-separated bytes16).
                 # Empty string = kill switch: no detection, no votes.
                 - name: MEMBERSHIP_AUTOACCEPT_SPACE_IDS
-                  value: ""
+                  value: "0xc9f267dcb0d270718c2a3c45a64afd32,0x84a679ce188f061ac9a92380bac2bab5"
                 - name: SPACE_REGISTRY_ADDRESS
                   value: "0xB01683b2f0d38d43fcD4D9aAB980166988924132"
                 - name: RPC_URL
