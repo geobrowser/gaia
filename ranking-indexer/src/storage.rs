@@ -36,6 +36,26 @@ impl Storage {
         &self.pool
     }
 
+    /// Fail-fast startup check that the membership view exists (migration
+    /// `0062_ranks_members_editors`). Without it the missing tables would only
+    /// surface sporadically — on the first DAO-space recompute — instead of
+    /// deterministically at boot with an explicit error. Deploy order matters:
+    /// the migration must be applied before this indexer version starts.
+    pub async fn check_membership_view(&self) -> Result<(), IndexerError> {
+        for table in ["ranks.members", "ranks.editors"] {
+            sqlx::query(&format!("SELECT 1 FROM {table} LIMIT 1"))
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| {
+                    IndexerError::Config(format!(
+                        "{table} not readable — has migration 0062_ranks_members_editors \
+                         been applied? ({e})"
+                    ))
+                })?;
+        }
+        Ok(())
+    }
+
     /// Resolve a space's kind from `public.spaces.type` (`DAO` / `Personal`).
     /// Returns `None` if the space isn't known yet; callers treat unknown
     /// conservatively (as `Dao`, i.e. membership-restricted).
@@ -51,17 +71,103 @@ impl Storage {
     }
 
     /// The set of personal-space ids that are members OR editors of `space_id`
-    /// — the eligible voters for a DAO-space block.
+    /// — the eligible voters for a DAO-space block. Reads the indexer's own
+    /// view (`ranks.members` / `ranks.editors`, fed from `space.membership`)
+    /// rather than the kg-indexer-maintained public tables, so a recompute
+    /// never races the kg-indexer's consumer group.
     pub async fn member_and_editor_spaces(
         &self,
         space_id: Uuid,
     ) -> Result<HashSet<Uuid>, IndexerError> {
         let rows: Vec<(Uuid,)> = sqlx::query_as(
-            "SELECT member_space_id FROM members WHERE space_id = $1
+            "SELECT member_space_id FROM ranks.members WHERE space_id = $1
              UNION
-             SELECT member_space_id FROM editors WHERE space_id = $1",
+             SELECT member_space_id FROM ranks.editors WHERE space_id = $1",
         )
         .bind(space_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// Record `member_space_id` as a member of `space_id` in the view.
+    pub async fn add_member(
+        &self,
+        space_id: Uuid,
+        member_space_id: Uuid,
+    ) -> Result<(), IndexerError> {
+        sqlx::query(
+            "INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(member_space_id)
+        .bind(space_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Drop `member_space_id` as a member of `space_id` from the view.
+    pub async fn remove_member(
+        &self,
+        space_id: Uuid,
+        member_space_id: Uuid,
+    ) -> Result<(), IndexerError> {
+        sqlx::query("DELETE FROM ranks.members WHERE member_space_id = $1 AND space_id = $2")
+            .bind(member_space_id)
+            .bind(space_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Record `member_space_id` as an editor of `space_id` in the view.
+    pub async fn add_editor(
+        &self,
+        space_id: Uuid,
+        member_space_id: Uuid,
+    ) -> Result<(), IndexerError> {
+        sqlx::query(
+            "INSERT INTO ranks.editors (member_space_id, space_id) VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(member_space_id)
+        .bind(space_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Drop `member_space_id` as an editor of `space_id` from the view.
+    pub async fn remove_editor(
+        &self,
+        space_id: Uuid,
+        member_space_id: Uuid,
+    ) -> Result<(), IndexerError> {
+        sqlx::query("DELETE FROM ranks.editors WHERE member_space_id = $1 AND space_id = $2")
+            .bind(member_space_id)
+            .bind(space_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Blocks whose aggregate a membership change for `(space_id,
+    /// member_space_id)` can affect: blocks in the affected space holding a
+    /// submission from that member's personal space.
+    pub async fn blocks_with_rankings_from(
+        &self,
+        space_id: Uuid,
+        member_space_id: Uuid,
+    ) -> Result<Vec<Uuid>, IndexerError> {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT DISTINCT r.block_id
+             FROM ranks.rankings r
+             JOIN ranks.ranking_blocks b ON b.id = r.block_id AND b.space_id = $1
+             WHERE r.space_id = $2 AND r.block_id IS NOT NULL",
+        )
+        .bind(space_id)
+        .bind(member_space_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(|(id,)| id).collect())

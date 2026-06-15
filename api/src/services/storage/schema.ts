@@ -1029,6 +1029,7 @@ export const rankings = ranks.table(
 		primaryKey({columns: [table.id, table.spaceId]}),
 		index("rankings_block_id_idx").on(table.blockId),
 		index("rankings_block_space_idx").on(table.blockId, table.spaceId),
+		index("rankings_space_id_idx").on(table.spaceId),
 	],
 )
 
@@ -1043,6 +1044,36 @@ export const rankingItems = ranks.table(
 		weight: doublePrecision(),
 	},
 	(table) => [primaryKey({columns: [table.rankingId, table.entityId, table.spaceId]})],
+)
+
+/**
+ * The ranking-indexer's own view of space membership, mirroring the public
+ * `members` / `editors` tables but fed directly from the `space.membership`
+ * Kafka topic. Eligibility reads this view instead of the public tables so a
+ * recompute never races the kg-indexer's consumer group.
+ */
+export const ranksMembers = ranks.table(
+	"members",
+	{
+		memberSpaceId: uuid("member_space_id").notNull(),
+		spaceId: uuid("space_id").notNull(),
+	},
+	(table) => [
+		primaryKey({columns: [table.memberSpaceId, table.spaceId]}),
+		index("ranks_members_space_id_idx").on(table.spaceId),
+	],
+)
+
+export const ranksEditors = ranks.table(
+	"editors",
+	{
+		memberSpaceId: uuid("member_space_id").notNull(),
+		spaceId: uuid("space_id").notNull(),
+	},
+	(table) => [
+		primaryKey({columns: [table.memberSpaceId, table.spaceId]}),
+		index("ranks_editors_space_id_idx").on(table.spaceId),
+	],
 )
 
 /** Computed aggregate, keyed on (block, entity, space). */
