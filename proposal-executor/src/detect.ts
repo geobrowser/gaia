@@ -27,15 +27,15 @@ export interface Proposal {
 }
 
 /**
- * A request-to-join proposal: a Fast-mode proposal whose single action admits
- * its own proposer (self-service join). Candidate for an auto-accept YES vote.
+ * A membership request: a Fast-mode proposal whose single action is an AddMember
+ * in an allowlisted space. Candidate for an auto-accept YES vote.
  */
 export interface MembershipRequest {
 	/** Proposal UUID (with dashes) */
 	id: string
 	/** DAO space UUID being joined (with dashes); always in the allowlist */
 	spaceId: string
-	/** Member space UUID being added (== proposedBy for a self-service request) */
+	/** Member space UUID being added (with dashes) */
 	requesterId: string
 }
 
@@ -188,11 +188,14 @@ export function findExecutableProposals(client: PgClient, nowSeconds: number): E
  *   60s skew buffer the stage-2 eligibility check applies (isVotingOpen, membership.ts)
  *   is added here so detection never excludes a request that stage 2 would still vote
  *   on — `now` must therefore be the same chain-sourced timestamp stage 2 uses.
- * - Exactly one action, an AddMember targeting the proposer itself
- *   (target_id = proposed_by) — the self-service request-to-join signature, not
- *   an editor-initiated add
+ * - Exactly one action, and it is an AddMember
  * - No indexed votes (NOT EXISTS in proposal_votes) — checks raw indexed votes,
  *   not the async-denormalized yes_count/no_count/abstain_count columns
+ *
+ * NOTE: this does not distinguish a self-service request-to-join from an editor-initiated
+ * AddMember — any untouched, in-window, single-AddMember Fast proposal in an allowlisted
+ * space is auto-accepted. If product requires restricting to self-service requests, we'll
+ * add that constraint.
  *
  * This filters voting_mode = 'Fast' while the executor's query filters 'Slow',
  * so the two paths never return the same proposal.
@@ -210,7 +213,6 @@ WHERE p.space_id = ANY($1)
   AND p.created_at::bigint <= $2::bigint
   AND $2::bigint <= p.end_time + ${CLOCK_SKEW_BUFFER}
   AND a.action_type = 'AddMember'
-  AND a.target_id = p.proposed_by
   AND NOT EXISTS (SELECT 1 FROM proposal_votes pv WHERE pv.proposal_id = p.id)
   AND (SELECT COUNT(*) FROM proposal_actions a2 WHERE a2.proposal_id = p.id) = 1
 ORDER BY p.created_at::bigint ASC
