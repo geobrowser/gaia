@@ -1,0 +1,45 @@
+# cargo-deny configuration — supply-chain advisories/bans/sources for the Rust workspace.
+# Run locally and in CI: `cargo deny check advisories bans sources`
+# (.github/workflows/cargo-deny.yml)
+
+[graph]
+# Check the default feature set / host target — i.e. what actually ships. Deps
+# behind disabled features (e.g. rsa, quinn-proto) therefore aren't flagged.
+all-features = false
+
+[advisories]
+version = 2
+# Baseline of advisories accepted as of this PR. Crucially, NO RUSTSEC
+# *vulnerability* is ignored here — only pre-existing unmaintained/unsound
+# advisories on transitive deps — so a newly-introduced vulnerable crate still
+# fails CI. Revisit as the parents upgrade.
+#
+# RUSTSEC-2023-0071 (rsa — Marvin timing side-channel) is deliberately NOT
+# ignored: it has no upstream fix, but `rsa` is feature-gated out of the default
+# build graph, so cargo-deny doesn't flag it today. Leaving it un-ignored means
+# that if `rsa` ever enters the shipped graph, CI fails and forces a fresh
+# decision — rather than a global ignore silently masking a no-fix vulnerability.
+ignore = [
+    # Unmaintained (transitive, no action available without upstreams moving):
+    "RUSTSEC-2021-0141", # dotenv unmaintained (use dotenvy — follow-up)
+    "RUSTSEC-2024-0384", # instant unmaintained
+    "RUSTSEC-2024-0388", # derivative unmaintained
+    "RUSTSEC-2024-0436", # paste unmaintained
+    "RUSTSEC-2025-0012", # backoff unmaintained
+    "RUSTSEC-2025-0134", # rustls-pemfile unmaintained
+    "RUSTSEC-2026-0173", # rustls-pemfile unmaintained
+    # Unsound (transitive, low-severity):
+    "RUSTSEC-2026-0002", # lru — IterMut Stacked-Borrows unsoundness
+    "RUSTSEC-2026-0012", # keccak unsound
+    "RUSTSEC-2026-0097", # rand unsound (custom-logger edge case)
+]
+
+[bans]
+# Duplicate/incompatible version pairings (the class behind the time/sentry-types
+# E0119) — surfaced as warnings to start; tighten to "deny" once cleaned up.
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
