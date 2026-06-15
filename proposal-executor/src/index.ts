@@ -55,7 +55,8 @@ export {InfraError, RevertError} from "./contracts.js"
 export interface ExecutorEnv {
 	/** Redacted — unwrap with Redacted.value() only at the point of use */
 	databaseUrl: Redacted.Redacted
-	privateKey: `0x${string}`
+	/** Redacted — unwrap with Redacted.value() only at the point of use */
+	privateKey: Redacted.Redacted<`0x${string}`>
 	/** Redacted — unwrap with Redacted.value() only at the point of use */
 	pimlicoApiKey: Redacted.Redacted
 	executorSpaceId: Hex
@@ -65,8 +66,11 @@ export interface ExecutorEnv {
 	chainId: SupportedChainId
 
 	// --- Membership-accept path (dedicated bot identity, distinct from the executor) ---
-	/** Dedicated bot signing key — MUST differ from `privateKey`. Auto-prefixed 0x. */
-	membershipBotPrivateKey: `0x${string}`
+	/**
+	 * Redacted — unwrap with Redacted.value() only at the point of use.
+	 * Dedicated bot signing key — MUST differ from `privateKey`. Auto-prefixed 0x.
+	 */
+	membershipBotPrivateKey: Redacted.Redacted<`0x${string}`>
 	/** Bot's registered personal space (bytes16) — MUST differ from `executorSpaceId`. */
 	membershipBotSpaceId: Hex
 	/**
@@ -101,7 +105,7 @@ export const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(fu
 		Config.withDefault(""),
 	)
 
-	// --- Validate private key ---
+	// --- Validate private key (on a plain temporary; re-wrapped before storing) ---
 	let privateKey = Redacted.value(rawPrivateKey)
 	if (!privateKey.startsWith("0x")) {
 		privateKey = `0x${privateKey}`
@@ -159,7 +163,8 @@ export const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(fu
 		)
 	}
 
-	// --- Validate membership-bot private key (auto-prefix 0x like the executor key) ---
+	// --- Validate membership-bot private key (auto-prefix 0x like the executor key;
+	// validated on a plain temporary, then re-wrapped before storing) ---
 	let membershipBotPrivateKey = Redacted.value(rawMembershipBotPrivateKey)
 	if (!membershipBotPrivateKey.startsWith("0x")) {
 		membershipBotPrivateKey = `0x${membershipBotPrivateKey}`
@@ -226,13 +231,15 @@ export const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(fu
 
 	return {
 		databaseUrl,
-		privateKey: privateKey as `0x${string}`,
+		// Re-wrap the validated keys so they stay redacted in the long-lived config and
+		// are unwrapped only at the createSmartWallet call sites.
+		privateKey: Redacted.make(privateKey as `0x${string}`),
 		pimlicoApiKey,
 		executorSpaceId: rawExecutorSpaceId as Hex,
 		spaceRegistryAddress,
 		rpcUrl,
 		chainId: chainId as SupportedChainId,
-		membershipBotPrivateKey: membershipBotPrivateKey as `0x${string}`,
+		membershipBotPrivateKey: Redacted.make(membershipBotPrivateKey as `0x${string}`),
 		membershipBotSpaceId: rawMembershipBotSpaceId as Hex,
 		membershipAutoacceptSpaceIds,
 	}
@@ -582,7 +589,7 @@ const main = Effect.gen(function* () {
 	yield* Effect.addFinalizer(() => disconnectDb(db).pipe(Effect.tap(() => Effect.logDebug("db_disconnected"))))
 
 	const wallet = yield* createSmartWallet({
-		privateKey: config.privateKey,
+		privateKey: Redacted.value(config.privateKey),
 		pimlicoApiKey: Redacted.value(config.pimlicoApiKey),
 		executorSpaceId: config.executorSpaceId,
 		spaceRegistryAddress: config.spaceRegistryAddress,
@@ -700,7 +707,7 @@ const main = Effect.gen(function* () {
 		// Verified each run so a misconfigured bot fails fast. It casts the membership YES
 		// votes; the executor wallet never does.
 		const botWallet = yield* createSmartWallet({
-			privateKey: config.membershipBotPrivateKey,
+			privateKey: Redacted.value(config.membershipBotPrivateKey),
 			pimlicoApiKey: Redacted.value(config.pimlicoApiKey),
 			executorSpaceId: config.membershipBotSpaceId,
 			spaceRegistryAddress: config.spaceRegistryAddress,

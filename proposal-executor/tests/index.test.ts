@@ -6,7 +6,7 @@
  */
 
 import {describe, expect, test} from "bun:test"
-import {Cause, ConfigProvider, Effect, Exit, Option} from "effect"
+import {Cause, ConfigProvider, Effect, Exit, Option, Redacted} from "effect"
 import type {Address, Hex} from "viem"
 import {InfraError, RevertError} from "../src/contracts.js"
 import {findMembershipRequests, type MembershipRequest} from "../src/detect.js"
@@ -283,14 +283,14 @@ describe("parseConfig: membership-bot config & allowlist", () => {
 
 	test("valid env parses bot identity + allowlist", async () => {
 		const env = expectSuccess(await runParse())
-		expect(env.membershipBotPrivateKey).toBe(BOT_KEY)
+		expect(Redacted.value(env.membershipBotPrivateKey)).toBe(BOT_KEY)
 		expect(env.membershipBotSpaceId).toBe(BOT_SPACE)
 		expect(env.membershipAutoacceptSpaceIds).toEqual([ALLOW_A, ALLOW_B])
 	})
 
 	test("auto-prefixes a bot key supplied without 0x", async () => {
 		const env = expectSuccess(await runParse({MEMBERSHIP_BOT_PRIVATE_KEY: "2".repeat(64)}))
-		expect(env.membershipBotPrivateKey).toBe(BOT_KEY)
+		expect(Redacted.value(env.membershipBotPrivateKey)).toBe(BOT_KEY)
 	})
 
 	test("rejects a malformed bot private key", async () => {
