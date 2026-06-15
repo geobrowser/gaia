@@ -7,15 +7,17 @@
 ```
 proposal-executor/
 ├── src/
-│   ├── index.ts        # Effect orchestration, config parsing, entry point
-│   ├── detect.ts       # DB connection + detection SQL query
+│   ├── index.ts        # Effect orchestration, config parsing, entry point (both paths)
+│   ├── detect.ts       # DB connection + detection SQL (executable proposals + membership requests)
 │   ├── execute.ts      # Smart wallet, encoding helpers, on-chain execution
+│   ├── membership.ts   # Membership stage-2 on-chain read + PROPOSAL_VOTED (Yes) vote cast
 │   ├── contracts.ts    # ABI subset, chain defs, tagged errors, governance constants
 │   └── telemetry.ts    # OTel tracing + Sentry error tracking (adapted from api/)
 ├── tests/
-│   ├── detect.test.ts  # RATIO_BASE cross-validation, SQL structure, Proposal shape
-│   ├── execute.test.ts # Encoding correctness, constant validation, error classification
-│   └── index.test.ts   # Tagged error discrimination, exit code logic, concurrency model
+│   ├── detect.test.ts     # RATIO_BASE cross-validation, SQL structure, Proposal + MembershipRequest shape
+│   ├── execute.test.ts    # Encoding correctness, constant validation, error classification
+│   ├── membership.test.ts # Vote encoding (VoteOption=1), tally decoding, two-stage eligibility
+│   └── index.test.ts      # Tagged error discrimination, exit code logic, concurrency, dual-wallet config
 ├── deployment/         # Both environments deploy into the 'knowledge' namespace
 │   ├── staging/        # Testnet (chain 19411) manifests
 │   │   ├── cronjob.yaml
@@ -37,6 +39,8 @@ proposal-executor/
 - `db.ts` → folded into `detect.ts` (5 lines of `pg.Client` connect/query/end)
 
 Each file has enough substance (~30–100 lines) to justify its existence without artificial splitting.
+
+The membership-accept feature added a fifth source file, `membership.ts`, rather than folding into `execute.ts`. It is a distinct concern (vote cast + on-chain tally read, not slow-path execution) with its own substance (~330 lines), so it earns its own file by the same single-responsibility rule. It still *reuses* `execute.ts`'s smart-wallet factory, encoding helpers (`uuidToBytes16`, `padBytes16ToBytes32`), and `classifyAsRevert` — no duplication.
 
 ## Concurrency Model
 
@@ -141,6 +145,144 @@ The Safe smart account address is deterministic from the owner EOA. The same pri
 
 The testnet uses custom Safe deployment addresses (defined in `contracts.ts`, forked from `geo-cli/src/wallet.ts:54-61`). These are selected via `config.chainId === 19411`.
 
+## Membership Auto-Accept Path
+
+A second action path runs in the same CronJob alongside slow-path execution: it detects
+untouched **request-to-join** proposals in an explicit allowlist of spaces and casts a single
+**YES vote** on each. Because allowlisted spaces are configured with `fastPathFlatThreshold = 1`,
+that one YES vote meets the threshold and the DAOSpace contract executes the `AddMember` action in
+the *same* transaction — admitting the joiner with no human in the loop. There is no separate
+`PROPOSAL_EXECUTED` step for these.
+
+The two paths share the process, the cycle, and the DB connection, but **never share a wallet
+identity**. They run concurrently (`Effect.all`, concurrency 2) with isolated error boundaries —
+each path is total (catches its own failures), so a failure in one cannot abort or interrupt the
+other.
+
+### Dual-Wallet Identity Isolation
+
+The membership path acts under a **dedicated bot identity whose wallet is distinct from the
+slow-path executor wallet** — a separate private key (`MEMBERSHIP_BOT_PRIVATE_KEY`) and a separate
+registered personal space (`MEMBERSHIP_BOT_SPACE_ID`). This is a hard requirement, enforced at
+startup:
+
+- `parseConfig` fails fast with `InfraError` if `MEMBERSHIP_BOT_PRIVATE_KEY === EXECUTOR_PRIVATE_KEY`
+  or `MEMBERSHIP_BOT_SPACE_ID === EXECUTOR_SPACE_ID`.
+- Both wallets are built via the same `createSmartWallet` factory and each is verified every run
+  (`verifyExecutorSetup`), so a misconfigured bot fails fast. Two `wallet_ready` logs are emitted,
+  tagged `identity: "executor"` and `identity: "membership-bot"`.
+
+Why a separate identity: least privilege. The bot holds the **EDITOR** role in each allowlisted
+space (the authority a YES vote requires); the executor does not need and should not have it. The
+bot gets its own key, its own authority, its own kill switch, and its own blast radius — fully
+isolated from the executor. The executor wallet never casts a membership vote; the bot wallet never
+executes a slow-path proposal.
+
+### Two-Stage "Untouched" Eligibility
+
+The bot only votes on a request that **no one has touched** — no vote of any kind. This is checked
+in two stages, indexer first then on-chain, to be both cheap and authoritative:
+
+1. **Stage 1 — indexer (`detect.ts`, `findMembershipRequests`).** A SQL `NOT EXISTS` against
+   `proposal_votes` excludes any request that already has an indexed vote. Cheap, batched, but
+   subject to indexing lag. This is a *filter* at detection time — excluded requests simply never
+   enter the membership loop, so **no per-request skip event is emitted** for them. (`indexed_vote`
+   exists in the `MembershipSkipReason` taxonomy for completeness but is never logged at runtime;
+   only stage-2 reasons appear in `membership_skip`.)
+2. **Stage 2 — on-chain (`membership.ts`, `readProposalTally`).** For each stage-1 survivor, read
+   the live tally from the per-space DAOSpace contract via
+   `getLatestProposalInformation(bytes16) → (executed, creator, parameters, tally, actions)`. The
+   request is eligible to vote **iff** `!executed && yes == 0 && no == 0 && abstain == 0` **and**
+   the voting window is still open. This RPC read closes the indexing-lag window left by stage 1.
+
+Reading the authoritative on-chain tally is also what makes the job **idempotent** across cycles:
+the moment the bot votes, its own vote is in the on-chain `Tally` — even before the indexer surfaces
+it — so the next cycle reads `yes >= 1` and skips. No duplicate vote, no shared mutable state, no
+tracking column. (This is the membership-path analogue of the executor's "let it revert" stance,
+but here the duplicate is prevented *before* submission rather than absorbed as a free revert.)
+
+`classifyMembershipSkip` maps an ineligible tally to one of three stage-2 reasons, in priority
+order, so telemetry says *why* nothing was done:
+
+| Reason | Condition | Meaning |
+|---|---|---|
+| `already_executed` | `executed == true` | Request already resolved (admitted or otherwise). |
+| `onchain_tally_nonzero` | any of `yes/no/abstain != 0` | A vote is already recorded (human's, or the bot's own prior vote → idempotency). |
+| `voting_window_closed` | window closed | Voting period ended; the protocol would reject the vote. |
+
+### Voting-Window Guard (Clock Skew)
+
+`getLatestProposalInformation` also returns `ProposalParameters.startDate` / `lastDate`. The
+protocol rejects a vote whose `block.timestamp` falls outside `[startDate, lastDate]`, so stage-2
+eligibility honours the window (`isVotingOpen`). Two deliberate choices:
+
+- **Chain time, not wall clock.** The check compares against the latest block's timestamp
+  (`readChainTimeSeconds`, read once per run), the same clock the contract enforces — not the pod's
+  wall clock, which can drift. On an RPC hiccup it falls back to the pod clock rather than failing
+  the batch; the skew buffer absorbs the drift.
+- **The close is widened, not narrowed** (`CLOCK_SKEW_BUFFER_SECONDS = 60`, mirroring the detection
+  query). During the final 60s — and up to 60s past `lastDate` — the bot still votes, accepting a
+  possible at-most-60s-late revert over wrongly skipping a still-open request. Missing a genuinely
+  open request is worse than a free, sponsored late revert.
+
+### Vote Cast Encoding
+
+The vote reuses the executor's gas-sponsored `enter()` UserOperation pattern. The deployed
+SpaceRegistry ABI takes `bytes16` space IDs:
+
+```
+enter(
+  botSpaceId,                                 // bytes16  _fromSpaceId (MEMBERSHIP_BOT_SPACE_ID)
+  uuidToBytes16(request.spaceId),             // bytes16  _toSpaceId   (DAO space being joined)
+  PROPOSAL_VOTED,                             // bytes32  0x4ebf5f29...d5819e
+  padBytes16ToBytes32(uuidToBytes16(id)),     // bytes32  topic = bytes32(proposalId), left-aligned
+  encodeVoteData(uuidToBytes16(id), VOTE_YES),// bytes    abi.encode(bytes16 proposalId, uint8 1)
+  "0x"                                        // bytes    _signature (ignored; msg.sender == _fromSpace)
+)
+```
+
+**`VoteOption.Yes = 1`** — from the deployed `IDAOSpace` interface
+(`enum VoteOption { None=0, Yes=1, No=2, Abstain=3 }`). A unit test asserts `VOTE_YES === 1` to
+guard this value, because `docs/protocol/dao-space.md` previously documented the enum incorrectly
+(now corrected). The DAOSpace tally getters live on the **per-space** contract, not the
+SpaceRegistry, so the address is resolved first via `SpaceRegistry.spaceIdToAddress(daoSpaceId)`
+(a zero address ⇒ unregistered space ⇒ `InfraError`).
+
+### Request-to-Join Detection Signature
+
+A membership request, per stage-1 SQL, is a proposal that is **all** of: `Fast` voting mode; a
+single action; that action is `AddMember`; the action targets the proposer itself
+(`proposals.proposed_by = proposal_actions.target_id` — a *self*-request, not an editor adding
+someone); not executed; in an allowlisted space; and with no row in `proposal_votes` (stage-1
+untouched). There is **no creation-time cutoff** — a pre-existing backlog is admitted. When the
+allowlist is empty the query short-circuits to `[]` (kill switch — no DB query issued).
+
+### Kill Switch & Blast Radius
+
+`MEMBERSHIP_AUTOACCEPT_SPACE_IDS` is an explicit, auditable, comma-separated allowlist of bytes16
+space IDs (trimmed, de-duped). It is read **once at startup**; changes require a redeploy/restart.
+An empty or unset list is valid and means the membership path is a complete no-op — the feature
+ships "off" and is flipped on only when product supplies an allowlist. This is why PR-A…PR-E could
+merge to `main` without changing production behaviour: until the allowlist is populated, the path
+does nothing.
+
+### Membership Telemetry
+
+| Event / Span | Kind | Meaning |
+|---|---|---|
+| `wallet_ready` (`identity: membership-bot`) | INFO | Bot wallet built + verified. Check `safeAddress`. |
+| `membership_vote_cast` | INFO | YES vote submitted. `{proposalId, spaceId, targetId, txHash}`. |
+| `membership_skip` | INFO | Ineligible at stage 2. `reason` ∈ {`already_executed`, `onchain_tally_nonzero`, `voting_window_closed`}. (Stage-1 indexed-vote exclusions are filtered out at detection time and emit no event — `indexed_vote` is never logged.) |
+| `membership_skip_expected` | INFO | Expected revert at cast time (already executed / resolved). Not an error. |
+| `membership_vote_reverted` | INFO | Unexpected revert (e.g. bot lacks EDITOR → `CanNotVote`). Skipped, retried next cycle. |
+| `membership_path_failed` | ERROR | The membership path's own InfraError boundary tripped; the execute path is unaffected. |
+| `proposal-executor.membership-vote` | span | Per-request vote attempt. |
+| `run_end` fields | INFO | `membershipAdmitted`, `membershipSkipped`, `membershipFailed`, `membershipTotal`, `membershipSpaces`. |
+
+Exit code: membership outcomes fold into the existing `succeeded`/`failed` semantics —
+`membershipAdmitted` adds to `succeeded`, an aborted membership space adds to `failed`. Partial
+success (anything admitted or executed) still exits `0`.
+
 ## Race Condition: Double Execution
 
 After the executor submits `enter(PROPOSAL_EXECUTED)` on-chain, the proposal's `executed_at` remains NULL until the kg-indexer processes the event (seconds to minutes). During this window, the next CronJob run re-detects and re-submits. The contract reverts ("already executed").
@@ -168,8 +310,11 @@ If revert noise becomes a problem at scale, the best future option is a local tr
 | `SPACE_REGISTRY_ADDRESS` | Valid Ethereum address (viem `getAddress()` checksum). |
 | `RPC_URL` | Non-empty, starts with `http://` or `https://`. |
 | `CHAIN_ID` | Must be `80451` or `19411` (exhaustive check). |
+| `MEMBERSHIP_BOT_PRIVATE_KEY` | 0x-prefixed, 64 hex chars (auto-prefix). **Must differ from `EXECUTOR_PRIVATE_KEY`.** |
+| `MEMBERSHIP_BOT_SPACE_ID` | 0x-prefixed bytes16 (34 chars). **Must differ from `EXECUTOR_SPACE_ID`.** |
+| `MEMBERSHIP_AUTOACCEPT_SPACE_IDS` | Comma-separated bytes16 (trimmed, de-duped). Empty/unset is valid = kill switch (no-op). |
 
-Sensitive values use `Config.redacted` (matches API + geo-cli patterns). All validation failures are fail-fast `InfraError` with descriptive messages.
+Sensitive values use `Config.redacted` (matches API + geo-cli patterns). All validation failures are fail-fast `InfraError` with descriptive messages. The two `Must differ` checks enforce dual-wallet identity isolation (see "Membership Auto-Accept Path").
 
 ## Telemetry
 
@@ -190,6 +335,7 @@ Adapted from `api/src/services/telemetry.ts` for a short-lived CronJob.
 | `proposal-executor.run` | Entire CronJob invocation (top-level) |
 | `proposal-executor.detect` | PostgreSQL detection query |
 | `proposal-executor.execute-proposal` | Per-proposal execution (attributes: `proposalId`, `spaceId`) |
+| `proposal-executor.membership-vote` | Per-request membership YES vote (attributes: `proposalId`, `spaceId`) |
 
 **Effect Logger routing:**
 - `ERROR` / `FATAL` → `Sentry.captureMessage` (creates Sentry issues)
@@ -248,6 +394,8 @@ securityContext:
 ### enter() Permission Model
 
 `enter()` with `PROPOSAL_EXECUTED` is **permissionless** — anyone can call it once criteria are met (confirmed in `docs/protocol/dao-space.md:179`). No membership or editorship required. The executor's personal space just needs to be registered.
+
+`enter()` with `PROPOSAL_VOTED` (the membership path) is **permissioned** — the caller must hold the **EDITOR** role in the target DAO space, which is exactly the authority a YES vote carries. This is why the membership bot is a distinct identity granted EDITOR in each allowlisted space, and why a missing role surfaces as a `CanNotVote` revert (`membership_vote_reverted`) rather than silently succeeding.
 
 ## Forked Code from geo-cli
 

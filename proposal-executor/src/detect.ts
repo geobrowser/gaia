@@ -26,6 +26,19 @@ export interface Proposal {
 	spaceId: string
 }
 
+/**
+ * A request-to-join proposal: a Fast-mode proposal whose single action admits
+ * its own proposer (self-service join). Candidate for an auto-accept YES vote.
+ */
+export interface MembershipRequest {
+	/** Proposal UUID (with dashes) */
+	id: string
+	/** DAO space UUID being joined (with dashes); always in the allowlist */
+	spaceId: string
+	/** Member space UUID being added (== proposedBy for a self-service request) */
+	requesterId: string
+}
+
 // ---------------------------------------------------------------------------
 // Clock skew buffer
 // ---------------------------------------------------------------------------
@@ -153,6 +166,93 @@ export function findExecutableProposals(client: PgClient, nowSeconds: number): E
 					? error.message.replace(/postgresql?:\/\/[^\s]+/gi, "<redacted>")
 					: "unknown error"
 			return new InfraError({message: `Detection query failed: ${safe}`, durationMs: 0})
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Membership-request detection (stage 1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Finds open, untouched, allowlisted request-to-join proposals (stage 1 of the
+ * two-stage untouched check — the indexer side). A row qualifies iff:
+ * - space_id is in the allowlist ($1)
+ * - Fast voting mode (a single YES vote can execute via the fast-path threshold)
+ * - Not yet executed (executed_at IS NULL)
+ * - Created in the past (guards against corrupt future timestamps; no age cutoff
+ *   — backlog is admitted, unlike the executor's MAX_PROPOSAL_AGE)
+ * - Voting period has not ended (now <= end_time + CLOCK_SKEW_BUFFER) — the protocol
+ *   rejects votes cast after the period closes, and an untouched Fast proposal whose
+ *   period has ended is already classified REJECTED (threshold not reached). The same
+ *   60s skew buffer the stage-2 eligibility check applies (isVotingOpen, membership.ts)
+ *   is added here so detection never excludes a request that stage 2 would still vote
+ *   on — `now` must therefore be the same chain-sourced timestamp stage 2 uses.
+ * - Exactly one action, an AddMember targeting the proposer itself
+ *   (target_id = proposed_by) — the self-service request-to-join signature, not
+ *   an editor-initiated add
+ * - No indexed votes (NOT EXISTS in proposal_votes) — checks raw indexed votes,
+ *   not the async-denormalized yes_count/no_count/abstain_count columns
+ *
+ * This filters voting_mode = 'Fast' while the executor's query filters 'Slow',
+ * so the two paths never return the same proposal.
+ *
+ * ORDER BY created_at::bigint ASC for FIFO ordering (created_at is text Unix
+ * seconds, so the ::bigint cast ensures numeric ordering).
+ */
+export const MEMBERSHIP_DETECTION_SQL = `
+SELECT p.id, p.space_id AS "spaceId", a.target_id AS "requesterId"
+FROM proposals p
+JOIN proposal_actions a ON a.proposal_id = p.id
+WHERE p.space_id = ANY($1)
+  AND p.voting_mode = 'Fast'
+  AND p.executed_at IS NULL
+  AND p.created_at::bigint <= $2::bigint
+  AND $2::bigint <= p.end_time + ${CLOCK_SKEW_BUFFER}
+  AND a.action_type = 'AddMember'
+  AND a.target_id = p.proposed_by
+  AND NOT EXISTS (SELECT 1 FROM proposal_votes pv WHERE pv.proposal_id = p.id)
+  AND (SELECT COUNT(*) FROM proposal_actions a2 WHERE a2.proposal_id = p.id) = 1
+ORDER BY p.created_at::bigint ASC
+`
+
+/**
+ * Find all untouched request-to-join proposals in allowlisted spaces that are
+ * candidates for an auto-accept YES vote.
+ *
+ * Short-circuits to [] without querying when the allowlist is empty — the
+ * kill switch (an emptied MEMBERSHIP_AUTOACCEPT_SPACE_IDS stops all activity).
+ *
+ * @param client - Connected pg.Client
+ * @param allowlistSpaceIds - Dashed UUIDs of allowlisted DAO spaces (from bytes16 config)
+ * @param nowSeconds - Current Unix timestamp in seconds. MUST be the same chain-sourced
+ *   clock stage 2 uses (readChainTimeSeconds), so the two stages share one notion of
+ *   "now" and the same skew policy — passing the pod wall clock would reintroduce the
+ *   drift the +CLOCK_SKEW_BUFFER window is meant to absorb.
+ */
+export function findMembershipRequests(
+	client: PgClient,
+	allowlistSpaceIds: string[],
+	nowSeconds: number,
+): Effect.Effect<MembershipRequest[], InfraError> {
+	if (allowlistSpaceIds.length === 0) {
+		return Effect.succeed([])
+	}
+	return Effect.tryPromise({
+		try: async () => {
+			const result = await client.query<MembershipRequest>(MEMBERSHIP_DETECTION_SQL, [
+				allowlistSpaceIds,
+				nowSeconds,
+			])
+			return result.rows
+		},
+		catch: (error) => {
+			// Sanitize: pg errors on broken connections may contain the connection string (with password).
+			const safe =
+				error instanceof Error
+					? error.message.replace(/postgresql?:\/\/[^\s]+/gi, "<redacted>")
+					: "unknown error"
+			return new InfraError({message: `Membership detection query failed: ${safe}`, durationMs: 0})
 		},
 	})
 }

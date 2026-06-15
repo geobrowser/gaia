@@ -27,9 +27,9 @@ enum VotingMode {
 ```solidity
 enum VoteOption {
     None,    // 0 - Invalid/not voted
-    Abstain, // 1
-    Yes,     // 2
-    No       // 3
+    Yes,     // 1
+    No,      // 2
+    Abstain  // 3
 }
 ```
 
