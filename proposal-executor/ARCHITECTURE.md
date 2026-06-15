@@ -251,10 +251,13 @@ SpaceRegistry, so the address is resolved first via `SpaceRegistry.spaceIdToAddr
 ### Membership Detection Signature
 
 A membership candidate, per stage-1 SQL, is a proposal that is **all** of: `Fast` voting mode; a
-single action; that action is `AddMember`; not executed; in an allowlisted space; within its
-voting window; and with no row in `proposal_votes` (stage-1 untouched). There is **no creation-time
-cutoff** — a pre-existing backlog is admitted. When the allowlist is empty the query short-circuits
-to `[]` (kill switch — no DB query issued).
+single action; that action is `AddMember`; not executed; in an allowlisted space; created in the
+past whose voting period has not yet ended (`created_at <= now <= end_time` + clock-skew buffer);
+and with no row in `proposal_votes` (stage-1 untouched). Note stage-1 only bounds the *close* of the
+window — the authoritative *open* check (`startDate <= now`) is enforced at stage 2 (`isVotingOpen`),
+so a not-yet-open proposal is never voted on. There is **no creation-time cutoff** — a pre-existing
+backlog is admitted. When the allowlist is empty the query short-circuits to `[]` (kill switch — no
+DB query issued).
 
 The detection does **not** distinguish a self-service request-to-join from an editor-initiated
 `AddMember`: the indexer stores `proposed_by` as the *space*, never the individual proposer, so the
