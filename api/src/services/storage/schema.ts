@@ -6,8 +6,10 @@ import {
 	decimal,
 	doublePrecision,
 	index,
+	integer,
 	jsonb,
 	pgEnum,
+	pgSchema,
 	pgTable,
 	primaryKey,
 	serial,
@@ -1001,5 +1003,81 @@ export const notificationDeliveries = pgTable(
 	(table) => [
 		unique().on(table.outboxId, table.webhookId),
 		index("idx_deliveries_pending").on(table.status, table.nextRetryAt),
+	],
+)
+
+/**
+ * Private `ranks` schema — the ranking-indexer's working cache.
+ *
+ * Lives outside `public` on purpose: PostGraphile introspects only `public`, so
+ * nothing here reaches the GraphQL API. Defined here (rather than as a hand-
+ * written migration) so drizzle-kit owns the migration. Every value is
+ * derivable from the `knowledge.edits` stream and rebuildable by replay.
+ */
+export const ranks = pgSchema("ranks")
+
+/** One row per Ranking Block entity, keyed on (id, space) for perspectives. */
+export const rankingBlocks = ranks.table(
+	"ranking_blocks",
+	{
+		id: uuid().notNull(),
+		spaceId: uuid("space_id").notNull(),
+		name: text(),
+		filter: text(),
+		startDate: timestamp("start_date", {withTimezone: true, mode: "date"}),
+		endDate: timestamp("end_date", {withTimezone: true, mode: "date"}),
+		restrictionId: uuid("restriction_id"),
+		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+	},
+	(table) => [primaryKey({columns: [table.id, table.spaceId]})],
+)
+
+/** One row per Rank submission entity, keyed on (id, space) for perspectives. */
+export const rankings = ranks.table(
+	"rankings",
+	{
+		id: uuid().notNull(),
+		blockId: uuid("block_id"),
+		spaceId: uuid("space_id").notNull(),
+		authorAddress: text("author_address"),
+		rankType: text("rank_type"),
+		submittedAt: timestamp("submitted_at", {withTimezone: true, mode: "date"}),
+		updatedAtBlock: bigint("updated_at_block", {mode: "number"}).notNull().default(0),
+		updateIndex: bigint("update_index", {mode: "number"}).notNull().default(0),
+		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+	},
+	(table) => [
+		primaryKey({columns: [table.id, table.spaceId]}),
+		index("rankings_block_id_idx").on(table.blockId),
+		index("rankings_block_space_idx").on(table.blockId, table.spaceId),
+	],
+)
+
+/** Decoded items of each submission, keyed on (ranking, entity, space). */
+export const rankingItems = ranks.table(
+	"ranking_items",
+	{
+		rankingId: uuid("ranking_id").notNull(),
+		entityId: uuid("entity_id").notNull(),
+		spaceId: uuid("space_id").notNull(),
+		position: text(),
+		weight: doublePrecision(),
+	},
+	(table) => [primaryKey({columns: [table.rankingId, table.entityId, table.spaceId]})],
+)
+
+/** Computed aggregate, keyed on (block, entity, space). */
+export const rankingScores = ranks.table(
+	"ranking_scores",
+	{
+		blockId: uuid("block_id").notNull(),
+		entityId: uuid("entity_id").notNull(),
+		spaceId: uuid("space_id").notNull(),
+		score: doublePrecision().notNull(),
+		position: integer().notNull(),
+	},
+	(table) => [
+		primaryKey({columns: [table.blockId, table.entityId, table.spaceId]}),
+		index("ranking_scores_block_position_idx").on(table.blockId, table.position),
 	],
 )

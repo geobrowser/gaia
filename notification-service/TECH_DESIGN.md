@@ -477,6 +477,15 @@ Notes:
 | `proposer_id` | UUID string | `created`, `updated`, `rejected` | Who created/updated the proposal |
 | `voter_id` | UUID string | `voted` only | Who cast the vote |
 | `vote` | string | `voted` only | `yes`, `no`, or `abstain` |
+| `voting_mode` | string | `created`, `updated` | `"slow"` or `"fast"` |
+| `actions` | array of action objects | `created`, `updated` | The proposal's actions — each has a `type` (`add_member`, `add_editor`, `publish`, …) plus type-specific fields like `target_address`. App servers inspect this to classify a proposal (e.g. membership vs. editorship request). See [Action types](WEBHOOK_INTEGRATION.md#action-types-in-actions-array) for the full list. |
+| `settings` | object | `created`, `settings_updated` | Proposal voting settings (`start_date`, `end_date`, `voting_mode`, `quorum`, `flat_threshold`, `percentage_threshold`). |
+| `proposal_name` | string | All governance (best-effort) | Human-readable proposal name (may be absent until indexed). |
+| `proposer_name` | string | `created`, `updated`, `rejected` (best-effort) | Human-readable proposer name. |
+| `voter_name` | string | `voted` only (best-effort) | Human-readable voter name. |
+| `yes_count` / `no_count` / `abstain_count` | number | `voted` only (best-effort) | Current vote tallies. |
+
+> All fields use `skip_serializing_if = "none"` — optional fields are **omitted** when not applicable (not sent as `null`). See `notification-indexer/src/models.rs` for the authoritative payload shape.
 
 #### Bounty fields
 
