@@ -9,7 +9,13 @@ import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Effect} from "effect"
 import {type NormalizedUuid, normalizeUuid} from "../utils/uuid"
-import {type DiscoveredEntity, type GroupedEntities, groupEntitiesByContext, mergeDiscoveryResults} from "./grouping"
+import {
+	type DiffVariant,
+	type DiscoveredEntity,
+	type GroupedEntities,
+	groupEntitiesByContext,
+	mergeDiscoveryResults,
+} from "./grouping"
 import type {
 	BlockSnapshot,
 	EntitySnapshot,
@@ -216,16 +222,33 @@ export function getRelationsAtVersion(
 /**
  * Query entities discovered via context metadata.
  * Returns ALL entities where context_root_id = entityId, regardless of edge type.
+ *
+ * Scoped to the request's spaceId when provided — cross-space context edges
+ * are intentionally excluded. The RFC does not cover cross-space diffs, and
+ * scoping here prevents a context in space A from leaking children from space B.
  */
 function queryContextEntities(
 	db: Database,
 	entityId: string,
 	versionKey: bigint,
 	spaceId?: string,
+	variant: DiffVariant = "v1",
 ): Effect.Effect<DiscoveredEntity[], QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
 			const versionKeyStr = versionKey.toString()
+
+			// How the "changed child" is surfaced per variant:
+			// - v1 (frozen prod behavior): infer it from the row's own id —
+			//   value-side `v.entity_id`, relation-side `r.to_entity_id`.
+			// - v2 (RFC 0006): prefer the persisted context leaf
+			//   (context_last_to_entity_id = edges.last().to_entity_id), falling
+			//   back to the structural inference (from_entity_id on the relation
+			//   side) for pre-column rows.
+			const valueChild =
+				variant === "v2" ? sql`COALESCE(v.context_last_to_entity_id, v.entity_id)` : sql`v.entity_id`
+			const relationChild =
+				variant === "v2" ? sql`COALESCE(r.context_last_to_entity_id, r.from_entity_id)` : sql`r.to_entity_id`
 
 			const result = spaceId
 				? await db.execute<{
@@ -233,8 +256,8 @@ function queryContextEntities(
 						context_edge_type_id: string | null
 					}>(sql`
 						SELECT DISTINCT entity_id, context_edge_type_id FROM (
-							-- Context-based discovery from values
-							SELECT DISTINCT v.entity_id, v.context_edge_type_id
+							-- Context-based discovery from values.
+							SELECT DISTINCT ${valueChild} AS entity_id, v.context_edge_type_id
 							FROM value_versions v
 							WHERE v.context_root_id = ${entityId}::uuid
 								AND v.context_edge_type_id IS NOT NULL
@@ -242,8 +265,8 @@ function queryContextEntities(
 								AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
 								AND v.space_id = ${spaceId}::uuid
 							UNION
-							-- Context-based discovery from relations (to_entity_id is the child)
-							SELECT DISTINCT r.to_entity_id AS entity_id, r.context_edge_type_id
+							-- Context-based discovery from relations.
+							SELECT DISTINCT ${relationChild} AS entity_id, r.context_edge_type_id
 							FROM relation_versions r
 							WHERE r.context_root_id = ${entityId}::uuid
 								AND r.context_edge_type_id IS NOT NULL
@@ -257,16 +280,16 @@ function queryContextEntities(
 						context_edge_type_id: string | null
 					}>(sql`
 						SELECT DISTINCT entity_id, context_edge_type_id FROM (
-							-- Context-based discovery from values
-							SELECT DISTINCT v.entity_id, v.context_edge_type_id
+							-- Context-based discovery from values.
+							SELECT DISTINCT ${valueChild} AS entity_id, v.context_edge_type_id
 							FROM value_versions v
 							WHERE v.context_root_id = ${entityId}::uuid
 								AND v.context_edge_type_id IS NOT NULL
 								AND v.valid_from_key <= ${versionKeyStr}::bigint
 								AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
 							UNION
-							-- Context-based discovery from relations (to_entity_id is the child)
-							SELECT DISTINCT r.to_entity_id AS entity_id, r.context_edge_type_id
+							-- Context-based discovery from relations.
+							SELECT DISTINCT ${relationChild} AS entity_id, r.context_edge_type_id
 							FROM relation_versions r
 							WHERE r.context_root_id = ${entityId}::uuid
 								AND r.context_edge_type_id IS NOT NULL
@@ -356,17 +379,18 @@ export function getGroupedEntityIdsAtVersion(
 	entityId: string,
 	versionKey: bigint,
 	spaceId?: string,
+	variant: DiffVariant = "v1",
 ): Effect.Effect<GroupedEntities, QueryError> {
 	return Effect.gen(function* () {
 		const [contextEntities, relationEntities] = yield* Effect.all([
-			queryContextEntities(db, entityId, versionKey, spaceId),
+			queryContextEntities(db, entityId, versionKey, spaceId, variant),
 			queryBlocksRelationEntities(db, entityId, versionKey, spaceId),
 		])
 
 		// Merge and group using pure functions
-		const merged = yield* mergeDiscoveryResults(contextEntities, relationEntities, BLOCKS_TYPE_ID)
+		const merged = yield* mergeDiscoveryResults(contextEntities, relationEntities)
 
-		return yield* groupEntitiesByContext(merged, BLOCKS_TYPE_ID)
+		return yield* groupEntitiesByContext(merged, BLOCKS_TYPE_ID, variant)
 	}).pipe(
 		Effect.withSpan("queries.getGroupedEntityIdsAtVersion", {
 			attributes: {
@@ -754,12 +778,13 @@ export function getGroupedEntitySnapshotAtVersion(
 	entityId: NormalizedUuid,
 	versionKey: bigint,
 	spaceId?: string,
+	variant: DiffVariant = "v1",
 ): Effect.Effect<GroupedEntitySnapshot, QueryError> {
 	return Effect.gen(function* () {
 		const [values, allRelations, grouped] = yield* Effect.all([
 			getValuesAtVersion(db, entityId, versionKey, spaceId),
 			getRelationsAtVersion(db, entityId, versionKey, spaceId),
-			getGroupedEntityIdsAtVersion(db, entityId, versionKey, spaceId),
+			getGroupedEntityIdsAtVersion(db, entityId, versionKey, spaceId, variant),
 		])
 
 		// Filter out relations that are used for grouping (BLOCKS + dynamic types)
@@ -918,6 +943,7 @@ const NAME_PROPERTY_ID = normalizeUuid(SystemIds.NAME_PROPERTY)
 export function batchGetEntityNames(
 	db: NodePgDatabase<Record<string, unknown>>,
 	entityIds: NormalizedUuid[],
+	spaceId?: NormalizedUuid,
 ): Effect.Effect<Map<NormalizedUuid, string>, QueryError> {
 	if (entityIds.length === 0) {
 		return Effect.succeed(new Map())
@@ -926,13 +952,28 @@ export function batchGetEntityNames(
 	return Effect.tryPromise({
 		try: async () => {
 			const idsArray = `{${entityIds.join(",")}}`
-			const result = await db.execute<{entity_id: string; text: string}>(sql`
-				SELECT entity_id, text
-				FROM "values"
-				WHERE entity_id = ANY(${idsArray}::uuid[])
-				  AND property_id = ${NAME_PROPERTY_ID}::uuid
-				  AND text IS NOT NULL
-			`)
+			// When a request space is given, prefer that space's NAME but fall back to
+			// the entity's name in any other space (properties/types are often defined
+			// in a shared/system space). DISTINCT ON + the ordering also makes the result
+			// deterministic when an entity has NAME rows in several spaces. The WHERE
+			// predicate is unchanged from the unscoped path, so the existing
+			// (entity_id, property_id, space_id) index still covers it.
+			const result = spaceId
+				? await db.execute<{entity_id: string; text: string}>(sql`
+						SELECT DISTINCT ON (entity_id) entity_id, text
+						FROM "values"
+						WHERE entity_id = ANY(${idsArray}::uuid[])
+						  AND property_id = ${NAME_PROPERTY_ID}::uuid
+						  AND text IS NOT NULL
+						ORDER BY entity_id, (space_id = ${spaceId}::uuid) DESC, space_id, id
+					`)
+				: await db.execute<{entity_id: string; text: string}>(sql`
+						SELECT entity_id, text
+						FROM "values"
+						WHERE entity_id = ANY(${idsArray}::uuid[])
+						  AND property_id = ${NAME_PROPERTY_ID}::uuid
+						  AND text IS NOT NULL
+					`)
 
 			const names = new Map<NormalizedUuid, string>()
 			for (const row of result.rows) {
@@ -943,7 +984,7 @@ export function batchGetEntityNames(
 		catch: (error) => new QueryError("batchGetEntityNames", error),
 	}).pipe(
 		Effect.withSpan("queries.batchGetEntityNames", {
-			attributes: {count: entityIds.length},
+			attributes: {count: entityIds.length, "query.space_id": spaceId ?? "all"},
 		}),
 	)
 }

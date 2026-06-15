@@ -52,4 +52,8 @@ pub struct ValueOp {
     // Context columns for grouping changes (GRC-20 Section 4.5)
     pub context_root_id: Option<Uuid>,
     pub context_edge_type_id: Option<Uuid>,
+    // RFC 0006: the context's leaf entity (edges.last().to_entity_id).
+    // Diff discovery prefers this over inferring "changed child" from
+    // entity_id, which is correct only by structural coincidence.
+    pub context_last_to_entity_id: Option<Uuid>,
 }

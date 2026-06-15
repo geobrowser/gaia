@@ -59,7 +59,7 @@ jobs:
           DEPLOYER_PK: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
       
       - name: Run integration tests
-        run: bun run test src/kg/__tests__/
+        run: bun run test src/kg/__tests__/ src/versioned/__tests__/
         env:
           DATABASE_URL: "postgresql://test:test@localhost:5432/test"
           IPFS_KEY: "test-key"

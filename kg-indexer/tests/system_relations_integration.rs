@@ -150,6 +150,7 @@ async fn test_insert_relations_does_not_overwrite_system_relation() {
         is_system: false,
         context_root_id: None,
         context_edge_type_id: None,
+        context_last_to_entity_id: None,
     };
 
     let mut tx = pool.begin().await.unwrap();
@@ -207,6 +208,9 @@ async fn test_update_relations_does_not_modify_system_relation() {
         position: Some("updated_position".to_string()),
         space_id,
         verified: Some(false),
+        context_root_id: None,
+        context_edge_type_id: None,
+        context_last_to_entity_id: None,
     };
 
     let mut tx = pool.begin().await.unwrap();
@@ -264,6 +268,9 @@ async fn test_unset_relation_fields_does_not_nullify_system_relation() {
         position: Some(true), // request to unset
         space_id,
         verified: Some(true), // request to unset
+        context_root_id: None,
+        context_edge_type_id: None,
+        context_last_to_entity_id: None,
     };
 
     let mut tx = pool.begin().await.unwrap();
