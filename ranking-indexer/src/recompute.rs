@@ -14,7 +14,7 @@ use crate::dedup::dedup_latest;
 use crate::detect::DetectedEdit;
 use crate::eligibility::{filter_eligible, SpaceKind};
 use crate::error::IndexerError;
-use crate::models::{Ranking, RankingItem};
+use crate::models::{BlockMeta, Ranking, RankingItem};
 use crate::storage::Storage;
 use crate::{publish, scoring};
 
@@ -53,7 +53,11 @@ pub async fn affected_blocks(
 }
 
 /// Recompute a single block's aggregate end to end.
-pub async fn recompute_block(block_id: Uuid, storage: &Storage) -> Result<(), IndexerError> {
+pub async fn recompute_block(
+    block_id: Uuid,
+    meta: BlockMeta,
+    storage: &Storage,
+) -> Result<(), IndexerError> {
     let block = match storage.get_ranking_block(block_id).await? {
         Some(block) => block,
         None => {
@@ -111,7 +115,13 @@ pub async fn recompute_block(block_id: Uuid, storage: &Storage) -> Result<(), In
     let projection = publish::build_projection(block_id, &scores);
     let contributing: Vec<Uuid> = ballots.iter().map(|(r, _)| r.id).collect();
     storage
-        .replace_rank_position_projection(block_id, block.space_id, &projection, &contributing)
+        .replace_rank_position_projection(
+            block_id,
+            block.space_id,
+            meta,
+            &projection,
+            &contributing,
+        )
         .await?;
 
     tracing::debug!(
@@ -164,7 +174,7 @@ pub async fn apply_detected_edit(
     }
 
     for block_id in affected_blocks(detected, storage).await? {
-        recompute_block(block_id, storage).await?;
+        recompute_block(block_id, detected.meta, storage).await?;
     }
 
     Ok(())

@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::eligibility::SpaceKind;
 use crate::error::IndexerError;
-use crate::models::{Ranking, RankingBlock, RankingItem};
+use crate::models::{BlockMeta, Ranking, RankingBlock, RankingItem};
 use crate::publish::{provenance_ids, RankPositionRow};
 use crate::scoring::ScoreRow;
 
@@ -465,6 +465,7 @@ impl Storage {
         &self,
         block_id: Uuid,
         block_space_id: Uuid,
+        meta: BlockMeta,
         rows: &[RankPositionRow],
         contributing_rankings: &[Uuid],
     ) -> Result<(), IndexerError> {
@@ -496,6 +497,13 @@ impl Storage {
         .await?;
 
         // 2. Drop prior projection relations (RANK_POSITION + Aggregated rankings).
+        //    Scoped by (from_entity_id, type_id, space_id) only — NOT by
+        //    from_space_id. Pre-fix projection rows were written with
+        //    from_space_id IS NULL; adding `from_space_id = block_space_id` would
+        //    skip them (NULL never equals anything), leaving their deterministic
+        //    PK ids in place. The ON-CONFLICT-free INSERTs below would then
+        //    collide on those ids → duplicate-key error → aborted tx → crash
+        //    loop. Matching on the space alone lets pre-fix blocks self-heal.
         sqlx::query(
             "DELETE FROM relations WHERE from_entity_id = $1 AND type_id = ANY($2) AND space_id = $3",
         )
@@ -505,17 +513,52 @@ impl Storage {
         .execute(&mut *tx)
         .await?;
 
-        // 3. Insert the ordered RANK_POSITION relations + their value rows.
+        // 3. Register every entity this projection mints in `entities` (the
+        //    source of truth for entity existence the API resolves against).
+        let mut entity_ids: Vec<Uuid> =
+            Vec::with_capacity(rows.len() * 2 + contributing_rankings.len() * 2);
+        for r in rows {
+            entity_ids.push(r.relation_id);
+            entity_ids.push(r.reified_entity_id);
+        }
+        for ranking_id in contributing_rankings {
+            let (relation_id, reified) = provenance_ids(block_id, *ranking_id);
+            entity_ids.push(relation_id);
+            entity_ids.push(reified);
+        }
+        if !entity_ids.is_empty() {
+            // `entities` columns are text: Unix seconds + block number, as the
+            // kg-indexer records. `created_at` only sticks on first insert;
+            // re-aggregation just bumps `updated_at`.
+            let created_at = meta.timestamp.to_string();
+            let created_at_block = meta.number.to_string();
+            let stamps = vec![created_at; entity_ids.len()];
+            let blocks = vec![created_at_block; entity_ids.len()];
+            sqlx::query(
+                "INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block) \
+                 SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::text[], $2::text[], $3::text[]) \
+                 ON CONFLICT (id) DO UPDATE SET \
+                   updated_at = EXCLUDED.updated_at, updated_at_block = EXCLUDED.updated_at_block",
+            )
+            .bind(&entity_ids)
+            .bind(&stamps)
+            .bind(&blocks)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        // 4. Insert the ordered RANK_POSITION relations + their value rows.
         for r in rows {
             sqlx::query(
                 "INSERT INTO relations \
-                 (id, entity_id, type_id, from_entity_id, to_entity_id, to_space_id, space_id, position) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                 (id, entity_id, type_id, from_entity_id, from_space_id, to_entity_id, to_space_id, space_id, position) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             )
             .bind(r.relation_id)
             .bind(r.reified_entity_id)
             .bind(rank_position)
             .bind(block_id)
+            .bind(block_space_id)
             .bind(r.entity_id)
             .bind(r.space_id)
             .bind(block_space_id)
@@ -537,18 +580,19 @@ impl Storage {
             .await?;
         }
 
-        // 4. Insert Aggregated rankings provenance relations (block -> submission).
+        // 5. Insert Aggregated rankings provenance relations (block -> submission).
         for ranking_id in contributing_rankings {
             let (relation_id, reified) = provenance_ids(block_id, *ranking_id);
             sqlx::query(
                 "INSERT INTO relations \
-                 (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                 (id, entity_id, type_id, from_entity_id, from_space_id, to_entity_id, space_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
             )
             .bind(relation_id)
             .bind(reified)
             .bind(aggregated)
             .bind(block_id)
+            .bind(block_space_id)
             .bind(ranking_id)
             .bind(block_space_id)
             .execute(&mut *tx)
