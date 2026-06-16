@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 
+use chrono::{DateTime, Utc};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -35,6 +36,26 @@ impl Storage {
         &self.pool
     }
 
+    /// Fail-fast startup check that the membership view exists (migration
+    /// `0062_ranks_members_editors`). Without it the missing tables would only
+    /// surface sporadically — on the first DAO-space recompute — instead of
+    /// deterministically at boot with an explicit error. Deploy order matters:
+    /// the migration must be applied before this indexer version starts.
+    pub async fn check_membership_view(&self) -> Result<(), IndexerError> {
+        for table in ["ranks.members", "ranks.editors"] {
+            sqlx::query(&format!("SELECT 1 FROM {table} LIMIT 1"))
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| {
+                    IndexerError::Config(format!(
+                        "{table} not readable — has migration 0062_ranks_members_editors \
+                         been applied? ({e})"
+                    ))
+                })?;
+        }
+        Ok(())
+    }
+
     /// Resolve a space's kind from `public.spaces.type` (`DAO` / `Personal`).
     /// Returns `None` if the space isn't known yet; callers treat unknown
     /// conservatively (as `Dao`, i.e. membership-restricted).
@@ -50,17 +71,103 @@ impl Storage {
     }
 
     /// The set of personal-space ids that are members OR editors of `space_id`
-    /// — the eligible voters for a DAO-space block.
+    /// — the eligible voters for a DAO-space block. Reads the indexer's own
+    /// view (`ranks.members` / `ranks.editors`, fed from `space.membership`)
+    /// rather than the kg-indexer-maintained public tables, so a recompute
+    /// never races the kg-indexer's consumer group.
     pub async fn member_and_editor_spaces(
         &self,
         space_id: Uuid,
     ) -> Result<HashSet<Uuid>, IndexerError> {
         let rows: Vec<(Uuid,)> = sqlx::query_as(
-            "SELECT member_space_id FROM members WHERE space_id = $1
+            "SELECT member_space_id FROM ranks.members WHERE space_id = $1
              UNION
-             SELECT member_space_id FROM editors WHERE space_id = $1",
+             SELECT member_space_id FROM ranks.editors WHERE space_id = $1",
         )
         .bind(space_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// Record `member_space_id` as a member of `space_id` in the view.
+    pub async fn add_member(
+        &self,
+        space_id: Uuid,
+        member_space_id: Uuid,
+    ) -> Result<(), IndexerError> {
+        sqlx::query(
+            "INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(member_space_id)
+        .bind(space_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Drop `member_space_id` as a member of `space_id` from the view.
+    pub async fn remove_member(
+        &self,
+        space_id: Uuid,
+        member_space_id: Uuid,
+    ) -> Result<(), IndexerError> {
+        sqlx::query("DELETE FROM ranks.members WHERE member_space_id = $1 AND space_id = $2")
+            .bind(member_space_id)
+            .bind(space_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Record `member_space_id` as an editor of `space_id` in the view.
+    pub async fn add_editor(
+        &self,
+        space_id: Uuid,
+        member_space_id: Uuid,
+    ) -> Result<(), IndexerError> {
+        sqlx::query(
+            "INSERT INTO ranks.editors (member_space_id, space_id) VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(member_space_id)
+        .bind(space_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Drop `member_space_id` as an editor of `space_id` from the view.
+    pub async fn remove_editor(
+        &self,
+        space_id: Uuid,
+        member_space_id: Uuid,
+    ) -> Result<(), IndexerError> {
+        sqlx::query("DELETE FROM ranks.editors WHERE member_space_id = $1 AND space_id = $2")
+            .bind(member_space_id)
+            .bind(space_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Blocks whose aggregate a membership change for `(space_id,
+    /// member_space_id)` can affect: blocks in the affected space holding a
+    /// submission from that member's personal space.
+    pub async fn blocks_with_rankings_from(
+        &self,
+        space_id: Uuid,
+        member_space_id: Uuid,
+    ) -> Result<Vec<Uuid>, IndexerError> {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT DISTINCT r.block_id
+             FROM ranks.rankings r
+             JOIN ranks.ranking_blocks b ON b.id = r.block_id AND b.space_id = $1
+             WHERE r.space_id = $2 AND r.block_id IS NOT NULL",
+        )
+        .bind(space_id)
+        .bind(member_space_id)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
@@ -93,6 +200,89 @@ impl Storage {
         .fetch_optional(&self.pool)
         .await?;
         Ok(block)
+    }
+
+    /// Reconstruct a Ranking Block's config from the indexed public graph.
+    ///
+    /// `detect()` only registers a block when its `TYPES -> Ranking Block`
+    /// relation and its config (Name/Filter/dates/restriction) arrive in the
+    /// *same* edit, because it resolves an entity's types from the current edit
+    /// alone. Real clients emit the type and the config across separate edits,
+    /// so the block is never registered and every rank linked to it is silently
+    /// never scored (issue #738). When a rank links to a block we never
+    /// registered, recover it from the graph here. Returns `None` if the entity
+    /// is not (yet) typed as a Ranking Block in `public.relations`.
+    pub async fn get_block_config_from_kg(
+        &self,
+        block_id: Uuid,
+    ) -> Result<Option<RankingBlock>, IndexerError> {
+        use sdk::core::ids;
+        let pid = |s: &str| Uuid::parse_str(s).expect("valid system ID constant");
+
+        // Must be typed as a Ranking Block in the graph; the type relation also
+        // tells us the block's home space.
+        let typed: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT space_id FROM relations \
+             WHERE from_entity_id = $1 AND type_id = $2 AND to_entity_id = $3 \
+             LIMIT 1",
+        )
+        .bind(block_id)
+        .bind(pid(ids::TYPE_RELATION_TYPE_ID))
+        .bind(pid(ids::RANKING_BLOCK_TYPE_ID))
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some((space_id,)) = typed else {
+            return Ok(None);
+        };
+
+        // Config properties: Name/Filter as text, Start/End as datetime. One row
+        // is always returned (aggregates over zero matching values yield NULLs).
+        type ConfigRow = (
+            Option<String>,
+            Option<String>,
+            Option<DateTime<Utc>>,
+            Option<DateTime<Utc>>,
+        );
+        // Scope to the block's home space: the same entity may be perspectived
+        // into other spaces with different config, keyed on (id, space_id).
+        let (name, filter, start_date, end_date): ConfigRow = sqlx::query_as(
+            "SELECT \
+               max(text)         FILTER (WHERE property_id = $2) AS name, \
+               max(text)         FILTER (WHERE property_id = $3) AS filter, \
+               max(datetime_utc) FILTER (WHERE property_id = $4) AS start_date, \
+               max(datetime_utc) FILTER (WHERE property_id = $5) AS end_date \
+             FROM values WHERE entity_id = $1 AND space_id = $6",
+        )
+        .bind(block_id)
+        .bind(pid(ids::NAME_PROPERTY_ID))
+        .bind(pid(ids::RANK_FILTER_PROPERTY_ID))
+        .bind(pid(ids::RANK_START_DATE_PROPERTY_ID))
+        .bind(pid(ids::RANK_END_DATE_PROPERTY_ID))
+        .bind(space_id)
+        .fetch_one(&self.pool)
+        .await?;
+
+        // Aggregation restriction is a relation (as detect() collects it),
+        // likewise scoped to the block's home space.
+        let restriction: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT to_entity_id FROM relations \
+             WHERE from_entity_id = $1 AND type_id = $2 AND space_id = $3 LIMIT 1",
+        )
+        .bind(block_id)
+        .bind(pid(ids::RANK_AGGREGATION_RESTRICTION_PROPERTY_ID))
+        .bind(space_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(Some(RankingBlock {
+            id: block_id,
+            space_id,
+            name,
+            filter,
+            start_date,
+            end_date,
+            restriction_id: restriction.map(|(r,)| r),
+        }))
     }
 
     /// Load all submissions currently linked to a block (pre-dedup).

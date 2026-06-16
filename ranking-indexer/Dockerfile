@@ -21,6 +21,11 @@ COPY sdk ./sdk
 COPY ranking-indexer ./ranking-indexer
 
 # Build from the crate directory (standalone, not as workspace member)
+# Pin dependency versions to the workspace lockfile. Without it every image
+# build re-resolves crates from scratch and drifts with crates.io (e.g.
+# sentry-types 0.46.2 vs time 0.3.48 broke all Rust image builds, 2026-06-12).
+COPY Cargo.lock ./ranking-indexer/Cargo.lock
+
 WORKDIR /app/ranking-indexer
 ENV SQLX_OFFLINE=true
 RUN cargo build --release

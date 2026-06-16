@@ -20,6 +20,11 @@ COPY stream ./stream
 COPY ipfs ./ipfs
 
 # Build from the crate directory (standalone, not as workspace member)
+# Pin dependency versions to the workspace lockfile. Without it every image
+# build re-resolves crates from scratch and drifts with crates.io (e.g.
+# sentry-types 0.46.2 vs time 0.3.48 broke all Rust image builds, 2026-06-12).
+COPY Cargo.lock ./hermes-ipfs-cache/Cargo.lock
+
 WORKDIR /app/hermes-ipfs-cache
 RUN cargo build --release
 
