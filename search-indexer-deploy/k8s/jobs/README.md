@@ -19,6 +19,7 @@ k8s/
 **Important**: The `ENVIRONMENT` variable controls the index naming:
 - `ENVIRONMENT=production` → indices use base names (e.g., `entities_v3`)
 - `ENVIRONMENT=staging` → indices get `staging_` prefix (e.g., `staging_entities_v3`)
+- `ENVIRONMENT=testnet` → indices get `testnet_` prefix (e.g., `testnet_entities_v3`)
 
 ## Prerequisites
 
@@ -268,7 +269,7 @@ The jobs support these environment variables:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `OPENSEARCH_URL` | OpenSearch endpoint URL | Read from `opensearch-credentials` secret |
-| `ENVIRONMENT` | Environment name (`staging` or `production`) | Set in job YAML |
+| `ENVIRONMENT` | Environment name (`staging`, `testnet`, or `production`) | Set in job YAML |
 | `INDEX_ALIAS` | Base index alias name | `entities` |
 | `SOURCE_VERSION` | Source index version (full-migration only) | Required (set in job YAML) |
 | `TARGET_VERSION` | Target index version (full-migration only) | Required (set in job YAML) |
@@ -285,6 +286,7 @@ The `ENVIRONMENT` variable controls how indices are named:
 |-------------|------------|-----------------|-------|
 | `production` | `entities` | `entities_v3` | `entities` |
 | `staging` | `entities` | `staging_entities_v3` | `staging_entities` |
+| `testnet` | `entities` | `testnet_entities_v3` | `testnet_entities` |
 
 ### Getting the OpenSearch URL
 
