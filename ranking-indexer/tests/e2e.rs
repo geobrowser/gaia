@@ -207,7 +207,7 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
     let value_prop = Uuid::parse_str(RANK_POSITION_VALUE_PROPERTY_ID).unwrap();
 
     let rows = sqlx::query(
-        "SELECT r.to_entity_id AS entity, r.to_space_id AS space, v.integer AS value, r.position AS position \
+        "SELECT r.to_entity_id AS entity, r.to_space_id AS space, r.from_space_id AS from_space, v.integer AS value, r.position AS position \
          FROM relations r \
          JOIN values v ON v.entity_id = r.entity_id AND v.property_id = $3 \
          WHERE r.from_entity_id = $1 AND r.type_id = $2 \
@@ -226,12 +226,18 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
     let e0: Uuid = rows[0].get("entity");
     let v0: i64 = rows[0].get("value");
     let s0: Uuid = rows[0].get("space");
+    let fs0: Uuid = rows[0].get("from_space");
     assert_eq!(e0, u(ENTITY_A), "top-ranked entity should be A");
     assert_eq!(v0, 100, "top entity scaled to 100");
     assert_eq!(
         s0,
         u(BLOCK_SPACE),
         "ranked perspective carried on to_space_id"
+    );
+    assert_eq!(
+        fs0,
+        u(BLOCK_SPACE),
+        "block's home space carried on from_space_id"
     );
 
     let e1: Uuid = rows[1].get("entity");

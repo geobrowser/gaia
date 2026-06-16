@@ -497,10 +497,11 @@ impl Storage {
 
         // 2. Drop prior projection relations (RANK_POSITION + Aggregated rankings).
         sqlx::query(
-            "DELETE FROM relations WHERE from_entity_id = $1 AND type_id = ANY($2) AND space_id = $3",
+            "DELETE FROM relations WHERE from_entity_id = $1 AND type_id = ANY($2) AND space_id = $3 AND from_space_id = $4",
         )
         .bind(block_id)
         .bind(&[rank_position, aggregated][..])
+        .bind(block_space_id)
         .bind(block_space_id)
         .execute(&mut *tx)
         .await?;
@@ -509,13 +510,14 @@ impl Storage {
         for r in rows {
             sqlx::query(
                 "INSERT INTO relations \
-                 (id, entity_id, type_id, from_entity_id, to_entity_id, to_space_id, space_id, position) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                 (id, entity_id, type_id, from_entity_id, from_space_id, to_entity_id, to_space_id, space_id, position) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             )
             .bind(r.relation_id)
             .bind(r.reified_entity_id)
             .bind(rank_position)
             .bind(block_id)
+            .bind(block_space_id)
             .bind(r.entity_id)
             .bind(r.space_id)
             .bind(block_space_id)
@@ -542,13 +544,14 @@ impl Storage {
             let (relation_id, reified) = provenance_ids(block_id, *ranking_id);
             sqlx::query(
                 "INSERT INTO relations \
-                 (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                 (id, entity_id, type_id, from_entity_id, from_space_id, to_entity_id, space_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
             )
             .bind(relation_id)
             .bind(reified)
             .bind(aggregated)
             .bind(block_id)
+            .bind(block_space_id)
             .bind(ranking_id)
             .bind(block_space_id)
             .execute(&mut *tx)
