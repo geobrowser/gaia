@@ -53,6 +53,7 @@ This guide walks through migrating from one index version to another using Kuber
 - The job YAML files from the appropriate environment directory:
   - **Production:** `search-indexer-deploy/k8s/production/jobs/`
   - **Staging:** `search-indexer-deploy/k8s/staging/jobs/`
+  - **Testnet (gaia-v2):** `search-indexer-deploy/k8s/v2/jobs/`
 
 ### Step 0: Choose Your Environment
 
@@ -62,6 +63,7 @@ Before running any jobs, decide which environment you're migrating:
 |-------------|-----------|-----------|--------------|
 | Production | `k8s/production/jobs/` | `search` | (none) |
 | Staging | `k8s/staging/jobs/` | `search-staging` | `staging_` |
+| Testnet (gaia-v2) | `k8s/v2/jobs/` | `gaia-v2` | `testnet_` |
 
 ```bash
 # For production
@@ -69,6 +71,9 @@ cd search-indexer-deploy/k8s/production/jobs
 
 # For staging
 cd search-indexer-deploy/k8s/staging/jobs
+
+# For testnet (gaia-v2)
+cd search-indexer-deploy/k8s/v2/jobs
 ```
 
 All commands below assume you've navigated to the appropriate jobs directory.
