@@ -509,7 +509,8 @@ impl Storage {
 
         // 3. Register every entity this projection mints in `entities` (the
         //    source of truth for entity existence the API resolves against).
-        let mut entity_ids: Vec<Uuid> = Vec::with_capacity(rows.len() * 2 + contributing_rankings.len() * 2);
+        let mut entity_ids: Vec<Uuid> =
+            Vec::with_capacity(rows.len() * 2 + contributing_rankings.len() * 2);
         for r in rows {
             entity_ids.push(r.relation_id);
             entity_ids.push(r.reified_entity_id);
