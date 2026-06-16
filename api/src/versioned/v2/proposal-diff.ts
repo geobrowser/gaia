@@ -177,6 +177,9 @@ interface RootContext {
 	/** data block id → its reified BLOCKS-relation (config) entity id, when the
 	 *  edit touched the config; the config entity is folded into the block. */
 	configByDataBlock: Map<NormalizedUuid, NormalizedUuid>
+	/** media type of DB-typed media entities (existing IMAGE/VIDEO), so a proposal
+	 *  that only updates an already-typed entity's URL still inlines correctly. */
+	mediaTypeById: Map<NormalizedUuid, "image" | "video">
 }
 
 /**
@@ -241,6 +244,8 @@ function resolveRoots(
 		}
 
 		const mediaChildren = new Set<NormalizedUuid>()
+		const mediaTypeById = new Map<NormalizedUuid, "image" | "video">()
+		for (const [id, m] of dbMedia) mediaTypeById.set(id, m.mediaType)
 		for (const id of affected) {
 			if (dbMedia.has(id) || opsIndex.mediaTyped.has(id)) mediaChildren.add(id)
 		}
@@ -270,20 +275,31 @@ function resolveRoots(
 			if (!blockChildren.has(p) && !mediaChildren.has(p) && !configEntities.has(p)) roots.add(p)
 		}
 
-		return {roots: Array.from(roots).sort(), ctx: {opsIndex, blockChildren, mediaChildren, configByDataBlock}}
+		return {
+			roots: Array.from(roots).sort(),
+			ctx: {opsIndex, blockChildren, mediaChildren, configByDataBlock, mediaTypeById},
+		}
 	})
 }
 
-/** Inline proposed-side (edit-created) media URLs onto a root's relation afters. */
+/**
+ * Inline media URLs that the edit set on the relation's after side.
+ *
+ * Covers media entities typed in the edit (`opsIndex.mediaTyped`) AND existing
+ * DB-typed media entities whose IMAGE_URL the edit *updated* (`ctx.mediaTypeById`).
+ * The edit-set URL is the authoritative after-side value, so it overrides any
+ * base-version URL `enrichWithMediaUrls` may have inlined (which, for proposals,
+ * is resolved at the base version and would otherwise be stale).
+ */
 function inlineProposedMedia(diff: EntityDiffV2, ctx: RootContext): EntityDiffV2 {
 	const {mediaTyped, proposedImageUrls} = ctx.opsIndex
-	if (mediaTyped.size === 0) return diff
+	if (proposedImageUrls.size === 0) return diff
 	const apply = (r: RelationChangeV2): RelationChangeV2 => {
 		if (!r.after) return r
-		const target = r.after.toEntityId
-		const mt = mediaTyped.get(target)
-		const url = proposedImageUrls.get(target)
-		if (!mt || !url || r.after.imageUrl || r.after.videoUrl) return r
+		const url = proposedImageUrls.get(r.after.toEntityId)
+		if (!url) return r
+		const mt = mediaTyped.get(r.after.toEntityId) ?? ctx.mediaTypeById.get(r.after.toEntityId)
+		if (!mt) return r
 		return {...r, after: {...r.after, ...(mt === "video" ? {videoUrl: url} : {imageUrl: url})}}
 	}
 	return {...diff, relations: diff.relations.map(apply)}

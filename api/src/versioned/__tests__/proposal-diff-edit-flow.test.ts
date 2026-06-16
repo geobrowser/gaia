@@ -610,6 +610,13 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			relTypesR: "21000000-0006-4000-8000-00000000000b",
 			propEditRank: "21000000-0008-4000-8000-000000000005",
 			actEditRank: "21000000-000a-4000-8000-000000000005",
+			// Scenario U: existing (DB-typed) image whose IMAGE_URL is updated in the proposal.
+			pageU: "21000000-0002-4000-8000-00000000000b",
+			imgU: "21000000-0002-4000-8000-00000000000c",
+			relImgUTypes: "21000000-0006-4000-8000-00000000000c",
+			relCoverU: "21000000-0006-4000-8000-00000000000d",
+			propUpdateMedia: "21000000-0008-4000-8000-000000000006",
+			actUpdateMedia: "21000000-000a-4000-8000-000000000006",
 		}
 		const RANKING_BLOCK_TYPE = "150db6defe2344f0805afa57502e2c32"
 
@@ -660,6 +667,10 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 				await val(`${f.rankR}-name`, f.rankR, SystemIds.NAME_PROPERTY, "Old Rank")
 				await rel(f.relBlocksR, f.pageR, f.rankR, SystemIds.BLOCKS)
 				await rel(f.relTypesR, f.rankR, RANKING_BLOCK_TYPE, SystemIds.TYPES_PROPERTY)
+				// Scenario U: page U + an EXISTING image entity (DB-typed, url "ipfs://oldcover").
+				await val(`${f.pageU}-name`, f.pageU, SystemIds.NAME_PROPERTY, "Page U")
+				await val(`${f.imgU}-url`, f.imgU, SystemIds.IMAGE_URL_PROPERTY, "ipfs://oldcover")
+				await rel(f.relImgUTypes, f.imgU, SystemIds.IMAGE_TYPE, SystemIds.TYPES_PROPERTY)
 				await client.query("COMMIT")
 			} catch (e) {
 				await client.query("ROLLBACK")
@@ -770,6 +781,29 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 							.build(),
 					contentUri: generateTestUri("fold-edit-rank"),
 				})
+				// Proposal U: update an existing image's url AND point a Cover relation at it.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propUpdateMedia,
+					actionId: f.actUpdateMedia,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Update cover image url")
+							.setCreatedNow()
+							.updateEntity(uuidToId(f.imgU), (u) =>
+								u.setText(uuidToId(SystemIds.IMAGE_URL_PROPERTY), "ipfs://newcover"),
+							)
+							.createRelationSimple(
+								uuidToId(f.relCoverU),
+								uuidToId(f.pageU),
+								uuidToId(f.imgU),
+								uuidToId(f.relTypeAvatar),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-update-media"),
+				})
 			} finally {
 				client2.release()
 			}
@@ -877,6 +911,20 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			// The two pages cover distinct roots.
 			const all = new Set([...b1.entities, ...b2.entities].map((e: {entityId: string}) => e.entityId))
 			expect(all.size).toBe(2)
+		})
+
+		it("inlines the proposed (updated) URL for an existing DB-typed media entity, not the stale base URL", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propUpdateMedia}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const ids = body.entities.map((e: {entityId: string}) => e.entityId)
+			expect(ids).toContain(n(f.pageU))
+			expect(ids).not.toContain(n(f.imgU))
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageU))
+			const rel = page.relations.find((r: {after?: {toEntityId: string}}) => r.after?.toEntityId === n(f.imgU))
+			expect(rel).toBeDefined()
+			// The edit updated the image's IMAGE_URL; the proposed URL must win over the base-version URL.
+			expect(rel.after.imageUrl).toBe("ipfs://newcover")
 		})
 	})
 })
