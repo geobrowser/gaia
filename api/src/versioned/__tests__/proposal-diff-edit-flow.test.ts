@@ -628,6 +628,10 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			relViewM2: "21000000-0006-4000-8000-000000000012",
 			propMultiConfig: "21000000-0008-4000-8000-000000000007",
 			actMultiConfig: "21000000-000a-4000-8000-000000000007",
+			// Scenario X: proposal UNSETS an existing image's IMAGE_URL (reuses pageU/imgU).
+			relCoverX: "21000000-0006-4000-8000-000000000013",
+			propUnsetMedia: "21000000-0008-4000-8000-000000000008",
+			actUnsetMedia: "21000000-000a-4000-8000-000000000008",
 		}
 		const RANKING_BLOCK_TYPE = "150db6defe2344f0805afa57502e2c32"
 
@@ -848,6 +852,27 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 							.build(),
 					contentUri: generateTestUri("fold-multi-config"),
 				})
+				// Proposal X: unset the existing image's IMAGE_URL while pointing a Cover relation at it.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propUnsetMedia,
+					actionId: f.actUnsetMedia,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Remove cover image url")
+							.setCreatedNow()
+							.updateEntity(uuidToId(f.imgU), (u) => u.unsetAll(uuidToId(SystemIds.IMAGE_URL_PROPERTY)))
+							.createRelationSimple(
+								uuidToId(f.relCoverX),
+								uuidToId(f.pageU),
+								uuidToId(f.imgU),
+								uuidToId(f.relTypeAvatar),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-unset-media"),
+				})
 			} finally {
 				client2.release()
 			}
@@ -986,6 +1011,19 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			// Each parent's fold must carry its OWN config — not a single block-keyed collision.
 			expect(viewOf(f.pageM1)).toBe(n(SystemIds.GALLERY_VIEW))
 			expect(viewOf(f.pageM2)).toBe(n(SystemIds.LIST_VIEW))
+		})
+
+		it("removes a relation's inlined media URL when the proposal unsets it", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propUnsetMedia}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageU))
+			expect(page).toBeDefined()
+			const rel = page.relations.find((r: {after?: {toEntityId: string}}) => r.after?.toEntityId === n(f.imgU))
+			expect(rel).toBeDefined()
+			// The proposal unset IMAGE_URL → no stale base-version URL should remain inlined.
+			expect(rel.after.imageUrl ?? null).toBeNull()
+			expect(rel.after.videoUrl ?? null).toBeNull()
 		})
 	})
 })

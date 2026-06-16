@@ -109,6 +109,8 @@ interface OpsIndex {
 	mediaTyped: Map<NormalizedUuid, "image" | "video">
 	/** entity id → IMAGE_URL set by the edit (proposed-side media url). */
 	proposedImageUrls: Map<NormalizedUuid, string>
+	/** entities whose IMAGE_URL the edit *unset* (so the media url is removed). */
+	unsetImageUrls: Set<NormalizedUuid>
 	/** reified BLOCKS-relation id (from the edit) → its parent + data block. */
 	blocksReified: Map<NormalizedUuid, BlocksReifiedEntry>
 }
@@ -117,6 +119,7 @@ function indexOps(ops: Op[]): OpsIndex {
 	const blockParents = new Map<NormalizedUuid, Set<NormalizedUuid>>()
 	const mediaTyped = new Map<NormalizedUuid, "image" | "video">()
 	const proposedImageUrls = new Map<NormalizedUuid, string>()
+	const unsetImageUrls = new Set<NormalizedUuid>()
 	const blocksReified = new Map<NormalizedUuid, BlocksReifiedEntry>()
 
 	const noteImageUrl = (entityId: NormalizedUuid, values: {property: unknown; value: unknown}[]) => {
@@ -148,9 +151,14 @@ function indexOps(ops: Op[]): OpsIndex {
 			noteImageUrl(normalizeUuid(idToUuid(op.id)), op.values)
 		} else if (op.type === "updateEntity") {
 			noteImageUrl(normalizeUuid(idToUuid(op.id)), op.set)
+			for (const u of op.unset) {
+				if (normalizeUuid(idToUuid(u.property as never)) === IMAGE_URL_PROPERTY_ID) {
+					unsetImageUrls.add(normalizeUuid(idToUuid(op.id)))
+				}
+			}
 		}
 	}
-	return {blockParents, mediaTyped, proposedImageUrls, blocksReified}
+	return {blockParents, mediaTyped, proposedImageUrls, unsetImageUrls, blocksReified}
 }
 
 /** Composite key for per-(parent, block) config lookup. */
@@ -301,15 +309,22 @@ function inlineProposedMedia(
 	diff: GroupedEntityDiff & {relations: RelationChangeV2[]},
 	ctx: RootContext,
 ): GroupedEntityDiff & {relations: RelationChangeV2[]} {
-	const {mediaTyped, proposedImageUrls} = ctx.opsIndex
-	if (proposedImageUrls.size === 0) return diff
+	const {mediaTyped, proposedImageUrls, unsetImageUrls} = ctx.opsIndex
+	if (proposedImageUrls.size === 0 && unsetImageUrls.size === 0) return diff
 	const apply = (r: RelationChange): RelationChangeV2 => {
 		if (!r.after) return r
-		const url = proposedImageUrls.get(r.after.toEntityId)
-		if (!url) return r
-		const mt = mediaTyped.get(r.after.toEntityId) ?? ctx.mediaTypeById.get(r.after.toEntityId)
+		const target = r.after.toEntityId
+		const mt = mediaTyped.get(target) ?? ctx.mediaTypeById.get(target)
 		if (!mt) return r
-		return {...r, after: {...r.after, ...(mt === "video" ? {videoUrl: url} : {imageUrl: url})}}
+		const url = proposedImageUrls.get(target)
+		// The edit set a new URL → it's the authoritative after-side value.
+		if (url) return {...r, after: {...r.after, ...(mt === "video" ? {videoUrl: url} : {imageUrl: url})}}
+		// The edit removed the URL → strip any base-version URL enrichWithMediaUrls inlined.
+		const after = r.after as {imageUrl?: string | null; videoUrl?: string | null}
+		if (unsetImageUrls.has(target) && (after.imageUrl || after.videoUrl)) {
+			return {...r, after: {...r.after, imageUrl: undefined, videoUrl: undefined}}
+		}
+		return r
 	}
 	// Mirror enrichWithMediaUrls: rewrite top-level, grouped, and block relations.
 	return {
