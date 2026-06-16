@@ -588,7 +588,30 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			relAvatar: "21000000-0006-4000-8000-000000000004",
 			propAddAvatar: "21000000-0008-4000-8000-000000000002",
 			actAddAvatar: "21000000-000a-4000-8000-000000000002",
+			// Scenario C: data block whose config (View) is set on the reified BLOCKS relation entity.
+			pageC: "21000000-0002-4000-8000-000000000005",
+			dataBlockC: "21000000-0002-4000-8000-000000000006",
+			relBlocksC: "21000000-0006-4000-8000-000000000005",
+			relTypesC: "21000000-0006-4000-8000-000000000006",
+			relViewConfig: "21000000-0006-4000-8000-000000000007",
+			propSetConfig: "21000000-0008-4000-8000-000000000003",
+			actSetConfig: "21000000-000a-4000-8000-000000000003",
+			// Scenario V: video block whose url is edited.
+			pageV: "21000000-0002-4000-8000-000000000007",
+			videoV: "21000000-0002-4000-8000-000000000008",
+			relBlocksV: "21000000-0006-4000-8000-000000000008",
+			relTypesV: "21000000-0006-4000-8000-000000000009",
+			propEditVideo: "21000000-0008-4000-8000-000000000004",
+			actEditVideo: "21000000-000a-4000-8000-000000000004",
+			// Scenario R: ranking block (a data-block subtype) whose name is edited.
+			pageR: "21000000-0002-4000-8000-000000000009",
+			rankR: "21000000-0002-4000-8000-00000000000a",
+			relBlocksR: "21000000-0006-4000-8000-00000000000a",
+			relTypesR: "21000000-0006-4000-8000-00000000000b",
+			propEditRank: "21000000-0008-4000-8000-000000000005",
+			actEditRank: "21000000-000a-4000-8000-000000000005",
 		}
+		const RANKING_BLOCK_TYPE = "150db6defe2344f0805afa57502e2c32"
 
 		beforeAll(async () => {
 			const db = drizzle(pool)
@@ -621,6 +644,22 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 				await rel(f.relTypesA, f.blockA, SystemIds.TEXT_BLOCK, SystemIds.TYPES_PROPERTY)
 				// Scenario B: page B (name only); proposal will add an image + avatar relation.
 				await val(`${f.pageB}-name`, f.pageB, SystemIds.NAME_PROPERTY, "Page B")
+				// Scenario C: page C owns a data block; config lives on the reified BLOCKS relation.
+				await val(`${f.pageC}-name`, f.pageC, SystemIds.NAME_PROPERTY, "Page C")
+				await val(`${f.dataBlockC}-name`, f.dataBlockC, SystemIds.NAME_PROPERTY, "My Data Block")
+				// The BLOCKS relation's reified entity id (entity_id) == relBlocksC → config carrier.
+				await rel(f.relBlocksC, f.pageC, f.dataBlockC, SystemIds.BLOCKS)
+				await rel(f.relTypesC, f.dataBlockC, SystemIds.DATA_BLOCK, SystemIds.TYPES_PROPERTY)
+				// Scenario V: page V owns a video block (url "ipfs://oldvid").
+				await val(`${f.pageV}-name`, f.pageV, SystemIds.NAME_PROPERTY, "Page V")
+				await val(`${f.videoV}-url`, f.videoV, SystemIds.IMAGE_URL_PROPERTY, "ipfs://oldvid")
+				await rel(f.relBlocksV, f.pageV, f.videoV, SystemIds.BLOCKS)
+				await rel(f.relTypesV, f.videoV, SystemIds.VIDEO_BLOCK, SystemIds.TYPES_PROPERTY)
+				// Scenario R: page R owns a ranking block (name "Old Rank").
+				await val(`${f.pageR}-name`, f.pageR, SystemIds.NAME_PROPERTY, "Page R")
+				await val(`${f.rankR}-name`, f.rankR, SystemIds.NAME_PROPERTY, "Old Rank")
+				await rel(f.relBlocksR, f.pageR, f.rankR, SystemIds.BLOCKS)
+				await rel(f.relTypesR, f.rankR, RANKING_BLOCK_TYPE, SystemIds.TYPES_PROPERTY)
 				await client.query("COMMIT")
 			} catch (e) {
 				await client.query("ROLLBACK")
@@ -677,6 +716,60 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 							.build(),
 					contentUri: generateTestUri("fold-add-avatar"),
 				})
+				// Proposal C: set a View config on the data block's reified BLOCKS relation entity.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propSetConfig,
+					actionId: f.actSetConfig,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Set data block view")
+							.setCreatedNow()
+							.createRelationSimple(
+								uuidToId(f.relViewConfig),
+								uuidToId(f.relBlocksC), // from = reified BLOCKS relation entity
+								uuidToId(SystemIds.GALLERY_VIEW),
+								uuidToId(SystemIds.VIEW_PROPERTY),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-set-config"),
+				})
+				// Proposal V: edit the video block's url.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propEditVideo,
+					actionId: f.actEditVideo,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Edit video url")
+							.setCreatedNow()
+							.updateEntity(uuidToId(f.videoV), (u) =>
+								u.setText(uuidToId(SystemIds.IMAGE_URL_PROPERTY), "ipfs://newvid"),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-edit-video"),
+				})
+				// Proposal R: rename the ranking block.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propEditRank,
+					actionId: f.actEditRank,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Rename ranking block")
+							.setCreatedNow()
+							.updateEntity(uuidToId(f.rankR), (u) =>
+								u.setText(uuidToId(SystemIds.NAME_PROPERTY), "New Rank"),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-edit-rank"),
+				})
 			} finally {
 				client2.release()
 			}
@@ -711,6 +804,79 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			const rel = page.relations.find((r: {after?: {toEntityId: string}}) => r.after?.toEntityId === n(f.imgB))
 			expect(rel).toBeDefined()
 			expect(rel.after.imageUrl).toBe("ipfs://foldtestimg")
+		})
+
+		it("folds data-block config (from the reified BLOCKS relation entity) into the block", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propSetConfig}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const ids = body.entities.map((e: {entityId: string}) => e.entityId)
+			// Only the page is a root; the reified config entity is folded, not top-level.
+			expect(ids).toContain(n(f.pageC))
+			expect(ids).not.toContain(n(f.relBlocksC))
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageC))
+			const block = page.blocks.find((b: {id: string}) => b.id === n(f.dataBlockC))
+			expect(block).toBeDefined()
+			expect(block.type).toBe("dataBlock")
+			// The View config relation (authored on the reified entity) is folded onto the block.
+			const viewRel = (block.relations ?? []).find(
+				(r: {typeId: string; after?: {toEntityId: string}}) =>
+					r.typeId === n(SystemIds.VIEW_PROPERTY) && r.after?.toEntityId === n(SystemIds.GALLERY_VIEW),
+			)
+			expect(viewRel).toBeDefined()
+			expect(viewRel.changeType).toBe("ADD")
+		})
+
+		it("folds a video block (videoBlock type) under its parent", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propEditVideo}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const ids = body.entities.map((e: {entityId: string}) => e.entityId)
+			expect(ids).toContain(n(f.pageV))
+			expect(ids).not.toContain(n(f.videoV))
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageV))
+			const block = page.blocks.find((b: {id: string}) => b.id === n(f.videoV))
+			expect(block).toBeDefined()
+			expect(block.type).toBe("videoBlock")
+			expect(block.before).toBe("ipfs://oldvid")
+			expect(block.after).toBe("ipfs://newvid")
+		})
+
+		it("folds a ranking block as a dataBlock", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propEditRank}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageR))
+			expect(page).toBeDefined()
+			const block = page.blocks.find((b: {id: string}) => b.id === n(f.rankR))
+			expect(block).toBeDefined()
+			expect(block.type).toBe("dataBlock")
+			expect(block.before).toBe("Old Rank")
+			expect(block.after).toBe("New Rank")
+		})
+
+		it("paginates over root entities (cursor crosses a page boundary)", async () => {
+			// proposalMultipleOps changes 2 root entities; limit=1 forces two pages.
+			const r1 = await v2App.request(
+				`/v2/versioned/proposals/${uuid.proposalMultipleOps}/diff?spaceId=${uuid.space1}&limit=1`,
+			)
+			expect(r1.status).toBe(200)
+			const b1 = await r1.json()
+			expect(b1.entities.length).toBe(1)
+			expect(b1.pagination.totalEntities).toBe(2)
+			expect(b1.pagination.hasMore).toBe(true)
+			expect(b1.pagination.cursor).toBeTruthy()
+
+			const r2 = await v2App.request(
+				`/v2/versioned/proposals/${uuid.proposalMultipleOps}/diff?spaceId=${uuid.space1}&limit=1&cursor=${encodeURIComponent(b1.pagination.cursor)}`,
+			)
+			expect(r2.status).toBe(200)
+			const b2 = await r2.json()
+			expect(b2.entities.length).toBe(1)
+			expect(b2.pagination.hasMore).toBe(false)
+			// The two pages cover distinct roots.
+			const all = new Set([...b1.entities, ...b2.entities].map((e: {entityId: string}) => e.entityId))
+			expect(all.size).toBe(2)
 		})
 	})
 })

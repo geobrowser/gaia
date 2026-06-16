@@ -25,6 +25,88 @@ export interface BlockParentEntry {
 	relationId: NormalizedUuid
 }
 
+/** A reified BLOCKS-relation entity (the "block relation entity" that holds a
+ *  data block's view/columns/sort config), resolved to its parent + data block. */
+export interface BlocksReifiedEntry {
+	parentId: NormalizedUuid
+	dataBlockId: NormalizedUuid
+}
+
+/**
+ * Resolve reified-BLOCKS-relation entities: for each candidate entity id, if it
+ * is the reified `entity_id` of a BLOCKS relation, return that relation's parent
+ * (`from`) and data block (`to`). Used by the proposal diff to fold a data
+ * block's config (which lives on this reified entity) into the block.
+ */
+export function batchGetBlocksRelationsByReifiedIdAtVersion(
+	db: NodePgDatabase<Record<string, unknown>>,
+	reifiedIds: NormalizedUuid[],
+	versionKey: bigint,
+	spaceId: NormalizedUuid,
+): Effect.Effect<Map<NormalizedUuid, BlocksReifiedEntry>, QueryError> {
+	if (reifiedIds.length === 0) return Effect.succeed(new Map())
+	return Effect.tryPromise({
+		try: async () => {
+			const idsArray = `{${reifiedIds.join(",")}}`
+			const vk = versionKey.toString()
+			const result = await db.execute<{entity_id: string; from_entity_id: string; to_entity_id: string}>(sql`
+				SELECT entity_id, from_entity_id, to_entity_id
+				FROM relation_versions
+				WHERE entity_id = ANY(${idsArray}::uuid[])
+					AND type_id = ${BLOCKS_TYPE_ID}
+					AND space_id = ${spaceId}
+					AND valid_from_key <= ${vk}::bigint
+					AND (valid_to_key IS NULL OR valid_to_key > ${vk}::bigint)
+			`)
+			const map = new Map<NormalizedUuid, BlocksReifiedEntry>()
+			for (const row of result.rows) {
+				map.set(normalizeUuid(row.entity_id), {
+					parentId: normalizeUuid(row.from_entity_id),
+					dataBlockId: normalizeUuid(row.to_entity_id),
+				})
+			}
+			return map
+		},
+		catch: (error) => new QueryError("batchGetBlocksRelationsByReifiedIdAtVersion", error),
+	}).pipe(
+		Effect.withSpan("queries-v2.batchGetBlocksRelationsByReifiedIdAtVersion", {
+			attributes: {count: reifiedIds.length},
+		}),
+	)
+}
+
+/** Live-state variant of {@link batchGetBlocksRelationsByReifiedIdAtVersion}. */
+export function batchGetLiveBlocksRelationsByReifiedId(
+	db: NodePgDatabase<Record<string, unknown>>,
+	reifiedIds: NormalizedUuid[],
+	spaceId: NormalizedUuid,
+): Effect.Effect<Map<NormalizedUuid, BlocksReifiedEntry>, QueryError> {
+	if (reifiedIds.length === 0) return Effect.succeed(new Map())
+	return Effect.tryPromise({
+		try: async () => {
+			const idsArray = `{${reifiedIds.join(",")}}`
+			const result = await db.execute<{entity_id: string; from_entity_id: string; to_entity_id: string}>(sql`
+				SELECT entity_id, from_entity_id, to_entity_id
+				FROM relations
+				WHERE entity_id = ANY(${idsArray}::uuid[])
+					AND type_id = ${BLOCKS_TYPE_ID}
+					AND space_id = ${spaceId}
+			`)
+			const map = new Map<NormalizedUuid, BlocksReifiedEntry>()
+			for (const row of result.rows) {
+				map.set(normalizeUuid(row.entity_id), {
+					parentId: normalizeUuid(row.from_entity_id),
+					dataBlockId: normalizeUuid(row.to_entity_id),
+				})
+			}
+			return map
+		},
+		catch: (error) => new QueryError("batchGetLiveBlocksRelationsByReifiedId", error),
+	}).pipe(
+		Effect.withSpan("queries-v2.batchGetLiveBlocksRelationsByReifiedId", {attributes: {count: reifiedIds.length}}),
+	)
+}
+
 /**
  * Backlink resolver: for each child entity id, find the parent(s) that link to
  * it via a BLOCKS relation at `versionKey`. Used by the proposal diff to fold a

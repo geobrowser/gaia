@@ -197,6 +197,19 @@ export interface ImageBlockChange {
 }
 
 /**
+ * A video block change with before/after URLs.
+ */
+export interface VideoBlockChange {
+	id: NormalizedUuid
+	type: "videoBlock"
+	before: string | null
+	after: string | null
+	blockName?: string | null
+	values?: ValueChange[]
+	relations?: RelationChange[]
+}
+
+/**
  * A data block change with before/after names.
  */
 export interface DataBlockChange {
@@ -209,7 +222,7 @@ export interface DataBlockChange {
 	relations?: RelationChange[]
 }
 
-export type BlockChange = TextBlockChange | ImageBlockChange | DataBlockChange
+export type BlockChange = TextBlockChange | ImageBlockChange | VideoBlockChange | DataBlockChange
 
 // ============================================================================
 // Entity Snapshots and Diffs

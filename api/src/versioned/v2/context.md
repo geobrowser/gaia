@@ -138,7 +138,29 @@ Validated against the DB in `__tests__/proposal-diff-edit-flow.test.ts`: block f
 *unchanged* parent (orphan-parent backlink), media entity dropped + URL inlined, plus the phase-0
 parity/enrichment/error tests.
 
-**Still missing:** `/v2/versioned/entities/:id` (snapshot) v2 variant.
+**`postProcessDiffs` parity (gaps closed):** to let the UI delete `postProcessDiffs` for the
+proposal path, the remaining client-only steps were ported:
+- **Data-block config merge for proposals.** The config (View/Shown columns/sort) lives on the
+  *reified BLOCKS-relation entity*, modified in the edit — `enrichBlockConfig` only reads committed
+  DB config, so it was a no-op for proposals and the reified entity leaked as a top-level row.
+  `resolveRoots` now classifies reified BLOCKS-relation entities (`batchGetBlocksRelationsByReifiedId`
+  over DB + edit ops), folds the data block under its parent, and `buildFoldedPage` merges the
+  config entity's base+proposed values/relations into the block before/after (so `enrichBlocks`
+  folds the config diff). The reified entity no longer appears top-level.
+- **Video blocks (shared `diff.ts`, benefits both endpoints).** `BlockChange` gained `videoBlock`;
+  `getBlockType`/`diffBlocks`/`diffDynamicGroup`/`enrichBlocks` handle `VIDEO_BLOCK`/`VIDEO_TYPE`
+  (url via `IMAGE_URL_PROPERTY`, matching the frontend).
+- **Ranking blocks.** `getBlockType` maps `RANKING_BLOCK_TYPE` → `dataBlock` (matches frontend).
+- **imageBlock detection** now also accepts `IMAGE_TYPE` (frontend parity), not just `IMAGE`/`IMAGE_BLOCK`.
+
+The v2 **entity-diff** endpoint inherits video/ranking/image-type from the shared `diff.ts` changes;
+data-block config was already covered there (committed-vs-committed via `enrichBlockConfig`).
+
+**Still missing:** `/v2/versioned/entities/:id` (snapshot) v2 variant — the only remaining endpoint;
+`postProcessDiffs` doesn't apply to it. **Accepted divergence:** the orphan new-block *fallback
+heuristic* (frontend L360–394, guessing a parent when a brand-new block has no backlink and no
+in-edit BLOCKS relation) is not ported — v2 resolves new blocks from the edit's BLOCKS ops, which
+covers the real case.
 
 ---
 
