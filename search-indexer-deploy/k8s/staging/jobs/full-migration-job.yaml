@@ -19,7 +19,7 @@ spec:
         environment: staging
     spec:
       imagePullSecrets:
-      - name: regcred
+      - name: geo
       # Use ServiceAccount with permissions to manage deployments
       serviceAccountName: search-admin
       restartPolicy: Never

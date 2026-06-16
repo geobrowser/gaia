@@ -1490,6 +1490,7 @@ impl Storage {
         let mut datetime_utcs = Vec::with_capacity(set_values.len());
         let mut context_root_ids = Vec::with_capacity(set_values.len());
         let mut context_edge_type_ids = Vec::with_capacity(set_values.len());
+        let mut context_last_to_entity_ids = Vec::with_capacity(set_values.len());
 
         for v in &set_values {
             // Derive deterministic ID for idempotency
@@ -1522,6 +1523,7 @@ impl Storage {
             datetime_utcs.push(v.datetime_utc.as_deref());
             context_root_ids.push(v.context_root_id);
             context_edge_type_ids.push(v.context_edge_type_id);
+            context_last_to_entity_ids.push(v.context_last_to_entity_id);
         }
 
         sqlx::query(
@@ -1530,14 +1532,16 @@ impl Storage {
                 id, entity_id, property_id, space_id, valid_from_key,
                 language, unit, text, boolean, decimal, time, point, rect,
                 integer, float, bytes, date, datetime, schedule, embedding,
-                time_utc, datetime_utc, context_root_id, context_edge_type_id
+                time_utc, datetime_utc, context_root_id, context_edge_type_id,
+                context_last_to_entity_id
             )
             SELECT * FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::bigint[],
                 $6::text[], $7::text[], $8::text[], $9::boolean[], $10::numeric[],
                 $11::text[], $12::text[], $13::text[], $14::bigint[], $15::double precision[],
                 $16::bytea[], $17::text[], $18::text[], $19::jsonb[], $20::jsonb[],
-                $21::timetz[], $22::timestamptz[], $23::uuid[], $24::uuid[]
+                $21::timetz[], $22::timestamptz[], $23::uuid[], $24::uuid[],
+                $25::uuid[]
             )
             ON CONFLICT (id) DO NOTHING
             "#,
@@ -1566,6 +1570,7 @@ impl Storage {
         .bind(&datetime_utcs)
         .bind(&context_root_ids)
         .bind(&context_edge_type_ids)
+        .bind(&context_last_to_entity_ids)
         .execute(&mut **tx)
         .await?;
 
@@ -1609,7 +1614,14 @@ impl Storage {
         .execute(&mut **tx)
         .await?;
 
-        // Filter to only Create operations for inserting new versions
+        // Filter to only Create operations for inserting new versions. The Create
+        // row carries the context columns (incl. context_last_to_entity_id)
+        // synthesized in-memory — no reads.
+        //
+        // NOTE: versioning Update/Unset ops (so an in-place relation field change
+        // is reflected in the temporal table rather than reading as deleted at the
+        // new version_key) is a separate write-path correctness fix tracked in its
+        // own PR — intentionally not bundled here to keep this change read-free.
         let creates: Vec<&SetRelationItem> = relations
             .iter()
             .filter_map(|r| match r {
@@ -1637,6 +1649,7 @@ impl Storage {
         let mut valid_from_keys = Vec::with_capacity(creates.len());
         let mut context_root_ids = Vec::with_capacity(creates.len());
         let mut context_edge_type_ids = Vec::with_capacity(creates.len());
+        let mut context_last_to_entity_ids = Vec::with_capacity(creates.len());
 
         for r in &creates {
             // Derive deterministic ID for idempotency
@@ -1658,6 +1671,7 @@ impl Storage {
             valid_from_keys.push(version_key);
             context_root_ids.push(r.context_root_id);
             context_edge_type_ids.push(r.context_edge_type_id);
+            context_last_to_entity_ids.push(r.context_last_to_entity_id);
         }
 
         sqlx::query(
@@ -1665,12 +1679,12 @@ impl Storage {
             INSERT INTO relation_versions (
                 id, relation_id, entity_id, type_id, from_entity_id, from_space_id,
                 to_entity_id, to_space_id, position, space_id, verified, valid_from_key,
-                context_root_id, context_edge_type_id
+                context_root_id, context_edge_type_id, context_last_to_entity_id
             )
             SELECT * FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::uuid[], $6::uuid[],
                 $7::uuid[], $8::uuid[], $9::text[], $10::uuid[], $11::boolean[], $12::bigint[],
-                $13::uuid[], $14::uuid[]
+                $13::uuid[], $14::uuid[], $15::uuid[]
             )
             ON CONFLICT (id) DO NOTHING
             "#,
@@ -1689,6 +1703,7 @@ impl Storage {
         .bind(&valid_from_keys)
         .bind(&context_root_ids)
         .bind(&context_edge_type_ids)
+        .bind(&context_last_to_entity_ids)
         .execute(&mut **tx)
         .await?;
 

@@ -16,6 +16,7 @@ import {OpenSearchClient} from "./src/services/search"
 import {db} from "./src/services/storage/storage"
 import {log} from "./src/services/telemetry"
 import {createVersionedRouter} from "./src/versioned"
+import {createVersionedV2Router} from "./src/versioned/v2"
 
 type AppEnv = {
 	Variables: {
@@ -75,6 +76,7 @@ app.use("/ipfs/*", canonicalRequestLogging())
 app.use("/profile/*", canonicalRequestLogging())
 app.use("/search/*", canonicalRequestLogging())
 app.use("/versioned/*", canonicalRequestLogging())
+app.use("/v2/versioned/*", canonicalRequestLogging())
 app.use("/proposals/*", canonicalRequestLogging())
 app.use("/graphql", canonicalRequestLogging())
 
@@ -91,10 +93,11 @@ if (opensearchUrl) {
 	}
 
 	// Get environment-specific index name
-	// staging -> staging_entities, production -> entities
+	// staging -> staging_entities, testnet -> testnet_entities, production -> entities
 	const environment = process.env.ENVIRONMENT
 	const baseIndexAlias = process.env.INDEX_ALIAS ?? "entities"
-	const indexName = environment === "staging" ? `staging_${baseIndexAlias}` : baseIndexAlias
+	const indexName =
+		environment === "staging" || environment === "testnet" ? `${environment}_${baseIndexAlias}` : baseIndexAlias
 
 	const searchClient = new OpenSearchClient(opensearchUrl, indexName)
 	await searchClient.init()
@@ -107,6 +110,10 @@ if (opensearchUrl) {
 // Mount versioned entities router
 app.route("/versioned", createVersionedRouter(db, runtime))
 log.info("Versioned entity routes enabled")
+
+// Mount v2 versioned entities router (additive enrichments over v1)
+app.route("/v2/versioned", createVersionedV2Router(db, runtime))
+log.info("Versioned v2 entity routes enabled")
 
 // Mount profile router
 app.route("/profile", createProfileRouter(db, runtime))

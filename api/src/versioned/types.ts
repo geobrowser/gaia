@@ -176,6 +176,11 @@ export interface TextBlockChange {
 	before: string | null
 	after: string | null
 	diff: DiffChunk[]
+	// Optional rich-shape fields, populated only by the v2 enrichment. v1 leaves
+	// them undefined, so the v1 response is unchanged.
+	blockName?: string | null
+	values?: ValueChange[]
+	relations?: RelationChange[]
 }
 
 /**
@@ -186,6 +191,9 @@ export interface ImageBlockChange {
 	type: "imageBlock"
 	before: string | null
 	after: string | null
+	blockName?: string | null
+	values?: ValueChange[]
+	relations?: RelationChange[]
 }
 
 /**
@@ -196,6 +204,9 @@ export interface DataBlockChange {
 	type: "dataBlock"
 	before: string | null
 	after: string | null
+	blockName?: string | null
+	values?: ValueChange[]
+	relations?: RelationChange[]
 }
 
 export type BlockChange = TextBlockChange | ImageBlockChange | DataBlockChange

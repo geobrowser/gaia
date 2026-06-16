@@ -100,15 +100,22 @@ fn id_to_uuid(id: &Grc20Id) -> Uuid {
 }
 
 /// Extract context metadata for grouping changes (GRC-20 Section 4.5).
-/// Returns (root_id, first_edge_type_id) from the context.
-fn extract_context(ctx: &Option<Context>) -> (Option<Uuid>, Option<Uuid>) {
+/// Returns (root_id, first_edge_type_id, last_to_entity_id) from the context.
+///
+/// - `first_edge_type_id` is the grouping bucket per RFC 0003 (`edges[0].type_id`).
+/// - `last_to_entity_id` is the leaf entity the change applies to per RFC 0006
+///   (`edges.last().to_entity_id`). Persisting this lets discovery match the
+///   RFC's rule literally instead of inferring "changed child" from a row's
+///   own entity_id / from_entity_id (correct only by structural coincidence).
+fn extract_context(ctx: &Option<Context>) -> (Option<Uuid>, Option<Uuid>, Option<Uuid>) {
     match ctx {
         Some(c) => {
             let root_id = id_to_uuid(&c.root_id);
             let edge_type_id = c.edges.first().map(|e| id_to_uuid(&e.type_id));
-            (Some(root_id), edge_type_id)
+            let last_to_entity_id = c.edges.last().map(|e| id_to_uuid(&e.to_entity_id));
+            (Some(root_id), edge_type_id, last_to_entity_id)
         }
-        None => (None, None),
+        None => (None, None, None),
     }
 }
 
@@ -251,6 +258,10 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             is_system: c.is_system,
             context_root_id: c.context_root_id,
             context_edge_type_id: c.context_edge_type_id,
+            // Prefer the update's leaf-context, falling back to the create's — an
+            // update can carry a newer context_last_to_entity_id, and like the other
+            // merged fields above it should not be silently dropped.
+            context_last_to_entity_id: u.context_last_to_entity_id.or(c.context_last_to_entity_id),
         }),
 
         // create -> delete: Delete wins
@@ -297,6 +308,7 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             is_system: c.is_system,
             context_root_id: c.context_root_id,
             context_edge_type_id: c.context_edge_type_id,
+            context_last_to_entity_id: c.context_last_to_entity_id,
         }),
 
         // update -> create: Create wins (overwrites)
@@ -312,6 +324,10 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             to_version_id: u.to_version_id.or(e.to_version_id),
             position: u.position.or(e.position),
             verified: u.verified.or(e.verified),
+            // Later context wins; fall back to earlier if later is None.
+            context_root_id: u.context_root_id.or(e.context_root_id),
+            context_edge_type_id: u.context_edge_type_id.or(e.context_edge_type_id),
+            context_last_to_entity_id: u.context_last_to_entity_id.or(e.context_last_to_entity_id),
         }),
 
         // update -> delete: Delete wins
@@ -351,6 +367,9 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             } else {
                 e.verified
             },
+            context_root_id: u.context_root_id.or(e.context_root_id),
+            context_edge_type_id: u.context_edge_type_id.or(e.context_edge_type_id),
+            context_last_to_entity_id: u.context_last_to_entity_id.or(e.context_last_to_entity_id),
         }),
 
         // delete -> anything: New op wins (recreation after delete)
@@ -375,6 +394,9 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             to_version_id: u.to_version_id.or(e.to_version_id),
             position: u.position.or(e.position),
             verified: u.verified.or(e.verified),
+            context_root_id: u.context_root_id.or(e.context_root_id),
+            context_edge_type_id: u.context_edge_type_id.or(e.context_edge_type_id),
+            context_last_to_entity_id: u.context_last_to_entity_id.or(e.context_last_to_entity_id),
         }),
     }
 }
@@ -458,7 +480,8 @@ fn value_to_value_op(
 ) -> Option<ValueOp> {
     let property_id = id_to_uuid(&pv.property);
     let value_id = derive_value_id(&entity_id, &property_id, &space_id);
-    let (context_root_id, context_edge_type_id) = extract_context(context);
+    let (context_root_id, context_edge_type_id, context_last_to_entity_id) =
+        extract_context(context);
 
     let mut op = ValueOp {
         id: value_id,
@@ -485,6 +508,7 @@ fn value_to_value_op(
         datetime_utc: None,
         context_root_id,
         context_edge_type_id,
+        context_last_to_entity_id,
     };
 
     match &pv.value {
@@ -640,7 +664,8 @@ fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
             }
             Grc20Op::UpdateEntity(entity) => {
                 let entity_id = id_to_uuid(&entity.id);
-                let (context_root_id, context_edge_type_id) = extract_context(&entity.context);
+                let (context_root_id, context_edge_type_id, context_last_to_entity_id) =
+                    extract_context(&entity.context);
 
                 // Handle unset values first
                 for unset in &entity.unset_values {
@@ -672,6 +697,7 @@ fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
                         datetime_utc: None,
                         context_root_id,
                         context_edge_type_id,
+                        context_last_to_entity_id,
                     });
                 }
 
@@ -707,7 +733,8 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
                 let from_version = relation.from_version.map(|id| id_to_uuid(&id).to_string());
                 let to_space = relation.to_space.map(|id| id_to_uuid(&id).to_string());
                 let to_version = relation.to_version.map(|id| id_to_uuid(&id).to_string());
-                let (context_root_id, context_edge_type_id) = extract_context(&relation.context);
+                let (context_root_id, context_edge_type_id, context_last_to_entity_id) =
+                    extract_context(&relation.context);
 
                 relation_ops.push(RelationOp::Create(SetRelationItem {
                     id: relation_id,
@@ -725,6 +752,7 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
                     is_system: false,
                     context_root_id,
                     context_edge_type_id,
+                    context_last_to_entity_id,
                 }));
             }
             Grc20Op::UpdateRelation(updated) => {
@@ -734,6 +762,8 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
                 let from_version = updated.from_version.map(|id| id_to_uuid(&id).to_string());
                 let to_space = updated.to_space.map(|id| id_to_uuid(&id).to_string());
                 let to_version = updated.to_version.map(|id| id_to_uuid(&id).to_string());
+                let (context_root_id, context_edge_type_id, context_last_to_entity_id) =
+                    extract_context(&updated.context);
 
                 // Check if any fields are being unset
                 let has_unset = !updated.unset.is_empty();
@@ -764,6 +794,9 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
                             .contains(&UnsetRelationField::Position)
                             .then_some(true),
                         verified: None,
+                        context_root_id,
+                        context_edge_type_id,
+                        context_last_to_entity_id,
                     }));
                 }
 
@@ -783,10 +816,15 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
                         from_space_id: from_space,
                         from_version_id: from_version,
                         to_version_id: to_version,
+                        context_root_id,
+                        context_edge_type_id,
+                        context_last_to_entity_id,
                     }));
                 }
             }
             Grc20Op::DeleteRelation(del) => {
+                // Delete-with-context tombstone is not yet implemented; see
+                // DeleteRelationItem doc comment.
                 relation_ops.push(RelationOp::Delete(DeleteRelationItem {
                     id: id_to_uuid(&del.id),
                     space_id: *space_id,
@@ -843,6 +881,7 @@ mod tests {
             datetime_utc: None,
             context_root_id: None,
             context_edge_type_id: None,
+            context_last_to_entity_id: None,
         }
     }
 
@@ -863,6 +902,7 @@ mod tests {
             is_system: false,
             context_root_id: None,
             context_edge_type_id: None,
+            context_last_to_entity_id: None,
         }
     }
 
@@ -876,6 +916,9 @@ mod tests {
             to_version_id: None,
             position: None,
             verified: None,
+            context_root_id: None,
+            context_edge_type_id: None,
+            context_last_to_entity_id: None,
         }
     }
 
@@ -889,6 +932,9 @@ mod tests {
             to_version_id: None,
             position: None,
             verified: None,
+            context_root_id: None,
+            context_edge_type_id: None,
+            context_last_to_entity_id: None,
         }
     }
 
@@ -1229,9 +1275,10 @@ mod tests {
 
     #[test]
     fn test_extract_context_none() {
-        let (root_id, edge_type_id) = extract_context(&None);
+        let (root_id, edge_type_id, last_to_entity_id) = extract_context(&None);
         assert!(root_id.is_none());
         assert!(edge_type_id.is_none());
+        assert!(last_to_entity_id.is_none());
     }
 
     #[test]
@@ -1248,10 +1295,52 @@ mod tests {
             }],
         };
 
-        let (extracted_root, extracted_edge_type) = extract_context(&Some(context));
+        let (extracted_root, extracted_edge_type, extracted_last_to_entity) =
+            extract_context(&Some(context));
 
         assert_eq!(extracted_root, Some(Uuid::from_bytes(root_id)));
         assert_eq!(extracted_edge_type, Some(Uuid::from_bytes(edge_type_id)));
+        assert_eq!(
+            extracted_last_to_entity,
+            Some(Uuid::from_bytes(to_entity_id))
+        );
+    }
+
+    #[test]
+    fn test_extract_context_multi_edge_returns_last_to_entity() {
+        // RFC 0006: leaf entity is `edges.last().to_entity_id`, regardless of
+        // path length. First-edge type still drives the grouping bucket.
+        let root_id: [u8; 16] = [1; 16];
+        let first_type: [u8; 16] = [2; 16];
+        let middle_target: [u8; 16] = [3; 16];
+        let last_type: [u8; 16] = [4; 16];
+        let leaf_target: [u8; 16] = [5; 16];
+
+        let context = Context {
+            root_id,
+            edges: vec![
+                ContextEdge {
+                    type_id: first_type,
+                    to_entity_id: middle_target,
+                },
+                ContextEdge {
+                    type_id: last_type,
+                    to_entity_id: leaf_target,
+                },
+            ],
+        };
+
+        let (extracted_root, extracted_edge_type, extracted_last_to_entity) =
+            extract_context(&Some(context));
+
+        assert_eq!(extracted_root, Some(Uuid::from_bytes(root_id)));
+        // Bucket key is first edge's type_id, not last.
+        assert_eq!(extracted_edge_type, Some(Uuid::from_bytes(first_type)));
+        // Leaf is last edge's to_entity_id, not the middle one.
+        assert_eq!(
+            extracted_last_to_entity,
+            Some(Uuid::from_bytes(leaf_target))
+        );
     }
 
     #[test]
@@ -1263,10 +1352,12 @@ mod tests {
             edges: vec![],
         };
 
-        let (extracted_root, extracted_edge_type) = extract_context(&Some(context));
+        let (extracted_root, extracted_edge_type, extracted_last_to_entity) =
+            extract_context(&Some(context));
 
         assert_eq!(extracted_root, Some(Uuid::from_bytes(root_id)));
         assert!(extracted_edge_type.is_none());
+        assert!(extracted_last_to_entity.is_none());
     }
 
     // ===================
@@ -1299,6 +1390,7 @@ mod tests {
             datetime_utc: None,
             context_root_id: None,
             context_edge_type_id: None,
+            context_last_to_entity_id: None,
         }
     }
 
@@ -1319,6 +1411,7 @@ mod tests {
             is_system: false,
             context_root_id: None,
             context_edge_type_id: None,
+            context_last_to_entity_id: None,
         }
     }
 
@@ -1583,7 +1676,7 @@ mod tests {
             ],
         };
 
-        let (_, extracted_edge_type) = extract_context(&Some(context));
+        let (_, extracted_edge_type, _) = extract_context(&Some(context));
 
         // Should use first edge's type_id
         assert_eq!(extracted_edge_type, Some(Uuid::from_bytes(first_edge_type)));

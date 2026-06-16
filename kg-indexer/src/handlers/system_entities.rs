@@ -139,6 +139,7 @@ fn make_system_value_integer(
         datetime_utc: None,
         context_root_id: None,
         context_edge_type_id: None,
+        context_last_to_entity_id: None,
     }
 }
 
@@ -173,6 +174,7 @@ fn make_system_value_text(
         datetime_utc: None,
         context_root_id: None,
         context_edge_type_id: None,
+        context_last_to_entity_id: None,
     }
 }
 
@@ -208,6 +210,7 @@ fn make_system_type_relation(
         is_system: true,
         context_root_id: None,
         context_edge_type_id: None,
+        context_last_to_entity_id: None,
     }
 }
 
