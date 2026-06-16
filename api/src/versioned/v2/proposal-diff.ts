@@ -2,23 +2,27 @@
  * v2 proposal diff — enriched, context-aware variants of the proposal endpoints.
  *
  * Mounted at /v2/versioned. Reuses v1's proposal state-construction wholesale
- * (proposal load, edit decode, base-state fetch, op application, pagination,
- * mode logic, errors) and swaps the diff+enrich tail: each affected entity is
- * diffed with the GROUPED diff and run through the same enrichment chain as the
- * entity-diff endpoint (blocks → blockConfig → names → media URLs), so relations
- * carry resolved names + media URLs and blocks carry their folded values/config.
+ * (proposal load, edit decode, base-state fetch, op application, mode logic,
+ * errors) and replaces the diff+enrich tail with the option-A pipeline:
+ *
+ *   1. Resolve the *root* (renderable) entities: classify each affected entity
+ *      as a block child (BLOCKS backlink, DB + edit ops) or a media-property
+ *      child (IMAGE/VIDEO typed), and treat their parents as roots — including
+ *      parents that weren't themselves changed (e.g. editing a block's text).
+ *   2. Paginate over roots (not the flat affected list).
+ *   3. Per root, fold each block child under `blocks[]` with its own proposed
+ *      values/relations/config, drop media children and inline their URL onto
+ *      the parent's relation, and run the shared enrichment chain
+ *      (enrichBlocks → enrichBlockConfig → enrichNames → enrichWithMediaUrls).
  *
  * v1 is unchanged; this is purely additive.
- *
- * NOTE: this slice keeps v1's pagination unit (the flat affected-entity list).
- * Cross-parent block folding + media-property filtering (which require paginating
- * over root entities) are the follow-up (Track B phases 2–3).
  */
 
 import {decodeEditAuto, type Op} from "@geoprotocol/grc-20"
+import {SystemIds} from "@graphprotocol/grc-20"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Effect} from "effect"
-import type {NormalizedUuid} from "../../utils/uuid"
+import {type NormalizedUuid, normalizeUuid} from "../../utils/uuid"
 import {diffGroupedEntitySnapshots} from "../diff"
 import {
 	applyOpsToSnapshot,
@@ -42,6 +46,7 @@ import {
 	getProposalStatus,
 	getProposalWithPublishAction,
 	InvalidCursorError,
+	idToUuid,
 	MAX_GROUP_SIZE,
 	MissingPublishActionError,
 	MixedModeError,
@@ -69,135 +74,284 @@ import {enrichWithMediaUrls} from "./enrich"
 import {enrichBlockConfig} from "./enrich-block-config"
 import {enrichBlocks} from "./enrich-blocks"
 import {enrichNames} from "./enrich-names"
-import type {EntityDiffV2, PaginatedGroupedProposalDiffV2, PaginatedProposalDiffV2} from "./types"
+import {
+	type BlockParentEntry,
+	batchGetBlockParentsAtVersion,
+	batchGetLiveBlockParents,
+	batchGetMediaUrls,
+	batchGetMediaUrlsAtVersion,
+} from "./queries"
+import type {
+	EntityDiffV2,
+	MediaEntity,
+	PaginatedGroupedProposalDiffV2,
+	PaginatedProposalDiffV2,
+	RelationChangeV2,
+} from "./types"
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
-/** Wrap a flat proposal EntitySnapshot as a GroupedEntitySnapshot.
- *  Proposal snapshots already separate BLOCKS children into `.blocks`; there are
- *  no dynamic (non-BLOCKS) groups in the proposal path, so `groups` is empty. */
+const BLOCKS_TYPE_ID = normalizeUuid(SystemIds.BLOCKS)
+const TYPES_PROPERTY_ID = normalizeUuid(SystemIds.TYPES_PROPERTY)
+const IMAGE_TYPE_ID = normalizeUuid(SystemIds.IMAGE_TYPE)
+const VIDEO_TYPE_ID = normalizeUuid(SystemIds.VIDEO_TYPE)
+const IMAGE_URL_PROPERTY_ID = normalizeUuid(SystemIds.IMAGE_URL_PROPERTY)
+
+/** What the edit's ops tell us about parentage / media that the DB can't (new entities). */
+interface OpsIndex {
+	/** child block id → set of parent ids (from createRelation BLOCKS ops). */
+	blockParents: Map<NormalizedUuid, Set<NormalizedUuid>>
+	/** entity id → media type, for entities the edit types as IMAGE/VIDEO. */
+	mediaTyped: Map<NormalizedUuid, "image" | "video">
+	/** entity id → IMAGE_URL set by the edit (proposed-side media url). */
+	proposedImageUrls: Map<NormalizedUuid, string>
+}
+
+function indexOps(ops: Op[]): OpsIndex {
+	const blockParents = new Map<NormalizedUuid, Set<NormalizedUuid>>()
+	const mediaTyped = new Map<NormalizedUuid, "image" | "video">()
+	const proposedImageUrls = new Map<NormalizedUuid, string>()
+
+	const noteImageUrl = (entityId: NormalizedUuid, values: {property: unknown; value: unknown}[]) => {
+		for (const pv of values) {
+			if (normalizeUuid(idToUuid(pv.property as never)) !== IMAGE_URL_PROPERTY_ID) continue
+			const v = pv.value as {type?: string; value?: unknown}
+			if (v?.type === "text" && typeof v.value === "string") proposedImageUrls.set(entityId, v.value)
+		}
+	}
+
+	for (const op of ops) {
+		if (op.type === "createRelation") {
+			const typeId = normalizeUuid(idToUuid(op.relationType))
+			if (typeId === BLOCKS_TYPE_ID) {
+				const child = normalizeUuid(idToUuid(op.to))
+				const parent = normalizeUuid(idToUuid(op.from))
+				const set = blockParents.get(child) ?? new Set<NormalizedUuid>()
+				set.add(parent)
+				blockParents.set(child, set)
+			} else if (typeId === TYPES_PROPERTY_ID) {
+				const to = normalizeUuid(idToUuid(op.to))
+				if (to === IMAGE_TYPE_ID || to === VIDEO_TYPE_ID) {
+					mediaTyped.set(normalizeUuid(idToUuid(op.from)), to === VIDEO_TYPE_ID ? "video" : "image")
+				}
+			}
+		} else if (op.type === "createEntity") {
+			noteImageUrl(normalizeUuid(idToUuid(op.id)), op.values)
+		} else if (op.type === "updateEntity") {
+			noteImageUrl(normalizeUuid(idToUuid(op.id)), op.set)
+		}
+	}
+	return {blockParents, mediaTyped, proposedImageUrls}
+}
+
+/** Wrap a flat proposal EntitySnapshot as a GroupedEntitySnapshot. */
 function toGrouped(s: EntitySnapshot): GroupedEntitySnapshot {
 	return {id: s.id, values: s.values, relations: s.relations, blocks: s.blocks, groupKeys: [], groups: {}}
 }
 
-/** Run the v2 enrichment chain on a single entity's before/after grouped snapshots. */
-function enrichEntity(
+interface RootContext {
+	opsIndex: OpsIndex
+	/** affected entities classified as block children (folded under a parent). */
+	blockChildren: Set<NormalizedUuid>
+	/** affected entities classified as media-property children (dropped + inlined). */
+	mediaChildren: Set<NormalizedUuid>
+}
+
+/**
+ * Resolve the renderable root entities for a proposal's affected set, plus the
+ * classification context needed to fold/drop children.
+ */
+function resolveRoots(
 	db: Database,
-	entityId: NormalizedUuid,
+	ops: Op[],
+	affected: NormalizedUuid[],
+	status: ProposalStatus,
+	baseVersionKey: bigint | null,
+	spaceId: NormalizedUuid,
+): Effect.Effect<{roots: NormalizedUuid[]; ctx: RootContext}, QueryError> {
+	return Effect.gen(function* () {
+		const opsIndex = indexOps(ops)
+
+		const [dbParents, dbMedia] = yield* Effect.all([
+			fetchBaseData(
+				status,
+				baseVersionKey,
+				() => batchGetLiveBlockParents(db, affected, spaceId),
+				(vk) => batchGetBlockParentsAtVersion(db, affected, vk, spaceId),
+				() => new Map<NormalizedUuid, BlockParentEntry[]>(),
+			),
+			fetchBaseData(
+				status,
+				baseVersionKey,
+				() => batchGetMediaUrls(db, affected, spaceId),
+				(vk) => batchGetMediaUrlsAtVersion(db, affected, vk, spaceId),
+				() => new Map<NormalizedUuid, MediaEntity>(),
+			),
+		])
+
+		// child → parents, merging the DB backlink with new BLOCKS ops from the edit.
+		const childToParents = new Map<NormalizedUuid, Set<NormalizedUuid>>()
+		for (const [child, entries] of dbParents) {
+			childToParents.set(child, new Set(entries.map((e) => e.parentId)))
+		}
+		for (const [child, parents] of opsIndex.blockParents) {
+			const set = childToParents.get(child) ?? new Set<NormalizedUuid>()
+			for (const p of parents) set.add(p)
+			childToParents.set(child, set)
+		}
+
+		const blockChildren = new Set<NormalizedUuid>()
+		const parentRoots = new Set<NormalizedUuid>()
+		for (const id of affected) {
+			const parents = childToParents.get(id)
+			if (parents && parents.size > 0) {
+				blockChildren.add(id)
+				for (const p of parents) parentRoots.add(p)
+			}
+		}
+
+		const mediaChildren = new Set<NormalizedUuid>()
+		for (const id of affected) {
+			if (dbMedia.has(id) || opsIndex.mediaTyped.has(id)) mediaChildren.add(id)
+		}
+
+		const roots = new Set<NormalizedUuid>()
+		for (const id of affected) {
+			if (!blockChildren.has(id) && !mediaChildren.has(id)) roots.add(id)
+		}
+		// Orphan parents (a block changed but its parent wasn't in the affected set).
+		for (const p of parentRoots) {
+			if (!blockChildren.has(p) && !mediaChildren.has(p)) roots.add(p)
+		}
+
+		return {roots: Array.from(roots).sort(), ctx: {opsIndex, blockChildren, mediaChildren}}
+	})
+}
+
+/** Inline proposed-side (edit-created) media URLs onto a root's relation afters. */
+function inlineProposedMedia(diff: EntityDiffV2, ctx: RootContext): EntityDiffV2 {
+	const {mediaTyped, proposedImageUrls} = ctx.opsIndex
+	if (mediaTyped.size === 0) return diff
+	const apply = (r: RelationChangeV2): RelationChangeV2 => {
+		if (!r.after) return r
+		const target = r.after.toEntityId
+		const mt = mediaTyped.get(target)
+		const url = proposedImageUrls.get(target)
+		if (!mt || !url || r.after.imageUrl || r.after.videoUrl) return r
+		return {...r, after: {...r.after, ...(mt === "video" ? {videoUrl: url} : {imageUrl: url})}}
+	}
+	return {...diff, relations: diff.relations.map(apply)}
+}
+
+/** Build the folded, enriched diff for one root entity. */
+function buildRootDiff(
+	db: Database,
+	rootId: NormalizedUuid,
 	before: GroupedEntitySnapshot,
 	after: GroupedEntitySnapshot,
 	baseVersionKey: bigint | null,
 	spaceId: NormalizedUuid,
+	ctx: RootContext,
 ): Effect.Effect<EntityDiffV2, QueryError> {
 	return Effect.gen(function* () {
-		// Proposals have no single "to" version (the proposed side is the edit
-		// applied in memory). Use the base version key where a DB lookup is needed;
-		// when null (active proposal) a 0 key makes the versioned lookup miss so the
-		// enrichers fall back to live state.
 		const vk = baseVersionKey ?? 0n
-		const raw = yield* diffGroupedEntitySnapshots(entityId, before, after)
+		const raw = yield* diffGroupedEntitySnapshots(rootId, before, after)
 		const withBlocks = yield* enrichBlocks(raw, before, after)
-		const withConfig = yield* enrichBlockConfig(
-			db,
-			withBlocks,
-			entityId,
-			before,
-			after,
-			baseVersionKey,
-			vk,
-			spaceId,
-		)
+		const withConfig = yield* enrichBlockConfig(db, withBlocks, rootId, before, after, baseVersionKey, vk, spaceId)
 		const named = yield* enrichNames(db, withConfig, spaceId)
 		const withMedia = yield* enrichWithMediaUrls(db, named, {fromVersionKey: vk, toVersionKey: vk, spaceId})
-		// Spread dynamic group keys at the entity level (matches DiffResponseV2).
 		const {groups, ...rest} = withMedia
-		return {...rest, ...groups} as unknown as EntityDiffV2
+		const flattened = {...rest, ...groups} as unknown as EntityDiffV2
+		return inlineProposedMedia(flattened, ctx)
 	})
 }
 
-/**
- * Shared core: given the decoded ops + the page's entity ids, build the base
- * states, apply the ops, and produce enriched grouped diffs for each entity.
- * Reuses the exact base-state/block fetching v1 uses.
- */
-function buildEnrichedEntities(
+/** Build the folded, enriched entity diffs for a page of root entities. */
+function buildFoldedPage(
 	db: Database,
 	ops: Op[],
-	pageEntityIds: NormalizedUuid[],
+	pageRoots: NormalizedUuid[],
 	status: ProposalStatus,
 	baseVersionKey: bigint | null,
 	spaceId: NormalizedUuid,
+	ctx: RootContext,
 ): Effect.Effect<EntityDiffV2[], QueryError> {
 	return Effect.gen(function* () {
-		// 1. Base states (values + relations) — live / versioned / empty, per v1.
+		if (pageRoots.length === 0) return []
+
+		// 1. Base states (values + relations) for the roots.
 		const baseStates = yield* fetchBaseData(
 			status,
 			baseVersionKey,
-			() => batchGetLiveSnapshots(db, pageEntityIds, spaceId),
-			(vk) => batchGetVersionedSnapshots(db, pageEntityIds, spaceId, vk),
+			() => batchGetLiveSnapshots(db, pageRoots, spaceId),
+			(vk) => batchGetVersionedSnapshots(db, pageRoots, spaceId, vk),
 			() => {
 				const m = new Map<NormalizedUuid, EntitySnapshot>()
-				for (const id of pageEntityIds) m.set(id, emptySnapshot(id))
+				for (const id of pageRoots) m.set(id, emptySnapshot(id))
 				return m
 			},
 		)
 
-		// 2. Discover BLOCKS relations + block snapshots for the page entities.
-		const blockRelationsMap = yield* fetchBaseData(
+		// 2. Forward BLOCKS relations for the roots (existing block children at base).
+		const relMap = yield* fetchBaseData(
 			status,
 			baseVersionKey,
-			() => batchGetLiveBlockRelationsForEntities(db, pageEntityIds, spaceId),
-			(vk) => batchGetBlockRelationsForEntities(db, pageEntityIds, vk, spaceId),
+			() => batchGetLiveBlockRelationsForEntities(db, pageRoots, spaceId),
+			(vk) => batchGetBlockRelationsForEntities(db, pageRoots, vk, spaceId),
 			() => {
 				const m = new Map<NormalizedUuid, BlockRelationEntry[]>()
-				for (const id of pageEntityIds) m.set(id, [])
+				for (const id of pageRoots) m.set(id, [])
 				return m
 			},
 		)
 
-		const allBlockIds = new Set<NormalizedUuid>()
-		for (const entries of blockRelationsMap.values()) {
-			for (const entry of entries) allBlockIds.add(entry.blockEntityId)
-		}
-		const blockIdsList = Array.from(allBlockIds)
-		let blockSnapshotsMap: Map<NormalizedUuid, BlockSnapshot>
-		if (blockIdsList.length === 0) {
-			blockSnapshotsMap = new Map()
-		} else {
-			const blockSnapshots = yield* fetchBaseData(
+		// All block child ids that exist at base (to fetch their snapshots).
+		const existingBlockIds = new Set<NormalizedUuid>()
+		for (const entries of relMap.values()) for (const e of entries) existingBlockIds.add(e.blockEntityId)
+		const existingBlockList = Array.from(existingBlockIds)
+		const blockBaseById = new Map<NormalizedUuid, BlockSnapshot>()
+		if (existingBlockList.length > 0) {
+			const snaps = yield* fetchBaseData(
 				status,
 				baseVersionKey,
-				() => batchGetLiveBlockSnapshots(db, blockIdsList, spaceId),
-				(vk) => batchGetBlockSnapshotsAtVersion(db, blockIdsList, vk, spaceId),
+				() => batchGetLiveBlockSnapshots(db, existingBlockList, spaceId),
+				(vk) => batchGetBlockSnapshotsAtVersion(db, existingBlockList, vk, spaceId),
 				() => [] as BlockSnapshot[],
 			)
-			blockSnapshotsMap = new Map(blockSnapshots.map((b) => [b.id, b]))
+			for (const b of snaps) blockBaseById.set(b.id, b)
 		}
 
-		// 3. Attach blocks to base states; build relation→block map for op matching.
+		// 3. Attach base blocks to roots; build the relation→block map for op matching.
 		const blocksRelationMap = new Map<NormalizedUuid, NormalizedUuid>()
-		for (const entityId of pageEntityIds) {
-			const entries = blockRelationsMap.get(entityId) ?? []
-			const baseState = baseStates.get(entityId)
+		for (const rootId of pageRoots) {
+			const entries = relMap.get(rootId) ?? []
+			const baseState = baseStates.get(rootId)
 			if (baseState) {
-				baseState.blocks = entries
-					.map((entry) => {
-						blocksRelationMap.set(entry.relationId, entry.blockEntityId)
-						return blockSnapshotsMap.get(entry.blockEntityId)
-					})
-					.filter((b): b is BlockSnapshot => b !== undefined)
+				baseState.blocks = entries.map((e) => {
+					blocksRelationMap.set(e.relationId, e.blockEntityId)
+					return blockBaseById.get(e.blockEntityId) ?? {id: e.blockEntityId, values: [], relations: []}
+				})
 			}
 		}
 
-		// 4. Per entity: apply ops → proposed, diff (grouped), enrich.
+		// 4. Per root: compute proposed root + proposed block sub-snapshots, fold + enrich.
 		const out: EntityDiffV2[] = []
-		for (const entityId of pageEntityIds) {
-			const baseState = baseStates.get(entityId) ?? emptySnapshot(entityId)
-			const proposedState = applyOpsToSnapshot(baseState, ops, entityId, spaceId, blocksRelationMap)
-			// Cheap pre-check on the flat diff to skip unchanged entities before enrichment.
+		for (const rootId of pageRoots) {
+			const baseState = baseStates.get(rootId) ?? emptySnapshot(rootId)
+			const proposedRoot = applyOpsToSnapshot(baseState, ops, rootId, spaceId, blocksRelationMap)
+
+			// Each block child's OWN proposed snapshot (applyOps with entity = block) —
+			// applyOps on the parent only tracks block membership, not block content.
+			const afterBlocks: BlockSnapshot[] = proposedRoot.blocks.map((b) => {
+				const existing = blockBaseById.get(b.id)
+				const blockBase: EntitySnapshot = existing ? {...existing, blocks: []} : emptySnapshot(b.id)
+				const proposed = applyOpsToSnapshot(blockBase, ops, b.id, spaceId, new Map())
+				return {id: proposed.id, values: proposed.values, relations: proposed.relations}
+			})
+
 			const before = toGrouped(baseState)
-			const after = toGrouped(proposedState)
-			const enriched = yield* enrichEntity(db, entityId, before, after, baseVersionKey, spaceId)
+			const after = {...toGrouped(proposedRoot), blocks: afterBlocks}
+			const enriched = yield* buildRootDiff(db, rootId, before, after, baseVersionKey, spaceId, ctx)
 			if (
 				enriched.values.length > 0 ||
 				enriched.relations.length > 0 ||
@@ -211,7 +365,7 @@ function buildEnrichedEntities(
 	})
 }
 
-/** v2 single-proposal diff. */
+/** v2 single-proposal diff (folded, enriched, root-paginated). */
 export function computeProposalDiffV2(
 	db: Database,
 	proposalId: NormalizedUuid,
@@ -256,36 +410,38 @@ export function computeProposalDiffV2(
 			catch: (error) => new EditDecodeError(error),
 		})
 
-		const entityIds = (yield* extractAffectedEntities(db, ops)).sort()
-		if (expectedTotalEntities !== undefined && expectedTotalEntities !== entityIds.length) {
-			return yield* Effect.fail(new InvalidCursorError(cursorStr ?? ""))
-		}
-		const pageEntityIds = entityIds.slice(startIndex, startIndex + limit)
+		const affected = (yield* extractAffectedEntities(db, ops)).sort()
 
 		let baseVersionKey: bigint | null = null
 		if (status !== "active") {
 			baseVersionKey = yield* resolveVersionKeyBeforeTimestamp(db, proposal.executedAt ?? proposal.endTime)
 		}
 
-		const entities = yield* buildEnrichedEntities(db, ops, pageEntityIds, status, baseVersionKey, spaceId)
+		const {roots, ctx} = yield* resolveRoots(db, ops, affected, status, baseVersionKey, spaceId)
+		// Pagination unit is the renderable roots, not the flat affected list.
+		if (expectedTotalEntities !== undefined && expectedTotalEntities !== roots.length) {
+			return yield* Effect.fail(new InvalidCursorError(cursorStr ?? ""))
+		}
+		const pageRoots = roots.slice(startIndex, startIndex + limit)
+		const entities = yield* buildFoldedPage(db, ops, pageRoots, status, baseVersionKey, spaceId, ctx)
 
 		const nextIndex = startIndex + limit
-		const hasMore = nextIndex < entityIds.length
+		const hasMore = nextIndex < roots.length
 		return {
 			proposalId,
 			spaceId,
 			proposalStatus: status,
 			entities,
 			pagination: {
-				cursor: hasMore ? encodeCursor({entityIndex: nextIndex, totalEntities: entityIds.length}) : null,
+				cursor: hasMore ? encodeCursor({entityIndex: nextIndex, totalEntities: roots.length}) : null,
 				hasMore,
-				totalEntities: entityIds.length,
+				totalEntities: roots.length,
 			},
 		}
 	}).pipe(Effect.withSpan("proposal-diff-v2.computeProposalDiffV2", {attributes: {proposalId, spaceId, limit}}))
 }
 
-/** v2 grouped (multi-proposal) diff. */
+/** v2 grouped (multi-proposal) diff (folded, enriched, root-paginated). */
 export function computeGroupedProposalDiffV2(
 	db: Database,
 	proposalIds: NormalizedUuid[],
@@ -364,11 +520,7 @@ export function computeGroupedProposalDiffV2(
 		decodedEdits.sort(compareGroupedEdits)
 		const allOps: Op[] = decodedEdits.flatMap((e) => e.ops)
 
-		const entityIds = (yield* extractAffectedEntities(db, allOps)).sort()
-		if (expectedTotalEntities !== undefined && expectedTotalEntities !== entityIds.length) {
-			return yield* Effect.fail(new InvalidCursorError(cursorStr ?? ""))
-		}
-		const pageEntityIds = entityIds.slice(startIndex, startIndex + limit)
+		const affected = (yield* extractAffectedEntities(db, allOps)).sort()
 
 		let baseVersionKey: bigint | null = null
 		const firstEdit = decodedEdits[0]
@@ -377,19 +529,24 @@ export function computeGroupedProposalDiffV2(
 		}
 		const fetchStatus: ProposalStatus = mode === "active" ? "active" : "closed"
 
-		const entities = yield* buildEnrichedEntities(db, allOps, pageEntityIds, fetchStatus, baseVersionKey, spaceId)
+		const {roots, ctx} = yield* resolveRoots(db, allOps, affected, fetchStatus, baseVersionKey, spaceId)
+		if (expectedTotalEntities !== undefined && expectedTotalEntities !== roots.length) {
+			return yield* Effect.fail(new InvalidCursorError(cursorStr ?? ""))
+		}
+		const pageRoots = roots.slice(startIndex, startIndex + limit)
+		const entities = yield* buildFoldedPage(db, allOps, pageRoots, fetchStatus, baseVersionKey, spaceId, ctx)
 
 		const nextIndex = startIndex + limit
-		const hasMore = nextIndex < entityIds.length
+		const hasMore = nextIndex < roots.length
 		return {
 			proposalIds,
 			spaceId,
 			mode,
 			entities,
 			pagination: {
-				cursor: hasMore ? encodeCursor({entityIndex: nextIndex, totalEntities: entityIds.length}) : null,
+				cursor: hasMore ? encodeCursor({entityIndex: nextIndex, totalEntities: roots.length}) : null,
 				hasMore,
-				totalEntities: entityIds.length,
+				totalEntities: roots.length,
 			},
 		}
 	}).pipe(

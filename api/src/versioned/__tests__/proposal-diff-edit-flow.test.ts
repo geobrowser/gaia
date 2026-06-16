@@ -225,7 +225,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			const floatDiff = entityDiff.values.find((v: any) => v.propertyId === n(uuid.propFloat))
 			expect(floatDiff?.type).toBe("FLOAT64")
 			expect(floatDiff?.before).toBeNull()
-			expect(Number(floatDiff?.after)).toBeCloseTo(3.14159, 4)
+			expect(Number(floatDiff?.after)).toBeCloseTo(Math.PI, 4)
 		})
 	})
 
@@ -566,6 +566,153 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(res.status).toBe(400)
 		})
 	})
+
+	// ==========================================================================
+	// 11. v2 folding — cross-parent block folding + media-property filtering
+	// ==========================================================================
+
+	describe("v2 folding (blocks + media)", () => {
+		let v2App: Hono
+		const f = {
+			space: "21000000-0001-4000-8000-000000000001",
+			pageA: "21000000-0002-4000-8000-000000000001",
+			blockA: "21000000-0002-4000-8000-000000000002",
+			relBlocksA: "21000000-0006-4000-8000-000000000001",
+			relTypesA: "21000000-0006-4000-8000-000000000002",
+			propEditBlock: "21000000-0008-4000-8000-000000000001",
+			actEditBlock: "21000000-000a-4000-8000-000000000001",
+			pageB: "21000000-0002-4000-8000-000000000003",
+			imgB: "21000000-0002-4000-8000-000000000004",
+			relTypeAvatar: "21000000-0005-4000-8000-000000000001",
+			relImgTypes: "21000000-0006-4000-8000-000000000003",
+			relAvatar: "21000000-0006-4000-8000-000000000004",
+			propAddAvatar: "21000000-0008-4000-8000-000000000002",
+			actAddAvatar: "21000000-000a-4000-8000-000000000002",
+		}
+
+		beforeAll(async () => {
+			const db = drizzle(pool)
+			v2App = new Hono()
+			v2App.route("/v2/versioned", createVersionedV2Router(db as any, runtime))
+
+			const now = Math.floor(Date.now() / 1000)
+			const client = await pool.connect()
+			try {
+				await client.query("BEGIN")
+				await client.query(
+					`INSERT INTO spaces (id, type, address) VALUES ($1, 'DAO', '0xFoldTestSpace') ON CONFLICT DO NOTHING`,
+					[f.space],
+				)
+				const val = (id: string, entity: string, prop: string, text: string) =>
+					client.query(
+						`INSERT INTO "values" (id, entity_id, property_id, space_id, text) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
+						[id, entity, prop, f.space, text],
+					)
+				const rel = (id: string, from: string, to: string, type: string) =>
+					client.query(
+						`INSERT INTO relations (id, entity_id, from_entity_id, to_entity_id, type_id, space_id) VALUES ($1, $1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
+						[id, from, to, type, f.space],
+					)
+				// Scenario A: page A owns a text block B (markdown "old text").
+				await val(`${f.pageA}-name`, f.pageA, SystemIds.NAME_PROPERTY, "Page A")
+				await val(`${f.blockA}-name`, f.blockA, SystemIds.NAME_PROPERTY, "Block A")
+				await val(`${f.blockA}-md`, f.blockA, SystemIds.MARKDOWN_CONTENT, "old text")
+				await rel(f.relBlocksA, f.pageA, f.blockA, SystemIds.BLOCKS)
+				await rel(f.relTypesA, f.blockA, SystemIds.TEXT_BLOCK, SystemIds.TYPES_PROPERTY)
+				// Scenario B: page B (name only); proposal will add an image + avatar relation.
+				await val(`${f.pageB}-name`, f.pageB, SystemIds.NAME_PROPERTY, "Page B")
+				await client.query("COMMIT")
+			} catch (e) {
+				await client.query("ROLLBACK")
+				throw e
+			} finally {
+				client.release()
+			}
+
+			const client2 = await pool.connect()
+			try {
+				// Proposal A: edit block A's markdown. Page A is NOT in the edit → orphan parent.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propEditBlock,
+					actionId: f.actEditBlock,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Edit block text")
+							.setCreatedNow()
+							.updateEntity(uuidToId(f.blockA), (u) =>
+								u.setText(uuidToId(SystemIds.MARKDOWN_CONTENT), "new text"),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-edit-block"),
+				})
+				// Proposal B: add an avatar image to page B (new IMAGE entity + relation).
+				await createProposalWithEdit(client2, {
+					proposalId: f.propAddAvatar,
+					actionId: f.actAddAvatar,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Add avatar")
+							.setCreatedNow()
+							.createEntity(uuidToId(f.imgB), (e) =>
+								e.text(uuidToId(SystemIds.IMAGE_URL_PROPERTY), "ipfs://foldtestimg"),
+							)
+							.createRelationSimple(
+								uuidToId(f.relImgTypes),
+								uuidToId(f.imgB),
+								uuidToId(SystemIds.IMAGE_TYPE),
+								uuidToId(SystemIds.TYPES_PROPERTY),
+							)
+							.createRelationSimple(
+								uuidToId(f.relAvatar),
+								uuidToId(f.pageB),
+								uuidToId(f.imgB),
+								uuidToId(f.relTypeAvatar),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-add-avatar"),
+				})
+			} finally {
+				client2.release()
+			}
+		})
+
+		it("folds an edited block under its (unchanged) parent page; block is not top-level", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propEditBlock}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const ids = body.entities.map((e: {entityId: string}) => e.entityId)
+			// Page A is the only root (resolved via BLOCKS backlink); block B is folded, not top-level.
+			expect(ids).toContain(n(f.pageA))
+			expect(ids).not.toContain(n(f.blockA))
+			expect(body.pagination.totalEntities).toBe(1)
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageA))
+			const block = page.blocks.find((b: {id: string}) => b.id === n(f.blockA))
+			expect(block).toBeDefined()
+			expect(block.type).toBe("textBlock")
+			expect(block.before).toBe("old text")
+			expect(block.after).toBe("new text")
+		})
+
+		it("drops a media-property entity and inlines its URL onto the parent relation", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propAddAvatar}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const ids = body.entities.map((e: {entityId: string}) => e.entityId)
+			expect(ids).toContain(n(f.pageB))
+			// The IMAGE entity is dropped from the top level; its URL is inlined instead.
+			expect(ids).not.toContain(n(f.imgB))
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageB))
+			const rel = page.relations.find((r: {after?: {toEntityId: string}}) => r.after?.toEntityId === n(f.imgB))
+			expect(rel).toBeDefined()
+			expect(rel.after.imageUrl).toBe("ipfs://foldtestimg")
+		})
+	})
 })
 
 // ============================================================================
@@ -847,9 +994,7 @@ async function setupTestData(pool: Pool): Promise<void> {
 					.updateEntity(uuidToId(uuid.entityExisting1), (u) =>
 						u.setInt64(uuidToId(uuid.propInt), BigInt(100)),
 					)
-					.updateEntity(uuidToId(uuid.entityExisting2), (u) =>
-						u.setFloat64(uuidToId(uuid.propFloat), 2.71828),
-					)
+					.updateEntity(uuidToId(uuid.entityExisting2), (u) => u.setFloat64(uuidToId(uuid.propFloat), Math.E))
 				return builder.build()
 			},
 			contentUri: generateTestUri("multiple-ops"),
@@ -871,7 +1016,7 @@ async function setupTestData(pool: Pool): Promise<void> {
 							.text(uuidToId(uuid.propText), "Entity with all types")
 							.bool(uuidToId(uuid.propBool), true)
 							.int64(uuidToId(uuid.propInt), BigInt(42))
-							.float64(uuidToId(uuid.propFloat), 3.14159),
+							.float64(uuidToId(uuid.propFloat), Math.PI),
 					)
 				return builder.build()
 			},

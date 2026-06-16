@@ -119,21 +119,26 @@ through the **same enrichment chain** as the entity-diff endpoint (grouped diff 
 Validated against the DB in `__tests__/proposal-diff-edit-flow.test.ts` (v1↔v2 entity-set parity,
 `propertyName`/`typeName`/`toEntityName` resolution, grouped mode, error parity).
 
-This slice keeps v1's pagination unit (the flat affected-entity list), so block/media child
-entities still appear as separate top-level entries.
+**Phases 2–3 (done):** the proposal endpoints now **paginate over root entities** and fold/drop
+children (`v2/proposal-diff.ts` — `resolveRoots` + `buildFoldedPage`):
+- **#1 cross-parent block folding.** `resolveRoots` classifies each affected entity as a block
+  child via a BLOCKS backlink (`batchGetBlockParents*` over the DB at base **+** the edit's new
+  BLOCKS ops) and promotes parents to roots — *including* parents that weren't otherwise changed
+  (e.g. editing a block's text). The page unit is now the root set, not the flat affected list.
+  Each block is folded under its parent's `blocks[]` with its **own** proposed values/relations
+  (computed by applying ops with the block as the entity, since the parent's `applyOps` only tracks
+  block membership), and the block entity is no longer a top-level entry.
+- **#2 media-property filtering.** IMAGE/VIDEO-typed affected entities (classified via
+  `batchGetMediaUrls*` for existing media + the edit's `TYPES → IMAGE/VIDEO` ops for new media) are
+  dropped from the top level; their URL is inlined on the parent's relation — DB-side via
+  `enrichWithMediaUrls`, and **proposed-side** (a media entity created in the edit, not yet in the
+  DB) via `inlineProposedMedia` reading the IMAGE_URL set by the ops.
 
-**Phases 2–3 (remaining):** **#1 cross-parent block folding** + **#2 media-property filtering** —
-both require paginating over *root* entities instead of the flat affected list:
-- Resolve each affected block's parent via a BLOCKS backlink (DB at base + the edit's new BLOCKS
-  ops); treat parents (incl. parents not otherwise changed) as the roots and paginate over them.
-- Fold each block under its parent's `blocks[]` (the per-entity `enrichBlocks` already folds a
-  parent's *own* blocks; the remaining work is the cross-parent case) and drop the block entity
-  from the top level.
-- Media-property filtering is mostly reuse: `batchGetMediaUrls*` already classifies IMAGE/VIDEO
-  entities and `enrichWithMediaUrls` inlines the URL — the new bit is dropping the now-redundant
-  top-level media entity. Plus proposed-side media URLs (a media entity *created in the edit* isn't
-  in the DB; its AFTER url must come from the applied proposed snapshot).
-- **Also missing:** `/v2/versioned/entities/:id` (snapshot).
+Validated against the DB in `__tests__/proposal-diff-edit-flow.test.ts`: block folded under an
+*unchanged* parent (orphan-parent backlink), media entity dropped + URL inlined, plus the phase-0
+parity/enrichment/error tests.
+
+**Still missing:** `/v2/versioned/entities/:id` (snapshot) v2 variant.
 
 ---
 

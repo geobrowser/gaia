@@ -548,7 +548,7 @@ function groupByEntityId(
  * Convert Id (Uint8Array) to NormalizedUuid.
  * Returns lowercase hex without dashes for consistent comparison with normalized DB output.
  */
-function idToUuid(id: Id): NormalizedUuid {
+export function idToUuid(id: Id): NormalizedUuid {
 	return Array.from(id)
 		.map((b) => b.toString(16).padStart(2, "0"))
 		.join("") as NormalizedUuid
