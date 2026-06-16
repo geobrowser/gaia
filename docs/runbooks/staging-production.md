@@ -23,6 +23,29 @@ feature branches → dev → main
 
 **Why this matters:** Squash merging destroys commit identity. If we squash dev→main, feature branches can't cleanly rebase onto dev because Git doesn't recognize "already applied" commits. Regular merge preserves SHAs so rebasing works.
 
+## Drizzle Migrations Across Branches
+
+Drizzle numbers migrations sequentially (`0062_*`, `0063_*`) with one entry per migration in `api/drizzle/meta/_journal.json`. The migrate step runs automatically as an init container on every deploy and applies migrations by a **timestamp high-water mark**: it runs every journal entry whose `when` is newer than the latest `created_at` already in that database's `drizzle.__drizzle_migrations` table.
+
+Because `dev` and `main` are long-lived branches that each auto-migrate their own database, **two migrations must never be generated at the same index on `dev` and `main` in parallel.** If they are, both claim e.g. `0062`, each gets applied to its own environment, and the branches can no longer be merged cleanly — duplicate `0062_*` files, a conflicting `_journal.json`, and a broken snapshot chain, with no trivial resolution.
+
+### Avoid it
+
+- **Land schema changes `dev` → `main`** (the normal flow) so each migration is created once and flows in order.
+- **If a migration reaches `main` directly** (a hotfix or release that bypasses dev), **backport `main` → `dev` immediately** — before any new migration is generated on either branch. The longer both branches sit un-synced, the more likely the other branch generates its own migration at the same index. See [Hotfix Workflow](#hotfix-workflow) and [Reset dev After Release](#reset-dev-after-release).
+
+### Fix it (once the conflict exists)
+
+Worked example: [PR #754](https://github.com/geobrowser/gaia/pull/754).
+
+1. **Keep both migrations; renumber the later-merged one** so each index is unique (e.g. `dev`'s stays `0062`, `main`'s becomes `0063`). Which keeps which number is cosmetic — the steps below are what make it correct.
+2. **Regenerate, don't hand-rename.** Place the first migration + its snapshot, then run `bun run db:generate` for the second so its `meta/00NN_snapshot.json` stacks on the first's. A hand-rename leaves the snapshot chain (and the next `db:generate` diff) broken.
+3. **Make both migrations idempotent** — `CREATE TABLE/INDEX IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `INSERT … ON CONFLICT DO NOTHING`. Each is already applied on one environment, so after the merge every environment **re-runs the one it already has**; idempotency makes that a safe no-op instead of an `already exists` error.
+4. **Bump both `when` timestamps above the newest migration any environment has already applied** (keep them monotonic with the index). Migrate applies by high-water mark, so a migration with an older timestamp than what an environment already ran is **silently skipped** there — the tables/columns would never get created.
+5. **Verify:** `bun run db:generate` reports no schema changes, and check each environment's high-water with `SELECT created_at FROM drizzle.__drizzle_migrations ORDER BY created_at DESC LIMIT 1;`.
+
+Net effect: every environment converges — it creates the migration it was missing and no-ops the one it already had.
+
 ## Service & Namespace Mapping
 
 | Service | Production NS | Staging NS | Workflow Files |
