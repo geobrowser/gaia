@@ -109,11 +109,31 @@ and snapshot mode. Run in CI by `.github/workflows/api-integration-tests.yml` (n
 
 ## Remaining (proposal-centric → Track B)
 
-- **#2 media-property filtering** + **#1 cross-parent block folding** — only bite with multiple
-  top-level entities.
-- **Missing v2 endpoints:** `/v2/versioned/entities/:id` (snapshot), `/proposals/:id/diff`,
-  `/proposal-groups/diff`. The enrichers above are reusable; proposal folding additionally needs
-  to fold each block under the *right* parent (or expose a `parentId` per top-level diff).
+**Phase 0 (done):** `/v2/versioned/proposals/:id/diff` and `/v2/versioned/proposal-groups/diff`
+now exist (`v2/proposal-diff.ts`, routed in `v2/router.ts`). They reuse v1's proposal
+state-construction wholesale (proposal load, edit decode, base-state fetch, op application,
+pagination, mode logic, errors — exported from `proposal-diff.ts`) and run each affected entity
+through the **same enrichment chain** as the entity-diff endpoint (grouped diff → `enrichBlocks` →
+`enrichBlockConfig` → `enrichNames` → `enrichWithMediaUrls`). Each entity comes back as the grouped
+`EntityDiffV2` shape with resolved names, media URLs on relations, and folded block values/config.
+Validated against the DB in `__tests__/proposal-diff-edit-flow.test.ts` (v1↔v2 entity-set parity,
+`propertyName`/`typeName`/`toEntityName` resolution, grouped mode, error parity).
+
+This slice keeps v1's pagination unit (the flat affected-entity list), so block/media child
+entities still appear as separate top-level entries.
+
+**Phases 2–3 (remaining):** **#1 cross-parent block folding** + **#2 media-property filtering** —
+both require paginating over *root* entities instead of the flat affected list:
+- Resolve each affected block's parent via a BLOCKS backlink (DB at base + the edit's new BLOCKS
+  ops); treat parents (incl. parents not otherwise changed) as the roots and paginate over them.
+- Fold each block under its parent's `blocks[]` (the per-entity `enrichBlocks` already folds a
+  parent's *own* blocks; the remaining work is the cross-parent case) and drop the block entity
+  from the top level.
+- Media-property filtering is mostly reuse: `batchGetMediaUrls*` already classifies IMAGE/VIDEO
+  entities and `enrichWithMediaUrls` inlines the URL — the new bit is dropping the now-redundant
+  top-level media entity. Plus proposed-side media URLs (a media entity *created in the edit* isn't
+  in the DB; its AFTER url must come from the applied proposed snapshot).
+- **Also missing:** `/v2/versioned/entities/:id` (snapshot).
 
 ---
 

@@ -31,6 +31,7 @@ import {afterAll, beforeAll, describe, expect, it} from "vitest"
 import {runtime} from "../../services/runtime"
 import {normalizeUuid} from "../../utils/uuid"
 import {createVersionedRouter} from "../router"
+import {createVersionedV2Router} from "../v2"
 
 /** Shorthand to normalize a UUID for response-body assertions. */
 const n = normalizeUuid
@@ -476,6 +477,93 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			const nonExistentId = "20000000-0008-4000-8000-000000000999"
 			const res = await app.request(`/versioned/proposals/${nonExistentId}/diff?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(404)
+		})
+	})
+
+	// ==========================================================================
+	// 10. v2 enriched / context-aware proposal diff (/v2/versioned/...)
+	// ==========================================================================
+
+	describe("v2 enriched endpoints", () => {
+		let v2App: Hono
+
+		beforeAll(async () => {
+			const db = drizzle(pool)
+			v2App = new Hono()
+			v2App.route("/v2/versioned", createVersionedV2Router(db as any, runtime))
+			// Seed a NAME for propText so name resolution (enrichNames) is assertable.
+			await pool.query(
+				`INSERT INTO "values" (id, entity_id, property_id, space_id, text) VALUES ($1, $2, $3, $4, 'Text Property') ON CONFLICT DO NOTHING`,
+				[uuid.val(900), n(uuid.propText), n(SystemIds.NAME_PROPERTY), n(uuid.space1)],
+			)
+		})
+
+		it("returns the same set of changed entities as v1 (enrichment preserves the diff)", async () => {
+			const [v1Res, v2Res] = await Promise.all([
+				app.request(`/versioned/proposals/${uuid.proposalMultipleOps}/diff?spaceId=${uuid.space1}`),
+				v2App.request(`/v2/versioned/proposals/${uuid.proposalMultipleOps}/diff?spaceId=${uuid.space1}`),
+			])
+			expect(v1Res.status).toBe(200)
+			expect(v2Res.status).toBe(200)
+			const v1 = await v1Res.json()
+			const v2 = await v2Res.json()
+			const ids = (b: {entities: {entityId: string}[]}) => b.entities.map((e) => e.entityId).sort()
+			expect(ids(v2)).toEqual(ids(v1))
+			expect(v2.pagination.totalEntities).toBe(v1.pagination.totalEntities)
+		})
+
+		it("returns the grouped/enriched shape with propertyName resolved", async () => {
+			const res = await v2App.request(
+				`/v2/versioned/proposals/${uuid.proposalCreateEntity}/diff?spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const entity = body.entities.find((e: {entityId: string}) => e.entityId === n(uuid.entityNew1))
+			expect(entity).toBeDefined()
+			expect(Array.isArray(entity.groupKeys)).toBe(true)
+			expect(Array.isArray(entity.blocks)).toBe(true)
+			const textChange = entity.values.find((v: {propertyId: string}) => v.propertyId === n(uuid.propText))
+			expect(textChange).toBeDefined()
+			expect(textChange).toHaveProperty("propertyName")
+			expect(textChange.propertyName).toBe("Text Property")
+		})
+
+		it("relation changes carry typeName + toEntityName fields", async () => {
+			const res = await v2App.request(
+				`/v2/versioned/proposals/${uuid.proposalCreateRelation}/diff?spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const withRel = body.entities.find((e: {relations: unknown[]}) => e.relations.length > 0)
+			expect(withRel).toBeDefined()
+			const rel = withRel.relations[0]
+			expect(rel).toHaveProperty("typeName")
+			expect(rel.after ?? rel.before).toHaveProperty("toEntityName")
+		})
+
+		it("grouped (multi-proposal) v2 endpoint returns enriched entities", async () => {
+			const res = await v2App.request(
+				`/v2/versioned/proposal-groups/diff?spaceId=${uuid.space1}&proposalIds=${uuid.proposalCreateEntity},${uuid.proposalCreateRelation}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body.mode).toBe("active")
+			expect(Array.isArray(body.entities)).toBe(true)
+			expect(body.entities.length).toBeGreaterThan(0)
+		})
+
+		it("returns 404 for a non-existent proposal", async () => {
+			const res = await v2App.request(
+				`/v2/versioned/proposals/20000000-0008-4000-8000-000000000999/diff?spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(404)
+		})
+
+		it("returns 400 for an invalid spaceId", async () => {
+			const res = await v2App.request(
+				`/v2/versioned/proposals/${uuid.proposalCreateEntity}/diff?spaceId=not-a-uuid`,
+			)
+			expect(res.status).toBe(400)
 		})
 	})
 })

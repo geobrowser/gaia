@@ -154,7 +154,7 @@ interface ProposalWithAction {
 /**
  * Get proposal with its Publish action (if any) in a single query.
  */
-function getProposalWithPublishAction(
+export function getProposalWithPublishAction(
 	db: Database,
 	proposalId: string,
 ): Effect.Effect<ProposalWithAction | null, QueryError> {
@@ -209,7 +209,7 @@ function getProposalWithPublishAction(
  * Batch-load multiple proposals with their Publish actions in a single query.
  * Returns a Map keyed by proposal ID for O(1) lookup.
  */
-function batchGetProposalsWithPublishActions(
+export function batchGetProposalsWithPublishActions(
 	db: Database,
 	proposalIds: NormalizedUuid[],
 ): Effect.Effect<Map<NormalizedUuid, ProposalWithAction>, QueryError> {
@@ -266,7 +266,7 @@ function batchGetProposalsWithPublishActions(
  * "not cached" (no row), "cached but decode failed" (row with is_errored=true),
  * and "cached successfully" (row with data).
  */
-function getIpfsCacheData(
+export function getIpfsCacheData(
 	db: Database,
 	uri: string,
 ): Effect.Effect<{data: Buffer | null; isErrored: boolean} | null, QueryError> {
@@ -291,7 +291,7 @@ function getIpfsCacheData(
 /**
  * Determine proposal status.
  */
-function getProposalStatus(proposal: ProposalWithAction["proposal"]): ProposalStatus {
+export function getProposalStatus(proposal: ProposalWithAction["proposal"]): ProposalStatus {
 	if (proposal.executedAt !== null) {
 		return "executed"
 	}
@@ -309,7 +309,10 @@ function getProposalStatus(proposal: ProposalWithAction["proposal"]): ProposalSt
  * so the diff shows what the proposal changed. Using `<` (not `<=`) ensures
  * edits at the exact execution timestamp are excluded from the base.
  */
-function resolveVersionKeyBeforeTimestamp(db: Database, timestamp: bigint): Effect.Effect<bigint | null, QueryError> {
+export function resolveVersionKeyBeforeTimestamp(
+	db: Database,
+	timestamp: bigint,
+): Effect.Effect<bigint | null, QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
 			const result = await db.execute<{version_key: string}>(sql`
@@ -395,7 +398,7 @@ function batchLookupRelationEntities(
  * Batch fetch live snapshots for multiple entities.
  * Uses 2 queries total (values + relations), not 2N.
  */
-function batchGetLiveSnapshots(
+export function batchGetLiveSnapshots(
 	db: Database,
 	entityIds: NormalizedUuid[],
 	spaceId: NormalizedUuid,
@@ -445,7 +448,7 @@ function batchGetLiveSnapshots(
 /**
  * Batch fetch versioned snapshots for multiple entities at a specific version.
  */
-function batchGetVersionedSnapshots(
+export function batchGetVersionedSnapshots(
 	db: Database,
 	entityIds: NormalizedUuid[],
 	spaceId: NormalizedUuid,
@@ -592,7 +595,7 @@ function extractAffectedEntitiesAndRelations(ops: Op[]): {
 /**
  * Extract all affected entity IDs from ops, including those requiring relation lookups.
  */
-function extractAffectedEntities(db: Database, ops: Op[]): Effect.Effect<NormalizedUuid[], QueryError> {
+export function extractAffectedEntities(db: Database, ops: Op[]): Effect.Effect<NormalizedUuid[], QueryError> {
 	return Effect.gen(function* () {
 		const {entityIds, relationIdsNeedingLookup} = extractAffectedEntitiesAndRelations(ops)
 
@@ -718,7 +721,7 @@ export function propertyValueToVersionedValue(
  *   which are stored in `blocks` rather than `relations` on the snapshot.
  *   **Mutated** by createRelation ops that add new BLOCKS relations.
  */
-function applyOpsToSnapshot(
+export function applyOpsToSnapshot(
 	base: EntitySnapshot,
 	ops: Op[],
 	entityId: NormalizedUuid,
@@ -892,14 +895,14 @@ function applyOpsToSnapshot(
 /**
  * Check if an entity diff is empty (no changes).
  */
-function isDiffEmpty(diff: EntityDiff): boolean {
+export function isDiffEmpty(diff: EntityDiff): boolean {
 	return diff.values.length === 0 && diff.relations.length === 0 && diff.blocks.length === 0
 }
 
 /**
  * Create an empty snapshot for a new entity.
  */
-function emptySnapshot(entityId: NormalizedUuid): EntitySnapshot {
+export function emptySnapshot(entityId: NormalizedUuid): EntitySnapshot {
 	return {id: entityId, values: [], relations: [], blocks: []}
 }
 
@@ -907,11 +910,11 @@ function emptySnapshot(entityId: NormalizedUuid): EntitySnapshot {
 // Cursor Encoding
 // ============================================================================
 
-function encodeCursor(cursor: ProposalDiffCursor): string {
+export function encodeCursor(cursor: ProposalDiffCursor): string {
 	return Buffer.from(JSON.stringify(cursor)).toString("base64")
 }
 
-function decodeCursor(encoded: string): ProposalDiffCursor | null {
+export function decodeCursor(encoded: string): ProposalDiffCursor | null {
 	try {
 		const json = Buffer.from(encoded, "base64").toString("utf-8")
 		return JSON.parse(json) as ProposalDiffCursor
@@ -933,7 +936,7 @@ function decodeCursor(encoded: string): ProposalDiffCursor | null {
  * - Non-active with no resolved version → use empty fallback
  * - Non-active with resolved version → fetch from versioned tables
  */
-function fetchBaseData<T>(
+export function fetchBaseData<T>(
 	status: ProposalStatus,
 	baseVersionKey: bigint | null,
 	fetchLive: () => Effect.Effect<T, QueryError>,
