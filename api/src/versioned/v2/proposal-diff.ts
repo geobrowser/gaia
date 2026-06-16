@@ -66,9 +66,11 @@ import {
 import type {
 	BlockSnapshot,
 	EntitySnapshot,
+	GroupedEntityDiff,
 	GroupedEntitySnapshot,
 	GroupedProposalDiffMode,
 	ProposalStatus,
+	RelationChange,
 } from "../types"
 import {enrichWithMediaUrls} from "./enrich"
 import {enrichBlocks} from "./enrich-blocks"
@@ -151,6 +153,9 @@ function indexOps(ops: Op[]): OpsIndex {
 	return {blockParents, mediaTyped, proposedImageUrls, blocksReified}
 }
 
+/** Composite key for per-(parent, block) config lookup. */
+const cfgKey = (parent: NormalizedUuid, block: NormalizedUuid) => `${parent}|${block}`
+
 /** Wrap a flat proposal EntitySnapshot as a GroupedEntitySnapshot. */
 function toGrouped(s: EntitySnapshot): GroupedEntitySnapshot {
 	return {id: s.id, values: s.values, relations: s.relations, blocks: s.blocks, groupKeys: [], groups: {}}
@@ -174,9 +179,10 @@ interface RootContext {
 	blockChildren: Set<NormalizedUuid>
 	/** affected entities classified as media-property children (dropped + inlined). */
 	mediaChildren: Set<NormalizedUuid>
-	/** data block id → its reified BLOCKS-relation (config) entity id, when the
-	 *  edit touched the config; the config entity is folded into the block. */
-	configByDataBlock: Map<NormalizedUuid, NormalizedUuid>
+	/** `${parentId}|${dataBlockId}` → its reified BLOCKS-relation (config) entity id,
+	 *  when the edit touched the config. Keyed per (parent, block) because the same
+	 *  data block can be embedded under multiple parents, each with its own config. */
+	configByParentBlock: Map<string, NormalizedUuid>
 	/** media type of DB-typed media entities (existing IMAGE/VIDEO), so a proposal
 	 *  that only updates an already-typed entity's URL still inlines correctly. */
 	mediaTypeById: Map<NormalizedUuid, "image" | "video">
@@ -255,12 +261,12 @@ function resolveRoots(
 		const reified = new Map<NormalizedUuid, BlocksReifiedEntry>(dbReified)
 		for (const [id, entry] of opsIndex.blocksReified) reified.set(id, entry)
 		const configEntities = new Set<NormalizedUuid>()
-		const configByDataBlock = new Map<NormalizedUuid, NormalizedUuid>()
+		const configByParentBlock = new Map<string, NormalizedUuid>()
 		for (const id of affected) {
 			const entry = reified.get(id)
 			if (!entry) continue
 			configEntities.add(id)
-			configByDataBlock.set(entry.dataBlockId, id)
+			configByParentBlock.set(cfgKey(entry.parentId, entry.dataBlockId), id)
 			// The config's data block folds under its parent; make sure both are placed.
 			blockChildren.add(entry.dataBlockId)
 			parentRoots.add(entry.parentId)
@@ -277,7 +283,7 @@ function resolveRoots(
 
 		return {
 			roots: Array.from(roots).sort(),
-			ctx: {opsIndex, blockChildren, mediaChildren, configByDataBlock, mediaTypeById},
+			ctx: {opsIndex, blockChildren, mediaChildren, configByParentBlock, mediaTypeById},
 		}
 	})
 }
@@ -291,10 +297,13 @@ function resolveRoots(
  * base-version URL `enrichWithMediaUrls` may have inlined (which, for proposals,
  * is resolved at the base version and would otherwise be stale).
  */
-function inlineProposedMedia(diff: EntityDiffV2, ctx: RootContext): EntityDiffV2 {
+function inlineProposedMedia(
+	diff: GroupedEntityDiff & {relations: RelationChangeV2[]},
+	ctx: RootContext,
+): GroupedEntityDiff & {relations: RelationChangeV2[]} {
 	const {mediaTyped, proposedImageUrls} = ctx.opsIndex
 	if (proposedImageUrls.size === 0) return diff
-	const apply = (r: RelationChangeV2): RelationChangeV2 => {
+	const apply = (r: RelationChange): RelationChangeV2 => {
 		if (!r.after) return r
 		const url = proposedImageUrls.get(r.after.toEntityId)
 		if (!url) return r
@@ -302,7 +311,22 @@ function inlineProposedMedia(diff: EntityDiffV2, ctx: RootContext): EntityDiffV2
 		if (!mt) return r
 		return {...r, after: {...r.after, ...(mt === "video" ? {videoUrl: url} : {imageUrl: url})}}
 	}
-	return {...diff, relations: diff.relations.map(apply)}
+	// Mirror enrichWithMediaUrls: rewrite top-level, grouped, and block relations.
+	return {
+		...diff,
+		relations: diff.relations.map(apply),
+		groups: Object.fromEntries(
+			Object.entries(diff.groups).map(([k, items]) => [
+				k,
+				items.map((item) =>
+					"relations" in item && item.relations ? {...item, relations: item.relations.map(apply)} : item,
+				),
+			]),
+		) as GroupedEntityDiff["groups"],
+		blocks: diff.blocks.map((block) =>
+			block.relations ? {...block, relations: block.relations.map(apply)} : block,
+		),
+	}
 }
 
 /** Build the folded, enriched diff for one root entity. */
@@ -323,9 +347,11 @@ function buildRootDiff(
 		const withBlocks = yield* enrichBlocks(raw, before, after)
 		const named = yield* enrichNames(db, withBlocks, spaceId)
 		const withMedia = yield* enrichWithMediaUrls(db, named, {fromVersionKey: vk, toVersionKey: vk, spaceId})
-		const {groups, ...rest} = withMedia
-		const flattened = {...rest, ...groups} as unknown as EntityDiffV2
-		return inlineProposedMedia(flattened, ctx)
+		// Override base-version media URLs with the edit's proposed URLs across top-level,
+		// grouped, and block relations (same structures enrichWithMediaUrls traverses).
+		const inlined = inlineProposedMedia(withMedia, ctx)
+		const {groups, ...rest} = inlined
+		return {...rest, ...groups} as unknown as EntityDiffV2
 	})
 }
 
@@ -384,20 +410,15 @@ function buildFoldedPage(
 			for (const b of snaps) blockBaseById.set(b.id, b)
 		}
 
-		// 2b. Data-block config entities (reified BLOCKS-relation entities). Fetch each
-		//     one's base snapshot and compute its proposed state so the config diff can be
-		//     folded into the data block (before = base config, after = proposed config).
+		// 2b. Data-block config entities (reified BLOCKS-relation entities), keyed per
+		//     (parent, block) so a block shared across parents keeps each parent's own
+		//     config. Fetch each config entity's base snapshot + proposed state so the
+		//     config diff folds into the data block (before = base, after = proposed).
 		const pageRootsSet = new Set(pageRoots)
-		const pageBlockIds = new Set(existingBlockList)
-		for (const [child, parents] of ctx.opsIndex.blockParents) {
-			for (const p of parents) if (pageRootsSet.has(p)) pageBlockIds.add(child)
-		}
-		const configIdByBlock = new Map<NormalizedUuid, NormalizedUuid>()
-		for (const blockId of pageBlockIds) {
-			const cfg = ctx.configByDataBlock.get(blockId)
-			if (cfg) configIdByBlock.set(blockId, cfg)
-		}
-		const configIds = Array.from(new Set(configIdByBlock.values()))
+		const configForPage = [...ctx.configByParentBlock.entries()].filter(([key]) =>
+			pageRootsSet.has(key.split("|")[0] as NormalizedUuid),
+		)
+		const configIds = Array.from(new Set(configForPage.map(([, cfgId]) => cfgId)))
 		const configBaseById = new Map<NormalizedUuid, EntitySnapshot>()
 		if (configIds.length > 0) {
 			const snaps = yield* fetchBaseData(
@@ -413,12 +434,13 @@ function buildFoldedPage(
 			)
 			for (const [id, s] of snaps) configBaseById.set(id, s)
 		}
-		const configBeforeByBlock = new Map<NormalizedUuid, EntitySnapshot>()
-		const configAfterByBlock = new Map<NormalizedUuid, EntitySnapshot>()
-		for (const [blockId, cfgId] of configIdByBlock) {
+		// (parent|block) → before/after config snapshot.
+		const configBefore = new Map<string, EntitySnapshot>()
+		const configAfter = new Map<string, EntitySnapshot>()
+		for (const [key, cfgId] of configForPage) {
 			const base = configBaseById.get(cfgId) ?? emptySnapshot(cfgId)
-			configBeforeByBlock.set(blockId, base)
-			configAfterByBlock.set(blockId, applyOpsToSnapshot(base, ops, cfgId, spaceId, new Map()))
+			configBefore.set(key, base)
+			configAfter.set(key, applyOpsToSnapshot(base, ops, cfgId, spaceId, new Map()))
 		}
 
 		// 3. Attach base blocks to roots (with config folded in); build the
@@ -431,7 +453,7 @@ function buildFoldedPage(
 				baseState.blocks = entries.map((e) => {
 					blocksRelationMap.set(e.relationId, e.blockEntityId)
 					const base = blockBaseById.get(e.blockEntityId) ?? {id: e.blockEntityId, values: [], relations: []}
-					return mergeConfig(base, configBeforeByBlock.get(e.blockEntityId))
+					return mergeConfig(base, configBefore.get(cfgKey(rootId, e.blockEntityId)))
 				})
 			}
 		}
@@ -453,7 +475,7 @@ function buildFoldedPage(
 					values: proposed.values,
 					relations: proposed.relations,
 				}
-				return mergeConfig(blockSnap, configAfterByBlock.get(b.id))
+				return mergeConfig(blockSnap, configAfter.get(cfgKey(rootId, b.id)))
 			})
 
 			const before = toGrouped(baseState)

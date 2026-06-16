@@ -617,6 +617,17 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			relCoverU: "21000000-0006-4000-8000-00000000000d",
 			propUpdateMedia: "21000000-0008-4000-8000-000000000006",
 			actUpdateMedia: "21000000-000a-4000-8000-000000000006",
+			// Scenario M: one data block shared under TWO parents, each with its own config.
+			pageM1: "21000000-0002-4000-8000-00000000000d",
+			pageM2: "21000000-0002-4000-8000-00000000000e",
+			sharedBlock: "21000000-0002-4000-8000-00000000000f",
+			relBlocksM1: "21000000-0006-4000-8000-00000000000e",
+			relBlocksM2: "21000000-0006-4000-8000-00000000000f",
+			relTypesShared: "21000000-0006-4000-8000-000000000010",
+			relViewM1: "21000000-0006-4000-8000-000000000011",
+			relViewM2: "21000000-0006-4000-8000-000000000012",
+			propMultiConfig: "21000000-0008-4000-8000-000000000007",
+			actMultiConfig: "21000000-000a-4000-8000-000000000007",
 		}
 		const RANKING_BLOCK_TYPE = "150db6defe2344f0805afa57502e2c32"
 
@@ -671,6 +682,13 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 				await val(`${f.pageU}-name`, f.pageU, SystemIds.NAME_PROPERTY, "Page U")
 				await val(`${f.imgU}-url`, f.imgU, SystemIds.IMAGE_URL_PROPERTY, "ipfs://oldcover")
 				await rel(f.relImgUTypes, f.imgU, SystemIds.IMAGE_TYPE, SystemIds.TYPES_PROPERTY)
+				// Scenario M: a single data block embedded under two parents (distinct config carriers).
+				await val(`${f.pageM1}-name`, f.pageM1, SystemIds.NAME_PROPERTY, "Parent 1")
+				await val(`${f.pageM2}-name`, f.pageM2, SystemIds.NAME_PROPERTY, "Parent 2")
+				await val(`${f.sharedBlock}-name`, f.sharedBlock, SystemIds.NAME_PROPERTY, "Shared Block")
+				await rel(f.relBlocksM1, f.pageM1, f.sharedBlock, SystemIds.BLOCKS)
+				await rel(f.relBlocksM2, f.pageM2, f.sharedBlock, SystemIds.BLOCKS)
+				await rel(f.relTypesShared, f.sharedBlock, SystemIds.DATA_BLOCK, SystemIds.TYPES_PROPERTY)
 				await client.query("COMMIT")
 			} catch (e) {
 				await client.query("ROLLBACK")
@@ -804,6 +822,32 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 							.build(),
 					contentUri: generateTestUri("fold-update-media"),
 				})
+				// Proposal M: set DIFFERENT views on the shared block's two parent configs.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propMultiConfig,
+					actionId: f.actMultiConfig,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Set per-parent views")
+							.setCreatedNow()
+							.createRelationSimple(
+								uuidToId(f.relViewM1),
+								uuidToId(f.relBlocksM1),
+								uuidToId(SystemIds.GALLERY_VIEW),
+								uuidToId(SystemIds.VIEW_PROPERTY),
+							)
+							.createRelationSimple(
+								uuidToId(f.relViewM2),
+								uuidToId(f.relBlocksM2),
+								uuidToId(SystemIds.LIST_VIEW),
+								uuidToId(SystemIds.VIEW_PROPERTY),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-multi-config"),
+				})
 			} finally {
 				client2.release()
 			}
@@ -925,6 +969,23 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(rel).toBeDefined()
 			// The edit updated the image's IMAGE_URL; the proposed URL must win over the base-version URL.
 			expect(rel.after.imageUrl).toBe("ipfs://newcover")
+		})
+
+		it("keeps per-parent config when one data block is shared under two parents", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propMultiConfig}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const viewOf = (parentId: string) => {
+				const page = body.entities.find((e: {entityId: string}) => e.entityId === n(parentId))
+				const block = page?.blocks.find((b: {id: string}) => b.id === n(f.sharedBlock))
+				const viewRel = (block?.relations ?? []).find(
+					(r: {typeId: string}) => r.typeId === n(SystemIds.VIEW_PROPERTY),
+				)
+				return viewRel?.after?.toEntityId
+			}
+			// Each parent's fold must carry its OWN config — not a single block-keyed collision.
+			expect(viewOf(f.pageM1)).toBe(n(SystemIds.GALLERY_VIEW))
+			expect(viewOf(f.pageM2)).toBe(n(SystemIds.LIST_VIEW))
 		})
 	})
 })
