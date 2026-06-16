@@ -497,12 +497,18 @@ impl Storage {
         .await?;
 
         // 2. Drop prior projection relations (RANK_POSITION + Aggregated rankings).
+        //    Scoped by (from_entity_id, type_id, space_id) only — NOT by
+        //    from_space_id. Pre-fix projection rows were written with
+        //    from_space_id IS NULL; adding `from_space_id = block_space_id` would
+        //    skip them (NULL never equals anything), leaving their deterministic
+        //    PK ids in place. The ON-CONFLICT-free INSERTs below would then
+        //    collide on those ids → duplicate-key error → aborted tx → crash
+        //    loop. Matching on the space alone lets pre-fix blocks self-heal.
         sqlx::query(
-            "DELETE FROM relations WHERE from_entity_id = $1 AND type_id = ANY($2) AND space_id = $3 AND from_space_id = $4",
+            "DELETE FROM relations WHERE from_entity_id = $1 AND type_id = ANY($2) AND space_id = $3",
         )
         .bind(block_id)
         .bind(&[rank_position, aggregated][..])
-        .bind(block_space_id)
         .bind(block_space_id)
         .execute(&mut *tx)
         .await?;

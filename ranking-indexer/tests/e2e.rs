@@ -461,6 +461,219 @@ async fn cross_edit_block_is_recovered_from_kg_and_scored() {
         "both ranked entities scored once the block is recovered"
     );
 }
+/// Regression: a projection row written before this PR has `from_space_id IS
+/// NULL` but keeps the deterministic v5 relation id (the PK). The step-2 DELETE
+/// in `replace_rank_position_projection` must clear it on the next recompute;
+/// if it were scoped by `from_space_id = block_space_id`, the NULL row would
+/// survive and the ON-CONFLICT-free re-INSERT would collide on the PK →
+/// duplicate-key error → aborted tx → post-#745 crash loop. This guards that a
+/// pre-fix block self-heals (re-acquires `from_space_id = block_space`) on
+/// recompute instead of crash-looping.
+#[tokio::test]
+async fn prefix_null_from_space_projection_self_heals_on_recompute() {
+    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
+        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+
+    // Distinct scenario ids so this can share a DB with the other e2e tests.
+    const SPACE: u128 = 0xE2E7_0000_0001;
+    const MEMBER: u128 = 0xE2E7_0000_0011;
+    const BLOCK: u128 = 0xE2E7_0000_0021;
+    const ENT_A: u128 = 0xE2E7_0000_0031;
+    const ENT_B: u128 = 0xE2E7_0000_0032;
+    const RANK: u128 = 0xE2E7_0000_0041;
+
+    // --- clean prior runs (idempotent) -------------------------------------
+    for sql in [
+        "DELETE FROM relations WHERE space_id = $1",
+        "DELETE FROM values WHERE space_id = $1",
+        "DELETE FROM ranks.members WHERE space_id = $1",
+        "DELETE FROM spaces WHERE id = $1",
+    ] {
+        sqlx::query(sql).bind(u(SPACE)).execute(pool).await.unwrap();
+    }
+    sqlx::query("DELETE FROM ranks.ranking_items WHERE ranking_id = $1")
+        .bind(u(RANK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.rankings WHERE id = $1")
+        .bind(u(RANK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.ranking_scores WHERE block_id = $1")
+        .bind(u(BLOCK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.ranking_blocks WHERE id = $1")
+        .bind(u(BLOCK))
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // --- seed: DAO space with one member ------------------------------------
+    sqlx::query("INSERT INTO spaces (id, type, address) VALUES ($1, 'DAO', '0xe2e7')")
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)")
+        .bind(u(MEMBER))
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // --- create the block ---------------------------------------------------
+    let block_edit = EditBuilder::new(gid(0xE2E7_0001))
+        .create_relation(|r| {
+            r.id(gid(0xE2E7_0100))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(BLOCK))
+                .to(sid(RANKING_BLOCK_TYPE_ID))
+        })
+        .create_relation(|r| {
+            r.id(gid(0xE2E7_0101))
+                .relation_type(sid(RANK_AGGREGATION_RESTRICTION_PROPERTY_ID))
+                .from(gid(BLOCK))
+                .to(sid(RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID))
+        })
+        .create_entity(gid(BLOCK), |e| {
+            e.text(sid(NAME_PROPERTY_ID), "Top Songs", None)
+        })
+        .build();
+    apply_detected_edit(&detect(&block_edit, u(SPACE), 1, 0), u(SPACE), &storage)
+        .await
+        .unwrap();
+
+    // --- a member submits a rank → a normal projection is written -----------
+    let submit = |rank: u128, rel_base: u128, first: u128, second: u128| {
+        EditBuilder::new(gid(rank ^ 0xED17))
+            .create_relation(|r| {
+                r.id(gid(rel_base))
+                    .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                    .from(gid(rank))
+                    .to(sid(RANK_TYPE_ID))
+            })
+            .create_entity(gid(rank), |e| {
+                e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None)
+            })
+            .create_relation(|r| {
+                r.id(gid(rel_base + 1))
+                    .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
+                    .from(gid(rank))
+                    .to(gid(BLOCK))
+            })
+            .create_relation(|r| {
+                r.id(gid(rel_base + 2))
+                    .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                    .from(gid(rank))
+                    .to(gid(first))
+                    .to_space(gid(SPACE))
+                    .position("a0")
+            })
+            .create_relation(|r| {
+                r.id(gid(rel_base + 3))
+                    .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                    .from(gid(rank))
+                    .to(gid(second))
+                    .to_space(gid(SPACE))
+                    .position("a1")
+            })
+            .build()
+    };
+
+    apply_detected_edit(
+        &detect(&submit(RANK, 0xE2E7_0200, ENT_A, ENT_B), u(MEMBER), 2, 0),
+        u(MEMBER),
+        &storage,
+    )
+    .await
+    .unwrap();
+
+    let rank_position = Uuid::parse_str(RANK_POSITION_RELATION_TYPE_ID).unwrap();
+    let aggregated = Uuid::parse_str(AGGREGATED_RANKINGS_RELATION_TYPE_ID).unwrap();
+
+    // The first recompute produced deterministic-id projection relations.
+    let projected: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM relations WHERE from_entity_id = $1 AND type_id = ANY($2)",
+    )
+    .bind(u(BLOCK))
+    .bind(&[rank_position, aggregated][..])
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(projected > 0, "first recompute must write a projection");
+
+    // --- SIMULATE a pre-fix row: blank out from_space_id ---------------------
+    // Rows written before this PR carried the deterministic PK id but NULL
+    // from_space_id. Replicate exactly that state.
+    sqlx::query(
+        "UPDATE relations SET from_space_id = NULL \
+         WHERE from_entity_id = $1 AND type_id = ANY($2)",
+    )
+    .bind(u(BLOCK))
+    .bind(&[rank_position, aggregated][..])
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let null_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM relations \
+         WHERE from_entity_id = $1 AND type_id = ANY($2) AND from_space_id IS NULL",
+    )
+    .bind(u(BLOCK))
+    .bind(&[rank_position, aggregated][..])
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(null_rows, projected, "pre-fix state: all rows now NULL");
+
+    // --- recompute the same block: must NOT crash with a duplicate-key error -
+    // Re-applying the rank forces another `replace_rank_position_projection`.
+    // The step-2 DELETE must clear the NULL-from_space rows (matching on space
+    // alone) so the re-INSERT of the same deterministic ids succeeds.
+    apply_detected_edit(
+        &detect(&submit(RANK, 0xE2E7_0200, ENT_A, ENT_B), u(MEMBER), 3, 0),
+        u(MEMBER),
+        &storage,
+    )
+    .await
+    .expect("recompute over a pre-fix (NULL from_space_id) projection must not collide");
+
+    // --- the block self-healed: every projection row now carries from_space --
+    let remaining_null: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM relations \
+         WHERE from_entity_id = $1 AND type_id = ANY($2) AND from_space_id IS NULL",
+    )
+    .bind(u(BLOCK))
+    .bind(&[rank_position, aggregated][..])
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(remaining_null, 0, "recompute must clear pre-fix NULL rows");
+
+    let healed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM relations \
+         WHERE from_entity_id = $1 AND type_id = ANY($2) AND from_space_id = $3",
+    )
+    .bind(u(BLOCK))
+    .bind(&[rank_position, aggregated][..])
+    .bind(u(SPACE))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        healed, projected,
+        "every projection row must now carry from_space_id = block space"
+    );
+}
+
 // Membership-lifecycle scenario UUIDs (distinct namespace so both e2e tests
 // can run against the same database, even concurrently).
 const M_SPACE: u128 = 0xE2E6_0000_0001;
