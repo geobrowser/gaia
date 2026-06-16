@@ -18,7 +18,7 @@ use chrono::{DateTime, Utc};
 use grc_20::{Id as Grc20Id, Op as Grc20Op, PropertyValue, Value as Grc20Value};
 use uuid::Uuid;
 
-use crate::models::{Ranking, RankingBlock, RankingItem};
+use crate::models::{BlockMeta, Ranking, RankingBlock, RankingItem};
 
 /// System IDs we match against, parsed once from their string constants.
 struct DetectIds {
@@ -120,6 +120,8 @@ pub struct DetectedEdit {
     pub items: Vec<RankingItem>,
     /// `(ranking_id, block_id)` links from `RANK_BLOCK` relations.
     pub block_links: Vec<(Uuid, Uuid)>,
+    /// Block provenance of the edit, recorded on entities the recompute mints.
+    pub meta: BlockMeta,
 }
 
 impl DetectedEdit {
@@ -146,7 +148,13 @@ pub fn detect(
 ) -> DetectedEdit {
     let ids = &*IDS;
     let submitted_at = DateTime::<Utc>::from_timestamp(block_timestamp, 0);
-    let mut out = DetectedEdit::default();
+    let mut out = DetectedEdit {
+        meta: BlockMeta {
+            number: block_number,
+            timestamp: block_timestamp,
+        },
+        ..DetectedEdit::default()
+    };
 
     // Pass 1: index entity property-values and resolve TYPES membership, and
     // collect the rank relations (votes + block links).

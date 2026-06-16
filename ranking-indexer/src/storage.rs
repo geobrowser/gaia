@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::eligibility::SpaceKind;
 use crate::error::IndexerError;
-use crate::models::{Ranking, RankingBlock, RankingItem};
+use crate::models::{BlockMeta, Ranking, RankingBlock, RankingItem};
 use crate::publish::{provenance_ids, RankPositionRow};
 use crate::scoring::ScoreRow;
 
@@ -465,6 +465,7 @@ impl Storage {
         &self,
         block_id: Uuid,
         block_space_id: Uuid,
+        meta: BlockMeta,
         rows: &[RankPositionRow],
         contributing_rankings: &[Uuid],
     ) -> Result<(), IndexerError> {
@@ -506,7 +507,40 @@ impl Storage {
         .execute(&mut *tx)
         .await?;
 
-        // 3. Insert the ordered RANK_POSITION relations + their value rows.
+        // 3. Register every entity this projection mints in `entities` (the
+        //    source of truth for entity existence the API resolves against).
+        let mut entity_ids: Vec<Uuid> = Vec::with_capacity(rows.len() * 2 + contributing_rankings.len() * 2);
+        for r in rows {
+            entity_ids.push(r.relation_id);
+            entity_ids.push(r.reified_entity_id);
+        }
+        for ranking_id in contributing_rankings {
+            let (relation_id, reified) = provenance_ids(block_id, *ranking_id);
+            entity_ids.push(relation_id);
+            entity_ids.push(reified);
+        }
+        if !entity_ids.is_empty() {
+            // `entities` columns are text: Unix seconds + block number, as the
+            // kg-indexer records. `created_at` only sticks on first insert;
+            // re-aggregation just bumps `updated_at`.
+            let created_at = meta.timestamp.to_string();
+            let created_at_block = meta.number.to_string();
+            let stamps = vec![created_at; entity_ids.len()];
+            let blocks = vec![created_at_block; entity_ids.len()];
+            sqlx::query(
+                "INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block) \
+                 SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::text[], $2::text[], $3::text[]) \
+                 ON CONFLICT (id) DO UPDATE SET \
+                   updated_at = EXCLUDED.updated_at, updated_at_block = EXCLUDED.updated_at_block",
+            )
+            .bind(&entity_ids)
+            .bind(&stamps)
+            .bind(&blocks)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        // 4. Insert the ordered RANK_POSITION relations + their value rows.
         for r in rows {
             sqlx::query(
                 "INSERT INTO relations \
@@ -539,7 +573,7 @@ impl Storage {
             .await?;
         }
 
-        // 4. Insert Aggregated rankings provenance relations (block -> submission).
+        // 5. Insert Aggregated rankings provenance relations (block -> submission).
         for ranking_id in contributing_rankings {
             let (relation_id, reified) = provenance_ids(block_id, *ranking_id);
             sqlx::query(

@@ -259,6 +259,25 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
         prov, 2,
         "non-member submission must be excluded from provenance"
     );
+
+    // entities: every reified entity the projection mints must be registered in
+    // `entities` (the API's source of truth for entity existence). Otherwise
+    // the reified entity carrying the rank value has no row and `entity(id)`
+    // returns null, hiding the value from the graph.
+    let orphans: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM relations r \
+         LEFT JOIN entities e ON e.id = r.entity_id \
+         WHERE r.from_entity_id = $1 AND r.type_id = ANY($2) AND e.id IS NULL",
+    )
+    .bind(u(BLOCK))
+    .bind(&[rank_position, aggregated][..])
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        orphans, 0,
+        "projected reified entities must be registered in the entities table"
+    );
 }
 
 /// Regression for #738: a block whose `TYPES -> Ranking Block` relation and its
