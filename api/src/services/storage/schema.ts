@@ -861,6 +861,10 @@ export const valueVersions = pgTable(
 		// GRC-20 edit context (for context-aware diff grouping)
 		contextRootId: uuid("context_root_id"), // Parent entity in edit context
 		contextEdgeTypeId: uuid("context_edge_type_id"), // Relation type from context edge
+		// RFC 0006: the context's leaf entity (edges.last().to_entity_id).
+		// Populated forward-only; NULL on rows written before the column existed.
+		// queryContextEntities prefers this over inferring from entity_id.
+		contextLastToEntityId: uuid("context_last_to_entity_id"),
 	},
 	(table) => [
 		index("value_versions_entity_idx").on(table.entityId),
@@ -874,6 +878,14 @@ export const valueVersions = pgTable(
 		index("value_versions_entity_space_valid_to_idx")
 			.on(table.entityId, table.spaceId, table.validToKey)
 			.where(sql`${table.validToKey} IS NOT NULL`),
+		// Partial composite index for context-aware diff discovery (RFC 0003).
+		// queryContextEntities filters by context_root_id + space_id + valid_from_key.
+		// Including space_id avoids post-seek filtering when a single root
+		// entity has version rows across multiple spaces. Most rows pre-RFC
+		// have NULL context_root_id, so a partial keeps it tight.
+		index("value_versions_context_root_idx")
+			.on(table.contextRootId, table.spaceId, table.validFromKey)
+			.where(sql`${table.contextRootId} IS NOT NULL`),
 	],
 )
 
@@ -902,6 +914,10 @@ export const relationVersions = pgTable(
 		// GRC-20 edit context (for context-aware diff grouping)
 		contextRootId: uuid("context_root_id"), // Parent entity in edit context
 		contextEdgeTypeId: uuid("context_edge_type_id"), // Relation type from context edge
+		// RFC 0006: the context's leaf entity (edges.last().to_entity_id).
+		// Populated forward-only; NULL on rows written before the column existed.
+		// queryContextEntities prefers this over inferring from from_entity_id.
+		contextLastToEntityId: uuid("context_last_to_entity_id"),
 	},
 	(table) => [
 		index("relation_versions_relation_idx").on(table.relationId),
@@ -916,6 +932,11 @@ export const relationVersions = pgTable(
 		index("relation_versions_from_entity_valid_to_idx")
 			.on(table.fromEntityId, table.validToKey)
 			.where(sql`${table.validToKey} IS NOT NULL`),
+		// Partial composite index for context-aware diff discovery (RFC 0003).
+		// See `value_versions_context_root_idx` above for rationale.
+		index("relation_versions_context_root_idx")
+			.on(table.contextRootId, table.spaceId, table.validFromKey)
+			.where(sql`${table.contextRootId} IS NOT NULL`),
 	],
 )
 

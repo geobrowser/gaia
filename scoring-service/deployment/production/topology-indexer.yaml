@@ -25,7 +25,7 @@ spec:
         runAsUser: 1001
         fsGroup: 1001
       imagePullSecrets:
-        - name: regcred
+        - name: geo
       containers:
         - name: topology-indexer
           image: registry.digitalocean.com/geo/topology-indexer:latest

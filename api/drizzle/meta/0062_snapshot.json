@@ -1,5 +1,5 @@
 {
-  "id": "1e70dfc8-9e9e-4392-83b1-cb0798aa1f53",
+  "id": "b716a33f-4fcb-4c0c-ae1f-feca9478a2a4",
   "prevId": "66ae6367-a3a0-4a26-9998-a7e9914df646",
   "version": "7",
   "dialect": "postgresql",
@@ -1722,21 +1722,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "rankings_space_id_idx": {
-          "name": "rankings_space_id_idx",
-          "columns": [
-            {
-              "expression": "space_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {},
@@ -1745,104 +1730,6 @@
           "name": "rankings_id_space_id_pk",
           "columns": [
             "id",
-            "space_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "ranks.editors": {
-      "name": "editors",
-      "schema": "ranks",
-      "columns": {
-        "member_space_id": {
-          "name": "member_space_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "space_id": {
-          "name": "space_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "ranks_editors_space_id_idx": {
-          "name": "ranks_editors_space_id_idx",
-          "columns": [
-            {
-              "expression": "space_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "editors_member_space_id_space_id_pk": {
-          "name": "editors_member_space_id_space_id_pk",
-          "columns": [
-            "member_space_id",
-            "space_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "ranks.members": {
-      "name": "members",
-      "schema": "ranks",
-      "columns": {
-        "member_space_id": {
-          "name": "member_space_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "space_id": {
-          "name": "space_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "ranks_members_space_id_idx": {
-          "name": "ranks_members_space_id_idx",
-          "columns": [
-            {
-              "expression": "space_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {
-        "members_member_space_id_space_id_pk": {
-          "name": "members_member_space_id_space_id_pk",
-          "columns": [
-            "member_space_id",
             "space_id"
           ]
         }
@@ -1942,6 +1829,12 @@
         },
         "context_edge_type_id": {
           "name": "context_edge_type_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "context_last_to_entity_id": {
+          "name": "context_last_to_entity_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
@@ -2060,6 +1953,34 @@
           ],
           "isUnique": false,
           "where": "\"relation_versions\".\"valid_to_key\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "relation_versions_context_root_idx": {
+          "name": "relation_versions_context_root_idx",
+          "columns": [
+            {
+              "expression": "context_root_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "valid_from_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"relation_versions\".\"context_root_id\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -2915,6 +2836,12 @@
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
+        },
+        "context_last_to_entity_id": {
+          "name": "context_last_to_entity_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -3033,6 +2960,34 @@
           ],
           "isUnique": false,
           "where": "\"value_versions\".\"valid_to_key\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "value_versions_context_root_idx": {
+          "name": "value_versions_context_root_idx",
+          "columns": [
+            {
+              "expression": "context_root_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "valid_from_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"value_versions\".\"context_root_id\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
