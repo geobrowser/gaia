@@ -10,6 +10,7 @@ import {
 	integer,
 	jsonb,
 	pgEnum,
+	pgSchema,
 	pgTable,
 	pgView,
 	primaryKey,
@@ -95,6 +96,7 @@ export const atlasCheckpoints = pgTable("atlas_checkpoints", {
 	rootSpaceId: text("root_space_id").notNull(),
 	schemaVersion: smallint("schema_version").notNull(),
 	graphStateBlob: jsonb("graph_state_blob").notNull(),
+	emissionBaselineBlob: bytea("emission_baseline_blob"),
 	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
 })
 
@@ -947,11 +949,30 @@ export const votesCount = pgTable(
 		spaceId: uuid("space_id").notNull(),
 		upvotes: bigint("upvotes", {mode: "number"}).notNull().default(0),
 		downvotes: bigint("downvotes", {mode: "number"}).notNull().default(0),
+		// Bumped on every upsert so the notification-indexer can poll only the
+		// rows whose counts changed since its last poll (keyset on updated_at,id).
+		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
 	},
 	(table) => ({
 		uniqueConstraint: unique().on(table.objectId, table.objectType, table.spaceId),
+		// Partial keyset index for the notification-indexer's entity-vote poller.
+		updatedAtIdx: index("idx_votes_count_updated_at").on(table.updatedAt, table.id).where(sql`object_type = 0`),
 	}),
 )
+
+/**
+ * notification_poll_cursors
+ *
+ * Persistent high-water cursors for the notification-indexer's pollers (e.g. the
+ * entity-vote-threshold poller). Lets a poll resume from where it left off across
+ * restarts instead of rescanning, keyed by poller name.
+ */
+export const notificationPollCursors = pgTable("notification_poll_cursors", {
+	name: text("name").primaryKey(),
+	cursorUpdatedAt: timestamp("cursor_updated_at", {withTimezone: true, mode: "date"}).notNull(),
+	cursorId: bigint("cursor_id", {mode: "number"}).notNull(),
+	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+})
 
 /** Versioned Entities Schema */
 
@@ -1025,6 +1046,10 @@ export const valueVersions = pgTable(
 		// GRC-20 edit context (for context-aware diff grouping)
 		contextRootId: uuid("context_root_id"), // Parent entity in edit context
 		contextEdgeTypeId: uuid("context_edge_type_id"), // Relation type from context edge
+		// RFC 0006: the context's leaf entity (edges.last().to_entity_id).
+		// Populated forward-only; NULL on rows written before the column existed.
+		// queryContextEntities prefers this over inferring from entity_id.
+		contextLastToEntityId: uuid("context_last_to_entity_id"),
 	},
 	(table) => [
 		index("value_versions_entity_idx").on(table.entityId),
@@ -1038,6 +1063,14 @@ export const valueVersions = pgTable(
 		index("value_versions_entity_space_valid_to_idx")
 			.on(table.entityId, table.spaceId, table.validToKey)
 			.where(sql`${table.validToKey} IS NOT NULL`),
+		// Partial composite index for context-aware diff discovery (RFC 0003).
+		// queryContextEntities filters by context_root_id + space_id + valid_from_key.
+		// Including space_id avoids post-seek filtering when a single root
+		// entity has version rows across multiple spaces. Most rows pre-RFC
+		// have NULL context_root_id, so a partial keeps it tight.
+		index("value_versions_context_root_idx")
+			.on(table.contextRootId, table.spaceId, table.validFromKey)
+			.where(sql`${table.contextRootId} IS NOT NULL`),
 	],
 )
 
@@ -1066,6 +1099,10 @@ export const relationVersions = pgTable(
 		// GRC-20 edit context (for context-aware diff grouping)
 		contextRootId: uuid("context_root_id"), // Parent entity in edit context
 		contextEdgeTypeId: uuid("context_edge_type_id"), // Relation type from context edge
+		// RFC 0006: the context's leaf entity (edges.last().to_entity_id).
+		// Populated forward-only; NULL on rows written before the column existed.
+		// queryContextEntities prefers this over inferring from from_entity_id.
+		contextLastToEntityId: uuid("context_last_to_entity_id"),
 	},
 	(table) => [
 		index("relation_versions_relation_idx").on(table.relationId),
@@ -1080,6 +1117,11 @@ export const relationVersions = pgTable(
 		index("relation_versions_from_entity_valid_to_idx")
 			.on(table.fromEntityId, table.validToKey)
 			.where(sql`${table.validToKey} IS NOT NULL`),
+		// Partial composite index for context-aware diff discovery (RFC 0003).
+		// See `value_versions_context_root_idx` above for rationale.
+		index("relation_versions_context_root_idx")
+			.on(table.contextRootId, table.spaceId, table.validFromKey)
+			.where(sql`${table.contextRootId} IS NOT NULL`),
 	],
 )
 
@@ -1146,5 +1188,112 @@ export const notificationDeliveries = pgTable(
 	(table) => [
 		unique().on(table.outboxId, table.webhookId),
 		index("idx_deliveries_pending").on(table.status, table.nextRetryAt),
+	],
+)
+
+/**
+ * Private `ranks` schema — the ranking-indexer's working cache.
+ *
+ * Lives outside `public` on purpose: PostGraphile introspects only `public`, so
+ * nothing here reaches the GraphQL API. Defined here (rather than as a hand-
+ * written migration) so drizzle-kit owns the migration. Every value is
+ * derivable from the `knowledge.edits` stream and rebuildable by replay.
+ */
+export const ranks = pgSchema("ranks")
+
+/** One row per Ranking Block entity, keyed on (id, space) for perspectives. */
+export const rankingBlocks = ranks.table(
+	"ranking_blocks",
+	{
+		id: uuid().notNull(),
+		spaceId: uuid("space_id").notNull(),
+		name: text(),
+		filter: text(),
+		startDate: timestamp("start_date", {withTimezone: true, mode: "date"}),
+		endDate: timestamp("end_date", {withTimezone: true, mode: "date"}),
+		restrictionId: uuid("restriction_id"),
+		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+	},
+	(table) => [primaryKey({columns: [table.id, table.spaceId]})],
+)
+
+/** One row per Rank submission entity, keyed on (id, space) for perspectives. */
+export const rankings = ranks.table(
+	"rankings",
+	{
+		id: uuid().notNull(),
+		blockId: uuid("block_id"),
+		spaceId: uuid("space_id").notNull(),
+		authorAddress: text("author_address"),
+		rankType: text("rank_type"),
+		submittedAt: timestamp("submitted_at", {withTimezone: true, mode: "date"}),
+		updatedAtBlock: bigint("updated_at_block", {mode: "number"}).notNull().default(0),
+		updateIndex: bigint("update_index", {mode: "number"}).notNull().default(0),
+		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+	},
+	(table) => [
+		primaryKey({columns: [table.id, table.spaceId]}),
+		index("rankings_block_id_idx").on(table.blockId),
+		index("rankings_block_space_idx").on(table.blockId, table.spaceId),
+		index("rankings_space_id_idx").on(table.spaceId),
+	],
+)
+
+/** Decoded items of each submission, keyed on (ranking, entity, space). */
+export const rankingItems = ranks.table(
+	"ranking_items",
+	{
+		rankingId: uuid("ranking_id").notNull(),
+		entityId: uuid("entity_id").notNull(),
+		spaceId: uuid("space_id").notNull(),
+		position: text(),
+		weight: doublePrecision(),
+	},
+	(table) => [primaryKey({columns: [table.rankingId, table.entityId, table.spaceId]})],
+)
+
+/**
+ * The ranking-indexer's own view of space membership, mirroring the public
+ * `members` / `editors` tables but fed directly from the `space.membership`
+ * Kafka topic. Eligibility reads this view instead of the public tables so a
+ * recompute never races the kg-indexer's consumer group.
+ */
+export const ranksMembers = ranks.table(
+	"members",
+	{
+		memberSpaceId: uuid("member_space_id").notNull(),
+		spaceId: uuid("space_id").notNull(),
+	},
+	(table) => [
+		primaryKey({columns: [table.memberSpaceId, table.spaceId]}),
+		index("ranks_members_space_id_idx").on(table.spaceId),
+	],
+)
+
+export const ranksEditors = ranks.table(
+	"editors",
+	{
+		memberSpaceId: uuid("member_space_id").notNull(),
+		spaceId: uuid("space_id").notNull(),
+	},
+	(table) => [
+		primaryKey({columns: [table.memberSpaceId, table.spaceId]}),
+		index("ranks_editors_space_id_idx").on(table.spaceId),
+	],
+)
+
+/** Computed aggregate, keyed on (block, entity, space). */
+export const rankingScores = ranks.table(
+	"ranking_scores",
+	{
+		blockId: uuid("block_id").notNull(),
+		entityId: uuid("entity_id").notNull(),
+		spaceId: uuid("space_id").notNull(),
+		score: doublePrecision().notNull(),
+		position: integer().notNull(),
+	},
+	(table) => [
+		primaryKey({columns: [table.blockId, table.entityId, table.spaceId]}),
+		index("ranking_scores_block_position_idx").on(table.blockId, table.position),
 	],
 )

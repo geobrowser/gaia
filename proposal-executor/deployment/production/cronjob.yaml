@@ -19,7 +19,7 @@ spec:
             runAsNonRoot: true
             runAsUser: 1001
           imagePullSecrets:
-            - name: regcred
+            - name: geo
           volumes:
             - name: ssl-certs
               emptyDir: {}
@@ -61,9 +61,22 @@ spec:
                     secretKeyRef:
                       name: proposal-executor-credentials
                       key: PIMLICO_API_KEY
+                # Membership-bot wallet — MUST be a distinct identity from the executor
+                - name: MEMBERSHIP_BOT_PRIVATE_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: MEMBERSHIP_BOT_PRIVATE_KEY
                 # Config (non-sensitive — plain values)
                 - name: EXECUTOR_SPACE_ID
                   value: "0xb64f2e2d69be2ddbb5e3c997cf8a7d15"
+                # Membership-bot personal space — MUST differ from EXECUTOR_SPACE_ID
+                - name: MEMBERSHIP_BOT_SPACE_ID
+                  value: "0x24208422558b4ac801e24a71a889dfad"
+                # Allowlisted DAO spaces for auto-accept (comma-separated bytes16).
+                # Empty string = kill switch: no detection, no votes.
+                - name: MEMBERSHIP_AUTOACCEPT_SPACE_IDS
+                  value: "0xc9f267dcb0d270718c2a3c45a64afd32,0x84a679ce188f061ac9a92380bac2bab5"
                 - name: SPACE_REGISTRY_ADDRESS
                   value: "0xB01683b2f0d38d43fcD4D9aAB980166988924132"
                 - name: RPC_URL

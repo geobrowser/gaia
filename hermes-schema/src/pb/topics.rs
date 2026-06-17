@@ -12,3 +12,16 @@ pub struct HermesTopicDeclared {
     #[prost(message, optional, tag = "3")]
     pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
 }
+/// HermesTopicRemoved - space removes a previously declared topic
+/// Data encoding: abi.encode(bytes16(topicId))
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HermesTopicRemoved {
+    /// 16 bytes - space removing topic
+    #[prost(bytes = "vec", tag = "1")]
+    pub space_id: ::prost::alloc::vec::Vec<u8>,
+    /// 16 bytes - topic UUID
+    #[prost(bytes = "vec", tag = "2")]
+    pub topic_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
+}

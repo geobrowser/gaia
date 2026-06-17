@@ -1,0 +1,67 @@
+name: Ranking Indexer Check
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'ranking-indexer/**'
+      - 'hermes-schema/**'
+      - 'hermes-instrumentation/**'
+      - 'hermes-kafka/**'
+      - 'indexer_utils/**'
+      - 'sdk/**'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'ranking-indexer/**'
+      - 'hermes-schema/**'
+      - 'hermes-instrumentation/**'
+      - 'hermes-kafka/**'
+      - 'indexer_utils/**'
+      - 'sdk/**'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Build & Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./ranking-indexer
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+          components: rustfmt, clippy
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get install -y \
+            cmake \
+            libclang-dev \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./ranking-indexer
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --verbose

@@ -20,7 +20,7 @@ spec:
         runAsUser: 1001
         fsGroup: 1001
       imagePullSecrets:
-        - name: regcred
+        - name: geo
       volumes:
         - name: ssl-certs
           emptyDir: {}

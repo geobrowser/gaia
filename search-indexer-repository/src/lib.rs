@@ -18,8 +18,9 @@ pub use interfaces::SearchIndexProvider;
 pub use opensearch::OpenSearchProvider;
 pub use service::SearchIndexService;
 pub use types::{
-    BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
-    RelationData, RemoveRelationByDocRequest, RemoveRelationData, UnsetEntityPropertiesRequest,
+    BatchOperationResult, BatchOperationSummary, ClearSpaceTopicEntityIdByDocRequest,
+    ClearSpaceTopicEntityIdRequest, DeleteEntityRequest, EntityOperation, RelationData,
+    RemoveRelationByDocRequest, RemoveRelationData, UnsetEntityPropertiesRequest,
     UpdateEntityGlobalScoreByDocRequest, UpdateEntityGlobalScoreRequest, UpdateEntityRequest,
     UpdateEntitySpaceScoreRequest, UpdateInCanonicalGraphByDocRequest,
     UpdateInCanonicalGraphRequest, UpdateSpaceScoreByDocRequest, UpdateSpaceScoreRequest,

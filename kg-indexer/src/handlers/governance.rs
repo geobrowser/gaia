@@ -503,7 +503,12 @@ fn map_proposal_action(
             },
             None => ProposalActionPayload::Unknown,
         },
-        Some(Action::UnsetTopic(_)) => ProposalActionPayload::UnsetTopic,
+        Some(Action::UnsetTopic(a)) => match bytes_to_uuid(&a.target_topic_id) {
+            Some(id) => ProposalActionPayload::UnsetTopic {
+                target_topic_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
+        },
         None => ProposalActionPayload::Unknown,
     };
 

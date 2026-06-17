@@ -901,6 +901,23 @@ pub fn topic_set(space_id: SpaceId, topic_id: TopicId) -> Action {
     }
 }
 
+/// Create a TOPIC_UNSET action.
+///
+/// - `space_id`: The space removing the topic
+/// - `topic_id`: The 16-byte topic UUID stored in the first 16 bytes of `topic`
+pub fn topic_removed(space_id: SpaceId, topic_id: TopicId) -> Action {
+    let mut topic = topic_id.to_vec();
+    topic.extend_from_slice(&[0u8; 16]);
+
+    Action {
+        from_id: space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::TOPIC_UNSET.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
 /// Create an EDITS_PUBLISHED action.
 ///
 /// - `space_id`: The space publishing the edit
@@ -1145,6 +1162,16 @@ pub mod test_topology {
     // Topic for trust pipeline topic unset testing
     pub const TOPIC_UNSET: TopicId = make_id(0x92);
 
+    // Topics for top-level TOPIC_SET / TOPIC_UNSET testing.
+    // `SPACE_TOPIC_KEPT` stays declared end-to-end; `SPACE_TOPIC_CLEARED` is
+    // declared then removed in the same scenario so the e2e can assert the
+    // column ends up NULL on the affected space.
+    pub const SPACE_TOPIC_KEPT: TopicId = make_id(0x93);
+    pub const SPACE_TOPIC_CLEARED: TopicId = make_id(0x94);
+    // A topic that is never the current topic of SPACE_J; a TOPIC_UNSET for it
+    // must be a no-op (conditional clear) and leave SPACE_TOPIC_KEPT in place.
+    pub const SPACE_TOPIC_STALE: TopicId = make_id(0x95);
+
     // Object types for voting
     pub const OBJECT_TYPE_ENTITY: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
     pub const OBJECT_TYPE_TRIPLE: [u8; 4] = [0x00, 0x00, 0x00, 0x02];
@@ -1228,6 +1255,16 @@ pub mod test_topology {
         // Phase 4b: Subspace topic unset (set then unset to test both paths)
         actions.push(subspace_topic_set(SPACE_A, SPACE_C, TOPIC_UNSET));
         actions.push(subspace_topic_unset(SPACE_A, SPACE_C, TOPIC_UNSET));
+
+        // Phase 4c: Top-level space topic declaration + removal.
+        // SPACE_J ends with topic_id = SPACE_TOPIC_KEPT.
+        // SPACE_I declares then removes SPACE_TOPIC_CLEARED → ends with NULL.
+        actions.push(topic_set(SPACE_J, SPACE_TOPIC_KEPT));
+        actions.push(topic_set(SPACE_I, SPACE_TOPIC_CLEARED));
+        actions.push(topic_removed(SPACE_I, SPACE_TOPIC_CLEARED));
+        // Stale removal: SPACE_J's current topic is SPACE_TOPIC_KEPT, so a
+        // TOPIC_UNSET for SPACE_TOPIC_STALE must NOT clear it (conditional clear).
+        actions.push(topic_removed(SPACE_J, SPACE_TOPIC_STALE));
 
         // Phase 5: Editor/member operations
         actions.push(editor_added(SPACE_A, SPACE_B));

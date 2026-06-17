@@ -28,7 +28,8 @@
 //! - `USE_MOCK` - Set to "true" or "1" to use mock data (default: false)
 //! - `SUBSTREAMS_ENDPOINT` - Substreams endpoint URL (default: geotest.substreams.pinax.network:443)
 //! - `SUBSTREAMS_API_TOKEN` - API token for substreams authentication
-//! - `SUBSTREAMS_START_BLOCK` - First block to consume (default: 82655)
+//! - `SUBSTREAMS_START_BLOCK` - First block to consume on cold start (default: 138000).
+//!   Ignored when a persisted cursor exists in the `meta` table.
 //! - `SUBSTREAMS_END_BLOCK` - Last block to consume (default: u64::MAX for continuous)
 //! - `KAFKA_BROKER` - Kafka broker address (default: localhost:9092)
 //! - `KAFKA_USERNAME` - SASL username for managed Kafka (optional)
@@ -42,6 +43,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use hermes_instrumentation::{Instrument, debug, error, info, info_span, warn};
 use prost::Message;
@@ -53,6 +55,7 @@ use hermes_relay::stream::utils;
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 
 use hermes_pipeline::cache::{CacheSource, IpfsCache};
+use hermes_pipeline::cursor::{self, CursorStore, MockCursorStore, PostgresCursorStore};
 use hermes_pipeline::pipelines;
 use hermes_pipeline::pipelines::BlockMetadata;
 use hermes_pipeline::pipelines::prefetch::{self, RetryConfig};
@@ -106,14 +109,26 @@ impl From<prost::DecodeError> for PipelineError {
 pub struct Pipeline {
     emitter: Emitter,
     cache: Arc<dyn IpfsCache>,
+    cursor_store: Arc<dyn CursorStore>,
+    /// Clock timestamp (Unix seconds) of the most recently processed block.
+    /// Stashed by `process_block_impl` so `persist_cursor` can update lag
+    /// gauges only after the cursor has been durably written. Zero means
+    /// "no block processed yet this run" (e.g., right after startup).
+    last_block_timestamp: AtomicI64,
     retry_config: RetryConfig,
 }
 
 impl Pipeline {
-    pub fn new(emitter: Emitter, cache: Arc<dyn IpfsCache>) -> Self {
+    pub fn new(
+        emitter: Emitter,
+        cache: Arc<dyn IpfsCache>,
+        cursor_store: Arc<dyn CursorStore>,
+    ) -> Self {
         Self {
             emitter,
             cache,
+            cursor_store,
+            last_block_timestamp: AtomicI64::new(0),
             retry_config: RetryConfig::default(),
         }
     }
@@ -123,11 +138,14 @@ impl Pipeline {
     pub fn with_retry_config(
         emitter: Emitter,
         cache: Arc<dyn IpfsCache>,
+        cursor_store: Arc<dyn CursorStore>,
         retry_config: RetryConfig,
     ) -> Self {
         Self {
             emitter,
             cache,
+            cursor_store,
+            last_block_timestamp: AtomicI64::new(0),
             retry_config,
         }
     }
@@ -287,6 +305,7 @@ impl Pipeline {
                 max_sequence(&moderation.content_flagged),
                 max_sequence(&moderation.content_unflagged),
                 max_sequence(&topics.topics_declared),
+                max_sequence(&topics.topics_removed),
                 max_sequence(&governance.proposals_created),
                 max_sequence(&governance.proposals_updated),
                 max_sequence(&governance.proposals_voted),
@@ -311,6 +330,7 @@ impl Pipeline {
                 || mark_sequence_as_last(&mut moderation.content_flagged, max_seq)
                 || mark_sequence_as_last(&mut moderation.content_unflagged, max_seq)
                 || mark_sequence_as_last(&mut topics.topics_declared, max_seq)
+                || mark_sequence_as_last(&mut topics.topics_removed, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_created, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_updated, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_voted, max_seq)
@@ -411,6 +431,10 @@ impl Pipeline {
         counts_by_event_type.insert(
             "TOPIC_DECLARED".to_string(),
             topics.topics_declared.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "TOPIC_REMOVED".to_string(),
+            topics.topics_removed.len() as u64,
         );
         counts_by_event_type.insert(
             "PROPOSAL_CREATED".to_string(),
@@ -546,15 +570,65 @@ impl Pipeline {
                 }
             }
 
-            // 5. Emit topic declarations
+            // 5. Emit topic declarations and removals.
+            // Both vecs are individually sorted by sequence (transform iterates
+            // actions in order). Merge-sort by sequence here so that declare/
+            // remove pairs in the same block are emitted in chain order — this
+            // matters because per-partition Kafka order determines the order
+            // consumers apply the writes, and a remove emitted after a later
+            // declare for the same space would leave the indexer in NULL state
+            // when the chain ended in the declared state.
             if topics.total() > 0 {
-                for event in &topics.topics_declared {
-                    self.emitter.emit(event).await?;
-                    debug!(
-                        space_id = %hex::encode(&event.space_id),
-                        topic_id = %hex::encode(&event.topic_id),
-                        "Topic declared"
-                    );
+                let mut declared_iter = topics.topics_declared.iter().peekable();
+                let mut removed_iter = topics.topics_removed.iter().peekable();
+                loop {
+                    let next_declared_seq = declared_iter
+                        .peek()
+                        .and_then(|e| e.meta.as_ref())
+                        .map(|m| m.sequence);
+                    let next_removed_seq = removed_iter
+                        .peek()
+                        .and_then(|e| e.meta.as_ref())
+                        .map(|m| m.sequence);
+                    match (next_declared_seq, next_removed_seq) {
+                        (Some(d), Some(r)) if d <= r => {
+                            let event = declared_iter.next().unwrap();
+                            self.emitter.emit(event).await?;
+                            debug!(
+                                space_id = %hex::encode(&event.space_id),
+                                topic_id = %hex::encode(&event.topic_id),
+                                "Topic declared"
+                            );
+                        }
+                        (Some(_), Some(_)) => {
+                            let event = removed_iter.next().unwrap();
+                            self.emitter.emit(event).await?;
+                            debug!(
+                                space_id = %hex::encode(&event.space_id),
+                                topic_id = %hex::encode(&event.topic_id),
+                                "Topic removed"
+                            );
+                        }
+                        (Some(_), None) => {
+                            let event = declared_iter.next().unwrap();
+                            self.emitter.emit(event).await?;
+                            debug!(
+                                space_id = %hex::encode(&event.space_id),
+                                topic_id = %hex::encode(&event.topic_id),
+                                "Topic declared"
+                            );
+                        }
+                        (None, Some(_)) => {
+                            let event = removed_iter.next().unwrap();
+                            self.emitter.emit(event).await?;
+                            debug!(
+                                space_id = %hex::encode(&event.space_id),
+                                topic_id = %hex::encode(&event.topic_id),
+                                "Topic removed"
+                            );
+                        }
+                        (None, None) => break,
+                    }
                 }
             }
 
@@ -710,13 +784,13 @@ impl Pipeline {
         };
         self.emitter.emit(&summary).await?;
 
-        // Block fully ack'd to Kafka — update lag gauges. The timestamp is
-        // the block's clock time, not now(); time-based lag alerts depend on
-        // that distinction.
-        hermes_instrumentation::metrics::set_latest_processed_block(meta.block_number);
-        hermes_instrumentation::metrics::set_latest_processed_block_timestamp(
-            meta.timestamp.parse().unwrap_or(0),
-        );
+        // Block fully ack'd to Kafka. Stash the block's clock time so
+        // `persist_cursor` can update the lag gauges only after the cursor
+        // is durably persisted — keeping the gauges consistent with what a
+        // restart would actually resume from. Mirrors the pattern in
+        // hermes-ipfs-cache/src/lib.rs:340-346.
+        self.last_block_timestamp
+            .store(meta.timestamp.parse().unwrap_or(0), Ordering::Relaxed);
 
         // Log block summary
         if total > 0 || total_cache_misses > 0 || total_errored_entries > 0 {
@@ -768,21 +842,100 @@ impl Sink for Pipeline {
         &self,
         undo_signal: &hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockUndoSignal,
     ) -> std::result::Result<(), Self::Error> {
-        // For now, just log the undo signal
-        // In a production system, we would delete any data recorded after this block
+        // For now, just log the undo signal.
+        // In a production system, we would delete any data recorded after this block.
+        //
+        // The trait's `run_live` will still rewind the cursor (via
+        // `persist_cursor(undo_signal.last_valid_cursor, ...)`) so substreams
+        // replays the reorged blocks with their new canonical contents —
+        // kg-indexer's event_id dedup makes the replay safe for net-new
+        // state. Stale events from the orphaned chain remain in Kafka — a
+        // known correctness gap acknowledged in the cursor-persistence
+        // design.
         let last_valid_block = undo_signal
             .last_valid_block
             .as_ref()
             .map_or(0, |b| b.number);
         warn!(
+            event = "hermes_pipeline.undo_signal",
+            indexer_id = cursor::INDEXER_ID,
             last_valid_block,
-            "Block undo signal received, rollback required"
+            "Block undo signal received — cursor will rewind on persist"
         );
-
-        // TODO: Implement actual rollback logic when cursor persistence is added
-        // This would involve deleting Kafka messages or updating state
-
         Ok(())
+    }
+
+    async fn persist_cursor(&self, cursor: String, block: u64) -> Result<(), Self::Error> {
+        // Log BEFORE the write so the cursor is recoverable from Axiom/Sentry
+        // even if the DB write fails (the failure surfaces separately as
+        // `event = "hermes_pipeline.persist_cursor_failed"` with the same
+        // fields). Mirrors hermes-ipfs-cache/README.md:154-167.
+        info!(
+            event = "hermes_pipeline.batch_end",
+            indexer_id = cursor::INDEXER_ID,
+            block_number = block,
+            cursor = %cursor,
+            "Cursor persist"
+        );
+        match self.cursor_store.persist(&cursor, block).await {
+            Ok(()) => {
+                // Cursor durably persisted — update lag gauges. We always
+                // update the block gauge (from the trait argument), but
+                // only update the timestamp gauge if a normal block has
+                // been processed this run; otherwise (e.g. an undo signal
+                // arrives before any block) the timestamp would be zero
+                // and corrupt the lag dashboard.
+                hermes_instrumentation::metrics::set_latest_processed_block(block);
+                let ts = self.last_block_timestamp.load(Ordering::Relaxed);
+                if ts > 0 {
+                    hermes_instrumentation::metrics::set_latest_processed_block_timestamp(ts);
+                }
+            }
+            Err(e) => {
+                // Persist failure is non-fatal: keep processing blocks and
+                // retry on the next persist_cursor call (called per-block
+                // by the Sink trait). The cursor in the batch_end log above
+                // is enough to manually recover the row if it stays missing
+                // — see hermes-ipfs-cache/README.md:154-167 for the
+                // procedure; ours mirrors it under event="batch_end".
+                // Lag gauges intentionally stay at the last *durably*
+                // persisted block so they reflect resume-from state, not
+                // in-memory state. Matches the hermes-ipfs-cache failure
+                // policy (lib.rs:330-346) — halting here would multiply
+                // the disruption on transient DB blips.
+                error!(
+                    event = "hermes_pipeline.persist_cursor_failed",
+                    indexer_id = cursor::INDEXER_ID,
+                    block_number = block,
+                    cursor = %cursor,
+                    error = %e,
+                    "Failed to persist cursor — continuing; will retry on next block"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn load_persisted_cursor(&self) -> Result<Option<String>, Self::Error> {
+        let cursor = self
+            .cursor_store
+            .load()
+            .await
+            .map_err(anyhow::Error::from)?;
+        match &cursor {
+            Some(c) => info!(
+                event = "hermes_pipeline.resume",
+                indexer_id = cursor::INDEXER_ID,
+                cursor = %c,
+                "Resuming from persisted cursor"
+            ),
+            None => info!(
+                event = "hermes_pipeline.cold_start",
+                indexer_id = cursor::INDEXER_ID,
+                "No persisted cursor — starting from SUBSTREAMS_START_BLOCK"
+            ),
+        }
+        Ok(cursor)
     }
 }
 
@@ -891,20 +1044,26 @@ async fn async_main() -> anyhow::Result<()> {
     let emitter = Emitter::new(producer);
     info!("Connected to Kafka broker");
 
-    // Create the IPFS cache: mock for testing, PostgreSQL for production
-    let cache = if use_mock {
-        info!("Using mock IPFS cache");
-        CacheSource::mock().into_cache().await?
+    // Create the IPFS cache and cursor store. Both are mock for testing,
+    // PostgreSQL for production — and they share the same DATABASE_URL.
+    let (cache, cursor_store): (Arc<dyn IpfsCache>, Arc<dyn CursorStore>) = if use_mock {
+        info!("Using mock IPFS cache and cursor store");
+        (
+            CacheSource::mock().into_cache().await?,
+            Arc::new(MockCursorStore::new()),
+        )
     } else {
         let database_url =
             env::var("DATABASE_URL").expect("DATABASE_URL must be set when USE_MOCK is not true");
         info!("Connecting to IPFS cache database");
-        CacheSource::live(&database_url).into_cache().await?
+        let cache = CacheSource::live(&database_url).into_cache().await?;
+        let cursor_store = Arc::new(PostgresCursorStore::new(&database_url).await?);
+        (cache, cursor_store)
     };
-    info!("IPFS cache initialized");
+    info!("IPFS cache and cursor store initialized");
 
     // Create the pipeline
-    let pipeline = Pipeline::new(emitter, cache);
+    let pipeline = Pipeline::new(emitter, cache, cursor_store);
 
     // Determine stream source: mock or live substreams
     let source = if use_mock {
@@ -915,7 +1074,7 @@ async fn async_main() -> anyhow::Result<()> {
         let start_block: i64 = env::var("SUBSTREAMS_START_BLOCK")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(82655);
+            .unwrap_or(138000);
         let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -958,4 +1117,131 @@ async fn async_main() -> anyhow::Result<()> {
     info!("Pipeline finished");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod sink_tests {
+    //! Sink-level integration tests exercising the cursor hooks on a real
+    //! `Pipeline` instance wired to a `MockCursorStore`. Validates the
+    //! `Sink` trait override path end-to-end without needing Kafka or a
+    //! database — `process_block_scoped_data` is bypassed here; we call
+    //! the cursor hooks directly to verify they delegate to the store
+    //! correctly and handle errors per the documented contract.
+    //!
+    //! `PostgresCursorStore` is covered separately in `cursor::tests`
+    //! (run via `cargo test -p hermes-pipeline -- --ignored postgres_cursor`).
+    use super::*;
+    use async_trait::async_trait;
+    use hermes_pipeline::cursor::CursorStoreError;
+
+    async fn make_pipeline(cursor_store: Arc<dyn CursorStore>) -> Pipeline {
+        // rdkafka's FutureProducer is lazy — construction doesn't connect,
+        // so a bogus broker is fine; we never call send() in these tests.
+        let producer = create_producer("localhost:1", "test-sink").expect("create producer");
+        // Use Emitter::new_with_prefix to bypass the ENVIRONMENT lookup
+        // inside Emitter::new — that path calls hermes_kafka::get_topic_prefix
+        // which caches the prefix in a process-wide OnceLock, leaking state
+        // between tests in an order-dependent way. Tests don't emit anything,
+        // so the prefix value doesn't matter — empty is fine.
+        let emitter = Emitter::new_with_prefix(producer, "");
+        let cache = CacheSource::mock().into_cache().await.expect("mock cache");
+        Pipeline::new(emitter, cache, cursor_store)
+    }
+
+    #[tokio::test]
+    async fn cold_start_load_returns_none() {
+        let store = Arc::new(MockCursorStore::new());
+        let pipeline = make_pipeline(store).await;
+
+        let loaded = pipeline
+            .load_persisted_cursor()
+            .await
+            .expect("load_persisted_cursor");
+        assert!(loaded.is_none(), "empty store must report cold start");
+    }
+
+    #[tokio::test]
+    async fn persist_cursor_writes_to_store() {
+        let store = Arc::new(MockCursorStore::new());
+        let pipeline = make_pipeline(store.clone()).await;
+
+        pipeline
+            .persist_cursor("cursor_abc".to_string(), 12345)
+            .await
+            .expect("persist_cursor");
+
+        let loaded = store.load().await.expect("store.load");
+        assert_eq!(loaded, Some("cursor_abc".to_string()));
+    }
+
+    #[tokio::test]
+    async fn load_after_persist_round_trips_via_sink_hook() {
+        let store = Arc::new(MockCursorStore::new());
+        let pipeline = make_pipeline(store).await;
+
+        pipeline
+            .persist_cursor("cursor_xyz".to_string(), 999)
+            .await
+            .expect("persist_cursor");
+
+        // Same Pipeline reading the cursor back through the trait surface.
+        let loaded = pipeline
+            .load_persisted_cursor()
+            .await
+            .expect("load_persisted_cursor");
+        assert_eq!(loaded, Some("cursor_xyz".to_string()));
+    }
+
+    #[tokio::test]
+    async fn persist_cursor_overwrites_previous_value() {
+        let store = Arc::new(MockCursorStore::new());
+        let pipeline = make_pipeline(store.clone()).await;
+
+        pipeline
+            .persist_cursor("cursor_first".to_string(), 100)
+            .await
+            .expect("first persist");
+        pipeline
+            .persist_cursor("cursor_second".to_string(), 200)
+            .await
+            .expect("second persist");
+
+        assert_eq!(
+            store.load().await.expect("store.load"),
+            Some("cursor_second".to_string())
+        );
+    }
+
+    /// A `CursorStore` that always fails to persist — used to verify that
+    /// the Sink-level override does not propagate the error and halt the
+    /// stream loop. Matches the failure-policy contract documented on
+    /// `Sink::persist_cursor` and mirrors `hermes-ipfs-cache`.
+    struct FailingCursorStore;
+
+    #[async_trait]
+    impl CursorStore for FailingCursorStore {
+        async fn load(&self) -> Result<Option<String>, CursorStoreError> {
+            Ok(None)
+        }
+
+        async fn persist(&self, _cursor: &str, _block: u64) -> Result<(), CursorStoreError> {
+            Err(CursorStoreError::Database(sqlx::Error::PoolClosed))
+        }
+    }
+
+    #[tokio::test]
+    async fn persist_failure_does_not_halt_pipeline() {
+        let store: Arc<dyn CursorStore> = Arc::new(FailingCursorStore);
+        let pipeline = make_pipeline(store).await;
+
+        // Even though the store fails internally, the Sink-level hook must
+        // return Ok so the trait's `run_live` loop keeps processing
+        // blocks. The next block's persist_cursor call will retry the
+        // write. See the comment on `impl Sink for Pipeline::persist_cursor`.
+        let result = pipeline.persist_cursor("any_cursor".to_string(), 1).await;
+        assert!(
+            result.is_ok(),
+            "persist_cursor must not halt the stream loop on store failure; got {result:?}"
+        );
+    }
 }

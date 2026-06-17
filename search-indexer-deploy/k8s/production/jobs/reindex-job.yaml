@@ -19,7 +19,7 @@ spec:
         environment: production
     spec:
       imagePullSecrets:
-      - name: regcred
+      - name: geo
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true

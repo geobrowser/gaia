@@ -37,7 +37,7 @@ struct Cli {
     #[arg(long, env = "INDEX_ALIAS", default_value = "entities")]
     index_alias: String,
 
-    /// Environment (staging or production). Required. Staging adds "staging_" prefix to index names.
+    /// Environment (staging, testnet, or production). Required. staging/testnet add a "staging_"/"testnet_" prefix to index names.
     #[arg(long, env = "ENVIRONMENT")]
     environment: String,
 

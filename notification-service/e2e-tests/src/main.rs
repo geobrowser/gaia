@@ -54,6 +54,9 @@ const SPACE_0E_BYTES: [u8; 16] = [0x22; 16];
 
 const PROPOSER_ID_BYTES: [u8; 16] = [0x02; 16];
 const VOTER_ID_BYTES: [u8; 16] = [0x0A; 16];
+// A prior voter on the 3-editor space's UPDATED proposal who is NOT an editor —
+// proves voter-targeted delivery of "a new version of a proposal you voted on".
+const UPDATE_VOTER_BYTES: [u8; 16] = [0x0B; 16];
 
 // Proposal IDs for 3-editor space (one per on-chain event type + rejection)
 const PROP_3E_CREATED_BYTES: [u8; 16] = [0x03; 16];
@@ -93,18 +96,73 @@ const PAYOUT_TYPE_BYTES: [u8; 16] = [
     0xfd, 0xda, 0xca, 0xae, 0x85, 0x13, 0x8a, 0x43, 0xec, 0x1a, 0x50, 0xff, 0x71, 0x56, 0x4d, 0x42,
 ];
 
+// Phase 3a — bounty created: a NEW bounty entity created in the bounty space.
+const NEW_BOUNTY_ENTITY_BYTES: [u8; 16] = [0xBC; 16];
+// A SECOND bounty created in the *same* HermesEdit as the first. This is the
+// idempotency regression fixture: both bounties share (block, sequence), so a
+// per-instance idempotency key is required for both notifications to survive.
+// Must differ from every other entity id (notably BOUNTY_ENTITY_BYTES = 0xBE).
+const SECOND_NEW_BOUNTY_ENTITY_BYTES: [u8; 16] = [0xCB; 16];
+
+// Phase 2a — proposal comment fixtures (isolated in their own space so the
+// 3-editor space counts are unaffected).
+const COMMENT_SPACE_BYTES: [u8; 16] = [0x71; 16];
+const COMMENT_PROPOSAL_BYTES: [u8; 16] = [0x72; 16];
+const COMMENT_PROPOSER_BYTES: [u8; 16] = [0x73; 16]; // recipient of the comment notification
+const COMMENT_MEMBER_BYTES: [u8; 16] = [0x74; 16]; // member of COMMENT_SPACE (allowed commenter)
+const COMMENT_NONMEMBER_BYTES: [u8; 16] = [0x75; 16]; // NOT a member (commenter must be filtered out)
+const COMMENT_ENTITY_BYTES: [u8; 16] = [0x76; 16]; // the comment entity (allowed)
+const COMMENT_ENTITY_2_BYTES: [u8; 16] = [0x78; 16]; // the comment entity (non-member, filtered)
+
+// Phase 2b — general comment thread fixtures (a reply into a seeded thread).
+const THREAD_ROOT_BYTES: [u8; 16] = [0x86; 16]; // the (non-proposal) thing being commented on
+const THREAD_HOME_SPACE_BYTES: [u8; 16] = [0x87; 16]; // root's home space == creator (recipient)
+const THREAD_GENERIC_TYPE_BYTES: [u8; 16] = [0x8F; 16]; // an arbitrary (non-bounty) type for the root
+const EXISTING_COMMENT_BYTES: [u8; 16] = [0x88; 16]; // a prior comment on the root (seeded)
+const THREAD_PARTICIPANT_SPACE_BYTES: [u8; 16] = [0x89; 16]; // author of the prior comment (recipient)
+const REPLY_COMMENT_BYTES: [u8; 16] = [0x8a; 16]; // the NEW reply (produced)
+const REPLY_AUTHOR_SPACE_BYTES: [u8; 16] = [0x8b; 16]; // author of the reply (must NOT be notified)
+
+// Votes — entity vote-threshold poller fixtures. The e2e runs the indexer with
+// VOTE_NOTIFICATION_THRESHOLD=3 and a short VOTE_POLL_INTERVAL_SECS.
+const VOTE_ENTITY_OVER_BYTES: [u8; 16] = [0x9c; 16]; // upvotes >= threshold + has a creator -> notifies
+const VOTE_CREATOR_SPACE_BYTES: [u8; 16] = [0x9d; 16]; // the entity's creator/home space (recipient)
+const VOTE_SPACE_BYTES: [u8; 16] = [0x9e; 16]; // the space votes are counted in (payload vote_space_id)
+const VOTE_ENTITY_BELOW_BYTES: [u8; 16] = [0x9f; 16]; // upvotes < threshold -> no notification
+const VOTE_ENTITY_NOCREATOR_BYTES: [u8; 16] = [0xa1; 16]; // over threshold but no creator -> no notification
+const VOTE_ENTITY_STALE_BYTES: [u8; 16] = [0xa2; 16]; // over threshold + creator, but updated_at older than the cold-start lookback -> no notification
+
 const GOVERNANCE_TOPIC: &str = "space.governance";
 const KNOWLEDGE_EDITS_TOPIC: &str = "knowledge.edits";
 const NUM_WEBHOOKS: usize = 3;
 
-// Expected calls:
-// 3-editor space: 6 event types × 3 editors × 3 webhooks = 54
-// 1-editor space: 1 event type  × 1 editor  × 3 webhooks = 3
-// 0-editor space: 1 event type  × 0 editors × 3 webhooks = 0
-// Bounty interest: 1 event × 2 editors × 3 webhooks = 6
-// Bounty allocated: 1 event × 1 curator × 3 webhooks = 3
-// Bounty payout: 1 event × 1 curator × 3 webhooks = 3
-const EXPECTED_CALLS: usize = 54 + 3 + 6 + 3 + 3;
+// Expected calls (3 webhooks each):
+// 3-editor space (66):
+//   proposal_created            3 editors                  × 3 = 9
+//   proposal_updated            3 editors + 1 prior voter  × 3 = 12
+//   proposal_voted              3 editors + proposer       × 3 = 12
+//   proposal_executed           3 editors + proposer       × 3 = 12
+//   proposal_settings_updated   3 editors                  × 3 = 9
+//   proposal_rejected           3 editors + proposer       × 3 = 12
+// 1-editor space: 1 event type  × 1 editor  × 3 = 3
+// 0-editor space: 1 event type  × 0 editors × 3 = 0
+// Bounty interest:  1 event × 2 editors × 3 = 6
+// Bounty allocated: 1 event × 1 curator × 3 = 3
+// Bounty payout:    1 event × 1 curator × 3 = 3
+// Bounty created:   2 bounties (one edit) × 2 bounty editors × 3 = 12  (Phase 3a;
+//                   both survive only because idempotency keys are per-bounty)
+// Proposal comment: 1 event × 1 proposer × 3 = 3         (Phase 2a; the non-member
+//                   comment is filtered out and produces 0 calls)
+// Comment thread:   1 reply × 2 recipients × 3 = 6       (Phase 2b; prior participant
+//                   + root creator; the reply author is excluded)
+// Vote threshold:   1 entity × 1 creator × 3 = 3         (Votes; the over-threshold
+//                   entity with a resolvable creator. The below-threshold and
+//                   no-creator entities produce 0.)
+//
+// The proposer (0x02), prior voter (0x0B), and comment proposer (0x73) are
+// intentionally NOT editors, so these counts also prove targeted delivery
+// reaches non-editors.
+const EXPECTED_CALLS: usize = 66 + 3 + 6 + 3 + 3 + 12 + 3 + 6 + 3;
 
 const GOVERNANCE_EVENT_TYPES: &[&str] = &[
     "proposal_created",
@@ -125,6 +183,10 @@ const ALL_EVENT_TYPES: &[&str] = &[
     "bounty_interest",
     "bounty_allocated",
     "bounty_payout",
+    "bounty_created",
+    "proposal_comment",
+    "comment",
+    "entity_votes_threshold",
 ];
 
 // ---------------------------------------------------------------------------
@@ -249,6 +311,36 @@ async fn seed_database(
     .execute(pool)
     .await?;
 
+    // Proposals for the VOTED and EXECUTED events so the indexer can resolve the
+    // proposer (find_proposer_for_proposal) and deliver "your proposal was voted
+    // on / approved" to them. end_time is in the FUTURE so the rejection poller
+    // does NOT also reject these (it only rejects end_time < now).
+    for prop in [PROP_3E_VOTED_BYTES, PROP_3E_EXECUTED_BYTES] {
+        sqlx::query(
+            "INSERT INTO proposals (id, space_id, proposed_by, start_time, end_time, created_at, created_at_block) \
+             VALUES ($1, $2, $3, $4, $5, '0', '0') ON CONFLICT DO NOTHING",
+        )
+        .bind(Uuid::from_bytes(prop))
+        .bind(space_3e)
+        .bind(proposer)
+        .bind(now - 3600)
+        .bind(now + 3600)
+        .execute(pool)
+        .await?;
+    }
+
+    // A prior vote on the UPDATED proposal by a NON-editor, so the indexer
+    // delivers "a new version of a proposal you voted on" to that voter.
+    sqlx::query(
+        "INSERT INTO proposal_votes (proposal_id, voter_id, space_id, vote) \
+         VALUES ($1, $2, $3, 'yes') ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(PROP_3E_UPDATED_BYTES))
+    .bind(Uuid::from_bytes(UPDATE_VOTER_BYTES))
+    .bind(space_3e)
+    .execute(pool)
+    .await?;
+
     // Bounty space with 2 editors
     let bounty_space = Uuid::from_bytes(BOUNTY_SPACE_BYTES);
     for bytes in [BOUNTY_EDITOR_1_BYTES, BOUNTY_EDITOR_2_BYTES] {
@@ -350,6 +442,123 @@ async fn seed_database(
     )
     .bind(curator_space)
     .bind(curator_space)
+    .execute(pool)
+    .await?;
+
+    // Phase 2a: a proposal in its own space for the comment test. end_time in the
+    // future so the rejection poller ignores it. The recipient is the proposer.
+    sqlx::query(
+        "INSERT INTO proposals (id, space_id, proposed_by, start_time, end_time, created_at, created_at_block) \
+         VALUES ($1, $2, $3, $4, $5, '0', '0') ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(COMMENT_PROPOSAL_BYTES))
+    .bind(Uuid::from_bytes(COMMENT_SPACE_BYTES))
+    .bind(Uuid::from_bytes(COMMENT_PROPOSER_BYTES))
+    .bind(now - 3600)
+    .bind(now + 3600)
+    .execute(pool)
+    .await?;
+
+    // The allowed commenter is a *member* (not editor) of the proposal's space,
+    // exercising the members branch of is_member_or_editor.
+    sqlx::query(
+        "INSERT INTO members (member_space_id, space_id) VALUES ($1, $2) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(COMMENT_MEMBER_BYTES))
+    .bind(Uuid::from_bytes(COMMENT_SPACE_BYTES))
+    .execute(pool)
+    .await?;
+
+    // Phase 2b: seed an existing comment thread. The notification-indexer reads
+    // these relations to resolve the thread root and its participants (kg-indexer
+    // isn't running in the e2e, so we seed the relations directly).
+    // (a) The thread root's Types relation → gives it a home space (== creator).
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, $3, $4) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::from_bytes(THREAD_HOME_SPACE_BYTES))
+    .bind(Uuid::from_bytes(THREAD_ROOT_BYTES))
+    .bind(Uuid::from_bytes(THREAD_GENERIC_TYPE_BYTES))
+    .execute(pool)
+    .await?;
+    // (b) A prior comment on the root, authored from a participant's space
+    //     (Reply-to → root). Its space_id is that participant.
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '310d4a24-0e5b-451c-b215-1bfce40d0fe6'::uuid, $3, $4) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::from_bytes(THREAD_PARTICIPANT_SPACE_BYTES))
+    .bind(Uuid::from_bytes(EXISTING_COMMENT_BYTES))
+    .bind(Uuid::from_bytes(THREAD_ROOT_BYTES))
+    .execute(pool)
+    .await?;
+
+    // Votes: seed votes_count rows for the entity-vote-threshold poller.
+    // (a) Over-threshold entity (upvotes=5 >= 3) WITH a Types relation that resolves
+    //     its creator/home space -> the poller notifies VOTE_CREATOR_SPACE.
+    sqlx::query(
+        "INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes) \
+         VALUES ($1, 0, $2, 5, 0) ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(VOTE_ENTITY_OVER_BYTES))
+    .bind(Uuid::from_bytes(VOTE_SPACE_BYTES))
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, $3, $4) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::from_bytes(VOTE_CREATOR_SPACE_BYTES)) // relation space_id == creator/home space
+    .bind(Uuid::from_bytes(VOTE_ENTITY_OVER_BYTES))
+    .bind(Uuid::from_bytes(THREAD_GENERIC_TYPE_BYTES))
+    .execute(pool)
+    .await?;
+    // (b) Below-threshold entity (upvotes=1 < 3) -> no notification.
+    sqlx::query(
+        "INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes) \
+         VALUES ($1, 0, $2, 1, 0) ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(VOTE_ENTITY_BELOW_BYTES))
+    .bind(Uuid::from_bytes(VOTE_SPACE_BYTES))
+    .execute(pool)
+    .await?;
+    // (c) Over-threshold entity with NO Types relation -> creator unresolved -> no notification.
+    sqlx::query(
+        "INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes) \
+         VALUES ($1, 0, $2, 9, 0) ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(VOTE_ENTITY_NOCREATOR_BYTES))
+    .bind(Uuid::from_bytes(VOTE_SPACE_BYTES))
+    .execute(pool)
+    .await?;
+    // (d) Over-threshold entity WITH a creator, but updated_at is older than the
+    //     cold-start lookback (2 days ago) -> excluded by the cold-start window
+    //     -> no notification. Proves the exclusion is the lookback, not a missing creator.
+    sqlx::query(
+        "INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes, updated_at) \
+         VALUES ($1, 0, $2, 8, 0, now() - interval '2 days') ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(VOTE_ENTITY_STALE_BYTES))
+    .bind(Uuid::from_bytes(VOTE_SPACE_BYTES))
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, $3, $4) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::from_bytes(VOTE_CREATOR_SPACE_BYTES))
+    .bind(Uuid::from_bytes(VOTE_ENTITY_STALE_BYTES))
+    .bind(Uuid::from_bytes(THREAD_GENERIC_TYPE_BYTES))
     .execute(pool)
     .await?;
 
@@ -616,6 +825,103 @@ async fn produce_test_events(kafka_broker: &str) -> Result<(), Box<dyn std::erro
         .await
         .map_err(|(e, _)| e)?;
 
+    // Phase 3a: a NEW bounty created in the bounty space (entity → Types → Bounty).
+    let types_bytes = Uuid::parse_str("8f151ba4-de20-4e3c-9cb4-99ddf96f48f1")
+        .expect("valid Types id")
+        .into_bytes();
+    let bounty_type_bytes = Uuid::parse_str("808af0ba-d588-4e33-91f0-9dd4b25e18be")
+        .expect("valid Bounty type id")
+        .into_bytes();
+    // Two bounties created in ONE edit (shared block/sequence) — exercises the
+    // idempotency-key fix: without per-bounty keys the second would be dropped.
+    let bounty_created_edit = make_two_bounty_created_hermes_edit(
+        types_bytes,
+        NEW_BOUNTY_ENTITY_BYTES,
+        SECOND_NEW_BOUNTY_ENTITY_BYTES,
+        bounty_type_bytes,
+        BOUNTY_SPACE_BYTES,
+        BOUNTY_EDITOR_1_BYTES, // actor/publisher space
+        40004,
+        1700033000,
+        4,
+    );
+    let headers = rdkafka::message::OwnedHeaders::new();
+    producer
+        .send(
+            FutureRecord::to(&ke_topic)
+                .payload(&bounty_created_edit.encode_to_vec())
+                .key("bounty-created")
+                .headers(headers),
+            Duration::from_secs(10),
+        )
+        .await
+        .map_err(|(e, _)| e)?;
+
+    // Phase 2a: a comment on COMMENT_PROPOSAL by a member (allowed → proposer
+    // notified) and by a non-member (must be filtered out → no notification).
+    let comment_allowed = make_comment_hermes_edit(
+        COMMENT_ENTITY_BYTES,
+        COMMENT_PROPOSAL_BYTES,
+        COMMENT_MEMBER_BYTES,
+        40005,
+        1700034000,
+        5,
+    );
+    let headers = rdkafka::message::OwnedHeaders::new();
+    producer
+        .send(
+            FutureRecord::to(&ke_topic)
+                .payload(&comment_allowed.encode_to_vec())
+                .key("comment-allowed")
+                .headers(headers),
+            Duration::from_secs(10),
+        )
+        .await
+        .map_err(|(e, _)| e)?;
+
+    let comment_blocked = make_comment_hermes_edit(
+        COMMENT_ENTITY_2_BYTES,
+        COMMENT_PROPOSAL_BYTES,
+        COMMENT_NONMEMBER_BYTES,
+        40006,
+        1700035000,
+        6,
+    );
+    let headers = rdkafka::message::OwnedHeaders::new();
+    producer
+        .send(
+            FutureRecord::to(&ke_topic)
+                .payload(&comment_blocked.encode_to_vec())
+                .key("comment-blocked")
+                .headers(headers),
+            Duration::from_secs(10),
+        )
+        .await
+        .map_err(|(e, _)| e)?;
+
+    // Phase 2b: a reply into the seeded thread (reply → EXISTING_COMMENT). The
+    // indexer walks to the root, notifying the prior participant + the root's
+    // creator (home space), but NOT the reply's own author.
+    let thread_reply = make_comment_hermes_edit(
+        REPLY_COMMENT_BYTES,
+        EXISTING_COMMENT_BYTES,
+        REPLY_AUTHOR_SPACE_BYTES,
+        40007,
+        1700036000,
+        7,
+    );
+    let headers = rdkafka::message::OwnedHeaders::new();
+    producer
+        .send(
+            FutureRecord::to(&ke_topic)
+                .payload(&thread_reply.encode_to_vec())
+                .key("comment-thread-reply")
+                .headers(headers),
+            Duration::from_secs(10),
+        )
+        .await
+        .map_err(|(e, _)| e)?;
+
     Ok(())
 }
 
@@ -676,6 +982,147 @@ fn make_bounty_hermes_edit(
     }
 }
 
+/// Build a HermesEdit that creates *two* bounties (two `Types → Bounty`
+/// relations) in a single edit. Both ops share the edit's (block, sequence),
+/// which is exactly the condition under which the old `{block}:{seq}:bounty_created`
+/// idempotency key collided and silently dropped the second notification.
+#[allow(clippy::too_many_arguments)]
+fn make_two_bounty_created_hermes_edit(
+    relation_type: [u8; 16],
+    bounty_a: [u8; 16],
+    bounty_b: [u8; 16],
+    bounty_type: [u8; 16],
+    space_id: [u8; 16],
+    // The actor/publisher space of the edit, used for `authors` (matches the
+    // convention in the other fixtures, where authors is the publisher space —
+    // not the entity being created).
+    author_space: [u8; 16],
+    block_number: u64,
+    created_at: u64,
+    sequence: u32,
+) -> hermes_schema::pb::knowledge::HermesEdit {
+    use std::borrow::Cow;
+
+    let mk_op = |entity: [u8; 16], rel_id: [u8; 16]| {
+        grc_20::Op::CreateRelation(grc_20::CreateRelation {
+            id: rel_id,
+            relation_type,
+            from: entity,
+            from_is_value_ref: false,
+            to: bounty_type,
+            to_is_value_ref: false,
+            from_space: None,
+            from_version: None,
+            to_space: None,
+            to_version: None,
+            entity: None,
+            position: None,
+            context: None,
+        })
+    };
+
+    let edit_id = [0xBF; 16];
+    let edit = grc_20::Edit {
+        id: edit_id,
+        name: Cow::Borrowed("two bounty edit"),
+        authors: vec![author_space],
+        created_at: created_at as i64,
+        ops: vec![mk_op(bounty_a, [0xD1; 16]), mk_op(bounty_b, [0xD2; 16])],
+    };
+    let payload = grc_20::encode_edit(&edit).expect("GRC-20 encode should succeed");
+
+    hermes_schema::pb::knowledge::HermesEdit {
+        id: edit_id.to_vec(),
+        name: "two bounty edit".into(),
+        payload,
+        authors: vec![author_space.to_vec()],
+        language: None,
+        space_id: space_id.to_vec(),
+        is_canonical: true,
+        meta: Some(hermes_schema::pb::blockchain_metadata::BlockchainMetadata {
+            created_at,
+            created_by: vec![],
+            block_number,
+            cursor: String::new(),
+            sequence,
+            is_last: false,
+        }),
+    }
+}
+
+/// Build a HermesEdit for a comment: a Comment entity (`Types → Comment`) that
+/// replies to `parent` (`Reply to → parent`), published from `commenter_space`.
+fn make_comment_hermes_edit(
+    comment_entity: [u8; 16],
+    parent: [u8; 16],
+    commenter_space: [u8; 16],
+    block_number: u64,
+    created_at: u64,
+    sequence: u32,
+) -> hermes_schema::pb::knowledge::HermesEdit {
+    use std::borrow::Cow;
+
+    let types = Uuid::parse_str("8f151ba4-de20-4e3c-9cb4-99ddf96f48f1")
+        .expect("valid Types id")
+        .into_bytes();
+    let comment_type = Uuid::parse_str("82f6123a-0323-4c6c-a811-701c5bc026e9")
+        .expect("valid Comment type id")
+        .into_bytes();
+    let reply_to = Uuid::parse_str("310d4a24-0e5b-451c-b215-1bfce40d0fe6")
+        .expect("valid Reply-to id")
+        .into_bytes();
+
+    let mk = |id: [u8; 16], rt: [u8; 16], from: [u8; 16], to: [u8; 16]| {
+        grc_20::Op::CreateRelation(grc_20::CreateRelation {
+            id,
+            relation_type: rt,
+            from,
+            from_is_value_ref: false,
+            to,
+            to_is_value_ref: false,
+            from_space: None,
+            from_version: None,
+            to_space: None,
+            to_version: None,
+            entity: None,
+            position: None,
+            context: None,
+        })
+    };
+
+    let edit = grc_20::Edit {
+        id: comment_entity,
+        name: Cow::Borrowed("comment edit"),
+        authors: vec![commenter_space],
+        created_at: created_at as i64,
+        ops: vec![
+            // Comment entity is typed as Comment...
+            mk([0xA1; 16], types, comment_entity, comment_type),
+            // ...and replies to its parent.
+            mk([0xA2; 16], reply_to, comment_entity, parent),
+        ],
+    };
+    let payload = grc_20::encode_edit(&edit).expect("GRC-20 encode should succeed");
+
+    hermes_schema::pb::knowledge::HermesEdit {
+        id: comment_entity.to_vec(),
+        name: "comment edit".into(),
+        payload,
+        authors: vec![commenter_space.to_vec()],
+        language: None,
+        space_id: commenter_space.to_vec(),
+        is_canonical: true,
+        meta: Some(hermes_schema::pb::blockchain_metadata::BlockchainMetadata {
+            created_at,
+            created_by: vec![],
+            block_number,
+            cursor: String::new(),
+            sequence,
+            is_last: false,
+        }),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Verification
 // ---------------------------------------------------------------------------
@@ -716,6 +1163,9 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         .map(|b| Uuid::from_bytes(*b).to_string())
         .collect();
     let editor_solo = Uuid::from_bytes(EDITOR_SOLO_BYTES).to_string();
+    // Phase 1 targeted recipients (intentionally NOT editors):
+    let proposer_uid = Uuid::from_bytes(PROPOSER_ID_BYTES).to_string();
+    let update_voter_uid = Uuid::from_bytes(UPDATE_VOTER_BYTES).to_string();
 
     // ===================================================================
     // Total count
@@ -776,28 +1226,35 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
     }
 
     // ===================================================================
-    // 3-editor space: 6 event types × 3 editors × 3 webhooks = 54 calls
+    // 3-editor space: 66 calls (editors on every event + targeted recipients)
     // ===================================================================
     let calls_3e: Vec<_> = calls
         .iter()
         .filter(|c| c.body["space_id"].as_str() == Some(space_3e.as_str()))
         .collect();
     r.check(
-        "3-editor space: exactly 54 calls (6 events x 3 editors x 3 webhooks)",
-        calls_3e.len() == 54,
+        "3-editor space: exactly 66 calls (editors + proposer/voter targeting)",
+        calls_3e.len() == 66,
     );
 
-    // Per governance event-type fan-out (3-editor space)
+    // Per governance event-type fan-out (3-editor space). Targeted events add one
+    // non-editor recipient: the proposer (voted/executed/rejected) or a prior
+    // voter (updated).
     for et in GOVERNANCE_EVENT_TYPES {
         let et_calls: Vec<_> = calls_3e
             .iter()
             .filter(|c| c.body["event_type"].as_str() == Some(et))
             .collect();
+        let expected_recipients = match *et {
+            "proposal_voted" | "proposal_executed" | "proposal_rejected" => editors_3e.len() + 1, // + proposer
+            "proposal_updated" => editors_3e.len() + 1, // + prior voter
+            _ => editors_3e.len(),
+        };
         r.check(
-            &format!("3e {}: 9 calls (3 editors x 3 webhooks)", et),
-            et_calls.len() == 9,
+            &format!("3e {}: {} calls", et, expected_recipients * NUM_WEBHOOKS),
+            et_calls.len() == expected_recipients * NUM_WEBHOOKS,
         );
-        // Each editor gets exactly 3 (one per webhook)
+        // Each editor still gets exactly 3 (one per webhook) on every event type.
         for editor_str in &editors_3e {
             let n = et_calls
                 .iter()
@@ -810,12 +1267,45 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         }
     }
 
+    // Phase 1: targeted recipients beyond editors reach non-editors.
+    for et in ["proposal_voted", "proposal_executed", "proposal_rejected"] {
+        let n = calls_3e
+            .iter()
+            .filter(|c| {
+                c.body["event_type"].as_str() == Some(et)
+                    && c.body["user_space_id"].as_str() == Some(proposer_uid.as_str())
+            })
+            .count();
+        r.check(
+            &format!("3e {}: proposer (non-editor) notified on 3 webhooks", et),
+            n == 3,
+        );
+    }
+    let upd_voter_calls = calls_3e
+        .iter()
+        .filter(|c| {
+            c.body["event_type"].as_str() == Some("proposal_updated")
+                && c.body["user_space_id"].as_str() == Some(update_voter_uid.as_str())
+        })
+        .count();
+    r.check(
+        "3e proposal_updated: prior voter (non-editor) notified on 3 webhooks",
+        upd_voter_calls == 3,
+    );
+
     // ===================================================================
     // Every call has user_space_id and it's a known editor
     // ===================================================================
     let bounty_editor_1 = Uuid::from_bytes(BOUNTY_EDITOR_1_BYTES).to_string();
     let bounty_editor_2 = Uuid::from_bytes(BOUNTY_EDITOR_2_BYTES).to_string();
     let curator_space = Uuid::from_bytes(CURATOR_SPACE_BYTES).to_string();
+    // Phase 2a: the proposal-comment recipient (the proposer; not an editor).
+    let comment_proposer = Uuid::from_bytes(COMMENT_PROPOSER_BYTES).to_string();
+    // Phase 2b: comment-thread recipients (prior participant + root creator).
+    let thread_participant = Uuid::from_bytes(THREAD_PARTICIPANT_SPACE_BYTES).to_string();
+    let thread_home = Uuid::from_bytes(THREAD_HOME_SPACE_BYTES).to_string();
+    // Votes: the over-threshold entity's creator (recipient of entity_votes_threshold).
+    let vote_creator = Uuid::from_bytes(VOTE_CREATOR_SPACE_BYTES).to_string();
 
     let all_known: Vec<String> = editors_3e
         .iter()
@@ -823,6 +1313,16 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         .chain(std::iter::once(&bounty_editor_1))
         .chain(std::iter::once(&bounty_editor_2))
         .chain(std::iter::once(&curator_space))
+        // Phase 1 targeted recipients (non-editors):
+        .chain(std::iter::once(&proposer_uid))
+        .chain(std::iter::once(&update_voter_uid))
+        // Phase 2a: proposal-comment recipient (proposer):
+        .chain(std::iter::once(&comment_proposer))
+        // Phase 2b: comment-thread recipients (participant + root creator):
+        .chain(std::iter::once(&thread_participant))
+        .chain(std::iter::once(&thread_home))
+        // Votes: the over-threshold entity's creator:
+        .chain(std::iter::once(&vote_creator))
         .cloned()
         .collect();
 
@@ -873,18 +1373,35 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
             );
         }
     }
-    // Bounty HMAC spot-checks
-    for et in &["bounty_interest", "bounty_allocated", "bounty_payout"] {
+    // Bounty + new-type (bounty_created / proposal_comment / comment) HMAC spot-checks
+    for et in &[
+        "bounty_interest",
+        "bounty_allocated",
+        "bounty_payout",
+        "bounty_created",
+        "proposal_comment",
+        "comment",
+    ] {
         if let Some(call) = calls
             .iter()
             .find(|c| c.body["event_type"].as_str() == Some(et))
         {
             r.check(
-                &format!("bounty {}: valid HMAC", et),
+                &format!("{}: valid HMAC", et),
                 verify_hmac(webhook_secret, &call.raw_body, &call.signature),
             );
         }
     }
+
+    // Blanket check: EVERY delivered webhook carries a valid signature. This is
+    // the root-cause guard — any current or future event type is covered, so a
+    // new type can't silently ship without signature verification.
+    r.check(
+        "all webhook calls have a valid HMAC signature",
+        calls
+            .iter()
+            .all(|c| verify_hmac(webhook_secret, &c.raw_body, &c.signature)),
+    );
 
     // ===================================================================
     // All calls have idempotency key (raw string format: base:user_space_id)
@@ -907,13 +1424,18 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
     r.check("idempotency keys are unique per (event, user) pair", {
         let keys: std::collections::HashSet<&str> =
             calls.iter().map(|c| c.idempotency_key.as_str()).collect();
-        // 3-editor space: 6 events × 3 editors = 18 distinct keys
-        // 1-editor space: 1 event × 1 editor = 1 distinct key
-        // Bounty interest: 1 event × 2 editors = 2 distinct keys
-        // Bounty allocated: 1 event × 1 curator = 1 distinct key
-        // Bounty payout: 1 event × 1 curator = 1 distinct key
-        // Total: 23
-        keys.len() == 23
+        // 3-editor space: per (event, user) pair —
+        //   created 3 + settings 3 + updated 4 + voted 4 + executed 4 + rejected 4 = 22
+        // 1-editor space: 1 event × 1 editor = 1
+        // Bounty interest: 1 event × 2 editors = 2
+        // Bounty allocated: 1 event × 1 curator = 1
+        // Bounty payout: 1 event × 1 curator = 1
+        // Bounty created: 2 bounties (one edit) × 2 bounty editors = 4
+        // Proposal comment: 1 event × 1 proposer = 1
+        // Comment thread: 1 reply × 2 recipients = 2
+        // Vote threshold: 1 entity × 1 creator = 1
+        // Total: 35
+        keys.len() == 35
     });
 
     // ===================================================================
@@ -1420,6 +1942,191 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         );
     }
 
+    // --- Phase 3a: bounty_created — TWO bounties in one edit, 2 bounty-space
+    //     editors × 3 webhooks each = 12. Both bounties surviving proves the
+    //     per-bounty idempotency key fix (the old key dropped the second). ---
+    let new_bounty_entity = Uuid::from_bytes(NEW_BOUNTY_ENTITY_BYTES).to_string();
+    let second_bounty_entity = Uuid::from_bytes(SECOND_NEW_BOUNTY_ENTITY_BYTES).to_string();
+    let bounty_space = Uuid::from_bytes(BOUNTY_SPACE_BYTES).to_string();
+    let created_calls: Vec<_> = calls
+        .iter()
+        .filter(|c| c.body["event_type"].as_str() == Some("bounty_created"))
+        .collect();
+    r.check(
+        "bounty_created: 12 calls (2 bounties x 2 editors x 3 webhooks)",
+        created_calls.len() == 12,
+    );
+    if let Some(call) = created_calls.first() {
+        r.check(
+            "bounty_created: category is 'bounty'",
+            call.body["category"].as_str() == Some("bounty"),
+        );
+        r.check(
+            "bounty_created: correct bounty_space_id",
+            call.body["bounty_space_id"].as_str() == Some(bounty_space.as_str()),
+        );
+    }
+    // Both bounties from the single edit must each produce notifications.
+    for (label, entity) in [
+        ("first", &new_bounty_entity),
+        ("second", &second_bounty_entity),
+    ] {
+        let n = created_calls
+            .iter()
+            .filter(|c| c.body["bounty_entity_id"].as_str() == Some(entity.as_str()))
+            .count();
+        r.check(
+            &format!("bounty_created: {label} bounty delivered (2 editors x 3 webhooks = 6)"),
+            n == 6,
+        );
+    }
+    for editor in [&bounty_editor_1, &bounty_editor_2] {
+        let n = created_calls
+            .iter()
+            .filter(|c| c.body["user_space_id"].as_str() == Some(editor.as_str()))
+            .count();
+        r.check(
+            &format!(
+                "bounty_created: editor {}.. got 6 deliveries (2 bounties x 3)",
+                &editor[..8]
+            ),
+            n == 6,
+        );
+    }
+
+    // --- Phase 2a: proposal_comment — proposer × 3 webhooks = 3, and the
+    //     non-member comment is filtered out (exactly 3 total proves it). ---
+    let comment_proposal = Uuid::from_bytes(COMMENT_PROPOSAL_BYTES).to_string();
+    let comment_member = Uuid::from_bytes(COMMENT_MEMBER_BYTES).to_string();
+    let comment_calls: Vec<_> = calls
+        .iter()
+        .filter(|c| c.body["event_type"].as_str() == Some("proposal_comment"))
+        .collect();
+    r.check(
+        "proposal_comment: exactly 3 calls (proposer x 3; non-member comment filtered out)",
+        comment_calls.len() == 3,
+    );
+    r.check(
+        "proposal_comment: all delivered to the proposer",
+        comment_calls
+            .iter()
+            .all(|c| c.body["user_space_id"].as_str() == Some(comment_proposer.as_str())),
+    );
+    if let Some(call) = comment_calls.first() {
+        r.check(
+            "proposal_comment: category is 'comment'",
+            call.body["category"].as_str() == Some("comment"),
+        );
+        r.check(
+            "proposal_comment: correct proposal_id",
+            call.body["proposal_id"].as_str() == Some(comment_proposal.as_str()),
+        );
+        r.check(
+            "proposal_comment: commenter_space_id is the member commenter",
+            call.body["commenter_space_id"].as_str() == Some(comment_member.as_str()),
+        );
+    }
+
+    // --- Phase 2b: comment thread — a reply notifies the prior participant and
+    //     the root's creator (home space), but NOT the reply's author. ---
+    let thread_root = Uuid::from_bytes(THREAD_ROOT_BYTES).to_string();
+    let reply_author = Uuid::from_bytes(REPLY_AUTHOR_SPACE_BYTES).to_string();
+    let comment_calls: Vec<_> = calls
+        .iter()
+        .filter(|c| c.body["event_type"].as_str() == Some("comment"))
+        .collect();
+    r.check(
+        "comment: 6 calls (prior participant + root creator) x 3 webhooks",
+        comment_calls.len() == 6,
+    );
+    if let Some(call) = comment_calls.first() {
+        r.check(
+            "comment: category is 'comment'",
+            call.body["category"].as_str() == Some("comment"),
+        );
+        r.check(
+            "comment: correct thread root_id",
+            call.body["root_id"].as_str() == Some(thread_root.as_str()),
+        );
+    }
+    // The prior participant and the root's creator each get 3 (one per webhook).
+    for (label, who) in [
+        ("prior participant", &thread_participant),
+        ("root creator", &thread_home),
+    ] {
+        let n = comment_calls
+            .iter()
+            .filter(|c| c.body["user_space_id"].as_str() == Some(who.as_str()))
+            .count();
+        r.check(
+            &format!("comment: {} notified on 3 webhooks", label),
+            n == 3,
+        );
+    }
+    // The reply's own author must NOT be notified.
+    r.check(
+        "comment: reply author is not notified (self-exclusion)",
+        !comment_calls
+            .iter()
+            .any(|c| c.body["user_space_id"].as_str() == Some(reply_author.as_str())),
+    );
+
+    // --- Votes: entity_votes_threshold — the over-threshold entity with a
+    //     resolvable creator notifies that creator exactly once (× 3 webhooks).
+    //     The below-threshold and no-creator entities produce nothing. ---
+    let vote_entity_over = Uuid::from_bytes(VOTE_ENTITY_OVER_BYTES).to_string();
+    let vote_below = Uuid::from_bytes(VOTE_ENTITY_BELOW_BYTES).to_string();
+    let vote_nocreator = Uuid::from_bytes(VOTE_ENTITY_NOCREATOR_BYTES).to_string();
+    let vote_stale = Uuid::from_bytes(VOTE_ENTITY_STALE_BYTES).to_string();
+    let vote_calls: Vec<_> = calls
+        .iter()
+        .filter(|c| c.body["event_type"].as_str() == Some("entity_votes_threshold"))
+        .collect();
+    r.check(
+        "entity_votes_threshold: exactly 3 calls (1 entity x 1 creator x 3 webhooks)",
+        vote_calls.len() == 3,
+    );
+    r.check(
+        "entity_votes_threshold: only the over-threshold entity fires",
+        vote_calls
+            .iter()
+            .all(|c| c.body["entity_id"].as_str() == Some(vote_entity_over.as_str())),
+    );
+    r.check(
+        "entity_votes_threshold: delivered to the entity's creator",
+        vote_calls
+            .iter()
+            .all(|c| c.body["user_space_id"].as_str() == Some(vote_creator.as_str())),
+    );
+    r.check(
+        "entity_votes_threshold: below-threshold entity is NOT notified",
+        !vote_calls
+            .iter()
+            .any(|c| c.body["entity_id"].as_str() == Some(vote_below.as_str())),
+    );
+    r.check(
+        "entity_votes_threshold: entity with no resolvable creator is NOT notified",
+        !vote_calls
+            .iter()
+            .any(|c| c.body["entity_id"].as_str() == Some(vote_nocreator.as_str())),
+    );
+    r.check(
+        "entity_votes_threshold: stale entity (older than cold-start lookback) is NOT notified",
+        !vote_calls
+            .iter()
+            .any(|c| c.body["entity_id"].as_str() == Some(vote_stale.as_str())),
+    );
+    if let Some(call) = vote_calls.first() {
+        r.check(
+            "entity_votes_threshold: category is 'votes'",
+            call.body["category"].as_str() == Some("votes"),
+        );
+        r.check(
+            "entity_votes_threshold: payload carries threshold + upvotes",
+            call.body["threshold"].as_i64() == Some(3) && call.body["upvotes"].as_i64() == Some(5),
+        );
+    }
+
     r
 }
 
@@ -1556,6 +2263,42 @@ async fn main() {
                     "  !! extra call: {} (space: {}, editor: {})",
                     call.body["event_type"].as_str().unwrap_or("?"),
                     call.body["space_id"].as_str().unwrap_or("?"),
+                    call.body["user_space_id"].as_str().unwrap_or("?"),
+                );
+                calls.push(call);
+            }
+            _ => break,
+        }
+    }
+
+    // No-repeat probe: bump the already-notified over-threshold entity's votes
+    // (new upvotes + updated_at) so the poller re-scans it on its next tick, then
+    // drain ~6s (>= 2 poll cycles at VOTE_POLL_INTERVAL_SECS=2). A correct poller
+    // emits nothing more; a regression would push calls beyond EXPECTED_CALLS and
+    // bump the entity_votes_threshold count, failing verification below.
+    println!("  No-repeat probe: bumping votes for the already-notified entity...");
+    if let Err(e) = sqlx::query(
+        "UPDATE votes_count SET upvotes = upvotes + 10, updated_at = now() \
+         WHERE object_id = $1 AND object_type = 0",
+    )
+    .bind(Uuid::from_bytes(VOTE_ENTITY_OVER_BYTES))
+    .execute(&pool)
+    .await
+    {
+        eprintln!("  !! failed to bump votes_count for no-repeat probe: {}", e);
+    }
+    let probe_deadline = tokio::time::Instant::now() + Duration::from_secs(6);
+    loop {
+        let remaining = probe_deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(call)) => {
+                eprintln!(
+                    "  !! post-bump call: {} (entity: {}, user: {})",
+                    call.body["event_type"].as_str().unwrap_or("?"),
+                    call.body["entity_id"].as_str().unwrap_or("?"),
                     call.body["user_space_id"].as_str().unwrap_or("?"),
                 );
                 calls.push(call);

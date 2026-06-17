@@ -19,7 +19,7 @@ spec:
         environment: staging
     spec:
       imagePullSecrets:
-      - name: regcred
+      - name: geo
       restartPolicy: OnFailure
       securityContext:
         runAsNonRoot: true

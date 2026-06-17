@@ -123,9 +123,12 @@ search-indexer-deploy/
     |   +-- monitoring.yaml
     |   +-- jobs/               # Production migration jobs (ENVIRONMENT=production)
     +-- staging/
-        +-- namespace.yaml      # namespace: search-staging
+    |   +-- namespace.yaml      # namespace: search-staging
+    |   +-- search-indexer.yaml
+    |   +-- jobs/               # Staging migration jobs (ENVIRONMENT=staging)
+    +-- v2/                     # gaia-v2 / testnet (shared namespace gaia-v2, bootstrapped via deploy-v2)
         +-- search-indexer.yaml
-        +-- jobs/               # Staging migration jobs (ENVIRONMENT=staging)
+        +-- jobs/               # Testnet migration jobs (ENVIRONMENT=testnet)
 ```
 
 ## Index Migrations
@@ -136,6 +139,7 @@ OpenSearch index migrations are managed using the [search-admin](../search-admin
 
 - **Production:** `k8s/production/jobs/` (namespace: `search`, no index prefix)
 - **Staging:** `k8s/staging/jobs/` (namespace: `search-staging`, `staging_` prefix)
+- **Testnet (gaia-v2):** `k8s/v2/jobs/` (namespace: `gaia-v2`, `testnet_` prefix)
 
 **For full migration workflows and step-by-step instructions, see:**
 
