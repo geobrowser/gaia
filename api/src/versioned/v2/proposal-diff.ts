@@ -126,7 +126,11 @@ function indexOps(ops: Op[]): OpsIndex {
 		for (const pv of values) {
 			if (normalizeUuid(idToUuid(pv.property as never)) !== IMAGE_URL_PROPERTY_ID) continue
 			const v = pv.value as {type?: string; value?: unknown}
-			if (v?.type === "text" && typeof v.value === "string") proposedImageUrls.set(entityId, v.value)
+			if (v?.type === "text" && typeof v.value === "string") {
+				// Last write wins: a set supersedes any earlier unset of this entity's url.
+				proposedImageUrls.set(entityId, v.value)
+				unsetImageUrls.delete(entityId)
+			}
 		}
 	}
 
@@ -153,7 +157,10 @@ function indexOps(ops: Op[]): OpsIndex {
 			noteImageUrl(normalizeUuid(idToUuid(op.id)), op.set)
 			for (const u of op.unset) {
 				if (normalizeUuid(idToUuid(u.property as never)) === IMAGE_URL_PROPERTY_ID) {
-					unsetImageUrls.add(normalizeUuid(idToUuid(op.id)))
+					const id = normalizeUuid(idToUuid(op.id))
+					// Last write wins: an unset supersedes any earlier set of this entity's url.
+					unsetImageUrls.add(id)
+					proposedImageUrls.delete(id)
 				}
 			}
 		}

@@ -632,6 +632,13 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			relCoverX: "21000000-0006-4000-8000-000000000013",
 			propUnsetMedia: "21000000-0008-4000-8000-000000000008",
 			actUnsetMedia: "21000000-000a-4000-8000-000000000008",
+			// Scenario Y: one edit SETS then UNSETS a new image's IMAGE_URL (last write wins → no url).
+			pageY: "21000000-0002-4000-8000-000000000010",
+			imgY: "21000000-0002-4000-8000-000000000011",
+			relImgYTypes: "21000000-0006-4000-8000-000000000014",
+			relCoverY: "21000000-0006-4000-8000-000000000015",
+			propSetUnsetMedia: "21000000-0008-4000-8000-000000000009",
+			actSetUnsetMedia: "21000000-000a-4000-8000-000000000009",
 		}
 		const RANKING_BLOCK_TYPE = "150db6defe2344f0805afa57502e2c32"
 
@@ -873,6 +880,37 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 							.build(),
 					contentUri: generateTestUri("fold-unset-media"),
 				})
+				// Proposal Y: within ONE edit, set then unset a new image's IMAGE_URL.
+				// Last write wins → the proposed url must NOT be inlined onto the Cover relation.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propSetUnsetMedia,
+					actionId: f.actSetUnsetMedia,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Add then remove cover url")
+							.setCreatedNow()
+							.createEntity(uuidToId(f.imgY), (e) =>
+								e.text(uuidToId(SystemIds.IMAGE_URL_PROPERTY), "ipfs://shouldberemoved"),
+							)
+							.createRelationSimple(
+								uuidToId(f.relImgYTypes),
+								uuidToId(f.imgY),
+								uuidToId(SystemIds.IMAGE_TYPE),
+								uuidToId(SystemIds.TYPES_PROPERTY),
+							)
+							.updateEntity(uuidToId(f.imgY), (u) => u.unsetAll(uuidToId(SystemIds.IMAGE_URL_PROPERTY)))
+							.createRelationSimple(
+								uuidToId(f.relCoverY),
+								uuidToId(f.pageY),
+								uuidToId(f.imgY),
+								uuidToId(f.relTypeAvatar),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-set-unset-media"),
+				})
 			} finally {
 				client2.release()
 			}
@@ -1022,6 +1060,19 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			const rel = page.relations.find((r: {after?: {toEntityId: string}}) => r.after?.toEntityId === n(f.imgU))
 			expect(rel).toBeDefined()
 			// The proposal unset IMAGE_URL → no stale base-version URL should remain inlined.
+			expect(rel.after.imageUrl ?? null).toBeNull()
+			expect(rel.after.videoUrl ?? null).toBeNull()
+		})
+
+		it("does not inline a proposed media URL that the same edit later unsets (last write wins)", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propSetUnsetMedia}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageY))
+			expect(page).toBeDefined()
+			const rel = page.relations.find((r: {after?: {toEntityId: string}}) => r.after?.toEntityId === n(f.imgY))
+			expect(rel).toBeDefined()
+			// The edit set IMAGE_URL then unset it; the proposed url must not be inlined.
 			expect(rel.after.imageUrl ?? null).toBeNull()
 			expect(rel.after.videoUrl ?? null).toBeNull()
 		})
