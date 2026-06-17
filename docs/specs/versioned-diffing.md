@@ -293,32 +293,45 @@ WHERE context_root_id = $entity_id
 
 ### Grouping Algorithm
 
+Two passes: dedupe-then-sort. Context discovery wins over BLOCKS-relation fallback so the RFC's `edges[0].type_id` grouping takes precedence when both discovery paths surface the same entity. Diffs that lack context metadata go through the pure-fallback path and behave identically to pre-RFC behavior.
+
 ```typescript
 function groupEntitiesByContext(
     entities: DiscoveredEntity[],
     fallbackTypeId: string = BLOCKS
 ): GroupedEntities {
-    // 1. Sort by position (nulls last)
-    const sorted = [...entities].sort((a, b) => {
+    // Pass 1: dedupe. Prefer the entry that carries a contextEdgeTypeId
+    // (context discovery) over a null-context entry (BLOCKS fallback), and
+    // inherit `position` from whichever entry has one.
+    const deduped = new Map<string, DiscoveredEntity>();
+    for (const entity of entities) {
+        const existing = deduped.get(entity.entityId);
+        if (!existing) {
+            deduped.set(entity.entityId, entity);
+            continue;
+        }
+        deduped.set(entity.entityId, {
+            entityId: entity.entityId,
+            contextEdgeTypeId: existing.contextEdgeTypeId ?? entity.contextEdgeTypeId,
+            position: existing.position ?? entity.position,
+        });
+    }
+
+    // Pass 2: sort by position (nulls last) and route into buckets.
+    const sorted = Array.from(deduped.values()).sort((a, b) => {
         if (a.position === null && b.position === null) return 0;
         if (a.position === null) return 1;
         if (b.position === null) return -1;
         return a.position.localeCompare(b.position);
     });
 
-    // 2. Deduplicate (first occurrence wins)
-    const seen = new Set<string>();
     const blocks: string[] = [];
     const dynamicGroups = new Map<string, string[]>();
 
     for (const entity of sorted) {
-        if (seen.has(entity.entityId)) continue;
-        seen.add(entity.entityId);
-
-        // 3. Determine effective type (null → fallback)
+        // null contextEdgeTypeId means fallback discovery only.
         const typeId = entity.contextEdgeTypeId ?? fallbackTypeId;
 
-        // 4. Route to static blocks or dynamic group
         if (typeId === BLOCKS) {
             blocks.push(entity.entityId);
         } else {
@@ -328,9 +341,7 @@ function groupEntitiesByContext(
         }
     }
 
-    // 5. Build sorted groupKeys for discoverability
     const groupKeys = Array.from(dynamicGroups.keys()).sort();
-
     return { blocks, dynamicGroups, groupKeys };
 }
 ```
@@ -398,14 +409,19 @@ const typeId = entity.contextEdgeTypeId ?? fallbackTypeId;
 
 ### Entity Deduplication
 
-**Decision**: First occurrence wins when the same entity appears multiple times.
+**Decision**: Context discovery wins over BLOCKS-relation fallback. When both discovery paths surface the same entity, the merged record inherits the non-null `contextEdgeTypeId` and the non-null `position`.
 
 ```typescript
-if (seen.has(entity.entityId)) continue;
-seen.add(entity.entityId);
+deduped.set(entity.entityId, {
+    entityId: entity.entityId,
+    contextEdgeTypeId: existing.contextEdgeTypeId ?? entity.contextEdgeTypeId,
+    position: existing.position ?? entity.position,
+});
 ```
 
-**Rationale**: An entity might be discovered via both context metadata AND relation fallback. We keep the first occurrence (which has context info if available) and skip duplicates.
+**Rationale**: The RFC specifies `edges[0].type_id` as the grouping key, so an entity tagged with context metadata must land under its dynamic key even if it's also reachable via a BLOCKS relation. Inheriting position from whichever entry has one preserves block ordering when context-discovery entries (which lack position) collide with relation-discovery entries (which carry it).
+
+**Non-context behavior unchanged**: Diffs without any context metadata go through the pure BLOCKS-fallback path — all entries arrive with `contextEdgeTypeId: null`, are deduped by entityId, sorted by position, and land in `blocks`. This matches the pre-RFC behavior exactly.
 
 ### Position-Based Ordering
 
@@ -891,7 +907,7 @@ Note: `type-a` is not in `groupKeys` because its content is unchanged.
 
 ## Test Coverage
 
-### Grouping Tests (17 tests)
+### Grouping Tests (21 tests)
 
 - Empty input handling
 - BLOCKS context grouping to static `blocks` array
@@ -944,3 +960,65 @@ Note: `type-a` is not in `groupKeys` because its content is unchanged.
 - Hybrid mode (blocks + dynamic)
 - groupKeys alphabetical sorting
 - Name fallback behavior
+
+## Known Gaps and Deferred Work
+
+### Delete-with-Context Attribution
+
+The `Grc20Op::DeleteRelation` indexer path does not write a tombstone version
+row carrying the edit's context. The live `relations` row is removed before
+the version table is touched, so by the time `insert_relation_versions` runs
+the pre-delete state is unrecoverable in the same transaction. As a result,
+relations deleted under a contextual edit appear in diffs only via the
+closure of `valid_to_key` on the existing version row — `queryContextEntities`
+does not surface them under their context group.
+
+Fixing this requires either fetching the pre-delete state up the call chain
+or moving the version-write to run before the live-table delete. Tracked as
+follow-up work; not blocking for the create- and update-relation paths which
+this RFC fully covers.
+
+### Response-Size Caps and Truncation
+
+The current implementation has **no caps** on the number of entities discovered, the number of dynamic groups, text diff length, or final response size. This is adequate for typical edits but creates a DoS surface for pathological inputs:
+
+- An adversarial edit authoring 10k+ distinct `context` entries could inflate a single diff to arbitrary size.
+- A single text block with a very large markdown payload forces `diffWords` into quadratic work.
+- A root entity with a very large `context_root_id` fan-out returns an unbounded row set from the database.
+
+Future hardening — to be scoped and implemented separately — should introduce layered caps with a visible `truncated` flag rather than silent cutoff:
+
+| Layer | Proposed cap | Signal |
+|---|---|---|
+| DB row fetch (`queryContextEntities`) | `LIMIT 10_001` with overflow detection | `contextRowLimit` |
+| DB row fetch (`queryBlocksRelationEntities`) | `LIMIT 10_001` with overflow detection | `relationRowLimit` |
+| Per-group children in grouping | 1000 | `childrenPerGroupLimit` |
+| Distinct dynamic group keys | 100 | `groupKeyLimit` |
+| `computeTextDiff` inputs | 400k combined chars; fall back to `{removed, added}` chunk pair | `textDiffCharLimit` |
+| Final serialized JSON size | 4 MB; return HTTP 413 | 413 response |
+
+Response-shape additions would be:
+
+```ts
+interface GroupedEntityDiff {
+    // ...existing fields
+    truncated: boolean;           // true if any cap was hit
+    truncationReasons: string[];  // sorted list of reason codes
+}
+```
+
+Overflow semantics should be "drop silently within a group, surface a reason code at the top level" — consumers render partial results with a banner rather than seeing an error. The response-size 4 MB ceiling is the only hard failure (413), reserved for pathological cases where even truncated output wouldn't fit.
+
+A prototype implementation was drafted and reverted in favor of shipping the context-aware grouping without behavior changes for non-context diffs; see git history for reference.
+
+### Pagination
+
+The RFC does not call for cursor pagination, and the diff endpoint is framed as "render the full diff inline on the entity page". If caps prove insufficient and we need to page through context-aware groups:
+
+- Introduce `?cursor=` query parameter and `nextCursor?: string` response field.
+- Cursor ordering would need a stable secondary sort (e.g., `(groupKey, entityId)`) because `position` can be null.
+- This is deferred until observed demand — caps + truncation are strictly simpler for the renderer-inline UX.
+
+### Cross-Space Context Edges
+
+Context queries are currently scoped to the request's `spaceId`, matching the existing versioned-diff scoping. A context in space A will not surface children that live in space B. The RFC does not cover cross-space diffs; if we later need them, the query would drop the `space_id` filter and the response would need to disambiguate children by `spaceId`.

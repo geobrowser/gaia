@@ -30,7 +30,7 @@ COPY sdk ./sdk
 # For local dev, pass --build-arg CARGO_FEATURES="--features search-indexer-repository/auto_index_creation"
 # Pin dependency versions to the workspace lockfile. Without it every image
 # build re-resolves crates from scratch and drifts with crates.io (e.g.
-# sentry-types 0.46.2 vs time broke all Rust image builds, 2026-06-12).
+# sentry-types 0.46.2 vs time 0.3.48 broke all Rust image builds, 2026-06-12).
 COPY Cargo.lock ./search-indexer/Cargo.lock
 
 WORKDIR /app/search-indexer

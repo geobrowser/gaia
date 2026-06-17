@@ -135,6 +135,35 @@ Inputs:
 - `contexts` for edits in the diff window (GRC-20 context extension)
 - `changedEntityIds` derived from the diff (see below)
 
+### Implementation note: persisted-context model
+
+The runtime algorithm described above was simplified during implementation by
+persisting context columns directly on each version row (see
+`docs/specs/versioned-diffing.md` for the full data model). Instead of
+matching contexts at diff time by walking edges, the indexer extracts
+`(root_id, first_edge_type_id)` at write time and stores those two values as
+columns on `value_versions` and `relation_versions`. Diff queries then locate
+candidate entities with a single index seek:
+
+```sql
+-- Values
+SELECT v.entity_id FROM value_versions v
+WHERE v.context_root_id = $rootEntityId AND v.context_edge_type_id IS NOT NULL ...
+
+-- Relations: from_entity_id is the changed child (the relation's owner),
+-- not to_entity_id (which is the relation's target — different dimension).
+SELECT r.from_entity_id FROM relation_versions r
+WHERE r.context_root_id = $rootEntityId AND r.context_edge_type_id IS NOT NULL ...
+```
+
+The `groupKey = edges[0].type_id` rule still applies — `context_edge_type_id`
+on the row IS the first edge's type id. The `last ContextEdge.to_entity_id ==
+changedEntityId` matching predicate from the original prose is implicit:
+for value rows the changed entity IS `entity_id`; for relation rows it IS
+`from_entity_id`. No edge walk is needed at query time.
+
+#### Original prose (pre-implementation)
+
 Steps:
 1) Build a set of `changedEntityIds`:
    - Include any entity IDs referenced in `entityDiff.blocks` (block entity IDs).

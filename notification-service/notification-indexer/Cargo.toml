@@ -8,6 +8,8 @@ description = "Notification indexer that consumes governance events from Kafka a
 hermes-schema = { path = "../../hermes-schema" }
 hermes-instrumentation = { path = "../../hermes-instrumentation" }
 hermes-kafka = { path = "../../hermes-kafka" }
+# Canonical knowledge-graph system/content IDs.
+sdk = { path = "../../sdk" }
 grc-20 = "0.4.1"
 rdkafka = { version = "0.38.0", features = ["cmake-build", "ssl", "zstd"] }
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "net"] }

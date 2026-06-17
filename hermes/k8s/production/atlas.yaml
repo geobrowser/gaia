@@ -17,7 +17,7 @@ spec:
     spec:
       restartPolicy: Always
       imagePullSecrets:
-        - name: regcred
+        - name: geo
       containers:
         - name: atlas
           image: registry.digitalocean.com/geo/atlas:latest
@@ -75,7 +75,7 @@ spec:
             - name: ATLAS_INDEXER_ID
               value: "atlas-production"
             - name: ATLAS_RUNTIME_COMPATIBILITY_MARKER
-              value: "atlas-v1"
+              value: "atlas-v2"
             - name: ATLAS_FAIL_OPEN_BOUND
               value: "10"
             - name: ATLAS_CHECKPOINT_RETRY_ATTEMPTS

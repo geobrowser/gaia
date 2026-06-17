@@ -156,7 +156,7 @@ kubectl logs -n search -f job/opensearch-delete-index
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `OPENSEARCH_URL` | OpenSearch connection URL | `http://localhost:9200` |
-| `ENVIRONMENT` | Environment name (`staging` or `production`). Staging adds `staging_` prefix to index names. | `production` |
+| `ENVIRONMENT` | Environment name (`staging`, `testnet`, or `production`). `staging`/`testnet` add a `staging_`/`testnet_` prefix to index names; `production` adds none. | `production` |
 | `INDEX_ALIAS` | Base index alias name | `entities` |
 | `RUST_LOG` | Log level (trace, debug, info, warn, error) | `info` |
 

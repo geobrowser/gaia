@@ -225,7 +225,7 @@ const REVERT_ERROR_NAMES = new Set([
 /** Fallback string patterns when structured error types aren't available */
 const REVERT_MESSAGE_PATTERNS = ["revert", "execution reverted", "CALL_EXCEPTION", "UserOperation reverted"]
 
-function classifyAsRevert(error: unknown, errorName: string, message: string): boolean {
+export function classifyAsRevert(error: unknown, errorName: string, message: string): boolean {
 	// 1. Check structured error name (most reliable)
 	if (REVERT_ERROR_NAMES.has(errorName)) return true
 

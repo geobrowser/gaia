@@ -16,10 +16,6 @@ pub enum EdgeType {
     Related,
     /// Topic-based membership — carries the topic that created this edge
     Topic { topic_id: TopicId },
-    /// Editor membership (canonical-granting)
-    Editor,
-    /// Member membership (canonical-granting)
-    Member,
 }
 
 /// A node in the traversal tree

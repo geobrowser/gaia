@@ -624,7 +624,10 @@ function extractAffectedEntities(db: Database, ops: Op[]): Effect.Effect<Normali
  * GRC-20 v2 decoded values have the format: {type: "text", value: "..."}
  * We need to convert this to our VersionedValue format.
  */
-function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, spaceId: NormalizedUuid): VersionedValue {
+export function propertyValueToVersionedValue(
+	pv: {property: Id; value: unknown},
+	spaceId: NormalizedUuid,
+): VersionedValue {
 	const propertyId = idToUuid(pv.property)
 	const value = pv.value as {type: string; value: unknown}
 
@@ -683,13 +686,20 @@ function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, space
 			result.schedule = value.value
 			break
 		case "point": {
-			const pt = value.value as {lon: number; lat: number; alt?: number}
+			// GRC-20 decodes point coordinates at the top level of the value
+			// ({type: "point", lat, lon, alt?}), NOT nested under `value.value`.
+			// Reading `value.value` yielded `undefined` and threw on `.alt`,
+			// 500-ing the diff endpoint for any edit containing a point value.
+			// Serialize as "lat,lon[,alt]" to match the indexer's stored format.
+			const pt = value as unknown as {lon: number; lat: number; alt?: number}
 			result.point = pt.alt !== undefined ? `${pt.lat},${pt.lon},${pt.alt}` : `${pt.lat},${pt.lon}`
 			break
 		}
 		case "rect": {
-			const rect = value.value as {minLon: number; minLat: number; maxLon: number; maxLat: number}
-			result.rect = `${rect.minLon},${rect.minLat},${rect.maxLon},${rect.maxLat}`
+			// Same top-level shape as point ({type: "rect", minLat, minLon, ...}).
+			// Serialize as "minLat,minLon,maxLat,maxLon" to match the indexer.
+			const rect = value as unknown as {minLon: number; minLat: number; maxLon: number; maxLat: number}
+			result.rect = `${rect.minLat},${rect.minLon},${rect.maxLat},${rect.maxLon}`
 			break
 		}
 		case "embedding":

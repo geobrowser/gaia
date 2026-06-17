@@ -17,6 +17,11 @@ COPY hermes-instrumentation ./hermes-instrumentation
 COPY notification-service/delivery-worker ./notification-service/delivery-worker
 
 # Build from the crate directory (standalone, not as workspace member)
+# Pin dependency versions to the workspace lockfile. Without it every image
+# build re-resolves crates from scratch and drifts with crates.io (e.g.
+# sentry-types 0.46.2 vs time 0.3.48 broke all Rust image builds, 2026-06-12).
+COPY Cargo.lock ./notification-service/delivery-worker/Cargo.lock
+
 WORKDIR /app/notification-service/delivery-worker
 ENV SQLX_OFFLINE=true
 RUN cargo build --release

@@ -348,7 +348,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 					},
 					{
 						action_type: "UnsetTopic",
-						target_id: null,
+						target_id: "990e8400-e29b-41d4-a716-446655440000",
 						content_uri: null,
 						content_id: null,
 						quorum: null,
@@ -371,6 +371,35 @@ describe("GET /proposals/space/:spaceId/status", () => {
 				},
 				{
 					actionType: "UNSET_TOPIC",
+					targetTopicId: "990e8400-e29b-41d4-a716-446655440000",
+				},
+			])
+		})
+
+		it("maps UNSET_TOPIC with null target_id to UNKNOWN", async () => {
+			const row = makeDbProposalRow({
+				actions_json: [
+					{
+						action_type: "UnsetTopic",
+						target_id: null,
+						content_uri: null,
+						content_id: null,
+						quorum: null,
+						fast_threshold: null,
+						slow_threshold: null,
+						duration: null,
+					},
+				],
+			})
+			db.execute.mockResolvedValueOnce({rows: [row]})
+
+			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status")
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body.proposals[0].actions).toEqual([
+				{
+					actionType: "UNKNOWN",
 				},
 			])
 		})

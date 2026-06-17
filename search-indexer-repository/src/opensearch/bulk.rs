@@ -83,8 +83,9 @@ fn serialize_bulk_operations<B: Serialize>(
 ) -> Result<Bytes, SearchIndexError> {
     let mut buf = bytes::BytesMut::new();
     for op in &operations {
-        Body::write(op, &mut buf)
-            .map_err(|e| SearchIndexError::bulk_index(format!("Failed to serialize bulk op: {e}")))?;
+        Body::write(op, &mut buf).map_err(|e| {
+            SearchIndexError::bulk_index(format!("Failed to serialize bulk op: {e}"))
+        })?;
         // BulkOperation::write already appends newlines, but guard against missing trailing newline
         if buf.last() != Some(&b'\n') {
             buf.extend_from_slice(b"\n");
@@ -164,7 +165,10 @@ pub async fn execute_bulk<B: Serialize>(
                 .await
                 .map_err(|e| SearchIndexError::parse(e.to_string()))?;
 
-            let took_ms = response_body.get("took").and_then(|v| v.as_u64()).unwrap_or(0);
+            let took_ms = response_body
+                .get("took")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             let mut summary = parse_bulk_response(&response_body, metas, action);
             summary.wall_ms = wall_ms;
             summary.took_ms = took_ms;
@@ -270,9 +274,9 @@ pub fn parse_bulk_response(
                     || meta.operation_type == "UpdateSpaceScoreByDoc"
                     || meta.operation_type == "UpdateEntitySpaceScore"
                     || meta.operation_type == "UpdateSpaceTopicEntityIdByDoc"
+                    || meta.operation_type == "ClearSpaceTopicEntityIdByDoc"
                     || meta.operation_type == "UpdateInCanonicalGraphByDoc");
-            let is_success =
-                (200..300).contains(&(status as u16)) || is_not_found_ok;
+            let is_success = (200..300).contains(&(status as u16)) || is_not_found_ok;
 
             if is_success {
                 (true, None)

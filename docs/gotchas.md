@@ -74,3 +74,7 @@ In Postgraphile we have a plugin which automatically strips dashes from response
 In order to make custom Postgraphile resolvers you need to write Postgres stored procedures. We have several stored procedures for things like Space front pages, queryable Properties, etc. You can find these in the drizzle schema migrations.
 
 There may be some stored procedures that aren't really used anymore. We should audit these.
+
+### Drizzle migrations diverge across dev/main
+
+`dev` and `main` each auto-migrate their own database, so if both branches generate a migration at the same index (e.g. two different `0062_*`) in parallel, the branches can't be merged cleanly — duplicate files, a conflicting `_journal.json`, and a broken snapshot chain. Avoid it by keeping migration creation linear (`dev` → `main`), and when something reaches `main` directly, backport `main` → `dev` promptly. See [Drizzle Migrations Across Branches](runbooks/staging-production.md#drizzle-migrations-across-branches) for the avoid/fix playbook.

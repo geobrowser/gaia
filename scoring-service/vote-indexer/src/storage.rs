@@ -169,16 +169,19 @@ impl Storage {
             downvotes.push(count.downvotes);
         }
 
+        // updated_at uses clock_timestamp() (the statement's wall-clock time, closer
+        // to the actual write) rather than now() (fixed at transaction start).
         let query = r#"
-            INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes)
-            SELECT object_id, object_type, space_id, upvotes, downvotes
+            INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes, updated_at)
+            SELECT object_id, object_type, space_id, upvotes, downvotes, clock_timestamp()
             FROM UNNEST(
                 $1::uuid[], $2::smallint[], $3::uuid[], $4::bigint[], $5::bigint[]
             ) AS t(object_id, object_type, space_id, upvotes, downvotes)
             ON CONFLICT (object_id, object_type, space_id)
             DO UPDATE SET
                 upvotes = EXCLUDED.upvotes,
-                downvotes = EXCLUDED.downvotes
+                downvotes = EXCLUDED.downvotes,
+                updated_at = clock_timestamp()
         "#;
 
         sqlx::query(query)
@@ -211,8 +214,8 @@ impl Storage {
             return Ok(());
         }
 
-        let property_id = Uuid::parse_str(SCORE_PROPERTY_ID)
-            .expect("SCORE_PROPERTY_ID is a valid UUID constant");
+        let property_id =
+            Uuid::parse_str(SCORE_PROPERTY_ID).expect("SCORE_PROPERTY_ID is a valid UUID constant");
 
         let mut ids = Vec::with_capacity(rows.len());
         let mut entity_ids = Vec::with_capacity(rows.len());

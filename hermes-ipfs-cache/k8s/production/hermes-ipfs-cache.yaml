@@ -20,7 +20,7 @@ spec:
         runAsUser: 1001
         fsGroup: 1001
       imagePullSecrets:
-        - name: regcred
+        - name: geo
       volumes:
         - name: ssl-certs
           emptyDir: {}
@@ -83,7 +83,7 @@ spec:
                   name: hermes-ipfs-cache-secrets
                   key: SUBSTREAMS_API_TOKEN
             - name: SUBSTREAMS_START_BLOCK
-              value: "82656"
+              value: "138000"
             - name: IPFS_GATEWAY_URL
               valueFrom:
                 secretKeyRef:

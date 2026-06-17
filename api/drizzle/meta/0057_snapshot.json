@@ -1,5 +1,5 @@
 {
-  "id": "30c74da2-0566-4a55-85a8-697d3bd69950",
+  "id": "35d7f3c5-6562-4096-955a-4543c4479274",
   "prevId": "8844e0b6-b70a-474f-b092-307b7d002c9e",
   "version": "7",
   "dialect": "postgresql",
@@ -115,6 +115,12 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": true
+        },
+        "emission_baseline_blob": {
+          "name": "emission_baseline_blob",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": false
         },
         "updated_at": {
           "name": "updated_at",
@@ -835,21 +841,15 @@
       "name": "proposal_actions",
       "schema": "",
       "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
         "proposal_id": {
           "name": "proposal_id",
           "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "proposal_version": {
-          "name": "proposal_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "index": {
-          "name": "index",
-          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -904,36 +904,6 @@
         },
         "duration": {
           "name": "duration",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "partial_percentage_support_threshold": {
-          "name": "partial_percentage_support_threshold",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "universal_percentage_support_threshold": {
-          "name": "universal_percentage_support_threshold",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "flat_support_threshold": {
-          "name": "flat_support_threshold",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "disable_fast_path_access_for_new_members": {
-          "name": "disable_fast_path_access_for_new_members",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "execution_grace_period": {
-          "name": "execution_grace_period",
           "type": "bigint",
           "primaryKey": false,
           "notNull": false
@@ -999,32 +969,21 @@
         }
       },
       "foreignKeys": {
-        "proposal_actions_version_fk": {
-          "name": "proposal_actions_version_fk",
+        "proposal_actions_proposal_id_proposals_id_fk": {
+          "name": "proposal_actions_proposal_id_proposals_id_fk",
           "tableFrom": "proposal_actions",
-          "tableTo": "proposal_versions",
+          "tableTo": "proposals",
           "columnsFrom": [
-            "proposal_id",
-            "proposal_version"
+            "proposal_id"
           ],
           "columnsTo": [
-            "proposal_id",
-            "proposal_version"
+            "id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
-      "compositePrimaryKeys": {
-        "proposal_actions_proposal_id_proposal_version_index_pk": {
-          "name": "proposal_actions_proposal_id_proposal_version_index_pk",
-          "columns": [
-            "proposal_id",
-            "proposal_version",
-            "index"
-          ]
-        }
-      },
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
@@ -1070,214 +1029,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.proposal_versions": {
-      "name": "proposal_versions",
-      "schema": "",
-      "columns": {
-        "proposal_id": {
-          "name": "proposal_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "proposal_version": {
-          "name": "proposal_version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "voting_mode": {
-          "name": "voting_mode",
-          "type": "votingMode",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "start_time": {
-          "name": "start_time",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "end_time": {
-          "name": "end_time",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "quorum": {
-          "name": "quorum",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "threshold": {
-          "name": "threshold",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "partial_percentage_support_threshold": {
-          "name": "partial_percentage_support_threshold",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "universal_percentage_support_threshold": {
-          "name": "universal_percentage_support_threshold",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "flat_support_threshold": {
-          "name": "flat_support_threshold",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "execute_by": {
-          "name": "execute_by",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "executed_at": {
-          "name": "executed_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "yes_count": {
-          "name": "yes_count",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "no_count": {
-          "name": "no_count",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "abstain_count": {
-          "name": "abstain_count",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "version_created_at": {
-          "name": "version_created_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "version_created_at_block": {
-          "name": "version_created_at_block",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "proposal_versions_proposal_version_desc_idx": {
-          "name": "proposal_versions_proposal_version_desc_idx",
-          "columns": [
-            {
-              "expression": "proposal_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "proposal_version",
-              "isExpression": false,
-              "asc": false,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "proposal_versions_end_time_idx": {
-          "name": "proposal_versions_end_time_idx",
-          "columns": [
-            {
-              "expression": "end_time",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "proposal_versions_start_time_idx": {
-          "name": "proposal_versions_start_time_idx",
-          "columns": [
-            {
-              "expression": "start_time",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "proposal_versions_proposal_id_proposals_id_fk": {
-          "name": "proposal_versions_proposal_id_proposals_id_fk",
-          "tableFrom": "proposal_versions",
-          "tableTo": "proposals",
-          "columnsFrom": [
-            "proposal_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "proposal_versions_proposal_id_proposal_version_pk": {
-          "name": "proposal_versions_proposal_id_proposal_version_pk",
-          "columns": [
-            "proposal_id",
-            "proposal_version"
-          ]
-        }
-      },
-      "uniqueConstraints": {
-        "proposal_versions_idempotency_key": {
-          "name": "proposal_versions_idempotency_key",
-          "nullsNotDistinct": false,
-          "columns": [
-            "proposal_id",
-            "version_created_at_block"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.proposal_votes": {
       "name": "proposal_votes",
       "schema": "",
@@ -1285,12 +1036,6 @@
         "proposal_id": {
           "name": "proposal_id",
           "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "proposal_version": {
-          "name": "proposal_version",
-          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -1374,6 +1119,19 @@
         }
       },
       "foreignKeys": {
+        "proposal_votes_proposal_id_proposals_id_fk": {
+          "name": "proposal_votes_proposal_id_proposals_id_fk",
+          "tableFrom": "proposal_votes",
+          "tableTo": "proposals",
+          "columnsFrom": [
+            "proposal_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "proposal_votes_space_id_spaces_id_fk": {
           "name": "proposal_votes_space_id_spaces_id_fk",
           "tableFrom": "proposal_votes",
@@ -1386,29 +1144,13 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
-        },
-        "proposal_votes_version_fk": {
-          "name": "proposal_votes_version_fk",
-          "tableFrom": "proposal_votes",
-          "tableTo": "proposal_versions",
-          "columnsFrom": [
-            "proposal_id",
-            "proposal_version"
-          ],
-          "columnsTo": [
-            "proposal_id",
-            "proposal_version"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
-        "proposal_votes_proposal_id_proposal_version_voter_id_pk": {
-          "name": "proposal_votes_proposal_id_proposal_version_voter_id_pk",
+        "proposal_votes_proposal_id_voter_id_pk": {
+          "name": "proposal_votes_proposal_id_voter_id_pk",
           "columns": [
             "proposal_id",
-            "proposal_version",
             "voter_id"
           ]
         }
@@ -1440,6 +1182,43 @@
           "primaryKey": false,
           "notNull": true
         },
+        "voting_mode": {
+          "name": "voting_mode",
+          "type": "votingMode",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "start_time": {
+          "name": "start_time",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "end_time": {
+          "name": "end_time",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "quorum": {
+          "name": "quorum",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "threshold": {
+          "name": "threshold",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "executed_at": {
+          "name": "executed_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "text",
@@ -1452,12 +1231,32 @@
           "primaryKey": false,
           "notNull": true
         },
-        "current_version": {
-          "name": "current_version",
-          "type": "integer",
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "yes_count": {
+          "name": "yes_count",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true,
-          "default": 1
+          "default": 0
+        },
+        "no_count": {
+          "name": "no_count",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "abstain_count": {
+          "name": "abstain_count",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         }
       },
       "indexes": {
@@ -1517,6 +1316,48 @@
             },
             {
               "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "proposals_space_end_time_idx": {
+          "name": "proposals_space_end_time_idx",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "end_time",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "proposals_space_start_time_idx": {
+          "name": "proposals_space_start_time_idx",
+          "columns": [
+            {
+              "expression": "space_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "start_time",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -2106,93 +1947,6 @@
       },
       "indexes": {},
       "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.space_voting_settings": {
-      "name": "space_voting_settings",
-      "schema": "",
-      "columns": {
-        "space_id": {
-          "name": "space_id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "partial_percentage_support_threshold": {
-          "name": "partial_percentage_support_threshold",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "universal_percentage_support_threshold": {
-          "name": "universal_percentage_support_threshold",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "flat_support_threshold": {
-          "name": "flat_support_threshold",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "quorum": {
-          "name": "quorum",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "duration": {
-          "name": "duration",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "disable_fast_path_access_for_new_members": {
-          "name": "disable_fast_path_access_for_new_members",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "execution_grace_period": {
-          "name": "execution_grace_period",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at_block": {
-          "name": "updated_at_block",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "space_voting_settings_space_id_spaces_id_fk": {
-          "name": "space_voting_settings_space_id_spaces_id_fk",
-          "tableFrom": "space_voting_settings",
-          "tableTo": "spaces",
-          "columnsFrom": [
-            "space_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
@@ -3551,16 +3305,7 @@
   "sequences": {},
   "roles": {},
   "policies": {},
-  "views": {
-    "public.proposals_current": {
-      "columns": {},
-      "definition": "select \"proposals\".\"id\", \"proposals\".\"space_id\", \"proposals\".\"proposed_by\", \"proposals\".\"created_at\", \"proposals\".\"created_at_block\", \"proposals\".\"current_version\", \"proposal_versions\".\"proposal_id\", \"proposal_versions\".\"proposal_version\", \"proposal_versions\".\"voting_mode\", \"proposal_versions\".\"start_time\", \"proposal_versions\".\"end_time\", \"proposal_versions\".\"quorum\", \"proposal_versions\".\"threshold\", \"proposal_versions\".\"partial_percentage_support_threshold\", \"proposal_versions\".\"universal_percentage_support_threshold\", \"proposal_versions\".\"flat_support_threshold\", \"proposal_versions\".\"execute_by\", \"proposal_versions\".\"executed_at\", \"proposal_versions\".\"name\", \"proposal_versions\".\"yes_count\", \"proposal_versions\".\"no_count\", \"proposal_versions\".\"abstain_count\", \"proposal_versions\".\"version_created_at\", \"proposal_versions\".\"version_created_at_block\" from \"proposals\" inner join \"proposal_versions\" on \"proposal_versions\".\"proposal_id\" = \"proposals\".\"id\" AND \"proposal_versions\".\"proposal_version\" = \"proposals\".\"current_version\"",
-      "name": "proposals_current",
-      "schema": "public",
-      "isExisting": false,
-      "materialized": false
-    }
-  },
+  "views": {},
   "_meta": {
     "columns": {},
     "schemas": {},

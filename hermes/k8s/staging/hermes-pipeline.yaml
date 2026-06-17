@@ -23,7 +23,7 @@ spec:
         runAsUser: 1001
         fsGroup: 1001
       imagePullSecrets:
-        - name: regcred
+        - name: geo
       volumes:
         - name: ssl-certs
           emptyDir: {}
@@ -107,6 +107,8 @@ spec:
                 secretKeyRef:
                   name: hermes-ipfs-cache-secrets
                   key: SUBSTREAMS_API_TOKEN
+            - name: SUBSTREAMS_START_BLOCK
+              value: "138000"
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:

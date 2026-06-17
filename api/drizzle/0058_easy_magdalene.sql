@@ -1,1 +1,0 @@
-CREATE VIEW "public"."space_editor_counts" AS (SELECT space_id, COUNT(*)::bigint AS total_editors FROM editors GROUP BY space_id);

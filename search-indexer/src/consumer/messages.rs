@@ -255,16 +255,29 @@ impl ScoreEvent {
 // Space Topic Events - from space.topics Kafka topic
 // ============================================================================
 
+/// Whether a space topic event is a declaration or a removal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpaceTopicEventKind {
+    /// Space declared a topic — set the topic entity as the space's representative.
+    Declared,
+    /// Space removed its topic — clear the mapping in cache and index.
+    Removed,
+}
+
 /// A space topic event received from the space.topics Kafka topic.
 ///
 /// When a space declares a topic, the topic entity ID serves as the
 /// representative entity for the space (containing its name, description, etc.).
+/// When a space removes its topic, the mapping is cleared but the topic entity
+/// document is preserved (it may carry knowledge-edit content for that entity).
 #[derive(Debug, Clone)]
 pub struct SpaceTopicEvent {
-    /// The space that declared the topic.
+    /// The space that declared or removed its topic.
     pub space_id: Uuid,
-    /// The topic entity ID (represents the space in the entity index).
+    /// The topic entity ID. For `Removed`, this is the topic being cleared.
     pub topic_entity_id: Uuid,
+    /// Whether this is a declaration or a removal.
+    pub kind: SpaceTopicEventKind,
 }
 
 // ============================================================================
