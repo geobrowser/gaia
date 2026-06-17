@@ -132,7 +132,9 @@ describe("V2 detection SQL", () => {
 		// Any threshold compare must be a V2 field (partial/universal/flat),
 		// not the bare `threshold`.
 		for (const m of matches) {
-			expect(m).toMatch(/partial_percentage_support_threshold|universal_percentage_support_threshold|flat_support_threshold/)
+			expect(m).toMatch(
+				/partial_percentage_support_threshold|universal_percentage_support_threshold|flat_support_threshold/,
+			)
 		}
 	})
 

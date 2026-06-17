@@ -83,15 +83,8 @@ export function computeProposalStatus(
 	// Skip the check when we can't evaluate it safely: totalEditors = 0 means
 	// the space has no indexed editors yet; universal = 0 means no configured
 	// early-execution threshold.
-	if (
-		!isVotingEnded &&
-		proposal.totalEditors > 0n &&
-		proposal.universalPercentageSupportThreshold > 0n
-	) {
-		const required = ceilDiv(
-			proposal.universalPercentageSupportThreshold * proposal.totalEditors,
-			RATIO_BASE,
-		)
+	if (!isVotingEnded && proposal.totalEditors > 0n && proposal.universalPercentageSupportThreshold > 0n) {
+		const required = ceilDiv(proposal.universalPercentageSupportThreshold * proposal.totalEditors, RATIO_BASE)
 		if (proposal.yesCount >= required) {
 			return {
 				status: "EXECUTABLE",
@@ -104,8 +97,7 @@ export function computeProposalStatus(
 
 	// Slow path — late execution (after voting ends).
 	const partial = proposal.partialPercentageSupportThreshold
-	const isThresholdReached =
-		(RATIO_BASE - partial) * proposal.yesCount > partial * proposal.noCount
+	const isThresholdReached = (RATIO_BASE - partial) * proposal.yesCount > partial * proposal.noCount
 
 	if (!isVotingEnded) {
 		return {

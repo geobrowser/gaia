@@ -80,7 +80,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Validate environment value
-    if cli.environment != "staging" && cli.environment != "testnet" && cli.environment != "production" {
+    if cli.environment != "staging"
+        && cli.environment != "testnet"
+        && cli.environment != "production"
+    {
         error!(
             environment = %cli.environment,
             "ENVIRONMENT must be 'staging', 'testnet' or 'production'"

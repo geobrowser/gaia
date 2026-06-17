@@ -592,15 +592,9 @@ export const proposalVersions = pgTable(
 		 * this constraint to make replays a no-op (and return the already-assigned
 		 * version number to the caller).
 		 */
-		unique("proposal_versions_idempotency_key").on(
-			table.proposalId,
-			table.versionCreatedAtBlock,
-		),
+		unique("proposal_versions_idempotency_key").on(table.proposalId, table.versionCreatedAtBlock),
 		// "Get the latest version for a proposal" — descending so the first hit is current.
-		index("proposal_versions_proposal_version_desc_idx").on(
-			table.proposalId,
-			table.proposalVersion.desc(),
-		),
+		index("proposal_versions_proposal_version_desc_idx").on(table.proposalId, table.proposalVersion.desc()),
 		// Supports "list proposals ordered by end_time of current version" type queries.
 		index("proposal_versions_end_time_idx").on(table.endTime),
 		index("proposal_versions_start_time_idx").on(table.startTime),
@@ -660,11 +654,7 @@ export const proposalActions = pgTable(
 		index("proposal_actions_action_type_idx").on(table.actionType),
 		// Composite index for the active proposal check query (hasActiveProposalForTarget)
 		// which filters by (proposal_id, action_type, target_id) in a correlated EXISTS subquery
-		index("proposal_actions_proposal_action_target_idx").on(
-			table.proposalId,
-			table.actionType,
-			table.targetId,
-		),
+		index("proposal_actions_proposal_action_target_idx").on(table.proposalId, table.actionType, table.targetId),
 	],
 )
 
