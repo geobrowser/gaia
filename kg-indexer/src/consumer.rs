@@ -294,10 +294,7 @@ pub fn parse_message(
                     let voting_settings_updated =
                         hermes_schema::pb::governance::HermesVotingSettingsUpdated::decode(payload)
                             .map_err(|e| {
-                                IndexerError::decode(format!(
-                                    "HermesVotingSettingsUpdated: {}",
-                                    e
-                                ))
+                                IndexerError::decode(format!("HermesVotingSettingsUpdated: {}", e))
                             })?;
                     Ok(KgMessage::VotingSettingsUpdated(voting_settings_updated))
                 }
@@ -350,8 +347,12 @@ mod tests {
         };
         let payload = msg.encode_to_vec();
 
-        let parsed =
-            parse_message("space.governance", &payload, Some("VOTING_SETTINGS_UPDATED")).unwrap();
+        let parsed = parse_message(
+            "space.governance",
+            &payload,
+            Some("VOTING_SETTINGS_UPDATED"),
+        )
+        .unwrap();
 
         match parsed {
             KgMessage::VotingSettingsUpdated(event) => {

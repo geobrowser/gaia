@@ -221,7 +221,10 @@ async fn test_upsert_space_voting_settings_overwrites_on_conflict() {
     .await
     .unwrap();
 
-    assert_eq!(row.0, 999_999, "partial threshold must reflect latest upsert");
+    assert_eq!(
+        row.0, 999_999,
+        "partial threshold must reflect latest upsert"
+    );
     assert_eq!(row.1, 2_000, "updated_at_block must reflect latest upsert");
 
     cleanup_space_voting_settings(&pool, space_id).await;
