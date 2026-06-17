@@ -446,21 +446,13 @@ impl ProposalActionType {
             Self::ProposalActionFlag => "PROPOSAL_ACTION_FLAG",
             Self::ProposalActionUnflag => "PROPOSAL_ACTION_UNFLAG",
             Self::ProposalActionUnflagEditor => "PROPOSAL_ACTION_UNFLAG_EDITOR",
-            Self::ProposalActionUpdateVotingSettings => {
-                "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS"
-            }
+            Self::ProposalActionUpdateVotingSettings => "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS",
             Self::ProposalActionSubspaceVerified => "PROPOSAL_ACTION_SUBSPACE_VERIFIED",
-            Self::ProposalActionSubspaceUnverified => {
-                "PROPOSAL_ACTION_SUBSPACE_UNVERIFIED"
-            }
+            Self::ProposalActionSubspaceUnverified => "PROPOSAL_ACTION_SUBSPACE_UNVERIFIED",
             Self::ProposalActionSubspaceRelated => "PROPOSAL_ACTION_SUBSPACE_RELATED",
             Self::ProposalActionSubspaceUnrelated => "PROPOSAL_ACTION_SUBSPACE_UNRELATED",
-            Self::ProposalActionSubspaceTopicDeclared => {
-                "PROPOSAL_ACTION_SUBSPACE_TOPIC_DECLARED"
-            }
-            Self::ProposalActionSubspaceTopicRemoved => {
-                "PROPOSAL_ACTION_SUBSPACE_TOPIC_REMOVED"
-            }
+            Self::ProposalActionSubspaceTopicDeclared => "PROPOSAL_ACTION_SUBSPACE_TOPIC_DECLARED",
+            Self::ProposalActionSubspaceTopicRemoved => "PROPOSAL_ACTION_SUBSPACE_TOPIC_REMOVED",
             Self::ProposalActionSetTopic => "PROPOSAL_ACTION_SET_TOPIC",
             Self::ProposalActionUnsetTopic => "PROPOSAL_ACTION_UNSET_TOPIC",
         }
@@ -480,18 +472,10 @@ impl ProposalActionType {
             "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS" => {
                 Some(Self::ProposalActionUpdateVotingSettings)
             }
-            "PROPOSAL_ACTION_SUBSPACE_VERIFIED" => {
-                Some(Self::ProposalActionSubspaceVerified)
-            }
-            "PROPOSAL_ACTION_SUBSPACE_UNVERIFIED" => {
-                Some(Self::ProposalActionSubspaceUnverified)
-            }
-            "PROPOSAL_ACTION_SUBSPACE_RELATED" => {
-                Some(Self::ProposalActionSubspaceRelated)
-            }
-            "PROPOSAL_ACTION_SUBSPACE_UNRELATED" => {
-                Some(Self::ProposalActionSubspaceUnrelated)
-            }
+            "PROPOSAL_ACTION_SUBSPACE_VERIFIED" => Some(Self::ProposalActionSubspaceVerified),
+            "PROPOSAL_ACTION_SUBSPACE_UNVERIFIED" => Some(Self::ProposalActionSubspaceUnverified),
+            "PROPOSAL_ACTION_SUBSPACE_RELATED" => Some(Self::ProposalActionSubspaceRelated),
+            "PROPOSAL_ACTION_SUBSPACE_UNRELATED" => Some(Self::ProposalActionSubspaceUnrelated),
             "PROPOSAL_ACTION_SUBSPACE_TOPIC_DECLARED" => {
                 Some(Self::ProposalActionSubspaceTopicDeclared)
             }
