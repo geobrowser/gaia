@@ -449,6 +449,13 @@
       "when": 1781536970769,
       "tag": "0063_context_aware_diff_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1781723659349,
+      "tag": "0064_governance_v2",
+      "breakpoints": true
     }
   ]
 }

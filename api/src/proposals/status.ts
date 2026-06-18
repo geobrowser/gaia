@@ -2,21 +2,30 @@
  * Proposal status computation matching the smart contract logic.
  *
  * This module provides a pure function for computing proposal status,
- * matching the contract's `isSupportThresholdReached()` implementation.
+ * matching the contract's `isSupportThresholdReached()` / `canExecuteProposal()`
+ * V2 implementation.
  */
 
 import type {ProposalListItem, ProposalWithVotes, StatusComputationResult} from "./types"
 import {RATIO_BASE} from "./types"
 
 /**
- * Computes proposal status matching the smart contract's isSupportThresholdReached() logic.
+ * Computes proposal status matching the V2 smart contract logic.
  *
  * This is a PURE function - time is injected to enable deterministic testing.
  *
- * Contract logic:
- * - Fast path: flat threshold (yes > threshold - 1, equivalent to yes >= threshold)
- * - Slow path: percentage threshold with quorum, voting must end first
- *   Formula: (RATIO_BASE - threshold) * yes > threshold * no
+ * Decision order:
+ * 1. Already executed → ACCEPTED
+ * 2. Past `executeBy` deadline → REJECTED
+ * 3. Fast path: `yesCount >= flatSupportThreshold` → EXECUTABLE
+ * 4. Slow-path early execution (before voting ends): when
+ *    `yesCount >= ceil(universalPercentageSupportThreshold × totalEditors / RATIO_BASE)`.
+ * 5. Slow-path late execution (after voting ends): quorum + the classic
+ *    `(RATIO_BASE - partial) × yes > partial × no` ratio.
+ *
+ * Must stay byte-for-byte consistent with the SQL fragments in `queries.ts`
+ * (`sqlIsExecutable` / `sqlIsProposed` / `sqlIsRejected`). The parity tests
+ * in `__tests__/queries.test.ts` validate this — update both sides together.
  *
  * @param proposal - The proposal with aggregated vote counts (using bigint)
  * @param nowSeconds - Current time in seconds (inject for testability)
@@ -26,62 +35,99 @@ export function computeProposalStatus(
 	proposal: ProposalWithVotes | ProposalListItem,
 	nowSeconds: bigint,
 ): StatusComputationResult {
-	// Already executed -> ACCEPTED (regardless of votes)
+	// Already executed -> ACCEPTED (regardless of votes or deadline)
 	if (proposal.executedAt !== null) {
 		return {
 			status: "ACCEPTED",
-			isQuorumReached: true, // Must have been reached to execute
+			isQuorumReached: true,
 			isThresholdReached: true,
+			isEarlyExecutable: false,
+		}
+	}
+
+	// Past the on-chain `executeBy` deadline → REJECTED, regardless of vote outcome.
+	// Null `executeBy` means no deadline (legacy V1 rows).
+	if (proposal.executeBy !== null && nowSeconds > proposal.executeBy) {
+		return {
+			status: "REJECTED",
+			isQuorumReached: false,
+			isThresholdReached: false,
+			isEarlyExecutable: false,
 		}
 	}
 
 	const isVotingEnded = nowSeconds > proposal.endTime
 	const totalVotes = proposal.yesCount + proposal.noCount + proposal.abstainCount
-
-	// Quorum check (applies to both paths, but only enforced in slow path)
 	const isQuorumReached = totalVotes >= proposal.quorum
 
 	if (proposal.votingMode === "Fast") {
-		// Fast path: flat threshold (absolute yes votes needed)
-		// Contract uses `yes > threshold - 1` which is equivalent to `yes >= threshold`
-		// We subtract 1 to match the contract's strict inequality
-		const fastThreshold = proposal.threshold === 0n ? 0n : proposal.threshold - 1n
-		const isThresholdReached = proposal.yesCount > fastThreshold
+		const isThresholdReached = proposal.yesCount >= proposal.flatSupportThreshold
 
 		if (isThresholdReached) {
-			return {status: "EXECUTABLE", isQuorumReached, isThresholdReached}
+			return {
+				status: "EXECUTABLE",
+				isQuorumReached,
+				isThresholdReached,
+				isEarlyExecutable: false,
+			}
 		}
 		return {
 			status: isVotingEnded ? "REJECTED" : "PROPOSED",
 			isQuorumReached,
 			isThresholdReached,
+			isEarlyExecutable: false,
 		}
 	}
 
-	// Slow path: percentage threshold with quorum check
-	// Formula from contract: (RATIO_BASE - threshold) * yes > threshold * no
-	// With RATIO_BASE = 10_000_000 and threshold = 5_000_000 (50%):
-	// 5_000_000 * yes > 5_000_000 * no -> yes > no
-	// Note: A tie (yes == no) results in REJECTED (threshold not reached)
-	const threshold = proposal.threshold
-	const isThresholdReached = (RATIO_BASE - threshold) * proposal.yesCount > threshold * proposal.noCount
-
-	// Must wait for voting period to end before determining outcome
-	if (!isVotingEnded) {
-		// During voting, compute threshold for UI display but status is PROPOSED
-		return {status: "PROPOSED", isQuorumReached, isThresholdReached}
+	// Slow path — early execution (before voting ends).
+	// Skip the check when we can't evaluate it safely: totalEditors = 0 means
+	// the space has no indexed editors yet; universal = 0 means no configured
+	// early-execution threshold.
+	if (!isVotingEnded && proposal.totalEditors > 0n && proposal.universalPercentageSupportThreshold > 0n) {
+		const required = ceilDiv(proposal.universalPercentageSupportThreshold * proposal.totalEditors, RATIO_BASE)
+		if (proposal.yesCount >= required) {
+			return {
+				status: "EXECUTABLE",
+				isQuorumReached,
+				isThresholdReached: true,
+				isEarlyExecutable: true,
+			}
+		}
 	}
 
-	// Voting ended - check quorum first
+	// Slow path — late execution (after voting ends).
+	const partial = proposal.partialPercentageSupportThreshold
+	const isThresholdReached = (RATIO_BASE - partial) * proposal.yesCount > partial * proposal.noCount
+
+	if (!isVotingEnded) {
+		return {
+			status: "PROPOSED",
+			isQuorumReached,
+			isThresholdReached,
+			isEarlyExecutable: false,
+		}
+	}
+
 	if (!isQuorumReached) {
-		return {status: "REJECTED", isQuorumReached, isThresholdReached: false}
+		return {
+			status: "REJECTED",
+			isQuorumReached,
+			isThresholdReached: false,
+			isEarlyExecutable: false,
+		}
 	}
 
 	return {
 		status: isThresholdReached ? "EXECUTABLE" : "REJECTED",
 		isQuorumReached,
 		isThresholdReached,
+		isEarlyExecutable: false,
 	}
+}
+
+// Integer ceiling division for bigint. Assumes `divisor > 0n` and `dividend >= 0n`.
+function ceilDiv(dividend: bigint, divisor: bigint): bigint {
+	return (dividend + divisor - 1n) / divisor
 }
 
 /**

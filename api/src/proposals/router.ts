@@ -127,6 +127,11 @@ function mapToActionResponse(action: ProposalWithVotes["actions"][number]): Acti
 				fastThreshold: action.fastThreshold,
 				slowThreshold: action.slowThreshold,
 				duration: action.duration,
+				partialPercentageSupportThreshold: action.partialPercentageSupportThreshold,
+				universalPercentageSupportThreshold: action.universalPercentageSupportThreshold,
+				flatSupportThreshold: action.flatSupportThreshold,
+				disableFastPathAccessForNewMembers: action.disableFastPathAccessForNewMembers,
+				executionGracePeriod: action.executionGracePeriod,
 			}
 		case "SubspaceVerified":
 			if (!action.targetId) return {actionType: "UNKNOWN"}
@@ -200,6 +205,8 @@ function computeResponseFields(proposal: ProposalWithVotes | ProposalListItem, n
 		spaceId: normalizeUuid(proposal.spaceId),
 		name: proposal.name,
 		proposedBy: normalizeUuid(proposal.proposedBy),
+		proposalVersion: proposal.proposalVersion,
+		executeBy: proposal.executeBy !== null ? Number(proposal.executeBy) : null,
 		status,
 		votingMode: proposal.votingMode.toUpperCase() as "FAST" | "SLOW",
 		actions: proposal.actions.map(mapToActionResponse),

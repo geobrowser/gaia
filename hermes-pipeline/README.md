@@ -26,10 +26,10 @@ This transformer is part of the Hermes architecture (see `docs/architecture.md`)
 |-------|-------------|-------------|
 | `SUBSPACE_VERIFIED` | Verified trust extensions | `space.trust.extensions` |
 | `SUBSPACE_RELATED` | Related trust extensions | `space.trust.extensions` |
-| `SUBSPACE_TOPIC_DECLARED` | Topic-based trust extensions | `space.trust.extensions` |
+| `SUBSPACE_TOPIC_SET` | Topic-based trust extensions | `space.trust.extensions` |
 | `SUBSPACE_UNVERIFIED` | Verified trust removals | `space.trust.extensions` |
 | `SUBSPACE_UNRELATED` | Related trust removals | `space.trust.extensions` |
-| `SUBSPACE_TOPIC_REMOVED` | Topic trust removals | `space.trust.extensions` |
+| `SUBSPACE_TOPIC_UNSET` | Topic trust removals | `space.trust.extensions` |
 
 ### Membership
 
@@ -54,7 +54,7 @@ This transformer is part of the Hermes architecture (see `docs/architecture.md`)
 
 | Event | Description | Kafka Topic |
 |-------|-------------|-------------|
-| `TOPIC_DECLARED` | Topic declared by space | `space.topics` |
+| `TOPIC_SET` | Topic set by space | `space.topics` |
 
 ### Governance
 
@@ -87,7 +87,7 @@ This transformer is part of the Hermes architecture (see `docs/architecture.md`)
 | `USE_MOCK` | Set to "true" or "1" to use mock data | `false` |
 | `SUBSTREAMS_ENDPOINT` | Substreams gRPC endpoint URL | `geotest.substreams.pinax.network:443` |
 | `SUBSTREAMS_API_TOKEN` | Auth token for substreams | - |
-| `SUBSTREAMS_START_BLOCK` | Block to start from on cold start (ignored when a persisted cursor exists) | `138000` |
+| `SUBSTREAMS_START_BLOCK` | Block number to start from. Set to `0` for a fresh/local Anvil chain; set to the contract deploy block for other chains. | `82655` |
 | `SUBSTREAMS_END_BLOCK` | Block number to stop at | `u64::MAX` (continuous) |
 
 ### Kafka Environment Variables
@@ -120,9 +120,13 @@ If `SENTRY_DSN` is set, telemetry is exported to Sentry. Otherwise, logs are wri
 # Start infrastructure (see docker-compose.yml at repo root)
 docker compose --profile infra up -d
 
-# Run with live substreams data (default)
+# Run with live substreams data (default).
+# SUBSTREAMS_START_BLOCK is the sole control for ingestion start:
+#   - Testnet live data:       82655 (ZC16 deploy block; current default)
+#   - Local Anvil / fresh chain: 0
+# Set it explicitly per target, or omit to accept the default.
 SUBSTREAMS_API_TOKEN=your-token \
-SUBSTREAMS_START_BLOCK=138000 \
+SUBSTREAMS_START_BLOCK=82655 \
 KAFKA_BROKER=localhost:9092 \
 cargo run --package hermes-pipeline
 ```
@@ -197,9 +201,9 @@ The pipeline is organized into modules that handle specific action categories:
 |--------|---------|--------------|
 | `spaces` | `SPACE_REGISTERED` | `space.creations` |
 | `membership` | `EDITOR_ADDED/REMOVED`, `MEMBER_ADDED/REMOVED`, `SPACE_LEFT` | `space.membership` |
-| `trust` | `SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED/REMOVED` | `space.trust.extensions` |
+| `trust` | `SUBSPACE_VERIFIED/RELATED/TOPIC_SET/UNSET` | `space.trust.extensions` |
 | `moderation` | `EDITOR_FLAGGED/UNFLAGGED`, `FLAGGED/UNFLAGGED` | `space.moderation` |
-| `topics` | `TOPIC_DECLARED` | `space.topics` |
+| `topics` | `TOPIC_SET` | `space.topics` |
 | `governance` | `PROPOSAL_CREATED/VOTED/EXECUTED` | `space.governance` |
 | `voting` | `UPVOTED/DOWNVOTED/UNVOTED` | `curation.votes` |
 | `edits` | `EDITS_PUBLISHED` | `knowledge.edits` |

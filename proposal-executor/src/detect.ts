@@ -1,11 +1,21 @@
 /**
  * Database connection and detection query for executable slow-path proposals.
  *
- * Detection SQL is a third copy of proposal status logic (after computeProposalStatus()
- * in api/src/proposals/status.ts and sqlIsExecutable() in api/src/proposals/queries.ts).
- * It adds a 60s clock-skew buffer not present in the other copies.
+ * Detection SQL is a third copy of proposal status logic (after
+ * computeProposalStatus() in api/src/proposals/status.ts and sqlIsExecutable()
+ * in api/src/proposals/queries.ts). Any change to the decision tree must land
+ * in all three. V2 (GEO-485):
+ *   - Reads from the `proposals_current` view (identity + current version).
+ *   - Uses `partial_percentage_support_threshold` for slow-late and
+ *     `universal_percentage_support_threshold` for slow-early.
+ *   - Enforces `execute_by` as the deadline, with a MAX_PROPOSAL_AGE fallback
+ *     for proposals that have no deadline set (NULL `execute_by`).
+ *   - Adds the 60s CLOCK_SKEW_BUFFER only on the slow-late `end_time` check
+ *     (slow-early runs while voting is ongoing, so no buffer needed).
  *
- * See: docs/plans/2026-03-02-feat-proposal-auto-executor-plan.md §Detection Query
+ * Fast-path proposals are NOT handled here — they auto-execute on-chain when
+ * yes_count reaches `flat_support_threshold`, and the kg-indexer picks up
+ * the resulting PROPOSAL_EXECUTED event.
  */
 
 import {Effect} from "effect"
@@ -63,34 +73,69 @@ export const MAX_PROPOSAL_AGE = 7 * 24 * 60 * 60 // 7 days
 // ---------------------------------------------------------------------------
 
 /**
- * Finds slow-path proposals that are EXECUTABLE:
- * - Not yet executed (executed_at IS NULL)
- * - Slow voting mode
- * - Created in the past (guards against corrupt future timestamps)
- * - Created within MAX_PROPOSAL_AGE (7 days) — older proposals are likely stuck
- * - Voting period ended (with clock-skew buffer)
- * - Quorum reached (total votes >= quorum)
- * - Threshold reached: (RATIO_BASE - threshold) * yes > threshold * no
+ * Finds Slow-mode proposals that are EXECUTABLE right now. Two branches:
  *
- * The RATIO_BASE constant (10,000,000) matches the smart contract value.
- * Source: api/src/proposals/types.ts — RATIO_BASE = 10_000_000n
+ *   Slow-late (after voting ends):
+ *     - `now > end_time + CLOCK_SKEW_BUFFER`
+ *     - quorum met
+ *     - `(RATIO_BASE - partial) × yes > partial × no`
  *
- * ORDER BY created_at::bigint ASC for FIFO ordering. The created_at column
- * stores Unix timestamps as text, so ::bigint cast ensures numeric ordering.
+ *   Slow-early (voting still ongoing, NEW in V2 via GEO-514):
+ *     - `now <= end_time`
+ *     - `universal_percentage_support_threshold > 0` (feature enabled)
+ *     - space has indexed editors (`space_editor_counts.total_editors > 0`)
+ *     - `yes_count >= ceil(universal × total_editors / RATIO_BASE)`
+ *
+ * Both branches additionally require:
+ *   - not yet executed (`executed_at IS NULL`)
+ *   - within execution deadline: `now <= execute_by` when set, else within
+ *     MAX_PROPOSAL_AGE of `created_at` (fallback for proposals without a
+ *     deadline — prevents the executor from retrying permanently stuck
+ *     proposals forever).
+ *
+ * RATIO_BASE (10,000,000) matches the smart contract. Source of truth:
+ * api/src/proposals/types.ts.
+ *
+ * ORDER BY created_at::bigint ASC for FIFO ordering — created_at is text, so
+ * the cast ensures numeric comparison.
  */
-const DETECTION_SQL = `
-SELECT p.id, p.space_id AS "spaceId"
-FROM proposals p
-WHERE p.executed_at IS NULL
-  AND p.voting_mode = 'Slow'
-  AND p.created_at::bigint <= $1::bigint
-  AND $1::bigint - p.created_at::bigint < ${MAX_PROPOSAL_AGE}
-  AND $1::bigint > p.end_time + ${CLOCK_SKEW_BUFFER}
-  AND (p.yes_count + p.no_count + p.abstain_count) >= p.quorum
-  -- RATIO_BASE = 10,000,000 (protocol constant from api/src/proposals/types.ts)
-  AND (${RATIO_BASE} - p.threshold::numeric) * p.yes_count::numeric
-      > p.threshold::numeric * p.no_count::numeric
-ORDER BY p.created_at::bigint ASC
+export const DETECTION_SQL = `
+SELECT pc.id, pc.space_id AS "spaceId"
+FROM proposals_current pc
+WHERE pc.executed_at IS NULL
+  AND pc.voting_mode = 'Slow'
+  AND pc.created_at::bigint <= $1::bigint
+  AND (
+    (pc.execute_by IS NOT NULL AND $1::bigint <= pc.execute_by)
+    OR (pc.execute_by IS NULL AND $1::bigint - pc.created_at::bigint < ${MAX_PROPOSAL_AGE})
+  )
+  AND (
+    -- Slow-late: voting ended + quorum met + partial ratio
+    (
+      $1::bigint > pc.end_time + ${CLOCK_SKEW_BUFFER}
+      AND (pc.yes_count + pc.no_count + pc.abstain_count) >= pc.quorum
+      AND (${RATIO_BASE} - pc.partial_percentage_support_threshold::numeric) * pc.yes_count::numeric
+          > pc.partial_percentage_support_threshold::numeric * pc.no_count::numeric
+    )
+    -- Slow-early: voting still ongoing + yes_count meets universal × total_editors ceiling
+    OR (
+      $1::bigint <= pc.end_time
+      AND pc.universal_percentage_support_threshold > 0
+      AND COALESCE(
+        (SELECT sec.total_editors FROM space_editor_counts sec WHERE sec.space_id = pc.space_id),
+        0
+      ) > 0
+      AND pc.yes_count::numeric >= CEIL(
+        pc.universal_percentage_support_threshold::numeric
+        * COALESCE(
+          (SELECT sec.total_editors FROM space_editor_counts sec WHERE sec.space_id = pc.space_id),
+          0
+        )::numeric
+        / ${RATIO_BASE}::numeric
+      )
+    )
+  )
+ORDER BY pc.created_at::bigint ASC
 `
 
 // ---------------------------------------------------------------------------

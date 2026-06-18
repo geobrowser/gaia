@@ -41,7 +41,7 @@ Environment variables:
 | `IPFS_GATEWAY_URL` | Live mode | IPFS gateway URL (e.g., `https://ipfs.io/ipfs/`) |
 | `SUBSTREAMS_ENDPOINT` | Live mode | Substreams endpoint URL (e.g., `geotest.substreams.pinax.network:443`) |
 | `SUBSTREAMS_API_TOKEN` | Live mode | API token for substreams authentication |
-| `SUBSTREAMS_START_BLOCK` | No | Cold-start block (default: 138000, ignored when a persisted cursor exists) |
+| `SUBSTREAMS_START_BLOCK` | No | Block to start from (default: `82655`; set to `0` for a fresh/local chain) |
 | `SUBSTREAMS_END_BLOCK` | No | Block to end at (default: u64::MAX = stream forever) |
 
 ## Database Schema
@@ -112,7 +112,7 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5433/ipfs_cache
 IPFS_GATEWAY_URL=https://ipfs.io/ipfs/
 SUBSTREAMS_ENDPOINT=geotest.substreams.pinax.network:443
 SUBSTREAMS_API_TOKEN=...
-SUBSTREAMS_START_BLOCK=138000
+SUBSTREAMS_START_BLOCK=82655
 RUST_LOG=info,hermes_ipfs_cache=debug
 ```
 

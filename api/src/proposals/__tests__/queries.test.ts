@@ -51,19 +51,32 @@ function setupTestApp() {
 
 /**
  * Create a test proposal row as returned from the database.
+ *
+ * Shape mirrors what `proposals_current` (view) + `space_editor_counts`
+ * (LEFT JOIN) return after GEO-481/514: V1 threshold is still projected for
+ * compat, but V2 per-mode fields + executeBy + proposal_version +
+ * total_editors are the canonical values.
  */
 function makeDbProposalRow(overrides: Partial<Record<string, unknown>> = {}) {
 	const now = Math.floor(Date.now() / 1000)
+	const votingMode = (overrides.voting_mode as string | undefined) ?? "Fast"
+	const threshold = (overrides.threshold as string | undefined) ?? "10"
 	return {
 		id: "550e8400-e29b-41d4-a716-446655440000",
 		space_id: "660e8400-e29b-41d4-a716-446655440000",
 		name: "Test Proposal",
 		proposed_by: "770e8400-e29b-41d4-a716-446655440000",
-		voting_mode: "Fast",
+		proposal_version: 1,
+		voting_mode: votingMode,
 		start_time: String(now - 3600),
 		end_time: String(now + 3600),
 		quorum: "10",
-		threshold: "10",
+		threshold,
+		flat_support_threshold: votingMode === "Fast" ? threshold : "0",
+		partial_percentage_support_threshold: votingMode === "Slow" ? threshold : "0",
+		universal_percentage_support_threshold: "0",
+		execute_by: null,
+		total_editors: "0",
 		executed_at: null,
 		created_at: new Date().toISOString(),
 		yes_count: "0",
@@ -79,16 +92,24 @@ function makeDbProposalRow(overrides: Partial<Record<string, unknown>> = {}) {
  */
 function makeProposal(overrides: Partial<ProposalWithVotes> = {}): ProposalWithVotes {
 	const now = BigInt(Math.floor(Date.now() / 1000))
+	const votingMode = overrides.votingMode ?? "Fast"
+	const threshold = overrides.threshold ?? 10n
 	return {
 		id: "test-proposal-id",
 		spaceId: "test-space-id",
 		name: "Test Proposal",
 		proposedBy: "test-proposer-id",
-		votingMode: "Fast",
+		proposalVersion: 1,
+		votingMode,
 		startTime: now - 3600n,
 		endTime: now + 3600n,
 		quorum: 10n,
-		threshold: 10n,
+		threshold,
+		flatSupportThreshold: votingMode === "Fast" ? threshold : 0n,
+		partialPercentageSupportThreshold: votingMode === "Slow" ? threshold : 0n,
+		universalPercentageSupportThreshold: 0n,
+		executeBy: null,
+		totalEditors: 0n,
 		executedAt: null,
 		yesCount: 0n,
 		noCount: 0n,
@@ -218,6 +239,98 @@ describe("GET /proposals/space/:spaceId/status", () => {
 			expect(body.proposals).toBeInstanceOf(Array)
 			expect(body.proposals).toHaveLength(1)
 			expect(body.nextCursor).toBeNull()
+		})
+
+		it("surfaces V2 fields (proposalVersion, executeBy) on list items", async () => {
+			const row = makeDbProposalRow({
+				proposal_version: 3,
+				execute_by: "1750000000",
+			})
+			db.execute.mockResolvedValueOnce({rows: [row]})
+
+			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status")
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body.proposals[0].proposalVersion).toBe(3)
+			expect(body.proposals[0].executeBy).toBe(1_750_000_000)
+		})
+
+		it("returns null executeBy for legacy proposals with no deadline", async () => {
+			const row = makeDbProposalRow({execute_by: null})
+			db.execute.mockResolvedValueOnce({rows: [row]})
+
+			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status")
+
+			const body = await res.json()
+			expect(body.proposals[0].executeBy).toBeNull()
+		})
+
+		it("projects legacy threshold.required from flatSupportThreshold for Fast proposals", async () => {
+			const row = makeDbProposalRow({
+				voting_mode: "Fast",
+				threshold: "999", // stale legacy value — should be ignored in favor of flat
+				flat_support_threshold: "42",
+			})
+			db.execute.mockResolvedValueOnce({rows: [row]})
+
+			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status")
+
+			const body = await res.json()
+			expect(body.proposals[0].threshold.required).toBe("42")
+		})
+
+		it("projects legacy threshold.required from partialPercentageSupportThreshold for Slow proposals", async () => {
+			const row = makeDbProposalRow({
+				voting_mode: "Slow",
+				threshold: "999",
+				partial_percentage_support_threshold: "5000000",
+			})
+			db.execute.mockResolvedValueOnce({rows: [row]})
+
+			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status")
+
+			const body = await res.json()
+			expect(body.proposals[0].threshold.required).toBe("5000000")
+		})
+
+		it("surfaces V2 fields on UpdateVotingSettings action responses", async () => {
+			const row = makeDbProposalRow({
+				actions_json: [
+					{
+						action_type: "UpdateVotingSettings",
+						target_id: null,
+						content_uri: null,
+						content_id: null,
+						quorum: 10,
+						fast_threshold: 3,
+						slow_threshold: 5_000_000,
+						duration: 3600,
+						partial_percentage_support_threshold: 5_000_000,
+						universal_percentage_support_threshold: 7_500_000,
+						flat_support_threshold: 3,
+						disable_fast_path_access_for_new_members: true,
+						execution_grace_period: 600,
+					},
+				],
+			})
+			db.execute.mockResolvedValueOnce({rows: [row]})
+
+			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status")
+
+			const body = await res.json()
+			expect(body.proposals[0].actions[0]).toEqual({
+				actionType: "UPDATE_VOTING_SETTINGS",
+				quorum: 10,
+				fastThreshold: 3,
+				slowThreshold: 5_000_000,
+				duration: 3600,
+				partialPercentageSupportThreshold: 5_000_000,
+				universalPercentageSupportThreshold: 7_500_000,
+				flatSupportThreshold: 3,
+				disableFastPathAccessForNewMembers: true,
+				executionGracePeriod: 600,
+			})
 		})
 
 		it("maps SET_TOPIC and UNSET_TOPIC actions in list responses", async () => {
@@ -611,31 +724,31 @@ describe("SQL/TypeScript status parity", () => {
 			expect(result.status).toBe("EXECUTABLE")
 		})
 
-		it("handles zero threshold with zero yes votes (Fast path NOT executable)", () => {
-			// This is the edge case: threshold=0 means we need yes > -1, which means yes >= 0
-			// But the contract logic uses yes > (threshold - 1), with threshold - 1 = 0 when threshold = 0
-			// So we need yes > 0, meaning at least 1 yes vote
+		it("handles zero flatSupportThreshold with zero yes votes (Fast path IS executable)", () => {
+			// V2 formula: yesCount >= flatSupportThreshold. With flat=0, any vote
+			// count — including zero — passes the threshold check.
 			const proposal = makeProposal({
 				votingMode: "Fast",
-				threshold: 0n,
+				threshold: 0n, // mirrors to flatSupportThreshold=0 via the helper
 				yesCount: 0n,
-				endTime: now + 3600n, // voting not ended
+				endTime: now + 3600n,
 			})
 			const result = computeProposalStatus(proposal, now)
-			// With threshold=0 and yesCount=0, threshold formula is yes > max(threshold-1, 0) = yes > 0
-			// 0 > 0 is false, so NOT executable yet
-			expect(result.status).toBe("PROPOSED")
+			expect(result.status).toBe("EXECUTABLE")
 		})
 
-		it("handles zero threshold with zero yes votes after voting ends (REJECTED)", () => {
+		it("handles zero flatSupportThreshold with zero yes votes after voting ends (EXECUTABLE)", () => {
+			// Even after voting ends, a Fast proposal that meets its (trivial)
+			// threshold is EXECUTABLE — voting end only matters when the
+			// threshold is NOT met.
 			const proposal = makeProposal({
 				votingMode: "Fast",
 				threshold: 0n,
 				yesCount: 0n,
-				endTime: now - 100n, // voting ended
+				endTime: now - 100n,
 			})
 			const result = computeProposalStatus(proposal, now)
-			expect(result.status).toBe("REJECTED")
+			expect(result.status).toBe("EXECUTABLE")
 		})
 
 		it("handles threshold=1 exactly met", () => {

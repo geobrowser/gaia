@@ -101,6 +101,7 @@ const uuid = {
 
 	// Proposals (continued)
 	proposalDeleteBlock: "20000000-0008-4000-8000-000000000010",
+	proposalExecuted: "20000000-0008-4000-8000-000000000011",
 
 	// Proposal actions
 	actionCreateEntity: "20000000-000a-4000-8000-000000000001",
@@ -113,6 +114,7 @@ const uuid = {
 	actionDeleteRelation: "20000000-000a-4000-8000-000000000008",
 	actionUpdateRelation: "20000000-000a-4000-8000-000000000009",
 	actionDeleteBlock: "20000000-000a-4000-8000-000000000010",
+	actionExecuted: "20000000-000a-4000-8000-000000000011",
 
 	// Value IDs (for value_versions)
 	val: (n: number) => `20000000-0009-4000-8000-${n.toString().padStart(12, "0")}`,
@@ -440,11 +442,29 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 	})
 
 	// ==========================================================================
-	// 8. Closed Proposal Tests
+	// 8. Proposal Status Branches
+	//
+	// `getProposalStatus()` (proposal-diff.ts) decides the base-state source:
+	//   - active            → live tables
+	//   - closed (not exec) → versioned tables at end_time
+	//   - executed          → versioned tables just before executed_at
+	//
+	// Most other tests in this suite exercise the `active` branch implicitly
+	// via end_time-in-the-future fixtures. These tests cover the remaining
+	// branches and assert the reported `proposalStatus`.
 	// ==========================================================================
 
-	describe("Closed Proposal", () => {
-		it("uses versioned base state for closed proposals", async () => {
+	describe("Proposal Status Branches", () => {
+		it("returns proposalStatus=active for an open proposal", async () => {
+			const res = await app.request(
+				`/versioned/proposals/${uuid.proposalCreateEntity}/diff?spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body.proposalStatus).toBe("active")
+		})
+
+		it("uses versioned base state for closed (not executed) proposals", async () => {
 			const res = await app.request(`/versioned/proposals/${uuid.proposalClosed}/diff?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(200)
 
@@ -452,6 +472,15 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			// Closed proposals should still return entities
 			expect(body.entities).toBeDefined()
 			expect(body.proposalStatus).toBe("closed")
+		})
+
+		it("uses versioned base state just before executed_at for executed proposals", async () => {
+			const res = await app.request(`/versioned/proposals/${uuid.proposalExecuted}/diff?spaceId=${uuid.space1}`)
+			expect(res.status).toBe(200)
+
+			const body = await res.json()
+			expect(body.entities).toBeDefined()
+			expect(body.proposalStatus).toBe("executed")
 		})
 	})
 
@@ -866,6 +895,28 @@ async function setupTestData(pool: Pool): Promise<void> {
 			contentUri: generateTestUri("delete-block"),
 		})
 
+		// Proposal 11: Executed Proposal — `executedAt` is set, so getProposalStatus
+		// returns "executed" regardless of where now sits relative to endTime.
+		// The diff should be computed against versioned state just before executedAt.
+		await createProposalWithEdit(client, {
+			proposalId: uuid.proposalExecuted,
+			actionId: uuid.actionExecuted,
+			spaceId: uuid.space1,
+			startTime: now - 86400,
+			endTime: now - 1000,
+			executedAt: now - 500,
+			editBuilder: (editId) => {
+				const builder = new EditBuilder(editId)
+					.setName("Executed Proposal Edit")
+					.setCreatedNow()
+					.updateEntity(uuidToId(uuid.entityExisting1), (u) =>
+						u.setText(uuidToId(uuid.propText), "From executed proposal"),
+					)
+				return builder.build()
+			},
+			contentUri: generateTestUri("executed-proposal"),
+		})
+
 		await client.query("COMMIT")
 	} catch (error) {
 		await client.query("ROLLBACK")
@@ -905,26 +956,41 @@ async function createProposalWithEdit(client: any, options: CreateProposalOption
 		[contentUri, Buffer.from(encoded), spaceId, edit.name],
 	)
 
-	// Create proposal
+	// Create proposal (V2 identity row + version 1 row).
+	// `proposals_current` view joins these on current_version = proposal_version.
 	if (executedAt) {
 		await client.query(
-			`INSERT INTO proposals (id, space_id, proposed_by, voting_mode, start_time, end_time, quorum, threshold, executed_at, created_at, created_at_block)
-			 VALUES ($1, $2, $3, 'Fast', $4, $5, 1, 1, $6, '2024-01-01T00:00:00Z', '2000') ON CONFLICT DO NOTHING`,
-			[proposalId, spaceId, uuid.entityExisting1, startTime, endTime, executedAt],
+			`INSERT INTO proposals (id, space_id, proposed_by, executed_at, created_at, created_at_block, current_version)
+			 VALUES ($1, $2, $3, $4, '2024-01-01T00:00:00Z', '2000', 1) ON CONFLICT DO NOTHING`,
+			[proposalId, spaceId, uuid.entityExisting1, executedAt],
 		)
 	} else {
 		await client.query(
-			`INSERT INTO proposals (id, space_id, proposed_by, voting_mode, start_time, end_time, quorum, threshold, created_at, created_at_block)
-			 VALUES ($1, $2, $3, 'Fast', $4, $5, 1, 1, '2024-01-01T00:00:00Z', '2000') ON CONFLICT DO NOTHING`,
-			[proposalId, spaceId, uuid.entityExisting1, startTime, endTime],
+			`INSERT INTO proposals (id, space_id, proposed_by, created_at, created_at_block, current_version)
+			 VALUES ($1, $2, $3, '2024-01-01T00:00:00Z', '2000', 1) ON CONFLICT DO NOTHING`,
+			[proposalId, spaceId, uuid.entityExisting1],
 		)
 	}
 
-	// Create proposal action (Publish)
 	await client.query(
-		`INSERT INTO proposal_actions (id, proposal_id, action_type, content_uri)
-		 VALUES ($1, $2, 'Publish', $3) ON CONFLICT DO NOTHING`,
-		[actionId, proposalId, contentUri],
+		`INSERT INTO proposal_versions (
+			proposal_id, proposal_version, voting_mode, start_time, end_time,
+			quorum, threshold,
+			partial_percentage_support_threshold, universal_percentage_support_threshold,
+			flat_support_threshold,
+			version_created_at, version_created_at_block
+		 )
+		 VALUES ($1, 1, 'Fast', $2, $3, 1, 1, 0, 0, 1, '2024-01-01T00:00:00Z', '2000') ON CONFLICT DO NOTHING`,
+		[proposalId, startTime, endTime],
+	)
+
+	// Create proposal action (Publish) — version-scoped on (proposal_id, proposal_version, index).
+	// `actionId` is retained in the option signature for caller stability but is no longer a column.
+	void actionId
+	await client.query(
+		`INSERT INTO proposal_actions (proposal_id, proposal_version, index, action_type, content_uri)
+		 VALUES ($1, 1, 0, 'Publish', $2) ON CONFLICT DO NOTHING`,
+		[proposalId, contentUri],
 	)
 }
 
@@ -936,6 +1002,7 @@ async function cleanupTestData(pool: Pool): Promise<void> {
 
 		// Delete in reverse order of foreign key dependencies
 		await client.query(`DELETE FROM proposal_actions WHERE proposal_id::text LIKE '20000000-%'`)
+		await client.query(`DELETE FROM proposal_versions WHERE proposal_id::text LIKE '20000000-%'`)
 		await client.query(`DELETE FROM proposals WHERE id::text LIKE '20000000-%'`)
 		await client.query(`DELETE FROM relations WHERE from_entity_id::text LIKE '20000000-%'`)
 		await client.query(`DELETE FROM relation_versions WHERE from_entity_id::text LIKE '20000000-%'`)

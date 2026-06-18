@@ -61,6 +61,31 @@ pub struct UnflagAction {
     #[prost(bytes = "vec", tag = "1")]
     pub content_id: ::prost::alloc::vec::Vec<u8>,
 }
+/// Decoded action: update voting settings (V2 — 7 fields matching contract VotingSettings)
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct UpdateVotingSettingsAction {
+    /// Slow path late execution (0..RATIO_BASE)
+    #[prost(uint64, tag = "5")]
+    pub partial_percentage_support_threshold: u64,
+    /// Slow path early execution (0..RATIO_BASE)
+    #[prost(uint64, tag = "6")]
+    pub universal_percentage_support_threshold: u64,
+    /// Fast path absolute YES votes
+    #[prost(uint64, tag = "7")]
+    pub flat_support_threshold: u64,
+    /// Minimum participating votes for slow path
+    #[prost(uint64, tag = "8")]
+    pub quorum: u64,
+    /// Voting window duration in seconds
+    #[prost(uint64, tag = "9")]
+    pub duration: u64,
+    /// Whether new members get fast-path access
+    #[prost(bool, tag = "10")]
+    pub disable_fast_path_access_for_new_members: bool,
+    /// Seconds after lastDate that execution is allowed
+    #[prost(uint64, tag = "11")]
+    pub execution_grace_period: u64,
+}
 /// Decoded action: subspace edge operation (add/remove verified or related edge)
 /// The specific operation type is determined by the ProposalActionType enum value.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -90,22 +115,6 @@ pub struct UnsetTopicAction {
     /// 16 bytes - topic entity ID
     #[prost(bytes = "vec", tag = "1")]
     pub target_topic_id: ::prost::alloc::vec::Vec<u8>,
-}
-/// Decoded action: update voting settings
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct UpdateVotingSettingsAction {
-    /// Minimum total votes required
-    #[prost(uint64, tag = "1")]
-    pub quorum: u64,
-    /// Fast path: absolute YES votes needed
-    #[prost(uint64, tag = "2")]
-    pub fast_threshold: u64,
-    /// Slow path: percentage of RATIO_BASE (10,000,000)
-    #[prost(uint64, tag = "3")]
-    pub slow_threshold: u64,
-    /// Voting duration
-    #[prost(uint64, tag = "4")]
-    pub duration: u64,
 }
 /// Action to be executed when proposal passes
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -167,27 +176,34 @@ pub mod proposal_action {
         UnsetTopic(super::UnsetTopicAction),
     }
 }
-/// Voting settings for a proposal, from PROPOSAL_SETTINGS_USED event
+/// Voting settings for a proposal, from PROPOSAL_SETTINGS_SELECTED event.
+/// V2 — 8 fields matching contract ProposalParameters, with per-proposal executeBy.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ProposalSettings {
+    /// Slow (0) or Fast (1)
+    #[prost(enumeration = "VotingMode", tag = "7")]
+    pub voting_mode: i32,
+    /// Slow path late execution (0..RATIO_BASE)
+    #[prost(uint64, tag = "8")]
+    pub partial_percentage_support_threshold: u64,
+    /// Slow path early execution (0..RATIO_BASE)
+    #[prost(uint64, tag = "9")]
+    pub universal_percentage_support_threshold: u64,
+    /// Fast path absolute YES votes
+    #[prost(uint64, tag = "10")]
+    pub flat_support_threshold: u64,
+    /// Minimum participating votes for slow path
+    #[prost(uint64, tag = "11")]
+    pub quorum: u64,
     /// Block timestamp when voting starts
-    #[prost(uint64, tag = "1")]
+    #[prost(uint64, tag = "12")]
     pub start_date: u64,
     /// Block timestamp when voting ends
-    #[prost(uint64, tag = "2")]
+    #[prost(uint64, tag = "13")]
     pub last_date: u64,
-    /// Slow (0) or Fast (1)
-    #[prost(enumeration = "VotingMode", tag = "3")]
-    pub voting_mode: i32,
-    /// Minimum total votes for slow path
-    #[prost(uint64, tag = "4")]
-    pub quorum: u64,
-    /// Fast path: absolute number of YES votes needed
-    #[prost(uint64, tag = "5")]
-    pub flat_threshold: u64,
-    /// Slow path: percentage of RATIO_BASE (10,000,000)
-    #[prost(uint64, tag = "6")]
-    pub percentage_threshold: u64,
+    /// Inclusive upper bound timestamp for execution
+    #[prost(uint64, tag = "14")]
+    pub execute_by: u64,
 }
 /// HermesProposalCreated - squashed from PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED
 /// Contains all actions in a single message with voting settings.
@@ -244,7 +260,7 @@ pub struct HermesProposalUpdated {
     pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
 }
 /// HermesProposalVoted - emitted when a vote is cast on a proposal
-/// Data encoding: abi.encode(bytes16 proposalId, VoteOption)
+/// Data encoding: abi.encode(bytes16 proposalId, uint8 proposalVersion, VoteOption)
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HermesProposalVoted {
     /// 16 bytes - space casting the vote (from from_id)
@@ -261,6 +277,9 @@ pub struct HermesProposalVoted {
     pub vote: i32,
     #[prost(message, optional, tag = "5")]
     pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
+    /// Proposal version being voted on (uint8 on-chain)
+    #[prost(uint32, tag = "6")]
+    pub proposal_version: u32,
 }
 /// HermesProposalExecuted - emitted when a passed proposal is executed
 /// Data encoding: abi.encode(bytes16 proposalId)
@@ -292,6 +311,38 @@ pub struct HermesProposalSettingsUpdated {
     #[prost(message, optional, tag = "3")]
     pub settings: ::core::option::Option<ProposalSettings>,
     #[prost(message, optional, tag = "4")]
+    pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
+}
+/// HermesVotingSettingsUpdated - emitted when DAO-global voting settings change.
+/// Data encoding: abi.encode(VotingSettings) — the full 7-field V2 struct.
+/// Subject topic is bytes32(0) since this is a space-level (not proposal-level) event.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HermesVotingSettingsUpdated {
+    /// 16 bytes - space whose settings changed (from_id)
+    #[prost(bytes = "vec", tag = "1")]
+    pub space_id: ::prost::alloc::vec::Vec<u8>,
+    /// Slow path late execution threshold (0..RATIO_BASE)
+    #[prost(uint64, tag = "2")]
+    pub partial_percentage_support_threshold: u64,
+    /// Slow path early execution threshold (0..RATIO_BASE)
+    #[prost(uint64, tag = "3")]
+    pub universal_percentage_support_threshold: u64,
+    /// Fast path absolute YES votes needed
+    #[prost(uint64, tag = "4")]
+    pub flat_support_threshold: u64,
+    /// Minimum participating votes for slow path
+    #[prost(uint64, tag = "5")]
+    pub quorum: u64,
+    /// Voting window duration in seconds
+    #[prost(uint64, tag = "6")]
+    pub duration: u64,
+    /// Whether newly added members get fast-path access
+    #[prost(bool, tag = "7")]
+    pub disable_fast_path_access_for_new_members: bool,
+    /// Seconds after lastDate that execution is allowed
+    #[prost(uint64, tag = "8")]
+    pub execution_grace_period: u64,
+    #[prost(message, optional, tag = "9")]
     pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
 }
 /// Voting mode for proposals
@@ -370,7 +421,6 @@ pub enum ProposalActionType {
     ProposalActionUnflag = 7,
     ProposalActionUnflagEditor = 8,
     ProposalActionUpdateVotingSettings = 9,
-    /// Was PROPOSAL_ACTION_PING (10) — now reserved, sub-classified into 11-16
     ProposalActionSubspaceVerified = 11,
     ProposalActionSubspaceUnverified = 12,
     ProposalActionSubspaceRelated = 13,

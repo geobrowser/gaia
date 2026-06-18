@@ -83,12 +83,17 @@ message UnflagAction {
   bytes content_id = 1;  // Content identifier being unflagged
 }
 
-// Decoded action: update voting settings
+// Decoded action: update voting settings (V2 — 7 fields matching contract VotingSettings)
 message UpdateVotingSettingsAction {
-  uint64 quorum = 1;            // Minimum total votes required
-  uint64 fast_threshold = 2;    // Fast path: absolute YES votes needed
-  uint64 slow_threshold = 3;    // Slow path: percentage of RATIO_BASE (10,000,000)
-  uint64 duration = 4;          // Voting duration
+  reserved 1, 2, 3, 4;
+  reserved "fast_threshold", "slow_threshold";
+  uint64 partial_percentage_support_threshold = 5;      // Slow path late execution (0..RATIO_BASE)
+  uint64 universal_percentage_support_threshold = 6;    // Slow path early execution (0..RATIO_BASE)
+  uint64 flat_support_threshold = 7;                    // Fast path absolute YES votes
+  uint64 quorum = 8;                                    // Minimum participating votes for slow path
+  uint64 duration = 9;                                  // Voting window duration in seconds
+  bool disable_fast_path_access_for_new_members = 10;   // Whether new members get fast-path access
+  uint64 execution_grace_period = 11;                   // Seconds after lastDate that execution is allowed
 }
 
 // Decoded action: subspace edge operation (add/remove verified or related edge)
@@ -141,14 +146,19 @@ message ProposalAction {
   }
 }
 
-// Voting settings for a proposal, from PROPOSAL_SETTINGS_USED event
+// Voting settings for a proposal, from PROPOSAL_SETTINGS_SELECTED event.
+// V2 — 8 fields matching contract ProposalParameters, with per-proposal executeBy.
 message ProposalSettings {
-  uint64 start_date = 1;              // Block timestamp when voting starts
-  uint64 last_date = 2;               // Block timestamp when voting ends
-  VotingMode voting_mode = 3;         // Slow (0) or Fast (1)
-  uint64 quorum = 4;                  // Minimum total votes for slow path
-  uint64 flat_threshold = 5;          // Fast path: absolute number of YES votes needed
-  uint64 percentage_threshold = 6;    // Slow path: percentage of RATIO_BASE (10,000,000)
+  reserved 1, 2, 3, 4, 5, 6;
+  reserved "flat_threshold", "percentage_threshold";
+  VotingMode voting_mode = 7;                           // Slow (0) or Fast (1)
+  uint64 partial_percentage_support_threshold = 8;      // Slow path late execution (0..RATIO_BASE)
+  uint64 universal_percentage_support_threshold = 9;    // Slow path early execution (0..RATIO_BASE)
+  uint64 flat_support_threshold = 10;                   // Fast path absolute YES votes
+  uint64 quorum = 11;                                   // Minimum participating votes for slow path
+  uint64 start_date = 12;                               // Block timestamp when voting starts
+  uint64 last_date = 13;                                // Block timestamp when voting ends
+  uint64 execute_by = 14;                               // Inclusive upper bound timestamp for execution
 }
 
 // HermesProposalCreated - squashed from PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED
@@ -180,13 +190,14 @@ message HermesProposalUpdated {
 }
 
 // HermesProposalVoted - emitted when a vote is cast on a proposal
-// Data encoding: abi.encode(bytes16 proposalId, VoteOption)
+// Data encoding: abi.encode(bytes16 proposalId, uint8 proposalVersion, VoteOption)
 message HermesProposalVoted {
   bytes voter_id = 1;                                   // 16 bytes - space casting the vote (from from_id)
   bytes space_id = 2;                                   // 16 bytes - space that owns the proposal (from to_id)
   bytes proposal_id = 3;                                // 16 bytes - proposal being voted on
   ProposalVoteOption vote = 4;                          // The vote cast
   blockchain_metadata.BlockchainMetadata meta = 5;
+  uint32 proposal_version = 6;                          // Proposal version being voted on (uint8 on-chain)
 }
 
 // HermesProposalExecuted - emitted when a passed proposal is executed
@@ -207,4 +218,19 @@ message HermesProposalSettingsUpdated {
   bytes proposal_id = 2;                                // 16 bytes - proposal identifier
   ProposalSettings settings = 3;                        // Updated voting settings
   blockchain_metadata.BlockchainMetadata meta = 4;
+}
+
+// HermesVotingSettingsUpdated - emitted when DAO-global voting settings change.
+// Data encoding: abi.encode(VotingSettings) — the full 7-field V2 struct.
+// Subject topic is bytes32(0) since this is a space-level (not proposal-level) event.
+message HermesVotingSettingsUpdated {
+  bytes space_id = 1;                                   // 16 bytes - space whose settings changed (from_id)
+  uint64 partial_percentage_support_threshold = 2;      // Slow path late execution threshold (0..RATIO_BASE)
+  uint64 universal_percentage_support_threshold = 3;    // Slow path early execution threshold (0..RATIO_BASE)
+  uint64 flat_support_threshold = 4;                    // Fast path absolute YES votes needed
+  uint64 quorum = 5;                                    // Minimum participating votes for slow path
+  uint64 duration = 6;                                  // Voting window duration in seconds
+  bool disable_fast_path_access_for_new_members = 7;    // Whether newly added members get fast-path access
+  uint64 execution_grace_period = 8;                    // Seconds after lastDate that execution is allowed
+  blockchain_metadata.BlockchainMetadata meta = 9;
 }

@@ -18,7 +18,7 @@ use hermes_schema::pb::{
     blockchain_metadata::BlockchainMetadata,
     governance::{
         HermesProposalCreated, HermesProposalExecuted, HermesProposalSettingsUpdated,
-        HermesProposalUpdated, HermesProposalVoted,
+        HermesProposalUpdated, HermesProposalVoted, HermesVotingSettingsUpdated,
     },
     knowledge::HermesEdit,
     membership::{HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft, MembershipRole},
@@ -294,6 +294,27 @@ impl KafkaEvent for HermesProposalSettingsUpdated {
 }
 
 impl HasMeta for HermesProposalSettingsUpdated {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
+impl KafkaEvent for HermesVotingSettingsUpdated {
+    const TOPIC: &'static str = topics::GOVERNANCE;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("VOTING_SETTINGS_UPDATED"),
+        })
+    }
+}
+
+impl HasMeta for HermesVotingSettingsUpdated {
     fn meta(&self) -> Option<&BlockchainMetadata> {
         self.meta.as_ref()
     }
@@ -786,6 +807,24 @@ mod tests {
         assert_eq!(HermesProposalCreated::TOPIC, "space.governance");
         assert_eq!(HermesProposalVoted::TOPIC, "space.governance");
         assert_eq!(HermesProposalExecuted::TOPIC, "space.governance");
+        assert_eq!(HermesProposalSettingsUpdated::TOPIC, "space.governance");
+        assert_eq!(HermesVotingSettingsUpdated::TOPIC, "space.governance");
+    }
+
+    #[test]
+    fn test_voting_settings_updated_key() {
+        let event = HermesVotingSettingsUpdated {
+            space_id: vec![0xAB; 16],
+            partial_percentage_support_threshold: 0,
+            universal_percentage_support_threshold: 0,
+            flat_support_threshold: 0,
+            quorum: 0,
+            duration: 0,
+            disable_fast_path_access_for_new_members: false,
+            execution_grace_period: 0,
+            meta: None,
+        };
+        assert_eq!(event.key(), vec![0xAB; 16]);
     }
 
     #[test]
@@ -812,6 +851,7 @@ mod tests {
             proposal_id: vec![0xCD; 16],
             vote: ProposalVoteOption::VoteOptionYes as i32,
             meta: None,
+            proposal_version: 1,
         };
         // Should key by space_id, not voter_id
         assert_eq!(event.key(), vec![0xAB; 16]);

@@ -6,7 +6,7 @@
 //! - `personal_space_registered` → `SPACE_ID_REGISTERED` + `SPACE_TYPE_DECLARED` actions
 //! - `subspace_verified` → `GOVERNANCE.SUBSPACE_VERIFIED` action
 //! - `subspace_related` → `GOVERNANCE.SUBSPACE_RELATED` action
-//! - `subspace_topic_declared` → `GOVERNANCE.SUBSPACE_TOPIC_DECLARED` action
+//! - `subspace_topic_set` → `GOVERNANCE.SUBSPACE_TOPIC_SET` action
 //! - `edit_published` → `GOVERNANCE.EDITS_PUBLISHED` action
 //! - And more...
 //!
@@ -229,12 +229,12 @@ pub fn subspace_unrelated(parent_space_id: SpaceId, subspace_id: SpaceId) -> Act
     }
 }
 
-/// Create a SUBSPACE_TOPIC_DECLARED action.
+/// Create a SUBSPACE_TOPIC_SET action.
 ///
-/// - `parent_space_id`: The parent space declaring the topic
+/// - `parent_space_id`: The parent space setting the topic
 /// - `subspace_id`: The subspace (first 16 bytes of topic field)
 /// - `topic_id`: The topic ID (last 16 bytes of topic field)
-pub fn subspace_topic_declared(
+pub fn subspace_topic_set(
     parent_space_id: SpaceId,
     subspace_id: SpaceId,
     topic_id: TopicId,
@@ -245,18 +245,18 @@ pub fn subspace_topic_declared(
     Action {
         from_id: parent_space_id.to_vec(),
         to_id: vec![0u8; 16],
-        action: actions::SUBSPACE_TOPIC_DECLARED.to_vec(),
+        action: actions::SUBSPACE_TOPIC_SET.to_vec(),
         topic,
         data: vec![],
     }
 }
 
-/// Create a SUBSPACE_TOPIC_REMOVED action.
+/// Create a SUBSPACE_TOPIC_UNSET action.
 ///
-/// - `parent_space_id`: The parent space removing the topic
+/// - `parent_space_id`: The parent space unsetting the topic
 /// - `subspace_id`: The subspace (first 16 bytes of topic field)
 /// - `topic_id`: The topic ID (last 16 bytes of topic field)
-pub fn subspace_topic_removed(
+pub fn subspace_topic_unset(
     parent_space_id: SpaceId,
     subspace_id: SpaceId,
     topic_id: TopicId,
@@ -267,7 +267,7 @@ pub fn subspace_topic_removed(
     Action {
         from_id: parent_space_id.to_vec(),
         to_id: vec![0u8; 16],
-        action: actions::SUBSPACE_TOPIC_REMOVED.to_vec(),
+        action: actions::SUBSPACE_TOPIC_UNSET.to_vec(),
         topic,
         data: vec![],
     }
@@ -478,7 +478,7 @@ impl ProposalAction {
         Self::ping(action_hash, topic, &[])
     }
 
-    /// Create a ping action for subspace topic operations (topic declared, topic removed).
+    /// Create a ping action for subspace topic operations (topic set, topic unset).
     ///
     /// Convenience wrapper that packs the target topic ID into the topic field.
     pub fn ping_subspace_topic(action_hash: [u8; 32], target_topic_id: TopicId) -> Self {
@@ -494,7 +494,7 @@ impl ProposalAction {
     pub fn set_topic(target_topic_id: TopicId, topic_data: &[u8]) -> Self {
         let mut topic = [0u8; 32];
         topic[0..16].copy_from_slice(&target_topic_id);
-        Self::ping(actions::TOPIC_DECLARED, topic, topic_data)
+        Self::ping(actions::TOPIC_SET, topic, topic_data)
     }
 
     /// Create an unset-topic proposal action using the DAO ping entrypoint.
@@ -503,7 +503,7 @@ impl ProposalAction {
     pub fn unset_topic(target_topic_id: TopicId, topic_data: &[u8]) -> Self {
         let mut topic = [0u8; 32];
         topic[0..16].copy_from_slice(&target_topic_id);
-        Self::ping(actions::TOPIC_REMOVED, topic, topic_data)
+        Self::ping(actions::TOPIC_UNSET, topic, topic_data)
     }
 }
 
@@ -884,24 +884,24 @@ pub fn membership_requested(
 // Content Actions
 // =============================================================================
 
-/// Create a TOPIC_DECLARED action.
+/// Create a TOPIC_SET action.
 ///
-/// - `space_id`: The space declaring the topic
+/// - `space_id`: The space setting the topic
 /// - `topic_id`: The 16-byte topic UUID stored in the first 16 bytes of `topic`
-pub fn topic_declared(space_id: SpaceId, topic_id: TopicId) -> Action {
+pub fn topic_set(space_id: SpaceId, topic_id: TopicId) -> Action {
     let mut topic = topic_id.to_vec();
     topic.extend_from_slice(&[0u8; 16]);
 
     Action {
         from_id: space_id.to_vec(),
         to_id: vec![0u8; 16],
-        action: actions::TOPIC_DECLARED.to_vec(),
+        action: actions::TOPIC_SET.to_vec(),
         topic,
         data: vec![],
     }
 }
 
-/// Create a TOPIC_REMOVED action.
+/// Create a TOPIC_UNSET action.
 ///
 /// - `space_id`: The space removing the topic
 /// - `topic_id`: The 16-byte topic UUID stored in the first 16 bytes of `topic`
@@ -912,7 +912,7 @@ pub fn topic_removed(space_id: SpaceId, topic_id: TopicId) -> Action {
     Action {
         from_id: space_id.to_vec(),
         to_id: vec![0u8; 16],
-        action: actions::TOPIC_REMOVED.to_vec(),
+        action: actions::TOPIC_UNSET.to_vec(),
         topic,
         data: vec![],
     }
@@ -1154,21 +1154,21 @@ pub mod test_topology {
     pub const SUBSPACE_TARGET_UNVERIFIED: SpaceId = make_id(0xC2);
     pub const SUBSPACE_TARGET_RELATED: SpaceId = make_id(0xC3);
     pub const SUBSPACE_TARGET_UNRELATED: SpaceId = make_id(0xC4);
-    pub const SUBSPACE_TARGET_TOPIC_DECLARED: TopicId = make_id(0xC5);
-    pub const SUBSPACE_TARGET_TOPIC_REMOVED: TopicId = make_id(0xC6);
+    pub const SUBSPACE_TARGET_TOPIC_SET: TopicId = make_id(0xC5);
+    pub const SUBSPACE_TARGET_TOPIC_UNSET: TopicId = make_id(0xC6);
     pub const SPACE_TARGET_TOPIC_SET: TopicId = make_id(0xD1);
-    pub const SPACE_TARGET_TOPIC_REMOVED: TopicId = make_id(0xD2);
+    pub const SPACE_TARGET_TOPIC_UNSET: TopicId = make_id(0xD2);
 
-    // Topic for trust pipeline topic removal testing
-    pub const TOPIC_REMOVED: TopicId = make_id(0x92);
+    // Topic for trust pipeline topic unset testing
+    pub const TOPIC_UNSET: TopicId = make_id(0x92);
 
-    // Topics for top-level TOPIC_DECLARED / TOPIC_REMOVED testing.
+    // Topics for top-level TOPIC_SET / TOPIC_UNSET testing.
     // `SPACE_TOPIC_KEPT` stays declared end-to-end; `SPACE_TOPIC_CLEARED` is
     // declared then removed in the same scenario so the e2e can assert the
     // column ends up NULL on the affected space.
     pub const SPACE_TOPIC_KEPT: TopicId = make_id(0x93);
     pub const SPACE_TOPIC_CLEARED: TopicId = make_id(0x94);
-    // A topic that is never the current topic of SPACE_J; a TOPIC_REMOVED for it
+    // A topic that is never the current topic of SPACE_J; a TOPIC_UNSET for it
     // must be a no-op (conditional clear) and leave SPACE_TOPIC_KEPT in place.
     pub const SPACE_TOPIC_STALE: TopicId = make_id(0x95);
 
@@ -1183,7 +1183,7 @@ pub mod test_topology {
     ///
     /// Returns actions for:
     /// - Space registrations (personal and DAO)
-    /// - Subspace operations (verified, related, topic declared)
+    /// - Subspace operations (verified, related, topic set)
     /// - Editor/member management
     /// - Proposals (created, voted, executed)
     /// - Content operations (edits, flagging)
@@ -1245,25 +1245,25 @@ pub mod test_topology {
         actions.push(subspace_related(SPACE_C, SPACE_G));
         actions.push(subspace_related(SPACE_X, SPACE_W));
 
-        // Phase 4: Subspace topic declarations
-        actions.push(subspace_topic_declared(SPACE_B, SPACE_H, TOPIC_H));
-        actions.push(subspace_topic_declared(ROOT_SPACE_ID, SPACE_E, TOPIC_E));
-        actions.push(subspace_topic_declared(SPACE_A, SPACE_A, TOPIC_SHARED));
-        actions.push(subspace_topic_declared(SPACE_X, SPACE_A, TOPIC_A));
-        actions.push(subspace_topic_declared(SPACE_P, SPACE_Q, TOPIC_Q));
+        // Phase 4: Subspace topic set
+        actions.push(subspace_topic_set(SPACE_B, SPACE_H, TOPIC_H));
+        actions.push(subspace_topic_set(ROOT_SPACE_ID, SPACE_E, TOPIC_E));
+        actions.push(subspace_topic_set(SPACE_A, SPACE_A, TOPIC_SHARED));
+        actions.push(subspace_topic_set(SPACE_X, SPACE_A, TOPIC_A));
+        actions.push(subspace_topic_set(SPACE_P, SPACE_Q, TOPIC_Q));
 
-        // Phase 4b: Subspace topic removal (declare then remove to test both paths)
-        actions.push(subspace_topic_declared(SPACE_A, SPACE_C, TOPIC_REMOVED));
-        actions.push(subspace_topic_removed(SPACE_A, SPACE_C, TOPIC_REMOVED));
+        // Phase 4b: Subspace topic unset (set then unset to test both paths)
+        actions.push(subspace_topic_set(SPACE_A, SPACE_C, TOPIC_UNSET));
+        actions.push(subspace_topic_unset(SPACE_A, SPACE_C, TOPIC_UNSET));
 
         // Phase 4c: Top-level space topic declaration + removal.
         // SPACE_J ends with topic_id = SPACE_TOPIC_KEPT.
         // SPACE_I declares then removes SPACE_TOPIC_CLEARED → ends with NULL.
-        actions.push(topic_declared(SPACE_J, SPACE_TOPIC_KEPT));
-        actions.push(topic_declared(SPACE_I, SPACE_TOPIC_CLEARED));
+        actions.push(topic_set(SPACE_J, SPACE_TOPIC_KEPT));
+        actions.push(topic_set(SPACE_I, SPACE_TOPIC_CLEARED));
         actions.push(topic_removed(SPACE_I, SPACE_TOPIC_CLEARED));
         // Stale removal: SPACE_J's current topic is SPACE_TOPIC_KEPT, so a
-        // TOPIC_REMOVED for SPACE_TOPIC_STALE must NOT clear it (conditional clear).
+        // TOPIC_UNSET for SPACE_TOPIC_STALE must NOT clear it (conditional clear).
         actions.push(topic_removed(SPACE_J, SPACE_TOPIC_STALE));
 
         // Phase 5: Editor/member operations
@@ -1665,14 +1665,14 @@ pub mod test_topology {
         ));
         actions.push(proposal_executed(SPACE_B, PROPOSAL_11));
 
-        // Proposal 12: SubspaceTopicDeclared
+        // Proposal 12: SubspaceTopicDeclared (V2: SUBSPACE_TOPIC_SET)
         actions.push(proposal_created(
             SPACE_C,
             PROPOSAL_12,
             VotingMode::Fast,
             vec![ProposalAction::ping_subspace_topic(
-                actions::SUBSPACE_TOPIC_DECLARED,
-                SUBSPACE_TARGET_TOPIC_DECLARED,
+                actions::SUBSPACE_TOPIC_SET,
+                SUBSPACE_TARGET_TOPIC_SET,
             )],
         ));
         actions.push(proposal_settings_selected(
@@ -1698,14 +1698,14 @@ pub mod test_topology {
         ));
         actions.push(proposal_executed(SPACE_C, PROPOSAL_12));
 
-        // Proposal 13: SubspaceTopicRemoved
+        // Proposal 13: SubspaceTopicRemoved (V2: SUBSPACE_TOPIC_UNSET)
         actions.push(proposal_created(
             SPACE_C,
             PROPOSAL_13,
             VotingMode::Fast,
             vec![ProposalAction::ping_subspace_topic(
-                actions::SUBSPACE_TOPIC_REMOVED,
-                SUBSPACE_TARGET_TOPIC_REMOVED,
+                actions::SUBSPACE_TOPIC_UNSET,
+                SUBSPACE_TARGET_TOPIC_UNSET,
             )],
         ));
         actions.push(proposal_settings_selected(
@@ -1770,7 +1770,7 @@ pub mod test_topology {
             PROPOSAL_15,
             VotingMode::Fast,
             vec![ProposalAction::unset_topic(
-                SPACE_TARGET_TOPIC_REMOVED,
+                SPACE_TARGET_TOPIC_UNSET,
                 b"topic-metadata",
             )],
         ));
@@ -1847,8 +1847,8 @@ pub mod test_topology {
         ));
 
         // Phase 10: Topic declarations (standalone, not trust-related)
-        actions.push(topic_declared(ROOT_SPACE_ID, make_id(0xD1)));
-        actions.push(topic_declared(SPACE_A, make_id(0xD2)));
+        actions.push(topic_set(ROOT_SPACE_ID, make_id(0xD1)));
+        actions.push(topic_set(SPACE_A, make_id(0xD2)));
 
         actions
     }
@@ -1948,26 +1948,26 @@ mod tests {
     }
 
     #[test]
-    fn test_subspace_topic_declared_format() {
+    fn test_subspace_topic_set_format() {
         let parent = make_id(0x01);
         let subspace = make_id(0x02);
         let topic = make_id(0x03);
-        let action = subspace_topic_declared(parent, subspace, topic);
+        let action = subspace_topic_set(parent, subspace, topic);
 
         assert_eq!(action.from_id, parent.to_vec());
-        assert_eq!(action.action, actions::SUBSPACE_TOPIC_DECLARED.to_vec());
+        assert_eq!(action.action, actions::SUBSPACE_TOPIC_SET.to_vec());
         assert_eq!(&action.topic[0..16], &subspace);
         assert_eq!(&action.topic[16..32], &topic);
     }
 
     #[test]
-    fn test_topic_declared_format() {
+    fn test_topic_set_format() {
         let space_id = make_id(0x01);
         let topic_id = make_id(0x02);
-        let action = topic_declared(space_id, topic_id);
+        let action = topic_set(space_id, topic_id);
 
         assert_eq!(action.from_id, space_id.to_vec());
-        assert_eq!(action.action, actions::TOPIC_DECLARED.to_vec());
+        assert_eq!(action.action, actions::TOPIC_SET.to_vec());
         assert_eq!(&action.topic[0..16], &topic_id);
         assert_eq!(&action.topic[16..32], &[0u8; 16]);
         assert!(action.data.is_empty());
@@ -2035,13 +2035,13 @@ mod tests {
             .iter()
             .filter(|a| a.action == actions::SUBSPACE_RELATED.to_vec())
             .count();
-        let topic_declared_count = actions
+        let topic_set_count = actions
             .iter()
-            .filter(|a| a.action == actions::SUBSPACE_TOPIC_DECLARED.to_vec())
+            .filter(|a| a.action == actions::SUBSPACE_TOPIC_SET.to_vec())
             .count();
-        let topic_removed_count = actions
+        let topic_unset_count = actions
             .iter()
-            .filter(|a| a.action == actions::SUBSPACE_TOPIC_REMOVED.to_vec())
+            .filter(|a| a.action == actions::SUBSPACE_TOPIC_UNSET.to_vec())
             .count();
         let edit_count = actions
             .iter()
@@ -2059,10 +2059,10 @@ mod tests {
         assert_eq!(verified_count, 10);
         // 4 related subspaces
         assert_eq!(related_count, 4);
-        // 6 topic declarations (5 original + 1 declared-then-removed)
-        assert_eq!(topic_declared_count, 6);
-        // 1 topic removal
-        assert_eq!(topic_removed_count, 1);
+        // 6 topic sets (5 original + 1 set-then-unset)
+        assert_eq!(topic_set_count, 6);
+        // 1 topic unset
+        assert_eq!(topic_unset_count, 1);
         // 9 edits (6 original + 3 type-related for search indexer testing)
         assert_eq!(edit_count, 9);
         // 15 proposals with settings (7 original + 6 subspace + 2 space-topic proposals)

@@ -1,0 +1,100 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scoring-service
+  namespace: gaia-v2
+spec:
+  schedule: "0 3 * * *"  # Run at 3am every day
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+            - name: regcred
+          nodeSelector:
+            doks.digitalocean.com/node-pool: gaia-v2-pool
+          tolerations:
+            - key: dedicated
+              value: gaia-v2
+              effect: NoSchedule
+          containers:
+            - name: scoring-service
+              image: registry.digitalocean.com/geo/scoring-service:latest
+              imagePullPolicy: Always
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: scoring-service-credentials
+                      key: DATABASE_URL
+                # Output mode: postgres, kafka, or all
+                - name: OUTPUT_MODE
+                  value: "all"
+                # Kafka configuration (uses kafka-credentials secret copied to scoring namespace)
+                - name: KAFKA_BROKER
+                  valueFrom:
+                    secretKeyRef:
+                      name: kafka-credentials
+                      key: KAFKA_BROKER
+                - name: KAFKA_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: kafka-credentials
+                      key: KAFKA_USERNAME
+                - name: KAFKA_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: kafka-credentials
+                      key: KAFKA_PASSWORD
+                - name: KAFKA_SSL_CA_PEM
+                  valueFrom:
+                    secretKeyRef:
+                      name: kafka-credentials
+                      key: KAFKA_SSL_CA_PEM
+                - name: ENVIRONMENT
+                  value: "testnet"
+                - name: KAFKA_TOPIC
+                  value: "curation.scores"
+                - name: SCORE_BATCH_SIZE
+                  value: "1000"
+                - name: NORMALIZATION_METHOD
+                  value: "z_score_sigmoid"
+                - name: SENTRY_DSN
+                  valueFrom:
+                    secretKeyRef:
+                      name: scoring-cronjob-secrets
+                      key: SENTRY_DSN
+                      optional: true
+                - name: SENTRY_TRACES_SAMPLE_RATE
+                  valueFrom:
+                    secretKeyRef:
+                      name: scoring-cronjob-secrets
+                      key: SENTRY_TRACES_SAMPLE_RATE
+                      optional: true
+                - name: SENTRY_SEND_DEFAULT_PII
+                  valueFrom:
+                    secretKeyRef:
+                      name: scoring-cronjob-secrets
+                      key: SENTRY_SEND_DEFAULT_PII
+                      optional: true
+                - name: SENTRY_ENVIRONMENT
+                  valueFrom:
+                    secretKeyRef:
+                      name: scoring-cronjob-secrets
+                      key: SENTRY_ENVIRONMENT
+                      optional: true
+                - name: SENTRY_RELEASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: scoring-cronjob-secrets
+                      key: SENTRY_RELEASE
+                      optional: true
+              resources:
+                requests:
+                  memory: "2048Mi"
+                  cpu: "1000m"
+                limits:
+                  memory: "4096Mi"
+                  cpu: "2000m"

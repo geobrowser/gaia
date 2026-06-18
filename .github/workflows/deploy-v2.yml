@@ -80,12 +80,24 @@ jobs:
 
       - name: Verify image tag exists in registry
         if: inputs.service != 'valkey'
+        env:
+          TAG: ${{ inputs.tag }}
+          SERVICE: ${{ inputs.service }}
         run: |
-          doctl registry repository list-tags ${{ inputs.service }} --format Tag --no-header | \
-            grep -qx "${{ inputs.tag }}" || {
-              echo "::error::Tag ${{ inputs.tag }} not found in $REGISTRY/${{ inputs.service }} — run the build workflow first."
-              exit 1
-            }
+          # Capture doctl output separately so a doctl failure is distinguishable
+          # from "tag not found". Match the tag against the FIRST column only:
+          # the runner's doctl ignores --format/--no-header and prints the full
+          # table, and a substring grep could false-positive on the hex digest
+          # column. First-field exact match works with either output format.
+          if ! tags=$(doctl registry repository list-tags "$SERVICE"); then
+            echo "::error::doctl failed listing tags for $REGISTRY/$SERVICE — registry/auth problem, not a missing tag."
+            exit 1
+          fi
+          if ! echo "$tags" | awk -v t="$TAG" '$1==t{found=1} END{exit !found}'; then
+            echo "::error::Tag $TAG not found in $REGISTRY/$SERVICE — run the build workflow first. Tags present:"
+            echo "$tags"
+            exit 1
+          fi
 
       - name: Ensure namespace exists
         run: kubectl apply -f kg-indexer/k8s/v2/namespace.yaml

@@ -92,8 +92,9 @@ if (opensearchUrl) {
 		throw error
 	}
 
-	// Get environment-specific index name
-	// staging -> staging_entities, testnet -> testnet_entities, production -> entities
+	// Get environment-specific index name; must mirror search-indexer-shared's
+	// get_index_prefix(): staging -> staging_entities, testnet -> testnet_entities,
+	// production -> entities
 	const environment = process.env.ENVIRONMENT
 	const baseIndexAlias = process.env.INDEX_ALIAS ?? "entities"
 	const indexName =

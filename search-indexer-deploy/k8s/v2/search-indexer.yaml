@@ -1,0 +1,181 @@
+# =============================================================================
+# Search Indexer Headless Service (required by StatefulSet)
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: search-indexer
+  namespace: gaia-v2
+  labels:
+    app: search-indexer
+spec:
+  clusterIP: None
+  selector:
+    app: search-indexer
+  ports:
+    - name: http
+      port: 8080
+      targetPort: health
+---
+# =============================================================================
+# Search Indexer StatefulSet
+# =============================================================================
+# Consumes messages from Kafka and indexes them into OpenSearch
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: search-indexer
+  namespace: gaia-v2
+  labels:
+    app: search-indexer
+spec:
+  serviceName: search-indexer
+  replicas: 1
+  selector:
+    matchLabels:
+      app: search-indexer
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: search-indexer
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      nodeSelector:
+        doks.digitalocean.com/node-pool: gaia-v2-pool
+      tolerations:
+        - key: dedicated
+          value: gaia-v2
+          effect: NoSchedule
+      containers:
+        - name: search-indexer
+          image: registry.digitalocean.com/geo/search-indexer:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            # OpenSearch connection (managed DigitalOcean OpenSearch)
+            - name: OPENSEARCH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-credentials
+                  key: OPENSEARCH_URL
+            # Index version (defaults to 0 if not set)
+            - name: ENTITIES_INDEX_VERSION
+              value: "5"
+            # Kafka connection (managed Kafka with SSL)
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_SSL_CA_PEM
+            # Database (Postgres lookup for fast score indexing)
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: search-indexer-secrets
+                  key: DATABASE_URL
+            - name: DATABASE_MAX_CONNECTIONS
+              value: "5"
+            # Relation map (SQLite-backed, for fast DeleteRelation lookups)
+            - name: RELATION_MAP_DB_PATH
+              value: "/data/relation_map.sqlite"
+            - name: RELATION_MAP_CACHE_SIZE
+              value: "500000"
+            # Kafka consumer configuration
+            - name: ENVIRONMENT
+              value: "testnet"
+            - name: KAFKA_GROUP_EDITS_ID
+              value: "search-indexer-group-edits-v4"
+            - name: KAFKA_GROUP_SCORES_ID
+              value: "search-indexer-group-scores-v3"
+            - name: KAFKA_GROUP_SPACE_TOPICS_ID
+              value: "search-indexer-group-space-topics-v3"
+            # Logging
+            - name: RUST_LOG
+              value: "info"
+              # Set with kubectl for debugging: "info,search_indexer=debug,search_indexer_repository=debug"
+            # Sentry telemetry and monitoring
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: search-indexer-secrets
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              value: "testnet"
+            - name: SENTRY_RELEASE
+              value: "search-indexer@1.0.0"
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              value: "0.1"
+            - name: SENTRY_SEND_DEFAULT_PII
+              value: "false"
+            - name: SENTRY_DEBUG
+              value: "false"
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "100m"
+            limits:
+              memory: "4Gi"
+              cpu: "500m"
+          volumeMounts:
+            - name: topology-data
+              mountPath: /data
+          # Liveness probe - checks if the process is alive and can respond to HTTP requests
+          # Used by Kubernetes to restart the container if it becomes unresponsive
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness probe - checks if the service is ready to accept traffic
+          # Verifies healthy OpenSearch connectivity before routing traffic to the pod
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+      restartPolicy: Always
+  volumeClaimTemplates:
+    - metadata:
+        name: topology-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi

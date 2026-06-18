@@ -1,6 +1,10 @@
-//! Pipeline: TOPIC_DECLARED / TOPIC_REMOVED → space.topics
+//! Pipeline: TOPIC_SET / TOPIC_UNSET → space.topics
 //!
-//! Converts topic declaration and removal actions to typed Hermes events with decoded data.
+//! Converts topic set and unset actions to typed `HermesTopicDeclared` /
+//! `HermesTopicRemoved` events with decoded data.
+//! (Wire format keeps the legacy `HermesTopicDeclared` / `HermesTopicRemoved` names;
+//! the contract selectors renamed from `TOPIC_DECLARED` / `TOPIC_REMOVED` to
+//! `TOPIC_SET` / `TOPIC_UNSET` in Governance V2.)
 
 use anyhow::Result;
 use hermes_instrumentation::{debug_span, warn};
@@ -35,7 +39,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
         let action_type = action.action.as_slice();
         let sequence = index as u32;
 
-        if actions::matches(action_type, &actions::TOPIC_DECLARED) {
+        if actions::matches(action_type, &actions::TOPIC_SET) {
             let event = debug_span!(
                 "convert.topics.declared",
                 space_id = %hex::encode(&action.from_id),
@@ -43,7 +47,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             )
             .in_scope(|| convert_topic_declared(action, meta, sequence))?;
             result.topics_declared.push(event);
-        } else if actions::matches(action_type, &actions::TOPIC_REMOVED) {
+        } else if actions::matches(action_type, &actions::TOPIC_UNSET) {
             let event = debug_span!(
                 "convert.topics.removed",
                 space_id = %hex::encode(&action.from_id),
@@ -57,7 +61,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
     Ok(result)
 }
 
-/// Convert a TOPIC_DECLARED action to HermesTopicDeclared proto.
+/// Convert a TOPIC_SET action to HermesTopicDeclared proto.
 ///
 /// The action structure:
 /// - from_id: space_id (16 bytes) - space declaring topic
@@ -87,9 +91,9 @@ fn convert_topic_declared(
     })
 }
 
-/// Convert a TOPIC_REMOVED action to HermesTopicRemoved proto.
+/// Convert a TOPIC_UNSET action to HermesTopicRemoved proto.
 ///
-/// The action structure mirrors TOPIC_DECLARED:
+/// The action structure mirrors TOPIC_SET:
 /// - from_id: space_id (16 bytes) - space removing topic
 /// - topic: bytes32(bytes16(topicId) | padding)
 /// - data: empty
@@ -137,7 +141,7 @@ mod tests {
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
-            action: actions::TOPIC_DECLARED.to_vec(),
+            action: actions::TOPIC_SET.to_vec(),
             topic,
             data: vec![9; 32],
         };
@@ -152,7 +156,7 @@ mod tests {
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
-            action: actions::TOPIC_DECLARED.to_vec(),
+            action: actions::TOPIC_SET.to_vec(),
             topic: vec![],
             data: vec![9; 32],
         };
@@ -168,14 +172,14 @@ mod tests {
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![],
-                action: actions::TOPIC_DECLARED.to_vec(),
+                action: actions::TOPIC_SET.to_vec(),
                 topic: vec![2; 32],
                 data: vec![],
             },
             Action {
                 from_id: vec![3; 16],
                 to_id: vec![],
-                action: actions::TOPIC_DECLARED.to_vec(),
+                action: actions::TOPIC_SET.to_vec(),
                 topic: vec![4; 32],
                 data: vec![],
             },
@@ -202,7 +206,7 @@ mod tests {
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
-            action: actions::TOPIC_REMOVED.to_vec(),
+            action: actions::TOPIC_UNSET.to_vec(),
             topic,
             data: vec![],
         };
@@ -217,7 +221,7 @@ mod tests {
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
-            action: actions::TOPIC_REMOVED.to_vec(),
+            action: actions::TOPIC_UNSET.to_vec(),
             topic: vec![],
             data: vec![],
         };
@@ -233,14 +237,14 @@ mod tests {
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![],
-                action: actions::TOPIC_REMOVED.to_vec(),
+                action: actions::TOPIC_UNSET.to_vec(),
                 topic: vec![2; 32],
                 data: vec![],
             },
             Action {
                 from_id: vec![3; 16],
                 to_id: vec![],
-                action: actions::TOPIC_REMOVED.to_vec(),
+                action: actions::TOPIC_UNSET.to_vec(),
                 topic: vec![4; 32],
                 data: vec![],
             },
@@ -270,21 +274,21 @@ mod tests {
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![],
-                action: actions::TOPIC_DECLARED.to_vec(),
+                action: actions::TOPIC_SET.to_vec(),
                 topic: vec![2; 32],
                 data: vec![],
             },
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![],
-                action: actions::TOPIC_REMOVED.to_vec(),
+                action: actions::TOPIC_UNSET.to_vec(),
                 topic: vec![2; 32],
                 data: vec![],
             },
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![],
-                action: actions::TOPIC_DECLARED.to_vec(),
+                action: actions::TOPIC_SET.to_vec(),
                 topic: vec![3; 32],
                 data: vec![],
             },

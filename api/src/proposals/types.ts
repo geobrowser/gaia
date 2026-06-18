@@ -79,12 +79,22 @@ export interface ProposalAction {
 	contentId: string | null
 	/** New quorum for UpdateVotingSettings */
 	quorum: number | null
-	/** New fast threshold for UpdateVotingSettings */
+	/** New fast threshold for UpdateVotingSettings (legacy: == flatSupportThreshold) */
 	fastThreshold: number | null
-	/** New slow threshold for UpdateVotingSettings */
+	/** New slow threshold for UpdateVotingSettings (legacy: == partialPercentageSupportThreshold) */
 	slowThreshold: number | null
 	/** New duration for UpdateVotingSettings */
 	duration: number | null
+	/** V2: slow-path late-execution threshold (percentage of RATIO_BASE) */
+	partialPercentageSupportThreshold: number | null
+	/** V2: slow-path early-execution threshold (percentage of RATIO_BASE) */
+	universalPercentageSupportThreshold: number | null
+	/** V2: fast-path threshold (absolute yes-count) */
+	flatSupportThreshold: number | null
+	/** V2: whether newly added members get fast-path access */
+	disableFastPathAccessForNewMembers: boolean | null
+	/** V2: grace period in seconds applied after voting ends */
+	executionGracePeriod: number | null
 }
 
 /**
@@ -98,6 +108,8 @@ export interface ProposalWithVotes {
 	name: string | null
 	/** Member space ID of the proposer */
 	proposedBy: string
+	/** Proposal version number (incremented on each update; starts at 1) */
+	proposalVersion: number
 	votingMode: VotingMode
 	/** Unix timestamp in seconds when voting starts */
 	startTime: bigint
@@ -105,8 +117,25 @@ export interface ProposalWithVotes {
 	endTime: bigint
 	/** Minimum total votes required (for slow path) */
 	quorum: bigint
-	/** Threshold for passing - interpretation depends on votingMode */
+	/**
+	 * Legacy threshold compatibility projection.
+	 *
+	 * For Fast proposals: mirrors `flatSupportThreshold`.
+	 * For Slow proposals: mirrors `partialPercentageSupportThreshold`.
+	 *
+	 * New code should read the per-mode V2 field directly.
+	 */
 	threshold: bigint
+	/** V2: fast-path threshold (absolute yes-count needed to pass) */
+	flatSupportThreshold: bigint
+	/** V2: slow-path late-execution threshold (percentage of RATIO_BASE) */
+	partialPercentageSupportThreshold: bigint
+	/** V2: slow-path early-execution threshold (percentage of RATIO_BASE) */
+	universalPercentageSupportThreshold: bigint
+	/** V2: execution deadline (Unix seconds) — past this, the proposal is REJECTED. Null on legacy rows. */
+	executeBy: bigint | null
+	/** V2: total editor count for the proposal's space, used by the slow-path early-execution formula */
+	totalEditors: bigint
 	/** Unix timestamp when executed, null if not executed */
 	executedAt: bigint | null
 	/** Number of yes votes */
@@ -138,6 +167,14 @@ export interface StatusComputationResult {
 	status: ProposalStatus
 	isQuorumReached: boolean
 	isThresholdReached: boolean
+	/**
+	 * True when a Slow-mode proposal became EXECUTABLE *before* its voting
+	 * period ended via the slow-path early-execution formula
+	 * (`yesCount >= ceil(universalPercentageSupportThreshold * totalEditors / RATIO_BASE)`).
+	 * Always false for Fast-mode and for Slow proposals that execute after
+	 * voting ends.
+	 */
+	isEarlyExecutable: boolean
 }
 
 // =============================================================================
@@ -223,12 +260,22 @@ export interface UpdateVotingSettingsAction {
 	actionType: "UPDATE_VOTING_SETTINGS"
 	/** New minimum total votes required for slow path */
 	quorum: number
-	/** New threshold for fast path (absolute yes votes needed) */
+	/** New threshold for fast path (legacy: == flatSupportThreshold) */
 	fastThreshold: number
-	/** New threshold for slow path (percentage as RATIO_BASE fraction) */
+	/** New threshold for slow path (legacy: == partialPercentageSupportThreshold) */
 	slowThreshold: number
 	/** New voting duration in seconds */
 	duration: number
+	/** V2: slow-path late-execution threshold (percentage of RATIO_BASE) */
+	partialPercentageSupportThreshold: number | null
+	/** V2: slow-path early-execution threshold (percentage of RATIO_BASE) */
+	universalPercentageSupportThreshold: number | null
+	/** V2: fast-path absolute yes-count threshold */
+	flatSupportThreshold: number | null
+	/** V2: whether newly added members get fast-path access */
+	disableFastPathAccessForNewMembers: boolean | null
+	/** V2: grace period in seconds applied after voting ends */
+	executionGracePeriod: number | null
 }
 
 /**
@@ -320,6 +367,10 @@ interface ProposalResponseBase {
 	name: string | null
 	/** Member space ID of the proposer (dashless UUID) */
 	proposedBy: string
+	/** Proposal version number (incremented on each update; starts at 1) */
+	proposalVersion: number
+	/** Execution deadline (Unix seconds) — past this, the proposal is REJECTED. Null on legacy rows. */
+	executeBy: number | null
 	status: ProposalStatus
 	votingMode: "FAST" | "SLOW"
 	/** Actions in this proposal */

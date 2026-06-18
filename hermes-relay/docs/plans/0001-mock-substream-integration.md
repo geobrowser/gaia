@@ -85,7 +85,7 @@ Event builders create `Action` events in the chain format:
 | DAO Space | `space_created_dao(space_id, editors, members)` | `SPACE_REGISTERED` |
 | Verified Trust | `subspace_verified(source, target)` | `SUBSPACE_VERIFIED` |
 | Related Trust | `subspace_related(source, target)` | `SUBSPACE_RELATED` |
-| Subtopic Trust | `subspace_topic_declared(source, subspace, topic)` | `SUBSPACE_TOPIC_DECLARED` |
+| Subtopic Trust | `subspace_topic_set(source, subspace, topic)` | `SUBSPACE_TOPIC_SET` |
 | Edit | `edit_published(space_id, ipfs_hash)` | `EDITS_PUBLISHED` |
 | Proposal Created | `proposal_created(space_id, proposal_id, voting_mode, actions)` | `PROPOSAL_CREATED` |
 | Proposal Voted | `proposal_voted(voter_id, space_id, proposal_id, vote_option)` | `PROPOSAL_VOTED` |

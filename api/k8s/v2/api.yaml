@@ -1,0 +1,250 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: gaia-v2
+  labels:
+    app: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: regcred
+      volumes:
+        - name: ssl-certs
+          emptyDir: {}
+      nodeSelector:
+        doks.digitalocean.com/node-pool: gaia-v2-pool
+      tolerations:
+        - key: dedicated
+          value: gaia-v2
+          effect: NoSchedule
+      initContainers:
+        - name: setup-certs
+          image: registry.digitalocean.com/geo/api:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - |
+              echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+          env:
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+        - name: migrate
+          image: registry.digitalocean.com/geo/api:latest
+          imagePullPolicy: Always
+          command: ["bun", "run", "db:migrate"]
+          env:
+            - name: DATABASE_URL_DIRECT
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL_DIRECT
+            - name: NODE_EXTRA_CA_CERTS
+              value: /ssl/ca.crt
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: api
+          image: registry.digitalocean.com/geo/api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
+          env:
+            - name: NODE_EXTRA_CA_CERTS
+              value: /ssl/ca.crt
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: PG_CONNECTION_TIMEOUT_MS
+              value: "3000"
+            - name: PG_POOL_PRESSURE_WAITING_THRESHOLD
+              value: "1"
+            - name: PG_POOL_PRESSURE_UTILIZATION_THRESHOLD
+              value: "90"
+            - name: PG_POOL_PRESSURE_TIMEOUT_THRESHOLD
+              value: "2"
+            - name: PG_POOL_ACQUIRE_TIMEOUT_WINDOW_MS
+              value: "30000"
+            - name: PG_POOL_SATURATION_ACTIVATION_MS
+              value: "15000"
+            - name: PG_POOL_SATURATION_RELEASE_MS
+              value: "30000"
+            - name: IPFS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: IPFS_KEY
+            - name: IPFS_GATEWAY_WRITE
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: IPFS_GATEWAY_WRITE
+            # Required so the API resolves the correct alias/index in the shared OpenSearch cluster.
+            - name: ENVIRONMENT
+              value: "testnet"
+            - name: OPENSEARCH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: OPENSEARCH_URL
+            - name: TOPOLOGY_SERVICE_URL
+              value: "http://search-indexer:8080"
+            # Response cache disabled — uncomment to re-enable.
+            # - name: VALKEY_URL
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: api-cache-secrets
+            #       key: VALKEY_URL
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: api-sentry
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              valueFrom:
+                secretKeyRef:
+                  name: api-sentry
+                  key: SENTRY_TRACES_SAMPLE_RATE
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: api-sentry
+                  key: SENTRY_ENVIRONMENT
+                  optional: true
+            - name: SENTRY_RELEASE
+              valueFrom:
+                secretKeyRef:
+                  name: api-sentry
+                  key: SENTRY_RELEASE
+                  optional: true
+            - name: SENTRY_DEBUG
+              valueFrom:
+                secretKeyRef:
+                  name: api-sentry
+                  key: SENTRY_DEBUG
+                  optional: true
+          resources:
+            requests:
+              memory: "768Mi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+          livenessProbe:
+            httpGet:
+              path: /health/liveness
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: gaia-v2
+  labels:
+    app: api
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      protocol: TCP
+  selector:
+    app: api
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api
+  namespace: gaia-v2
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/server-snippet: |
+      gzip on;
+      gzip_comp_level 5;
+      gzip_min_length 512;
+      gzip_proxied any;
+      gzip_vary on;
+      gzip_types
+        application/json
+        application/graphql-response+json
+        application/javascript
+        application/xml
+        text/plain
+        text/css
+        text/javascript
+        text/xml;
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - testnet-api-v2.geobrowser.io
+      secretName: testnet-api-v2-tls
+  rules:
+    - host: testnet-api-v2.geobrowser.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 3000

@@ -1,14 +1,14 @@
-//! Pipeline: SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED → space.trust.extensions
+//! Pipeline: SUBSPACE_VERIFIED/RELATED/TOPIC_SET → space.trust.extensions
 //!
 //! Converts trust extension and revocation actions to HermesSpaceTrustExtension events.
 //!
 //! Action types:
 //! - SUBSPACE_VERIFIED: Verified trust extension (explicit canonical trust)
 //! - SUBSPACE_RELATED: Related trust extension (explicit non-canonical trust)
-//! - SUBSPACE_TOPIC_DECLARED: Topic-based trust extension
+//! - SUBSPACE_TOPIC_SET: Topic-based trust extension
 //! - SUBSPACE_UNVERIFIED: Verified trust removal
 //! - SUBSPACE_UNRELATED: Related trust removal
-//! - SUBSPACE_TOPIC_REMOVED: Topic trust removal
+//! - SUBSPACE_TOPIC_UNSET: Topic trust removal
 
 use anyhow::Result;
 use hermes_instrumentation::debug_span;
@@ -58,10 +58,10 @@ impl TransformResult {
 /// Handles the following action types:
 /// - SUBSPACE_VERIFIED: Verified trust extension
 /// - SUBSPACE_RELATED: Related trust extension
-/// - SUBSPACE_TOPIC_DECLARED: Topic-based trust extension
+/// - SUBSPACE_TOPIC_SET: Topic-based trust extension
 /// - SUBSPACE_UNVERIFIED: Verified trust removal
 /// - SUBSPACE_UNRELATED: Related trust removal
-/// - SUBSPACE_TOPIC_REMOVED: Topic trust removal
+/// - SUBSPACE_TOPIC_UNSET: Topic trust removal
 ///
 /// Returns transformed events without sending to Kafka.
 pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
@@ -89,7 +89,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             .in_scope(|| convert_related(action, meta, sequence))?;
             result.events.push(event);
             result.related += 1;
-        } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_DECLARED) {
+        } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_SET) {
             let event = debug_span!(
                 "convert.trust.topic_declared",
                 source = %hex::encode(&action.from_id),
@@ -117,7 +117,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             .in_scope(|| convert_unrelated(action, meta, sequence))?;
             result.events.push(event);
             result.unrelated += 1;
-        } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_REMOVED) {
+        } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_UNSET) {
             let event = debug_span!(
                 "convert.trust.topic_removed",
                 source = %hex::encode(&action.from_id),
@@ -184,9 +184,9 @@ fn convert_related(
     })
 }
 
-/// Convert a SUBSPACE_TOPIC_DECLARED action to HermesSpaceTrustExtension proto.
+/// Convert a SUBSPACE_TOPIC_SET action to HermesSpaceTrustExtension proto.
 ///
-/// The action structure for SUBSPACE_TOPIC_DECLARED:
+/// The action structure for SUBSPACE_TOPIC_SET:
 /// - from_id: parent_space_id (16 bytes)
 /// - topic: [subspace_id (16 bytes)][topic_id (16 bytes)]
 fn convert_topic_declared(
@@ -257,7 +257,7 @@ fn convert_unrelated(
     })
 }
 
-/// Convert a SUBSPACE_TOPIC_REMOVED action to HermesSpaceTrustExtension proto.
+/// Convert a SUBSPACE_TOPIC_UNSET action to HermesSpaceTrustExtension proto.
 ///
 /// action.topic layout: [subspace_id: 16 bytes | topic_id: 16 bytes]
 fn convert_topic_removed(
@@ -363,7 +363,7 @@ mod tests {
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
-            action: actions::SUBSPACE_TOPIC_DECLARED.to_vec(),
+            action: actions::SUBSPACE_TOPIC_SET.to_vec(),
             topic,
             data: vec![],
         };
@@ -430,7 +430,7 @@ mod tests {
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
-            action: actions::SUBSPACE_TOPIC_REMOVED.to_vec(),
+            action: actions::SUBSPACE_TOPIC_UNSET.to_vec(),
             topic,
             data: vec![],
         };
@@ -465,7 +465,7 @@ mod tests {
             Action {
                 from_id: vec![5; 16],
                 to_id: vec![],
-                action: actions::SUBSPACE_TOPIC_DECLARED.to_vec(),
+                action: actions::SUBSPACE_TOPIC_SET.to_vec(),
                 topic: {
                     let mut t = vec![6u8; 16];
                     t.extend_from_slice(&[7u8; 16]);
@@ -490,7 +490,7 @@ mod tests {
             Action {
                 from_id: vec![14; 16],
                 to_id: vec![],
-                action: actions::SUBSPACE_TOPIC_REMOVED.to_vec(),
+                action: actions::SUBSPACE_TOPIC_UNSET.to_vec(),
                 topic: {
                     let mut t = vec![15u8; 16];
                     t.extend_from_slice(&[16u8; 16]);

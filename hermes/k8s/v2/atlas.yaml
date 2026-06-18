@@ -1,0 +1,140 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas
+  namespace: gaia-v2
+  labels:
+    app: atlas
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: atlas
+  template:
+    metadata:
+      labels:
+        app: atlas
+    spec:
+      restartPolicy: Always
+      imagePullSecrets:
+        - name: regcred
+      nodeSelector:
+        doks.digitalocean.com/node-pool: gaia-v2-pool
+      tolerations:
+        - key: dedicated
+          value: gaia-v2
+          effect: NoSchedule
+      containers:
+        - name: atlas
+          image: registry.digitalocean.com/geo/atlas:latest
+          imagePullPolicy: Always
+          env:
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_SSL_CA_PEM
+            - name: ENVIRONMENT
+              value: "testnet"
+            - name: KAFKA_TOPIC
+              value: "topology.canonical"
+            - name: USE_MOCK
+              value: "false"
+            - name: SUBSTREAMS_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: SUBSTREAMS_ENDPOINT
+            - name: SUBSTREAMS_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: SUBSTREAMS_API_TOKEN
+                  optional: true
+            # 0 = stream from genesis — safe on the fresh chain (non-numeric values are
+            # silently ignored and fall back to the OLD testnet block 82655).
+            # Tighten to the V2 SpaceRegistry deploy block at deploy time (runbook Step 9).
+            - name: SUBSTREAMS_START_BLOCK
+              value: "0"
+            - name: ROOT_SPACE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-secrets
+                  key: ROOT_SPACE_ID
+            - name: ATLAS_CHECKPOINT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: ATLAS_INDEXER_ID
+              value: "atlas-testnet"
+            - name: ATLAS_RUNTIME_COMPATIBILITY_MARKER
+              value: "atlas-v1"
+            - name: ATLAS_FAIL_OPEN_BOUND
+              value: "10"
+            - name: ATLAS_CHECKPOINT_RETRY_ATTEMPTS
+              value: "3"
+            - name: ATLAS_CHECKPOINT_RETRY_BACKOFF_MS
+              value: "200"
+            - name: ATLAS_PAUSE_RECOVERY_MAX_ATTEMPTS
+              value: "120"
+            - name: ATLAS_CHECKPOINT_ALLOW_FRESH_START
+              value: "false"
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-otel
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-otel
+                  key: SENTRY_TRACES_SAMPLE_RATE
+                  optional: true
+            - name: SENTRY_SEND_DEFAULT_PII
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-otel
+                  key: SENTRY_SEND_DEFAULT_PII
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-otel
+                  key: SENTRY_ENVIRONMENT
+                  optional: true
+            - name: SENTRY_RELEASE
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-otel
+                  key: SENTRY_RELEASE
+                  optional: true
+            - name: SENTRY_DEBUG
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-otel
+                  key: SENTRY_DEBUG
+                  optional: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"

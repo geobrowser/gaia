@@ -46,20 +46,23 @@ pub use hermes_substream::ACTION_PROPOSAL_UPDATED as PROPOSAL_UPDATED;
 pub use hermes_substream::ACTION_PROPOSAL_VOTED as PROPOSAL_VOTED;
 pub use hermes_substream::ACTION_SPACE_FAST_PATH_RESTRICTED as SPACE_FAST_PATH_RESTRICTED;
 pub use hermes_substream::ACTION_SPACE_FAST_PATH_UNRESTRICTED as SPACE_FAST_PATH_UNRESTRICTED;
+pub use hermes_substream::ACTION_SPACE_ID_ARCHIVED as SPACE_ID_ARCHIVED;
 pub use hermes_substream::ACTION_SPACE_ID_CLEARED as SPACE_ID_CLEARED;
 pub use hermes_substream::ACTION_SPACE_ID_MIGRATED as SPACE_MIGRATED;
+pub use hermes_substream::ACTION_SPACE_ID_RECOVERED as SPACE_ID_RECOVERED;
 pub use hermes_substream::ACTION_SPACE_ID_REGISTERED as SPACE_REGISTERED;
 pub use hermes_substream::ACTION_SPACE_LEFT as SPACE_LEFT;
 pub use hermes_substream::ACTION_SPACE_TYPE_DECLARED as SPACE_TYPE_DECLARED;
 pub use hermes_substream::ACTION_SUBSPACE_RELATED as SUBSPACE_RELATED;
-pub use hermes_substream::ACTION_SUBSPACE_TOPIC_DECLARED as SUBSPACE_TOPIC_DECLARED;
-pub use hermes_substream::ACTION_SUBSPACE_TOPIC_REMOVED as SUBSPACE_TOPIC_REMOVED;
+pub use hermes_substream::ACTION_SUBSPACE_TOPIC_SET as SUBSPACE_TOPIC_SET;
+pub use hermes_substream::ACTION_SUBSPACE_TOPIC_UNSET as SUBSPACE_TOPIC_UNSET;
 pub use hermes_substream::ACTION_SUBSPACE_UNRELATED as SUBSPACE_UNRELATED;
 pub use hermes_substream::ACTION_SUBSPACE_UNVERIFIED as SUBSPACE_UNVERIFIED;
 pub use hermes_substream::ACTION_SUBSPACE_VERIFIED as SUBSPACE_VERIFIED;
-pub use hermes_substream::ACTION_TOPIC_DECLARED as TOPIC_DECLARED;
-pub use hermes_substream::ACTION_TOPIC_REMOVED as TOPIC_REMOVED;
+pub use hermes_substream::ACTION_TOPIC_SET as TOPIC_SET;
+pub use hermes_substream::ACTION_TOPIC_UNSET as TOPIC_UNSET;
 pub use hermes_substream::ACTION_UNFLAGGED as UNFLAGGED;
+pub use hermes_substream::ACTION_VOTING_SETTINGS_UPDATED as VOTING_SETTINGS_UPDATED;
 
 // =============================================================================
 // Permissionless Actions
@@ -79,4 +82,49 @@ pub use hermes_substream::SPACE_TYPE_EOA;
 /// Check if an action matches a specific action type.
 pub fn matches(action_bytes: &[u8], action_type: &[u8; 32]) -> bool {
     action_bytes == action_type
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::primitives::keccak256;
+
+    #[test]
+    fn voting_settings_updated_matches_contract_hash() {
+        assert_eq!(
+            super::VOTING_SETTINGS_UPDATED,
+            keccak256("GOVERNANCE.VOTING_SETTINGS_UPDATED").0,
+        );
+    }
+
+    #[test]
+    fn space_id_archived_matches_contract_hash() {
+        assert_eq!(
+            super::SPACE_ID_ARCHIVED,
+            keccak256("GOVERNANCE.SPACE_ID_ARCHIVED").0,
+        );
+    }
+
+    #[test]
+    fn space_id_recovered_matches_contract_hash() {
+        assert_eq!(
+            super::SPACE_ID_RECOVERED,
+            keccak256("GOVERNANCE.SPACE_ID_RECOVERED").0,
+        );
+    }
+
+    #[test]
+    fn space_id_cleared_matches_contract_hash() {
+        assert_eq!(
+            super::SPACE_ID_CLEARED,
+            keccak256("GOVERNANCE.SPACE_ID_CLEARED").0,
+        );
+    }
+
+    #[test]
+    fn proposal_updated_matches_contract_hash() {
+        assert_eq!(
+            super::PROPOSAL_UPDATED,
+            keccak256("GOVERNANCE.PROPOSAL_UPDATED").0,
+        );
+    }
 }

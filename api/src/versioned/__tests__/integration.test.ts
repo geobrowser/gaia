@@ -1545,36 +1545,52 @@ async function setupTestData(pool: Pool): Promise<void> {
 			[uuid.val(valIdx++), uuid.rfc0006Leaf, uuid.propText, uuid.space1, versionKey2],
 		)
 
-		// 11. Create proposals
+		// 11. Create proposals (V2: identity row + version 1 row, joined via `proposals_current` view)
 		const now = Math.floor(Date.now() / 1000)
 
+		const insertProposalV2 = async (
+			proposalId: string,
+			startTime: number,
+			endTime: number,
+			executedAt: number | null,
+		) => {
+			if (executedAt !== null) {
+				await client.query(
+					`INSERT INTO proposals (id, space_id, proposed_by, executed_at, created_at, created_at_block, current_version)
+					 VALUES ($1, $2, $3, $4, '2024-01-01T00:00:00Z', '1000', 1) ON CONFLICT DO NOTHING`,
+					[proposalId, uuid.space1, uuid.entityAllTypes, executedAt],
+				)
+			} else {
+				await client.query(
+					`INSERT INTO proposals (id, space_id, proposed_by, created_at, created_at_block, current_version)
+					 VALUES ($1, $2, $3, '2024-01-01T00:00:00Z', '1000', 1) ON CONFLICT DO NOTHING`,
+					[proposalId, uuid.space1, uuid.entityAllTypes],
+				)
+			}
+			await client.query(
+				`INSERT INTO proposal_versions (
+					proposal_id, proposal_version, voting_mode, start_time, end_time,
+					quorum, threshold,
+					partial_percentage_support_threshold, universal_percentage_support_threshold,
+					flat_support_threshold,
+					version_created_at, version_created_at_block
+				 )
+				 VALUES ($1, 1, 'Fast', $2, $3, 1, 1, 0, 0, 1, '2024-01-01T00:00:00Z', '1000') ON CONFLICT DO NOTHING`,
+				[proposalId, startTime, endTime],
+			)
+		}
+
 		// Active proposal (end_time in future)
-		await client.query(
-			`INSERT INTO proposals (id, space_id, proposed_by, voting_mode, start_time, end_time, quorum, threshold, created_at, created_at_block)
-			 VALUES ($1, $2, $3, 'Fast', $4, $5, 1, 1, '2024-01-01T00:00:00Z', '1000') ON CONFLICT DO NOTHING`,
-			[uuid.proposalActive, uuid.space1, uuid.entityAllTypes, now - 1000, now + 86400],
-		)
+		await insertProposalV2(uuid.proposalActive, now - 1000, now + 86400, null)
 
 		// Closed proposal (end_time in past)
-		await client.query(
-			`INSERT INTO proposals (id, space_id, proposed_by, voting_mode, start_time, end_time, quorum, threshold, created_at, created_at_block)
-			 VALUES ($1, $2, $3, 'Fast', $4, $5, 1, 1, '2024-01-01T00:00:00Z', '1000') ON CONFLICT DO NOTHING`,
-			[uuid.proposalClosed, uuid.space1, uuid.entityAllTypes, now - 86400, now - 1000],
-		)
+		await insertProposalV2(uuid.proposalClosed, now - 86400, now - 1000, null)
 
 		// Executed proposal
-		await client.query(
-			`INSERT INTO proposals (id, space_id, proposed_by, voting_mode, start_time, end_time, quorum, threshold, executed_at, created_at, created_at_block)
-			 VALUES ($1, $2, $3, 'Fast', $4, $5, 1, 1, $6, '2024-01-01T00:00:00Z', '1000') ON CONFLICT DO NOTHING`,
-			[uuid.proposalExecuted, uuid.space1, uuid.entityAllTypes, now - 86400, now - 1000, now - 500],
-		)
+		await insertProposalV2(uuid.proposalExecuted, now - 86400, now - 1000, now - 500)
 
 		// Proposal without publish action
-		await client.query(
-			`INSERT INTO proposals (id, space_id, proposed_by, voting_mode, start_time, end_time, quorum, threshold, created_at, created_at_block)
-			 VALUES ($1, $2, $3, 'Fast', $4, $5, 1, 1, '2024-01-01T00:00:00Z', '1000') ON CONFLICT DO NOTHING`,
-			[uuid.proposalNoPublish, uuid.space1, uuid.entityAllTypes, now - 1000, now + 86400],
-		)
+		await insertProposalV2(uuid.proposalNoPublish, now - 1000, now + 86400, null)
 
 		await client.query("COMMIT")
 	} catch (error) {
@@ -1593,6 +1609,7 @@ async function cleanupTestData(pool: Pool): Promise<void> {
 
 		// Delete in reverse order of foreign key dependencies
 		await client.query(`DELETE FROM proposal_actions WHERE proposal_id::text LIKE '10000000-%'`)
+		await client.query(`DELETE FROM proposal_versions WHERE proposal_id::text LIKE '10000000-%'`)
 		await client.query(`DELETE FROM proposals WHERE id::text LIKE '10000000-%'`)
 		await client.query(`DELETE FROM relation_versions WHERE entity_id::text LIKE '10000000-%'`)
 		await client.query(`DELETE FROM value_versions WHERE entity_id::text LIKE '10000000-%'`)

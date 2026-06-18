@@ -49,8 +49,8 @@ pub mod selectors {
     pub const UNFLAG: [u8; 4] = [0xc6, 0x96, 0x84, 0x0f];
     /// unrestrictSpace(bytes16)
     pub const UNRESTRICT_SPACE: [u8; 4] = [0xd6, 0xf8, 0x43, 0x2f];
-    /// updateVotingSettings((uint256,uint256,uint256,uint256))
-    pub const UPDATE_VOTING_SETTINGS: [u8; 4] = [0xd2, 0x1e, 0x85, 0x41];
+    /// updateVotingSettings((uint256,uint256,uint256,uint256,uint256,bool,uint256))
+    pub const UPDATE_VOTING_SETTINGS: [u8; 4] = [0xf2, 0x2e, 0xc6, 0xb2];
     /// ping(bytes32,bytes32,bytes)
     pub const PING: [u8; 4] = [0xc7, 0x0d, 0x82, 0x82];
 }
@@ -202,24 +202,36 @@ pub fn decode_flag_args(calldata: &[u8]) -> Result<FlagArgs, DecodeError> {
     })
 }
 
-/// Decoded voting settings update arguments.
+/// Decoded voting settings update arguments (V2, 7 fields).
+/// Field order matches the Solidity `VotingSettings` struct.
 #[derive(Debug, Clone)]
 pub struct VotingSettingsArgs {
-    /// Minimum total votes required
+    /// Slow path late execution threshold (0..RATIO_BASE, % of yes/no votes)
+    pub partial_percentage_support_threshold: u64,
+    /// Slow path early execution threshold (0..RATIO_BASE, % of total editors)
+    pub universal_percentage_support_threshold: u64,
+    /// Fast path absolute YES votes needed
+    pub flat_support_threshold: u64,
+    /// Minimum participating votes for slow path
     pub quorum: u64,
-    /// Fast path: absolute YES votes needed
-    pub fast_threshold: u64,
-    /// Slow path: percentage of RATIO_BASE (10,000,000)
-    pub slow_threshold: u64,
-    /// Voting duration
+    /// Voting window duration in seconds
     pub duration: u64,
+    /// Whether newly added members are restricted from the fast path
+    pub disable_fast_path_access_for_new_members: bool,
+    /// Seconds after `lastDate` during which a passed proposal may still be executed
+    pub execution_grace_period: u64,
 }
 
-/// Decode updateVotingSettings((uint256,uint256,uint256,uint256)) calldata.
+/// ABI shape for the V2 `VotingSettings` tuple.
+/// Used both by `decode_voting_settings_args` (function calldata) and
+/// `decode_voting_settings_data` (raw event payload).
+type VotingSettingsTuple = sol! { (uint256, uint256, uint256, uint256, uint256, bool, uint256) };
+
+/// Decode `updateVotingSettings((uint256,uint256,uint256,uint256,uint256,bool,uint256))` calldata.
 ///
 /// The calldata is:
 /// - 4 bytes: function selector
-/// - ABI-encoded tuple (quorum, fastThreshold, slowThreshold, duration)
+/// - ABI-encoded 7-field `VotingSettings` tuple
 pub fn decode_voting_settings_args(calldata: &[u8]) -> Result<VotingSettingsArgs, DecodeError> {
     if calldata.len() < 4 {
         return Err(DecodeError::DataTooShort {
@@ -229,21 +241,67 @@ pub fn decode_voting_settings_args(calldata: &[u8]) -> Result<VotingSettingsArgs
     }
 
     // Skip the 4-byte selector
-    let data = &calldata[4..];
+    decode_voting_settings_data(&calldata[4..])
+}
 
-    // Decode ((uint256, uint256, uint256, uint256))
-    // Note: Solidity struct is encoded as a tuple
-    type VotingSettingsArgsType = sol! { (uint256, uint256, uint256, uint256) };
-    let (quorum, fast_threshold, slow_threshold, duration) =
-        VotingSettingsArgsType::abi_decode(data)
-            .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+/// Size in bytes of the raw ABI-encoded `VotingSettings` tuple: 7 static
+/// words × 32 bytes each.
+const VOTING_SETTINGS_TUPLE_SIZE: usize = 7 * 32;
+
+/// Decode a raw ABI-encoded `VotingSettings` tuple (no function selector).
+///
+/// Used for the `VOTING_SETTINGS_UPDATED` action event, whose `data` field is
+/// `abi.encode(_votingSettings)` without any selector prefix.
+///
+/// The expected payload is a fixed-size static 7-word tuple (7 × 32 = 224 bytes),
+/// so we do not need to speculatively unwrap before trying to decode. The eager
+/// `maybe_unwrap_bytes` heuristic can mis-detect a valid raw tuple as an ABI
+/// `bytes` envelope (e.g., when `partial_percentage_support_threshold == 32`
+/// and `universal_percentage_support_threshold <= 160`), slice the buffer, and
+/// drop the event. Invert the order:
+pub fn decode_voting_settings_data(data: &[u8]) -> Result<VotingSettingsArgs, DecodeError> {
+    if data.len() == VOTING_SETTINGS_TUPLE_SIZE
+        && let Ok(args) = decode_voting_settings_data_inner(data)
+    {
+        return Ok(args);
+    }
+
+    let unwrapped_once = maybe_unwrap_bytes(data);
+    if let Ok(args) = decode_voting_settings_data_inner(&unwrapped_once) {
+        return Ok(args);
+    }
+
+    if let Some(unwrapped_twice) = unwrap_bytes_once(unwrapped_once.as_ref())
+        && let Ok(args) = decode_voting_settings_data_inner(&unwrapped_twice)
+    {
+        return Ok(args);
+    }
+
+    Err(DecodeError::AbiDecode(
+        "Failed to decode voting settings data".to_string(),
+    ))
+}
+
+fn decode_voting_settings_data_inner(data: &[u8]) -> Result<VotingSettingsArgs, DecodeError> {
+    let (
+        partial,
+        universal,
+        flat,
+        quorum,
+        duration,
+        disable_fast_path_access_for_new_members,
+        execution_grace_period,
+    ) = VotingSettingsTuple::abi_decode(data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
 
     // Convert U256 to u64, saturating if too large
     Ok(VotingSettingsArgs {
+        partial_percentage_support_threshold: partial.try_into().unwrap_or(u64::MAX),
+        universal_percentage_support_threshold: universal.try_into().unwrap_or(u64::MAX),
+        flat_support_threshold: flat.try_into().unwrap_or(u64::MAX),
         quorum: quorum.try_into().unwrap_or(u64::MAX),
-        fast_threshold: fast_threshold.try_into().unwrap_or(u64::MAX),
-        slow_threshold: slow_threshold.try_into().unwrap_or(u64::MAX),
         duration: duration.try_into().unwrap_or(u64::MAX),
+        disable_fast_path_access_for_new_members,
+        execution_grace_period: execution_grace_period.try_into().unwrap_or(u64::MAX),
     })
 }
 
@@ -267,7 +325,7 @@ pub struct PingArgs {
 /// The `action` field is a keccak256 hash identifying the subspace operation.
 /// The `topic` field layout depends on the action type:
 ///   - Edge actions (verified/related/etc): `bytes32(bytes16)` → target in [0..16], padding in [16..32]
-///   - Topic actions (topic_declared/removed): [subspace_id: 16 | topic_id: 16]
+///   - Subspace topic actions (subspace_topic_set/unset): [subspace_id: 16 | topic_id: 16]
 pub fn decode_ping_args(calldata: &[u8]) -> Result<PingArgs, DecodeError> {
     // Minimum: 4-byte selector + 2×32 static (bytes32, bytes32) + 32 offset + 32 length = 132 bytes
     if calldata.len() < 132 {
@@ -313,12 +371,14 @@ sol! {
 // PROPOSAL_CREATED: abi.encode(bytes16 proposalId, VotingMode, Action[])
 #[allow(dead_code)] // Used in tests for encoding
 type ProposalCreatedDataType = sol! { (bytes16, uint8, Action[]) };
-// PROPOSAL_SETTINGS_USED: abi.encode(startDate, lastDate, votingMode, quorum, supportThreshold)
-// Note: onchain start/last dates are uint256 timestamps.
+// PROPOSAL_SETTINGS_SELECTED (V2): abi.encode(ProposalParameters).
+// Field order matches the Solidity `ProposalParameters` struct:
+// (votingMode, partialPct, universalPct, flat, quorum, startDate, lastDate, executeBy).
 #[allow(dead_code)] // Used in tests for encoding
-type ProposalSettingsUsedDataType = sol! { (uint256, uint256, uint8, uint256, uint256) };
-// PROPOSAL_VOTED: abi.encode(bytes16 proposalId, VoteOption)
-type ProposalVotedDataType = sol! { (bytes16, uint8) };
+type ProposalSettingsUsedDataType =
+    sol! { (uint8, uint256, uint256, uint256, uint256, uint256, uint256, uint256) };
+// PROPOSAL_VOTED (V2): abi.encode(bytes16 proposalId, uint8 proposalVersion, VoteOption).
+type ProposalVotedDataType = sol! { (bytes16, uint8, uint8) };
 type VoteDataType = sol! { (uint16, bytes16, bytes16) };
 #[allow(dead_code)] // Prepared for future EDITS_PUBLISHED decoding
 type EditsPublishedDataType = sol! { (bytes, bytes) };
@@ -417,19 +477,26 @@ pub struct ProposalAction {
     pub data: Vec<u8>,
 }
 
-/// Decoded proposal settings from PROPOSAL_SETTINGS_USED.
+/// Decoded proposal settings from PROPOSAL_SETTINGS_SELECTED (V2 — 8 fields).
+/// Field order matches the Solidity `ProposalParameters` struct.
 #[derive(Debug, Clone)]
 pub struct ProposalSettingsData {
+    /// Voting mode (0=Slow, 1=Fast).
+    pub voting_mode: u8,
+    /// Slow path late execution threshold (0..RATIO_BASE, % of yes/no votes).
+    pub partial_percentage_support_threshold: u64,
+    /// Slow path early execution threshold (0..RATIO_BASE, % of total editors).
+    pub universal_percentage_support_threshold: u64,
+    /// Fast path absolute YES votes needed.
+    pub flat_support_threshold: u64,
+    /// Minimum participating votes for slow path (quorum).
+    pub quorum: u64,
     /// Block timestamp when voting starts.
     pub start_date: u64,
     /// Block timestamp when voting ends.
     pub last_date: u64,
-    /// Voting mode (0=Fast, 1=Slow).
-    pub voting_mode: u8,
-    /// Minimum total votes for slow path (quorum).
-    pub quorum: u64,
-    /// Support threshold (flat for fast path, percentage for slow path).
-    pub support_threshold: u64,
+    /// Inclusive upper bound timestamp for execution.
+    pub execute_by: u64,
 }
 
 /// Decode PROPOSAL_CREATED data.
@@ -471,13 +538,14 @@ pub fn decode_proposal_created(data: &[u8]) -> Result<(ProposalCreatedData, u8),
     ))
 }
 
-/// Decode PROPOSAL_SETTINGS_USED data.
+/// Decode PROPOSAL_SETTINGS_SELECTED data (V2).
 ///
-/// Encoding: `abi.encode(startDate, lastDate, votingMode, quorum, supportThreshold)`
+/// Encoding: `abi.encode(ProposalParameters)` where the struct is
+/// `(votingMode, partialPct, universalPct, flat, quorum, startDate, lastDate, executeBy)`.
 pub fn decode_proposal_settings_used(data: &[u8]) -> Result<ProposalSettingsData, DecodeError> {
     if data.is_empty() {
         return Err(DecodeError::DataTooShort {
-            expected: 160, // 5 * 32 bytes for uint64, uint64, uint8, uint256, uint256
+            expected: 256, // 8 * 32 bytes
             actual: 0,
         });
     }
@@ -499,15 +567,7 @@ pub fn decode_proposal_settings_used(data: &[u8]) -> Result<ProposalSettingsData
         }
     };
 
-    let (start_date, last_date, voting_mode, quorum, support_threshold) = decoded;
-
-    Ok(ProposalSettingsData {
-        start_date,
-        last_date,
-        voting_mode,
-        quorum,
-        support_threshold,
-    })
+    Ok(decoded)
 }
 
 fn decode_proposal_created_inner(data: &[u8]) -> Result<ProposalCreatedData, DecodeError> {
@@ -578,61 +638,64 @@ fn decode_proposal_created_inner(data: &[u8]) -> Result<ProposalCreatedData, Dec
     })
 }
 
-fn decode_proposal_settings_used_inner(
-    data: &[u8],
-) -> Result<(u64, u64, u8, u64, u64), DecodeError> {
+fn decode_proposal_settings_used_inner(data: &[u8]) -> Result<ProposalSettingsData, DecodeError> {
     let params = [
-        ParamType::Uint(256),
-        ParamType::Uint(256),
-        ParamType::Uint(8),
-        ParamType::Uint(256),
-        ParamType::Uint(256),
+        ParamType::Uint(8),   // votingMode
+        ParamType::Uint(256), // partialPercentageSupportThreshold
+        ParamType::Uint(256), // universalPercentageSupportThreshold
+        ParamType::Uint(256), // flatSupportThreshold
+        ParamType::Uint(256), // quorum
+        ParamType::Uint(256), // startDate
+        ParamType::Uint(256), // lastDate
+        ParamType::Uint(256), // executeBy
     ];
 
     let tokens =
         ethabi::decode(&params, data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
 
-    let start = match &tokens[0] {
-        Token::Uint(v) => v.as_u64(),
-        _ => return Err(DecodeError::AbiDecode("Invalid start_date".to_string())),
+    let read_u8 = |i: usize, name: &str| -> Result<u8, DecodeError> {
+        match &tokens[i] {
+            Token::Uint(v) => Ok(v.low_u32() as u8),
+            _ => Err(DecodeError::AbiDecode(format!("Invalid {name}"))),
+        }
     };
-    let last = match &tokens[1] {
-        Token::Uint(v) => v.as_u64(),
-        _ => return Err(DecodeError::AbiDecode("Invalid last_date".to_string())),
-    };
-    let voting_mode = match &tokens[2] {
-        Token::Uint(v) => v.low_u32() as u8,
-        _ => return Err(DecodeError::AbiDecode("Invalid voting_mode".to_string())),
-    };
-    let quorum = match &tokens[3] {
-        Token::Uint(v) => v.as_u64(),
-        _ => return Err(DecodeError::AbiDecode("Invalid quorum".to_string())),
-    };
-    let support = match &tokens[4] {
-        Token::Uint(v) => v.as_u64(),
-        _ => {
-            return Err(DecodeError::AbiDecode(
-                "Invalid support_threshold".to_string(),
-            ));
+    let read_u64 = |i: usize, name: &str| -> Result<u64, DecodeError> {
+        match &tokens[i] {
+            Token::Uint(v) => Ok(v.as_u64()),
+            _ => Err(DecodeError::AbiDecode(format!("Invalid {name}"))),
         }
     };
 
-    Ok((start, last, voting_mode, quorum, support))
+    Ok(ProposalSettingsData {
+        voting_mode: read_u8(0, "voting_mode")?,
+        partial_percentage_support_threshold: read_u64(1, "partial_percentage_support_threshold")?,
+        universal_percentage_support_threshold: read_u64(
+            2,
+            "universal_percentage_support_threshold",
+        )?,
+        flat_support_threshold: read_u64(3, "flat_support_threshold")?,
+        quorum: read_u64(4, "quorum")?,
+        start_date: read_u64(5, "start_date")?,
+        last_date: read_u64(6, "last_date")?,
+        execute_by: read_u64(7, "execute_by")?,
+    })
 }
 
-/// Decoded proposal vote data.
+/// Decoded proposal vote data (V2 — includes proposal version).
 #[derive(Debug, Clone)]
 pub struct ProposalVotedData {
     /// Proposal ID (16 bytes).
     #[allow(dead_code)] // Available for callers who need it
     pub proposal_id: Vec<u8>,
+    /// Proposal version being voted on (uint8 on-chain, monotonically incremented on update).
+    pub proposal_version: u8,
     /// Vote option (0=None, 1=Yes, 2=No, 3=Abstain).
     pub vote: u8,
 }
 
-/// Decode PROPOSAL_VOTED data.
+/// Decode PROPOSAL_VOTED data (V2).
 ///
-/// Encoding: `abi.encode(bytes16 proposalId, VoteOption)`
+/// Encoding: `abi.encode(bytes16 proposalId, uint8 proposalVersion, VoteOption)`
 ///
 /// The data may arrive wrapped in an ABI `bytes` encoding (offset + length + content)
 /// because the SpaceRegistry's Action event emits `_data` as a non-indexed `bytes`
@@ -649,11 +712,12 @@ pub fn decode_proposal_voted(data: &[u8]) -> Result<ProposalVotedData, DecodeErr
 
     let current = maybe_unwrap_bytes(data);
 
-    let (proposal_id, vote_option) = ProposalVotedDataType::abi_decode(&current)
+    let (proposal_id, proposal_version, vote_option) = ProposalVotedDataType::abi_decode(&current)
         .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
 
     Ok(ProposalVotedData {
         proposal_id: proposal_id.to_vec(),
+        proposal_version,
         vote: vote_option,
     })
 }
@@ -802,7 +866,14 @@ pub fn decode_flag_data(data: &[u8]) -> Result<String, DecodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::{Bytes as PrimBytes, FixedBytes};
+    use alloy::primitives::{Bytes as PrimBytes, FixedBytes, keccak256};
+
+    #[test]
+    fn update_voting_settings_selector_matches_v2_signature() {
+        let sig = "updateVotingSettings((uint256,uint256,uint256,uint256,uint256,bool,uint256))";
+        let expected: [u8; 4] = keccak256(sig.as_bytes()).0[..4].try_into().unwrap();
+        assert_eq!(selectors::UPDATE_VOTING_SETTINGS, expected);
+    }
 
     #[test]
     fn test_decode_proposal_created_empty() {
@@ -840,14 +911,169 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_proposal_voted() {
+    fn test_decode_proposal_voted_v2() {
         let proposal_id = FixedBytes::<16>::from([0xCD; 16]);
+        let proposal_version = 7u8;
         let vote_option = 2u8; // No
-        let encoded = ProposalVotedDataType::abi_encode(&(proposal_id, vote_option));
+        let encoded =
+            ProposalVotedDataType::abi_encode(&(proposal_id, proposal_version, vote_option));
 
         let result = decode_proposal_voted(&encoded).unwrap();
         assert_eq!(result.proposal_id, vec![0xCD; 16]);
+        assert_eq!(result.proposal_version, 7);
         assert_eq!(result.vote, 2);
+    }
+
+    #[test]
+    fn decode_voting_settings_args_returns_v2_seven_fields() {
+        use alloy::primitives::U256;
+
+        let tuple = (
+            U256::from(1_000_000u64), // partial
+            U256::from(2_000_000u64), // universal
+            U256::from(3u64),         // flat
+            U256::from(4u64),         // quorum
+            U256::from(5u64),         // duration
+            true,                     // disableFastPathAccessForNewMembers
+            U256::from(6u64),         // executionGracePeriod
+        );
+        let tuple_bytes = VotingSettingsTuple::abi_encode(&tuple);
+
+        let mut calldata = Vec::with_capacity(4 + tuple_bytes.len());
+        calldata.extend_from_slice(&selectors::UPDATE_VOTING_SETTINGS);
+        calldata.extend_from_slice(&tuple_bytes);
+
+        let args = decode_voting_settings_args(&calldata).unwrap();
+        assert_eq!(args.partial_percentage_support_threshold, 1_000_000);
+        assert_eq!(args.universal_percentage_support_threshold, 2_000_000);
+        assert_eq!(args.flat_support_threshold, 3);
+        assert_eq!(args.quorum, 4);
+        assert_eq!(args.duration, 5);
+        assert!(args.disable_fast_path_access_for_new_members);
+        assert_eq!(args.execution_grace_period, 6);
+    }
+
+    #[test]
+    fn decode_voting_settings_data_accepts_raw_event_payload() {
+        use alloy::primitives::U256;
+
+        let tuple = (
+            U256::from(100u64),
+            U256::from(200u64),
+            U256::from(300u64),
+            U256::from(400u64),
+            U256::from(500u64),
+            false,
+            U256::from(600u64),
+        );
+        let data = VotingSettingsTuple::abi_encode(&tuple);
+
+        let args = decode_voting_settings_data(&data).unwrap();
+        assert_eq!(args.partial_percentage_support_threshold, 100);
+        assert_eq!(args.universal_percentage_support_threshold, 200);
+        assert_eq!(args.flat_support_threshold, 300);
+        assert_eq!(args.quorum, 400);
+        assert_eq!(args.duration, 500);
+        assert!(!args.disable_fast_path_access_for_new_members);
+        assert_eq!(args.execution_grace_period, 600);
+    }
+
+    #[test]
+    fn decode_voting_settings_data_accepts_bytes_wrapped_payload() {
+        use alloy::primitives::U256;
+        use alloy::sol_types::SolValue;
+
+        // The EVM may deliver Action.data wrapped in an ABI `bytes` envelope
+        // (offset + length + content). Verify the decoder transparently unwraps
+        // one level so VOTING_SETTINGS_UPDATED is not silently dropped.
+        let tuple = (
+            U256::from(1_000_000u64),
+            U256::from(2_000_000u64),
+            U256::from(3u64),
+            U256::from(4u64),
+            U256::from(5u64),
+            true,
+            U256::from(6u64),
+        );
+        let tuple_bytes = VotingSettingsTuple::abi_encode(&tuple);
+
+        // Wrap tuple encoding inside a `bytes` ABI envelope, mirroring the
+        // shape the EVM produces for a non-indexed `bytes` event parameter.
+        let wrapped = PrimBytes::from(tuple_bytes).abi_encode();
+
+        let args = decode_voting_settings_data(&wrapped).unwrap();
+        assert_eq!(args.partial_percentage_support_threshold, 1_000_000);
+        assert_eq!(args.universal_percentage_support_threshold, 2_000_000);
+        assert_eq!(args.flat_support_threshold, 3);
+        assert_eq!(args.quorum, 4);
+        assert_eq!(args.duration, 5);
+        assert!(args.disable_fast_path_access_for_new_members);
+        assert_eq!(args.execution_grace_period, 6);
+    }
+
+    #[test]
+    fn decode_voting_settings_data_decodes_raw_tuple_with_small_partial_threshold() {
+        use alloy::primitives::U256;
+
+        // Regression test: `maybe_unwrap_bytes` looks at words 0 and 1 of the
+        // payload and treats `(offset=32, length<=data.len()-64)` as an ABI
+        // `bytes` envelope. For a raw `VotingSettings` tuple, word 0 is
+        // `partial_percentage_support_threshold` and word 1 is
+        // `universal_percentage_support_threshold`. Choosing `partial == 32`
+        // and `universal == 160` produces a valid tuple whose wire layout
+        // satisfies the envelope heuristic: the eager pre-unwrap would slice
+        // the buffer down to the inner 160 bytes and fail to decode the
+        // (now-truncated) 7-word tuple, causing the event to be dropped.
+        //
+        // With the fix, the raw tuple decode is attempted first and succeeds.
+        let tuple = (
+            U256::from(32u64),  // partial — matches the "offset" word
+            U256::from(160u64), // universal — matches the "length" word (<= 224 - 64)
+            U256::from(3u64),
+            U256::from(4u64),
+            U256::from(5u64),
+            true,
+            U256::from(6u64),
+        );
+        let data = VotingSettingsTuple::abi_encode(&tuple);
+        assert_eq!(data.len(), 224, "static 7-word tuple should be 224 bytes");
+
+        let args = decode_voting_settings_data(&data).unwrap();
+        assert_eq!(args.partial_percentage_support_threshold, 32);
+        assert_eq!(args.universal_percentage_support_threshold, 160);
+        assert_eq!(args.flat_support_threshold, 3);
+        assert_eq!(args.quorum, 4);
+        assert_eq!(args.duration, 5);
+        assert!(args.disable_fast_path_access_for_new_members);
+        assert_eq!(args.execution_grace_period, 6);
+    }
+
+    #[test]
+    fn decode_proposal_settings_used_returns_v2_eight_fields_with_execute_by() {
+        use ethabi::ethereum_types::U256 as EthU256;
+
+        // Encode the V2 ProposalParameters tuple: (votingMode, partialPct,
+        // universalPct, flat, quorum, startDate, lastDate, executeBy).
+        let encoded = ethabi::encode(&[
+            Token::Uint(EthU256::from(1u8)),              // votingMode = Fast (1)
+            Token::Uint(EthU256::from(500_000u64)),       // partialPct
+            Token::Uint(EthU256::from(750_000u64)),       // universalPct
+            Token::Uint(EthU256::from(3u64)),             // flat
+            Token::Uint(EthU256::from(10u64)),            // quorum
+            Token::Uint(EthU256::from(1_700_000_000u64)), // startDate
+            Token::Uint(EthU256::from(1_700_086_400u64)), // lastDate
+            Token::Uint(EthU256::from(1_700_691_200u64)), // executeBy
+        ]);
+
+        let settings = decode_proposal_settings_used(&encoded).unwrap();
+        assert_eq!(settings.voting_mode, 1);
+        assert_eq!(settings.partial_percentage_support_threshold, 500_000);
+        assert_eq!(settings.universal_percentage_support_threshold, 750_000);
+        assert_eq!(settings.flat_support_threshold, 3);
+        assert_eq!(settings.quorum, 10);
+        assert_eq!(settings.start_date, 1_700_000_000);
+        assert_eq!(settings.last_date, 1_700_086_400);
+        assert_eq!(settings.execute_by, 1_700_691_200);
     }
 
     #[test]

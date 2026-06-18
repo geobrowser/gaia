@@ -6,10 +6,10 @@
 //! ## Event Types Handled
 //!
 //! - `SPACE_REGISTERED` - new space registrations -> `space.creations` topic
-//! - `SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED/REMOVED` - trust events -> `space.trust.extensions` topic
+//! - `SUBSPACE_VERIFIED/RELATED/TOPIC_SET/UNSET` - trust events -> `space.trust.extensions` topic
 //! - `EDITOR/MEMBER_ADDED/REMOVED`, `SPACE_LEFT` - membership -> `space.membership` topic
 //! - `EDITOR_FLAGGED/UNFLAGGED`, `FLAGGED/UNFLAGGED` - moderation -> `space.moderation` topic
-//! - `TOPIC_DECLARED` - topic declarations -> `space.topics` topic
+//! - `TOPIC_SET` - topic declarations -> `space.topics` topic
 //! - `PROPOSAL_CREATED/VOTED/EXECUTED` - governance -> `space.governance` topic
 //! - `UPVOTED/DOWNVOTED/UNVOTED` - curation voting -> `curation.votes` topic
 //! - `EDITS_PUBLISHED` - edit publications -> `knowledge.edits` topic
@@ -96,10 +96,10 @@ impl From<prost::DecodeError> for PipelineError {
 ///
 /// Subscribes to `HermesModule::Actions` and processes:
 /// - `SPACE_REGISTERED` -> spaces pipeline
-/// - `SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED/REMOVED` -> trust pipeline
+/// - `SUBSPACE_VERIFIED/RELATED/TOPIC_SET/UNSET` -> trust pipeline
 /// - `EDITOR/MEMBER_ADDED/REMOVED`, `SPACE_LEFT` -> membership pipeline
 /// - `EDITOR_FLAGGED/UNFLAGGED`, `FLAGGED/UNFLAGGED` -> moderation pipeline
-/// - `TOPIC_DECLARED` -> topics pipeline
+/// - `TOPIC_SET` -> topics pipeline
 /// - `PROPOSAL_CREATED/VOTED/EXECUTED` -> governance pipeline
 /// - `UPVOTED/DOWNVOTED/UNVOTED` -> voting pipeline
 /// - `EDITS_PUBLISHED` -> edits pipeline (with IPFS cache lookup)
@@ -311,6 +311,7 @@ impl Pipeline {
                 max_sequence(&governance.proposals_voted),
                 max_sequence(&governance.proposals_executed),
                 max_sequence(&governance.proposals_settings_updated),
+                max_sequence(&governance.voting_settings_updated),
                 max_sequence(&voting.votes),
                 max_sequence(&edits.events),
             ]
@@ -335,6 +336,7 @@ impl Pipeline {
                 || mark_sequence_as_last(&mut governance.proposals_voted, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_executed, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_settings_updated, max_seq)
+                || mark_sequence_as_last(&mut governance.voting_settings_updated, max_seq)
                 || mark_sequence_as_last(&mut voting.votes, max_seq)
                 || mark_sequence_as_last(&mut edits.events, max_seq);
         }
@@ -398,13 +400,13 @@ impl Pipeline {
         counts_by_event_type.insert("SUBSPACE_VERIFIED".to_string(), trust.verified as u64);
         counts_by_event_type.insert("SUBSPACE_RELATED".to_string(), trust.related as u64);
         counts_by_event_type.insert(
-            "SUBSPACE_TOPIC_DECLARED".to_string(),
+            "SUBSPACE_TOPIC_SET".to_string(),
             trust.topic_declared as u64,
         );
         counts_by_event_type.insert("SUBSPACE_UNVERIFIED".to_string(), trust.unverified as u64);
         counts_by_event_type.insert("SUBSPACE_UNRELATED".to_string(), trust.unrelated as u64);
         counts_by_event_type.insert(
-            "SUBSPACE_TOPIC_REMOVED".to_string(),
+            "SUBSPACE_TOPIC_UNSET".to_string(),
             trust.topic_removed as u64,
         );
         counts_by_event_type.insert(
@@ -423,6 +425,9 @@ impl Pipeline {
             "CONTENT_UNFLAGGED".to_string(),
             moderation.content_unflagged.len() as u64,
         );
+        // Summary key matches the wire-format Kafka `event-type` header
+        // (see emit.rs:491) — kept as TOPIC_DECLARED for kg-indexer's
+        // EXPECTED_EVENT_TYPES completeness check (kg-indexer/src/main.rs:685).
         counts_by_event_type.insert(
             "TOPIC_DECLARED".to_string(),
             topics.topics_declared.len() as u64,
@@ -450,6 +455,10 @@ impl Pipeline {
         counts_by_event_type.insert(
             "PROPOSAL_SETTINGS_UPDATED".to_string(),
             governance.proposals_settings_updated.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "VOTING_SETTINGS_UPDATED".to_string(),
+            governance.voting_settings_updated.len() as u64,
         );
         counts_by_event_type.insert("VOTE_CAST".to_string(), voting.votes.len() as u64);
 
@@ -664,6 +673,13 @@ impl Pipeline {
                         space_id = %hex::encode(&event.space_id),
                         proposal_id = %hex::encode(&event.proposal_id),
                         "Proposal settings updated"
+                    );
+                }
+                for event in &governance.voting_settings_updated {
+                    self.emitter.emit(event).await?;
+                    debug!(
+                        space_id = %hex::encode(&event.space_id),
+                        "Voting settings updated"
                     );
                 }
             }

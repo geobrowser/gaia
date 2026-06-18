@@ -9,7 +9,7 @@
 import {describe, expect, test} from "bun:test"
 import {Effect} from "effect"
 import {RATIO_BASE} from "../src/contracts.js"
-import {findMembershipRequests, MEMBERSHIP_DETECTION_SQL} from "../src/detect.js"
+import {DETECTION_SQL, findMembershipRequests, MAX_PROPOSAL_AGE, MEMBERSHIP_DETECTION_SQL} from "../src/detect.js"
 
 // ---------------------------------------------------------------------------
 // RATIO_BASE cross-validation
@@ -74,6 +74,73 @@ describe("Proposal type", () => {
 		}
 		expect(proposal.id).toContain("-") // UUID with dashes
 		expect(proposal.spaceId).toContain("-") // UUID with dashes
+	})
+})
+
+// ---------------------------------------------------------------------------
+// V2 detection SQL structure (GEO-485)
+//
+// These tests inspect the module-exported DETECTION_SQL string to verify it
+// reads from the post-GEO-481 schema shape. No DB is involved — just string
+// assertions.
+// ---------------------------------------------------------------------------
+
+describe("V2 detection SQL", () => {
+	test("reads from proposals_current, not the identity-only proposals table", () => {
+		expect(DETECTION_SQL).toMatch(/FROM\s+proposals_current/)
+		// Guard against the legacy shape coming back: `FROM proposals p` with a
+		// `WHERE p.voting_mode …` clause would fail at runtime against 0057+.
+		expect(DETECTION_SQL).not.toMatch(/FROM\s+proposals\s+p\b/)
+	})
+
+	test("filters by voting_mode = 'Slow' (Fast-path auto-exec is handled by the indexer)", () => {
+		expect(DETECTION_SQL).toMatch(/voting_mode\s*=\s*'Slow'/)
+	})
+
+	test("uses partial_percentage_support_threshold in the slow-late ratio", () => {
+		// V1 used a single `threshold` column; V2 slow-late must use `partial`.
+		expect(DETECTION_SQL).toContain("partial_percentage_support_threshold")
+		// The ratio formula shape should still be (RATIO_BASE - partial) * yes > partial * no
+		expect(DETECTION_SQL).toMatch(
+			/\(\s*10000000\s*-\s*[a-z0-9_.]*partial_percentage_support_threshold::numeric\s*\)\s*\*\s*[a-z0-9_.]*yes_count::numeric\s*>\s*[a-z0-9_.]*partial_percentage_support_threshold::numeric\s*\*\s*[a-z0-9_.]*no_count::numeric/,
+		)
+	})
+
+	test("enforces executeBy deadline with MAX_PROPOSAL_AGE fallback for proposals with no deadline", () => {
+		expect(DETECTION_SQL).toContain("execute_by")
+		// `execute_by IS NOT NULL` → now <= execute_by
+		expect(DETECTION_SQL).toMatch(/execute_by\s+IS\s+NOT\s+NULL[\s\S]*<=\s*[a-z0-9_.]*execute_by/)
+		// `execute_by IS NULL` → fall back to MAX_PROPOSAL_AGE cap
+		expect(DETECTION_SQL).toMatch(/execute_by\s+IS\s+NULL/)
+		expect(DETECTION_SQL).toContain(String(MAX_PROPOSAL_AGE))
+	})
+
+	test("includes a slow-path early-execution branch using space_editor_counts", () => {
+		// Early-exec: voting still ongoing + universal threshold > 0 +
+		// yes_count >= ceil(universal × total_editors / RATIO_BASE)
+		expect(DETECTION_SQL).toContain("universal_percentage_support_threshold")
+		expect(DETECTION_SQL).toContain("space_editor_counts")
+		expect(DETECTION_SQL).toMatch(/CEIL|ceil/)
+	})
+
+	test("does not reference the legacy single-column threshold in any new comparison", () => {
+		// The legacy `threshold` column is retained on proposal_versions for
+		// backcompat, but V2 detection must use the per-mode field. Guard
+		// against a stale `p.threshold::numeric` comparison creeping back.
+		const threshold_compare_pattern = /[a-z0-9_.]*\bthreshold::numeric/g
+		const matches = DETECTION_SQL.match(threshold_compare_pattern) ?? []
+		// Any threshold compare must be a V2 field (partial/universal/flat),
+		// not the bare `threshold`.
+		for (const m of matches) {
+			expect(m).toMatch(
+				/partial_percentage_support_threshold|universal_percentage_support_threshold|flat_support_threshold/,
+			)
+		}
+	})
+
+	test("preserves CLOCK_SKEW_BUFFER on the slow-late end_time check", () => {
+		// Slow-late path gates on: now > end_time + CLOCK_SKEW_BUFFER
+		expect(DETECTION_SQL).toMatch(/end_time\s*\+\s*60/)
 	})
 })
 
