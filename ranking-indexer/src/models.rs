@@ -3,6 +3,16 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+/// Block provenance for entities the projection mints, carried from the
+/// triggering edit or membership event down to the public-graph write. The
+/// `entities` table requires `created_at`/`*_block` (Unix seconds + block
+/// number as text), matching what the kg-indexer records.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BlockMeta {
+    pub number: i64,
+    pub timestamp: i64,
+}
+
 /// A `ranks.ranking_blocks` row — one per Ranking Block entity.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct RankingBlock {

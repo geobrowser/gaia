@@ -10,6 +10,7 @@ use hermes_schema::pb::membership::{HermesRoleGranted, HermesRoleRevoked, Member
 use uuid::Uuid;
 
 use crate::error::IndexerError;
+use crate::models::BlockMeta;
 use crate::recompute::recompute_block;
 use crate::storage::Storage;
 
@@ -35,6 +36,20 @@ pub struct MembershipChange {
     pub space_id: Uuid,
     pub member_space_id: Uuid,
     pub kind: ChangeKind,
+}
+
+/// Block provenance of the event, recorded on entities a triggered recompute
+/// mints. Defaults to zero when meta is absent, matching the edit path.
+fn block_meta(event: &MembershipEvent) -> BlockMeta {
+    let meta = match event {
+        MembershipEvent::RoleGranted(e) => e.meta.as_ref(),
+        MembershipEvent::RoleRevoked(e) => e.meta.as_ref(),
+    };
+    meta.map(|m| BlockMeta {
+        number: m.block_number as i64,
+        timestamp: m.created_at as i64,
+    })
+    .unwrap_or_default()
 }
 
 fn ids(space_id: &[u8], member_space_id: &[u8]) -> Result<(Uuid, Uuid), IndexerError> {
@@ -86,6 +101,7 @@ pub async fn apply_membership_event(
     storage: &Storage,
 ) -> Result<(), IndexerError> {
     let change = change_for(event)?;
+    let meta = block_meta(event);
 
     match change.kind {
         ChangeKind::AddMember => {
@@ -114,7 +130,7 @@ pub async fn apply_membership_event(
         .blocks_with_rankings_from(change.space_id, change.member_space_id)
         .await?;
     for block_id in &blocks {
-        recompute_block(*block_id, storage).await?;
+        recompute_block(*block_id, meta, storage).await?;
     }
 
     tracing::debug!(
