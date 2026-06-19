@@ -1392,7 +1392,8 @@ async fn enrich_payload(
                     if matches!(action.action_type.as_str(), "add_member" | "add_editor") {
                         if let Some(target) = action.target_address.as_deref() {
                             if let Ok(target_space_id) = uuid::Uuid::parse_str(target) {
-                                action.target_name = storage.lookup_space_name(target_space_id).await;
+                                action.target_name =
+                                    storage.lookup_space_name(target_space_id).await;
                             }
                         }
                     }
