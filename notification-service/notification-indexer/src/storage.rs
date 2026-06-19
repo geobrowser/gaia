@@ -549,6 +549,12 @@ impl Storage {
     /// Name values are not space-scoped (matching the API's `entities_name`),
     /// so we match on `entity_id` only. Returns `None` if the space has no page
     /// entity or it has no name.
+    ///
+    /// The schema enforces no uniqueness on the matched relation/value keys (an
+    /// entity can carry multiple Name values, e.g. per `language`), so we apply
+    /// a deterministic tie-break before `LIMIT 1` — same convention as the API's
+    /// `batchGetEntityNames`: pick the lowest page-entity id, prefer the Name
+    /// value defined in this space, then the lowest value id.
     pub async fn lookup_space_name(&self, space_id: Uuid) -> Option<String> {
         sqlx::query_scalar::<_, String>(
             r#"
@@ -560,6 +566,7 @@ impl Storage {
               AND r.to_entity_id = $3
               AND v.property_id = $4
               AND v.text IS NOT NULL
+            ORDER BY r.from_entity_id, (v.space_id = $1) DESC, v.id
             LIMIT 1
             "#,
         )
