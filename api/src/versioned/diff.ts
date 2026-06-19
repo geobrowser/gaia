@@ -29,7 +29,12 @@ const TYPES_PROPERTY = normalizeUuid(SystemIds.TYPES_PROPERTY)
 const TEXT_BLOCK = normalizeUuid(SystemIds.TEXT_BLOCK)
 const IMAGE_BLOCK = normalizeUuid(SystemIds.IMAGE_BLOCK)
 const IMAGE = normalizeUuid(SystemIds.IMAGE)
+const IMAGE_TYPE = normalizeUuid(SystemIds.IMAGE_TYPE)
+const VIDEO_BLOCK = normalizeUuid(SystemIds.VIDEO_BLOCK)
+const VIDEO_TYPE = normalizeUuid(SystemIds.VIDEO_TYPE)
 const DATA_BLOCK = normalizeUuid(SystemIds.DATA_BLOCK)
+// Ranking blocks are a Geo-specific data-block subtype; no SystemIds entry.
+const RANKING_BLOCK_TYPE = normalizeUuid("150db6defe2344f0805afa57502e2c32")
 const MARKDOWN_CONTENT = normalizeUuid(SystemIds.MARKDOWN_CONTENT)
 const IMAGE_URL_PROPERTY = normalizeUuid(SystemIds.IMAGE_URL_PROPERTY)
 const NAME_PROPERTY = normalizeUuid(SystemIds.NAME_PROPERTY)
@@ -325,16 +330,29 @@ export function diffRelations(
 /**
  * Determine block type from its relations.
  */
-export function getBlockType(block: BlockSnapshot): "textBlock" | "imageBlock" | "dataBlock" | null {
+export function getBlockType(block: BlockSnapshot): "textBlock" | "imageBlock" | "videoBlock" | "dataBlock" | null {
 	// Check relations for type indicators
 	for (const rel of block.relations) {
 		if (rel.typeId === TYPES_PROPERTY) {
 			if (rel.toEntityId === TEXT_BLOCK) return "textBlock"
-			if (rel.toEntityId === IMAGE_BLOCK || rel.toEntityId === IMAGE) return "imageBlock"
-			if (rel.toEntityId === DATA_BLOCK) return "dataBlock"
+			if (rel.toEntityId === IMAGE_BLOCK || rel.toEntityId === IMAGE || rel.toEntityId === IMAGE_TYPE)
+				return "imageBlock"
+			if (rel.toEntityId === VIDEO_BLOCK || rel.toEntityId === VIDEO_TYPE) return "videoBlock"
+			if (rel.toEntityId === DATA_BLOCK || rel.toEntityId === RANKING_BLOCK_TYPE) return "dataBlock"
 		}
 	}
 	return null
+}
+
+/** Media (image/video) block change with the url on before/after. Both kinds
+ *  store their url under IMAGE_URL_PROPERTY in the current data model. */
+function mediaBlockChange(
+	id: NormalizedUuid,
+	type: "imageBlock" | "videoBlock",
+	before: string | null,
+	after: string | null,
+): BlockChange {
+	return {id, type, before, after} as BlockChange
 }
 
 /**
@@ -395,12 +413,8 @@ export function diffBlocks(
 						break
 					}
 					case "imageBlock":
-						changes.push({
-							id,
-							type: "imageBlock",
-							before: null,
-							after: getImageUrl(afterBlock),
-						})
+					case "videoBlock":
+						changes.push(mediaBlockChange(id, blockType, null, getImageUrl(afterBlock)))
 						break
 					case "dataBlock":
 						changes.push({
@@ -428,16 +442,12 @@ export function diffBlocks(
 						}
 						break
 					}
-					case "imageBlock": {
+					case "imageBlock":
+					case "videoBlock": {
 						const beforeUrl = getImageUrl(beforeBlock)
 						const afterUrl = getImageUrl(afterBlock)
 						if (beforeUrl !== afterUrl) {
-							changes.push({
-								id,
-								type: "imageBlock",
-								before: beforeUrl,
-								after: afterUrl,
-							})
+							changes.push(mediaBlockChange(id, blockType, beforeUrl, afterUrl))
 						}
 						break
 					}
@@ -477,12 +487,8 @@ export function diffBlocks(
 						break
 					}
 					case "imageBlock":
-						changes.push({
-							id,
-							type: "imageBlock",
-							before: getImageUrl(beforeBlock),
-							after: null,
-						})
+					case "videoBlock":
+						changes.push(mediaBlockChange(id, blockType, getImageUrl(beforeBlock), null))
 						break
 					case "dataBlock":
 						changes.push({
@@ -589,12 +595,8 @@ export function diffDynamicGroup(
 							break
 						}
 						case "imageBlock":
-							changes.push({
-								id,
-								type: "imageBlock",
-								before: null,
-								after: getImageUrl(afterEntity),
-							})
+						case "videoBlock":
+							changes.push(mediaBlockChange(id, blockType, null, getImageUrl(afterEntity)))
 							break
 						case "dataBlock":
 							changes.push({
@@ -621,16 +623,12 @@ export function diffDynamicGroup(
 							}
 							break
 						}
-						case "imageBlock": {
+						case "imageBlock":
+						case "videoBlock": {
 							const beforeUrl = getImageUrl(beforeEntity)
 							const afterUrl = getImageUrl(afterEntity)
 							if (beforeUrl !== afterUrl) {
-								changes.push({
-									id,
-									type: "imageBlock",
-									before: beforeUrl,
-									after: afterUrl,
-								})
+								changes.push(mediaBlockChange(id, blockType, beforeUrl, afterUrl))
 							}
 							break
 						}
@@ -680,12 +678,8 @@ export function diffDynamicGroup(
 							break
 						}
 						case "imageBlock":
-							changes.push({
-								id,
-								type: "imageBlock",
-								before: getImageUrl(beforeEntity),
-								after: null,
-							})
+						case "videoBlock":
+							changes.push(mediaBlockChange(id, blockType, getImageUrl(beforeEntity), null))
 							break
 						case "dataBlock":
 							changes.push({
