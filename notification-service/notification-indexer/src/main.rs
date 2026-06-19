@@ -1383,6 +1383,22 @@ async fn enrich_payload(
                 }
             }
 
+            // Member/editor target display names — name *who* an editor/member
+            // request is about. `target_address` on add_member/add_editor actions
+            // is the target's personal-space UUID (hermes decodes addMember(bytes16)
+            // into it), so it resolves to a name like any other space.
+            if let Some(actions) = gov.actions.as_mut() {
+                for action in actions.iter_mut() {
+                    if matches!(action.action_type.as_str(), "add_member" | "add_editor") {
+                        if let Some(target) = action.target_address.as_deref() {
+                            if let Ok(target_space_id) = uuid::Uuid::parse_str(target) {
+                                action.target_name = storage.lookup_space_name(target_space_id).await;
+                            }
+                        }
+                    }
+                }
+            }
+
             // Vote tallies (proposal_voted events only)
             if event.event_type == NotificationEventType::ProposalVoted {
                 if let Ok(pid) = uuid::Uuid::parse_str(&gov.proposal_id) {
