@@ -7,7 +7,7 @@
 #   kubectl create secret generic api-sentry \
 #     --namespace=api \
 #     --from-literal=SENTRY_DSN='<dsn>' \
-#     --from-literal=SENTRY_TRACES_SAMPLE_RATE=1.0 \
+#     --from-literal=SENTRY_TRACES_SAMPLE_RATE=0.3 \
 #     --from-literal=SENTRY_ENVIRONMENT=production \
 #     --from-literal=SENTRY_RELEASE=api@<version> \
 #     --from-literal=SENTRY_DEBUG=false
@@ -23,7 +23,12 @@ metadata:
 type: Opaque
 stringData:
   SENTRY_DSN: "<dsn>"
-  SENTRY_TRACES_SAMPLE_RATE: "1.0"
+  # Honored by SentrySampler in api/src/services/telemetry.ts. gaia-api drives
+  # ~80% of the org's Sentry spans (~27M/mo unsampled vs the 5M quota), so watch
+  # the Spans usage chart at this rate and lower it if we approach the quota.
+  # Error Issues are captured independently of trace sampling, so a dropped
+  # trace never drops its error. Tunable without a redeploy (kubectl edit secret).
+  SENTRY_TRACES_SAMPLE_RATE: "0.3"
   SENTRY_ENVIRONMENT: "production"
   SENTRY_RELEASE: "api@<version>"
   SENTRY_DEBUG: "false"
