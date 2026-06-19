@@ -1531,16 +1531,17 @@ async function cleanupTestData(pool: Pool): Promise<void> {
 	try {
 		await client.query("BEGIN")
 
-		// Delete in reverse order of foreign key dependencies
-		await client.query(`DELETE FROM proposal_actions WHERE proposal_id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM proposals WHERE id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM relations WHERE from_entity_id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM relation_versions WHERE from_entity_id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM "values" WHERE entity_id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM value_versions WHERE entity_id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM edit_versions WHERE edit_id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM entities WHERE id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM spaces WHERE id::text LIKE '20000000-%'`)
+		// Delete in reverse order of foreign key dependencies.
+		// Covers both fixture prefixes used in this file: 20000000-* and 21000000-*.
+		await client.query(`DELETE FROM proposal_actions WHERE proposal_id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM proposals WHERE id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM relations WHERE from_entity_id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM relation_versions WHERE from_entity_id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM "values" WHERE entity_id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM value_versions WHERE entity_id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM edit_versions WHERE edit_id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM entities WHERE id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM spaces WHERE id::text ~ '^2[01]000000-'`)
 		await client.query(`DELETE FROM ipfs_cache WHERE uri LIKE 'ipfs://bafkreitest%'`)
 
 		await client.query("COMMIT")
