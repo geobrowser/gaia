@@ -1365,10 +1365,14 @@ async fn enrich_payload(
                 gov.proposal_name = storage.lookup_proposal_name(pid).await;
             }
 
-            // Proposer display name
+            // Proposer display name. `proposer_id` is the proposer's personal-space
+            // UUID (proposals.proposed_by), so its display name lives on that
+            // space's page entity — resolve it the same way as the space name, not
+            // via lookup_entity_name on the bare id (which only finds the
+            // "Space <uuid>" placeholder, scoped to the wrong space → null).
             if let Some(ref proposer_id) = gov.proposer_id {
                 if let Ok(pid) = uuid::Uuid::parse_str(proposer_id) {
-                    gov.proposer_name = storage.lookup_entity_name(pid, space_id).await;
+                    gov.proposer_name = storage.lookup_space_name(pid).await;
                 }
             }
 
