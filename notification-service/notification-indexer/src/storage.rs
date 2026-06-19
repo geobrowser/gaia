@@ -538,6 +538,41 @@ impl Storage {
         .flatten()
     }
 
+    /// Look up a space's display name (e.g. "Wonderland").
+    ///
+    /// The bare `space_id` entity only carries the auto-generated placeholder
+    /// ("Space <uuid>"). The real name lives on the space's *page entity* — the
+    /// entity inside the space with a Types relation to SPACE_TYPE (the same
+    /// "front page entity" pattern as `lookup_entity_space`, and what the API's
+    /// `spaces_page` function resolves). We read that entity's Name value.
+    ///
+    /// Name values are not space-scoped (matching the API's `entities_name`),
+    /// so we match on `entity_id` only. Returns `None` if the space has no page
+    /// entity or it has no name.
+    pub async fn lookup_space_name(&self, space_id: Uuid) -> Option<String> {
+        sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT v.text
+            FROM relations r
+            JOIN "values" v ON v.entity_id = r.from_entity_id
+            WHERE r.space_id = $1
+              AND r.type_id = $2
+              AND r.to_entity_id = $3
+              AND v.property_id = $4
+              AND v.text IS NOT NULL
+            LIMIT 1
+            "#,
+        )
+        .bind(space_id)
+        .bind(ids::types_relation_type())
+        .bind(ids::space_type())
+        .bind(ids::name_property())
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+    }
+
     /// Look up the human-readable name for a proposal from the proposals table.
     pub async fn lookup_proposal_name(&self, proposal_id: Uuid) -> Option<String> {
         sqlx::query_scalar::<_, String>(

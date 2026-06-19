@@ -1349,8 +1349,14 @@ async fn enrich_payload(
 ) {
     use notification_indexer::models::{NotificationData, NotificationEventType};
 
-    // Space name (common to all event types)
-    event.payload.space_name = storage.lookup_entity_name(space_id, space_id).await;
+    // Space name (common to all event types). Prefer the space's page-entity
+    // display name (e.g. "Wonderland"); fall back to the bare space entity's
+    // name (the auto-generated "Space <uuid>" placeholder) only if there is no
+    // page entity / name.
+    event.payload.space_name = match storage.lookup_space_name(space_id).await {
+        Some(name) => Some(name),
+        None => storage.lookup_entity_name(space_id, space_id).await,
+    };
 
     match &mut event.payload.data {
         NotificationData::Governance(ref mut gov) => {
