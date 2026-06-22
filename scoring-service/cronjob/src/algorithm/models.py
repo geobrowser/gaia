@@ -152,9 +152,9 @@ class Space:
 
     def calculate_space_score(
         self,
-        entities: list[Entity],
-        users: list[User],
         spaces: list["Space"],
+        member_counts: dict[str, int],
+        entity_counts: dict[str, int],
         root_space_id: str = ROOT_SPACE_ID,
     ) -> None:
         """Calculate space score based on distance from root (GEO)."""
@@ -168,12 +168,8 @@ class Space:
         else:
             self.space_score = SPACE_SCORE_DECAY_BASE**DISCONNECTED_SPACE_DEPTH
 
-        self.member_count = sum(
-            1 for user in users if self.id in user.member_spaces or self.id in user.editor_spaces
-        )
-        self.entity_count = len(
-            [e for e in entities if any(p.space_id == self.id for p in e.perspectives)]
-        )
+        self.member_count = member_counts.get(self.id, 0)
+        self.entity_count = entity_counts.get(self.id, 0)
 
     def _calculate_distance_to_root(
         self, spaces: list["Space"], root_space_id: str, max_depth: int = MAX_SPACE_DEPTH
