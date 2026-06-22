@@ -930,3 +930,198 @@ async fn membership_events_integrate_and_drop_rankings() {
         "both roles revoked — view tables must be empty"
     );
 }
+
+/// Regression for the `values_pkey` crash loop (prod incident 2026-06-22): a
+/// recompute `INSERT INTO values` without `ON CONFLICT` collided whenever a
+/// prior projection value row survived step-1's DELETE — e.g. its
+/// `RANK_POSITION` relation was missing, so the DELETE's `entity_id IN
+/// (SELECT … FROM relations …)` subquery never resolved it. The duplicate-key
+/// was misclassified as transient, so the consumer crash-looped forever on the
+/// same offset. The recompute INSERTs are now idempotent; re-running over an
+/// orphaned value row must converge instead of erroring.
+#[tokio::test]
+async fn recompute_is_idempotent_when_a_prior_value_row_is_orphaned() {
+    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
+        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+
+    // Distinct scenario ids so this can share a DB with the other e2e tests.
+    const SPACE: u128 = 0xE2E5_0000_3001;
+    const MEMBER: u128 = 0xE2E5_0000_3011;
+    const BLK: u128 = 0xE2E5_0000_3021;
+    const ENT_A: u128 = 0xE2E5_0000_3031;
+    const ENT_B: u128 = 0xE2E5_0000_3032;
+    const RNK: u128 = 0xE2E5_0000_3041;
+
+    // --- clean prior runs (idempotent) -------------------------------------
+    for sql in [
+        "DELETE FROM relations WHERE space_id = $1",
+        "DELETE FROM values WHERE space_id = $1",
+    ] {
+        sqlx::query(sql).bind(u(SPACE)).execute(pool).await.unwrap();
+    }
+    for sql in [
+        "DELETE FROM ranks.ranking_items WHERE ranking_id = $1",
+        "DELETE FROM ranks.rankings WHERE id = $1",
+    ] {
+        sqlx::query(sql).bind(u(RNK)).execute(pool).await.unwrap();
+    }
+    for sql in [
+        "DELETE FROM ranks.ranking_scores WHERE block_id = $1",
+        "DELETE FROM ranks.ranking_blocks WHERE id = $1",
+    ] {
+        sqlx::query(sql).bind(u(BLK)).execute(pool).await.unwrap();
+    }
+    sqlx::query("DELETE FROM ranks.members WHERE space_id = $1")
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM spaces WHERE id = $1")
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // --- seed prerequisites + build the projection -------------------------
+    sqlx::query("INSERT INTO spaces (id, type, address) VALUES ($1, 'DAO', '0xe2e3')")
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)")
+        .bind(u(MEMBER))
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let block_edit = EditBuilder::new(gid(0x3001))
+        .create_relation(|r| {
+            r.id(gid(0x3100))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(BLK))
+                .to(sid(RANKING_BLOCK_TYPE_ID))
+        })
+        .create_relation(|r| {
+            r.id(gid(0x3101))
+                .relation_type(sid(RANK_AGGREGATION_RESTRICTION_PROPERTY_ID))
+                .from(gid(BLK))
+                .to(sid(RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID))
+        })
+        .create_entity(gid(BLK), |e| {
+            e.text(sid(NAME_PROPERTY_ID), "Top Films", None)
+        })
+        .build();
+    apply_detected_edit(&detect(&block_edit, u(SPACE), 1, 0), u(SPACE), &storage)
+        .await
+        .unwrap();
+
+    let submission = EditBuilder::new(gid(0x3001 ^ 0xED17))
+        .create_relation(|r| {
+            r.id(gid(0x3200))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(RNK))
+                .to(sid(RANK_TYPE_ID))
+        })
+        .create_entity(gid(RNK), |e| {
+            e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None)
+        })
+        .create_relation(|r| {
+            r.id(gid(0x3201))
+                .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
+                .from(gid(RNK))
+                .to(gid(BLK))
+        })
+        .create_relation(|r| {
+            r.id(gid(0x3202))
+                .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                .from(gid(RNK))
+                .to(gid(ENT_A))
+                .to_space(gid(SPACE))
+                .position("a0")
+        })
+        .create_relation(|r| {
+            r.id(gid(0x3203))
+                .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                .from(gid(RNK))
+                .to(gid(ENT_B))
+                .to_space(gid(SPACE))
+                .position("a1")
+        })
+        .build();
+    let detected_submission = detect(&submission, u(MEMBER), 2, 0);
+    apply_detected_edit(&detected_submission, u(MEMBER), &storage)
+        .await
+        .unwrap();
+
+    let rank_position = u(Uuid::parse_str(RANK_POSITION_RELATION_TYPE_ID)
+        .unwrap()
+        .as_u128());
+    let value_prop = Uuid::parse_str(RANK_POSITION_VALUE_PROPERTY_ID).unwrap();
+
+    // --- recreate the prod failure state: orphan one projection value row ---
+    // Delete a single RANK_POSITION relation but leave its value row behind.
+    // The next recompute's value-DELETE resolves entity_ids through the
+    // relations it lists, so it can no longer see this orphan — exactly the
+    // condition that made the value INSERT collide on `values.id`.
+    let victim: Uuid = sqlx::query_scalar(
+        "SELECT entity_id FROM relations WHERE from_entity_id = $1 AND type_id = $2 LIMIT 1",
+    )
+    .bind(u(BLK))
+    .bind(rank_position)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let val_before: i64 = sqlx::query_scalar("SELECT count(*) FROM values WHERE entity_id = $1")
+        .bind(victim)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        val_before, 1,
+        "precondition: reified entity has its value row"
+    );
+    sqlx::query(
+        "DELETE FROM relations WHERE entity_id = $1 AND type_id = $2 AND from_entity_id = $3",
+    )
+    .bind(victim)
+    .bind(rank_position)
+    .bind(u(BLK))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // --- recompute must converge, not crash on values_pkey ------------------
+    let result = apply_detected_edit(&detected_submission, u(MEMBER), &storage).await;
+    assert!(
+        result.is_ok(),
+        "recompute must be idempotent when a value row is orphaned, got: {result:?}"
+    );
+
+    // projection restored: A (#1, value 100) and B (#2, value 50).
+    let rows = sqlx::query(
+        "SELECT r.to_entity_id AS entity, v.integer AS value \
+         FROM relations r JOIN values v ON v.entity_id = r.entity_id AND v.property_id = $3 \
+         WHERE r.from_entity_id = $1 AND r.type_id = $2 ORDER BY r.position",
+    )
+    .bind(u(BLK))
+    .bind(rank_position)
+    .bind(value_prop)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 2, "projection restored to two ranked entities");
+    let e0: Uuid = rows[0].get("entity");
+    let v0: i64 = rows[0].get("value");
+    assert_eq!(e0, u(ENT_A), "top-ranked entity should be A");
+    assert_eq!(
+        v0, 100,
+        "top entity scaled to 100 after idempotent recompute"
+    );
+    let v1: i64 = rows[1].get("value");
+    assert_eq!(v1, 50, "second entity converges to 50");
+}
