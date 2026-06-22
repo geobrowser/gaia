@@ -62,8 +62,8 @@ spec:
                   value: "z_score_sigmoid"
               resources:
                 requests:
+                  memory: "1280Mi"
+                  cpu: "500m"
+                limits:
                   memory: "2048Mi"
                   cpu: "1000m"
-                limits:
-                  memory: "4096Mi"
-                  cpu: "2000m"
