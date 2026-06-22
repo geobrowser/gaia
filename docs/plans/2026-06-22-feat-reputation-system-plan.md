@@ -1,0 +1,288 @@
+---
+title: "feat: Per-space user reputation (Rep) and reputation-weighted voting"
+type: feat
+date: 2026-06-22
+status: draft
+---
+
+# feat: Per-space user reputation (Rep) and reputation-weighted voting
+
+## Overview
+
+**Rep** is a per-space, per-user reputation score signifying a person's demonstrated
+knowledge, ability, and contributions *within the context of a space*. Its purpose is a
+meritocracy: the more you've demonstrably contributed to a space, the more your vote counts
+there. Rep is **stored internally as `0–1`** and **presented as `0–1000`** (or `0–100` with a
+decimal). It is computed as a new stage that runs **after** the existing score calculation, and
+its output feeds back into the vote `weight` already supported by the scoring engine.
+
+This plan scopes the **gaia backend** (rep computation, storage, vote-weighting) plus the **API
+read surface** the frontend needs. The geogenesis frontend flows (verify UI, claim profile, view
+rep) are a tracked follow-on (see Phase 5 / Open Questions).
+
+**Spec source:** `Rep` design note (Notion / `/tmp/Rep …md`), status "Curator".
+
+## Problem Statement
+
+Today every vote counts equally (uniform `weight = 1.0`) after anti-sybil filtering. There is no
+concept of "this user's vote counts for more because they have demonstrated merit in this space."
+There is no per-user reputation, trust, or credibility score anywhere in the system — the
+`User` model holds only `member_spaces` / `editor_spaces`.
+
+We want a reputation quantity that:
+- is **scoped to a space** (expertise is domain-specific),
+- rewards demonstrated contribution (votes/rankings on the person) and verified standing,
+- is resistant to sybil/gaming (built on on-chain verification and membership), and
+- **weights voting** so that consensus in a space is driven by its proven contributors.
+
+## Background — what we build on (mostly already exists)
+
+The good news: roughly half of Rep is already implemented infrastructure.
+
+| Building block | Where | Reuse for Rep |
+|---|---|---|
+| Per-entity, per-space scores | `scoring-service` Python cronjob → `local_scores`, `global_scores`, `space_scores` | **Expert band** reads the person entity's `local_score` |
+| Uniform vote weight hook | `Vote.weight` (default `1.0`) in `scoring-service/cronjob/src/algorithm/models.py` | **Reputation-weighted voting** sets this from Rep |
+| On-chain verification | `SUBSPACE_VERIFIED`/`SUBSPACE_UNVERIFIED` → `space.trust.extensions` topic → `kg-indexer` → `subspaces` table (`type='verified'`) | **Verified band** raw edges |
+| Transitive verified closure | `atlas` (`atlas/src/graph/transitive.rs`): BFS + visited-set from root, diamond/cycle-safe, reverse-dependency incremental invalidation, revocation cascade; emits `topology.canonical` | **Verified band** transitivity + revocation — *no new graph code* |
+| Space membership (private, race-insulated) | `members`/`editors` tables; `ranks.members`/`ranks.editors` fed from `space.membership` | **Low-trust band** + anti-sybil |
+| Anti-sybil levers | `filter_non_members`, `use_distance_weighting` in `scoring.py` | Compose with rep weighting |
+
+Verification is **on-chain and permissionless** — anyone can verify any space id; the chain
+enforces authorship. A "user" is identified by their **personal space id**. So "is this user
+verified?" == "is this user's personal space in atlas's verified closure from root?"
+
+## Proposed Solution
+
+### Representation
+
+- **Stored:** `rep ∈ [0, 1]` per `(user_space_id, space_id)`.
+- **Displayed:** `rep × 1000` (0–1000), or `0–100.0` with one decimal.
+- **Vote weight:** the stored `rep` (0–1) is used directly as `Vote.weight`. (Cold start and the
+  zero-rep case are handled below.)
+
+### Band model
+
+Rep is built from four bands. The internal "points" total (0–1000 scale) is the sum of band
+contributions, then divided by 1000 for storage.
+
+```
+points = low_trust_base + verified_add + professional_add + expert_add
+rep     = clamp(points / 1000, 0, 1)
+```
+
+**1. Low trust (0–1 points)**
+- `0` initially.
+- `1` once the user creates a profile AND joins a public space.
+- Forced to `0` if the user is flagged or removed from *all* public spaces.
+
+**2. Verified (2–10 points)** — *gated by transitive verification*
+- Eligible only if the user's personal space is in atlas's **verified closure from root**
+  (verified by a verified user, transitively).
+- `verified_add = 2 + 8 × (points_earned / max_points_earned)` → range `[2, 10]`.
+  - `points_earned` is a per-space contribution metric (see Open Questions — defined in the
+    knowledge layer).
+- Revocation: handled upstream by atlas. If a verifier is unverified/flagged, atlas removes the
+  transitive members; the next rep cycle recomputes those users' Verified band to 0.
+
+**3. Professional (2–10 points)** — *space-governed*
+- The user works in the industry / produces high-quality original content per the space's
+  standards. Requires roles, skills, projects, socials filled out; known in the space or works
+  for a verified project.
+- `professional_add = rep value of the user's highest role`, each role's rep value being defined
+  **in the knowledge layer**, governed by the space's knowledge governance (not hardcoded).
+- May be computed before a profile is claimed.
+
+**4. Expert (0–880 points)** — *the exponential band*
+- "Expertise" = the user's **person entity `local_score`** in this space (the score already
+  produced by `scoring-service` from upvotes/downvotes/rankings), normalized to `[-1, 1]`.
+- Not every member has a person entity — those members get `expert_add = 0`.
+- If the score is **negative**, `expert_add = 0` (see Open Questions — total-vs-band semantics).
+- Otherwise apply the exponential curve:
+
+```
+                 e^(k·x) − 1
+expert_add = M · ───────────         k = 5,  x = score ∈ [0, 1],  M = EXPERT_MAX
+                  e^k − 1
+```
+
+With `M = 880` this yields the spec's reference table (x=0→0, 0.25→15, 0.5→67, 0.75→247,
+0.9→529, 1.0→880). The exponential keeps average experts in the low-hundreds while reserving the
+top of the range for the very best. (See Open Questions on `M = 880` vs `980` to reach a true
+1000 cap.)
+
+A **compile-time lookup table** (1001 × `u16`) quantizes `x→points` for O(1) evaluation with zero
+runtime `exp()` — per the spec's discrete implementation. This is the only band needing real math.
+
+### Reputation-weighted voting and the feedback loop
+
+Rep both **derives from** scores and **weights** the votes that produce scores. This is a coupled
+system, resolved **iteratively across cron cycles** (not within one):
+
+```
+cycle N:   scores_N  = score(votes, weights = rep_{N-1})     ← scoring-service (existing)
+           rep_N     = reputation(scores_N, verified, roles) ← NEW stage, runs AFTER scoring
+cycle N+1: weights   = rep_N
+```
+
+- **Ordering:** rep is computed strictly after scores in the same cycle (the spec's hard rule).
+- **Cold start:** when no `rep` row exists for a user, `weight = 1.0` (today's behavior). The
+  system converges over cycles as rep populates.
+- **Zero rep:** a user with `rep = 0` has `weight = 0` — their votes don't count. We must decide
+  whether zero-rep users contribute weight `0` or a small floor (Open Questions), to avoid a
+  cold-start deadlock where no one has rep so no votes count. Proposal: floor new/unscored users
+  at `1.0` until they have a computed rep, and only drop to `0` on explicit flag/removal.
+
+## Technical Approach
+
+### Architecture
+
+```
+                          (existing)                         (new)
+  ┌────────────────┐   ┌────────────────────┐   ┌─────────────────────────────┐
+  │ user_votes,    │──▶│ scoring-service     │──▶│ reputation stage            │
+  │ members/editors│   │ (score entities &   │   │ (runs after scoring)        │
+  │ local_scores   │   │  spaces)            │   │  • low-trust  • verified    │
+  └────────────────┘   │  uses Vote.weight   │   │  • professional • expert    │
+          ▲            └─────────┬───────────┘   │  • exponential curve        │
+          │                      │               └──────────────┬──────────────┘
+          │   weights = rep_{N-1}│                              │ writes
+          └──────────────────────┘                              ▼
+                                              ┌──────────────────────────────┐
+  atlas ──topology.canonical──▶ verified set  │ user_reputation (0–1, per     │
+  subspaces (verified edges)                   │  user_space × space)          │
+  KG role config (knowledge layer)             └───────────────┬──────────────┘
+                                                                │ read
+                                                                ▼
+                                                       API (GraphQL): userSpaceRep,
+                                                       spacePeopleByRep
+```
+
+### Data model (new)
+
+```sql
+-- Per-space, per-user reputation. user identified by personal space id.
+CREATE TABLE user_reputation (
+    user_space_id uuid NOT NULL,        -- the user's personal space id
+    space_id      uuid NOT NULL,        -- the space this rep is scoped to
+    rep           numeric NOT NULL,     -- stored 0–1
+    band          text    NOT NULL,     -- 'low_trust' | 'verified' | 'professional' | 'expert'
+    -- breakdown for audit / display / debugging
+    low_trust     numeric NOT NULL DEFAULT 0,
+    verified_add  numeric NOT NULL DEFAULT 0,
+    prof_add      numeric NOT NULL DEFAULT 0,
+    expert_add    numeric NOT NULL DEFAULT 0,
+    person_entity_id uuid,              -- null if the user has no person entity here
+    updated_at    timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_space_id, space_id)
+);
+CREATE INDEX user_reputation_space_rep_idx ON user_reputation (space_id, rep DESC);
+```
+
+The verified set can be consumed from atlas's `topology.canonical` into a small materialized
+table (e.g. `verified_spaces(space_id)`), or queried from atlas's persisted baseline — TBD with
+the atlas owner (see Dependencies). The `subspaces` verified edges + `points_earned` come from
+existing tables / the knowledge layer.
+
+### User → person entity resolution
+
+The Expert band requires resolving, per `(user_space_id, space_id)`, the user's **person entity**
+and its `local_score`. From the onboarding flow, a person entity carries a `Person` type relation
+and an account relation linking it to the wallet/account. The rep stage needs a query:
+`account/personal space → person entity id → local_scores[person_entity_id, space_id]`. The exact
+KG traversal must be confirmed against the schema (sub-task in Phase 3).
+
+### Where the code lives
+
+- **Rep computation:** extend the Python `scoring-service` cronjob with a `reputation` stage that
+  runs after `rank_entities`/`rank_spaces`. Reuses its DB connection, data provider, and writer.
+- **Exponential curve:** a small, table-driven, unit-tested module (Python; mirror of the spec's
+  Rust lookup table). O(1), no runtime `exp()`.
+- **Vote weighting:** in the existing scoring path, populate `Vote.weight` from `user_reputation`
+  (the previous cycle's values), with the cold-start floor.
+- **Verified set:** a consumer or query bridging atlas `topology.canonical` → rep stage.
+- **API:** GraphQL fields `userSpaceRep(spaceId, userSpaceId)` and `spacePeopleByRep(spaceId)`
+  reading `user_reputation` (mirrors how `entityGlobalScore` is exposed).
+
+## Implementation Phases
+
+### Phase 1 — Expert-band curve (standalone, testable)
+- Implement the exponential lookup table (k=5), with `EXPERT_MAX` as a parameter.
+- Unit tests pinning the reference points (0, 250, 500, 750, 900, 1000 → 0, 15, 67, 247, 529, max).
+- No DB, no integration — pure function. *Smallest verifiable unit; de-risks the math.*
+
+### Phase 2 — Data model + read API
+- `user_reputation` table (Drizzle migration; `CREATE INDEX CONCURRENTLY` runbook — see Risks).
+- GraphQL read fields + tests against seeded rows. Frontend can integrate against this early.
+
+### Phase 3 — Rep computation stage (no weighting yet)
+- Verified set bridge from atlas `topology.canonical`.
+- User → person entity → `local_score` resolution.
+- Compute all four bands; write `user_reputation`. Weighting still uniform (`1.0`).
+- Characterization tests per band + combined, mirroring the scoring-service test style.
+
+### Phase 4 — Reputation-weighted voting (the feedback loop)
+- Wire `Vote.weight` from previous-cycle `user_reputation`, with cold-start floor.
+- Validate convergence on a seeded multi-cycle fixture; assert no cold-start deadlock.
+- Feature-flag the weighting so it can be enabled per environment / rolled back instantly.
+
+### Phase 5 — Frontend (geogenesis, follow-on)
+- Verify people (on-chain permissionless action), claim a profile, view rep in personal space,
+  view people-by-rep in a public space. Tracked separately; depends on Phase 2 API.
+
+## Acceptance Criteria
+
+- A user's `rep` is computed per space and stored in `[0, 1]`, displayable as 0–1000.
+- Expert band matches the reference exponential table within rounding.
+- Verified band reflects atlas's transitive closure, including revocation cascade on unverify.
+- Members without a person entity get `expert_add = 0` and a well-defined total.
+- With weighting enabled, scores reflect rep-weighted votes; with it disabled, behavior is
+  identical to today.
+- No cold-start deadlock: a fresh space with no rep still produces scores.
+
+## Dependencies & Risks
+
+- **Atlas integration (dependency).** Confirm the contract for consuming the verified closure
+  (`topology.canonical` topic vs. querying atlas's persisted baseline) with the atlas owner. Rep's
+  Verified band correctness depends on it.
+- **Migration lock (risk).** Adding `user_reputation` + index on a busy DB: use `CREATE INDEX
+  CONCURRENTLY` (cannot run in Drizzle's txn wrapper — manual pre-build, mirror the `0064` pattern).
+- **Feedback-loop stability (risk).** Coupled rep↔scores could oscillate or amplify. Mitigate with
+  the across-cycle ordering, cold-start floor, the exponential's damping, and a kill switch
+  (Phase 4 feature flag).
+- **Knowledge-layer config (dependency).** Professional roles/standards and the Verified band's
+  "points" live in the knowledge layer and must be modeled + governed per space before those bands
+  are meaningful. Expert + Low-trust + Verified-gating do not depend on this and can ship first.
+- **Person-entity join (risk).** The account → person entity → score path must be verified against
+  the live KG schema; mis-resolution silently zeroes Expert rep.
+
+## Open Questions
+
+1. **Cap math.** Bands sum to ~900 (Verified ≤10 + Professional ≤10 + Expert ≤880), but the spec
+   says the top user reaches 1000. Should `EXPERT_MAX = 980` (true 1000 cap) or is ~900 acceptable?
+2. **"points earned / max points earned"** (Verified band) — exact definition? Given "all in the
+   knowledge layer," is this a governed contribution metric distinct from the entity score?
+3. **Negative-score semantics.** "If someone has a negative score, their rep is 0" — does a
+   negative person-entity score zero the *Expert band only*, or the *entire* rep (wiping verified +
+   professional)? Plan assumes Expert-band-only; confirm.
+4. **Band stacking.** Are bands strictly additive (modeled here), or progressive floors where the
+   highest qualifying band replaces lower ones? Affects how low-trust `1` relates to verified `2`.
+5. **Zero-rep voting weight.** Weight `0` (votes don't count) vs. a small floor — and the exact
+   cold-start rule to avoid deadlock.
+6. **Verification scope.** Confirmed reading: verification is *global* (closure from root) and
+   gates eligibility, while the 2–10 *value* scales with *per-space* contribution. Correct?
+7. **Recompute cadence / cost.** Full recompute every scoring cycle vs. incremental (atlas-style
+   reverse-dependency invalidation) — depends on user×space cardinality.
+
+## References
+
+### Internal
+- Scoring engine: `scoring-service/cronjob/src/algorithm/{models.py,scoring.py}`, `main.py`
+- Vote weight hook: `scoring-service/cronjob/src/algorithm/models.py` (`Vote.weight`)
+- Atlas transitive closure: `atlas/src/graph/{transitive.rs,canonical.rs,state.rs}`, `persistence.rs`
+- Trust pipeline: `hermes-pipeline/src/pipelines/trust.rs`, `kg-indexer/src/handlers/subspaces.rs`
+- Verified edges schema: `subspaces` table (`api/drizzle/0045_hard_annihilus.sql`)
+- Scores schema: `api/src/services/storage/schema.ts` (`global_scores`, `local_scores`, `space_scores`)
+
+### Spec
+- `Rep` design note (Notion), status "Curator" — bands, exponential distribution, feature list.
