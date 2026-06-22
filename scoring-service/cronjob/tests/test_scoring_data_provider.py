@@ -342,7 +342,7 @@ class TestSpaceScoreCalculation:
         spaces = [root, child_1, child_3]
 
         for space in spaces:
-            space.calculate_space_score([], [], spaces)
+            space.calculate_space_score(spaces, {}, {})
 
         assert root.space_score == 1.0
         assert root.space_score > child_1.space_score
