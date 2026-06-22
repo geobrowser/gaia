@@ -54,6 +54,12 @@ jobs:
           - image: scoring-service
             dockerfile: scoring-service/cronjob/Dockerfile
             context: scoring-service/cronjob
+          - image: notification-indexer
+            dockerfile: notification-service/notification-indexer/Dockerfile
+            context: .
+          - image: delivery-worker
+            dockerfile: notification-service/delivery-worker/Dockerfile
+            context: .
     steps:
       - name: Checkout code
         uses: actions/checkout@v6.0.2
