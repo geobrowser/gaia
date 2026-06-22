@@ -223,11 +223,15 @@ class ScoringDataProvider:
         has to derive them — it only consumes pre-computed distances.
         """
         spaces = []
-        non_root_spaces = {str(space_id) for (space_id,) in space_rows if space_id != ROOT_SPACE_ID}
+        # spaces.id comes back from psycopg as a uuid.UUID, while ROOT_SPACE_ID is a
+        # string — compare on the string form so root detection actually works.
+        non_root_spaces = {
+            str(space_id) for (space_id,) in space_rows if str(space_id) != ROOT_SPACE_ID
+        }
 
         for (space_id,) in space_rows:
             space_id_str = str(space_id)
-            is_root = space_id == ROOT_SPACE_ID
+            is_root = space_id_str == ROOT_SPACE_ID
             sub_space_ids = non_root_spaces if is_root else set()
             parent_space_id = None if is_root else ROOT_SPACE_ID
             distance_to_root = 0 if is_root else 1
