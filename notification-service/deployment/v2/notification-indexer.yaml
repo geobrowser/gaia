@@ -1,0 +1,117 @@
+# Notification Indexer Deployment (v2 / testnet)
+#
+# Consumes governance events from Kafka and writes to the notification outbox.
+# Also polls for expired proposals to generate rejection notifications.
+#
+# ENVIRONMENT=testnet makes hermes_kafka::get_topic_prefix() return "testnet.",
+# so this indexer consumes the testnet.* Kafka topics; consumer groups are
+# suffixed -testnet-v1 to keep offsets isolated from staging/production.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-indexer
+  namespace: gaia-v2
+  labels:
+    app: notification-indexer
+    environment: testnet
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: notification-indexer
+  template:
+    metadata:
+      labels:
+        app: notification-indexer
+        environment: testnet
+    spec:
+      restartPolicy: Always
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      containers:
+        - name: notification-indexer
+          image: registry.digitalocean.com/geo/notification-indexer:latest
+          imagePullPolicy: Always
+          env:
+            # Database configuration
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            # Kafka configuration
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: KAFKA_USERNAME
+                  optional: true
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: KAFKA_PASSWORD
+                  optional: true
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: KAFKA_SSL_CA_PEM
+                  optional: true
+            # Consumer configuration
+            - name: ENVIRONMENT
+              value: "testnet"
+            - name: KAFKA_GROUP_ID_GOVERNANCE
+              value: "notification-indexer-governance-testnet-v1"
+            - name: KAFKA_GROUP_ID_KNOWLEDGE_EDITS
+              value: "notification-indexer-knowledge-edits-testnet-v1"
+            - name: REJECTION_POLL_INTERVAL_SECS
+              value: "60"
+            # Logging
+            - name: RUST_LOG
+              value: "info,notification_indexer=debug"
+          ports:
+            - containerPort: 8080
+              name: health
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
