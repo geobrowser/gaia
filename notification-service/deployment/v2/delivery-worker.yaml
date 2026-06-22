@@ -4,7 +4,7 @@
 # to registered webhooks with HMAC-SHA256 signatures.
 #
 # The worker is environment-scoped purely by the DATABASE_URL it points at
-# (the testnet `notification-service-credentials` secret) — it doesn't consume
+# (the v2 KG DB, from the shared `api-secrets` secret) — it doesn't consume
 # Kafka, so it needs no ENVIRONMENT/topic-prefix.
 apiVersion: apps/v1
 kind: Deployment
