@@ -52,7 +52,12 @@ bun run start
 
 Deploys to the `knowledge` namespace via GitHub Actions:
 
-- **Staging** (testnet): push to `dev` → `proposal-executor-deploy-staging.yml`
-- **Production** (mainnet): push to `main` → `proposal-executor-deploy.yml`
+- **Production**: push to `main` → `proposal-executor-deploy.yml`
 
-Environment-specific manifests in `deployment/staging/` and `deployment/production/`.
+The manifest lives in `deployment/production/`.
+
+There is no staging deployment. The service shares its chain, contracts, and bot
+identities across environments, so a "staging" instance would issue real on-chain
+transactions as the same actor as production — it isn't sandboxed. A pre-prod
+deployment would require genuinely isolated infrastructure (a separate chain/RPC/
+registry, its own database, and throwaway bot keys that are not editors anywhere).
