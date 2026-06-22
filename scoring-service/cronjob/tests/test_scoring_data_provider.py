@@ -5,7 +5,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.algorithm.models import Space, VoteType
+from src.algorithm.models import (
+    DISCONNECTED_SPACE_DEPTH,
+    SPACE_SCORE_DECAY_BASE,
+    Space,
+    VoteType,
+)
 from src.constants import ROOT_SPACE_ID
 from src.scoring_data_provider import ScoringDataProvider, ScoringData
 
@@ -304,9 +309,12 @@ class TestScoringDataProvider:
             root = next(s for s in spaces if s.id == ROOT_SPACE_ID)
             assert root.parent_space_id is None
             assert "space-1" in root.subspace_ids
+            # Flat fallback sets distances explicitly: root=0, every other space=1.
+            assert root.distance_to_root == 0
 
             child = next(s for s in spaces if s.id == "space-1")
             assert child.parent_space_id == ROOT_SPACE_ID
+            assert child.distance_to_root == 1
 
     def test_fetch_scoring_topology_distances(self) -> None:
         """Test that topology distances are fetched correctly."""
@@ -347,3 +355,13 @@ class TestSpaceScoreCalculation:
         assert root.space_score == 1.0
         assert root.space_score > child_1.space_score
         assert child_1.space_score > child_3.space_score
+
+    def test_unset_distance_defaults_to_disconnected(self) -> None:
+        """A space with no distance (no topology entry) is scored as disconnected."""
+        now = datetime.now()
+        space = Space(id="orphan", created_at=now, distance_to_root=None)
+
+        space.calculate_space_score([space], {}, {})
+
+        assert space.distance_to_root == DISCONNECTED_SPACE_DEPTH
+        assert space.space_score == SPACE_SCORE_DECAY_BASE**DISCONNECTED_SPACE_DEPTH
