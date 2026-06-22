@@ -208,6 +208,11 @@ pub struct ActionSummary {
     /// Target address (hex-encoded, for member/editor actions).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_address: Option<String>,
+    /// Display name of the target member/editor, resolved from `target_address`
+    /// — which carries the target's personal-space UUID (hermes' decode of
+    /// `addMember(bytes16)`), so it resolves like any space name. Best-effort.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_name: Option<String>,
     /// Target space ID (for subspace actions).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_space_id: Option<String>,

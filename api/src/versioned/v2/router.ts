@@ -13,14 +13,16 @@ import {Hono} from "hono"
 import {getProfilesBySpaceIds} from "../../profile/queries"
 import type {Profile} from "../../profile/types"
 import type {AppRuntime} from "../../services/runtime"
-import {isValidUuid, type NormalizedUuid, normalizeUuid, toDashedUuid} from "../../utils/uuid"
+import {isValidUuid, normalizeUuid, toDashedUuid} from "../../utils/uuid"
 import {diffGroupedEntitySnapshots} from "../diff"
 import {getGroupedEntitySnapshotAtVersion, type QueryError, resolveVersionKey} from "../queries"
-import type {DiffResponse, GroupedEntitySnapshot} from "../types"
+import {mapGroupedProposalError, validateGroupedRequest} from "../router"
+import type {GroupedEntitySnapshot} from "../types"
 import {enrichWithMediaUrls} from "./enrich"
 import {enrichBlockConfig} from "./enrich-block-config"
 import {enrichBlocks} from "./enrich-blocks"
 import {enrichNames} from "./enrich-names"
+import {computeGroupedProposalDiffV2, computeProposalDiffV2} from "./proposal-diff"
 import type {DiffResponseV2} from "./types"
 
 type AppEnv = {
@@ -203,6 +205,83 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 				}
 			},
 			onRight: (response: DiffResponseV2) => c.json(response as unknown as Record<string, unknown>, 200),
+		})
+	})
+
+	/**
+	 * GET /v2/versioned/proposals/:id/diff
+	 *
+	 * Enriched, context-aware variant of the v1 proposal diff: each entity is a
+	 * grouped diff with resolved names, media URLs on relations, and folded block
+	 * values/config — same enrichment as the entity-diff endpoint.
+	 */
+	router.get("/proposals/:id/diff", async (c) => {
+		const rawProposalId = c.req.param("id")
+		const rawSpaceId = c.req.query("spaceId")
+		const cursor = c.req.query("cursor")
+		const rawLimit = c.req.query("limit")
+
+		if (!isValidUuid(rawProposalId)) {
+			return c.json({error: "Invalid parameter", message: "Proposal ID must be a valid UUID"}, 400)
+		}
+		if (!rawSpaceId || !isValidUuid(rawSpaceId)) {
+			return c.json({error: "Invalid parameter", message: "spaceId must be a valid UUID"}, 400)
+		}
+		let limit = 50
+		if (rawLimit !== undefined) {
+			const parsed = Number.parseInt(rawLimit, 10)
+			if (Number.isNaN(parsed) || parsed < 1) {
+				return c.json({error: "Invalid parameter", message: "limit must be a positive integer"}, 400)
+			}
+			limit = Math.min(parsed, 100)
+		}
+
+		const program = computeProposalDiffV2(
+			db,
+			normalizeUuid(rawProposalId),
+			normalizeUuid(rawSpaceId),
+			cursor,
+			limit,
+		).pipe(Effect.withSpan("GET /v2/versioned/proposals/:id/diff"))
+
+		const result = await runtime.runPromise(Effect.either(program))
+		return Either.match(result, {
+			onLeft: (error) => {
+				const mapped = mapGroupedProposalError(error)
+				return c.json(mapped.body, mapped.status)
+			},
+			onRight: (diff) => c.json(diff as unknown as Record<string, unknown>, 200),
+		})
+	})
+
+	/**
+	 * GET /v2/versioned/proposal-groups/diff
+	 *
+	 * Enriched, context-aware variant of the v1 grouped (multi-proposal) diff.
+	 */
+	router.get("/proposal-groups/diff", async (c) => {
+		const validation = validateGroupedRequest({
+			spaceId: c.req.query("spaceId"),
+			proposalIds: c.req.query("proposalIds"),
+			cursor: c.req.query("cursor"),
+			limit: c.req.query("limit"),
+		})
+		if (!validation.ok) {
+			return c.json(validation.failure.body, validation.failure.status)
+		}
+		const {spaceId, proposalIds, cursor, limit} = validation.value
+
+		const program = computeGroupedProposalDiffV2(db, proposalIds, spaceId, cursor, limit).pipe(
+			Effect.withSpan("GET /v2/versioned/proposal-groups/diff"),
+		)
+
+		const result = await runtime.runPromise(Effect.either(program))
+		return Either.match(result, {
+			onLeft: (error) => {
+				const mapped = mapGroupedProposalError(error)
+				return c.json(mapped.body, mapped.status)
+			},
+			onRight: (diff) => c.json(diff as unknown as Record<string, unknown>, 200),
 		})
 	})
 

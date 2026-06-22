@@ -1349,8 +1349,14 @@ async fn enrich_payload(
 ) {
     use notification_indexer::models::{NotificationData, NotificationEventType};
 
-    // Space name (common to all event types)
-    event.payload.space_name = storage.lookup_entity_name(space_id, space_id).await;
+    // Space name (common to all event types). Prefer the space's page-entity
+    // display name (e.g. "Wonderland"); fall back to the bare space entity's
+    // name (the auto-generated "Space <uuid>" placeholder) only if there is no
+    // page entity / name.
+    event.payload.space_name = match storage.lookup_space_name(space_id).await {
+        Some(name) => Some(name),
+        None => storage.lookup_entity_name(space_id, space_id).await,
+    };
 
     match &mut event.payload.data {
         NotificationData::Governance(ref mut gov) => {
@@ -1359,10 +1365,14 @@ async fn enrich_payload(
                 gov.proposal_name = storage.lookup_proposal_name(pid).await;
             }
 
-            // Proposer display name
+            // Proposer display name. `proposer_id` is the proposer's personal-space
+            // UUID (proposals.proposed_by), so its display name lives on that
+            // space's page entity — resolve it the same way as the space name, not
+            // via lookup_entity_name on the bare id (which only finds the
+            // "Space <uuid>" placeholder, scoped to the wrong space → null).
             if let Some(ref proposer_id) = gov.proposer_id {
                 if let Ok(pid) = uuid::Uuid::parse_str(proposer_id) {
-                    gov.proposer_name = storage.lookup_entity_name(pid, space_id).await;
+                    gov.proposer_name = storage.lookup_space_name(pid).await;
                 }
             }
 
@@ -1370,6 +1380,23 @@ async fn enrich_payload(
             if let Some(ref voter_id) = gov.voter_id {
                 if let Ok(vid) = uuid::Uuid::parse_str(voter_id) {
                     gov.voter_name = storage.lookup_entity_name(vid, space_id).await;
+                }
+            }
+
+            // Member/editor target display names — name *who* an editor/member
+            // request is about. `target_address` on add_member/add_editor actions
+            // is the target's personal-space UUID (hermes decodes addMember(bytes16)
+            // into it), so it resolves to a name like any other space.
+            if let Some(actions) = gov.actions.as_mut() {
+                for action in actions.iter_mut() {
+                    if matches!(action.action_type.as_str(), "add_member" | "add_editor") {
+                        if let Some(target) = action.target_address.as_deref() {
+                            if let Ok(target_space_id) = uuid::Uuid::parse_str(target) {
+                                action.target_name =
+                                    storage.lookup_space_name(target_space_id).await;
+                            }
+                        }
+                    }
                 }
             }
 

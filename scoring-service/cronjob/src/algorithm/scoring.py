@@ -68,10 +68,23 @@ class EntityScorer:
 
         return hot_score
 
+    @staticmethod
+    def _index_users_by_id(users: list[User]) -> dict[str, User]:
+        """Index users by id for O(1) lookup.
+
+        Keeps the first occurrence of any duplicate id, matching the
+        previous next()-based linear scan.
+        """
+        by_id: dict[str, User] = {}
+        for user in users:
+            by_id.setdefault(user.id, user)
+        return by_id
+
     def filter_valid_votes(
         self, votes: list[Vote], users: list[User], entity: Entity
     ) -> list[Vote]:
         """Filter votes to only include valid ones based on anti-sybil rules."""
+        users_by_id = self._index_users_by_id(users)
         relevant_votes = []
         for vote in votes:
             # Find the perspective this vote is for
@@ -90,7 +103,7 @@ class EntityScorer:
                 continue
 
             # Find the user who cast this vote
-            user = next((u for u in users if u.id == vote.user_id), None)
+            user = users_by_id.get(vote.user_id)
             if not user:
                 continue
 
@@ -114,10 +127,11 @@ class EntityScorer:
         # Calculate distance hash table between all spaces
         space_distances = calculate_space_distances(spaces, self.config.max_distance)
 
+        users_by_id = self._index_users_by_id(users)
         weighted_votes = []
         for vote in votes:
             # Find voting user
-            user = next((u for u in users if u.id == vote.user_id), None)
+            user = users_by_id.get(vote.user_id)
             if not user:
                 weighted_votes.append(vote)
                 continue

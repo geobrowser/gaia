@@ -36,7 +36,7 @@ jobs:
         working-directory: ./hermes-pipeline
 
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master

@@ -31,6 +31,7 @@ import {afterAll, beforeAll, describe, expect, it} from "vitest"
 import {runtime} from "../../services/runtime"
 import {normalizeUuid} from "../../utils/uuid"
 import {createVersionedRouter} from "../router"
+import {createVersionedV2Router} from "../v2"
 
 /** Shorthand to normalize a UUID for response-body assertions. */
 const n = normalizeUuid
@@ -224,7 +225,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			const floatDiff = entityDiff.values.find((v: any) => v.propertyId === n(uuid.propFloat))
 			expect(floatDiff?.type).toBe("FLOAT64")
 			expect(floatDiff?.before).toBeNull()
-			expect(Number(floatDiff?.after)).toBeCloseTo(3.14159, 4)
+			expect(Number(floatDiff?.after)).toBeCloseTo(Math.PI, 4)
 		})
 	})
 
@@ -476,6 +477,604 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			const nonExistentId = "20000000-0008-4000-8000-000000000999"
 			const res = await app.request(`/versioned/proposals/${nonExistentId}/diff?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(404)
+		})
+	})
+
+	// ==========================================================================
+	// 10. v2 enriched / context-aware proposal diff (/v2/versioned/...)
+	// ==========================================================================
+
+	describe("v2 enriched endpoints", () => {
+		let v2App: Hono
+
+		beforeAll(async () => {
+			const db = drizzle(pool)
+			v2App = new Hono()
+			v2App.route("/v2/versioned", createVersionedV2Router(db as any, runtime))
+			// Seed a NAME for propText so name resolution (enrichNames) is assertable.
+			await pool.query(
+				`INSERT INTO "values" (id, entity_id, property_id, space_id, text) VALUES ($1, $2, $3, $4, 'Text Property') ON CONFLICT DO NOTHING`,
+				[uuid.val(900), n(uuid.propText), n(SystemIds.NAME_PROPERTY), n(uuid.space1)],
+			)
+		})
+
+		it("returns the same set of changed entities as v1 (enrichment preserves the diff)", async () => {
+			const [v1Res, v2Res] = await Promise.all([
+				app.request(`/versioned/proposals/${uuid.proposalMultipleOps}/diff?spaceId=${uuid.space1}`),
+				v2App.request(`/v2/versioned/proposals/${uuid.proposalMultipleOps}/diff?spaceId=${uuid.space1}`),
+			])
+			expect(v1Res.status).toBe(200)
+			expect(v2Res.status).toBe(200)
+			const v1 = await v1Res.json()
+			const v2 = await v2Res.json()
+			const ids = (b: {entities: {entityId: string}[]}) => b.entities.map((e) => e.entityId).sort()
+			expect(ids(v2)).toEqual(ids(v1))
+			expect(v2.pagination.totalEntities).toBe(v1.pagination.totalEntities)
+		})
+
+		it("returns the grouped/enriched shape with propertyName resolved", async () => {
+			const res = await v2App.request(
+				`/v2/versioned/proposals/${uuid.proposalCreateEntity}/diff?spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const entity = body.entities.find((e: {entityId: string}) => e.entityId === n(uuid.entityNew1))
+			expect(entity).toBeDefined()
+			expect(Array.isArray(entity.groupKeys)).toBe(true)
+			expect(Array.isArray(entity.blocks)).toBe(true)
+			const textChange = entity.values.find((v: {propertyId: string}) => v.propertyId === n(uuid.propText))
+			expect(textChange).toBeDefined()
+			expect(textChange).toHaveProperty("propertyName")
+			expect(textChange.propertyName).toBe("Text Property")
+		})
+
+		it("relation changes carry typeName + toEntityName fields", async () => {
+			const res = await v2App.request(
+				`/v2/versioned/proposals/${uuid.proposalCreateRelation}/diff?spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const withRel = body.entities.find((e: {relations: unknown[]}) => e.relations.length > 0)
+			expect(withRel).toBeDefined()
+			const rel = withRel.relations[0]
+			expect(rel).toHaveProperty("typeName")
+			expect(rel.after ?? rel.before).toHaveProperty("toEntityName")
+		})
+
+		it("grouped (multi-proposal) v2 endpoint returns enriched entities", async () => {
+			const res = await v2App.request(
+				`/v2/versioned/proposal-groups/diff?spaceId=${uuid.space1}&proposalIds=${uuid.proposalCreateEntity},${uuid.proposalCreateRelation}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body.mode).toBe("active")
+			expect(Array.isArray(body.entities)).toBe(true)
+			expect(body.entities.length).toBeGreaterThan(0)
+		})
+
+		it("returns 404 for a non-existent proposal", async () => {
+			const res = await v2App.request(
+				`/v2/versioned/proposals/20000000-0008-4000-8000-000000000999/diff?spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(404)
+		})
+
+		it("returns 400 for an invalid spaceId", async () => {
+			const res = await v2App.request(
+				`/v2/versioned/proposals/${uuid.proposalCreateEntity}/diff?spaceId=not-a-uuid`,
+			)
+			expect(res.status).toBe(400)
+		})
+	})
+
+	// ==========================================================================
+	// 11. v2 folding — cross-parent block folding + media-property filtering
+	// ==========================================================================
+
+	describe("v2 folding (blocks + media)", () => {
+		let v2App: Hono
+		const f = {
+			space: "21000000-0001-4000-8000-000000000001",
+			pageA: "21000000-0002-4000-8000-000000000001",
+			blockA: "21000000-0002-4000-8000-000000000002",
+			relBlocksA: "21000000-0006-4000-8000-000000000001",
+			relTypesA: "21000000-0006-4000-8000-000000000002",
+			propEditBlock: "21000000-0008-4000-8000-000000000001",
+			actEditBlock: "21000000-000a-4000-8000-000000000001",
+			pageB: "21000000-0002-4000-8000-000000000003",
+			imgB: "21000000-0002-4000-8000-000000000004",
+			relTypeAvatar: "21000000-0005-4000-8000-000000000001",
+			relImgTypes: "21000000-0006-4000-8000-000000000003",
+			relAvatar: "21000000-0006-4000-8000-000000000004",
+			propAddAvatar: "21000000-0008-4000-8000-000000000002",
+			actAddAvatar: "21000000-000a-4000-8000-000000000002",
+			// Scenario C: data block whose config (View) is set on the reified BLOCKS relation entity.
+			pageC: "21000000-0002-4000-8000-000000000005",
+			dataBlockC: "21000000-0002-4000-8000-000000000006",
+			relBlocksC: "21000000-0006-4000-8000-000000000005",
+			relTypesC: "21000000-0006-4000-8000-000000000006",
+			relViewConfig: "21000000-0006-4000-8000-000000000007",
+			propSetConfig: "21000000-0008-4000-8000-000000000003",
+			actSetConfig: "21000000-000a-4000-8000-000000000003",
+			// Scenario V: video block whose url is edited.
+			pageV: "21000000-0002-4000-8000-000000000007",
+			videoV: "21000000-0002-4000-8000-000000000008",
+			relBlocksV: "21000000-0006-4000-8000-000000000008",
+			relTypesV: "21000000-0006-4000-8000-000000000009",
+			propEditVideo: "21000000-0008-4000-8000-000000000004",
+			actEditVideo: "21000000-000a-4000-8000-000000000004",
+			// Scenario R: ranking block (a data-block subtype) whose name is edited.
+			pageR: "21000000-0002-4000-8000-000000000009",
+			rankR: "21000000-0002-4000-8000-00000000000a",
+			relBlocksR: "21000000-0006-4000-8000-00000000000a",
+			relTypesR: "21000000-0006-4000-8000-00000000000b",
+			propEditRank: "21000000-0008-4000-8000-000000000005",
+			actEditRank: "21000000-000a-4000-8000-000000000005",
+			// Scenario U: existing (DB-typed) image whose IMAGE_URL is updated in the proposal.
+			pageU: "21000000-0002-4000-8000-00000000000b",
+			imgU: "21000000-0002-4000-8000-00000000000c",
+			relImgUTypes: "21000000-0006-4000-8000-00000000000c",
+			relCoverU: "21000000-0006-4000-8000-00000000000d",
+			propUpdateMedia: "21000000-0008-4000-8000-000000000006",
+			actUpdateMedia: "21000000-000a-4000-8000-000000000006",
+			// Scenario M: one data block shared under TWO parents, each with its own config.
+			pageM1: "21000000-0002-4000-8000-00000000000d",
+			pageM2: "21000000-0002-4000-8000-00000000000e",
+			sharedBlock: "21000000-0002-4000-8000-00000000000f",
+			relBlocksM1: "21000000-0006-4000-8000-00000000000e",
+			relBlocksM2: "21000000-0006-4000-8000-00000000000f",
+			relTypesShared: "21000000-0006-4000-8000-000000000010",
+			relViewM1: "21000000-0006-4000-8000-000000000011",
+			relViewM2: "21000000-0006-4000-8000-000000000012",
+			propMultiConfig: "21000000-0008-4000-8000-000000000007",
+			actMultiConfig: "21000000-000a-4000-8000-000000000007",
+			// Scenario X: proposal UNSETS an existing image's IMAGE_URL (reuses pageU/imgU).
+			relCoverX: "21000000-0006-4000-8000-000000000013",
+			propUnsetMedia: "21000000-0008-4000-8000-000000000008",
+			actUnsetMedia: "21000000-000a-4000-8000-000000000008",
+			// Scenario Y: one edit SETS then UNSETS a new image's IMAGE_URL (last write wins → no url).
+			pageY: "21000000-0002-4000-8000-000000000010",
+			imgY: "21000000-0002-4000-8000-000000000011",
+			relImgYTypes: "21000000-0006-4000-8000-000000000014",
+			relCoverY: "21000000-0006-4000-8000-000000000015",
+			propSetUnsetMedia: "21000000-0008-4000-8000-000000000009",
+			actSetUnsetMedia: "21000000-000a-4000-8000-000000000009",
+		}
+		const RANKING_BLOCK_TYPE = "150db6defe2344f0805afa57502e2c32"
+
+		beforeAll(async () => {
+			const db = drizzle(pool)
+			v2App = new Hono()
+			v2App.route("/v2/versioned", createVersionedV2Router(db as any, runtime))
+
+			const now = Math.floor(Date.now() / 1000)
+			const client = await pool.connect()
+			try {
+				await client.query("BEGIN")
+				await client.query(
+					`INSERT INTO spaces (id, type, address) VALUES ($1, 'DAO', '0xFoldTestSpace') ON CONFLICT DO NOTHING`,
+					[f.space],
+				)
+				const val = (id: string, entity: string, prop: string, text: string) =>
+					client.query(
+						`INSERT INTO "values" (id, entity_id, property_id, space_id, text) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
+						[id, entity, prop, f.space, text],
+					)
+				const rel = (id: string, from: string, to: string, type: string) =>
+					client.query(
+						`INSERT INTO relations (id, entity_id, from_entity_id, to_entity_id, type_id, space_id) VALUES ($1, $1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`,
+						[id, from, to, type, f.space],
+					)
+				// Scenario A: page A owns a text block B (markdown "old text").
+				await val(`${f.pageA}-name`, f.pageA, SystemIds.NAME_PROPERTY, "Page A")
+				await val(`${f.blockA}-name`, f.blockA, SystemIds.NAME_PROPERTY, "Block A")
+				await val(`${f.blockA}-md`, f.blockA, SystemIds.MARKDOWN_CONTENT, "old text")
+				await rel(f.relBlocksA, f.pageA, f.blockA, SystemIds.BLOCKS)
+				await rel(f.relTypesA, f.blockA, SystemIds.TEXT_BLOCK, SystemIds.TYPES_PROPERTY)
+				// Scenario B: page B (name only); proposal will add an image + avatar relation.
+				await val(`${f.pageB}-name`, f.pageB, SystemIds.NAME_PROPERTY, "Page B")
+				// Scenario C: page C owns a data block; config lives on the reified BLOCKS relation.
+				await val(`${f.pageC}-name`, f.pageC, SystemIds.NAME_PROPERTY, "Page C")
+				await val(`${f.dataBlockC}-name`, f.dataBlockC, SystemIds.NAME_PROPERTY, "My Data Block")
+				// The BLOCKS relation's reified entity id (entity_id) == relBlocksC → config carrier.
+				await rel(f.relBlocksC, f.pageC, f.dataBlockC, SystemIds.BLOCKS)
+				await rel(f.relTypesC, f.dataBlockC, SystemIds.DATA_BLOCK, SystemIds.TYPES_PROPERTY)
+				// Scenario V: page V owns a video block (url "ipfs://oldvid").
+				await val(`${f.pageV}-name`, f.pageV, SystemIds.NAME_PROPERTY, "Page V")
+				await val(`${f.videoV}-url`, f.videoV, SystemIds.IMAGE_URL_PROPERTY, "ipfs://oldvid")
+				await rel(f.relBlocksV, f.pageV, f.videoV, SystemIds.BLOCKS)
+				await rel(f.relTypesV, f.videoV, SystemIds.VIDEO_BLOCK, SystemIds.TYPES_PROPERTY)
+				// Scenario R: page R owns a ranking block (name "Old Rank").
+				await val(`${f.pageR}-name`, f.pageR, SystemIds.NAME_PROPERTY, "Page R")
+				await val(`${f.rankR}-name`, f.rankR, SystemIds.NAME_PROPERTY, "Old Rank")
+				await rel(f.relBlocksR, f.pageR, f.rankR, SystemIds.BLOCKS)
+				await rel(f.relTypesR, f.rankR, RANKING_BLOCK_TYPE, SystemIds.TYPES_PROPERTY)
+				// Scenario U: page U + an EXISTING image entity (DB-typed, url "ipfs://oldcover").
+				await val(`${f.pageU}-name`, f.pageU, SystemIds.NAME_PROPERTY, "Page U")
+				await val(`${f.imgU}-url`, f.imgU, SystemIds.IMAGE_URL_PROPERTY, "ipfs://oldcover")
+				await rel(f.relImgUTypes, f.imgU, SystemIds.IMAGE_TYPE, SystemIds.TYPES_PROPERTY)
+				// Scenario M: a single data block embedded under two parents (distinct config carriers).
+				await val(`${f.pageM1}-name`, f.pageM1, SystemIds.NAME_PROPERTY, "Parent 1")
+				await val(`${f.pageM2}-name`, f.pageM2, SystemIds.NAME_PROPERTY, "Parent 2")
+				await val(`${f.sharedBlock}-name`, f.sharedBlock, SystemIds.NAME_PROPERTY, "Shared Block")
+				await rel(f.relBlocksM1, f.pageM1, f.sharedBlock, SystemIds.BLOCKS)
+				await rel(f.relBlocksM2, f.pageM2, f.sharedBlock, SystemIds.BLOCKS)
+				await rel(f.relTypesShared, f.sharedBlock, SystemIds.DATA_BLOCK, SystemIds.TYPES_PROPERTY)
+				await client.query("COMMIT")
+			} catch (e) {
+				await client.query("ROLLBACK")
+				throw e
+			} finally {
+				client.release()
+			}
+
+			const client2 = await pool.connect()
+			try {
+				// Proposal A: edit block A's markdown. Page A is NOT in the edit → orphan parent.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propEditBlock,
+					actionId: f.actEditBlock,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Edit block text")
+							.setCreatedNow()
+							.updateEntity(uuidToId(f.blockA), (u) =>
+								u.setText(uuidToId(SystemIds.MARKDOWN_CONTENT), "new text"),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-edit-block"),
+				})
+				// Proposal B: add an avatar image to page B (new IMAGE entity + relation).
+				await createProposalWithEdit(client2, {
+					proposalId: f.propAddAvatar,
+					actionId: f.actAddAvatar,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Add avatar")
+							.setCreatedNow()
+							.createEntity(uuidToId(f.imgB), (e) =>
+								e.text(uuidToId(SystemIds.IMAGE_URL_PROPERTY), "ipfs://foldtestimg"),
+							)
+							.createRelationSimple(
+								uuidToId(f.relImgTypes),
+								uuidToId(f.imgB),
+								uuidToId(SystemIds.IMAGE_TYPE),
+								uuidToId(SystemIds.TYPES_PROPERTY),
+							)
+							.createRelationSimple(
+								uuidToId(f.relAvatar),
+								uuidToId(f.pageB),
+								uuidToId(f.imgB),
+								uuidToId(f.relTypeAvatar),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-add-avatar"),
+				})
+				// Proposal C: set a View config on the data block's reified BLOCKS relation entity.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propSetConfig,
+					actionId: f.actSetConfig,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Set data block view")
+							.setCreatedNow()
+							.createRelationSimple(
+								uuidToId(f.relViewConfig),
+								uuidToId(f.relBlocksC), // from = reified BLOCKS relation entity
+								uuidToId(SystemIds.GALLERY_VIEW),
+								uuidToId(SystemIds.VIEW_PROPERTY),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-set-config"),
+				})
+				// Proposal V: edit the video block's url.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propEditVideo,
+					actionId: f.actEditVideo,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Edit video url")
+							.setCreatedNow()
+							.updateEntity(uuidToId(f.videoV), (u) =>
+								u.setText(uuidToId(SystemIds.IMAGE_URL_PROPERTY), "ipfs://newvid"),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-edit-video"),
+				})
+				// Proposal R: rename the ranking block.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propEditRank,
+					actionId: f.actEditRank,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Rename ranking block")
+							.setCreatedNow()
+							.updateEntity(uuidToId(f.rankR), (u) =>
+								u.setText(uuidToId(SystemIds.NAME_PROPERTY), "New Rank"),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-edit-rank"),
+				})
+				// Proposal U: update an existing image's url AND point a Cover relation at it.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propUpdateMedia,
+					actionId: f.actUpdateMedia,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Update cover image url")
+							.setCreatedNow()
+							.updateEntity(uuidToId(f.imgU), (u) =>
+								u.setText(uuidToId(SystemIds.IMAGE_URL_PROPERTY), "ipfs://newcover"),
+							)
+							.createRelationSimple(
+								uuidToId(f.relCoverU),
+								uuidToId(f.pageU),
+								uuidToId(f.imgU),
+								uuidToId(f.relTypeAvatar),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-update-media"),
+				})
+				// Proposal M: set DIFFERENT views on the shared block's two parent configs.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propMultiConfig,
+					actionId: f.actMultiConfig,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Set per-parent views")
+							.setCreatedNow()
+							.createRelationSimple(
+								uuidToId(f.relViewM1),
+								uuidToId(f.relBlocksM1),
+								uuidToId(SystemIds.GALLERY_VIEW),
+								uuidToId(SystemIds.VIEW_PROPERTY),
+							)
+							.createRelationSimple(
+								uuidToId(f.relViewM2),
+								uuidToId(f.relBlocksM2),
+								uuidToId(SystemIds.LIST_VIEW),
+								uuidToId(SystemIds.VIEW_PROPERTY),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-multi-config"),
+				})
+				// Proposal X: unset the existing image's IMAGE_URL while pointing a Cover relation at it.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propUnsetMedia,
+					actionId: f.actUnsetMedia,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Remove cover image url")
+							.setCreatedNow()
+							.updateEntity(uuidToId(f.imgU), (u) => u.unsetAll(uuidToId(SystemIds.IMAGE_URL_PROPERTY)))
+							.createRelationSimple(
+								uuidToId(f.relCoverX),
+								uuidToId(f.pageU),
+								uuidToId(f.imgU),
+								uuidToId(f.relTypeAvatar),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-unset-media"),
+				})
+				// Proposal Y: within ONE edit, set then unset a new image's IMAGE_URL.
+				// Last write wins → the proposed url must NOT be inlined onto the Cover relation.
+				await createProposalWithEdit(client2, {
+					proposalId: f.propSetUnsetMedia,
+					actionId: f.actSetUnsetMedia,
+					spaceId: f.space,
+					startTime: now - 1000,
+					endTime: now + 86400,
+					editBuilder: (editId) =>
+						new EditBuilder(editId)
+							.setName("Add then remove cover url")
+							.setCreatedNow()
+							.createEntity(uuidToId(f.imgY), (e) =>
+								e.text(uuidToId(SystemIds.IMAGE_URL_PROPERTY), "ipfs://shouldberemoved"),
+							)
+							.createRelationSimple(
+								uuidToId(f.relImgYTypes),
+								uuidToId(f.imgY),
+								uuidToId(SystemIds.IMAGE_TYPE),
+								uuidToId(SystemIds.TYPES_PROPERTY),
+							)
+							.updateEntity(uuidToId(f.imgY), (u) => u.unsetAll(uuidToId(SystemIds.IMAGE_URL_PROPERTY)))
+							.createRelationSimple(
+								uuidToId(f.relCoverY),
+								uuidToId(f.pageY),
+								uuidToId(f.imgY),
+								uuidToId(f.relTypeAvatar),
+							)
+							.build(),
+					contentUri: generateTestUri("fold-set-unset-media"),
+				})
+			} finally {
+				client2.release()
+			}
+		})
+
+		it("folds an edited block under its (unchanged) parent page; block is not top-level", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propEditBlock}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const ids = body.entities.map((e: {entityId: string}) => e.entityId)
+			// Page A is the only root (resolved via BLOCKS backlink); block B is folded, not top-level.
+			expect(ids).toContain(n(f.pageA))
+			expect(ids).not.toContain(n(f.blockA))
+			expect(body.pagination.totalEntities).toBe(1)
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageA))
+			const block = page.blocks.find((b: {id: string}) => b.id === n(f.blockA))
+			expect(block).toBeDefined()
+			expect(block.type).toBe("textBlock")
+			expect(block.before).toBe("old text")
+			expect(block.after).toBe("new text")
+		})
+
+		it("drops a media-property entity and inlines its URL onto the parent relation", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propAddAvatar}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const ids = body.entities.map((e: {entityId: string}) => e.entityId)
+			expect(ids).toContain(n(f.pageB))
+			// The IMAGE entity is dropped from the top level; its URL is inlined instead.
+			expect(ids).not.toContain(n(f.imgB))
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageB))
+			const rel = page.relations.find((r: {after?: {toEntityId: string}}) => r.after?.toEntityId === n(f.imgB))
+			expect(rel).toBeDefined()
+			expect(rel.after.imageUrl).toBe("ipfs://foldtestimg")
+		})
+
+		it("folds data-block config (from the reified BLOCKS relation entity) into the block", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propSetConfig}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const ids = body.entities.map((e: {entityId: string}) => e.entityId)
+			// Only the page is a root; the reified config entity is folded, not top-level.
+			expect(ids).toContain(n(f.pageC))
+			expect(ids).not.toContain(n(f.relBlocksC))
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageC))
+			const block = page.blocks.find((b: {id: string}) => b.id === n(f.dataBlockC))
+			expect(block).toBeDefined()
+			expect(block.type).toBe("dataBlock")
+			// The View config relation (authored on the reified entity) is folded onto the block.
+			const viewRel = (block.relations ?? []).find(
+				(r: {typeId: string; after?: {toEntityId: string}}) =>
+					r.typeId === n(SystemIds.VIEW_PROPERTY) && r.after?.toEntityId === n(SystemIds.GALLERY_VIEW),
+			)
+			expect(viewRel).toBeDefined()
+			expect(viewRel.changeType).toBe("ADD")
+		})
+
+		it("folds a video block (videoBlock type) under its parent", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propEditVideo}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const ids = body.entities.map((e: {entityId: string}) => e.entityId)
+			expect(ids).toContain(n(f.pageV))
+			expect(ids).not.toContain(n(f.videoV))
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageV))
+			const block = page.blocks.find((b: {id: string}) => b.id === n(f.videoV))
+			expect(block).toBeDefined()
+			expect(block.type).toBe("videoBlock")
+			expect(block.before).toBe("ipfs://oldvid")
+			expect(block.after).toBe("ipfs://newvid")
+		})
+
+		it("folds a ranking block as a dataBlock", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propEditRank}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageR))
+			expect(page).toBeDefined()
+			const block = page.blocks.find((b: {id: string}) => b.id === n(f.rankR))
+			expect(block).toBeDefined()
+			expect(block.type).toBe("dataBlock")
+			expect(block.before).toBe("Old Rank")
+			expect(block.after).toBe("New Rank")
+		})
+
+		it("paginates over root entities (cursor crosses a page boundary)", async () => {
+			// proposalMultipleOps changes 2 root entities; limit=1 forces two pages.
+			const r1 = await v2App.request(
+				`/v2/versioned/proposals/${uuid.proposalMultipleOps}/diff?spaceId=${uuid.space1}&limit=1`,
+			)
+			expect(r1.status).toBe(200)
+			const b1 = await r1.json()
+			expect(b1.entities.length).toBe(1)
+			expect(b1.pagination.totalEntities).toBe(2)
+			expect(b1.pagination.hasMore).toBe(true)
+			expect(b1.pagination.cursor).toBeTruthy()
+
+			const r2 = await v2App.request(
+				`/v2/versioned/proposals/${uuid.proposalMultipleOps}/diff?spaceId=${uuid.space1}&limit=1&cursor=${encodeURIComponent(b1.pagination.cursor)}`,
+			)
+			expect(r2.status).toBe(200)
+			const b2 = await r2.json()
+			expect(b2.entities.length).toBe(1)
+			expect(b2.pagination.hasMore).toBe(false)
+			// The two pages cover distinct roots.
+			const all = new Set([...b1.entities, ...b2.entities].map((e: {entityId: string}) => e.entityId))
+			expect(all.size).toBe(2)
+		})
+
+		it("inlines the proposed (updated) URL for an existing DB-typed media entity, not the stale base URL", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propUpdateMedia}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const ids = body.entities.map((e: {entityId: string}) => e.entityId)
+			expect(ids).toContain(n(f.pageU))
+			expect(ids).not.toContain(n(f.imgU))
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageU))
+			const rel = page.relations.find((r: {after?: {toEntityId: string}}) => r.after?.toEntityId === n(f.imgU))
+			expect(rel).toBeDefined()
+			// The edit updated the image's IMAGE_URL; the proposed URL must win over the base-version URL.
+			expect(rel.after.imageUrl).toBe("ipfs://newcover")
+		})
+
+		it("keeps per-parent config when one data block is shared under two parents", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propMultiConfig}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const viewOf = (parentId: string) => {
+				const page = body.entities.find((e: {entityId: string}) => e.entityId === n(parentId))
+				const block = page?.blocks.find((b: {id: string}) => b.id === n(f.sharedBlock))
+				const viewRel = (block?.relations ?? []).find(
+					(r: {typeId: string}) => r.typeId === n(SystemIds.VIEW_PROPERTY),
+				)
+				return viewRel?.after?.toEntityId
+			}
+			// Each parent's fold must carry its OWN config — not a single block-keyed collision.
+			expect(viewOf(f.pageM1)).toBe(n(SystemIds.GALLERY_VIEW))
+			expect(viewOf(f.pageM2)).toBe(n(SystemIds.LIST_VIEW))
+		})
+
+		it("removes a relation's inlined media URL when the proposal unsets it", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propUnsetMedia}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageU))
+			expect(page).toBeDefined()
+			const rel = page.relations.find((r: {after?: {toEntityId: string}}) => r.after?.toEntityId === n(f.imgU))
+			expect(rel).toBeDefined()
+			// The proposal unset IMAGE_URL → no stale base-version URL should remain inlined.
+			expect(rel.after.imageUrl ?? null).toBeNull()
+			expect(rel.after.videoUrl ?? null).toBeNull()
+		})
+
+		it("does not inline a proposed media URL that the same edit later unsets (last write wins)", async () => {
+			const res = await v2App.request(`/v2/versioned/proposals/${f.propSetUnsetMedia}/diff?spaceId=${f.space}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			const page = body.entities.find((e: {entityId: string}) => e.entityId === n(f.pageY))
+			expect(page).toBeDefined()
+			const rel = page.relations.find((r: {after?: {toEntityId: string}}) => r.after?.toEntityId === n(f.imgY))
+			expect(rel).toBeDefined()
+			// The edit set IMAGE_URL then unset it; the proposed url must not be inlined.
+			expect(rel.after.imageUrl ?? null).toBeNull()
+			expect(rel.after.videoUrl ?? null).toBeNull()
 		})
 	})
 })
@@ -759,9 +1358,7 @@ async function setupTestData(pool: Pool): Promise<void> {
 					.updateEntity(uuidToId(uuid.entityExisting1), (u) =>
 						u.setInt64(uuidToId(uuid.propInt), BigInt(100)),
 					)
-					.updateEntity(uuidToId(uuid.entityExisting2), (u) =>
-						u.setFloat64(uuidToId(uuid.propFloat), 2.71828),
-					)
+					.updateEntity(uuidToId(uuid.entityExisting2), (u) => u.setFloat64(uuidToId(uuid.propFloat), Math.E))
 				return builder.build()
 			},
 			contentUri: generateTestUri("multiple-ops"),
@@ -783,7 +1380,7 @@ async function setupTestData(pool: Pool): Promise<void> {
 							.text(uuidToId(uuid.propText), "Entity with all types")
 							.bool(uuidToId(uuid.propBool), true)
 							.int64(uuidToId(uuid.propInt), BigInt(42))
-							.float64(uuidToId(uuid.propFloat), 3.14159),
+							.float64(uuidToId(uuid.propFloat), Math.PI),
 					)
 				return builder.build()
 			},
@@ -934,16 +1531,17 @@ async function cleanupTestData(pool: Pool): Promise<void> {
 	try {
 		await client.query("BEGIN")
 
-		// Delete in reverse order of foreign key dependencies
-		await client.query(`DELETE FROM proposal_actions WHERE proposal_id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM proposals WHERE id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM relations WHERE from_entity_id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM relation_versions WHERE from_entity_id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM "values" WHERE entity_id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM value_versions WHERE entity_id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM edit_versions WHERE edit_id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM entities WHERE id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM spaces WHERE id::text LIKE '20000000-%'`)
+		// Delete in reverse order of foreign key dependencies.
+		// Covers both fixture prefixes used in this file: 20000000-* and 21000000-*.
+		await client.query(`DELETE FROM proposal_actions WHERE proposal_id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM proposals WHERE id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM relations WHERE from_entity_id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM relation_versions WHERE from_entity_id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM "values" WHERE entity_id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM value_versions WHERE entity_id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM edit_versions WHERE edit_id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM entities WHERE id::text ~ '^2[01]000000-'`)
+		await client.query(`DELETE FROM spaces WHERE id::text ~ '^2[01]000000-'`)
 		await client.query(`DELETE FROM ipfs_cache WHERE uri LIKE 'ipfs://bafkreitest%'`)
 
 		await client.query("COMMIT")
