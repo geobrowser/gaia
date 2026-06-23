@@ -11,6 +11,7 @@ import {decodeEditAuto} from "@geoprotocol/grc-20"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
+import {bodyLimit} from "hono/body-limit"
 import {getProfilesBySpaceIds} from "../../profile/queries"
 import type {Profile} from "../../profile/types"
 import type {AppRuntime} from "../../services/runtime"
@@ -41,6 +42,14 @@ const MAX_REVIEW_OPS = 10_000
  * only kicks in post-decode). 8 MiB is generous headroom over real edits.
  */
 const MAX_REVIEW_EDIT_BYTES = 8 * 1024 * 1024
+
+/**
+ * Max raw request-body size for /review, enforced by Hono's bodyLimit middleware
+ * BEFORE `c.req.json()` materializes the body. Headroom over `MAX_REVIEW_EDIT_BYTES`
+ * since base64 expands ~4/3 and JSON adds wrapper bytes; the inner decoded-size and
+ * op-count caps are the tighter, semantic bounds.
+ */
+const MAX_REVIEW_BODY_BYTES = 12 * 1024 * 1024
 
 type AppEnv = {
 	Variables: {
@@ -315,88 +324,101 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 	 * exact publish-parity; raw JSON `ops[]` support is a follow-up (op ids are
 	 * 16-byte binary, not hex strings, so they need a conversion layer).
 	 */
-	router.post("/review", async (c) => {
-		const body = (await c.req.json().catch(() => null)) as {
-			spaceId?: unknown
-			edit?: unknown
-			cursor?: unknown
-			limit?: unknown
-		} | null
+	router.post(
+		"/review",
+		bodyLimit({
+			maxSize: MAX_REVIEW_BODY_BYTES,
+			onError: (c) =>
+				c.json(
+					{error: "Payload too large", message: `request body exceeds ${MAX_REVIEW_BODY_BYTES} bytes`},
+					413,
+				),
+		}),
+		async (c) => {
+			const body = (await c.req.json().catch(() => null)) as {
+				spaceId?: unknown
+				edit?: unknown
+				cursor?: unknown
+				limit?: unknown
+			} | null
 
-		const program = Effect.gen(function* () {
-			if (!body || typeof body !== "object") {
-				return yield* Effect.fail(new ValidationError({message: "Request body must be a JSON object"}))
-			}
-			if (typeof body.spaceId !== "string" || !isValidUuid(body.spaceId)) {
-				return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
-			}
-			if (typeof body.edit !== "string" || body.edit.length === 0) {
-				return yield* Effect.fail(new ValidationError({message: "edit (base64-encoded edit blob) is required"}))
-			}
-			// Reject oversized blobs up front (base64 decodes to ~3/4 its length) so we
-			// never run Buffer.from + decodeEditAuto on a huge untrusted payload.
-			if (Math.floor((body.edit.length * 3) / 4) > MAX_REVIEW_EDIT_BYTES) {
-				return yield* Effect.fail(
-					new ValidationError({message: `edit exceeds the ${MAX_REVIEW_EDIT_BYTES}-byte review limit`}),
-				)
-			}
-			if (body.cursor !== undefined && typeof body.cursor !== "string") {
-				return yield* Effect.fail(new ValidationError({message: "cursor must be a string"}))
-			}
-			let limit = 50
-			if (body.limit !== undefined) {
-				if (typeof body.limit !== "number" || !Number.isInteger(body.limit) || body.limit < 1) {
-					return yield* Effect.fail(new ValidationError({message: "limit must be a positive integer"}))
+			const program = Effect.gen(function* () {
+				if (!body || typeof body !== "object") {
+					return yield* Effect.fail(new ValidationError({message: "Request body must be a JSON object"}))
 				}
-				limit = Math.min(body.limit, 100)
-			}
-
-			const blob = yield* Effect.try({
-				try: () => new Uint8Array(Buffer.from(body.edit as string, "base64")),
-				catch: () => new ValidationError({message: "edit must be valid base64"}),
-			})
-			const ops = yield* Effect.tryPromise({
-				try: async () => (await decodeEditAuto(blob)).ops,
-				catch: (error) => new EditDecodeError(error),
-			})
-			if (ops.length > MAX_REVIEW_OPS) {
-				return yield* Effect.fail(
-					new ValidationError({
-						message: `edit exceeds the ${MAX_REVIEW_OPS}-op review limit (${ops.length})`,
-					}),
-				)
-			}
-
-			return yield* computeReviewDiffV2(
-				db,
-				ops,
-				normalizeUuid(body.spaceId),
-				body.cursor as string | undefined,
-				limit,
-			)
-		}).pipe(Effect.withSpan("POST /v2/versioned/review"))
-
-		const result = await runtime.runPromise(Effect.either(program))
-		return Either.match(result, {
-			onLeft: (error) => {
-				if (error._tag === "ValidationError") {
-					return c.json({error: "Invalid parameter", message: error.message}, 400)
+				if (typeof body.spaceId !== "string" || !isValidUuid(body.spaceId)) {
+					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
 				}
-				// Unlike the proposal path (where the blob comes from our own IPFS cache and a
-				// decode failure is a 500), the review blob is CLIENT input — an undecodable
-				// edit is a bad request, not a server fault.
-				if (error._tag === "EditDecodeError") {
-					return c.json(
-						{error: "Invalid parameter", message: "edit is not a decodable GRC-20 edit blob"},
-						400,
+				if (typeof body.edit !== "string" || body.edit.length === 0) {
+					return yield* Effect.fail(
+						new ValidationError({message: "edit (base64-encoded edit blob) is required"}),
 					)
 				}
-				const mapped = mapGroupedProposalError(error)
-				return c.json(mapped.body, mapped.status)
-			},
-			onRight: (diff) => c.json(diff as unknown as Record<string, unknown>, 200),
-		})
-	})
+				// Reject oversized blobs up front (base64 decodes to ~3/4 its length) so we
+				// never run Buffer.from + decodeEditAuto on a huge untrusted payload.
+				if (Math.floor((body.edit.length * 3) / 4) > MAX_REVIEW_EDIT_BYTES) {
+					return yield* Effect.fail(
+						new ValidationError({message: `edit exceeds the ${MAX_REVIEW_EDIT_BYTES}-byte review limit`}),
+					)
+				}
+				if (body.cursor !== undefined && typeof body.cursor !== "string") {
+					return yield* Effect.fail(new ValidationError({message: "cursor must be a string"}))
+				}
+				let limit = 50
+				if (body.limit !== undefined) {
+					if (typeof body.limit !== "number" || !Number.isInteger(body.limit) || body.limit < 1) {
+						return yield* Effect.fail(new ValidationError({message: "limit must be a positive integer"}))
+					}
+					limit = Math.min(body.limit, 100)
+				}
+
+				const blob = yield* Effect.try({
+					try: () => new Uint8Array(Buffer.from(body.edit as string, "base64")),
+					catch: () => new ValidationError({message: "edit must be valid base64"}),
+				})
+				const ops = yield* Effect.tryPromise({
+					try: async () => (await decodeEditAuto(blob)).ops,
+					catch: (error) => new EditDecodeError(error),
+				})
+				if (ops.length > MAX_REVIEW_OPS) {
+					return yield* Effect.fail(
+						new ValidationError({
+							message: `edit exceeds the ${MAX_REVIEW_OPS}-op review limit (${ops.length})`,
+						}),
+					)
+				}
+
+				return yield* computeReviewDiffV2(
+					db,
+					ops,
+					normalizeUuid(body.spaceId),
+					body.cursor as string | undefined,
+					limit,
+				)
+			}).pipe(Effect.withSpan("POST /v2/versioned/review"))
+
+			const result = await runtime.runPromise(Effect.either(program))
+			return Either.match(result, {
+				onLeft: (error) => {
+					if (error._tag === "ValidationError") {
+						return c.json({error: "Invalid parameter", message: error.message}, 400)
+					}
+					// Unlike the proposal path (where the blob comes from our own IPFS cache and a
+					// decode failure is a 500), the review blob is CLIENT input — an undecodable
+					// edit is a bad request, not a server fault.
+					if (error._tag === "EditDecodeError") {
+						return c.json(
+							{error: "Invalid parameter", message: "edit is not a decodable GRC-20 edit blob"},
+							400,
+						)
+					}
+					const mapped = mapGroupedProposalError(error)
+					return c.json(mapped.body, mapped.status)
+				},
+				onRight: (diff) => c.json(diff as unknown as Record<string, unknown>, 200),
+			})
+		},
+	)
 
 	return router
 }

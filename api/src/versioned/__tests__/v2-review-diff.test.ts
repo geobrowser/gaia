@@ -94,10 +94,20 @@ describe.skipIf(SKIP)("POST /v2/versioned/review", () => {
 			expect(res.status).toBe(400)
 		})
 
-		it("400 when the edit blob exceeds the size cap (rejected before decode)", async () => {
-			// > 8 MiB decoded (~12 MiB of base64 chars). Caught up front, never decoded.
-			const res = await post({spaceId: SPACE, edit: "A".repeat(12 * 1024 * 1024)})
+		it("400 when the decoded edit exceeds the size cap (rejected before decode)", async () => {
+			// 11 MiB of base64 → ~8.25 MiB decoded (> 8 MiB cap) but body < 12 MiB, so it
+			// passes bodyLimit and is caught by the inner decoded-size check, never decoded.
+			const res = await post({spaceId: SPACE, edit: "A".repeat(11 * 1024 * 1024)})
 			expect(res.status).toBe(400)
+		})
+
+		it("rejects a body that exceeds the bodyLimit (read aborted before full materialization)", async () => {
+			// > 12 MiB body. bodyLimit aborts the body read at the cap so c.req.json() never
+			// materializes the whole payload. Real clients send Content-Length → 413 via the
+			// fast path; the in-memory test has none → streaming path → the aborted read
+			// surfaces as 400. Both are "rejected"; the point is bounded allocation.
+			const res = await post({spaceId: SPACE, edit: "A".repeat(13 * 1024 * 1024)})
+			expect([400, 413]).toContain(res.status)
 		})
 
 		it("400 when limit is invalid", async () => {
