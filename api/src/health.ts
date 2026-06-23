@@ -3,7 +3,7 @@ import {describeRoute} from "hono-openapi"
 import {renderQueryCostHistogram} from "./kg/costLoggerPlugin"
 import {renderResponseSizeHistogram} from "./kg/instrumentationPlugin"
 import {getGraphqlPoolPressure, getGraphqlPoolStats} from "./kg/postgraphile"
-import {db, getPoolStats, getReviewPoolStats} from "./services/storage/storage"
+import {db, getPoolStats} from "./services/storage/storage"
 import {log} from "./services/telemetry"
 
 const health = new Hono()
@@ -46,36 +46,10 @@ function renderGaugeMetric(name: string, help: string, value: number): string {
 
 function renderPrometheusMetrics(): string {
 	const dbPoolStats = getPoolStats()
-	const reviewPoolStats = getReviewPoolStats()
 	const graphqlPoolStats = getGraphqlPoolStats()
 	const graphqlPoolPressure = getGraphqlPoolPressure()
 
 	return [
-		renderGaugeMetric(
-			"gaia_api_review_db_pool_total_connections",
-			"Total connections currently tracked by the isolated /v2/versioned/review PostgreSQL pool.",
-			reviewPoolStats.totalConnections,
-		),
-		renderGaugeMetric(
-			"gaia_api_review_db_pool_idle_connections",
-			"Idle connections currently available in the /v2/versioned/review PostgreSQL pool.",
-			reviewPoolStats.idleConnections,
-		),
-		renderGaugeMetric(
-			"gaia_api_review_db_pool_waiting_count",
-			"Requests currently waiting for a /v2/versioned/review PostgreSQL pool client.",
-			reviewPoolStats.waitingCount,
-		),
-		renderGaugeMetric(
-			"gaia_api_review_db_pool_max_connections",
-			"Configured maximum size of the /v2/versioned/review PostgreSQL pool.",
-			reviewPoolStats.maxConnections,
-		),
-		renderGaugeMetric(
-			"gaia_api_review_db_pool_utilization_ratio",
-			"Current utilization ratio of the /v2/versioned/review PostgreSQL pool.",
-			poolUtilizationRatio(reviewPoolStats),
-		),
 		renderGaugeMetric(
 			"gaia_api_db_pool_total_connections",
 			"Total connections currently tracked by the REST/Drizzle PostgreSQL pool.",

@@ -80,7 +80,7 @@ function resolveCreatorProfiles(
 	)
 }
 
-export function createVersionedV2Router(db: Database, runtime: AppRuntime, reviewDb: Database = db) {
+export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 	const router = new Hono<AppEnv>()
 
 	/**
@@ -405,7 +405,7 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime, revie
 				}
 
 				return yield* computeReviewDiffV2(
-					reviewDb,
+					db,
 					ops,
 					normalizeUuid(body.spaceId),
 					body.cursor as string | undefined,

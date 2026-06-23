@@ -13,7 +13,7 @@ import {isPoolConnectTimeout} from "./src/services/dbFailures"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
 import {runtime} from "./src/services/runtime"
 import {OpenSearchClient} from "./src/services/search"
-import {db, reviewDb} from "./src/services/storage/storage"
+import {db} from "./src/services/storage/storage"
 import {log} from "./src/services/telemetry"
 import {createVersionedRouter} from "./src/versioned"
 import {createVersionedV2Router} from "./src/versioned/v2"
@@ -112,7 +112,7 @@ app.route("/versioned", createVersionedRouter(db, runtime))
 log.info("Versioned entity routes enabled")
 
 // Mount v2 versioned entities router (additive enrichments over v1)
-app.route("/v2/versioned", createVersionedV2Router(db, runtime, reviewDb))
+app.route("/v2/versioned", createVersionedV2Router(db, runtime))
 log.info("Versioned v2 entity routes enabled")
 
 // Mount profile router
