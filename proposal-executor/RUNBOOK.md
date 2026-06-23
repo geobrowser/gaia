@@ -82,17 +82,12 @@ Before applying, edit the environment-specific `deployment/<env>/cronjob.yaml` a
 
 - `EXECUTOR_SPACE_ID` — from step 1.4 above
 
-`SPACE_REGISTRY_ADDRESS`, `RPC_URL`, and `CHAIN_ID` are pre-filled per environment. `EXECUTOR_SPACE_ID` is the only value you must set — it's empty by default and the service will crash without it.
+`SPACE_REGISTRY_ADDRESS`, `RPC_URL`, and `CHAIN_ID` are pre-filled in the production manifest. `EXECUTOR_SPACE_ID` is the only value you must set — it's empty by default and the service will crash without it.
 
 ### 3. Create K8s resources
 
 ```bash
-# Both environments deploy into the existing 'knowledge' namespace.
-
-# For staging (testnet):
-kubectl apply -f deployment/staging/cronjob.yaml
-
-# For production (mainnet):
+# Production deploys into the existing 'knowledge' namespace.
 kubectl apply -f deployment/production/cronjob.yaml
 ```
 

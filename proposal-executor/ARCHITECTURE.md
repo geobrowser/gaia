@@ -18,10 +18,7 @@ proposal-executor/
 │   ├── execute.test.ts    # Encoding correctness, constant validation, error classification
 │   ├── membership.test.ts # Vote encoding (VoteOption=1), tally decoding, two-stage eligibility
 │   └── index.test.ts      # Tagged error discrimination, exit code logic, concurrency, dual-wallet config
-├── deployment/         # Both environments deploy into the 'knowledge' namespace
-│   ├── staging/        # Testnet (chain 19411) manifests
-│   │   ├── cronjob.yaml
-│   │   └── secrets.yaml.example
+├── deployment/         # Deploys into the 'knowledge' namespace
 │   └── production/     # Mainnet (chain 80451) manifests
 │       ├── cronjob.yaml
 │       └── secrets.yaml.example
