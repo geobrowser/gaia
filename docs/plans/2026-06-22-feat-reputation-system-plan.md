@@ -42,7 +42,8 @@ findings**) showed the Expert band is **not** a simple reuse — there is no per
 
 | Building block | Where | Reuse for Rep |
 |---|---|---|
-| Per-entity, per-space scores | `scoring-service` Python cronjob → `local_scores`, `global_scores`, `space_scores` | **Expert band** — ⚠️ `local_scores` is keyed by the *voted-on content entity id*, **not** by a person/user. There is no person-entity score to read. Needs a new user-scoring derivation — see Verification findings. |
+| Per-entity, per-space scores | `scoring-service` Python cronjob → `local_scores`, `global_scores`, `space_scores` | **Expert band** reads a per-user score. Canonical source = the user's **Person entity** `local_score`, resolved via `spaces.topic_id → TYPES_PROPERTY→PERSON_TYPE` (verified) — confirmed (finding #8), but **unpopulated until people are voted/ranked on**. Interim: authored-content aggregation (finding #6). See *User → expertise score*. |
+| Person-entity link | `spaces.topic_id` FK → entity typed `Person`, gated on `subspaces type='verified'` | **Expert band** per-user identity resolution (finding #8) |
 | Uniform vote weight hook | `Vote.weight` (default `1.0`) in `scoring-service/cronjob/src/algorithm/models.py` | **Reputation-weighted voting** sets this from Rep |
 | On-chain verification | `SUBSPACE_VERIFIED`/`SUBSPACE_UNVERIFIED` → `space.trust.extensions` topic → `kg-indexer` → `subspaces` table (`type='verified'`) | **Verified band** raw edges |
 | Transitive verified closure | `atlas` (`atlas/src/graph/transitive.rs`): BFS + visited-set from root, diamond/cycle-safe, reverse-dependency incremental invalidation, revocation cascade; emits `topology.canonical` | **Verified band** transitivity + revocation — *no new graph code* |
@@ -107,19 +108,19 @@ rep     = clamp(points / 1000, 0, 1)
 
 **4. Expert (0–980 points)** — *the exponential band*
 
-> ℹ️ **Premise refuted by verification (2026-06-23), then re-grounded.** The original "read the
-> person entity's `local_score`" assumption was wrong (no person entity; `local_scores` is
-> content-keyed; range is `(0,1)`-neutral-`0.5`, not `[-1,1]`). The expertise source is now **derived
-> from authored content** — see *User → expertise score* for the decided model and join.
+> ℹ️ **Source corrected 2026-06-23.** The original `[-1,1]` range was wrong (it's `(0,1)`-neutral-`0.5`),
+> but the Person-entity premise was *right* (finding #1 was a false negative — finding #8 confirms the
+> Person entity + resolution). Canonical source = the Person entity's `local_score`; authored-content
+> is an interim bootstrap until people are voted/ranked on. See *User → expertise score*.
 
-- "Expertise" = a **per-user, per-space score derived from the user's authored content** (Bayesian-
-  shrunk mean of those entities' `local_scores`; see *User → expertise score*), mapped to `x ∈ [0,1]`
-  via `x = max(0, 2q − 1)` — which accounts for the `(0,1)`-neutral-`0.5` source: below-neutral
-  reception → `x = 0`, and `(0.5, 1]` stretches to `(0, 1]`.
-- Users with no authored, scored content get `expert_add = 0`.
-- **Negative/downvoted score wipes the entire rep, not just this band.** "Negative" here means below
-  the neutral midpoint by a deadband (`score < 0.5 − ε`), since the source has no true negatives.
-  Rationale and guard: see Decisions #3.
+- "Expertise" = a **per-user, per-space score** — canonically the user's Person-entity `local_score`
+  (interim: authored-content shrunk mean `q`; see *User → expertise score*) — mapped to `x ∈ [0,1]`
+  via `x = max(0, 2q − 1)`, which folds the `(0,1)`-neutral-`0.5` source: below-neutral → `x = 0`,
+  `(0.5, 1]` stretches to `(0, 1]`.
+- Users with no scored Person entity (and no scored authored content, if bootstrapping) get
+  `expert_add = 0`.
+- A below-neutral score yields `expert_add = 0` — it does **not** wipe the rest of rep (Decision #3,
+  reversed: the score is relative-within-space, so "below median" ≠ "bad actor").
 - Otherwise apply the exponential curve:
 
 ```
@@ -209,46 +210,51 @@ table (e.g. `verified_spaces(space_id)`), or queried from atlas's persisted base
 the atlas owner (see Dependencies). The `subspaces` verified edges + `points_earned` come from
 existing tables / the knowledge layer.
 
-### User → expertise score (⚠️ rewritten — verification refuted the original plan; **decided**)
+### User → expertise score (⚠️ corrected 2026-06-23 — a Person entity *does* exist)
 
-The original plan assumed the Expert band could read a user's **person entity `local_score`** via
-`account/personal space → person entity id → local_scores[...]`. **Verification refuted this**
-(finding #1): there is no person entity in gaia, and `local_scores` is keyed by the *voted-on content
-entity id*, not by a user. The user identity in scoring is `member_space_id`. So there is no existing
-per-user score to read — it must be **derived**. Two approaches are *mechanically* feasible (findings
-#6/#7); the decision is to ship the cheap one now and design for the spec's model as v2.
+The original plan said the Expert band reads a user's **Person-entity `local_score`**. Our first
+verification pass (finding #1) called this refuted — **that was wrong**, a tooling artifact: we
+grepped source for the `PERSON_TYPE` constant, but gaia stores types **generically** as
+`TYPES_PROPERTY` relations, so Person entities exist in the *data*, not in named code. Yaniv
+corrected this; finding #8 confirms the mechanism.
 
-**Decision — v1: authored-content aggregation.** A user's expertise in space `S` is derived from the
-scores of the content they authored in `S`. The author→content→score join is confirmed (finding #6):
-
-```
-edit_versions (created_by_id = :member_space_id)        -- author is already a space id
-  └─ version_key = value_versions/relation_versions.valid_from_key
-       → (entity_id, space_id)
-       → local_scores[entity_id, space_id]              -- sₑ ∈ (0,1), neutral 0.5
-```
-
-Aggregate with a **Bayesian-shrunk mean** toward neutral, so low volume / one lucky entity can't
-spike rep and spamming mediocre content stays near neutral:
+**The Person-entity resolution (confirmed, finding #8).** A user's Person entity is reachable per
+space:
 
 ```
-q = (Σ sₑ + κ·0.5) / (n + κ)        n = # authored entities with a score in S,  κ ≈ 5 (tunable)
-x = max(0, 2q − 1)                  remap (0.5,1]→(0,1], below-neutral→0 (finding #2)
-expert_add = curve(x)               exponential, EXPERT_MAX = 980
+personal space (must be verified)                       -- subspaces type='verified' gate
+  → spaces.topic_id                                      -- real FK column → entities.id (schema.ts:103)
+  → entity with a TYPES_PROPERTY relation to PERSON_TYPE (7ed45f2b…)
+  → local_scores[person_entity_id, space_id]
 ```
 
-Caveats (finding #6): author coverage is **forward-only** (`created_by_id` is null for content
-indexed before the column landed) so early authors are under-credited; the join runs through the
-**versioned** tables, not the live ones.
+The join is cheap to wire (mirrors the existing `profileSelectFields` type-relation pattern). So the
+*resolution* is no longer a blocker. The remaining issue is **data, not plumbing**:
 
-**Designed for — v2: direct person endorsement** (the spec's literal "votes/rankings on the person").
-Voting/ranking is **type-agnostic** (finding #7): a person's profile entity can receive
-upvotes/downvotes/`RANK_VOTES` and get a `local_scores[profile_entity, S]` row **with no backend
-change** — but nothing *produces* such votes today. v2 adds the frontend affordance to endorse/rank a
-person in a space, plus `member_space → profile-entity` resolution (the front-page entity via
-`TYPES_PROPERTY→SPACE_TYPE`; mind the `LIMIT 1` arbitrary-pick caveat). When v2 data exists, the
-expertise score becomes a blend of authored-content (v1) and direct-endorsement (v2). Backend is
-nearly free; the cost is frontend + cold-start (no person has endorsement votes yet).
+**Person entities are unpopulated with scores today** (finding #5/#7). Voting/ranking is type-agnostic
+so a Person entity *can* be scored, but **nothing votes or ranks on people yet** — so
+`local_scores[person_entity]` is empty until an "endorse / rank a person" surface exists. Reading it
+now yields `expert_add = 0` for everyone (rep collapses to low-trust+verified+professional, ≤21/1000).
+
+**Decision (reframed — pending Yaniv; the scope question is in his court):**
+- **Canonical source = the Person entity's `local_score`** (approach A) — spec-aligned, what Yaniv
+  intends, and now confirmed cheap to resolve. This is the long-term Expert source.
+- **Interim bootstrap = authored-content aggregation** (approach B) — *optional*, used only to give the
+  Expert band signal before the endorse-a-person surface ships; ripped out once A is populated. Built
+  on the confirmed `edit_versions.created_by_id` join (finding #6):
+
+```
+edit_versions (created_by_id = :member_space_id) → version_key
+  = value_versions/relation_versions.valid_from_key → (entity_id, space_id) → local_scores
+q = (Σ sₑ + κ·0.5) / (n + κ)     κ ≈ 5, shrink toward neutral 0.5 (anti-gaming/low-volume)
+```
+
+Whichever source feeds it, the score is `(0,1)`-neutral-`0.5` (finding #2), so map with
+`x = max(0, 2q − 1)` before the exponential (`EXPERT_MAX = 980`). If the endorse-a-person surface is
+in this milestone, skip B entirely and ship A. **Open:** is that surface in scope now? (asked Yaniv).
+
+*B's caveats if used:* author coverage is **forward-only** (`created_by_id` null for pre-column
+content); the join runs through the **versioned** tables, not the live ones.
 
 ### Where the code lives
 
@@ -277,8 +283,10 @@ nearly free; the cost is frontend + cold-start (no person has endorsement votes 
 
 ### Phase 3 — Rep computation stage (no weighting yet)
 - Verified set bridge from atlas `topology.canonical`.
-- **Expert band (now unblocked):** authored-content aggregation via the `edit_versions.created_by_id`
-  join → shrunk mean → `x`-mapping → curve (Decisions #8/#9; see *User → expertise score*).
+- **Expert band:** wire the Person-entity resolution (`spaces.topic_id → PERSON_TYPE`, verified) and
+  read its `local_score` → `x`-mapping → curve (Decisions #8/#9). If the endorse-a-person surface
+  isn't in this milestone, add the authored-content bootstrap (`edit_versions` join → shrunk mean) so
+  the band isn't all-zeros. See *User → expertise score*. (Pending Yaniv's scope answer.)
 - **Low-trust** (removal/unverify only) + **Verified gating** (flat `2`). The Verified *variable*
   component stays deferred until payout-entity summation exists (Decision #2).
 - Write `user_reputation`. Weighting still uniform (`1.0`).
@@ -319,11 +327,12 @@ nearly free; the cost is frontend + cold-start (no person has endorsement votes 
   knowledge layer; the Verified band's `points_earned` comes from payout system entities (on-chain),
   which are not yet summable. Both must exist before those band components are meaningful. Expert +
   Low-trust + Verified-*gating* (flat `2`) do not depend on either and can ship first.
-- **Per-user expertise score (🔴 blocker, was "person-entity join").** Verification (finding #1)
-  showed the assumed account→person-entity→score path does not exist — `local_scores` is
-  content-keyed and there is no person entity. The Expert band cannot be built until a per-user
-  expertise derivation is chosen (see *User → expertise score*). This blocks Phase 3's Expert band
-  (other bands are unaffected).
+- **Expert-band data, not plumbing (dependency, not a blocker).** The Person-entity resolution exists
+  (`spaces.topic_id → PERSON_TYPE`, verified — finding #8), so the join isn't the problem. The risk is
+  that Person entities have **no scores until people are voted/ranked on** — so the canonical Expert
+  source is dead-empty until the endorse-a-person surface ships. Mitigation: the authored-content
+  bootstrap (finding #6), pending Yaniv's scope answer (see *User → expertise score*). Other bands
+  unaffected.
 
 ## Decisions (resolved with Yaniv, 2026-06-22)
 
@@ -363,31 +372,34 @@ nearly free; the cost is frontend + cold-start (no person has endorsement votes 
 
 ### Verification-driven decisions (2026-06-23, pending Yaniv review)
 
-8. **Expert-band source → authored-content aggregation (v1); direct person endorsement (v2).** The
-   per-user expertise score is a **Bayesian-shrunk mean** of the `local_scores` of content the user
-   authored in the space (`q = (Σ sₑ + κ·0.5)/(n + κ)`, `κ ≈ 5`), built on the confirmed
-   `edit_versions.created_by_id` join (finding #6). v2 layers in direct endorsement (votes/rankings on
-   a person) once a frontend surface exists — its backend is already free (finding #7). Rationale and
-   the full join in *User → expertise score*.
+8. **Expert-band source → Person-entity `local_score` (canonical); authored-content as optional
+   interim bootstrap.** ⚠️ **Reframed 2026-06-23 after Yaniv's correction** (the Person entity exists
+   — finding #1 was a false negative; the `spaces.topic_id → PERSON_TYPE` resolution is confirmed,
+   finding #8). The spec-canonical source is the Person entity's own `local_score`, now cheap to wire.
+   It is **empty until an endorse/rank-a-person surface ships**, so authored-content aggregation
+   (Bayesian-shrunk mean, `q = (Σ sₑ + κ·0.5)/(n + κ)`, `κ ≈ 5`; built on the `edit_versions` join,
+   finding #6) is an *optional* bootstrap to give the band signal in the meantime — dropped once the
+   Person score is populated. **Scope question for Yaniv:** is the endorse-a-person surface in this
+   milestone (→ ship A only), or do we want the B bootstrap? Full join in *User → expertise score*.
 9. **Expert-band x-mapping → `x = max(0, 2q − 1)`.** Folds the `(0,1)`-neutral-`0.5` source: below
    neutral → `0`, `(0.5,1]` stretches to `(0,1]`. Note `s=1` is an unreachable sigmoid asymptote, so
    the realistic Expert ceiling sits below `980` — which is fine (reserves the top for true outliers).
 
 ## Verification findings (codebase pass, 2026-06-23)
 
-Seven plan assumptions were checked against the live code (two follow-up probes, #6/#7, settled the
-Expert-band data source). file:line evidence below.
+Eight plan assumptions were checked against the live code. Findings #6/#7/#8 are follow-up probes;
+**#8 corrects #1.** file:line evidence below.
 
-**🔴 1. No per-user score exists — original Expert-band data source refuted (now re-grounded via #6).**
-`local_scores` is keyed by the **voted-on content entity id**, not by a person/user
-(`scoring_data_writer.py:88-93`; perspectives = `DISTINCT entity_id, space_id FROM values`,
-`scoring_data_provider.py:359-381`). A user is identified throughout scoring by `member_space_id`
-(lowercased), never converted to an entity id (`scoring_data_provider.py:238-300`; `models.py:33-39`).
-There is **no "person entity"** in gaia's path: `PERSON_TYPE` exists in the geo-sdk but is referenced
-nowhere in gaia; profiles resolve to a personal space's *front-page entity* (`TYPES_PROPERTY→SPACE_TYPE`),
-not a Person (`api/src/profile/queries.ts:82-133`). The hypothesized join `user_space_id →
-person_entity_id → local_scores` would return **null for essentially every user**. → *Resolved: derive
-the expertise score from authored content instead — see finding #6 and* User → expertise score.
+**⚠️ 1. ~~No per-user score / no person entity~~ — PARTLY WRONG, corrected by #8.** Two separate
+claims were bundled here; only the first holds:
+- *True:* the `scoring-service` `local_scores` table is keyed by the **voted-on entity id**
+  (`scoring_data_writer.py:88-93`; perspectives = `DISTINCT entity_id, space_id FROM values`); the
+  scoring domain identifies a user only as `member_space_id` (`scoring_data_provider.py:238-300`).
+- *Wrong:* "there is no Person entity in gaia." This was a **tooling false negative** — we grepped
+  source for the `PERSON_TYPE` *constant*, but gaia stores types **generically** as `TYPES_PROPERTY`
+  relations, so Person-typed entities exist in *data* without source ever naming the constant.
+  Per Yaniv + finding #8, a user's Person entity **is** resolvable. → *See finding #8 and* User →
+  expertise score.
 
 **🔴 2. Score range is `(0,1)` neutral `0.5`, not `[-1,1]`.** Production normalization is
 `z_score_sigmoid` (`main.py:292`): within-space z-score → logistic sigmoid
@@ -427,21 +439,35 @@ untyped — `ranking-indexer/src/detect.rs`) and get a `local_scores[profile_ent
 no backend change** — but nothing *produces* such votes today. → *Backend for the v2 direct-endorsement
 model is effectively free; the gap is frontend + cold-start.*
 
+**🟢 8. Person entity IS resolvable — corrects #1** (probe after Yaniv's correction). gaia stores
+types generically as `TYPES_PROPERTY` relations, so Person-typed entities exist in data even though
+`PERSON_TYPE` (`7ed45f2b…`) is never named in source. The link Yaniv described is confirmed: a space
+has a real `topic_id` FK column → an entity (`spaces.topic_id`, `schema.ts:103`; set on-chain via
+`SetTopic` → `kg-indexer/src/handlers/topics.rs`), and that topic entity can be typed `Person` via a
+`TYPES_PROPERTY` relation. Resolution: `personal space (verified) → spaces.topic_id → entity →
+TYPES_PROPERTY→PERSON_TYPE`, gated on `subspaces type='verified'` (`schema.ts:281-300`). The join is
+SQL-expressible and mirrors the existing `profileSelectFields` pattern (`api/src/profile/queries.ts`).
+⚠️ *But* (cross-ref #5/#7): person entities are **unpopulated with scores today** — nothing votes/ranks
+on people, so `local_scores[person_entity]` is empty until an endorse-a-person surface ships. → *Makes
+the Person score the canonical Expert source (Decision #8), with authored-content as interim bootstrap.*
+
 ## Open / to confirm
 
 The verification pass closed most of these. What remains:
 
-- **Yaniv sign-off on the verification-driven calls** — especially Decision #3 (reversed from his
-  "wipe all" lean) and Decision #8 (authored-content as the Expert source vs. waiting for the
-  endorsement model). These are the two judgment calls worth a sync before Discord.
+- **🔴 Endorse-a-person surface — in this milestone?** (asked Yaniv.) This decides Decision #8: if the
+  vote/rank-a-person UI ships now, Expert reads the Person-entity score directly (A only); if not, add
+  the authored-content bootstrap (B) so the band has signal at launch. The single biggest open item.
+- **Yaniv sign-off on Decision #3** (reversed from his "wipe all" lean — score is relative-within-space).
 - **`κ` shrinkage value** (Decision #8) — tune in Phase 1 against real authored-content distributions.
 - **`points_earned` summation** (Decision #2) — still blocked on payout-entity summability; Verified
   band ships flat `2` until then.
 - **#7 cardinality** — measure user×space before committing to full-recompute permanently.
 - **Discord** — share the design for community feedback (Yaniv's ask), ideally after his sign-off.
 
-*Resolved by verification (was open):* Expert-band data source (#8), `x`-mapping (#9), weighting
-composition (#4 → disable distance weighting), negative-score semantics (#3 → no score-driven wipe).
+*Resolved by verification (was open):* Person-entity resolution (#8 — the join exists; **source choice
+still pends Yaniv's scope answer**), `x`-mapping (#9), weighting composition (#4 → disable distance
+weighting), negative-score semantics (#3 → no score-driven wipe).
 
 ## References
 
