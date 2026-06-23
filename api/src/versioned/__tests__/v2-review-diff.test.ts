@@ -40,6 +40,10 @@ const NEW_ENTITY = "9b000000-0001-4000-8000-000000000001"
 const NEW_TARGET = "9b000000-0002-4000-8000-000000000001"
 const REL = "9b000000-0003-4000-8000-000000000001"
 const REL_TYPE = "9b000000-0004-4000-8000-000000000001"
+// For the "update existing entity" case (live base state in the "values" table).
+const EXISTING = "9b000000-0005-4000-8000-000000000001"
+const EXISTING_VAL = "9b000000-0006-4000-8000-000000000001"
+const NAME_PROP = "a126ca53-0c8e-48d5-b888-82c734c38935" // SystemIds.NAME_PROPERTY (dashed)
 
 /** Build → encode → base64 an edit, the exact shape the SDK publishes. */
 function editBlob(build: (e: EditBuilder) => EditBuilder): string {
@@ -132,6 +136,40 @@ describe.skipIf(SKIP)("POST /v2/versioned/review", () => {
 			// Relation is added.
 			expect(entity?.relations.some((r) => r.changeType === "ADD")).toBe(true)
 			expect(body.pagination.hasMore).toBe(false)
+		})
+	})
+
+	describe("update existing entity (live base state)", () => {
+		beforeAll(async () => {
+			// Seed the entity's current live value (the "before" side).
+			await pool.query(
+				`INSERT INTO "values" (id, entity_id, property_id, space_id, text)
+				 VALUES ($1, $2, $3, $4, 'Old Name') ON CONFLICT DO NOTHING`,
+				[EXISTING_VAL, EXISTING, NAME_PROP, SPACE],
+			)
+		})
+
+		afterAll(async () => {
+			await pool.query(`DELETE FROM "values" WHERE id = $1`, [EXISTING_VAL])
+		})
+
+		it("returns a before→after value change diffed against live state", async () => {
+			const res = await post({
+				spaceId: SPACE,
+				edit: editBlob((e) =>
+					e.updateEntity(uuidToId(EXISTING), (u) => u.setText(uuidToId(NAME_PROP), "New Name")),
+				),
+			})
+			expect(res.status).toBe(200)
+			const body = (await res.json()) as {
+				entities: {entityId: string; values: {propertyId: string; before: unknown; after: unknown}[]}[]
+			}
+			const entity = body.entities.find((e) => e.entityId === EXISTING.replace(/-/g, ""))
+			expect(entity).toBeDefined()
+			const change = entity?.values.find((v) => v.propertyId === NAME_PROP.replace(/-/g, ""))
+			expect(change).toBeDefined()
+			expect(change?.before).toBe("Old Name")
+			expect(change?.after).toBe("New Name")
 		})
 	})
 })
