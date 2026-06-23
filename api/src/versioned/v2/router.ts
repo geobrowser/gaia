@@ -7,7 +7,7 @@
  * media-property entity filtering, data-block config merging, etc.
  */
 
-import {decodeEditAuto} from "@geoprotocol/grc-20"
+import {decodeEditAuto, isCompressed} from "@geoprotocol/grc-20"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
@@ -380,6 +380,18 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime, revie
 					try: () => new Uint8Array(Buffer.from(body.edit as string, "base64")),
 					catch: () => new ValidationError({message: "edit must be valid base64"}),
 				})
+				// Reject compressed (GRC2Z) blobs: the size cap bounds the *encoded* bytes, but
+				// decodeEditAuto would decompress first — a small blob could inflate past the cap
+				// (zip-bomb) before the op-count check runs. The SDK's publish path (geo-sdk
+				// Ipfs.publishEdit → encodeEdit) only ever emits the uncompressed GRC2 format, so
+				// legitimate clients are unaffected; only a crafted payload would be compressed.
+				if (isCompressed(blob)) {
+					return yield* Effect.fail(
+						new ValidationError({
+							message: "compressed edit blobs are not accepted; send an uncompressed GRC-20 edit",
+						}),
+					)
+				}
 				const ops = yield* Effect.tryPromise({
 					try: async () => (await decodeEditAuto(blob)).ops,
 					catch: (error) => new EditDecodeError(error),
