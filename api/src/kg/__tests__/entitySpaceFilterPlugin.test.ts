@@ -516,7 +516,7 @@ describe("EntitySpaceFilterPlugin", () => {
 			}
 		})
 
-		it("should include System Type IDs in entity.typeIds", async () => {
+		it("should expose System Type IDs in the dedicated systemTypeIds field", async () => {
 			if (!systemEntityId || !systemTypeId) {
 				console.log("Skipping test: no entity with a System Type relation found")
 				return
@@ -527,7 +527,7 @@ describe("EntitySpaceFilterPlugin", () => {
 				query SystemTypeIds($id: UUID!) {
 					entity(id: $id) {
 						id
-						typeIds
+						systemTypeIds
 					}
 				}
 			`,
@@ -536,10 +536,10 @@ describe("EntitySpaceFilterPlugin", () => {
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entity).toBeDefined()
-			expect(result.data.entity.typeIds).toContain(systemTypeId)
+			expect(result.data.entity.systemTypeIds).toContain(systemTypeId)
 		})
 
-		it("should match system entities when filtering by a System Type ID", async () => {
+		it("should keep system type IDs out of the regular typeIds field", async () => {
 			if (!systemEntityId || !systemTypeId) {
 				console.log("Skipping test: no entity with a System Type relation found")
 				return
@@ -547,14 +547,41 @@ describe("EntitySpaceFilterPlugin", () => {
 
 			const result = await executeGraphQL(
 				`
-				query FilterBySystemType($typeId: UUID!) {
-					entities(typeId: $typeId, first: 50) {
+				query TypeIdsExcludeSystem($id: UUID!) {
+					entity(id: $id) {
 						id
 						typeIds
+						systemTypeIds
 					}
 				}
 			`,
-				{typeId: systemTypeId},
+				{id: systemEntityId},
+			)
+
+			expect(result.errors).toBeUndefined()
+			expect(result.data.entity).toBeDefined()
+			// typeIds aggregates only regular Type relations; the system type id
+			// must surface in systemTypeIds, not typeIds (provenance is preserved).
+			expect(result.data.entity.typeIds ?? []).not.toContain(systemTypeId)
+			expect(result.data.entity.systemTypeIds).toContain(systemTypeId)
+		})
+
+		it("should match system entities when filtering by systemTypeId", async () => {
+			if (!systemEntityId || !systemTypeId) {
+				console.log("Skipping test: no entity with a System Type relation found")
+				return
+			}
+
+			const result = await executeGraphQL(
+				`
+				query FilterBySystemType($systemTypeId: UUID!) {
+					entities(systemTypeId: $systemTypeId, first: 50) {
+						id
+						systemTypeIds
+					}
+				}
+			`,
+				{systemTypeId},
 			)
 
 			expect(result.errors).toBeUndefined()
@@ -562,10 +589,36 @@ describe("EntitySpaceFilterPlugin", () => {
 
 			// Every match carries the system type id, and our known entity is among them
 			for (const entity of result.data.entities) {
-				expect(entity.typeIds).toContain(systemTypeId)
+				expect(entity.systemTypeIds).toContain(systemTypeId)
 			}
 			const ids = result.data.entities.map((e: {id: string}) => e.id)
 			expect(ids).toContain(systemEntityId)
+		})
+
+		it("should filter by systemTypeIds with the 'in' operator", async () => {
+			if (!systemEntityId || !systemTypeId) {
+				console.log("Skipping test: no entity with a System Type relation found")
+				return
+			}
+
+			const result = await executeGraphQL(
+				`
+				query FilterBySystemTypeIn($systemTypeIds: [UUID!]!) {
+					entities(systemTypeIds: { in: $systemTypeIds }, first: 50) {
+						id
+						systemTypeIds
+					}
+				}
+			`,
+				{systemTypeIds: [systemTypeId]},
+			)
+
+			expect(result.errors).toBeUndefined()
+			expect(result.data.entities).toBeDefined()
+
+			for (const entity of result.data.entities) {
+				expect(entity.systemTypeIds).toContain(systemTypeId)
+			}
 		})
 	})
 
@@ -672,6 +725,56 @@ describe("EntitySpaceFilterPlugin", () => {
 			const typeIdsArg = entitiesField.args.find((a: {name: string}) => a.name === "typeIds")
 			expect(typeIdsArg).toBeDefined()
 			expect(typeIdsArg.type.name).toBe("UUIDFilter")
+		})
+
+		it("should expose systemTypeId argument on entities field", async () => {
+			const result = await executeGraphQL(`
+				query IntrospectEntities {
+					__type(name: "Query") {
+						fields {
+							name
+							args {
+								name
+								type { name }
+							}
+						}
+					}
+				}
+			`)
+
+			expect(result.errors).toBeUndefined()
+
+			const entitiesField = result.data.__type.fields.find((f: {name: string}) => f.name === "entities")
+			expect(entitiesField).toBeDefined()
+
+			const systemTypeIdArg = entitiesField.args.find((a: {name: string}) => a.name === "systemTypeId")
+			expect(systemTypeIdArg).toBeDefined()
+			expect(systemTypeIdArg.type.name).toBe("UUID")
+		})
+
+		it("should expose systemTypeIds argument on entities field", async () => {
+			const result = await executeGraphQL(`
+				query IntrospectEntities {
+					__type(name: "Query") {
+						fields {
+							name
+							args {
+								name
+								type { name }
+							}
+						}
+					}
+				}
+			`)
+
+			expect(result.errors).toBeUndefined()
+
+			const entitiesField = result.data.__type.fields.find((f: {name: string}) => f.name === "entities")
+			expect(entitiesField).toBeDefined()
+
+			const systemTypeIdsArg = entitiesField.args.find((a: {name: string}) => a.name === "systemTypeIds")
+			expect(systemTypeIdsArg).toBeDefined()
+			expect(systemTypeIdsArg.type.name).toBe("UUIDFilter")
 		})
 	})
 })

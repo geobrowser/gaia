@@ -1,20 +1,19 @@
 -- Custom SQL migration file, put your code below! --
 
--- Include System Type relations in entities.typeIds
+-- Expose System Type relations as a dedicated entities.systemTypeIds field.
 --
--- entities_type_ids() (originally defined in 0004_functions.sql) previously
--- aggregated only regular Type relations (TYPES_PROPERTY). System entities are
--- classified via the System Type relation (88b3d6ad-..., system-minted /
--- non-user-editable), so they returned no typeIds and could not be identified
--- or filtered through the field. Widen the relation type filter to include
--- both, so user-defined and system-defined classifications surface together.
-CREATE OR REPLACE FUNCTION public.entities_type_ids(entities entities) RETURNS uuid[] AS $$
+-- System entities are classified through the System Type relation
+-- (88b3d6ad-..., system-minted and non-user-editable: the indexer always drops
+-- user attempts to author it). This is kept separate from entities.typeIds
+-- (which aggregates user-authored Type relations) to preserve provenance — a
+-- user can author a regular Type relation pointing at a system-type entity, but
+-- cannot forge a System Type relation, so systemTypeIds reliably identifies
+-- system entities. PostGraphile exposes this computed column as the
+-- `systemTypeIds` field on every Entity.
+CREATE OR REPLACE FUNCTION public.entities_system_type_ids(entities entities) RETURNS uuid[] AS $$
   SELECT array_agg(DISTINCT e.id)
   FROM entities e
   INNER JOIN relations r ON e.id = r.to_entity_id
   WHERE r.from_entity_id = entities.id
-    AND r.type_id IN (
-      '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1',  -- TYPES_PROPERTY
-      '88b3d6ad-288c-529c-a212-0e1c24819185'   -- System Type (SYSTEM_TYPES_RELATION_TYPE_ID)
-    );
+    AND r.type_id = '88b3d6ad-288c-529c-a212-0e1c24819185';  -- System Type (SYSTEM_TYPES_RELATION_TYPE_ID)
 $$ LANGUAGE sql STABLE;

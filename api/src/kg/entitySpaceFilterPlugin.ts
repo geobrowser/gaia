@@ -16,15 +16,20 @@
  *     WHERE entities_type_ids(e) @> array['type-uuid']
  *   After (fast - O(1) indexed EXISTS):
  *     WHERE EXISTS (SELECT 1 FROM relations WHERE from_entity_id = e.id
- *                   AND type_id = ANY('{SystemIds.Types, System Type}') AND to_entity_id = 'type-uuid' LIMIT 1)
- *   Both regular Type and System Type relations classify an entity, matching
- *   the entities.typeIds field.
+ *                   AND type_id = 'SystemIds.Types' AND to_entity_id = 'type-uuid' LIMIT 1)
+ *
+ * System-type filtering mirrors type filtering but matches the System Type
+ * relation (system-minted, non-user-editable) instead of regular Type
+ * relations. It is kept separate from typeId/typeIds so consumers can reliably
+ * identify system entities — see entities.systemTypeIds.
  *
  * Usage in GraphQL:
  *   entities(spaceId: "uuid", first: 100) { ... }              # single space
  *   entities(spaceIds: { in: ["uuid1", "uuid2"] }, first: 100) { ... } # multiple spaces (OR)
  *   entities(typeId: "uuid", first: 100) { ... }               # single type
  *   entities(typeIds: { in: ["uuid1", "uuid2"] }, first: 100) { ... }  # multiple types (OR)
+ *   entities(systemTypeId: "uuid", first: 100) { ... }         # single system type
+ *   entities(systemTypeIds: { in: ["uuid1", "uuid2"] }, first: 100) { ... }  # multiple system types (OR)
  *
  * Requires indexes (already exist):
  *   - values(entity_id, space_id)
@@ -36,13 +41,12 @@ import {SystemIds} from "@geoprotocol/geo-sdk"
 
 const SYSTEM_IDS_TYPES = SystemIds.TYPES_PROPERTY
 
-// System Type relation (system-minted, non-user-editable). System entities are classified through this
-// relation, so type filtering must consider it alongside regular Type
-// relations to stay consistent with the entities.typeIds field.
+// System Type relation (system-minted, non-user-editable: the indexer always
+// drops user attempts to author it). Kept separate from regular Type relations
+// so systemTypeIds reliably identifies system entities — a user can author a
+// Type relation pointing at a system-type entity, but cannot forge a System
+// Type relation.
 const SYSTEM_TYPE = "88b3d6ad-288c-529c-a212-0e1c24819185"
-
-// Relation type IDs that classify an entity (regular Type + System Type).
-const TYPE_RELATION_TYPE_IDS = [SYSTEM_IDS_TYPES, SYSTEM_TYPE]
 
 // ============================================================================
 // Space filter helpers
@@ -111,7 +115,7 @@ const buildSingleTypeCondition = (sql: any, tableAlias: any, typeId: string) => 
 	return sql.fragment`EXISTS (
 		SELECT 1 FROM public.relations r
 		WHERE r.from_entity_id = ${tableAlias}.id
-		AND r.type_id = ANY(${sql.value(TYPE_RELATION_TYPE_IDS)}::uuid[])
+		AND r.type_id = ${sql.value(SYSTEM_IDS_TYPES)}::uuid
 		AND r.to_entity_id = ${sql.value(typeId)}::uuid
 		LIMIT 1
 	)`
@@ -122,7 +126,7 @@ const buildMultiTypeCondition = (sql: any, tableAlias: any, typeIds: string[]) =
 	return sql.fragment`EXISTS (
 		SELECT 1 FROM public.relations r
 		WHERE r.from_entity_id = ${tableAlias}.id
-		AND r.type_id = ANY(${sql.value(TYPE_RELATION_TYPE_IDS)}::uuid[])
+		AND r.type_id = ${sql.value(SYSTEM_IDS_TYPES)}::uuid
 		AND r.to_entity_id = ANY(${sql.value(typeIds)}::uuid[])
 		LIMIT 1
 	)`
@@ -133,7 +137,43 @@ const buildHasAnyTypeCondition = (sql: any, tableAlias: any) => {
 	return sql.fragment`EXISTS (
 		SELECT 1 FROM public.relations r
 		WHERE r.from_entity_id = ${tableAlias}.id
-		AND r.type_id = ANY(${sql.value(TYPE_RELATION_TYPE_IDS)}::uuid[])
+		AND r.type_id = ${sql.value(SYSTEM_IDS_TYPES)}::uuid
+		LIMIT 1
+	)`
+}
+
+// ============================================================================
+// System type filter helpers
+// ============================================================================
+
+// Helper to build the EXISTS condition for a single system type ID
+const buildSingleSystemTypeCondition = (sql: any, tableAlias: any, systemTypeId: string) => {
+	return sql.fragment`EXISTS (
+		SELECT 1 FROM public.relations r
+		WHERE r.from_entity_id = ${tableAlias}.id
+		AND r.type_id = ${sql.value(SYSTEM_TYPE)}::uuid
+		AND r.to_entity_id = ${sql.value(systemTypeId)}::uuid
+		LIMIT 1
+	)`
+}
+
+// Helper to build the EXISTS condition for multiple system type IDs
+const buildMultiSystemTypeCondition = (sql: any, tableAlias: any, systemTypeIds: string[]) => {
+	return sql.fragment`EXISTS (
+		SELECT 1 FROM public.relations r
+		WHERE r.from_entity_id = ${tableAlias}.id
+		AND r.type_id = ${sql.value(SYSTEM_TYPE)}::uuid
+		AND r.to_entity_id = ANY(${sql.value(systemTypeIds)}::uuid[])
+		LIMIT 1
+	)`
+}
+
+// Helper to build condition for checking if entity has any system type
+const buildHasAnySystemTypeCondition = (sql: any, tableAlias: any) => {
+	return sql.fragment`EXISTS (
+		SELECT 1 FROM public.relations r
+		WHERE r.from_entity_id = ${tableAlias}.id
+		AND r.type_id = ${sql.value(SYSTEM_TYPE)}::uuid
 		LIMIT 1
 	)`
 }
@@ -143,7 +183,7 @@ const buildHasAnyTypeCondition = (sql: any, tableAlias: any) => {
 // ============================================================================
 
 export const EntitySpaceFilterPlugin = (builder: any) => {
-	// Add spaceId/spaceIds/typeId/typeIds arguments and register data generators
+	// Add spaceId(s)/typeId(s)/systemTypeId(s) arguments and register data generators
 	builder.hook("GraphQLObjectType:fields:field:args", (args: any, build: any, context: any) => {
 		const {
 			scope: {isPgFieldConnection, isPgFieldSimpleCollection, pgFieldIntrospection},
@@ -258,6 +298,54 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 		})
 
 		// ========================================================================
+		// System type filter data generators
+		// ========================================================================
+
+		// Register the data generator for systemTypeId argument
+		addArgDataGenerator(({systemTypeId}: {systemTypeId?: string}) => {
+			if (!systemTypeId) return {}
+			return {
+				pgQuery: (queryBuilder: any) => {
+					queryBuilder.where(buildSingleSystemTypeCondition(sql, queryBuilder.getTableAlias(), systemTypeId))
+				},
+			}
+		})
+
+		// Register the data generator for systemTypeIds argument
+		addArgDataGenerator(({systemTypeIds}: {systemTypeIds?: any}) => {
+			if (!systemTypeIds) return {}
+
+			return {
+				pgQuery: (queryBuilder: any) => {
+					const tableAlias = queryBuilder.getTableAlias()
+
+					if (systemTypeIds.is) {
+						queryBuilder.where(buildSingleSystemTypeCondition(sql, tableAlias, systemTypeIds.is))
+					}
+					if (systemTypeIds.isNot) {
+						queryBuilder.where(
+							sql.fragment`NOT ${buildSingleSystemTypeCondition(sql, tableAlias, systemTypeIds.isNot)}`,
+						)
+					}
+					if (systemTypeIds.in && systemTypeIds.in.length > 0) {
+						queryBuilder.where(buildMultiSystemTypeCondition(sql, tableAlias, systemTypeIds.in))
+					}
+					if (systemTypeIds.notIn && systemTypeIds.notIn.length > 0) {
+						queryBuilder.where(
+							sql.fragment`NOT ${buildMultiSystemTypeCondition(sql, tableAlias, systemTypeIds.notIn)}`,
+						)
+					}
+					if (systemTypeIds.isNull === true) {
+						queryBuilder.where(sql.fragment`NOT ${buildHasAnySystemTypeCondition(sql, tableAlias)}`)
+					}
+					if (systemTypeIds.isNull === false) {
+						queryBuilder.where(buildHasAnySystemTypeCondition(sql, tableAlias))
+					}
+				},
+			}
+		})
+
+		// ========================================================================
 		// Add arguments to schema
 		// ========================================================================
 
@@ -276,6 +364,16 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 			},
 			typeIds: {
 				description: "Filter entities by type with operators (in, notIn, is, isNot, etc.)",
+				type: UUIDFilterType,
+			},
+			systemTypeId: {
+				description:
+					"Filter entities that have this system type (efficient indexed lookup). System types are system-managed and non-user-editable.",
+				type: UUIDType,
+			},
+			systemTypeIds: {
+				description:
+					"Filter entities by system type with operators (in, notIn, is, isNot, etc.). System types are system-managed and non-user-editable.",
 				type: UUIDFilterType,
 			},
 		})
