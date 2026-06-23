@@ -16,7 +16,9 @@
  *     WHERE entities_type_ids(e) @> array['type-uuid']
  *   After (fast - O(1) indexed EXISTS):
  *     WHERE EXISTS (SELECT 1 FROM relations WHERE from_entity_id = e.id
- *                   AND type_id = 'SystemIds.Types' AND to_entity_id = 'type-uuid' LIMIT 1)
+ *                   AND type_id = ANY('{SystemIds.Types, System Type}') AND to_entity_id = 'type-uuid' LIMIT 1)
+ *   Both regular Type and System Type relations classify an entity, matching
+ *   the entities.typeIds field.
  *
  * Usage in GraphQL:
  *   entities(spaceId: "uuid", first: 100) { ... }              # single space
@@ -33,6 +35,14 @@
 import {SystemIds} from "@geoprotocol/geo-sdk"
 
 const SYSTEM_IDS_TYPES = SystemIds.TYPES_PROPERTY
+
+// System Type relation (system-minted, non-user-editable). System entities are classified through this
+// relation, so type filtering must consider it alongside regular Type
+// relations to stay consistent with the entities.typeIds field.
+const SYSTEM_TYPE = "88b3d6ad-288c-529c-a212-0e1c24819185"
+
+// Relation type IDs that classify an entity (regular Type + System Type).
+const TYPE_RELATION_TYPE_IDS = [SYSTEM_IDS_TYPES, SYSTEM_TYPE]
 
 // ============================================================================
 // Space filter helpers
@@ -101,7 +111,7 @@ const buildSingleTypeCondition = (sql: any, tableAlias: any, typeId: string) => 
 	return sql.fragment`EXISTS (
 		SELECT 1 FROM public.relations r
 		WHERE r.from_entity_id = ${tableAlias}.id
-		AND r.type_id = ${sql.value(SYSTEM_IDS_TYPES)}::uuid
+		AND r.type_id = ANY(${sql.value(TYPE_RELATION_TYPE_IDS)}::uuid[])
 		AND r.to_entity_id = ${sql.value(typeId)}::uuid
 		LIMIT 1
 	)`
@@ -112,7 +122,7 @@ const buildMultiTypeCondition = (sql: any, tableAlias: any, typeIds: string[]) =
 	return sql.fragment`EXISTS (
 		SELECT 1 FROM public.relations r
 		WHERE r.from_entity_id = ${tableAlias}.id
-		AND r.type_id = ${sql.value(SYSTEM_IDS_TYPES)}::uuid
+		AND r.type_id = ANY(${sql.value(TYPE_RELATION_TYPE_IDS)}::uuid[])
 		AND r.to_entity_id = ANY(${sql.value(typeIds)}::uuid[])
 		LIMIT 1
 	)`
@@ -123,7 +133,7 @@ const buildHasAnyTypeCondition = (sql: any, tableAlias: any) => {
 	return sql.fragment`EXISTS (
 		SELECT 1 FROM public.relations r
 		WHERE r.from_entity_id = ${tableAlias}.id
-		AND r.type_id = ${sql.value(SYSTEM_IDS_TYPES)}::uuid
+		AND r.type_id = ANY(${sql.value(TYPE_RELATION_TYPE_IDS)}::uuid[])
 		LIMIT 1
 	)`
 }

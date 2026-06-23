@@ -486,6 +486,90 @@ describe("EntitySpaceFilterPlugin", () => {
 	})
 
 	// ============================================================================
+	// System Type classification
+	// ============================================================================
+
+	describe("system type classification", () => {
+		// System Type relation: system-minted, non-user-editable. Entities
+		// classified through it must surface in typeIds and be filterable, just
+		// like regular Type relations.
+		const SYSTEM_TYPE_RELATION_ID = "88b3d6ad-288c-529c-a212-0e1c24819185"
+		let systemEntityId: string | null = null
+		let systemTypeId: string | null = null
+
+		beforeAll(async () => {
+			// Find an entity classified via a System Type relation
+			const result = await pool.query(
+				`
+				SELECT r.from_entity_id, r.to_entity_id
+				FROM relations r
+				INNER JOIN entities e ON e.id = r.to_entity_id
+				WHERE r.type_id = $1
+				LIMIT 1
+			`,
+				[SYSTEM_TYPE_RELATION_ID],
+			)
+
+			if (result.rows.length > 0) {
+				systemEntityId = result.rows[0].from_entity_id.replace(/-/g, "")
+				systemTypeId = result.rows[0].to_entity_id.replace(/-/g, "")
+			}
+		})
+
+		it("should include System Type IDs in entity.typeIds", async () => {
+			if (!systemEntityId || !systemTypeId) {
+				console.log("Skipping test: no entity with a System Type relation found")
+				return
+			}
+
+			const result = await executeGraphQL(
+				`
+				query SystemTypeIds($id: UUID!) {
+					entity(id: $id) {
+						id
+						typeIds
+					}
+				}
+			`,
+				{id: systemEntityId},
+			)
+
+			expect(result.errors).toBeUndefined()
+			expect(result.data.entity).toBeDefined()
+			expect(result.data.entity.typeIds).toContain(systemTypeId)
+		})
+
+		it("should match system entities when filtering by a System Type ID", async () => {
+			if (!systemEntityId || !systemTypeId) {
+				console.log("Skipping test: no entity with a System Type relation found")
+				return
+			}
+
+			const result = await executeGraphQL(
+				`
+				query FilterBySystemType($typeId: UUID!) {
+					entities(typeId: $typeId, first: 50) {
+						id
+						typeIds
+					}
+				}
+			`,
+				{typeId: systemTypeId},
+			)
+
+			expect(result.errors).toBeUndefined()
+			expect(result.data.entities).toBeDefined()
+
+			// Every match carries the system type id, and our known entity is among them
+			for (const entity of result.data.entities) {
+				expect(entity.typeIds).toContain(systemTypeId)
+			}
+			const ids = result.data.entities.map((e: {id: string}) => e.id)
+			expect(ids).toContain(systemEntityId)
+		})
+	})
+
+	// ============================================================================
 	// Schema introspection tests
 	// ============================================================================
 
