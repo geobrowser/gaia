@@ -34,6 +34,14 @@ import type {DiffResponseV2} from "./types"
  */
 const MAX_REVIEW_OPS = 10_000
 
+/**
+ * Max decoded size of the `edit` blob (untrusted input). Enforced from the base64
+ * string length *before* allocating/decoding, so an oversized payload is rejected
+ * up front rather than after `Buffer.from` + `decodeEditAuto` (the op-count cap
+ * only kicks in post-decode). 8 MiB is generous headroom over real edits.
+ */
+const MAX_REVIEW_EDIT_BYTES = 8 * 1024 * 1024
+
 type AppEnv = {
 	Variables: {
 		requestId: string
@@ -324,6 +332,13 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 			}
 			if (typeof body.edit !== "string" || body.edit.length === 0) {
 				return yield* Effect.fail(new ValidationError({message: "edit (base64-encoded edit blob) is required"}))
+			}
+			// Reject oversized blobs up front (base64 decodes to ~3/4 its length) so we
+			// never run Buffer.from + decodeEditAuto on a huge untrusted payload.
+			if (Math.floor((body.edit.length * 3) / 4) > MAX_REVIEW_EDIT_BYTES) {
+				return yield* Effect.fail(
+					new ValidationError({message: `edit exceeds the ${MAX_REVIEW_EDIT_BYTES}-byte review limit`}),
+				)
 			}
 			if (body.cursor !== undefined && typeof body.cursor !== "string") {
 				return yield* Effect.fail(new ValidationError({message: "cursor must be a string"}))

@@ -94,6 +94,12 @@ describe.skipIf(SKIP)("POST /v2/versioned/review", () => {
 			expect(res.status).toBe(400)
 		})
 
+		it("400 when the edit blob exceeds the size cap (rejected before decode)", async () => {
+			// > 8 MiB decoded (~12 MiB of base64 chars). Caught up front, never decoded.
+			const res = await post({spaceId: SPACE, edit: "A".repeat(12 * 1024 * 1024)})
+			expect(res.status).toBe(400)
+		})
+
 		it("400 when limit is invalid", async () => {
 			const res = await post({
 				spaceId: SPACE,
