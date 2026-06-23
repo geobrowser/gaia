@@ -110,6 +110,19 @@ describe.skipIf(SKIP)("POST /v2/versioned/review", () => {
 			expect([400, 413]).toContain(res.status)
 		})
 
+		it("400 when the edit affects more than 500 entities", async () => {
+			// 501 fresh entities → exceeds MAX_REVIEW_AFFECTED_ENTITIES (caught before fan-out).
+			const manyId = (i: number) => `9b000000-0007-4000-8000-${i.toString(16).padStart(12, "0")}`
+			const res = await post({
+				spaceId: SPACE,
+				edit: editBlob((e) => {
+					for (let i = 0; i < 501; i++) e.createEmptyEntity(uuidToId(manyId(i)))
+					return e
+				}),
+			})
+			expect(res.status).toBe(400)
+		})
+
 		it("400 when limit is invalid", async () => {
 			const res = await post({
 				spaceId: SPACE,

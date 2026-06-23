@@ -40,6 +40,24 @@ pool.on("error", (err) => {
 	log.error("PostgreSQL pool error", {error: String(err)})
 })
 
+// Dedicated pool for POST /v2/versioned/review — the only endpoint that runs heavy,
+// fan-out diff computation on untrusted client input. Isolated from the shared pool
+// (so a burst of expensive reviews can't starve the other REST routes' 18 slots) and
+// capped at a 10s statement_timeout per query so one pathological edit can't hold a
+// connection indefinitely. Small + interactive use → a low max is plenty.
+const reviewPool = new Pool({
+	connectionString: Redacted.value(EnvironmentLive.databaseUrl),
+	max: 6,
+	idleTimeoutMillis: 30000,
+	connectionTimeoutMillis: 3000,
+	allowExitOnIdle: true,
+	statement_timeout: 10_000,
+})
+
+reviewPool.on("error", (err) => {
+	log.error("PostgreSQL review pool error", {error: String(err)})
+})
+
 const schemaDefinition = {
 	ipfsCache,
 	entities,
@@ -63,6 +81,13 @@ type DbSchema = typeof schemaDefinition
 export const db = drizzle<DbSchema>({
 	casing: "snake_case",
 	client: pool,
+	schema: schemaDefinition,
+})
+
+/** Drizzle handle over the isolated, statement_timeout-bounded review pool. */
+export const reviewDb = drizzle<DbSchema>({
+	casing: "snake_case",
+	client: reviewPool,
 	schema: schemaDefinition,
 })
 

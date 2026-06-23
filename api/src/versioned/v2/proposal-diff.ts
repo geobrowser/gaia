@@ -25,6 +25,7 @@ import {Effect} from "effect"
 import {type NormalizedUuid, normalizeUuid} from "../../utils/uuid"
 import {diffGroupedEntitySnapshots} from "../diff"
 import {
+	AffectedEntityLimitError,
 	applyOpsToSnapshot,
 	batchGetLiveSnapshots,
 	batchGetProposalsWithPublishActions,
@@ -537,6 +538,7 @@ export function computeEnrichedOpsDiff(
 	baseVersionKey: bigint | null,
 	cursorStr?: string,
 	limit = 50,
+	maxAffected?: number,
 ): Effect.Effect<{entities: EntityDiffV2[]; pagination: PaginationV2}, ProposalDiffError> {
 	return Effect.gen(function* () {
 		let startIndex = 0
@@ -549,6 +551,11 @@ export function computeEnrichedOpsDiff(
 		}
 
 		const affected = (yield* extractAffectedEntities(db, ops)).sort()
+		// Bound per-request work for callers that opt in (review). Checked here, before
+		// the resolveRoots batch-query fan-out runs over the full affected set.
+		if (maxAffected !== undefined && affected.length > maxAffected) {
+			return yield* Effect.fail(new AffectedEntityLimitError(maxAffected, affected.length))
+		}
 
 		const {roots, ctx} = yield* resolveRoots(db, ops, affected, status, baseVersionKey, spaceId)
 		// Pagination unit is the renderable roots, not the flat affected list.
@@ -720,6 +727,13 @@ export function computeGroupedProposalDiffV2(
 }
 
 /**
+ * Max entities a single review edit may affect. Bounds the resolveRoots batch-query
+ * fan-out per request (proposals are unbounded — a governance edit can legitimately
+ * touch thousands — but interactive local-edit review should be small).
+ */
+const MAX_REVIEW_AFFECTED_ENTITIES = 500
+
+/**
  * v2 review diff: diff a space's UNPUBLISHED local edit ops against current live
  * state, returning the same enriched `EntityDiffV2[]` shape as the proposal diff.
  *
@@ -737,7 +751,16 @@ export function computeReviewDiffV2(
 	limit = 50,
 ): Effect.Effect<PaginatedReviewDiffV2, ProposalDiffError> {
 	return Effect.gen(function* () {
-		const {entities, pagination} = yield* computeEnrichedOpsDiff(db, ops, spaceId, "active", null, cursorStr, limit)
+		const {entities, pagination} = yield* computeEnrichedOpsDiff(
+			db,
+			ops,
+			spaceId,
+			"active",
+			null,
+			cursorStr,
+			limit,
+			MAX_REVIEW_AFFECTED_ENTITIES,
+		)
 		return {spaceId, entities, pagination}
 	}).pipe(
 		Effect.withSpan("proposal-diff-v2.computeReviewDiffV2", {
