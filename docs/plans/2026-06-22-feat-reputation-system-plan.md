@@ -35,18 +35,19 @@ We want a reputation quantity that:
 - is resistant to sybil/gaming (built on on-chain verification and membership), and
 - **weights voting** so that consensus in a space is driven by its proven contributors.
 
-## Background — what we build on (mostly already exists)
+## Background — what we build on
 
-The good news: roughly half of Rep is already implemented infrastructure.
+Some of Rep's infrastructure already exists; the verification pass (2026-06-23, see **Verification
+findings**) showed the Expert band is **not** a simple reuse — there is no per-user score to read.
 
 | Building block | Where | Reuse for Rep |
 |---|---|---|
-| Per-entity, per-space scores | `scoring-service` Python cronjob → `local_scores`, `global_scores`, `space_scores` | **Expert band** reads the person entity's `local_score` |
+| Per-entity, per-space scores | `scoring-service` Python cronjob → `local_scores`, `global_scores`, `space_scores` | **Expert band** — ⚠️ `local_scores` is keyed by the *voted-on content entity id*, **not** by a person/user. There is no person-entity score to read. Needs a new user-scoring derivation — see Verification findings. |
 | Uniform vote weight hook | `Vote.weight` (default `1.0`) in `scoring-service/cronjob/src/algorithm/models.py` | **Reputation-weighted voting** sets this from Rep |
 | On-chain verification | `SUBSPACE_VERIFIED`/`SUBSPACE_UNVERIFIED` → `space.trust.extensions` topic → `kg-indexer` → `subspaces` table (`type='verified'`) | **Verified band** raw edges |
 | Transitive verified closure | `atlas` (`atlas/src/graph/transitive.rs`): BFS + visited-set from root, diamond/cycle-safe, reverse-dependency incremental invalidation, revocation cascade; emits `topology.canonical` | **Verified band** transitivity + revocation — *no new graph code* |
 | Space membership (private, race-insulated) | `members`/`editors` tables; `ranks.members`/`ranks.editors` fed from `space.membership` | **Low-trust band** + anti-sybil |
-| Anti-sybil levers | `filter_non_members`, `use_distance_weighting` in `scoring.py` | Compose with rep weighting |
+| Anti-sybil levers | `filter_non_members`, `use_distance_weighting` in `scoring.py` | Compose with rep weighting — ⚠️ production runs `use_distance_weighting=True`, which already *multiplies* `Vote.weight`; rep-weighting would compound (see Verification findings + Decisions #4). |
 
 Verification is **on-chain and permissionless** — anyone can verify any space id; the chain
 enforces authorship. A "user" is identified by their **personal space id**. So "is this user
@@ -77,6 +78,11 @@ rep     = clamp(points / 1000, 0, 1)
 - `0` initially.
 - `1` once the user creates a profile AND joins a public space.
 - Forced to `0` if the user is flagged or removed from *all* public spaces.
+  - ⚠️ **v1 scope:** only **removal/unverify** is consumable today. "Flagged" exists on-chain
+    (`FLAGGED`/`SPACE_FAST_PATH_RESTRICTED` → `space.moderation` topic) but **nothing consumes or
+    persists it** — no indexer subscribes to `space.moderation`, no `flagged` column exists. v1
+    forces low-trust→0 on removal/unverify only; flag-driven demotion is a follow-on requiring a new
+    consumer + column. See Verification findings.
 
 **2. Verified (2–10 points)** — *gated by transitive verification*
 - Eligible only if the user's personal space is in atlas's **verified closure from root**
@@ -100,12 +106,24 @@ rep     = clamp(points / 1000, 0, 1)
 - May be computed before a profile is claimed.
 
 **4. Expert (0–980 points)** — *the exponential band*
-- "Expertise" = the user's **person entity `local_score`** in this space (the score already
-  produced by `scoring-service` from upvotes/downvotes/rankings), normalized to `[-1, 1]`.
-- Not every member has a person entity — those members get `expert_add = 0`.
-- **Negative score wipes the entire rep, not just this band.** If the person-entity score is below a
-  small negative deadband (`score < -ε`), the user's **total `rep` is forced to `0`** (verified and
-  professional contributions included). Rationale and the deadband guard: see Decisions #3.
+
+> ⚠️ **Blocked — premise refuted by verification (2026-06-23).** Two assumptions below are wrong
+> against the live system; this band needs a design decision before it can be built. See
+> **Verification findings**.
+> - *No per-user score exists.* `local_scores` is keyed by the voted-on **content entity id**, not
+>   by a person/user. There is no "person entity" in gaia's identity/scoring path; a user is a
+>   `member_space_id`, never converted to a scored entity. A user-level score must be **newly
+>   derived** (e.g. aggregate the scores of content the user authored / was voted on).
+> - *Score range is not `[-1,1]`.* The produced `local_score` is a within-space z-score → sigmoid,
+>   range `(0,1)`, **neutral at `0.5`**. There is no signed/negative half. "Downvoted" = `< 0.5`.
+
+- "Expertise" = a **per-user, per-space expertise score** (to be defined — see above), mapped onto
+  `x ∈ [0,1]` for the curve. The mapping must account for the `(0,1)`-neutral-`0.5` source range:
+  e.g. remap `(0.5, 1] → (0, 1]` and treat `≤ 0.5` as zero.
+- Users with no derivable expertise score get `expert_add = 0`.
+- **Negative/downvoted score wipes the entire rep, not just this band.** "Negative" here means below
+  the neutral midpoint by a deadband (`score < 0.5 − ε`), since the source has no true negatives.
+  Rationale and guard: see Decisions #3.
 - Otherwise apply the exponential curve:
 
 ```
@@ -183,7 +201,7 @@ CREATE TABLE user_reputation (
     verified_add  numeric NOT NULL DEFAULT 0,
     prof_add      numeric NOT NULL DEFAULT 0,
     expert_add    numeric NOT NULL DEFAULT 0,
-    person_entity_id uuid,              -- null if the user has no person entity here
+    expertise_entity_id uuid,           -- entity whose local_score backed the Expert band (see User → expertise score); null if none
     updated_at    timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (user_space_id, space_id)
 );
@@ -195,13 +213,27 @@ table (e.g. `verified_spaces(space_id)`), or queried from atlas's persisted base
 the atlas owner (see Dependencies). The `subspaces` verified edges + `points_earned` come from
 existing tables / the knowledge layer.
 
-### User → person entity resolution
+### User → expertise score (⚠️ rewritten — verification refuted the original plan)
 
-The Expert band requires resolving, per `(user_space_id, space_id)`, the user's **person entity**
-and its `local_score`. From the onboarding flow, a person entity carries a `Person` type relation
-and an account relation linking it to the wallet/account. The rep stage needs a query:
-`account/personal space → person entity id → local_scores[person_entity_id, space_id]`. The exact
-KG traversal must be confirmed against the schema (sub-task in Phase 3).
+The original plan assumed the Expert band could read a user's **person entity `local_score`** via
+`account/personal space → person entity id → local_scores[...]`. **Verification refuted this**
+(finding #1): there is no person entity in gaia, and `local_scores` is keyed by the *voted-on content
+entity id*, not by a user. The user identity in scoring is `member_space_id`.
+
+So there is no existing per-user score to read; one must be **derived**. Candidate approaches (to
+decide — this is the top open item):
+- **Authored-content aggregation:** map `user → content entities they authored/edited in this space`
+  (via `values`/`relations` provenance) → aggregate those entities' `local_scores`. Closest to "your
+  contributions earned merit," but needs a reliable author→entity link.
+- **Vote-target aggregation:** if a user *is* represented by a voted-on entity (e.g. their profile/
+  front-page entity receives votes), read that entity's `local_score`. Depends on whether people get
+  voted on as entities at all (not currently the case).
+- **New Person/Account ingestion:** add a person-entity ingestion path (the geo-sdk has
+  `PERSON_TYPE`/`ACCOUNT_TYPE`, unused by gaia) so users become first-class scored entities. Largest
+  scope.
+
+Whatever the source, its output range is `(0,1)`-neutral-`0.5` (finding #2) and must be remapped
+before the exponential curve.
 
 ### Where the code lives
 
@@ -210,7 +242,8 @@ KG traversal must be confirmed against the schema (sub-task in Phase 3).
 - **Exponential curve:** a small, table-driven, unit-tested module (Python; mirror of the spec's
   Rust lookup table). O(1), no runtime `exp()`.
 - **Vote weighting:** in the existing scoring path, populate `Vote.weight` from `user_reputation`
-  (the previous cycle's values), with the cold-start floor.
+  (the previous cycle's values); `rep = 0 ⇒ weight = 0`, no floor (Decision #5). Mind the
+  distance-weighting composition (finding #4).
 - **Verified set:** a consumer or query bridging atlas `topology.canonical` → rep stage.
 - **API:** GraphQL fields `userSpaceRep(spaceId, userSpaceId)` and `spacePeopleByRep(spaceId)`
   reading `user_reputation` (mirrors how `entityGlobalScore` is exposed).
@@ -229,12 +262,17 @@ KG traversal must be confirmed against the schema (sub-task in Phase 3).
 
 ### Phase 3 — Rep computation stage (no weighting yet)
 - Verified set bridge from atlas `topology.canonical`.
-- User → person entity → `local_score` resolution.
-- Compute all four bands; write `user_reputation`. Weighting still uniform (`1.0`).
+- **Per-user expertise score derivation** (🔴 blocked on the design decision — see *User → expertise
+  score*; was "User → person entity resolution", which verification refuted).
+- Compute the bands that are unblocked first: **Low-trust** (removal/unverify only) + **Verified
+  gating** (flat `2`). Expert and the Verified variable component land once their blockers clear.
+- Write `user_reputation`. Weighting still uniform (`1.0`).
 - Characterization tests per band + combined, mirroring the scoring-service test style.
 
 ### Phase 4 — Reputation-weighted voting (the feedback loop)
-- Wire `Vote.weight` from previous-cycle `user_reputation`, with cold-start floor.
+- Wire `Vote.weight` from previous-cycle `user_reputation`; `rep = 0 ⇒ weight = 0`, no floor.
+- Resolve distance-weighting composition (finding #4): disable `use_distance_weighting` or accept
+  `rep × 0.8^distance` compounding.
 - Validate convergence on a seeded multi-cycle fixture; assert no cold-start deadlock.
 - Feature-flag the weighting so it can be enabled per environment / rolled back instantly.
 
@@ -247,7 +285,7 @@ KG traversal must be confirmed against the schema (sub-task in Phase 3).
 - A user's `rep` is computed per space and stored in `[0, 1]`, displayable as 0–1000.
 - Expert band matches the reference exponential table within rounding.
 - Verified band reflects atlas's transitive closure, including revocation cascade on unverify.
-- Members without a person entity get `expert_add = 0` and a well-defined total.
+- Members with no derivable expertise score get `expert_add = 0` and a well-defined total.
 - With weighting enabled, scores reflect rep-weighted votes; with it disabled, behavior is
   identical to today.
 - No cold-start deadlock: a fresh space with no rep still produces scores.
@@ -266,8 +304,11 @@ KG traversal must be confirmed against the schema (sub-task in Phase 3).
   knowledge layer; the Verified band's `points_earned` comes from payout system entities (on-chain),
   which are not yet summable. Both must exist before those band components are meaningful. Expert +
   Low-trust + Verified-*gating* (flat `2`) do not depend on either and can ship first.
-- **Person-entity join (risk).** The account → person entity → score path must be verified against
-  the live KG schema; mis-resolution silently zeroes Expert rep.
+- **Per-user expertise score (🔴 blocker, was "person-entity join").** Verification (finding #1)
+  showed the assumed account→person-entity→score path does not exist — `local_scores` is
+  content-keyed and there is no person entity. The Expert band cannot be built until a per-user
+  expertise derivation is chosen (see *User → expertise score*). This blocks Phase 3's Expert band
+  (other bands are unaffected).
 
 ## Decisions (resolved with Yaniv, 2026-06-22)
 
@@ -277,13 +318,17 @@ KG traversal must be confirmed against the schema (sub-task in Phase 3).
    modeled as system entities generated by on-chain actions. No summation mechanism exists yet, so
    the Verified band's variable `+8 ×` component is **deferred**; the band ships as a flat `2`
    (eligibility only) until payout summation lands.
-3. **Negative score → wipe entire rep** (not Expert-band-only). *Guard (proposed):* trigger only
-   below a small negative deadband (`score < -ε`), not the instant a score dips below 0, so a
-   verified professional can't be brigaded to zero on noise. Pushing a score negative already
-   requires rep-weighted downvotes, which is somewhat self-protecting. Open to revisiting the
-   deadband value.
+3. **Negative score → wipe entire rep** (not Expert-band-only). ⚠️ *Revised by verification:* the
+   source score has **no negative half** — it is `(0,1)` with neutral `0.5`. So "negative" must mean
+   "downvoted below neutral by a deadband": `score < 0.5 − ε`. *Guard:* the deadband prevents
+   noise-zeroing a verified professional; pushing a score below neutral already requires rep-weighted
+   downvotes, which is somewhat self-protecting. Deadband value still open.
 4. **Band stacking → additive** (as modeled). No strong preference expressed; keeping the simpler
-   additive model.
+   additive model. ⚠️ *Verification caveat on weighting composition:* production runs
+   `use_distance_weighting=True` (with `filter_non_members=False`; the config forbids both). Distance
+   weighting already **multiplies** `Vote.weight` by `0.8^distance`, so seeding `Vote.weight` from rep
+   compounds multiplicatively (`rep × 0.8^distance`). Phase 4 must either disable distance weighting
+   or consciously accept the compounding. ("Composes cleanly" only holds vs. `filter_non_members`.)
 5. **Zero rep → zero weight, no floor.** A user must be in ≥1 public space (with a profile) for
    their vote to count. No deadlock because low-trust is earned on joining, not on accumulated score
    (see the feedback-loop section).
@@ -296,9 +341,52 @@ KG traversal must be confirmed against the schema (sub-task in Phase 3).
    move to incremental (atlas-style reverse-dependency invalidation) if data shows it's a
    bottleneck; premature invalidation is exactly what caused the recent ranking-indexer crash-loop.
 
+## Verification findings (codebase pass, 2026-06-23)
+
+Five plan assumptions were checked against the live code. Three were refuted — two of them
+materially. file:line evidence below.
+
+**🔴 1. No per-user score exists — the Expert band has no data source.** `local_scores` is keyed by
+the **voted-on content entity id**, not by a person/user (`scoring_data_writer.py:88-93`;
+perspectives = `DISTINCT entity_id, space_id FROM values`, `scoring_data_provider.py:359-381`). A
+user is identified throughout scoring by `member_space_id` (lowercased), never converted to an
+entity id (`scoring_data_provider.py:238-300`; `models.py:33-39`). There is **no "person entity"** in
+gaia's path: `PERSON_TYPE` exists in the geo-sdk but is referenced nowhere in gaia; profiles resolve
+to a personal space's *front-page entity* (`TYPES_PROPERTY→SPACE_TYPE`), not a Person
+(`api/src/profile/queries.ts:82-133`). The hypothesized join `user_space_id → person_entity_id →
+local_scores` would return **null for essentially every user**. → *The Expert band requires a
+new per-user expertise derivation (e.g. aggregate the local_scores of content the user authored / was
+voted on). This is net-new work, not reuse.*
+
+**🔴 2. Score range is `(0,1)` neutral `0.5`, not `[-1,1]`.** Production normalization is
+`z_score_sigmoid` (`main.py:292`): within-space z-score → logistic sigmoid
+(`models.py:304-314`), range `(0,1)`, mean entity = `0.5`. There is no signed/negative half. →
+*Drives the Expert-band `x`-mapping and the redefinition of "negative" in Decision #3 (`< 0.5 − ε`).*
+
+**🟢 3. Tiny vote weights are safe.** `Vote.weight` is a pure linear multiplier summed into
+`raw_score` (`models.py:78-91`), then z-scored — and z-score is invariant to a uniform positive
+scale. No absolute thresholds, no divide-by-zero (only divisor `std_score` is guarded). A `0.001`
+weight preserves relative ordering. → *Confirms Decision #5 (zero-rep→0 weight, no floor).*
+
+**🟡 4. Weighting double-counts with distance weighting.** `apply_distance_weighting`
+(`scoring.py:107-160`) overwrites `weight = vote.weight × 0.8^distance` before it's summed; the
+config forbids `use_distance_weighting` + `filter_non_members` together (`models.py:244-251`), and
+production runs distance weighting on (`main.py:288,293`). → *See Decision #4.*
+
+**🟡 5. "Flagged" is not consumable today.** On-chain `FLAGGED`/`SPACE_FAST_PATH_RESTRICTED` decode
+to a `space.moderation` topic (`hermes-pipeline/src/pipelines/moderation.rs`), but **no indexer
+subscribes** and no `flagged`/`banned` column exists (`members`/`editors`/`ranks.*` are pure join
+tables). Only removal/unverify is consumable. → *See Low-trust band v1 scope.*
+
 ## Open / to confirm
 
-- **#3 deadband value** — what `ε` (or score threshold) trips the full-rep wipe.
+- **🔴 Expert-band user score (finding #1)** — biggest open design item. How do we derive a per-user,
+  per-space expertise score, given there is no person entity and `local_scores` is content-keyed?
+- **Expert-band `x`-mapping (finding #2)** — confirm the `(0.5,1] → (0,1]`, treat-`≤0.5`-as-zero
+  remap (or an alternative) once the user score is defined.
+- **Weighting composition (finding #4)** — disable `use_distance_weighting` under rep-weighting, or
+  accept `rep × 0.8^distance` compounding?
+- **#3 deadband value** — what `ε` trips the full-rep wipe (now relative to `0.5`).
 - **#7** — confirm full-recompute-first is acceptable; revisit after a cardinality measurement.
 - **Discord** — share this proposed design in Discord for community feedback (Yaniv's ask).
 
