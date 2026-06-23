@@ -99,3 +99,13 @@ export function getPoolStats() {
 		maxConnections: pool.options.max!, // Set to 18 in constructor above
 	}
 }
+
+/** Stats for the isolated /review pool, for /health metrics (same shape as getPoolStats). */
+export function getReviewPoolStats() {
+	return {
+		totalConnections: reviewPool.totalCount,
+		idleConnections: reviewPool.idleCount,
+		waitingCount: reviewPool.waitingCount,
+		maxConnections: reviewPool.options.max!, // Set in the reviewPool constructor above
+	}
+}
