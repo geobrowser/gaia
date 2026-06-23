@@ -367,6 +367,15 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 				if (error._tag === "ValidationError") {
 					return c.json({error: "Invalid parameter", message: error.message}, 400)
 				}
+				// Unlike the proposal path (where the blob comes from our own IPFS cache and a
+				// decode failure is a 500), the review blob is CLIENT input — an undecodable
+				// edit is a bad request, not a server fault.
+				if (error._tag === "EditDecodeError") {
+					return c.json(
+						{error: "Invalid parameter", message: "edit is not a decodable GRC-20 edit blob"},
+						400,
+					)
+				}
 				const mapped = mapGroupedProposalError(error)
 				return c.json(mapped.body, mapped.status)
 			},
