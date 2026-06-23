@@ -7,6 +7,7 @@
  * media-property entity filtering, data-block config merging, etc.
  */
 
+import {decodeEditAuto} from "@geoprotocol/grc-20"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
@@ -15,6 +16,7 @@ import type {Profile} from "../../profile/types"
 import type {AppRuntime} from "../../services/runtime"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../../utils/uuid"
 import {diffGroupedEntitySnapshots} from "../diff"
+import {EditDecodeError} from "../proposal-diff"
 import {getGroupedEntitySnapshotAtVersion, type QueryError, resolveVersionKey} from "../queries"
 import {mapGroupedProposalError, validateGroupedRequest} from "../router"
 import type {GroupedEntitySnapshot} from "../types"
@@ -22,8 +24,15 @@ import {enrichWithMediaUrls} from "./enrich"
 import {enrichBlockConfig} from "./enrich-block-config"
 import {enrichBlocks} from "./enrich-blocks"
 import {enrichNames} from "./enrich-names"
-import {computeGroupedProposalDiffV2, computeProposalDiffV2} from "./proposal-diff"
+import {computeGroupedProposalDiffV2, computeProposalDiffV2, computeReviewDiffV2} from "./proposal-diff"
 import type {DiffResponseV2} from "./types"
+
+/**
+ * Safety bound on a single review request's op count (untrusted input). Generous
+ * headroom over real edits (largest observed published edit ≈ 2.8k ops). A
+ * tighter, entity-aware cap is tracked in PRO-71.
+ */
+const MAX_REVIEW_OPS = 10_000
 
 type AppEnv = {
 	Variables: {
@@ -278,6 +287,86 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 		const result = await runtime.runPromise(Effect.either(program))
 		return Either.match(result, {
 			onLeft: (error) => {
+				const mapped = mapGroupedProposalError(error)
+				return c.json(mapped.body, mapped.status)
+			},
+			onRight: (diff) => c.json(diff as unknown as Record<string, unknown>, 200),
+		})
+	})
+
+	/**
+	 * POST /v2/versioned/review
+	 *
+	 * Diff a space's UNPUBLISHED local edit against current live state and return
+	 * the same enriched `EntityDiffV2[]` shape as the proposal diff. Non-mutating —
+	 * computes only, persists nothing.
+	 *
+	 * Body: `{ spaceId: string, edit: string, cursor?: string, limit?: number }`
+	 * where `edit` is the base64-encoded GRC-20 edit blob the SDK would publish.
+	 * First release accepts the encoded blob (decoded via `decodeEditAuto`) for
+	 * exact publish-parity; raw JSON `ops[]` support is a follow-up (op ids are
+	 * 16-byte binary, not hex strings, so they need a conversion layer).
+	 */
+	router.post("/review", async (c) => {
+		const body = (await c.req.json().catch(() => null)) as {
+			spaceId?: unknown
+			edit?: unknown
+			cursor?: unknown
+			limit?: unknown
+		} | null
+
+		const program = Effect.gen(function* () {
+			if (!body || typeof body !== "object") {
+				return yield* Effect.fail(new ValidationError({message: "Request body must be a JSON object"}))
+			}
+			if (typeof body.spaceId !== "string" || !isValidUuid(body.spaceId)) {
+				return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
+			}
+			if (typeof body.edit !== "string" || body.edit.length === 0) {
+				return yield* Effect.fail(new ValidationError({message: "edit (base64-encoded edit blob) is required"}))
+			}
+			if (body.cursor !== undefined && typeof body.cursor !== "string") {
+				return yield* Effect.fail(new ValidationError({message: "cursor must be a string"}))
+			}
+			let limit = 50
+			if (body.limit !== undefined) {
+				if (typeof body.limit !== "number" || !Number.isInteger(body.limit) || body.limit < 1) {
+					return yield* Effect.fail(new ValidationError({message: "limit must be a positive integer"}))
+				}
+				limit = Math.min(body.limit, 100)
+			}
+
+			const blob = yield* Effect.try({
+				try: () => new Uint8Array(Buffer.from(body.edit as string, "base64")),
+				catch: () => new ValidationError({message: "edit must be valid base64"}),
+			})
+			const ops = yield* Effect.tryPromise({
+				try: async () => (await decodeEditAuto(blob)).ops,
+				catch: (error) => new EditDecodeError(error),
+			})
+			if (ops.length > MAX_REVIEW_OPS) {
+				return yield* Effect.fail(
+					new ValidationError({
+						message: `edit exceeds the ${MAX_REVIEW_OPS}-op review limit (${ops.length})`,
+					}),
+				)
+			}
+
+			return yield* computeReviewDiffV2(
+				db,
+				ops,
+				normalizeUuid(body.spaceId),
+				body.cursor as string | undefined,
+				limit,
+			)
+		}).pipe(Effect.withSpan("POST /v2/versioned/review"))
+
+		const result = await runtime.runPromise(Effect.either(program))
+		return Either.match(result, {
+			onLeft: (error) => {
+				if (error._tag === "ValidationError") {
+					return c.json({error: "Invalid parameter", message: error.message}, 400)
+				}
 				const mapped = mapGroupedProposalError(error)
 				return c.json(mapped.body, mapped.status)
 			},

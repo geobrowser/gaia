@@ -68,7 +68,7 @@ export type EntityDiffV2 = Omit<GroupedEntityDiff, "relations" | "groups"> & {
 	relations: RelationChangeV2[]
 } & Record<NormalizedUuid, DynamicGroupItem[]>
 
-interface PaginationV2 {
+export interface PaginationV2 {
 	cursor: string | null
 	hasMore: boolean
 	totalEntities: number
@@ -88,6 +88,19 @@ export interface PaginatedGroupedProposalDiffV2 {
 	proposalIds: NormalizedUuid[]
 	spaceId: NormalizedUuid
 	mode: "active" | "historical"
+	entities: EntityDiffV2[]
+	pagination: PaginationV2
+}
+
+/**
+ * Response for `POST /v2/versioned/review`.
+ *
+ * Same enriched `EntityDiffV2[]` shape as the proposal diff, for a space's
+ * unpublished local edit diffed against current live state. No proposal/edit
+ * metadata since there is no persisted proposal.
+ */
+export interface PaginatedReviewDiffV2 {
+	spaceId: NormalizedUuid
 	entities: EntityDiffV2[]
 	pagination: PaginationV2
 }
