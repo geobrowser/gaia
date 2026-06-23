@@ -604,6 +604,14 @@ export function computeProposalDiffV2(
 			}
 		}
 
+		// Validate cursor format up front — before the IPFS fetch + decode — so an
+		// invalid cursor fails fast with InvalidCursorError instead of doing expensive
+		// work or being masked by an EditBlob* error. The core re-checks it against the
+		// resolved root count.
+		if (cursorStr && decodeCursor(cursorStr) === null) {
+			return yield* Effect.fail(new InvalidCursorError(cursorStr))
+		}
+
 		const cacheResult = yield* getIpfsCacheData(db, contentUri)
 		if (!cacheResult) return yield* Effect.fail(new EditBlobNotCachedError(contentUri))
 		if (cacheResult.isErrored) return yield* Effect.fail(new EditBlobDecodeFailedError(contentUri))
@@ -673,6 +681,11 @@ export function computeGroupedProposalDiffV2(
 			return yield* Effect.fail(new MixedModeError(activeCount, nonActiveCount))
 		}
 		const mode: GroupedProposalDiffMode = activeCount > 0 ? "active" : "historical"
+
+		// Validate cursor format before fetching/decoding all the group's edit blobs.
+		if (cursorStr && decodeCursor(cursorStr) === null) {
+			return yield* Effect.fail(new InvalidCursorError(cursorStr))
+		}
 
 		const blobs = yield* Effect.all(
 			proposalIds.map((id) => {

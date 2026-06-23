@@ -17,7 +17,7 @@ import type {Profile} from "../../profile/types"
 import type {AppRuntime} from "../../services/runtime"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../../utils/uuid"
 import {diffGroupedEntitySnapshots} from "../diff"
-import {EditDecodeError} from "../proposal-diff"
+import {decodeCursor, EditDecodeError, InvalidCursorError} from "../proposal-diff"
 import {getGroupedEntitySnapshotAtVersion, type QueryError, resolveVersionKey} from "../queries"
 import {mapGroupedProposalError, validateGroupedRequest} from "../router"
 import type {GroupedEntitySnapshot} from "../types"
@@ -363,6 +363,10 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime, revie
 				}
 				if (body.cursor !== undefined && typeof body.cursor !== "string") {
 					return yield* Effect.fail(new ValidationError({message: "cursor must be a string"}))
+				}
+				// Validate cursor format before decoding the edit blob (fail fast, correct error).
+				if (typeof body.cursor === "string" && decodeCursor(body.cursor) === null) {
+					return yield* Effect.fail(new InvalidCursorError(body.cursor))
 				}
 				let limit = 50
 				if (body.limit !== undefined) {

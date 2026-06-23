@@ -123,6 +123,15 @@ describe.skipIf(SKIP)("POST /v2/versioned/review", () => {
 			expect(res.status).toBe(400)
 		})
 
+		it("400 when the cursor is malformed (validated before decode)", async () => {
+			const res = await post({
+				spaceId: SPACE,
+				edit: editBlob((e) => e.createEmptyEntity(uuidToId(NEW_ENTITY))),
+				cursor: "!!!not-a-valid-cursor!!!",
+			})
+			expect(res.status).toBe(400)
+		})
+
 		it("400 when limit is invalid", async () => {
 			const res = await post({
 				spaceId: SPACE,
