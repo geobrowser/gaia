@@ -1,11 +1,17 @@
 """Unit tests for the ScoringDataProvider module."""
 
+import uuid
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.algorithm.models import Space, VoteType
+from src.algorithm.models import (
+    DISCONNECTED_SPACE_DEPTH,
+    SPACE_SCORE_DECAY_BASE,
+    Space,
+    VoteType,
+)
 from src.constants import ROOT_SPACE_ID
 from src.scoring_data_provider import ScoringDataProvider, ScoringData
 
@@ -304,9 +310,47 @@ class TestScoringDataProvider:
             root = next(s for s in spaces if s.id == ROOT_SPACE_ID)
             assert root.parent_space_id is None
             assert "space-1" in root.subspace_ids
+            # Flat fallback sets distances explicitly: root=0, every other space=1.
+            assert root.distance_to_root == 0
 
             child = next(s for s in spaces if s.id == "space-1")
             assert child.parent_space_id == ROOT_SPACE_ID
+            assert child.distance_to_root == 1
+
+    def test_flat_fallback_identifies_root_with_uuid_ids(self) -> None:
+        """Flat fallback must detect the root even when spaces.id rows are uuid.UUID.
+
+        psycopg returns UUID columns as uuid.UUID objects, not strings. Comparing the
+        raw uuid.UUID against the string ROOT_SPACE_ID is always False, which would
+        misclassify the root as a child (distance 1, self-parent). Root detection must
+        use the string form.
+        """
+        with patch("src.scoring_data_provider.scoring_data_provider.psycopg.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_connect.return_value.__enter__.return_value = mock_conn
+            mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+
+            child_id = uuid.uuid4()
+            mock_cursor.fetchall.side_effect = [
+                # spaces query — ids come back as uuid.UUID objects (production behavior)
+                [(uuid.UUID(ROOT_SPACE_ID),), (child_id,)],
+                # topology distances query — empty (indexer hasn't run)
+                [],
+            ]
+
+            provider = ScoringDataProvider("postgresql://test:test@localhost/test")
+            spaces = provider._fetch_spaces(mock_conn)
+
+            root = next(s for s in spaces if s.id == ROOT_SPACE_ID)
+            assert root.parent_space_id is None
+            assert root.distance_to_root == 0
+            assert str(child_id) in root.subspace_ids
+            assert ROOT_SPACE_ID not in root.subspace_ids
+
+            child = next(s for s in spaces if s.id == str(child_id))
+            assert child.parent_space_id == ROOT_SPACE_ID
+            assert child.distance_to_root == 1
 
     def test_fetch_scoring_topology_distances(self) -> None:
         """Test that topology distances are fetched correctly."""
@@ -342,8 +386,18 @@ class TestSpaceScoreCalculation:
         spaces = [root, child_1, child_3]
 
         for space in spaces:
-            space.calculate_space_score([], [], spaces)
+            space.calculate_space_score(spaces, {}, {})
 
         assert root.space_score == 1.0
         assert root.space_score > child_1.space_score
         assert child_1.space_score > child_3.space_score
+
+    def test_unset_distance_defaults_to_disconnected(self) -> None:
+        """A space with no distance (no topology entry) is scored as disconnected."""
+        now = datetime.now()
+        space = Space(id="orphan", created_at=now, distance_to_root=None)
+
+        space.calculate_space_score([space], {}, {})
+
+        assert space.distance_to_root == DISCONNECTED_SPACE_DEPTH
+        assert space.space_score == SPACE_SCORE_DECAY_BASE**DISCONNECTED_SPACE_DEPTH
