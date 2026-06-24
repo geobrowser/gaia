@@ -38,6 +38,7 @@
  */
 
 import {SystemIds} from "@geoprotocol/geo-sdk"
+import {SYSTEM_TYPE_RELATION_TYPE_ID} from "./systemTypeIds"
 
 const SYSTEM_IDS_TYPES = SystemIds.TYPES_PROPERTY
 
@@ -45,8 +46,8 @@ const SYSTEM_IDS_TYPES = SystemIds.TYPES_PROPERTY
 // drops user attempts to author it). Kept separate from regular Type relations
 // so systemTypeIds reliably identifies system entities — a user can author a
 // Type relation pointing at a system-type entity, but cannot forge a System
-// Type relation.
-const SYSTEM_TYPE = "88b3d6ad-288c-529c-a212-0e1c24819185"
+// Type relation. See ./systemTypeIds for the shared constant.
+const SYSTEM_TYPE = SYSTEM_TYPE_RELATION_TYPE_ID
 
 // ============================================================================
 // Space filter helpers

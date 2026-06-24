@@ -1,6 +1,7 @@
 import {Pool} from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
 import {graphqlServer} from "../postgraphile"
+import {SYSTEM_TYPE_RELATION_TYPE_ID} from "../systemTypeIds"
 
 // Helper to execute GraphQL queries against the yoga server
 async function executeGraphQL(query: string, variables?: Record<string, unknown>) {
@@ -491,9 +492,8 @@ describe("EntitySpaceFilterPlugin", () => {
 
 	describe("system type classification", () => {
 		// System Type relation: system-minted, non-user-editable. Entities
-		// classified through it must surface in typeIds and be filterable, just
-		// like regular Type relations.
-		const SYSTEM_TYPE_RELATION_ID = "88b3d6ad-288c-529c-a212-0e1c24819185"
+		// classified through it must surface in systemTypeIds and be filterable.
+		const SYSTEM_TYPE_RELATION_ID = SYSTEM_TYPE_RELATION_TYPE_ID
 		let systemEntityId: string | null = null
 		let systemTypeId: string | null = null
 
