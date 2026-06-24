@@ -26,9 +26,11 @@ inside `insert_notifications_for_users`:
 INSERT INTO notification_deliveries (outbox_id, webhook_id) SELECT $1, id FROM app_webhooks
 ```
 
-Every notification × every webhook. Filtering = adding a `WHERE` here. We filter
-at **fan-out** (not at delivery) so non-matching webhooks never get a delivery
-row at all.
+Every notification × every webhook. We filter at **fan-out** (not at delivery) so
+non-matching webhooks never get a delivery row. Rather than re-query `app_webhooks`
+per recipient, the filters are held in an **in-memory cache** (the table is tiny,
+~5–10 rows, rarely changing); matching is done in Rust and the delivery rows are
+inserted by id (`SELECT $1, unnest($2::uuid[])`). See **Caching** below.
 
 ## Type taxonomy
 
