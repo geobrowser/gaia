@@ -236,11 +236,18 @@ so a Person entity *can* be scored, but **nothing votes or ranks on people yet**
 `local_scores[person_entity]` is empty until an "endorse / rank a person" surface exists. Reading it
 now yields `expert_add = 0` for everyone (rep collapses to low-trust+verified+professional, ≤21/1000).
 
-**Decision (reframed — pending Yaniv; the scope question is in his court):**
+**Decision (resolved with Yaniv 2026-06-24 — ship A only):** the endorse/rank-a-person surface **is
+in scope**. Yaniv: *"Yes we should get the initial rankings in. That's the big push we're gonna do on
+the curator side in around 3 weeks for the crypto space. So that could actually seed this ahead of the
+debates launch."* So the canonical Person-entity score (A) will have real data, seeded by the
+crypto-space rankings push (~3 weeks from 2026-06-24, i.e. mid-July 2026), ahead of debates launch.
 - **Canonical source = the Person entity's `local_score`** (approach A) — spec-aligned, what Yaniv
-  intends, and now confirmed cheap to resolve. This is the long-term Expert source.
-- **Interim bootstrap = authored-content aggregation** (approach B) — *optional*, used only to give the
-  Expert band signal before the endorse-a-person surface ships; ripped out once A is populated. Built
+  intends, confirmed cheap to resolve, and now confirmed to be populated by the rankings push. This is
+  the Expert source, full stop.
+- **Authored-content aggregation (approach B) is dropped from the plan of record** — it was only an
+  interim bootstrap for the case where the endorse-a-person surface *didn't* ship this milestone. It
+  does, so B would be throwaway work. Kept documented below **as a fallback only** if the ~3-week
+  rankings timeline slips or we need Expert signal in a space the rankings haven't reached yet. Built
   on the confirmed `edit_versions.created_by_id` join (finding #6):
 
 ```
@@ -250,8 +257,9 @@ q = (Σ sₑ + κ·0.5) / (n + κ)     κ ≈ 5, shrink toward neutral 0.5 (anti
 ```
 
 Whichever source feeds it, the score is `(0,1)`-neutral-`0.5` (finding #2), so map with
-`x = max(0, 2q − 1)` before the exponential (`EXPERT_MAX = 980`). If the endorse-a-person surface is
-in this milestone, skip B entirely and ship A. **Open:** is that surface in scope now? (asked Yaniv).
+`x = max(0, 2q − 1)` before the exponential (`EXPERT_MAX = 980`). **Resolved (2026-06-24): the
+endorse-a-person surface is in scope, so we ship A only and skip B** (kept above as a slip/coverage
+fallback).
 
 *B's caveats if used:* author coverage is **forward-only** (`created_by_id` null for pre-column
 content); the join runs through the **versioned** tables, not the live ones.
@@ -284,9 +292,11 @@ content); the join runs through the **versioned** tables, not the live ones.
 ### Phase 3 — Rep computation stage (no weighting yet)
 - Verified set bridge from atlas `topology.canonical`.
 - **Expert band:** wire the Person-entity resolution (`spaces.topic_id → PERSON_TYPE`, verified) and
-  read its `local_score` → `x`-mapping → curve (Decisions #8/#9). If the endorse-a-person surface
-  isn't in this milestone, add the authored-content bootstrap (`edit_versions` join → shrunk mean) so
-  the band isn't all-zeros. See *User → expertise score*. (Pending Yaniv's scope answer.)
+  read its `local_score` → `x`-mapping → curve (Decisions #8/#9) — **approach A only** (scope resolved
+  2026-06-24; no bootstrap). The band reads `0` for every user until the crypto-space rankings push
+  seeds Person scores (~mid-July 2026), degrading gracefully (rep = low-trust + verified +
+  professional) with no deadlock. The authored-content bootstrap stays on the shelf as a slip/coverage
+  fallback. See *User → expertise score*.
 - **Low-trust** (removal/unverify only) + **Verified gating** (flat `2`). The Verified *variable*
   component stays deferred until payout-entity summation exists (Decision #2).
 - Write `user_reputation`. Weighting still uniform (`1.0`).
@@ -328,11 +338,12 @@ content); the join runs through the **versioned** tables, not the live ones.
   which are not yet summable. Both must exist before those band components are meaningful. Expert +
   Low-trust + Verified-*gating* (flat `2`) do not depend on either and can ship first.
 - **Expert-band data, not plumbing (dependency, not a blocker).** The Person-entity resolution exists
-  (`spaces.topic_id → PERSON_TYPE`, verified — finding #8), so the join isn't the problem. The risk is
-  that Person entities have **no scores until people are voted/ranked on** — so the canonical Expert
-  source is dead-empty until the endorse-a-person surface ships. Mitigation: the authored-content
-  bootstrap (finding #6), pending Yaniv's scope answer (see *User → expertise score*). Other bands
-  unaffected.
+  (`spaces.topic_id → PERSON_TYPE`, verified — finding #8), so the join isn't the problem. Person
+  entities have **no scores until people are voted/ranked on** — the canonical Expert source is empty
+  until the rankings push lands. **Resolved 2026-06-24:** that push is in scope (~3 weeks out, crypto
+  space first, ahead of debates launch — Yaniv), so it seeds A directly; we ship A only and the band
+  degrades gracefully to `0` until then. The authored-content bootstrap (finding #6) is retained only
+  as a slip/coverage fallback (see *User → expertise score*). Other bands unaffected.
 
 ## Decisions (resolved with Yaniv, 2026-06-22)
 
@@ -342,9 +353,10 @@ content); the join runs through the **versioned** tables, not the live ones.
    modeled as system entities generated by on-chain actions. No summation mechanism exists yet, so
    the Verified band's variable `+8 ×` component is **deferred**; the band ships as a flat `2`
    (eligibility only) until payout summation lands.
-3. **Negative score → ~~wipe entire rep~~ → no score-driven wipe.** ⚠️ **Reversed by verification
-   (diverges from Yaniv's "wipe all" lean — flagged for his review).** The score is *relative within a
-   space*: half of all entities sit below `0.5` **by construction**, so "below neutral" means "ranked
+3. **Negative score → ~~wipe entire rep~~ → no score-driven wipe.** ✅ **Reversal signed off by Yaniv
+   2026-06-24** (originally his "wipe all" lean; verification argued for the reversal and he agreed).
+   The score is *relative within a space*: half of all entities sit below `0.5` **by construction**,
+   so "below neutral" means "ranked
    below median this cycle," **not** "bad actor." Erasing earned verified/professional credentials on
    that basis is both wrong and trivially weaponizable (brigade below median → nuke standing). And it's
    unnecessary: the `x = max(0, 2q−1)` mapping already sets `expert_add = 0` below neutral, so a
@@ -370,17 +382,16 @@ content); the join runs through the **versioned** tables, not the live ones.
    move to incremental (atlas-style reverse-dependency invalidation) if data shows it's a
    bottleneck; premature invalidation is exactly what caused the recent ranking-indexer crash-loop.
 
-### Verification-driven decisions (2026-06-23, pending Yaniv review)
+### Verification-driven decisions (2026-06-23; #3 and #8 signed off by Yaniv 2026-06-24)
 
-8. **Expert-band source → Person-entity `local_score` (canonical); authored-content as optional
-   interim bootstrap.** ⚠️ **Reframed 2026-06-23 after Yaniv's correction** (the Person entity exists
-   — finding #1 was a false negative; the `spaces.topic_id → PERSON_TYPE` resolution is confirmed,
-   finding #8). The spec-canonical source is the Person entity's own `local_score`, now cheap to wire.
-   It is **empty until an endorse/rank-a-person surface ships**, so authored-content aggregation
-   (Bayesian-shrunk mean, `q = (Σ sₑ + κ·0.5)/(n + κ)`, `κ ≈ 5`; built on the `edit_versions` join,
-   finding #6) is an *optional* bootstrap to give the band signal in the meantime — dropped once the
-   Person score is populated. **Scope question for Yaniv:** is the endorse-a-person surface in this
-   milestone (→ ship A only), or do we want the B bootstrap? Full join in *User → expertise score*.
+8. **Expert-band source → Person-entity `local_score` (A), ship A only.** ✅ **Scope resolved with
+   Yaniv 2026-06-24:** the endorse/rank-a-person surface **is in scope** — the "initial rankings" push
+   on the curator side (~3 weeks out, crypto space first, ahead of debates launch) will seed Person
+   scores. So we ship the canonical Person-entity `local_score` (resolution confirmed finding #8:
+   `spaces.topic_id → PERSON_TYPE`, verified) and **drop** the authored-content bootstrap (B) from the
+   plan of record — it was only for the case where the surface didn't ship this milestone. B stays
+   documented (*User → expertise score*) as a slip/coverage fallback. The band reads `0` until the
+   rankings push lands, degrading gracefully (no deadlock).
 9. **Expert-band x-mapping → `x = max(0, 2q − 1)`.** Folds the `(0,1)`-neutral-`0.5` source: below
    neutral → `0`, `(0.5,1]` stretches to `(0,1]`. Note `s=1` is an unreachable sigmoid asymptote, so
    the realistic Expert ceiling sits below `980` — which is fine (reserves the top for true outliers).
@@ -455,19 +466,17 @@ the Person score the canonical Expert source (Decision #8), with authored-conten
 
 The verification pass closed most of these. What remains:
 
-- **🔴 Endorse-a-person surface — in this milestone?** (asked Yaniv.) This decides Decision #8: if the
-  vote/rank-a-person UI ships now, Expert reads the Person-entity score directly (A only); if not, add
-  the authored-content bootstrap (B) so the band has signal at launch. The single biggest open item.
-- **Yaniv sign-off on Decision #3** (reversed from his "wipe all" lean — score is relative-within-space).
-- **`κ` shrinkage value** (Decision #8) — tune in Phase 1 against real authored-content distributions.
+- **`κ` shrinkage value** (Decision #8 fallback only) — tune against real authored-content
+  distributions *if* the B bootstrap is ever needed; not on the critical path now that A ships.
 - **`points_earned` summation** (Decision #2) — still blocked on payout-entity summability; Verified
   band ships flat `2` until then.
 - **#7 cardinality** — measure user×space before committing to full-recompute permanently.
 - **Discord** — share the design for community feedback (Yaniv's ask), ideally after his sign-off.
 
-*Resolved by verification (was open):* Person-entity resolution (#8 — the join exists; **source choice
-still pends Yaniv's scope answer**), `x`-mapping (#9), weighting composition (#4 → disable distance
-weighting), negative-score semantics (#3 → no score-driven wipe).
+*Resolved (was open):* Expert-band scope (#8 → endorse-a-person surface is in scope, ship A only, drop
+the B bootstrap — Yaniv 2026-06-24), Person-entity resolution (#8 — the join exists), `x`-mapping (#9),
+weighting composition (#4 → disable distance weighting), negative-score semantics (#3 → no score-driven
+wipe, Yaniv signed off 2026-06-24).
 
 ## References
 
