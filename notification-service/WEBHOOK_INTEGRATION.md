@@ -23,6 +23,8 @@ Webhooks are registered directly in the `app_webhooks` table. Each row needs:
 | `app_name` | Unique name for your app (e.g. `curator-ios`) |
 | `url` | The HTTPS endpoint that will receive POST requests |
 | `secret` | Shared secret for HMAC signature verification |
+| `notification_types` | Optional `text[]` — only deliver these notification types. `NULL`/empty = **all types**. |
+| `space_ids` | Optional `uuid[]` — only deliver events in these spaces. `NULL`/empty = **all spaces**. |
 
 ```sql
 INSERT INTO app_webhooks (app_name, url, secret)
@@ -30,6 +32,69 @@ VALUES ('curator-ios', 'https://api.curator.app/webhooks/geo', 'your-secret-here
 ```
 
 Generate a strong secret (e.g. `openssl rand -hex 32`). Store it securely — you'll need it to verify signatures.
+
+### Filtering which events you receive
+
+By default (both filter columns `NULL`), a webhook receives **every** event for
+**every** space. Set either column to narrow delivery. The two dimensions are
+**ANDed** — an event is delivered only if it matches *both* the type filter
+*and* the space filter:
+
+- **`notification_types`** — an event is matched if any of its notification
+  tokens (see taxonomy below) is in the array. Empty/`NULL` matches all types.
+- **`space_ids`** — an event is matched if its `space_id` is in the array.
+  Empty/`NULL` matches all spaces.
+
+```sql
+-- Only membership changes (add_member / add_editor), and only in two spaces:
+INSERT INTO app_webhooks (app_name, url, secret, notification_types, space_ids)
+VALUES (
+  'curator-ios',
+  'https://api.curator.app/webhooks/geo',
+  'your-secret-here',
+  ARRAY['add_member', 'add_editor'],
+  ARRAY['d4f5a6b7-...', 'e5f6a7b8-...']::uuid[]
+);
+
+-- All proposal events, any space:
+UPDATE app_webhooks SET notification_types = ARRAY['proposal_created'] WHERE app_name = 'curator-ios';
+```
+
+#### Notification type taxonomy
+
+Most events map to a single token equal to their `event_type`.
+**`proposal_created` is layered**: it always emits the base token
+`proposal_created`, *plus* a per-action token for membership actions. This lets
+you subscribe broadly or narrowly:
+
+- Subscribe to **`proposal_created`** → you receive **all** proposals, including
+  those that add members/editors.
+- Subscribe to **`add_member`** (or `add_editor`) → you receive **only**
+  proposals containing that action, not other proposals.
+
+| Token | Emitted when |
+|---|---|
+| `proposal_created` | Any proposal is created (always). |
+| `add_member` | A `proposal_created` contains an `add_member` action (in addition to `proposal_created`). |
+| `add_editor` | A `proposal_created` contains an `add_editor` action (in addition to `proposal_created`). |
+| `proposal_updated` | A proposal is updated. |
+| `proposal_voted` | A vote is cast. |
+| `proposal_executed` | A passed proposal is executed. |
+| `proposal_settings_updated` | Voting settings change. |
+| `proposal_rejected` | A proposal expires unexecuted. |
+| `bounty_interest` / `bounty_allocated` / `bounty_payout` / `bounty_created` | Corresponding bounty event. |
+| `proposal_comment` / `comment` | Comment events. |
+| `entity_votes_threshold` | Entity vote threshold reached. |
+
+> **Unknown types are logged, not rejected.** If `notification_types` contains a
+> token outside this set it simply never matches (and the indexer logs an error
+> at startup naming the app and token). Adding a type to the DB before the
+> indexer knows about it won't cause errors — it just won't match until the code
+> recognizes it.
+
+> **Propagation delay:** filters are cached in memory by the indexer and
+> refreshed every **30 seconds**, so inserts/updates to `app_webhooks` take
+> effect within ~30s — no restart needed.
 
 ## 2. Implement the webhook endpoint
 
