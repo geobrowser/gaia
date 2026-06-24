@@ -10,8 +10,11 @@
 -- cannot forge a System Type relation, so systemTypeIds reliably identifies
 -- system entities. PostGraphile exposes this computed column as the
 -- `systemTypeIds` field on every Entity.
+-- COALESCE to an empty array so entities with no System Type relation (the vast
+-- majority) return '{}' rather than NULL, matching entities_space_ids() and
+-- keeping systemTypeIds an always-present list for API consumers.
 CREATE OR REPLACE FUNCTION public.entities_system_type_ids(entities entities) RETURNS uuid[] AS $$
-  SELECT array_agg(DISTINCT e.id)
+  SELECT COALESCE(array_agg(DISTINCT e.id), '{}'::uuid[])
   FROM entities e
   INNER JOIN relations r ON e.id = r.to_entity_id
   WHERE r.from_entity_id = entities.id
