@@ -32,25 +32,29 @@ row at all.
 
 ## Type taxonomy
 
-`proposal_created` is split by action; every other event keeps its `event_type`.
-Crucially, an event maps to a **set** of tokens (not one), so a proposal that does
-several things filters correctly:
+`proposal_created` is **layered**; every other event keeps its `event_type`. An
+event maps to a **set** of tokens (not one), so a proposal that does several things
+filters correctly:
 
-- **`proposal_created`** → for the actions present:
-  - has an `add_member` action → token **`add_member`**
-  - has an `add_editor` action → token **`add_editor`**
-  - has **neither** `add_member` nor `add_editor` → token **`proposal_created`**
-    (covers content publishes, topic/subspace changes, remove_member/editor, voting-settings, …)
+- **`proposal_created`** → **always** the base token **`proposal_created`**, PLUS:
+  - an `add_member` action → also **`add_member`**
+  - an `add_editor` action → also **`add_editor`**
+  - (publishes, topic/subspace changes, remove_member/editor, voting-settings, … add
+    no extra token — they're just `proposal_created`.)
 - **every other event** → its `event_type` token: `proposal_voted`,
   `proposal_executed`, `bounty_interest`, `bounty_allocated`, `bounty_payout`,
   `bounty_created`, `proposal_comment`, `comment`, `entity_votes_threshold`.
+
+Because the base token is always present, **subscribing to `proposal_created`
+receives every proposal**, while **subscribing to `add_member` receives only
+member-adding proposals**.
 
 Examples:
 
 | Event | Token set |
 |---|---|
-| proposal adds a member | `{add_member}` |
-| proposal adds a member **and** an editor | `{add_member, add_editor}` |
+| proposal adds a member | `{proposal_created, add_member}` |
+| proposal adds a member **and** an editor | `{proposal_created, add_member, add_editor}` |
 | proposal only publishes content / sets topic / removes a member | `{proposal_created}` |
 | a vote | `{proposal_voted}` |
 
@@ -159,13 +163,9 @@ Existing webhooks keep getting everything until their arrays are populated.
 
 ## Open questions / gaps
 
-1. **"Subscribe to ALL proposals."** Under this model an `add_member`/`add_editor`
-   proposal is *not* also tagged `proposal_created`, so a webhook that wants every
-   proposal must list `{proposal_created, add_member, add_editor}` (and any future
-   sub-tokens). Alternative: always emit a base `proposal_created` token on *every*
-   proposal_created event (layered), so `{proposal_created}` alone = all proposals
-   and the action tokens narrow it. **Chosen here: mutually exclusive** (per the
-   stated intent) — revisit if "all proposals" becomes a common subscription.
+1. **"Subscribe to ALL proposals"** → **resolved: layered.** Every `proposal_created`
+   event always carries the base `proposal_created` token, so `{proposal_created}`
+   = all proposals, and `{add_member}` narrows to only member-adding ones.
 2. **Other proposal actions** (`remove_member`, `remove_editor`, `set_topic`,
    subspace ops, voting-settings, content publish) currently all collapse to
    `proposal_created` — not individually filterable. Easy to add tokens later

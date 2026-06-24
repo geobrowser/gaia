@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use hermes_instrumentation::instrument;
+use hermes_instrumentation::{error, instrument, warn};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::types::chrono::{DateTime, Utc};
@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::error::StorageError;
 use crate::ids;
-use crate::models::NotificationEvent;
+use crate::models::{event_notification_types, NotificationEvent, KNOWN_NOTIFICATION_TYPES};
 
 /// Storage for notification-related database operations.
 pub struct Storage {
@@ -118,6 +118,17 @@ impl Storage {
     ) -> Result<u64, StorageError> {
         let mut inserted_count: u64 = 0;
 
+        // Event-level webhook routing keys (identical for every recipient): the
+        // notification token set (for type filtering) and the event's space id.
+        let notification_types = event_notification_types(event);
+        let space_id = Uuid::parse_str(&event.payload.space_id).unwrap_or_else(|_| {
+            warn!(
+                space_id = %event.payload.space_id,
+                "notification payload has a non-UUID space_id; space-filtered webhooks will be skipped for it"
+            );
+            Uuid::nil()
+        });
+
         // Serialize the payload once before the recipient loop. Per-user fields
         // (user_space_id, idempotency_key) are stamped into the Value clone,
         // avoiding N struct clones + N serializations.
@@ -179,14 +190,22 @@ impl Storage {
                 }
             };
 
-            // Fan out: create a delivery row for every registered webhook
+            // Fan out: create a delivery row for each registered webhook whose
+            // filters match this event. A NULL/empty `notification_types` or
+            // `space_ids` means "all" on that dimension (back-compatible default).
             sqlx::query(
                 r#"
                 INSERT INTO notification_deliveries (outbox_id, webhook_id)
-                SELECT $1, id FROM app_webhooks
+                SELECT $1, id FROM app_webhooks w
+                WHERE (w.notification_types IS NULL OR cardinality(w.notification_types) = 0
+                       OR w.notification_types && $2)
+                  AND (w.space_ids IS NULL OR cardinality(w.space_ids) = 0
+                       OR $3 = ANY(w.space_ids))
                 "#,
             )
             .bind(outbox_id)
+            .bind(&notification_types)
+            .bind(space_id)
             .execute(&mut *tx)
             .await?;
 
@@ -196,6 +215,39 @@ impl Storage {
         tx.commit().await?;
 
         Ok(inserted_count)
+    }
+
+    /// Best-effort startup check: log (don't reject) any webhook filter that
+    /// references a notification type the indexer never emits — such a token can
+    /// never match, so the operator should fix the typo. Filters with only-unknown
+    /// tokens will receive nothing; this is how that's surfaced.
+    #[instrument(
+        name = "notification_indexer.storage.validate_webhook_filters",
+        skip(self)
+    )]
+    pub async fn log_unknown_webhook_filter_types(&self) {
+        let rows = sqlx::query(
+            "SELECT app_name, unnest(notification_types) AS t
+             FROM app_webhooks WHERE notification_types IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await;
+        match rows {
+            Ok(rows) => {
+                for row in rows {
+                    let app_name: String = row.get("app_name");
+                    let t: String = row.get("t");
+                    if !KNOWN_NOTIFICATION_TYPES.contains(&t.as_str()) {
+                        error!(
+                            app_name = %app_name,
+                            notification_type = %t,
+                            "unknown notification_type in webhook filter — it will never match any event"
+                        );
+                    }
+                }
+            }
+            Err(e) => warn!(error = %e, "could not validate webhook filter notification_types"),
+        }
     }
 
     // -----------------------------------------------------------------------
