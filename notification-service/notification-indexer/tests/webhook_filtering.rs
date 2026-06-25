@@ -215,4 +215,28 @@ async fn fan_out_respects_webhook_filters() {
         vec!["all", "space_x_only"],
         "a vote in space X reaches the unfiltered + space-X webhooks, not the add_member one"
     );
+
+    sqlx::query("TRUNCATE notification_deliveries, notification_outbox")
+        .execute(&pool)
+        .await
+        .expect("truncate after e3");
+
+    // Event 4: webhook deleted while the cache is still warm. The cache (warmed by
+    // e1-e3) still holds space_x_only's id, but the row is gone — the fan-out insert
+    // must skip it (join against app_webhooks) rather than hit the FK and abort.
+    sqlx::query("DELETE FROM app_webhooks WHERE app_name = 'space_x_only'")
+        .execute(&pool)
+        .await
+        .expect("delete space_x_only");
+
+    let e4 = proposal_event("e4", space_x, &["add_member"]);
+    storage
+        .insert_notifications_for_users(&e4, &[recipient])
+        .await
+        .expect("insert e4 must not FK-error on the stale cached webhook id");
+    assert_eq!(
+        delivered_apps(&pool).await,
+        vec!["all", "member_only"],
+        "a deleted webhook still in the cache is skipped, not delivered or errored"
+    );
 }

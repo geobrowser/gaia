@@ -285,11 +285,16 @@ impl Storage {
 
             // Fan out: one delivery row per matching webhook (computed above, in
             // memory). Skip the insert entirely when no webhook subscribes.
+            //
+            // The matched IDs come from the webhook cache, which is stale for up
+            // to WEBHOOK_CACHE_TTL. Join against app_webhooks so a webhook deleted
+            // within that window is simply skipped rather than triggering a
+            // webhook_id FK violation that would abort the whole transaction.
             if !matched_webhook_ids.is_empty() {
                 sqlx::query(
                     r#"
                     INSERT INTO notification_deliveries (outbox_id, webhook_id)
-                    SELECT $1, unnest($2::uuid[])
+                    SELECT $1, w.id FROM app_webhooks w WHERE w.id = ANY($2::uuid[])
                     "#,
                 )
                 .bind(outbox_id)
@@ -325,7 +330,11 @@ impl Storage {
             Ok(rows) => {
                 for row in rows {
                     let app_name: String = row.get("app_name");
-                    let t: String = row.get("t");
+                    // Decode as Option: a NULL element inside the array unnests to
+                    // a NULL row, and decoding NULL into a non-Option String panics.
+                    let Some(t) = row.get::<Option<String>, _>("t") else {
+                        continue;
+                    };
                     if !KNOWN_NOTIFICATION_TYPES.contains(&t.as_str()) {
                         error!(
                             app_name = %app_name,
