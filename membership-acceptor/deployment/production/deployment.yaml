@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: membership-acceptor
+  namespace: knowledge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: membership-acceptor
+  template:
+    metadata:
+      labels:
+        app: membership-acceptor
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      imagePullSecrets:
+        - name: geo
+      containers:
+        - name: membership-acceptor
+          image: registry.digitalocean.com/geo/membership-acceptor:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            # Shared secret — MUST equal this service's app_webhooks.secret
+            - name: GEO_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: membership-acceptor-credentials
+                  key: GEO_WEBHOOK_SECRET
+            # Optional: Sentry error reporting
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: membership-acceptor-credentials
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              value: "production"
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: membership-acceptor
+  namespace: knowledge
+spec:
+  selector:
+    app: membership-acceptor
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
