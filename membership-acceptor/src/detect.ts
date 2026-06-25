@@ -105,4 +105,19 @@ export class SeenProposals {
 		}
 		return false
 	}
+
+	/**
+	 * Forget `proposalId` so it can be processed again.
+	 *
+	 * Used to roll back an optimistic `seen()` after an infrastructure failure:
+	 * we mark before voting (so the concurrent fan-out copies dedupe), but if the
+	 * vote fails for a retryable reason we must un-mark, or the delivery-worker's
+	 * retry would be silently deduped and the vote never lands. (We leave the id
+	 * recorded for benign reverts and successes — those should not retry.)
+	 */
+	unmark(proposalId: string): void {
+		if (!this.seenIds.delete(proposalId)) return
+		const idx = this.insertionOrder.indexOf(proposalId)
+		if (idx !== -1) this.insertionOrder.splice(idx, 1)
+	}
 }
