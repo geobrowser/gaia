@@ -963,6 +963,13 @@ export const appWebhooks = pgTable("app_webhooks", {
 	appName: text("app_name").notNull().unique(),
 	url: text().notNull(),
 	secret: text().notNull(),
+	// Optional delivery filters. NULL/empty = receive everything (back-compatible).
+	// A webhook receives a notification iff its type is in `notificationTypes`
+	// (or it's empty) AND the event's space is in `spaceIds` (or it's empty).
+	// `notificationTypes` tokens: proposal_created (+ sub-tokens add_member /
+	// add_editor), proposal_voted, bounty_*, comment, etc.
+	notificationTypes: text("notification_types").array(),
+	spaceIds: uuid("space_ids").array(),
 	createdAt: timestamp("created_at", {withTimezone: true, mode: "date"}).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).defaultNow().notNull(),
 })
