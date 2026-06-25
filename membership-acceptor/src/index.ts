@@ -13,13 +13,16 @@ import {parseConfig} from "./config.js"
 import {createApp} from "./server.js"
 import {flush, log} from "./telemetry.js"
 
-function main() {
+async function main() {
 	let config: ReturnType<typeof parseConfig>
 	try {
 		config = parseConfig()
 	} catch (err) {
 		// Misconfiguration — crash loudly so the deployment is visibly broken.
 		log.error("configuration error — refusing to start", {error: err})
+		// Flush buffered telemetry before exiting, or the startup-failure event is
+		// lost (same reason the graceful-shutdown path flushes before exit).
+		await flush()
 		process.exit(1)
 	}
 
