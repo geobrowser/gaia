@@ -18,17 +18,23 @@ It is structured so it can later be extracted into its own repo that space
 admins deploy themselves, each running a sovereign acceptor with its own wallet
 and membership policy (allow-all, allow-verified, reputation, payment, …).
 
-## Status — Milestone 1 (webhook connectivity)
+## Status — Milestone 2 (membership-request detection)
 
-This milestone proves the pipe end to end. The service:
+The service:
 
 - exposes `POST /webhooks/geo` and verifies the `X-Geo-Signature` HMAC-SHA256
   header against `GEO_WEBHOOK_SECRET` (rejects unsigned/tampered requests with 401);
 - exposes `GET /health` for k8s probes;
-- logs a structured summary of every delivery it receives.
+- **detects membership requests** in the firehose — a `proposal_created` event
+  with `voting_mode == "fast"` and exactly one `add_member` action that still
+  looks open — and **de-duplicates** them by `proposal_id` (the fan-out delivers
+  one copy per editor of the space);
+- logs `membership request detected — would accept` for each unique match.
 
-It does **not** yet detect membership requests (M2) or cast votes (M3). Every
-authenticated webhook is acknowledged with `200`.
+It does **not** yet cast votes (M3) — a detected request is logged, and every
+authenticated webhook is acknowledged with `200`. Detection is payload-only and
+best-effort (a trigger, not a source of truth); the authoritative open/untouched
+check happens on-chain in M3 before any vote.
 
 > Implementation note: unlike `proposal-executor` (an Effect-TS CronJob), this is
 > a plain `Bun.serve` HTTP server. The request path is straightforward async
@@ -41,6 +47,7 @@ authenticated webhook is acknowledged with `200`.
 |---|---|
 | `src/index.ts` | Entry point — parse config, start server, graceful shutdown |
 | `src/server.ts` | Routes + request handling (`createApp` returns a testable fetch handler) |
+| `src/detect.ts` | Membership-request detection + `proposal_id` de-duplication |
 | `src/signature.ts` | `X-Geo-Signature` HMAC verification |
 | `src/config.ts` | Env parsing + validation (fail-fast) |
 | `src/telemetry.ts` | Sentry init + structured logger + flush |

@@ -63,6 +63,36 @@ describe("POST /webhooks/geo", () => {
 		const res = await app(webhookRequest(tampered, signature))
 		expect(res.status).toBe(401)
 	})
+
+	test("accepts and acks a membership-request payload (M2 detection path)", async () => {
+		const membership = JSON.stringify({
+			version: 1,
+			event_type: "proposal_created",
+			category: "governance",
+			space_id: "d4f5a6b7-0000-0000-0000-000000000000",
+			proposal_id: "c3e4f5a6-0000-0000-0000-000000000000",
+			voting_mode: "fast",
+			actions: [{type: "add_member", target_address: "0x1234"}],
+		})
+		const res = await app(webhookRequest(membership, sign(membership)))
+		expect(res.status).toBe(200)
+		expect(await res.json()).toEqual({status: "ok"})
+	})
+
+	test("acks a duplicate membership delivery with 200 (deduped, no error)", async () => {
+		const membership = JSON.stringify({
+			event_type: "proposal_created",
+			space_id: "d4f5a6b7-0000-0000-0000-000000000000",
+			proposal_id: "dupe-proposal-id",
+			voting_mode: "fast",
+			actions: [{type: "add_member", target_address: "0x1234"}],
+		})
+		const sig = sign(membership)
+		const first = await app(webhookRequest(membership, sig))
+		const second = await app(webhookRequest(membership, sig))
+		expect(first.status).toBe(200)
+		expect(second.status).toBe(200)
+	})
 })
 
 describe("unknown routes", () => {
