@@ -5,12 +5,14 @@
  * it can be driven directly in unit tests (no bound port) and handed to
  * `Bun.serve` in production.
  *
- * Milestone 1 scope: prove connectivity. We verify the HMAC signature and log a
- * structured summary of every delivery. Detection (M2) and voting (M3) are not
- * here yet — every authenticated webhook is acknowledged with 200.
+ * Milestone 2 scope: verify the HMAC signature, then detect which deliveries are
+ * membership requests and de-duplicate them. Voting (M3) is not here yet — a
+ * detected request is logged as "would accept" and every authenticated webhook
+ * is acknowledged with 200.
  */
 
 import type {AcceptorConfig} from "./config.js"
+import {detectMembershipRequest, SeenProposals} from "./detect.js"
 import {verifySignature} from "./signature.js"
 import {log} from "./telemetry.js"
 
@@ -39,7 +41,7 @@ function json(body: unknown, status: number): Response {
 	})
 }
 
-async function handleWebhook(req: Request, config: AcceptorConfig): Promise<Response> {
+async function handleWebhook(req: Request, config: AcceptorConfig, seen: SeenProposals): Promise<Response> {
 	const signature = req.headers.get(SIGNATURE_HEADER)
 
 	// A missing or malformed signature header can never pass the HMAC check, so
@@ -71,8 +73,30 @@ async function handleWebhook(req: Request, config: AcceptorConfig): Promise<Resp
 		return json({error: "invalid JSON body"}, 400)
 	}
 
-	// M1: just observe. M2 will filter to membership requests; M3 will vote.
-	log.info("webhook received", summarize(payload))
+	// Every authenticated delivery is logged at debug (the firehose is large);
+	// membership requests are surfaced at info below.
+	log.debug("webhook received", summarize(payload))
+
+	const request = detectMembershipRequest(payload)
+	if (!request) {
+		return json({status: "ok"}, 200)
+	}
+
+	// Dedupe on proposal_id: the fan-out delivers one copy per editor.
+	if (seen.seen(request.proposalId)) {
+		log.debug("membership request already seen — deduped", {
+			proposal_id: request.proposalId,
+			space_id: request.spaceId,
+		})
+		return json({status: "ok"}, 200)
+	}
+
+	// M2 ends here: detected, not yet voted. M3 verifies on-chain and casts YES.
+	log.info("membership request detected — would accept", {
+		proposal_id: request.proposalId,
+		space_id: request.spaceId,
+		requester_space_id: request.requesterSpaceId,
+	})
 	return json({status: "ok"}, 200)
 }
 
@@ -84,6 +108,9 @@ async function handleWebhook(req: Request, config: AcceptorConfig): Promise<Resp
  *  - `POST /webhooks/geo` — notification webhook sink (HMAC-verified)
  */
 export function createApp(config: AcceptorConfig): (req: Request) => Promise<Response> {
+	// Dedupe state lives for the lifetime of the process (see SeenProposals).
+	const seen = new SeenProposals()
+
 	return async (req: Request): Promise<Response> => {
 		const {pathname} = new URL(req.url)
 
@@ -93,7 +120,7 @@ export function createApp(config: AcceptorConfig): (req: Request) => Promise<Res
 
 		if (req.method === "POST" && pathname === "/webhooks/geo") {
 			try {
-				return await handleWebhook(req, config)
+				return await handleWebhook(req, config, seen)
 			} catch (err) {
 				// Unexpected failure — 500 makes the delivery-worker retry rather than
 				// silently dropping the event.
