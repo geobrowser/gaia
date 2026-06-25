@@ -15,6 +15,12 @@ import {verifySignature} from "./signature.js"
 import {log} from "./telemetry.js"
 
 const SIGNATURE_HEADER = "x-geo-signature"
+const SIGNATURE_PREFIX = "sha256="
+
+// Cap how much we're willing to buffer per webhook. Notification payloads are a
+// few KB at most, so 1 MiB is generous while still preventing an unauthenticated
+// (or malicious) client from forcing large in-memory allocations.
+const MAX_BODY_BYTES = 1_048_576
 
 /** Best-effort summary of a notification payload, for logging only. */
 function summarize(payload: unknown): Record<string, unknown> {
@@ -40,9 +46,36 @@ function json(body: unknown, status: number): Response {
 
 async function handleWebhook(req: Request, config: AcceptorConfig): Promise<Response> {
 	const signature = req.headers.get(SIGNATURE_HEADER)
+
+	// Cheap reject BEFORE buffering the body: a missing or malformed signature
+	// header can never pass the HMAC check, so don't let unauthenticated clients
+	// force us to allocate/CPU on `arrayBuffer()`. The full HMAC verification still
+	// runs below (defense in depth).
+	if (signature === null || !signature.startsWith(SIGNATURE_PREFIX)) {
+		log.warn("webhook signature verification failed", {
+			has_signature: signature !== null,
+		})
+		return json({error: "invalid signature"}, 401)
+	}
+
+	// Reject oversized requests before buffering, when the client advertises a
+	// Content-Length we can trust to be too large.
+	const contentLength = Number(req.headers.get("content-length"))
+	if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+		log.warn("webhook body exceeds size limit", {content_length: contentLength})
+		return json({error: "payload too large"}, 413)
+	}
+
 	// Read the raw bytes — the HMAC is over exactly what was sent, so we must not
 	// round-trip through JSON before verifying.
 	const body = new Uint8Array(await req.arrayBuffer())
+
+	// Guard again post-read: Content-Length may have been absent or understated
+	// (e.g. chunked transfer). Reject before any HMAC/JSON work.
+	if (body.length > MAX_BODY_BYTES) {
+		log.warn("webhook body exceeds size limit", {body_bytes: body.length})
+		return json({error: "payload too large"}, 413)
+	}
 
 	if (!verifySignature(body, config.webhookSecret, signature)) {
 		log.warn("webhook signature verification failed", {

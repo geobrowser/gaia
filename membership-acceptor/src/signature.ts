@@ -27,9 +27,14 @@ export function verifySignature(body: Uint8Array, secret: string, signatureHeade
 	const received = signatureHeader.slice(PREFIX.length)
 	const expected = createHmac("sha256", secret).update(body).digest("hex")
 
-	// Length check first: timingSafeEqual throws if the buffers differ in length.
-	if (received.length !== expected.length) {
+	// Compare BYTE lengths, not char lengths: timingSafeEqual throws on unequal
+	// buffer lengths, and malformed non-ASCII input can encode to a different byte
+	// length than its char length suggests. Build the buffers first, then bail out
+	// early if their byte lengths differ so we never hand mismatched buffers in.
+	const receivedBuf = Buffer.from(received)
+	const expectedBuf = Buffer.from(expected)
+	if (receivedBuf.length !== expectedBuf.length) {
 		return false
 	}
-	return timingSafeEqual(Buffer.from(received), Buffer.from(expected))
+	return timingSafeEqual(receivedBuf, expectedBuf)
 }
