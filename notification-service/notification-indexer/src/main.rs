@@ -172,6 +172,9 @@ async fn async_main() -> Result<(), IndexerError> {
     let storage = Storage::connect(&database_url).await?;
     info!("Connected to database");
 
+    // Surface (don't reject) any webhook filter referencing an unknown notification type.
+    storage.log_unknown_webhook_filter_types().await;
+
     // Start health check server
     let _health_handle =
         notification_indexer::health::start_health_server(storage.pool().clone(), health_port);

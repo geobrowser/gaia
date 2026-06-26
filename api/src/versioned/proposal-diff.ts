@@ -88,6 +88,16 @@ export class InvalidCursorError {
 	constructor(readonly cursor: string) {}
 }
 
+// Raised when an ops-diff request affects more entities than the caller's cap
+// allows (used by the review endpoint to bound per-request work). Maps to 400.
+export class AffectedEntityLimitError {
+	readonly _tag = "AffectedEntityLimitError"
+	constructor(
+		readonly max: number,
+		readonly actual: number,
+	) {}
+}
+
 // Grouped diff error types
 export class GroupSizeLimitError {
 	readonly _tag = "GroupSizeLimitError"
@@ -123,6 +133,7 @@ export type ProposalDiffError =
 	| EditDecodeError
 	| SpaceMismatchError
 	| InvalidCursorError
+	| AffectedEntityLimitError
 
 export type GroupedProposalDiffError =
 	| ProposalDiffError

@@ -25,6 +25,7 @@ import {Effect} from "effect"
 import {type NormalizedUuid, normalizeUuid} from "../../utils/uuid"
 import {diffGroupedEntitySnapshots} from "../diff"
 import {
+	AffectedEntityLimitError,
 	applyOpsToSnapshot,
 	batchGetLiveSnapshots,
 	batchGetProposalsWithPublishActions,
@@ -90,6 +91,8 @@ import type {
 	MediaEntity,
 	PaginatedGroupedProposalDiffV2,
 	PaginatedProposalDiffV2,
+	PaginatedReviewDiffV2,
+	PaginationV2,
 	RelationChangeV2,
 } from "./types"
 
@@ -516,6 +519,65 @@ function buildFoldedPage(
 	})
 }
 
+/**
+ * Shared core: diff a set of GRC-20 ops against base snapshots and return the
+ * v2-enriched, folded, root-paginated entity diffs + pagination.
+ *
+ * This is the single engine behind all three front doors — single-proposal diff,
+ * grouped (multi-proposal) diff, and the review endpoint (unpublished local ops).
+ * Callers supply the ops (decoded from an IPFS edit blob, the concatenation of a
+ * group's edits, or a request body) plus the base selector:
+ *   - `status === "active"` → diff against current live state (`baseVersionKey` ignored);
+ *   - otherwise → diff against the versioned state at `baseVersionKey`.
+ */
+export function computeEnrichedOpsDiff(
+	db: Database,
+	ops: Op[],
+	spaceId: NormalizedUuid,
+	status: ProposalStatus,
+	baseVersionKey: bigint | null,
+	cursorStr?: string,
+	limit = 50,
+	maxAffected?: number,
+): Effect.Effect<{entities: EntityDiffV2[]; pagination: PaginationV2}, ProposalDiffError> {
+	return Effect.gen(function* () {
+		let startIndex = 0
+		let expectedTotalEntities: number | undefined
+		if (cursorStr) {
+			const cursor = decodeCursor(cursorStr)
+			if (cursor === null) return yield* Effect.fail(new InvalidCursorError(cursorStr))
+			startIndex = cursor.entityIndex
+			expectedTotalEntities = cursor.totalEntities
+		}
+
+		const affected = (yield* extractAffectedEntities(db, ops)).sort()
+		// Bound per-request work for callers that opt in (review). Checked here, before
+		// the resolveRoots batch-query fan-out runs over the full affected set.
+		if (maxAffected !== undefined && affected.length > maxAffected) {
+			return yield* Effect.fail(new AffectedEntityLimitError(maxAffected, affected.length))
+		}
+
+		const {roots, ctx} = yield* resolveRoots(db, ops, affected, status, baseVersionKey, spaceId)
+		// Pagination unit is the renderable roots, not the flat affected list.
+		if (expectedTotalEntities !== undefined && expectedTotalEntities !== roots.length) {
+			return yield* Effect.fail(new InvalidCursorError(cursorStr ?? ""))
+		}
+		const pageRoots = roots.slice(startIndex, startIndex + limit)
+		const entities = yield* buildFoldedPage(db, ops, pageRoots, status, baseVersionKey, spaceId, ctx)
+
+		const nextIndex = startIndex + limit
+		const hasMore = nextIndex < roots.length
+		return {
+			entities,
+			pagination: {
+				cursor: hasMore ? encodeCursor({entityIndex: nextIndex, totalEntities: roots.length}) : null,
+				hasMore,
+				totalEntities: roots.length,
+			},
+		}
+	})
+}
+
 /** v2 single-proposal diff (folded, enriched, root-paginated). */
 export function computeProposalDiffV2(
 	db: Database,
@@ -542,13 +604,12 @@ export function computeProposalDiffV2(
 			}
 		}
 
-		let startIndex = 0
-		let expectedTotalEntities: number | undefined
-		if (cursorStr) {
-			const cursor = decodeCursor(cursorStr)
-			if (cursor === null) return yield* Effect.fail(new InvalidCursorError(cursorStr))
-			startIndex = cursor.entityIndex
-			expectedTotalEntities = cursor.totalEntities
+		// Validate cursor format up front — before the IPFS fetch + decode — so an
+		// invalid cursor fails fast with InvalidCursorError instead of doing expensive
+		// work or being masked by an EditBlob* error. The core re-checks it against the
+		// resolved root count.
+		if (cursorStr && decodeCursor(cursorStr) === null) {
+			return yield* Effect.fail(new InvalidCursorError(cursorStr))
 		}
 
 		const cacheResult = yield* getIpfsCacheData(db, contentUri)
@@ -561,34 +622,21 @@ export function computeProposalDiffV2(
 			catch: (error) => new EditDecodeError(error),
 		})
 
-		const affected = (yield* extractAffectedEntities(db, ops)).sort()
-
 		let baseVersionKey: bigint | null = null
 		if (status !== "active") {
 			baseVersionKey = yield* resolveVersionKeyBeforeTimestamp(db, proposal.executedAt ?? proposal.endTime)
 		}
 
-		const {roots, ctx} = yield* resolveRoots(db, ops, affected, status, baseVersionKey, spaceId)
-		// Pagination unit is the renderable roots, not the flat affected list.
-		if (expectedTotalEntities !== undefined && expectedTotalEntities !== roots.length) {
-			return yield* Effect.fail(new InvalidCursorError(cursorStr ?? ""))
-		}
-		const pageRoots = roots.slice(startIndex, startIndex + limit)
-		const entities = yield* buildFoldedPage(db, ops, pageRoots, status, baseVersionKey, spaceId, ctx)
-
-		const nextIndex = startIndex + limit
-		const hasMore = nextIndex < roots.length
-		return {
-			proposalId,
+		const {entities, pagination} = yield* computeEnrichedOpsDiff(
+			db,
+			ops,
 			spaceId,
-			proposalStatus: status,
-			entities,
-			pagination: {
-				cursor: hasMore ? encodeCursor({entityIndex: nextIndex, totalEntities: roots.length}) : null,
-				hasMore,
-				totalEntities: roots.length,
-			},
-		}
+			status,
+			baseVersionKey,
+			cursorStr,
+			limit,
+		)
+		return {proposalId, spaceId, proposalStatus: status, entities, pagination}
 	}).pipe(Effect.withSpan("proposal-diff-v2.computeProposalDiffV2", {attributes: {proposalId, spaceId, limit}}))
 }
 
@@ -634,13 +682,9 @@ export function computeGroupedProposalDiffV2(
 		}
 		const mode: GroupedProposalDiffMode = activeCount > 0 ? "active" : "historical"
 
-		let startIndex = 0
-		let expectedTotalEntities: number | undefined
-		if (cursorStr) {
-			const cursor = decodeCursor(cursorStr)
-			if (cursor === null) return yield* Effect.fail(new InvalidCursorError(cursorStr))
-			startIndex = cursor.entityIndex
-			expectedTotalEntities = cursor.totalEntities
+		// Validate cursor format before fetching/decoding all the group's edit blobs.
+		if (cursorStr && decodeCursor(cursorStr) === null) {
+			return yield* Effect.fail(new InvalidCursorError(cursorStr))
 		}
 
 		const blobs = yield* Effect.all(
@@ -671,8 +715,6 @@ export function computeGroupedProposalDiffV2(
 		decodedEdits.sort(compareGroupedEdits)
 		const allOps: Op[] = decodedEdits.flatMap((e) => e.ops)
 
-		const affected = (yield* extractAffectedEntities(db, allOps)).sort()
-
 		let baseVersionKey: bigint | null = null
 		const firstEdit = decodedEdits[0]
 		if (mode === "historical" && firstEdit) {
@@ -680,29 +722,62 @@ export function computeGroupedProposalDiffV2(
 		}
 		const fetchStatus: ProposalStatus = mode === "active" ? "active" : "closed"
 
-		const {roots, ctx} = yield* resolveRoots(db, allOps, affected, fetchStatus, baseVersionKey, spaceId)
-		if (expectedTotalEntities !== undefined && expectedTotalEntities !== roots.length) {
-			return yield* Effect.fail(new InvalidCursorError(cursorStr ?? ""))
-		}
-		const pageRoots = roots.slice(startIndex, startIndex + limit)
-		const entities = yield* buildFoldedPage(db, allOps, pageRoots, fetchStatus, baseVersionKey, spaceId, ctx)
-
-		const nextIndex = startIndex + limit
-		const hasMore = nextIndex < roots.length
-		return {
-			proposalIds,
+		const {entities, pagination} = yield* computeEnrichedOpsDiff(
+			db,
+			allOps,
 			spaceId,
-			mode,
-			entities,
-			pagination: {
-				cursor: hasMore ? encodeCursor({entityIndex: nextIndex, totalEntities: roots.length}) : null,
-				hasMore,
-				totalEntities: roots.length,
-			},
-		}
+			fetchStatus,
+			baseVersionKey,
+			cursorStr,
+			limit,
+		)
+		return {proposalIds, spaceId, mode, entities, pagination}
 	}).pipe(
 		Effect.withSpan("proposal-diff-v2.computeGroupedProposalDiffV2", {
 			attributes: {proposalCount: proposalIds.length, spaceId, limit},
+		}),
+	)
+}
+
+/**
+ * Max entities a single review edit may affect. Bounds the resolveRoots batch-query
+ * fan-out per request (proposals are unbounded — a governance edit can legitimately
+ * touch thousands — but interactive local-edit review should be small).
+ */
+const MAX_REVIEW_AFFECTED_ENTITIES = 500
+
+/**
+ * v2 review diff: diff a space's UNPUBLISHED local edit ops against current live
+ * state, returning the same enriched `EntityDiffV2[]` shape as the proposal diff.
+ *
+ * Same engine as the proposal endpoints (`computeEnrichedOpsDiff`), but the ops
+ * come from the request body rather than a published edit, and the base is always
+ * current live state (`status = "active"`, `baseVersionKey = null`). The caller is
+ * responsible for decoding the ops (e.g. `decodeEditAuto` on the encoded edit
+ * blob) so review == published diff. Non-mutating.
+ */
+export function computeReviewDiffV2(
+	db: Database,
+	ops: Op[],
+	spaceId: NormalizedUuid,
+	cursorStr?: string,
+	limit = 50,
+): Effect.Effect<PaginatedReviewDiffV2, ProposalDiffError> {
+	return Effect.gen(function* () {
+		const {entities, pagination} = yield* computeEnrichedOpsDiff(
+			db,
+			ops,
+			spaceId,
+			"active",
+			null,
+			cursorStr,
+			limit,
+			MAX_REVIEW_AFFECTED_ENTITIES,
+		)
+		return {spaceId, entities, pagination}
+	}).pipe(
+		Effect.withSpan("proposal-diff-v2.computeReviewDiffV2", {
+			attributes: {spaceId, limit, opCount: ops.length},
 		}),
 	)
 }
