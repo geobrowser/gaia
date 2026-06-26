@@ -528,7 +528,8 @@ mod tests {
 
     fn make_publish_action(name: &str) -> ProposalAction {
         ProposalAction {
-            to: vec![],
+            to_address: vec![],
+            to_space_id: vec![],
             value: vec![],
             data: vec![],
             action: Some(Action::Publish(PublishAction {
@@ -541,7 +542,8 @@ mod tests {
 
     fn make_add_member_action() -> ProposalAction {
         ProposalAction {
-            to: vec![],
+            to_address: vec![],
+            to_space_id: vec![],
             value: vec![],
             data: vec![],
             action: Some(Action::AddMember(AddMemberAction {
@@ -778,7 +780,8 @@ mod tests {
         let proposal_id = Uuid::new_v4();
 
         let action = ProposalAction {
-            to: vec![],
+            to_address: vec![],
+            to_space_id: vec![],
             value: vec![],
             data: vec![],
             action: Some(Action::UpdateVotingSettings(UpdateVotingSettingsAction {

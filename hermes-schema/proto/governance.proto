@@ -120,9 +120,10 @@ message UnsetTopicAction {
 
 // Action to be executed when proposal passes
 message ProposalAction {
-  bytes to = 1;        // 20 bytes - target contract address
-  bytes value = 2;     // 32 bytes - uint256 ETH value to send
-  bytes data = 3;      // calldata (function selector + encoded args)
+  bytes to_address = 1;   // 20 bytes - explicit call target; address(0) => resolve via to_space_id at execution
+  bytes value = 2;        // 32 bytes - uint256 ETH value to send
+  bytes data = 3;         // calldata (function selector + encoded args)
+  bytes to_space_id = 4;  // 16 bytes - GEO space UUID; resolved via SpaceRegistry.spaceIdToAddress when to_address is address(0)
 
   // Decoded action (based on function selector in calldata)
   oneof action {

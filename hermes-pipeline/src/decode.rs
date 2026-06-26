@@ -388,7 +388,8 @@ sol! {
     /// Action to be executed when a proposal passes.
     #[derive(Debug)]
     struct Action {
-        address to;
+        address toAddress;
+        bytes16 toSpaceId;
         uint256 value;
         bytes data;
     }
@@ -494,10 +495,17 @@ pub struct ProposalCreatedData {
 }
 
 /// A single action in a proposal.
+///
+/// `to_address` + `to_space_id` mirror the onchain `Action` call target: when
+/// `to_address` is non-zero it is the explicit target; when it is `address(0)`
+/// the target is resolved onchain from `to_space_id` via
+/// `SpaceRegistry.spaceIdToAddress` at execution time.
 #[derive(Debug, Clone)]
 pub struct ProposalAction {
-    /// Target contract address (20 bytes).
-    pub to: Vec<u8>,
+    /// Explicit call target (20 bytes); `address(0)` ⇒ resolve via `to_space_id`.
+    pub to_address: Vec<u8>,
+    /// GEO space UUID (16 bytes) used to resolve the target when `to_address` is zero.
+    pub to_space_id: Vec<u8>,
     /// ETH value to send (32 bytes, big-endian).
     pub value: Vec<u8>,
     /// Calldata (function selector + encoded args).
@@ -602,7 +610,8 @@ fn decode_proposal_created_inner(data: &[u8]) -> Result<ProposalCreatedData, Dec
         ParamType::FixedBytes(16),
         ParamType::Uint(8),
         ParamType::Array(Box::new(ParamType::Tuple(vec![
-            ParamType::Address,
+            ParamType::Address,         // toAddress (decoded-and-discarded)
+            ParamType::FixedBytes(16),  // toSpaceId (decoded-and-discarded)
             ParamType::Uint(256),
             ParamType::Bytes,
         ]))),
@@ -631,12 +640,25 @@ fn decode_proposal_created_inner(data: &[u8]) -> Result<ProposalCreatedData, Dec
         Token::Array(items) => items
             .iter()
             .map(|item| match item {
-                Token::Tuple(fields) if fields.len() == 3 => {
-                    let to = match &fields[0] {
+                // fields: (toAddress, toSpaceId, value, data) — see `Action` above.
+                Token::Tuple(fields) if fields.len() == 4 => {
+                    let to_address = match &fields[0] {
                         Token::Address(addr) => addr.as_bytes().to_vec(),
-                        _ => return Err(DecodeError::AbiDecode("Invalid action.to".to_string())),
+                        _ => {
+                            return Err(DecodeError::AbiDecode(
+                                "Invalid action.toAddress".to_string(),
+                            ));
+                        }
                     };
-                    let value = match &fields[1] {
+                    let to_space_id = match &fields[1] {
+                        Token::FixedBytes(bytes) => bytes.clone(),
+                        _ => {
+                            return Err(DecodeError::AbiDecode(
+                                "Invalid action.toSpaceId".to_string(),
+                            ));
+                        }
+                    };
+                    let value = match &fields[2] {
                         Token::Uint(v) => {
                             let mut buf = [0u8; 32];
                             v.to_big_endian(&mut buf);
@@ -646,11 +668,16 @@ fn decode_proposal_created_inner(data: &[u8]) -> Result<ProposalCreatedData, Dec
                             return Err(DecodeError::AbiDecode("Invalid action.value".to_string()));
                         }
                     };
-                    let data = match &fields[2] {
+                    let data = match &fields[3] {
                         Token::Bytes(bytes) => bytes.clone(),
                         _ => return Err(DecodeError::AbiDecode("Invalid action.data".to_string())),
                     };
-                    Ok(ProposalAction { to, value, data })
+                    Ok(ProposalAction {
+                        to_address,
+                        to_space_id,
+                        value,
+                        data,
+                    })
                 }
                 _ => Err(DecodeError::AbiDecode("Invalid action tuple".to_string())),
             })
@@ -918,7 +945,8 @@ mod tests {
         let proposal_id = vec![0xAB_u8; 16];
         let voting_mode = EthU256::from(1u8);
         let action_tuple = Token::Tuple(vec![
-            Token::Address(ethabi::Address::zero()),
+            Token::Address(ethabi::Address::zero()), // toAddress
+            Token::FixedBytes(vec![0u8; 16]),        // toSpaceId
             Token::Uint(EthU256::from(1000u64)),
             Token::Bytes(vec![1, 2, 3]),
         ]);
@@ -933,7 +961,14 @@ mod tests {
         assert_eq!(unwrap_level, 0);
         assert_eq!(result.proposal_id, proposal_id);
         assert_eq!(result.actions.len(), 1);
-        assert_eq!(result.actions[0].to, vec![0u8; 20]);
+        assert_eq!(result.actions[0].to_address, vec![0u8; 20]);
+        assert_eq!(result.actions[0].to_space_id, vec![0u8; 16]);
+        assert_eq!(result.actions[0].value, {
+            let mut buf = [0u8; 32];
+            EthU256::from(1000u64).to_big_endian(&mut buf);
+            buf.to_vec()
+        });
+        assert_eq!(result.actions[0].data, vec![1, 2, 3]);
         assert_eq!(result.voting_mode, 1);
     }
 
