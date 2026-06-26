@@ -519,6 +519,7 @@ fn encode_proposal_data(
         .map(|a| {
             Token::Tuple(vec![
                 Token::Address(ethabi::Address::from_slice(&a.to)),
+                Token::FixedBytes(vec![0u8; 16]), // toSpaceId: mock targets by address, so zero
                 Token::Uint(EthU256::from_big_endian(&a.value)),
                 Token::Bytes(a.data.clone()),
             ])
