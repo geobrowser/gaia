@@ -81,7 +81,7 @@ fn is_base32_lower(s: &str) -> bool {
 /// Extract IPFS URIs from PROPOSAL_CREATED action data.
 ///
 /// The data is ABI-encoded as: `(bytes16 proposalId, uint8 votingMode, Action[])`
-/// where each Action is `(address to, uint256 value, bytes data)`.
+/// where each Action is `(address toAddress, bytes16 toSpaceId, uint256 value, bytes data)`.
 ///
 /// Edits are published in one of two ways:
 /// - Legacy `publish(bytes32 topic, bytes contentUri, bytes metadata)` (selector 0x6b47f61a)
@@ -154,12 +154,13 @@ fn decode_proposal_actions(data: &[u8]) -> Option<Vec<Vec<u8>>> {
 /// Inner decode function for proposal actions.
 fn decode_proposal_actions_inner(data: &[u8]) -> Option<Vec<Vec<u8>>> {
     // ABI schema: (bytes16 proposalId, uint8 votingMode, Action[])
-    // where Action is (address to, uint256 value, bytes data)
+    // where Action is (address toAddress, bytes16 toSpaceId, uint256 value, bytes data)
     let params = [
         ParamType::FixedBytes(16),
         ParamType::Uint(8),
         ParamType::Array(Box::new(ParamType::Tuple(vec![
-            ParamType::Address,
+            ParamType::Address,        // toAddress (call target; resolved onchain)
+            ParamType::FixedBytes(16), // toSpaceId (call target; resolved onchain)
             ParamType::Uint(256),
             ParamType::Bytes,
         ]))),
@@ -167,12 +168,12 @@ fn decode_proposal_actions_inner(data: &[u8]) -> Option<Vec<Vec<u8>>> {
 
     let tokens = ethabi::decode(&params, data).ok()?;
 
-    // Extract action calldata from the actions array
+    // Extract action calldata (fields[3]) from the actions array
     let actions = match &tokens.get(2)? {
         Token::Array(items) => items
             .iter()
             .filter_map(|item| match item {
-                Token::Tuple(fields) if fields.len() == 3 => match &fields[2] {
+                Token::Tuple(fields) if fields.len() == 4 => match &fields[3] {
                     Token::Bytes(bytes) => Some(bytes.clone()),
                     _ => None,
                 },
