@@ -6,7 +6,7 @@
  * webhooks.
  */
 
-import type {SupportedChainId} from "./contracts.js"
+import {type SupportedChainId, toBytes16Hex} from "./contracts.js"
 
 export interface AppConfig {
 	/** Port the HTTP server listens on. */
@@ -34,8 +34,10 @@ export interface AppConfig {
 	graphqlEndpoint: string
 
 	/**
-	 * Spaces this acceptor auto-accepts (DAO space UUIDs, lowercased). A request
-	 * for any other space is ignored. Empty ⇒ accept none (effective kill switch).
+	 * Spaces this acceptor auto-accepts, canonicalized to `0x`-prefixed bytes16 hex
+	 * (see {@link toBytes16Hex}) so they compare equal to a converted webhook
+	 * `space_id`. A request for any other space is ignored. Empty ⇒ accept none
+	 * (effective kill switch).
 	 */
 	autoacceptSpaceIds: ReadonlySet<string>
 }
@@ -104,12 +106,21 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 		throw new ConfigError(`Invalid CHAIN_ID: expected 80451 (mainnet) or 19411 (testnet), got "${rawChainId}"`)
 	}
 
-	const autoacceptSpaceIds = new Set(
-		(env.MEMBERSHIP_AUTOACCEPT_SPACE_IDS ?? "")
-			.split(",")
-			.map((s) => s.trim().toLowerCase())
-			.filter((s) => s.length > 0),
-	)
+	// Canonicalize every allowlist entry to 0x bytes16 and validate it, so a
+	// typo'd id fails fast at startup instead of silently never matching. Incoming
+	// webhook space_ids are converted the same way before lookup (see allowsSpace).
+	const autoacceptSpaceIds = new Set<string>()
+	for (const raw of (env.MEMBERSHIP_AUTOACCEPT_SPACE_IDS ?? "").split(",")) {
+		const trimmed = raw.trim()
+		if (!trimmed) continue
+		const key = toBytes16Hex(trimmed)
+		if (!BYTES16_RE.test(key)) {
+			throw new ConfigError(
+				`Invalid MEMBERSHIP_AUTOACCEPT_SPACE_IDS entry "${trimmed}": expected a space id (bytes16 hex or UUID)`,
+			)
+		}
+		autoacceptSpaceIds.add(key)
+	}
 
 	return {
 		port,

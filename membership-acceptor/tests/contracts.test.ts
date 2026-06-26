@@ -6,6 +6,7 @@ import {
 	isRevert,
 	padBytes16ToBytes32,
 	sanitizeError,
+	toBytes16Hex,
 	uuidToBytes16,
 	VOTE_YES,
 } from "../src/contracts.js"
@@ -17,6 +18,22 @@ describe("uuidToBytes16", () => {
 
 	test("throws on a non-UUID", () => {
 		expect(() => uuidToBytes16("not-a-uuid")).toThrow()
+	})
+})
+
+describe("toBytes16Hex", () => {
+	test("converts a dashed UUID to 0x bytes16", () => {
+		expect(toBytes16Hex("c9f267dc-b0d2-7071-8c2a-3c45a64afd32")).toBe("0xc9f267dcb0d270718c2a3c45a64afd32")
+	})
+
+	test("is idempotent on an already-0x bytes16 (lowercased)", () => {
+		expect(toBytes16Hex("0xC9F267DCB0D270718C2A3C45A64AFD32")).toBe("0xc9f267dcb0d270718c2a3c45a64afd32")
+	})
+
+	test("a dashed UUID and its 0x form canonicalize equal", () => {
+		expect(toBytes16Hex("c9f267dc-b0d2-7071-8c2a-3c45a64afd32")).toBe(
+			toBytes16Hex("0xc9f267dcb0d270718c2a3c45a64afd32"),
+		)
 	})
 })
 
@@ -65,14 +82,29 @@ describe("isRevert", () => {
 		expect(isRevert(new Error("wrap", {cause}))).toBe(true)
 	})
 
-	test("true on message patterns", () => {
+	test("true on definite revert message patterns", () => {
 		expect(isRevert(new Error("execution reverted: CanNotVote"))).toBe(true)
-		expect(isRevert("UserOperation reverted")).toBe(true)
+		expect(isRevert(new Error("ProposalAlreadyExecuted()"))).toBe(true)
+		expect(isRevert(new Error("reverted with AlreadyVoted"))).toBe(true)
 	})
 
 	test("false for plain infrastructure errors", () => {
 		expect(isRevert(new Error("ECONNREFUSED"))).toBe(false)
 		expect(isRevert(new Error("fetch failed"))).toBe(false)
+	})
+
+	test("false for the broad execution/call wrappers (not necessarily reverts)", () => {
+		// These wrap RPC/estimation failures too, so they must NOT be auto-benign.
+		const exec = new Error("call failed")
+		exec.name = "ContractFunctionExecutionError"
+		expect(isRevert(exec)).toBe(false)
+
+		const call = new Error("call failed")
+		call.name = "CallExecutionError"
+		expect(isRevert(call)).toBe(false)
+
+		// A bare "UserOperation reverted" with no revert reason is ambiguous → infra.
+		expect(isRevert(new Error("UserOperation reverted"))).toBe(false)
 	})
 })
 

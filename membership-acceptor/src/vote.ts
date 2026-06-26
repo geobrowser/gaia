@@ -21,6 +21,7 @@ import {
 	padBytes16ToBytes32,
 	SpaceRegistryAbi,
 	sanitizeError,
+	toBytes16Hex,
 	uuidToBytes16,
 	VOTE_YES,
 } from "./contracts.js"
@@ -71,7 +72,9 @@ export interface AcceptorConfig {
 export function createAcceptor(config: AcceptorConfig): Acceptor {
 	return {
 		allowsSpace(spaceId: string): boolean {
-			return config.allowlist.has(spaceId.toLowerCase())
+			// Webhook space_id arrives as a dashed UUID; the allowlist is 0x bytes16.
+			// Canonicalize both to the same form before comparing.
+			return config.allowlist.has(toBytes16Hex(spaceId))
 		},
 
 		evaluate(request: MembershipRequest): Promise<PolicyDecision> {

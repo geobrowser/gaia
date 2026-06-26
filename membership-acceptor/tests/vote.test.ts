@@ -1,5 +1,6 @@
 import {describe, expect, test} from "bun:test"
 
+import {toBytes16Hex} from "../src/contracts.js"
 import type {MembershipRequest} from "../src/detect.js"
 import type {GraphQLClient} from "../src/graphql.js"
 import type {Policy} from "../src/policy.js"
@@ -31,7 +32,7 @@ function acceptorWith(send: () => Promise<string>, allowlist = [REQUEST.spaceId]
 		wallet: fakeWallet(send),
 		acceptorSpaceId: `0x${"a".repeat(32)}`,
 		spaceRegistryAddress: `0x${"b".repeat(40)}`,
-		allowlist: new Set(allowlist.map((s) => s.toLowerCase())),
+		allowlist: new Set(allowlist.map(toBytes16Hex)),
 		policy,
 		graphql: noopGraphql,
 	})

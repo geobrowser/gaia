@@ -100,6 +100,17 @@ export function uuidToBytes16(uuid: string): Hex {
 	return `0x${stripped}` as Hex
 }
 
+/**
+ * Canonicalize any Geo space id to `0x`-prefixed, dashless, lowercase bytes16 hex.
+ * Accepts a dashed UUID (as delivered in webhook `space_id`) or an already-`0x`
+ * bytes16 value, so the two representations compare equal. Pure formatting — does
+ * not validate length (callers that need that check the result against a regex).
+ * @example toBytes16Hex("c9f267dc-b0d2-7071-8c2a-3c45a64afd32") → "0xc9f267dcb0d270718c2a3c45a64afd32"
+ */
+export function toBytes16Hex(id: string): `0x${string}` {
+	return `0x${id.replace(/^0x/i, "").replace(/-/g, "").toLowerCase()}`
+}
+
 /** Pad a bytes16 hex (32 hex chars) to bytes32 (64 hex chars) with trailing zeros. */
 export function padBytes16ToBytes32(bytes16Hex: Hex): Hex {
 	const withoutPrefix = bytes16Hex.startsWith("0x") ? bytes16Hex.slice(2) : bytes16Hex
@@ -127,25 +138,38 @@ export function encodeVoteData(proposalIdHex: Hex, voteOption: number): Hex {
 // ---------------------------------------------------------------------------
 
 /**
- * viem/permissionless error names that indicate an on-chain revert. The chain
- * rejecting a vote (already voted / executed / window closed / not an editor) is
- * a *benign* outcome for us — there is nothing to retry — so we must distinguish
- * it from an infrastructure error (RPC/bundler hiccup) which SHOULD be retried.
+ * Classifying a failure as a *revert* makes it benign (no retry); classifying it
+ * as infra makes it retry. So we only treat a failure as a revert on a STRONG,
+ * unambiguous signal, and let everything else fall through to infra (retryable).
+ *
+ * `ContractFunctionRevertedError` is viem's definite "the contract reverted"
+ * error. We intentionally do NOT key off the broader `ContractFunctionExecutionError`
+ * / `CallExecutionError` wrappers — those also wrap RPC/estimation failures, and
+ * misreading one of those as benign would silently drop a real admission attempt.
  */
-const REVERT_ERROR_NAMES = new Set([
-	"ContractFunctionRevertedError",
-	"ContractFunctionExecutionError",
-	"CallExecutionError",
-])
+const REVERT_ERROR_NAME = "ContractFunctionRevertedError"
 
-const REVERT_MESSAGE_PATTERNS = ["revert", "execution reverted", "CALL_EXCEPTION", "UserOperation reverted"]
+/**
+ * Definite on-chain revert signals: the EVM revert prefix and the governance
+ * custom errors this vote can legitimately hit (already voted/executed/closed, or
+ * not an editor). Anything else is treated as infra and retried.
+ */
+const REVERT_MESSAGE_PATTERNS = [
+	"execution reverted",
+	"CanNotVote",
+	"CanNotExecute",
+	"ProposalAlreadyExecuted",
+	"AlreadyVoted",
+	"InvalidAction",
+	"already executed",
+]
 
-/** True if `error` looks like an on-chain revert (vs. an infrastructure failure). */
+/** True if `error` is unambiguously an on-chain revert (vs. an infrastructure failure). */
 export function isRevert(error: unknown): boolean {
 	const name = error instanceof Error ? error.name : typeof error
-	if (REVERT_ERROR_NAMES.has(name)) return true
+	if (name === REVERT_ERROR_NAME) return true
 
-	if (error instanceof Error && error.cause instanceof Error && REVERT_ERROR_NAMES.has(error.cause.name)) {
+	if (error instanceof Error && error.cause instanceof Error && error.cause.name === REVERT_ERROR_NAME) {
 		return true
 	}
 

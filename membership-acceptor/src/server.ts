@@ -8,6 +8,7 @@
  */
 
 import type {AppConfig} from "./config.js"
+import {sanitizeError} from "./contracts.js"
 import {detectMembershipRequest, SeenProposals} from "./detect.js"
 import {verifySignature} from "./signature.js"
 import {log} from "./telemetry.js"
@@ -104,48 +105,63 @@ async function handleWebhook(
 		return json({status: "ok"}, 200)
 	}
 
-	// Policy seam: API-backed rules (editor check, and any space-defined policies).
-	const decision = await acceptor.evaluate(request)
-	if (!decision.accept) {
-		log.info("membership request denied by policy", {
+	// Once marked seen, any non-terminal failure below must roll the mark back, or
+	// the delivery-worker's retry would be silently deduped and the vote never lands.
+	// A thrown error (e.g. an unexpected policy failure) is exactly such a case.
+	try {
+		// Policy seam: API-backed rules (editor check, and any space-defined policies).
+		const decision = await acceptor.evaluate(request)
+		if (!decision.accept) {
+			log.info("membership request denied by policy", {
+				proposal_id: request.proposalId,
+				space_id: request.spaceId,
+				reason: decision.reason,
+			})
+			return json({status: "ok"}, 200)
+		}
+
+		const result = await acceptor.vote(request)
+		switch (result.kind) {
+			case "voted":
+				log.info("membership request accepted — vote cast", {
+					proposal_id: request.proposalId,
+					space_id: request.spaceId,
+					requester_space_id: request.requesterSpaceId,
+					tx_hash: result.txHash,
+				})
+				return json({status: "ok"}, 200)
+
+			case "benign":
+				// The chain rejected the vote. Nothing to retry — ack so delivery stops.
+				log.warn("membership vote rejected on-chain — not retrying", {
+					proposal_id: request.proposalId,
+					space_id: request.spaceId,
+					reason: result.message,
+				})
+				return json({status: "ok"}, 200)
+
+			default: {
+				// Infrastructure failure — roll back the dedupe mark so the
+				// delivery-worker's retry isn't silently swallowed, and 5xx to retry.
+				seen.unmark(request.proposalId)
+				log.error("membership vote failed (infrastructure) — will retry", {
+					proposal_id: request.proposalId,
+					space_id: request.spaceId,
+					error: result.message,
+				})
+				return json({error: "vote failed"}, 503)
+			}
+		}
+	} catch (err) {
+		// Unexpected throw during evaluate/vote — roll back the dedupe mark and ask
+		// for a retry, instead of letting the outer catch 500 with the mark stuck.
+		seen.unmark(request.proposalId)
+		log.error("membership processing failed — will retry", {
 			proposal_id: request.proposalId,
 			space_id: request.spaceId,
-			reason: decision.reason,
+			error: sanitizeError(err),
 		})
-		return json({status: "ok"}, 200)
-	}
-
-	const result = await acceptor.vote(request)
-	switch (result.kind) {
-		case "voted":
-			log.info("membership request accepted — vote cast", {
-				proposal_id: request.proposalId,
-				space_id: request.spaceId,
-				requester_space_id: request.requesterSpaceId,
-				tx_hash: result.txHash,
-			})
-			return json({status: "ok"}, 200)
-
-		case "benign":
-			// The chain rejected the vote. Nothing to retry — ack so delivery stops.
-			log.warn("membership vote rejected on-chain — not retrying", {
-				proposal_id: request.proposalId,
-				space_id: request.spaceId,
-				reason: result.message,
-			})
-			return json({status: "ok"}, 200)
-
-		default: {
-			// Infrastructure failure — roll back the dedupe mark so the
-			// delivery-worker's retry isn't silently swallowed, and 5xx to retry.
-			seen.unmark(request.proposalId)
-			log.error("membership vote failed (infrastructure) — will retry", {
-				proposal_id: request.proposalId,
-				space_id: request.spaceId,
-				error: result.message,
-			})
-			return json({error: "vote failed"}, 503)
-		}
+		return json({error: "processing failed"}, 503)
 	}
 }
 
@@ -172,8 +188,9 @@ export function createApp(config: AppConfig, acceptor: Acceptor): (req: Request)
 				return await handleWebhook(req, config, acceptor, seen)
 			} catch (err) {
 				// Unexpected failure — 500 makes the delivery-worker retry rather than
-				// silently dropping the event.
-				log.error("unhandled error processing webhook", {error: err})
+				// silently dropping the event. Sanitize: the error may carry a bundler
+				// URL with an API key.
+				log.error("unhandled error processing webhook", {error: sanitizeError(err)})
 				return json({error: "internal error"}, 500)
 			}
 		}

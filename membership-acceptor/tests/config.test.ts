@@ -23,7 +23,8 @@ describe("parseConfig", () => {
 		expect(c.webhookSecret).toBe("s3cr3t")
 		expect(c.chainId).toBe(80451) // mainnet default
 		expect(c.spaceRegistryAddress).toBe(`0x${"b".repeat(40)}`)
-		expect([...c.autoacceptSpaceIds]).toEqual(["d4f5a6b7-0000-0000-0000-000000000000"])
+		// Allowlist is canonicalized to 0x bytes16 (the dashed UUID's dashless form).
+		expect([...c.autoacceptSpaceIds]).toEqual(["0xd4f5a6b7000000000000000000000000"])
 	})
 
 	test("adds the 0x prefix to a bare private key", () => {
@@ -31,9 +32,23 @@ describe("parseConfig", () => {
 		expect(c.acceptorPrivateKey).toBe(`0x${"1".repeat(64)}`)
 	})
 
-	test("lowercases and de-duplicates the allowlist, dropping blanks", () => {
-		const c = parseConfig({...validEnv(), MEMBERSHIP_AUTOACCEPT_SPACE_IDS: " AAA , aaa ,, BBB "})
-		expect([...c.autoacceptSpaceIds].sort()).toEqual(["aaa", "bbb"])
+	test("canonicalizes, de-duplicates, and drops blanks in the allowlist", () => {
+		// Same space in 0x-upper, dashless-lower, and dashed-UUID forms → one entry;
+		// plus a distinct space. All canonicalize to 0x bytes16.
+		const dupA0x = `0x${"A".repeat(32)}`
+		const dupADashless = "a".repeat(32)
+		const distinctUuid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+		const c = parseConfig({
+			...validEnv(),
+			MEMBERSHIP_AUTOACCEPT_SPACE_IDS: ` ${dupA0x} , ${dupADashless} ,, ${distinctUuid} `,
+		})
+		expect([...c.autoacceptSpaceIds].sort()).toEqual([`0x${"a".repeat(32)}`, `0x${"b".repeat(32)}`])
+	})
+
+	test("throws on an allowlist entry that isn't a valid space id", () => {
+		expect(() => parseConfig({...validEnv(), MEMBERSHIP_AUTOACCEPT_SPACE_IDS: "not-a-real-id"})).toThrow(
+			ConfigError,
+		)
 	})
 
 	test("an empty allowlist is allowed (kill switch)", () => {

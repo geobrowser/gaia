@@ -10,6 +10,7 @@
  */
 
 import {parseConfig} from "./config.js"
+import {sanitizeError} from "./contracts.js"
 import {createGraphQLClient} from "./graphql.js"
 import {composePolicies, editorPolicy} from "./policy.js"
 import {createApp} from "./server.js"
@@ -23,7 +24,7 @@ async function main() {
 		config = parseConfig()
 	} catch (err) {
 		// Misconfiguration — crash loudly so the deployment is visibly broken.
-		log.error("configuration error — refusing to start", {error: err})
+		log.error("configuration error — refusing to start", {error: sanitizeError(err)})
 		// Flush buffered telemetry before exiting, or the startup-failure event is
 		// lost (same reason the graceful-shutdown path flushes before exit).
 		await flush()
@@ -56,7 +57,9 @@ async function main() {
 			graphql,
 		})
 	} catch (err) {
-		log.error("failed to initialize acceptor wallet — refusing to start", {error: err})
+		// Sanitize: wallet/bundler init errors can embed the Pimlico API key (it's
+		// in the bundler URL), and this goes to logs/Sentry.
+		log.error("failed to initialize acceptor wallet — refusing to start", {error: sanitizeError(err)})
 		await flush()
 		process.exit(1)
 	}

@@ -59,8 +59,8 @@ spec:
               value: "19411"
             - name: GRAPHQL_ENDPOINT
               value: "https://testnet-api.geobrowser.io/graphql" # Geo GraphQL endpoint (policies, e.g. editor check)
-            # DAO spaces this acceptor auto-accepts (comma-separated UUIDs).
-            # Empty = accept none.
+            # DAO spaces this acceptor auto-accepts: comma-separated space ids as
+            # 0x-prefixed bytes16 hex (dashed UUIDs also accepted). Empty = accept none.
             - name: MEMBERSHIP_AUTOACCEPT_SPACE_IDS
               value: "0xc9f267dcb0d270718c2a3c45a64afd32,0x84a679ce188f061ac9a92380bac2bab5,0x0477636ace64280fc43a9f440a502291"
             # Optional: Sentry error reporting
