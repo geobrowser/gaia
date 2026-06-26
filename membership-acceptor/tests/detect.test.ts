@@ -110,6 +110,31 @@ describe("SeenProposals", () => {
 		expect(seen.seen("p2")).toBe(true)
 	})
 
+	test("unmark lets an id be processed again", () => {
+		const seen = new SeenProposals()
+		expect(seen.seen("p1")).toBe(false)
+		expect(seen.seen("p1")).toBe(true)
+		seen.unmark("p1")
+		expect(seen.seen("p1")).toBe(false) // forgotten → first sighting again
+		expect(seen.seen("p1")).toBe(true)
+	})
+
+	test("unmark of an unknown id is a no-op", () => {
+		const seen = new SeenProposals()
+		seen.unmark("never-seen")
+		expect(seen.seen("never-seen")).toBe(false)
+	})
+
+	test("unmark frees the capacity slot (no phantom eviction)", () => {
+		const seen = new SeenProposals(2)
+		expect(seen.seen("a")).toBe(false)
+		expect(seen.seen("b")).toBe(false)
+		seen.unmark("a") // {b}
+		expect(seen.seen("c")).toBe(false) // {b,c} — within capacity, nothing evicted
+		expect(seen.seen("b")).toBe(true)
+		expect(seen.seen("c")).toBe(true)
+	})
+
 	test("evicts oldest ids beyond capacity (FIFO)", () => {
 		const seen = new SeenProposals(2)
 		expect(seen.seen("a")).toBe(false) // {a}

@@ -5,16 +5,14 @@
  * it can be driven directly in unit tests (no bound port) and handed to
  * `Bun.serve` in production.
  *
- * Milestone 2 scope: verify the HMAC signature, then detect which deliveries are
- * membership requests and de-duplicate them. Voting (M3) is not here yet — a
- * detected request is logged as "would accept" and every authenticated webhook
- * is acknowledged with 200.
  */
 
-import type {AcceptorConfig} from "./config.js"
+import type {AppConfig} from "./config.js"
+import {sanitizeError} from "./contracts.js"
 import {detectMembershipRequest, SeenProposals} from "./detect.js"
 import {verifySignature} from "./signature.js"
 import {log} from "./telemetry.js"
+import type {Acceptor} from "./vote.js"
 
 const SIGNATURE_HEADER = "x-geo-signature"
 const SIGNATURE_PREFIX = "sha256="
@@ -41,7 +39,12 @@ function json(body: unknown, status: number): Response {
 	})
 }
 
-async function handleWebhook(req: Request, config: AcceptorConfig, seen: SeenProposals): Promise<Response> {
+async function handleWebhook(
+	req: Request,
+	config: AppConfig,
+	acceptor: Acceptor,
+	seen: SeenProposals,
+): Promise<Response> {
 	const signature = req.headers.get(SIGNATURE_HEADER)
 
 	// A missing or malformed signature header can never pass the HMAC check, so
@@ -82,7 +85,18 @@ async function handleWebhook(req: Request, config: AcceptorConfig, seen: SeenPro
 		return json({status: "ok"}, 200)
 	}
 
-	// Dedupe on proposal_id: the fan-out delivers one copy per editor.
+	// Policy gate: only act on spaces this acceptor serves.
+	if (!acceptor.allowsSpace(request.spaceId)) {
+		log.debug("membership request for an unserved space — ignored", {
+			proposal_id: request.proposalId,
+			space_id: request.spaceId,
+		})
+		return json({status: "ok"}, 200)
+	}
+
+	// Dedupe on proposal_id, marking BEFORE we evaluate/vote so the concurrent
+	// fan-out copies (one per editor) collapse to a single attempt — and so we
+	// only hit the policy's API once per proposal.
 	if (seen.seen(request.proposalId)) {
 		log.debug("membership request already seen — deduped", {
 			proposal_id: request.proposalId,
@@ -91,13 +105,64 @@ async function handleWebhook(req: Request, config: AcceptorConfig, seen: SeenPro
 		return json({status: "ok"}, 200)
 	}
 
-	// M2 ends here: detected, not yet voted. M3 verifies on-chain and casts YES.
-	log.info("membership request detected — would accept", {
-		proposal_id: request.proposalId,
-		space_id: request.spaceId,
-		requester_space_id: request.requesterSpaceId,
-	})
-	return json({status: "ok"}, 200)
+	// Once marked seen, any non-terminal failure below must roll the mark back, or
+	// the delivery-worker's retry would be silently deduped and the vote never lands.
+	// A thrown error (e.g. an unexpected policy failure) is exactly such a case.
+	try {
+		// Policy seam: API-backed rules (editor check, and any space-defined policies).
+		const decision = await acceptor.evaluate(request)
+		if (!decision.accept) {
+			log.info("membership request denied by policy", {
+				proposal_id: request.proposalId,
+				space_id: request.spaceId,
+				reason: decision.reason,
+			})
+			return json({status: "ok"}, 200)
+		}
+
+		const result = await acceptor.vote(request)
+		switch (result.kind) {
+			case "voted":
+				log.info("membership request accepted — vote cast", {
+					proposal_id: request.proposalId,
+					space_id: request.spaceId,
+					requester_space_id: request.requesterSpaceId,
+					tx_hash: result.txHash,
+				})
+				return json({status: "ok"}, 200)
+
+			case "benign":
+				// The chain rejected the vote. Nothing to retry — ack so delivery stops.
+				log.warn("membership vote rejected on-chain — not retrying", {
+					proposal_id: request.proposalId,
+					space_id: request.spaceId,
+					reason: result.message,
+				})
+				return json({status: "ok"}, 200)
+
+			default: {
+				// Infrastructure failure — roll back the dedupe mark so the
+				// delivery-worker's retry isn't silently swallowed, and 5xx to retry.
+				seen.unmark(request.proposalId)
+				log.error("membership vote failed (infrastructure) — will retry", {
+					proposal_id: request.proposalId,
+					space_id: request.spaceId,
+					error: result.message,
+				})
+				return json({error: "vote failed"}, 503)
+			}
+		}
+	} catch (err) {
+		// Unexpected throw during evaluate/vote — roll back the dedupe mark and ask
+		// for a retry, instead of letting the outer catch 500 with the mark stuck.
+		seen.unmark(request.proposalId)
+		log.error("membership processing failed — will retry", {
+			proposal_id: request.proposalId,
+			space_id: request.spaceId,
+			error: sanitizeError(err),
+		})
+		return json({error: "processing failed"}, 503)
+	}
 }
 
 /**
@@ -107,7 +172,7 @@ async function handleWebhook(req: Request, config: AcceptorConfig, seen: SeenPro
  *  - `GET /health`        — liveness/readiness probe
  *  - `POST /webhooks/geo` — notification webhook sink (HMAC-verified)
  */
-export function createApp(config: AcceptorConfig): (req: Request) => Promise<Response> {
+export function createApp(config: AppConfig, acceptor: Acceptor): (req: Request) => Promise<Response> {
 	// Dedupe state lives for the lifetime of the process (see SeenProposals).
 	const seen = new SeenProposals()
 
@@ -120,11 +185,12 @@ export function createApp(config: AcceptorConfig): (req: Request) => Promise<Res
 
 		if (req.method === "POST" && pathname === "/webhooks/geo") {
 			try {
-				return await handleWebhook(req, config, seen)
+				return await handleWebhook(req, config, acceptor, seen)
 			} catch (err) {
 				// Unexpected failure — 500 makes the delivery-worker retry rather than
-				// silently dropping the event.
-				log.error("unhandled error processing webhook", {error: err})
+				// silently dropping the event. Sanitize: the error may carry a bundler
+				// URL with an API key.
+				log.error("unhandled error processing webhook", {error: sanitizeError(err)})
 				return json({error: "internal error"}, 500)
 			}
 		}

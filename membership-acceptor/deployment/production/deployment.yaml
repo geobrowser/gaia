@@ -34,6 +34,35 @@ spec:
                 secretKeyRef:
                   name: membership-acceptor-credentials
                   key: GEO_WEBHOOK_SECRET
+            # Voting identity (sensitive)
+            - name: ACCEPTOR_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: membership-acceptor-credentials
+                  key: ACCEPTOR_PRIVATE_KEY
+            - name: PIMLICO_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: membership-acceptor-credentials
+                  key: PIMLICO_API_KEY
+            - name: RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: membership-acceptor-credentials
+                  key: RPC_URL
+            # Non-sensitive config
+            - name: ACCEPTOR_SPACE_ID
+              value: "0x24208422558b4ac801e24a71a889dfad" # acceptor's personal-space id (bytes16)
+            - name: SPACE_REGISTRY_ADDRESS
+              value: "0xB01683b2f0d38d43fcD4D9aAB980166988924132"
+            - name: CHAIN_ID
+              value: "19411"
+            - name: GRAPHQL_ENDPOINT
+              value: "https://testnet-api.geobrowser.io/graphql" # Geo GraphQL endpoint (policies, e.g. editor check)
+            # DAO spaces this acceptor auto-accepts: comma-separated space ids as
+            # 0x-prefixed bytes16 hex (dashed UUIDs also accepted). Empty = accept none.
+            - name: MEMBERSHIP_AUTOACCEPT_SPACE_IDS
+              value: "0xc9f267dcb0d270718c2a3c45a64afd32,0x84a679ce188f061ac9a92380bac2bab5,0x0477636ace64280fc43a9f440a502291"
             # Optional: Sentry error reporting
             - name: SENTRY_DSN
               valueFrom:

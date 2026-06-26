@@ -18,7 +18,7 @@ It is structured so it can later be extracted into its own repo that space
 admins deploy themselves, each running a sovereign acceptor with its own wallet
 and membership policy (allow-all, allow-verified, reputation, payment, …).
 
-## Status — Milestone 2 (membership-request detection)
+## Status — Milestone 3 (on-chain vote)
 
 The service:
 
@@ -26,20 +26,60 @@ The service:
   header against `GEO_WEBHOOK_SECRET` (rejects unsigned/tampered requests with 401);
 - exposes `GET /health` for k8s probes;
 - **detects membership requests** in the firehose — a `proposal_created` event
-  with `voting_mode == "fast"` and exactly one `add_member` action that still
-  looks open — and **de-duplicates** them by `proposal_id` (the fan-out delivers
-  one copy per editor of the space);
-- logs `membership request detected — would accept` for each unique match.
+  with `voting_mode == "fast"` and exactly one `add_member` action — gates them by
+  the `MEMBERSHIP_AUTOACCEPT_SPACE_IDS` allowlist, and **de-duplicates** by
+  `proposal_id` (the fan-out delivers one copy per editor of the space);
+- runs a **policy** (API-backed rules — see below) before voting;
+- **casts the YES vote** for each unique allowed+accepted request via the acceptor's Safe
+  smart account (`SpaceRegistry.enter(PROPOSAL_VOTED, Yes)`, gas-sponsored by
+  Pimlico). Fast-path threshold = 1, so the YES executes the AddMember in the same
+  transaction — admitting the member.
 
-It does **not** yet cast votes (M3) — a detected request is logged, and every
-authenticated webhook is acknowledged with `200`. Detection is payload-only and
-best-effort (a trigger, not a source of truth); the authoritative open/untouched
-check happens on-chain in M3 before any vote.
+### The "simple" model (no on-chain pre-reads)
+
+The contract is the source of truth, so there is **no** read-before-vote. We mark
+the proposal seen, attempt the vote, and classify the result:
+
+| Outcome | HTTP | Behavior |
+|---|---|---|
+| `voted` | `200` | YES landed; member admitted. |
+| `benign` (on-chain revert: already voted/executed/closed, or not an editor) | `200` | Nothing to retry — ack so the delivery-worker stops. |
+| `infra` (RPC/bundler failure) | `503` | Roll back the dedupe mark and signal a retry. |
+
+This eliminates the check-then-act race a read-before-vote design would have: a
+duplicate that slips past in-memory dedupe (restart, 2nd replica) simply reverts
+on-chain → no double-admit, just a wasted tx. **Keep `replicas: 1`** — dedupe is
+per-process.
+
+> **Prerequisite:** the acceptor's Safe smart account (`ACCEPTOR_PRIVATE_KEY` /
+> `ACCEPTOR_SPACE_ID`) must be an **editor** of every space in
+> `MEMBERSHIP_AUTOACCEPT_SPACE_IDS`, or its votes revert (`benign`, logged loudly).
+
+### Policies (the BYO extension point)
+
+Requests pass through a cheap→expensive funnel:
+
+```
+detect → WHITELIST (config Set, no I/O) → dedupe → POLICY (GraphQL) → vote
+```
+
+A `Policy` is `(request, ctx) => Promise<{accept, reason}>`; `ctx` carries a
+`GraphQLClient` so a space can express rules backed by API data (reputation,
+payment, external auth, …) without touching the webhook/voting plumbing. Compose
+several with `composePolicies(...)` (AND semantics, first denial wins).
+
+The shipped reference policy is **`editorPolicy`**: it confirms the acceptor is an
+editor of the target space via the `editor(spaceId, memberSpaceId)` GraphQL query.
+It **fails open** — an API error/timeout never suppresses a vote; the chain stays
+the final authority (a genuine non-editor just reverts). Configure the endpoint
+with `GRAPHQL_ENDPOINT`. Add your own policies in `src/index.ts`:
+`composePolicies(editorPolicy, myReputationPolicy)`.
 
 > Implementation note: unlike `proposal-executor` (an Effect-TS CronJob), this is
-> a plain `Bun.serve` HTTP server. The request path is straightforward async
-> code; we keep the same Sentry/structured-logging conventions (see
-> `src/telemetry.ts`) so logs read consistently across the two services.
+> a plain `Bun.serve` HTTP server. The on-chain pieces (ABI, `enter()` encoding,
+> Safe smart wallet) are ported from `proposal-executor` because the published
+> `@geoprotocol/geo-sdk` voting helpers are hardcoded to testnet in the current
+> version and cannot drive a mainnet vote.
 
 ## Layout
 
@@ -48,6 +88,11 @@ check happens on-chain in M3 before any vote.
 | `src/index.ts` | Entry point — parse config, start server, graceful shutdown |
 | `src/server.ts` | Routes + request handling (`createApp` returns a testable fetch handler) |
 | `src/detect.ts` | Membership-request detection + `proposal_id` de-duplication |
+| `src/vote.ts` | The acceptor: whitelist + run policy + cast the YES vote, classify the result |
+| `src/policy.ts` | Policy seam + `composePolicies` + the reference `editorPolicy` |
+| `src/graphql.ts` | Minimal GraphQL client used by policies |
+| `src/wallet.ts` | Safe smart-account setup (Pimlico-sponsored) |
+| `src/contracts.ts` | SpaceRegistry ABI, chains, `enter()` encoding, revert classification |
 | `src/signature.ts` | `X-Geo-Signature` HMAC verification |
 | `src/config.ts` | Env parsing + validation (fail-fast) |
 | `src/telemetry.ts` | Sentry init + structured logger + flush |
