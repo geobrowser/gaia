@@ -591,13 +591,15 @@ fn parse_proposal_created(action: &Action, sequence: u32) -> Option<ProposalCrea
             info!(
                 action_type = ?action_type,
                 selector = %selector,
-                target = %hex::encode(&a.to),
+                to_address = %hex::encode(&a.to_address),
+                to_space_id = %hex::encode(&a.to_space_id),
                 data_len = a.data.len(),
                 "Decoded proposal action"
             );
 
             ProposalAction {
-                to: a.to,
+                to_address: a.to_address,
+                to_space_id: a.to_space_id,
                 value: a.value,
                 data: a.data,
                 action: decoded_action,
@@ -815,7 +817,8 @@ mod tests {
         use ethabi::{Token, ethereum_types::U256 as EthU256};
 
         let action_tuple = Token::Tuple(vec![
-            Token::Address(ethabi::Address::zero()),
+            Token::Address(ethabi::Address::zero()), // toAddress
+            Token::FixedBytes(vec![0u8; 16]),        // toSpaceId
             Token::Uint(EthU256::zero()),
             Token::Bytes(vec![]),
         ]);
@@ -991,7 +994,8 @@ mod tests {
             .into_iter()
             .map(|(to, data)| {
                 Token::Tuple(vec![
-                    Token::Address(to),
+                    Token::Address(to),               // toAddress
+                    Token::FixedBytes(vec![0u8; 16]), // toSpaceId
                     Token::Uint(EthU256::zero()),
                     Token::Bytes(data),
                 ])
@@ -1504,7 +1508,8 @@ mod tests {
             proposal_id: vec![3u8; 16],
             voting_mode: 0,
             actions: vec![ProposalAction {
-                to: vec![],
+                to_address: vec![],
+                to_space_id: vec![],
                 value: vec![],
                 data: vec![],
                 action: Some(proposal_action::Action::Publish(PublishAction {
@@ -1781,7 +1786,8 @@ mod tests {
             proposal_id: vec![3u8; 16],
             voting_mode: VotingMode::Fast as i32,
             actions: vec![ProposalAction {
-                to: vec![],
+                to_address: vec![],
+                to_space_id: vec![],
                 value: vec![],
                 data: vec![],
                 action: Some(proposal_action::Action::Publish(PublishAction {

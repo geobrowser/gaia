@@ -119,15 +119,18 @@ pub struct UnsetTopicAction {
 /// Action to be executed when proposal passes
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProposalAction {
-    /// 20 bytes - target contract address
+    /// 20 bytes - explicit call target; address(0) => resolve via to_space_id at execution
     #[prost(bytes = "vec", tag = "1")]
-    pub to: ::prost::alloc::vec::Vec<u8>,
+    pub to_address: ::prost::alloc::vec::Vec<u8>,
     /// 32 bytes - uint256 ETH value to send
     #[prost(bytes = "vec", tag = "2")]
     pub value: ::prost::alloc::vec::Vec<u8>,
     /// calldata (function selector + encoded args)
     #[prost(bytes = "vec", tag = "3")]
     pub data: ::prost::alloc::vec::Vec<u8>,
+    /// 16 bytes - GEO space UUID; resolved via SpaceRegistry.spaceIdToAddress when to_address is address(0)
+    #[prost(bytes = "vec", tag = "4")]
+    pub to_space_id: ::prost::alloc::vec::Vec<u8>,
     /// Decoded action (based on function selector in calldata)
     #[prost(
         oneof = "proposal_action::Action",
