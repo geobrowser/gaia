@@ -80,6 +80,21 @@ points = low_trust_base + verified_add + professional_add + expert_add
 rep     = clamp(points / 1000, 0, 1)
 ```
 
+**The Expert band is the score; the other three are an eligibility premium.** The points budget is
+deliberately lopsided: Expert spans `0–980`, while Low-trust, Verified, and Professional together
+contribute at most `21` points (`≈ 0.021` rep). For any ranked user, `rep ≈ expert_add / 1000`; the
+other three bands function as a small floor and a gate, not as independent sources of standing. A
+fully verified, credentialed professional with **no ranking standing** therefore lands at
+`rep ≈ 0.02` — effectively silenced. This is intentional (standing is *earned through demonstrated
+expertise in the space*, not conferred by credentials), but it means the system's behaviour is
+governed almost entirely by the Expert band's signal and curve.
+
+The `EXPERT_MAX = 980` cap and the curve steepness `k` are therefore the principal **policy levers**
+of the whole system, not implementation constants chosen by feel: together they set how steeply
+standing converts to influence (a near-`980:1` weight ratio between the top-ranked voter and one just
+above the median). Treat them as explicit, reviewable policy. The weighting that consumes them ships
+behind a feature flag (Phase 4), so the curve can be retuned before it affects live consensus.
+
 **1. Low trust (0–1 points)**
 
 - `0` initially.
@@ -160,9 +175,11 @@ cycle N+1: weights   = rep_N
 - **No cold-start deadlock.** Low-trust is achievable *immediately* on joining, independent of any
   earned score: every member of a fresh public space gets low-trust `1` ⇒ `rep ≥ 0.001` ⇒
   `weight > 0`, so scores still compute. A deadlock would arise only if weight required *earned*
-  rep — it does not. Because the smallest non-zero weight is `0.001`, Phase 4 must normalize weights
-  (relative ordering is what matters) so that tiny absolute weights do not underflow scoring
-  thresholds.
+  rep — it does not. Phase 4 normalizes weights so that what reaches the scorer is the *relative*
+  ordering across users, not the raw absolute magnitudes. This is **not** about underflow — Finding #3
+  confirms z-scoring is invariant to a uniform positive scale and imposes no absolute threshold — but
+  about controlling the *ratio* between the strongest and weakest votes (a near-`980:1` spread is a
+  policy choice, not a given) and keeping it stable across cycles.
 
 ## Technical approach
 
@@ -253,6 +270,14 @@ therefore *itself* the ordinal → points mapping: a person's normalized rank (o
 | D | 0.25 | 17 |
 | below median / unranked | 0 | 0 |
 
+**Tiers are illustrative, not the operative input.** The table shows how familiar tier labels land on
+the curve; it is not the implemented mapping. The operative input is the continuous within-space
+normalized rank described above, and the tier rows are convenient reference points on it (`C` sits at
+the median, `x = 0.5`, immediately above the below-median cliff to `0`). If tiers are ever surfaced
+in product or governance as the real unit, the mapping must be redefined as a discrete tier → `x`
+step function and reconciled with the continuous normalization — they are not interchangeable at the
+boundaries.
+
 This resolves the ordinal-vs-cardinal question cleanly and preserves every existing design property:
 
 - **Relative within a space** — ordinal rankings are inherently relative, matching rep's
@@ -266,11 +291,27 @@ This resolves the ordinal-vs-cardinal question cleanly and preserves every exist
 - **No new integration** — reading `ranks.ranking_scores` needs no rankings→votes bridge; the push
   lands directly in the source the band reads.
 
-**`x`-mapping for the ranking source.** Replace the sigmoid-tuned `x = max(0, 2q − 1)` (specific to
-the `(0,1)`-neutral-`0.5` `local_score`) with a within-space normalization of the ranking aggregate:
-a percentile/normalized-rank for `ORDINAL` rankings, or the normalized `weight` for `WEIGHTED`
-rankings (`ranks` supports both `rank_type`s). Below-median rank ⇒ `x = 0`. The exact normalization
-of `ranks.ranking_scores.score` / `position` → `x` is the one detail to pin in Phase 3.
+**`x`-mapping for the ranking source — the central design lever.** Because `rep ≈ expert_add / 1000`
+for any ranked user, the mapping from `ranks.ranking_scores` to `x ∈ [0, 1]` **is** the reputation
+algorithm; it is not a detail to be settled late. The baseline replaces the sigmoid-tuned
+`x = max(0, 2q − 1)` (specific to the `(0,1)`-neutral-`0.5` `local_score`) with a within-space
+normalization of the ranking aggregate: a percentile / normalized-rank for `ORDINAL` rankings, or the
+normalized `weight` for `WEIGHTED` rankings (`ranks` supports both `rank_type`s), with below-median
+rank ⇒ `x = 0`. Two consequences must be decided deliberately, not inherited from the arithmetic:
+
+- **Thin-ranked spaces.** A percentile is unstable when few people are ranked: with five ranked
+  subjects, the "median" and the tier boundaries swing on every new rank, and a single ranking can
+  move a user's weight by a large multiple. Phase 3 must define behaviour below a minimum-ranked-
+  population threshold (e.g. suppress the Expert band, or shrink `x` toward `0`, until the ranked set
+  is large enough to be meaningful).
+- **Half the population muted by construction.** Below-median ⇒ `x = 0` ⇒ `expert_add = 0` ⇒
+  `rep ≈ 0.02`, which combined with no-floor zero-weighting means roughly **half of all ranked
+  participants carry near-zero vote weight every cycle**. That is a strong, deliberate consensus
+  policy — state it as such and confirm it is the intended dynamic, rather than letting it fall out
+  of the curve.
+
+Pinning the exact `ranks.ranking_scores.score` / `position` → `x` function (and the `WEIGHTED` case)
+is the gating design task for Phase 3.
 
 **Open for sign-off.** This revises Decision #8, which previously named the Person-entity
 `local_score` as canonical on the now-corrected premise that rankings feed `local_scores`. The
@@ -320,6 +361,16 @@ content), and the join runs through the **versioned** tables, not the live ones.
 
 ## Implementation phases
 
+**What actually ships, and when.** Be clear-eyed about the v1 surface. The Verified variable
+component is deferred (Decision #2), Professional depends on knowledge-layer role config that does
+not yet exist, and the Expert band reads `0` until the rankings push lands (~mid-July 2026) *and* the
+`x`-normalization is pinned. Until both arrive, computed rep is essentially the low-trust bit plus a
+flat Verified `2` — i.e. `≈ 0.001–0.003` for everyone. Phases 1–3 therefore ship the *machinery*
+(curve, table, API, computation stage, atlas/ranks bridges) and a flat eligibility signal; the
+system's *meaningful* output is gated on the rankings push and the normalization decision, both
+downstream. This is deliberate, low-risk sequencing — but "degrades gracefully" should not obscure
+that the interesting behaviour arrives only once those inputs do.
+
 ### Phase 1 — Expert-band curve (standalone, testable)
 
 - Implement the exponential lookup table (`k = 5`, `EXPERT_MAX = 980`).
@@ -333,6 +384,10 @@ content), and the join runs through the **versioned** tables, not the live ones.
 - GraphQL read fields plus tests against seeded rows. The frontend can integrate against this early.
 
 ### Phase 3 — Rep computation stage (no weighting yet)
+
+> **Blocked on two sign-offs.** (1) Re-confirmation of Decision #8 (Expert source =
+> `ranks.ranking_scores`); (2) the `x`-normalization decision below. Both gate the Expert band, which
+> is ~98% of rep — do not begin Phase 3 computation until they are resolved.
 
 - Verified-set bridge from atlas `topology.canonical`.
 - **Expert band:** resolve the person entity (`spaces.topic_id → PERSON_TYPE`, verified), read
@@ -381,7 +436,16 @@ content), and the join runs through the **versioned** tables, not the live ones.
   manually, mirroring the `0064` pattern).
 - **Feedback-loop stability (risk).** The coupled rep↔scores system could oscillate or amplify.
   Mitigated by the across-cycle ordering, weight normalization, the exponential's damping, and a kill
-  switch (the Phase 4 feature flag).
+  switch (the Phase 4 feature flag). Note this addresses *numerical* instability only — see the next
+  item for the sociological one.
+- **Entrenchment / mobility (risk).** Top-ranked users receive on the order of `50–980×` the vote
+  weight of median users, rep has no time decay, and there is no built-in mobility mechanism. If the
+  rankings that drive the Expert band are themselves shaped by the same high-rep cohort, that cohort
+  can entrench: its votes dominate the scores and rankings that would otherwise let newcomers displace
+  it. The across-cycle ordering and the exponential's damping address numerical oscillation, not this
+  attractor. Mitigations to consider (not yet designed): rep decay over time, a cap on any single
+  cohort's share of total weight, or periodic re-normalization. At minimum, instrument the per-space
+  rep distribution and watch its top-k / Gini share across cycles.
 - **Knowledge-layer / payout-entity config (dependency).** Professional roles and standards live in
   the knowledge layer; the Verified band's `points_earned` comes from on-chain payout system entities,
   which are not yet summable. Both must exist before those band components are meaningful. The Expert,
@@ -528,6 +592,15 @@ larger piece of work) and is not needed for rep.
   band ships flat `2` until then.
 - **Recompute cardinality** (Decision #7) — measure user × space before committing to full recompute
   permanently.
+- **Curve steepness / cap as policy** — `k = 5` and `EXPERT_MAX = 980` set a near-`980:1` influence
+  ratio and are currently chosen by shape, not argument. Decide the intended top-to-median ratio
+  explicitly before Phase 4 enables weighting; treat `k` and the cap as reviewable policy.
+- **Endorsement vs contribution as the canonical expertise signal** — the Expert band reads ordinal
+  rankings because that is what the push populates (Finding #9), which is expedient rather than
+  principled. Endorsement is the more gameable signal (collusion rings); contribution (authored
+  content that earned upvotes, Finding #6) is harder to game but currently relegated to "deep
+  fallback." Confirm rankings-as-canonical is a deliberate choice for v1, not just the available one,
+  and note contribution as the candidate to revisit.
 - **Community share** — circulate the design for community feedback (a design-review action item),
   ideally after the Decision #8 re-confirmation.
 
