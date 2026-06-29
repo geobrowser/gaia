@@ -116,10 +116,23 @@ async fn async_main() -> Result<(), IndexerError> {
         .unwrap_or(30);
 
     // How often the retention cleanup task runs. Default 86400s (daily).
-    let retention_cleanup_interval_secs: u64 = env::var("RETENTION_CLEANUP_INTERVAL_SECS")
+    // Guard against 0: tokio::time::interval panics on a zero period, and an
+    // operator might set 0 expecting it to disable (the disable knob is actually
+    // NOTIFICATION_RETENTION_DAYS=0). Fall back to the default with a warning.
+    let retention_cleanup_interval_secs: u64 = match env::var("RETENTION_CLEANUP_INTERVAL_SECS")
         .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(86_400);
+        .and_then(|s| s.parse::<u64>().ok())
+    {
+        Some(0) => {
+            warn!(
+                "RETENTION_CLEANUP_INTERVAL_SECS=0 is invalid; using default 86400. \
+                     To disable retention cleanup, set NOTIFICATION_RETENTION_DAYS=0"
+            );
+            86_400
+        }
+        Some(v) => v,
+        None => 86_400,
+    };
 
     let health_port: u16 = env::var("HEALTH_PORT")
         .ok()
