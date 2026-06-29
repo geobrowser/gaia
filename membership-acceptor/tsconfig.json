@@ -1,0 +1,19 @@
+{
+	"compilerOptions": {
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"target": "ES2022",
+		"verbatimModuleSyntax": true,
+		"resolveJsonModule": true,
+		"moduleDetection": "force",
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"moduleResolution": "Bundler",
+		"module": "ESNext",
+		"noEmit": true,
+		"lib": ["ES2024"],
+		"types": ["bun"]
+	},
+	"include": ["./**/*"],
+	"exclude": ["node_modules"]
+}
