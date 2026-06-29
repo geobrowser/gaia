@@ -660,6 +660,78 @@ impl Storage {
         Ok(expired)
     }
 
+    /// Delete notification rows older than `retention_days`, in batches of
+    /// `batch_size`, to enforce a retention window without long table locks.
+    ///
+    /// FK-safe order: `notification_deliveries` first (they reference
+    /// `notification_outbox`), then outbox rows past the window that no longer
+    /// have any delivery. Each table is drained in capped batches until a batch
+    /// removes fewer than `batch_size` rows. Returns
+    /// `(deliveries_deleted, outbox_deleted)`.
+    #[instrument(
+        name = "notification_indexer.storage.delete_expired_notifications",
+        skip(self),
+        fields(retention_days = retention_days, batch_size = batch_size)
+    )]
+    pub async fn delete_expired_notifications(
+        &self,
+        retention_days: i32,
+        batch_size: i64,
+    ) -> Result<(u64, u64), StorageError> {
+        // Deliveries first — they FK-reference notification_outbox.
+        let mut deliveries_deleted: u64 = 0;
+        loop {
+            let n = sqlx::query(
+                r#"
+                DELETE FROM notification_deliveries
+                WHERE id IN (
+                    SELECT id FROM notification_deliveries
+                    WHERE created_at < now() - make_interval(days => $1::int)
+                    LIMIT $2
+                )
+                "#,
+            )
+            .bind(retention_days)
+            .bind(batch_size)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+            deliveries_deleted += n;
+            if (n as i64) < batch_size {
+                break;
+            }
+        }
+
+        // Then outbox rows past the window with no remaining delivery (FK-safe).
+        let mut outbox_deleted: u64 = 0;
+        loop {
+            let n = sqlx::query(
+                r#"
+                DELETE FROM notification_outbox
+                WHERE id IN (
+                    SELECT o.id FROM notification_outbox o
+                    WHERE o.created_at < now() - make_interval(days => $1::int)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM notification_deliveries d WHERE d.outbox_id = o.id
+                      )
+                    LIMIT $2
+                )
+                "#,
+            )
+            .bind(retention_days)
+            .bind(batch_size)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+            outbox_deleted += n;
+            if (n as i64) < batch_size {
+                break;
+            }
+        }
+
+        Ok((deliveries_deleted, outbox_deleted))
+    }
+
     // -----------------------------------------------------------------------
     // Enrichment lookups (best-effort — return None on failure)
     // -----------------------------------------------------------------------

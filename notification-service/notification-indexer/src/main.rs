@@ -108,6 +108,19 @@ async fn async_main() -> Result<(), IndexerError> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(60);
 
+    // Retention: delete notification_outbox / notification_deliveries rows older
+    // than this many days. Default 30. Set to 0 to disable the cleanup task.
+    let retention_days: i32 = env::var("NOTIFICATION_RETENTION_DAYS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30);
+
+    // How often the retention cleanup task runs. Default 86400s (daily).
+    let retention_cleanup_interval_secs: u64 = env::var("RETENTION_CLEANUP_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(86_400);
+
     let health_port: u16 = env::var("HEALTH_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -219,6 +232,7 @@ async fn async_main() -> Result<(), IndexerError> {
     let mut shutdown_rx2 = shutdown_tx.subscribe();
     let mut shutdown_rx3 = shutdown_tx.subscribe();
     let mut shutdown_rx4 = shutdown_tx.subscribe();
+    let mut shutdown_rx5 = shutdown_tx.subscribe();
 
     let _signal_handle = tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
@@ -310,6 +324,52 @@ async fn async_main() -> Result<(), IndexerError> {
             }
         }
     });
+
+    // Spawn retention cleanup task: periodically delete notification rows older
+    // than the retention window, in batches. Disabled when retention_days == 0.
+    let retention_handle: Option<tokio::task::JoinHandle<()>> = if retention_days > 0 {
+        let retention_storage = Storage::new(storage.pool().clone());
+        info!(
+            retention_days = retention_days,
+            interval_secs = retention_cleanup_interval_secs,
+            "Retention cleanup enabled"
+        );
+        Some(tokio::spawn(async move {
+            const RETENTION_BATCH_SIZE: i64 = 5_000;
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
+                retention_cleanup_interval_secs,
+            ));
+            loop {
+                tokio::select! {
+                    _ = shutdown_rx5.recv() => {
+                        info!("Retention cleanup shutting down");
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        match retention_storage
+                            .delete_expired_notifications(retention_days, RETENTION_BATCH_SIZE)
+                            .await
+                        {
+                            Ok((deliveries, outbox)) => {
+                                if deliveries > 0 || outbox > 0 {
+                                    info!(
+                                        deliveries_deleted = deliveries,
+                                        outbox_deleted = outbox,
+                                        retention_days = retention_days,
+                                        "Retention cleanup removed expired notifications"
+                                    );
+                                }
+                            }
+                            Err(e) => error!(error = %e, "Retention cleanup failed"),
+                        }
+                    }
+                }
+            }
+        }))
+    } else {
+        info!("Retention cleanup disabled (NOTIFICATION_RETENTION_DAYS=0)");
+        None
+    };
 
     // Spawn entity-vote-threshold poller task.
     //
@@ -1275,6 +1335,15 @@ async fn async_main() -> Result<(), IndexerError> {
             Ok(Ok(())) => info!("Vote poller stopped"),
             Ok(Err(e)) => warn!(error = %e, "Vote poller task failed"),
             Err(_) => warn!("Vote poller did not stop within 5s, aborting"),
+        }
+    }
+
+    // Wait for the retention cleanup task to finish (if enabled)
+    if let Some(handle) = retention_handle {
+        match tokio::time::timeout(tokio::time::Duration::from_secs(5), handle).await {
+            Ok(Ok(())) => info!("Retention cleanup stopped"),
+            Ok(Err(e)) => warn!(error = %e, "Retention cleanup task failed"),
+            Err(_) => warn!("Retention cleanup did not stop within 5s, aborting"),
         }
     }
 
