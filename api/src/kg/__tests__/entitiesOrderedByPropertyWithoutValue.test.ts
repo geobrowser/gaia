@@ -205,6 +205,17 @@ describe("entitiesOrderedByProperty — include entities without a value", () =>
 		])
 	})
 
+	it("treats an explicit includeWithoutValue: null the same as false (excludes value-less)", async () => {
+		// PostGraphile exposes includeWithoutValue as a nullable Boolean, so a client can pass
+		// null explicitly. With typeIds present, null must NOT opt into the unscored branch.
+		const result = await executeGraphQL(ORDER_QUERY, {...baseVars, dir: "DESC", include: null})
+		expect(result.errors).toBeUndefined()
+		const ids = idsOf(result)
+		expect(ids).toEqual([undash(E_POS), undash(E_ZERO), undash(E_NEG)])
+		expect(ids).not.toContain(undash(E_NOVAL_1))
+		expect(ids).not.toContain(undash(E_NOVAL_2))
+	})
+
 	it("falls back to scored-only when includeWithoutValue is true but no typeIds are given", async () => {
 		const result = await executeGraphQL(
 			`

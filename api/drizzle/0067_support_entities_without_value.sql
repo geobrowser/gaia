@@ -103,8 +103,11 @@ BEGIN
   END IF;
 
   -- Value-less entities can only be bounded by the TYPES relation; without type_ids there is
-  -- no cheap, well-defined candidate set, so fall back to scored-only behavior.
-  with_unscored := include_without_value AND type_ids IS NOT NULL AND cardinality(type_ids) > 0;
+  -- no cheap, well-defined candidate set, so fall back to scored-only behavior. COALESCE guards
+  -- the nullable flag: PostGraphile exposes includeWithoutValue as a nullable Boolean, and a
+  -- NULL must behave like false (NULL AND ... yields NULL, which would otherwise fall through
+  -- the IF NOT below into the unscored branch).
+  with_unscored := COALESCE(include_without_value, false) AND type_ids IS NOT NULL AND cardinality(type_ids) > 0;
 
   IF NOT with_unscored THEN
     -- Backward-compatible path (identical to 0060): only entities WITH a usable value.
