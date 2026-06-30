@@ -668,6 +668,14 @@ impl Storage {
     /// have any delivery. Each table is drained in capped batches until a batch
     /// removes fewer than `batch_size` rows. Returns
     /// `(deliveries_deleted, outbox_deleted)`.
+    ///
+    /// The pollers use the outbox as an idempotency ledger (the rejection poller
+    /// LEFT JOINs `proposal_rejected` rows; the vote poller checks an EXISTS on
+    /// `entity_votes_threshold` rows), and they re-derive from source tables on
+    /// every tick — so deleting those rows would re-emit. Those two event types
+    /// are therefore preserved. Kafka-sourced types are safe to prune: their
+    /// offsets are committed and events older than the min-age window are skipped,
+    /// so they are never re-processed.
     #[instrument(
         name = "notification_indexer.storage.delete_expired_notifications",
         skip(self),
@@ -711,6 +719,8 @@ impl Storage {
                 WHERE id IN (
                     SELECT o.id FROM notification_outbox o
                     WHERE o.created_at < now() - make_interval(days => $1::int)
+                      -- Preserve poller idempotency ledgers (see fn docs).
+                      AND o.event_type NOT IN ('proposal_rejected', 'entity_votes_threshold')
                       AND NOT EXISTS (
                           SELECT 1 FROM notification_deliveries d WHERE d.outbox_id = o.id
                       )

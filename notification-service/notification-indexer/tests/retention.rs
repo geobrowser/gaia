@@ -29,12 +29,23 @@ CREATE TABLE notification_deliveries (
 
 /// Insert one outbox row (with an explicit age in days) and return its id.
 async fn seed_outbox(pool: &PgPool, key: &str, age_days: i64) -> uuid::Uuid {
+    seed_outbox_typed(pool, key, age_days, "proposal_created").await
+}
+
+/// Insert one outbox row of a given event_type and age; return its id.
+async fn seed_outbox_typed(
+    pool: &PgPool,
+    key: &str,
+    age_days: i64,
+    event_type: &str,
+) -> uuid::Uuid {
     let row = sqlx::query(
         "INSERT INTO notification_outbox (idempotency_key, event_type, created_at)
-         VALUES ($1, 'proposal_created', now() - make_interval(days => $2::int))
+         VALUES ($1, $2, now() - make_interval(days => $3::int))
          RETURNING id",
     )
     .bind(key)
+    .bind(event_type)
     .bind(age_days as i32)
     .fetch_one(pool)
     .await
@@ -95,6 +106,10 @@ async fn retention_deletes_old_rows_fk_safely() {
     seed_delivery(&pool, d, 0).await;
     // E: old outbox, no deliveries → removed.
     seed_outbox(&pool, "e", 40).await;
+    // F,G: old poller-ledger rows with no deliveries → KEPT (deleting them would
+    // let the rejection / vote-threshold pollers re-emit).
+    seed_outbox_typed(&pool, "f", 40, "proposal_rejected").await;
+    seed_outbox_typed(&pool, "g", 40, "entity_votes_threshold").await;
 
     // batch_size = 2 forces the drain loop to iterate more than once.
     let (deliveries_deleted, outbox_deleted) = storage
@@ -108,7 +123,7 @@ async fn retention_deletes_old_rows_fk_safely() {
     );
     assert_eq!(
         outbox_deleted, 3,
-        "old unreferenced outbox A,B,E removed (C kept; D kept — still referenced)"
+        "old unreferenced outbox A,B,E removed (C kept; D referenced; F,G are ledgers)"
     );
     assert_eq!(
         count(&pool, "notification_deliveries").await,
@@ -117,7 +132,7 @@ async fn retention_deletes_old_rows_fk_safely() {
     );
     assert_eq!(
         count(&pool, "notification_outbox").await,
-        2,
-        "C,D outbox remain"
+        4,
+        "C,D + ledger rows F,G remain"
     );
 }

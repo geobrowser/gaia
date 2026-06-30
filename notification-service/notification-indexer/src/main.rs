@@ -109,11 +109,18 @@ async fn async_main() -> Result<(), IndexerError> {
         .unwrap_or(60);
 
     // Retention: delete notification_outbox / notification_deliveries rows older
-    // than this many days. Default 30. Set to 0 to disable the cleanup task.
-    let retention_days: i32 = env::var("NOTIFICATION_RETENTION_DAYS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(30);
+    // than this many days. Unset = default 30; 0 disables the cleanup task.
+    // Validate rather than silently default — a malformed value could mask a
+    // misconfig, and a NEGATIVE value would push the cutoff into the future and
+    // delete everything. Fail fast on anything that isn't a non-negative integer.
+    let retention_days: i32 = match env::var("NOTIFICATION_RETENTION_DAYS") {
+        Ok(s) => s.parse::<i32>().ok().filter(|&v| v >= 0).ok_or_else(|| {
+            IndexerError::Config(format!(
+                "NOTIFICATION_RETENTION_DAYS must be a non-negative integer (0 disables), got {s:?}"
+            ))
+        })?,
+        Err(_) => 30,
+    };
 
     // How often the retention cleanup task runs. Default 86400s (daily).
     // Guard against 0: tokio::time::interval panics on a zero period, and an
