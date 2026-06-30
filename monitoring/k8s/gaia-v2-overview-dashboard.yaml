@@ -80,7 +80,7 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_requests_per_second:rate5m",
+              "expr": "gaia_v2:ingress_requests_per_second:rate5m",
               "legendFormat": "rps",
               "refId": "A"
             }
@@ -132,7 +132,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "sum(increase(nginx_ingress_controller_requests{host=\"testnet-api.geobrowser.io\",status=~\"5..\"}[$__range]))",
+              "expr": "sum(increase(nginx_ingress_controller_requests{host=\"testnet-api-v2.geobrowser.io\",status=~\"5..\"}[$__range]))",
               "instant": true
             }
           ],
@@ -189,7 +189,7 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_p99_latency_seconds:5m",
+              "expr": "gaia_v2:ingress_p99_latency_seconds:5m",
               "legendFormat": "p99",
               "refId": "A"
             }
@@ -243,7 +243,7 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_5xx_ratio:rate5m",
+              "expr": "gaia_v2:ingress_5xx_ratio:rate5m",
               "legendFormat": "5xx",
               "refId": "A"
             }
@@ -349,7 +349,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max(gaia_api_graphql_pool_saturated)",
+              "expr": "max(gaia_api_graphql_pool_saturated{namespace=\"gaia-v2\"})",
               "legendFormat": "saturated",
               "refId": "A"
             }
@@ -425,12 +425,12 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_requests_per_second:rate5m",
+              "expr": "gaia_v2:ingress_requests_per_second:rate5m",
               "legendFormat": "total",
               "refId": "A"
             },
             {
-              "expr": "api:ingress_5xx_per_second:rate5m",
+              "expr": "gaia_v2:ingress_5xx_per_second:rate5m",
               "legendFormat": "5xx",
               "refId": "B"
             }
@@ -484,22 +484,22 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_p50_latency_seconds:5m",
+              "expr": "gaia_v2:ingress_p50_latency_seconds:5m",
               "legendFormat": "p50",
               "refId": "A"
             },
             {
-              "expr": "api:ingress_p75_latency_seconds:5m",
+              "expr": "gaia_v2:ingress_p75_latency_seconds:5m",
               "legendFormat": "p75",
               "refId": "B"
             },
             {
-              "expr": "api:ingress_p95_latency_seconds:5m",
+              "expr": "gaia_v2:ingress_p95_latency_seconds:5m",
               "legendFormat": "p95",
               "refId": "C"
             },
             {
-              "expr": "api:ingress_p99_latency_seconds:5m",
+              "expr": "gaia_v2:ingress_p99_latency_seconds:5m",
               "legendFormat": "p99",
               "refId": "D"
             }
@@ -537,17 +537,17 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_499_per_second:rate5m",
+              "expr": "gaia_v2:ingress_499_per_second:rate5m",
               "legendFormat": "499 (client cancel)",
               "refId": "A"
             },
             {
-              "expr": "api:ingress_500_per_second:rate5m",
+              "expr": "gaia_v2:ingress_500_per_second:rate5m",
               "legendFormat": "500 (server error)",
               "refId": "B"
             },
             {
-              "expr": "api:ingress_503_per_second:rate5m",
+              "expr": "gaia_v2:ingress_503_per_second:rate5m",
               "legendFormat": "503 (unavailable)",
               "refId": "C"
             }
@@ -616,7 +616,7 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_status_requests_per_second:rate5m",
+              "expr": "gaia_v2:ingress_status_requests_per_second:rate5m",
               "legendFormat": "{{status}}",
               "refId": "A"
             }
@@ -667,7 +667,7 @@ data:
           },
           "targets": [
             {
-              "expr": "avg(gaia_api_db_pool_utilization_ratio)",
+              "expr": "avg(gaia_api_db_pool_utilization_ratio{namespace=\"gaia-v2\"})",
               "legendFormat": "utilization",
               "refId": "A"
             }
@@ -729,7 +729,7 @@ data:
           },
           "targets": [
             {
-              "expr": "avg(gaia_api_graphql_pool_utilization_ratio)",
+              "expr": "avg(gaia_api_graphql_pool_utilization_ratio{namespace=\"gaia-v2\"})",
               "legendFormat": "utilization",
               "refId": "A"
             }
@@ -791,17 +791,17 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(gaia_api_db_pool_waiting_count)",
+              "expr": "sum(gaia_api_db_pool_waiting_count{namespace=\"gaia-v2\"})",
               "legendFormat": "REST waiting",
               "refId": "A"
             },
             {
-              "expr": "sum(gaia_api_graphql_pool_waiting_count)",
+              "expr": "sum(gaia_api_graphql_pool_waiting_count{namespace=\"gaia-v2\"})",
               "legendFormat": "GQL waiting",
               "refId": "B"
             },
             {
-              "expr": "sum(gaia_api_graphql_pool_recent_acquire_timeouts)",
+              "expr": "sum(gaia_api_graphql_pool_recent_acquire_timeouts{namespace=\"gaia-v2\"})",
               "legendFormat": "GQL acquire timeouts",
               "refId": "C"
             }
@@ -3428,7 +3428,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "sum by (le) (rate(gaia_api_graphql_query_cost_bucket[5m]))",
+              "expr": "sum by (le) (rate(gaia_api_graphql_query_cost_bucket{namespace=\"gaia-v2\"}[5m]))",
               "format": "heatmap",
               "legendFormat": "{{le}}"
             }
@@ -3472,17 +3472,17 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "histogram_quantile(0.50, sum by (le) (rate(gaia_api_graphql_query_cost_bucket[5m])))",
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(gaia_api_graphql_query_cost_bucket{namespace=\"gaia-v2\"}[5m])))",
               "legendFormat": "p50"
             },
             {
               "refId": "B",
-              "expr": "histogram_quantile(0.95, sum by (le) (rate(gaia_api_graphql_query_cost_bucket[5m])))",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(gaia_api_graphql_query_cost_bucket{namespace=\"gaia-v2\"}[5m])))",
               "legendFormat": "p95"
             },
             {
               "refId": "C",
-              "expr": "histogram_quantile(0.99, sum by (le) (rate(gaia_api_graphql_query_cost_bucket[5m])))",
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(gaia_api_graphql_query_cost_bucket{namespace=\"gaia-v2\"}[5m])))",
               "legendFormat": "p99"
             }
           ],
@@ -3542,7 +3542,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket[5m]))",
+              "expr": "sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket{namespace=\"gaia-v2\"}[5m]))",
               "format": "heatmap",
               "legendFormat": "{{le}}"
             }
@@ -3586,17 +3586,17 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "histogram_quantile(0.50, sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket[5m])))",
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket{namespace=\"gaia-v2\"}[5m])))",
               "legendFormat": "p50"
             },
             {
               "refId": "B",
-              "expr": "histogram_quantile(0.95, sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket[5m])))",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket{namespace=\"gaia-v2\"}[5m])))",
               "legendFormat": "p95"
             },
             {
               "refId": "C",
-              "expr": "histogram_quantile(0.99, sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket[5m])))",
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(gaia_api_graphql_response_size_bytes_bucket{namespace=\"gaia-v2\"}[5m])))",
               "legendFormat": "p99"
             }
           ],
