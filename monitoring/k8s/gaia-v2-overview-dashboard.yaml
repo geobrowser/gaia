@@ -3406,7 +3406,7 @@ data:
             "h": 1,
             "w": 24,
             "x": 0,
-            "y": 76
+            "y": 123
           },
           "panels": []
         },
@@ -3419,7 +3419,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 77
+            "y": 124
           },
           "datasource": {
             "type": "prometheus",
@@ -3463,7 +3463,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 77
+            "y": 124
           },
           "datasource": {
             "type": "prometheus",
@@ -3513,14 +3513,14 @@ data:
         },
         {
           "type": "row",
-          "id": 108,
+          "id": 109,
           "title": "GraphQL Response Size (sampled when durationMs ≥ 1s)",
           "collapsed": false,
           "gridPos": {
             "h": 1,
             "w": 24,
             "x": 0,
-            "y": 85
+            "y": 132
           },
           "panels": []
         },
@@ -3533,7 +3533,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 86
+            "y": 133
           },
           "datasource": {
             "type": "prometheus",
@@ -3577,7 +3577,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 86
+            "y": 133
           },
           "datasource": {
             "type": "prometheus",
