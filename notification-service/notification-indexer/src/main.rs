@@ -141,6 +141,25 @@ async fn async_main() -> Result<(), IndexerError> {
         None => 86_400,
     };
 
+    // Rows deleted per batch by the retention task. Default 5000. Guard against
+    // <= 0: a non-positive LIMIT would make the drain loop never make progress
+    // (it stops when a batch deletes fewer than this many rows). Fall back to the
+    // default with a warning.
+    let retention_batch_size: i64 = match env::var("RETENTION_BATCH_SIZE")
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok())
+    {
+        Some(v) if v > 0 => v,
+        Some(v) => {
+            warn!(
+                value = v,
+                "RETENTION_BATCH_SIZE must be a positive integer; using default 5000"
+            );
+            5_000
+        }
+        None => 5_000,
+    };
+
     let health_port: u16 = env::var("HEALTH_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -352,10 +371,10 @@ async fn async_main() -> Result<(), IndexerError> {
         info!(
             retention_days = retention_days,
             interval_secs = retention_cleanup_interval_secs,
+            batch_size = retention_batch_size,
             "Retention cleanup enabled"
         );
         Some(tokio::spawn(async move {
-            const RETENTION_BATCH_SIZE: i64 = 5_000;
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
                 retention_cleanup_interval_secs,
             ));
@@ -367,7 +386,7 @@ async fn async_main() -> Result<(), IndexerError> {
                     }
                     _ = interval.tick() => {
                         match retention_storage
-                            .delete_expired_notifications(retention_days, RETENTION_BATCH_SIZE)
+                            .delete_expired_notifications(retention_days, retention_batch_size)
                             .await
                         {
                             Ok((deliveries, outbox)) => {
