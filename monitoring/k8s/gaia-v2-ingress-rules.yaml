@@ -21,7 +21,7 @@ spec:
           expr: |
             gaia_v2:ingress_5xx_per_second:rate5m
             /
-            clamp_min(gaia_v2:ingress_requests_per_second:rate5m, 1)
+            clamp_min(gaia_v2:ingress_requests_per_second:rate5m, 1e-9)
 
         - record: gaia_v2:ingress_status_requests_per_second:rate5m
           expr: |
@@ -84,13 +84,13 @@ spec:
           expr: |
             gaia_v2:ingress_499_per_second:rate5m
             /
-            clamp_min(gaia_v2:ingress_requests_per_second:rate5m, 1)
+            clamp_min(gaia_v2:ingress_requests_per_second:rate5m, 1e-9)
 
         - record: gaia_v2:ingress_503_ratio:rate5m
           expr: |
             gaia_v2:ingress_503_per_second:rate5m
             /
-            clamp_min(gaia_v2:ingress_requests_per_second:rate5m, 1)
+            clamp_min(gaia_v2:ingress_requests_per_second:rate5m, 1e-9)
 
         - record: gaia_v2:ingress_p95_latency_seconds:5m
           expr: |

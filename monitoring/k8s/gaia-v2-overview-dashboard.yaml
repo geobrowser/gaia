@@ -880,7 +880,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22api%5C%22,container%3D%5C%22api%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22gaia-v2%5C%22,container%3D%5C%22api%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1132,7 +1132,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22search%5C%22,container%3D%5C%22search-indexer%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22gaia-v2%5C%22,container%3D%5C%22search-indexer%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1258,7 +1258,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22scoring%5C%22,container%3D%5C%22scoring-service%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22gaia-v2%5C%22,container%3D%5C%22scoring-service%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1321,7 +1321,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22api%5C%22,container%3D%5C%22api%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22gaia-v2%5C%22,container%3D%5C%22api%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1573,7 +1573,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22search%5C%22,container%3D%5C%22search-indexer%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22gaia-v2%5C%22,container%3D%5C%22search-indexer%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1699,7 +1699,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22scoring%5C%22,container%3D%5C%22scoring-service%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22gaia-v2%5C%22,container%3D%5C%22scoring-service%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
