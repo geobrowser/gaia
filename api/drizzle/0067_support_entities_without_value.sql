@@ -45,6 +45,7 @@ CREATE OR REPLACE FUNCTION public.entities_ordered_by_property(
 )
 RETURNS SETOF entities AS $fn$
 DECLARE
+  types_rel_id  constant uuid := '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1';  -- TYPES relation: links an entity to its type entity
   resolved_type   text;
   sort_expr       text;
   null_pred       text;
@@ -109,7 +110,7 @@ BEGIN
   IF type_ids IS NOT NULL AND cardinality(type_ids) > 0 THEN
     type_pred := format(
       ' AND EXISTS (SELECT 1 FROM relations r WHERE r.from_entity_id = v.entity_id AND r.type_id = %L AND r.to_entity_id = ANY(%L::uuid[]) AND r.space_id = v.space_id)',
-      '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1', type_ids);
+      types_rel_id, type_ids);
   END IF;
 
   -- Value-less entities can only be bounded by the TYPES relation; without type_ids there is
@@ -138,11 +139,9 @@ BEGIN
     END IF;
 
     -- Candidate set for value-less entities: entities of type_ids (within space_ids).
-    -- '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1' is TYPES_RELATION_ID, the system "Types" relation
-    -- that links an entity (from_entity_id) to its type entity (to_entity_id).
     candidate_pred := format(
       'r.type_id = %L AND r.to_entity_id = ANY(%L::uuid[])',
-      '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1', type_ids) || rel_space_pred;
+      types_rel_id, type_ids) || rel_space_pred;
 
     sql :=
          'WITH scored AS ('
