@@ -33,22 +33,24 @@ holds only `member_spaces` / `editor_spaces`.
 We want a reputation quantity that:
 
 - is **scoped to a space** (expertise is domain-specific);
-- rewards demonstrated contribution (rankings and votes on the person) and verified standing;
+- rewards demonstrated contribution (authored work, rankings, and votes on the person) and verified standing;
 - is resistant to sybil/gaming (built on on-chain verification and membership); and
 - **weights voting**, so that consensus in a space is driven by its proven contributors.
 
 ## Background — what we build on
 
-Much of Rep's infrastructure already exists. The verification pass (2026-06-23) plus a follow-up
-ranking-pipeline investigation (2026-06-26) clarified one important point: the Expert band's signal
-is produced by the **ordinal ranking system**, not by the entity scoring tables that earlier drafts
-assumed (see *Expertise signal → the Expert band* and Finding #9).
+Much of Rep's infrastructure already exists. The verification pass (2026-06-23) and a follow-up
+ranking-pipeline investigation (2026-06-26) mapped the available signals; a design discussion on
+2026-06-30 then settled how the Expert band consumes them: **contribution is the canonical baseline
+signal, with the ordinal ranking system as a complementary overlay** (Decision #8 and *Expertise
+signal → the Expert band*). Both are distinct from the entity scoring assumptions earlier drafts
+made (Finding #9).
 
 | Building block | Where | Reuse for Rep |
 |---|---|---|
-| Ordinal ranking aggregate | `ranks.ranking_scores` (per entity × space), produced by the `ranking-indexer` from `RANK_VOTES` relations | **Expert band** canonical signal — the rankings push populates this directly (Finding #9). |
+| Authored-content / entity scores | `scoring-service` cronjob → `local_scores`, `global_scores`, `space_scores`, joinable to authorship via `edit_versions.created_by_id` (Finding #6) | **Expert band** canonical *baseline* signal (contribution) — scales to every editor, no curator effort (Decision #8). |
+| Ordinal ranking aggregate | `ranks.ranking_scores` (per entity × space), produced by the `ranking-indexer` from `RANK_VOTES` relations | **Expert band** complementary *overlay* signal — high-signal where curation is feasible; the rankings push populates it directly (Finding #9). |
 | Person-entity link | `spaces.topic_id` FK → entity typed `Person`, gated on `subspaces type='verified'` | **Expert band** per-user identity resolution (Finding #8). |
-| Per-entity, per-space scores | `scoring-service` cronjob → `local_scores`, `global_scores`, `space_scores` | **Expert band** complementary signal — populated only if a person receives direct up/down votes. |
 | Uniform vote-weight hook | `Vote.weight` (default `1.0`) in `scoring-service/cronjob/src/algorithm/models.py` | **Reputation-weighted voting** sets this from Rep. |
 | On-chain verification | `SUBSPACE_VERIFIED` / `SUBSPACE_UNVERIFIED` → `space.trust.extensions` topic → `kg-indexer` → `subspaces` table (`type='verified'`) | **Verified band** raw edges. |
 | Transitive verified closure | `atlas` (`atlas/src/graph/transitive.rs`): BFS + visited-set from root, diamond/cycle-safe, reverse-dependency invalidation, revocation cascade; emits `topology.canonical` | **Verified band** transitivity and revocation — *no new graph code required*. |
@@ -84,7 +86,7 @@ rep     = clamp(points / 1000, 0, 1)
 deliberately lopsided: Expert spans `0–980`, while Low-trust, Verified, and Professional together
 contribute at most `21` points (`≈ 0.021` rep). For any ranked user, `rep ≈ expert_add / 1000`; the
 other three bands function as a small floor and a gate, not as independent sources of standing. A
-fully verified, credentialed professional with **no ranking standing** therefore lands at
+fully verified, credentialed professional with **no expertise standing** therefore lands at
 `rep ≈ 0.02` — effectively silenced. This is intentional (standing is *earned through demonstrated
 expertise in the space*, not conferred by credentials), but it means the system's behaviour is
 governed almost entirely by the Expert band's signal and curve.
@@ -135,9 +137,11 @@ The Expert band converts a per-person, per-space expertise signal into points vi
 curve. The signal source and its mapping are detailed in *Expertise signal → the Expert band*; in
 summary:
 
-- The signal is a user's **normalized standing in the space's ordinal rankings** (`ranks.ranking_scores`),
-  mapped to `x ∈ [0, 1]` (S-tier → `x ≈ 1`, below-median / unranked → `x = 0`).
-- Users with no ranking standing get `expert_add = 0`.
+- The signal is a user's **normalized expertise standing in the space**, mapped to `x ∈ [0, 1]`
+  (top → `x ≈ 1`, below-median / no standing → `x = 0`). The canonical baseline is **contribution**
+  (authored-content / person `local_score`), enriched by an **ordinal ranking overlay**
+  (`ranks.ranking_scores`) where rankings exist (Decision #8).
+- Users with no standing under either signal get `expert_add = 0`.
 - A below-median standing yields `expert_add = 0`; it does **not** wipe the rest of rep (Decision #3
   — the signal is relative within a space, so "below median" ≠ "bad actor").
 - Otherwise apply the exponential curve:
@@ -198,7 +202,7 @@ cycle N+1: weights   = rep_N
           └──────────────────────┘                              ▼
                                               ┌──────────────────────────────┐
   atlas ──topology.canonical──▶ verified set  │ user_reputation (0–1, per     │
-  ranks.ranking_scores ─────────▶ expertise   │  user_space × space)          │
+  contribution + ranks ────────▶ expertise    │  user_space × space)          │
   subspaces (verified edges)                   └───────────────┬──────────────┘
   KG role config (knowledge layer)                             │ read
                                                                 ▼
@@ -229,35 +233,72 @@ CREATE INDEX user_reputation_space_rep_idx ON user_reputation (space_id, rep DES
 
 The verified set can be consumed from atlas's `topology.canonical` into a small materialized table
 (e.g. `verified_spaces(space_id)`), or queried from atlas's persisted baseline — to be confirmed with
-the atlas owner (see Dependencies). The Expert signal reads `ranks.ranking_scores`; `points_earned`
+the atlas owner (see Dependencies). The Expert signal reads the contribution baseline (`local_scores`)
+plus the ranking overlay (`ranks.ranking_scores`); `points_earned`
 (Verified band) comes from the knowledge layer once summable.
 
 ### Expertise signal → the Expert band
 
 The Expert band needs a per-person, per-space measure of "how expert is this person, here," which it
-maps through the exponential curve. The choice of source was reconsidered on 2026-06-26 after a
-ranking-pipeline investigation (Finding #9) corrected an earlier assumption.
+maps through the exponential curve. The source was reconsidered twice: a ranking-pipeline
+investigation on 2026-06-26 (Finding #9) corrected which tables the rankings push populates, and a
+design discussion on 2026-06-30 settled the signal model — **contribution as the canonical baseline,
+ordinal rankings as a complementary overlay** (Decision #8).
 
-**What the rankings push actually populates.** The upcoming curator-side rankings push seeds the
-**ordinal ranking system** (`ranks.*`), not `local_scores`. `RANK_VOTES` relations are consumed by
-the `ranking-indexer` into `ranks.rankings` / `ranks.ranking_items` / `ranks.ranking_scores`
-(`api/drizzle/0061_create_ranks_schema.sql`) — a schema the scoring-service never reads. Earlier
-drafts assumed the push would seed `local_scores[person_entity]`; that does not hold as built.
-Reading `local_scores` after the push would still return `0` for anyone who was only *ranked* rather
-than up/down-voted.
+**Why contribution is the baseline.** Expertise should be legible from what a user has demonstrably
+contributed, and that signal *scales*: it is computed from data the system already has (authored
+content joined to its scores, Finding #6; or a person entity's own `local_score`), covers every
+editor who has contributed, and needs no human effort to produce. Rankings, by contrast, require
+curators to rank people — which does not scale to spaces with hundreds of editors (a curator can only
+rank the subset they have context on). So rankings *enrich* the signal where they exist; they do not
+define it.
+
+**Why rankings are a strong overlay (not the base).** A ranking ballot is partial: a curator ranks
+only the people they know, "ranked at all" carries a floor, and the `ranking-indexer` aggregates many
+partial ballots into one ordered result per `(entity, space)` — so no single curator must rank
+everyone. Where a space *is* small enough to curate, that is high-quality signal. But coverage is the
+catch: in a large space, editors nobody ranked get no ranking standing regardless of contribution, so
+rankings alone would be blind to contribution they cannot see. Layered on top of the contribution
+baseline, they add signal without that blind spot.
+
+**Sequencing caveat.** The two signals do not arrive together. The curator-side rankings push
+(~mid-July 2026) populates `ranks.ranking_scores` directly; the contribution baseline
+(authored-content aggregation, Finding #6) must be built and is **forward-only**
+(`edit_versions.created_by_id` is null for pre-column content). So v1 may bootstrap the Expert band on
+the ranking overlay while the contribution baseline is built out, and the `x`-mapping must accept
+either signal present (or both). Note also that reading `local_scores` after the rankings push still
+returns `0` for anyone only *ranked* — rankings and entity scores are separate pipelines (Finding #9).
+
+**How ranks are produced** (the overlay pipeline, for reference). A "rank" is a user-submitted
+*ballot*, not a side effect of ordinary edits:
+
+- **Submission (GRC-20 edit).** A `Rank` entity (typed via `TYPES`, carrying a `rank_type` of
+  `ORDINAL` or `WEIGHTED`); `RANK_VOTES` relations from it to each ranked entity, each with a
+  fractional `position` and a `to_space` perspective (WEIGHTED ballots carry a weight on the reified
+  vote entity); a `Ranking Block` entity (name, filter, submission window, membership restriction);
+  and a `RANK_BLOCK` relation linking rank → block.
+- **Detect** (`ranking-indexer/src/detect.rs`) extracts those ops from the `knowledge.edits` stream
+  into `ranks.rankings` / `ranks.ranking_items` / `ranks.ranking_blocks`.
+- **Recompute** (`recompute.rs`), per affected block, full and order-independent:
+  **dedup** (latest submission per author wins) → **eligibility** (membership restriction +
+  submission window) → **scoring** → **publish**.
+- **Scoring** (`scoring.rs`) normalizes each ballot's items into `[0.5, 1.0]` (ordinal: linear by
+  position, best `1.0` / worst `0.5`; weighted: min-max of weights), **sums** per `(entity, space)`
+  across eligible ballots, sorts descending, and assigns a 1-based `position` → the
+  `{entity_id, space_id, score, position}` rows in `ranks.ranking_scores` that the Expert band reads.
 
 **Candidate sources, reconsidered:**
 
-| Source | Populated by | Status |
+| Source | Populated by | Role |
 |---|---|---|
-| **Ordinal ranking aggregate** — `ranks.ranking_scores[person_entity, space]` | the rankings push (directly) | **Recommended canonical source** — exactly what the push produces. |
-| Person-entity `local_score` | direct up/down votes on a person's entity | Complementary / future — requires a rankings→votes integration to capture ranking signal (it does not exist today). |
-| Authored-content aggregation | derived from edit authorship (Finding #6) | Deep fallback only. |
+| **Authored-content aggregation** — content a user authored, joined to `local_scores` (Finding #6) | edit authorship (`edit_versions.created_by_id`) | **Canonical baseline.** Scales to every contributor; forward-only coverage, needs building. |
+| **Person-entity `local_score`** | direct up/down votes on a person's entity | Baseline (alternative/complement) — usable once people receive direct votes; none today. |
+| **Ordinal ranking aggregate** — `ranks.ranking_scores[person_entity, space]` | the rankings push (directly) | **Overlay.** High-signal where curation is feasible; available first (mid-July push). |
 
-**Why the ordinal ranking aggregate is the natural fit — the S-tier framing.** Ordinal rankings
-place people into ordered positions; the human-facing form of this is **tiers (S / A / B / C / D)**.
-The Expert band's exponential curve was chosen precisely to keep average contributors low and reserve
-the top of the range for the very best — the same shape as a tier ladder. The exponential curve is
+**The S-tier framing — why the curve suits the ranking overlay.** Ordinal rankings place people into
+ordered positions; the human-facing form of this is **tiers (S / A / B / C / D)**. The Expert band's
+exponential curve was chosen precisely to keep average contributors low and reserve the top of the
+range for the very best — the same shape as a tier ladder. For the ranking overlay the curve is
 therefore *itself* the ordinal → points mapping: a person's normalized rank (or tier) becomes
 `x ∈ [0, 1]`, and the curve assigns points. Tiers map cleanly onto the reference table:
 
@@ -313,11 +354,11 @@ rank ⇒ `x = 0`. Two consequences must be decided deliberately, not inherited f
 Pinning the exact `ranks.ranking_scores.score` / `position` → `x` function (and the `WEIGHTED` case)
 is the gating design task for Phase 3.
 
-**Open for sign-off.** This revises Decision #8, which previously named the Person-entity
-`local_score` as canonical on the now-corrected premise that rankings feed `local_scores`. The
-recommendation is to adopt the ordinal ranking aggregate as canonical, retain `local_score` as a
-complementary signal if and when people also receive direct up/down votes, and keep authored-content
-as a deep fallback.
+**Resolved (2026-06-30).** Decision #8 is settled on the contribution-baseline + ranking-overlay
+model above: contribution (authored-content / person `local_score`) is the canonical baseline because
+it scales and covers every contributor; the ordinal ranking aggregate is a complementary overlay,
+strong where curation is feasible and available first via the mid-July push. The remaining open task
+is the `x`-mapping — how each signal normalizes to `x ∈ [0, 1]` and how the two combine (Phase 3).
 
 **Person-entity resolution (confirmed, Finding #8).** Whichever score table is read, the person
 entity for a user is resolved per space:
@@ -326,14 +367,15 @@ entity for a user is resolved per space:
 personal space (must be verified)                       -- subspaces type='verified' gate
   → spaces.topic_id                                      -- FK column → entities.id (schema.ts:103)
   → entity with a TYPES_PROPERTY relation to PERSON_TYPE (7ed45f2b…)
-  → ranks.ranking_scores[person_entity_id, space_id]     -- (or local_scores, complementary)
+  → local_scores[person_entity_id, space_id]             -- contribution baseline
+    + ranks.ranking_scores[person_entity_id, space_id]   -- ranking overlay
 ```
 
 The join is cheap and mirrors the existing `profileSelectFields` type-relation pattern
 (`api/src/profile/queries.ts`).
 
-**Authored-content fallback (Finding #6), if ever needed.** Aggregate the scores of content a user
-authored, via the `edit_versions.created_by_id` join:
+**Authored-content aggregation (Finding #6) — the contribution baseline.** Aggregate the scores of
+content a user authored, via the `edit_versions.created_by_id` join:
 
 ```
 edit_versions (created_by_id = :member_space_id) → version_key
@@ -341,8 +383,10 @@ edit_versions (created_by_id = :member_space_id) → version_key
 q = (Σ sₑ + κ·0.5) / (n + κ)     κ ≈ 5, shrink toward neutral 0.5 (anti-gaming / low-volume)
 ```
 
-Caveats if used: author coverage is **forward-only** (`created_by_id` is null for pre-column
-content), and the join runs through the **versioned** tables, not the live ones.
+This is the canonical baseline signal (Decision #8). Two caveats shape v1: author coverage is
+**forward-only** (`created_by_id` is null for pre-column content), and the join runs through the
+**versioned** tables, not the live ones — which is why the ranking overlay, available first, may
+carry the Expert band until this is built out.
 
 ### Where the code lives
 
@@ -350,14 +394,43 @@ content), and the join runs through the **versioned** tables, not the live ones.
   runs after `rank_entities` / `rank_spaces`. Reuses its DB connection, data provider, and writer.
 - **Exponential curve:** a small, table-driven, unit-tested module (Python; a mirror of the spec's
   Rust lookup table). O(1), no runtime `exp()`.
-- **Expert signal:** read `ranks.ranking_scores` for the resolved person entity → normalize to `x` →
-  curve.
+- **Expert signal:** read the contribution baseline (`local_scores` for the resolved person entity /
+  authored-content aggregation) and, where present, the ranking overlay (`ranks.ranking_scores`);
+  combine and normalize to `x` → curve.
 - **Vote weighting:** in the existing scoring path, populate `Vote.weight` from `user_reputation`
   (the previous cycle's values); `rep = 0 ⇒ weight = 0`, no floor (Decision #5). Compose carefully
   with distance weighting (Finding #4 / Decision #4).
 - **Verified set:** a consumer or query bridging atlas `topology.canonical` → rep stage.
-- **API:** GraphQL fields `userSpaceRep(spaceId, userSpaceId)` and `spacePeopleByRep(spaceId)`
-  reading `user_reputation`, mirroring how `entityGlobalScore` is exposed.
+- **Read & publish surface:** see *Read & publish surface* below — a `user_reputation` table (system
+  of record) plus an optional published `Reputation` system property for product/graph consumption.
+
+### Read & publish surface
+
+Rep needs to be both *consumed internally* (the vote-weighting loop) and *exposed* to product. The
+codebase offers two established patterns, and rep uses them the way the ranking-indexer already does —
+both at once:
+
+- **`user_reputation` table — system of record (required).** The vote-weighting feedback loop reads
+  rep straight from this table each cycle, and it holds the band breakdown
+  (`low_trust` / `verified_add` / `prof_add` / `expert_add`) for audit and display. This is the
+  internal source of truth and does not change regardless of the product surface. Scores
+  (`local_scores` / `global_scores`) follow this pattern — private tables surfaced via a query plugin
+  (`entityGlobalScore`), not graph properties.
+- **Published `Reputation` system property — optional, for product (Decision #10).** The
+  ranking-indexer publishes its aggregate into the public graph as a protected, indexer-owned property
+  (`Rank position value`, on a reified `RANK_POSITION` relation — `ranking-indexer/src/publish.rs`,
+  reserved in `PROTECTED_PROPERTY_IDS`). Rep can do the same: write a per-`(person, space)`
+  `Reputation` value on the Person entity, so product reads it through the generic entity/graph API
+  (sortable, composable with other queries) rather than a bespoke field. It fits cleanly — graph
+  values are already space-scoped (`values.space_id`), so `value(person_entity, Reputation, space)`
+  maps 1:1 with rep's key. Publish the display integer (0–1000), keep the breakdown private in the
+  table, and upsert the whole set each recompute with deterministic IDs (the `publish.rs` shape).
+- **GraphQL fields (either way).** `userSpaceRep(spaceId, userSpaceId)` and `spacePeopleByRep(spaceId)`
+  read `user_reputation`, mirroring how `entityGlobalScore` is exposed.
+
+Whether to also publish the system property is gated on product's consumption model (Decision #10):
+publish it if they want rep in the generic graph API; skip it if a dedicated field suffices, since
+writing into the canonical graph every cycle is real churn for no gain.
 
 ## Implementation phases
 
@@ -385,15 +458,18 @@ that the interesting behaviour arrives only once those inputs do.
 
 ### Phase 3 — Rep computation stage (no weighting yet)
 
-> **Blocked on two sign-offs.** (1) Re-confirmation of Decision #8 (Expert source =
-> `ranks.ranking_scores`); (2) the `x`-normalization decision below. Both gate the Expert band, which
-> is ~98% of rep — do not begin Phase 3 computation until they are resolved.
+> **Blocked on the `x`-mapping.** Decision #8 (signal model = contribution baseline + ranking overlay)
+> is resolved; the open gate is how each signal normalizes to `x ∈ [0, 1]` and how the two combine
+> (below). This drives ~98% of rep — do not begin Phase 3 computation until it is pinned.
 
 - Verified-set bridge from atlas `topology.canonical`.
-- **Expert band:** resolve the person entity (`spaces.topic_id → PERSON_TYPE`, verified), read
-  `ranks.ranking_scores`, normalize to `x`, apply the curve (Decisions #8 / #9). The band reads `0`
-  until the rankings push seeds standing (~mid-July 2026), degrading gracefully (rep = low-trust +
-  verified + professional) with no deadlock. Pin the ranking-aggregate → `x` normalization here.
+- **Expert band:** resolve the person entity (`spaces.topic_id → PERSON_TYPE`, verified), read the
+  contribution baseline (`local_scores` / authored-content) and the ranking overlay
+  (`ranks.ranking_scores`), combine, normalize to `x`, apply the curve (Decisions #8 / #9). The band
+  degrades gracefully to `0` where neither signal has standing (rep = low-trust + verified +
+  professional) with no deadlock. Pin the signal → `x` normalization and the baseline/overlay combine
+  here. (v1 may lean on the ranking overlay first; the contribution baseline is forward-only and needs
+  building.)
 - **Low-trust** (removal/unverify only) and **Verified gating** (flat `2`). The Verified variable
   component remains deferred until payout-entity summation exists (Decision #2).
 - Write `user_reputation`. Weighting still uniform (`1.0`).
@@ -417,7 +493,8 @@ that the interesting behaviour arrives only once those inputs do.
 - A user's `rep` is computed per space and stored in `[0, 1]`, displayable as 0–1000.
 - The Expert band matches the reference exponential table (and the tier mapping) within rounding.
 - The Verified band reflects atlas's transitive closure, including the revocation cascade on unverify.
-- Members with no ranking standing get `expert_add = 0` and a well-defined total.
+- Members with no expertise standing (neither contribution nor ranking) get `expert_add = 0` and a
+  well-defined total.
 - With weighting enabled, scores reflect rep-weighted votes; with it disabled, behavior is identical
   to today.
 - No cold-start deadlock: a fresh space with no rep still produces scores.
@@ -427,10 +504,12 @@ that the interesting behaviour arrives only once those inputs do.
 - **Atlas integration (dependency).** Confirm the contract for consuming the verified closure
   (`topology.canonical` topic vs. querying atlas's persisted baseline) with the atlas owner. The
   Verified band's correctness depends on it.
-- **Ranking-aggregate semantics (dependency).** The Expert band reads `ranks.ranking_scores`; pin the
-  exact normalization of its `score` / `position` to `x ∈ [0, 1]` (percentile for ordinal,
-  normalized weight for weighted) before Phase 3 lands. The band degrades gracefully to `0` until the
-  rankings push populates standing (~mid-July 2026, crypto space first, ahead of the debates launch).
+- **Signal normalization (dependency).** The Expert band combines the contribution baseline
+  (`local_scores` / authored-content) with the ranking overlay (`ranks.ranking_scores`); pin each
+  signal's normalization to `x ∈ [0, 1]` (percentile for ordinal, normalized weight for weighted,
+  `max(0, 2q − 1)` for `local_score`) and the combine rule before Phase 3 lands. The band degrades
+  gracefully to `0` until a signal populates standing — the ranking overlay arrives first via the
+  push (~mid-July 2026, crypto space first, ahead of the debates launch).
 - **Migration lock (risk).** Adding `user_reputation` plus its index on a busy DB: use
   `CREATE INDEX CONCURRENTLY` (which cannot run inside Drizzle's transaction wrapper — pre-build
   manually, mirroring the `0064` pattern).
@@ -453,8 +532,9 @@ that the interesting behaviour arrives only once those inputs do.
 
 ## Decisions
 
-*Resolved in design review on 2026-06-22 unless noted; #3 and #8 confirmed in review on 2026-06-24;
-#8 revised on 2026-06-26 following Finding #9 and pending re-confirmation.*
+*Resolved in design review on 2026-06-22 unless noted; #3 and #8 confirmed 2026-06-24; #8 revised
+2026-06-26 (Finding #9) and re-settled 2026-06-30 (contribution baseline + ranking overlay); #10
+added 2026-06-30.*
 
 1. **Cap math → `EXPERT_MAX = 980`.** A true 1000 cap. The `+1` from low-trust, which pushes the
    theoretical maximum to 1001, is absorbed by the storage clamp, so the displayed ceiling is exactly
@@ -490,21 +570,30 @@ that the interesting behaviour arrives only once those inputs do.
    scoring-service already pays to recompute for `local_scores`. Add a cardinality metric and move to
    incremental (atlas-style reverse-dependency invalidation) only if data shows it to be a
    bottleneck; premature invalidation is exactly what caused the recent ranking-indexer crash-loop.
-8. **Expert-band source → ordinal ranking aggregate (`ranks.ranking_scores`)** *(revised 2026-06-26;
-   pending re-confirmation).* The endorse/rank-a-person surface is in scope: the initial curator-side
-   rankings push (~mid-July 2026, crypto space first, ahead of the debates launch) seeds it. Finding
-   #9 showed the push populates the ordinal ranking system rather than `local_scores`, so the Expert
-   band reads `ranks.ranking_scores` directly, with the exponential curve serving as the ordinal-tier
-   → points mapping (see *Expertise signal → the Expert band*). The Person-entity `local_score`
-   (resolution confirmed, Finding #8) becomes a complementary signal usable only once people receive
-   direct up/down votes; authored-content (Finding #6) remains a deep fallback. *Superseded premise:*
-   earlier drafts named `local_score` as canonical on the assumption that rankings feed it.
-9. **Expert-band `x`-mapping.** Map the source signal to `x ∈ [0, 1]` with below-median → `0` and the
-   top of the range → `1`. For the ranking aggregate this is a within-space normalized rank
-   (percentile) or normalized weight; for the `local_score` complementary signal it is
-   `x = max(0, 2q − 1)`, which folds the `(0,1)`-neutral-`0.5` range. Note that a `local_score` of `1`
-   is an unreachable sigmoid asymptote, so its realistic Expert ceiling sits below `980` — acceptable,
-   as it reserves the top for true outliers.
+8. **Expert-band signal → contribution baseline + ranking overlay** *(re-settled 2026-06-30).*
+   Contribution is the canonical baseline: it scales to every editor and needs no curator effort,
+   sourced from authored-content aggregation (Finding #6) or a person entity's own `local_score`
+   (Finding #8). The ordinal ranking aggregate (`ranks.ranking_scores`, Finding #9) is a complementary
+   overlay — high-signal where curation is feasible, but unable to cover large editor sets on its own
+   (a curator can only rank people they have context on), so it enriches rather than defines the
+   signal. The curve doubles as the ordinal → points mapping for the overlay (see *Expertise signal →
+   the Expert band*). **Sequencing:** rankings land first (mid-July push); the contribution baseline is
+   forward-only and must be built, so v1 may bootstrap on the overlay. *Superseded:* the 2026-06-22
+   draft named `local_score` canonical assuming rankings feed it; the 2026-06-26 revision named the
+   ranking aggregate canonical — both are folded into the baseline+overlay model here.
+9. **Expert-band `x`-mapping** *(open — the Phase 3 gate).* Map each signal to `x ∈ [0, 1]` with
+   below-median → `0` and the top of the range → `1`, then combine baseline and overlay. For the
+   contribution baseline (`local_score`) it is `x = max(0, 2q − 1)`, folding the `(0,1)`-neutral-`0.5`
+   range (a `local_score` of `1` is an unreachable sigmoid asymptote, so its realistic ceiling sits
+   below `980` — acceptable, it reserves the top for true outliers). For the ranking overlay it is a
+   within-space normalized rank (percentile) or normalized weight. The combine rule (max? weighted
+   blend? overlay-dominates-where-present?) and the thin-ranked-space guard are open for Phase 3.
+10. **Rep exposure → table (required) + optional published system property** *(added 2026-06-30).*
+    `user_reputation` is the system of record (drives the vote-weighting loop, holds the band
+    breakdown). Whether to *also* publish a protected `Reputation` system property into the KG (the
+    `publish.rs` pattern) is gated on product's consumption model: publish it if product reads rep
+    through the generic entity/graph API; skip it if a dedicated `userSpaceRep` field suffices, since
+    per-cycle graph writes are real churn. See *Read & publish surface*.
 
 ## Verification findings
 
@@ -577,17 +666,22 @@ per-item `position` and optional `weight`, aggregated per entity × space into `
 The scoring-service reads only `user_votes` filtered to `object_type = 0`
 (`scoring_data_provider.py` `_fetch_votes`), fed by the `vote-indexer` from `HermesVoteCast` events;
 it never reads `ranks.*`. **Consequence:** the rankings push seeds `ranks.ranking_scores`, not
-`local_scores`. The Expert band therefore reads the ranking aggregate directly (Decision #8); feeding
-rankings into `local_scores` would require a separate rankings→votes integration (a distinct,
+`local_scores`. The Expert band's ranking *overlay* therefore reads the aggregate directly
+(Decision #8); feeding rankings into `local_scores` would require a separate rankings→votes
+integration (a distinct,
 larger piece of work) and is not needed for rep.
 
 ## Open / to confirm
 
-- **Re-confirm Decision #8** — the Expert source moves from `local_score` to the ordinal ranking
-  aggregate (`ranks.ranking_scores`) on the corrected premise of Finding #9. This is the one item
-  needing fresh sign-off.
-- **Ranking-aggregate → `x` normalization** — pin the exact mapping of `ranks.ranking_scores`
-  (`score` / `position`, and the `WEIGHTED` case) to `x ∈ [0, 1]` in Phase 3.
+- **Signal → `x` mapping and baseline/overlay combine** (Decision #9) — pin how the contribution
+  baseline (`local_score` / authored-content) and the ranking overlay (`ranks.ranking_scores`) each
+  normalize to `x ∈ [0, 1]`, the combine rule, and the thin-ranked-space guard. The Phase 3 gate.
+- **Contribution-baseline build-out** — authored-content aggregation (Finding #6) needs implementing
+  and is forward-only; decide whether v1 ships it or bootstraps the Expert band on the ranking overlay
+  until it lands.
+- **Rep exposure as a system property** (Decision #10) — confirm with product whether rep is consumed
+  through the generic entity/graph API (publish the `Reputation` property) or a dedicated field
+  (table + GraphQL only).
 - **`points_earned` summation** (Decision #2) — blocked on payout-entity summability; the Verified
   band ships flat `2` until then.
 - **Recompute cardinality** (Decision #7) — measure user × space before committing to full recompute
@@ -595,18 +689,13 @@ larger piece of work) and is not needed for rep.
 - **Curve steepness / cap as policy** — `k = 5` and `EXPERT_MAX = 980` set a near-`980:1` influence
   ratio and are currently chosen by shape, not argument. Decide the intended top-to-median ratio
   explicitly before Phase 4 enables weighting; treat `k` and the cap as reviewable policy.
-- **Endorsement vs contribution as the canonical expertise signal** — the Expert band reads ordinal
-  rankings because that is what the push populates (Finding #9), which is expedient rather than
-  principled. Endorsement is the more gameable signal (collusion rings); contribution (authored
-  content that earned upvotes, Finding #6) is harder to game but currently relegated to "deep
-  fallback." Confirm rankings-as-canonical is a deliberate choice for v1, not just the available one,
-  and note contribution as the candidate to revisit.
-- **Community share** — circulate the design for community feedback (a design-review action item),
-  ideally after the Decision #8 re-confirmation.
+- **Community share** — circulate the design for community feedback (a design-review action item).
 
 *Resolved:* endorse-a-person surface is in scope (review 2026-06-24); Person-entity resolution
 (Finding #8); negative/below-median semantics (Decision #3, confirmed 2026-06-24); weighting
-composition (Decision #4); rankings/scoring pipeline separation (Finding #9).
+composition (Decision #4); rankings/scoring pipeline separation (Finding #9); Expert-band signal model
+— contribution baseline + ranking overlay (Decision #8, 2026-06-30); rep exposure (Decision #10,
+2026-06-30).
 
 ## References
 
@@ -614,7 +703,7 @@ composition (Decision #4); rankings/scoring pipeline separation (Finding #9).
 
 - Scoring engine: `scoring-service/cronjob/src/algorithm/{models.py,scoring.py}`, `main.py`
 - Vote-weight hook: `scoring-service/cronjob/src/algorithm/models.py` (`Vote.weight`)
-- Ranking pipeline: `ranking-indexer/src/{detect.rs,scoring.rs,storage.rs}`,
+- Ranking pipeline: `ranking-indexer/src/{detect.rs,recompute.rs,scoring.rs,publish.rs,storage.rs}`,
   `ranks.*` schema (`api/drizzle/0061_create_ranks_schema.sql`)
 - Atlas transitive closure: `atlas/src/graph/{transitive.rs,canonical.rs,state.rs}`, `persistence.rs`
 - Trust pipeline: `hermes-pipeline/src/pipelines/trust.rs`, `kg-indexer/src/handlers/subspaces.rs`
