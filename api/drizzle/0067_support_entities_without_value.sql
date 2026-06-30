@@ -59,6 +59,16 @@ DECLARE
   with_unscored   boolean;
   sql             text;
 BEGIN
+  -- include_without_value requires space_ids. The value-less branch enumerates the full
+  -- type population and the whole set is ordered/materialized before PostGraphile applies
+  -- LIMIT/OFFSET (pagination happens outside this function, see 0060), so an unbounded
+  -- (all-spaces) candidate scan could be very large. Requiring space_ids bounds the scan to
+  -- the requested spaces. COALESCE so an explicit NULL flag behaves like false (no guard).
+  IF COALESCE(include_without_value, false) AND (space_ids IS NULL OR cardinality(space_ids) = 0) THEN
+    RAISE EXCEPTION 'space_ids is required when include_without_value is true'
+      USING ERRCODE = '22023';
+  END IF;
+
   IF data_type IS NOT NULL THEN
     resolved_type := lower(data_type);
   ELSE
@@ -128,6 +138,8 @@ BEGIN
     END IF;
 
     -- Candidate set for value-less entities: entities of type_ids (within space_ids).
+    -- '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1' is TYPES_RELATION_ID, the system "Types" relation
+    -- that links an entity (from_entity_id) to its type entity (to_entity_id).
     candidate_pred := format(
       'r.type_id = %L AND r.to_entity_id = ANY(%L::uuid[])',
       '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1', type_ids) || rel_space_pred;
