@@ -29,6 +29,9 @@ const TYPES_RELATION_ID = "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
 const SPACE = "00000000-cccc-4ccc-cccc-000000000001"
 const TYPE_ID = "00000000-cccc-4ccc-cccc-0000000000aa"
 const PROPERTY_ID = "00000000-cccc-4ccc-cccc-0000000000bb"
+// Separate properties to exercise the non-numeric (text) and other-numeric (float) branches.
+const PROPERTY_TEXT = "00000000-cccc-4ccc-cccc-0000000000cc"
+const PROPERTY_FLOAT = "00000000-cccc-4ccc-cccc-0000000000dd"
 
 // integer = 100
 const E_POS = "00000000-dddd-4ddd-dddd-000000000001"
@@ -84,6 +87,42 @@ async function seedFixtures(pool: Pool) {
 			($3, $4, $8, $6, -50)`,
 		[`geo696-${E_POS}`, `geo696-${E_ZERO}`, `geo696-${E_NEG}`, PROPERTY_ID, E_POS, SPACE, E_ZERO, E_NEG],
 	)
+
+	// Text values on a separate property — non-numeric, so value-less entities sort NULLS LAST.
+	await pool.query(
+		`INSERT INTO "values" (id, property_id, entity_id, space_id, text) VALUES
+			($1, $4, $5, $7, 'banana'),
+			($2, $4, $6, $7, 'apple'),
+			($3, $4, $8, $7, 'cherry')`,
+		[
+			`geo696-text-${E_POS}`,
+			`geo696-text-${E_ZERO}`,
+			`geo696-text-${E_NEG}`,
+			PROPERTY_TEXT,
+			E_POS,
+			E_ZERO,
+			SPACE,
+			E_NEG,
+		],
+	)
+
+	// Float values on a separate property — numeric, so a missing value sorts as zero.
+	await pool.query(
+		`INSERT INTO "values" (id, property_id, entity_id, space_id, float) VALUES
+			($1, $4, $5, $7, 2.5),
+			($2, $4, $6, $7, 0),
+			($3, $4, $8, $7, -1.5)`,
+		[
+			`geo696-float-${E_POS}`,
+			`geo696-float-${E_ZERO}`,
+			`geo696-float-${E_NEG}`,
+			PROPERTY_FLOAT,
+			E_POS,
+			E_ZERO,
+			SPACE,
+			E_NEG,
+		],
+	)
 }
 
 const ORDER_QUERY = `
@@ -93,6 +132,23 @@ const ORDER_QUERY = `
 			spaceIds: $spaceIds
 			typeIds: $typeIds
 			dataType: "integer"
+			sortDirection: $dir
+			includeWithoutValue: $include
+			first: 50
+		) {
+			id
+		}
+	}
+`
+
+// Same as ORDER_QUERY but with a parameterized dataType, for the text/float cases.
+const ORDER_QUERY_DT = `
+	query Q($propertyId: UUID!, $spaceIds: [UUID!], $typeIds: [UUID!], $dataType: String!, $dir: SortOrder!, $include: Boolean) {
+		entitiesOrderedByProperty(
+			propertyId: $propertyId
+			spaceIds: $spaceIds
+			typeIds: $typeIds
+			dataType: $dataType
 			sortDirection: $dir
 			includeWithoutValue: $include
 			first: 50
@@ -235,5 +291,158 @@ describe("entitiesOrderedByProperty — include entities without a value", () =>
 		expect(result.errors).toBeUndefined()
 		const ids = idsOf(result)
 		expect(ids).toEqual([undash(E_POS), undash(E_ZERO), undash(E_NEG)])
+	})
+
+	it("text (non-numeric): value-less entities sort to the tail via NULLS LAST, DESC", async () => {
+		const result = await executeGraphQL(ORDER_QUERY_DT, {
+			propertyId: undash(PROPERTY_TEXT),
+			spaceIds: [undash(SPACE)],
+			typeIds: [undash(TYPE_ID)],
+			dataType: "text",
+			dir: "DESC",
+			include: true,
+		})
+		expect(result.errors).toBeUndefined()
+		// DESC: cherry > banana > apple, then value-less entities last (NULLS LAST).
+		expect(idsOf(result)).toEqual([
+			undash(E_NEG),
+			undash(E_POS),
+			undash(E_ZERO),
+			undash(E_NOVAL_1),
+			undash(E_NOVAL_2),
+		])
+	})
+
+	it("text (non-numeric): value-less entities sort to the tail via NULLS LAST, ASC", async () => {
+		const result = await executeGraphQL(ORDER_QUERY_DT, {
+			propertyId: undash(PROPERTY_TEXT),
+			spaceIds: [undash(SPACE)],
+			typeIds: [undash(TYPE_ID)],
+			dataType: "text",
+			dir: "ASC",
+			include: true,
+		})
+		expect(result.errors).toBeUndefined()
+		// ASC: apple < banana < cherry, then value-less last (NULLS LAST in both directions).
+		expect(idsOf(result)).toEqual([
+			undash(E_ZERO),
+			undash(E_POS),
+			undash(E_NEG),
+			undash(E_NOVAL_1),
+			undash(E_NOVAL_2),
+		])
+	})
+
+	it("float (numeric): a missing value sorts as zero, DESC", async () => {
+		const result = await executeGraphQL(ORDER_QUERY_DT, {
+			propertyId: undash(PROPERTY_FLOAT),
+			spaceIds: [undash(SPACE)],
+			typeIds: [undash(TYPE_ID)],
+			dataType: "float",
+			dir: "DESC",
+			include: true,
+		})
+		expect(result.errors).toBeUndefined()
+		// 2.5 first; then the zero group {0, value-less} by id; then -1.5.
+		expect(idsOf(result)).toEqual([
+			undash(E_POS),
+			undash(E_ZERO),
+			undash(E_NOVAL_1),
+			undash(E_NOVAL_2),
+			undash(E_NEG),
+		])
+	})
+
+	it("raises when includeWithoutValue is true but no spaceIds are given", async () => {
+		const result = await executeGraphQL(
+			`
+				query Q($propertyId: UUID!, $typeIds: [UUID!]) {
+					entitiesOrderedByProperty(
+						propertyId: $propertyId
+						typeIds: $typeIds
+						dataType: "integer"
+						sortDirection: DESC
+						includeWithoutValue: true
+						first: 50
+					) { id }
+				}
+			`,
+			{propertyId: undash(PROPERTY_ID), typeIds: [undash(TYPE_ID)]},
+		)
+		// space_ids is mandatory when includeWithoutValue is true (bounds the candidate scan).
+		expect(result.errors).toBeDefined()
+		expect(result.data?.entitiesOrderedByProperty ?? null).toBeFalsy()
+	})
+})
+
+// An entity is "scored" only when its value and its TYPES relation live in the SAME space.
+// An entity valued in one space but typed in another is therefore not scored in any single
+// space and is intentionally treated as value-less (sorts at the zero position). Isolated
+// fixtures (distinct UUIDs) so this multi-space layout can't perturb the single-space suite.
+const MS_SPACE_A = "00000000-c2cc-4ccc-cccc-00000000000a"
+const MS_SPACE_B = "00000000-c2cc-4ccc-cccc-00000000000b"
+const MS_TYPE = "00000000-c2cc-4ccc-cccc-0000000000aa"
+const MS_PROP = "00000000-c2cc-4ccc-cccc-0000000000bb"
+const MS_HI = "00000000-c2dd-4ddd-dddd-000000000001" // integer 50, typed + valued in SPACE_A
+const MS_CROSS = "00000000-c2dd-4ddd-dddd-000000000002" // integer 999 in SPACE_A, typed in SPACE_B
+const MS_LO = "00000000-c2dd-4ddd-dddd-000000000003" // integer -50, typed + valued in SPACE_A
+const MS_ENTITY_IDS = [MS_HI, MS_CROSS, MS_LO]
+
+async function cleanupMs(pool: Pool) {
+	await pool.query(`DELETE FROM "values" WHERE entity_id = ANY($1::uuid[])`, [MS_ENTITY_IDS])
+	await pool.query(`DELETE FROM relations WHERE from_entity_id = ANY($1::uuid[])`, [MS_ENTITY_IDS])
+	await pool.query(`DELETE FROM entities WHERE id = ANY($1::uuid[])`, [MS_ENTITY_IDS])
+}
+
+describe("entitiesOrderedByProperty — multi-space scoping", () => {
+	let pool: Pool
+
+	beforeAll(async () => {
+		pool = new Pool({connectionString: process.env.DATABASE_URL})
+		await cleanupMs(pool)
+		await pool.query(
+			`INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
+			 SELECT unnest($1::uuid[]), '0', '0', '0', '0'`,
+			[MS_ENTITY_IDS],
+		)
+		// MS_HI / MS_LO are typed in SPACE_A; MS_CROSS is typed in SPACE_B.
+		await pool.query(
+			`INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) VALUES
+				($1, $1, $4, $1, $5, $6),
+				($2, $2, $4, $2, $5, $7),
+				($3, $3, $4, $3, $5, $6)`,
+			[MS_HI, MS_CROSS, MS_LO, TYPES_RELATION_ID, MS_TYPE, MS_SPACE_A, MS_SPACE_B],
+		)
+		// All three carry their integer value in SPACE_A.
+		await pool.query(
+			`INSERT INTO "values" (id, property_id, entity_id, space_id, integer) VALUES
+				($1, $4, $5, $6, 50),
+				($2, $4, $7, $6, 999),
+				($3, $4, $8, $6, -50)`,
+			["geo696-ms-hi", "geo696-ms-cross", "geo696-ms-lo", MS_PROP, MS_HI, MS_SPACE_A, MS_CROSS, MS_LO],
+		)
+	})
+
+	afterAll(async () => {
+		if (pool) {
+			await cleanupMs(pool)
+			await pool.end()
+		}
+	})
+
+	it("treats an entity valued in one space but typed in another as value-less (sorts at zero)", async () => {
+		const result = await executeGraphQL(ORDER_QUERY_DT, {
+			propertyId: undash(MS_PROP),
+			spaceIds: [undash(MS_SPACE_A), undash(MS_SPACE_B)],
+			typeIds: [undash(MS_TYPE)],
+			dataType: "integer",
+			dir: "DESC",
+			include: true,
+		})
+		expect(result.errors).toBeUndefined()
+		// MS_HI (50) is scored. MS_CROSS holds integer 999 in SPACE_A but its TYPES relation is
+		// in SPACE_B, so it is not scored in any single space and sorts at zero — above MS_LO
+		// (-50) and below MS_HI — despite its value.
+		expect(idsOf(result)).toEqual([undash(MS_HI), undash(MS_CROSS), undash(MS_LO)])
 	})
 })
