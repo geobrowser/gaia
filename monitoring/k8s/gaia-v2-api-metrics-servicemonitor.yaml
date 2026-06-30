@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gaia-v2-api-metrics
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - gaia-v2
+  selector:
+    matchLabels:
+      app: api
+  endpoints:
+    - port: http
+      path: /health/metrics
+      interval: 15s
+      scrapeTimeout: 5s
