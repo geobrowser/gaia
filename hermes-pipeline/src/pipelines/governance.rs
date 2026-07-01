@@ -16,8 +16,8 @@ use hermes_instrumentation::{debug, debug_span, info, warn};
 
 use crate::cache::CachedEdit;
 use crate::decode::{
-    self, ProposalActionType, decode_flag_args, decode_ping_args, decode_publish_args,
-    decode_space_id_arg, decode_voting_settings_args,
+    self, ProposalActionType, decode_edits_published_args, decode_flag_args, decode_ping_args,
+    decode_publish_args, decode_space_id_arg, decode_voting_settings_args,
 };
 
 use hermes_relay::{Action, actions};
@@ -440,6 +440,16 @@ fn decode_ping_governance_action(calldata: &[u8]) -> Option<proposal_action::Act
                     },
                 ))
             }
+        }
+        x if x == actions::EDITS_PUBLISHED => {
+            // Edit proposals map to a Publish action.
+            // Note: name is populated later by enrich_publish_action_names.
+            let edits = decode_edits_published_args(&args.data).ok()?;
+            Some(proposal_action::Action::Publish(PublishAction {
+                content_uri: edits.content_uri,
+                metadata: edits.metadata,
+                name: String::new(),
+            }))
         }
         _ => {
             warn!(action_hash = %hex::encode(args.action), "Unrecognized ping action hash, storing as Unknown");
@@ -1769,6 +1779,39 @@ mod tests {
             result.is_none(),
             "Unrecognized ping action should return None"
         );
+    }
+
+    #[test]
+    fn test_decode_ping_edits_published_maps_to_publish() {
+        use alloy::primitives::Bytes as PrimBytes;
+        use alloy::sol_types::SolType;
+
+        // v2: ping(EDITS_PUBLISHED, EMPTY_TOPIC, abi.encode(contentUri, metadata))
+        let content_uri = "ipfs://QmEditProposalCid";
+        let metadata = b"edit-metadata".to_vec();
+
+        type EditsArgsType = alloy::sol! { (bytes, bytes) };
+        let ping_data = EditsArgsType::abi_encode_params(&(
+            PrimBytes::from(content_uri.as_bytes().to_vec()),
+            PrimBytes::from(metadata.clone()),
+        ));
+
+        let calldata = encode_ping_calldata(&actions::EDITS_PUBLISHED, &[0u8; 32], &ping_data);
+
+        // The ping selector should classify as a Ping action type.
+        assert!(matches!(
+            ProposalActionType::from_calldata(&calldata),
+            ProposalActionType::Ping
+        ));
+
+        match decode_ping_governance_action(&calldata) {
+            Some(proposal_action::Action::Publish(action)) => {
+                assert_eq!(action.content_uri, content_uri);
+                assert_eq!(action.metadata, metadata);
+                assert_eq!(action.name, "");
+            }
+            other => panic!("Expected Publish from EDITS_PUBLISHED ping, got {other:?}"),
+        }
     }
 
     #[test]

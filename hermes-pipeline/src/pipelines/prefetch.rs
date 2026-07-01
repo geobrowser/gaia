@@ -21,7 +21,10 @@ use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use hermes_relay::{Action, actions, extract_ipfs_uri};
 
 use crate::cache::{CacheError, CachedEdit, IpfsCache};
-use crate::decode::{ProposalActionType, decode_proposal_created, decode_publish_args};
+use crate::decode::{
+    ProposalActionType, decode_edits_published_args, decode_ping_args, decode_proposal_created,
+    decode_publish_args,
+};
 
 /// Configuration for cache retry behavior.
 #[derive(Debug, Clone)]
@@ -102,6 +105,19 @@ fn collect_uris(actions: &[Action]) -> Vec<FetchRequest> {
                 let action_type = ProposalActionType::from_calldata(&proposal_action.data);
                 if matches!(action_type, ProposalActionType::Publish)
                     && let Ok(args) = decode_publish_args(&proposal_action.data)
+                {
+                    requests.push(FetchRequest {
+                        uri: args.content_uri,
+                        space_id: action.to_id.clone(), // space owning the proposal
+                    });
+                }
+
+                // Edit proposals arrive as ping(EDITS_PUBLISHED, ...); extract
+                // the content URI so name enrichment has cached edit data.
+                if matches!(action_type, ProposalActionType::Ping)
+                    && let Ok(ping) = decode_ping_args(&proposal_action.data)
+                    && ping.action == actions::EDITS_PUBLISHED
+                    && let Ok(args) = decode_edits_published_args(&ping.data)
                 {
                     requests.push(FetchRequest {
                         uri: args.content_uri,

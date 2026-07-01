@@ -154,6 +154,33 @@ pub fn decode_publish_args(calldata: &[u8]) -> Result<PublishArgs, DecodeError> 
     })
 }
 
+/// Decode the data payload of a `ping(EDITS_PUBLISHED, ...)` action.
+///
+/// `data` is the ping payload `abi.encode(bytes editsContentUri, bytes editsMetadata)`
+/// — not full calldata, so there is no function selector to skip. Returns the
+/// same [`PublishArgs`] shape as [`decode_publish_args`].
+pub fn decode_edits_published_args(data: &[u8]) -> Result<PublishArgs, DecodeError> {
+    if data.is_empty() {
+        return Err(DecodeError::DataTooShort {
+            expected: 64,
+            actual: data.len(),
+        });
+    }
+
+    // Params encoding (two offsets + tails), matching the SDK's
+    // `encodeAbiParameters([{bytes}, {bytes}], ...)`.
+    type EditsArgsType = sol! { (bytes, bytes) };
+    let (content_uri, metadata) =
+        EditsArgsType::abi_decode_params(data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+
+    let content_uri_str = decode_utf8_bytes(content_uri.to_vec())?;
+
+    Ok(PublishArgs {
+        content_uri: content_uri_str,
+        metadata: metadata.to_vec(),
+    })
+}
+
 fn decode_utf8_bytes(mut data: Vec<u8>) -> Result<String, DecodeError> {
     for _ in 0..2 {
         if let Some(unwrapped) = unwrap_bytes_once(&data) {
@@ -1182,6 +1209,29 @@ mod tests {
 
         let decoded = decode_publish_args(&calldata).unwrap();
         assert_eq!(decoded.content_uri, String::from_utf8(uri).unwrap());
+    }
+
+    #[test]
+    fn test_decode_edits_published_args() {
+        // Mirrors the v0.20 SDK payload:
+        // encodeAbiParameters([{bytes contentUri}, {bytes metadata}], [toHex(cid), '0x'])
+        let uri = "ipfs://QmEditProposalCidValue";
+        let metadata = b"some-metadata".to_vec();
+
+        type EditsArgsType = sol! { (bytes, bytes) };
+        let data = EditsArgsType::abi_encode_params(&(
+            PrimBytes::from(uri.as_bytes().to_vec()),
+            PrimBytes::from(metadata.clone()),
+        ));
+
+        let decoded = decode_edits_published_args(&data).unwrap();
+        assert_eq!(decoded.content_uri, uri);
+        assert_eq!(decoded.metadata, metadata);
+    }
+
+    #[test]
+    fn test_decode_edits_published_args_empty_is_err() {
+        assert!(decode_edits_published_args(&[]).is_err());
     }
 
     #[test]
