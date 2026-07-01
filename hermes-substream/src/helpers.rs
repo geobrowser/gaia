@@ -9,6 +9,9 @@ pub fn format_hex(address: &[u8]) -> String {
 /// Function selector for publish(bytes32, bytes, bytes)
 const PUBLISH_SELECTOR: [u8; 4] = [0x6b, 0x47, 0xf6, 0x1a];
 
+/// Function selector for ping(bytes32, bytes32, bytes)
+const PING_SELECTOR: [u8; 4] = [0xc7, 0x0d, 0x82, 0x82];
+
 /// Extract and validate an IPFS URI from raw event data bytes.
 ///
 /// Searches for "ipfs://" pattern in the data and validates the CID.
@@ -80,10 +83,12 @@ fn is_base32_lower(s: &str) -> bool {
 /// The data is ABI-encoded as: `(bytes16 proposalId, uint8 votingMode, Action[])`
 /// where each Action is `(address to, uint256 value, bytes data)`.
 ///
-/// For Publish actions (selector 0x6b47f61a), the data contains:
-/// `publish(bytes32 topic, bytes contentUri, bytes metadata)`
+/// Edits are published in one of two ways:
+/// - Legacy `publish(bytes32 topic, bytes contentUri, bytes metadata)` (selector 0x6b47f61a)
+/// - v2 `ping(EDITS_PUBLISHED, EMPTY_TOPIC, abi.encode(bytes contentUri, bytes metadata))`
+///   (selector 0xc70d8282), where the first 32-byte word is the EDITS_PUBLISHED action hash
 ///
-/// Returns a list of valid IPFS URIs found in Publish actions.
+/// Returns a list of valid IPFS URIs found in those actions.
 pub fn extract_proposal_publish_uris(data: &[u8]) -> Vec<String> {
     let mut uris = Vec::new();
 
@@ -93,23 +98,31 @@ pub fn extract_proposal_publish_uris(data: &[u8]) -> Vec<String> {
         None => return uris,
     };
 
-    // For each action, check if it's a Publish action
+    // For each action, check if it publishes an edit.
     for action_data in actions {
         if action_data.len() < 4 {
             continue;
         }
 
-        // Check if this is a Publish action
         let selector: [u8; 4] = action_data[0..4].try_into().unwrap_or([0; 4]);
-        if selector != PUBLISH_SELECTOR {
-            continue;
-        }
 
-        // Decode publish args: (bytes32 topic, bytes contentUri, bytes metadata)
-        if let Some(uri) = decode_publish_content_uri(&action_data[4..])
-            && let Some(valid_uri) = extract_ipfs_uri(uri.as_bytes())
-        {
-            uris.push(valid_uri);
+        if selector == PUBLISH_SELECTOR {
+            // Legacy: publish(bytes32 topic, bytes contentUri, bytes metadata)
+            if let Some(uri) = decode_publish_content_uri(&action_data[4..])
+                && let Some(valid_uri) = extract_ipfs_uri(uri.as_bytes())
+            {
+                uris.push(valid_uri);
+            }
+        } else if selector == PING_SELECTOR {
+            // v2: ping(EDITS_PUBLISHED, EMPTY_TOPIC, abi.encode(contentUri, metadata)).
+            // The action hash is the first 32-byte word after the selector; the
+            // content URI lives in the trailing data (extract_ipfs_uri byte-scans).
+            if action_data.len() >= 4 + 32
+                && action_data[4..36] == crate::ACTION_EDITS_PUBLISHED[..]
+                && let Some(valid_uri) = extract_ipfs_uri(&action_data[36..])
+            {
+                uris.push(valid_uri);
+            }
         }
     }
 
@@ -342,5 +355,57 @@ mod tests {
         assert!(!is_base58("QmOInvalid")); // Contains O
         assert!(!is_base58("QmIInvalid")); // Contains I
         assert!(!is_base58("QmlInvalid")); // Contains l
+    }
+
+    /// Wrap an inner action calldata in a PROPOSAL_CREATED payload:
+    /// abi.encode(bytes16 proposalId, uint8 votingMode, Action[] { (address, uint256, bytes) }).
+    fn encode_proposal_with_action(action_calldata: Vec<u8>) -> Vec<u8> {
+        let action = Token::Tuple(vec![
+            Token::Address(ethabi::Address::zero()),
+            Token::Uint(ethabi::Uint::zero()),
+            Token::Bytes(action_calldata),
+        ]);
+        ethabi::encode(&[
+            Token::FixedBytes(vec![0u8; 16]),
+            Token::Uint(ethabi::Uint::zero()),
+            Token::Array(vec![action]),
+        ])
+    }
+
+    /// Build ping(action, EMPTY_TOPIC, abi.encode(contentUri, metadata)) calldata.
+    fn encode_edit_ping(action_hash: &[u8; 32], content_uri: &str) -> Vec<u8> {
+        let inner_data = ethabi::encode(&[
+            Token::Bytes(content_uri.as_bytes().to_vec()),
+            Token::Bytes(vec![]),
+        ]);
+        let args = ethabi::encode(&[
+            Token::FixedBytes(action_hash.to_vec()),
+            Token::FixedBytes(vec![0u8; 32]),
+            Token::Bytes(inner_data),
+        ]);
+        let mut calldata = PING_SELECTOR.to_vec();
+        calldata.extend_from_slice(&args);
+        calldata
+    }
+
+    #[test]
+    fn test_extract_proposal_uris_ping_edits_published() {
+        let uri = "ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+        let ping = encode_edit_ping(&crate::ACTION_EDITS_PUBLISHED, uri);
+        let proposal = encode_proposal_with_action(ping);
+
+        assert_eq!(extract_proposal_publish_uris(&proposal), vec![uri.to_string()]);
+    }
+
+    #[test]
+    fn test_extract_proposal_uris_ping_non_edits_ignored() {
+        // A ping with a different action hash must not yield a URI, even if the
+        // payload happens to contain an ipfs:// string.
+        let uri = "ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+        let other_action = [0x42u8; 32];
+        let ping = encode_edit_ping(&other_action, uri);
+        let proposal = encode_proposal_with_action(ping);
+
+        assert!(extract_proposal_publish_uris(&proposal).is_empty());
     }
 }
