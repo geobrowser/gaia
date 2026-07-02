@@ -148,6 +148,7 @@ const uuid = {
 	proposalClosed: normalizeUuid("10000000-0008-4000-8000-000000000002"),
 	proposalExecuted: normalizeUuid("10000000-0008-4000-8000-000000000003"),
 	proposalNoPublish: normalizeUuid("10000000-0008-4000-8000-000000000004"),
+	proposalUnstarted: normalizeUuid("10000000-0008-4000-8000-000000000005"),
 
 	// Value IDs (for value_versions)
 	val: (n: number) => normalizeUuid(`10000000-0009-4000-8000-${n.toString().padStart(12, "0")}`),
@@ -826,6 +827,13 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 	describe("Proposal Diff", () => {
 		it("returns proposal status as active when end_time is in future", async () => {
 			const res = await app.request(`/versioned/proposals/${uuid.proposalActive}/diff?spaceId=${uuid.space1}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body.proposalStatus).toBe("active")
+		})
+
+		it("returns proposal status as active when the voting window has not started (end_time = 0)", async () => {
+			const res = await app.request(`/versioned/proposals/${uuid.proposalUnstarted}/diff?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.proposalStatus).toBe("active")
@@ -1591,6 +1599,9 @@ async function setupTestData(pool: Pool): Promise<void> {
 
 		// Proposal without publish action
 		await insertProposalV2(uuid.proposalNoPublish, now - 1000, now + 86400, null)
+
+		// V2 proposal whose voting window has not started yet (start/end = 0)
+		await insertProposalV2(uuid.proposalUnstarted, 0, 0, null)
 
 		await client.query("COMMIT")
 	} catch (error) {
