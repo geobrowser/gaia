@@ -17,10 +17,16 @@ import {RATIO_BASE} from "./types"
  * Decision order:
  * 1. Already executed → ACCEPTED
  * 2. Past `executeBy` deadline → REJECTED
- * 3. Fast path: `yesCount >= flatSupportThreshold` → EXECUTABLE
- * 4. Slow-path early execution (before voting ends): when
+ * 3. Voting window not started yet (`endTime == 0`) → PROPOSED. In V2 the
+ *    window (`startDate`/`lastDate`/`executeBy`) stays zero until the first
+ *    vote, and the contract's `canExecuteProposal` returns false while
+ *    `lastDate == 0`. So a proposal with no votes yet is open, never
+ *    executable or rejected on the zero window.
+ * 4. Fast path: `yesCount > effective(flatSupportThreshold)` → EXECUTABLE,
+ *    where `effective(x) = x == 0 ? 0 : x - 1` (matches the contract).
+ * 5. Slow-path early execution (before voting ends): when
  *    `yesCount >= ceil(universalPercentageSupportThreshold × totalEditors / RATIO_BASE)`.
- * 5. Slow-path late execution (after voting ends): quorum + the classic
+ * 6. Slow-path late execution (after voting ends): quorum + the classic
  *    `(RATIO_BASE - partial) × yes > partial × no` ratio.
  *
  * Must stay byte-for-byte consistent with the SQL fragments in `queries.ts`
@@ -56,12 +62,24 @@ export function computeProposalStatus(
 		}
 	}
 
+	// Voting window not started yet: the V2 contract leaves start/last/executeBy
+	// at zero until the first vote, and `canExecuteProposal` returns false while
+	// `lastDate == 0`. Treat this as an open proposal — not executable, not ended.
+	if (proposal.endTime === 0n) {
+		return {
+			status: "PROPOSED",
+			isQuorumReached: false,
+			isThresholdReached: false,
+			isEarlyExecutable: false,
+		}
+	}
+
 	const isVotingEnded = nowSeconds > proposal.endTime
 	const totalVotes = proposal.yesCount + proposal.noCount + proposal.abstainCount
 	const isQuorumReached = totalVotes >= proposal.quorum
 
 	if (proposal.votingMode === "Fast") {
-		const isThresholdReached = proposal.yesCount >= proposal.flatSupportThreshold
+		const isThresholdReached = proposal.yesCount > effectiveThreshold(proposal.flatSupportThreshold)
 
 		if (isThresholdReached) {
 			return {
@@ -128,6 +146,12 @@ export function computeProposalStatus(
 // Integer ceiling division for bigint. Assumes `divisor > 0n` and `dividend >= 0n`.
 function ceilDiv(dividend: bigint, divisor: bigint): bigint {
 	return (dividend + divisor - 1n) / divisor
+}
+
+// Mirrors the contract's `_computeEffectiveSupportThreshold`: a threshold of 0
+// stays 0 (so a single yes vote clears it via strict `>`), otherwise `x - 1`.
+function effectiveThreshold(threshold: bigint): bigint {
+	return threshold === 0n ? 0n : threshold - 1n
 }
 
 /**

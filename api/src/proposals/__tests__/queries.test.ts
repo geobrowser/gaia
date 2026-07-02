@@ -711,6 +711,48 @@ describe("SQL/TypeScript status parity", () => {
 			const result = computeProposalStatus(proposal, now)
 			expect(result.status).toBe("PROPOSED")
 		})
+
+		// V2: voting window not started yet (end_time = 0, before the first vote).
+		// Mirrors the `p.end_time = 0` branch of sqlIsProposed.
+		it("proposal is PROPOSED when the voting window has not started (Fast, no votes)", () => {
+			const proposal = makeProposal({
+				votingMode: "Fast",
+				flatSupportThreshold: 10n,
+				yesCount: 0n,
+				startTime: 0n,
+				endTime: 0n,
+				executeBy: null,
+			})
+			const result = computeProposalStatus(proposal, now)
+			expect(result.status).toBe("PROPOSED")
+		})
+
+		it("proposal is PROPOSED when the voting window has not started (Fast, flat=0)", () => {
+			const proposal = makeProposal({
+				votingMode: "Fast",
+				flatSupportThreshold: 0n,
+				yesCount: 0n,
+				startTime: 0n,
+				endTime: 0n,
+				executeBy: null,
+			})
+			const result = computeProposalStatus(proposal, now)
+			expect(result.status).toBe("PROPOSED")
+		})
+
+		it("proposal is PROPOSED when the voting window has not started (Slow, no votes)", () => {
+			const proposal = makeProposal({
+				votingMode: "Slow",
+				partialPercentageSupportThreshold: 5_000_000n,
+				quorum: 1n,
+				yesCount: 0n,
+				startTime: 0n,
+				endTime: 0n,
+				executeBy: null,
+			})
+			const result = computeProposalStatus(proposal, now)
+			expect(result.status).toBe("PROPOSED")
+		})
 	})
 
 	describe("edge cases", () => {
@@ -724,9 +766,10 @@ describe("SQL/TypeScript status parity", () => {
 			expect(result.status).toBe("EXECUTABLE")
 		})
 
-		it("handles zero flatSupportThreshold with zero yes votes (Fast path IS executable)", () => {
-			// V2 formula: yesCount >= flatSupportThreshold. With flat=0, any vote
-			// count — including zero — passes the threshold check.
+		it("handles zero flatSupportThreshold with zero yes votes while voting is open (PROPOSED)", () => {
+			// V2 contract: yes > effective(flat) with effective(0)=0, so a flat
+			// threshold of 0 still requires at least one yes vote. With 0 yes and
+			// the window open, the proposal is PROPOSED (not executable).
 			const proposal = makeProposal({
 				votingMode: "Fast",
 				threshold: 0n, // mirrors to flatSupportThreshold=0 via the helper
@@ -734,13 +777,12 @@ describe("SQL/TypeScript status parity", () => {
 				endTime: now + 3600n,
 			})
 			const result = computeProposalStatus(proposal, now)
-			expect(result.status).toBe("EXECUTABLE")
+			expect(result.status).toBe("PROPOSED")
 		})
 
-		it("handles zero flatSupportThreshold with zero yes votes after voting ends (EXECUTABLE)", () => {
-			// Even after voting ends, a Fast proposal that meets its (trivial)
-			// threshold is EXECUTABLE — voting end only matters when the
-			// threshold is NOT met.
+		it("handles zero flatSupportThreshold with zero yes votes after voting ends (REJECTED)", () => {
+			// flat=0 still needs a yes vote (yes > 0); with none and voting ended,
+			// the proposal is REJECTED.
 			const proposal = makeProposal({
 				votingMode: "Fast",
 				threshold: 0n,
@@ -748,7 +790,7 @@ describe("SQL/TypeScript status parity", () => {
 				endTime: now - 100n,
 			})
 			const result = computeProposalStatus(proposal, now)
-			expect(result.status).toBe("EXECUTABLE")
+			expect(result.status).toBe("REJECTED")
 		})
 
 		it("handles threshold=1 exactly met", () => {

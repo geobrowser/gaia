@@ -696,6 +696,100 @@ describe("computeProposalStatus - V2 executeBy deadline", () => {
 })
 
 // =============================================================================
+// V2: voting window not started (endTime == 0, before the first vote)
+// =============================================================================
+
+describe("computeProposalStatus - V2 voting window not started", () => {
+	// In V2 the contract leaves start/last/executeBy at zero until the first
+	// vote and `canExecuteProposal` returns false while `lastDate == 0`. A
+	// freshly-created proposal (no votes) must read as PROPOSED, never as
+	// EXECUTABLE (fast) or REJECTED (slow).
+	const now = 1707000000n
+
+	it("fast proposal with no votes is PROPOSED (not EXECUTABLE)", () => {
+		const proposal = makeProposal({
+			votingMode: "Fast",
+			flatSupportThreshold: 10n,
+			yesCount: 0n,
+			startTime: 0n,
+			endTime: 0n,
+			executeBy: null,
+		})
+
+		const result = computeProposalStatus(proposal, now)
+
+		expect(result.status).toBe("PROPOSED")
+		expect(result.isThresholdReached).toBe(false)
+		expect(result.isEarlyExecutable).toBe(false)
+	})
+
+	it("fast proposal with flatSupportThreshold=0 and no votes is PROPOSED (regression: was EXECUTABLE)", () => {
+		const proposal = makeProposal({
+			votingMode: "Fast",
+			flatSupportThreshold: 0n,
+			yesCount: 0n,
+			startTime: 0n,
+			endTime: 0n,
+			executeBy: null,
+		})
+
+		const result = computeProposalStatus(proposal, now)
+
+		expect(result.status).toBe("PROPOSED")
+	})
+
+	it("slow proposal with no votes is PROPOSED (regression: was immediately REJECTED)", () => {
+		const proposal = makeProposal({
+			votingMode: "Slow",
+			partialPercentageSupportThreshold: 5_000_000n,
+			quorum: 1n,
+			yesCount: 0n,
+			noCount: 0n,
+			abstainCount: 0n,
+			startTime: 0n,
+			endTime: 0n,
+			executeBy: null,
+		})
+
+		const result = computeProposalStatus(proposal, now)
+
+		expect(result.status).toBe("PROPOSED")
+		expect(result.isQuorumReached).toBe(false)
+	})
+})
+
+// =============================================================================
+// V2: fast path flat threshold = 0 requires a yes vote (strict `>` on effective)
+// =============================================================================
+
+describe("computeProposalStatus - V2 fast path flat threshold 0", () => {
+	const now = 1707000000n
+	const window = {startTime: now - 3600n, endTime: now + 3600n}
+
+	it("stays PROPOSED with 0 yes votes once the window is open", () => {
+		const proposal = makeProposal({
+			votingMode: "Fast",
+			flatSupportThreshold: 0n,
+			yesCount: 0n,
+			...window,
+		})
+
+		expect(computeProposalStatus(proposal, now).status).toBe("PROPOSED")
+	})
+
+	it("becomes EXECUTABLE on the first yes vote", () => {
+		const proposal = makeProposal({
+			votingMode: "Fast",
+			flatSupportThreshold: 0n,
+			yesCount: 1n,
+			...window,
+		})
+
+		expect(computeProposalStatus(proposal, now).status).toBe("EXECUTABLE")
+	})
+})
+
+// =============================================================================
 // V2: isEarlyExecutable flag is false for all non-slow-early paths
 // =============================================================================
 
