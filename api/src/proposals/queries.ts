@@ -346,9 +346,10 @@ function sqlIsAccepted() {
 }
 
 /**
- * Proposal is EXECUTABLE iff not executed, deadline not passed, and any
- * path produces an executable outcome:
- *   - Fast: yes_count >= flat_support_threshold
+ * Proposal is EXECUTABLE iff not executed, deadline not passed, the voting
+ * window has started (end_time > 0; mirrors the contract's `lastDate != 0`
+ * guard in `canExecuteProposal`), and any path produces an executable outcome:
+ *   - Fast: yes_count > effective(flat_support_threshold)
  *   - Slow early: voting ongoing AND total_editors > 0 AND universal > 0
  *                 AND yes_count >= ceil(universal * total_editors / RATIO_BASE)
  *   - Slow late:  voting ended AND quorum met
@@ -358,8 +359,9 @@ function sqlIsExecutable(nowSeconds: bigint) {
 	return sql`(
 		p.executed_at IS NULL
 		AND (p.execute_by IS NULL OR ${nowSeconds}::bigint <= p.execute_by)
+		AND p.end_time > 0
 		AND (
-			(p.voting_mode = 'Fast' AND p.yes_count >= p.flat_support_threshold)
+			(p.voting_mode = 'Fast' AND p.yes_count > (CASE WHEN p.flat_support_threshold = 0 THEN 0 ELSE p.flat_support_threshold - 1 END))
 			OR (
 				p.voting_mode = 'Slow'
 				AND ${nowSeconds}::bigint <= p.end_time
@@ -381,23 +383,29 @@ function sqlIsExecutable(nowSeconds: bigint) {
 }
 
 /**
- * Proposal is PROPOSED iff not executed, deadline not passed, voting
- * ongoing, and no executable path is already matched.
+ * Proposal is PROPOSED iff not executed, deadline not passed, and either the
+ * voting window has not started yet (end_time = 0 — open, awaiting the first
+ * vote) or voting is ongoing with no executable path already matched.
  */
 function sqlIsProposed(nowSeconds: bigint) {
 	return sql`(
 		p.executed_at IS NULL
 		AND (p.execute_by IS NULL OR ${nowSeconds}::bigint <= p.execute_by)
-		AND ${nowSeconds}::bigint <= p.end_time
-		AND NOT (
-			(p.voting_mode = 'Fast' AND p.yes_count >= p.flat_support_threshold)
+		AND (
+			p.end_time = 0
 			OR (
-				p.voting_mode = 'Slow'
-				AND ${sqlTotalEditors()} > 0
-				AND p.universal_percentage_support_threshold > 0
-				AND p.yes_count::numeric >= CEIL(
-					(p.universal_percentage_support_threshold::numeric * ${sqlTotalEditors()}::numeric)
-					/ ${RATIO_BASE}::numeric
+				${nowSeconds}::bigint <= p.end_time
+				AND NOT (
+					(p.voting_mode = 'Fast' AND p.yes_count > (CASE WHEN p.flat_support_threshold = 0 THEN 0 ELSE p.flat_support_threshold - 1 END))
+					OR (
+						p.voting_mode = 'Slow'
+						AND ${sqlTotalEditors()} > 0
+						AND p.universal_percentage_support_threshold > 0
+						AND p.yes_count::numeric >= CEIL(
+							(p.universal_percentage_support_threshold::numeric * ${sqlTotalEditors()}::numeric)
+							/ ${RATIO_BASE}::numeric
+						)
+					)
 				)
 			)
 		)
@@ -406,7 +414,9 @@ function sqlIsProposed(nowSeconds: bigint) {
 
 /**
  * Proposal is REJECTED iff not executed and either the executeBy deadline
- * has passed, or voting ended without any executable path matching.
+ * has passed, or the voting window started and ended (end_time > 0 AND now >
+ * end_time) without any executable path matching. A zero window (end_time = 0)
+ * is never rejected — the proposal is still open (see sqlIsProposed).
  */
 function sqlIsRejected(nowSeconds: bigint) {
 	return sql`(
@@ -414,9 +424,10 @@ function sqlIsRejected(nowSeconds: bigint) {
 		AND (
 			(p.execute_by IS NOT NULL AND ${nowSeconds}::bigint > p.execute_by)
 			OR (
-				${nowSeconds}::bigint > p.end_time
+				p.end_time > 0
+				AND ${nowSeconds}::bigint > p.end_time
 				AND NOT (
-					(p.voting_mode = 'Fast' AND p.yes_count >= p.flat_support_threshold)
+					(p.voting_mode = 'Fast' AND p.yes_count > (CASE WHEN p.flat_support_threshold = 0 THEN 0 ELSE p.flat_support_threshold - 1 END))
 					OR (
 						p.voting_mode = 'Slow'
 						AND (p.yes_count + p.no_count + p.abstain_count) >= p.quorum
