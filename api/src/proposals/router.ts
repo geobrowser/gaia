@@ -171,8 +171,11 @@ function computeResponseFields(proposal: ProposalWithVotes | ProposalListItem, n
 
 	const now = Number(nowSeconds)
 	const endTime = Number(proposal.endTime)
-	const isVotingEnded = now > endTime
-	const timeRemaining = isVotingEnded ? null : endTime - now
+	// V2: the voting window is unset (endTime === 0) until the first vote, so it
+	// has neither started nor ended yet. Only report "ended" once it has started.
+	const windowStarted = endTime > 0
+	const isVotingEnded = windowStarted && now > endTime
+	const timeRemaining = windowStarted && !isVotingEnded ? endTime - now : null
 
 	const totalVotes = proposal.yesCount + proposal.noCount + proposal.abstainCount
 	const quorumRequired = Number(proposal.quorum)
