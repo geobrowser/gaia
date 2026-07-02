@@ -266,6 +266,27 @@ describe("GET /proposals/space/:spaceId/status", () => {
 			expect(body.proposals[0].executeBy).toBeNull()
 		})
 
+		it("reports voting as not ended when the window has not started (end_time = 0)", async () => {
+			// V2: window is unset until the first vote. It has neither started nor
+			// ended, so isVotingEnded must be false and timeRemaining null (not a
+			// negative value derived from `0 - now`).
+			const row = makeDbProposalRow({
+				voting_mode: "Slow",
+				start_time: "0",
+				end_time: "0",
+				execute_by: null,
+			})
+			db.execute.mockResolvedValueOnce({rows: [row]})
+
+			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status")
+
+			const body = await res.json()
+			expect(body.proposals[0].status).toBe("PROPOSED")
+			expect(body.proposals[0].timing.isVotingEnded).toBe(false)
+			expect(body.proposals[0].timing.timeRemaining).toBeNull()
+			expect(body.proposals[0].timing.endTime).toBe(0)
+		})
+
 		it("projects legacy threshold.required from flatSupportThreshold for Fast proposals", async () => {
 			const row = makeDbProposalRow({
 				voting_mode: "Fast",
