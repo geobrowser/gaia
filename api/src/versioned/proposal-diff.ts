@@ -302,7 +302,9 @@ function getProposalStatus(proposal: ProposalWithAction["proposal"]): ProposalSt
 		return "executed"
 	}
 	const now = BigInt(Math.floor(Date.now() / 1000))
-	if (now < proposal.endTime) {
+	// endTime === 0 means the V2 voting window hasn't started yet (no votes cast).
+	// Such a proposal is still open — treat it as active, not closed.
+	if (proposal.endTime === 0n || now < proposal.endTime) {
 		return "active"
 	}
 	return "closed"
