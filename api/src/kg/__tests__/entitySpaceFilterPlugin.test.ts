@@ -1,6 +1,7 @@
 import {Pool} from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
 import {graphqlServer} from "../postgraphile"
+import {SYSTEM_TYPE_RELATION_TYPE_ID} from "../systemTypeIds"
 
 // Helper to execute GraphQL queries against the yoga server
 async function executeGraphQL(query: string, variables?: Record<string, unknown>) {
@@ -486,6 +487,142 @@ describe("EntitySpaceFilterPlugin", () => {
 	})
 
 	// ============================================================================
+	// System Type classification
+	// ============================================================================
+
+	describe("system type classification", () => {
+		// System Type relation: system-minted, non-user-editable. Entities
+		// classified through it must surface in systemTypeIds and be filterable.
+		const SYSTEM_TYPE_RELATION_ID = SYSTEM_TYPE_RELATION_TYPE_ID
+		let systemEntityId: string | null = null
+		let systemTypeId: string | null = null
+
+		beforeAll(async () => {
+			// Find an entity classified via a System Type relation
+			const result = await pool.query(
+				`
+				SELECT r.from_entity_id, r.to_entity_id
+				FROM relations r
+				INNER JOIN entities e ON e.id = r.to_entity_id
+				WHERE r.type_id = $1
+				LIMIT 1
+			`,
+				[SYSTEM_TYPE_RELATION_ID],
+			)
+
+			if (result.rows.length > 0) {
+				systemEntityId = result.rows[0].from_entity_id.replace(/-/g, "")
+				systemTypeId = result.rows[0].to_entity_id.replace(/-/g, "")
+			}
+		})
+
+		it("should expose System Type IDs in the dedicated systemTypeIds field", async () => {
+			if (!systemEntityId || !systemTypeId) {
+				console.log("Skipping test: no entity with a System Type relation found")
+				return
+			}
+
+			const result = await executeGraphQL(
+				`
+				query SystemTypeIds($id: UUID!) {
+					entity(id: $id) {
+						id
+						systemTypeIds
+					}
+				}
+			`,
+				{id: systemEntityId},
+			)
+
+			expect(result.errors).toBeUndefined()
+			expect(result.data.entity).toBeDefined()
+			expect(result.data.entity.systemTypeIds).toContain(systemTypeId)
+		})
+
+		it("should keep system type IDs out of the regular typeIds field", async () => {
+			if (!systemEntityId || !systemTypeId) {
+				console.log("Skipping test: no entity with a System Type relation found")
+				return
+			}
+
+			const result = await executeGraphQL(
+				`
+				query TypeIdsExcludeSystem($id: UUID!) {
+					entity(id: $id) {
+						id
+						typeIds
+						systemTypeIds
+					}
+				}
+			`,
+				{id: systemEntityId},
+			)
+
+			expect(result.errors).toBeUndefined()
+			expect(result.data.entity).toBeDefined()
+			// typeIds aggregates only regular Type relations; the system type id
+			// must surface in systemTypeIds, not typeIds (provenance is preserved).
+			expect(result.data.entity.typeIds ?? []).not.toContain(systemTypeId)
+			expect(result.data.entity.systemTypeIds).toContain(systemTypeId)
+		})
+
+		it("should match system entities when filtering by systemTypeId", async () => {
+			if (!systemEntityId || !systemTypeId) {
+				console.log("Skipping test: no entity with a System Type relation found")
+				return
+			}
+
+			const result = await executeGraphQL(
+				`
+				query FilterBySystemType($systemTypeId: UUID!) {
+					entities(systemTypeId: $systemTypeId, first: 50) {
+						id
+						systemTypeIds
+					}
+				}
+			`,
+				{systemTypeId},
+			)
+
+			expect(result.errors).toBeUndefined()
+			expect(result.data.entities).toBeDefined()
+
+			// Every match carries the system type id, and our known entity is among them
+			for (const entity of result.data.entities) {
+				expect(entity.systemTypeIds).toContain(systemTypeId)
+			}
+			const ids = result.data.entities.map((e: {id: string}) => e.id)
+			expect(ids).toContain(systemEntityId)
+		})
+
+		it("should filter by systemTypeIds with the 'in' operator", async () => {
+			if (!systemEntityId || !systemTypeId) {
+				console.log("Skipping test: no entity with a System Type relation found")
+				return
+			}
+
+			const result = await executeGraphQL(
+				`
+				query FilterBySystemTypeIn($systemTypeIds: [UUID!]!) {
+					entities(systemTypeIds: { in: $systemTypeIds }, first: 50) {
+						id
+						systemTypeIds
+					}
+				}
+			`,
+				{systemTypeIds: [systemTypeId]},
+			)
+
+			expect(result.errors).toBeUndefined()
+			expect(result.data.entities).toBeDefined()
+
+			for (const entity of result.data.entities) {
+				expect(entity.systemTypeIds).toContain(systemTypeId)
+			}
+		})
+	})
+
+	// ============================================================================
 	// Schema introspection tests
 	// ============================================================================
 
@@ -588,6 +725,56 @@ describe("EntitySpaceFilterPlugin", () => {
 			const typeIdsArg = entitiesField.args.find((a: {name: string}) => a.name === "typeIds")
 			expect(typeIdsArg).toBeDefined()
 			expect(typeIdsArg.type.name).toBe("UUIDFilter")
+		})
+
+		it("should expose systemTypeId argument on entities field", async () => {
+			const result = await executeGraphQL(`
+				query IntrospectEntities {
+					__type(name: "Query") {
+						fields {
+							name
+							args {
+								name
+								type { name }
+							}
+						}
+					}
+				}
+			`)
+
+			expect(result.errors).toBeUndefined()
+
+			const entitiesField = result.data.__type.fields.find((f: {name: string}) => f.name === "entities")
+			expect(entitiesField).toBeDefined()
+
+			const systemTypeIdArg = entitiesField.args.find((a: {name: string}) => a.name === "systemTypeId")
+			expect(systemTypeIdArg).toBeDefined()
+			expect(systemTypeIdArg.type.name).toBe("UUID")
+		})
+
+		it("should expose systemTypeIds argument on entities field", async () => {
+			const result = await executeGraphQL(`
+				query IntrospectEntities {
+					__type(name: "Query") {
+						fields {
+							name
+							args {
+								name
+								type { name }
+							}
+						}
+					}
+				}
+			`)
+
+			expect(result.errors).toBeUndefined()
+
+			const entitiesField = result.data.__type.fields.find((f: {name: string}) => f.name === "entities")
+			expect(entitiesField).toBeDefined()
+
+			const systemTypeIdsArg = entitiesField.args.find((a: {name: string}) => a.name === "systemTypeIds")
+			expect(systemTypeIdsArg).toBeDefined()
+			expect(systemTypeIdsArg.type.name).toBe("UUIDFilter")
 		})
 	})
 })

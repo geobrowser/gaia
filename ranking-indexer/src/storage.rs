@@ -496,14 +496,15 @@ impl Storage {
         .execute(&mut *tx)
         .await?;
 
-        // 2. Drop prior projection relations (RANK_POSITION + Aggregated rankings).
-        //    Scoped by (from_entity_id, type_id, space_id) only — NOT by
-        //    from_space_id. Pre-fix projection rows were written with
-        //    from_space_id IS NULL; adding `from_space_id = block_space_id` would
-        //    skip them (NULL never equals anything), leaving their deterministic
-        //    PK ids in place. The ON-CONFLICT-free INSERTs below would then
-        //    collide on those ids → duplicate-key error → aborted tx → crash
-        //    loop. Matching on the space alone lets pre-fix blocks self-heal.
+        // 2. Drop prior projection relations (RANK_POSITION + Aggregated rankings)
+        //    that are no longer part of the recomputed projection. Scoped by
+        //    (from_entity_id, type_id, space_id) only — NOT by from_space_id,
+        //    so pre-fix rows written with from_space_id IS NULL are still
+        //    cleared (NULL never equals block_space_id). The INSERTs below are
+        //    idempotent (ON CONFLICT on the PK), so even a row this DELETE
+        //    misses converges on re-insert instead of raising a duplicate-key
+        //    error — a unique violation here is also reclassified as poison
+        //    (see error.rs), so it can never crash-loop the partition again.
         sqlx::query(
             "DELETE FROM relations WHERE from_entity_id = $1 AND type_id = ANY($2) AND space_id = $3",
         )
@@ -552,7 +553,12 @@ impl Storage {
             sqlx::query(
                 "INSERT INTO relations \
                  (id, entity_id, type_id, from_entity_id, from_space_id, to_entity_id, to_space_id, space_id, position) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                 ON CONFLICT (id) DO UPDATE SET \
+                   entity_id = EXCLUDED.entity_id, \
+                   to_entity_id = EXCLUDED.to_entity_id, \
+                   to_space_id = EXCLUDED.to_space_id, \
+                   position = EXCLUDED.position",
             )
             .bind(r.relation_id)
             .bind(r.reified_entity_id)
@@ -569,7 +575,12 @@ impl Storage {
             // `values.id` is a text column — serialize the UUID at the bind boundary.
             sqlx::query(
                 "INSERT INTO values (id, entity_id, space_id, property_id, integer) \
-                 VALUES ($1, $2, $3, $4, $5)",
+                 VALUES ($1, $2, $3, $4, $5) \
+                 ON CONFLICT (id) DO UPDATE SET \
+                   entity_id = EXCLUDED.entity_id, \
+                   space_id = EXCLUDED.space_id, \
+                   property_id = EXCLUDED.property_id, \
+                   integer = EXCLUDED.integer",
             )
             .bind(r.value_row_id.to_string())
             .bind(r.reified_entity_id)
@@ -583,10 +594,14 @@ impl Storage {
         // 5. Insert Aggregated rankings provenance relations (block -> submission).
         for ranking_id in contributing_rankings {
             let (relation_id, reified) = provenance_ids(block_id, *ranking_id);
+            // Provenance is a deterministic block -> submission mapping; on a
+            // recompute the same ids re-resolve to the same row, so a conflict
+            // just means it's already present.
             sqlx::query(
                 "INSERT INTO relations \
                  (id, entity_id, type_id, from_entity_id, from_space_id, to_entity_id, space_id) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                 ON CONFLICT (id) DO NOTHING",
             )
             .bind(relation_id)
             .bind(reified)

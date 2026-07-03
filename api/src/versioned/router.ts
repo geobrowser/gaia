@@ -24,6 +24,7 @@ import {isValidUuid, type NormalizedUuid, normalizeUuid, toDashedUuid} from "../
 import {diffGroupedEntitySnapshots} from "./diff"
 import {enrichEntityDiffs} from "./enrich"
 import type {
+	AffectedEntityLimitError,
 	DuplicateProposalError,
 	EditBlobDecodeFailedError,
 	EditBlobNotCachedError,
@@ -74,6 +75,7 @@ type ProposalError =
 	| EditDecodeError
 	| SpaceMismatchError
 	| InvalidCursorError
+	| AffectedEntityLimitError
 
 type GroupedProposalError =
 	| ProposalError
@@ -229,6 +231,14 @@ export function mapGroupedProposalError(error: GroupedProposalError): {
 			}
 		case "InvalidCursorError":
 			return {status: 400, body: {error: "Invalid parameter", message: "Invalid pagination cursor"}}
+		case "AffectedEntityLimitError":
+			return {
+				status: 400,
+				body: {
+					error: "Invalid parameter",
+					message: `Edit affects ${error.actual} entities, exceeding the maximum of ${error.max}`,
+				},
+			}
 		case "GroupSizeLimitError":
 			return {
 				status: 400,
@@ -1130,6 +1140,14 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 								{
 									error: "Invalid parameter",
 									message: "Invalid pagination cursor",
+								},
+								400,
+							)
+						case "AffectedEntityLimitError":
+							return c.json(
+								{
+									error: "Invalid parameter",
+									message: `Edit affects ${error.actual} entities, exceeding the maximum of ${error.max}`,
 								},
 								400,
 							)

@@ -92,7 +92,8 @@ function synthesizeUnchangedBlock(
 			const content = getMarkdownContent(a)
 			return {id, type, before: content, after: content, diff: [], ...rich}
 		}
-		case "imageBlock": {
+		case "imageBlock":
+		case "videoBlock": {
 			const url = getImageUrl(a)
 			return {id, type, before: url, after: url, ...rich}
 		}

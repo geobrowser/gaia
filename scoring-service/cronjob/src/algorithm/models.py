@@ -10,7 +10,6 @@ from src.constants import ROOT_SPACE_ID
 
 SPACE_SCORE_DECAY_BASE = 0.8        # Base for space score decay calculation
 DISCONNECTED_SPACE_DEPTH = 11       # Depth used for disconnected spaces (no path to root)
-MAX_SPACE_DEPTH = 10                # Maximum depth for parent traversal
 
 __all__ = [
     "VoteType",
@@ -152,67 +151,26 @@ class Space:
 
     def calculate_space_score(
         self,
-        entities: list[Entity],
-        users: list[User],
         spaces: list["Space"],
+        member_counts: dict[str, int],
+        entity_counts: dict[str, int],
         root_space_id: str = ROOT_SPACE_ID,
     ) -> None:
-        """Calculate space score based on distance from root (GEO)."""
-        # If distance_to_root was pre-set by the topology indexer, skip BFS.
+        """Calculate space score based on distance from root (GEO).
+
+        ``distance_to_root`` is computed upstream by the topology indexer (atlas) and
+        read from the ``scoring_topology_distances`` table. The invariant is: a space
+        with no topology entry is not connected to the root, so it is treated as
+        disconnected. ``distance_to_root`` should already be set by the data provider;
+        ``None`` is handled defensively here as disconnected.
+        """
         if self.distance_to_root is None:
-            self.distance_to_root = self._calculate_distance_to_root(spaces, root_space_id)
+            self.distance_to_root = DISCONNECTED_SPACE_DEPTH
 
-        # Calculate space score based on distance to root
-        if self.distance_to_root >= 0:
-            self.space_score = SPACE_SCORE_DECAY_BASE**self.distance_to_root
-        else:
-            self.space_score = SPACE_SCORE_DECAY_BASE**DISCONNECTED_SPACE_DEPTH
+        self.space_score = SPACE_SCORE_DECAY_BASE**self.distance_to_root
 
-        self.member_count = sum(
-            1 for user in users if self.id in user.member_spaces or self.id in user.editor_spaces
-        )
-        self.entity_count = len(
-            [e for e in entities if any(p.space_id == self.id for p in e.perspectives)]
-        )
-
-    def _calculate_distance_to_root(
-        self, spaces: list["Space"], root_space_id: str, max_depth: int = MAX_SPACE_DEPTH
-    ) -> int:
-        """Calculate the number of hops from this space to the root space."""
-        if self.id == root_space_id:
-            return 0
-
-        if not self.parent_space_id:
-            return max_depth + 1
-
-        # Build space lookup for parent traversal
-        space_lookup = {space.id: space for space in spaces}
-
-        # FIXME: we should support multi-parent space-subspace relations
-        # Calculate distance with depth protection
-        distance = 1
-        current_space_id: str | None = self.parent_space_id
-        visited = {self.id}
-
-        while (
-            current_space_id is not None
-            and current_space_id not in visited
-            and distance <= max_depth
-        ):
-            visited.add(current_space_id)
-
-            if current_space_id == root_space_id:
-                return distance
-
-            current_space = space_lookup.get(current_space_id)
-            if not current_space:
-                break
-
-            distance += 1
-            current_space_id = current_space.parent_space_id
-
-        # Return invalid distance if no path found
-        return max_depth + 1
+        self.member_count = member_counts.get(self.id, 0)
+        self.entity_count = entity_counts.get(self.id, 0)
 
 
 @dataclass
@@ -239,7 +197,6 @@ class RankingConfig:
 
     # Anti-sybil
     filter_non_members: bool = True
-    require_space_membership: bool = True
 
     def __post_init__(self) -> None:
         """Validate configuration after initialisation."""

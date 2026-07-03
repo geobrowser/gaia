@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS app_webhooks (
     app_name text NOT NULL UNIQUE,
     url text NOT NULL,
     secret text NOT NULL,
+    notification_types text[],
+    space_ids uuid[],
     created_at timestamptz DEFAULT now() NOT NULL,
     updated_at timestamptz DEFAULT now() NOT NULL
 );

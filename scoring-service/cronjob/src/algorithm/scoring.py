@@ -3,6 +3,7 @@
 import logging
 import math
 import time
+from collections import Counter, defaultdict
 from datetime import datetime
 
 import numpy as np
@@ -16,6 +17,34 @@ ACTIVITY_WEIGHT = 0.1           # Activity weight in composite space score (10%)
 from .utils import calculate_space_distances
 
 logger = logging.getLogger(__name__)
+
+
+def compute_space_aggregates(
+    entities: list[Entity], users: list[User]
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Precompute per-space member and entity counts in a single pass.
+
+    Returns:
+        ``(member_counts, entity_counts)`` keyed by space id. ``member_counts`` counts
+        each user once per space they are a member or editor of; ``entity_counts``
+        counts distinct entities that have at least one perspective in the space.
+    """
+    member_counts: Counter[str] = Counter()
+    for user in users:
+        # Union dedups users who are both member and editor of the same space,
+        # matching the previous `member_spaces or editor_spaces` semantics.
+        for space_id in user.member_spaces | user.editor_spaces:
+            member_counts[space_id] += 1
+
+    # Track distinct entity ids per space so an entity with several perspectives in the
+    # same space is counted once (matches the previous list-comprehension semantics).
+    entity_ids_by_space: dict[str, set[str]] = defaultdict(set)
+    for entity in entities:
+        for perspective in entity.perspectives:
+            entity_ids_by_space[perspective.space_id].add(entity.id)
+    entity_counts = {space_id: len(ids) for space_id, ids in entity_ids_by_space.items()}
+
+    return dict(member_counts), entity_counts
 
 
 class EntityScorer:
@@ -68,10 +97,23 @@ class EntityScorer:
 
         return hot_score
 
+    @staticmethod
+    def _index_users_by_id(users: list[User]) -> dict[str, User]:
+        """Index users by id for O(1) lookup.
+
+        Keeps the first occurrence of any duplicate id, matching the
+        previous next()-based linear scan.
+        """
+        by_id: dict[str, User] = {}
+        for user in users:
+            by_id.setdefault(user.id, user)
+        return by_id
+
     def filter_valid_votes(
         self, votes: list[Vote], users: list[User], entity: Entity
     ) -> list[Vote]:
         """Filter votes to only include valid ones based on anti-sybil rules."""
+        users_by_id = self._index_users_by_id(users)
         relevant_votes = []
         for vote in votes:
             # Find the perspective this vote is for
@@ -90,7 +132,7 @@ class EntityScorer:
                 continue
 
             # Find the user who cast this vote
-            user = next((u for u in users if u.id == vote.user_id), None)
+            user = users_by_id.get(vote.user_id)
             if not user:
                 continue
 
@@ -114,10 +156,11 @@ class EntityScorer:
         # Calculate distance hash table between all spaces
         space_distances = calculate_space_distances(spaces, self.config.max_distance)
 
+        users_by_id = self._index_users_by_id(users)
         weighted_votes = []
         for vote in votes:
             # Find voting user
-            user = next((u for u in users if u.id == vote.user_id), None)
+            user = users_by_id.get(vote.user_id)
             if not user:
                 weighted_votes.append(vote)
                 continue
@@ -267,8 +310,9 @@ class RankingEngine:
 
         # Step 0: Calculate space scores if spaces are provided
         if spaces is not None:
+            member_counts, entity_counts = compute_space_aggregates(entities, users)
             for space in spaces:
-                space.calculate_space_score(entities, users, spaces)
+                space.calculate_space_score(spaces, member_counts, entity_counts)
 
         # Step 1: Apply distance-based weighting to votes if enabled
         processed_votes = votes
@@ -351,9 +395,11 @@ class RankingEngine:
         total = len(spaces)
         log_interval = max(1, total // 4)
 
+        member_counts, entity_counts = compute_space_aggregates(entities, users)
+
         # Calculate scores for all spaces
         for i, space in enumerate(spaces):
-            space.calculate_space_score(entities, users, spaces)
+            space.calculate_space_score(spaces, member_counts, entity_counts)
 
             if self.config.use_activity_metrics:
                 space.activity_score = self.space_scorer.calculate_activity_score(space, entities)

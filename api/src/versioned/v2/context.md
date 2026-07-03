@@ -109,11 +109,58 @@ and snapshot mode. Run in CI by `.github/workflows/api-integration-tests.yml` (n
 
 ## Remaining (proposal-centric → Track B)
 
-- **#2 media-property filtering** + **#1 cross-parent block folding** — only bite with multiple
-  top-level entities.
-- **Missing v2 endpoints:** `/v2/versioned/entities/:id` (snapshot), `/proposals/:id/diff`,
-  `/proposal-groups/diff`. The enrichers above are reusable; proposal folding additionally needs
-  to fold each block under the *right* parent (or expose a `parentId` per top-level diff).
+**Phase 0 (done):** `/v2/versioned/proposals/:id/diff` and `/v2/versioned/proposal-groups/diff`
+now exist (`v2/proposal-diff.ts`, routed in `v2/router.ts`). They reuse v1's proposal
+state-construction wholesale (proposal load, edit decode, base-state fetch, op application,
+pagination, mode logic, errors — exported from `proposal-diff.ts`) and run each affected entity
+through the **same enrichment chain** as the entity-diff endpoint (grouped diff → `enrichBlocks` →
+`enrichBlockConfig` → `enrichNames` → `enrichWithMediaUrls`). Each entity comes back as the grouped
+`EntityDiffV2` shape with resolved names, media URLs on relations, and folded block values/config.
+Validated against the DB in `__tests__/proposal-diff-edit-flow.test.ts` (v1↔v2 entity-set parity,
+`propertyName`/`typeName`/`toEntityName` resolution, grouped mode, error parity).
+
+**Phases 2–3 (done):** the proposal endpoints now **paginate over root entities** and fold/drop
+children (`v2/proposal-diff.ts` — `resolveRoots` + `buildFoldedPage`):
+- **#1 cross-parent block folding.** `resolveRoots` classifies each affected entity as a block
+  child via a BLOCKS backlink (`batchGetBlockParents*` over the DB at base **+** the edit's new
+  BLOCKS ops) and promotes parents to roots — *including* parents that weren't otherwise changed
+  (e.g. editing a block's text). The page unit is now the root set, not the flat affected list.
+  Each block is folded under its parent's `blocks[]` with its **own** proposed values/relations
+  (computed by applying ops with the block as the entity, since the parent's `applyOps` only tracks
+  block membership), and the block entity is no longer a top-level entry.
+- **#2 media-property filtering.** IMAGE/VIDEO-typed affected entities (classified via
+  `batchGetMediaUrls*` for existing media + the edit's `TYPES → IMAGE/VIDEO` ops for new media) are
+  dropped from the top level; their URL is inlined on the parent's relation — DB-side via
+  `enrichWithMediaUrls`, and **proposed-side** (a media entity created in the edit, not yet in the
+  DB) via `inlineProposedMedia` reading the IMAGE_URL set by the ops.
+
+Validated against the DB in `__tests__/proposal-diff-edit-flow.test.ts`: block folded under an
+*unchanged* parent (orphan-parent backlink), media entity dropped + URL inlined, plus the phase-0
+parity/enrichment/error tests.
+
+**`postProcessDiffs` parity (gaps closed):** to let the UI delete `postProcessDiffs` for the
+proposal path, the remaining client-only steps were ported:
+- **Data-block config merge for proposals.** The config (View/Shown columns/sort) lives on the
+  *reified BLOCKS-relation entity*, modified in the edit — `enrichBlockConfig` only reads committed
+  DB config, so it was a no-op for proposals and the reified entity leaked as a top-level row.
+  `resolveRoots` now classifies reified BLOCKS-relation entities (`batchGetBlocksRelationsByReifiedId`
+  over DB + edit ops), folds the data block under its parent, and `buildFoldedPage` merges the
+  config entity's base+proposed values/relations into the block before/after (so `enrichBlocks`
+  folds the config diff). The reified entity no longer appears top-level.
+- **Video blocks (shared `diff.ts`, benefits both endpoints).** `BlockChange` gained `videoBlock`;
+  `getBlockType`/`diffBlocks`/`diffDynamicGroup`/`enrichBlocks` handle `VIDEO_BLOCK`/`VIDEO_TYPE`
+  (url via `IMAGE_URL_PROPERTY`, matching the frontend).
+- **Ranking blocks.** `getBlockType` maps `RANKING_BLOCK_TYPE` → `dataBlock` (matches frontend).
+- **imageBlock detection** now also accepts `IMAGE_TYPE` (frontend parity), not just `IMAGE`/`IMAGE_BLOCK`.
+
+The v2 **entity-diff** endpoint inherits video/ranking/image-type from the shared `diff.ts` changes;
+data-block config was already covered there (committed-vs-committed via `enrichBlockConfig`).
+
+**Still missing:** `/v2/versioned/entities/:id` (snapshot) v2 variant — the only remaining endpoint;
+`postProcessDiffs` doesn't apply to it. **Accepted divergence:** the orphan new-block *fallback
+heuristic* (frontend L360–394, guessing a parent when a brand-new block has no backlink and no
+in-edit BLOCKS relation) is not ported — v2 resolves new blocks from the edit's BLOCKS ops, which
+covers the real case.
 
 ---
 

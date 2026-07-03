@@ -7,21 +7,49 @@
  * media-property entity filtering, data-block config merging, etc.
  */
 
+import {decodeEditAuto, isCompressed} from "@geoprotocol/grc-20"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
+import {bodyLimit} from "hono/body-limit"
 import {getProfilesBySpaceIds} from "../../profile/queries"
 import type {Profile} from "../../profile/types"
 import type {AppRuntime} from "../../services/runtime"
-import {isValidUuid, type NormalizedUuid, normalizeUuid, toDashedUuid} from "../../utils/uuid"
+import {isValidUuid, normalizeUuid, toDashedUuid} from "../../utils/uuid"
 import {diffGroupedEntitySnapshots} from "../diff"
+import {decodeCursor, EditDecodeError, InvalidCursorError} from "../proposal-diff"
 import {getGroupedEntitySnapshotAtVersion, type QueryError, resolveVersionKey} from "../queries"
-import type {DiffResponse, GroupedEntitySnapshot} from "../types"
+import {mapGroupedProposalError, validateGroupedRequest} from "../router"
+import type {GroupedEntitySnapshot} from "../types"
 import {enrichWithMediaUrls} from "./enrich"
 import {enrichBlockConfig} from "./enrich-block-config"
 import {enrichBlocks} from "./enrich-blocks"
 import {enrichNames} from "./enrich-names"
+import {computeGroupedProposalDiffV2, computeProposalDiffV2, computeReviewDiffV2} from "./proposal-diff"
 import type {DiffResponseV2} from "./types"
+
+/**
+ * Safety bound on a single review request's op count (untrusted input). Generous
+ * headroom over real edits (largest observed published edit ≈ 2.8k ops). A
+ * tighter, entity-aware cap is tracked in PRO-71.
+ */
+const MAX_REVIEW_OPS = 10_000
+
+/**
+ * Max decoded size of the `edit` blob (untrusted input). Enforced from the base64
+ * string length *before* allocating/decoding, so an oversized payload is rejected
+ * up front rather than after `Buffer.from` + `decodeEditAuto` (the op-count cap
+ * only kicks in post-decode). 8 MiB is generous headroom over real edits.
+ */
+const MAX_REVIEW_EDIT_BYTES = 8 * 1024 * 1024
+
+/**
+ * Max raw request-body size for /review, enforced by Hono's bodyLimit middleware
+ * BEFORE `c.req.json()` materializes the body. Headroom over `MAX_REVIEW_EDIT_BYTES`
+ * since base64 expands ~4/3 and JSON adds wrapper bytes; the inner decoded-size and
+ * op-count caps are the tighter, semantic bounds.
+ */
+const MAX_REVIEW_BODY_BYTES = 12 * 1024 * 1024
 
 type AppEnv = {
 	Variables: {
@@ -205,6 +233,208 @@ export function createVersionedV2Router(db: Database, runtime: AppRuntime) {
 			onRight: (response: DiffResponseV2) => c.json(response as unknown as Record<string, unknown>, 200),
 		})
 	})
+
+	/**
+	 * GET /v2/versioned/proposals/:id/diff
+	 *
+	 * Enriched, context-aware variant of the v1 proposal diff: each entity is a
+	 * grouped diff with resolved names, media URLs on relations, and folded block
+	 * values/config — same enrichment as the entity-diff endpoint.
+	 */
+	router.get("/proposals/:id/diff", async (c) => {
+		const rawProposalId = c.req.param("id")
+		const rawSpaceId = c.req.query("spaceId")
+		const cursor = c.req.query("cursor")
+		const rawLimit = c.req.query("limit")
+
+		if (!isValidUuid(rawProposalId)) {
+			return c.json({error: "Invalid parameter", message: "Proposal ID must be a valid UUID"}, 400)
+		}
+		if (!rawSpaceId || !isValidUuid(rawSpaceId)) {
+			return c.json({error: "Invalid parameter", message: "spaceId must be a valid UUID"}, 400)
+		}
+		let limit = 50
+		if (rawLimit !== undefined) {
+			const parsed = Number.parseInt(rawLimit, 10)
+			if (Number.isNaN(parsed) || parsed < 1) {
+				return c.json({error: "Invalid parameter", message: "limit must be a positive integer"}, 400)
+			}
+			limit = Math.min(parsed, 100)
+		}
+
+		const program = computeProposalDiffV2(
+			db,
+			normalizeUuid(rawProposalId),
+			normalizeUuid(rawSpaceId),
+			cursor,
+			limit,
+		).pipe(Effect.withSpan("GET /v2/versioned/proposals/:id/diff"))
+
+		const result = await runtime.runPromise(Effect.either(program))
+		return Either.match(result, {
+			onLeft: (error) => {
+				const mapped = mapGroupedProposalError(error)
+				return c.json(mapped.body, mapped.status)
+			},
+			onRight: (diff) => c.json(diff as unknown as Record<string, unknown>, 200),
+		})
+	})
+
+	/**
+	 * GET /v2/versioned/proposal-groups/diff
+	 *
+	 * Enriched, context-aware variant of the v1 grouped (multi-proposal) diff.
+	 */
+	router.get("/proposal-groups/diff", async (c) => {
+		const validation = validateGroupedRequest({
+			spaceId: c.req.query("spaceId"),
+			proposalIds: c.req.query("proposalIds"),
+			cursor: c.req.query("cursor"),
+			limit: c.req.query("limit"),
+		})
+		if (!validation.ok) {
+			return c.json(validation.failure.body, validation.failure.status)
+		}
+		const {spaceId, proposalIds, cursor, limit} = validation.value
+
+		const program = computeGroupedProposalDiffV2(db, proposalIds, spaceId, cursor, limit).pipe(
+			Effect.withSpan("GET /v2/versioned/proposal-groups/diff"),
+		)
+
+		const result = await runtime.runPromise(Effect.either(program))
+		return Either.match(result, {
+			onLeft: (error) => {
+				const mapped = mapGroupedProposalError(error)
+				return c.json(mapped.body, mapped.status)
+			},
+			onRight: (diff) => c.json(diff as unknown as Record<string, unknown>, 200),
+		})
+	})
+
+	/**
+	 * POST /v2/versioned/review
+	 *
+	 * Diff a space's UNPUBLISHED local edit against current live state and return
+	 * the same enriched `EntityDiffV2[]` shape as the proposal diff. Non-mutating —
+	 * computes only, persists nothing.
+	 *
+	 * Body: `{ spaceId: string, edit: string, cursor?: string, limit?: number }`
+	 * where `edit` is the base64-encoded GRC-20 edit blob the SDK would publish.
+	 * First release accepts the encoded blob (decoded via `decodeEditAuto`) for
+	 * exact publish-parity; raw JSON `ops[]` support is a follow-up (op ids are
+	 * 16-byte binary, not hex strings, so they need a conversion layer).
+	 */
+	router.post(
+		"/review",
+		bodyLimit({
+			maxSize: MAX_REVIEW_BODY_BYTES,
+			onError: (c) =>
+				c.json(
+					{error: "Payload too large", message: `request body exceeds ${MAX_REVIEW_BODY_BYTES} bytes`},
+					413,
+				),
+		}),
+		async (c) => {
+			const body = (await c.req.json().catch(() => null)) as {
+				spaceId?: unknown
+				edit?: unknown
+				cursor?: unknown
+				limit?: unknown
+			} | null
+
+			const program = Effect.gen(function* () {
+				if (!body || typeof body !== "object") {
+					return yield* Effect.fail(new ValidationError({message: "Request body must be a JSON object"}))
+				}
+				if (typeof body.spaceId !== "string" || !isValidUuid(body.spaceId)) {
+					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
+				}
+				if (typeof body.edit !== "string" || body.edit.length === 0) {
+					return yield* Effect.fail(
+						new ValidationError({message: "edit (base64-encoded edit blob) is required"}),
+					)
+				}
+				// Reject oversized blobs up front (base64 decodes to ~3/4 its length) so we
+				// never run Buffer.from + decodeEditAuto on a huge untrusted payload.
+				if (Math.floor((body.edit.length * 3) / 4) > MAX_REVIEW_EDIT_BYTES) {
+					return yield* Effect.fail(
+						new ValidationError({message: `edit exceeds the ${MAX_REVIEW_EDIT_BYTES}-byte review limit`}),
+					)
+				}
+				if (body.cursor !== undefined && typeof body.cursor !== "string") {
+					return yield* Effect.fail(new ValidationError({message: "cursor must be a string"}))
+				}
+				// Validate cursor format before decoding the edit blob (fail fast, correct error).
+				if (typeof body.cursor === "string" && decodeCursor(body.cursor) === null) {
+					return yield* Effect.fail(new InvalidCursorError(body.cursor))
+				}
+				let limit = 50
+				if (body.limit !== undefined) {
+					if (typeof body.limit !== "number" || !Number.isInteger(body.limit) || body.limit < 1) {
+						return yield* Effect.fail(new ValidationError({message: "limit must be a positive integer"}))
+					}
+					limit = Math.min(body.limit, 100)
+				}
+
+				const blob = yield* Effect.try({
+					try: () => new Uint8Array(Buffer.from(body.edit as string, "base64")),
+					catch: () => new ValidationError({message: "edit must be valid base64"}),
+				})
+				// Reject compressed (GRC2Z) blobs: the size cap bounds the *encoded* bytes, but
+				// decodeEditAuto would decompress first — a small blob could inflate past the cap
+				// (zip-bomb) before the op-count check runs. The SDK's publish path (geo-sdk
+				// Ipfs.publishEdit → encodeEdit) only ever emits the uncompressed GRC2 format, so
+				// legitimate clients are unaffected; only a crafted payload would be compressed.
+				if (isCompressed(blob)) {
+					return yield* Effect.fail(
+						new ValidationError({
+							message: "compressed edit blobs are not accepted; send an uncompressed GRC-20 edit",
+						}),
+					)
+				}
+				const ops = yield* Effect.tryPromise({
+					try: async () => (await decodeEditAuto(blob)).ops,
+					catch: (error) => new EditDecodeError(error),
+				})
+				if (ops.length > MAX_REVIEW_OPS) {
+					return yield* Effect.fail(
+						new ValidationError({
+							message: `edit exceeds the ${MAX_REVIEW_OPS}-op review limit (${ops.length})`,
+						}),
+					)
+				}
+
+				return yield* computeReviewDiffV2(
+					db,
+					ops,
+					normalizeUuid(body.spaceId),
+					body.cursor as string | undefined,
+					limit,
+				)
+			}).pipe(Effect.withSpan("POST /v2/versioned/review"))
+
+			const result = await runtime.runPromise(Effect.either(program))
+			return Either.match(result, {
+				onLeft: (error) => {
+					if (error._tag === "ValidationError") {
+						return c.json({error: "Invalid parameter", message: error.message}, 400)
+					}
+					// Unlike the proposal path (where the blob comes from our own IPFS cache and a
+					// decode failure is a 500), the review blob is CLIENT input — an undecodable
+					// edit is a bad request, not a server fault.
+					if (error._tag === "EditDecodeError") {
+						return c.json(
+							{error: "Invalid parameter", message: "edit is not a decodable GRC-20 edit blob"},
+							400,
+						)
+					}
+					const mapped = mapGroupedProposalError(error)
+					return c.json(mapped.body, mapped.status)
+				},
+				onRight: (diff) => c.json(diff as unknown as Record<string, unknown>, 200),
+			})
+		},
+	)
 
 	return router
 }

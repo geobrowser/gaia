@@ -1,0 +1,227 @@
+/**
+ * Integration tests for the v2 review endpoint (POST /v2/versioned/review).
+ *
+ * The review endpoint diffs a space's UNPUBLISHED local edit (the base64-encoded
+ * GRC-20 edit blob the SDK would publish) against current live state, returning
+ * the same enriched EntityDiffV2[] shape as the proposal diff - without a
+ * persisted proposal.
+ *
+ * Runs against a real PostgreSQL DB. Prerequisites:
+ *   - DATABASE_URL set, migrations applied (bun run db:migrate)
+ * Skipped automatically when DATABASE_URL is unset (mirrors the other suites).
+ *
+ * NOTE: authored to the same conventions as v2-entity-diff.test.ts /
+ * proposal-diff-edit-flow.test.ts but not yet executed locally (no test DB
+ * provisioned in this environment) - relies on the CI integration job.
+ */
+
+import {EditBuilder, encodeEdit, type Id, parseId} from "@geoprotocol/grc-20"
+import {SystemIds} from "@graphprotocol/grc-20"
+import {drizzle} from "drizzle-orm/node-postgres"
+import {Hono} from "hono"
+import {Pool} from "pg"
+import {afterAll, beforeAll, describe, expect, it} from "vitest"
+import {runtime} from "../../services/runtime"
+import {createVersionedV2Router} from "../v2"
+
+const DATABASE_URL = process.env.DATABASE_URL
+const SKIP = !DATABASE_URL
+
+const uuidToId = (u: string): Id => {
+	const id = parseId(u)
+	if (!id) throw new Error(`invalid uuid: ${u}`)
+	return id
+}
+
+// Fixture ids - 9b000000-* prefix for isolation.
+const SPACE = "9b000000-0000-4000-8000-000000000001"
+const EDIT = "9b000000-000e-4000-8000-000000000001"
+const NEW_ENTITY = "9b000000-0001-4000-8000-000000000001"
+const NEW_TARGET = "9b000000-0002-4000-8000-000000000001"
+const REL = "9b000000-0003-4000-8000-000000000001"
+const REL_TYPE = "9b000000-0004-4000-8000-000000000001"
+// For the "update existing entity" case (live base state in the "values" table).
+const EXISTING = "9b000000-0005-4000-8000-000000000001"
+const EXISTING_VAL = "9b000000-0006-4000-8000-000000000001"
+const NAME_PROP = "a126ca53-0c8e-48d5-b888-82c734c38935" // SystemIds.NAME_PROPERTY (dashed)
+
+/** Build -> encode -> base64 an edit, the exact shape the SDK publishes. */
+function editBlob(build: (e: EditBuilder) => EditBuilder): string {
+	const edit = build(new EditBuilder(uuidToId(EDIT)).setName("review test").setCreatedNow()).build()
+	return Buffer.from(encodeEdit(edit)).toString("base64")
+}
+
+describe.skipIf(SKIP)("POST /v2/versioned/review", () => {
+	let pool: Pool
+	let app: Hono
+
+	beforeAll(() => {
+		pool = new Pool({connectionString: DATABASE_URL})
+		app = new Hono()
+		// biome-ignore lint/suspicious/noExplicitAny: test wiring mirrors the other v2 suites
+		app.route("/v2/versioned", createVersionedV2Router(drizzle(pool) as any, runtime))
+	})
+
+	afterAll(async () => {
+		await pool.end()
+	})
+
+	const post = (body: unknown) =>
+		app.request("/v2/versioned/review", {
+			method: "POST",
+			headers: {"Content-Type": "application/json"},
+			body: JSON.stringify(body),
+		})
+
+	describe("validation", () => {
+		it("400 when spaceId is missing", async () => {
+			const res = await post({edit: editBlob((e) => e.createEmptyEntity(uuidToId(NEW_ENTITY)))})
+			expect(res.status).toBe(400)
+		})
+
+		it("400 when spaceId is not a UUID", async () => {
+			const res = await post({spaceId: "not-a-uuid", edit: "AAAA"})
+			expect(res.status).toBe(400)
+		})
+
+		it("400 when edit is missing", async () => {
+			const res = await post({spaceId: SPACE})
+			expect(res.status).toBe(400)
+		})
+
+		it("400 when edit is not a decodable GRC-20 blob", async () => {
+			const res = await post({spaceId: SPACE, edit: "not-base64-or-a-real-edit!!!"})
+			expect(res.status).toBe(400)
+		})
+
+		it("400 when the decoded edit exceeds the size cap (rejected before decode)", async () => {
+			// 11 MiB of base64 -> ~8.25 MiB decoded (> 8 MiB cap) but body < 12 MiB, so it
+			// passes bodyLimit and is caught by the inner decoded-size check, never decoded.
+			const res = await post({spaceId: SPACE, edit: "A".repeat(11 * 1024 * 1024)})
+			expect(res.status).toBe(400)
+		})
+
+		it("rejects a body over the bodyLimit even with a small valid edit (isolates bodyLimit)", async () => {
+			// Small VALID edit (won't trip MAX_REVIEW_EDIT_BYTES or decode/op caps); a large
+			// extra field pushes the raw JSON body past MAX_REVIEW_BODY_BYTES, so bodyLimit is
+			// the ONLY thing that can reject it - otherwise this request would succeed.
+			// bodyLimit aborts the read at the cap so c.req.json() never materializes the whole
+			// payload. Real clients send Content-Length -> 413 fast path; the in-memory test has
+			// none -> streaming path -> the aborted read surfaces as 400. Either proves it fired.
+			const res = await post({
+				spaceId: SPACE,
+				edit: editBlob((e) => e.createEmptyEntity(uuidToId(NEW_ENTITY))),
+				padding: "A".repeat(13 * 1024 * 1024),
+			})
+			expect([400, 413]).toContain(res.status)
+		})
+
+		it("400 when the edit affects more than 500 entities", async () => {
+			// 501 fresh entities -> exceeds MAX_REVIEW_AFFECTED_ENTITIES (caught before fan-out).
+			const manyId = (i: number) => `9b000000-0007-4000-8000-${i.toString(16).padStart(12, "0")}`
+			const res = await post({
+				spaceId: SPACE,
+				edit: editBlob((e) => {
+					for (let i = 0; i < 501; i++) e.createEmptyEntity(uuidToId(manyId(i)))
+					return e
+				}),
+			})
+			expect(res.status).toBe(400)
+		})
+
+		it("400 when the cursor is malformed (validated before decode)", async () => {
+			const res = await post({
+				spaceId: SPACE,
+				edit: editBlob((e) => e.createEmptyEntity(uuidToId(NEW_ENTITY))),
+				cursor: "!!!not-a-valid-cursor!!!",
+			})
+			expect(res.status).toBe(400)
+		})
+
+		it("400 when the edit blob is compressed (GRC2Z magic, rejected before decode)", async () => {
+			// isCompressed() matches the 5-byte GRC2Z magic; reject before decodeEditAuto so a
+			// compressed payload can't decompress past the size cap (zip-bomb guard).
+			const compressed = Buffer.from("GRC2Z-fake-compressed-payload").toString("base64")
+			const res = await post({spaceId: SPACE, edit: compressed})
+			expect(res.status).toBe(400)
+		})
+
+		it("400 when limit is invalid", async () => {
+			const res = await post({
+				spaceId: SPACE,
+				edit: editBlob((e) => e.createEmptyEntity(uuidToId(NEW_ENTITY))),
+				limit: 0,
+			})
+			expect(res.status).toBe(400)
+		})
+	})
+
+	describe("create-only edit (all-added, no base state)", () => {
+		it("returns the new entity with its value added and relation added", async () => {
+			const res = await post({
+				spaceId: SPACE,
+				edit: editBlob((e) =>
+					e
+						.createEntity(uuidToId(NEW_ENTITY), (b) =>
+							b.text(uuidToId(SystemIds.NAME_PROPERTY), "Brand New Entity"),
+						)
+						.createRelationSimple(
+							uuidToId(REL),
+							uuidToId(NEW_ENTITY),
+							uuidToId(NEW_TARGET),
+							uuidToId(REL_TYPE),
+						),
+				),
+			})
+			expect(res.status).toBe(200)
+			const body = (await res.json()) as {
+				spaceId: string
+				entities: {entityId: string; values: {after: unknown}[]; relations: {changeType: string}[]}[]
+				pagination: {hasMore: boolean; totalEntities: number}
+			}
+
+			expect(body.spaceId).toBe(SPACE.replace(/-/g, ""))
+			const entity = body.entities.find((e) => e.entityId === NEW_ENTITY.replace(/-/g, ""))
+			expect(entity).toBeDefined()
+			// Name value is added.
+			expect(entity?.values.some((v) => v.after === "Brand New Entity")).toBe(true)
+			// Relation is added.
+			expect(entity?.relations.some((r) => r.changeType === "ADD")).toBe(true)
+			expect(body.pagination.hasMore).toBe(false)
+		})
+	})
+
+	describe("update existing entity (live base state)", () => {
+		beforeAll(async () => {
+			// Seed the entity's current live value (the "before" side).
+			await pool.query(
+				`INSERT INTO "values" (id, entity_id, property_id, space_id, text)
+				 VALUES ($1, $2, $3, $4, 'Old Name') ON CONFLICT DO NOTHING`,
+				[EXISTING_VAL, EXISTING, NAME_PROP, SPACE],
+			)
+		})
+
+		afterAll(async () => {
+			await pool.query(`DELETE FROM "values" WHERE id = $1`, [EXISTING_VAL])
+		})
+
+		it("returns a before->after value change diffed against live state", async () => {
+			const res = await post({
+				spaceId: SPACE,
+				edit: editBlob((e) =>
+					e.updateEntity(uuidToId(EXISTING), (u) => u.setText(uuidToId(NAME_PROP), "New Name")),
+				),
+			})
+			expect(res.status).toBe(200)
+			const body = (await res.json()) as {
+				entities: {entityId: string; values: {propertyId: string; before: unknown; after: unknown}[]}[]
+			}
+			const entity = body.entities.find((e) => e.entityId === EXISTING.replace(/-/g, ""))
+			expect(entity).toBeDefined()
+			const change = entity?.values.find((v) => v.propertyId === NAME_PROP.replace(/-/g, ""))
+			expect(change).toBeDefined()
+			expect(change?.before).toBe("Old Name")
+			expect(change?.after).toBe("New Name")
+		})
+	})
+})
