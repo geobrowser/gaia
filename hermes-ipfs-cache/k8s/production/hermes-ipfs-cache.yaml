@@ -82,8 +82,12 @@ spec:
                 secretKeyRef:
                   name: hermes-ipfs-cache-secrets
                   key: SUBSTREAMS_API_TOKEN
+            # PLACEHOLDER — set to the new chain's SpaceRegistry deploy block before bring-up.
+            # 0 = stream from genesis (safe: won't miss events, just slower to catch up).
+            # NOTE: a non-numeric value is silently ignored and falls back to the OLD
+            # testnet block, so use 0 — never a REPLACE_WITH string — as the placeholder.
             - name: SUBSTREAMS_START_BLOCK
-              value: "138000"
+              value: "0"
             - name: IPFS_GATEWAY_URL
               valueFrom:
                 secretKeyRef:
