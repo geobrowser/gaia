@@ -215,14 +215,26 @@ class ScoringDataProvider:
         return spaces
 
     def _build_spaces_flat(self, space_rows: list[tuple]) -> list[Space]:
-        """Build Space objects using flat hierarchy (all children of root)."""
+        """Build Space objects using flat hierarchy (all children of root).
+
+        Fallback used when the topology indexer has not populated
+        scoring_topology_distances yet. Distances are set explicitly here (0 for root,
+        1 for every other space as a direct child of root) so the scoring model never
+        has to derive them — it only consumes pre-computed distances.
+        """
         spaces = []
-        non_root_spaces = {str(space_id) for (space_id,) in space_rows if space_id != ROOT_SPACE_ID}
+        # spaces.id comes back from psycopg as a uuid.UUID, while ROOT_SPACE_ID is a
+        # string — compare on the string form so root detection actually works.
+        non_root_spaces = {
+            str(space_id) for (space_id,) in space_rows if str(space_id) != ROOT_SPACE_ID
+        }
 
         for (space_id,) in space_rows:
             space_id_str = str(space_id)
-            sub_space_ids = non_root_spaces if space_id == ROOT_SPACE_ID else set()
-            parent_space_id = None if space_id == ROOT_SPACE_ID else ROOT_SPACE_ID
+            is_root = space_id_str == ROOT_SPACE_ID
+            sub_space_ids = non_root_spaces if is_root else set()
+            parent_space_id = None if is_root else ROOT_SPACE_ID
+            distance_to_root = 0 if is_root else 1
             spaces.append(
                 Space(
                     id=space_id_str,
@@ -230,6 +242,7 @@ class ScoringDataProvider:
                     created_at=datetime.now(),
                     parent_space_id=parent_space_id,
                     subspace_ids=sub_space_ids,
+                    distance_to_root=distance_to_root,
                 )
             )
 

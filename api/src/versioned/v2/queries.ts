@@ -19,6 +19,165 @@ const IMAGE_URL_PROPERTY_ID = normalizeUuid(SystemIds.IMAGE_URL_PROPERTY)
 const TYPES_PROPERTY_ID = normalizeUuid(SystemIds.TYPES_PROPERTY)
 const BLOCKS_TYPE_ID = normalizeUuid(SystemIds.BLOCKS)
 
+/** A BLOCKS relation pointing *at* a (block) entity: which parent owns it. */
+export interface BlockParentEntry {
+	parentId: NormalizedUuid
+	relationId: NormalizedUuid
+}
+
+/** A reified BLOCKS-relation entity (the "block relation entity" that holds a
+ *  data block's view/columns/sort config), resolved to its parent + data block. */
+export interface BlocksReifiedEntry {
+	parentId: NormalizedUuid
+	dataBlockId: NormalizedUuid
+}
+
+/**
+ * Resolve reified-BLOCKS-relation entities: for each candidate entity id, if it
+ * is the reified `entity_id` of a BLOCKS relation, return that relation's parent
+ * (`from`) and data block (`to`). Used by the proposal diff to fold a data
+ * block's config (which lives on this reified entity) into the block.
+ */
+export function batchGetBlocksRelationsByReifiedIdAtVersion(
+	db: NodePgDatabase<Record<string, unknown>>,
+	reifiedIds: NormalizedUuid[],
+	versionKey: bigint,
+	spaceId: NormalizedUuid,
+): Effect.Effect<Map<NormalizedUuid, BlocksReifiedEntry>, QueryError> {
+	if (reifiedIds.length === 0) return Effect.succeed(new Map())
+	return Effect.tryPromise({
+		try: async () => {
+			const idsArray = `{${reifiedIds.join(",")}}`
+			const vk = versionKey.toString()
+			const result = await db.execute<{entity_id: string; from_entity_id: string; to_entity_id: string}>(sql`
+				SELECT entity_id, from_entity_id, to_entity_id
+				FROM relation_versions
+				WHERE entity_id = ANY(${idsArray}::uuid[])
+					AND type_id = ${BLOCKS_TYPE_ID}
+					AND space_id = ${spaceId}
+					AND valid_from_key <= ${vk}::bigint
+					AND (valid_to_key IS NULL OR valid_to_key > ${vk}::bigint)
+			`)
+			const map = new Map<NormalizedUuid, BlocksReifiedEntry>()
+			for (const row of result.rows) {
+				map.set(normalizeUuid(row.entity_id), {
+					parentId: normalizeUuid(row.from_entity_id),
+					dataBlockId: normalizeUuid(row.to_entity_id),
+				})
+			}
+			return map
+		},
+		catch: (error) => new QueryError("batchGetBlocksRelationsByReifiedIdAtVersion", error),
+	}).pipe(
+		Effect.withSpan("queries-v2.batchGetBlocksRelationsByReifiedIdAtVersion", {
+			attributes: {count: reifiedIds.length},
+		}),
+	)
+}
+
+/** Live-state variant of {@link batchGetBlocksRelationsByReifiedIdAtVersion}. */
+export function batchGetLiveBlocksRelationsByReifiedId(
+	db: NodePgDatabase<Record<string, unknown>>,
+	reifiedIds: NormalizedUuid[],
+	spaceId: NormalizedUuid,
+): Effect.Effect<Map<NormalizedUuid, BlocksReifiedEntry>, QueryError> {
+	if (reifiedIds.length === 0) return Effect.succeed(new Map())
+	return Effect.tryPromise({
+		try: async () => {
+			const idsArray = `{${reifiedIds.join(",")}}`
+			const result = await db.execute<{entity_id: string; from_entity_id: string; to_entity_id: string}>(sql`
+				SELECT entity_id, from_entity_id, to_entity_id
+				FROM relations
+				WHERE entity_id = ANY(${idsArray}::uuid[])
+					AND type_id = ${BLOCKS_TYPE_ID}
+					AND space_id = ${spaceId}
+			`)
+			const map = new Map<NormalizedUuid, BlocksReifiedEntry>()
+			for (const row of result.rows) {
+				map.set(normalizeUuid(row.entity_id), {
+					parentId: normalizeUuid(row.from_entity_id),
+					dataBlockId: normalizeUuid(row.to_entity_id),
+				})
+			}
+			return map
+		},
+		catch: (error) => new QueryError("batchGetLiveBlocksRelationsByReifiedId", error),
+	}).pipe(
+		Effect.withSpan("queries-v2.batchGetLiveBlocksRelationsByReifiedId", {attributes: {count: reifiedIds.length}}),
+	)
+}
+
+/**
+ * Backlink resolver: for each child entity id, find the parent(s) that link to
+ * it via a BLOCKS relation at `versionKey`. Used by the proposal diff to fold a
+ * block under its parent even when the parent itself wasn't otherwise changed
+ * (e.g. editing a block's text doesn't touch the parent page).
+ */
+export function batchGetBlockParentsAtVersion(
+	db: NodePgDatabase<Record<string, unknown>>,
+	childIds: NormalizedUuid[],
+	versionKey: bigint,
+	spaceId: NormalizedUuid,
+): Effect.Effect<Map<NormalizedUuid, BlockParentEntry[]>, QueryError> {
+	if (childIds.length === 0) return Effect.succeed(new Map())
+	return Effect.tryPromise({
+		try: async () => {
+			const idsArray = `{${childIds.join(",")}}`
+			const vk = versionKey.toString()
+			const result = await db.execute<{to_entity_id: string; from_entity_id: string; relation_id: string}>(sql`
+				SELECT to_entity_id, from_entity_id, relation_id
+				FROM relation_versions
+				WHERE to_entity_id = ANY(${idsArray}::uuid[])
+					AND type_id = ${BLOCKS_TYPE_ID}
+					AND space_id = ${spaceId}
+					AND valid_from_key <= ${vk}::bigint
+					AND (valid_to_key IS NULL OR valid_to_key > ${vk}::bigint)
+			`)
+			const map = new Map<NormalizedUuid, BlockParentEntry[]>()
+			for (const row of result.rows) {
+				const child = normalizeUuid(row.to_entity_id)
+				const entry = {parentId: normalizeUuid(row.from_entity_id), relationId: normalizeUuid(row.relation_id)}
+				const list = map.get(child)
+				if (list) list.push(entry)
+				else map.set(child, [entry])
+			}
+			return map
+		},
+		catch: (error) => new QueryError("batchGetBlockParentsAtVersion", error),
+	}).pipe(Effect.withSpan("queries-v2.batchGetBlockParentsAtVersion", {attributes: {count: childIds.length}}))
+}
+
+/** Live-state variant of {@link batchGetBlockParentsAtVersion}. */
+export function batchGetLiveBlockParents(
+	db: NodePgDatabase<Record<string, unknown>>,
+	childIds: NormalizedUuid[],
+	spaceId: NormalizedUuid,
+): Effect.Effect<Map<NormalizedUuid, BlockParentEntry[]>, QueryError> {
+	if (childIds.length === 0) return Effect.succeed(new Map())
+	return Effect.tryPromise({
+		try: async () => {
+			const idsArray = `{${childIds.join(",")}}`
+			const result = await db.execute<{to_entity_id: string; from_entity_id: string; id: string}>(sql`
+				SELECT to_entity_id, from_entity_id, id
+				FROM relations
+				WHERE to_entity_id = ANY(${idsArray}::uuid[])
+					AND type_id = ${BLOCKS_TYPE_ID}
+					AND space_id = ${spaceId}
+			`)
+			const map = new Map<NormalizedUuid, BlockParentEntry[]>()
+			for (const row of result.rows) {
+				const child = normalizeUuid(row.to_entity_id)
+				const entry = {parentId: normalizeUuid(row.from_entity_id), relationId: normalizeUuid(row.id)}
+				const list = map.get(child)
+				if (list) list.push(entry)
+				else map.set(child, [entry])
+			}
+			return map
+		},
+		catch: (error) => new QueryError("batchGetLiveBlockParents", error),
+	}).pipe(Effect.withSpan("queries-v2.batchGetLiveBlockParents", {attributes: {count: childIds.length}}))
+}
+
 /**
  * For a parent entity's BLOCKS relations at `versionKey`, map each target
  * (data) block id → the BLOCKS relation's reified-relation entity id (= the

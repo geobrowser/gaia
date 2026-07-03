@@ -1102,6 +1102,12 @@ export const relationVersions = pgTable(
 		// Composite index for batch block relation discovery queries that filter on
 		// from_entity_id + type_id with temporal range predicates
 		index("relation_versions_from_entity_type_idx").on(table.fromEntityId, table.typeId, table.validFromKey),
+		// Partial index for the reverse (block child -> parent) BLOCKS lookup used by
+		// proposal-diff block folding (batchGetBlockParentsAtVersion: WHERE to_entity_id
+		// = ANY AND type_id = BLOCKS AND space_id ...). Partial on BLOCKS keeps it small.
+		index("relation_versions_blocks_to_entity_idx")
+			.on(table.toEntityId, table.spaceId, table.validFromKey)
+			.where(sql`${table.typeId} = 'beaba5cb-a677-41a8-b353-77030613fc70'::uuid`),
 		// Partial index for version discovery queries that scan valid_to_key
 		// to find edits that deleted/superseded relations on an entity
 		index("relation_versions_from_entity_valid_to_idx")
@@ -1132,6 +1138,13 @@ export const appWebhooks = pgTable("app_webhooks", {
 	appName: text("app_name").notNull().unique(),
 	url: text().notNull(),
 	secret: text().notNull(),
+	// Optional delivery filters. NULL/empty = receive everything (back-compatible).
+	// A webhook receives a notification iff its type is in `notificationTypes`
+	// (or it's empty) AND the event's space is in `spaceIds` (or it's empty).
+	// `notificationTypes` tokens: proposal_created (+ sub-tokens add_member /
+	// add_editor), proposal_voted, bounty_*, comment, etc.
+	notificationTypes: text("notification_types").array(),
+	spaceIds: uuid("space_ids").array(),
 	createdAt: timestamp("created_at", {withTimezone: true, mode: "date"}).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).defaultNow().notNull(),
 })

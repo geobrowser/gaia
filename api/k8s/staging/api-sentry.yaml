@@ -7,7 +7,7 @@
 #   kubectl create secret generic api-sentry \
 #     --namespace=api-staging \
 #     --from-literal=SENTRY_DSN='<dsn>' \
-#     --from-literal=SENTRY_TRACES_SAMPLE_RATE=1.0 \
+#     --from-literal=SENTRY_TRACES_SAMPLE_RATE=0.1 \
 #     --from-literal=SENTRY_ENVIRONMENT=staging \
 #     --from-literal=SENTRY_RELEASE=api@<version> \
 #     --from-literal=SENTRY_DEBUG=false
@@ -23,7 +23,10 @@ metadata:
 type: Opaque
 stringData:
   SENTRY_DSN: "<dsn>"
-  SENTRY_TRACES_SAMPLE_RATE: "1.0"
+  # Honored by SentrySampler in api/src/services/telemetry.ts. Staging volume is
+  # low, so the rate mainly trades trace fidelity vs noise while debugging.
+  # Tunable without a redeploy (kubectl edit secret).
+  SENTRY_TRACES_SAMPLE_RATE: "0.1"
   SENTRY_ENVIRONMENT: "staging"
   SENTRY_RELEASE: "api@<version>"
   SENTRY_DEBUG: "false"

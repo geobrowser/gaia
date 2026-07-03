@@ -1,21 +1,63 @@
 //! Storage layer for notification outbox and delivery fan-out.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use hermes_instrumentation::instrument;
+use hermes_instrumentation::{error, instrument, warn};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::error::StorageError;
 use crate::ids;
-use crate::models::NotificationEvent;
+use crate::models::{event_notification_types, NotificationEvent, KNOWN_NOTIFICATION_TYPES};
+
+/// How long the in-memory `app_webhooks` snapshot is reused before re-reading the
+/// table. The table is tiny (a handful of rows) and changes rarely, so we serve
+/// filtering from memory and refresh lazily — a filter change takes effect within
+/// this window without a redeploy.
+const WEBHOOK_CACHE_TTL: Duration = Duration::from_secs(30);
+
+/// A registered webhook's delivery filters. `None`/empty on a dimension = "all".
+#[derive(Debug, Clone)]
+pub struct WebhookFilter {
+    pub id: Uuid,
+    pub notification_types: Option<Vec<String>>,
+    pub space_ids: Option<Vec<Uuid>>,
+}
+
+impl WebhookFilter {
+    /// Whether this webhook should receive an event with the given token set +
+    /// space. A dimension matches when its filter is unset/empty (= all) or it
+    /// contains the event's value; both dimensions must match.
+    pub fn matches(&self, event_types: &[String], space_id: Uuid) -> bool {
+        let type_ok = self.notification_types.as_ref().is_none_or(|allowed| {
+            allowed.is_empty()
+                || allowed
+                    .iter()
+                    .any(|wt| event_types.iter().any(|et| et == wt))
+        });
+        let space_ok = self
+            .space_ids
+            .as_ref()
+            .is_none_or(|allowed| allowed.is_empty() || allowed.contains(&space_id));
+        type_ok && space_ok
+    }
+}
+
+struct WebhookCache {
+    webhooks: Vec<WebhookFilter>,
+    fetched_at: Instant,
+}
 
 /// Storage for notification-related database operations.
 pub struct Storage {
     pool: PgPool,
+    /// Cached `app_webhooks` filters (per-instance, TTL-refreshed). Filtering is
+    /// done in memory so the per-recipient fan-out never re-queries the table.
+    webhook_cache: RwLock<Option<WebhookCache>>,
 }
 
 /// An expired proposal found by the rejection poller.
@@ -45,7 +87,52 @@ pub struct EntityVoteCount {
 
 impl Storage {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            webhook_cache: RwLock::new(None),
+        }
+    }
+
+    /// Ids of the webhooks that should receive an event with this token set +
+    /// space, evaluated against the in-memory cache.
+    async fn matching_webhook_ids(
+        &self,
+        event_types: &[String],
+        space_id: Uuid,
+    ) -> Result<Vec<Uuid>, StorageError> {
+        Ok(self
+            .cached_webhooks()
+            .await?
+            .into_iter()
+            .filter(|w| w.matches(event_types, space_id))
+            .map(|w| w.id)
+            .collect())
+    }
+
+    /// The cached webhook filters, refreshed from `app_webhooks` when older than
+    /// `WEBHOOK_CACHE_TTL` (or on first use).
+    async fn cached_webhooks(&self) -> Result<Vec<WebhookFilter>, StorageError> {
+        if let Some(cache) = self.webhook_cache.read().await.as_ref() {
+            if cache.fetched_at.elapsed() < WEBHOOK_CACHE_TTL {
+                return Ok(cache.webhooks.clone());
+            }
+        }
+        let rows = sqlx::query("SELECT id, notification_types, space_ids FROM app_webhooks")
+            .fetch_all(&self.pool)
+            .await?;
+        let webhooks: Vec<WebhookFilter> = rows
+            .iter()
+            .map(|r| WebhookFilter {
+                id: r.get("id"),
+                notification_types: r.get("notification_types"),
+                space_ids: r.get("space_ids"),
+            })
+            .collect();
+        *self.webhook_cache.write().await = Some(WebhookCache {
+            webhooks: webhooks.clone(),
+            fetched_at: Instant::now(),
+        });
+        Ok(webhooks)
     }
 
     /// Connect to the database and create a new Storage instance.
@@ -118,6 +205,23 @@ impl Storage {
     ) -> Result<u64, StorageError> {
         let mut inserted_count: u64 = 0;
 
+        // Event-level webhook routing keys (identical for every recipient): the
+        // notification token set (for type filtering) and the event's space id.
+        let notification_types = event_notification_types(event);
+        let space_id = Uuid::parse_str(&event.payload.space_id).unwrap_or_else(|_| {
+            warn!(
+                space_id = %event.payload.space_id,
+                "notification payload has a non-UUID space_id; space-filtered webhooks will be skipped for it"
+            );
+            Uuid::nil()
+        });
+
+        // Which webhooks receive this event — filtered once per event against the
+        // in-memory cache (NULL/empty filters = all). Identical for every recipient.
+        let matched_webhook_ids = self
+            .matching_webhook_ids(&notification_types, space_id)
+            .await?;
+
         // Serialize the payload once before the recipient loop. Per-user fields
         // (user_space_id, idempotency_key) are stamped into the Value clone,
         // avoiding N struct clones + N serializations.
@@ -179,16 +283,25 @@ impl Storage {
                 }
             };
 
-            // Fan out: create a delivery row for every registered webhook
-            sqlx::query(
-                r#"
-                INSERT INTO notification_deliveries (outbox_id, webhook_id)
-                SELECT $1, id FROM app_webhooks
-                "#,
-            )
-            .bind(outbox_id)
-            .execute(&mut *tx)
-            .await?;
+            // Fan out: one delivery row per matching webhook (computed above, in
+            // memory). Skip the insert entirely when no webhook subscribes.
+            //
+            // The matched IDs come from the webhook cache, which is stale for up
+            // to WEBHOOK_CACHE_TTL. Join against app_webhooks so a webhook deleted
+            // within that window is simply skipped rather than triggering a
+            // webhook_id FK violation that would abort the whole transaction.
+            if !matched_webhook_ids.is_empty() {
+                sqlx::query(
+                    r#"
+                    INSERT INTO notification_deliveries (outbox_id, webhook_id)
+                    SELECT $1, w.id FROM app_webhooks w WHERE w.id = ANY($2::uuid[])
+                    "#,
+                )
+                .bind(outbox_id)
+                .bind(&matched_webhook_ids)
+                .execute(&mut *tx)
+                .await?;
+            }
 
             inserted_count += 1;
         }
@@ -196,6 +309,43 @@ impl Storage {
         tx.commit().await?;
 
         Ok(inserted_count)
+    }
+
+    /// Best-effort startup check: log (don't reject) any webhook filter that
+    /// references a notification type the indexer never emits — such a token can
+    /// never match, so the operator should fix the typo. Filters with only-unknown
+    /// tokens will receive nothing; this is how that's surfaced.
+    #[instrument(
+        name = "notification_indexer.storage.validate_webhook_filters",
+        skip(self)
+    )]
+    pub async fn log_unknown_webhook_filter_types(&self) {
+        let rows = sqlx::query(
+            "SELECT app_name, unnest(notification_types) AS t
+             FROM app_webhooks WHERE notification_types IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await;
+        match rows {
+            Ok(rows) => {
+                for row in rows {
+                    let app_name: String = row.get("app_name");
+                    // Decode as Option: a NULL element inside the array unnests to
+                    // a NULL row, and decoding NULL into a non-Option String panics.
+                    let Some(t) = row.get::<Option<String>, _>("t") else {
+                        continue;
+                    };
+                    if !KNOWN_NOTIFICATION_TYPES.contains(&t.as_str()) {
+                        error!(
+                            app_name = %app_name,
+                            notification_type = %t,
+                            "unknown notification_type in webhook filter — it will never match any event"
+                        );
+                    }
+                }
+            }
+            Err(e) => warn!(error = %e, "could not validate webhook filter notification_types"),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -538,6 +688,48 @@ impl Storage {
         .flatten()
     }
 
+    /// Look up a space's display name (e.g. "Wonderland").
+    ///
+    /// The bare `space_id` entity only carries the auto-generated placeholder
+    /// ("Space <uuid>"). The real name lives on the space's *page entity* — the
+    /// entity inside the space with a Types relation to SPACE_TYPE (the same
+    /// "front page entity" pattern as `lookup_entity_space`, and what the API's
+    /// `spaces_page` function resolves). We read that entity's Name value.
+    ///
+    /// Name values are not space-scoped (matching the API's `entities_name`),
+    /// so we match on `entity_id` only. Returns `None` if the space has no page
+    /// entity or it has no name.
+    ///
+    /// The schema enforces no uniqueness on the matched relation/value keys (an
+    /// entity can carry multiple Name values, e.g. per `language`), so we apply
+    /// a deterministic tie-break before `LIMIT 1` — same convention as the API's
+    /// `batchGetEntityNames`: pick the lowest page-entity id, prefer the Name
+    /// value defined in this space, then the lowest value id.
+    pub async fn lookup_space_name(&self, space_id: Uuid) -> Option<String> {
+        sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT v.text
+            FROM relations r
+            JOIN "values" v ON v.entity_id = r.from_entity_id
+            WHERE r.space_id = $1
+              AND r.type_id = $2
+              AND r.to_entity_id = $3
+              AND v.property_id = $4
+              AND v.text IS NOT NULL
+            ORDER BY r.from_entity_id, (v.space_id = $1) DESC, v.id
+            LIMIT 1
+            "#,
+        )
+        .bind(space_id)
+        .bind(ids::types_relation_type())
+        .bind(ids::space_type())
+        .bind(ids::name_property())
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+    }
+
     /// Look up the human-readable name for a proposal from the proposals table.
     pub async fn lookup_proposal_name(&self, proposal_id: Uuid) -> Option<String> {
         sqlx::query_scalar::<_, String>(
@@ -685,5 +877,63 @@ impl Storage {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn filter(types: Option<&[&str]>, spaces: Option<&[Uuid]>) -> WebhookFilter {
+        WebhookFilter {
+            id: Uuid::nil(),
+            notification_types: types.map(|t| t.iter().map(|s| s.to_string()).collect()),
+            space_ids: spaces.map(<[Uuid]>::to_vec),
+        }
+    }
+
+    #[test]
+    fn webhook_filter_matches() {
+        let space_a = Uuid::from_u128(0xA);
+        let space_b = Uuid::from_u128(0xB);
+        // event token sets (from event_notification_types)
+        let proposal_member = ["proposal_created".to_string(), "add_member".to_string()];
+        let proposal_plain = ["proposal_created".to_string()];
+        let vote = ["proposal_voted".to_string()];
+
+        // No filter (None) or empty filter = receive everything.
+        assert!(filter(None, None).matches(&proposal_member, space_a));
+        assert!(filter(Some(&[]), Some(&[])).matches(&vote, space_b));
+
+        // Subscribe to `proposal_created` → every proposal (layered base token),
+        // but not non-proposal events.
+        let pc = filter(Some(&["proposal_created"]), None);
+        assert!(pc.matches(&proposal_member, space_a));
+        assert!(pc.matches(&proposal_plain, space_a));
+        assert!(!pc.matches(&vote, space_a));
+
+        // Subscribe to `add_member` → only member-adding proposals.
+        let am = filter(Some(&["add_member"]), None);
+        assert!(am.matches(&proposal_member, space_a));
+        assert!(!am.matches(&proposal_plain, space_a));
+
+        // Space filter.
+        let sx = filter(None, Some(&[space_a]));
+        assert!(sx.matches(&proposal_member, space_a));
+        assert!(!sx.matches(&proposal_member, space_b));
+
+        // Both dimensions must match.
+        let both = filter(Some(&["add_member"]), Some(&[space_a]));
+        assert!(both.matches(&proposal_member, space_a));
+        assert!(!both.matches(&proposal_member, space_b)); // wrong space
+        assert!(!both.matches(&proposal_plain, space_a)); // wrong type
+
+        // Many types / many spaces.
+        let multi = filter(
+            Some(&["add_editor", "proposal_voted"]),
+            Some(&[space_a, space_b]),
+        );
+        assert!(multi.matches(&vote, space_b));
+        assert!(!multi.matches(&proposal_member, space_a)); // member not in {add_editor, proposal_voted}
     }
 }

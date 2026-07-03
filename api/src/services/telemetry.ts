@@ -1,10 +1,10 @@
 import {NodeSdk} from "@effect/opentelemetry"
 import {trace} from "@opentelemetry/api"
 import {resourceFromAttributes} from "@opentelemetry/resources"
-import {BasicTracerProvider} from "@opentelemetry/sdk-trace-base"
+import {BasicTracerProvider, type Sampler} from "@opentelemetry/sdk-trace-base"
 import {ATTR_SERVICE_NAME} from "@opentelemetry/semantic-conventions"
 import * as Sentry from "@sentry/node"
-import {SentrySpanProcessor} from "@sentry/opentelemetry"
+import {SentrySampler, SentrySpanProcessor} from "@sentry/opentelemetry"
 import {Effect, HashMap, Layer, Logger, LogLevel} from "effect"
 
 const SERVICE_NAME = "gaia-api"
@@ -12,6 +12,7 @@ const SERVICE_NAME = "gaia-api"
 // Track whether Sentry is initialized
 let sentryInitialized = false
 let spanProcessor: SentrySpanProcessor | undefined
+let sampler: Sampler | undefined
 
 // Initialize Sentry and OTEL eagerly at module load time
 // This ensures tracing is ready before any requests arrive
@@ -54,10 +55,26 @@ function initSentry() {
 	// We intentionally skip SentryContextManager to avoid conflicts with Effect's Fiber-based context.
 	// Effect has its own scoped provider; this global provider is only for trace.getTracer() calls.
 	spanProcessor = new SentrySpanProcessor()
+
+	// SentrySampler is what actually honors `tracesSampleRate`. Because we pass
+	// `skipOpenTelemetrySetup: true`, Sentry does NOT install its sampler for us,
+	// and SentrySpanProcessor exports every span it receives unconditionally — so
+	// without an explicit sampler the OTEL default (AlwaysOnSampler) records every
+	// span and `tracesSampleRate` is silently ignored. Installing SentrySampler
+	// moves the head-sampling decision to span-start: root spans are sampled at
+	// `tracesSampleRate`, and child spans (e.g. the GraphQL operation span, which
+	// is parented to the HTTP span via the manually-propagated trace context)
+	// inherit the root's decision, so all spans of a request are kept or dropped
+	// together. Errors are still captured independently (captureException /
+	// captureMessage), so dropping a trace never drops its error Issue.
+	const client = Sentry.getClient()
+	sampler = client ? new SentrySampler(client) : undefined
+
 	const globalProvider = new BasicTracerProvider({
 		resource: resourceFromAttributes({
 			[ATTR_SERVICE_NAME]: SERVICE_NAME,
 		}),
+		...(sampler ? {sampler} : {}),
 		spanProcessors: [spanProcessor],
 	})
 	trace.setGlobalTracerProvider(globalProvider)
@@ -69,10 +86,13 @@ function initSentry() {
 // Initialize immediately when module is loaded
 initSentry()
 
-// Effect layer config - reuses the already-initialized Sentry
+// Effect layer config - reuses the already-initialized Sentry.
+// Pass the same SentrySampler through tracerConfig so Effect-originated root
+// spans honor `tracesSampleRate` too, consistent with the global provider above.
 const makeTelemetryConfig = Effect.sync(() => ({
 	resource: {serviceName: SERVICE_NAME},
 	spanProcessor: spanProcessor,
+	...(sampler ? {tracerConfig: {sampler}} : {}),
 }))
 
 // Effect layer with SentrySpanProcessor

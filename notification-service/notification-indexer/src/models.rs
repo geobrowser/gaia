@@ -199,6 +199,56 @@ pub struct GovernanceData {
     pub abstain_count: Option<i64>,
 }
 
+/// Every webhook-filter token the indexer can emit — used to validate webhook
+/// configs (a filter referencing anything else can never match). `add_member` /
+/// `add_editor` are `proposal_created` sub-tokens (see `event_notification_types`);
+/// the rest are the `NotificationEventType` values.
+pub const KNOWN_NOTIFICATION_TYPES: &[&str] = &[
+    "proposal_created",
+    "add_member",
+    "add_editor",
+    "proposal_updated",
+    "proposal_voted",
+    "proposal_executed",
+    "proposal_settings_updated",
+    "proposal_rejected",
+    "bounty_interest",
+    "bounty_allocated",
+    "bounty_payout",
+    "bounty_created",
+    "proposal_comment",
+    "comment",
+    "entity_votes_threshold",
+];
+
+/// The set of webhook-filter tokens an event maps to. A webhook receives the event
+/// when its `notification_types` filter overlaps this set (or the filter is empty
+/// = all).
+///
+/// `proposal_created` is **layered**: it always emits the base `proposal_created`
+/// token, *plus* `add_member` / `add_editor` for each such action present. So
+/// subscribing to `proposal_created` receives every proposal, while subscribing to
+/// `add_member` receives only member-adding proposals. Every other event maps to
+/// its single `event_type` token.
+pub fn event_notification_types(event: &NotificationEvent) -> Vec<String> {
+    let event_type = event.payload.event_type.as_str();
+    if event_type != NotificationEventType::ProposalCreated.as_str() {
+        return vec![event_type.to_string()];
+    }
+    let mut tokens = vec![event_type.to_string()];
+    if let NotificationData::Governance(gov) = &event.payload.data {
+        if let Some(actions) = &gov.actions {
+            if actions.iter().any(|a| a.action_type == "add_member") {
+                tokens.push("add_member".to_string());
+            }
+            if actions.iter().any(|a| a.action_type == "add_editor") {
+                tokens.push("add_editor".to_string());
+            }
+        }
+    }
+    tokens
+}
+
 /// Summary of a single proposal action for the webhook payload.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ActionSummary {
@@ -208,6 +258,11 @@ pub struct ActionSummary {
     /// Target address (hex-encoded, for member/editor actions).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_address: Option<String>,
+    /// Display name of the target member/editor, resolved from `target_address`
+    /// — which carries the target's personal-space UUID (hermes' decode of
+    /// `addMember(bytes16)`), so it resolves like any space name. Best-effort.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_name: Option<String>,
     /// Target space ID (for subspace actions).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_space_id: Option<String>,
@@ -3443,5 +3498,82 @@ mod tests {
             base,
             build_vote_threshold_event(e1, s1, 10, 0, 25).idempotency_key
         );
+    }
+
+    #[test]
+    fn test_event_notification_types() {
+        fn proposal_with(actions: &[&str]) -> NotificationEvent {
+            NotificationEvent {
+                event_type: NotificationEventType::ProposalCreated,
+                idempotency_key: "k".to_string(),
+                payload: NotificationPayload {
+                    version: PAYLOAD_VERSION,
+                    event_type: "proposal_created".to_string(),
+                    category: "governance".to_string(),
+                    space_id: "00000000-0000-0000-0000-000000000001".to_string(),
+                    user_space_id: None,
+                    idempotency_key: None,
+                    block_number: None,
+                    timestamp: None,
+                    space_name: None,
+                    data: NotificationData::Governance(GovernanceData {
+                        proposal_id: "p".to_string(),
+                        proposer_id: None,
+                        voter_id: None,
+                        vote: None,
+                        voting_mode: None,
+                        actions: Some(
+                            actions
+                                .iter()
+                                .map(|t| ActionSummary {
+                                    action_type: t.to_string(),
+                                    ..Default::default()
+                                })
+                                .collect(),
+                        ),
+                        settings: None,
+                        proposal_name: None,
+                        proposer_name: None,
+                        voter_name: None,
+                        yes_count: None,
+                        no_count: None,
+                        abstain_count: None,
+                    }),
+                },
+            }
+        }
+
+        // proposal_created is layered: base token always, plus a sub-token per add_* action.
+        assert_eq!(
+            event_notification_types(&proposal_with(&["publish"])),
+            vec!["proposal_created"]
+        );
+        assert_eq!(
+            event_notification_types(&proposal_with(&["add_member"])),
+            vec!["proposal_created", "add_member"]
+        );
+        assert_eq!(
+            event_notification_types(&proposal_with(&["add_editor"])),
+            vec!["proposal_created", "add_editor"]
+        );
+        assert_eq!(
+            event_notification_types(&proposal_with(&["add_member", "add_editor"])),
+            vec!["proposal_created", "add_member", "add_editor"]
+        );
+
+        // Non-proposal events map to their single event_type token.
+        let voted = build_vote_threshold_event(Uuid::nil(), Uuid::nil(), 10, 0, 10);
+        assert_eq!(
+            event_notification_types(&voted),
+            vec![voted.payload.event_type.clone()]
+        );
+
+        // Every emitted token is in the known set (keeps KNOWN_NOTIFICATION_TYPES honest).
+        for t in event_notification_types(&proposal_with(&["add_member", "add_editor"])) {
+            assert!(
+                KNOWN_NOTIFICATION_TYPES.contains(&t.as_str()),
+                "unknown token: {t}"
+            );
+        }
     }
 }

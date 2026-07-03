@@ -1,0 +1,68 @@
+name: Deploy Membership Acceptor (Production)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'membership-acceptor/**'
+      - '.github/workflows/membership-acceptor-deploy.yml'
+
+concurrency:
+  group: membership-acceptor-production
+  cancel-in-progress: true
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: membership-acceptor
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@3cb3953159719656269e044e0e24ca16dd2a690f # v2.5.2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -f membership-acceptor/Dockerfile membership-acceptor
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Set up kubectl
+        uses: Azure/setup-kubectl@v5
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          # Pin the image to this commit's SHA and apply the Deployment + Service.
+          sed -i 's|image: registry.digitalocean.com/geo/membership-acceptor:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' membership-acceptor/deployment/production/deployment.yaml
+          kubectl apply -f membership-acceptor/deployment/production/deployment.yaml
+
+      - name: Wait for rollout
+        run: kubectl rollout status deployment/membership-acceptor -n knowledge --timeout=120s
+
+      - name: Show deployment status
+        if: always()
+        run: |
+          echo "=== Membership Acceptor Deployment (Production) ==="
+          kubectl get deployment membership-acceptor -n knowledge || echo "Deployment not found"
+          echo ""
+          echo "=== Pods ==="
+          kubectl get pods -n knowledge -l app=membership-acceptor || echo "No pods found"
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n knowledge --sort-by='.lastTimestamp' | tail -10
