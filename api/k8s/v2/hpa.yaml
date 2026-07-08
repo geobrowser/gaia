@@ -2,7 +2,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: api
-  namespace: gaia-v2
+  namespace: gaia
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -34,7 +34,7 @@ spec:
   metrics:
     # v2 scales on resource metrics only — the prod External/Pods metrics
     # (prometheus-adapter + recording rules) are scoped to the prod host and
-    # namespace and don't exist for gaia-v2 until monitoring is wired (Step 15).
+    # namespace and don't exist for gaia until monitoring is wired (Step 15).
     - type: Resource
       resource:
         name: cpu

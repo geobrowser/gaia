@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: api
-  namespace: gaia-v2
+  namespace: gaia
   labels:
     app: api
 spec:
@@ -24,12 +24,6 @@ spec:
       volumes:
         - name: ssl-certs
           emptyDir: {}
-      nodeSelector:
-        doks.digitalocean.com/node-pool: gaia-v2-pool
-      tolerations:
-        - key: dedicated
-          value: gaia-v2
-          effect: NoSchedule
       initContainers:
         - name: setup-certs
           image: registry.digitalocean.com/geo/api:latest
@@ -195,7 +189,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: api
-  namespace: gaia-v2
+  namespace: gaia
   labels:
     app: api
 spec:
@@ -208,43 +202,30 @@ spec:
   selector:
     app: api
 ---
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+# HTTP routing via the shared Cilium Gateway (`geo-chat-api` in the geo-chat
+# namespace — one LB / IP for the whole cluster, per-service HTTPRoutes).
+# Companion Gateway-side change (geo-chat repo): listeners for
+# testnet-api-v2.geobrowser.io (HTTP + HTTPS with a cert-manager cert) and
+# allowedRoutes opened to the gaia namespace; DNS for the host points at the
+# shared Gateway LB.
+# Note: the old nginx server-snippet gzip and proxy-body-size tuning have no
+# HTTPRoute equivalent — response compression falls to the api process.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
 metadata:
   name: api
-  namespace: gaia-v2
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
-    nginx.ingress.kubernetes.io/server-snippet: |
-      gzip on;
-      gzip_comp_level 5;
-      gzip_min_length 512;
-      gzip_proxied any;
-      gzip_vary on;
-      gzip_types
-        application/json
-        application/graphql-response+json
-        application/javascript
-        application/xml
-        text/plain
-        text/css
-        text/javascript
-        text/xml;
+  namespace: gaia
 spec:
-  ingressClassName: nginx
-  tls:
-    - hosts:
-        - testnet-api-v2.geobrowser.io
-      secretName: testnet-api-v2-tls
+  parentRefs:
+    - name: geo-chat-api
+      namespace: geo-chat
+  hostnames:
+    - testnet-api-v2.geobrowser.io
   rules:
-    - host: testnet-api-v2.geobrowser.io
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: api
-                port:
-                  number: 3000
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: api
+          port: 3000

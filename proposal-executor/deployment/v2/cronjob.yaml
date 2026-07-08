@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: proposal-executor
-  namespace: gaia-v2
+  namespace: gaia
 spec:
   schedule: "*/5 * * * *"
   concurrencyPolicy: Forbid
@@ -23,12 +23,6 @@ spec:
           volumes:
             - name: ssl-certs
               emptyDir: {}
-          nodeSelector:
-            doks.digitalocean.com/node-pool: gaia-v2-pool
-          tolerations:
-            - key: dedicated
-              value: gaia-v2
-              effect: NoSchedule
           initContainers:
             - name: setup-certs
               image: registry.digitalocean.com/geo/proposal-executor:latest

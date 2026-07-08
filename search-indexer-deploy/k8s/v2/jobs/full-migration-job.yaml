@@ -3,7 +3,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: opensearch-full-migration
-  namespace: gaia-v2
+  namespace: gaia
   labels:
     app: opensearch-admin
     task: full-migration
@@ -59,7 +59,7 @@ spec:
         - name: TARGET_VERSION
           value: "3"  # CHANGE THIS: New/target index version
         - name: NAMESPACE
-          value: "gaia-v2"  # Kubernetes namespace for gaia-v2 (testnet)
+          value: "gaia"  # Kubernetes namespace for gaia (testnet)
         - name: DEPLOYMENT_NAME
           value: "search-indexer"
         - name: RUST_LOG

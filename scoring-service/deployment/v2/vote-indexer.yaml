@@ -6,7 +6,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: vote-indexer
-  namespace: gaia-v2
+  namespace: gaia
   labels:
     app: vote-indexer
 spec:
@@ -26,12 +26,6 @@ spec:
         fsGroup: 1001
       imagePullSecrets:
         - name: regcred
-      nodeSelector:
-        doks.digitalocean.com/node-pool: gaia-v2-pool
-      tolerations:
-        - key: dedicated
-          value: gaia-v2
-          effect: NoSchedule
       containers:
         - name: vote-indexer
           image: registry.digitalocean.com/geo/vote-indexer:latest

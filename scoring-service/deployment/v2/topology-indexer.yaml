@@ -6,7 +6,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: topology-indexer
-  namespace: gaia-v2
+  namespace: gaia
   labels:
     app: topology-indexer
 spec:
@@ -26,12 +26,6 @@ spec:
         fsGroup: 1001
       imagePullSecrets:
         - name: regcred
-      nodeSelector:
-        doks.digitalocean.com/node-pool: gaia-v2-pool
-      tolerations:
-        - key: dedicated
-          value: gaia-v2
-          effect: NoSchedule
       containers:
         - name: topology-indexer
           image: registry.digitalocean.com/geo/topology-indexer:latest
