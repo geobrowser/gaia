@@ -1,7 +1,11 @@
 name: Deploy gaia-v2 service (manual)
 
-# Deploys one gaia-v2 service: seds the image tag into its k8s/v2 manifest(s)
-# and applies them to the gaia-v2 namespace, then gates on rollout status.
+# Deploys one gaia v2-stack service: seds the image tag into its k8s/v2
+# manifest(s) and applies them, then gates on rollout status.
+#
+# Target cluster is a dispatch input. Default is geo-testnet-k8s (the new
+# testnet cluster, namespace `gaia`); k8s-geo-testnet (namespace `gaia-v2`)
+# remains selectable while the legacy cluster is being retired.
 #
 # Companion to "Build gaia-v2 images (manual)" — build first, then deploy with
 # the tag the build run printed. Bring-up order and per-service health gates
@@ -27,18 +31,29 @@ on:
           - topology-indexer
           - scoring-service
           - proposal-executor
+          - notification-indexer
+          - delivery-worker
+          - ranking-indexer
       tag:
         description: "Image tag to deploy (from the build workflow, e.g. short SHA). Ignored for valkey (pinned public image)."
         required: true
         type: string
+      cluster:
+        description: "Target cluster. geo-testnet-k8s = new testnet cluster (namespace gaia); k8s-geo-testnet = legacy cluster (namespace gaia-v2, being retired)."
+        required: true
+        type: choice
+        default: geo-testnet-k8s
+        options:
+          - geo-testnet-k8s
+          - k8s-geo-testnet
 
 concurrency:
-  group: deploy-v2-${{ inputs.service }}
+  group: deploy-v2-${{ inputs.cluster }}-${{ inputs.service }}
   cancel-in-progress: false
 
 env:
   REGISTRY: registry.digitalocean.com/geo
-  NAMESPACE: gaia-v2
+  NAMESPACE: ${{ inputs.cluster == 'k8s-geo-testnet' && 'gaia-v2' || 'gaia' }}
 
 jobs:
   deploy:
@@ -56,7 +71,7 @@ jobs:
         uses: azure/setup-kubectl@v5
 
       - name: Configure kubectl for DigitalOcean
-        run: doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+        run: doctl kubernetes cluster kubeconfig save ${{ inputs.cluster }}
 
       - name: Resolve service mapping
         id: map
@@ -73,6 +88,9 @@ jobs:
             topology-indexer)  manifests="scoring-service/deployment/v2/topology-indexer.yaml"; rollout="deployment/topology-indexer" ;;
             scoring-service)   manifests="scoring-service/deployment/v2/cronjob.yaml";      rollout="" ;;
             proposal-executor) manifests="proposal-executor/deployment/v2/cronjob.yaml";    rollout="" ;;
+            notification-indexer) manifests="notification-service/deployment/v2/notification-indexer.yaml"; rollout="deployment/notification-indexer" ;;
+            delivery-worker)   manifests="notification-service/deployment/v2/delivery-worker.yaml"; rollout="deployment/delivery-worker" ;;
+            ranking-indexer)   manifests="ranking-indexer/k8s/v2/ranking-indexer.yaml";     rollout="deployment/ranking-indexer" ;;
             *) echo "unknown service"; exit 1 ;;
           esac
           echo "manifests=$manifests" >> "$GITHUB_OUTPUT"
@@ -88,7 +106,7 @@ jobs:
             }
 
       - name: Ensure namespace exists
-        run: kubectl apply -f kg-indexer/k8s/v2/namespace.yaml
+        run: kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Guard against unfilled placeholders
         run: |
