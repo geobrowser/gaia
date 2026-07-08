@@ -589,8 +589,9 @@ fn make_settings() -> hermes_schema::pb::governance::ProposalSettings {
         last_date: 1700086400,
         voting_mode: 0,
         quorum: 1,
-        flat_threshold: 1,
-        percentage_threshold: 0,
+        flat_support_threshold: 1,
+        partial_percentage_support_threshold: 0,
+        ..Default::default()
     }
 }
 
@@ -665,6 +666,7 @@ async fn produce_test_events(kafka_broker: &str) -> Result<(), Box<dyn std::erro
         proposal_id: PROP_3E_VOTED_BYTES.to_vec(),
         vote: hermes_schema::pb::governance::ProposalVoteOption::VoteOptionYes as i32,
         meta: Some(make_meta(12348, 1700003000)),
+        ..Default::default()
     };
     send_event(
         &producer,
@@ -695,8 +697,9 @@ async fn produce_test_events(kafka_broker: &str) -> Result<(), Box<dyn std::erro
             last_date: 1700172800,
             voting_mode: 1,
             quorum: 5,
-            flat_threshold: 0,
-            percentage_threshold: 5000000,
+            flat_support_threshold: 0,
+            partial_percentage_support_threshold: 5000000,
+            ..Default::default()
         }),
         meta: Some(make_meta(12349, 1700004000)),
     };

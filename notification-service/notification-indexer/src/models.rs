@@ -519,13 +519,21 @@ fn voting_mode_to_string(mode: i32) -> Result<String, HandlerError> {
 fn settings_to_payload(
     settings: &hermes_schema::pb::governance::ProposalSettings,
 ) -> Result<ProposalSettingsPayload, HandlerError> {
+    // Governance v2 (#759) split the v1 thresholds. Payload field names are the
+    // stable webhook contract; the v1-equivalent sources are (per the documented
+    // semantics in api/src/proposals/types.ts):
+    //   flat_threshold       <- flat_support_threshold (fast path, absolute YES count)
+    //   percentage_threshold <- partial_percentage_support_threshold (slow path,
+    //                           late-execution bar — the "did it pass" threshold)
+    // universal_percentage_support_threshold (early execution) is a new v2 concept
+    // with no v1 counterpart and is intentionally not mapped here.
     Ok(ProposalSettingsPayload {
         start_date: settings.start_date,
         end_date: settings.last_date,
         voting_mode: voting_mode_to_string(settings.voting_mode)?,
         quorum: settings.quorum,
-        flat_threshold: settings.flat_threshold,
-        percentage_threshold: settings.percentage_threshold,
+        flat_threshold: settings.flat_support_threshold,
+        percentage_threshold: settings.partial_percentage_support_threshold,
     })
 }
 
@@ -585,8 +593,11 @@ fn action_to_summary(action: &hermes_schema::pb::governance::ProposalAction) -> 
             action_type: "update_voting_settings".to_string(),
             voting_settings: Some(VotingSettingsUpdate {
                 quorum: s.quorum,
-                fast_threshold: s.fast_threshold,
-                slow_threshold: s.slow_threshold,
+                // Same gov-v2 mapping as settings_to_payload: fast path is the
+                // flat YES-count threshold, slow path is the late-execution
+                // (partial) percentage threshold.
+                fast_threshold: s.flat_support_threshold,
+                slow_threshold: s.partial_percentage_support_threshold,
                 duration: s.duration,
             }),
             ..ActionSummary::default()
@@ -1611,6 +1622,7 @@ mod tests {
             proposal_id: make_test_uuid(0x03),
             vote: ProposalVoteOption::VoteOptionYes as i32,
             meta: Some(make_metadata(888, 1700003000)),
+            ..Default::default()
         };
 
         let event = handle_proposal_voted(&msg).expect("should parse");
@@ -1634,6 +1646,7 @@ mod tests {
             proposal_id: make_test_uuid(0x03),
             vote: ProposalVoteOption::VoteOptionNo as i32,
             meta: Some(make_metadata(889, 1700003001)),
+            ..Default::default()
         };
 
         let event = handle_proposal_voted(&msg).expect("should parse");
@@ -1649,6 +1662,7 @@ mod tests {
             proposal_id: make_test_uuid(0x03),
             vote: ProposalVoteOption::VoteOptionAbstain as i32,
             meta: Some(make_metadata(890, 1700003002)),
+            ..Default::default()
         };
 
         let event = handle_proposal_voted(&msg).expect("should parse");
@@ -1664,6 +1678,7 @@ mod tests {
             proposal_id: make_test_uuid(0x03),
             vote: ProposalVoteOption::VoteOptionYes as i32,
             meta: Some(make_metadata(42, 100)),
+            ..Default::default()
         };
 
         let event = handle_proposal_voted(&msg).expect("should parse");
@@ -1678,6 +1693,7 @@ mod tests {
             proposal_id: make_test_uuid(0x03),
             vote: ProposalVoteOption::VoteOptionYes as i32,
             meta: Some(make_metadata(100, 999)),
+            ..Default::default()
         };
 
         let event = handle_proposal_voted(&msg).expect("should parse");
@@ -1739,8 +1755,9 @@ mod tests {
                 last_date: 1700086400,
                 voting_mode: 1,
                 quorum: 5,
-                flat_threshold: 0,
-                percentage_threshold: 5000000,
+                flat_support_threshold: 0,
+                partial_percentage_support_threshold: 5000000,
+                ..Default::default()
             }),
             meta: Some(make_metadata(777, 1700004000)),
         };
@@ -1817,6 +1834,7 @@ mod tests {
             proposal_id: make_test_uuid(0x03),
             vote: 1,
             meta: None,
+            ..Default::default()
         };
         assert!(matches!(
             handle_proposal_voted(&msg).unwrap_err(),
