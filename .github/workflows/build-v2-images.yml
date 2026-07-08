@@ -31,6 +31,7 @@ on:
           - scoring-service
           - notification-indexer
           - delivery-worker
+          - ranking-indexer
 
 concurrency:
   group: build-v2-images-${{ inputs.service }}
@@ -62,7 +63,8 @@ jobs:
             {"image":"topology-indexer","dockerfile":"scoring-service/topology-indexer/Dockerfile","context":"."},
             {"image":"scoring-service","dockerfile":"scoring-service/cronjob/Dockerfile","context":"scoring-service/cronjob"},
             {"image":"notification-indexer","dockerfile":"notification-service/notification-indexer/Dockerfile","context":"."},
-            {"image":"delivery-worker","dockerfile":"notification-service/delivery-worker/Dockerfile","context":"."}
+            {"image":"delivery-worker","dockerfile":"notification-service/delivery-worker/Dockerfile","context":"."},
+            {"image":"ranking-indexer","dockerfile":"ranking-indexer/Dockerfile","context":"."}
           ]'
           if [ "$SERVICE" = "all" ]; then
             MATRIX="$(echo "$ALL" | jq -c '{include: .}')"
