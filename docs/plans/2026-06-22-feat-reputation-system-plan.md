@@ -351,9 +351,15 @@ This resolves the ordinal-vs-cardinal question cleanly and preserves every exist
 - **Median-and-below → 0, no credential wipe** (Decision #3) — low standing maps to `x = 0` ⇒
   `expert_add = 0`, collapsing to the credential floor without erasing verified or professional
   standing.
-- **Eligibility inherited** — ranking blocks already carry their membership restriction
-  (`restriction_id`); the ranking-indexer's aggregate respects it, so the Expert band inherits the
-  anti-sybil gate without re-implementing it.
+- **Eligibility inherited — with two known gaps (review 2026-07-07, Preston).** Ranking blocks
+  already carry their membership restriction (`restriction_id`); the ranking-indexer's aggregate
+  respects it, so the Expert band inherits that anti-sybil gate without re-implementing it. It does
+  **not** cover: (a) **self-inclusion** — nothing excludes the ballot author's own person entity, so
+  an author can rank themselves top, and at the `B = 3` floor a self-vote is a third of the
+  evidence (fix: drop self-items in the ranking-indexer's recompute — routed to the rankings push,
+  cheap there and unfixable downstream); (b) **verify-then-rank collusion** — verification is
+  permissionless, so a user can verify accomplices who then rank them highly (candidate hardening:
+  discount rankings that travel along verification edges; see the Phase 4 ring-simulation gate).
 - **No new integration** — reading `ranks.ranking_scores` needs no rankings→votes bridge; the push
   lands directly in the source the band reads.
 
@@ -386,7 +392,7 @@ detail to be settled late. Three rules (Decision #9):
   considered and rejected: partial credit muddies what `x` means, and "degrades gracefully to `0`"
   is already the designed fallback.
 
-Two consequences of the percentile arithmetic are deliberate policy, stated as such:
+Three consequences of the percentile arithmetic are deliberate policy, stated as such:
 
 - **Thin-ranked spaces** are handled by the gate above rather than left undefined.
 - **Half the population muted by construction.** Median-and-below ⇒ `x = 0` ⇒ `expert_add = 0` ⇒
@@ -395,6 +401,17 @@ Two consequences of the percentile arithmetic are deliberate policy, stated as s
   gradually above the median (the 60th percentile earns `x = 0.2` → `~11` points). This is a strong
   consensus policy consistent with the exponential's design intent (reserve influence for
   demonstrated top standing); it is restated here so it is chosen, not inherited.
+- **Standing is scale-relative, and this is intended** *(stated per review 2026-07-07, Preston).*
+  A fixed absolute rank gains standing as the ranked field grows beneath it (#5 of 20 is the ~79th
+  percentile, midfield points; #5 of 5000 is ~99.9th, near-max), and the top decile's share of
+  total expert points is scale-invariant (~55% at any `N` — a property of the exponential over a
+  percentile, not an accident). This is the "relative within a space" intent taken seriously: a
+  high rank in a large field *is* stronger evidence. The genuine risk is not the arithmetic but
+  **stale ballots**: an old ballot that is never refreshed props up whoever it ranked while never
+  ranking newcomers. Mobility therefore hinges on block cadence and ballot expiry (see *Block
+  window cadence* under Dependencies and risks), not on re-normalizing the mapping. Note rankings are *not*
+  rep-weighted, so incumbents cannot weight-capture their own standing — curators can re-rank them
+  freely and the latest ballot per author wins.
 
 Team sign-off on this mapping is the Phase 3 gate.
 
@@ -546,6 +563,12 @@ that the interesting behaviour arrives only once those inputs do.
 - Set `use_distance_weighting=False, filter_non_members=True` under rep-weighting (Decision #4) — rep
   replaces distance weighting rather than compounding with it.
 - Validate convergence on a seeded multi-cycle fixture; assert no cold-start deadlock.
+- **Ring-simulation gate** *(added per review 2026-07-07, Preston).* Before the flag flips, simulate
+  the break-even collusion ring: the smallest set of eligible curators ranking each other that
+  clears the thin-ranked gate (`N ≥ 10`, `B ≥ 3`) and mints top-of-curve rep. The `B` floor is a
+  thin guard against exactly this — size it to the measured threat (raise the floor, or add a
+  ballot-independence requirement such as discounting rankings along verification edges) rather
+  than by feel. Same move as the curve-ratio reframe: convert the argument into a number.
 - Feature-flag the weighting so it can be enabled per environment and rolled back instantly.
 
 ### Phase 5 — Frontend (geogenesis, follow-on)
@@ -586,6 +609,22 @@ that the interesting behaviour arrives only once those inputs do.
   small enough to curate; instrument the per-space fraction of active editors with `expert_add = 0`
   against the numeric build-out trigger (> ~70% in flagship spaces four weeks after rankings launch
   ⇒ greenlight the hardened baseline).
+- **Curator incentive (hard dependency — named per review 2026-07-07, Preston).** The Expert band is
+  fully inert until ≥ 3 curators actually submit ballots per space, and no incentive mechanism for
+  ballot creation exists in this plan or elsewhere. If nothing motivates curators by the mid-July
+  push, Phase 3 ships near-uniform rep for everyone (~0.003) and the system's meaningful output
+  slips indefinitely. Needs an owner in the Curator Program, not a Phase 5 follow-on.
+- **Ranking rubric legibility (dependency).** A Ranking Block carries a name and filter but no
+  stated criteria, yet its aggregate is the sole input to a ~330:1 vote-weight grant — standing
+  currently cannot be contested on the merits, and a curator has no stated basis for how to rank.
+  At minimum, per-block stated criteria (a property on the block entity — knowledge-layer change,
+  small). Expect this to surface in the community-share comment window; better to have the answer
+  first.
+- **Block window cadence (dependency).** The backend enforces whatever submission window it is
+  handed, but nobody owns how long blocks stay open or how often they recur. Cadence is also the
+  mobility lever (see the scale-relative-standing consequence: stale ballots, not the percentile
+  arithmetic, are the entrenchment vector) — dynamic enough that rankings refresh, not so frequent
+  that curators exhaust.
 - **Migration lock (risk).** Adding `user_reputation` plus its index on a busy DB: use
   `CREATE INDEX CONCURRENTLY` (which cannot run inside Drizzle's transaction wrapper — pre-build
   manually, mirroring the `0064` pattern).
@@ -599,8 +638,17 @@ that the interesting behaviour arrives only once those inputs do.
   can entrench: its votes dominate the scores and rankings that would otherwise let newcomers displace
   it. The across-cycle ordering and the exponential's damping address numerical oscillation, not this
   attractor. Mitigations to consider (not yet designed): rep decay over time, a cap on any single
-  cohort's share of total weight, or periodic re-normalization. At minimum, instrument the per-space
-  rep distribution and watch its top-k / Gini share across cycles.
+  cohort's share of total weight, or periodic re-normalization. Added per review 2026-07-07
+  (Preston): **retroactive vote re-weighting** is part of this attractor — full recompute applies
+  *current* rep to a voter's entire vote history, so a rising cohort re-amplifies its back-catalog
+  each cycle. Candidate mitigation: cap each vote's effective weight at
+  `min(weight-at-cast, current rep)` — kills retroactive amplification while preserving clean
+  revocation (falling rep still drags old votes down). Costs are real: cast-time weights exist
+  nowhere (needs a per-vote snapshot or per-cycle rep history) and it breaks Decision #7's pure
+  recompute — so it is guardrail-triggered, not v1. At minimum, instrument the per-space
+  rep distribution and watch its top-k / Gini share across cycles (the Decision #11 guardrail);
+  a breach triggers this mitigation set, starting with the cheapest that addresses the observed
+  concentration.
 - **Knowledge-layer / payout-entity config (dependency).** Professional roles and standards live in
   the knowledge layer; the Verified band's `points_earned` comes from on-chain payout system entities,
   which are not yet summable. Both must exist before those band components are meaningful. The Expert,
@@ -802,6 +850,13 @@ larger piece of work) and is not needed for rep.
   mid-July rankings push ships (a live leaderboard gets real reactions; an abstract formula invites
   bikeshedding) and **before** the Phase 4 weighting flag flips, with an explicit comment window —
   changes to governance power need the legitimacy of a review period.
+- **Verification substrate alignment** *(raised in review 2026-07-07, Preston)* — this plan's
+  Verified band is built on the existing pipeline (`SUBSPACE_VERIFIED` → `subspaces` edges → atlas
+  closure), which is live and indexed today. Preston's separate verification spec models
+  verification via **system properties on space system entities** — if that is a re-modeling rather
+  than a formalization of what is indexed, the Verified band's substrate (and the atlas
+  integration above) changes. Sync scheduled; resolve before any Phase 3 verified-bridge work
+  builds further on the current substrate.
 
 *Resolved:* endorse-a-person surface is in scope (review 2026-06-24); Person-entity resolution
 (Finding #8); negative/below-median semantics (Decision #3, confirmed 2026-06-24); weighting
