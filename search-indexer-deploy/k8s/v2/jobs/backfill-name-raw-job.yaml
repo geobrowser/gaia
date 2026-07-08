@@ -3,7 +3,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: opensearch-backfill-name-raw
-  namespace: gaia-v2
+  namespace: gaia
   labels:
     app: opensearch-admin
     task: backfill-name-raw

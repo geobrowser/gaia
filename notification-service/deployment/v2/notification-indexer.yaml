@@ -10,7 +10,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: notification-indexer
-  namespace: gaia-v2
+  namespace: gaia
   labels:
     app: notification-indexer
     environment: testnet

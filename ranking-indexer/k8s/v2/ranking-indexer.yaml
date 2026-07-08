@@ -1,0 +1,105 @@
+# Ranking Indexer Deployment
+#
+# Consumes RANK_VOTES ops from the knowledge.edits stream and materializes
+# ranking aggregates into the ranks.* schema. ranks.ranking_scores is the
+# reputation system's v1 Expert-band signal, so this service is part of the
+# rep-critical path (see docs/plans/2026-06-22-feat-reputation-system-plan.md).
+# Modeled on the knowledge-staging deployment; env/resources match it, with
+# the shared kafka-credentials secret standing in for ranking-indexer-secrets.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ranking-indexer
+  namespace: gaia
+  labels:
+    app: ranking-indexer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ranking-indexer
+  template:
+    metadata:
+      labels:
+        app: ranking-indexer
+    spec:
+      restartPolicy: Always
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: regcred
+      volumes:
+        - name: ssl-certs
+          emptyDir: {}
+      initContainers:
+        - name: setup-certs
+          image: registry.digitalocean.com/geo/ranking-indexer:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - |
+              echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+          env:
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+      containers:
+        - name: ranking-indexer
+          image: registry.digitalocean.com/geo/ranking-indexer:latest
+          imagePullPolicy: Always
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
+          env:
+            - name: PGSSLROOTCERT
+              value: /ssl/ca.crt
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_USERNAME
+                  optional: true
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_PASSWORD
+                  optional: true
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_SSL_CA_PEM
+                  optional: true
+            - name: ENVIRONMENT
+              value: "testnet"
+            - name: KAFKA_GROUP_ID
+              value: "ranking-indexer-testnet-v1"
+            - name: RUST_LOG
+              value: "ranking_indexer=info"
+          resources:
+            requests:
+              memory: "768Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "500m"

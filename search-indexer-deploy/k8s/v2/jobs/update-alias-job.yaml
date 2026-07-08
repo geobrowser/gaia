@@ -3,7 +3,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: opensearch-update-alias
-  namespace: gaia-v2
+  namespace: gaia
   labels:
     app: opensearch-admin
     task: update-alias

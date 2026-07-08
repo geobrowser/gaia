@@ -10,7 +10,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: delivery-worker
-  namespace: gaia-v2
+  namespace: gaia
   labels:
     app: delivery-worker
     environment: testnet

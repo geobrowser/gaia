@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: scoring-service
-  namespace: gaia-v2
+  namespace: gaia
 spec:
   schedule: "0 3 * * *"  # Run at 3am every day
   failedJobsHistoryLimit: 3
@@ -13,12 +13,6 @@ spec:
           restartPolicy: OnFailure
           imagePullSecrets:
             - name: regcred
-          nodeSelector:
-            doks.digitalocean.com/node-pool: gaia-v2-pool
-          tolerations:
-            - key: dedicated
-              value: gaia-v2
-              effect: NoSchedule
           containers:
             - name: scoring-service
               image: registry.digitalocean.com/geo/scoring-service:latest
