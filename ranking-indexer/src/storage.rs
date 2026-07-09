@@ -285,6 +285,49 @@ impl Storage {
         }))
     }
 
+    /// Entities typed `Ranking Block` in the indexed public graph that never
+    /// made it into `ranks.ranking_blocks`.
+    ///
+    /// `get_block_config_from_kg` (issue #738/#739) only ever runs when a rank
+    /// happens to link to the block *after* the block's own typing/config is
+    /// indexed; if no rank has linked to it since, or the link raced ahead of
+    /// kg-indexer committing the type relation, the block is stuck here
+    /// forever with nothing to retry it. Used by the one-off backfill binary
+    /// (`bin/backfill_blocks.rs`) and can also back a periodic reconciliation
+    /// sweep.
+    pub async fn find_unregistered_ranking_blocks(&self) -> Result<Vec<Uuid>, IndexerError> {
+        use sdk::core::ids;
+        let pid = |s: &str| Uuid::parse_str(s).expect("valid system ID constant");
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT DISTINCT r.from_entity_id FROM relations r \
+             WHERE r.type_id = $1 AND r.to_entity_id = $2 \
+               AND r.from_entity_id NOT IN (SELECT id FROM ranks.ranking_blocks)",
+        )
+        .bind(pid(ids::TYPE_RELATION_TYPE_ID))
+        .bind(pid(ids::RANKING_BLOCK_TYPE_ID))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// The chain height/timestamp hermes has indexed up to, for stamping
+    /// entities the backfill binary mints (it runs off-band, with no edit of
+    /// its own to take `BlockMeta` from). Falls back to `(0, 0)` if the cursor
+    /// row is absent (e.g. a fresh/local database) — the projection is stamped
+    /// but otherwise unaffected, since dedup/ordering key off `rankings`'
+    /// own `updated_at_block`, not this value.
+    pub async fn current_chain_meta(&self) -> Result<BlockMeta, IndexerError> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT block_number FROM meta WHERE id = 'hermes_pipeline'")
+                .fetch_optional(&self.pool)
+                .await?;
+        let number = row.and_then(|(s,)| s.parse::<i64>().ok()).unwrap_or(0);
+        Ok(BlockMeta {
+            number,
+            timestamp: Utc::now().timestamp(),
+        })
+    }
+
     /// Load all submissions currently linked to a block (pre-dedup).
     pub async fn get_rankings_for_block(
         &self,
