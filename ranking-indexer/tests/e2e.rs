@@ -15,7 +15,8 @@ use uuid::Uuid;
 
 use ranking_indexer::detect::detect;
 use ranking_indexer::membership::{apply_membership_event, MembershipEvent};
-use ranking_indexer::recompute::apply_detected_edit;
+use ranking_indexer::models::BlockMeta;
+use ranking_indexer::recompute::{apply_detected_edit, recompute_block};
 use ranking_indexer::storage::Storage;
 
 fn gid(n: u128) -> [u8; 16] {
@@ -949,12 +950,12 @@ async fn recompute_is_idempotent_when_a_prior_value_row_is_orphaned() {
     let pool = storage.pool();
 
     // Distinct scenario ids so this can share a DB with the other e2e tests.
-    const SPACE: u128 = 0xE2E5_0000_3001;
-    const MEMBER: u128 = 0xE2E5_0000_3011;
-    const BLK: u128 = 0xE2E5_0000_3021;
+    const SPACE: u128 = 0xE2E5_0000_4001;
+    const MEMBER: u128 = 0xE2E5_0000_4011;
+    const BLK: u128 = 0xE2E5_0000_4021;
     const ENT_A: u128 = 0xE2E5_0000_3031;
     const ENT_B: u128 = 0xE2E5_0000_3032;
-    const RNK: u128 = 0xE2E5_0000_3041;
+    const RNK: u128 = 0xE2E5_0000_4041;
 
     // --- clean prior runs (idempotent) -------------------------------------
     for sql in [
@@ -1124,4 +1125,203 @@ async fn recompute_is_idempotent_when_a_prior_value_row_is_orphaned() {
     );
     let v1: i64 = rows[1].get("value");
     assert_eq!(v1, 50, "second entity converges to 50");
+}
+
+/// Companion to `cross_edit_block_is_recovered_from_kg_and_scored`, for the
+/// identical split-edit gap on Rank entities — except there's no reactive
+/// live-path trigger for ranks (unlike blocks), so recovery is
+/// periodic-sweep-only: `find_unregistered_ranks` + `get_rank_config_from_kg`
+/// + a manual `upsert_ranking` + `recompute_block`, exactly what
+/// `bin/backfill_blocks.rs` runs on a schedule.
+#[tokio::test]
+async fn cross_edit_rank_is_recovered_from_kg_and_scored() {
+    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
+        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+
+    const BLOCK_SPACE: u128 = 0xE2E5_0000_4001;
+    const MEMBER_SPACE: u128 = 0xE2E5_0000_4011; // the rank's own (personal) space
+    const BLOCK: u128 = 0xE2E5_0000_4021;
+    const RANK: u128 = 0xE2E5_0000_4041;
+    const TYPE_REL: u128 = 0xE2E5_0000_4042;
+    const BLOCK_REL: u128 = 0xE2E5_0000_4043;
+    const RANK_TYPE_VAL: u128 = 0xE2E5_0000_4044;
+    const ENT_A: u128 = 0xE2E5_0000_4051;
+    const ENT_B: u128 = 0xE2E5_0000_4052;
+
+    let su = |s: &str| Uuid::parse_str(s).unwrap();
+
+    // --- clean prior runs (idempotent) -------------------------------------
+    for sql in [
+        "DELETE FROM relations WHERE space_id = $1",
+        "DELETE FROM values WHERE space_id = $1",
+        "DELETE FROM entities WHERE id = $2",
+    ] {
+        sqlx::query(sql)
+            .bind(u(MEMBER_SPACE))
+            .bind(u(RANK))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("DELETE FROM ranks.ranking_items WHERE ranking_id = $1")
+        .bind(u(RANK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.rankings WHERE id = $1")
+        .bind(u(RANK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.ranking_scores WHERE block_id = $1")
+        .bind(u(BLOCK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.ranking_blocks WHERE id = $1")
+        .bind(u(BLOCK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM spaces WHERE id IN ($1, $2)")
+        .bind(u(BLOCK_SPACE))
+        .bind(u(MEMBER_SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // --- seed prerequisites: a Personal block (no membership check needed,
+    // "All of Geo" admits any submitter) already registered in `ranks`. ----
+    sqlx::query("INSERT INTO spaces (id, type, address) VALUES ($1, 'Personal', '0xe2e3')")
+        .bind(u(BLOCK_SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO ranks.ranking_blocks (id, space_id, name, updated_at) \
+         VALUES ($1, $2, 'Recovered Rank Target', now())",
+    )
+    .bind(u(BLOCK))
+    .bind(u(BLOCK_SPACE))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // --- seed the KG as kg-indexer would: the rank's `TYPES -> Rank`
+    // relation, its rank_type value, its `RANK_BLOCK` link, and its entity
+    // row — WITHOUT registering it in `ranks.rankings` — i.e. the exact
+    // state where detect() never saw the type and the entity in one edit. --
+    sqlx::query(
+        "INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block) \
+         VALUES ($1, '1700000000', '42', '1700000100', '43')",
+    )
+    .bind(u(RANK))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) \
+         VALUES ($1, $1, $2, $3, $4, $5)",
+    )
+    .bind(u(TYPE_REL))
+    .bind(su(TYPE_RELATION_TYPE_ID))
+    .bind(u(RANK))
+    .bind(su(RANK_TYPE_ID))
+    .bind(u(MEMBER_SPACE))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO values (id, entity_id, space_id, property_id, text) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(u(RANK_TYPE_VAL).to_string())
+    .bind(u(RANK))
+    .bind(u(MEMBER_SPACE))
+    .bind(su(RANK_TYPE_PROPERTY_ID))
+    .bind("ORDINAL")
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) \
+         VALUES ($1, $1, $2, $3, $4, $5)",
+    )
+    .bind(u(BLOCK_REL))
+    .bind(su(RANK_BLOCK_RELATION_TYPE_ID))
+    .bind(u(RANK))
+    .bind(u(BLOCK))
+    .bind(u(MEMBER_SPACE))
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // Votes landed via the live path at the time (RANK_VOTES relations are
+    // collected regardless of whether their `from` entity is classified),
+    // so they're already sitting in `ranking_items` — orphaned, since
+    // `ranks.rankings` has no row for RANK to attach them to yet.
+    for (entity, position) in [(ENT_A, "a0"), (ENT_B, "a1")] {
+        sqlx::query(
+            "INSERT INTO ranks.ranking_items (ranking_id, entity_id, space_id, position) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(u(RANK))
+        .bind(u(entity))
+        .bind(u(MEMBER_SPACE))
+        .bind(position)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    // --- precondition: the rank is NOT registered in the ranks schema ------
+    let registered: i64 = sqlx::query_scalar("SELECT count(*) FROM ranks.rankings WHERE id = $1")
+        .bind(u(RANK))
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        registered, 0,
+        "precondition: rank must be unregistered before recovery"
+    );
+
+    // --- the sweep's recovery path: find it, reconstruct it, score it ------
+    let candidates = storage.find_unregistered_ranks().await.unwrap();
+    assert!(
+        candidates.contains(&u(RANK)),
+        "find_unregistered_ranks must surface the orphaned rank"
+    );
+
+    let recovered = storage
+        .get_rank_config_from_kg(u(RANK))
+        .await
+        .unwrap()
+        .expect("rank must be reconstructable from the KG");
+    assert_eq!(recovered.rank_type.as_deref(), Some("ORDINAL"));
+    assert_eq!(
+        recovered.block_id,
+        Some(u(BLOCK)),
+        "block_id must be resolved directly from the RANK_BLOCK relation, \
+         not from ranks.rankings (set_ranking_block silently no-ops against \
+         an unregistered rank)"
+    );
+
+    storage.upsert_ranking(&recovered).await.unwrap();
+    recompute_block(u(BLOCK), BlockMeta::default(), &storage)
+        .await
+        .unwrap();
+
+    let scores: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM ranks.ranking_scores WHERE block_id = $1")
+            .bind(u(BLOCK))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        scores, 2,
+        "both previously-orphaned items scored once the rank is recovered"
+    );
 }

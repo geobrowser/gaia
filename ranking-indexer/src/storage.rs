@@ -310,6 +310,120 @@ impl Storage {
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
+    /// Entities typed `Rank` in the indexed public graph that never made it
+    /// into `ranks.rankings` — the identical split-edit gap as
+    /// `find_unregistered_ranking_blocks`, but for Rank submissions.
+    ///
+    /// Unlike blocks, nothing in the live consumer ever retries this (no
+    /// `get_block_config_from_kg`-style reactive trigger exists for ranks),
+    /// so recovery here is driven entirely by the periodic sweep — see
+    /// `get_rank_config_from_kg`.
+    pub async fn find_unregistered_ranks(&self) -> Result<Vec<Uuid>, IndexerError> {
+        use sdk::core::ids;
+        let pid = |s: &str| Uuid::parse_str(s).expect("valid system ID constant");
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT DISTINCT r.from_entity_id FROM relations r \
+             WHERE r.type_id = $1 AND r.to_entity_id = $2 \
+               AND r.from_entity_id NOT IN (SELECT id FROM ranks.rankings)",
+        )
+        .bind(pid(ids::TYPE_RELATION_TYPE_ID))
+        .bind(pid(ids::RANK_TYPE_ID))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// Reconstruct a Rank submission's config from the indexed public graph.
+    ///
+    /// Mirrors `get_block_config_from_kg` (issue #738/#739) for the identical
+    /// gap on Rank entities: `detect()` only registers a rank when its
+    /// `TYPES -> Rank` relation and its `rank_type` property arrive in the
+    /// *same* edit. There is deliberately no reactive live-path trigger for
+    /// this (unlike blocks, which recover the moment a rank links to one) —
+    /// recovery is periodic-sweep-only, so this also resolves `block_id`
+    /// directly from the `RANK_BLOCK` relation here rather than depending on
+    /// `set_ranking_block`'s live path, which is a bare `UPDATE` that
+    /// silently touches zero rows against a not-yet-registered rank.
+    ///
+    /// `submitted_at`/`updated_at_block` come from `public.entities`
+    /// (`updated_at`/`updated_at_block`, not `created_at`, so dedup ordering
+    /// reflects the *latest* on-chain change) rather than a live edit's
+    /// metadata, since a recovery run has no current edit to take them from.
+    /// `update_index` has no public-schema equivalent; recovered ranks get
+    /// `0`, which only risks a wrong dedup tie-break against another
+    /// submission landing in the exact same chain block (narrow, accepted).
+    /// `author_address` is `None`, matching what the live path always
+    /// produces today (unimplemented there too — not a recovery gap).
+    /// Returns `None` if the entity is not (yet) typed as a Rank.
+    pub async fn get_rank_config_from_kg(
+        &self,
+        rank_id: Uuid,
+    ) -> Result<Option<Ranking>, IndexerError> {
+        use sdk::core::ids;
+        let pid = |s: &str| Uuid::parse_str(s).expect("valid system ID constant");
+
+        let typed: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT space_id FROM relations \
+             WHERE from_entity_id = $1 AND type_id = $2 AND to_entity_id = $3 \
+             LIMIT 1",
+        )
+        .bind(rank_id)
+        .bind(pid(ids::TYPE_RELATION_TYPE_ID))
+        .bind(pid(ids::RANK_TYPE_ID))
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some((space_id,)) = typed else {
+            return Ok(None);
+        };
+
+        let rank_type: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT text FROM values \
+             WHERE entity_id = $1 AND space_id = $2 AND property_id = $3 LIMIT 1",
+        )
+        .bind(rank_id)
+        .bind(space_id)
+        .bind(pid(ids::RANK_TYPE_PROPERTY_ID))
+        .fetch_optional(&self.pool)
+        .await?;
+        let rank_type = rank_type.and_then(|(t,)| t);
+
+        let block_id: Option<(Uuid,)> = sqlx::query_as(
+            "SELECT to_entity_id FROM relations \
+             WHERE from_entity_id = $1 AND type_id = $2 LIMIT 1",
+        )
+        .bind(rank_id)
+        .bind(pid(ids::RANK_BLOCK_RELATION_TYPE_ID))
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let entity: Option<(String, String)> =
+            sqlx::query_as("SELECT updated_at, updated_at_block FROM entities WHERE id = $1")
+                .bind(rank_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        let (submitted_at, updated_at_block) = match entity {
+            Some((updated_at, updated_at_block)) => (
+                updated_at
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|ts| DateTime::<Utc>::from_timestamp(ts, 0)),
+                updated_at_block.parse::<i64>().unwrap_or(0),
+            ),
+            None => (None, 0),
+        };
+
+        Ok(Some(Ranking {
+            id: rank_id,
+            block_id: block_id.map(|(b,)| b),
+            space_id,
+            author_address: None,
+            rank_type,
+            submitted_at,
+            updated_at_block,
+            update_index: 0,
+        }))
+    }
+
     /// The chain height/timestamp hermes has indexed up to, for stamping
     /// entities the backfill binary mints (it runs off-band, with no edit of
     /// its own to take `BlockMeta` from). Falls back to `(0, 0)` if the cursor
