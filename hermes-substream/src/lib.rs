@@ -13,13 +13,36 @@ pub use helpers::extract_proposal_publish_uris;
 use pb::hermes::*;
 use substreams_ethereum::{block_view::LogView, pb::eth};
 
-// Space Registry proxy contract address (irdc testnet)
+// Space Registry PROXY contract address for the target chain.
+//
+// ⚠️ PLACEHOLDER — set this before bring-up. This value is compiled into the
+// `.spkg` and is NOT runtime-configurable; if it is wrong every service comes
+// up green and streams ZERO events with no error.
+//
+// To arm the substream:
+//   1. Replace the 20 bytes below with the target chain's SpaceRegistry proxy
+//      address (big-endian, one byte per array element).
+//   2. Delete the `compile_error!` line below.
+//   3. Rebuild and commit the regenerated binary:
+//        cd hermes-substream && substreams build
+//        git add hermes-substream/src/lib.rs hermes-substream/hermes-substream-v0.1.0.spkg
+//   4. Ensure proposal-executor's SPACE_REGISTRY_ADDRESS matches this exactly.
+//
+// The guard below makes the build fail until the address is set, so a stale or
+// zero-address `.spkg` can never be shipped by accident.
+compile_error!("SPACE_REGISTRY_ADDRESS is a placeholder — set the target-chain SpaceRegistry proxy address and delete this compile_error! line before building");
 const SPACE_REGISTRY_ADDRESS: [u8; 20] = [
-    0x36, 0x42, 0x31, 0x61, 0x5d, 0xce, 0xa3, 0x3d, 0x13, 0xc8, 0x23, 0xb1, 0x3b, 0x44, 0x9d, 0xd9,
-    0xf5, 0x53, 0x81, 0xe7,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
 ];
 
-// Local Space Registry Proxy
+// --- Previous addresses (kept for format reference) ---
+// irdc testnet Space Registry Proxy:
+// const SPACE_REGISTRY_ADDRESS: [u8; 20] = [
+//     0x36, 0x42, 0x31, 0x61, 0x5d, 0xce, 0xa3, 0x3d, 0x13, 0xc8, 0x23, 0xb1, 0x3b, 0x44, 0x9d, 0xd9,
+//     0xf5, 0x53, 0x81, 0xe7,
+// ];
+// Local Space Registry Proxy:
 // const SPACE_REGISTRY_ADDRESS: [u8; 20] = [
 //     0xe7, 0xf1, 0x72, 0x5e, 0x77, 0x34, 0xce, 0x28, 0x8f, 0x83, 0x67, 0xe1, 0xbb, 0x14, 0x3e, 0x90,
 //     0xbb, 0x3f, 0x05, 0x12,
