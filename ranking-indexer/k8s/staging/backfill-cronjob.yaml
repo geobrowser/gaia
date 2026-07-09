@@ -1,0 +1,83 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ranking-indexer-backfill
+  namespace: knowledge-staging
+  labels:
+    app: ranking-indexer-backfill
+    environment: staging
+spec:
+  # Self-heals blocks the live recovery path (issue #738/#739) missed because
+  # kg-indexer hadn't yet indexed the block's type/config at the moment a rank
+  # linked to it — that recovery only ever gets one shot. Hourly is plenty;
+  # this is a safety net, not a latency-sensitive path.
+  schedule: "0 * * * *"
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            environment: staging
+        spec:
+          restartPolicy: OnFailure
+          imagePullSecrets:
+            - name: geo
+          volumes:
+            - name: ssl-certs
+              emptyDir: {}
+          initContainers:
+            - name: setup-certs
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command:
+                - sh
+                - -c
+                - |
+                  echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+              env:
+                - name: DATABASE_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_SSL_CA
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+          containers:
+            - name: ranking-indexer-backfill
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command: ["backfill_blocks"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+                  readOnly: true
+              env:
+                - name: PGSSLROOTCERT
+                  value: /ssl/ca.crt
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_URL
+                - name: RUST_LOG
+                  value: "backfill_blocks=info,ranking_indexer=info"
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "250m"
