@@ -8,6 +8,10 @@
 //! live recovery path does, and recomputes its aggregate. Idempotent — safe
 //! to re-run; already-registered blocks are never touched.
 //!
+//! Exits non-zero if any block failed to recover, so a scheduled run (see
+//! `k8s/*/backfill-cronjob.yaml`) surfaces failures as a failed Job instead
+//! of a silently-green one.
+//!
 //! Usage: `DATABASE_URL=... cargo run -p ranking-indexer --bin backfill_blocks`
 //! Add `DRY_RUN=true` to list candidates without writing anything.
 
@@ -87,5 +91,8 @@ async fn main() -> Result<(), IndexerError> {
     }
 
     info!(recovered, still_unregistered, failed, "backfill complete");
+    if failed > 0 {
+        std::process::exit(1);
+    }
     Ok(())
 }
