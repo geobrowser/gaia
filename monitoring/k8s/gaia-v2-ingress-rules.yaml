@@ -1,0 +1,129 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: gaia-v2-ingress-observability
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: gaia-v2.ingress
+      rules:
+        - record: gaia_v2:ingress_requests_per_second:rate5m
+          expr: |
+            sum(rate(nginx_ingress_controller_requests{host="testnet-api-v2.geobrowser.io"}[5m]))
+
+        - record: gaia_v2:ingress_5xx_per_second:rate5m
+          expr: |
+            sum(rate(nginx_ingress_controller_requests{host="testnet-api-v2.geobrowser.io",status=~"5.."}[5m]))
+
+        - record: gaia_v2:ingress_5xx_ratio:rate5m
+          expr: |
+            gaia_v2:ingress_5xx_per_second:rate5m
+            /
+            clamp_min(gaia_v2:ingress_requests_per_second:rate5m, 1e-9)
+
+        - record: gaia_v2:ingress_status_requests_per_second:rate5m
+          expr: |
+            sum by (status) (
+              rate(nginx_ingress_controller_requests{host="testnet-api-v2.geobrowser.io"}[5m])
+            )
+
+        - record: gaia_v2:ingress_method_requests_per_second:rate5m
+          expr: |
+            sum by (method) (
+              rate(nginx_ingress_controller_requests{host="testnet-api-v2.geobrowser.io"}[5m])
+            )
+
+        - record: gaia_v2:ingress_method_p99_latency_seconds:5m
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le, method) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api-v2.geobrowser.io"}[5m])
+              )
+            )
+
+        - record: gaia_v2:ingress_p95_latency_seconds:2m
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api-v2.geobrowser.io"}[2m])
+              )
+            )
+
+        - record: gaia_v2:ingress_p99_latency_seconds:2m
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api-v2.geobrowser.io"}[2m])
+              )
+            )
+
+        - record: gaia_v2:ingress_error_status_requests_per_second:rate5m
+          expr: |
+            sum by (status) (
+              rate(nginx_ingress_controller_requests{host="testnet-api-v2.geobrowser.io",status=~"4..|5.."}[5m])
+            )
+
+        - record: gaia_v2:ingress_499_per_second:rate5m
+          expr: |
+            sum(rate(nginx_ingress_controller_requests{host="testnet-api-v2.geobrowser.io",status="499"}[5m]))
+
+        - record: gaia_v2:ingress_500_per_second:rate5m
+          expr: |
+            sum(rate(nginx_ingress_controller_requests{host="testnet-api-v2.geobrowser.io",status="500"}[5m]))
+
+        - record: gaia_v2:ingress_503_per_second:rate5m
+          expr: |
+            sum(rate(nginx_ingress_controller_requests{host="testnet-api-v2.geobrowser.io",status="503"}[5m]))
+
+        - record: gaia_v2:ingress_499_ratio:rate5m
+          expr: |
+            gaia_v2:ingress_499_per_second:rate5m
+            /
+            clamp_min(gaia_v2:ingress_requests_per_second:rate5m, 1e-9)
+
+        - record: gaia_v2:ingress_503_ratio:rate5m
+          expr: |
+            gaia_v2:ingress_503_per_second:rate5m
+            /
+            clamp_min(gaia_v2:ingress_requests_per_second:rate5m, 1e-9)
+
+        - record: gaia_v2:ingress_p95_latency_seconds:5m
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api-v2.geobrowser.io"}[5m])
+              )
+            )
+
+        - record: gaia_v2:ingress_p50_latency_seconds:5m
+          expr: |
+            histogram_quantile(
+              0.50,
+              sum by (le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api-v2.geobrowser.io"}[5m])
+              )
+            )
+
+        - record: gaia_v2:ingress_p75_latency_seconds:5m
+          expr: |
+            histogram_quantile(
+              0.75,
+              sum by (le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api-v2.geobrowser.io"}[5m])
+              )
+            )
+
+        - record: gaia_v2:ingress_p99_latency_seconds:5m
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api-v2.geobrowser.io"}[5m])
+              )
+            )

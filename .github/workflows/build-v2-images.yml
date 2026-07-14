@@ -1,6 +1,9 @@
 name: Build gaia-v2 images (manual)
 
-# Builds and pushes all images needed for the gaia-v2 (chain-migration) stack.
+# Builds and pushes images needed for the gaia-v2 (chain-migration) stack.
+# By default builds ALL images; use the `service` input to build a single one
+# when you only have service-scoped changes.
+#
 # Build-and-push only — deploys stay manual per the GEO-664 runbook (Step 12:
 # sed the image tag into the k8s/v2 manifests and kubectl apply).
 #
@@ -9,51 +12,73 @@ name: Build gaia-v2 images (manual)
 
 on:
   workflow_dispatch:
+    inputs:
+      service:
+        description: Which service to build and push
+        type: choice
+        default: all
+        options:
+          - all
+          - hermes-pipeline
+          - hermes-ipfs-cache
+          - kg-indexer
+          - api
+          - proposal-executor
+          - atlas
+          - search-indexer
+          - vote-indexer
+          - topology-indexer
+          - scoring-service
+          - notification-indexer
+          - delivery-worker
+          - ranking-indexer
 
 concurrency:
-  group: build-v2-images
+  group: build-v2-images-${{ inputs.service }}
   cancel-in-progress: false
 
 env:
   REGISTRY: registry.digitalocean.com/geo
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Compute build matrix
+        id: set-matrix
+        env:
+          SERVICE: ${{ inputs.service }}
+        run: |
+          ALL='[
+            {"image":"hermes-pipeline","dockerfile":"hermes-pipeline/Dockerfile","context":"."},
+            {"image":"hermes-ipfs-cache","dockerfile":"hermes-ipfs-cache/Dockerfile","context":"."},
+            {"image":"kg-indexer","dockerfile":"kg-indexer/Dockerfile","context":"."},
+            {"image":"api","dockerfile":"api/Dockerfile","context":"./api"},
+            {"image":"proposal-executor","dockerfile":"proposal-executor/Dockerfile","context":"proposal-executor"},
+            {"image":"atlas","dockerfile":"atlas/Dockerfile","context":"."},
+            {"image":"search-indexer","dockerfile":"search-indexer/Dockerfile","context":"."},
+            {"image":"vote-indexer","dockerfile":"scoring-service/vote-indexer/Dockerfile","context":"."},
+            {"image":"topology-indexer","dockerfile":"scoring-service/topology-indexer/Dockerfile","context":"."},
+            {"image":"scoring-service","dockerfile":"scoring-service/cronjob/Dockerfile","context":"scoring-service/cronjob"},
+            {"image":"notification-indexer","dockerfile":"notification-service/notification-indexer/Dockerfile","context":"."},
+            {"image":"delivery-worker","dockerfile":"notification-service/delivery-worker/Dockerfile","context":"."},
+            {"image":"ranking-indexer","dockerfile":"ranking-indexer/Dockerfile","context":"."}
+          ]'
+          if [ "$SERVICE" = "all" ]; then
+            MATRIX="$(echo "$ALL" | jq -c '{include: .}')"
+          else
+            MATRIX="$(echo "$ALL" | jq -c --arg svc "$SERVICE" '{include: [.[] | select(.image == $svc)]}')"
+          fi
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: prepare
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - image: hermes-pipeline
-            dockerfile: hermes-pipeline/Dockerfile
-            context: .
-          - image: hermes-ipfs-cache
-            dockerfile: hermes-ipfs-cache/Dockerfile
-            context: .
-          - image: kg-indexer
-            dockerfile: kg-indexer/Dockerfile
-            context: .
-          - image: api
-            dockerfile: api/Dockerfile
-            context: ./api
-          - image: proposal-executor
-            dockerfile: proposal-executor/Dockerfile
-            context: proposal-executor
-          - image: atlas
-            dockerfile: atlas/Dockerfile
-            context: .
-          - image: search-indexer
-            dockerfile: search-indexer/Dockerfile
-            context: .
-          - image: vote-indexer
-            dockerfile: scoring-service/vote-indexer/Dockerfile
-            context: .
-          - image: topology-indexer
-            dockerfile: scoring-service/topology-indexer/Dockerfile
-            context: .
-          - image: scoring-service
-            dockerfile: scoring-service/cronjob/Dockerfile
-            context: scoring-service/cronjob
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -83,5 +108,6 @@ jobs:
       - name: Print image tags
         run: |
           echo "## gaia-v2 images" >> "$GITHUB_STEP_SUMMARY"
+          echo "Service(s) built: \`${{ inputs.service }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "Tag for manifests: \`${GITHUB_SHA:0:8}\` (or full \`${GITHUB_SHA}\`)" >> "$GITHUB_STEP_SUMMARY"
           echo "Build result: ${{ needs.build.result }}" >> "$GITHUB_STEP_SUMMARY"
