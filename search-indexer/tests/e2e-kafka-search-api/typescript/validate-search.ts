@@ -2594,23 +2594,30 @@ class SearchValidator {
   }
 
   /**
-   * Test 40: SPACE scope on topo_root (canonical root) returns all 5 canonical entities.
+   * Test 40: SPACE scope on topo_root (canonical root), canonical-only requested,
+   * returns all 5 canonical entities.
    *
-   * topo_root is the canonical root → the API must use {term:{in_canonical_graph:true}}
-   * which matches ALL entities across all canonical spaces (root + children + grandchild).
+   * topo_root is the canonical root → with include_non_canonical=false the API
+   * must use {term:{in_canonical_graph:true}}, matching ALL entities across all
+   * canonical spaces (root + children + grandchild) and excluding topo_remove_me.
+   *
+   * Root-space membership only collapses to the canonical filter when the caller
+   * actually asks for canonical-only — the toggle is NOT ignored for root-space
+   * queries (see test40b for the include_non_canonical=true / default case).
    *
    * After all three diffs the canonical set is:
    *   topo_root, topo_child_a, topo_child_b, topo_grandchild, topo_moveable (5 spaces)
    * So we expect 5 entities in the result (topo_remove_me was removed).
    */
   async test40_SpaceScopeRootUsesCanonicalFilter(): Promise<void> {
-    console.log(`\n${BLUE}Test 40: SPACE scope on canonical root returns entities from all canonical subspaces${NC}`);
+    console.log(`\n${BLUE}Test 40: SPACE scope on canonical root, canonical-only requested, returns entities from all canonical subspaces${NC}`);
 
     const response = await this.search({
       query: 'TopoEntity',
       scope: 'SPACE',
       space_id: TEST_ENTITIES.TOPO_ROOT_SPACE_ID,
       limit: 20,
+      include_non_canonical: false,
     });
 
     // topo_remove_me was removed in diff 2 → its entity should not appear
@@ -2638,6 +2645,37 @@ class SearchValidator {
     } else {
       const missing = [...expectedCanonical].filter(id => !foundIds.has(id));
       this.addResult('test40_canonical_entities_present', false, `Missing canonical TopoEntity entities: ${missing.join(', ')}`);
+    }
+  }
+
+  /**
+   * Test 40b: SPACE scope on topo_root, include_non_canonical=true (the default —
+   * i.e. the caller never sent the param at all), does NOT force the canonical
+   * filter — topo_remove_me (in_canonical_graph=false) must be reachable.
+   *
+   * Regression coverage for a real bug: root-space search used to hardcode
+   * {term:{in_canonical_graph:true}} unconditionally, so a "canonical only" UI
+   * toggle turned off had no effect for any consumer scoped to the root space —
+   * non-canonical entities were unsearchable by name no matter what. Root-space
+   * membership must only collapse to canonical when canonical-only is actually
+   * requested (test40); the default (unset / true) must leave it unfiltered.
+   */
+  async test40b_SpaceScopeRootIncludesNonCanonicalByDefault(): Promise<void> {
+    console.log(`\n${BLUE}Test 40b: SPACE scope on canonical root, include_non_canonical default (true), includes non-canonical entities${NC}`);
+
+    const response = await this.search({
+      query: 'TopoEntity',
+      scope: 'SPACE',
+      space_id: TEST_ENTITIES.TOPO_ROOT_SPACE_ID,
+      limit: 20,
+    });
+
+    const foundIds = new Set(response.results.map(r => r.entityId));
+    const removeMePresent = foundIds.has(TEST_ENTITIES.TOPO_REMOVE_ME_ENTITY_ID);
+    if (removeMePresent) {
+      this.addResult('test40b_remove_me_included', true, 'topo_remove_me entity (non-canonical) found in root SPACE scope when canonical-only is not requested');
+    } else {
+      this.addResult('test40b_remove_me_included', false, 'topo_remove_me entity missing from root SPACE scope — canonical-only toggle has no effect (regression)');
     }
   }
 
@@ -2705,9 +2743,11 @@ class SearchValidator {
   /**
    * Test 42: Removed node loses in_canonical_graph flag (diff 2).
    *
-   * topo_remove_me was removed in diff 2.  Its entity must NOT appear in a SPACE
-   * scope search on topo_root (which uses the in_canonical_graph filter).  We
-   * also confirm that the topology endpoint no longer knows about topo_remove_me.
+   * topo_remove_me was removed in diff 2.  With canonical-only explicitly
+   * requested (include_non_canonical=false), its entity must NOT appear in a
+   * SPACE scope search on topo_root (which uses the in_canonical_graph filter).
+   * We also confirm that the topology endpoint no longer knows about
+   * topo_remove_me.
    */
   async test42_RemovedNodeLosesCanonicalFlag(): Promise<void> {
     console.log(`\n${BLUE}Test 42: Removed node loses in_canonical_graph flag (diff 2 removal)${NC}`);
@@ -2720,12 +2760,13 @@ class SearchValidator {
       this.addResult('test42_topology_404', false, `Expected 404 for topo_remove_me, got subspaces: ${JSON.stringify(subResp)}`);
     }
 
-    // Root SPACE scope must exclude topo_remove_me_entity (in_canonical_graph=false)
+    // Root SPACE scope with canonical-only requested must exclude topo_remove_me_entity (in_canonical_graph=false)
     const response = await this.search({
       query: 'TopoEntity',
       scope: 'SPACE',
       space_id: TEST_ENTITIES.TOPO_ROOT_SPACE_ID,
       limit: 20,
+      include_non_canonical: false,
     });
 
     const foundIds = response.results.map(r => r.entityId);
@@ -3827,6 +3868,7 @@ async function main() {
     await validator.test38_TopologyRootIsSet();
     await validator.test39_CanonicalEntitiesIndexed();
     await validator.test40_SpaceScopeRootUsesCanonicalFilter();
+    await validator.test40b_SpaceScopeRootIncludesNonCanonicalByDefault();
     await validator.test41_SpaceScopeNonRootUsesSubspaceList();
     await validator.test42_RemovedNodeLosesCanonicalFlag();
     await validator.test43_SubtreeCascadeAndRejoin();
