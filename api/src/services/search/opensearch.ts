@@ -826,16 +826,15 @@ export class OpenSearchClient implements SearchClient {
 				return buildBoolQuery()
 
 			case "SPACE":
-				if (space_id) {
-					if (this.isRootSpace(space_id)) {
-						filters.push({term: {in_canonical_graph: true}})
-					} else {
-						const {subspaces, isRoot} = await this.fetchSubspaces(space_id)
-						if (isRoot) {
-							filters.push({term: {in_canonical_graph: true}})
-						} else {
-							filters.push({terms: {space_id: subspaces.flatMap(uuidTermVariants)}})
-						}
+				// Root-space membership already collapses to the canonical filter,
+				// which the shared `!includeNonCanonical` push above already applies —
+				// don't force it here too, or the canonical-only toggle has no effect
+				// for root-space searches (see e.g. buildMultiSpaceQuery for the same
+				// pattern applied to text search).
+				if (space_id && !this.isRootSpace(space_id)) {
+					const {subspaces, isRoot} = await this.fetchSubspaces(space_id)
+					if (!isRoot) {
+						filters.push({terms: {space_id: subspaces.flatMap(uuidTermVariants)}})
 					}
 				}
 				return buildBoolQuery()
@@ -945,16 +944,15 @@ export class OpenSearchClient implements SearchClient {
 				}
 
 			case "SPACE":
-				if (space_id) {
-					if (this.isRootSpace(space_id)) {
-						filters.push({term: {in_canonical_graph: true}})
-					} else {
-						const {subspaces, isRoot} = await this.fetchSubspaces(space_id)
-						if (isRoot) {
-							filters.push({term: {in_canonical_graph: true}})
-						} else {
-							filters.push({terms: {space_id: subspaces.flatMap(uuidTermVariants)}})
-						}
+				// Root-space membership already collapses to the canonical filter,
+				// which the shared `!includeNonCanonical` push above already applies —
+				// don't force it here too, or the canonical-only toggle has no effect
+				// for root-space searches (see e.g. buildMultiSpaceQuery for the same
+				// pattern applied to text search).
+				if (space_id && !this.isRootSpace(space_id)) {
+					const {subspaces, isRoot} = await this.fetchSubspaces(space_id)
+					if (!isRoot) {
+						filters.push({terms: {space_id: subspaces.flatMap(uuidTermVariants)}})
 					}
 				}
 				return {
@@ -1420,10 +1418,12 @@ export class OpenSearchClient implements SearchClient {
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
-		const spaceFilter = isRoot
-			? {term: {in_canonical_graph: true}}
-			: {terms: {space_id: spaceIds.flatMap(uuidTermVariants)}}
-		const filters: object[] = [spaceFilter]
+		// Root-space membership already collapses to the canonical filter, which
+		// the `!includeNonCanonical` push below already applies — don't force it
+		// here too, or the canonical-only toggle has no effect for root-space
+		// searches. When non-canonical entities are requested for a root space,
+		// there's no bounded space set to filter by, so leave it unfiltered.
+		const filters: object[] = isRoot ? [] : [{terms: {space_id: spaceIds.flatMap(uuidTermVariants)}}]
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
