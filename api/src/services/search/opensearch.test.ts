@@ -791,7 +791,31 @@ describe("OpenSearchClient", () => {
 			vi.restoreAllMocks()
 		})
 
-		it("uses in_canonical_graph filter when space is root", async () => {
+		it("uses in_canonical_graph filter when space is root and canonical-only is requested", async () => {
+			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0001"
+			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+				new Response(JSON.stringify({subspaces: [spaceId, "child-1"], is_root: true}), {
+					status: 200,
+					headers: {"Content-Type": "application/json"},
+				}),
+			)
+
+			const query = await topologyClient.buildSearchBody({
+				query: "blockchain",
+				scope: "SPACE",
+				space_id: spaceId,
+				include_non_canonical: false,
+			})
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain("in_canonical_graph")
+			expect(queryStr).not.toContain(spaceId)
+		})
+
+		it("does NOT force in_canonical_graph when space is root and non-canonical is included (regression)", async () => {
+			// Root-space membership must not silently collapse to canonical-only —
+			// the include_non_canonical toggle (default true) has to actually widen
+			// results, or non-canonical entities become unsearchable from root.
 			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0001"
 			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
 				new Response(JSON.stringify({subspaces: [spaceId, "child-1"], is_root: true}), {
@@ -807,8 +831,7 @@ describe("OpenSearchClient", () => {
 			})
 			const queryStr = JSON.stringify(query)
 
-			expect(queryStr).toContain("in_canonical_graph")
-			expect(queryStr).not.toContain(spaceId)
+			expect(queryStr).not.toContain("in_canonical_graph")
 		})
 
 		it("uses space_id terms filter when space is not root", async () => {
@@ -905,6 +928,7 @@ describe("OpenSearchClient", () => {
 				query: "blockchain",
 				scope: "SPACE",
 				space_id: rootId,
+				include_non_canonical: false,
 			})
 			const queryStr = JSON.stringify(query)
 
@@ -969,6 +993,7 @@ describe("OpenSearchClient", () => {
 				query: "test",
 				scope: "SPACE",
 				space_id: rootId,
+				include_non_canonical: false,
 			})
 			expect(JSON.stringify(query1)).toContain("in_canonical_graph")
 
@@ -979,6 +1004,7 @@ describe("OpenSearchClient", () => {
 				query: "test2",
 				scope: "SPACE",
 				space_id: rootId,
+				include_non_canonical: false,
 			})
 			expect(JSON.stringify(query2)).toContain("in_canonical_graph")
 			expect(fetchSpy).not.toHaveBeenCalled()
