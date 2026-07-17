@@ -7,6 +7,7 @@
 //! connection string. Skips (passes) if unset, so it never runs on a generic
 //! CI `DATABASE_URL` that lacks the `ranks` schema.
 
+use chrono::{TimeZone, Utc};
 use grc_20::model::builder::EditBuilder;
 use hermes_schema::pb::membership::{HermesRoleGranted, HermesRoleRevoked, MembershipRole};
 use sdk::core::ids::*;
@@ -462,6 +463,195 @@ async fn cross_edit_block_is_recovered_from_kg_and_scored() {
         "both ranked entities scored once the block is recovered"
     );
 }
+
+/// Regression (GEO-2253): `get_block_config_from_kg` must resolve the same
+/// datetime-over-legacy-date precedence as `detect::window_bound`, or the
+/// live path and the KG-recovery path disagree on an unregistered block's
+/// window. Start authors both properties (datetime should win); end authors
+/// only the legacy property (must still fall back correctly).
+#[tokio::test]
+async fn cross_edit_block_recovers_datetime_bounds_preferring_new_property_over_legacy() {
+    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
+        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+
+    const SPACE: u128 = 0xE2E5_0000_3001;
+    const MEMBER: u128 = 0xE2E5_0000_3011;
+    const BLOCK: u128 = 0xE2E5_0000_3021;
+    const TYPE_REL: u128 = 0xE2E5_0000_3022;
+    const START_LEGACY_VAL: u128 = 0xE2E5_0000_3023;
+    const START_DATETIME_VAL: u128 = 0xE2E5_0000_3024;
+    const END_LEGACY_VAL: u128 = 0xE2E5_0000_3025;
+    const ENT_A: u128 = 0xE2E5_0000_3031;
+    const RANK: u128 = 0xE2E5_0000_3041;
+
+    let su = |s: &str| Uuid::parse_str(s).unwrap();
+    let legacy_start = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+    let new_start = Utc.with_ymd_and_hms(2026, 2, 2, 9, 30, 0).unwrap();
+    let legacy_end = Utc.with_ymd_and_hms(2026, 3, 3, 0, 0, 0).unwrap();
+
+    // --- clean prior runs (idempotent) -------------------------------------
+    for sql in [
+        "DELETE FROM relations WHERE space_id = $1",
+        "DELETE FROM values WHERE space_id = $1",
+    ] {
+        sqlx::query(sql).bind(u(SPACE)).execute(pool).await.unwrap();
+    }
+    sqlx::query("DELETE FROM ranks.ranking_items WHERE ranking_id = $1")
+        .bind(u(RANK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.rankings WHERE id = $1")
+        .bind(u(RANK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.ranking_scores WHERE block_id = $1")
+        .bind(u(BLOCK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.ranking_blocks WHERE id = $1")
+        .bind(u(BLOCK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.members WHERE space_id = $1")
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM spaces WHERE id = $1")
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // --- seed prerequisites --------------------------------------------------
+    sqlx::query("INSERT INTO spaces (id, type, address) VALUES ($1, 'DAO', '0xe2e3')")
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)")
+        .bind(u(MEMBER))
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // Seed the KG as kg-indexer would: the block's `TYPES -> Ranking Block`
+    // relation, plus start authored on BOTH the legacy and datetime property
+    // (datetime should win), and end authored on only the legacy property
+    // (must fall back). Never registered in `ranks`.
+    sqlx::query(
+        "INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(u(TYPE_REL))
+    .bind(u(TYPE_REL))
+    .bind(su(TYPE_RELATION_TYPE_ID))
+    .bind(u(BLOCK))
+    .bind(su(RANKING_BLOCK_TYPE_ID))
+    .bind(u(SPACE))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO values (id, entity_id, space_id, property_id, datetime_utc) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(u(START_LEGACY_VAL).to_string())
+    .bind(u(BLOCK))
+    .bind(u(SPACE))
+    .bind(su(RANK_START_DATE_PROPERTY_ID))
+    .bind(legacy_start)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO values (id, entity_id, space_id, property_id, datetime_utc) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(u(START_DATETIME_VAL).to_string())
+    .bind(u(BLOCK))
+    .bind(u(SPACE))
+    .bind(su(RANK_START_DATETIME_PROPERTY_ID))
+    .bind(new_start)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO values (id, entity_id, space_id, property_id, datetime_utc) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(u(END_LEGACY_VAL).to_string())
+    .bind(u(BLOCK))
+    .bind(u(SPACE))
+    .bind(su(RANK_END_DATE_PROPERTY_ID))
+    .bind(legacy_end)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // Precondition: the block is NOT registered in the ranks schema.
+    assert!(
+        storage.get_ranking_block(u(BLOCK)).await.unwrap().is_none(),
+        "precondition: block must be unregistered before the rank arrives"
+    );
+
+    // --- a member submits a rank linked to the (unregistered) block --------
+    let rank_edit = EditBuilder::new(gid(RANK ^ 0xED17))
+        .create_relation(|r| {
+            r.id(gid(0x310))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(RANK))
+                .to(sid(RANK_TYPE_ID))
+        })
+        .create_entity(gid(RANK), |e| {
+            e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None)
+        })
+        .create_relation(|r| {
+            r.id(gid(0x311))
+                .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
+                .from(gid(RANK))
+                .to(gid(BLOCK))
+        })
+        .create_relation(|r| {
+            r.id(gid(0x312))
+                .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                .from(gid(RANK))
+                .to(gid(ENT_A))
+                .to_space(gid(SPACE))
+                .position("a0")
+        })
+        .build();
+    apply_detected_edit(&detect(&rank_edit, u(MEMBER), 2, 0), u(MEMBER), &storage)
+        .await
+        .unwrap();
+
+    // --- the recovered block prefers the datetime bound over the legacy one,
+    //     and falls back to legacy where the datetime bound is absent --------
+    let (start_date, end_date): (Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>) =
+        sqlx::query_as("SELECT start_date, end_date FROM ranks.ranking_blocks WHERE id = $1")
+            .bind(u(BLOCK))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+
+    assert_eq!(
+        start_date,
+        Some(new_start),
+        "start: the datetime property must win over the legacy one authored on the same block"
+    );
+    assert_eq!(
+        end_date,
+        Some(legacy_end),
+        "end: must fall back to the legacy property when no datetime property is authored"
+    );
+}
+
 /// Regression: a projection row written before this PR has `from_space_id IS
 /// NULL` but keeps the deterministic v5 relation id (the PK). The step-2 DELETE
 /// in `replace_rank_position_projection` must clear it on the next recompute;

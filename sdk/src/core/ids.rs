@@ -61,6 +61,11 @@ pub const RANKING_BLOCK_TYPE_ID: &str = "150db6de-fe23-44f0-805a-fa57502e2c32";
 pub const RANK_BLOCK_RELATION_TYPE_ID: &str = "09c219c1-03d1-4d2a-a5c7-8edbf2d0182a";
 pub const RANK_START_DATE_PROPERTY_ID: &str = "eed03a04-0acd-4a9e-81e0-8272ed70a817";
 pub const RANK_END_DATE_PROPERTY_ID: &str = "b08b8f63-dc1e-4156-8b08-19946f2b011c";
+// Datetime successors to the start/end date properties (GEO-2253). Minted
+// on-chain 2026-07-09; not yet in geo-sdk. When a block authors both, the
+// datetime property wins per-bound and the legacy date one is ignored.
+pub const RANK_START_DATETIME_PROPERTY_ID: &str = "2d696bf0-510f-403e-985b-8cd1e73feb9b";
+pub const RANK_END_DATETIME_PROPERTY_ID: &str = "c3445f6b-e2c0-4f25-b73a-5eb876c4f50c";
 pub const RANK_AGGREGATION_RESTRICTION_PROPERTY_ID: &str = "1e4caa2d-e331-4efa-8ac2-4e8d9d3e9fe9";
 pub const RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID: &str = "10a7b103-90f9-4a72-8087-935052ffaa69";
 pub const RANK_FILTER_PROPERTY_ID: &str = "14a46854-bfd1-4b18-8215-2785c2dab9f3";
