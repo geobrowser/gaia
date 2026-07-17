@@ -18,6 +18,26 @@ use crate::models::{BlockMeta, Ranking, RankingBlock, RankingItem};
 use crate::publish::{provenance_ids, RankPositionRow};
 use crate::scoring::ScoreRow;
 
+/// Resolve one submission-window bound from separately queried legacy/datetime
+/// columns: the datetime property (GEO-2253) wins per-bound; the legacy date
+/// property is the fallback. Mirrors `detect::window_bound`'s precedence so
+/// the live and KG-recovery paths never disagree on a block that authors both.
+fn resolve_window_bound(
+    block: Uuid,
+    bound: &'static str,
+    datetime_value: Option<DateTime<Utc>>,
+    date_value: Option<DateTime<Utc>>,
+) -> Option<DateTime<Utc>> {
+    if datetime_value.is_some() && date_value.is_some() {
+        tracing::debug!(
+            block = %block,
+            bound,
+            "block authors both the datetime and legacy date property; using the datetime one"
+        );
+    }
+    datetime_value.or(date_value)
+}
+
 #[derive(Clone)]
 pub struct Storage {
     pool: PgPool,
@@ -235,32 +255,48 @@ impl Storage {
             return Ok(None);
         };
 
-        // Config properties: Name/Filter as text, Start/End as datetime. One row
-        // is always returned (aggregates over zero matching values yield NULLs).
+        // Config properties: Name/Filter as text, Start/End as datetime (both
+        // the legacy date property and its GEO-2253 datetime successor — see
+        // `resolve_window_bound`). One row is always returned (aggregates over
+        // zero matching values yield NULLs).
         type ConfigRow = (
             Option<String>,
             Option<String>,
             Option<DateTime<Utc>>,
             Option<DateTime<Utc>>,
+            Option<DateTime<Utc>>,
+            Option<DateTime<Utc>>,
         );
         // Scope to the block's home space: the same entity may be perspectived
         // into other spaces with different config, keyed on (id, space_id).
-        let (name, filter, start_date, end_date): ConfigRow = sqlx::query_as(
-            "SELECT \
-               max(text)         FILTER (WHERE property_id = $2) AS name, \
-               max(text)         FILTER (WHERE property_id = $3) AS filter, \
-               max(datetime_utc) FILTER (WHERE property_id = $4) AS start_date, \
-               max(datetime_utc) FILTER (WHERE property_id = $5) AS end_date \
-             FROM values WHERE entity_id = $1 AND space_id = $6",
-        )
-        .bind(block_id)
-        .bind(pid(ids::NAME_PROPERTY_ID))
-        .bind(pid(ids::RANK_FILTER_PROPERTY_ID))
-        .bind(pid(ids::RANK_START_DATE_PROPERTY_ID))
-        .bind(pid(ids::RANK_END_DATE_PROPERTY_ID))
-        .bind(space_id)
-        .fetch_one(&self.pool)
-        .await?;
+        let (name, filter, legacy_start_date, legacy_end_date, start_datetime, end_datetime): ConfigRow =
+            sqlx::query_as(
+                "SELECT \
+                   max(text)         FILTER (WHERE property_id = $2) AS name, \
+                   max(text)         FILTER (WHERE property_id = $3) AS filter, \
+                   max(datetime_utc) FILTER (WHERE property_id = $4) AS start_date, \
+                   max(datetime_utc) FILTER (WHERE property_id = $5) AS end_date, \
+                   max(datetime_utc) FILTER (WHERE property_id = $6) AS start_datetime, \
+                   max(datetime_utc) FILTER (WHERE property_id = $7) AS end_datetime \
+                 FROM values WHERE entity_id = $1 AND space_id = $8",
+            )
+            .bind(block_id)
+            .bind(pid(ids::NAME_PROPERTY_ID))
+            .bind(pid(ids::RANK_FILTER_PROPERTY_ID))
+            .bind(pid(ids::RANK_START_DATE_PROPERTY_ID))
+            .bind(pid(ids::RANK_END_DATE_PROPERTY_ID))
+            .bind(pid(ids::RANK_START_DATETIME_PROPERTY_ID))
+            .bind(pid(ids::RANK_END_DATETIME_PROPERTY_ID))
+            .bind(space_id)
+            .fetch_one(&self.pool)
+            .await?;
+
+        // The datetime property (GEO-2253) wins per-bound; the legacy date
+        // property is the fallback — same precedence as `detect::window_bound`,
+        // so the live and KG-recovery paths never disagree on a block that
+        // authors both.
+        let start_date = resolve_window_bound(block_id, "start", start_datetime, legacy_start_date);
+        let end_date = resolve_window_bound(block_id, "end", end_datetime, legacy_end_date);
 
         // Aggregation restriction is a relation (as detect() collects it),
         // likewise scoped to the block's home space.
