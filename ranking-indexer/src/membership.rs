@@ -6,6 +6,7 @@
 //! event recomputes the blocks where the change can matter: blocks in the
 //! affected space that hold a submission from the member's personal space.
 
+use chrono::Utc;
 use hermes_schema::pb::membership::{HermesRoleGranted, HermesRoleRevoked, MembershipRole};
 use uuid::Uuid;
 
@@ -129,8 +130,9 @@ pub async fn apply_membership_event(
     let blocks = storage
         .blocks_with_rankings_from(change.space_id, change.member_space_id)
         .await?;
+    let now = Utc::now();
     for block_id in &blocks {
-        recompute_block(*block_id, meta, storage).await?;
+        recompute_block(*block_id, meta, now, storage).await?;
     }
 
     tracing::debug!(
