@@ -477,6 +477,13 @@
       "when": 1782497674043,
       "tag": "0067_support_entities_without_value",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1784315353445,
+      "tag": "0068_amazing_franklin_richards",
+      "breakpoints": true
     }
   ]
 }
