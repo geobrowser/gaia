@@ -29,9 +29,8 @@ export function uploadEdit(file: File) {
 		const run = Effect.gen(function* () {
 			yield* Ref.update(attemptRef, (n) => n + 1)
 
-			// No Blob wrap — aligns with Pinata's SDK.
+			// No Blob wrap — File is passed directly to FormData.
 			const formData = new FormData()
-			formData.append("network", "public")
 			formData.append("file", file, file.name || "edit.bin")
 
 			const hash = yield* upload(formData, config.ipfsGatewayWrite)
@@ -86,7 +85,6 @@ export function uploadFile(file: File) {
 			yield* Ref.update(attemptRef, (n) => n + 1)
 
 			const formData = new FormData()
-			formData.append("network", "public")
 			// Always provide filename - Bun hangs indefinitely without it
 			formData.append("file", file, file.name || "file.bin")
 
@@ -166,7 +164,7 @@ export function upload(formData: FormData, url: string) {
 			responseTimeMs: Date.now() - requestStart,
 			contentType: response.headers.get("content-type"),
 			contentLength: response.headers.get("content-length"),
-			pinataRequestId: response.headers.get("x-pinata-request-id") ?? response.headers.get("x-request-id"),
+			gatewayRequestId: response.headers.get("x-request-id"),
 			cfRay: response.headers.get("cf-ray"),
 			server: response.headers.get("server"),
 			retryAfter: response.headers.get("retry-after"),
@@ -182,30 +180,49 @@ export function upload(formData: FormData, url: string) {
 			yield* Effect.fail(new IpfsUploadError(`IPFS gateway HTTP ${response.status} ${response.statusText}`))
 		}
 
-		const responseJson = yield* Effect.try({
-			try: () => JSON.parse(responseText) as {error?: unknown; data?: {cid?: string}},
-			catch: () => new IpfsParseResponseError(`Could not parse IPFS JSON response (status=${response.status})`),
-		}).pipe(Effect.tapError(() => Effect.logWarning("[IPFS] gateway returned non-JSON response", diagnostics)))
+		// Filebase's IPFS `add` (Kubo-compatible /api/v0/add) returns
+		// newline-delimited JSON, one entry per added path — `{"Hash": "Qm...", ...}`,
+		// or `{"Type": "error", "Message": "..."}` if something fails mid-stream. A
+		// single-file upload yields one line; parse leniently (ignore blank/non-JSON
+		// lines) and take the last Hash regardless, matching curator-app's reference
+		// implementation for the same gateway.
+		let hash: string | undefined
+		let sawUnparseableLine = false
+		for (const line of responseText.split("\n")) {
+			const trimmed = line.trim()
+			if (!trimmed) continue
 
-		// Handle error responses from gateway
-		if (responseJson.error) {
-			const errorMsg =
-				typeof responseJson.error === "object" && responseJson.error !== null
-					? (responseJson.error as {message?: string}).message || JSON.stringify(responseJson.error)
-					: String(responseJson.error)
-			yield* Effect.logWarning("[IPFS] gateway returned error in body", {
-				...diagnostics,
-				gatewayErrorMessage: errorMsg,
-			})
-			yield* Effect.fail(new IpfsUploadError(`IPFS gateway error: ${errorMsg}`))
+			let entry: {Hash?: string; Type?: string; Message?: string}
+			try {
+				entry = JSON.parse(trimmed)
+			} catch {
+				sawUnparseableLine = true
+				continue
+			}
+
+			if (entry.Type === "error" || entry.Message) {
+				const errorMsg = entry.Message ?? "unknown gateway error"
+				yield* Effect.logWarning("[IPFS] gateway returned error in body", {
+					...diagnostics,
+					gatewayErrorMessage: errorMsg,
+				})
+				yield* Effect.fail(new IpfsUploadError(`IPFS gateway error: ${errorMsg}`))
+			}
+
+			if (entry.Hash) hash = entry.Hash
 		}
 
-		const cid = responseJson.data?.cid
-		if (!cid) {
+		if (!hash) {
+			if (sawUnparseableLine) {
+				yield* Effect.logWarning("[IPFS] gateway returned non-JSON response", diagnostics)
+				yield* Effect.fail(
+					new IpfsParseResponseError(`Could not parse IPFS JSON response (status=${response.status})`),
+				)
+			}
 			yield* Effect.logWarning("[IPFS] gateway returned no CID", diagnostics)
 			return yield* Effect.fail(new IpfsUploadError("IPFS gateway returned no CID"))
 		}
 
-		return `ipfs://${cid}` as const
+		return `ipfs://${hash}` as const
 	}).pipe(Effect.withSpan("ipfs.upload"))
 }
