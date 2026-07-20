@@ -161,7 +161,11 @@ impl IpfsFetcher for IpfsClient {
     async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
         let cid = uri.strip_prefix("ipfs://").unwrap_or(uri);
 
-        let mut last_transport_err: Option<IpfsError> = None;
+        // Tracks whatever happened on the most recent attempt, so the final
+        // error accurately reflects that attempt's actual failure mode
+        // (transport error vs. hash mismatch) rather than conflating the
+        // two across a mixed sequence of retries.
+        let mut last_error: Option<IpfsError> = None;
 
         for attempt in 1..=self.max_attempts {
             match self.fetch_once(cid).await {
@@ -175,7 +179,10 @@ impl IpfsFetcher for IpfsClient {
                             bytes = bytes.len(),
                             "fetched bytes did not hash to the requested CID, retrying"
                         );
-                        last_transport_err = None;
+                        last_error = Some(IpfsError::VerificationFailed {
+                            cid: cid.to_string(),
+                            attempts: attempt,
+                        });
                     }
                 },
                 Err(err) => {
@@ -186,7 +193,7 @@ impl IpfsFetcher for IpfsClient {
                         error = %err,
                         "IPFS fetch failed, retrying"
                     );
-                    last_transport_err = Some(err);
+                    last_error = Some(err);
                 }
             }
 
@@ -204,10 +211,11 @@ impl IpfsFetcher for IpfsClient {
             }
         }
 
-        Err(last_transport_err.unwrap_or(IpfsError::VerificationFailed {
-            cid: cid.to_string(),
-            attempts: self.max_attempts,
-        }))
+        // Every loop iteration sets last_error before falling through to
+        // here (the only early return is the Ok(bytes) success path above),
+        // so this is always Some by the time max_attempts is exhausted.
+        Err(last_error
+            .expect("get_bytes retry loop always records an error before exhausting attempts"))
     }
 }
 

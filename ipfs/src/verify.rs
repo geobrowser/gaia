@@ -165,6 +165,15 @@ fn base32_decode_nopad(s: &str) -> Option<Vec<u8>> {
         }
     }
 
+    // Canonical RFC4648 no-pad base32 requires the leftover (non-byte-
+    // aligned) bits at the end to be zero — they're unused padding, not
+    // data. A non-canonical encoding could set them to anything and still
+    // decode to the same bytes; reject rather than silently accept it.
+    let leftover_mask = (1u64 << bit_count) - 1;
+    if bits & leftover_mask != 0 {
+        return None;
+    }
+
     Some(out)
 }
 
@@ -527,5 +536,38 @@ mod tests {
             out.push(ALPHABET[((bits << (5 - bit_count)) & 0x1f) as usize] as char);
         }
         out
+    }
+
+    /// Same encoding as `base32_encode_nopad`, but deliberately sets the
+    /// final group's padding bit to 1 instead of 0 — a non-canonical
+    /// encoding that decodes to identical bytes but must still be rejected.
+    fn base32_encode_nonzero_padding(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+        let mut bits: u64 = 0;
+        let mut bit_count: u32 = 0;
+        let mut out = String::new();
+        for &b in bytes {
+            bits = (bits << 8) | b as u64;
+            bit_count += 8;
+            while bit_count >= 5 {
+                bit_count -= 5;
+                out.push(ALPHABET[((bits >> bit_count) & 0x1f) as usize] as char);
+            }
+        }
+        assert!(
+            bit_count > 0,
+            "test input must need padding to be meaningful"
+        );
+        let value = (((bits << (5 - bit_count)) & 0x1f) | 0b1) as usize;
+        out.push(ALPHABET[value] as char);
+        out
+    }
+
+    #[test]
+    fn rejects_non_canonical_base32_padding() {
+        let mut bytes = vec![1u8, CODEC_RAW as u8, MULTIHASH_SHA2_256 as u8, 32];
+        bytes.extend_from_slice(&[0xABu8; 32]);
+        let cid = format!("b{}", base32_encode_nonzero_padding(&bytes));
+        assert_eq!(verify(&cid, b"anything"), Verification::Unsupported);
     }
 }

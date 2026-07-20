@@ -245,8 +245,12 @@ async fn main() -> Result<(), IndexerError> {
                 .await?;
             println!("Wrote {ops} operations, version_key={version_key}");
         } else {
+            // The entities/values/relations upserts above already ran in
+            // this transaction (idempotent no-ops if this edit was replayed
+            // before) — only the version-tracking rows are skipped here, so
+            // "nothing written" would overstate what this branch means.
             println!(
-                "edit_id {} already has a version — nothing written (idempotent no-op)",
+                "edit_id {} already has a version — skipped value/relation version rows (live-table writes above already ran, idempotently)",
                 result.edit_id
             );
         }
