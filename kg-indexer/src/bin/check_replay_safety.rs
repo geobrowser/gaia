@@ -175,16 +175,25 @@ async fn main() -> Result<(), IndexerError> {
             space_ids.push(*space_id);
         }
 
-        let open_versions: Vec<(Uuid, Uuid, Uuid, i64)> = sqlx::query_as(
+        // DISTINCT ON + ORDER BY ... valid_from_key DESC gets the *latest*
+        // version per target regardless of whether it's still open —
+        // an Unset/Delete op closes a version without opening a new one
+        // (see Storage::insert_value_versions, which only inserts new rows
+        // for the Set subset), so a target's most recent touch can leave no
+        // open row at all. Checking only `valid_to_key IS NULL` would miss
+        // that and let a replay silently resurrect data a later edit
+        // deliberately removed.
+        let latest_versions: Vec<(Uuid, Uuid, Uuid, i64)> = sqlx::query_as(
             r#"
-            SELECT entity_id, property_id, space_id, valid_from_key
+            SELECT DISTINCT ON (entity_id, property_id, space_id)
+                entity_id, property_id, space_id, valid_from_key
             FROM value_versions
-            WHERE valid_to_key IS NULL
-              AND (entity_id, property_id, space_id) IN (
+            WHERE (entity_id, property_id, space_id) IN (
                 SELECT entity_id, property_id, space_id
                 FROM UNNEST($1::uuid[], $2::uuid[], $3::uuid[])
                 AS t(entity_id, property_id, space_id)
               )
+            ORDER BY entity_id, property_id, space_id, valid_from_key DESC
             "#,
         )
         .bind(&entity_ids)
@@ -193,12 +202,12 @@ async fn main() -> Result<(), IndexerError> {
         .fetch_all(&storage.pool)
         .await?;
 
-        for (entity_id, property_id, space_id, open_from_key) in open_versions {
-            if open_from_key > version_key {
+        for (entity_id, property_id, space_id, latest_from_key) in latest_versions {
+            if latest_from_key > version_key {
                 conflicts.push(format!(
                     "VALUE CONFLICT: (entity={entity_id}, property={property_id}, space={space_id}) \
-                     already has an open version from key {open_from_key} > this edit's {version_key} \
-                     — replaying would corrupt that row's valid_to_key"
+                     already has a later version from key {latest_from_key} > this edit's {version_key} \
+                     — replaying would corrupt or resurrect over that row"
                 ));
             }
         }
@@ -212,16 +221,19 @@ async fn main() -> Result<(), IndexerError> {
             space_ids.push(*space_id);
         }
 
-        let open_versions: Vec<(Uuid, Uuid, i64)> = sqlx::query_as(
+        // Same rationale as the value-target query above: check the latest
+        // version regardless of open/closed status.
+        let latest_versions: Vec<(Uuid, Uuid, i64)> = sqlx::query_as(
             r#"
-            SELECT relation_id, space_id, valid_from_key
+            SELECT DISTINCT ON (relation_id, space_id)
+                relation_id, space_id, valid_from_key
             FROM relation_versions
-            WHERE valid_to_key IS NULL
-              AND (relation_id, space_id) IN (
+            WHERE (relation_id, space_id) IN (
                 SELECT relation_id, space_id
                 FROM UNNEST($1::uuid[], $2::uuid[])
                 AS t(relation_id, space_id)
               )
+            ORDER BY relation_id, space_id, valid_from_key DESC
             "#,
         )
         .bind(&relation_ids)
@@ -229,12 +241,12 @@ async fn main() -> Result<(), IndexerError> {
         .fetch_all(&storage.pool)
         .await?;
 
-        for (relation_id, space_id, open_from_key) in open_versions {
-            if open_from_key > version_key {
+        for (relation_id, space_id, latest_from_key) in latest_versions {
+            if latest_from_key > version_key {
                 conflicts.push(format!(
-                    "RELATION CONFLICT: (relation={relation_id}, space={space_id}) already has an \
-                     open version from key {open_from_key} > this edit's {version_key} — replaying \
-                     would corrupt that row's valid_to_key"
+                    "RELATION CONFLICT: (relation={relation_id}, space={space_id}) already has a \
+                     later version from key {latest_from_key} > this edit's {version_key} — \
+                     replaying would corrupt or resurrect over that row"
                 ));
             }
         }

@@ -135,17 +135,19 @@ async fn main() -> Result<(), IndexerError> {
         }
     }
 
-    let shared: Vec<(&Target, &Vec<BatchEdit>)> =
-        target_edits.iter().filter(|(_, v)| v.len() > 1).collect();
-
+    // Check the full chain for every target the batch touched, not just
+    // ones shared between 2+ batch edits — a single batch edit can also
+    // silently resurrect data over an independent, non-batch edit that
+    // later unset/deleted it (that edit closes a version without opening a
+    // new one, so it wouldn't otherwise show up as a "shared target").
     println!(
-        "{} target(s) touched by more than one edit in this batch.",
-        shared.len()
+        "Checking full version chain for {} target(s) touched by this batch.",
+        target_edits.len()
     );
 
     let mut any_corrupt = false;
 
-    for (target, edits) in shared {
+    for (target, edits) in target_edits.iter() {
         match target {
             Target::Value(entity_id, property_id, space_id) => {
                 let rows: Vec<(Uuid, i64, Option<i64>)> = sqlx::query_as(
@@ -190,7 +192,7 @@ async fn main() -> Result<(), IndexerError> {
     }
 
     if !any_corrupt {
-        println!("No out-of-order chains found among shared targets.");
+        println!("No out-of-order chains found among any of the batch's targets.");
     }
 
     Ok(())
@@ -203,18 +205,22 @@ fn report_chain(
     any_corrupt: &mut bool,
 ) {
     let mut corrupt = false;
+    let mut lines = Vec::new();
     for i in 0..rows.len() {
         let (id, valid_from, valid_to) = &rows[i];
         let expected_valid_to = rows.get(i + 1).map(|(_, next_from, _)| *next_from);
         if *valid_to != expected_valid_to {
             corrupt = true;
         }
-        println!(
+        lines.push(format!(
             "  row {id}: valid_from={valid_from} valid_to={valid_to:?} (expected {expected_valid_to:?})"
-        );
+        ));
     }
     if corrupt {
         *any_corrupt = true;
+        for line in &lines {
+            println!("{line}");
+        }
         println!(
             "CORRUPT CHAIN: {label} — touched by batch edits: {}",
             batch_edits
@@ -223,7 +229,5 @@ fn report_chain(
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-    } else {
-        println!("OK: {label}");
     }
 }
