@@ -118,7 +118,12 @@ async fn main() -> Result<(), IndexerError> {
             .bind(&args.uri)
             .fetch_one(&storage.pool)
             .await
-            .map_err(|e| IndexerError::Config(format!("uri not found in ipfs_cache: {e}")))?;
+            .map_err(|e| match e {
+                sqlx::Error::RowNotFound => {
+                    IndexerError::Config(format!("uri not found in ipfs_cache: {}", args.uri))
+                }
+                other => IndexerError::Database(other),
+            })?;
     let (data, is_errored) = row;
     if is_errored {
         return Err(IndexerError::Config(
