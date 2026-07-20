@@ -27,7 +27,9 @@
 //! creation-only edits (new entities/relations with no prior state) are safe
 //! by construction.
 //!
-//! Usage:
+//! Usage (a single DATABASE_URL is correct here — `ipfs_cache` and the KG
+//! tables this replays into are defined in the same migration/schema, see
+//! `api/drizzle/0000_handy_omega_red.sql`):
 //!   DATABASE_URL=... cargo run -p kg-indexer --bin replay_edit -- \
 //!     --uri ipfs://Qm... \
 //!     --space f3dab79c-b5a3-d9d1-7596-56dd5361d1c6 \
@@ -45,6 +47,10 @@ use kg_indexer::handlers;
 use kg_indexer::models::values::ValueChangeType;
 use kg_indexer::storage::Storage;
 use uuid::Uuid;
+
+/// Must match `main.rs`'s `MAX_EDIT_NAME_LENGTH` — this tool mirrors the real
+/// Kafka consumer's storage-write behavior exactly, name truncation included.
+const MAX_EDIT_NAME_LENGTH: usize = 256;
 
 struct Args {
     uri: String,
@@ -207,8 +213,13 @@ async fn main() -> Result<(), IndexerError> {
     storage.delete_relations(&delete_relations, &mut tx).await?;
 
     if let Some(meta) = edit.meta.as_ref() {
+        // Mirror main.rs's extract_edit_metadata exactly, so a replayed
+        // edit's stored name matches what the real Kafka consumer would
+        // have written for the same payload.
         let name = if edit.name.is_empty() {
             None
+        } else if edit.name.len() > MAX_EDIT_NAME_LENGTH {
+            Some(&edit.name[..edit.name.floor_char_boundary(MAX_EDIT_NAME_LENGTH)])
         } else {
             Some(edit.name.as_str())
         };
