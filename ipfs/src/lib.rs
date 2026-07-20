@@ -129,7 +129,13 @@ impl IpfsClient {
     }
 
     async fn fetch_once(&self, cid: &str) -> Result<Vec<u8>> {
-        let url = format!("{}{}", self.url, cid);
+        // Normalize exactly one separating slash regardless of whether the
+        // configured gateway URL ends with one — e.g. the production
+        // secrets template documents a bare `https://ipfs.io` with no
+        // trailing slash, which naive concatenation would turn into a
+        // malformed `https://ipfs.ioQm...` URL.
+        let base = self.url.trim_end_matches('/');
+        let url = format!("{base}/{cid}");
         let res = self.client.get(&url).send().await?;
 
         if !res.status().is_success() {
@@ -350,6 +356,28 @@ mod retry_tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             ResponseTemplate::new(200).set_body_bytes(self.body.clone())
         }
+    }
+
+    #[tokio::test]
+    async fn succeeds_when_base_url_has_no_trailing_slash() {
+        // Matches the production secrets template, which documents a bare
+        // `https://ipfs.io` with no trailing slash.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(format!("/{GOLDEN_SMALL_CID}")))
+            .respond_with(AlwaysBody {
+                calls: Arc::new(AtomicU32::new(0)),
+                body: GOLDEN_SMALL_BYTES.to_vec(),
+            })
+            .mount(&server)
+            .await;
+
+        let no_trailing_slash = server.uri();
+        assert!(!no_trailing_slash.ends_with('/'));
+        let client = IpfsClient::with_retry_config(&no_trailing_slash, 3, Duration::from_millis(1));
+
+        let bytes = client.get_bytes(GOLDEN_SMALL_CID).await.unwrap();
+        assert_eq!(bytes, GOLDEN_SMALL_BYTES);
     }
 
     #[tokio::test]

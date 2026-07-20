@@ -90,7 +90,12 @@ async fn main() -> Result<(), IndexerError> {
                     }
                     other => IndexerError::Database(other),
                 })?;
-        let (data, _is_errored) = row;
+        let (data, is_errored) = row;
+        if is_errored {
+            return Err(IndexerError::Config(format!(
+                "{uri}: ipfs_cache row is still marked is_errored — fix that first"
+            )));
+        }
         let payload = data.ok_or_else(|| IndexerError::Config("no data".into()))?;
         let decoded = decode_edit(&payload)
             .map_err(|e| IndexerError::Config(format!("decode failed: {e}")))?;
