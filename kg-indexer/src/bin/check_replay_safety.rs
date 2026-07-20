@@ -141,22 +141,39 @@ async fn main() -> Result<(), IndexerError> {
     );
 
     // Dedup targets — the same (entity, property, space) can be touched by
-    // multiple ops (e.g. set then later unset within the same edit).
-    let mut value_targets: HashSet<(Uuid, Uuid, Uuid)> = HashSet::new();
-    for v in &result.values {
-        value_targets.insert((v.entity_id, v.property_id, v.space_id));
-    }
-    let mut relation_targets: HashSet<(Uuid, Uuid)> = HashSet::new();
-    for r in &result.relations {
-        relation_targets.insert((r.id(), r.space_id()));
-    }
+    // multiple ops (e.g. set then later unset within the same edit). Kept as
+    // a single Vec<tuple> (not three parallel Vecs each derived from a
+    // separate HashSet::iter() pass) so the three per-column arrays bound
+    // below are built from one aligned iteration — `UNNEST` zips its
+    // argument arrays by index, so any independent derivation risks
+    // misaligning them and silently checking the wrong tuples.
+    let mut seen_values = HashSet::new();
+    let value_targets: Vec<(Uuid, Uuid, Uuid)> = result
+        .values
+        .iter()
+        .map(|v| (v.entity_id, v.property_id, v.space_id))
+        .filter(|t| seen_values.insert(*t))
+        .collect();
+
+    let mut seen_relations = HashSet::new();
+    let relation_targets: Vec<(Uuid, Uuid)> = result
+        .relations
+        .iter()
+        .map(|r| (r.id(), r.space_id()))
+        .filter(|t| seen_relations.insert(*t))
+        .collect();
 
     let mut conflicts: Vec<String> = Vec::new();
 
     if !value_targets.is_empty() {
-        let entity_ids: Vec<Uuid> = value_targets.iter().map(|t| t.0).collect();
-        let property_ids: Vec<Uuid> = value_targets.iter().map(|t| t.1).collect();
-        let space_ids: Vec<Uuid> = value_targets.iter().map(|t| t.2).collect();
+        let mut entity_ids = Vec::with_capacity(value_targets.len());
+        let mut property_ids = Vec::with_capacity(value_targets.len());
+        let mut space_ids = Vec::with_capacity(value_targets.len());
+        for (entity_id, property_id, space_id) in &value_targets {
+            entity_ids.push(*entity_id);
+            property_ids.push(*property_id);
+            space_ids.push(*space_id);
+        }
 
         let open_versions: Vec<(Uuid, Uuid, Uuid, i64)> = sqlx::query_as(
             r#"
@@ -174,8 +191,7 @@ async fn main() -> Result<(), IndexerError> {
         .bind(&property_ids)
         .bind(&space_ids)
         .fetch_all(&storage.pool)
-        .await
-        .map_err(|e| IndexerError::Config(format!("value_versions query failed: {e}")))?;
+        .await?;
 
         for (entity_id, property_id, space_id, open_from_key) in open_versions {
             if open_from_key > version_key {
@@ -189,8 +205,12 @@ async fn main() -> Result<(), IndexerError> {
     }
 
     if !relation_targets.is_empty() {
-        let relation_ids: Vec<Uuid> = relation_targets.iter().map(|t| t.0).collect();
-        let space_ids: Vec<Uuid> = relation_targets.iter().map(|t| t.1).collect();
+        let mut relation_ids = Vec::with_capacity(relation_targets.len());
+        let mut space_ids = Vec::with_capacity(relation_targets.len());
+        for (relation_id, space_id) in &relation_targets {
+            relation_ids.push(*relation_id);
+            space_ids.push(*space_id);
+        }
 
         let open_versions: Vec<(Uuid, Uuid, i64)> = sqlx::query_as(
             r#"
@@ -207,8 +227,7 @@ async fn main() -> Result<(), IndexerError> {
         .bind(&relation_ids)
         .bind(&space_ids)
         .fetch_all(&storage.pool)
-        .await
-        .map_err(|e| IndexerError::Config(format!("relation_versions query failed: {e}")))?;
+        .await?;
 
         for (relation_id, space_id, open_from_key) in open_versions {
             if open_from_key > version_key {
