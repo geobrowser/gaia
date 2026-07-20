@@ -102,6 +102,10 @@ impl IpfsClient {
     /// attempt didn't get the real content," not "this content is invalid."
     const DEFAULT_MAX_ATTEMPTS: u32 = 3;
     const DEFAULT_BASE_BACKOFF: Duration = Duration::from_millis(250);
+    /// Upper bound on any single retry's backoff, regardless of attempt
+    /// count or configured base — keeps a large `max_attempts` from ever
+    /// producing an absurd (if not overflowing) wait.
+    const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
     pub fn new(url: &str) -> Self {
         IpfsClient {
@@ -187,7 +191,16 @@ impl IpfsFetcher for IpfsClient {
             }
 
             if attempt < self.max_attempts {
-                tokio::time::sleep(self.base_backoff * 2u32.pow(attempt - 1)).await;
+                // `checked_pow`/`saturating_mul` (rather than plain `*`) so a
+                // large `max_attempts` via `with_retry_config` can't overflow
+                // `u32`/`Duration` arithmetic; `.min(MAX_BACKOFF)` caps the
+                // wait at something sane regardless.
+                let multiplier = 2u32.checked_pow(attempt - 1).unwrap_or(u32::MAX);
+                let backoff = self
+                    .base_backoff
+                    .saturating_mul(multiplier)
+                    .min(Self::MAX_BACKOFF);
+                tokio::time::sleep(backoff).await;
             }
         }
 

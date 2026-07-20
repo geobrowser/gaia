@@ -41,11 +41,15 @@ async fn main() -> anyhow::Result<()> {
 
     let args: Vec<String> = env::args().collect();
     let dry_run = args.iter().any(|a| a == "--dry-run");
-    let limit: Option<i64> = args
-        .iter()
-        .position(|a| a == "--limit")
-        .and_then(|i| args.get(i + 1))
-        .map(|s| s.parse().expect("--limit must be a number"));
+    // Distinguish "--limit absent" (limit = None, sweep everything) from
+    // "--limit present but missing/invalid value" (must error, not silently
+    // fall back to sweeping everything).
+    let limit: Option<i64> = args.iter().position(|a| a == "--limit").map(|i| {
+        args.get(i + 1)
+            .unwrap_or_else(|| panic!("--limit requires a value"))
+            .parse()
+            .expect("--limit must be a number")
+    });
 
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let ipfs_gateway = env::var("IPFS_GATEWAY_URL").expect("IPFS_GATEWAY_URL must be set");

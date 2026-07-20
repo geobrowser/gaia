@@ -95,9 +95,13 @@ pub fn verify(cid: &str, bytes: &[u8]) -> Verification {
 /// digest. Returns `None` for anything not in one of those two shapes, or
 /// using a hash function other than sha2-256.
 fn parse_cid(cid: &str) -> Option<ParsedCid> {
-    if let Some(rest) = cid.strip_prefix('b') {
-        // CIDv1, multibase 'b' = base32 (RFC4648, lowercase, no padding) —
-        // by far the most common CIDv1 string encoding in practice.
+    // Multibase 'b' (lowercase) and 'B' (uppercase) both denote base32
+    // (RFC4648, no padding) — 'b' is by far the most common CIDv1 string
+    // encoding in practice, but 'B' is equally valid per the multibase spec.
+    // `base32_decode_nopad` itself is already case-insensitive, so only the
+    // prefix check needs to accept both.
+    if cid.starts_with('b') || cid.starts_with('B') {
+        let rest = &cid[1..];
         let bytes = base32_decode_nopad(rest)?;
         let mut pos = 0;
         let (version, n) = read_varint(&bytes[pos..])?;
@@ -114,7 +118,14 @@ fn parse_cid(cid: &str) -> Option<ParsedCid> {
         if mh_code != MULTIHASH_SHA2_256 || mh_len != MULTIHASH_SHA2_256_LEN {
             return None;
         }
-        let digest = bytes.get(pos..pos + mh_len as usize)?.to_vec();
+        let digest_end = pos.checked_add(mh_len as usize)?;
+        // Reject trailing bytes past the digest — a canonical CIDv1 multihash
+        // ends exactly here; anything left over is a malformed or
+        // non-canonical encoding we shouldn't guess about.
+        if digest_end != bytes.len() {
+            return None;
+        }
+        let digest = bytes[pos..digest_end].to_vec();
         return Some(ParsedCid { codec, digest });
     }
 
@@ -159,9 +170,17 @@ fn base32_decode_nopad(s: &str) -> Option<Vec<u8>> {
 
 /// Read an unsigned LEB128 varint, returning `(value, bytes_consumed)`.
 fn read_varint(bytes: &[u8]) -> Option<(u64, usize)> {
+    // A u64 needs at most 10 groups of 7 bits (70 > 64). Bounding the loop
+    // (rather than trusting the continuation bit alone) keeps a malformed
+    // CID with an unbroken run of continuation bytes from shifting past the
+    // width of `value` — `checked_shl` would otherwise return `None` there
+    // and this function would just report a bogus-but-harmless failure, but
+    // bounding it up front makes that guarantee explicit rather than
+    // incidental.
     let mut value: u64 = 0;
-    for (i, &byte) in bytes.iter().enumerate() {
-        value |= ((byte & 0x7f) as u64) << (7 * i);
+    for (i, &byte) in bytes.iter().take(10).enumerate() {
+        let shifted = ((byte & 0x7f) as u64).checked_shl(7 * i as u32)?;
+        value |= shifted;
         if byte & 0x80 == 0 {
             return Some((value, i + 1));
         }
@@ -390,6 +409,32 @@ mod tests {
         // not a shape we quietly mis-verify.
         let result = verify("not-a-real-cid-0O0Il", b"anything");
         assert_eq!(result, Verification::Unsupported);
+    }
+
+    #[test]
+    fn verifies_uppercase_multibase_prefix() {
+        // 'B' (uppercase) is the multibase code for base32-upper — equally
+        // valid per the multibase spec, just far rarer in practice than
+        // lowercase 'b'. Uppercasing everything after the prefix on a known
+        // real CID should still verify.
+        let uppercased = format!("B{}", GOLDEN_CIDV1_RAW_CID[1..].to_ascii_uppercase());
+        assert_eq!(
+            verify(&uppercased, GOLDEN_CIDV1_RAW_BYTES),
+            Verification::Verified
+        );
+    }
+
+    #[test]
+    fn rejects_cidv1_with_trailing_bytes_after_the_digest() {
+        // A well-formed header + digest followed by extra bytes is not a
+        // canonical CIDv1 multihash — reject rather than silently ignoring
+        // the trailing bytes.
+        let mut bytes = vec![1u8, CODEC_RAW as u8, MULTIHASH_SHA2_256 as u8, 32];
+        bytes.extend_from_slice(&[0u8; 32]);
+        bytes.push(0xFF); // trailing garbage past the digest
+        let cid = format!("b{}", base32_encode_nopad(&bytes));
+
+        assert_eq!(verify(&cid, b"anything"), Verification::Unsupported);
     }
 
     #[test]
