@@ -222,12 +222,26 @@ fn report_chain(
     batch_edits: &[BatchEdit],
     any_corrupt: &mut bool,
 ) {
+    // A target's *last* row legitimately has no successor whenever the
+    // final touch was an Unset/Delete — those close a version without
+    // opening a new one (see Storage::insert_relation_versions/
+    // insert_value_versions, which only insert new rows for Create/Set).
+    // So the only real invariants are: (1) no row's valid_to is earlier
+    // than its own valid_from (closed before it opened), and (2) every row
+    // that *does* have a successor must hand off to it exactly (this row's
+    // valid_to == the next row's valid_from). Whether the last row is open
+    // or closed is not itself evidence of anything.
     let mut corrupt = false;
     let mut lines = Vec::new();
     for i in 0..rows.len() {
         let (id, valid_from, valid_to) = &rows[i];
+        if let Some(vt) = valid_to {
+            if vt < valid_from {
+                corrupt = true;
+            }
+        }
         let expected_valid_to = rows.get(i + 1).map(|(_, next_from, _)| *next_from);
-        if *valid_to != expected_valid_to {
+        if expected_valid_to.is_some() && *valid_to != expected_valid_to {
             corrupt = true;
         }
         lines.push(format!(
