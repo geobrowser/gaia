@@ -98,7 +98,7 @@ pub struct IpfsClient {
 impl IpfsClient {
     /// Max fetch attempts before giving up on a URI. Applies to both
     /// transport failures (timeouts, non-2xx) and content that fails CID
-    /// verification (see [`verify::verify`]) — either is treated as "this
+    /// verification (see [`Verification`]) — either is treated as "this
     /// attempt didn't get the real content," not "this content is invalid."
     const DEFAULT_MAX_ATTEMPTS: u32 = 3;
     const DEFAULT_BASE_BACKOFF: Duration = Duration::from_millis(250);

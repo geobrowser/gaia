@@ -7,15 +7,19 @@
 //! target touched by more than one edit in a batch that wasn't replayed in
 //! block order ends up with a corrupted `valid_to_key` chain.
 //!
-//! Given a list of (uri, space, block) triples (one per line, space-
+//! Given a list of (uri, block, space) triples (one per line, space-
 //! separated, same format as the batch that was replayed), this:
 //! 1. Decodes each edit and collects every (entity, property, space) and
 //!    (relation, space) target it touches, same extraction as
 //!    `check_replay_safety`.
-//! 2. Groups by target; any target touched by 2+ edits in the batch is at
-//!    risk.
-//! 3. For each such target, fetches the *entire* current version chain
-//!    (not just the open row) and checks whether `valid_to_key` on each row
+//! 2. Groups by target. Every target the batch touches is checked — not
+//!    just ones shared between 2+ batch edits, since a single batch edit
+//!    can also corrupt or resurrect data over an *independent*, non-batch
+//!    edit that touched the same target (see `check_replay_safety`'s
+//!    Unset/Delete handling for why "no open row" doesn't mean "nothing
+//!    else touched this").
+//! 3. For each target, fetches the *entire* current version chain (not
+//!    just the open row) and checks whether `valid_to_key` on each row
 //!    equals the `valid_from_key` of the next row in ascending order (and
 //!    the last row is open, i.e. `valid_to_key IS NULL`).
 //! 4. Reports any chain that's out of order, with the exact corrected
@@ -75,9 +79,18 @@ async fn main() -> Result<(), IndexerError> {
 
     for line in lines.lines().filter(|l| !l.trim().is_empty()) {
         let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() != 3 {
+            return Err(IndexerError::Config(format!(
+                "malformed batch-file line (expected \"<uri> <block> <space>\"): {line:?}"
+            )));
+        }
         let (uri, block_str, space_str) = (parts[0], parts[1], parts[2]);
-        let block: u64 = block_str.parse().expect("block must be a number");
-        let space: Uuid = space_str.parse().expect("space must be a valid UUID");
+        let block: u64 = block_str
+            .parse()
+            .map_err(|e| IndexerError::Config(format!("bad block number in line {line:?}: {e}")))?;
+        let space: Uuid = space_str
+            .parse()
+            .map_err(|e| IndexerError::Config(format!("bad space UUID in line {line:?}: {e}")))?;
 
         let row: (Option<Vec<u8>>, bool) =
             sqlx::query_as("SELECT data, is_errored FROM ipfs_cache WHERE uri = $1")
