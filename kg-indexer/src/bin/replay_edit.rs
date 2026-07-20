@@ -1,6 +1,6 @@
 //! One-off manual replay for a single edit that `hermes-pipeline` permanently
 //! dropped due to a false-positive `ipfs_cache.is_errored` (see
-//! `ipfs/src/lib.rs::get_bytes` — no CID-hash verification on fetch, so a
+//! `ipfs::IpfsClient::get_bytes` — no CID-hash verification on fetch, so a
 //! transient truncated/corrupted read gets marked errored forever with no
 //! retry). Once the cache row is corrected (real payload + `is_errored =
 //! false`), the edit itself still never reaches `kg-indexer` on its own —
@@ -164,8 +164,7 @@ async fn main() -> Result<(), IndexerError> {
         .execute(&mut *tx)
         .await?;
 
-    let result = handlers::edits::handle_edit(&edit)
-        .map_err(|e| IndexerError::Config(format!("handle_edit failed: {e}")))?;
+    let result = handlers::edits::handle_edit(&edit)?;
 
     let values_for_versioning = result.values.clone();
     let relations_for_versioning = result.relations.clone();

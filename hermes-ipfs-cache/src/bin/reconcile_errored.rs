@@ -18,7 +18,8 @@
 //!
 //! Safe to run repeatedly: only touches rows still marked `is_errored`, and
 //! genuinely invalid content (fails to decode even once correctly fetched
-//! and, where the CID shape is one `ipfs::verify` understands, hash-verified)
+//! and, where the CID shape is one the `ipfs` crate's internal verification
+//! understands, hash-verified)
 //! is left alone rather than looped on forever.
 //!
 //! Usage:
