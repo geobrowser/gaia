@@ -30,7 +30,7 @@
 //!   DATABASE_URL=... cargo run -p kg-indexer --bin audit_batch_replay -- \
 //!     --batch-file /path/to/uri_block_space_lines.txt
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 
@@ -133,23 +133,22 @@ async fn main() -> Result<(), IndexerError> {
 
         let result = handlers::edits::handle_edit(&edit)?;
 
+        // Dedup this edit's own targets before recording them — a single
+        // edit can touch the same target more than once (e.g. set then
+        // later unset), which would otherwise inflate memory and make the
+        // "touched by batch edits" output list the same edit repeatedly.
+        let mut edit_targets: HashSet<Target> = HashSet::new();
         for v in &result.values {
-            target_edits
-                .entry(Target::Value(v.entity_id, v.property_id, v.space_id))
-                .or_default()
-                .push(BatchEdit {
-                    uri: uri.to_string(),
-                    block,
-                });
+            edit_targets.insert(Target::Value(v.entity_id, v.property_id, v.space_id));
         }
         for r in &result.relations {
-            target_edits
-                .entry(Target::Relation(r.id(), r.space_id()))
-                .or_default()
-                .push(BatchEdit {
-                    uri: uri.to_string(),
-                    block,
-                });
+            edit_targets.insert(Target::Relation(r.id(), r.space_id()));
+        }
+        for target in edit_targets {
+            target_edits.entry(target).or_default().push(BatchEdit {
+                uri: uri.to_string(),
+                block,
+            });
         }
     }
 
@@ -250,9 +249,6 @@ fn report_chain(
     }
     if corrupt {
         *any_corrupt = true;
-        for line in &lines {
-            println!("{line}");
-        }
         println!(
             "CORRUPT CHAIN: {label} — touched by batch edits: {}",
             batch_edits
@@ -261,5 +257,8 @@ fn report_chain(
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+        for line in &lines {
+            println!("{line}");
+        }
     }
 }

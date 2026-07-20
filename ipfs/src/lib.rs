@@ -130,10 +130,12 @@ impl IpfsClient {
 
     async fn fetch_once(&self, cid: &str) -> Result<Vec<u8>> {
         // Normalize exactly one separating slash regardless of whether the
-        // configured gateway URL ends with one — e.g. the production
-        // secrets template documents a bare `https://ipfs.io` with no
-        // trailing slash, which naive concatenation would turn into a
-        // malformed `https://ipfs.ioQm...` URL.
+        // configured gateway URL ends with one, so a trailing-slash typo in
+        // config doesn't turn into a malformed `https://hostQm...` URL. This
+        // does NOT guess at a gateway's path convention (e.g. `/ipfs/` vs
+        // `/files/`) — the configured URL must already include whatever
+        // path segment that specific gateway needs; see
+        // `hermes-ipfs-cache/k8s/production/secrets.yaml.template`.
         let base = self.url.trim_end_matches('/');
         let url = format!("{base}/{cid}");
         let res = self.client.get(&url).send().await?;
@@ -360,8 +362,7 @@ mod retry_tests {
 
     #[tokio::test]
     async fn succeeds_when_base_url_has_no_trailing_slash() {
-        // Matches the production secrets template, which documents a bare
-        // `https://ipfs.io` with no trailing slash.
+        // A trailing-slash typo in config shouldn't produce a malformed URL.
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path(format!("/{GOLDEN_SMALL_CID}")))
