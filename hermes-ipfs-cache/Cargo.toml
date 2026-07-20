@@ -10,6 +10,10 @@ path = "src/lib.rs"
 name = "hermes-ipfs-cache"
 path = "src/main.rs"
 
+[[bin]]
+name = "reconcile_errored"
+path = "src/bin/reconcile_errored.rs"
+
 [dependencies]
 hermes-instrumentation = { path = "../hermes-instrumentation" }
 hermes-relay = { path = "../hermes-relay" }
@@ -34,6 +38,7 @@ sqlx = { version = "0.8", features = [
     "tls-rustls",
 ] }
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 uuid = "1"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
