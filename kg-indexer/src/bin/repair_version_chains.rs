@@ -228,15 +228,15 @@ async fn main() -> Result<(), IndexerError> {
     );
 
     // ---- Phase 3: in-memory relink ----
-    let mut value_chains: HashMap<(Uuid, Uuid, Uuid), Vec<(Uuid, i64, Option<i64>)>> =
-        HashMap::new();
+    type ChainRow = (Uuid, i64, Option<i64>); // (id, valid_from_key, valid_to_key)
+    let mut value_chains: HashMap<(Uuid, Uuid, Uuid), Vec<ChainRow>> = HashMap::new();
     for (e, p, s, id, vf, vt) in value_rows {
         value_chains
             .entry((e, p, s))
             .or_default()
             .push((id, vf, vt));
     }
-    let mut relation_chains: HashMap<(Uuid, Uuid), Vec<(Uuid, i64, Option<i64>)>> = HashMap::new();
+    let mut relation_chains: HashMap<(Uuid, Uuid), Vec<ChainRow>> = HashMap::new();
     for (r, s, id, vf, vt) in relation_rows {
         relation_chains
             .entry((r, s))
