@@ -557,7 +557,8 @@ async fn main() -> Result<(), IndexerError> {
              ON CONFLICT (id) DO UPDATE SET entity_id = EXCLUDED.entity_id, type_id = EXCLUDED.type_id, \
              from_entity_id = EXCLUDED.from_entity_id, from_space_id = EXCLUDED.from_space_id, \
              to_entity_id = EXCLUDED.to_entity_id, to_space_id = EXCLUDED.to_space_id, \
-             position = EXCLUDED.position, space_id = EXCLUDED.space_id, verified = EXCLUDED.verified",
+             position = EXCLUDED.position, space_id = EXCLUDED.space_id, verified = EXCLUDED.verified \
+             WHERE relations.is_system = false",
         )
         .bind(&rel_ids)
         .bind(&source_ids)

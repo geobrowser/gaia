@@ -406,6 +406,21 @@ async fn main() -> Result<(), IndexerError> {
     let mut delete_relation_version_ids: Vec<Uuid> = Vec::new();
     let mut update_relation_version_valid_to: Vec<(Uuid, Option<i64>)> = Vec::new();
 
+    // Whether THIS run found any actual wrong-space version-table footprint
+    // for each plan. An edit whose every target shows "no trace" likely
+    // pre-existed from before the incident — `insert_edit_version` no-op'd
+    // (ON CONFLICT DO NOTHING) so its edit_versions row is from whatever
+    // legitimately indexed it earlier, not from this bad replay. Deleting
+    // that row would remove replay_edit's idempotency guard for an edit
+    // that was never actually broken, and re-processing it would re-close
+    // currently-open versions and reintroduce backfill-style corruption.
+    // Edits with zero targets at all have nothing to find a trace of, so
+    // there's nothing at risk — treat them as safe to clear.
+    let mut has_footprint: Vec<bool> = plans
+        .iter()
+        .map(|p| p.value_targets.is_empty() && p.relation_targets.is_empty())
+        .collect();
+
     for t in &value_touches {
         let opened = opened_value_map.get(&t.opened_id).copied();
         let closed = closed_value_map
@@ -419,6 +434,7 @@ async fn main() -> Result<(), IndexerError> {
                 plans[t.plan_idx].uri, t.entity_id, t.property_id, t.version_key
             );
         } else {
+            has_footprint[t.plan_idx] = true;
             let new_valid_to = opened.and_then(|(_, to)| to);
             if let Some((closed_id, closed_from)) = closed {
                 println!(
@@ -449,6 +465,7 @@ async fn main() -> Result<(), IndexerError> {
                 plans[t.plan_idx].uri, t.relation_id, t.version_key
             );
         } else {
+            has_footprint[t.plan_idx] = true;
             let new_valid_to = opened.and_then(|(_, to)| to);
             if let Some((closed_id, closed_from)) = closed {
                 println!(
@@ -467,12 +484,23 @@ async fn main() -> Result<(), IndexerError> {
         }
     }
 
-    let edit_ids: Vec<Uuid> = plans.iter().map(|p| p.edit_id).collect();
-    for plan in &plans {
-        println!(
-            "  [edit {}] WOULD DELETE edit_versions WHERE edit_id = {} ({:?})",
-            plan.uri, plan.edit_id, plan.edit_name
-        );
+    let mut edit_ids: Vec<Uuid> = Vec::new();
+    for (plan_idx, plan) in plans.iter().enumerate() {
+        if has_footprint[plan_idx] {
+            edit_ids.push(plan.edit_id);
+            println!(
+                "  [edit {}] WOULD DELETE edit_versions WHERE edit_id = {} ({:?})",
+                plan.uri, plan.edit_id, plan.edit_name
+            );
+        } else {
+            println!(
+                "  [edit {}] SKIP edit_versions delete for edit_id = {} ({:?}) — no wrong-space \
+                 footprint found for any of its targets, so it likely pre-existed from before the \
+                 incident; deleting would remove replay_edit's idempotency guard for an edit that \
+                 was never actually broken",
+                plan.uri, plan.edit_id, plan.edit_name
+            );
+        }
     }
 
     // Capture counts before these vecs are consumed below.
@@ -695,7 +723,7 @@ async fn main() -> Result<(), IndexerError> {
              space_id = rv.space_id, verified = rv.verified \
              FROM UNNEST($1::uuid[], $2::uuid[]) AS u(relation_id, source_id) \
              JOIN relation_versions rv ON rv.id = u.source_id \
-             WHERE r.id = u.relation_id",
+             WHERE r.id = u.relation_id AND r.is_system = false",
         )
         .bind(&rel_ids)
         .bind(&source_ids)
