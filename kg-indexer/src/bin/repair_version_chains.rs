@@ -327,11 +327,23 @@ async fn main() -> Result<(), IndexerError> {
         }
     }
 
+    // Which spaces this run actually queried relation_versions for, per
+    // relation_id — needed below to tell "confirmed no history anywhere" (0
+    // opens found here would be conclusive if this were the only space)
+    // apart from "we just didn't check the space this relation currently
+    // lives in".
+    let mut checked_spaces_by_relation: HashMap<Uuid, HashSet<Uuid>> = HashMap::new();
+    for &(r, s) in &relation_targets {
+        checked_spaces_by_relation.entry(r).or_default().insert(s);
+    }
+
     let mut sync_live_relation: Vec<(Uuid, Uuid)> = Vec::new(); // (relation_id, source_version_id)
     let mut delete_live_relation_ids: Vec<Uuid> = Vec::new();
+    let mut zero_open_relation_ids: Vec<Uuid> = Vec::new();
+
     for (relation_id, mut opens) in open_per_relation {
         match opens.len() {
-            0 => delete_live_relation_ids.push(relation_id),
+            0 => zero_open_relation_ids.push(relation_id),
             1 => sync_live_relation.push((relation_id, opens.remove(0).1)),
             _ => {
                 println!(
@@ -339,6 +351,46 @@ async fn main() -> Result<(), IndexerError> {
                      ({opens:?}) — ambiguous, leaving live row untouched.",
                     opens.len()
                 );
+            }
+        }
+    }
+
+    // A relation with zero opens among the spaces this run checked is only
+    // a confirmed orphan if its CURRENT live space_id is one of those we
+    // actually queried. If it currently lives in some other space this run
+    // never looked at, deleting it would drop valid history purely because
+    // we didn't check — so leave it untouched instead of guessing.
+    if !zero_open_relation_ids.is_empty() {
+        let current_relation_spaces: Vec<(Uuid, Option<Uuid>)> =
+            sqlx::query_as("SELECT id, space_id FROM relations WHERE id = ANY($1::uuid[])")
+                .bind(&zero_open_relation_ids)
+                .fetch_all(&storage.pool)
+                .await?;
+        let current_space_by_relation: HashMap<Uuid, Option<Uuid>> =
+            current_relation_spaces.into_iter().collect();
+
+        for relation_id in zero_open_relation_ids {
+            let current_space = current_space_by_relation
+                .get(&relation_id)
+                .copied()
+                .flatten();
+            match current_space {
+                None => {} // no live row exists at all — nothing to delete
+                Some(space) => {
+                    let checked = checked_spaces_by_relation
+                        .get(&relation_id)
+                        .is_some_and(|spaces| spaces.contains(&space));
+                    if checked {
+                        delete_live_relation_ids.push(relation_id);
+                    } else {
+                        println!(
+                            "  WARNING: relation {relation_id} has no open version in the \
+                             space(s) this run checked, but its live row currently sits in \
+                             {space}, which wasn't checked — leaving it untouched rather than \
+                             risk deleting valid history this run never queried."
+                        );
+                    }
+                }
             }
         }
     }

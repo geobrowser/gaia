@@ -107,17 +107,26 @@ async fn main() -> Result<(), IndexerError> {
                 "malformed line (expected \"<uri> <block> <wrong_space> <correct_space>\"): {line:?}"
             )));
         }
+        let wrong_space: Uuid = parts[2]
+            .parse()
+            .map_err(|e| IndexerError::Config(format!("bad wrong_space in line {line:?}: {e}")))?;
+        let correct_space: Uuid = parts[3].parse().map_err(|e| {
+            IndexerError::Config(format!("bad correct_space in line {line:?}: {e}"))
+        })?;
+        if wrong_space == correct_space {
+            return Err(IndexerError::Config(format!(
+                "wrong_space == correct_space in line {line:?} — this tool deletes/relinks \
+                 history in wrong_space, so a malformed line here would corrupt the correct \
+                 space instead of fixing it"
+            )));
+        }
         lines.push(BatchLine {
             uri: parts[0].to_string(),
             block: parts[1]
                 .parse()
                 .map_err(|e| IndexerError::Config(format!("bad block in line {line:?}: {e}")))?,
-            wrong_space: parts[2].parse().map_err(|e| {
-                IndexerError::Config(format!("bad wrong_space in line {line:?}: {e}"))
-            })?,
-            correct_space: parts[3].parse().map_err(|e| {
-                IndexerError::Config(format!("bad correct_space in line {line:?}: {e}"))
-            })?,
+            wrong_space,
+            correct_space,
         });
     }
     lines.sort_by_key(|l| l.block);
