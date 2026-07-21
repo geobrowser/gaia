@@ -1323,7 +1323,7 @@ impl Storage {
 
     /// Derive a deterministic version ID from entity, property, space, and version_key.
     /// This ensures idempotency - the same inputs always produce the same ID.
-    fn derive_value_version_id(
+    pub fn derive_value_version_id(
         entity_id: &Uuid,
         property_id: &Uuid,
         space_id: &Uuid,
@@ -1347,7 +1347,11 @@ impl Storage {
     }
 
     /// Derive a deterministic version ID for relation versions.
-    fn derive_relation_version_id(relation_id: &Uuid, space_id: &Uuid, version_key: i64) -> Uuid {
+    pub fn derive_relation_version_id(
+        relation_id: &Uuid,
+        space_id: &Uuid,
+        version_key: i64,
+    ) -> Uuid {
         let mut hasher = DefaultHasher::new();
         relation_id.hash(&mut hasher);
         space_id.hash(&mut hasher);
