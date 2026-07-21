@@ -414,7 +414,7 @@ async fn main() -> Result<(), IndexerError> {
 
         if opened.is_none() && closed.is_none() {
             println!(
-                "  [edit {}] VALUE (entity={}, property={}): no version_versions trace at version_key={} \
+                "  [edit {}] VALUE (entity={}, property={}): no value_versions trace at version_key={} \
                  (edit_id likely pre-existed from before the incident)",
                 plans[t.plan_idx].uri, t.entity_id, t.property_id, t.version_key
             );

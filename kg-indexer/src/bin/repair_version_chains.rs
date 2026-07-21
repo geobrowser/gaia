@@ -245,7 +245,7 @@ async fn main() -> Result<(), IndexerError> {
 
     // ---- Phase 3: in-memory relink ----
     // Seeded from every decoded target (not just ones with query results) so
-    // a target backed by zero version_versions rows still gets checked —
+    // a target backed by zero value_versions rows still gets checked —
     // that's exactly the "live row is a pure orphan" case: no chain to
     // relink, but a stale live row may still need deleting.
     type ChainRow = (Uuid, i64, Option<i64>); // (id, valid_from_key, valid_to_key)
