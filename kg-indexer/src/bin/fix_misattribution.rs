@@ -785,16 +785,18 @@ fn build_plan(
     let result = handlers::edits::handle_edit(&edit)?;
 
     let mut value_targets: Vec<(Uuid, Uuid)> = Vec::new();
+    let mut seen_value_targets: HashSet<(Uuid, Uuid)> = HashSet::new();
     for v in &result.values {
         let t = (v.entity_id, v.property_id);
-        if !value_targets.contains(&t) {
+        if seen_value_targets.insert(t) {
             value_targets.push(t);
         }
     }
     let mut relation_targets: Vec<Uuid> = Vec::new();
+    let mut seen_relation_targets: HashSet<Uuid> = HashSet::new();
     for r in &result.relations {
         let id = r.id();
-        if !relation_targets.contains(&id) {
+        if seen_relation_targets.insert(id) {
             relation_targets.push(id);
         }
     }
