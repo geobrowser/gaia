@@ -153,6 +153,43 @@ async fn main() -> Result<(), IndexerError> {
         }
     }
 
+    // The original bad replay's version_key is whatever `replay_edit` was
+    // actually invoked with — `(block << 32) | sequence`, not necessarily
+    // `sequence = 0`. Rather than assume, read it back from each edit's
+    // still-present (wrong-space) `edit_versions` row, which is exactly the
+    // value the opened/closed rows in value_versions/relation_versions were
+    // written with.
+    let plan_edit_ids: Vec<Uuid> = plans.iter().map(|p| p.edit_id).collect();
+    let edit_version_keys: Vec<(Uuid, i64)> = if plan_edit_ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as(
+            "SELECT edit_id, version_key FROM edit_versions WHERE edit_id = ANY($1::uuid[])",
+        )
+        .bind(&plan_edit_ids)
+        .fetch_all(&storage.pool)
+        .await?
+    };
+    let version_key_by_edit_id: HashMap<Uuid, i64> = edit_version_keys.into_iter().collect();
+
+    let mut resolved_plans = Vec::with_capacity(plans.len());
+    for mut plan in plans {
+        match version_key_by_edit_id.get(&plan.edit_id) {
+            Some(&version_key) => {
+                plan.version_key = version_key;
+                resolved_plans.push(plan);
+            }
+            None => {
+                println!(
+                    "SKIP {}: no edit_versions row for edit_id {} — already cleaned up, or never replayed?",
+                    plan.uri, plan.edit_id
+                );
+                skipped += 1;
+            }
+        }
+    }
+    let plans = resolved_plans;
+
     println!(
         "Decoded {} edit(s), {} skipped. Collecting targets...",
         plans.len(),
@@ -276,33 +313,12 @@ async fn main() -> Result<(), IndexerError> {
             })
             .collect()
     };
-    let (nve, nvp, nvs): (Vec<Uuid>, Vec<Uuid>, Vec<Uuid>) = distinct_value_targets
-        .iter()
-        .map(|&(e, p, s)| (e, p, s))
-        .fold(
-            (Vec::new(), Vec::new(), Vec::new()),
-            |mut acc, (e, p, s)| {
-                acc.0.push(e);
-                acc.1.push(p);
-                acc.2.push(s);
-                acc
-            },
-        );
-    let now_open_values: Vec<(Uuid, Uuid, Uuid, Uuid)> = sqlx::query_as(
-        "SELECT entity_id, property_id, space_id, id FROM value_versions \
-         WHERE (entity_id, property_id, space_id) IN (\
-           SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::uuid[])\
-         ) AND valid_to_key IS NULL",
-    )
-    .bind(&nve)
-    .bind(&nvp)
-    .bind(&nvs)
-    .fetch_all(&storage.pool)
-    .await?;
-    let now_open_value_map: HashMap<(Uuid, Uuid, Uuid), Uuid> = now_open_values
-        .into_iter()
-        .map(|(e, p, s, id)| ((e, p, s), id))
-        .collect();
+    // `now_open` state (which row is currently the latest for each target)
+    // is deliberately NOT fetched here. It's read fresh after the
+    // version-table mutations run (see Phase 5) — a target's "now open" row
+    // can be exactly the row this tool is about to delete, and syncing the
+    // live row to a snapshot taken before that delete would point it at a
+    // row that no longer exists by the time the sync statement runs.
 
     let live_value_ids: Vec<String> = value_touches.iter().map(|t| t.live_id.clone()).collect();
     let live_values: Vec<String> =
@@ -362,28 +378,6 @@ async fn main() -> Result<(), IndexerError> {
             })
             .collect()
     };
-    let (nrr, nrs): (Vec<Uuid>, Vec<Uuid>) = distinct_relation_targets
-        .iter()
-        .map(|&(r, s)| (r, s))
-        .fold((Vec::new(), Vec::new()), |mut acc, (r, s)| {
-            acc.0.push(r);
-            acc.1.push(s);
-            acc
-        });
-    let now_open_relations: Vec<(Uuid, Uuid, Uuid)> = sqlx::query_as(
-        "SELECT relation_id, space_id, id FROM relation_versions \
-         WHERE (relation_id, space_id) IN (SELECT * FROM UNNEST($1::uuid[], $2::uuid[])) \
-         AND valid_to_key IS NULL",
-    )
-    .bind(&nrr)
-    .bind(&nrs)
-    .fetch_all(&storage.pool)
-    .await?;
-    let now_open_relation_map: HashMap<(Uuid, Uuid), Uuid> = now_open_relations
-        .into_iter()
-        .map(|(r, s, id)| ((r, s), id))
-        .collect();
-
     let relation_ids: Vec<Uuid> = relation_touches.iter().map(|t| t.relation_id).collect();
     let current_relations: Vec<(Uuid, Uuid)> =
         sqlx::query_as("SELECT id, space_id FROM relations WHERE id = ANY($1::uuid[])")
@@ -394,16 +388,11 @@ async fn main() -> Result<(), IndexerError> {
 
     println!("Batch fetch complete. Computing plan...");
 
-    // ---- Phase 4: compute the plan in memory (no more queries needed) ----
+    // ---- Phase 4: compute version-table mutations in memory ----
     let mut delete_value_version_ids: Vec<Uuid> = Vec::new();
     let mut update_value_version_valid_to: Vec<(Uuid, Option<i64>)> = Vec::new();
-    let mut sync_live_value: Vec<(String, Uuid)> = Vec::new(); // (live_id, source_version_id)
-    let mut delete_live_value_ids: Vec<String> = Vec::new();
-
     let mut delete_relation_version_ids: Vec<Uuid> = Vec::new();
     let mut update_relation_version_valid_to: Vec<(Uuid, Option<i64>)> = Vec::new();
-    let mut sync_live_relation: Vec<(Uuid, Uuid)> = Vec::new(); // (relation_id, source_version_id)
-    let mut delete_live_relation_ids: Vec<Uuid> = Vec::new();
 
     for t in &value_touches {
         let opened = opened_value_map.get(&t.opened_id).copied();
@@ -433,25 +422,6 @@ async fn main() -> Result<(), IndexerError> {
                 );
                 delete_value_version_ids.push(t.opened_id);
             }
-        }
-
-        let now_open = now_open_value_map
-            .get(&(t.entity_id, t.property_id, t.wrong_space))
-            .copied();
-        let live_exists = live_value_set.contains(&t.live_id);
-        match (now_open, live_exists) {
-            (Some(open_id), _) => {
-                println!(
-                    "  [edit {}] VALUE live sync: set values id={} to match now-open row {open_id}",
-                    plans[t.plan_idx].uri, t.live_id
-                );
-                sync_live_value.push((t.live_id.clone(), open_id));
-            }
-            (None, true) => {
-                println!("  [edit {}] VALUE live sync: delete orphaned values id={} (no version history backs it)", plans[t.plan_idx].uri, t.live_id);
-                delete_live_value_ids.push(t.live_id.clone());
-            }
-            (None, false) => {}
         }
     }
 
@@ -483,28 +453,6 @@ async fn main() -> Result<(), IndexerError> {
                 delete_relation_version_ids.push(t.opened_id);
             }
         }
-
-        let current_space = current_relation_space_map.get(&t.relation_id).copied();
-        if current_space != Some(t.wrong_space) {
-            println!(
-                "  [edit {}] RELATION live sync: not needed (relations id={} current space_id={:?} is not the wrong space)",
-                plans[t.plan_idx].uri, t.relation_id, current_space
-            );
-            continue;
-        }
-        match now_open_relation_map
-            .get(&(t.relation_id, t.wrong_space))
-            .copied()
-        {
-            Some(open_id) => {
-                println!("  [edit {}] RELATION live sync: set relations id={} to match now-open row {open_id}", plans[t.plan_idx].uri, t.relation_id);
-                sync_live_relation.push((t.relation_id, open_id));
-            }
-            None => {
-                println!("  [edit {}] RELATION live sync: delete relations id={} (currently wrong-space, nothing precedes it)", plans[t.plan_idx].uri, t.relation_id);
-                delete_live_relation_ids.push(t.relation_id);
-            }
-        }
     }
 
     let edit_ids: Vec<Uuid> = plans.iter().map(|p| p.edit_id).collect();
@@ -515,27 +463,20 @@ async fn main() -> Result<(), IndexerError> {
         );
     }
 
-    println!(
-        "\nPlan: delete {} value_version row(s), update {} value_version row(s), sync {} live value row(s), \
-         delete {} orphaned live value row(s); delete {} relation_version row(s), update {} relation_version row(s), \
-         sync {} live relation row(s), delete {} live relation row(s); delete {} edit_versions row(s).",
-        delete_value_version_ids.len(),
-        update_value_version_valid_to.len(),
-        sync_live_value.len(),
-        delete_live_value_ids.len(),
-        delete_relation_version_ids.len(),
-        update_relation_version_valid_to.len(),
-        sync_live_relation.len(),
-        delete_live_relation_ids.len(),
-        edit_ids.len(),
-    );
+    // Capture counts before these vecs are consumed below.
+    let delete_value_version_count = delete_value_version_ids.len();
+    let update_value_version_count = update_value_version_valid_to.len();
+    let delete_relation_version_count = delete_relation_version_ids.len();
+    let update_relation_version_count = update_relation_version_valid_to.len();
 
-    if !execute {
-        println!("\nDry run — no changes made. Pass --execute to apply.");
-        return Ok(());
-    }
-
-    // ---- Phase 5: execute, batched ----
+    // ---- Phase 5: mutate version tables, THEN decide live-row sync from
+    // the post-mutation state. Always runs inside a transaction — a
+    // target's "now open" row can be exactly the row we just deleted, so
+    // computing that from a pre-mutation snapshot (like Phase 3's queries
+    // would if reused here) risks syncing a live row to something that no
+    // longer exists by the time the sync statement runs. Dry-run rolls the
+    // transaction back at the end, so the printed plan is always exactly
+    // what --execute would do.
     let mut tx = storage.pool.begin().await?;
 
     if !delete_value_version_ids.is_empty() {
@@ -556,6 +497,154 @@ async fn main() -> Result<(), IndexerError> {
         .execute(&mut *tx)
         .await?;
     }
+    if !delete_relation_version_ids.is_empty() {
+        sqlx::query("DELETE FROM relation_versions WHERE id = ANY($1::uuid[])")
+            .bind(&delete_relation_version_ids)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if !update_relation_version_valid_to.is_empty() {
+        let (ids, valid_tos): (Vec<Uuid>, Vec<Option<i64>>) =
+            update_relation_version_valid_to.into_iter().unzip();
+        sqlx::query(
+            "UPDATE relation_versions rv SET valid_to_key = u.valid_to_key \
+             FROM UNNEST($1::uuid[], $2::bigint[]) AS u(id, valid_to_key) WHERE rv.id = u.id",
+        )
+        .bind(&ids)
+        .bind(&valid_tos)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    // Fresh post-mutation "now open" lookups, read inside the same
+    // transaction (READ COMMITTED sees this transaction's own prior writes).
+    let (nve, nvp, nvs): (Vec<Uuid>, Vec<Uuid>, Vec<Uuid>) = distinct_value_targets
+        .iter()
+        .map(|&(e, p, s)| (e, p, s))
+        .fold(
+            (Vec::new(), Vec::new(), Vec::new()),
+            |mut acc, (e, p, s)| {
+                acc.0.push(e);
+                acc.1.push(p);
+                acc.2.push(s);
+                acc
+            },
+        );
+    let now_open_values: Vec<(Uuid, Uuid, Uuid, Uuid)> = sqlx::query_as(
+        "SELECT entity_id, property_id, space_id, id FROM value_versions \
+         WHERE (entity_id, property_id, space_id) IN (\
+           SELECT * FROM UNNEST($1::uuid[], $2::uuid[], $3::uuid[])\
+         ) AND valid_to_key IS NULL",
+    )
+    .bind(&nve)
+    .bind(&nvp)
+    .bind(&nvs)
+    .fetch_all(&mut *tx)
+    .await?;
+    let now_open_value_map: HashMap<(Uuid, Uuid, Uuid), Uuid> = now_open_values
+        .into_iter()
+        .map(|(e, p, s, id)| ((e, p, s), id))
+        .collect();
+
+    let (nrr, nrs): (Vec<Uuid>, Vec<Uuid>) = distinct_relation_targets
+        .iter()
+        .map(|&(r, s)| (r, s))
+        .fold((Vec::new(), Vec::new()), |mut acc, (r, s)| {
+            acc.0.push(r);
+            acc.1.push(s);
+            acc
+        });
+    let now_open_relations: Vec<(Uuid, Uuid, Uuid)> = sqlx::query_as(
+        "SELECT relation_id, space_id, id FROM relation_versions \
+         WHERE (relation_id, space_id) IN (SELECT * FROM UNNEST($1::uuid[], $2::uuid[])) \
+         AND valid_to_key IS NULL",
+    )
+    .bind(&nrr)
+    .bind(&nrs)
+    .fetch_all(&mut *tx)
+    .await?;
+    let now_open_relation_map: HashMap<(Uuid, Uuid), Uuid> = now_open_relations
+        .into_iter()
+        .map(|(r, s, id)| ((r, s), id))
+        .collect();
+
+    let mut sync_live_value: Vec<(String, Uuid)> = Vec::new(); // (live_id, source_version_id)
+    let mut delete_live_value_ids: Vec<String> = Vec::new();
+    let mut seen_value_targets: HashSet<(Uuid, Uuid, Uuid)> = HashSet::new();
+
+    for t in &value_touches {
+        let key = (t.entity_id, t.property_id, t.wrong_space);
+        if !seen_value_targets.insert(key) {
+            continue; // already decided for this target by an earlier touch
+        }
+        let now_open = now_open_value_map.get(&key).copied();
+        let live_exists = live_value_set.contains(&t.live_id);
+        match (now_open, live_exists) {
+            (Some(open_id), _) => {
+                println!(
+                    "  [edit {}] VALUE live sync: set values id={} to match now-open row {open_id}",
+                    plans[t.plan_idx].uri, t.live_id
+                );
+                sync_live_value.push((t.live_id.clone(), open_id));
+            }
+            (None, true) => {
+                println!("  [edit {}] VALUE live sync: delete orphaned values id={} (no version history backs it)", plans[t.plan_idx].uri, t.live_id);
+                delete_live_value_ids.push(t.live_id.clone());
+            }
+            (None, false) => {}
+        }
+    }
+
+    let mut sync_live_relation: Vec<(Uuid, Uuid)> = Vec::new(); // (relation_id, source_version_id)
+    let mut delete_live_relation_ids: Vec<Uuid> = Vec::new();
+    let mut seen_relation_targets: HashSet<(Uuid, Uuid)> = HashSet::new();
+
+    for t in &relation_touches {
+        let key = (t.relation_id, t.wrong_space);
+        if !seen_relation_targets.insert(key) {
+            continue;
+        }
+        let current_space = current_relation_space_map.get(&t.relation_id).copied();
+        if current_space != Some(t.wrong_space) {
+            println!(
+                "  [edit {}] RELATION live sync: not needed (relations id={} current space_id={:?} is not the wrong space)",
+                plans[t.plan_idx].uri, t.relation_id, current_space
+            );
+            continue;
+        }
+        match now_open_relation_map.get(&key).copied() {
+            Some(open_id) => {
+                println!("  [edit {}] RELATION live sync: set relations id={} to match now-open row {open_id}", plans[t.plan_idx].uri, t.relation_id);
+                sync_live_relation.push((t.relation_id, open_id));
+            }
+            None => {
+                println!("  [edit {}] RELATION live sync: delete relations id={} (currently wrong-space, nothing precedes it)", plans[t.plan_idx].uri, t.relation_id);
+                delete_live_relation_ids.push(t.relation_id);
+            }
+        }
+    }
+
+    println!(
+        "\nPlan: delete {} value_version row(s), update {} value_version row(s), sync {} live value row(s), \
+         delete {} orphaned live value row(s); delete {} relation_version row(s), update {} relation_version row(s), \
+         sync {} live relation row(s), delete {} live relation row(s); delete {} edit_versions row(s).",
+        delete_value_version_count,
+        update_value_version_count,
+        sync_live_value.len(),
+        delete_live_value_ids.len(),
+        delete_relation_version_count,
+        update_relation_version_count,
+        sync_live_relation.len(),
+        delete_live_relation_ids.len(),
+        edit_ids.len(),
+    );
+
+    if !execute {
+        tx.rollback().await?;
+        println!("\nDry run — no changes made. Pass --execute to apply.");
+        return Ok(());
+    }
+
     if !sync_live_value.is_empty() {
         let (live_ids, source_ids): (Vec<String>, Vec<Uuid>) = sync_live_value.into_iter().unzip();
         sqlx::query(
@@ -584,25 +673,6 @@ async fn main() -> Result<(), IndexerError> {
             .bind(&delete_live_value_ids)
             .execute(&mut *tx)
             .await?;
-    }
-
-    if !delete_relation_version_ids.is_empty() {
-        sqlx::query("DELETE FROM relation_versions WHERE id = ANY($1::uuid[])")
-            .bind(&delete_relation_version_ids)
-            .execute(&mut *tx)
-            .await?;
-    }
-    if !update_relation_version_valid_to.is_empty() {
-        let (ids, valid_tos): (Vec<Uuid>, Vec<Option<i64>>) =
-            update_relation_version_valid_to.into_iter().unzip();
-        sqlx::query(
-            "UPDATE relation_versions rv SET valid_to_key = u.valid_to_key \
-             FROM UNNEST($1::uuid[], $2::bigint[]) AS u(id, valid_to_key) WHERE rv.id = u.id",
-        )
-        .bind(&ids)
-        .bind(&valid_tos)
-        .execute(&mut *tx)
-        .await?;
     }
     if !sync_live_relation.is_empty() {
         let (rel_ids, source_ids): (Vec<Uuid>, Vec<Uuid>) = sync_live_relation.into_iter().unzip();
@@ -692,7 +762,10 @@ fn build_plan(
     Ok(EditPlan {
         uri: line.uri.clone(),
         wrong_space: line.wrong_space,
-        version_key: (line.block as i64) << 32,
+        // Placeholder — overwritten from the edit's actual `edit_versions`
+        // row (see main()) once every plan's edit_id is known, since the
+        // true version_key may include a non-zero sequence.
+        version_key: 0,
         edit_id: result.edit_id,
         edit_name: decoded.name.to_string(),
         value_targets,

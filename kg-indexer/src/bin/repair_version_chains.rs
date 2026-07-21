@@ -228,15 +228,21 @@ async fn main() -> Result<(), IndexerError> {
     );
 
     // ---- Phase 3: in-memory relink ----
+    // Seeded from every decoded target (not just ones with query results) so
+    // a target backed by zero version_versions rows still gets checked —
+    // that's exactly the "live row is a pure orphan" case: no chain to
+    // relink, but a stale live row may still need deleting.
     type ChainRow = (Uuid, i64, Option<i64>); // (id, valid_from_key, valid_to_key)
-    let mut value_chains: HashMap<(Uuid, Uuid, Uuid), Vec<ChainRow>> = HashMap::new();
+    let mut value_chains: HashMap<(Uuid, Uuid, Uuid), Vec<ChainRow>> =
+        value_targets.iter().map(|&t| (t, Vec::new())).collect();
     for (e, p, s, id, vf, vt) in value_rows {
         value_chains
             .entry((e, p, s))
             .or_default()
             .push((id, vf, vt));
     }
-    let mut relation_chains: HashMap<(Uuid, Uuid), Vec<ChainRow>> = HashMap::new();
+    let mut relation_chains: HashMap<(Uuid, Uuid), Vec<ChainRow>> =
+        relation_targets.iter().map(|&t| (t, Vec::new())).collect();
     for (r, s, id, vf, vt) in relation_rows {
         relation_chains
             .entry((r, s))
@@ -263,16 +269,19 @@ async fn main() -> Result<(), IndexerError> {
         if was_corrupt {
             corrupt_value_targets += 1;
         }
+        // Always resync regardless of `was_corrupt`, not just when the
+        // chain needed relinking — the live row can still be stale even
+        // when its own version chain is already correctly ordered (e.g. it
+        // was never resynced by whatever wrote the version rows).
         let live_id =
             handlers::edits::derive_value_id(&entity_id, &property_id, &space_id).to_string();
         match rows.last() {
-            Some((open_id, _, _)) if was_corrupt => {
+            Some((open_id, _, _)) => {
                 sync_live_value.push((live_id, *open_id));
             }
             None => {
                 delete_live_value_ids.push(live_id);
             }
-            _ => {}
         }
     }
 
@@ -288,7 +297,13 @@ async fn main() -> Result<(), IndexerError> {
     // in the linking sense. So live sync must be decided globally per
     // relation_id (which space currently has the open/latest row), not
     // gated on whether any single space's chain needed relinking.
-    let mut open_per_relation: HashMap<Uuid, Vec<(Uuid, Uuid)>> = HashMap::new(); // relation_id -> [(space_id, open_version_id)]
+    // Seeded from every distinct relation_id so one with zero backing rows
+    // in any space still surfaces below (as an empty `opens` list) instead
+    // of silently never appearing at all.
+    let mut open_per_relation: HashMap<Uuid, Vec<(Uuid, Uuid)>> = relation_targets
+        .iter()
+        .map(|&(r, _)| (r, Vec::new()))
+        .collect();
 
     for ((relation_id, space_id), mut rows) in relation_chains {
         rows.sort_by_key(|(_, vf, _)| *vf);
