@@ -67,11 +67,13 @@ async fn main() -> Result<(), IndexerError> {
     let lines = fs::read_to_string(batch_file)
         .map_err(|e| IndexerError::Config(format!("could not read batch file: {e}")))?;
 
-    // ---- Phase 1: decode every edit, collect its distinct targets ----
-    let mut targets: HashSet<Target> = HashSet::new();
-    let mut decoded_count = 0usize;
-    let mut skipped = 0usize;
-
+    // ---- Phase 1: parse lines, batch-fetch ipfs_cache, decode every edit ----
+    struct BatchLine {
+        uri: String,
+        block: u64,
+        space: Uuid,
+    }
+    let mut batch_lines = Vec::new();
     for line in lines.lines().filter(|l| !l.trim().is_empty()) {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() != 3 {
@@ -79,43 +81,57 @@ async fn main() -> Result<(), IndexerError> {
                 "malformed batch-file line (expected \"<uri> <block> <space>\"): {line:?}"
             )));
         }
-        let (uri, block_str, space_str) = (parts[0], parts[1], parts[2]);
-        let block: u64 = block_str
+        let block: u64 = parts[1]
             .parse()
             .map_err(|e| IndexerError::Config(format!("bad block number in line {line:?}: {e}")))?;
-        let space: Uuid = space_str
+        let space: Uuid = parts[2]
             .parse()
             .map_err(|e| IndexerError::Config(format!("bad space UUID in line {line:?}: {e}")))?;
+        batch_lines.push(BatchLine {
+            uri: parts[0].to_string(),
+            block,
+            space,
+        });
+    }
 
-        let row: (Option<Vec<u8>>, bool) =
-            sqlx::query_as("SELECT data, is_errored FROM ipfs_cache WHERE uri = $1")
-                .bind(uri)
-                .fetch_one(&storage.pool)
-                .await
-                .map_err(|e| match e {
-                    sqlx::Error::RowNotFound => {
-                        IndexerError::Config(format!("uri not found in ipfs_cache: {uri}"))
-                    }
-                    other => IndexerError::Database(other),
-                })?;
-        let (data, is_errored) = row;
-        if is_errored {
-            println!("SKIP {uri}: ipfs_cache row still marked is_errored");
+    let uris: Vec<&str> = batch_lines.iter().map(|l| l.uri.as_str()).collect();
+    let cache_rows: Vec<(String, Option<Vec<u8>>, bool)> =
+        sqlx::query_as("SELECT uri, data, is_errored FROM ipfs_cache WHERE uri = ANY($1::text[])")
+            .bind(&uris)
+            .fetch_all(&storage.pool)
+            .await?;
+    let cache_by_uri: HashMap<String, (Option<Vec<u8>>, bool)> = cache_rows
+        .into_iter()
+        .map(|(uri, data, errored)| (uri, (data, errored)))
+        .collect();
+
+    let mut targets: HashSet<Target> = HashSet::new();
+    let mut decoded_count = 0usize;
+    let mut skipped = 0usize;
+
+    for line in &batch_lines {
+        let Some((data, is_errored)) = cache_by_uri.get(&line.uri) else {
+            println!("SKIP {}: uri not found in ipfs_cache", line.uri);
+            skipped += 1;
+            continue;
+        };
+        if *is_errored {
+            println!("SKIP {}: ipfs_cache row still marked is_errored", line.uri);
             skipped += 1;
             continue;
         }
         let payload = match data {
             Some(p) => p,
             None => {
-                println!("SKIP {uri}: no data");
+                println!("SKIP {}: no data", line.uri);
                 skipped += 1;
                 continue;
             }
         };
-        let decoded = match decode_edit(&payload) {
+        let decoded = match decode_edit(payload) {
             Ok(d) => d,
             Err(e) => {
-                println!("SKIP {uri}: decode failed: {e}");
+                println!("SKIP {}: decode failed: {e}", line.uri);
                 skipped += 1;
                 continue;
             }
@@ -127,12 +143,12 @@ async fn main() -> Result<(), IndexerError> {
             payload: payload.clone(),
             authors: decoded.authors.iter().map(|a| a.to_vec()).collect(),
             language: None,
-            space_id: space.as_bytes().to_vec(),
+            space_id: line.space.as_bytes().to_vec(),
             is_canonical: true,
             meta: Some(BlockchainMetadata {
                 created_at: 0,
                 created_by: vec![],
-                block_number: block,
+                block_number: line.block,
                 cursor: String::new(),
                 sequence: 0,
                 is_last: false,
@@ -258,12 +274,38 @@ async fn main() -> Result<(), IndexerError> {
     for ((entity_id, property_id, space_id), mut rows) in value_chains {
         rows.sort_by_key(|(_, vf, _)| *vf);
         let mut was_corrupt = false;
+        // Post-fix valid_to per row, applied below — used afterward to
+        // find whichever row is genuinely open once these fixes land,
+        // rather than assuming it's always `rows.last()`.
+        let mut fixed_valid_to: Vec<Option<i64>> = rows.iter().map(|(_, _, vt)| *vt).collect();
         for i in 0..rows.len() {
-            let (id, _vf, vt) = rows[i];
-            let correct_vt = rows.get(i + 1).map(|(_, next_vf, _)| *next_vf);
-            if vt != correct_vt {
-                was_corrupt = true;
-                update_value_valid_to.push((id, correct_vt));
+            let (id, vf, vt) = rows[i];
+            match rows.get(i + 1) {
+                Some((_, next_vf, _)) => {
+                    // A real next row exists for this target — the
+                    // hand-off must match it exactly.
+                    if vt != Some(*next_vf) {
+                        was_corrupt = true;
+                        update_value_valid_to.push((id, Some(*next_vf)));
+                        fixed_valid_to[i] = Some(*next_vf);
+                    }
+                }
+                None => {
+                    // No successor exists in this target's history. That's
+                    // not evidence of anything on its own — the last touch
+                    // may have legitimately been an Unset/Delete, which
+                    // closes a version without opening a new one (see
+                    // audit_batch_replay's identical invariant). Only a
+                    // genuine inversion (closed before it opened) is
+                    // corruption here.
+                    if let Some(actual_vt) = vt {
+                        if actual_vt < vf {
+                            was_corrupt = true;
+                            update_value_valid_to.push((id, None));
+                            fixed_valid_to[i] = None;
+                        }
+                    }
+                }
             }
         }
         if was_corrupt {
@@ -272,12 +314,22 @@ async fn main() -> Result<(), IndexerError> {
         // Always resync regardless of `was_corrupt`, not just when the
         // chain needed relinking — the live row can still be stale even
         // when its own version chain is already correctly ordered (e.g. it
-        // was never resynced by whatever wrote the version rows).
+        // was never resynced by whatever wrote the version rows). The row
+        // to sync to is whichever one is genuinely open (valid_to IS NULL)
+        // after the fixes above — not simply the row with the largest
+        // valid_from, since that row may be legitimately closed (Unset)
+        // with nothing currently valid for this target at all.
         let live_id =
             handlers::edits::derive_value_id(&entity_id, &property_id, &space_id).to_string();
-        match rows.last() {
-            Some((open_id, _, _)) => {
-                sync_live_value.push((live_id, *open_id));
+        let currently_open = rows
+            .iter()
+            .zip(fixed_valid_to.iter())
+            .rev()
+            .find(|(_, vt)| vt.is_none())
+            .map(|((id, _, _), _)| *id);
+        match currently_open {
+            Some(open_id) => {
+                sync_live_value.push((live_id, open_id));
             }
             None => {
                 delete_live_value_ids.push(live_id);
@@ -308,22 +360,47 @@ async fn main() -> Result<(), IndexerError> {
     for ((relation_id, space_id), mut rows) in relation_chains {
         rows.sort_by_key(|(_, vf, _)| *vf);
         let mut was_corrupt = false;
+        let mut fixed_valid_to: Vec<Option<i64>> = rows.iter().map(|(_, _, vt)| *vt).collect();
         for i in 0..rows.len() {
-            let (id, _vf, vt) = rows[i];
-            let correct_vt = rows.get(i + 1).map(|(_, next_vf, _)| *next_vf);
-            if vt != correct_vt {
-                was_corrupt = true;
-                update_relation_valid_to.push((id, correct_vt));
+            let (id, vf, vt) = rows[i];
+            match rows.get(i + 1) {
+                Some((_, next_vf, _)) => {
+                    if vt != Some(*next_vf) {
+                        was_corrupt = true;
+                        update_relation_valid_to.push((id, Some(*next_vf)));
+                        fixed_valid_to[i] = Some(*next_vf);
+                    }
+                }
+                None => {
+                    // No successor — only a genuine inversion is
+                    // corruption; a legitimate Unset/Delete closes a
+                    // version without opening a new one and is not itself
+                    // evidence of anything (same invariant as values,
+                    // above, and as audit_batch_replay).
+                    if let Some(actual_vt) = vt {
+                        if actual_vt < vf {
+                            was_corrupt = true;
+                            update_relation_valid_to.push((id, None));
+                            fixed_valid_to[i] = None;
+                        }
+                    }
+                }
             }
         }
         if was_corrupt {
             corrupt_relation_targets += 1;
         }
-        if let Some((open_id, _, _)) = rows.last() {
+        let currently_open = rows
+            .iter()
+            .zip(fixed_valid_to.iter())
+            .rev()
+            .find(|(_, vt)| vt.is_none())
+            .map(|((id, _, _), _)| *id);
+        if let Some(open_id) = currently_open {
             open_per_relation
                 .entry(relation_id)
                 .or_default()
-                .push((space_id, *open_id));
+                .push((space_id, open_id));
         }
     }
 

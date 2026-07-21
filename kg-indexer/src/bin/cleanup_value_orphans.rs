@@ -36,7 +36,7 @@
 //!     --batch-file /path/to/uri_block_wrongspace_lines.txt \
 //!     [--execute]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
 
@@ -74,6 +74,12 @@ async fn main() -> Result<(), IndexerError> {
     let mut decoded = 0usize;
     let mut skipped = 0usize;
 
+    struct BatchLine {
+        uri: String,
+        block: u64,
+        space: Uuid,
+    }
+    let mut batch_lines = Vec::new();
     for line in content.lines().filter(|l| !l.trim().is_empty()) {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 3 {
@@ -81,43 +87,53 @@ async fn main() -> Result<(), IndexerError> {
                 "malformed batch-file line (expected \"<uri> <block> <space> ...\"): {line:?}"
             )));
         }
-        let (uri, block_str, space_str) = (parts[0], parts[1], parts[2]);
-        let block: u64 = block_str
+        let block: u64 = parts[1]
             .parse()
             .map_err(|e| IndexerError::Config(format!("bad block in line {line:?}: {e}")))?;
-        let space: Uuid = space_str
+        let space: Uuid = parts[2]
             .parse()
             .map_err(|e| IndexerError::Config(format!("bad space in line {line:?}: {e}")))?;
+        batch_lines.push(BatchLine {
+            uri: parts[0].to_string(),
+            block,
+            space,
+        });
+    }
 
-        let row: (Option<Vec<u8>>, bool) =
-            sqlx::query_as("SELECT data, is_errored FROM ipfs_cache WHERE uri = $1")
-                .bind(uri)
-                .fetch_one(&storage.pool)
-                .await
-                .map_err(|e| match e {
-                    sqlx::Error::RowNotFound => {
-                        IndexerError::Config(format!("uri not found in ipfs_cache: {uri}"))
-                    }
-                    other => IndexerError::Database(other),
-                })?;
-        let (data, is_errored) = row;
-        if is_errored {
-            println!("SKIP {uri}: ipfs_cache row still marked is_errored");
+    let uris: Vec<&str> = batch_lines.iter().map(|l| l.uri.as_str()).collect();
+    let cache_rows: Vec<(String, Option<Vec<u8>>, bool)> =
+        sqlx::query_as("SELECT uri, data, is_errored FROM ipfs_cache WHERE uri = ANY($1::text[])")
+            .bind(&uris)
+            .fetch_all(&storage.pool)
+            .await?;
+    let cache_by_uri: HashMap<String, (Option<Vec<u8>>, bool)> = cache_rows
+        .into_iter()
+        .map(|(uri, data, errored)| (uri, (data, errored)))
+        .collect();
+
+    for line in &batch_lines {
+        let Some((data, is_errored)) = cache_by_uri.get(&line.uri) else {
+            println!("SKIP {}: uri not found in ipfs_cache", line.uri);
+            skipped += 1;
+            continue;
+        };
+        if *is_errored {
+            println!("SKIP {}: ipfs_cache row still marked is_errored", line.uri);
             skipped += 1;
             continue;
         }
         let payload = match data {
             Some(p) => p,
             None => {
-                println!("SKIP {uri}: no data");
+                println!("SKIP {}: no data", line.uri);
                 skipped += 1;
                 continue;
             }
         };
-        let decoded_edit = match decode_edit(&payload) {
+        let decoded_edit = match decode_edit(payload) {
             Ok(d) => d,
             Err(e) => {
-                println!("SKIP {uri}: decode failed: {e}");
+                println!("SKIP {}: decode failed: {e}", line.uri);
                 skipped += 1;
                 continue;
             }
@@ -126,15 +142,15 @@ async fn main() -> Result<(), IndexerError> {
         let edit = HermesEdit {
             id: decoded_edit.id.to_vec(),
             name: decoded_edit.name.to_string(),
-            payload: payload.clone(),
+            payload: payload.to_vec(),
             authors: decoded_edit.authors.iter().map(|a| a.to_vec()).collect(),
             language: None,
-            space_id: space.as_bytes().to_vec(),
+            space_id: line.space.as_bytes().to_vec(),
             is_canonical: true,
             meta: Some(BlockchainMetadata {
                 created_at: 0,
                 created_by: vec![],
-                block_number: block,
+                block_number: line.block,
                 cursor: String::new(),
                 sequence: 0,
                 is_last: false,

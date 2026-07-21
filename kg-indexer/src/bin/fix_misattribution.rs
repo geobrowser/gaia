@@ -329,7 +329,10 @@ async fn main() -> Result<(), IndexerError> {
     // live row to a snapshot taken before that delete would point it at a
     // row that no longer exists by the time the sync statement runs.
 
-    let live_value_ids: Vec<String> = value_touches.iter().map(|t| t.live_id.clone()).collect();
+    let live_value_ids: Vec<String> = distinct_value_targets
+        .iter()
+        .map(|&(e, p, s)| handlers::edits::derive_value_id(&e, &p, &s).to_string())
+        .collect();
     let live_values: Vec<String> =
         sqlx::query_scalar("SELECT id FROM values WHERE id = ANY($1::text[])")
             .bind(&live_value_ids)
@@ -387,7 +390,7 @@ async fn main() -> Result<(), IndexerError> {
             })
             .collect()
     };
-    let relation_ids: Vec<Uuid> = relation_touches.iter().map(|t| t.relation_id).collect();
+    let relation_ids: Vec<Uuid> = distinct_relation_targets.iter().map(|&(r, _)| r).collect();
     let current_relations: Vec<(Uuid, Uuid)> =
         sqlx::query_as("SELECT id, space_id FROM relations WHERE id = ANY($1::uuid[])")
             .bind(&relation_ids)
