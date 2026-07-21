@@ -228,13 +228,20 @@ async fn main() -> Result<(), IndexerError> {
     );
 
     // ---- Phase 3: in-memory relink ----
-    let mut value_chains: HashMap<(Uuid, Uuid, Uuid), Vec<(Uuid, i64, Option<i64>)>> = HashMap::new();
+    let mut value_chains: HashMap<(Uuid, Uuid, Uuid), Vec<(Uuid, i64, Option<i64>)>> =
+        HashMap::new();
     for (e, p, s, id, vf, vt) in value_rows {
-        value_chains.entry((e, p, s)).or_default().push((id, vf, vt));
+        value_chains
+            .entry((e, p, s))
+            .or_default()
+            .push((id, vf, vt));
     }
     let mut relation_chains: HashMap<(Uuid, Uuid), Vec<(Uuid, i64, Option<i64>)>> = HashMap::new();
     for (r, s, id, vf, vt) in relation_rows {
-        relation_chains.entry((r, s)).or_default().push((id, vf, vt));
+        relation_chains
+            .entry((r, s))
+            .or_default()
+            .push((id, vf, vt));
     }
 
     let mut update_value_valid_to: Vec<(Uuid, Option<i64>)> = Vec::new();
@@ -256,7 +263,8 @@ async fn main() -> Result<(), IndexerError> {
         if was_corrupt {
             corrupt_value_targets += 1;
         }
-        let live_id = handlers::edits::derive_value_id(&entity_id, &property_id, &space_id).to_string();
+        let live_id =
+            handlers::edits::derive_value_id(&entity_id, &property_id, &space_id).to_string();
         match rows.last() {
             Some((open_id, _, _)) if was_corrupt => {
                 sync_live_value.push((live_id, *open_id));

@@ -112,12 +112,12 @@ async fn main() -> Result<(), IndexerError> {
             block: parts[1]
                 .parse()
                 .map_err(|e| IndexerError::Config(format!("bad block in line {line:?}: {e}")))?,
-            wrong_space: parts[2]
-                .parse()
-                .map_err(|e| IndexerError::Config(format!("bad wrong_space in line {line:?}: {e}")))?,
-            correct_space: parts[3]
-                .parse()
-                .map_err(|e| IndexerError::Config(format!("bad correct_space in line {line:?}: {e}")))?,
+            wrong_space: parts[2].parse().map_err(|e| {
+                IndexerError::Config(format!("bad wrong_space in line {line:?}: {e}"))
+            })?,
+            correct_space: parts[3].parse().map_err(|e| {
+                IndexerError::Config(format!("bad correct_space in line {line:?}: {e}"))
+            })?,
         });
     }
     lines.sort_by_key(|l| l.block);
@@ -130,12 +130,11 @@ async fn main() -> Result<(), IndexerError> {
 
     // ---- Phase 1: fetch + decode every edit, collect its targets ----
     let uris: Vec<&str> = lines.iter().map(|l| l.uri.as_str()).collect();
-    let cache_rows: Vec<(String, Option<Vec<u8>>, bool)> = sqlx::query_as(
-        "SELECT uri, data, is_errored FROM ipfs_cache WHERE uri = ANY($1::text[])",
-    )
-    .bind(&uris)
-    .fetch_all(&storage.pool)
-    .await?;
+    let cache_rows: Vec<(String, Option<Vec<u8>>, bool)> =
+        sqlx::query_as("SELECT uri, data, is_errored FROM ipfs_cache WHERE uri = ANY($1::text[])")
+            .bind(&uris)
+            .fetch_all(&storage.pool)
+            .await?;
     let cache_by_uri: HashMap<String, (Option<Vec<u8>>, bool)> = cache_rows
         .into_iter()
         .map(|(uri, data, errored)| (uri, (data, errored)))
@@ -203,8 +202,11 @@ async fn main() -> Result<(), IndexerError> {
             });
         }
         for &relation_id in &plan.relation_targets {
-            let opened_id =
-                Storage::derive_relation_version_id(&relation_id, &plan.wrong_space, plan.version_key);
+            let opened_id = Storage::derive_relation_version_id(
+                &relation_id,
+                &plan.wrong_space,
+                plan.version_key,
+            );
             relation_touches.push(RelationTouch {
                 plan_idx,
                 relation_id,
@@ -277,12 +279,15 @@ async fn main() -> Result<(), IndexerError> {
     let (nve, nvp, nvs): (Vec<Uuid>, Vec<Uuid>, Vec<Uuid>) = distinct_value_targets
         .iter()
         .map(|&(e, p, s)| (e, p, s))
-        .fold((Vec::new(), Vec::new(), Vec::new()), |mut acc, (e, p, s)| {
-            acc.0.push(e);
-            acc.1.push(p);
-            acc.2.push(s);
-            acc
-        });
+        .fold(
+            (Vec::new(), Vec::new(), Vec::new()),
+            |mut acc, (e, p, s)| {
+                acc.0.push(e);
+                acc.1.push(p);
+                acc.2.push(s);
+                acc
+            },
+        );
     let now_open_values: Vec<(Uuid, Uuid, Uuid, Uuid)> = sqlx::query_as(
         "SELECT entity_id, property_id, space_id, id FROM value_versions \
          WHERE (entity_id, property_id, space_id) IN (\
@@ -430,11 +435,16 @@ async fn main() -> Result<(), IndexerError> {
             }
         }
 
-        let now_open = now_open_value_map.get(&(t.entity_id, t.property_id, t.wrong_space)).copied();
+        let now_open = now_open_value_map
+            .get(&(t.entity_id, t.property_id, t.wrong_space))
+            .copied();
         let live_exists = live_value_set.contains(&t.live_id);
         match (now_open, live_exists) {
             (Some(open_id), _) => {
-                println!("  [edit {}] VALUE live sync: set values id={} to match now-open row {open_id}", plans[t.plan_idx].uri, t.live_id);
+                println!(
+                    "  [edit {}] VALUE live sync: set values id={} to match now-open row {open_id}",
+                    plans[t.plan_idx].uri, t.live_id
+                );
                 sync_live_value.push((t.live_id.clone(), open_id));
             }
             (None, true) => {
@@ -482,7 +492,10 @@ async fn main() -> Result<(), IndexerError> {
             );
             continue;
         }
-        match now_open_relation_map.get(&(t.relation_id, t.wrong_space)).copied() {
+        match now_open_relation_map
+            .get(&(t.relation_id, t.wrong_space))
+            .copied()
+        {
             Some(open_id) => {
                 println!("  [edit {}] RELATION live sync: set relations id={} to match now-open row {open_id}", plans[t.plan_idx].uri, t.relation_id);
                 sync_live_relation.push((t.relation_id, open_id));
@@ -629,9 +642,9 @@ fn build_plan(
     line: &BatchLine,
     cache_by_uri: &HashMap<String, (Option<Vec<u8>>, bool)>,
 ) -> Result<EditPlan, IndexerError> {
-    let (data, is_errored) = cache_by_uri
-        .get(&line.uri)
-        .ok_or_else(|| IndexerError::Config(format!("uri not found in ipfs_cache: {}", line.uri)))?;
+    let (data, is_errored) = cache_by_uri.get(&line.uri).ok_or_else(|| {
+        IndexerError::Config(format!("uri not found in ipfs_cache: {}", line.uri))
+    })?;
     if *is_errored {
         return Err(IndexerError::Config("ipfs_cache row is_errored".into()));
     }
