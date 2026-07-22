@@ -359,10 +359,11 @@ mod tests {
     }
 
     /// Wrap an inner action calldata in a PROPOSAL_CREATED payload:
-    /// abi.encode(bytes16 proposalId, uint8 votingMode, Action[] { (address, uint256, bytes) }).
+    /// abi.encode(bytes16 proposalId, uint8 votingMode, Action[] { (address, bytes16, uint256, bytes) }).
     fn encode_proposal_with_action(action_calldata: Vec<u8>) -> Vec<u8> {
         let action = Token::Tuple(vec![
             Token::Address(ethabi::Address::zero()),
+            Token::FixedBytes(vec![0u8; 16]),
             Token::Uint(ethabi::Uint::zero()),
             Token::Bytes(action_calldata),
         ]);
