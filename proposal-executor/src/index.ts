@@ -64,6 +64,11 @@ export interface ExecutorEnv {
 	/** Redacted — may contain API keys in the path */
 	rpcUrl: Redacted.Redacted
 	chainId: SupportedChainId
+	/**
+	 * Redacted — embeds a ZeroDev project ID. Required only when chainId is
+	 * 55516 (see ExecutorConfig.zerodevSponsorshipRpcUrl in execute.ts for why).
+	 */
+	zerodevSponsorshipRpcUrl: Redacted.Redacted
 
 	// --- Membership-accept path (dedicated bot identity, distinct from the executor) ---
 	/**
@@ -92,6 +97,10 @@ export const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(fu
 	const rawPrivateKey = yield* Config.redacted("EXECUTOR_PRIVATE_KEY")
 	const pimlicoApiKey = yield* Config.redacted("PIMLICO_API_KEY")
 	const rawMembershipBotPrivateKey = yield* Config.redacted("MEMBERSHIP_BOT_PRIVATE_KEY")
+	// Only required for chainId 55516 — validated below once chainId is known.
+	const zerodevSponsorshipRpcUrl = yield* Config.redacted("ZERODEV_SPONSORSHIP_RPC_URL").pipe(
+		Config.withDefault(Redacted.make("")),
+	)
 
 	const rpcUrl = yield* Config.redacted("RPC_URL")
 
@@ -161,6 +170,24 @@ export const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(fu
 				durationMs: 0,
 			}),
 		)
+	}
+
+	// --- Validate ZeroDev sponsorship URL (only required on chain 55516, which has
+	// no Safe infra and uses ZeroDev's EIP-7702 Kernel bundler instead of Pimlico) ---
+	const zerodevSponsorshipRpcUrlValue = Redacted.value(zerodevSponsorshipRpcUrl)
+	if (chainId === 55516) {
+		if (
+			!zerodevSponsorshipRpcUrlValue.startsWith("http://") &&
+			!zerodevSponsorshipRpcUrlValue.startsWith("https://")
+		) {
+			return yield* Effect.fail(
+				new InfraError({
+					message:
+						"Invalid ZERODEV_SPONSORSHIP_RPC_URL: expected http:// or https:// URL (required when CHAIN_ID=55516)",
+					durationMs: 0,
+				}),
+			)
+		}
 	}
 
 	// --- Validate membership-bot private key (auto-prefix 0x like the executor key;
@@ -239,6 +266,7 @@ export const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(fu
 		spaceRegistryAddress,
 		rpcUrl,
 		chainId: chainId as SupportedChainId,
+		zerodevSponsorshipRpcUrl,
 		membershipBotPrivateKey: Redacted.make(membershipBotPrivateKey as `0x${string}`),
 		membershipBotSpaceId: rawMembershipBotSpaceId as Hex,
 		membershipAutoacceptSpaceIds,
@@ -595,10 +623,11 @@ const main = Effect.gen(function* () {
 		spaceRegistryAddress: config.spaceRegistryAddress,
 		rpcUrl: Redacted.value(config.rpcUrl),
 		chainId: config.chainId,
+		zerodevSponsorshipRpcUrl: Redacted.value(config.zerodevSponsorshipRpcUrl) || undefined,
 	})
 
 	yield* Effect.logInfo("wallet_ready").pipe(
-		Effect.annotateLogs({identity: "executor", safeAddress: wallet.safeAddress}),
+		Effect.annotateLogs({identity: "executor", accountAddress: wallet.accountAddress}),
 	)
 
 	yield* verifyExecutorSetup(wallet, config.executorSpaceId, config.spaceRegistryAddress)
@@ -713,10 +742,11 @@ const main = Effect.gen(function* () {
 			spaceRegistryAddress: config.spaceRegistryAddress,
 			rpcUrl: Redacted.value(config.rpcUrl),
 			chainId: config.chainId,
+			zerodevSponsorshipRpcUrl: Redacted.value(config.zerodevSponsorshipRpcUrl) || undefined,
 		})
 
 		yield* Effect.logInfo("wallet_ready").pipe(
-			Effect.annotateLogs({identity: "membership-bot", safeAddress: botWallet.safeAddress}),
+			Effect.annotateLogs({identity: "membership-bot", accountAddress: botWallet.accountAddress}),
 		)
 
 		yield* verifyExecutorSetup(botWallet, config.membershipBotSpaceId, config.spaceRegistryAddress)
