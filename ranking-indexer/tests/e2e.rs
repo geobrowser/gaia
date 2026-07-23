@@ -7,7 +7,7 @@
 //! connection string. Skips (passes) if unset, so it never runs on a generic
 //! CI `DATABASE_URL` that lacks the `ranks` schema.
 
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use grc_20::model::builder::EditBuilder;
 use hermes_schema::pb::membership::{HermesRoleGranted, HermesRoleRevoked, MembershipRole};
 use sdk::core::ids::*;
@@ -649,6 +649,171 @@ async fn cross_edit_block_recovers_datetime_bounds_preferring_new_property_over_
         end_date,
         Some(legacy_end),
         "end: must fall back to the legacy property when no datetime property is authored"
+    );
+}
+
+/// GEO-2328: a Rolling block's submission stays eligible only for
+/// `submission_frequency` hours after `submitted_at` — unlike a static
+/// block's fixed `[start, end]` window, it ages out purely from elapsed time,
+/// with no new edit required. Recomputes the same block twice with different
+/// injected `now` values (no real sleep) to simulate what the future sweep
+/// binary will do periodically.
+#[tokio::test]
+async fn rolling_block_drops_a_submission_once_it_ages_past_its_frequency() {
+    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
+        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+        return;
+    };
+    let storage = Storage::new(&url).await.expect("connect");
+    let pool = storage.pool();
+
+    const SPACE: u128 = 0xE2E5_0000_4001;
+    const MEMBER: u128 = 0xE2E5_0000_4011;
+    const BLOCK: u128 = 0xE2E5_0000_4021;
+    const ENT_A: u128 = 0xE2E5_0000_4031;
+    const RANK: u128 = 0xE2E5_0000_4041;
+
+    // --- clean prior runs (idempotent) -------------------------------------
+    for sql in [
+        "DELETE FROM relations WHERE space_id = $1",
+        "DELETE FROM values WHERE space_id = $1",
+    ] {
+        sqlx::query(sql).bind(u(SPACE)).execute(pool).await.unwrap();
+    }
+    sqlx::query("DELETE FROM ranks.ranking_items WHERE ranking_id = $1")
+        .bind(u(RANK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.rankings WHERE id = $1")
+        .bind(u(RANK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.ranking_scores WHERE block_id = $1")
+        .bind(u(BLOCK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.ranking_blocks WHERE id = $1")
+        .bind(u(BLOCK))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM ranks.members WHERE space_id = $1")
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM spaces WHERE id = $1")
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // --- seed prerequisites --------------------------------------------------
+    sqlx::query("INSERT INTO spaces (id, type, address) VALUES ($1, 'DAO', '0xe2e4')")
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO ranks.members (member_space_id, space_id) VALUES ($1, $2)")
+        .bind(u(MEMBER))
+        .bind(u(SPACE))
+        .execute(pool)
+        .await
+        .unwrap();
+
+    // --- edit 1: a Rolling block with a 1-hour submission_frequency ---------
+    // Rolling is a second `TYPES` relation (GEO-2328) alongside the standard
+    // `Ranking Block` typing, not a dedicated property.
+    let block_edit = EditBuilder::new(gid(1))
+        .create_relation(|r| {
+            r.id(gid(0x400))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(BLOCK))
+                .to(sid(RANKING_BLOCK_TYPE_ID))
+        })
+        .create_relation(|r| {
+            r.id(gid(0x401))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(BLOCK))
+                .to(sid(RANK_ROLLING_TYPE_ID))
+        })
+        .create_entity(gid(BLOCK), |e| {
+            e.text(sid(NAME_PROPERTY_ID), "Rolling Block", None)
+                .integer(sid(RANK_SUBMISSION_FREQUENCY_PROPERTY_ID), 1, None)
+        })
+        .build();
+    apply_detected_edit(&detect(&block_edit, u(SPACE), 1, 0), u(SPACE), &storage)
+        .await
+        .unwrap();
+
+    // --- a member submits a rank at submitted_at = epoch 0 -------------------
+    let rank_edit = EditBuilder::new(gid(RANK ^ 0xED17))
+        .create_relation(|r| {
+            r.id(gid(0x410))
+                .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                .from(gid(RANK))
+                .to(sid(RANK_TYPE_ID))
+        })
+        .create_entity(gid(RANK), |e| {
+            e.text(sid(RANK_TYPE_PROPERTY_ID), "ORDINAL", None)
+        })
+        .create_relation(|r| {
+            r.id(gid(0x411))
+                .relation_type(sid(RANK_BLOCK_RELATION_TYPE_ID))
+                .from(gid(RANK))
+                .to(gid(BLOCK))
+        })
+        .create_relation(|r| {
+            r.id(gid(0x412))
+                .relation_type(sid(RANK_VOTES_RELATION_TYPE_ID))
+                .from(gid(RANK))
+                .to(gid(ENT_A))
+                .to_space(gid(SPACE))
+                .position("a0")
+        })
+        .build();
+    apply_detected_edit(
+        &detect(&rank_edit, u(MEMBER), 2, 0), // block_timestamp 0 -> submitted_at = epoch 0
+        u(MEMBER),
+        &storage,
+    )
+    .await
+    .unwrap();
+
+    let t = |n: i64| DateTime::<Utc>::from_timestamp(n, 0).unwrap();
+    let scored_count = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM ranks.ranking_scores WHERE block_id = $1 AND entity_id = $2",
+        )
+        .bind(u(BLOCK))
+        .bind(u(ENT_A))
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    };
+
+    // --- recompute at now = 30 min: still within the 1-hour frequency -------
+    recompute_block(u(BLOCK), BlockMeta::default(), t(30 * 60), &storage)
+        .await
+        .unwrap();
+    assert_eq!(
+        scored_count().await,
+        1,
+        "a submission still within its submission_frequency must be scored"
+    );
+
+    // --- recompute at now = 2h: aged past the frequency, no new edit --------
+    recompute_block(u(BLOCK), BlockMeta::default(), t(2 * 3600), &storage)
+        .await
+        .unwrap();
+    assert_eq!(
+        scored_count().await,
+        0,
+        "a submission past its submission_frequency must be dropped purely from \
+         elapsed time, with no new edit required"
     );
 }
 
@@ -1500,7 +1665,7 @@ async fn cross_edit_rank_is_recovered_from_kg_and_scored() {
     );
 
     storage.upsert_ranking(&recovered).await.unwrap();
-    recompute_block(u(BLOCK), BlockMeta::default(), &storage)
+    recompute_block(u(BLOCK), BlockMeta::default(), Utc::now(), &storage)
         .await
         .unwrap();
 

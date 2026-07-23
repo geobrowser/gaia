@@ -213,7 +213,8 @@ impl Storage {
         block_id: Uuid,
     ) -> Result<Option<RankingBlock>, IndexerError> {
         let block = sqlx::query_as::<_, RankingBlock>(
-            "SELECT id, space_id, name, filter, start_date, end_date, restriction_id \
+            "SELECT id, space_id, name, filter, start_date, end_date, restriction_id, \
+                    ranking_type, submission_frequency \
              FROM ranks.ranking_blocks WHERE id = $1",
         )
         .bind(block_id)
@@ -257,8 +258,9 @@ impl Storage {
 
         // Config properties: Name/Filter as text, Start/End as datetime (both
         // the legacy date property and its GEO-2253 datetime successor — see
-        // `resolve_window_bound`). One row is always returned (aggregates over
-        // zero matching values yield NULLs).
+        // `resolve_window_bound`), Submission frequency (GEO-2328) as integer
+        // hours. One row is always returned (aggregates over zero matching
+        // values yield NULLs).
         type ConfigRow = (
             Option<String>,
             Option<String>,
@@ -266,30 +268,40 @@ impl Storage {
             Option<DateTime<Utc>>,
             Option<DateTime<Utc>>,
             Option<DateTime<Utc>>,
+            Option<i64>,
         );
         // Scope to the block's home space: the same entity may be perspectived
         // into other spaces with different config, keyed on (id, space_id).
-        let (name, filter, legacy_start_date, legacy_end_date, start_datetime, end_datetime): ConfigRow =
-            sqlx::query_as(
-                "SELECT \
+        let (
+            name,
+            filter,
+            legacy_start_date,
+            legacy_end_date,
+            start_datetime,
+            end_datetime,
+            submission_frequency,
+        ): ConfigRow = sqlx::query_as(
+            "SELECT \
                    max(text)         FILTER (WHERE property_id = $2) AS name, \
                    max(text)         FILTER (WHERE property_id = $3) AS filter, \
                    max(datetime_utc) FILTER (WHERE property_id = $4) AS start_date, \
                    max(datetime_utc) FILTER (WHERE property_id = $5) AS end_date, \
                    max(datetime_utc) FILTER (WHERE property_id = $6) AS start_datetime, \
-                   max(datetime_utc) FILTER (WHERE property_id = $7) AS end_datetime \
-                 FROM values WHERE entity_id = $1 AND space_id = $8",
-            )
-            .bind(block_id)
-            .bind(pid(ids::NAME_PROPERTY_ID))
-            .bind(pid(ids::RANK_FILTER_PROPERTY_ID))
-            .bind(pid(ids::RANK_START_DATE_PROPERTY_ID))
-            .bind(pid(ids::RANK_END_DATE_PROPERTY_ID))
-            .bind(pid(ids::RANK_START_DATETIME_PROPERTY_ID))
-            .bind(pid(ids::RANK_END_DATETIME_PROPERTY_ID))
-            .bind(space_id)
-            .fetch_one(&self.pool)
-            .await?;
+                   max(datetime_utc) FILTER (WHERE property_id = $7) AS end_datetime, \
+                   max(integer)      FILTER (WHERE property_id = $8) AS submission_frequency \
+                 FROM values WHERE entity_id = $1 AND space_id = $9",
+        )
+        .bind(block_id)
+        .bind(pid(ids::NAME_PROPERTY_ID))
+        .bind(pid(ids::RANK_FILTER_PROPERTY_ID))
+        .bind(pid(ids::RANK_START_DATE_PROPERTY_ID))
+        .bind(pid(ids::RANK_END_DATE_PROPERTY_ID))
+        .bind(pid(ids::RANK_START_DATETIME_PROPERTY_ID))
+        .bind(pid(ids::RANK_END_DATETIME_PROPERTY_ID))
+        .bind(pid(ids::RANK_SUBMISSION_FREQUENCY_PROPERTY_ID))
+        .bind(space_id)
+        .fetch_one(&self.pool)
+        .await?;
 
         // The datetime property (GEO-2253) wins per-bound; the legacy date
         // property is the fallback — same precedence as `detect::window_bound`,
@@ -310,6 +322,20 @@ impl Storage {
         .fetch_optional(&self.pool)
         .await?;
 
+        // Rolling is a second `TYPES` relation on the block (GEO-2328) — same
+        // relation type as the `Ranking Block` typing above, different target
+        // — not a dedicated property. See RANK_ROLLING_TYPE_ID's doc comment.
+        let (is_rolling,): (bool,) = sqlx::query_as(
+            "SELECT EXISTS (SELECT 1 FROM relations \
+             WHERE from_entity_id = $1 AND type_id = $2 AND to_entity_id = $3 AND space_id = $4)",
+        )
+        .bind(block_id)
+        .bind(pid(ids::TYPE_RELATION_TYPE_ID))
+        .bind(pid(ids::RANK_ROLLING_TYPE_ID))
+        .bind(space_id)
+        .fetch_one(&self.pool)
+        .await?;
+
         Ok(Some(RankingBlock {
             id: block_id,
             space_id,
@@ -318,6 +344,8 @@ impl Storage {
             start_date,
             end_date,
             restriction_id: restriction.map(|(r,)| r),
+            ranking_type: is_rolling.then(|| pid(ids::RANK_ROLLING_TYPE_ID)),
+            submission_frequency: submission_frequency.and_then(|v| i32::try_from(v).ok()),
         }))
     }
 
@@ -343,6 +371,20 @@ impl Storage {
         .bind(pid(ids::RANKING_BLOCK_TYPE_ID))
         .fetch_all(&self.pool)
         .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// Every already-registered Rolling block (GEO-2328) — `ranking_type` is
+    /// `NOT NULL` — for the periodic sweep (`bin/rolling_sweep.rs`) to
+    /// recompute. A Rolling block's aggregate can go stale purely from
+    /// elapsed time (a submission ageing past `submission_frequency`), with
+    /// no edit to react to, so unlike everything else in this indexer it
+    /// needs a time-based trigger rather than an event-based one.
+    pub async fn find_rolling_ranking_blocks(&self) -> Result<Vec<Uuid>, IndexerError> {
+        let rows: Vec<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM ranks.ranking_blocks WHERE ranking_type IS NOT NULL")
+                .fetch_all(&self.pool)
+                .await?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
@@ -498,14 +540,17 @@ impl Storage {
         sqlx::query(
             r#"
             INSERT INTO ranks.ranking_blocks
-                (id, space_id, name, filter, start_date, end_date, restriction_id, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+                (id, space_id, name, filter, start_date, end_date, restriction_id,
+                 ranking_type, submission_frequency, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
             ON CONFLICT (id, space_id) DO UPDATE SET
                 name = EXCLUDED.name,
                 filter = EXCLUDED.filter,
                 start_date = EXCLUDED.start_date,
                 end_date = EXCLUDED.end_date,
                 restriction_id = EXCLUDED.restriction_id,
+                ranking_type = EXCLUDED.ranking_type,
+                submission_frequency = EXCLUDED.submission_frequency,
                 updated_at = now()
             "#,
         )
@@ -516,6 +561,8 @@ impl Storage {
         .bind(b.start_date)
         .bind(b.end_date)
         .bind(b.restriction_id)
+        .bind(b.ranking_type)
+        .bind(b.submission_frequency)
         .execute(&self.pool)
         .await?;
         Ok(())

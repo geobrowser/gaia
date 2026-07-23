@@ -27,6 +27,7 @@
 use std::collections::HashSet;
 use std::env;
 
+use chrono::Utc;
 use tracing::{error, info, warn};
 
 use ranking_indexer::error::IndexerError;
@@ -70,6 +71,7 @@ async fn main() -> Result<(), IndexerError> {
     }
 
     let meta = storage.current_chain_meta().await?;
+    let now = Utc::now();
 
     let mut recovered_blocks = 0;
     let mut still_unregistered_blocks = 0;
@@ -92,7 +94,7 @@ async fn main() -> Result<(), IndexerError> {
                     failed += 1;
                     continue;
                 }
-                if let Err(e) = recompute_block(block_id, meta, &storage).await {
+                if let Err(e) = recompute_block(block_id, meta, now, &storage).await {
                     error!(block_id = %block_id, error = %e, "recovered block but recompute failed");
                     failed += 1;
                     continue;
@@ -143,7 +145,7 @@ async fn main() -> Result<(), IndexerError> {
     // Recompute every block a recovered rank links to — its aggregate needs
     // to include the rank that just appeared.
     for block_id in affected_blocks {
-        if let Err(e) = recompute_block(block_id, meta, &storage).await {
+        if let Err(e) = recompute_block(block_id, meta, now, &storage).await {
             error!(
                 block_id = %block_id,
                 error = %e,

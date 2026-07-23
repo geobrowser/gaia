@@ -36,6 +36,8 @@ struct DetectIds {
     start_datetime_property: Uuid,
     end_datetime_property: Uuid,
     aggregation_restriction_relation: Uuid,
+    rolling_type: Uuid,
+    submission_frequency_property: Uuid,
 }
 
 static IDS: LazyLock<DetectIds> = LazyLock::new(|| {
@@ -56,6 +58,8 @@ static IDS: LazyLock<DetectIds> = LazyLock::new(|| {
         start_datetime_property: uid(RANK_START_DATETIME_PROPERTY_ID),
         end_datetime_property: uid(RANK_END_DATETIME_PROPERTY_ID),
         aggregation_restriction_relation: uid(RANK_AGGREGATION_RESTRICTION_PROPERTY_ID),
+        rolling_type: uid(RANK_ROLLING_TYPE_ID),
+        submission_frequency_property: uid(RANK_SUBMISSION_FREQUENCY_PROPERTY_ID),
     }
 });
 
@@ -82,6 +86,20 @@ fn float_value(values: &[PropertyValue], property: Uuid) -> Option<f64> {
         }
         match &pv.value {
             Grc20Value::Float { value, .. } => Some(*value),
+            _ => None,
+        }
+    })
+}
+
+/// Read an `Integer` property value, truncated to `i32` (the column type;
+/// `submission_frequency` is a small number of hours, never near i64's range).
+fn int_value(values: &[PropertyValue], property: Uuid) -> Option<i32> {
+    values.iter().find_map(|pv| {
+        if id_to_uuid(&pv.property) != property {
+            return None;
+        }
+        match &pv.value {
+            Grc20Value::Integer { value, .. } => i32::try_from(*value).ok(),
             _ => None,
         }
     })
@@ -253,6 +271,15 @@ pub fn detect(
                             ids.end_date_property,
                         ),
                         restriction_id: restriction_of.get(&entity_id).copied(),
+                        // Rolling is a second TYPES tag on the block (GEO-2328), not a
+                        // dedicated property — see RANK_ROLLING_TYPE_ID's doc comment.
+                        ranking_type: entity_types
+                            .is_some_and(|t| t.contains(&ids.rolling_type))
+                            .then_some(ids.rolling_type),
+                        submission_frequency: int_value(
+                            &entity.values,
+                            ids.submission_frequency_property,
+                        ),
                     });
                 }
             }
