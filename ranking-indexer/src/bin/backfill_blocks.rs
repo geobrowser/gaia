@@ -14,8 +14,13 @@
 //! that's missing from `ranks.ranking_blocks`/`ranks.rankings`, recovers its
 //! config from the same source those tables are meant to reflect, and
 //! recomputes the aggregate for every block touched (directly, or via a
-//! recovered rank that links to one). Idempotent — safe to re-run;
-//! already-registered blocks/ranks are never touched.
+//! recovered rank that links to one). Also finds blocks that already have a
+//! row but are stuck with a stale `ranking_type` — the identical gap one
+//! step later: a block created static and tagged Rolling by a subsequent,
+//! separate edit never gets its existing row updated, since `detect()` only
+//! reads a `CreateEntity`'s own ops (found investigating GEO-2328/PR#821).
+//! Idempotent — safe to re-run; blocks/ranks with nothing stale are never
+//! touched.
 //!
 //! Exits non-zero if anything failed to recover, so a scheduled run (see
 //! `k8s/*/backfill-cronjob.yaml`) surfaces failures as a failed Job instead
@@ -48,17 +53,22 @@ async fn main() -> Result<(), IndexerError> {
     let storage = Storage::new(&database_url).await?;
 
     let block_candidates = storage.find_unregistered_ranking_blocks().await?;
+    let stale_blocks = storage.find_stale_ranking_type_blocks().await?;
     let rank_candidates = storage.find_unregistered_ranks().await?;
     info!(
         blocks = block_candidates.len(),
+        stale_blocks = stale_blocks.len(),
         ranks = rank_candidates.len(),
         dry_run,
-        "found unregistered blocks/ranks"
+        "found unregistered/stale blocks and unregistered ranks"
     );
 
     if dry_run {
         for id in &block_candidates {
             info!(block_id = %id, "would recover block");
+        }
+        for id in &stale_blocks {
+            info!(block_id = %id, "would resync stale ranking_type");
         }
         for id in &rank_candidates {
             info!(rank_id = %id, "would recover rank");
@@ -66,7 +76,7 @@ async fn main() -> Result<(), IndexerError> {
         return Ok(());
     }
 
-    if block_candidates.is_empty() && rank_candidates.is_empty() {
+    if block_candidates.is_empty() && stale_blocks.is_empty() && rank_candidates.is_empty() {
         return Ok(());
     }
 
@@ -75,6 +85,7 @@ async fn main() -> Result<(), IndexerError> {
 
     let mut recovered_blocks = 0;
     let mut still_unregistered_blocks = 0;
+    let mut resynced_stale_blocks = 0;
     let mut recovered_ranks = 0;
     let mut still_unregistered_ranks = 0;
     let mut failed = 0;
@@ -110,6 +121,39 @@ async fn main() -> Result<(), IndexerError> {
             }
             Err(e) => {
                 error!(block_id = %block_id, error = %e, "failed to read block config from kg");
+                failed += 1;
+            }
+        }
+    }
+
+    // Already-registered blocks stuck with a stale `ranking_type` — same
+    // recovery as above (`get_block_config_from_kg` + `upsert_ranking_block`
+    // is already an upsert, so this safely overwrites the stale row), just
+    // starting from a row that already exists.
+    for block_id in stale_blocks {
+        match storage.get_block_config_from_kg(block_id).await {
+            Ok(Some(block)) => {
+                if let Err(e) = storage.upsert_ranking_block(&block).await {
+                    error!(block_id = %block_id, error = %e, "failed to upsert resynced block");
+                    failed += 1;
+                    continue;
+                }
+                if let Err(e) = recompute_block(block_id, meta, now, &storage).await {
+                    error!(block_id = %block_id, error = %e, "resynced block but recompute failed");
+                    failed += 1;
+                    continue;
+                }
+                info!(block_id = %block_id, "resynced stale ranking_type + recomputed block");
+                resynced_stale_blocks += 1;
+            }
+            Ok(None) => {
+                // No longer typed as a Ranking Block at all — leave its
+                // existing row alone; that's a different (currently
+                // unhandled) case, not this gap.
+                warn!(block_id = %block_id, "no longer typed as Ranking Block — skipping resync");
+            }
+            Err(e) => {
+                error!(block_id = %block_id, error = %e, "failed to read block config from kg for resync");
                 failed += 1;
             }
         }
@@ -158,6 +202,7 @@ async fn main() -> Result<(), IndexerError> {
     info!(
         recovered_blocks,
         still_unregistered_blocks,
+        resynced_stale_blocks,
         recovered_ranks,
         still_unregistered_ranks,
         failed,
