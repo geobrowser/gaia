@@ -162,10 +162,11 @@ describe("config validation contracts", () => {
 		expect(validKey.startsWith("0x")).toBe(true)
 	})
 
-	test("chain ID must be 80451 (mainnet) or 19411 (testnet)", () => {
-		const validChainIds = [80451, 19411]
+	test("chain ID must be 80451 (mainnet), 19411 (testnet), or 55516 (testnet v2)", () => {
+		const validChainIds = [80451, 19411, 55516]
 		expect(validChainIds).toContain(80451)
 		expect(validChainIds).toContain(19411)
+		expect(validChainIds).toContain(55516)
 		expect(validChainIds).not.toContain(1) // Ethereum mainnet
 		expect(validChainIds).not.toContain(0)
 	})
