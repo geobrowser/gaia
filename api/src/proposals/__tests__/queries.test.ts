@@ -707,6 +707,38 @@ describe("SQL/TypeScript status parity", () => {
 		})
 	})
 
+	describe("execute_by deadline does not override a resolved vote outcome", () => {
+		// Mirrors sqlIsExecutable/sqlIsRejected: execute_by only downgrades a
+		// proposal that's still vote-undecided (sqlVoteOutcomeUndecided) to
+		// REJECTED — it must never override an outcome the votes already
+		// resolved. This is the real-world shape of every migrated historical
+		// proposal, where execute_by is synthesized from long-past timestamps
+		// and is always already expired by the time anyone looks at it.
+		it("stays EXECUTABLE past execute_by when the fast-path threshold was met", () => {
+			const proposal = makeProposal({
+				votingMode: "Fast",
+				threshold: 3n,
+				yesCount: 100n,
+				executeBy: now - 10n,
+				endTime: now + 3600n,
+			})
+			const result = computeProposalStatus(proposal, now)
+			expect(result.status).toBe("EXECUTABLE")
+		})
+
+		it("REJECTS past execute_by when still vote-undecided", () => {
+			const proposal = makeProposal({
+				votingMode: "Fast",
+				threshold: 3n,
+				yesCount: 0n,
+				executeBy: now - 10n,
+				endTime: now + 3600n,
+			})
+			const result = computeProposalStatus(proposal, now)
+			expect(result.status).toBe("REJECTED")
+		})
+	})
+
 	describe("PROPOSED status", () => {
 		it("proposal is PROPOSED when voting not ended and threshold not met (Fast)", () => {
 			const proposal = makeProposal({

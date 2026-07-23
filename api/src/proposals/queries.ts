@@ -346,19 +346,22 @@ function sqlIsAccepted() {
 }
 
 /**
- * Proposal is EXECUTABLE iff not executed, deadline not passed, the voting
- * window has started (end_time > 0; mirrors the contract's `lastDate != 0`
- * guard in `canExecuteProposal`), and any path produces an executable outcome:
+ * Proposal is EXECUTABLE iff not executed, the voting window has started
+ * (end_time > 0; mirrors the contract's `lastDate != 0` guard in
+ * `canExecuteProposal`), and any path produces an executable outcome:
  *   - Fast: yes_count > effective(flat_support_threshold)
  *   - Slow early: voting ongoing AND total_editors > 0 AND universal > 0
  *                 AND yes_count >= ceil(universal * total_editors / RATIO_BASE)
  *   - Slow late:  voting ended AND quorum met
  *                 AND (RATIO_BASE - partial) * yes > partial * no
+ *
+ * Deliberately does NOT gate on `execute_by` — see the note on `sqlIsRejected`
+ * for why the deadline must never override an outcome the votes already
+ * resolved.
  */
 function sqlIsExecutable(nowSeconds: bigint) {
 	return sql`(
 		p.executed_at IS NULL
-		AND (p.execute_by IS NULL OR ${nowSeconds}::bigint <= p.execute_by)
 		AND p.end_time > 0
 		AND (
 			(p.voting_mode = 'Fast' AND p.yes_count > (CASE WHEN p.flat_support_threshold = 0 THEN 0 ELSE p.flat_support_threshold - 1 END))
@@ -383,28 +386,26 @@ function sqlIsExecutable(nowSeconds: bigint) {
 }
 
 /**
- * Proposal is PROPOSED iff not executed, deadline not passed, and either the
- * voting window has not started yet (end_time = 0 — open, awaiting the first
- * vote) or voting is ongoing with no executable path already matched.
+ * Vote-based "still undecided" condition, independent of the `execute_by`
+ * deadline: either the voting window hasn't started yet (end_time = 0 —
+ * open, awaiting the first vote) or voting is ongoing with no executable
+ * path matched yet. Shared by `sqlIsProposed` and `sqlIsRejected` so the two
+ * stay in sync by construction.
  */
-function sqlIsProposed(nowSeconds: bigint) {
+function sqlVoteOutcomeUndecided(nowSeconds: bigint) {
 	return sql`(
-		p.executed_at IS NULL
-		AND (p.execute_by IS NULL OR ${nowSeconds}::bigint <= p.execute_by)
-		AND (
-			p.end_time = 0
-			OR (
-				${nowSeconds}::bigint <= p.end_time
-				AND NOT (
-					(p.voting_mode = 'Fast' AND p.yes_count > (CASE WHEN p.flat_support_threshold = 0 THEN 0 ELSE p.flat_support_threshold - 1 END))
-					OR (
-						p.voting_mode = 'Slow'
-						AND ${sqlTotalEditors()} > 0
-						AND p.universal_percentage_support_threshold > 0
-						AND p.yes_count::numeric >= CEIL(
-							(p.universal_percentage_support_threshold::numeric * ${sqlTotalEditors()}::numeric)
-							/ ${RATIO_BASE}::numeric
-						)
+		p.end_time = 0
+		OR (
+			${nowSeconds}::bigint <= p.end_time
+			AND NOT (
+				(p.voting_mode = 'Fast' AND p.yes_count > (CASE WHEN p.flat_support_threshold = 0 THEN 0 ELSE p.flat_support_threshold - 1 END))
+				OR (
+					p.voting_mode = 'Slow'
+					AND ${sqlTotalEditors()} > 0
+					AND p.universal_percentage_support_threshold > 0
+					AND p.yes_count::numeric >= CEIL(
+						(p.universal_percentage_support_threshold::numeric * ${sqlTotalEditors()}::numeric)
+						/ ${RATIO_BASE}::numeric
 					)
 				)
 			)
@@ -413,17 +414,44 @@ function sqlIsProposed(nowSeconds: bigint) {
 }
 
 /**
- * Proposal is REJECTED iff not executed and either the executeBy deadline
- * has passed, or the voting window started and ended (end_time > 0 AND now >
- * end_time) without any executable path matching. A zero window (end_time = 0)
- * is never rejected — the proposal is still open (see sqlIsProposed).
+ * Proposal is PROPOSED iff not executed, still vote-undecided (see
+ * `sqlVoteOutcomeUndecided`), and the `execute_by` deadline hasn't passed —
+ * once it does, an undecided proposal downgrades to REJECTED instead (see
+ * `sqlIsRejected`).
+ */
+function sqlIsProposed(nowSeconds: bigint) {
+	return sql`(
+		p.executed_at IS NULL
+		AND ${sqlVoteOutcomeUndecided(nowSeconds)}
+		AND (p.execute_by IS NULL OR ${nowSeconds}::bigint <= p.execute_by)
+	)`
+}
+
+/**
+ * Proposal is REJECTED iff not executed and either:
+ *   - the voting window started and ended (end_time > 0 AND now > end_time)
+ *     without any executable path matching, regardless of `execute_by` — a
+ *     proposal that lost its vote is rejected whether or not its deadline
+ *     also happened to pass, OR
+ *   - it's still vote-undecided (see `sqlVoteOutcomeUndecided`) AND the
+ *     `execute_by` deadline has passed — an open proposal that never got
+ *     resolved lapses once its execution window closes.
+ * A zero window (end_time = 0) is never rejected by the first branch — the
+ * proposal is still open (see `sqlIsProposed`) unless it lapses via the
+ * second branch.
+ *
+ * `execute_by` deliberately never overrides an outcome that already resolved
+ * to EXECUTABLE via the vote-count conditions (see `sqlIsExecutable`) — it
+ * only closes out proposals that were still undecided. This matters for
+ * historical/migrated proposals, where `execute_by` is synthesized from
+ * long-past timestamps and will always appear expired by the time anyone
+ * looks at it.
  */
 function sqlIsRejected(nowSeconds: bigint) {
 	return sql`(
 		p.executed_at IS NULL
 		AND (
-			(p.execute_by IS NOT NULL AND ${nowSeconds}::bigint > p.execute_by)
-			OR (
+			(
 				p.end_time > 0
 				AND ${nowSeconds}::bigint > p.end_time
 				AND NOT (
@@ -434,6 +462,11 @@ function sqlIsRejected(nowSeconds: bigint) {
 						AND (${RATIO_BASE}::numeric - p.partial_percentage_support_threshold::numeric) * p.yes_count::numeric > p.partial_percentage_support_threshold::numeric * p.no_count::numeric
 					)
 				)
+			)
+			OR (
+				${sqlVoteOutcomeUndecided(nowSeconds)}
+				AND p.execute_by IS NOT NULL
+				AND ${nowSeconds}::bigint > p.execute_by
 			)
 		)
 	)`
