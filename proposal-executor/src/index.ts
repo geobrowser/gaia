@@ -154,10 +154,10 @@ export const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(fu
 	}
 
 	// --- Validate chain ID ---
-	if (chainId !== 80451 && chainId !== 19411) {
+	if (chainId !== 80451 && chainId !== 19411 && chainId !== 55516) {
 		return yield* Effect.fail(
 			new InfraError({
-				message: `Invalid CHAIN_ID: ${chainId}. Expected 80451 (mainnet) or 19411 (testnet).`,
+				message: `Invalid CHAIN_ID: ${chainId}. Expected 80451 (mainnet), 19411 (testnet), or 55516 (testnet v2).`,
 				durationMs: 0,
 			}),
 		)

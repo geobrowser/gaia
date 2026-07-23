@@ -149,11 +149,21 @@ export const testnetChain: Chain = {
 	},
 }
 
-export type SupportedChainId = 80451 | 19411
+export const testnetV2Chain: Chain = {
+	id: 55516,
+	name: "Geo Testnet",
+	nativeCurrency: {name: "Ethereum", symbol: "ETH", decimals: 18},
+	rpcUrls: {
+		default: {http: ["https://rpc-geo-testnet-irdc0cgb0w.t.conduit.xyz"]},
+	},
+}
+
+export type SupportedChainId = 80451 | 19411 | 55516
 
 export function getChain(chainId: SupportedChainId): Chain {
 	if (chainId === 80451) return mainnetChain
 	if (chainId === 19411) return testnetChain
+	if (chainId === 55516) return testnetV2Chain
 	// Exhaustiveness check — TypeScript will error here if a new chain ID is added
 	// to SupportedChainId without a corresponding branch above.
 	const _exhaustive: never = chainId
