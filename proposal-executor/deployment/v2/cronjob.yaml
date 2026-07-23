@@ -80,6 +80,14 @@ spec:
                       key: RPC_URL
                 - name: CHAIN_ID
                   value: "55516"
+                # Required because CHAIN_ID=55516 has no Safe infra deployed — the
+                # executor uses an EIP-7702 Kernel account via ZeroDev's bundler
+                # instead of Safe+Pimlico on this chain (see execute.ts).
+                - name: ZERODEV_SPONSORSHIP_RPC_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: ZERODEV_SPONSORSHIP_RPC_URL
                 # Optional: Sentry error reporting
                 - name: SENTRY_DSN
                   valueFrom:
