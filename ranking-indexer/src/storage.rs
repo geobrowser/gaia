@@ -388,6 +388,35 @@ impl Storage {
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
+    /// Already-registered blocks (`ranks.ranking_blocks` row exists) whose
+    /// `ranking_type` is still `NULL` even though the graph now tags them
+    /// Rolling — the same split-edit gap as `find_unregistered_ranking_blocks`,
+    /// one step later: `detect()` only sets `ranking_type` from a
+    /// `CreateEntity`'s own ops, so a block created as static and tagged
+    /// Rolling by a *later*, separate edit never gets its row updated (issue
+    /// found investigating GEO-2328/PR#821 — a real block on a live space sat
+    /// stuck this way until backfilled by hand). Used by `bin/backfill_blocks.rs`
+    /// alongside `find_unregistered_ranking_blocks`; the recovery step is
+    /// identical (`get_block_config_from_kg` + `upsert_ranking_block`), just
+    /// starting from a row that already exists instead of one that doesn't.
+    pub async fn find_stale_ranking_type_blocks(&self) -> Result<Vec<Uuid>, IndexerError> {
+        use sdk::core::ids;
+        let pid = |s: &str| Uuid::parse_str(s).expect("valid system ID constant");
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            "SELECT rb.id FROM ranks.ranking_blocks rb \
+             WHERE rb.ranking_type IS NULL \
+               AND EXISTS ( \
+                 SELECT 1 FROM relations r \
+                 WHERE r.from_entity_id = rb.id AND r.type_id = $1 AND r.to_entity_id = $2 \
+               )",
+        )
+        .bind(pid(ids::TYPE_RELATION_TYPE_ID))
+        .bind(pid(ids::RANK_ROLLING_TYPE_ID))
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
     /// Entities typed `Rank` in the indexed public graph that never made it
     /// into `ranks.rankings` — the identical split-edit gap as
     /// `find_unregistered_ranking_blocks`, but for Rank submissions.
