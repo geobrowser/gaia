@@ -629,7 +629,12 @@ describe("computeProposalStatus - V2 slow early execution", () => {
 // =============================================================================
 
 describe("computeProposalStatus - V2 executeBy deadline", () => {
-	it("REJECTS an otherwise-executable fast proposal past executeBy", () => {
+	it("stays EXECUTABLE for a fast proposal that passed its vote, even past executeBy", () => {
+		// executeBy must never override an outcome the votes already resolved —
+		// this is exactly the shape of every migrated historical proposal, where
+		// executeBy is synthesized from long-past timestamps and is always
+		// already expired by the time anyone looks at it (see the doc comment
+		// on computeProposalStatus).
 		const now = BigInt(Math.floor(Date.now() / 1000))
 		const proposal = makeProposal({
 			votingMode: "Fast",
@@ -641,10 +646,10 @@ describe("computeProposalStatus - V2 executeBy deadline", () => {
 
 		const result = computeProposalStatus(proposal, now)
 
-		expect(result.status).toBe("REJECTED")
+		expect(result.status).toBe("EXECUTABLE")
 	})
 
-	it("REJECTS an otherwise-early-executable slow proposal past executeBy", () => {
+	it("stays EXECUTABLE for a slow proposal that early-executed, even past executeBy", () => {
 		const now = BigInt(Math.floor(Date.now() / 1000))
 		const proposal = makeProposal({
 			votingMode: "Slow",
@@ -653,6 +658,43 @@ describe("computeProposalStatus - V2 executeBy deadline", () => {
 			partialPercentageSupportThreshold: 5_000_000n,
 			quorum: 1n,
 			yesCount: 2n,
+			executeBy: now - 10n,
+			endTime: now + 3600n,
+		})
+
+		const result = computeProposalStatus(proposal, now)
+
+		expect(result.status).toBe("EXECUTABLE")
+		expect(result.isEarlyExecutable).toBe(true)
+	})
+
+	it("REJECTS a still-undecided fast proposal once executeBy passes", () => {
+		// This is the case executeBy is actually meant to catch: a proposal that
+		// never resolved (didn't clear its threshold) and whose window to do
+		// anything about it has now also closed.
+		const now = BigInt(Math.floor(Date.now() / 1000))
+		const proposal = makeProposal({
+			votingMode: "Fast",
+			flatSupportThreshold: 3n,
+			yesCount: 0n, // never voted on, still undecided
+			executeBy: now - 10n, // deadline passed
+			endTime: now + 3600n, // voting window technically still open
+		})
+
+		const result = computeProposalStatus(proposal, now)
+
+		expect(result.status).toBe("REJECTED")
+	})
+
+	it("REJECTS a still-undecided slow proposal once executeBy passes", () => {
+		const now = BigInt(Math.floor(Date.now() / 1000))
+		const proposal = makeProposal({
+			votingMode: "Slow",
+			universalPercentageSupportThreshold: 5_000_000n,
+			totalEditors: 2n,
+			partialPercentageSupportThreshold: 5_000_000n,
+			quorum: 1n,
+			yesCount: 0n, // never voted on, still undecided
 			executeBy: now - 10n,
 			endTime: now + 3600n,
 		})

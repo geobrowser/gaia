@@ -16,18 +16,26 @@ import {RATIO_BASE} from "./types"
  *
  * Decision order:
  * 1. Already executed → ACCEPTED
- * 2. Past `executeBy` deadline → REJECTED
- * 3. Voting window not started yet (`endTime == 0`) → PROPOSED. In V2 the
+ * 2. Voting window not started yet (`endTime == 0`) → PROPOSED. In V2 the
  *    window (`startDate`/`lastDate`/`executeBy`) stays zero until the first
  *    vote, and the contract's `canExecuteProposal` returns false while
  *    `lastDate == 0`. So a proposal with no votes yet is open, never
  *    executable or rejected on the zero window.
- * 4. Fast path: `yesCount > effective(flatSupportThreshold)` → EXECUTABLE,
+ * 3. Fast path: `yesCount > effective(flatSupportThreshold)` → EXECUTABLE,
  *    where `effective(x) = x == 0 ? 0 : x - 1` (matches the contract).
- * 5. Slow-path early execution (before voting ends): when
+ * 4. Slow-path early execution (before voting ends): when
  *    `yesCount >= ceil(universalPercentageSupportThreshold × totalEditors / RATIO_BASE)`.
- * 6. Slow-path late execution (after voting ends): quorum + the classic
+ * 5. Slow-path late execution (after voting ends): quorum + the classic
  *    `(RATIO_BASE - partial) × yes > partial × no` ratio.
+ * 6. Past `executeBy` deadline → downgrades an otherwise-still-undecided
+ *    (PROPOSED) outcome to REJECTED. Deliberately does NOT override an
+ *    outcome that already resolved to EXECUTABLE (or REJECTED by vote) —
+ *    `executeBy` means "this open proposal lapsed without a decision," not
+ *    "ignore what the votes say." This matters for historical/migrated
+ *    proposals, where `executeBy` is synthesized from long-past timestamps
+ *    and will always appear expired by the time anyone looks at it; treating
+ *    it as an unconditional override would make every migrated proposal that
+ *    actually passed its vote display as REJECTED.
  *
  * Must stay byte-for-byte consistent with the SQL fragments in `queries.ts`
  * (`sqlIsExecutable` / `sqlIsProposed` / `sqlIsRejected`). The parity tests
@@ -51,17 +59,27 @@ export function computeProposalStatus(
 		}
 	}
 
-	// Past the on-chain `executeBy` deadline → REJECTED, regardless of vote outcome.
-	// Null `executeBy` means no deadline (legacy V1 rows).
-	if (proposal.executeBy !== null && nowSeconds > proposal.executeBy) {
+	const result = computeVoteBasedStatus(proposal, nowSeconds)
+
+	// Past the on-chain `executeBy` deadline: only downgrades a proposal that's
+	// still genuinely undecided (PROPOSED) to REJECTED. See the deadline note
+	// above for why this must not override an already-resolved outcome.
+	if (result.status === "PROPOSED" && proposal.executeBy !== null && nowSeconds > proposal.executeBy) {
 		return {
 			status: "REJECTED",
-			isQuorumReached: false,
+			isQuorumReached: result.isQuorumReached,
 			isThresholdReached: false,
 			isEarlyExecutable: false,
 		}
 	}
 
+	return result
+}
+
+function computeVoteBasedStatus(
+	proposal: ProposalWithVotes | ProposalListItem,
+	nowSeconds: bigint,
+): StatusComputationResult {
 	// Voting window not started yet: the V2 contract leaves start/last/executeBy
 	// at zero until the first vote, and `canExecuteProposal` returns false while
 	// `lastDate == 0`. Treat this as an open proposal — not executable, not ended.
