@@ -67,10 +67,21 @@ spec:
                       name: proposal-executor-credentials
                       key: MEMBERSHIP_BOT_PRIVATE_KEY
                 # Config (non-sensitive — plain values)
+                #
+                # EXECUTOR_SPACE_ID/MEMBERSHIP_BOT_SPACE_ID below are specific to THIS
+                # chain (55516) — SpaceRegistry.generateSpaceId() derives the ID from
+                # keccak256("grc20.space", account, nonce, chainId), so it depends on
+                # the calling address and chain ID, not just a fixed constant. The old
+                # 19411 values (0xc669ec5cfd998cb14ca129a0f9838f78 /
+                # 0x4612d0863fe0b321052cb8d404a7afac) belonged to the old chain's
+                # Safe-derived executor address and can't be reused here — the executor
+                # now uses an EIP-7702 account whose address IS the raw EOA, which is a
+                # different address than the old Safe proxy. Registered via
+                # registerSpaceId() against each bot's own address on 55516.
                 - name: EXECUTOR_SPACE_ID
-                  value: "0xc669ec5cfd998cb14ca129a0f9838f78"
+                  value: "0xc6fdd7ccff1b4f5ba5f81dae4e1eb99b"
                 - name: MEMBERSHIP_BOT_SPACE_ID
-                  value: "0x4612d0863fe0b321052cb8d404a7afac"
+                  value: "0xf61e6ac5a54f47898ee23ae48a0729ba"
                 - name: SPACE_REGISTRY_ADDRESS
                   value: "0x364231615dcEA33D13C823b13B449DD9F55381E7"
                 - name: RPC_URL
