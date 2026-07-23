@@ -72,14 +72,14 @@ spec:
                 - name: MEMBERSHIP_BOT_SPACE_ID
                   value: "0x4612d0863fe0b321052cb8d404a7afac"
                 - name: SPACE_REGISTRY_ADDRESS
-                  value: "0xB01683b2f0d38d43fcD4D9aAB980166988924132"
+                  value: "0x364231615dcEA33D13C823b13B449DD9F55381E7"
                 - name: RPC_URL
                   valueFrom:
                     secretKeyRef:
                       name: proposal-executor-credentials
                       key: RPC_URL
                 - name: CHAIN_ID
-                  value: "19411"
+                  value: "55516"
                 # Optional: Sentry error reporting
                 - name: SENTRY_DSN
                   valueFrom:
