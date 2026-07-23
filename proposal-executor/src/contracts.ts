@@ -111,7 +111,8 @@ export const DAOSpaceAbi = [
 			},
 			{
 				components: [
-					{internalType: "address", name: "to", type: "address"},
+					{internalType: "address", name: "toAddress", type: "address"},
+					{internalType: "bytes16", name: "toSpaceId", type: "bytes16"},
 					{internalType: "uint256", name: "value", type: "uint256"},
 					{internalType: "bytes", name: "data", type: "bytes"},
 				],
