@@ -1492,6 +1492,65 @@ impl Storage {
         .execute(&mut *tx)
         .await?;
 
+        // Detect fast-path proposals auto-executed by a YES vote meeting the
+        // effective threshold, and backfill `executed_at` accordingly.
+        //
+        // The DAOSpace contract auto-executes fast-path proposals inline when a
+        // YES vote meets the threshold (_vote -> _executeProposal), but does NOT
+        // emit a PROPOSAL_EXECUTED event in that path — only the explicit
+        // enter(PROPOSAL_EXECUTED) path (slow-path/manual execution) emits it.
+        // So for fast-path proposals we must infer execution from the tally: if
+        // the current version's yes_count clears the effective threshold and
+        // executed_at is still NULL, mark it executed using the timestamp of the
+        // most recent current-version vote.
+        //
+        // `yes_count >= GREATEST(flat_support_threshold, 1)` mirrors
+        // api/src/proposals/status.ts's `effectiveThreshold` (a threshold of 0
+        // stays 0, so a single yes vote clears it via strict `>`; otherwise the
+        // effective bound is `threshold - 1`, so `yes_count >= threshold`).
+        //
+        // This restores logic that existed pre-governance-v2 (see git history,
+        // "remove obsolete Fast-path executed_at inference") and was never
+        // carried forward into the versioned schema — `main`/prod still has an
+        // equivalent unversioned form and runs it correctly today. Without this,
+        // any fast-path proposal that passed its vote but was never explicitly
+        // executed permanently shows as REJECTED once its (synthesized, for
+        // migrated proposals) execute_by deadline lapses, regardless of the
+        // real vote outcome.
+        let auto_executed = sqlx::query(
+            r#"
+            UPDATE proposals p
+            SET executed_at = latest_vote.max_created_at::bigint
+            FROM UNNEST($1::uuid[]) AS queued(proposal_id)
+            JOIN proposal_versions pv
+                ON pv.proposal_id = queued.proposal_id
+            JOIN (
+                SELECT proposal_id, proposal_version, MAX(created_at)::bigint AS max_created_at
+                FROM proposal_votes
+                WHERE proposal_id = ANY($1)
+                GROUP BY proposal_id, proposal_version
+            ) latest_vote
+                ON latest_vote.proposal_id = pv.proposal_id
+                AND latest_vote.proposal_version = pv.proposal_version
+            WHERE p.id = queued.proposal_id
+              AND p.id = pv.proposal_id
+              AND p.current_version = pv.proposal_version
+              AND pv.voting_mode = 'Fast'::"votingMode"
+              AND p.executed_at IS NULL
+              AND pv.yes_count >= GREATEST(pv.flat_support_threshold, 1)
+            "#,
+        )
+        .bind(&proposal_ids)
+        .execute(&mut *tx)
+        .await?;
+
+        if auto_executed.rows_affected() > 0 {
+            info!(
+                count = auto_executed.rows_affected(),
+                "Auto-detected fast-path proposal executions from vote tallies"
+            );
+        }
+
         // Remove processed proposals from the queue
         sqlx::query(
             r#"
