@@ -7,6 +7,13 @@
  * See: docs/plans/2026-03-02-feat-proposal-auto-executor-plan.md §On-Chain Execution
  */
 
+import {
+	createKernelAccount,
+	createKernelAccountClient,
+	createZeroDevPaymasterClient,
+	getUserOperationGasPrice,
+} from "@zerodev/sdk"
+import {getEntryPoint, KERNEL_V3_3} from "@zerodev/sdk/constants"
 import {Effect} from "effect"
 import {createSmartAccountClient, type SmartAccountClient} from "permissionless"
 import {toSafeSmartAccount} from "permissionless/accounts"
@@ -43,7 +50,7 @@ export interface SmartWallet {
 	readonly smartAccountClient: SmartAccountClient
 	readonly publicClient: PublicClient
 	readonly chain: Chain
-	readonly safeAddress: Address
+	readonly accountAddress: Address
 }
 
 export interface ExecutorConfig {
@@ -53,6 +60,17 @@ export interface ExecutorConfig {
 	spaceRegistryAddress: Address
 	rpcUrl: string
 	chainId: SupportedChainId
+	/**
+	 * ZeroDev bundler+paymaster endpoint (embeds a project ID) — required only
+	 * when chainId is 55516. That chain (a Conduit rollup) has ZeroDev's Kernel
+	 * v0.3.3 + EntryPoint v0.7 contracts deployed by default but no Safe infra
+	 * at all, so it uses an EIP-7702 Kernel account via ZeroDev's own bundler
+	 * instead of the Safe+Pimlico path used on 19411/80451 — the same pattern
+	 * geogenesis's frontend (mainnet-migration-v020, @geoprotocol/geo-sdk)
+	 * already uses for this chain. Unlike a Safe/classic-Kernel proxy, the
+	 * resulting account address IS the raw EOA derived from `privateKey`.
+	 */
+	zerodevSponsorshipRpcUrl?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -101,14 +119,17 @@ export function encodeProposalExecutedData(proposalIdHex: Hex): Hex {
 // ---------------------------------------------------------------------------
 
 /**
- * Create a gas-sponsored Safe smart account with Pimlico paymaster.
- * Called once per CronJob run.
+ * Create a gas-sponsored smart account. Called once per CronJob run.
+ *
+ * Chain 55516 (testnet v2) has no Safe infra deployed, so it uses an
+ * EIP-7702 Kernel account via ZeroDev's bundler instead of the Safe+Pimlico
+ * path used everywhere else. See the `zerodevSponsorshipRpcUrl` doc comment
+ * on `ExecutorConfig` for why.
  */
 export function createSmartWallet(config: ExecutorConfig): Effect.Effect<SmartWallet, InfraError> {
 	return Effect.tryPromise({
 		try: async () => {
 			const chain = getChain(config.chainId)
-			const bundlerUrl = `https://api.pimlico.io/v2/${config.chainId}/rpc?apikey=${config.pimlicoApiKey}`
 
 			const publicClient = createPublicClient({
 				chain,
@@ -116,6 +137,53 @@ export function createSmartWallet(config: ExecutorConfig): Effect.Effect<SmartWa
 			})
 
 			const owner = privateKeyToAccount(config.privateKey)
+
+			if (config.chainId === 55516) {
+				if (!config.zerodevSponsorshipRpcUrl) {
+					throw new Error("zerodevSponsorshipRpcUrl is required when chainId is 55516")
+				}
+
+				const entryPoint = getEntryPoint("0.7")
+				const kernelAccount = await createKernelAccount(publicClient, {
+					eip7702Account: owner,
+					entryPoint,
+					kernelVersion: KERNEL_V3_3,
+				})
+
+				const bundlerTransport = http(config.zerodevSponsorshipRpcUrl)
+				const paymasterClient = createZeroDevPaymasterClient({
+					chain,
+					transport: bundlerTransport,
+				})
+
+				const smartAccountClient = createKernelAccountClient({
+					account: kernelAccount,
+					chain,
+					client: publicClient,
+					bundlerTransport,
+					paymaster: {
+						getPaymasterStubData: (userOperation) =>
+							paymasterClient.sponsorUserOperation({userOperation, shouldConsume: false}),
+						getPaymasterData: (userOperation) => paymasterClient.sponsorUserOperation({userOperation}),
+					},
+					userOperation: {
+						estimateFeesPerGas: async ({bundlerClient}) => getUserOperationGasPrice(bundlerClient),
+					},
+				})
+
+				return {
+					// KernelAccountClient and permissionless's SmartAccountClient both
+					// expose the `.account`/`.sendTransaction(...)` shape executeProposal
+					// and castMembershipVote actually use — that's the only shape SmartWallet
+					// depends on across the codebase (verified: no other member is accessed).
+					smartAccountClient: smartAccountClient as unknown as SmartAccountClient,
+					publicClient,
+					chain,
+					accountAddress: kernelAccount.address,
+				} satisfies SmartWallet
+			}
+
+			const bundlerUrl = `https://api.pimlico.io/v2/${config.chainId}/rpc?apikey=${config.pimlicoApiKey}`
 
 			const safeAccount = await toSafeSmartAccount({
 				client: publicClient,
@@ -154,7 +222,7 @@ export function createSmartWallet(config: ExecutorConfig): Effect.Effect<SmartWa
 				smartAccountClient,
 				publicClient,
 				chain,
-				safeAddress: safeAccount.address,
+				accountAddress: safeAccount.address,
 			} satisfies SmartWallet
 		},
 		catch: (error) => new InfraError({message: `Smart wallet creation failed: ${error}`, durationMs: 0}),
@@ -167,8 +235,8 @@ export function createSmartWallet(config: ExecutorConfig): Effect.Effect<SmartWa
 
 /**
  * Verify the executor's personal space is registered on-chain.
- * Calls addressToSpaceId(safeAddress) — if it returns zero bytes, the personal
- * space hasn't been created yet and all executions will revert.
+ * Calls addressToSpaceId(accountAddress) — if it returns zero bytes, the
+ * personal space hasn't been created yet and all executions will revert.
  */
 export function verifyExecutorSetup(
 	wallet: SmartWallet,
@@ -181,13 +249,13 @@ export function verifyExecutorSetup(
 				address: spaceRegistryAddress,
 				abi: SpaceRegistryAbi,
 				functionName: "addressToSpaceId",
-				args: [wallet.safeAddress],
+				args: [wallet.accountAddress],
 			})
 
 			const ZERO_BYTES16 = "0x00000000000000000000000000000000"
 			if (spaceId === ZERO_BYTES16) {
 				throw new Error(
-					`Executor Safe ${wallet.safeAddress} has no registered personal space. ` +
+					`Executor account ${wallet.accountAddress} has no registered personal space. ` +
 						"Register one with 'geo space create' before running the executor.",
 				)
 			}
@@ -195,7 +263,7 @@ export function verifyExecutorSetup(
 			// Verify it matches the configured EXECUTOR_SPACE_ID
 			if (spaceId.toLowerCase() !== executorSpaceId.toLowerCase()) {
 				throw new Error(
-					`On-chain space ID ${spaceId} for Safe ${wallet.safeAddress} ` +
+					`On-chain space ID ${spaceId} for account ${wallet.accountAddress} ` +
 						`does not match configured EXECUTOR_SPACE_ID ${executorSpaceId}`,
 				)
 			}

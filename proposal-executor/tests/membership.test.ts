@@ -68,7 +68,7 @@ function fakeWallet(overrides: {
 			getBlock: overrides.getBlock ?? (async () => ({timestamp: NOW})),
 		},
 		chain: {id: 19411},
-		safeAddress: "0xsafe",
+		accountAddress: "0xsafe",
 	} as unknown as SmartWallet
 }
 

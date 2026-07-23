@@ -337,6 +337,29 @@ describe("parseConfig: membership-bot config & allowlist", () => {
 		)
 		expect(env.membershipAutoacceptSpaceIds).toEqual([ALLOW_A, ALLOW_B])
 	})
+
+	test("CHAIN_ID=55516 requires ZERODEV_SPONSORSHIP_RPC_URL", async () => {
+		const err = expectInfraError(await runParse({CHAIN_ID: "55516"}))
+		expect(err.message).toContain("ZERODEV_SPONSORSHIP_RPC_URL")
+	})
+
+	test("CHAIN_ID=55516 with a valid ZERODEV_SPONSORSHIP_RPC_URL parses successfully", async () => {
+		const env = expectSuccess(
+			await runParse({
+				CHAIN_ID: "55516",
+				ZERODEV_SPONSORSHIP_RPC_URL: "https://rpc.zerodev.app/api/v3/test-project/chain/55516",
+			}),
+		)
+		expect(env.chainId).toBe(55516)
+		expect(Redacted.value(env.zerodevSponsorshipRpcUrl)).toBe(
+			"https://rpc.zerodev.app/api/v3/test-project/chain/55516",
+		)
+	})
+
+	test("CHAIN_ID=80451 does not require ZERODEV_SPONSORSHIP_RPC_URL", async () => {
+		const env = expectSuccess(await runParse({}, ["ZERODEV_SPONSORSHIP_RPC_URL"]))
+		expect(env.chainId).toBe(80451)
+	})
 })
 
 // ---------------------------------------------------------------------------
@@ -385,7 +408,7 @@ function makeFakeWallet(opts: FakeWalletOpts = {}): FakeWallet {
 	const calls = {readContract: [] as string[], sendTransaction: 0}
 	const wallet = {
 		chain: {id: 80451},
-		safeAddress: "0x0000000000000000000000000000000000000001",
+		accountAddress: "0x0000000000000000000000000000000000000001",
 		publicClient: {
 			// biome-ignore lint/suspicious/noExplicitAny: minimal stub
 			readContract: async ({functionName}: any) => {
