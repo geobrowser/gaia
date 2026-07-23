@@ -605,7 +605,89 @@ pub fn decode_proposal_settings_used(data: &[u8]) -> Result<ProposalSettingsData
     Ok(decoded)
 }
 
+/// Decode PROPOSAL_CREATED's inner `Action[]`, trying the current v2 4-tuple
+/// shape `(toAddress, toSpaceId, value, data)` first, falling back to the
+/// legacy pre-2026-06-26 3-tuple shape `(to, value, data)`.
+///
+/// The legacy fallback exists because proposals migrated onto this chain
+/// before 2026-06-26 (the transplant run that predates the 4-tuple reshape
+/// landing in geo-migration) are permanently stuck in the 3-tuple shape —
+/// historical on-chain events are immutable and can't be re-emitted. Without
+/// this fallback, that entire migrated batch would fail to decode on any
+/// future full reindex. `toSpaceId` is synthesized as all-zero bytes for
+/// legacy actions, matching how geo-migration's own `reshapeProposalCreated`
+/// treats the old explicit `to` address (see geo-migration
+/// packages/transplanter/event-mapping.ts).
+///
+/// Deliberately does NOT just try v2, catch an `Err`, and fall back — ethabi
+/// can silently "succeed" decoding 3-tuple-encoded bytes as a 4-tuple with
+/// wrong (not erroring) field values when an action's fields are mostly
+/// zero/short, since tuple-array decoding has no way to detect an arity
+/// mismatch on its own. Each candidate decode is verified by re-encoding it
+/// with the same shape and checking it reproduces the exact input bytes;
+/// only a byte-for-byte match is trusted.
 fn decode_proposal_created_inner(data: &[u8]) -> Result<ProposalCreatedData, DecodeError> {
+    if let Ok(decoded) = decode_proposal_created_inner_v2(data)
+        && encode_proposal_created_v2(&decoded) == data
+    {
+        return Ok(decoded);
+    }
+    if let Ok(decoded) = decode_proposal_created_inner_legacy(data)
+        && encode_proposal_created_legacy(&decoded) == data
+    {
+        return Ok(decoded);
+    }
+    // Neither shape round-trips exactly — shouldn't happen for real on-chain
+    // data. Fall back to whichever decode succeeded at all, preferring v2,
+    // rather than failing outright.
+    decode_proposal_created_inner_v2(data).or_else(|_| decode_proposal_created_inner_legacy(data))
+}
+
+/// Re-encode a v2-shaped decode result and check it reproduces the original
+/// bytes exactly — the real signal that the v2 decode was correct, not just
+/// that `ethabi::decode` happened to return `Ok`.
+fn encode_proposal_created_v2(decoded: &ProposalCreatedData) -> Vec<u8> {
+    let actions = decoded
+        .actions
+        .iter()
+        .map(|a| {
+            Token::Tuple(vec![
+                Token::Address(ethabi::Address::from_slice(&a.to_address)),
+                Token::FixedBytes(a.to_space_id.clone()),
+                Token::Uint(ethabi::Uint::from_big_endian(&a.value)),
+                Token::Bytes(a.data.clone()),
+            ])
+        })
+        .collect();
+    ethabi::encode(&[
+        Token::FixedBytes(decoded.proposal_id.clone()),
+        Token::Uint(ethabi::Uint::from(decoded.voting_mode)),
+        Token::Array(actions),
+    ])
+}
+
+/// Re-encode a legacy-shaped decode result and check it reproduces the
+/// original bytes exactly, for the same reason as [`encode_proposal_created_v2`].
+fn encode_proposal_created_legacy(decoded: &ProposalCreatedData) -> Vec<u8> {
+    let actions = decoded
+        .actions
+        .iter()
+        .map(|a| {
+            Token::Tuple(vec![
+                Token::Address(ethabi::Address::from_slice(&a.to_address)),
+                Token::Uint(ethabi::Uint::from_big_endian(&a.value)),
+                Token::Bytes(a.data.clone()),
+            ])
+        })
+        .collect();
+    ethabi::encode(&[
+        Token::FixedBytes(decoded.proposal_id.clone()),
+        Token::Uint(ethabi::Uint::from(decoded.voting_mode)),
+        Token::Array(actions),
+    ])
+}
+
+fn decode_proposal_created_inner_v2(data: &[u8]) -> Result<ProposalCreatedData, DecodeError> {
     let params = [
         ParamType::FixedBytes(16),
         ParamType::Uint(8),
@@ -675,6 +757,85 @@ fn decode_proposal_created_inner(data: &[u8]) -> Result<ProposalCreatedData, Dec
                     Ok(ProposalAction {
                         to_address,
                         to_space_id,
+                        value,
+                        data,
+                    })
+                }
+                _ => Err(DecodeError::AbiDecode("Invalid action tuple".to_string())),
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(DecodeError::AbiDecode("Invalid actions array".to_string())),
+    };
+
+    Ok(ProposalCreatedData {
+        proposal_id,
+        voting_mode,
+        actions,
+    })
+}
+
+/// Legacy pre-2026-06-26 decode: inner Action tuple is `(to, value, data)`,
+/// a 3-tuple with no `toSpaceId`. `to_space_id` is synthesized as all-zero
+/// bytes to keep `ProposalAction`'s shape uniform for callers.
+fn decode_proposal_created_inner_legacy(data: &[u8]) -> Result<ProposalCreatedData, DecodeError> {
+    let params = [
+        ParamType::FixedBytes(16),
+        ParamType::Uint(8),
+        ParamType::Array(Box::new(ParamType::Tuple(vec![
+            ParamType::Address, // to
+            ParamType::Uint(256),
+            ParamType::Bytes,
+        ]))),
+    ];
+
+    let tokens =
+        ethabi::decode(&params, data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+
+    let proposal_id = match &tokens[0] {
+        Token::FixedBytes(bytes) if bytes.len() == 16 => bytes.clone(),
+        _ => return Err(DecodeError::AbiDecode("Invalid proposal_id".to_string())),
+    };
+
+    let voting_mode = match &tokens[1] {
+        Token::Uint(value) => {
+            let v = value.low_u32();
+            if v > u8::MAX as u32 {
+                return Err(DecodeError::AbiDecode("Invalid voting_mode".to_string()));
+            }
+            v as u8
+        }
+        _ => return Err(DecodeError::AbiDecode("Invalid voting_mode".to_string())),
+    };
+
+    let actions = match &tokens[2] {
+        Token::Array(items) => items
+            .iter()
+            .map(|item| match item {
+                // fields: (to, value, data) — legacy 3-tuple, no toSpaceId.
+                Token::Tuple(fields) if fields.len() == 3 => {
+                    let to_address = match &fields[0] {
+                        Token::Address(addr) => addr.as_bytes().to_vec(),
+                        _ => {
+                            return Err(DecodeError::AbiDecode("Invalid action.to".to_string()));
+                        }
+                    };
+                    let value = match &fields[1] {
+                        Token::Uint(v) => {
+                            let mut buf = [0u8; 32];
+                            v.to_big_endian(&mut buf);
+                            buf.to_vec()
+                        }
+                        _ => {
+                            return Err(DecodeError::AbiDecode("Invalid action.value".to_string()));
+                        }
+                    };
+                    let data = match &fields[2] {
+                        Token::Bytes(bytes) => bytes.clone(),
+                        _ => return Err(DecodeError::AbiDecode("Invalid action.data".to_string())),
+                    };
+                    Ok(ProposalAction {
+                        to_address,
+                        to_space_id: vec![0u8; 16],
                         value,
                         data,
                     })
@@ -968,6 +1129,40 @@ mod tests {
             EthU256::from(1000u64).to_big_endian(&mut buf);
             buf.to_vec()
         });
+        assert_eq!(result.actions[0].data, vec![1, 2, 3]);
+        assert_eq!(result.voting_mode, 1);
+    }
+
+    #[test]
+    fn test_decode_proposal_created_legacy_3_tuple() {
+        // Proposals migrated before 2026-06-26 (geo-migration's 4-tuple reshape)
+        // are permanently stuck in the legacy 3-tuple Action shape on-chain.
+        use ethabi::ethereum_types::U256 as EthU256;
+
+        let proposal_id = vec![0xAB_u8; 16];
+        let voting_mode = EthU256::from(1u8);
+        let legacy_action_tuple = Token::Tuple(vec![
+            Token::Address(ethabi::Address::zero()), // to
+            Token::Uint(EthU256::from(1000u64)),
+            Token::Bytes(vec![1, 2, 3]),
+        ]);
+
+        let encoded = ethabi::encode(&[
+            Token::FixedBytes(proposal_id.clone()),
+            Token::Uint(voting_mode),
+            Token::Array(vec![legacy_action_tuple]),
+        ]);
+
+        let (result, unwrap_level) = decode_proposal_created(&encoded).unwrap();
+        assert_eq!(unwrap_level, 0);
+        assert_eq!(result.proposal_id, proposal_id);
+        assert_eq!(result.actions.len(), 1);
+        assert_eq!(result.actions[0].to_address, vec![0u8; 20]);
+        assert_eq!(
+            result.actions[0].to_space_id,
+            vec![0u8; 16],
+            "legacy actions have no toSpaceId; must synthesize as zero"
+        );
         assert_eq!(result.actions[0].data, vec![1, 2, 3]);
         assert_eq!(result.voting_mode, 1);
     }
@@ -1446,5 +1641,31 @@ mod tests {
             publish_params_result.is_ok(),
             "publish: abi_decode_params should work"
         );
+    }
+}
+
+#[cfg(test)]
+mod real_data_verification {
+    use super::*;
+
+    #[test]
+    fn decodes_real_migrated_proposal_via_legacy_fallback() {
+        // Real PROPOSAL_CREATED data pulled directly from chain 55516 (space
+        // 7570a0ba-7552-e680-6e07-51c2ad105754, proposal be774813-0da2-4c9d-
+        // 841e-77ef9c780a18) — genuinely migrated June-11 content, permanently
+        // stuck in the legacy 3-tuple shape.
+        let hex = "00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000280be7748130da24c9d841e77ef9c780a18000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000020000000000000000000000000533b21f8af11753c8d2dbed1fbe7c1dd4962bd0e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006000000000000000000000000000000000000000000000000000000000000001446b47f61a00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000012000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000042697066733a2f2f6261666b72656962677a65697961336b6579666e673632706f6e71787868376266723533656c6a6c6662366c637a72356f73766d327567716f6575000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+        let data = hex::decode(hex).unwrap();
+
+        let (result, _unwrap_level) = decode_proposal_created(&data).unwrap();
+        assert_eq!(hex::encode(&result.proposal_id), "be7748130da24c9d841e77ef9c780a18");
+        assert_eq!(result.voting_mode, 1);
+        assert_eq!(result.actions.len(), 1);
+        assert_eq!(
+            hex::encode(&result.actions[0].to_address),
+            "533b21f8af11753c8d2dbed1fbe7c1dd4962bd0e"
+        );
+        assert_eq!(result.actions[0].to_space_id, vec![0u8; 16], "legacy action synthesizes zero toSpaceId");
+        assert_eq!(&result.actions[0].data[0..4], &[0x6b, 0x47, 0xf6, 0x1a][..], "publish() selector");
     }
 }
