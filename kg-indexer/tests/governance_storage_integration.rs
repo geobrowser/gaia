@@ -857,6 +857,216 @@ async fn test_update_proposal_executed_writes_to_identity() {
     cleanup_proposal(&pool, proposal_id, &[space_id, proposer_id]).await;
 }
 
+// --------------------------------------------------------------------------
+// process_tally_queue backfills executed_at for fast-path proposals whose
+// yes_count clears the effective threshold — restored compensation logic
+// for the DAOSpace contract's silent inline auto-execution (see the comment
+// on process_tally_queue). This is a real regression test: this exact
+// scenario (a migrated fast-path proposal whose vote passed but was never
+// explicitly executed) was displaying REJECTED in production before this
+// fix, because executed_at stayed NULL forever without it.
+// --------------------------------------------------------------------------
+#[tokio::test]
+#[ignore]
+async fn test_process_tally_queue_backfills_executed_at_for_passed_fast_path() {
+    let pool = get_pool().await;
+    let storage = setup_storage().await;
+    let space_id = Uuid::new_v4();
+    let proposal_id = Uuid::new_v4();
+    let proposer_id = Uuid::new_v4();
+    let voter_ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
+
+    ensure_space(&pool, space_id).await;
+    ensure_space(&pool, proposer_id).await;
+    for voter_id in &voter_ids {
+        ensure_space(&pool, *voter_id).await;
+    }
+
+    // flat_support_threshold = 3 -> effective threshold clears at yes_count >= 3.
+    let v1 = version_fast(3, Some(3_000));
+    seed_proposal_v1(&storage, &pool, proposal_id, space_id, proposer_id, &v1).await;
+
+    let vote_timestamps = [1_700_000_100, 1_700_000_200, 1_700_000_300];
+    let mut tx = pool.begin().await.unwrap();
+    for (voter_id, created_at) in voter_ids.iter().zip(vote_timestamps.iter()) {
+        let vote = ProposalVoteItem {
+            proposal_id,
+            voter_id: *voter_id,
+            space_id,
+            vote: VoteOption::Yes,
+            created_at: *created_at,
+            created_at_block: 1,
+            proposal_version: 1,
+        };
+        storage
+            .insert_proposal_votes(std::slice::from_ref(&vote), &mut tx)
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    storage
+        .queue_tally_update(proposal_id, &mut tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    storage
+        .process_tally_queue(10)
+        .await
+        .expect("process_tally_queue failed");
+
+    let (executed_at, yes_count): (Option<i64>, i64) = sqlx::query_as(
+        r#"SELECT p.executed_at, pv.yes_count
+           FROM proposals p
+           JOIN proposal_versions pv ON pv.proposal_id = p.id AND pv.proposal_version = p.current_version
+           WHERE p.id = $1"#,
+    )
+    .bind(proposal_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(yes_count, 3, "tally must reflect all 3 yes votes");
+    assert_eq!(
+        executed_at,
+        Some(1_700_000_300),
+        "executed_at must be backfilled to the latest vote's timestamp once the effective threshold is cleared"
+    );
+
+    cleanup_proposal(&pool, proposal_id, &[space_id, proposer_id, voter_ids[0], voter_ids[1], voter_ids[2]]).await;
+}
+
+// --------------------------------------------------------------------------
+// process_tally_queue must NOT backfill executed_at when the fast-path
+// threshold hasn't actually been cleared yet.
+// --------------------------------------------------------------------------
+#[tokio::test]
+#[ignore]
+async fn test_process_tally_queue_does_not_backfill_when_threshold_not_met() {
+    let pool = get_pool().await;
+    let storage = setup_storage().await;
+    let space_id = Uuid::new_v4();
+    let proposal_id = Uuid::new_v4();
+    let proposer_id = Uuid::new_v4();
+    let voter_id = Uuid::new_v4();
+
+    ensure_space(&pool, space_id).await;
+    ensure_space(&pool, proposer_id).await;
+    ensure_space(&pool, voter_id).await;
+
+    // flat_support_threshold = 3 -> needs yes_count >= 3; only 1 yes vote cast.
+    let v1 = version_fast(3, Some(3_000));
+    seed_proposal_v1(&storage, &pool, proposal_id, space_id, proposer_id, &v1).await;
+
+    let vote = ProposalVoteItem {
+        proposal_id,
+        voter_id,
+        space_id,
+        vote: VoteOption::Yes,
+        created_at: 1_700_000_100,
+        created_at_block: 1,
+        proposal_version: 1,
+    };
+    let mut tx = pool.begin().await.unwrap();
+    storage
+        .insert_proposal_votes(std::slice::from_ref(&vote), &mut tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    storage
+        .queue_tally_update(proposal_id, &mut tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    storage
+        .process_tally_queue(10)
+        .await
+        .expect("process_tally_queue failed");
+
+    let (executed_at,): (Option<i64>,) =
+        sqlx::query_as("SELECT executed_at FROM proposals WHERE id = $1")
+            .bind(proposal_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!(
+        executed_at, None,
+        "executed_at must stay NULL when the effective threshold isn't cleared"
+    );
+
+    cleanup_proposal(&pool, proposal_id, &[space_id, proposer_id, voter_id]).await;
+}
+
+// --------------------------------------------------------------------------
+// process_tally_queue must NOT backfill executed_at for Slow-path proposals
+// even when they clearly pass — fast-path auto-execution is a distinct
+// contract behavior; slow-path proposals require an explicit execute() call,
+// which (if it happens) is reflected via a real PROPOSAL_EXECUTED event
+// through update_proposal_executed, not tally-based inference.
+// --------------------------------------------------------------------------
+#[tokio::test]
+#[ignore]
+async fn test_process_tally_queue_does_not_backfill_slow_path() {
+    let pool = get_pool().await;
+    let storage = setup_storage().await;
+    let space_id = Uuid::new_v4();
+    let proposal_id = Uuid::new_v4();
+    let proposer_id = Uuid::new_v4();
+    let voter_id = Uuid::new_v4();
+
+    ensure_space(&pool, space_id).await;
+    ensure_space(&pool, proposer_id).await;
+    ensure_space(&pool, voter_id).await;
+
+    let v1 = version_slow(Some("Slow proposal"));
+    seed_proposal_v1(&storage, &pool, proposal_id, space_id, proposer_id, &v1).await;
+
+    let vote = ProposalVoteItem {
+        proposal_id,
+        voter_id,
+        space_id,
+        vote: VoteOption::Yes,
+        created_at: 1_700_000_100,
+        created_at_block: 1,
+        proposal_version: 1,
+    };
+    let mut tx = pool.begin().await.unwrap();
+    storage
+        .insert_proposal_votes(std::slice::from_ref(&vote), &mut tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    storage
+        .queue_tally_update(proposal_id, &mut tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    storage
+        .process_tally_queue(10)
+        .await
+        .expect("process_tally_queue failed");
+
+    let (executed_at,): (Option<i64>,) =
+        sqlx::query_as("SELECT executed_at FROM proposals WHERE id = $1")
+            .bind(proposal_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    assert_eq!(
+        executed_at, None,
+        "slow-path proposals must never be auto-executed by tally inference"
+    );
+
+    cleanup_proposal(&pool, proposal_id, &[space_id, proposer_id, voter_id]).await;
+}
+
 // Silence unused-import warnings for types not exercised in every test.
 #[allow(dead_code)]
 fn _unused(_a: ProposalActionItem, _p: ProposalActionPayload) {}
