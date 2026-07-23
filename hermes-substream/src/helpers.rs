@@ -151,39 +151,83 @@ fn decode_proposal_actions(data: &[u8]) -> Option<Vec<Vec<u8>>> {
     None
 }
 
-/// Inner decode function for proposal actions.
+/// Inner decode function for proposal actions, trying the current v2 4-tuple
+/// Action shape first, falling back to the legacy pre-2026-06-26 3-tuple
+/// shape. The legacy shape is permanently present on-chain for proposals
+/// migrated before the 4-tuple reshape landed in geo-migration — historical
+/// events are immutable, so this fallback can't be retired.
+///
+/// Deliberately does NOT just try v2, treat `None` as failure, and fall back
+/// — ethabi can silently "succeed" decoding 3-tuple-encoded bytes as a
+/// 4-tuple with wrong (not-`None`) results when an action's fields are
+/// mostly zero/short, since tuple-array decoding can't detect an arity
+/// mismatch on its own. Each candidate decode is verified by re-encoding the
+/// exact tokens it produced and checking that reproduces the input bytes
+/// exactly; only a byte-for-byte match is trusted.
 fn decode_proposal_actions_inner(data: &[u8]) -> Option<Vec<Vec<u8>>> {
-    // ABI schema: (bytes16 proposalId, uint8 votingMode, Action[])
-    // where Action is (address toAddress, bytes16 toSpaceId, uint256 value, bytes data)
+    if let Some(tokens) = decode_proposal_tokens(data, 4)
+        && ethabi::encode(&tokens) == data
+    {
+        return extract_action_field(&tokens, 3);
+    }
+    if let Some(tokens) = decode_proposal_tokens(data, 3)
+        && ethabi::encode(&tokens) == data
+    {
+        return extract_action_field(&tokens, 2);
+    }
+    // Neither shape round-trips exactly — shouldn't happen for real on-chain
+    // data. Fall back to whichever decode succeeded at all, preferring v2.
+    decode_proposal_tokens(data, 4)
+        .and_then(|tokens| extract_action_field(&tokens, 3))
+        .or_else(|| decode_proposal_tokens(data, 3).and_then(|tokens| extract_action_field(&tokens, 2)))
+}
+
+/// Decode `(bytes16 proposalId, uint8 votingMode, Action[])` where each
+/// Action tuple has `action_arity` fields — 4 for the current v2 shape
+/// `(toAddress, toSpaceId, value, data)`, 3 for the legacy shape
+/// `(to, value, data)`. Returns the raw decoded tokens so callers can
+/// re-encode them for round-trip verification before trusting the result.
+fn decode_proposal_tokens(data: &[u8], action_arity: usize) -> Option<Vec<Token>> {
+    let action_fields = match action_arity {
+        4 => vec![
+            ParamType::Address,        // toAddress
+            ParamType::FixedBytes(16), // toSpaceId
+            ParamType::Uint(256),
+            ParamType::Bytes,
+        ],
+        3 => vec![
+            ParamType::Address, // to
+            ParamType::Uint(256),
+            ParamType::Bytes,
+        ],
+        _ => return None,
+    };
     let params = [
         ParamType::FixedBytes(16),
         ParamType::Uint(8),
-        ParamType::Array(Box::new(ParamType::Tuple(vec![
-            ParamType::Address,        // toAddress (call target; resolved onchain)
-            ParamType::FixedBytes(16), // toSpaceId (call target; resolved onchain)
-            ParamType::Uint(256),
-            ParamType::Bytes,
-        ]))),
+        ParamType::Array(Box::new(ParamType::Tuple(action_fields))),
     ];
+    ethabi::decode(&params, data).ok()
+}
 
-    let tokens = ethabi::decode(&params, data).ok()?;
-
-    // Extract action calldata (fields[3]) from the actions array
-    let actions = match &tokens.get(2)? {
-        Token::Array(items) => items
-            .iter()
-            .filter_map(|item| match item {
-                Token::Tuple(fields) if fields.len() == 4 => match &fields[3] {
-                    Token::Bytes(bytes) => Some(bytes.clone()),
+/// Extract the `bytes data` field (at `data_field_index` within each Action
+/// tuple) from the actions array in `tokens[2]`.
+fn extract_action_field(tokens: &[Token], data_field_index: usize) -> Option<Vec<Vec<u8>>> {
+    match tokens.get(2)? {
+        Token::Array(items) => Some(
+            items
+                .iter()
+                .filter_map(|item| match item {
+                    Token::Tuple(fields) => match fields.get(data_field_index) {
+                        Some(Token::Bytes(bytes)) => Some(bytes.clone()),
+                        _ => None,
+                    },
                     _ => None,
-                },
-                _ => None,
-            })
-            .collect(),
-        _ => return None,
-    };
-
-    Some(actions)
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
 }
 
 /// Decode the content_uri from publish action calldata (after selector).
@@ -374,6 +418,23 @@ mod tests {
         ])
     }
 
+    /// Wrap an inner action calldata in a legacy (pre-2026-06-26) PROPOSAL_CREATED
+    /// payload: abi.encode(bytes16 proposalId, uint8 votingMode, Action[] { (address, uint256, bytes) }).
+    /// Proposals migrated before geo-migration's 4-tuple reshape landed are
+    /// permanently stuck in this shape on-chain.
+    fn encode_proposal_with_action_legacy(action_calldata: Vec<u8>) -> Vec<u8> {
+        let action = Token::Tuple(vec![
+            Token::Address(ethabi::Address::zero()),
+            Token::Uint(ethabi::Uint::zero()),
+            Token::Bytes(action_calldata),
+        ]);
+        ethabi::encode(&[
+            Token::FixedBytes(vec![0u8; 16]),
+            Token::Uint(ethabi::Uint::zero()),
+            Token::Array(vec![action]),
+        ])
+    }
+
     /// Build ping(action, EMPTY_TOPIC, abi.encode(contentUri, metadata)) calldata.
     fn encode_edit_ping(action_hash: &[u8; 32], content_uri: &str) -> Vec<u8> {
         let inner_data = ethabi::encode(&[
@@ -395,6 +456,23 @@ mod tests {
         let uri = "ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
         let ping = encode_edit_ping(&crate::ACTION_EDITS_PUBLISHED, uri);
         let proposal = encode_proposal_with_action(ping);
+
+        assert_eq!(extract_proposal_publish_uris(&proposal), vec![uri.to_string()]);
+    }
+
+    #[test]
+    fn test_extract_proposal_uris_legacy_3_tuple_publish() {
+        // Proposals migrated before geo-migration's 4-tuple reshape landed
+        // (2026-06-26) are permanently stuck in the legacy 3-tuple Action
+        // shape on-chain — historical events are immutable.
+        let uri = "ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
+        let mut calldata = PUBLISH_SELECTOR.to_vec();
+        calldata.extend_from_slice(&ethabi::encode(&[
+            Token::FixedBytes(vec![0u8; 32]),
+            Token::Bytes(uri.as_bytes().to_vec()),
+            Token::Bytes(vec![]),
+        ]));
+        let proposal = encode_proposal_with_action_legacy(calldata);
 
         assert_eq!(extract_proposal_publish_uris(&proposal), vec![uri.to_string()]);
     }
