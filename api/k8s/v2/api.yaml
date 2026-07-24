@@ -208,6 +208,8 @@ spec:
 # testnet-api-v2.geobrowser.io and api-testnet.geobrowser.io (HTTP + HTTPS
 # with a cert-manager cert) and allowedRoutes opened to the gaia namespace;
 # DNS for both hosts points at the shared Gateway LB.
+# This backend route attaches only to the HTTPS listeners. The geo-chat
+# Gateway manifest owns the HTTP-to-HTTPS redirect route for both hosts.
 # Note: the old nginx server-snippet gzip and proxy-body-size tuning have no
 # HTTPRoute equivalent — response compression falls to the api process.
 apiVersion: gateway.networking.k8s.io/v1
@@ -219,6 +221,10 @@ spec:
   parentRefs:
     - name: geo-chat-api
       namespace: geo-chat
+      sectionName: gaia-api-https
+    - name: geo-chat-api
+      namespace: geo-chat
+      sectionName: gaia-api-alias-https
   hostnames:
     - testnet-api-v2.geobrowser.io
     - api-testnet.geobrowser.io
