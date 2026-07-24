@@ -69,24 +69,21 @@ spec:
                 # Config (non-sensitive — plain values)
                 #
                 # EXECUTOR_SPACE_ID/MEMBERSHIP_BOT_SPACE_ID below are specific to THIS
-                # chain (55516) AND this SpaceRegistry deployment — generateSpaceId()
-                # derives the ID from the calling address, an internal per-account
-                # nonce, and the chain ID, so a new SpaceRegistry proxy (its own,
-                # separate storage) starts each account's nonce independently. These
-                # values were re-registered via registerSpaceId() against the new
-                # proxy below (2026-07-24); nonces landed at 2 and 3 respectively
-                # because both accounts already had earlier registrations on this
-                # same new proxy from prior exploratory work. The old 19411 values
-                # (0xc669ec5cfd998cb14ca129a0f9838f78 / 0x4612d0863fe0b321052cb8d404a7afac)
-                # belonged to the old chain's Safe-derived executor address and can't be
-                # reused here — the executor uses an EIP-7702 account whose address IS
-                # the raw EOA, a different address than the old Safe proxy.
+                # chain (55516) — SpaceRegistry.generateSpaceId() derives the ID from
+                # keccak256("grc20.space", account, nonce, chainId), so it depends on
+                # the calling address and chain ID, not just a fixed constant. The old
+                # 19411 values (0xc669ec5cfd998cb14ca129a0f9838f78 /
+                # 0x4612d0863fe0b321052cb8d404a7afac) belonged to the old chain's
+                # Safe-derived executor address and can't be reused here — the executor
+                # now uses an EIP-7702 account whose address IS the raw EOA, which is a
+                # different address than the old Safe proxy. Registered via
+                # registerSpaceId() against each bot's own address on 55516.
                 - name: EXECUTOR_SPACE_ID
-                  value: "0xa98356cee6be405cae013cd55ef934f7"
+                  value: "0xc6fdd7ccff1b4f5ba5f81dae4e1eb99b"
                 - name: MEMBERSHIP_BOT_SPACE_ID
-                  value: "0x91c83a14d737420abae4ceb3f7b500c5"
+                  value: "0xf61e6ac5a54f47898ee23ae48a0729ba"
                 - name: SPACE_REGISTRY_ADDRESS
-                  value: "0x4ee61966cCd1f6A99656def361e9E6e75bCE5eBa"
+                  value: "0x364231615dcEA33D13C823b13B449DD9F55381E7"
                 - name: RPC_URL
                   valueFrom:
                     secretKeyRef:
