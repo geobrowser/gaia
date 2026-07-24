@@ -205,9 +205,9 @@ spec:
 # HTTP routing via the shared Cilium Gateway (`geo-chat-api` in the geo-chat
 # namespace — one LB / IP for the whole cluster, per-service HTTPRoutes).
 # Companion Gateway-side change (geo-chat repo): listeners for
-# testnet-api-v2.geobrowser.io (HTTP + HTTPS with a cert-manager cert) and
-# allowedRoutes opened to the gaia namespace; DNS for the host points at the
-# shared Gateway LB.
+# testnet-api-v2.geobrowser.io and api-testnet.geobrowser.io (HTTP + HTTPS
+# with a cert-manager cert) and allowedRoutes opened to the gaia namespace;
+# DNS for both hosts points at the shared Gateway LB.
 # Note: the old nginx server-snippet gzip and proxy-body-size tuning have no
 # HTTPRoute equivalent — response compression falls to the api process.
 apiVersion: gateway.networking.k8s.io/v1
@@ -221,6 +221,7 @@ spec:
       namespace: geo-chat
   hostnames:
     - testnet-api-v2.geobrowser.io
+    - api-testnet.geobrowser.io
   rules:
     - matches:
         - path:
