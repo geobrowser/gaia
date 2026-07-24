@@ -209,7 +209,11 @@ spec:
 # with a cert-manager cert) and allowedRoutes opened to the gaia namespace;
 # DNS for both hosts points at the shared Gateway LB.
 # This backend route attaches only to the HTTPS listeners. The geo-chat
-# Gateway manifest owns the HTTP-to-HTTPS redirect route for both hosts.
+# Gateway manifest owns the HTTP-to-HTTPS redirect route for both hosts,
+# using a 308 (method-preserving) redirect — this required upgrading
+# geo-testnet-k8s's Gateway API CRDs from v1.2.1 to v1.6.1, since 308
+# only graduated to Core support in the RequestRedirect filter as of
+# Gateway API v1.6.0.
 # Note: the old nginx server-snippet gzip and proxy-body-size tuning have no
 # HTTPRoute equivalent — response compression falls to the api process.
 apiVersion: gateway.networking.k8s.io/v1
