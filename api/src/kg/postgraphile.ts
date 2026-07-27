@@ -58,6 +58,10 @@ const pgPool = new Pool({
 	connectionTimeoutMillis: parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "3000", 10),
 	// Close idle connections after 30 seconds to free up PgBouncer slots
 	idleTimeoutMillis: parseInt(process.env.PG_IDLE_TIMEOUT_MS || "30000", 10),
+	// Deterministic client-side fuse: destroys a stuck query's connection just above
+	// Postgres' statement_timeout (10s, api/docs/database-configuration.md), so a client
+	// that doesn't get freed server-side is still reclaimed on the Node side.
+	query_timeout: parseInt(process.env.PG_QUERY_TIMEOUT_MS || "12000", 10),
 	// Allow process to exit cleanly when pool is idle (for graceful shutdown)
 	allowExitOnIdle: true,
 })
