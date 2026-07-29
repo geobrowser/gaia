@@ -107,9 +107,15 @@ spec:
                   key: SUBSTREAMS_API_TOKEN
             # 0 = stream from genesis — safe on the fresh chain (non-numeric values are
             # silently ignored and fall back to the OLD testnet block 82655).
-            # Tighten to the V2 SpaceRegistry deploy block at deploy time (runbook Step 9).
+            # Deploy block of the self-owned SpaceRegistry (0xcf13491802747e759e1bb8e364bc43045398d1dd)
+            # on chain 55516. MUST NOT be 0: the Substreams server enforces
+            # limit-processed-blocks=10000 per request, so a start block of 0 against a chain
+            # past ~10k blocks never begins streaming. It fails silently — the pod stays Running
+            # and repeats one unchanging "Progress (Jobs: 0, Bytes: [...]) map_actions: 1000
+            # blocks" line, produces nothing to Kafka, and logs no error. Re-tighten this
+            # whenever the registry is redeployed.
             - name: SUBSTREAMS_START_BLOCK
-              value: "0"
+              value: "14339"
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
