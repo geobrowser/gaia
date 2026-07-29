@@ -13,10 +13,20 @@ pub use helpers::extract_proposal_publish_uris;
 use pb::hermes::*;
 use substreams_ethereum::{block_view::LogView, pb::eth};
 
-// Space Registry proxy contract address (irdc testnet)
+// Space Registry proxy contract address — chain 55516, self-owned registry
+// deployed 2026-07-29: 0xcf13491802747e759e1bb8e364bc43045398d1dd
+//
+// Events are filtered by contract address (see the guard in map_actions below),
+// NOT by signature, so this constant alone decides which registry the whole
+// indexing chain observes. Changing it requires rebuilding the .spkg and every
+// image that embeds it (hermes-pipeline, atlas, hermes-ipfs-cache).
+//
+// Previous value 0x364231615dcEA33D13C823b13B449DD9F55381E7 is the old registry
+// whose DAO spaces are welded to it and cannot be re-pointed; it is superseded,
+// not a fallback.
 const SPACE_REGISTRY_ADDRESS: [u8; 20] = [
-    0x36, 0x42, 0x31, 0x61, 0x5d, 0xce, 0xa3, 0x3d, 0x13, 0xc8, 0x23, 0xb1, 0x3b, 0x44, 0x9d, 0xd9,
-    0xf5, 0x53, 0x81, 0xe7,
+    0xcf, 0x13, 0x49, 0x18, 0x02, 0x74, 0x7e, 0x75, 0x9e, 0x1b, 0xb8, 0xe3, 0x64, 0xbc, 0x43, 0x04,
+    0x53, 0x98, 0xd1, 0xdd,
 ];
 
 // Local Space Registry Proxy
