@@ -54,7 +54,7 @@ describe.each(ENDPOINTS)("POST %s", (endpoint) => {
 		expect(uploadFile).not.toHaveBeenCalled()
 	})
 
-	it("returns 400 when the file is empty (size === 0) without calling Pinata", async () => {
+	it("returns 400 when the file is empty (size === 0) without calling the upload service", async () => {
 		const {app, uploadEdit, uploadFile} = setupApp()
 
 		const emptyFile = new File([], "empty.bin", {type: "application/octet-stream"})
@@ -68,12 +68,12 @@ describe.each(ENDPOINTS)("POST %s", (endpoint) => {
 		expect(res.status).toBe(400)
 		expect(await res.text()).toBe("File cannot be empty")
 		// Critical: the upload service MUST NOT be invoked for empty files —
-		// that's the regression this PR fixes (Pinata error → Sentry issue).
+		// that's the regression this guards against (upstream gateway error → Sentry issue).
 		expect(uploadEdit).not.toHaveBeenCalled()
 		expect(uploadFile).not.toHaveBeenCalled()
 	})
 
-	it("returns 400 with no Pinata call when the request body isn't multipart", async () => {
+	it("returns 400 with no upload-service call when the request body isn't multipart", async () => {
 		const {app, uploadEdit, uploadFile} = setupApp()
 
 		// Bare POST: no Content-Type, no body. c.req.formData() throws on this.
@@ -85,7 +85,7 @@ describe.each(ENDPOINTS)("POST %s", (endpoint) => {
 		expect(uploadFile).not.toHaveBeenCalled()
 	})
 
-	it("returns 400 with no Pinata call for a JSON body (wrong content-type)", async () => {
+	it("returns 400 with no upload-service call for a JSON body (wrong content-type)", async () => {
 		const {app, uploadEdit, uploadFile} = setupApp()
 
 		const res = await app.request(endpoint, {

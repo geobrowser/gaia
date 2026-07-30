@@ -7,8 +7,9 @@
  *   - POST /upload-file-alternative-gateway      — deprecated alias for /upload-file
  *
  * Validates that a file is provided and non-empty before delegating to the
- * Pinata-backed IPFS service. Empty/missing files short-circuit with 400 to
- * avoid producing Sentry issues from upstream gateway errors.
+ * Filebase-backed IPFS service (GEO-2323 — migrated off Pinata). Empty/missing
+ * files short-circuit with 400 to avoid producing Sentry issues from upstream
+ * gateway errors.
  */
 
 import {Effect, Either} from "effect"
