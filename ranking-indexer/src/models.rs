@@ -24,6 +24,14 @@ pub struct RankingBlock {
     pub end_date: Option<DateTime<Utc>>,
     /// Aggregation restriction value entity; `None` => default "Members and editors".
     pub restriction_id: Option<Uuid>,
+    /// `Ranking type` value entity (GEO-2328), e.g. `RANK_ROLLING_TYPE_VALUE_ID`;
+    /// `None` => default (static, the only kind that existed before GEO-2328).
+    pub ranking_type: Option<Uuid>,
+    /// Hours a submission stays eligible after `submitted_at` before requiring
+    /// resubmission. Only meaningful when `ranking_type` is Rolling; `None`
+    /// otherwise (static blocks use the block-wide `[start_date, end_date]`
+    /// window instead — see `eligibility::filter_eligible`).
+    pub submission_frequency: Option<i32>,
 }
 
 /// A `ranks.rankings` row — one per Rank submission.

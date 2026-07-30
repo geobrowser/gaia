@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::dedup::dedup_latest;
@@ -53,9 +54,17 @@ pub async fn affected_blocks(
 }
 
 /// Recompute a single block's aggregate end to end.
+///
+/// `now` is the instant used to evaluate a Rolling block's per-submission
+/// expiry (see `eligibility::rolling_admits`) — a parameter, not an inline
+/// `Utc::now()` call, so a test can recompute the same block twice with an
+/// advanced `now` to simulate a submission aging out between two sweeps
+/// without a real sleep. Live callers (the edit consumer, membership events)
+/// pass `Utc::now()` at their own boundary.
 pub async fn recompute_block(
     block_id: Uuid,
     meta: BlockMeta,
+    now: DateTime<Utc>,
     storage: &Storage,
 ) -> Result<(), IndexerError> {
     let block = match storage.get_ranking_block(block_id).await? {
@@ -90,7 +99,7 @@ pub async fn recompute_block(
         SpaceKind::Dao => storage.member_and_editor_spaces(block.space_id).await?,
         SpaceKind::Personal => HashSet::new(), // unused under "All of Geo"
     };
-    let eligible = filter_eligible(&block, space_kind, &eligible_member_spaces, deduped);
+    let eligible = filter_eligible(&block, space_kind, &eligible_member_spaces, deduped, now);
 
     // 3. Scoring: normalize each ballot to [0.5, 1] and aggregate per (entity, space).
     let eligible_ids: Vec<Uuid> = eligible.iter().map(|r| r.id).collect();
@@ -173,8 +182,9 @@ pub async fn apply_detected_edit(
             .await?;
     }
 
+    let now = Utc::now();
     for block_id in affected_blocks(detected, storage).await? {
-        recompute_block(block_id, detected.meta, storage).await?;
+        recompute_block(block_id, detected.meta, now, storage).await?;
     }
 
     Ok(())

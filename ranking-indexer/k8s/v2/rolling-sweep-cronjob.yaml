@@ -1,0 +1,98 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ranking-indexer-rolling-sweep
+  namespace: gaia
+  labels:
+    app: ranking-indexer-rolling-sweep
+    environment: testnet
+spec:
+  # GEO-2328: the actual timing mechanism Rolling ranking blocks need — without
+  # this, a submission ageing past its `submission_frequency` never triggers a
+  # recompute (nothing on-chain happens when a submission just expires).
+  # Cadence is a product question, not an engineering one: how stale an
+  # expired ranking is allowed to look. PLACEHOLDER at ship time — no Rolling
+  # blocks exist yet, so there's no real submission_frequency distribution to
+  # tune against. Retune to roughly the shortest submission_frequency in use
+  # once that's known; this is a plain schedule edit, no code change needed.
+  #
+  # Until a Rolling block exists the sweep finds nothing and is a no-op, so
+  # shipping it on v2 ahead of product costs nothing.
+  #
+  # Modeled on k8s/staging/rolling-sweep-cronjob.yaml; v2 conventions applied
+  # (namespace gaia, `regcred` pull secret, non-root pod securityContext) to
+  # match k8s/v2/ranking-indexer.yaml. Needs only DATABASE_URL — no Kafka.
+  schedule: "0 * * * *"
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            environment: testnet
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            fsGroup: 1001
+          imagePullSecrets:
+            - name: regcred
+          volumes:
+            - name: ssl-certs
+              emptyDir: {}
+          initContainers:
+            - name: setup-certs
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command:
+                - sh
+                - -c
+                - |
+                  echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+              env:
+                - name: DATABASE_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_SSL_CA
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+          containers:
+            - name: ranking-indexer-rolling-sweep
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command: ["rolling_sweep"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+                  readOnly: true
+              env:
+                - name: PGSSLROOTCERT
+                  value: /ssl/ca.crt
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_URL
+                - name: RUST_LOG
+                  value: "rolling_sweep=info,ranking_indexer=info"
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "250m"

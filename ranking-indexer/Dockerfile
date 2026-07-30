@@ -37,5 +37,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/ranking-indexer/target/release/ranking-indexer /usr/local/bin/ranking-indexer
+COPY --from=builder /app/ranking-indexer/target/release/backfill_blocks /usr/local/bin/backfill_blocks
+COPY --from=builder /app/ranking-indexer/target/release/rolling_sweep /usr/local/bin/rolling_sweep
 
 CMD ["ranking-indexer"]

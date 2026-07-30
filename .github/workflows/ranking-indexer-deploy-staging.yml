@@ -57,6 +57,10 @@ jobs:
           # Update image tag to use SHA and apply
           sed -i 's|image: registry.digitalocean.com/geo/ranking-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' ranking-indexer/k8s/staging/ranking-indexer.yaml
           kubectl apply -f ranking-indexer/k8s/staging/ranking-indexer.yaml
+          sed -i 's|image: registry.digitalocean.com/geo/ranking-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' ranking-indexer/k8s/staging/backfill-cronjob.yaml
+          kubectl apply -f ranking-indexer/k8s/staging/backfill-cronjob.yaml
+          sed -i 's|image: registry.digitalocean.com/geo/ranking-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' ranking-indexer/k8s/staging/rolling-sweep-cronjob.yaml
+          kubectl apply -f ranking-indexer/k8s/staging/rolling-sweep-cronjob.yaml
 
       - name: Restart deployment to pick up new image
         run: |

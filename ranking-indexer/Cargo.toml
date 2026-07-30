@@ -8,6 +8,14 @@ description = "Aggregates GEO rank submissions into ranking results and projects
 name = "ranking-indexer"
 path = "src/main.rs"
 
+[[bin]]
+name = "backfill_blocks"
+path = "src/bin/backfill_blocks.rs"
+
+[[bin]]
+name = "rolling_sweep"
+path = "src/bin/rolling_sweep.rs"
+
 [dependencies]
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
