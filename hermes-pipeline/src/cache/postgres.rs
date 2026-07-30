@@ -49,8 +49,26 @@ impl PostgresCache {
     }
 }
 
+/// `meta.id` under which hermes-ipfs-cache persists its cursor. Must match the
+/// indexer id the warmer writes (see hermes-ipfs-cache's cursor store).
+const IPFS_CACHE_INDEXER_ID: &str = "hermes_ipfs_cache";
+
 #[async_trait]
 impl IpfsCache for PostgresCache {
+    /// Reads the warmer's durable cursor from the shared `meta` table. On any
+    /// error this returns `None` — "unknown", which callers treat as "not yet
+    /// processed" so a transient DB blip can never be mistaken for a verdict
+    /// that content is unfetchable.
+    async fn warmer_block(&self) -> Option<u64> {
+        sqlx::query_scalar::<_, i64>("SELECT block_number FROM meta WHERE id = $1")
+            .bind(IPFS_CACHE_INDEXER_ID)
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|b| u64::try_from(b).ok())
+    }
+
     async fn get(&self, ipfs_hash: &str, _space_id: &[u8]) -> Result<CachedEdit, CacheError> {
         let row =
             sqlx::query("SELECT data, space, is_errored, name FROM ipfs_cache WHERE uri = $1")

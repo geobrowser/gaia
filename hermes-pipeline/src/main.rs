@@ -172,9 +172,10 @@ impl Pipeline {
         // =========================================================================
         // Batch all cache lookups at the start so transform functions can be sync.
         // This fetches URIs for both EDITS_PUBLISHED and PROPOSAL_CREATED actions.
-        let prefetch_result = prefetch::prefetch_block(actions, &self.cache, &self.retry_config)
-            .instrument(info_span!("prefetch", action_count = actions.len()))
-            .await;
+        let prefetch_result =
+            prefetch::prefetch_block(actions, &self.cache, &self.retry_config, meta.block_number)
+                .instrument(info_span!("prefetch", action_count = actions.len()))
+                .await;
 
         // =========================================================================
         // Phase 1: Transform actions into events

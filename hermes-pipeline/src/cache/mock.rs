@@ -123,6 +123,12 @@ impl Default for MockIpfsCache {
 
 #[async_trait]
 impl IpfsCache for MockIpfsCache {
+    /// The mock has no warmer behind it; every entry it will ever hold is
+    /// already present, so a miss is final.
+    async fn warmer_block(&self) -> Option<u64> {
+        Some(u64::MAX)
+    }
+
     async fn get(&self, ipfs_hash: &str, space_id: &[u8]) -> Result<CachedEdit, CacheError> {
         if self.errored_hashes.contains(ipfs_hash) {
             return Ok(CachedEdit::errored(
