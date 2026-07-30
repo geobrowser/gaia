@@ -354,7 +354,7 @@ impl Pipeline {
         // 7. Voting events (social layer)
         // 8. Edits come last as they may reference entities across trusted spaces
 
-        let space_count = spaces.events.len() as u64;
+        let space_count = (spaces.events.len() + spaces.address_updates.len()) as u64;
         let membership_count = membership.total() as u64;
         let trust_count = trust.total();
         let moderation_count = moderation.total() as u64;
@@ -490,6 +490,19 @@ impl Pipeline {
                     debug!(
                         space_id = %hex::encode(&event.space_id),
                         "Space registered"
+                    );
+                }
+            }
+
+            // 1b. Emit space address overrides. Same topic and key as creations,
+            // so an override always lands after the creation it amends.
+            if !spaces.address_updates.is_empty() {
+                for event in &spaces.address_updates {
+                    self.emitter.emit(event).await?;
+                    debug!(
+                        space_id = %hex::encode(&event.space_id),
+                        address = %hex::encode(&event.address),
+                        "Space address overridden"
                     );
                 }
             }

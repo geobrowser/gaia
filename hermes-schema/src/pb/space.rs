@@ -47,6 +47,25 @@ pub mod hermes_create_space {
         DefaultDaoSpace(super::DefaultDaoSpacePayload),
     }
 }
+/// Emitted for GOVERNANCE.SPACE_ID_OVERRIDDEN, which re-points an EXISTING
+/// space at a different owner address (SpaceRegistry.overrideSpaceId, owner-only).
+///
+/// Deliberately NOT a HermesCreateSpace: an override carries no accompanying
+/// SPACE_TYPE_DECLARED, so there is no way to populate that message's `payload`
+/// oneof without guessing a space type and overwriting the real one. Consumers
+/// must apply this as an address-only update to a space that already exists,
+/// and ignore it otherwise.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HermesSpaceAddressUpdated {
+    /// uuid
+    #[prost(bytes = "vec", tag = "1")]
+    pub space_id: ::prost::alloc::vec::Vec<u8>,
+    /// 20-byte owner address
+    #[prost(bytes = "vec", tag = "2")]
+    pub address: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "3")]
+    pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct VerifiedExtension {
     /// uuid of the space receiving verified trust

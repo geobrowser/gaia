@@ -49,6 +49,21 @@ message HermesCreateSpace {
     blockchain_metadata.BlockchainMetadata meta = 5;
 }
 
+// Emitted for GOVERNANCE.SPACE_ID_OVERRIDDEN, which re-points an EXISTING
+// space at a different owner address (SpaceRegistry.overrideSpaceId, owner-only).
+//
+// Deliberately NOT a HermesCreateSpace: an override carries no accompanying
+// SPACE_TYPE_DECLARED, so there is no way to populate that message's `payload`
+// oneof without guessing a space type and overwriting the real one. Consumers
+// must apply this as an address-only update to a space that already exists,
+// and ignore it otherwise.
+message HermesSpaceAddressUpdated {
+    bytes space_id = 1; // uuid
+    bytes address = 2;  // 20-byte owner address
+
+    blockchain_metadata.BlockchainMetadata meta = 3;
+}
+
 message VerifiedExtension {
     bytes target_space_id = 1; // uuid of the space receiving verified trust
 }

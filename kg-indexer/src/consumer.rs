@@ -122,6 +122,7 @@ pub enum KgMessage {
     BlockSummary(hermes_schema::pb::block_summary::HermesBlockSummary),
     Edit(hermes_schema::pb::knowledge::HermesEdit),
     CreateSpace(hermes_schema::pb::space::HermesCreateSpace),
+    SpaceAddressUpdated(hermes_schema::pb::space::HermesSpaceAddressUpdated),
     RoleGranted(hermes_schema::pb::membership::HermesRoleGranted),
     RoleRevoked(hermes_schema::pb::membership::HermesRoleRevoked),
     TrustExtension(hermes_schema::pb::space::HermesSpaceTrustExtension),
@@ -142,6 +143,7 @@ impl KgMessage {
             KgMessage::BlockSummary(_) => None,
             KgMessage::Edit(e) => e.meta.as_ref(),
             KgMessage::CreateSpace(s) => s.meta.as_ref(),
+            KgMessage::SpaceAddressUpdated(s) => s.meta.as_ref(),
             KgMessage::RoleGranted(r) => r.meta.as_ref(),
             KgMessage::RoleRevoked(r) => r.meta.as_ref(),
             KgMessage::TrustExtension(t) => t.meta.as_ref(),
@@ -203,11 +205,23 @@ pub fn parse_message(
                 .map_err(|e| IndexerError::decode(format!("HermesEdit: {}", e)))?;
             Ok(KgMessage::Edit(edit))
         }
-        "space.creations" => {
-            let space = hermes_schema::pb::space::HermesCreateSpace::decode(payload)
-                .map_err(|e| IndexerError::decode(format!("HermesCreateSpace: {}", e)))?;
-            Ok(KgMessage::CreateSpace(space))
-        }
+        "space.creations" => match event_type {
+            // SPACE_ID_OVERRIDDEN re-points an existing space at a new owner
+            // address. HermesCreateSpace carries no event-type header, so the
+            // fallback arm preserves the original behaviour.
+            Some("SPACE_ADDRESS_UPDATED") => {
+                let updated = hermes_schema::pb::space::HermesSpaceAddressUpdated::decode(payload)
+                    .map_err(|e| {
+                        IndexerError::decode(format!("HermesSpaceAddressUpdated: {}", e))
+                    })?;
+                Ok(KgMessage::SpaceAddressUpdated(updated))
+            }
+            _ => {
+                let space = hermes_schema::pb::space::HermesCreateSpace::decode(payload)
+                    .map_err(|e| IndexerError::decode(format!("HermesCreateSpace: {}", e)))?;
+                Ok(KgMessage::CreateSpace(space))
+            }
+        },
         "space.membership" => {
             // Use event-type header to determine message type
             match event_type {

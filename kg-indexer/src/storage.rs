@@ -456,6 +456,30 @@ impl Storage {
         Ok(())
     }
 
+    /// Apply a SPACE_ID_OVERRIDDEN address change to an existing space.
+    ///
+    /// Returns the number of rows updated — 0 means the space is unknown to
+    /// this indexer, which is not an error (the override may predate the
+    /// space's creation event, or belong to a space we never indexed).
+    ///
+    /// This exists because `insert_spaces` uses `ON CONFLICT (id) DO NOTHING`,
+    /// so a re-registration can never change `address` through that path. Only
+    /// `address` is touched: an override carries no space type or topic.
+    pub async fn update_space_address(
+        &self,
+        space_id: Uuid,
+        address: &str,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<u64, IndexerError> {
+        let result = sqlx::query("UPDATE spaces SET address = $2 WHERE id = $1")
+            .bind(space_id)
+            .bind(address)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(result.rows_affected())
+    }
+
     pub async fn update_space_topic(
         &self,
         space_id: Uuid,
