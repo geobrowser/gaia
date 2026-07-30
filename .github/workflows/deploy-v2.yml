@@ -34,6 +34,7 @@ on:
           - notification-indexer
           - delivery-worker
           - ranking-indexer
+          - membership-acceptor
       tag:
         description: "Image tag to deploy (from the build workflow, e.g. short SHA). Ignored for valkey (pinned public image)."
         required: true
@@ -93,6 +94,7 @@ jobs:
             # The two CronJobs ship with the Deployment: both run the same image
             # and are only useful at the same version as the consumer.
             ranking-indexer)   manifests="ranking-indexer/k8s/v2/ranking-indexer.yaml ranking-indexer/k8s/v2/backfill-cronjob.yaml ranking-indexer/k8s/v2/rolling-sweep-cronjob.yaml"; rollout="deployment/ranking-indexer" ;;
+            membership-acceptor) manifests="membership-acceptor/deployment/v2/deployment.yaml"; rollout="deployment/membership-acceptor" ;;
             *) echo "unknown service"; exit 1 ;;
           esac
           echo "manifests=$manifests" >> "$GITHUB_OUTPUT"

@@ -90,6 +90,48 @@ describe("parseConfig", () => {
 		expect(() => parseConfig({...validEnv(), CHAIN_ID: "1"})).toThrow(ConfigError)
 	})
 
+	// GEO-2478: 55516 was rejected outright, so the acceptor could not run on the
+	// v2 testnet at all — it would have thrown at startup even once deployed.
+	describe("chain 55516 (testnet v2)", () => {
+		const v2Env = (): NodeJS.ProcessEnv => ({
+			...validEnv(),
+			CHAIN_ID: "55516",
+			ZERODEV_SPONSORSHIP_RPC_URL: "https://rpc.zerodev.app/api/v3/proj/chain/55516",
+		})
+
+		test("is accepted", () => {
+			const c = parseConfig(v2Env())
+			expect(c.chainId).toBe(55516)
+			expect(c.zerodevSponsorshipRpcUrl).toBe("https://rpc.zerodev.app/api/v3/proj/chain/55516")
+		})
+
+		test("requires ZERODEV_SPONSORSHIP_RPC_URL — there is no Safe/Pimlico fallback there", () => {
+			const env = v2Env()
+			delete env.ZERODEV_SPONSORSHIP_RPC_URL
+			expect(() => parseConfig(env)).toThrow(ConfigError)
+		})
+
+		test("does NOT require PIMLICO_API_KEY — that chain never calls Pimlico", () => {
+			const env = v2Env()
+			delete env.PIMLICO_API_KEY
+			const c = parseConfig(env)
+			expect(c.chainId).toBe(55516)
+			expect(c.pimlicoApiKey).toBe("")
+		})
+	})
+
+	test("PIMLICO_API_KEY is still required on the Safe chains", () => {
+		const env = validEnv()
+		delete env.PIMLICO_API_KEY
+		env.CHAIN_ID = "19411"
+		expect(() => parseConfig(env)).toThrow(ConfigError)
+	})
+
+	test("ZERODEV_SPONSORSHIP_RPC_URL is ignored on the Safe chains", () => {
+		const c = parseConfig({...validEnv(), CHAIN_ID: "19411", ZERODEV_SPONSORSHIP_RPC_URL: "https://ignored"})
+		expect(c.zerodevSponsorshipRpcUrl).toBeUndefined()
+	})
+
 	test("throws on an out-of-range PORT", () => {
 		expect(() => parseConfig({...validEnv(), PORT: "70000"})).toThrow(ConfigError)
 	})

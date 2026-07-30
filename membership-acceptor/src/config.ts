@@ -26,10 +26,15 @@ export interface AppConfig {
 	spaceRegistryAddress: `0x${string}`
 	/** Chain RPC endpoint (may contain an API key). */
 	rpcUrl: string
-	/** Pimlico bundler/paymaster API key (gas sponsorship). */
+	/** Pimlico bundler/paymaster API key (gas sponsorship). Empty on 55516, which uses ZeroDev. */
 	pimlicoApiKey: string
-	/** 80451 (mainnet) or 19411 (testnet). */
+	/** 80451 (mainnet), 19411 (testnet) or 55516 (testnet v2). */
 	chainId: SupportedChainId
+	/**
+	 * ZeroDev bundler+paymaster endpoint (embeds a project id) — required only on
+	 * 55516, which has no Safe infra and uses an EIP-7702 Kernel account instead.
+	 */
+	zerodevSponsorshipRpcUrl?: string
 	/** Geo GraphQL endpoint — used by policies (e.g. the editor check). */
 	graphqlEndpoint: string
 
@@ -97,14 +102,23 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 	}
 
 	const rpcUrl = required(env, "RPC_URL")
-	const pimlicoApiKey = required(env, "PIMLICO_API_KEY")
 	const graphqlEndpoint = required(env, "GRAPHQL_ENDPOINT")
 
 	const rawChainId = env.CHAIN_ID?.trim() || "80451"
 	const chainId = Number(rawChainId)
-	if (chainId !== 80451 && chainId !== 19411) {
-		throw new ConfigError(`Invalid CHAIN_ID: expected 80451 (mainnet) or 19411 (testnet), got "${rawChainId}"`)
+	if (chainId !== 80451 && chainId !== 19411 && chainId !== 55516) {
+		throw new ConfigError(
+			`Invalid CHAIN_ID: expected 80451 (mainnet), 19411 (testnet) or 55516 (testnet v2), got "${rawChainId}"`,
+		)
 	}
+
+	// The two gas-sponsorship stacks are mutually exclusive, so each key is
+	// required only on the chains that actually use it. Demanding PIMLICO_API_KEY
+	// on 55516 would force operators to invent a value for a service that chain
+	// never calls.
+	const isV2Chain = chainId === 55516
+	const pimlicoApiKey = isV2Chain ? (env.PIMLICO_API_KEY?.trim() ?? "") : required(env, "PIMLICO_API_KEY")
+	const zerodevSponsorshipRpcUrl = isV2Chain ? required(env, "ZERODEV_SPONSORSHIP_RPC_URL") : undefined
 
 	// Canonicalize every allowlist entry to 0x bytes16 and validate it, so a
 	// typo'd id fails fast at startup instead of silently never matching. Incoming
@@ -131,6 +145,7 @@ export function parseConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 		rpcUrl,
 		pimlicoApiKey,
 		chainId: chainId as SupportedChainId,
+		zerodevSponsorshipRpcUrl,
 		graphqlEndpoint,
 		autoacceptSpaceIds,
 	}

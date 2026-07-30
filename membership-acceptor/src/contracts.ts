@@ -52,11 +52,27 @@ export const testnetChain: Chain = {
 	rpcUrls: {default: {http: ["https://rpc-geo-test-zc16z3tcvf.t.conduit.xyz"]}},
 }
 
-export type SupportedChainId = 80451 | 19411
+/**
+ * Chain 55516 — the v2 testnet rollup. Definition matches
+ * proposal-executor/src/contracts.ts:152 exactly; keep them in sync.
+ *
+ * Unlike 19411/80451 this chain has NO Safe infrastructure deployed. It ships
+ * ZeroDev's Kernel v0.3.3 + EntryPoint v0.7 by default, so the acceptor uses an
+ * EIP-7702 Kernel account here instead of Safe+Pimlico — see `createSmartWallet`.
+ */
+export const testnetV2Chain: Chain = {
+	id: 55516,
+	name: "Geo Testnet",
+	nativeCurrency: {name: "Ethereum", symbol: "ETH", decimals: 18},
+	rpcUrls: {default: {http: ["https://rpc-geo-testnet-irdc0cgb0w.t.conduit.xyz"]}},
+}
+
+export type SupportedChainId = 80451 | 19411 | 55516
 
 export function getChain(chainId: SupportedChainId): Chain {
 	if (chainId === 80451) return mainnetChain
 	if (chainId === 19411) return testnetChain
+	if (chainId === 55516) return testnetV2Chain
 	const _exhaustive: never = chainId
 	throw new Error(`Unsupported chain ID: ${_exhaustive}`)
 }

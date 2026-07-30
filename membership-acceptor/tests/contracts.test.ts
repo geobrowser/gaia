@@ -66,6 +66,16 @@ describe("getChain", () => {
 	test("maps the supported chain ids", () => {
 		expect(getChain(80451).id).toBe(80451)
 		expect(getChain(19411).id).toBe(19411)
+		expect(getChain(55516).id).toBe(55516)
+	})
+
+	// Must stay identical to proposal-executor/src/contracts.ts:152 — the two
+	// services vote against the same registry on the same chain, so a drifted RPC
+	// or chain id would be a subtle split-brain rather than a loud failure.
+	test("55516 matches proposal-executor's definition", () => {
+		const c = getChain(55516)
+		expect(c.rpcUrls.default.http[0]).toBe("https://rpc-geo-testnet-irdc0cgb0w.t.conduit.xyz")
+		expect(c.nativeCurrency.decimals).toBe(18)
 	})
 })
 
