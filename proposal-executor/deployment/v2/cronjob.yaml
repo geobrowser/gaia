@@ -82,8 +82,21 @@ spec:
                   value: "0xc6fdd7ccff1b4f5ba5f81dae4e1eb99b"
                 - name: MEMBERSHIP_BOT_SPACE_ID
                   value: "0xf61e6ac5a54f47898ee23ae48a0729ba"
+                # GEO-2478: automatic member acceptance did nothing on this
+                # cluster because this variable was never set — an empty
+                # allowlist means "accept none", so the bot detected requests
+                # and admitted no one. These are the same four spaces prod
+                # auto-accepts; all four exist on 55516 under the same ids
+                # (verified 2026-07-30), since the migration preserved space ids.
+                - name: MEMBERSHIP_AUTOACCEPT_SPACE_IDS
+                  value: "0xc9f267dcb0d270718c2a3c45a64afd32,0x84a679ce188f061ac9a92380bac2bab5,0x0477636ace64280fc43a9f440a502291,0x29a5122f65295cea9f421ec7a73ac825"
+                # Self-owned SpaceRegistry deployed 2026-07-29. The live CronJob
+                # was already patched to this address; this manifest still said
+                # 0x364231615dcEA33D13C823b13B449DD9F55381E7, so redeploying from
+                # the repo would have silently reverted the executor to the old
+                # registry. Fixed 2026-07-30 to match the cluster.
                 - name: SPACE_REGISTRY_ADDRESS
-                  value: "0x364231615dcEA33D13C823b13B449DD9F55381E7"
+                  value: "0xCF13491802747e759e1BB8E364bc43045398d1DD"
                 - name: RPC_URL
                   valueFrom:
                     secretKeyRef:
