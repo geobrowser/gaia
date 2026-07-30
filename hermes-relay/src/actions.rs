@@ -49,6 +49,7 @@ pub use hermes_substream::ACTION_SPACE_FAST_PATH_UNRESTRICTED as SPACE_FAST_PATH
 pub use hermes_substream::ACTION_SPACE_ID_ARCHIVED as SPACE_ID_ARCHIVED;
 pub use hermes_substream::ACTION_SPACE_ID_CLEARED as SPACE_ID_CLEARED;
 pub use hermes_substream::ACTION_SPACE_ID_MIGRATED as SPACE_MIGRATED;
+pub use hermes_substream::ACTION_SPACE_ID_OVERRIDDEN as SPACE_OVERRIDDEN;
 pub use hermes_substream::ACTION_SPACE_ID_RECOVERED as SPACE_ID_RECOVERED;
 pub use hermes_substream::ACTION_SPACE_ID_REGISTERED as SPACE_REGISTERED;
 pub use hermes_substream::ACTION_SPACE_LEFT as SPACE_LEFT;

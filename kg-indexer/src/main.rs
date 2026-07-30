@@ -682,6 +682,7 @@ fn event_type_label(event: &BufferedEvent) -> String {
     match &event.msg {
         KgMessage::Edit(_) => "EDITS_PUBLISHED".to_string(),
         KgMessage::CreateSpace(_) => "SPACE_REGISTERED".to_string(),
+        KgMessage::SpaceAddressUpdated(_) => "SPACE_ADDRESS_UPDATED".to_string(),
         KgMessage::RoleGranted(_) => "ROLE_GRANTED".to_string(),
         KgMessage::RoleRevoked(_) => "ROLE_REVOKED".to_string(),
         KgMessage::TrustExtension(_) => "TRUST_EXTENSION".to_string(),
@@ -1075,6 +1076,25 @@ async fn process_message(
 
             ops
         }
+        KgMessage::SpaceAddressUpdated(updated) => {
+            // Address-only update for an EXISTING space. Deliberately does not
+            // insert: an override carries no space type, and a space we have
+            // never seen created is not ours to invent.
+            let space_id = uuid::Uuid::from_slice(&updated.space_id)
+                .map_err(|e| IndexerError::decode(format!("space_id: {}", e)))?;
+            let address = format!("0x{}", hex::encode(&updated.address));
+            let updated_rows = storage
+                .update_space_address(space_id, &address, &mut tx)
+                .await?;
+            if updated_rows == 0 {
+                warn!(
+                    space_id = %space_id,
+                    address = %address,
+                    "SPACE_ADDRESS_UPDATED for unknown space; ignoring"
+                );
+            }
+            updated_rows as usize
+        }
         KgMessage::CreateSpace(space) => {
             let space_item = handlers::spaces::handle_create_space(&space)?;
             storage.insert_spaces(&[space_item], &mut tx).await?;
@@ -1338,6 +1358,14 @@ async fn process_block(
                 "otel.status_code" = tracing::field::Empty,
                 "otel.status_message" = tracing::field::Empty
             ),
+            KgMessage::SpaceAddressUpdated(_) => info_span!(
+                "kg_indexer.handle_space_address_updated",
+                event_id = event_id,
+                space_id = tracing::field::Empty,
+                space_address = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
             KgMessage::CreateSpace(_) => info_span!(
                 "kg_indexer.handle_create_space",
                 event_id = event_id,
@@ -1518,6 +1546,25 @@ async fn process_block(
                     }
 
                     ops
+                }
+                KgMessage::SpaceAddressUpdated(updated) => {
+                    // Address-only update for an existing space; never inserts.
+                    let space_id = uuid::Uuid::from_slice(&updated.space_id)
+                        .map_err(|e| IndexerError::decode(format!("space_id: {}", e)))?;
+                    let address = format!("0x{}", hex::encode(&updated.address));
+                    event_span.record("space_id", display(space_id));
+                    event_span.record("space_address", address.as_str());
+                    let n = storage
+                        .update_space_address(space_id, &address, &mut tx)
+                        .await?;
+                    if n == 0 {
+                        warn!(
+                            space_id = %space_id,
+                            address = %address,
+                            "SPACE_ADDRESS_UPDATED for unknown space; ignoring"
+                        );
+                    }
+                    n as usize
                 }
                 KgMessage::CreateSpace(space) => {
                     let mut space_item = handlers::spaces::handle_create_space(space)?;

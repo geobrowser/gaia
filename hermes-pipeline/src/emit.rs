@@ -26,8 +26,8 @@ use hermes_schema::pb::{
         HermesContentFlagged, HermesContentUnflagged, HermesEditorFlagged, HermesEditorUnflagged,
     },
     space::{
-        HermesCreateSpace, HermesSpaceTrustExtension, hermes_create_space,
-        hermes_space_trust_extension,
+        HermesCreateSpace, HermesSpaceAddressUpdated, HermesSpaceTrustExtension,
+        hermes_create_space, hermes_space_trust_extension,
     },
     topics::{HermesTopicDeclared, HermesTopicRemoved},
     voting::{HermesVoteCast, VoteDirection},
@@ -102,6 +102,26 @@ impl KafkaEvent for HermesCreateSpace {
     }
 }
 
+// Shares the space.creations topic (and therefore its per-space key ordering)
+// with HermesCreateSpace, so a space's creation and any later address override
+// stay in order on the same partition. Discriminated by the `event-type`
+// header: HermesCreateSpace sets no such header, so consumers that default to
+// HermesCreateSpace when the header is absent remain correct.
+impl KafkaEvent for HermesSpaceAddressUpdated {
+    const TOPIC: &'static str = topics::SPACE_CREATIONS;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("SPACE_ADDRESS_UPDATED"),
+        })
+    }
+}
+
 impl KafkaEvent for HermesBlockSummary {
     const TOPIC: &'static str = topics::BLOCK_SUMMARY;
 
@@ -133,6 +153,12 @@ impl HasMeta for HermesBlockSummary {
             "block_summary:{}:{}",
             self.block_number, self.cursor
         ))
+    }
+}
+
+impl HasMeta for HermesSpaceAddressUpdated {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
     }
 }
 

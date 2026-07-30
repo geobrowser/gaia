@@ -13,7 +13,8 @@ use hermes_instrumentation::{debug_span, warn};
 
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::space::{
-    DefaultDaoSpacePayload, EoaSpacePayload, HermesCreateSpace, hermes_create_space,
+    DefaultDaoSpacePayload, EoaSpacePayload, HermesCreateSpace, HermesSpaceAddressUpdated,
+    hermes_create_space,
 };
 
 use super::BlockMetadata;
@@ -23,6 +24,11 @@ use super::BlockMetadata;
 pub struct TransformResult {
     /// Transformed space creation events ready for emission.
     pub events: Vec<HermesCreateSpace>,
+    /// SPACE_ID_OVERRIDDEN events, re-pointing an existing space at a new
+    /// owner address. Kept separate from `events` because an override carries
+    /// no SPACE_TYPE_DECLARED, so it cannot populate HermesCreateSpace's
+    /// `payload` oneof without inventing a space type.
+    pub address_updates: Vec<HermesSpaceAddressUpdated>,
 }
 
 /// Transform all space registration actions in a block.
@@ -32,8 +38,20 @@ pub struct TransformResult {
 /// with the same space_id to determine the space type.
 pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
     let mut events = Vec::new();
+    let mut address_updates = Vec::new();
 
     for (index, action) in actions.iter().enumerate() {
+        if actions::matches(&action.action, &actions::SPACE_OVERRIDDEN) {
+            // Same field layout as SPACE_ID_REGISTERED: space id in `to_id`,
+            // new owner address left-aligned in `topic`.
+            address_updates.push(HermesSpaceAddressUpdated {
+                space_id: action.to_id.clone(),
+                address: action.topic.get(0..20).map(|s| s.to_vec()).unwrap_or_default(),
+                meta: Some(meta.to_proto(index as u32)),
+            });
+            continue;
+        }
+
         if !actions::matches(&action.action, &actions::SPACE_REGISTERED) {
             continue;
         }
@@ -50,7 +68,10 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
         events.push(event);
     }
 
-    Ok(TransformResult { events })
+    Ok(TransformResult {
+        events,
+        address_updates,
+    })
 }
 
 /// Find a SPACE_TYPE_DECLARED action for the given space_id, starting from start_index.
@@ -271,6 +292,61 @@ mod tests {
 
         let result = transform(&test_actions, &test_meta()).unwrap();
         assert_eq!(result.events.len(), 2); // Only SPACE_REGISTERED actions
+    }
+
+    // An override must NOT become a HermesCreateSpace: it carries no
+    // SPACE_TYPE_DECLARED, so routing it through the creation path would force
+    // a guessed space type onto an existing space (convert() defaults unknown
+    // types to EOA — see test_convert_without_type_defaults_to_eoa).
+    #[test]
+    fn test_transform_emits_address_update_for_overridden_not_a_creation() {
+        let test_actions = vec![Action {
+            from_id: vec![0; 16],
+            to_id: vec![7; 16],
+            action: actions::SPACE_OVERRIDDEN.to_vec(),
+            // address is LEFT-aligned in topic, right-padded to 32 bytes
+            topic: [vec![0xab; 20], vec![0; 12]].concat(),
+            data: vec![],
+        }];
+
+        let result = transform(&test_actions, &test_meta()).unwrap();
+
+        assert!(
+            result.events.is_empty(),
+            "override must not produce a space creation"
+        );
+        assert_eq!(result.address_updates.len(), 1);
+        assert_eq!(result.address_updates[0].space_id, vec![7; 16]);
+        assert_eq!(result.address_updates[0].address, vec![0xab; 20]);
+        assert!(result.address_updates[0].meta.is_some());
+    }
+
+    // A block can carry both; each must land on its own path.
+    #[test]
+    fn test_transform_handles_registration_and_override_together() {
+        let test_actions = vec![
+            Action {
+                from_id: vec![0; 16],
+                to_id: vec![1; 16],
+                action: actions::SPACE_REGISTERED.to_vec(),
+                topic: vec![2; 32],
+                data: vec![],
+            },
+            Action {
+                from_id: vec![0; 16],
+                to_id: vec![9; 16],
+                action: actions::SPACE_OVERRIDDEN.to_vec(),
+                topic: [vec![0xcd; 20], vec![0; 12]].concat(),
+                data: vec![],
+            },
+        ];
+
+        let result = transform(&test_actions, &test_meta()).unwrap();
+
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].space_id, vec![1; 16]);
+        assert_eq!(result.address_updates.len(), 1);
+        assert_eq!(result.address_updates[0].space_id, vec![9; 16]);
     }
 
     #[test]
