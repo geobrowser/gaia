@@ -108,6 +108,31 @@ async fn async_main() -> Result<(), IndexerError> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(60);
 
+    // How far back the rejection poller looks the FIRST time it runs against a
+    // given database. Only proposals that ended after `now - this` are ever
+    // notified. Applied once and persisted (see `Storage::rejection_floor`), so
+    // changing it later has no effect on a database that already has a floor.
+    //
+    // This exists because the query below was broken on the v2 schema for its
+    // whole life, so switching it on finds every proposal the chain migration
+    // replayed. Measured on testnet 2026-07-30: 3,241 expired-unnotified
+    // proposals dating back to 1970, of which 10 were from the preceding 10h.
+    // Negative values would push the floor into the future and silence the
+    // poller entirely, so reject them rather than defaulting.
+    let rejection_backfill_hours: i64 = match env::var("REJECTION_BACKFILL_HOURS") {
+        Ok(v) => match v.parse::<i64>() {
+            Ok(h) if h >= 0 => h,
+            _ => {
+                error!(
+                    value = %v,
+                    "REJECTION_BACKFILL_HOURS must be a non-negative integer; refusing to start"
+                );
+                std::process::exit(1);
+            }
+        },
+        Err(_) => 10,
+    };
+
     // Retention: delete notification_outbox / notification_deliveries rows older
     // than this many days. Unset = default 30; 0 disables the cleanup task.
     // Validate rather than silently default — a malformed value could mask a
@@ -286,6 +311,30 @@ async fn async_main() -> Result<(), IndexerError> {
             rejection_poll_interval_secs,
         ));
 
+        // Resolve the floor once, before the first tick. Seeded on first run to
+        // `now - REJECTION_BACKFILL_HOURS`; thereafter read from the database, so
+        // restarts and config changes cannot widen it retroactively.
+        let rejection_floor = match poller_storage
+            .rejection_floor(rejection_backfill_hours)
+            .await
+        {
+            Ok(floor) => {
+                info!(
+                    floor = floor,
+                    backfill_hours = rejection_backfill_hours,
+                    "Rejection floor resolved; proposals that ended before it are never notified"
+                );
+                floor
+            }
+            Err(e) => {
+                // Without a floor we would notify the entire historical backlog,
+                // which on a migrated chain is thousands of replayed proposals.
+                // Skipping a poll cycle is strictly better than that.
+                error!(error = %e, "Failed to resolve rejection floor; rejection poller disabled");
+                return;
+            }
+        };
+
         loop {
             tokio::select! {
                 _ = shutdown_rx2.recv() => {
@@ -297,7 +346,7 @@ async fn async_main() -> Result<(), IndexerError> {
 
                     // Process in batches to avoid unbounded memory usage
                     loop {
-                        match poller_storage.find_expired_proposals(BATCH_LIMIT).await {
+                        match poller_storage.find_expired_proposals(BATCH_LIMIT, rejection_floor).await {
                             Ok(expired) => {
                                 let batch_len = expired.len();
                                 if !expired.is_empty() {

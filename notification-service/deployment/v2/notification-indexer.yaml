@@ -76,6 +76,16 @@ spec:
               value: "notification-indexer-knowledge-edits-testnet-v1"
             - name: REJECTION_POLL_INTERVAL_SECS
               value: "60"
+            # Rejection notifications were dead on this cluster for its whole
+            # life (the query read `proposals.end_time`, which governance-v2
+            # moved to `proposal_versions`), so switching them on finds every
+            # proposal the chain migration replayed: 3,241 expired-unnotified
+            # proposals dating back to 1970 when measured on 2026-07-30. This
+            # bounds the first run to the preceding 10 hours — 10 real
+            # proposals — and is then persisted, so this value has no further
+            # effect on a database that already has a floor.
+            - name: REJECTION_BACKFILL_HOURS
+              value: "10"
             # Logging
             - name: RUST_LOG
               value: "info,notification_indexer=debug"
