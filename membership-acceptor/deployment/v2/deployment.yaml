@@ -57,12 +57,14 @@ spec:
                 secretKeyRef:
                   name: membership-acceptor-credentials
                   key: GEO_WEBHOOK_SECRET
-            # Voting identity (sensitive)
+            # Voting identity (sensitive).
+            # Reads the SAME key proposal-executor's membership path uses rather
+            # than copying it into a second secret — one private key in one place.
             - name: ACCEPTOR_PRIVATE_KEY
               valueFrom:
                 secretKeyRef:
-                  name: membership-acceptor-credentials
-                  key: ACCEPTOR_PRIVATE_KEY
+                  name: proposal-executor-credentials
+                  key: MEMBERSHIP_BOT_PRIVATE_KEY
             - name: RPC_URL
               valueFrom:
                 secretKeyRef:
@@ -76,23 +78,17 @@ spec:
                   key: ZERODEV_SPONSORSHIP_RPC_URL
             # Non-sensitive config
             #
-            # !!! BLOCKED — READ BEFORE ENABLING ANY AUTO-ACCEPT SPACE !!!
-            # This space id is correct and exists on 55516, but the space is
-            # registered to 0xE23D205e0850c73319627512C5a25275A02a9caa — the
-            # acceptor's *Safe* address from prod. Under EIP-7702 on this chain
-            # the acceptor acts as its EOA (0xcCc140d7715bA5C7544205e9588541c796bD6372),
-            # and SpaceRegistry.enter() requires msg.sender to be the space's
-            # account, so every vote would revert. 55516 has no Safe infra, so
-            # that Safe address can never be controlled there.
-            #
-            # The space must be re-keyed on-chain to the acceptor's EOA first —
-            # the same operation that repaired 672 personal spaces after the
-            # migration. This space is one of 103 that repair missed.
-            #
-            # Until then MEMBERSHIP_AUTOACCEPT_SPACE_IDS below is intentionally
-            # empty: the service starts and serves /health, but votes on nothing.
+            # Uses the v2 membership-bot identity, NOT prod's. v2 provisioned a
+            # dedicated bot space + key during bring-up:
+            #   space 0xf61e6ac5a54f47898ee23ae48a0729ba
+            #     -> registered to 0x14b3F486aD9a2f5E2a15B54bCa43684C17210e3A
+            #   proposal-executor-credentials/MEMBERSHIP_BOT_PRIVATE_KEY
+            #     -> derives to that same address (verified 2026-07-30)
+            # which is EOA-keyed and therefore works under EIP-7702. Prod's
+            # acceptor space is registered to a *Safe* address that cannot exist
+            # on 55516, so reusing prod's identity here would revert every vote.
             - name: ACCEPTOR_SPACE_ID
-              value: "0x24208422558b4ac801e24a71a889dfad"
+              value: "0xf61e6ac5a54f47898ee23ae48a0729ba"
             # Self-owned SpaceRegistry deployed 2026-07-29 on chain 55516
             - name: SPACE_REGISTRY_ADDRESS
               value: "0xCF13491802747e759e1BB8E364bc43045398d1DD"
@@ -101,10 +97,19 @@ spec:
             # In-cluster: avoids an external hop and does not depend on public DNS
             - name: GRAPHQL_ENDPOINT
               value: "http://api.gaia.svc.cluster.local:3000/graphql"
-            # DAO spaces this acceptor auto-accepts, as 0x-prefixed bytes16 hex
-            # (dashed UUIDs also accepted). EMPTY = accept none, which is the safe
-            # default: the service runs and answers health checks but votes on
-            # nothing until the v2 space ids are filled in.
+            # !!! MUST STAY EMPTY UNLESS proposal-executor's LIST IS EMPTIED !!!
+            #
+            # On v2 automatic member acceptance is ALREADY handled by
+            # proposal-executor's built-in membership path (src/membership.ts —
+            # stage-1 detect + stage-2 on-chain eligibility read + YES vote),
+            # driven by its own MEMBERSHIP_AUTOACCEPT_SPACE_IDS. That is the path
+            # GEO-2478 was actually about: the variable was simply never set
+            # there, so the allowlist was empty and nobody was admitted.
+            #
+            # This standalone webhook-driven service is the second implementation
+            # of the same behaviour (prod runs both). Listing a space in BOTH
+            # places means two independent bots vote on the same request. Pick
+            # one owner per space.
             - name: MEMBERSHIP_AUTOACCEPT_SPACE_IDS
               value: ""
             - name: SENTRY_DSN
