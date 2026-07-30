@@ -43,8 +43,15 @@ async function main() {
 			pimlicoApiKey: config.pimlicoApiKey,
 			rpcUrl: config.rpcUrl,
 			chainId: config.chainId,
+			zerodevSponsorshipRpcUrl: config.zerodevSponsorshipRpcUrl,
 		})
-		log.info("acceptor wallet ready", {safe_address: wallet.safeAddress, chain_id: config.chainId})
+		// On 55516 this address is the EOA itself (EIP-7702), not a Safe proxy — it
+		// is what must own ACCEPTOR_SPACE_ID, so log it either way.
+		log.info("acceptor wallet ready", {
+			account_address: wallet.safeAddress,
+			chain_id: config.chainId,
+			sponsorship: config.chainId === 55516 ? "zerodev-kernel-7702" : "safe-pimlico",
+		})
 		const graphql = createGraphQLClient({endpoint: config.graphqlEndpoint})
 		// The editor check is the reference policy; space-defined policies compose here.
 		const policy = composePolicies(editorPolicy)

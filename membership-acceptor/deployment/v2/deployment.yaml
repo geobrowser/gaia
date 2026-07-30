@@ -1,0 +1,158 @@
+# membership-acceptor — gaia v2 stack (chain 55516, namespace `gaia`).
+#
+# GEO-2478: this service existed only on prod (ns `knowledge`, chain 19411) and
+# was never brought to the v2 cluster, so automatic member acceptance simply did
+# not run there. Modeled on deployment/production/deployment.yaml with the v2
+# conventions applied: namespace `gaia`, `regcred` pull secret (prod uses `geo`),
+# and chain-55516 config.
+#
+# Sponsorship differs from prod: 55516 has no Safe infrastructure, so the
+# acceptor uses an EIP-7702 Kernel account via ZeroDev instead of Safe+Pimlico
+# (see src/wallet.ts). Under EIP-7702 the acting address IS the acceptor's EOA,
+# not a Safe proxy — that EOA must own ACCEPTOR_SPACE_ID and hold editor rights
+# in the auto-accept spaces, which is NOT the same identity as on prod.
+#
+# Requires a `membership-acceptor-credentials` secret in `gaia` holding
+# ACCEPTOR_PRIVATE_KEY, GEO_WEBHOOK_SECRET, RPC_URL, ZERODEV_SPONSORSHIP_RPC_URL
+# and (optionally) SENTRY_DSN. PIMLICO_API_KEY is deliberately absent — this
+# chain never calls Pimlico.
+#
+# It also needs a row in `app_webhooks` pointing at this Service, or nothing will
+# ever invoke it; the notification system is what drives the bot.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: membership-acceptor
+  namespace: gaia
+  labels:
+    app: membership-acceptor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: membership-acceptor
+  template:
+    metadata:
+      labels:
+        app: membership-acceptor
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: membership-acceptor
+          image: registry.digitalocean.com/geo/membership-acceptor:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            # Shared secret — MUST equal this service's app_webhooks.secret row
+            - name: GEO_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: membership-acceptor-credentials
+                  key: GEO_WEBHOOK_SECRET
+            # Voting identity (sensitive)
+            - name: ACCEPTOR_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: membership-acceptor-credentials
+                  key: ACCEPTOR_PRIVATE_KEY
+            - name: RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: membership-acceptor-credentials
+                  key: RPC_URL
+            # ZeroDev bundler + paymaster (replaces PIMLICO_API_KEY on this chain)
+            - name: ZERODEV_SPONSORSHIP_RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: membership-acceptor-credentials
+                  key: ZERODEV_SPONSORSHIP_RPC_URL
+            # Non-sensitive config
+            #
+            # !!! BLOCKED — READ BEFORE ENABLING ANY AUTO-ACCEPT SPACE !!!
+            # This space id is correct and exists on 55516, but the space is
+            # registered to 0xE23D205e0850c73319627512C5a25275A02a9caa — the
+            # acceptor's *Safe* address from prod. Under EIP-7702 on this chain
+            # the acceptor acts as its EOA (0xcCc140d7715bA5C7544205e9588541c796bD6372),
+            # and SpaceRegistry.enter() requires msg.sender to be the space's
+            # account, so every vote would revert. 55516 has no Safe infra, so
+            # that Safe address can never be controlled there.
+            #
+            # The space must be re-keyed on-chain to the acceptor's EOA first —
+            # the same operation that repaired 672 personal spaces after the
+            # migration. This space is one of 103 that repair missed.
+            #
+            # Until then MEMBERSHIP_AUTOACCEPT_SPACE_IDS below is intentionally
+            # empty: the service starts and serves /health, but votes on nothing.
+            - name: ACCEPTOR_SPACE_ID
+              value: "0x24208422558b4ac801e24a71a889dfad"
+            # Self-owned SpaceRegistry deployed 2026-07-29 on chain 55516
+            - name: SPACE_REGISTRY_ADDRESS
+              value: "0xCF13491802747e759e1BB8E364bc43045398d1DD"
+            - name: CHAIN_ID
+              value: "55516"
+            # In-cluster: avoids an external hop and does not depend on public DNS
+            - name: GRAPHQL_ENDPOINT
+              value: "http://api.gaia.svc.cluster.local:3000/graphql"
+            # DAO spaces this acceptor auto-accepts, as 0x-prefixed bytes16 hex
+            # (dashed UUIDs also accepted). EMPTY = accept none, which is the safe
+            # default: the service runs and answers health checks but votes on
+            # nothing until the v2 space ids are filled in.
+            - name: MEMBERSHIP_AUTOACCEPT_SPACE_IDS
+              value: ""
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: membership-acceptor-credentials
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              value: "testnet"
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: membership-acceptor
+  namespace: gaia
+spec:
+  selector:
+    app: membership-acceptor
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
