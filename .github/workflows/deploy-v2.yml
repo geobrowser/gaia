@@ -90,7 +90,9 @@ jobs:
             proposal-executor) manifests="proposal-executor/deployment/v2/cronjob.yaml";    rollout="" ;;
             notification-indexer) manifests="notification-service/deployment/v2/notification-indexer.yaml"; rollout="deployment/notification-indexer" ;;
             delivery-worker)   manifests="notification-service/deployment/v2/delivery-worker.yaml"; rollout="deployment/delivery-worker" ;;
-            ranking-indexer)   manifests="ranking-indexer/k8s/v2/ranking-indexer.yaml";     rollout="deployment/ranking-indexer" ;;
+            # The two CronJobs ship with the Deployment: both run the same image
+            # and are only useful at the same version as the consumer.
+            ranking-indexer)   manifests="ranking-indexer/k8s/v2/ranking-indexer.yaml ranking-indexer/k8s/v2/backfill-cronjob.yaml ranking-indexer/k8s/v2/rolling-sweep-cronjob.yaml"; rollout="deployment/ranking-indexer" ;;
             *) echo "unknown service"; exit 1 ;;
           esac
           echo "manifests=$manifests" >> "$GITHUB_OUTPUT"

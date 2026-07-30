@@ -33,7 +33,11 @@ struct DetectIds {
     filter_property: Uuid,
     start_date_property: Uuid,
     end_date_property: Uuid,
+    start_datetime_property: Uuid,
+    end_datetime_property: Uuid,
     aggregation_restriction_relation: Uuid,
+    rolling_type: Uuid,
+    submission_frequency_property: Uuid,
 }
 
 static IDS: LazyLock<DetectIds> = LazyLock::new(|| {
@@ -51,7 +55,11 @@ static IDS: LazyLock<DetectIds> = LazyLock::new(|| {
         filter_property: uid(RANK_FILTER_PROPERTY_ID),
         start_date_property: uid(RANK_START_DATE_PROPERTY_ID),
         end_date_property: uid(RANK_END_DATE_PROPERTY_ID),
+        start_datetime_property: uid(RANK_START_DATETIME_PROPERTY_ID),
+        end_datetime_property: uid(RANK_END_DATETIME_PROPERTY_ID),
         aggregation_restriction_relation: uid(RANK_AGGREGATION_RESTRICTION_PROPERTY_ID),
+        rolling_type: uid(RANK_ROLLING_TYPE_ID),
+        submission_frequency_property: uid(RANK_SUBMISSION_FREQUENCY_PROPERTY_ID),
     }
 });
 
@@ -78,6 +86,20 @@ fn float_value(values: &[PropertyValue], property: Uuid) -> Option<f64> {
         }
         match &pv.value {
             Grc20Value::Float { value, .. } => Some(*value),
+            _ => None,
+        }
+    })
+}
+
+/// Read an `Integer` property value, truncated to `i32` (the column type;
+/// `submission_frequency` is a small number of hours, never near i64's range).
+fn int_value(values: &[PropertyValue], property: Uuid) -> Option<i32> {
+    values.iter().find_map(|pv| {
+        if id_to_uuid(&pv.property) != property {
+            return None;
+        }
+        match &pv.value {
+            Grc20Value::Integer { value, .. } => i32::try_from(*value).ok(),
             _ => None,
         }
     })
@@ -110,6 +132,28 @@ fn parse_date(s: &str) -> Option<DateTime<Utc>> {
             .map(|ndt| DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc));
     }
     None
+}
+
+/// Resolve one submission-window bound of a block: the datetime property
+/// (GEO-2253) wins; the legacy date property is the fallback. When a block
+/// authors both, the legacy value is ignored (even if it differs).
+fn window_bound(
+    values: &[PropertyValue],
+    block: Uuid,
+    bound: &'static str,
+    datetime_property: Uuid,
+    date_property: Uuid,
+) -> Option<DateTime<Utc>> {
+    let new = date_value(values, datetime_property);
+    let old = date_value(values, date_property);
+    if new.is_some() && old.is_some() {
+        tracing::debug!(
+            block = %block,
+            bound,
+            "block authors both the datetime and legacy date property; using the datetime one"
+        );
+    }
+    new.or(old)
 }
 
 /// The rank-relevant ops extracted from a single edit.
@@ -212,9 +256,30 @@ pub fn detect(
                         space_id,
                         name: text_value(&entity.values, ids.name_property),
                         filter: text_value(&entity.values, ids.filter_property),
-                        start_date: date_value(&entity.values, ids.start_date_property),
-                        end_date: date_value(&entity.values, ids.end_date_property),
+                        start_date: window_bound(
+                            &entity.values,
+                            entity_id,
+                            "start",
+                            ids.start_datetime_property,
+                            ids.start_date_property,
+                        ),
+                        end_date: window_bound(
+                            &entity.values,
+                            entity_id,
+                            "end",
+                            ids.end_datetime_property,
+                            ids.end_date_property,
+                        ),
                         restriction_id: restriction_of.get(&entity_id).copied(),
+                        // Rolling is a second TYPES tag on the block (GEO-2328), not a
+                        // dedicated property — see RANK_ROLLING_TYPE_ID's doc comment.
+                        ranking_type: entity_types
+                            .is_some_and(|t| t.contains(&ids.rolling_type))
+                            .then_some(ids.rolling_type),
+                        submission_frequency: int_value(
+                            &entity.values,
+                            ids.submission_frequency_property,
+                        ),
                     });
                 }
             }
@@ -444,6 +509,105 @@ mod tests {
         assert_eq!(
             b.restriction_id,
             Some(Uuid::parse_str(RANK_RESTRICTION_MEMBERS_AND_EDITORS_ID).unwrap())
+        );
+    }
+
+    /// A `Ranking Block` typed entity whose values are set by `configure`.
+    fn block_edit(
+        configure: impl FnOnce(
+            grc_20::model::builder::EntityBuilder<'static>,
+        ) -> grc_20::model::builder::EntityBuilder<'static>,
+    ) -> grc_20::Edit<'static> {
+        EditBuilder::new(gid(0))
+            .create_relation(|r| {
+                r.id(gid(20))
+                    .relation_type(sid(TYPE_RELATION_TYPE_ID))
+                    .from(gid(BLOCK))
+                    .to(sid(RANKING_BLOCK_TYPE_ID))
+            })
+            .create_entity(gid(BLOCK), configure)
+            .build()
+    }
+
+    #[test]
+    fn legacy_date_props_accept_datetime_values() {
+        use chrono::TimeZone;
+        let edit = block_edit(|e| {
+            e.value(
+                sid(RANK_START_DATE_PROPERTY_ID),
+                Grc20Value::Datetime("2026-06-01T12:30:00Z".into()),
+            )
+            .value(
+                sid(RANK_END_DATE_PROPERTY_ID),
+                Grc20Value::Datetime("2026-06-30T18:00:00+02:00".into()),
+            )
+        });
+
+        let b = &detect(&edit, space_uuid(), 100, 0).blocks[0];
+        assert_eq!(
+            b.start_date,
+            Some(Utc.with_ymd_and_hms(2026, 6, 1, 12, 30, 0).unwrap())
+        );
+        // offsets normalize to UTC
+        assert_eq!(
+            b.end_date,
+            Some(Utc.with_ymd_and_hms(2026, 6, 30, 16, 0, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn detects_new_datetime_props() {
+        use chrono::TimeZone;
+        let edit = block_edit(|e| {
+            e.value(
+                sid(RANK_START_DATETIME_PROPERTY_ID),
+                Grc20Value::Datetime("2026-06-01T12:30:00Z".into()),
+            )
+            .value(
+                sid(RANK_END_DATETIME_PROPERTY_ID),
+                Grc20Value::Datetime("2026-06-30T18:00:00Z".into()),
+            )
+        });
+
+        let b = &detect(&edit, space_uuid(), 100, 0).blocks[0];
+        assert_eq!(
+            b.start_date,
+            Some(Utc.with_ymd_and_hms(2026, 6, 1, 12, 30, 0).unwrap())
+        );
+        assert_eq!(
+            b.end_date,
+            Some(Utc.with_ymd_and_hms(2026, 6, 30, 18, 0, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn new_datetime_props_win_over_legacy_per_bound() {
+        use chrono::TimeZone;
+        // start: both authored, values disagree -> the datetime property wins;
+        // end: only the legacy date -> falls back per-bound.
+        let edit = block_edit(|e| {
+            e.value(
+                sid(RANK_START_DATE_PROPERTY_ID),
+                Grc20Value::Date("2026-06-01".into()),
+            )
+            .value(
+                sid(RANK_START_DATETIME_PROPERTY_ID),
+                Grc20Value::Datetime("2026-06-02T09:00:00Z".into()),
+            )
+            .value(
+                sid(RANK_END_DATE_PROPERTY_ID),
+                Grc20Value::Date("2026-06-30".into()),
+            )
+        });
+
+        let b = &detect(&edit, space_uuid(), 100, 0).blocks[0];
+        assert_eq!(
+            b.start_date,
+            Some(Utc.with_ymd_and_hms(2026, 6, 2, 9, 0, 0).unwrap())
+        );
+        assert_eq!(
+            b.end_date,
+            Some(Utc.with_ymd_and_hms(2026, 6, 30, 0, 0, 0).unwrap())
         );
     }
 

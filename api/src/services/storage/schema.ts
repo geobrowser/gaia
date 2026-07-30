@@ -1215,6 +1215,10 @@ export const rankingBlocks = ranks.table(
 		startDate: timestamp("start_date", {withTimezone: true, mode: "date"}),
 		endDate: timestamp("end_date", {withTimezone: true, mode: "date"}),
 		restrictionId: uuid("restriction_id"),
+		/** Value-entity id of the block's `Ranking type` relation (e.g. the "Rolling" value); `null` = static (default). */
+		rankingType: uuid("ranking_type"),
+		/** GEO-2328: hours a submission stays eligible before a rolling block requires resubmission. `null` for static blocks. */
+		submissionFrequency: integer("submission_frequency"),
 		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
 	},
 	(table) => [primaryKey({columns: [table.id, table.spaceId]})],

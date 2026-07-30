@@ -477,6 +477,13 @@
       "when": 1783089645264,
       "tag": "0067_governance_v2",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1785416524168,
+      "tag": "0068_rolling_rankings",
+      "breakpoints": true
     }
   ]
 }
