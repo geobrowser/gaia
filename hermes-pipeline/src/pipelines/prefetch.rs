@@ -37,6 +37,14 @@ pub struct RetryConfig {
     pub max_delay: Duration,
     /// Maximum number of retries (default: 10)
     pub max_retries: usize,
+    /// How long to hold a block waiting for the IPFS warmer to reach it before
+    /// giving up and treating the misses as unfetchable (default: 10 minutes,
+    /// override with `IPFS_WARMER_WAIT_SECS`).
+    ///
+    /// A backstop only. In the normal case the wait ends as soon as the warmer's
+    /// cursor passes this block, which is typically seconds. Set to zero to
+    /// restore the old drop-immediately behaviour.
+    pub warmer_wait_max: Duration,
 }
 
 impl Default for RetryConfig {
@@ -46,6 +54,11 @@ impl Default for RetryConfig {
             factor: 2,
             max_delay: Duration::from_secs(5),
             max_retries: 10,
+            warmer_wait_max: std::env::var("IPFS_WARMER_WAIT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(600)),
         }
     }
 }
@@ -138,10 +151,17 @@ fn collect_uris(actions: &[Action]) -> Vec<FetchRequest> {
 /// Prefetch all IPFS URIs needed for a block.
 ///
 /// This performs a batch lookup with retry logic for cache misses.
+/// How long to wait between re-checks while the warmer catches up.
+const WARMER_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Emit an escalating log every this many waits, so a genuinely stuck warmer is
+/// loud rather than a silent stall.
+const WARMER_STALL_LOG_EVERY: u32 = 15;
+
 pub async fn prefetch_block(
     actions: &[Action],
     cache: &Arc<dyn IpfsCache>,
     config: &RetryConfig,
+    block_number: u64,
 ) -> PrefetchResult {
     let requests = collect_uris(actions);
 
@@ -154,6 +174,75 @@ pub async fn prefetch_block(
         tracing::info!("Prefetching {} IPFS URIs", request_count);
     });
 
+    // A cache miss has two very different causes, and conflating them loses
+    // data: either the warmer has not fetched this URI YET (transient — the
+    // pipeline is simply ahead of it at chain head), or the warmer looked and
+    // the content is unfetchable (permanent, recorded as `is_errored`).
+    //
+    // The warmer writes a row for EVERY URI it processes, so a missing row only
+    // means "unfetchable" once the warmer has advanced past this block. Until
+    // then we wait instead of dropping. Waiting is bounded by the warmer's own
+    // progress, not by a timeout, so this cannot stall on content that the
+    // warmer has already ruled on.
+    let mut waits: u32 = 0;
+    loop {
+        let result = fetch_once(&requests, cache, config).await;
+
+        if result.cache_misses == 0 {
+            return result;
+        }
+
+        match cache.warmer_block().await {
+            // Warmer is past this block: the misses are real verdicts.
+            Some(warmer) if warmer >= block_number => {
+                tracing::error!(
+                    block_number,
+                    warmer_block = warmer,
+                    count = result.cache_misses,
+                    "Cache misses persist though the IPFS warmer is past this block; \
+                     treating as unfetchable"
+                );
+                return result;
+            }
+            // Warmer is behind (or unknown): these URIs are simply not fetched
+            // yet. Hold the block — do NOT let the cursor advance past it.
+            other => {
+                let waited = WARMER_POLL_INTERVAL * waits;
+                if waited >= config.warmer_wait_max {
+                    tracing::error!(
+                        block_number,
+                        warmer_block = ?other,
+                        count = result.cache_misses,
+                        waited_secs = waited.as_secs(),
+                        "Gave up waiting for the IPFS warmer; edits in this block will be \
+                         dropped. The warmer is stalled or not running — investigate before \
+                         trusting this block's contents"
+                    );
+                    return result;
+                }
+                waits += 1;
+                if waits % WARMER_STALL_LOG_EVERY == 1 {
+                    tracing::warn!(
+                        block_number,
+                        warmer_block = ?other,
+                        outstanding = result.cache_misses,
+                        waited_secs = waits * WARMER_POLL_INTERVAL.as_secs() as u32,
+                        "Waiting for the IPFS warmer to reach this block before emitting; \
+                         edits would otherwise be dropped"
+                    );
+                }
+                tokio::time::sleep(WARMER_POLL_INTERVAL).await;
+            }
+        }
+    }
+}
+
+/// One parallel pass over every URI in the block.
+async fn fetch_once(
+    requests: &[FetchRequest],
+    cache: &Arc<dyn IpfsCache>,
+    config: &RetryConfig,
+) -> PrefetchResult {
     // Fetch all in parallel with retry
     let fetch_futures = requests.iter().map(|request| {
         let cache = Arc::clone(cache);
@@ -321,7 +410,87 @@ mod tests {
             factor: 1,
             max_delay: Duration::from_millis(1),
             max_retries: 1,
+            // Tests assert the drop path directly; no warmer to wait for.
+            warmer_wait_max: Duration::ZERO,
         }
+    }
+
+    /// Cache whose warmer position is fixed, and whose content for a given hash
+    /// only materialises after N lookups — models the pipeline running ahead of
+    /// the warmer at chain head.
+    struct LaggingCache {
+        inner: MockIpfsCache,
+        warmer: Option<u64>,
+        appears_after: usize,
+        looks: std::sync::atomic::AtomicUsize,
+        hash: String,
+    }
+
+    #[async_trait::async_trait]
+    impl IpfsCache for LaggingCache {
+        async fn warmer_block(&self) -> Option<u64> {
+            self.warmer
+        }
+
+        async fn get(&self, ipfs_hash: &str, space_id: &[u8]) -> Result<CachedEdit, CacheError> {
+            if ipfs_hash == self.hash {
+                let n = self.looks.fetch_add(1, Ordering::Relaxed) + 1;
+                if n < self.appears_after {
+                    return Err(CacheError::NotFound(ipfs_hash.to_string()));
+                }
+                // Once the warmer has fetched it, serve a real cached edit.
+                return self.inner.get("QmRootEdit1CreatePersons", space_id).await;
+            }
+            self.inner.get(ipfs_hash, space_id).await
+        }
+    }
+
+    // The regression this guards: the pipeline reaching a block before the
+    // warmer used to drop the edit permanently and advance its cursor, silently
+    // losing user writes. It must wait instead.
+    #[tokio::test]
+    async fn does_not_drop_when_warmer_is_behind_and_content_arrives() {
+        let cache: Arc<dyn IpfsCache> = Arc::new(LaggingCache {
+            inner: MockIpfsCache::new(),
+            warmer: Some(50), // behind the block below
+            appears_after: 3,
+            looks: std::sync::atomic::AtomicUsize::new(0),
+            hash: format!("ipfs://{}", MISSING_HASH),
+        });
+        let actions = [edits_published_action(MISSING_HASH, 0x01)];
+
+        let mut config = fast_retry_config();
+        config.warmer_wait_max = Duration::from_secs(30);
+
+        let result = prefetch_block(&actions, &cache, &config, 100).await;
+
+        assert_eq!(
+            result.cache_misses, 0,
+            "must not drop while warmer is behind"
+        );
+        assert_eq!(result.cache.len(), 1, "edit must be recovered once fetched");
+    }
+
+    // The other half: once the warmer is PAST the block, a missing row is a real
+    // verdict and must not hang the pipeline.
+    #[tokio::test]
+    async fn drops_when_warmer_has_already_passed_the_block() {
+        let cache: Arc<dyn IpfsCache> = Arc::new(LaggingCache {
+            inner: MockIpfsCache::new(),
+            warmer: Some(100), // at/past the block below
+            appears_after: usize::MAX,
+            looks: std::sync::atomic::AtomicUsize::new(0),
+            hash: format!("ipfs://{}", MISSING_HASH),
+        });
+        let actions = [edits_published_action(MISSING_HASH, 0x01)];
+
+        let mut config = fast_retry_config();
+        config.warmer_wait_max = Duration::from_secs(30);
+
+        let result = prefetch_block(&actions, &cache, &config, 100).await;
+
+        assert_eq!(result.cache_misses, 1);
+        assert!(result.cache.is_empty());
     }
 
     fn edits_published_action(ipfs_uri: &str, space_id: u8) -> Action {
@@ -348,7 +517,7 @@ mod tests {
             Arc::new(MockIpfsCache::with_errored_hashes(vec![key.clone()]));
         let actions = [edits_published_action(ERRORED_HASH, 0x01)];
 
-        let result = prefetch_block(&actions, &cache, &fast_retry_config()).await;
+        let result = prefetch_block(&actions, &cache, &fast_retry_config(), 1).await;
 
         let entry = result.cache.get(&key).expect(
             "errored entries must be inserted into the prefetched map so edits.rs can \
@@ -371,7 +540,7 @@ mod tests {
         let cache: Arc<dyn IpfsCache> = Arc::new(MockIpfsCache::new());
         let actions = [edits_published_action(MISSING_HASH, 0x01)];
 
-        let result = prefetch_block(&actions, &cache, &fast_retry_config()).await;
+        let result = prefetch_block(&actions, &cache, &fast_retry_config(), 1).await;
 
         let key = format!("ipfs://{}", MISSING_HASH);
         assert!(

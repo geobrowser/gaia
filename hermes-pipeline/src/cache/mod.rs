@@ -142,6 +142,22 @@ pub trait IpfsCache: Send + Sync {
     /// * `Err(CacheError::DeserializeError)` - Failed to parse cached data
     async fn get(&self, ipfs_hash: &str, space_id: &[u8]) -> Result<CachedEdit, CacheError>;
 
+    /// Block height that `hermes-ipfs-cache` (the warmer) has durably processed.
+    ///
+    /// This is what lets a caller tell "the warmer has not fetched this URI
+    /// YET" apart from "the warmer looked and the content is unfetchable".
+    /// The warmer writes a row for every URI it sees — content on success,
+    /// `is_errored = true` on failure — so a MISSING row is only meaningful
+    /// once the warmer has advanced past the block that referenced it.
+    ///
+    /// Returns `None` when the progress is unknown, which callers must treat
+    /// as "not yet processed" (the safe direction: wait rather than drop).
+    ///
+    /// Required rather than defaulted on purpose: a cache that silently
+    /// inherited `None` would make the pipeline wait out its full backstop on
+    /// every miss, so each implementation must say what it knows.
+    async fn warmer_block(&self) -> Option<u64>;
+
     /// Batch lookup multiple edits by their IPFS hashes.
     ///
     /// This is more efficient than multiple individual lookups for backends
@@ -167,6 +183,14 @@ pub trait IpfsCache: Send + Sync {
 /// This allows passing Arc<Cache> to functions expecting &impl IpfsCache
 #[async_trait]
 impl<T: IpfsCache + ?Sized> IpfsCache for Arc<T> {
+    // Must forward. When this method carried a default body, this blanket impl
+    // silently inherited it, so every `Arc<dyn IpfsCache>` reported `None`
+    // regardless of the concrete cache underneath — the reason `warmer_block`
+    // is a required method now.
+    async fn warmer_block(&self) -> Option<u64> {
+        (**self).warmer_block().await
+    }
+
     async fn get(&self, ipfs_hash: &str, space_id: &[u8]) -> Result<CachedEdit, CacheError> {
         (**self).get(ipfs_hash, space_id).await
     }
