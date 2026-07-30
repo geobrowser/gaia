@@ -484,6 +484,13 @@
       "when": 1785416524168,
       "tag": "0068_rolling_rankings",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1785432681541,
+      "tag": "0069_support_entities_without_value",
+      "breakpoints": true
     }
   ]
 }
