@@ -14,6 +14,11 @@ use crate::error::StorageError;
 use crate::ids;
 use crate::models::{event_notification_types, NotificationEvent, KNOWN_NOTIFICATION_TYPES};
 
+/// `notification_poll_cursors` key holding the rejection-notification floor.
+/// See [`Storage::rejection_floor`] — this one is a fixed floor, not a
+/// high-water mark like `entity_votes_threshold`.
+pub const REJECTION_FLOOR_CURSOR: &str = "proposal_rejected_floor";
+
 /// How long the in-memory `app_webhooks` snapshot is reused before re-reading the
 /// table. The table is tiny (a handful of rows) and changes rarely, so we serve
 /// filtering from memory and refresh lazily — a filter change takes effect within
@@ -618,25 +623,47 @@ impl Storage {
     /// Find proposals that have expired (end_time < now) without being executed,
     /// and for which we haven't yet sent a rejection notification.
     ///
+    /// Reads from `proposals_current`, NOT `proposals`. Under the governance-v2
+    /// schema (migration `0067_governance_v2`) `proposals` is an identity table
+    /// and all mutable state — including `end_time` — lives in
+    /// `proposal_versions`; `proposals_current` is the view joining each
+    /// proposal to its `current_version`. `executed_at` stayed on `proposals`
+    /// and the view carries it through, so every column here resolves.
+    ///
+    /// NOTE: this makes the query v2-only. It must not be cherry-picked to a
+    /// branch without `0067_governance_v2` — there is no `proposals_current`
+    /// there and the query fails at runtime, which is exactly how this broke:
+    /// the old `FROM proposals` text is correct pre-v2 and silently started
+    /// erroring (`column p.end_time does not exist`) once the split landed.
+    ///
+    /// `min_end_time` is an absolute epoch-seconds floor: proposals that ended
+    /// before it are never notified. It exists because turning this query back
+    /// on against a migrated chain would otherwise fire a rejection for every
+    /// proposal replayed by the transplant — 3,241 of them when this was fixed,
+    /// spanning 1970 to 2026, versus 10 that were genuinely recent. See
+    /// `rejection_floor`.
+    ///
     /// Results are limited to `limit` rows to prevent unbounded memory usage.
     /// Callers should loop until a batch returns fewer than `limit` rows.
     #[instrument(
         name = "notification_indexer.storage.find_expired_proposals",
         skip(self),
-        fields(limit = limit)
+        fields(limit = limit, min_end_time = min_end_time)
     )]
     pub async fn find_expired_proposals(
         &self,
         limit: i64,
+        min_end_time: i64,
     ) -> Result<Vec<ExpiredProposal>, StorageError> {
         let rows = sqlx::query(
             r#"
             SELECT p.id, p.space_id, p.proposed_by, p.end_time
-            FROM proposals p
+            FROM proposals_current p
             LEFT JOIN notification_outbox o
               ON o.event_type = 'proposal_rejected'
              AND (o.payload->>'proposal_id')::uuid = p.id
             WHERE p.end_time < EXTRACT(EPOCH FROM now())
+              AND p.end_time >= $2
               AND p.executed_at IS NULL
               AND o.id IS NULL
             ORDER BY p.end_time ASC, p.id
@@ -644,6 +671,7 @@ impl Storage {
             "#,
         )
         .bind(limit)
+        .bind(min_end_time)
         .fetch_all(&self.pool)
         .await?;
 
@@ -959,6 +987,44 @@ impl Storage {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Read the rejection floor, seeding it on first run.
+    ///
+    /// Unlike the other entries in `notification_poll_cursors` this is a FIXED
+    /// floor, not an advancing high-water mark: it is written once and then only
+    /// ever read. Deduplication of already-sent rejections is handled by the
+    /// `notification_outbox` anti-join in `find_expired_proposals`, so this only
+    /// needs to answer "how far back do we look the very first time".
+    ///
+    /// It must be absolute and persisted rather than computed as
+    /// `now() - backfill` on each poll. A relative window would permanently skip
+    /// any proposal that expired while the service was down for longer than the
+    /// window — the anti-join would never see a notification for it, but the
+    /// window would have moved past it. Persisting the floor means catching up
+    /// after an outage still notifies everything after it.
+    ///
+    /// `backfill_hours` therefore only has an effect on a database that has
+    /// never run this poller. Changing it later is a no-op; to move an existing
+    /// floor, update the row.
+    #[instrument(name = "notification_indexer.storage.rejection_floor", skip(self))]
+    pub async fn rejection_floor(&self, backfill_hours: i64) -> Result<i64, StorageError> {
+        if let Some((ts, _)) = self.get_poll_cursor(REJECTION_FLOOR_CURSOR).await? {
+            return Ok(ts.timestamp());
+        }
+
+        // Epoch arithmetic rather than a chrono `Duration`, which collides with
+        // the `std::time::Duration` already imported in this module.
+        let floor_secs = Utc::now().timestamp() - backfill_hours * 3600;
+        let floor = DateTime::<Utc>::from_timestamp(floor_secs, 0).ok_or_else(|| {
+            StorageError::Database(sqlx::Error::Protocol(format!(
+                "rejection floor {floor_secs} is not a representable timestamp \
+                 (check REJECTION_BACKFILL_HOURS)"
+            )))
+        })?;
+        self.set_poll_cursor(REJECTION_FLOOR_CURSOR, floor, 0)
+            .await?;
+        Ok(floor.timestamp())
     }
 }
 
