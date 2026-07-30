@@ -37,5 +37,15 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/kg-indexer/target/release/kg-indexer /usr/local/bin/kg-indexer
+# Remediation/diagnostic binaries (#823, #824). `cargo build --release` already
+# produces them, but without these COPYs they are discarded with the builder
+# stage and cannot be run in-cluster — the same omission #826 hit with
+# ranking-indexer's rolling_sweep and #849 with reconcile_errored.
+COPY --from=builder /app/kg-indexer/target/release/audit_batch_replay /usr/local/bin/audit_batch_replay
+COPY --from=builder /app/kg-indexer/target/release/check_replay_safety /usr/local/bin/check_replay_safety
+COPY --from=builder /app/kg-indexer/target/release/replay_edit /usr/local/bin/replay_edit
+COPY --from=builder /app/kg-indexer/target/release/cleanup_value_orphans /usr/local/bin/cleanup_value_orphans
+COPY --from=builder /app/kg-indexer/target/release/fix_misattribution /usr/local/bin/fix_misattribution
+COPY --from=builder /app/kg-indexer/target/release/repair_version_chains /usr/local/bin/repair_version_chains
 
 CMD ["kg-indexer"]
