@@ -35,6 +35,11 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/hermes-ipfs-cache/target/release/hermes-ipfs-cache /usr/local/bin/hermes-ipfs-cache
+# reconcile_errored re-attempts ipfs_cache rows marked is_errored (#823). `cargo
+# build --release` already produces it, but without this COPY it is discarded with
+# the builder stage and the tool cannot be run in-cluster — same omission #826 hit
+# with ranking-indexer's rolling_sweep.
+COPY --from=builder /app/hermes-ipfs-cache/target/release/reconcile_errored /usr/local/bin/reconcile_errored
 COPY --from=builder /app/hermes-substream/hermes-substream-v0.1.0.spkg /hermes-substream/hermes-substream-v0.1.0.spkg
 
 WORKDIR /
