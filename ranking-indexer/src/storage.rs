@@ -388,6 +388,29 @@ impl Storage {
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
+    /// EVERY registered block, for a deliberate full recompute
+    /// (`bin/backfill_blocks.rs --recompute-all`).
+    ///
+    /// Every other trigger in this indexer is reactive — an edit, a membership
+    /// event, a rank appearing, time elapsing for a Rolling block. None of them
+    /// fire when the *inputs* an aggregate was derived from are corrected
+    /// underneath it by something outside the indexer.
+    ///
+    /// That gap is not hypothetical: on 2026-07-31 every migrated
+    /// `ranks.rankings.submitted_at` was repaired (the chain migration had
+    /// stamped 349 submissions with migration wall-clock time instead of their
+    /// real dates, collapsing 348 distinct timestamps into 101). Eligibility is
+    /// decided by `submitted_at` against a block's date window, so the stored
+    /// aggregates were computed from wrong inputs — and nothing recomputed them,
+    /// because no edit had happened. `backfill_blocks` reported
+    /// `blocks=0 stale_blocks=0`: correct for what it looks at, useless here.
+    pub async fn find_all_ranking_blocks(&self) -> Result<Vec<Uuid>, IndexerError> {
+        let rows: Vec<(Uuid,)> = sqlx::query_as("SELECT id FROM ranks.ranking_blocks ORDER BY id")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
     /// Already-registered blocks (`ranks.ranking_blocks` row exists) whose
     /// `ranking_type` is still `NULL` even though the graph now tags them
     /// Rolling — the same split-edit gap as `find_unregistered_ranking_blocks`,
