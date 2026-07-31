@@ -58,10 +58,13 @@ const pgPool = new Pool({
 	connectionTimeoutMillis: parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "3000", 10),
 	// Close idle connections after 30 seconds to free up PgBouncer slots
 	idleTimeoutMillis: parseInt(process.env.PG_IDLE_TIMEOUT_MS || "30000", 10),
-	// Deterministic client-side fuse: destroys a stuck query's connection just above
-	// Postgres' statement_timeout (10s, api/docs/database-configuration.md), so a client
-	// that doesn't get freed server-side is still reclaimed on the Node side.
-	query_timeout: parseInt(process.env.PG_QUERY_TIMEOUT_MS || "12000", 10),
+	// Client-side fuse, deliberately ABOVE the statement_timeout applied on connect
+	// below. Postgres must cancel the query first so the server-side backend is
+	// freed; this only reclaims the Node side if that fails. If this is ever the
+	// tighter of the two it destroys connections for queries the server is still
+	// running, and the failure surfaces as an opaque INTERNAL_SERVER_ERROR with no
+	// server-side trace. See api/docs/database-configuration.md.
+	query_timeout: parseInt(process.env.PG_QUERY_TIMEOUT_MS || "35000", 10),
 	// Allow process to exit cleanly when pool is idle (for graceful shutdown)
 	allowExitOnIdle: true,
 })
@@ -149,6 +152,26 @@ function toUserInputGraphQLError(error: GraphQLError, pgError: {message: string}
 		},
 	})
 }
+
+// Apply the server-side query budget ourselves rather than trusting the database's
+// configured statement_timeout. api/docs/database-configuration.md documented 10s,
+// but the managed instances actually ship `0` (unlimited) on the v2 cluster and
+// `1min` on production — so a client-side fuse tuned "just above 10s" was in fact
+// the only, and tighter, limit. Setting it here makes the layering true everywhere.
+//
+// Fires once per new physical connection, not per request. This must be a plain
+// SET rather than a startup `options` parameter: DigitalOcean's PgBouncer rejects
+// `options: -c statement_timeout=...` at connect time with
+// `FATAL: unsupported startup parameter in options`.
+const PG_STATEMENT_TIMEOUT_MS = parseInt(process.env.PG_STATEMENT_TIMEOUT_MS || "30000", 10)
+pgPool.on("connect", (client) => {
+	client.query(`SET statement_timeout = ${PG_STATEMENT_TIMEOUT_MS}`).catch((err) => {
+		log.error("Failed to apply statement_timeout to new pool connection", {
+			error: String(err),
+			statementTimeoutMs: PG_STATEMENT_TIMEOUT_MS,
+		})
+	})
+})
 
 // Without this handler, background connection errors (PgBouncer closing idle connections,
 // network blips) become unhandled events. The pool doesn't remove the dead connection,

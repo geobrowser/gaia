@@ -20,7 +20,7 @@ API Replicas (3x)              PgBouncer                 PostgreSQL
 | Setting | Value | Purpose |
 |---------|-------|---------|
 | `max_connections` | 100 | Maximum concurrent connections |
-| `statement_timeout` | 10s | Kill queries running longer than 10s |
+| `statement_timeout` | 30s | Kill queries running longer than 30s. Set per connection by the API (`PG_STATEMENT_TIMEOUT_MS`), not from the server config — the managed databases ship `0` (v2) and `1min` (production). |
 | `idle_in_transaction_session_timeout` | 30s | Kill connections stuck in a transaction without committing |
 
 ### Applying PostgreSQL Settings
@@ -128,11 +128,23 @@ Saturation env values are validated at startup. Invalid values fail fast instead
 
 Keep timeout budgets ordered so overload fails predictably:
 
-1. Pool acquire/connect timeout (shortest)
+1. Pool acquire/connect timeout (shortest) — `PG_CONNECTION_TIMEOUT_MS`
 2. Request/application deadline
-3. `statement_timeout` (longest)
+3. `statement_timeout` — `PG_STATEMENT_TIMEOUT_MS`, applied per connection by the API
+4. node-postgres `query_timeout` (longest) — `PG_QUERY_TIMEOUT_MS`
 
 Avoid setting all layers to the same value (for example all 10s), which makes root cause ambiguous.
+
+`query_timeout` must stay **above** `statement_timeout`. It is a client-side
+backstop: Postgres should cancel the query first and free the server, and
+`query_timeout` only reclaims the Node side if that fails. Inverting the two
+destroys connections for queries the server is still happily running, and the
+failure surfaces as an opaque `INTERNAL_SERVER_ERROR` with no server-side trace.
+
+Do not infer `statement_timeout` from the database's own configuration. The
+managed instances do not match this table on their own — v2 ships `0`
+(unlimited) and production ships `1min` — which is why the API sets it
+explicitly per connection.
 
 ### Readiness and Saturation Routing
 
