@@ -491,6 +491,13 @@
       "when": 1785432681541,
       "tag": "0069_support_entities_without_value",
       "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1785528543090,
+      "tag": "0070_relations_to_entity_type_idx",
+      "breakpoints": true
     }
   ]
 }
