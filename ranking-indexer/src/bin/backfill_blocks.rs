@@ -50,6 +50,17 @@ async fn main() -> Result<(), IndexerError> {
         .map_err(|_| IndexerError::Config("DATABASE_URL not set".into()))?;
     let dry_run = env::var("DRY_RUN").is_ok_and(|v| v == "true" || v == "1");
 
+    // Opt-in full recompute of EVERY registered block. Deliberately not part of
+    // the normal run: the hourly CronJob is a cheap self-heal that touches only
+    // what is broken, and silently turning it into a full recompute would make
+    // an unbounded amount of work happen on a schedule nobody chose.
+    //
+    // This exists for the case the reactive triggers cannot see — an aggregate's
+    // INPUTS being corrected underneath it from outside the indexer, with no
+    // edit to react to. See `Storage::find_all_ranking_blocks`.
+    let recompute_all = env::args().any(|a| a == "--recompute-all")
+        || env::var("RECOMPUTE_ALL").is_ok_and(|v| v == "true" || v == "1");
+
     let storage = Storage::new(&database_url).await?;
 
     let block_candidates = storage.find_unregistered_ranking_blocks().await?;
@@ -63,6 +74,17 @@ async fn main() -> Result<(), IndexerError> {
         "found unregistered/stale blocks and unregistered ranks"
     );
 
+    let all_blocks = if recompute_all {
+        let all = storage.find_all_ranking_blocks().await?;
+        info!(
+            blocks = all.len(),
+            "--recompute-all: will recompute EVERY registered block"
+        );
+        all
+    } else {
+        Vec::new()
+    };
+
     if dry_run {
         for id in &block_candidates {
             info!(block_id = %id, "would recover block");
@@ -73,10 +95,17 @@ async fn main() -> Result<(), IndexerError> {
         for id in &rank_candidates {
             info!(rank_id = %id, "would recover rank");
         }
+        for id in &all_blocks {
+            info!(block_id = %id, "would recompute (--recompute-all)");
+        }
         return Ok(());
     }
 
-    if block_candidates.is_empty() && stale_blocks.is_empty() && rank_candidates.is_empty() {
+    if block_candidates.is_empty()
+        && stale_blocks.is_empty()
+        && rank_candidates.is_empty()
+        && all_blocks.is_empty()
+    {
         return Ok(());
     }
 
@@ -89,6 +118,9 @@ async fn main() -> Result<(), IndexerError> {
     let mut recovered_ranks = 0;
     let mut still_unregistered_ranks = 0;
     let mut failed = 0;
+    // Blocks recomputed by the recovery/resync passes below, so the optional
+    // full recompute at the end does not redo them.
+    let mut handled_blocks: HashSet<uuid::Uuid> = HashSet::new();
 
     // Blocks first: a recovered rank's block_id is guaranteed to already be
     // registered by the time we get to it below, since this scan already
@@ -112,6 +144,7 @@ async fn main() -> Result<(), IndexerError> {
                 }
                 info!(block_id = %block_id, "recovered + recomputed block");
                 recovered_blocks += 1;
+                handled_blocks.insert(block_id);
             }
             Ok(None) => {
                 // Typed in `relations` a moment ago, not typed now — a
@@ -145,6 +178,7 @@ async fn main() -> Result<(), IndexerError> {
                 }
                 info!(block_id = %block_id, "resynced stale ranking_type + recomputed block");
                 resynced_stale_blocks += 1;
+                handled_blocks.insert(block_id);
             }
             Ok(None) => {
                 // No longer typed as a Ranking Block at all — leave its
@@ -189,6 +223,7 @@ async fn main() -> Result<(), IndexerError> {
     // Recompute every block a recovered rank links to — its aggregate needs
     // to include the rank that just appeared.
     for block_id in affected_blocks {
+        handled_blocks.insert(block_id);
         if let Err(e) = recompute_block(block_id, meta, now, &storage).await {
             error!(
                 block_id = %block_id,
@@ -199,12 +234,37 @@ async fn main() -> Result<(), IndexerError> {
         }
     }
 
+    // Full recompute last, so anything recovered above is included rather than
+    // recomputed twice. Blocks already handled above are skipped for the same
+    // reason — recompute_block is idempotent, but doing it twice doubles the
+    // cost of the expensive mode for no benefit.
+    let mut recomputed_all = 0;
+    for block_id in &all_blocks {
+        if handled_blocks.contains(block_id) {
+            continue;
+        }
+        if let Err(e) = recompute_block(*block_id, meta, now, &storage).await {
+            error!(block_id = %block_id, error = %e, "recompute failed (--recompute-all)");
+            failed += 1;
+        } else {
+            recomputed_all += 1;
+        }
+    }
+    if recompute_all {
+        info!(
+            recomputed = recomputed_all,
+            skipped_already_done = all_blocks.len() - recomputed_all,
+            "full recompute complete"
+        );
+    }
+
     info!(
         recovered_blocks,
         still_unregistered_blocks,
         resynced_stale_blocks,
         recovered_ranks,
         still_unregistered_ranks,
+        recomputed_all,
         failed,
         "backfill complete"
     );
