@@ -245,12 +245,21 @@ export function findExecutableProposals(client: PgClient, nowSeconds: number): E
  * This filters voting_mode = 'Fast' while the executor's query filters 'Slow',
  * so the two paths never return the same proposal.
  *
+ * Reads `proposals_current`, NOT `proposals`. Under governance-v2 (migration
+ * `0067_governance_v2`) `proposals` became an identity table and the mutable
+ * per-version state — `voting_mode` and `end_time` among it — moved to
+ * `proposal_versions`; `proposals_current` is the view joining each proposal to
+ * its `current_version`. DETECTION_SQL above was updated for this and this query
+ * was not, so on a v2 database it failed with `column p.voting_mode does not
+ * exist` and the ENTIRE membership path errored out every run — silently, as far
+ * as anyone auto-accepting members could tell (GEO-2478).
+ *
  * ORDER BY created_at::bigint ASC for FIFO ordering (created_at is text Unix
  * seconds, so the ::bigint cast ensures numeric ordering).
  */
 export const MEMBERSHIP_DETECTION_SQL = `
 SELECT p.id, p.space_id AS "spaceId", a.target_id AS "requesterId"
-FROM proposals p
+FROM proposals_current p
 JOIN proposal_actions a ON a.proposal_id = p.id
 WHERE p.space_id = ANY($1)
   AND p.voting_mode = 'Fast'
