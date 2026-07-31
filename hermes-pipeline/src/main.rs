@@ -30,7 +30,8 @@
 //! - `SUBSTREAMS_API_TOKEN` - API token for substreams authentication
 //! - `SUBSTREAMS_START_BLOCK` - First block to consume on cold start (default: 138000).
 //!   Ignored when a persisted cursor exists in the `meta` table.
-//! - `SUBSTREAMS_END_BLOCK` - Last block to consume (default: u64::MAX for continuous)
+//! - `SUBSTREAMS_END_BLOCK` - Last block to consume (default: 0, the Substreams
+//!   sentinel for "stream forever"). Do not set this to `u64::MAX`.
 //! - `KAFKA_BROKER` - Kafka broker address (default: localhost:9092)
 //! - `KAFKA_USERNAME` - SASL username for managed Kafka (optional)
 //! - `KAFKA_PASSWORD` - SASL password for managed Kafka (optional)
@@ -1089,10 +1090,14 @@ async fn async_main() -> anyhow::Result<()> {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(138000);
+        // `0` is the Substreams protocol's sentinel for "never stop". Passing
+        // `u64::MAX` instead makes the server plan a bounded job of ~18
+        // quintillion blocks: it backprocesses forever, emitting progress but
+        // never a single `BlockScopedData`.
         let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(u64::MAX);
+            .unwrap_or(0);
 
         info!(
             endpoint = %endpoint,

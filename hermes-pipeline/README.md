@@ -88,7 +88,7 @@ This transformer is part of the Hermes architecture (see `docs/architecture.md`)
 | `SUBSTREAMS_ENDPOINT` | Substreams gRPC endpoint URL | `geotest.substreams.pinax.network:443` |
 | `SUBSTREAMS_API_TOKEN` | Auth token for substreams | - |
 | `SUBSTREAMS_START_BLOCK` | Block number to start from. Set to `0` for a fresh/local Anvil chain; set to the contract deploy block for other chains. | `82655` |
-| `SUBSTREAMS_END_BLOCK` | Block number to stop at | `u64::MAX` (continuous) |
+| `SUBSTREAMS_END_BLOCK` | Block number to stop at | `0` (continuous) |
 
 ### Kafka Environment Variables
 

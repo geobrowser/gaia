@@ -54,7 +54,7 @@ Access Kafka UI at http://localhost:8080 to view messages.
 | `SUBSTREAMS_ENDPOINT` | No | `https://geotest.substreams.pinax.network:443` | Live substreams endpoint |
 | `SUBSTREAMS_API_TOKEN` | No | - | Optional auth token for substreams endpoint |
 | `SUBSTREAMS_START_BLOCK` | No | `82655` | Start block for live stream |
-| `SUBSTREAMS_END_BLOCK` | No | `u64::MAX` | End block for live stream |
+| `SUBSTREAMS_END_BLOCK` | No | `0` | End block for live stream (`0` = never stop) |
 | `ATLAS_CHECKPOINT_DATABASE_URL` | No | - | PostgreSQL URL for checkpoint persistence |
 | `ATLAS_INDEXER_ID` | Conditional | - | Required and non-empty when checkpoint persistence is enabled |
 | `ATLAS_RUNTIME_COMPATIBILITY_MARKER` | No | `atlas-v2` | Runtime marker used for checkpoint compatibility validation |

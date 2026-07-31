@@ -12,7 +12,8 @@
 //! - `USE_MOCK` - Use mock data source instead of live substream (default: false)
 //! - `SUBSTREAMS_ENDPOINT` - Substream endpoint URL (default: geotest.substreams.pinax.network:443)
 //! - `SUBSTREAMS_START_BLOCK` - Start block number (default: 82655, Space Registry deployment)
-//! - `SUBSTREAMS_END_BLOCK` - End block number (default: u64::MAX for continuous streaming)
+//! - `SUBSTREAMS_END_BLOCK` - End block number (default: 0, the Substreams
+//!   sentinel for "stream forever"). Do not set this to `u64::MAX`.
 //! - `SUBSTREAMS_API_TOKEN` - Optional API token for authenticated endpoints
 //!
 //! ### Graph Configuration
@@ -679,10 +680,14 @@ async fn async_main() -> anyhow::Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(82655); // Space Registry deployment block
+    // `0` is the Substreams protocol's sentinel for "never stop". Passing
+    // `u64::MAX` instead makes the server plan a bounded job of ~18 quintillion
+    // blocks: it backprocesses forever, emitting progress but never a single
+    // `BlockScopedData`.
     let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(u64::MAX);
+        .unwrap_or(0);
 
     // Root space configuration
     let root_space_id = parse_root_space_id()?;

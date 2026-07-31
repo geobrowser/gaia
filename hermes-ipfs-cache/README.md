@@ -42,7 +42,7 @@ Environment variables:
 | `SUBSTREAMS_ENDPOINT` | Live mode | Substreams endpoint URL (e.g., `geotest.substreams.pinax.network:443`) |
 | `SUBSTREAMS_API_TOKEN` | Live mode | API token for substreams authentication |
 | `SUBSTREAMS_START_BLOCK` | No | Block to start from (default: `82655`; set to `0` for a fresh/local chain) |
-| `SUBSTREAMS_END_BLOCK` | No | Block to end at (default: u64::MAX = stream forever) |
+| `SUBSTREAMS_END_BLOCK` | No | Block to end at (default: `0` = stream forever) |
 
 ## Database Schema
 
