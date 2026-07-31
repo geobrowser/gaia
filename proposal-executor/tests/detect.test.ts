@@ -97,6 +97,32 @@ describe("V2 detection SQL", () => {
 		expect(DETECTION_SQL).toMatch(/voting_mode\s*=\s*'Slow'/)
 	})
 
+	// GEO-2478: DETECTION_SQL was moved to proposals_current and this one was
+	// not, so on a v2 database the whole membership path died every run with
+	// `column p.voting_mode does not exist` and nobody was ever auto-accepted.
+	// The asymmetry is the bug — assert BOTH queries, not just the executor's.
+	test("MEMBERSHIP_DETECTION_SQL also reads proposals_current", () => {
+		expect(MEMBERSHIP_DETECTION_SQL).toMatch(/FROM\s+proposals_current/)
+		expect(MEMBERSHIP_DETECTION_SQL).not.toMatch(/FROM\s+proposals\s+p\b/)
+	})
+
+	test("both queries source every moved column from the current-version view", () => {
+		// voting_mode and end_time live on proposal_versions post-0067, so any
+		// read of them must come from the view. Catches a partial revert that
+		// swaps the FROM back but leaves the columns, or vice versa.
+		for (const sql of [DETECTION_SQL, MEMBERSHIP_DETECTION_SQL]) {
+			expect(sql).toMatch(/FROM\s+proposals_current/)
+			expect(sql).not.toMatch(/FROM\s+proposals\s/)
+		}
+	})
+
+	test("the two paths stay mutually exclusive on voting_mode", () => {
+		// If both ever selected the same mode the executor and the membership bot
+		// would race for the same proposal.
+		expect(DETECTION_SQL).toMatch(/voting_mode\s*=\s*'Slow'/)
+		expect(MEMBERSHIP_DETECTION_SQL).toMatch(/voting_mode\s*=\s*'Fast'/)
+	})
+
 	test("uses partial_percentage_support_threshold in the slow-late ratio", () => {
 		// V1 used a single `threshold` column; V2 slow-late must use `partial`.
 		expect(DETECTION_SQL).toContain("partial_percentage_support_threshold")
