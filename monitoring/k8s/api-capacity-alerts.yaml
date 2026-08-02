@@ -29,7 +29,7 @@ spec:
             kube_horizontalpodautoscaler_status_current_replicas{namespace="api", horizontalpodautoscaler="api"}
             >=
             kube_horizontalpodautoscaler_spec_max_replicas{namespace="api", horizontalpodautoscaler="api"}
-            and api:ingress_p99_latency_seconds:5m > 2
+            and api:ingress_p99_latency_seconds:5m{exported_namespace="api",ingress="api",exported_service="api"} > 2
           for: 10m
           labels:
             severity: critical
@@ -39,7 +39,7 @@ spec:
             description: API is at max replicas with sustained p99 latency above 2s.
 
         - alert: Api5xxRateHigh
-          expr: api:ingress_5xx_ratio:rate5m > 0.02
+          expr: api:ingress_5xx_ratio:rate5m{exported_namespace="api",ingress="api",exported_service="api"} > 0.02
           for: 10m
           labels:
             severity: warning

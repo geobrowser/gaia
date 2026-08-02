@@ -67,27 +67,27 @@ data:
       window: 5m
 
     externalRules:
-      - seriesQuery: '{__name__="nginx_ingress_controller_requests",host="testnet-api.geobrowser.io"}'
+      - seriesQuery: '{__name__="nginx_ingress_controller_requests",exported_namespace="api",ingress="api",exported_service="api"}'
         name:
           as: api_ingress_503_ratio_rate5m
         metricsQuery: |
-          (sum(rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io",status="503"}[5m])) or vector(0))
+          (sum(rate(nginx_ingress_controller_requests{exported_namespace="api",ingress="api",exported_service="api",status="503"}[5m])) or vector(0))
           /
-          clamp_min(sum(rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io"}[5m])), 1)
+          clamp_min(sum(rate(nginx_ingress_controller_requests{exported_namespace="api",ingress="api",exported_service="api"}[5m])), 1)
         resources:
           namespaced: false
-      - seriesQuery: '{__name__="api:ingress_p95_latency_seconds:2m"}'
+      - seriesQuery: '{__name__="api:ingress_p95_latency_seconds:2m",exported_namespace="api",ingress="api",exported_service="api"}'
         name:
           as: api_ingress_p95_latency_seconds_2m
         metricsQuery: |
-          api:ingress_p95_latency_seconds:2m
+          api:ingress_p95_latency_seconds:2m{exported_namespace="api",ingress="api",exported_service="api"}
         resources:
           namespaced: false
-      - seriesQuery: '{__name__="api:ingress_p99_latency_seconds:2m"}'
+      - seriesQuery: '{__name__="api:ingress_p99_latency_seconds:2m",exported_namespace="api",ingress="api",exported_service="api"}'
         name:
           as: api_ingress_p99_latency_seconds_2m
         metricsQuery: |
-          api:ingress_p99_latency_seconds:2m
+          api:ingress_p99_latency_seconds:2m{exported_namespace="api",ingress="api",exported_service="api"}
         resources:
           namespaced: false
       - seriesQuery: '{__name__="kube_deployment_status_replicas_available",namespace="api",deployment="api"}'

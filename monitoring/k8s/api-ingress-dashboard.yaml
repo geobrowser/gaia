@@ -31,6 +31,30 @@ data:
               "text": "Prometheus",
               "value": "Prometheus"
             }
+          },
+          {
+            "name": "env",
+            "label": "Environment",
+            "description": "Suffix appended to the ingress host. Empty for production, '-staging' for staging.",
+            "type": "custom",
+            "query": "Production : (?:),Staging : -staging",
+            "current": {
+              "selected": true,
+              "text": "Production",
+              "value": "(?:)"
+            },
+            "options": [
+              {
+                "selected": true,
+                "text": "Production",
+                "value": "(?:)"
+              },
+              {
+                "selected": false,
+                "text": "Staging",
+                "value": "-staging"
+              }
+            ]
           }
         ]
       },
@@ -52,12 +76,12 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "api:ingress_requests_per_second:rate5m",
+              "expr": "api:ingress_requests_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "total"
             },
             {
               "refId": "B",
-              "expr": "api:ingress_5xx_per_second:rate5m",
+              "expr": "api:ingress_5xx_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "5xx"
             }
           ],
@@ -95,7 +119,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "api:ingress_5xx_ratio:rate5m",
+              "expr": "api:ingress_5xx_ratio:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "5xx ratio"
             }
           ],
@@ -135,22 +159,22 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "api:ingress_p50_latency_seconds:5m",
+              "expr": "api:ingress_p50_latency_seconds:5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "p50"
             },
             {
               "refId": "B",
-              "expr": "api:ingress_p75_latency_seconds:5m",
+              "expr": "api:ingress_p75_latency_seconds:5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "p75"
             },
             {
               "refId": "C",
-              "expr": "api:ingress_p95_latency_seconds:5m",
+              "expr": "api:ingress_p95_latency_seconds:5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "p95"
             },
             {
               "refId": "D",
-              "expr": "api:ingress_p99_latency_seconds:5m",
+              "expr": "api:ingress_p99_latency_seconds:5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "p99"
             }
           ],
@@ -188,7 +212,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "api:ingress_method_p99_latency_seconds:5m",
+              "expr": "api:ingress_method_p99_latency_seconds:5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "{{method}}"
             }
           ],
@@ -226,7 +250,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "api:ingress_method_requests_per_second:rate5m",
+              "expr": "api:ingress_method_requests_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "{{method}}"
             }
           ],
@@ -264,7 +288,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "api:ingress_status_requests_per_second:rate5m",
+              "expr": "api:ingress_status_requests_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "{{status}}"
             }
           ],
@@ -302,7 +326,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "sum by (status) (increase(nginx_ingress_controller_requests{host=\"testnet-api.geobrowser.io\"}[24h]))",
+              "expr": "sum by (status) (increase(nginx_ingress_controller_requests{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}[24h]))",
               "format": "table",
               "instant": true,
               "legendFormat": "{{status}}"
@@ -357,17 +381,17 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "api:ingress_499_per_second:rate5m",
+              "expr": "api:ingress_499_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "499"
             },
             {
               "refId": "B",
-              "expr": "api:ingress_500_per_second:rate5m",
+              "expr": "api:ingress_500_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "500"
             },
             {
               "refId": "C",
-              "expr": "api:ingress_503_per_second:rate5m",
+              "expr": "api:ingress_503_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "503"
             }
           ],
@@ -405,7 +429,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "api:ingress_error_status_requests_per_second:rate5m",
+              "expr": "api:ingress_error_status_requests_per_second:rate5m{exported_namespace=~\"^api${env:raw}$\",ingress=\"api\",exported_service=\"api\"}",
               "legendFormat": "{{status}}"
             }
           ],
