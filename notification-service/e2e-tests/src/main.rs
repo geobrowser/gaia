@@ -899,12 +899,14 @@ async fn produce_test_events(kafka_broker: &str) -> Result<(), Box<dyn std::erro
         .await
         .map_err(|(e, _)| e)?;
 
-    // Phase 2b: a reply into the seeded thread (reply → EXISTING_COMMENT). The
-    // indexer walks to the root, notifying the prior participant + the root's
-    // creator (home space), but NOT the reply's own author.
-    let thread_reply = make_comment_hermes_edit(
+    // Phase 2b: a reply into the seeded thread, using the curator-app CASCADE —
+    // reply-to the root FIRST (carried forward) and the immediate parent LAST.
+    // The indexer walks to the root (notifying the prior participant + the root's
+    // creator, but NOT the reply's author) and resolves the immediate parent
+    // (EXISTING_COMMENT) for the payload's parent_id rather than the root.
+    let thread_reply = make_cascade_comment_hermes_edit(
         REPLY_COMMENT_BYTES,
-        EXISTING_COMMENT_BYTES,
+        &[THREAD_ROOT_BYTES, EXISTING_COMMENT_BYTES],
         REPLY_AUTHOR_SPACE_BYTES,
         40007,
         1700036000,
@@ -1107,6 +1109,76 @@ fn make_comment_hermes_edit(
     hermes_schema::pb::knowledge::HermesEdit {
         id: comment_entity.to_vec(),
         name: "comment edit".into(),
+        payload,
+        authors: vec![commenter_space.to_vec()],
+        language: None,
+        space_id: commenter_space.to_vec(),
+        is_canonical: true,
+        meta: Some(hermes_schema::pb::blockchain_metadata::BlockchainMetadata {
+            created_at,
+            created_by: vec![],
+            block_number,
+            cursor: String::new(),
+            sequence,
+            is_last: false,
+        }),
+    }
+}
+
+/// Build a HermesEdit for a comment with the curator-app *cascade* `Reply to`
+/// pattern: one Reply-to edge per `reply_targets` entry (root carried forward
+/// first, the immediate parent appended last). Exercises the consumer's
+/// immediate-parent resolution.
+fn make_cascade_comment_hermes_edit(
+    comment_entity: [u8; 16],
+    reply_targets: &[[u8; 16]],
+    commenter_space: [u8; 16],
+    block_number: u64,
+    created_at: u64,
+    sequence: u32,
+) -> hermes_schema::pb::knowledge::HermesEdit {
+    use std::borrow::Cow;
+    let types = Uuid::parse_str("8f151ba4-de20-4e3c-9cb4-99ddf96f48f1")
+        .expect("valid Types id")
+        .into_bytes();
+    let comment_type = Uuid::parse_str("82f6123a-0323-4c6c-a811-701c5bc026e9")
+        .expect("valid Comment type id")
+        .into_bytes();
+    let reply_to = Uuid::parse_str("310d4a24-0e5b-451c-b215-1bfce40d0fe6")
+        .expect("valid Reply-to id")
+        .into_bytes();
+    let mk = |id: [u8; 16], rt: [u8; 16], from: [u8; 16], to: [u8; 16]| {
+        grc_20::Op::CreateRelation(grc_20::CreateRelation {
+            id,
+            relation_type: rt,
+            from,
+            from_is_value_ref: false,
+            to,
+            to_is_value_ref: false,
+            from_space: None,
+            from_version: None,
+            to_space: None,
+            to_version: None,
+            entity: None,
+            position: None,
+            context: None,
+        })
+    };
+    let mut ops = vec![mk([0xA1; 16], types, comment_entity, comment_type)];
+    for (i, target) in reply_targets.iter().enumerate() {
+        ops.push(mk([0xB0 + i as u8; 16], reply_to, comment_entity, *target));
+    }
+    let edit = grc_20::Edit {
+        id: comment_entity,
+        name: Cow::Borrowed("cascade comment edit"),
+        authors: vec![commenter_space],
+        created_at: created_at as i64,
+        ops,
+    };
+    let payload = grc_20::encode_edit(&edit).expect("GRC-20 encode should succeed");
+    hermes_schema::pb::knowledge::HermesEdit {
+        id: comment_entity.to_vec(),
+        name: "cascade comment edit".into(),
         payload,
         authors: vec![commenter_space.to_vec()],
         language: None,
@@ -2047,6 +2119,13 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         r.check(
             "comment: correct thread root_id",
             call.body["root_id"].as_str() == Some(thread_root.as_str()),
+        );
+        // Cascade fidelity: parent_id is the IMMEDIATE parent (EXISTING_COMMENT),
+        // not the root target — even though the cascade lists the root first.
+        let existing_comment = Uuid::from_bytes(EXISTING_COMMENT_BYTES).to_string();
+        r.check(
+            "comment: parent_id is the immediate parent (not the root) for a cascade reply",
+            call.body["parent_id"].as_str() == Some(existing_comment.as_str()),
         );
     }
     // The prior participant and the root's creator each get 3 (one per webhook).
