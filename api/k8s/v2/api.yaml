@@ -130,12 +130,18 @@ spec:
                   key: OPENSEARCH_URL
             - name: TOPOLOGY_SERVICE_URL
               value: "http://search-indexer:8080"
-            # Response cache disabled — uncomment to re-enable.
-            # - name: VALKEY_URL
-            #   valueFrom:
-            #     secretKeyRef:
-            #       name: api-cache-secrets
-            #       key: VALKEY_URL
+            # Response cache. Disabled in #655 after a stuck "Create Personal
+            # Space" modal: a client polling for its new space cached the
+            # pre-indexing empty result for 60s and kept being served it.
+            # Re-enabled here now that #867 refuses to cache empty results.
+            # Writes land out of band (chain -> indexer -> Postgres), so the
+            # cache's mutation-driven invalidation never fires — not caching
+            # "nothing here" is what makes read-after-write polling safe.
+            - name: VALKEY_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-cache-secrets
+                  key: VALKEY_URL
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
