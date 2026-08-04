@@ -23,6 +23,7 @@ import {shouldUnmaskError} from "./errorMasking"
 import HideProceduresPlugin from "./hideProceduresPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin, {NoFirstAndLastRule} from "./paginationCapPlugin"
+import {hasCacheableData} from "./responseCachePolicy"
 import {useSearchInvocationLogger} from "./searchInvocationLogger"
 import {createShedEpisodeTracker} from "./shedEpisodeTracker"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
@@ -393,6 +394,7 @@ const DEFAULT_TTL_MS = 10_000
 // Longer TTL for expensive, rarely-changing queries identified in production logs.
 // These queries are identical across all users and produce large responses (2-15 MB).
 const LONG_TTL_MS = 60_000
+
 const responseCachePlugin = (() => {
 	const valkeyUrl = process.env.VALKEY_URL
 	if (!valkeyUrl) {
@@ -401,8 +403,22 @@ const responseCachePlugin = (() => {
 	}
 	log.info("Response cache enabled", {valkeyUrl: valkeyUrl.replace(/\/\/.*@/, "//<redacted>@")})
 	return useResponseCache({
+		// Deliberately null: the API has no authenticated session, and the cache
+		// key already includes the query document and its variables, so callers
+		// filtering by different addresses get different entries.
 		session: () => null,
 		ttl: DEFAULT_TTL_MS,
+		// Replaces the plugin default (`!result.errors?.length`), so the error
+		// check has to be repeated here. See hasCacheableData for why empty
+		// results must not be cached.
+		shouldCacheResult: ({result}) => {
+			if (result.errors?.length) return false
+			if (hasCacheableData(result.data)) return true
+			log.debug("Response cache skipped: empty result", {
+				reason: "empty_result_not_cacheable",
+			})
+			return false
+		},
 		ttlPerSchemaCoordinate: {
 			// All DAO spaces list — 12 MB, called on 5+ pages, near-static
 			"Query.spaces": LONG_TTL_MS,
