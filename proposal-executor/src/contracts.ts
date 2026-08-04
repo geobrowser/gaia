@@ -190,6 +190,26 @@ export const TESTNET_SAFE_ADDRESSES = {
 // ---------------------------------------------------------------------------
 
 /** keccak256('GOVERNANCE.PROPOSAL_EXECUTED') — action hash for enter() */
+/**
+ * DAOSpace ABI — the single view we need to avoid wasting sponsored simulations.
+ *
+ * `canExecuteProposal` is the exact predicate `_executeProposal` checks before
+ * it reverts with `CanNotExecute()` (0xdf322356). Calling it first is a free
+ * `eth_call`; letting it fail instead costs a sponsored UserOperation
+ * simulation and produces a `proposal_reverted` log that reads like a fault.
+ *
+ * See geo-migration `contracts/src/contracts/DAOSpace.sol`.
+ */
+export const DaoSpaceAbi = [
+	{
+		inputs: [{internalType: "bytes16", name: "_proposalId", type: "bytes16"}],
+		name: "canExecuteProposal",
+		outputs: [{internalType: "bool", name: "_canExecuteProposal", type: "bool"}],
+		stateMutability: "view",
+		type: "function",
+	},
+] as const
+
 export const PROPOSAL_EXECUTED_ACTION = "0x62a60c0a9681612871e0dafa0f24bb0c83cbdde8be5a6299979c88d382369e96" as Hex
 
 /** keccak256('GOVERNANCE.PROPOSAL_VOTED') — action hash for casting a vote via enter() */

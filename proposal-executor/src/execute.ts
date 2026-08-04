@@ -31,6 +31,7 @@ import {
 import {entryPoint07Address} from "viem/account-abstraction"
 import {privateKeyToAccount} from "viem/accounts"
 import {
+	DaoSpaceAbi,
 	EMPTY_SIGNATURE,
 	getChain,
 	InfraError,
@@ -319,6 +320,18 @@ export function classifyAsRevert(error: unknown, errorName: string, message: str
  *
  * Retry and timeout are composed externally in index.ts.
  */
+/**
+ * Raised by the pre-flight check when the DAO reports the proposal cannot
+ * execute. A named class rather than a message match, so classification does
+ * not depend on error text we do not control.
+ */
+class NotExecutableError extends Error {
+	constructor() {
+		super("canExecuteProposal returned false — skipped before simulation")
+		this.name = "NotExecutableError"
+	}
+}
+
 export function executeProposal(
 	wallet: SmartWallet,
 	proposal: Proposal,
@@ -334,6 +347,40 @@ export function executeProposal(
 			try: async () => {
 				const daoSpaceId = uuidToBytes16(proposal.spaceId)
 				const proposalIdHex = uuidToBytes16(proposal.id)
+
+				// Ask the DAO whether this can execute before paying to find out.
+				//
+				// `_executeProposal` reverts with CanNotExecute() (0xdf322356) when
+				// `canExecuteProposal` is false. Reaching that revert costs a sponsored
+				// UserOperation simulation and logs `proposal_reverted`, which reads as
+				// a fault. Checking first is a plain eth_call and costs nothing.
+				//
+				// This is not a race guard — a proposal can still be executed by someone
+				// else between the check and the send, which the RevertError path below
+				// still handles. It exists because the migration left proposals in the
+				// database that were never created on chain 55516, so they can NEVER
+				// execute: `creator == bytes16(0)`. Without this, each one burns a
+				// sponsored simulation every run, forever. See gaia notes on
+				// v2-proposals-absent-on-chain.
+				const daoAddress = await wallet.publicClient.readContract({
+					address: spaceRegistryAddress,
+					abi: SpaceRegistryAbi,
+					functionName: "spaceIdToAddress",
+					args: [daoSpaceId],
+				})
+
+				const canExecute = await wallet.publicClient.readContract({
+					address: daoAddress,
+					abi: DaoSpaceAbi,
+					functionName: "canExecuteProposal",
+					args: [proposalIdHex],
+				})
+
+				if (!canExecute) {
+					// Deliberately a RevertError with expected: true — this is a skip, not
+					// a failure, and the caller already treats expected reverts as such.
+					throw new NotExecutableError()
+				}
 
 				const calldata = encodeFunctionData({
 					abi: SpaceRegistryAbi,
@@ -371,11 +418,12 @@ export function executeProposal(
 				// Capture error type for observability — helps tighten classification over time
 				const errorName = error instanceof Error ? error.name : typeof error
 
-				const isRevert = classifyAsRevert(error, errorName, message)
+				const isRevert = error instanceof NotExecutableError || classifyAsRevert(error, errorName, message)
 
 				if (isRevert) {
 					// Expected reverts: proposal already executed (race condition window)
 					const isExpected =
+						error instanceof NotExecutableError ||
 						message.includes("already executed") ||
 						message.includes("ProposalAlreadyExecuted") ||
 						message.includes("InvalidAction")
