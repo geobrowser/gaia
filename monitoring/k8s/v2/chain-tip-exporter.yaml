@@ -1,0 +1,95 @@
+# chain-tip-exporter for the new cluster (chain 55516).
+#
+# Publishes `chain_tip_block_number`, which HermesBehindChainTip subtracts
+# `hermes_latest_processed_block` from. Without this deployment that alert can
+# never fire — which is why the 2026-07-31 indexing stall went unnoticed for
+# 3.5 hours.
+#
+# The `gaia_namespace` label is what joins this to the hermes metrics: the
+# ServiceMonitor lifts it via `targetLabels`, and the alert does
+# `label_replace(..., "namespace", "$1", "gaia_namespace", "(.*)")`. On the old
+# cluster it was `knowledge`; here the stack lives in `gaia`.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chain-tip-exporter
+  namespace: monitoring
+  labels:
+    app: chain-tip-exporter
+    environment: production
+    gaia_namespace: gaia
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chain-tip-exporter
+      environment: production
+  template:
+    metadata:
+      labels:
+        app: chain-tip-exporter
+        environment: production
+        gaia_namespace: gaia
+    spec:
+      restartPolicy: Always
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: chain-tip-exporter
+          image: registry.digitalocean.com/geo/chain-tip-exporter:latest
+          imagePullPolicy: Always
+          ports:
+            - name: metrics
+              containerPort: 9464
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: chain-tip-exporter-secrets
+                  key: RPC_URL
+            - name: POLL_INTERVAL_SECS
+              value: "30"
+            # Chain 55516 only produces blocks on demand — multi-hour gaps with
+            # no transactions are normal, so the old cluster's 300s staleness
+            # warning would be permanent noise here.
+            - name: LATEST_BLOCK_BEHIND_THRESHOLD_SECS
+              value: "86400"
+            - name: SENTRY_ENVIRONMENT
+              value: "production"
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chain-tip-exporter
+  namespace: monitoring
+  labels:
+    app: chain-tip-exporter
+    environment: production
+    gaia_namespace: gaia
+spec:
+  type: ClusterIP
+  selector:
+    app: chain-tip-exporter
+    environment: production
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: metrics
+      protocol: TCP

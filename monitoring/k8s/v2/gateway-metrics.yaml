@@ -1,0 +1,93 @@
+# Scrape Cilium's Envoy, which backs the Gateway API on this cluster.
+#
+# Replaces the ingress-nginx metrics the old cluster used. Every cilium agent
+# exposes ~2,600 envoy_* series on the `envoy-metrics` port; the Gateway's
+# request counters and latency histograms live there.
+#
+# Traffic for a given backend appears on whichever nodes' Envoy handled it —
+# currently 3 of 4 — so every rule below must aggregate across pods before
+# computing a ratio or quantile.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cilium-envoy-metrics
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - kube-system
+  selector:
+    matchLabels:
+      k8s-app: cilium
+  podMetricsEndpoints:
+    - port: envoy-metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+# Recording rules replacing the nginx-derived api:ingress_* pair.
+#
+# The Envoy cluster name is assigned by Cilium as
+#   <gateway-namespace>/cilium-gateway-<gateway>/<backend-ns>_<svc>_<port>
+# and for the API that is:
+#   geo-chat/cilium-gateway-geo-chat-api/gaia_api_3000
+# Note the `geo-chat` prefix: gaia's HTTPRoute attaches cross-namespace to the
+# shared Gateway that lives in the geo-chat namespace, so nothing here is
+# labelled `gaia`. The match keys on the `gaia_api_3000` suffix instead, which
+# will need updating if the service or its port is ever renamed.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: gateway-api-recording-rules
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: gateway.api.recording
+      interval: 30s
+      rules:
+        # p99 of Envoy -> API-pod latency, in SECONDS.
+        #
+        # envoy_cluster_upstream_rq_time is denominated in MILLISECONDS — its
+        # buckets run to 3,600,000 — so the /1000 is required. Without it this
+        # records ~4760 and any threshold expressed in seconds fires forever.
+        #
+        # NOT identical to the old nginx metric: that measured the full
+        # client-facing request including proxy queueing, this measures the
+        # upstream leg only, so it reads slightly lower. Envoy does not expose
+        # a downstream latency histogram here (only rq_timeout counters), so
+        # this is the closest available equivalent.
+        #
+        # Bucket boundaries are coarse near the tail (…1000, 2500, 5000, 10000…),
+        # so a p99 in that range is interpolated. Treat it as an order of
+        # magnitude, not a precise figure.
+        - record: api:gateway_p99_latency_seconds:5m
+          expr: |
+            histogram_quantile(0.99,
+              sum by (le) (
+                rate(envoy_cluster_upstream_rq_time_bucket{
+                  envoy_cluster_name=~".*gaia_api_3000"
+                }[5m])
+              )
+            ) / 1000
+
+        # 5xx as a share of all responses.
+        #
+        # Uses envoy_cluster_upstream_rq_xx only. Envoy also publishes
+        # envoy_cluster_external_upstream_rq_xx with identical values for this
+        # cluster; including both would double-count.
+        - record: api:gateway_5xx_ratio:rate5m
+          expr: |
+            sum(rate(envoy_cluster_upstream_rq_xx{
+              envoy_cluster_name=~".*gaia_api_3000", envoy_response_code_class="5"
+            }[5m]))
+            /
+            clamp_min(
+              sum(rate(envoy_cluster_upstream_rq_xx{
+                envoy_cluster_name=~".*gaia_api_3000"
+              }[5m])),
+              0.001
+            )

@@ -1,0 +1,71 @@
+# API capacity alerts for the gaia namespace.
+#
+# The old cluster's copy defines three alerts twice (once for `api`, once for
+# `api-staging`). The new cluster runs a single `gaia` namespace, so the
+# staging duplicate is dropped.
+#
+# The two latency/error alerts were originally backed by
+# nginx_ingress_controller_* metrics. This cluster serves through a Cilium
+# Gateway, so they are now backed by the api:gateway_* recording rules in
+# gateway-metrics.yaml, which derive from Cilium's Envoy.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: api-capacity-observability
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: api.capacity
+      rules:
+        - alert: ApiReadinessDegraded
+          expr: |
+            (
+              sum(kube_pod_status_ready{namespace="gaia", condition="true", pod=~"api-.*"})
+              /
+              clamp_min(sum(kube_pod_status_phase{namespace="gaia", phase="Running", pod=~"api-.*"}), 1)
+            ) < 0.75
+          for: 5m
+          labels:
+            severity: warning
+            service: api
+          annotations:
+            summary: API readiness ratio is degraded
+            description: Fewer than 75% of running API pods are ready for 5 minutes.
+
+        # Restores the old cluster's pairing: saturation alone is normal and
+        # self-correcting, saturation WITH a latency tail is not. Firing on the
+        # replica count by itself produced false alarms on a healthy API.
+        #
+        # Threshold raised from the old cluster's 2s to 5s: p99 here measures
+        # only the Envoy -> pod leg but currently sits at ~4.4s against a p50 of
+        # 0.03s and p90 of 0.31s. That tail is a real problem worth fixing, but
+        # it is the steady state today, so alerting at 2s would page constantly.
+        # Lower this to 2s once the tail is addressed.
+        - alert: ApiHpaMaxedWithHighP99
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{namespace="gaia", horizontalpodautoscaler="api"}
+            >=
+            kube_horizontalpodautoscaler_spec_max_replicas{namespace="gaia", horizontalpodautoscaler="api"}
+            and api:gateway_p99_latency_seconds:5m > 5
+          for: 10m
+          labels:
+            severity: critical
+            service: api
+          annotations:
+            summary: API HPA is maxed while p99 latency is high
+            description: >-
+              API is at max replicas with sustained p99 latency above 5s. Unlike
+              a bare max-replicas condition this means requests are actually
+              suffering, not merely that the autoscaler has hit its ceiling.
+
+        - alert: Api5xxRateHigh
+          expr: api:gateway_5xx_ratio:rate5m > 0.02
+          for: 10m
+          labels:
+            severity: warning
+            service: api
+          annotations:
+            summary: API 5xx rate above 2%
+            description: More than 2% of gateway responses for the API have been 5xx for 10 minutes.
