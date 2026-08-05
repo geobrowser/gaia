@@ -1867,4 +1867,69 @@ mod tests {
             panic!("Expected Publish action");
         }
     }
+
+    // ========================================================================
+    // Mock-stream contract
+    //
+    // The mock event generator encodes payloads that this module decodes. When
+    // the two drift, nothing fails loudly: a settings payload that won't decode
+    // leaves the settings map empty, the squash below discards every paired
+    // PROPOSAL_CREATED, and the stream silently contains zero proposals. The
+    // kg-indexer E2E then fails far downstream with a foreign-key violation on
+    // proposal_votes and 14 assertions reporting "space not found".
+    //
+    // These tests pin the mock stream against the real decoders so that drift
+    // fails here, in a unit test, with a message that names the cause.
+    // ========================================================================
+
+    #[test]
+    fn mock_stream_yields_decodable_proposals() {
+        let actions = hermes_relay::source::mock_events::test_topology::generate();
+        let result = transform(&actions, &test_meta(), &HashMap::new()).unwrap();
+
+        assert!(
+            !result.proposals_created.is_empty(),
+            "mock stream produced zero PROPOSAL_CREATED events. The most likely \
+             cause is that mock_events' PROPOSAL_SETTINGS_SELECTED payload no \
+             longer matches decode_proposal_settings_used, so the squash \
+             discarded every proposal."
+        );
+    }
+
+    #[test]
+    fn mock_stream_settings_decode_into_created_proposals() {
+        let actions = hermes_relay::source::mock_events::test_topology::generate();
+        let result = transform(&actions, &test_meta(), &HashMap::new()).unwrap();
+
+        for p in &result.proposals_created {
+            let settings = p.settings.as_ref().expect(
+                "a squashed PROPOSAL_CREATED must carry settings; if this is None the \
+                 squash emitted an unpaired event",
+            );
+            // start/end come straight from the mock's voting window, so a field
+            // ordering regression in the ABI shows up as zeroes here.
+            assert!(
+                settings.last_date > settings.start_date,
+                "decoded voting window is not ordered (start={}, end={}) — likely an \
+                 ABI field-order mismatch between mock_events and decode.rs",
+                settings.start_date,
+                settings.last_date
+            );
+        }
+    }
+
+    #[test]
+    fn mock_stream_votes_are_version_scoped() {
+        let actions = hermes_relay::source::mock_events::test_topology::generate();
+        let result = transform(&actions, &test_meta(), &HashMap::new()).unwrap();
+
+        assert!(
+            !result.proposals_voted.is_empty(),
+            "mock stream produced zero PROPOSAL_VOTED events — the vote payload \
+             likely lost its proposal_version field and now fails to decode"
+        );
+        // The decoder reads proposal_version off the wire but HermesProposalVoted
+        // does not carry it, so there is nothing further to assert here — a
+        // non-empty result already proves the three-field payload decoded.
+    }
 }
