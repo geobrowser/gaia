@@ -248,6 +248,44 @@ fn verify_hmac(secret: &str, body: &[u8], signature_header: &str) -> bool {
 // Database seeding
 // ---------------------------------------------------------------------------
 
+/// Insert a proposal across the governance-v2 two-table split.
+///
+/// `proposals` holds identity, `proposal_versions` holds the version-scoped
+/// mutable state, and the `proposals_current` view joins them — which is what
+/// the notification-indexer actually reads. Writing only `proposals` (the
+/// pre-v2 flat shape) leaves the view empty, and `find_expired_proposals`
+/// silently returns nothing.
+async fn insert_proposal(
+    pool: &sqlx::PgPool,
+    id: Uuid,
+    space_id: Uuid,
+    proposed_by: Uuid,
+    start_time: i64,
+    end_time: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO proposals (id, space_id, proposed_by, created_at, created_at_block, current_version) \
+         VALUES ($1, $2, $3, '0', '0', 1) ON CONFLICT DO NOTHING",
+    )
+    .bind(id)
+    .bind(space_id)
+    .bind(proposed_by)
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO proposal_versions (proposal_id, proposal_version, start_time, end_time) \
+         VALUES ($1, 1, $2, $3) ON CONFLICT DO NOTHING",
+    )
+    .bind(id)
+    .bind(start_time)
+    .bind(end_time)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 async fn seed_database(
     pool: &PgPool,
     webhook_port: u16,
@@ -299,16 +337,14 @@ async fn seed_database(
         .as_secs() as i64;
     let proposer = Uuid::from_bytes(PROPOSER_ID_BYTES);
 
-    sqlx::query(
-        "INSERT INTO proposals (id, space_id, proposed_by, start_time, end_time, created_at, created_at_block) \
-         VALUES ($1, $2, $3, $4, $5, '0', '0') ON CONFLICT DO NOTHING",
+    insert_proposal(
+        pool,
+        Uuid::from_bytes(PROP_3E_REJECTED_BYTES),
+        space_3e,
+        proposer,
+        now - 7200,
+        now - 3600,
     )
-    .bind(Uuid::from_bytes(PROP_3E_REJECTED_BYTES))
-    .bind(space_3e)
-    .bind(proposer)
-    .bind(now - 7200)
-    .bind(now - 3600)
-    .execute(pool)
     .await?;
 
     // Proposals for the VOTED and EXECUTED events so the indexer can resolve the
@@ -316,16 +352,14 @@ async fn seed_database(
     // on / approved" to them. end_time is in the FUTURE so the rejection poller
     // does NOT also reject these (it only rejects end_time < now).
     for prop in [PROP_3E_VOTED_BYTES, PROP_3E_EXECUTED_BYTES] {
-        sqlx::query(
-            "INSERT INTO proposals (id, space_id, proposed_by, start_time, end_time, created_at, created_at_block) \
-             VALUES ($1, $2, $3, $4, $5, '0', '0') ON CONFLICT DO NOTHING",
+        insert_proposal(
+            pool,
+            Uuid::from_bytes(prop),
+            space_3e,
+            proposer,
+            now - 3600,
+            now + 3600,
         )
-        .bind(Uuid::from_bytes(prop))
-        .bind(space_3e)
-        .bind(proposer)
-        .bind(now - 3600)
-        .bind(now + 3600)
-        .execute(pool)
         .await?;
     }
 
@@ -447,16 +481,14 @@ async fn seed_database(
 
     // Phase 2a: a proposal in its own space for the comment test. end_time in the
     // future so the rejection poller ignores it. The recipient is the proposer.
-    sqlx::query(
-        "INSERT INTO proposals (id, space_id, proposed_by, start_time, end_time, created_at, created_at_block) \
-         VALUES ($1, $2, $3, $4, $5, '0', '0') ON CONFLICT DO NOTHING",
+    insert_proposal(
+        pool,
+        Uuid::from_bytes(COMMENT_PROPOSAL_BYTES),
+        Uuid::from_bytes(COMMENT_SPACE_BYTES),
+        Uuid::from_bytes(COMMENT_PROPOSER_BYTES),
+        now - 3600,
+        now + 3600,
     )
-    .bind(Uuid::from_bytes(COMMENT_PROPOSAL_BYTES))
-    .bind(Uuid::from_bytes(COMMENT_SPACE_BYTES))
-    .bind(Uuid::from_bytes(COMMENT_PROPOSER_BYTES))
-    .bind(now - 3600)
-    .bind(now + 3600)
-    .execute(pool)
     .await?;
 
     // The allowed commenter is a *member* (not editor) of the proposal's space,

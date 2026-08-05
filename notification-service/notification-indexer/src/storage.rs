@@ -840,10 +840,16 @@ impl Storage {
         .flatten()
     }
 
-    /// Look up the human-readable name for a proposal from the proposals table.
+    /// Look up the human-readable name for a proposal.
+    ///
+    /// Reads `proposals_current`, not `proposals`: `name` is version-scoped
+    /// under governance-v2 (see `find_expired_proposals`). The old text errored
+    /// with `column "name" does not exist`, and because this swallows errors
+    /// with `.ok()` the failure was invisible — names just silently stopped
+    /// appearing in notification payloads.
     pub async fn lookup_proposal_name(&self, proposal_id: Uuid) -> Option<String> {
         sqlx::query_scalar::<_, String>(
-            "SELECT name FROM proposals WHERE id = $1 AND name IS NOT NULL",
+            "SELECT name FROM proposals_current WHERE id = $1 AND name IS NOT NULL",
         )
         .bind(proposal_id)
         .fetch_optional(&self.pool)
@@ -853,9 +859,13 @@ impl Storage {
     }
 
     /// Look up current vote tallies for a proposal.
+    ///
+    /// Reads `proposals_current` for the same reason as `lookup_proposal_name`:
+    /// the tallies are version-scoped under governance-v2, and this call also
+    /// swallows errors, so the old query degraded to "no tallies" in silence.
     pub async fn lookup_vote_tallies(&self, proposal_id: Uuid) -> Option<(i64, i64, i64)> {
         sqlx::query_as::<_, (i64, i64, i64)>(
-            "SELECT yes_count, no_count, abstain_count FROM proposals WHERE id = $1",
+            "SELECT yes_count, no_count, abstain_count FROM proposals_current WHERE id = $1",
         )
         .bind(proposal_id)
         .fetch_optional(&self.pool)
