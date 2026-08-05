@@ -179,7 +179,9 @@ fn decode_proposal_actions_inner(data: &[u8]) -> Option<Vec<Vec<u8>>> {
     // data. Fall back to whichever decode succeeded at all, preferring v2.
     decode_proposal_tokens(data, 4)
         .and_then(|tokens| extract_action_field(&tokens, 3))
-        .or_else(|| decode_proposal_tokens(data, 3).and_then(|tokens| extract_action_field(&tokens, 2)))
+        .or_else(|| {
+            decode_proposal_tokens(data, 3).and_then(|tokens| extract_action_field(&tokens, 2))
+        })
 }
 
 /// Decode `(bytes16 proposalId, uint8 votingMode, Action[])` where each
@@ -457,7 +459,10 @@ mod tests {
         let ping = encode_edit_ping(&crate::ACTION_EDITS_PUBLISHED, uri);
         let proposal = encode_proposal_with_action(ping);
 
-        assert_eq!(extract_proposal_publish_uris(&proposal), vec![uri.to_string()]);
+        assert_eq!(
+            extract_proposal_publish_uris(&proposal),
+            vec![uri.to_string()]
+        );
     }
 
     #[test]
@@ -474,7 +479,10 @@ mod tests {
         ]));
         let proposal = encode_proposal_with_action_legacy(calldata);
 
-        assert_eq!(extract_proposal_publish_uris(&proposal), vec![uri.to_string()]);
+        assert_eq!(
+            extract_proposal_publish_uris(&proposal),
+            vec![uri.to_string()]
+        );
     }
 
     #[test]

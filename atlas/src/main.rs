@@ -680,10 +680,10 @@ async fn async_main() -> anyhow::Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(82655); // Space Registry deployment block
-    // `0` is the Substreams protocol's sentinel for "never stop". Passing
-    // `u64::MAX` instead makes the server plan a bounded job of ~18 quintillion
-    // blocks: it backprocesses forever, emitting progress but never a single
-    // `BlockScopedData`.
+                           // `0` is the Substreams protocol's sentinel for "never stop". Passing
+                           // `u64::MAX` instead makes the server plan a bounded job of ~18 quintillion
+                           // blocks: it backprocesses forever, emitting progress but never a single
+                           // `BlockScopedData`.
     let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
         .ok()
         .and_then(|s| s.parse().ok())
