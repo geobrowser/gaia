@@ -334,12 +334,15 @@ async fn test_proposal_1_details() {
     let space_a = uuid_from_bytes(expected::SPACE_A);
 
     // Verify proposal exists in SPACE_A with Fast voting mode
-    let proposal: Option<(Uuid, String)> =
-        sqlx::query_as("SELECT space_id, voting_mode::text FROM proposals WHERE id = $1")
-            .bind(proposal_id)
-            .fetch_optional(&pool)
-            .await
-            .expect("Failed to query proposal");
+    let proposal: Option<(Uuid, String)> = sqlx::query_as(
+        // voting_mode is version-scoped since governance-v2; proposals_current
+        // is the view that re-exposes the current version's columns flat.
+        "SELECT space_id, voting_mode::text FROM proposals_current WHERE id = $1",
+    )
+    .bind(proposal_id)
+    .fetch_optional(&pool)
+    .await
+    .expect("Failed to query proposal");
 
     let (space_id, voting_mode) = proposal.expect("Proposal 1 should exist");
     assert_eq!(space_id, space_a, "Proposal 1 should be in SPACE_A");
@@ -357,12 +360,15 @@ async fn test_proposal_2_details() {
     let space_a = uuid_from_bytes(expected::SPACE_A);
 
     // Verify proposal exists in SPACE_A with Slow voting mode
-    let proposal: Option<(Uuid, String)> =
-        sqlx::query_as("SELECT space_id, voting_mode::text FROM proposals WHERE id = $1")
-            .bind(proposal_id)
-            .fetch_optional(&pool)
-            .await
-            .expect("Failed to query proposal");
+    let proposal: Option<(Uuid, String)> = sqlx::query_as(
+        // voting_mode is version-scoped since governance-v2; proposals_current
+        // is the view that re-exposes the current version's columns flat.
+        "SELECT space_id, voting_mode::text FROM proposals_current WHERE id = $1",
+    )
+    .bind(proposal_id)
+    .fetch_optional(&pool)
+    .await
+    .expect("Failed to query proposal");
 
     let (space_id, voting_mode) = proposal.expect("Proposal 2 should exist");
     assert_eq!(space_id, space_a, "Proposal 2 should be in SPACE_A");
