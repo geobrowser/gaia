@@ -3,14 +3,14 @@ name: Notification Indexer Unit Tests
 on:
   workflow_dispatch:
   push:
-    branches: [main, dev, feat/notification-service]  # TODO: remove feat branch before merge
+    branches: [main, dev, staging, feat/notification-service]  # TODO: remove feat branch before merge
     paths:
       - 'notification-service/notification-indexer/**'
       - 'hermes-schema/**'
       - 'hermes-kafka/**'
       - '.github/workflows/notification-indexer-tests.yml'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'notification-service/notification-indexer/**'
       - 'hermes-schema/**'

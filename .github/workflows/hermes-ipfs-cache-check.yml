@@ -2,7 +2,7 @@ name: Hermes IPFS Cache Check
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'hermes-ipfs-cache/**'
       - 'hermes-relay/**'
@@ -11,7 +11,7 @@ on:
       - 'ipfs/**'
       - 'stream/**'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'hermes-ipfs-cache/**'
       - 'hermes-relay/**'

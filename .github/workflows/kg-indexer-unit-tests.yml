@@ -2,14 +2,14 @@ name: KG Indexer Unit Tests
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'kg-indexer/**'
       - 'hermes-schema/**'
       - 'wire/**'
       - 'indexer_utils/**'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'kg-indexer/**'
       - 'hermes-schema/**'

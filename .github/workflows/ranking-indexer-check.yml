@@ -2,7 +2,7 @@ name: Ranking Indexer Check
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'ranking-indexer/**'
       - 'hermes-schema/**'
@@ -11,7 +11,7 @@ on:
       - 'indexer_utils/**'
       - 'sdk/**'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'ranking-indexer/**'
       - 'hermes-schema/**'

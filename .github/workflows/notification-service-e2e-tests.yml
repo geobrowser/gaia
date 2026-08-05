@@ -3,14 +3,14 @@ name: Notification Service E2E Tests
 on:
   workflow_dispatch:
   push:
-    branches: [main, dev, feat/notification-service]  # TODO: remove feat branch before merge
+    branches: [main, dev, staging, feat/notification-service]  # TODO: remove feat branch before merge
     paths:
       - 'notification-service/**'
       - 'hermes-schema/**'
       - 'hermes-kafka/**'
       - '.github/workflows/notification-service-e2e-tests.yml'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'notification-service/**'
       - 'hermes-schema/**'

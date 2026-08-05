@@ -2,7 +2,7 @@ name: Search Indexer Unit Tests
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'search-indexer/**'
       - 'search-indexer-repository/**'
@@ -11,7 +11,7 @@ on:
       - 'wire/**'
       - '.github/workflows/search-indexer-unit-tests.yml'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'search-indexer/**'
       - 'search-indexer-repository/**'

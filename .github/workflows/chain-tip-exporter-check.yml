@@ -2,12 +2,12 @@ name: Chain Tip Exporter Check
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'chain-tip-exporter/**'
       - 'hermes-instrumentation/**'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'chain-tip-exporter/**'
       - 'hermes-instrumentation/**'

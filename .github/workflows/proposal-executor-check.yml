@@ -2,7 +2,7 @@ name: Proposal Executor Check
 
 on:
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'proposal-executor/**'
       - '.github/workflows/proposal-executor-check.yml'
