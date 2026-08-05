@@ -934,7 +934,18 @@ async fn test_process_tally_queue_backfills_executed_at_for_passed_fast_path() {
         "executed_at must be backfilled to the latest vote's timestamp once the effective threshold is cleared"
     );
 
-    cleanup_proposal(&pool, proposal_id, &[space_id, proposer_id, voter_ids[0], voter_ids[1], voter_ids[2]]).await;
+    cleanup_proposal(
+        &pool,
+        proposal_id,
+        &[
+            space_id,
+            proposer_id,
+            voter_ids[0],
+            voter_ids[1],
+            voter_ids[2],
+        ],
+    )
+    .await;
 }
 
 // --------------------------------------------------------------------------

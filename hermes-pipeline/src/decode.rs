@@ -170,8 +170,8 @@ pub fn decode_edits_published_args(data: &[u8]) -> Result<PublishArgs, DecodeErr
     // Params encoding (two offsets + tails), matching the SDK's
     // `encodeAbiParameters([{bytes}, {bytes}], ...)`.
     type EditsArgsType = sol! { (bytes, bytes) };
-    let (content_uri, metadata) =
-        EditsArgsType::abi_decode_params(data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+    let (content_uri, metadata) = EditsArgsType::abi_decode_params(data)
+        .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
 
     let content_uri_str = decode_utf8_bytes(content_uri.to_vec())?;
 
@@ -692,8 +692,8 @@ fn decode_proposal_created_inner_v2(data: &[u8]) -> Result<ProposalCreatedData, 
         ParamType::FixedBytes(16),
         ParamType::Uint(8),
         ParamType::Array(Box::new(ParamType::Tuple(vec![
-            ParamType::Address,         // toAddress (decoded-and-discarded)
-            ParamType::FixedBytes(16),  // toSpaceId (decoded-and-discarded)
+            ParamType::Address,        // toAddress (decoded-and-discarded)
+            ParamType::FixedBytes(16), // toSpaceId (decoded-and-discarded)
             ParamType::Uint(256),
             ParamType::Bytes,
         ]))),
@@ -1658,14 +1658,25 @@ mod real_data_verification {
         let data = hex::decode(hex).unwrap();
 
         let (result, _unwrap_level) = decode_proposal_created(&data).unwrap();
-        assert_eq!(hex::encode(&result.proposal_id), "be7748130da24c9d841e77ef9c780a18");
+        assert_eq!(
+            hex::encode(&result.proposal_id),
+            "be7748130da24c9d841e77ef9c780a18"
+        );
         assert_eq!(result.voting_mode, 1);
         assert_eq!(result.actions.len(), 1);
         assert_eq!(
             hex::encode(&result.actions[0].to_address),
             "533b21f8af11753c8d2dbed1fbe7c1dd4962bd0e"
         );
-        assert_eq!(result.actions[0].to_space_id, vec![0u8; 16], "legacy action synthesizes zero toSpaceId");
-        assert_eq!(&result.actions[0].data[0..4], &[0x6b, 0x47, 0xf6, 0x1a][..], "publish() selector");
+        assert_eq!(
+            result.actions[0].to_space_id,
+            vec![0u8; 16],
+            "legacy action synthesizes zero toSpaceId"
+        );
+        assert_eq!(
+            &result.actions[0].data[0..4],
+            &[0x6b, 0x47, 0xf6, 0x1a][..],
+            "publish() selector"
+        );
     }
 }

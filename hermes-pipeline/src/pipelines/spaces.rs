@@ -46,7 +46,11 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             // new owner address left-aligned in `topic`.
             address_updates.push(HermesSpaceAddressUpdated {
                 space_id: action.to_id.clone(),
-                address: action.topic.get(0..20).map(|s| s.to_vec()).unwrap_or_default(),
+                address: action
+                    .topic
+                    .get(0..20)
+                    .map(|s| s.to_vec())
+                    .unwrap_or_default(),
                 meta: Some(meta.to_proto(index as u32)),
             });
             continue;
