@@ -26,6 +26,7 @@ import PaginationCapPlugin, {NoFirstAndLastRule} from "./paginationCapPlugin"
 import {hasCacheableData} from "./responseCachePolicy"
 import {useSearchInvocationLogger} from "./searchInvocationLogger"
 import {createShedEpisodeTracker} from "./shedEpisodeTracker"
+import UserVoteLegacyAccessorPlugin from "./userVoteLegacyAccessorPlugin"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 import {createValkeyCache} from "./valkeyCache"
 import ValueOrderByScorePlugin from "./valueOrderByScorePlugin"
@@ -207,6 +208,9 @@ const postgraphileOptions = {
 	//   Must run AFTER ConnectionFilterPlugin so its build hook can wrap
 	//   `connectionFilterRegisterResolver` before the computed-columns sub-plugin uses it.
 	// - PaginationCapPlugin clamps first/last/offset on collection fields
+	// - UserVoteLegacyAccessorPlugin re-adds the pre-0071 unique-key accessor name
+	//   for user_votes, resolving the curation row. Deprecated shim; drop it with
+	//   the votes_count upvotes/downvotes shims.
 	appendPlugins: [
 		UndashedUuidPlugin,
 		ValueScalarsPlugin,
@@ -217,6 +221,7 @@ const postgraphileOptions = {
 		ValueOrderByScorePlugin,
 		PaginationCapPlugin,
 		HideProceduresPlugin,
+		UserVoteLegacyAccessorPlugin,
 	],
 	disableDefaultMutations: true,
 	simpleCollections: "both" as const,
