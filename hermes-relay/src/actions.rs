@@ -69,9 +69,20 @@ pub use hermes_substream::ACTION_VOTING_SETTINGS_UPDATED as VOTING_SETTINGS_UPDA
 // Permissionless Actions
 // =============================================================================
 
+// Curation kind (vote_kind 0) — the original triple.
 pub use hermes_substream::ACTION_DOWNVOTED as DOWNVOTED;
 pub use hermes_substream::ACTION_UNVOTED as UNVOTED;
 pub use hermes_substream::ACTION_UPVOTED as UPVOTED;
+
+// Stance kind (vote_kind 1) — "do you hold this position".
+pub use hermes_substream::ACTION_AGREED as AGREED;
+pub use hermes_substream::ACTION_DISAGREED as DISAGREED;
+pub use hermes_substream::ACTION_UNAGREED as UNAGREED;
+
+// Veracity kind (vote_kind 2) — "is this true".
+pub use hermes_substream::ACTION_DISPUTED as DISPUTED;
+pub use hermes_substream::ACTION_UNVERIFIED as UNVERIFIED;
+pub use hermes_substream::ACTION_VERIFIED as VERIFIED;
 
 // =============================================================================
 // Space Type Constants
@@ -127,5 +138,56 @@ mod tests {
             super::PROPOSAL_UPDATED,
             keccak256("GOVERNANCE.PROPOSAL_UPDATED").0,
         );
+    }
+
+    /// The nine response actions, asserted against a live keccak.
+    ///
+    /// These constants are the shared source of truth for three parties that
+    /// must agree byte for byte: the `setPermissionlessAction` registration
+    /// calls, the SDK's calldata, and this indexer. A hash that does not match
+    /// the registered one yields an action the registry never recognises — and
+    /// on the indexer side, an event that is silently never decoded.
+    #[test]
+    fn response_actions_match_contract_hashes() {
+        // Curation — pre-existing, included so a regression here is caught too.
+        assert_eq!(super::UPVOTED, keccak256("PERMISSIONLESS.UPVOTED").0);
+        assert_eq!(super::DOWNVOTED, keccak256("PERMISSIONLESS.DOWNVOTED").0);
+        assert_eq!(super::UNVOTED, keccak256("PERMISSIONLESS.UNVOTED").0);
+
+        // Stance.
+        assert_eq!(super::AGREED, keccak256("PERMISSIONLESS.AGREED").0);
+        assert_eq!(super::DISAGREED, keccak256("PERMISSIONLESS.DISAGREED").0);
+        assert_eq!(super::UNAGREED, keccak256("PERMISSIONLESS.UNAGREED").0);
+
+        // Veracity.
+        assert_eq!(super::VERIFIED, keccak256("PERMISSIONLESS.VERIFIED").0);
+        assert_eq!(super::DISPUTED, keccak256("PERMISSIONLESS.DISPUTED").0);
+        assert_eq!(super::UNVERIFIED, keccak256("PERMISSIONLESS.UNVERIFIED").0);
+    }
+
+    /// All nine hashes must be distinct, or one kind's events would be decoded
+    /// as another's.
+    #[test]
+    fn response_action_hashes_are_pairwise_distinct() {
+        let all = [
+            super::UPVOTED,
+            super::DOWNVOTED,
+            super::UNVOTED,
+            super::AGREED,
+            super::DISAGREED,
+            super::UNAGREED,
+            super::VERIFIED,
+            super::DISPUTED,
+            super::UNVERIFIED,
+        ];
+        let unique: std::collections::HashSet<_> = all.iter().collect();
+        assert_eq!(unique.len(), all.len(), "duplicate response action hash");
+    }
+
+    /// `PERMISSIONLESS.VERIFIED` and `GOVERNANCE.SUBSPACE_VERIFIED` are
+    /// different concepts that share a word. Pin that they never share bytes.
+    #[test]
+    fn permissionless_verified_is_not_subspace_verified() {
+        assert_ne!(super::VERIFIED, super::SUBSPACE_VERIFIED);
     }
 }

@@ -2,14 +2,14 @@
 
 use std::collections::HashMap;
 
-use hermes_schema::pb::voting::{HermesVoteCast, VoteDirection};
+use hermes_schema::pb::voting::{HermesVoteCast, VoteDirection, VoteKind};
 use sdk::core::ids::GEO_SYSTEM_NAMESPACE;
 use uuid::Uuid;
 
 use crate::error::HandlerError;
 use crate::models::voting::{
-    ScoreValueItem, UserVoteCriteria, UserVoteItem, VoteCountCriteria, VoteItem, VoteObjectType,
-    VoteValue, VotesCountItem,
+    ResponseKind, ScoreValueItem, UserVoteCriteria, UserVoteItem, VoteCountCriteria, VoteItem,
+    VoteObjectType, VoteValue, VotesCountItem,
 };
 
 /// Object type discriminator values (big-endian 4-byte encoding)
@@ -47,28 +47,51 @@ pub fn handle_vote_cast(vote: &HermesVoteCast) -> Result<VoteItem, HandlerError>
         Err(_) => return Err(HandlerError::InvalidVoteDirection(vote.direction)),
     };
 
+    // An unrecognised kind keeps its raw discriminant rather than falling back
+    // to curation. Events produced before this field existed carry 0 and decode
+    // as curation naturally; a *newer* producer emitting a kind this build
+    // predates must not be folded into curation, or its rows would collide with
+    // the user's real curation vote and overwrite it — the exact silent loss
+    // vote_kind exists to prevent. Preserving the value keeps such rows in their
+    // own key space, inert until this binary is upgraded, and does not halt the
+    // consumer mid-batch.
+    let kind = match VoteKind::try_from(vote.kind) {
+        Ok(VoteKind::Curation) => ResponseKind::Curation,
+        Ok(VoteKind::Stance) => ResponseKind::Stance,
+        Ok(VoteKind::Veracity) => ResponseKind::Veracity,
+        Err(_) => ResponseKind::Unknown(vote.kind as i16),
+    };
+
     Ok(VoteItem {
         voter_id,
         object_id,
         object_type,
         space_id,
         vote: vote_value,
+        kind,
         block_number: meta.block_number,
         block_timestamp: meta.created_at,
     })
 }
 
-/// Represents the change in vote counts when a vote is modified.
+/// Represents the change in tallies when a response is modified.
+///
+/// Always applies within a single kind — a response on one axis never moves
+/// another axis's tallies.
 #[derive(Debug, PartialEq, Eq)]
 pub struct VotesDelta {
-    pub upvotes: i32,
-    pub downvotes: i32,
+    pub positive: i32,
+    pub negative: i32,
 }
 
-/// Deduplicate votes, keeping the latest vote per user/entity/space/object_type combination.
+/// Deduplicate votes, keeping the latest per user/entity/space/object_type/KIND.
 ///
-/// Assumes votes are processed in order (by block_timestamp), so the last occurrence
-/// for each unique key is the most recent vote.
+/// Assumes votes are processed in order (by block_timestamp), so the last
+/// occurrence for each unique key is the most recent response.
+///
+/// The kind is part of the dedup key: an upvote and a Verify cast by the same
+/// user on the same object in the same block are two distinct responses, and
+/// collapsing them would drop one.
 pub fn get_latest_user_votes(votes: &[VoteItem]) -> Vec<UserVoteItem> {
     let mut latest_votes: HashMap<UserVoteCriteria, &VoteItem> = HashMap::new();
 
@@ -78,6 +101,7 @@ pub fn get_latest_user_votes(votes: &[VoteItem]) -> Vec<UserVoteItem> {
             vote.object_id,
             vote.space_id,
             vote.object_type,
+            vote.kind,
         );
         latest_votes.insert(vote_criteria, vote);
     }
@@ -85,19 +109,20 @@ pub fn get_latest_user_votes(votes: &[VoteItem]) -> Vec<UserVoteItem> {
     latest_votes
         .into_iter()
         .map(
-            |((voter_id, object_id, space_id, object_type), vote)| UserVoteItem {
+            |((voter_id, object_id, space_id, object_type, kind), vote)| UserVoteItem {
                 voter_id,
                 object_id,
                 object_type,
                 space_id,
                 vote_type: vote.vote.clone(),
+                kind,
                 voted_at: vote.block_timestamp,
             },
         )
         .collect()
 }
 
-/// Compute the delta in upvotes/downvotes when a vote changes.
+/// Compute the delta in positive/negative tallies when a response changes.
 ///
 /// Returns the change that should be applied to the aggregate counts.
 pub fn compute_vote_delta(
@@ -107,7 +132,7 @@ pub fn compute_vote_delta(
     let saved_vote_value = saved_vote.map(|vote| vote.vote_type.clone());
     let new_vote_value = new_vote.vote_type.clone();
 
-    let (upvotes, downvotes) = match (saved_vote_value, new_vote_value) {
+    let (positive, negative) = match (saved_vote_value, new_vote_value) {
         (Some(VoteValue::Up), VoteValue::Down) => (-1, 1),
         (Some(VoteValue::Up), VoteValue::Remove) => (-1, 0),
         (Some(VoteValue::Down), VoteValue::Up) => (1, -1),
@@ -120,7 +145,7 @@ pub fn compute_vote_delta(
         (_, _) => (0, 0),
     };
 
-    VotesDelta { upvotes, downvotes }
+    VotesDelta { positive, negative }
 }
 
 /// Calculate updated vote counts based on new votes and existing stored data.
@@ -140,13 +165,21 @@ pub fn calculate_vote_counts(
         stored_vote_counts.clone();
 
     for new_vote in user_votes {
+        // Both keys carry the kind, so a delta computed for one axis can only
+        // ever land on that axis's aggregate row.
         let vote_criteria = (
             new_vote.voter_id,
             new_vote.object_id,
             new_vote.space_id,
             new_vote.object_type,
+            new_vote.kind,
         );
-        let count_criteria = (new_vote.object_id, new_vote.space_id, new_vote.object_type);
+        let count_criteria = (
+            new_vote.object_id,
+            new_vote.space_id,
+            new_vote.object_type,
+            new_vote.kind,
+        );
 
         let stored_user_vote = stored_user_votes.get(&vote_criteria);
         let vote_delta = compute_vote_delta(stored_user_vote, new_vote);
@@ -157,12 +190,13 @@ pub fn calculate_vote_counts(
                 object_id: new_vote.object_id,
                 object_type: new_vote.object_type,
                 space_id: new_vote.space_id,
-                upvotes: 0,
-                downvotes: 0,
+                kind: new_vote.kind,
+                positive: 0,
+                negative: 0,
             });
 
-        vote_count.upvotes += vote_delta.upvotes as i64;
-        vote_count.downvotes += vote_delta.downvotes as i64;
+        vote_count.positive += vote_delta.positive as i64;
+        vote_count.negative += vote_delta.negative as i64;
     }
 
     vote_counts_map.into_values().collect()
@@ -171,6 +205,11 @@ pub fn calculate_vote_counts(
 /// Build the `values`-table rows mirroring net scores for entities.
 ///
 /// Skips relation votes: only entities (`object_type == Entity`) get a score row.
+/// Also skips every non-curation kind: this mirrors into the Score system
+/// property that feeds ranking, and ranking stays curation-only (PRD §8 Q4).
+/// Without that filter a claim's agrees and verifications would be written over
+/// each other's score row — they share an (entity, space) id — and whichever
+/// kind was processed last would silently become the entity's score.
 /// The row `id` is a deterministic UUIDv5 over the name `score:<entity>:<space>`
 /// under `GEO_SYSTEM_NAMESPACE` — the `score:` tag keeps these ids disjoint from
 /// any other scheme that might hash `(entity_id, space_id)`.
@@ -180,11 +219,12 @@ pub fn build_score_values(counts: &[VotesCountItem]) -> Vec<ScoreValueItem> {
     counts
         .iter()
         .filter(|c| c.object_type == VoteObjectType::Entity)
+        .filter(|c| c.kind == ResponseKind::Curation)
         .map(|c| ScoreValueItem {
             id: derive_score_value_id(&ns, &c.object_id, &c.space_id),
             entity_id: c.object_id,
             space_id: c.space_id,
-            integer: c.upvotes - c.downvotes,
+            integer: c.positive - c.negative,
         })
         .collect()
 }
@@ -228,6 +268,7 @@ mod tests {
             group_id: make_test_uuid(),
             space_pov: make_test_uuid(),
             meta: Some(make_test_meta()),
+            kind: VoteKind::Curation as i32,
         };
 
         let result = handle_vote_cast(&vote).unwrap();
@@ -249,6 +290,7 @@ mod tests {
             group_id: make_test_uuid(),
             space_pov: make_test_uuid(),
             meta: Some(make_test_meta()),
+            kind: VoteKind::Curation as i32,
         };
 
         let result = handle_vote_cast(&vote).unwrap();
@@ -268,6 +310,7 @@ mod tests {
             group_id: make_test_uuid(),
             space_pov: make_test_uuid(),
             meta: Some(make_test_meta()),
+            kind: VoteKind::Curation as i32,
         };
 
         let result = handle_vote_cast(&vote).unwrap();
@@ -286,6 +329,7 @@ mod tests {
             group_id: make_test_uuid(),
             space_pov: make_test_uuid(),
             meta: None,
+            kind: VoteKind::Curation as i32,
         };
 
         let result = handle_vote_cast(&vote);
@@ -303,6 +347,7 @@ mod tests {
             group_id: make_test_uuid(),
             space_pov: make_test_uuid(),
             meta: Some(make_test_meta()),
+            kind: VoteKind::Curation as i32,
         };
 
         let result = handle_vote_cast(&vote);
@@ -343,12 +388,34 @@ mod tests {
         vote: VoteValue,
         block_timestamp: u64,
     ) -> VoteItem {
+        make_kinded_vote_item(
+            voter_id,
+            object_id,
+            space_id,
+            object_type,
+            vote,
+            ResponseKind::Curation,
+            block_timestamp,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn make_kinded_vote_item(
+        voter_id: Uuid,
+        object_id: Uuid,
+        space_id: Uuid,
+        object_type: VoteObjectType,
+        vote: VoteValue,
+        kind: ResponseKind,
+        block_timestamp: u64,
+    ) -> VoteItem {
         VoteItem {
             voter_id,
             object_id,
             object_type,
             space_id,
             vote,
+            kind,
             block_number: 1,
             block_timestamp,
         }
@@ -490,6 +557,7 @@ mod tests {
             object_type: VoteObjectType::Entity,
             space_id: Uuid::from_bytes([3u8; 16]),
             vote_type,
+            kind: ResponseKind::Curation,
             voted_at: 1000,
         }
     }
@@ -504,8 +572,8 @@ mod tests {
         assert_eq!(
             delta,
             VotesDelta {
-                upvotes: -1,
-                downvotes: 1
+                positive: -1,
+                negative: 1
             }
         );
     }
@@ -520,8 +588,8 @@ mod tests {
         assert_eq!(
             delta,
             VotesDelta {
-                upvotes: -1,
-                downvotes: 0
+                positive: -1,
+                negative: 0
             }
         );
     }
@@ -536,8 +604,8 @@ mod tests {
         assert_eq!(
             delta,
             VotesDelta {
-                upvotes: 1,
-                downvotes: -1
+                positive: 1,
+                negative: -1
             }
         );
     }
@@ -552,8 +620,8 @@ mod tests {
         assert_eq!(
             delta,
             VotesDelta {
-                upvotes: 0,
-                downvotes: -1
+                positive: 0,
+                negative: -1
             }
         );
     }
@@ -567,8 +635,8 @@ mod tests {
         assert_eq!(
             delta,
             VotesDelta {
-                upvotes: 1,
-                downvotes: 0
+                positive: 1,
+                negative: 0
             }
         );
     }
@@ -582,8 +650,8 @@ mod tests {
         assert_eq!(
             delta,
             VotesDelta {
-                upvotes: 0,
-                downvotes: 1
+                positive: 0,
+                negative: 1
             }
         );
     }
@@ -598,8 +666,8 @@ mod tests {
         assert_eq!(
             delta,
             VotesDelta {
-                upvotes: 0,
-                downvotes: 0
+                positive: 0,
+                negative: 0
             }
         );
     }
@@ -620,6 +688,7 @@ mod tests {
             object_type: VoteObjectType::Entity,
             space_id: space,
             vote_type: VoteValue::Up,
+            kind: ResponseKind::Curation,
             voted_at: 1000,
         }];
 
@@ -629,8 +698,8 @@ mod tests {
         let counts = calculate_vote_counts(&user_votes, &stored_user_votes, &stored_vote_counts);
 
         assert_eq!(counts.len(), 1);
-        assert_eq!(counts[0].upvotes, 1);
-        assert_eq!(counts[0].downvotes, 0);
+        assert_eq!(counts[0].positive, 1);
+        assert_eq!(counts[0].negative, 0);
     }
 
     #[test]
@@ -645,39 +714,53 @@ mod tests {
             object_type: VoteObjectType::Entity,
             space_id: space,
             vote_type: VoteValue::Down,
+            kind: ResponseKind::Curation,
             voted_at: 2000,
         }];
 
         let mut stored_user_votes: HashMap<UserVoteCriteria, UserVoteItem> = HashMap::new();
         stored_user_votes.insert(
-            (voter, object, space, VoteObjectType::Entity),
+            (
+                voter,
+                object,
+                space,
+                VoteObjectType::Entity,
+                ResponseKind::Curation,
+            ),
             UserVoteItem {
                 voter_id: voter,
                 object_id: object,
                 object_type: VoteObjectType::Entity,
                 space_id: space,
                 vote_type: VoteValue::Up,
+                kind: ResponseKind::Curation,
                 voted_at: 1000,
             },
         );
 
         let mut stored_vote_counts: HashMap<VoteCountCriteria, VotesCountItem> = HashMap::new();
         stored_vote_counts.insert(
-            (object, space, VoteObjectType::Entity),
+            (
+                object,
+                space,
+                VoteObjectType::Entity,
+                ResponseKind::Curation,
+            ),
             VotesCountItem {
                 object_id: object,
                 object_type: VoteObjectType::Entity,
                 space_id: space,
-                upvotes: 5,
-                downvotes: 2,
+                kind: ResponseKind::Curation,
+                positive: 5,
+                negative: 2,
             },
         );
 
         let counts = calculate_vote_counts(&user_votes, &stored_user_votes, &stored_vote_counts);
 
         assert_eq!(counts.len(), 1);
-        assert_eq!(counts[0].upvotes, 4); // 5 - 1
-        assert_eq!(counts[0].downvotes, 3); // 2 + 1
+        assert_eq!(counts[0].positive, 4); // 5 - 1
+        assert_eq!(counts[0].negative, 3); // 2 + 1
     }
 
     #[test]
@@ -694,6 +777,7 @@ mod tests {
                 object_type: VoteObjectType::Entity,
                 space_id: space,
                 vote_type: VoteValue::Up,
+                kind: ResponseKind::Curation,
                 voted_at: 1000,
             },
             UserVoteItem {
@@ -702,6 +786,7 @@ mod tests {
                 object_type: VoteObjectType::Entity,
                 space_id: space,
                 vote_type: VoteValue::Down,
+                kind: ResponseKind::Curation,
                 voted_at: 1000,
             },
         ];
@@ -712,8 +797,8 @@ mod tests {
         let counts = calculate_vote_counts(&user_votes, &stored_user_votes, &stored_vote_counts);
 
         assert_eq!(counts.len(), 1);
-        assert_eq!(counts[0].upvotes, 1);
-        assert_eq!(counts[0].downvotes, 1);
+        assert_eq!(counts[0].positive, 1);
+        assert_eq!(counts[0].negative, 1);
     }
 
     // ============================================================================
@@ -728,8 +813,9 @@ mod tests {
             object_id: entity_id,
             object_type: VoteObjectType::Entity,
             space_id,
-            upvotes: 5,
-            downvotes: 2,
+            kind: ResponseKind::Curation,
+            positive: 5,
+            negative: 2,
         }];
 
         let rows = build_score_values(&counts);
@@ -751,8 +837,9 @@ mod tests {
             object_id: entity_id,
             object_type: VoteObjectType::Entity,
             space_id,
-            upvotes: 1,
-            downvotes: 0,
+            kind: ResponseKind::Curation,
+            positive: 1,
+            negative: 0,
         };
 
         let first = build_score_values(&[count.clone()]);
@@ -767,8 +854,9 @@ mod tests {
             object_id: Uuid::new_v4(),
             object_type: VoteObjectType::Entity,
             space_id: Uuid::new_v4(),
-            upvotes: 1,
-            downvotes: 4,
+            kind: ResponseKind::Curation,
+            positive: 1,
+            negative: 4,
         }];
 
         let rows = build_score_values(&counts);
@@ -784,15 +872,17 @@ mod tests {
                 object_id: Uuid::new_v4(),
                 object_type: VoteObjectType::Relation,
                 space_id: Uuid::new_v4(),
-                upvotes: 10,
-                downvotes: 0,
+                kind: ResponseKind::Curation,
+                positive: 10,
+                negative: 0,
             },
             VotesCountItem {
                 object_id: Uuid::new_v4(),
                 object_type: VoteObjectType::Entity,
                 space_id: Uuid::new_v4(),
-                upvotes: 2,
-                downvotes: 1,
+                kind: ResponseKind::Curation,
+                positive: 2,
+                negative: 1,
             },
         ];
 
@@ -818,15 +908,17 @@ mod tests {
                 object_id: entity_id,
                 object_type: VoteObjectType::Entity,
                 space_id: space_a,
-                upvotes: 3,
-                downvotes: 0,
+                kind: ResponseKind::Curation,
+                positive: 3,
+                negative: 0,
             },
             VotesCountItem {
                 object_id: entity_id,
                 object_type: VoteObjectType::Entity,
                 space_id: space_b,
-                upvotes: 0,
-                downvotes: 5,
+                kind: ResponseKind::Curation,
+                positive: 0,
+                negative: 5,
             },
         ];
 
@@ -841,5 +933,353 @@ mod tests {
         assert_eq!(row_b.integer, -5);
         assert_eq!(row_b.id, derive_score_value_id(&ns, &entity_id, &space_b));
         assert_ne!(row_a.id, row_b.id);
+    }
+
+    // ========================================================================
+    // vote_kind: the axes must stay independent
+    //
+    // The failure these cover is silent — no error, no log, just a vote that
+    // stops existing or a tally that drifts. They are the indexer-side half of
+    // what the widened unique constraint provides.
+    // ========================================================================
+
+    #[test]
+    fn handle_vote_cast_decodes_each_kind() {
+        for (proto_kind, want) in [
+            (VoteKind::Curation, ResponseKind::Curation),
+            (VoteKind::Stance, ResponseKind::Stance),
+            (VoteKind::Veracity, ResponseKind::Veracity),
+        ] {
+            let vote = HermesVoteCast {
+                voter_id: make_test_uuid(),
+                object_type: OBJECT_TYPE_ENTITY.to_vec(),
+                object_id: make_test_uuid(),
+                direction: VoteDirection::Up as i32,
+                version: 1,
+                group_id: make_test_uuid(),
+                space_pov: make_test_uuid(),
+                meta: Some(make_test_meta()),
+                kind: proto_kind as i32,
+            };
+            assert_eq!(handle_vote_cast(&vote).unwrap().kind, want);
+        }
+    }
+
+    /// An unknown kind from a newer producer must not halt the consumer, and
+    /// must NOT be folded into curation — that would key it identically to the
+    /// user's real curation vote and overwrite it, which is the silent loss
+    /// vote_kind exists to prevent.
+    #[test]
+    fn handle_vote_cast_unknown_kind_preserves_its_discriminant() {
+        let vote = HermesVoteCast {
+            voter_id: make_test_uuid(),
+            object_type: OBJECT_TYPE_ENTITY.to_vec(),
+            object_id: make_test_uuid(),
+            direction: VoteDirection::Up as i32,
+            version: 1,
+            group_id: make_test_uuid(),
+            space_pov: make_test_uuid(),
+            meta: Some(make_test_meta()),
+            kind: 99,
+        };
+        let decoded = handle_vote_cast(&vote).unwrap().kind;
+        assert_eq!(decoded, ResponseKind::Unknown(99));
+        assert_ne!(decoded, ResponseKind::Curation);
+        // Round-trips through the DB column type without collapsing to 0.
+        assert_eq!(i16::from(decoded), 99);
+    }
+
+    /// The dedup key must treat an unknown kind as its own axis, so a future
+    /// kind cannot clobber an existing curation vote.
+    #[test]
+    fn unknown_kind_does_not_collide_with_curation() {
+        let voter = Uuid::from_bytes([1u8; 16]);
+        let object = Uuid::from_bytes([2u8; 16]);
+        let space = Uuid::from_bytes([3u8; 16]);
+
+        let votes = vec![
+            make_kinded_vote_item(
+                voter,
+                object,
+                space,
+                VoteObjectType::Entity,
+                VoteValue::Up,
+                ResponseKind::Curation,
+                1000,
+            ),
+            make_kinded_vote_item(
+                voter,
+                object,
+                space,
+                VoteObjectType::Entity,
+                VoteValue::Down,
+                ResponseKind::Unknown(99),
+                2000,
+            ),
+        ];
+
+        // Two distinct responses, not one overwriting the other.
+        let user_votes = get_latest_user_votes(&votes);
+        assert_eq!(user_votes.len(), 2);
+
+        let curation = user_votes
+            .iter()
+            .find(|v| v.kind == ResponseKind::Curation)
+            .expect("curation row must survive an unknown-kind vote");
+        assert_eq!(curation.vote_type, VoteValue::Up);
+    }
+
+    /// Same user, same object, same block, different axes — three responses,
+    /// not one. If the dedup key dropped the kind, two would be discarded.
+    #[test]
+    fn get_latest_user_votes_keeps_one_row_per_kind() {
+        let voter = Uuid::from_bytes([1u8; 16]);
+        let object = Uuid::from_bytes([2u8; 16]);
+        let space = Uuid::from_bytes([3u8; 16]);
+
+        let votes: Vec<VoteItem> = [
+            ResponseKind::Curation,
+            ResponseKind::Stance,
+            ResponseKind::Veracity,
+        ]
+        .into_iter()
+        .map(|k| {
+            make_kinded_vote_item(
+                voter,
+                object,
+                space,
+                VoteObjectType::Entity,
+                VoteValue::Up,
+                k,
+                1000,
+            )
+        })
+        .collect();
+
+        let user_votes = get_latest_user_votes(&votes);
+        assert_eq!(user_votes.len(), 3);
+
+        let mut kinds: Vec<i16> = user_votes.iter().map(|v| i16::from(v.kind)).collect();
+        kinds.sort_unstable();
+        assert_eq!(kinds, vec![0, 1, 2]);
+    }
+
+    /// Within one kind, the latest response still wins.
+    #[test]
+    fn get_latest_user_votes_still_dedups_within_a_kind() {
+        let voter = Uuid::from_bytes([1u8; 16]);
+        let object = Uuid::from_bytes([2u8; 16]);
+        let space = Uuid::from_bytes([3u8; 16]);
+
+        let votes = vec![
+            make_kinded_vote_item(
+                voter,
+                object,
+                space,
+                VoteObjectType::Entity,
+                VoteValue::Up,
+                ResponseKind::Veracity,
+                1000,
+            ),
+            make_kinded_vote_item(
+                voter,
+                object,
+                space,
+                VoteObjectType::Entity,
+                VoteValue::Down,
+                ResponseKind::Veracity,
+                2000,
+            ),
+        ];
+
+        let user_votes = get_latest_user_votes(&votes);
+        assert_eq!(user_votes.len(), 1);
+        assert_eq!(user_votes[0].vote_type, VoteValue::Down);
+        assert_eq!(user_votes[0].kind, ResponseKind::Veracity);
+    }
+
+    /// THE regression test for the indexer: casting a Verify on an object the
+    /// user already upvoted must leave the curation tally untouched.
+    #[test]
+    fn verify_does_not_disturb_an_existing_upvote() {
+        let voter = Uuid::from_bytes([1u8; 16]);
+        let object = Uuid::from_bytes([2u8; 16]);
+        let space = Uuid::from_bytes([3u8; 16]);
+
+        // Stored state: the user has an upvote; curation tally is 5/2.
+        let mut stored_user_votes: HashMap<UserVoteCriteria, UserVoteItem> = HashMap::new();
+        stored_user_votes.insert(
+            (
+                voter,
+                object,
+                space,
+                VoteObjectType::Entity,
+                ResponseKind::Curation,
+            ),
+            UserVoteItem {
+                voter_id: voter,
+                object_id: object,
+                object_type: VoteObjectType::Entity,
+                space_id: space,
+                vote_type: VoteValue::Up,
+                kind: ResponseKind::Curation,
+                voted_at: 1000,
+            },
+        );
+
+        let mut stored_vote_counts: HashMap<VoteCountCriteria, VotesCountItem> = HashMap::new();
+        stored_vote_counts.insert(
+            (
+                object,
+                space,
+                VoteObjectType::Entity,
+                ResponseKind::Curation,
+            ),
+            VotesCountItem {
+                object_id: object,
+                object_type: VoteObjectType::Entity,
+                space_id: space,
+                kind: ResponseKind::Curation,
+                positive: 5,
+                negative: 2,
+            },
+        );
+
+        // The same user now casts a Verify.
+        let new_votes = vec![UserVoteItem {
+            voter_id: voter,
+            object_id: object,
+            object_type: VoteObjectType::Entity,
+            space_id: space,
+            vote_type: VoteValue::Up,
+            kind: ResponseKind::Veracity,
+            voted_at: 2000,
+        }];
+
+        let counts = calculate_vote_counts(&new_votes, &stored_user_votes, &stored_vote_counts);
+
+        let curation = counts
+            .iter()
+            .find(|c| c.kind == ResponseKind::Curation)
+            .expect("curation row must survive");
+        assert_eq!(
+            curation.positive, 5,
+            "Verify must not move the upvote tally"
+        );
+        assert_eq!(curation.negative, 2);
+
+        let veracity = counts
+            .iter()
+            .find(|c| c.kind == ResponseKind::Veracity)
+            .expect("veracity row must be created");
+        assert_eq!(veracity.positive, 1);
+        assert_eq!(veracity.negative, 0);
+    }
+
+    /// A kind-scoped clear removes only its own axis. An UNVERIFIED from a user
+    /// holding both an upvote and a verification must zero the veracity tally
+    /// and leave curation alone.
+    #[test]
+    fn clear_is_scoped_to_its_own_kind() {
+        let voter = Uuid::from_bytes([1u8; 16]);
+        let object = Uuid::from_bytes([2u8; 16]);
+        let space = Uuid::from_bytes([3u8; 16]);
+
+        let mut stored_user_votes: HashMap<UserVoteCriteria, UserVoteItem> = HashMap::new();
+        for kind in [ResponseKind::Curation, ResponseKind::Veracity] {
+            stored_user_votes.insert(
+                (voter, object, space, VoteObjectType::Entity, kind),
+                UserVoteItem {
+                    voter_id: voter,
+                    object_id: object,
+                    object_type: VoteObjectType::Entity,
+                    space_id: space,
+                    vote_type: VoteValue::Up,
+                    kind,
+                    voted_at: 1000,
+                },
+            );
+        }
+
+        let mut stored_vote_counts: HashMap<VoteCountCriteria, VotesCountItem> = HashMap::new();
+        for kind in [ResponseKind::Curation, ResponseKind::Veracity] {
+            stored_vote_counts.insert(
+                (object, space, VoteObjectType::Entity, kind),
+                VotesCountItem {
+                    object_id: object,
+                    object_type: VoteObjectType::Entity,
+                    space_id: space,
+                    kind,
+                    positive: 4,
+                    negative: 0,
+                },
+            );
+        }
+
+        // UNVERIFIED: clear, on the veracity axis only.
+        let new_votes = vec![UserVoteItem {
+            voter_id: voter,
+            object_id: object,
+            object_type: VoteObjectType::Entity,
+            space_id: space,
+            vote_type: VoteValue::Remove,
+            kind: ResponseKind::Veracity,
+            voted_at: 2000,
+        }];
+
+        let counts = calculate_vote_counts(&new_votes, &stored_user_votes, &stored_vote_counts);
+
+        let curation = counts
+            .iter()
+            .find(|c| c.kind == ResponseKind::Curation)
+            .unwrap();
+        let veracity = counts
+            .iter()
+            .find(|c| c.kind == ResponseKind::Veracity)
+            .unwrap();
+
+        assert_eq!(curation.positive, 4, "UNVERIFIED must not clear the upvote");
+        assert_eq!(veracity.positive, 3, "veracity tally must drop by one");
+    }
+
+    /// Score mirroring feeds ranking, which stays curation-only. Non-curation
+    /// rows share the same (entity, space) value id, so without this filter the
+    /// last kind processed would silently overwrite the entity's score.
+    #[test]
+    fn build_score_values_ignores_non_curation_kinds() {
+        let entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let counts = vec![
+            VotesCountItem {
+                object_id: entity_id,
+                object_type: VoteObjectType::Entity,
+                space_id,
+                kind: ResponseKind::Curation,
+                positive: 3,
+                negative: 1,
+            },
+            VotesCountItem {
+                object_id: entity_id,
+                object_type: VoteObjectType::Entity,
+                space_id,
+                kind: ResponseKind::Veracity,
+                positive: 900,
+                negative: 0,
+            },
+            VotesCountItem {
+                object_id: entity_id,
+                object_type: VoteObjectType::Entity,
+                space_id,
+                kind: ResponseKind::Stance,
+                positive: 500,
+                negative: 0,
+            },
+        ];
+
+        let rows = build_score_values(&counts);
+
+        assert_eq!(rows.len(), 1, "only the curation row may mirror a score");
+        assert_eq!(rows[0].integer, 2);
     }
 }

@@ -81,7 +81,12 @@ pub struct EntityVoteCount {
     pub entity_id: Uuid,
     /// The space the votes were counted in.
     pub space_id: Uuid,
+    /// Read from `votes_count.positive`, and always a *curation* tally — the
+    /// poller's query is scoped to vote_kind = 0. The field (and the webhook
+    /// payload key it feeds) keeps the `upvotes` name because that name is part
+    /// of the published `entity_votes_threshold` contract.
     pub upvotes: i64,
+    /// Read from `votes_count.negative`. See `upvotes`.
     pub downvotes: i64,
     /// `updated_at` — the keyset primary key and cursor high-water mark.
     pub updated_at: DateTime<Utc>,
@@ -919,7 +924,7 @@ impl Storage {
     ) -> Result<Vec<EntityVoteCount>, StorageError> {
         let rows = sqlx::query(
             r#"
-            SELECT vc.id::bigint AS id, vc.object_id, vc.space_id, vc.upvotes, vc.downvotes,
+            SELECT vc.id::bigint AS id, vc.object_id, vc.space_id, vc.positive, vc.negative,
                    vc.updated_at,
                    EXISTS (
                        SELECT 1 FROM notification_outbox o
@@ -930,6 +935,11 @@ impl Storage {
                    ) AS already_notified
             FROM votes_count vc
             WHERE vc.object_type = 0
+              -- Curation only. votes_count now holds one row per response kind,
+              -- and this poller notifies on UPVOTES — it must not fire on agrees
+              -- or verifications. The literal also matches the partial keyset
+              -- index, which is scoped to the same predicate.
+              AND vc.vote_kind = 0
               -- $2::int matches vc.id (int4) so the (updated_at, id) keyset index is
               -- used as-is; cursor_id is always within int4 range (from votes_count.id).
               AND (vc.updated_at, vc.id) > ($1, $2::int)
@@ -950,8 +960,8 @@ impl Storage {
                 cursor_id: r.get("id"),
                 entity_id: r.get("object_id"),
                 space_id: r.get("space_id"),
-                upvotes: r.get("upvotes"),
-                downvotes: r.get("downvotes"),
+                upvotes: r.get("positive"),
+                downvotes: r.get("negative"),
                 updated_at: r.get("updated_at"),
                 already_notified: r.get("already_notified"),
             })

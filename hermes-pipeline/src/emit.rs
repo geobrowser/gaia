@@ -955,6 +955,7 @@ mod tests {
             group_id: vec![0; 16],
             space_pov: vec![0; 16],
             meta: None,
+            kind: 0,
         };
         // Should key by object_id for partitioning
         assert_eq!(event.key(), vec![0xAB; 16]);

@@ -28,8 +28,8 @@ const TEST_ENTITY_IDS = [ENTITY_1, ENTITY_2, ENTITY_3]
 
 // Expected cross-space aggregation for ENTITY_1:
 // votes_count rows inserted below —
-//   ENTITY_1 @ SPACE_A: upvotes=15, downvotes=5 → net=10
-//   ENTITY_1 @ SPACE_B: upvotes=8,  downvotes=2 → net=6
+//   ENTITY_1 @ SPACE_A: positive=15, negative=5 → net=10
+//   ENTITY_1 @ SPACE_B: positive=8,  negative=2 → net=6
 // sum across spaces = 16, max single space = 10 (they differ, so the regression
 // guard in test #8 actually proves the aggregation path).
 const ENTITY_1_CROSS_SPACE_NET_SCORE = 16
@@ -68,16 +68,138 @@ async function seedFixtures(pool: Pool) {
 	)
 
 	// ENTITY_1 is voted on in BOTH spaces so the cross-space RAW branch exercises
-	// SUM(upvotes - downvotes) across rows. ENTITY_2 and ENTITY_3 vote only in SPACE_A.
+	// SUM(positive - negative) across rows. ENTITY_2 and ENTITY_3 vote only in SPACE_A.
+	// All curation (vote_kind 0) — per-kind isolation is covered by the
+	// "vote_kind isolation" suite above.
 	await pool.query(
-		`INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes) VALUES
-			($1, 0, $4, 15, 5),
-			($1, 0, $5, 8, 2),
-			($2, 0, $4, 10, 1),
-			($3, 0, $4, 5, 5)`,
+		`INSERT INTO votes_count (object_id, object_type, space_id, vote_kind, positive, negative) VALUES
+			($1, 0, $4, 0, 15, 5),
+			($1, 0, $5, 0, 8, 2),
+			($2, 0, $4, 0, 10, 1),
+			($3, 0, $4, 0, 5, 5)`,
 		[ENTITY_1, ENTITY_2, ENTITY_3, SPACE_A, SPACE_B],
 	)
 }
+
+// ---------------------------------------------------------------------------
+// vote_kind isolation
+//
+// These call the SQL function directly rather than going through GraphQL, and
+// are deliberately NOT part of the describe.skip block below: that suite is
+// skipped because entities_ordered_by_score is hidden from GraphQL, so a test
+// added there would never run and would read as passing coverage it isn't.
+//
+// What they protect: votes_count went from one row per
+// (object_id, object_type, space_id) to one per kind. Every read path has to
+// filter vote_kind = 0, or the SUM paths add stance/veracity tallies into the
+// curation score and the direct-join paths pick an arbitrary row of three.
+// Neither raises an error — the ranking silently changes. The fixture is built
+// so that a missing filter flips the order, not merely perturbs a number.
+// ---------------------------------------------------------------------------
+const KIND_SPACE = "00000000-aaaa-4aaa-aaaa-00000000dd01"
+const KIND_ENTITY_HIGH = "00000000-bbbb-4bbb-bbbb-00000000dd01"
+const KIND_ENTITY_LOW = "00000000-bbbb-4bbb-bbbb-00000000dd02"
+const KIND_ENTITY_IDS = [KIND_ENTITY_HIGH, KIND_ENTITY_LOW]
+
+describe("entities_ordered_by_score vote_kind isolation", () => {
+	let pool: Pool
+
+	async function cleanup() {
+		await pool.query(`DELETE FROM votes_count WHERE object_id = ANY($1::uuid[])`, [KIND_ENTITY_IDS])
+		await pool.query(`DELETE FROM entities WHERE id = ANY($1::uuid[])`, [KIND_ENTITY_IDS])
+	}
+
+	beforeAll(async () => {
+		pool = new Pool({connectionString: process.env.DATABASE_URL})
+		await cleanup()
+
+		await pool.query(
+			`INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
+			 SELECT unnest($1::uuid[]), '0', '0', '0', '0'`,
+			[KIND_ENTITY_IDS],
+		)
+
+		// Curation: HIGH (net 10) must outrank LOW (net 9).
+		// Stance: a landslide on LOW that must not count toward curation. If any
+		// read path drops the vote_kind filter, LOW's effective score becomes
+		// 9 + 500 and the two entities swap places.
+		await pool.query(
+			`INSERT INTO votes_count (object_id, object_type, space_id, vote_kind, positive, negative) VALUES
+				($1, 0, $3, 0, 15, 5),
+				($2, 0, $3, 0, 10, 1),
+				($2, 0, $3, 1, 500, 0)`,
+			[KIND_ENTITY_HIGH, KIND_ENTITY_LOW, KIND_SPACE],
+		)
+	})
+
+	afterAll(async () => {
+		if (pool) {
+			await cleanup()
+			await pool.end()
+		}
+	})
+
+	it("ignores a stance row when ordering RAW within a space", async () => {
+		const res = await pool.query(
+			`SELECT id FROM entities_ordered_by_score('raw', $1::uuid, 'DESC')
+			 WHERE id = ANY($2::uuid[])`,
+			[KIND_SPACE, KIND_ENTITY_IDS],
+		)
+		// Per-space RAW is a direct LEFT JOIN. Unfiltered it would match an
+		// arbitrary one of LOW's two rows.
+		expect(res.rows.map((r) => r.id)).toEqual([KIND_ENTITY_HIGH, KIND_ENTITY_LOW])
+	})
+
+	it("ignores a stance row when ordering RAW across spaces", async () => {
+		const res = await pool.query(
+			`SELECT id FROM entities_ordered_by_score('raw', NULL, 'DESC')
+			 WHERE id = ANY($1::uuid[])`,
+			[KIND_ENTITY_IDS],
+		)
+		// Cross-space RAW is the SUM path — the one that inflates.
+		expect(res.rows.map((r) => r.id)).toEqual([KIND_ENTITY_HIGH, KIND_ENTITY_LOW])
+	})
+
+	it("keeps the entity's curation score unchanged by responses of other kinds", async () => {
+		const res = await pool.query(
+			`SELECT COALESCE(SUM(positive - negative), 0)::bigint AS net
+			 FROM votes_count WHERE object_type = 0 AND vote_kind = 0 AND object_id = $1`,
+			[KIND_ENTITY_LOW],
+		)
+		expect(Number(res.rows[0].net)).toBe(9)
+	})
+
+	it("returns one votes_count row per kind for the same object and space", async () => {
+		const res = await pool.query(
+			`SELECT vote_kind, positive, negative FROM votes_count
+			 WHERE object_id = $1 AND object_type = 0 AND space_id = $2
+			 ORDER BY vote_kind`,
+			[KIND_ENTITY_LOW, KIND_SPACE],
+		)
+		// The cardinality change itself — one row per (object, space) became one
+		// per (object, space, kind). This is the premise every filter depends on.
+		expect(res.rows.map((r) => r.vote_kind)).toEqual([0, 1])
+	})
+
+	it("still exposes upvotes/downvotes as read-only shims equal to positive/negative", async () => {
+		const res = await pool.query(
+			`SELECT positive, negative, upvotes, downvotes FROM votes_count
+			 WHERE object_id = $1 AND object_type = 0 AND space_id = $2 AND vote_kind = 0`,
+			[KIND_ENTITY_HIGH, KIND_SPACE],
+		)
+		// The pre-vote_kind web client still selects these names over GraphQL.
+		expect(Number(res.rows[0].upvotes)).toBe(Number(res.rows[0].positive))
+		expect(Number(res.rows[0].downvotes)).toBe(Number(res.rows[0].negative))
+	})
+
+	it("rejects a write to the deprecated upvotes shim", async () => {
+		// Guards against a writer being "fixed" to target the old column name and
+		// silently diverging from positive/negative.
+		await expect(
+			pool.query(`UPDATE votes_count SET upvotes = 1 WHERE object_id = $1`, [KIND_ENTITY_HIGH]),
+		).rejects.toThrow()
+	})
+})
 
 // Skipped: entities_ordered_by_score is hidden from GraphQL via hideProceduresPlugin.
 // Unskip when the field is re-exposed.
@@ -201,7 +323,7 @@ describe.skip("entitiesOrderedByScore", () => {
 			expect(ids.slice(0, 3)).toEqual([undash(ENTITY_1), undash(ENTITY_2), undash(ENTITY_3)])
 		})
 
-		it("accepts RAW with spaceId and orders by (upvotes - downvotes) within the space", async () => {
+		it("accepts RAW with spaceId and orders by (positive - negative) within the space", async () => {
 			const result = await executeGraphQL(
 				`
 					query Q($spaceId: UUID!) {
@@ -217,7 +339,7 @@ describe.skip("entitiesOrderedByScore", () => {
 			expect(ids.slice(0, 3)).toEqual([undash(ENTITY_1), undash(ENTITY_2), undash(ENTITY_3)])
 		})
 
-		it("accepts RAW without spaceId and sums upvotes-downvotes across spaces", async () => {
+		it("accepts RAW without spaceId and sums positive-negative across spaces", async () => {
 			const result = await executeGraphQL(`
 				{
 					entitiesOrderedByScore(scoreType: RAW, first: 50) { id }
@@ -232,10 +354,10 @@ describe.skip("entitiesOrderedByScore", () => {
 			// single space. Recomputes directly from votes_count as an extra guard.
 			const direct = await pool.query(
 				`
-					SELECT SUM(upvotes - downvotes)::bigint AS net_score,
-						MAX(upvotes - downvotes)::bigint AS max_single_space
+					SELECT SUM(positive - negative)::bigint AS net_score,
+						MAX(positive - negative)::bigint AS max_single_space
 					FROM votes_count
-					WHERE object_type = 0 AND object_id = $1
+					WHERE object_type = 0 AND vote_kind = 0 AND object_id = $1
 				`,
 				[ENTITY_1],
 			)

@@ -131,6 +131,7 @@ const VOTE_SPACE_BYTES: [u8; 16] = [0x9e; 16]; // the space votes are counted in
 const VOTE_ENTITY_BELOW_BYTES: [u8; 16] = [0x9f; 16]; // upvotes < threshold -> no notification
 const VOTE_ENTITY_NOCREATOR_BYTES: [u8; 16] = [0xa1; 16]; // over threshold but no creator -> no notification
 const VOTE_ENTITY_STALE_BYTES: [u8; 16] = [0xa2; 16]; // over threshold + creator, but updated_at older than the cold-start lookback -> no notification
+const VOTE_ENTITY_VERACITY_BYTES: [u8; 16] = [0xa3; 16]; // verifications over threshold + creator, but vote_kind != 0 -> no notification
 
 const GOVERNANCE_TOPIC: &str = "space.governance";
 const KNOWLEDGE_EDITS_TOPIC: &str = "knowledge.edits";
@@ -535,7 +536,7 @@ async fn seed_database(
     // (a) Over-threshold entity (upvotes=5 >= 3) WITH a Types relation that resolves
     //     its creator/home space -> the poller notifies VOTE_CREATOR_SPACE.
     sqlx::query(
-        "INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes) \
+        "INSERT INTO votes_count (object_id, object_type, space_id, positive, negative) \
          VALUES ($1, 0, $2, 5, 0) ON CONFLICT DO NOTHING",
     )
     .bind(Uuid::from_bytes(VOTE_ENTITY_OVER_BYTES))
@@ -555,7 +556,7 @@ async fn seed_database(
     .await?;
     // (b) Below-threshold entity (upvotes=1 < 3) -> no notification.
     sqlx::query(
-        "INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes) \
+        "INSERT INTO votes_count (object_id, object_type, space_id, positive, negative) \
          VALUES ($1, 0, $2, 1, 0) ON CONFLICT DO NOTHING",
     )
     .bind(Uuid::from_bytes(VOTE_ENTITY_BELOW_BYTES))
@@ -564,7 +565,7 @@ async fn seed_database(
     .await?;
     // (c) Over-threshold entity with NO Types relation -> creator unresolved -> no notification.
     sqlx::query(
-        "INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes) \
+        "INSERT INTO votes_count (object_id, object_type, space_id, positive, negative) \
          VALUES ($1, 0, $2, 9, 0) ON CONFLICT DO NOTHING",
     )
     .bind(Uuid::from_bytes(VOTE_ENTITY_NOCREATOR_BYTES))
@@ -575,7 +576,7 @@ async fn seed_database(
     //     cold-start lookback (2 days ago) -> excluded by the cold-start window
     //     -> no notification. Proves the exclusion is the lookback, not a missing creator.
     sqlx::query(
-        "INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes, updated_at) \
+        "INSERT INTO votes_count (object_id, object_type, space_id, positive, negative, updated_at) \
          VALUES ($1, 0, $2, 8, 0, now() - interval '2 days') ON CONFLICT DO NOTHING",
     )
     .bind(Uuid::from_bytes(VOTE_ENTITY_STALE_BYTES))
@@ -590,6 +591,31 @@ async fn seed_database(
     .bind(Uuid::new_v4())
     .bind(Uuid::from_bytes(VOTE_CREATOR_SPACE_BYTES))
     .bind(Uuid::from_bytes(VOTE_ENTITY_STALE_BYTES))
+    .bind(Uuid::from_bytes(THREAD_GENERIC_TYPE_BYTES))
+    .execute(pool)
+    .await?;
+
+    // (e) Entity whose VERACITY tally is over threshold, with a resolvable
+    //     creator and a fresh updated_at — everything the poller needs except
+    //     the right kind. It must stay silent: "12 people verified this" is not
+    //     "12 people upvoted this". Without `vote_kind = 0` in the poller's
+    //     query this row notifies, and nothing else in the suite would catch it.
+    sqlx::query(
+        "INSERT INTO votes_count (object_id, object_type, space_id, vote_kind, positive, negative) \
+         VALUES ($1, 0, $2, 2, 12, 0) ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::from_bytes(VOTE_ENTITY_VERACITY_BYTES))
+    .bind(Uuid::from_bytes(VOTE_SPACE_BYTES))
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO relations (id, space_id, type_id, from_entity_id, to_entity_id) \
+         VALUES ($1, $2, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, $3, $4) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(Uuid::from_bytes(VOTE_CREATOR_SPACE_BYTES))
+    .bind(Uuid::from_bytes(VOTE_ENTITY_VERACITY_BYTES))
     .bind(Uuid::from_bytes(THREAD_GENERIC_TYPE_BYTES))
     .execute(pool)
     .await?;
@@ -2113,6 +2139,7 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
     let vote_below = Uuid::from_bytes(VOTE_ENTITY_BELOW_BYTES).to_string();
     let vote_nocreator = Uuid::from_bytes(VOTE_ENTITY_NOCREATOR_BYTES).to_string();
     let vote_stale = Uuid::from_bytes(VOTE_ENTITY_STALE_BYTES).to_string();
+    let vote_veracity = Uuid::from_bytes(VOTE_ENTITY_VERACITY_BYTES).to_string();
     let vote_calls: Vec<_> = calls
         .iter()
         .filter(|c| c.body["event_type"].as_str() == Some("entity_votes_threshold"))
@@ -2150,6 +2177,12 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
         !vote_calls
             .iter()
             .any(|c| c.body["entity_id"].as_str() == Some(vote_stale.as_str())),
+    );
+    r.check(
+        "entity_votes_threshold: veracity tally over threshold is NOT notified (curation only)",
+        !vote_calls
+            .iter()
+            .any(|c| c.body["entity_id"].as_str() == Some(vote_veracity.as_str())),
     );
     if let Some(call) = vote_calls.first() {
         r.check(
@@ -2313,10 +2346,17 @@ async fn main() {
     // bump the entity_votes_threshold count, failing verification below.
     println!("  No-repeat probe: bumping votes for the already-notified entity...");
     if let Err(e) = sqlx::query(
-        "UPDATE votes_count SET upvotes = upvotes + 10, updated_at = now() \
-         WHERE object_id = $1 AND object_type = 0",
+        // Scoped to the exact row the poller already notified on: the curation
+        // tally in VOTE_SPACE. The entity has only one votes_count row today, but
+        // the table is keyed per (object, type, space, kind) now, so an unscoped
+        // bump would also touch any row a later fixture adds — a second space
+        // would be a genuinely new (entity, space) pair and produce an extra
+        // notification, muddying what this probe is asserting.
+        "UPDATE votes_count SET positive = positive + 10, updated_at = now() \
+         WHERE object_id = $1 AND object_type = 0 AND space_id = $2 AND vote_kind = 0",
     )
     .bind(Uuid::from_bytes(VOTE_ENTITY_OVER_BYTES))
+    .bind(Uuid::from_bytes(VOTE_SPACE_BYTES))
     .execute(&pool)
     .await
     {
