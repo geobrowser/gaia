@@ -47,15 +47,19 @@ pub fn handle_vote_cast(vote: &HermesVoteCast) -> Result<VoteItem, HandlerError>
         Err(_) => return Err(HandlerError::InvalidVoteDirection(vote.direction)),
     };
 
-    // An unrecognised kind falls back to curation rather than erroring: the
-    // field is additive, so events produced before it existed carry 0, and a
-    // future producer sending a kind this build predates should not halt the
+    // An unrecognised kind keeps its raw discriminant rather than falling back
+    // to curation. Events produced before this field existed carry 0 and decode
+    // as curation naturally; a *newer* producer emitting a kind this build
+    // predates must not be folded into curation, or its rows would collide with
+    // the user's real curation vote and overwrite it — the exact silent loss
+    // vote_kind exists to prevent. Preserving the value keeps such rows in their
+    // own key space, inert until this binary is upgraded, and does not halt the
     // consumer mid-batch.
     let kind = match VoteKind::try_from(vote.kind) {
         Ok(VoteKind::Curation) => ResponseKind::Curation,
         Ok(VoteKind::Stance) => ResponseKind::Stance,
         Ok(VoteKind::Veracity) => ResponseKind::Veracity,
-        Err(_) => ResponseKind::Curation,
+        Err(_) => ResponseKind::Unknown(vote.kind as i16),
     };
 
     Ok(VoteItem {
@@ -961,10 +965,12 @@ mod tests {
         }
     }
 
-    /// An unknown kind from a newer producer must not halt the consumer; it
-    /// degrades to curation, matching the column default.
+    /// An unknown kind from a newer producer must not halt the consumer, and
+    /// must NOT be folded into curation — that would key it identically to the
+    /// user's real curation vote and overwrite it, which is the silent loss
+    /// vote_kind exists to prevent.
     #[test]
-    fn handle_vote_cast_unknown_kind_falls_back_to_curation() {
+    fn handle_vote_cast_unknown_kind_preserves_its_discriminant() {
         let vote = HermesVoteCast {
             voter_id: make_test_uuid(),
             object_type: OBJECT_TYPE_ENTITY.to_vec(),
@@ -976,10 +982,51 @@ mod tests {
             meta: Some(make_test_meta()),
             kind: 99,
         };
-        assert_eq!(
-            handle_vote_cast(&vote).unwrap().kind,
-            ResponseKind::Curation
-        );
+        let decoded = handle_vote_cast(&vote).unwrap().kind;
+        assert_eq!(decoded, ResponseKind::Unknown(99));
+        assert_ne!(decoded, ResponseKind::Curation);
+        // Round-trips through the DB column type without collapsing to 0.
+        assert_eq!(i16::from(decoded), 99);
+    }
+
+    /// The dedup key must treat an unknown kind as its own axis, so a future
+    /// kind cannot clobber an existing curation vote.
+    #[test]
+    fn unknown_kind_does_not_collide_with_curation() {
+        let voter = Uuid::from_bytes([1u8; 16]);
+        let object = Uuid::from_bytes([2u8; 16]);
+        let space = Uuid::from_bytes([3u8; 16]);
+
+        let votes = vec![
+            make_kinded_vote_item(
+                voter,
+                object,
+                space,
+                VoteObjectType::Entity,
+                VoteValue::Up,
+                ResponseKind::Curation,
+                1000,
+            ),
+            make_kinded_vote_item(
+                voter,
+                object,
+                space,
+                VoteObjectType::Entity,
+                VoteValue::Down,
+                ResponseKind::Unknown(99),
+                2000,
+            ),
+        ];
+
+        // Two distinct responses, not one overwriting the other.
+        let user_votes = get_latest_user_votes(&votes);
+        assert_eq!(user_votes.len(), 2);
+
+        let curation = user_votes
+            .iter()
+            .find(|v| v.kind == ResponseKind::Curation)
+            .expect("curation row must survive an unknown-kind vote");
+        assert_eq!(curation.vote_type, VoteValue::Up);
     }
 
     /// Same user, same object, same block, different axes — three responses,

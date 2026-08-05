@@ -10,7 +10,7 @@ import "blockchain_metadata.proto";
 enum VoteDirection {
   VOTE_DIRECTION_UP = 0;
   VOTE_DIRECTION_DOWN = 1;
-  VOTE_DIRECTION_NONE = 2;  // For unvote
+  VOTE_DIRECTION_NONE = 2;  // Clear the response on this axis
 }
 
 // Response kind — the axis a response applies to.

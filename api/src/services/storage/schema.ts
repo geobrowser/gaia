@@ -979,9 +979,15 @@ export const userVotes = pgTable(
  *
  * ⚠️ One row per (object_id, object_type, space_id, **vote_kind**) — up to three
  * per object, not one. Every consumer that joins or sums this table must filter
- * the kind it means, or a SUM silently folds stance and veracity tallies into a
- * curation score and a direct join returns an arbitrary one of the three rows.
- * Neither errors.
+ * the kind it means. The three failure modes differ, and only the first is
+ * silent:
+ *   - SUM over kinds     → stance/veracity tallies fold into the curation
+ *                          score. No error; the number is just wrong.
+ *   - JOIN without kind  → the row multiplies, so an entity appears up to three
+ *                          times in ranked output (what the uniqueness
+ *                          assertion in entitiesOrderedByScore.test.ts catches).
+ *   - scalar subquery    → Postgres raises "more than one row returned by a
+ *                          subquery used as an expression". Loud.
  */
 export const votesCount = pgTable(
 	"votes_count",

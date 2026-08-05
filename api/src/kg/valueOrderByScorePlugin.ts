@@ -33,8 +33,9 @@ export const ValueOrderByScorePlugin = makeAddPgTableOrderByPlugin(
 
 		// RAW_SCORE is the curation score. votes_count holds one row per
 		// (object, type, space, vote_kind), so without the vote_kind filter this
-		// scalar subquery would match up to three rows — erroring at best, and
-		// silently returning an arbitrary kind's tally at worst.
+		// scalar subquery matches up to three rows and Postgres raises
+		// "more than one row returned by a subquery used as an expression" —
+		// a hard error, not a wrong number. The filter is what keeps it single-row.
 		const rawScore = orderByAscDesc(
 			"RAW_SCORE",
 			({queryBuilder}) => {

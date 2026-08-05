@@ -46,6 +46,16 @@ pub enum ResponseKind {
     Stance,
     /// Verify / dispute.
     Veracity,
+    /// A kind this build does not know about, carrying its raw discriminant.
+    ///
+    /// Reachable during a rolling deploy where a newer producer emits a kind
+    /// added after this binary was built. The raw value is preserved rather
+    /// than folded into `Curation`, because folding is precisely the bug this
+    /// whole discriminator exists to prevent: an unknown kind keyed as 0 would
+    /// share the `user_votes` uniqueness with the user's real curation vote and
+    /// silently overwrite it. Keeping the discriminant keeps such a row in its
+    /// own key space, where it is inert until the indexer catches up.
+    Unknown(i16),
 }
 
 impl From<ResponseKind> for i16 {
@@ -54,6 +64,7 @@ impl From<ResponseKind> for i16 {
             ResponseKind::Curation => 0,
             ResponseKind::Stance => 1,
             ResponseKind::Veracity => 2,
+            ResponseKind::Unknown(v) => v,
         }
     }
 }
@@ -61,12 +72,10 @@ impl From<ResponseKind> for i16 {
 impl From<i16> for ResponseKind {
     fn from(v: i16) -> ResponseKind {
         match v {
+            0 => ResponseKind::Curation,
             1 => ResponseKind::Stance,
             2 => ResponseKind::Veracity,
-            // Anything else — including a kind written by a newer producer that
-            // this build does not know about — reads as curation, matching the
-            // column default rather than panicking mid-batch.
-            _ => ResponseKind::Curation,
+            other => ResponseKind::Unknown(other),
         }
     }
 }
