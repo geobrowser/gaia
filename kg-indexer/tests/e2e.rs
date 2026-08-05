@@ -335,7 +335,11 @@ async fn test_proposal_1_details() {
 
     // Verify proposal exists in SPACE_A with Fast voting mode
     let proposal: Option<(Uuid, String)> =
-        sqlx::query_as("SELECT space_id, voting_mode::text FROM proposals WHERE id = $1")
+        sqlx::query_as(
+            // voting_mode is version-scoped since governance-v2; proposals_current
+            // is the view that re-exposes the current version's columns flat.
+            "SELECT space_id, voting_mode::text FROM proposals_current WHERE id = $1",
+        )
             .bind(proposal_id)
             .fetch_optional(&pool)
             .await
@@ -358,7 +362,11 @@ async fn test_proposal_2_details() {
 
     // Verify proposal exists in SPACE_A with Slow voting mode
     let proposal: Option<(Uuid, String)> =
-        sqlx::query_as("SELECT space_id, voting_mode::text FROM proposals WHERE id = $1")
+        sqlx::query_as(
+            // voting_mode is version-scoped since governance-v2; proposals_current
+            // is the view that re-exposes the current version's columns flat.
+            "SELECT space_id, voting_mode::text FROM proposals_current WHERE id = $1",
+        )
             .bind(proposal_id)
             .fetch_optional(&pool)
             .await
