@@ -2,7 +2,7 @@ name: Search Indexer Docker Build
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'search-indexer/**'
       - 'search-indexer-shared/**'
@@ -16,7 +16,7 @@ on:
       - 'sdk/**'
       - '.github/workflows/search-indexer-docker-build.yml'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'search-indexer/**'
       - 'search-indexer-shared/**'

@@ -2,14 +2,14 @@ name: Atlas Unit Tests
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'atlas/**'
       - 'hermes-relay/**'
       - 'hermes-substream/**'
       - 'stream/**'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'atlas/**'
       - 'hermes-relay/**'

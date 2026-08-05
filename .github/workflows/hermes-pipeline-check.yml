@@ -2,7 +2,7 @@ name: Hermes Pipeline Check
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'hermes-pipeline/**'
       - 'hermes-instrumentation/**'
@@ -13,7 +13,7 @@ on:
       - 'stream/**'
       - 'wire/**'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'hermes-pipeline/**'
       - 'hermes-instrumentation/**'

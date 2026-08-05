@@ -2,7 +2,7 @@ name: API Cache Integration Tests
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'api/src/kg/valkeyCache.ts'
       - 'api/src/kg/postgraphile.ts'
@@ -12,7 +12,7 @@ on:
       - 'api/package.json'
       - '.github/workflows/api-cache-integration-tests.yml'
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, staging]
     paths:
       - 'api/src/kg/valkeyCache.ts'
       - 'api/src/kg/postgraphile.ts'
