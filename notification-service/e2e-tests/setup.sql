@@ -2,24 +2,54 @@
 -- Only includes tables needed by the notification-indexer and delivery-worker.
 
 -- Required by notification-indexer for rejection polling (expired proposals).
--- Simplified version of the full proposals table — no FK to spaces.
+-- Simplified version of the real tables — no FK to spaces.
+--
+-- Mirrors the governance-v2 split (migration 0067): `proposals` is an identity
+-- table and all mutable, version-scoped state lives in `proposal_versions`,
+-- with the `proposals_current` view joining each proposal to its current
+-- version. The harness previously carried the pre-v2 flat shape, so
+-- `find_expired_proposals` — which correctly reads `proposals_current` — failed
+-- every poll with `relation "proposals_current" does not exist`, and the
+-- proposal_rejected notifications it drives never fired.
 CREATE TABLE IF NOT EXISTS proposals (
     id uuid PRIMARY KEY,
     space_id uuid NOT NULL,
     proposed_by uuid NOT NULL,
+    created_at text NOT NULL DEFAULT '0',
+    created_at_block text NOT NULL DEFAULT '0',
+    current_version integer NOT NULL DEFAULT 1,
+    executed_at bigint
+);
+
+CREATE TABLE IF NOT EXISTS proposal_versions (
+    proposal_id uuid NOT NULL,
+    proposal_version integer NOT NULL,
     voting_mode text NOT NULL DEFAULT 'Slow',
     start_time bigint NOT NULL,
     end_time bigint NOT NULL,
     quorum bigint NOT NULL DEFAULT 0,
     threshold bigint NOT NULL DEFAULT 0,
-    executed_at bigint,
-    created_at text NOT NULL DEFAULT '0',
-    created_at_block text NOT NULL DEFAULT '0',
     name text,
     yes_count bigint NOT NULL DEFAULT 0,
     no_count bigint NOT NULL DEFAULT 0,
-    abstain_count bigint NOT NULL DEFAULT 0
+    abstain_count bigint NOT NULL DEFAULT 0,
+    PRIMARY KEY (proposal_id, proposal_version)
 );
+
+-- Column list mirrors the production view in 0067_governance_v2 for the columns
+-- this harness exercises. `executed_at` stays on `proposals` and is carried
+-- through, which is what lets find_expired_proposals filter on it.
+CREATE OR REPLACE VIEW proposals_current AS
+SELECT
+    p.id, p.space_id, p.proposed_by, p.created_at, p.created_at_block,
+    p.current_version, p.executed_at,
+    pv.proposal_version, pv.voting_mode, pv.start_time, pv.end_time,
+    pv.quorum, pv.threshold, pv.name,
+    pv.yes_count, pv.no_count, pv.abstain_count
+FROM proposals p
+INNER JOIN proposal_versions pv
+    ON pv.proposal_id = p.id
+   AND pv.proposal_version = p.current_version;
 
 -- Required by notification-indexer for per-editor fan-out.
 -- Simplified version of the full editors table — no FK to spaces.
