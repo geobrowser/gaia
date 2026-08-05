@@ -534,13 +534,22 @@ fn encode_proposal_data(
 }
 
 // Type alias for encoding vote data: (bytes16, uint8)
-type VoteDataType = sol! { (bytes16, uint8) };
+// PROPOSAL_VOTED (V2): abi.encode(bytes16 proposalId, uint8 proposalVersion, uint8 voteOption).
+// Governance-v2 made votes version-scoped; the pre-v2 two-field payload decodes
+// as a buffer overrun.
+type VoteDataType = sol! { (bytes16, uint8, uint8) };
 
-/// ABI-encode proposal vote data: (bytes16 proposalId, uint8 voteOption)
+/// Version every mock proposal is created at. Proposals are created once and
+/// never updated in this stream, so their current_version is always 1.
+const MOCK_PROPOSAL_VERSION: u8 = 1;
+
+/// ABI-encode proposal vote data:
+/// (bytes16 proposalId, uint8 proposalVersion, uint8 voteOption)
 fn encode_vote_data(proposal_id: ProposalId, vote_option: VoteOption) -> Vec<u8> {
     use alloy::primitives::FixedBytes;
     VoteDataType::abi_encode(&(
         FixedBytes::<16>::from_slice(&proposal_id),
+        MOCK_PROPOSAL_VERSION,
         vote_option as u8,
     ))
 }
@@ -598,13 +607,23 @@ pub fn proposal_created(
 /// This event is emitted after PROPOSAL_CREATED to convey the proposal settings.
 /// The pipeline squashes PROPOSAL_CREATED + PROPOSAL_SETTINGS_SELECTED into a single event.
 ///
+/// ⚠️ The payload is the governance-v2 `ProposalParameters` struct, in the
+/// field order the pipeline's `decode_proposal_settings_used` expects:
+/// `(votingMode, partialPct, universalPct, flat, quorum, startDate, lastDate,
+/// executeBy)`. The pre-v2 shape was five fields in a different order; it
+/// decodes as an error, which makes the governance pipeline discard the paired
+/// PROPOSAL_CREATED entirely (see the squash in `pipelines/governance.rs`) —
+/// so a mismatch here silently produces a stream with zero proposals.
+///
 /// - `space_id`: The space with the proposal
 /// - `proposal_id`: The proposal ID (16 bytes)
 /// - `voting_mode`: Voting mode (Slow=0, Fast=1)
 /// - `start_date`: Block timestamp when voting starts
 /// - `end_date`: Block timestamp when voting ends
 /// - `quorum`: Minimum total votes for slow path
-/// - `support_threshold`: Support threshold (flat for fast, percentage for slow)
+/// - `support_threshold`: Support threshold, applied to the field matching
+///   `voting_mode` — flat for Fast, universal-percentage for Slow
+#[allow(clippy::too_many_arguments)]
 pub fn proposal_settings_selected(
     space_id: SpaceId,
     proposal_id: ProposalId,
@@ -614,16 +633,31 @@ pub fn proposal_settings_selected(
     quorum: u64,
     support_threshold: u64,
 ) -> Action {
-    // Encode settings as: (uint256 startDate, uint256 lastDate, uint8 votingMode, uint256 quorum, uint256 supportThreshold)
     use alloy::sol_types::SolType;
 
-    type SettingsType = sol! { (uint256, uint256, uint8, uint256, uint256) };
+    // Governance-v2 split the single support threshold into three. Route the
+    // caller's value to the one the voting mode actually uses and leave the
+    // others zero, so the mock exercises the same field the contract would.
+    let (partial_pct, universal_pct, flat) = match voting_mode {
+        VotingMode::Fast => (0u64, 0u64, support_threshold),
+        VotingMode::Slow => (0u64, support_threshold, 0u64),
+    };
+
+    // executeBy has no pre-v2 equivalent. Set it a week past the voting window
+    // so the execution deadline is never the reason a mock proposal fails.
+    let execute_by = end_date + 7 * 24 * 60 * 60;
+
+    type SettingsType =
+        sol! { (uint8, uint256, uint256, uint256, uint256, uint256, uint256, uint256) };
     let data = SettingsType::abi_encode(&(
+        voting_mode as u8,
+        U256::from(partial_pct),
+        U256::from(universal_pct),
+        U256::from(flat),
+        U256::from(quorum),
         U256::from(start_date),
         U256::from(end_date),
-        voting_mode as u8,
-        U256::from(quorum),
-        U256::from(support_threshold),
+        U256::from(execute_by),
     ));
 
     // Pad proposal_id to 32 bytes for topic field
@@ -2142,9 +2176,10 @@ mod tests {
         // Topic is proposal_id padded to 32 bytes
         assert_eq!(action.topic.len(), 32);
         assert_eq!(&action.topic[..16], &proposal_id);
-        // Data should contain encoded (bytes16 proposalId, uint8 voteOption)
-        // ABI-encoded: 32 bytes for bytes16 (padded) + 32 bytes for uint8 (padded)
-        assert_eq!(action.data.len(), 64);
+        // Data is the governance-v2 payload:
+        // (bytes16 proposalId, uint8 proposalVersion, uint8 voteOption)
+        // ABI-encoded, each field padded to 32 bytes.
+        assert_eq!(action.data.len(), 96);
     }
 
     #[test]
