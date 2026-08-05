@@ -50,6 +50,7 @@ impl Storage {
         let mut object_types = Vec::with_capacity(votes.len());
         let mut space_ids = Vec::with_capacity(votes.len());
         let mut vote_values = Vec::with_capacity(votes.len());
+        let mut vote_kinds = Vec::with_capacity(votes.len());
         let mut block_numbers = Vec::with_capacity(votes.len());
         let mut block_timestamps = Vec::with_capacity(votes.len());
 
@@ -59,16 +60,20 @@ impl Storage {
             object_types.push(i16::from(vote.object_type));
             space_ids.push(vote.space_id);
             vote_values.push(i16::from(vote.vote));
+            vote_kinds.push(i16::from(vote.kind));
             block_numbers.push(vote.block_number as i64);
             block_timestamps.push(vote.block_timestamp as i64);
         }
 
+        // vote_kind is stored here too: this log keeps a decoded direction, never
+        // the action hash, so without it a Remove row cannot say which axis it
+        // cleared and the log stops being replayable into current state.
         let query = r#"
-            INSERT INTO votes (voter_id, object_id, object_type, space_id, vote, block_number, block_timestamp)
-            SELECT voter_id, object_id, object_type, space_id, vote, block_number, to_timestamp(block_timestamp)
+            INSERT INTO votes (voter_id, object_id, object_type, space_id, vote, vote_kind, block_number, block_timestamp)
+            SELECT voter_id, object_id, object_type, space_id, vote, vote_kind, block_number, to_timestamp(block_timestamp)
             FROM UNNEST(
-                $1::uuid[], $2::uuid[], $3::smallint[], $4::uuid[], $5::smallint[], $6::bigint[], $7::bigint[]
-            ) AS t(voter_id, object_id, object_type, space_id, vote, block_number, block_timestamp)
+                $1::uuid[], $2::uuid[], $3::smallint[], $4::uuid[], $5::smallint[], $6::smallint[], $7::bigint[], $8::bigint[]
+            ) AS t(voter_id, object_id, object_type, space_id, vote, vote_kind, block_number, block_timestamp)
         "#;
 
         sqlx::query(query)
@@ -77,6 +82,7 @@ impl Storage {
             .bind(&object_types)
             .bind(&space_ids)
             .bind(&vote_values)
+            .bind(&vote_kinds)
             .bind(&block_numbers)
             .bind(&block_timestamps)
             .execute(&mut **tx)
@@ -104,6 +110,7 @@ impl Storage {
         let mut object_types = Vec::with_capacity(votes.len());
         let mut space_ids = Vec::with_capacity(votes.len());
         let mut vote_types = Vec::with_capacity(votes.len());
+        let mut vote_kinds = Vec::with_capacity(votes.len());
         let mut voted_ats = Vec::with_capacity(votes.len());
 
         for vote in votes {
@@ -112,17 +119,21 @@ impl Storage {
             object_types.push(i16::from(vote.object_type));
             space_ids.push(vote.space_id);
             vote_types.push(i16::from(vote.vote_type));
+            vote_kinds.push(i16::from(vote.kind));
             voted_ats.push(vote.voted_at as i64);
         }
 
+        // vote_kind is in the conflict target, which is what keeps the axes
+        // independent. Drop it and a Verify would overwrite the same user's
+        // upvote on the same object instead of sitting alongside it.
         let query = r#"
-            INSERT INTO user_votes (user_id, object_id, object_type, space_id, vote_type, voted_at)
-            SELECT user_id, object_id, object_type, space_id, vote_type,
+            INSERT INTO user_votes (user_id, object_id, object_type, space_id, vote_type, vote_kind, voted_at)
+            SELECT user_id, object_id, object_type, space_id, vote_type, vote_kind,
                    to_timestamp(voted_at)
             FROM UNNEST(
-                $1::uuid[], $2::uuid[], $3::smallint[], $4::uuid[], $5::smallint[], $6::bigint[]
-            ) AS t(user_id, object_id, object_type, space_id, vote_type, voted_at)
-            ON CONFLICT (user_id, object_id, object_type, space_id)
+                $1::uuid[], $2::uuid[], $3::smallint[], $4::uuid[], $5::smallint[], $6::smallint[], $7::bigint[]
+            ) AS t(user_id, object_id, object_type, space_id, vote_type, vote_kind, voted_at)
+            ON CONFLICT (user_id, object_id, object_type, space_id, vote_kind)
             DO UPDATE SET
                 vote_type = EXCLUDED.vote_type,
                 voted_at = EXCLUDED.voted_at
@@ -134,6 +145,7 @@ impl Storage {
             .bind(&object_types)
             .bind(&space_ids)
             .bind(&vote_types)
+            .bind(&vote_kinds)
             .bind(&voted_ats)
             .execute(&mut **tx)
             .await?;
@@ -143,8 +155,8 @@ impl Storage {
 
     /// Upsert aggregated vote counts.
     ///
-    /// Updates the total upvotes/downvotes for each object/space combination.
-    /// Uses ON CONFLICT to update existing counts.
+    /// Updates the positive/negative tallies for each object/space/kind
+    /// combination. Uses ON CONFLICT to update existing counts.
     #[instrument(name = "vote_indexer.storage.upsert_votes_counts", skip(self, counts, tx), fields(count = counts.len()))]
     pub async fn upsert_votes_counts(
         &self,
@@ -158,29 +170,35 @@ impl Storage {
         let mut object_ids = Vec::with_capacity(counts.len());
         let mut object_types = Vec::with_capacity(counts.len());
         let mut space_ids = Vec::with_capacity(counts.len());
-        let mut upvotes = Vec::with_capacity(counts.len());
-        let mut downvotes = Vec::with_capacity(counts.len());
+        let mut vote_kinds = Vec::with_capacity(counts.len());
+        let mut positives = Vec::with_capacity(counts.len());
+        let mut negatives = Vec::with_capacity(counts.len());
 
         for count in counts {
             object_ids.push(count.object_id);
             object_types.push(i16::from(count.object_type));
             space_ids.push(count.space_id);
-            upvotes.push(count.upvotes);
-            downvotes.push(count.downvotes);
+            vote_kinds.push(i16::from(count.kind));
+            positives.push(count.positive);
+            negatives.push(count.negative);
         }
 
+        // Writes target positive/negative. The upvotes/downvotes columns still
+        // exist for the pre-vote_kind client but are GENERATED ALWAYS, so naming
+        // them here would be rejected outright.
+        //
         // updated_at uses clock_timestamp() (the statement's wall-clock time, closer
         // to the actual write) rather than now() (fixed at transaction start).
         let query = r#"
-            INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes, updated_at)
-            SELECT object_id, object_type, space_id, upvotes, downvotes, clock_timestamp()
+            INSERT INTO votes_count (object_id, object_type, space_id, vote_kind, positive, negative, updated_at)
+            SELECT object_id, object_type, space_id, vote_kind, positive, negative, clock_timestamp()
             FROM UNNEST(
-                $1::uuid[], $2::smallint[], $3::uuid[], $4::bigint[], $5::bigint[]
-            ) AS t(object_id, object_type, space_id, upvotes, downvotes)
-            ON CONFLICT (object_id, object_type, space_id)
+                $1::uuid[], $2::smallint[], $3::uuid[], $4::smallint[], $5::bigint[], $6::bigint[]
+            ) AS t(object_id, object_type, space_id, vote_kind, positive, negative)
+            ON CONFLICT (object_id, object_type, space_id, vote_kind)
             DO UPDATE SET
-                upvotes = EXCLUDED.upvotes,
-                downvotes = EXCLUDED.downvotes,
+                positive = EXCLUDED.positive,
+                negative = EXCLUDED.negative,
                 updated_at = clock_timestamp()
         "#;
 
@@ -188,8 +206,9 @@ impl Storage {
             .bind(&object_ids)
             .bind(&object_types)
             .bind(&space_ids)
-            .bind(&upvotes)
-            .bind(&downvotes)
+            .bind(&vote_kinds)
+            .bind(&positives)
+            .bind(&negatives)
             .execute(&mut **tx)
             .await?;
 
@@ -198,8 +217,10 @@ impl Storage {
 
     /// Mirror net scores into the `values` table under the Score system property.
     ///
-    /// Enables sorting entities by `upvotes - downvotes` through the existing
+    /// Enables sorting entities by `positive - negative` through the existing
     /// `entities_ordered_by_property` function without any SQL changes.
+    /// Curation only — see `build_score_values`, which filters the other kinds
+    /// out before they reach here.
     /// Upserts on `id` — a deterministic UUIDv5 of `score:<entity>:<space>`
     /// under `GEO_SYSTEM_NAMESPACE`, stored as text. The `score:` tag keeps
     /// these ids disjoint from kg-indexer-minted value ids and any other
@@ -269,18 +290,28 @@ impl Storage {
             return Ok(Vec::new());
         }
 
-        let voter_ids: Vec<Uuid> = criteria.iter().map(|(v, _, _, _)| *v).collect();
-        let object_ids: Vec<Uuid> = criteria.iter().map(|(_, o, _, _)| *o).collect();
-        let space_ids: Vec<Uuid> = criteria.iter().map(|(_, _, s, _)| *s).collect();
-        let object_types: Vec<i16> = criteria.iter().map(|(_, _, _, t)| i16::from(*t)).collect();
+        let voter_ids: Vec<Uuid> = criteria.iter().map(|(v, _, _, _, _)| *v).collect();
+        let object_ids: Vec<Uuid> = criteria.iter().map(|(_, o, _, _, _)| *o).collect();
+        let space_ids: Vec<Uuid> = criteria.iter().map(|(_, _, s, _, _)| *s).collect();
+        let object_types: Vec<i16> = criteria
+            .iter()
+            .map(|(_, _, _, t, _)| i16::from(*t))
+            .collect();
+        let vote_kinds: Vec<i16> = criteria
+            .iter()
+            .map(|(_, _, _, _, k)| i16::from(*k))
+            .collect();
 
+        // vote_kind is part of the lookup key. Without it this would lock and
+        // return a user's rows across all three axes, and the delta computed
+        // against the wrong one would corrupt the tallies.
         let query = r#"
-            SELECT user_id, object_id, object_type, space_id, vote_type, voted_at
+            SELECT user_id, object_id, object_type, space_id, vote_type, vote_kind, voted_at
             FROM user_votes
-            WHERE (user_id, object_id, object_type, space_id) IN (
-                SELECT user_id, object_id, object_type, space_id
-                FROM UNNEST($1::uuid[], $2::uuid[], $3::smallint[], $4::uuid[])
-                AS t(user_id, object_id, object_type, space_id)
+            WHERE (user_id, object_id, object_type, space_id, vote_kind) IN (
+                SELECT user_id, object_id, object_type, space_id, vote_kind
+                FROM UNNEST($1::uuid[], $2::uuid[], $3::smallint[], $4::uuid[], $5::smallint[])
+                AS t(user_id, object_id, object_type, space_id, vote_kind)
             )
             FOR UPDATE
         "#;
@@ -290,6 +321,7 @@ impl Storage {
             .bind(&object_ids)
             .bind(&object_types)
             .bind(&space_ids)
+            .bind(&vote_kinds)
             .fetch_all(&mut **tx)
             .await?;
 
@@ -298,12 +330,14 @@ impl Storage {
             let voted_at: chrono::DateTime<chrono::Utc> = row.get("voted_at");
             let object_type: i16 = row.get("object_type");
             let vote_type: i16 = row.get("vote_type");
+            let vote_kind: i16 = row.get("vote_kind");
             result.push(UserVoteItem {
                 voter_id: row.get("user_id"),
                 object_id: row.get("object_id"),
                 object_type: object_type.into(),
                 space_id: row.get("space_id"),
                 vote_type: vote_type.into(),
+                kind: vote_kind.into(),
                 voted_at: voted_at.timestamp() as u64,
             });
         }
@@ -325,17 +359,18 @@ impl Storage {
             return Ok(Vec::new());
         }
 
-        let object_ids: Vec<Uuid> = criteria.iter().map(|(o, _, _)| *o).collect();
-        let space_ids: Vec<Uuid> = criteria.iter().map(|(_, s, _)| *s).collect();
-        let object_types: Vec<i16> = criteria.iter().map(|(_, _, t)| i16::from(*t)).collect();
+        let object_ids: Vec<Uuid> = criteria.iter().map(|(o, _, _, _)| *o).collect();
+        let space_ids: Vec<Uuid> = criteria.iter().map(|(_, s, _, _)| *s).collect();
+        let object_types: Vec<i16> = criteria.iter().map(|(_, _, t, _)| i16::from(*t)).collect();
+        let vote_kinds: Vec<i16> = criteria.iter().map(|(_, _, _, k)| i16::from(*k)).collect();
 
         let query = r#"
-            SELECT object_id, object_type, space_id, upvotes, downvotes
+            SELECT object_id, object_type, space_id, vote_kind, positive, negative
             FROM votes_count
-            WHERE (object_id, object_type, space_id) IN (
-                SELECT object_id, object_type, space_id
-                FROM UNNEST($1::uuid[], $2::smallint[], $3::uuid[])
-                AS t(object_id, object_type, space_id)
+            WHERE (object_id, object_type, space_id, vote_kind) IN (
+                SELECT object_id, object_type, space_id, vote_kind
+                FROM UNNEST($1::uuid[], $2::smallint[], $3::uuid[], $4::smallint[])
+                AS t(object_id, object_type, space_id, vote_kind)
             )
             FOR UPDATE
         "#;
@@ -344,18 +379,21 @@ impl Storage {
             .bind(&object_ids)
             .bind(&object_types)
             .bind(&space_ids)
+            .bind(&vote_kinds)
             .fetch_all(&mut **tx)
             .await?;
 
         let mut result = Vec::with_capacity(rows.len());
         for row in rows {
             let object_type: i16 = row.get("object_type");
+            let vote_kind: i16 = row.get("vote_kind");
             result.push(VotesCountItem {
                 object_id: row.get("object_id"),
                 object_type: object_type.into(),
                 space_id: row.get("space_id"),
-                upvotes: row.get("upvotes"),
-                downvotes: row.get("downvotes"),
+                kind: vote_kind.into(),
+                positive: row.get("positive"),
+                negative: row.get("negative"),
             });
         }
 

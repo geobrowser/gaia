@@ -4,23 +4,43 @@ package voting;
 
 import "blockchain_metadata.proto";
 
-// Vote direction for permissionless voting
+// Vote direction for permissionless voting.
+// Direction is now a pure positive/negative/clear axis; which *kind* of response
+// it applies to is carried separately by VoteKind.
 enum VoteDirection {
   VOTE_DIRECTION_UP = 0;
   VOTE_DIRECTION_DOWN = 1;
   VOTE_DIRECTION_NONE = 2;  // For unvote
 }
 
-// HermesVoteCast - vote cast on an object (upvote, downvote, or unvote)
+// Response kind — the axis a response applies to.
+//
+// The three axes are independent: a user can simultaneously hold a curation
+// vote, a stance and a veracity response on the same object, and casting one
+// never touches another. The on-chain action hash is the only discriminator
+// (topic and data encoding are identical across kinds), so this field is the
+// decoded form of "which of the nine action hashes produced this event".
+//
+// CURATION is 0 so that events produced before this field existed — and rows
+// written by the pre-vote_kind indexer — decode as curation, which is what
+// they are.
+enum VoteKind {
+  VOTE_KIND_CURATION = 0;  // upvote / downvote / unvote
+  VOTE_KIND_STANCE = 1;    // agree / disagree / unagree
+  VOTE_KIND_VERACITY = 2;  // verify / dispute / unverify
+}
+
+// HermesVoteCast - a response cast on an object
 // Topic encoding: bytes32(bytes4(objectType) << 224) | (bytes16(objectId) << 96)
 // Data encoding: abi.encode(uint16(version), bytes16(groupId), bytes16(spacePOV))
 message HermesVoteCast {
   bytes voter_id = 1;             // 16 bytes - voter's space ID
   bytes object_type = 2;          // 4 bytes - type discriminator
   bytes object_id = 3;            // 16 bytes - object being voted on
-  VoteDirection direction = 4;    // UP, DOWN, or NONE (unvote)
+  VoteDirection direction = 4;    // UP, DOWN, or NONE (clear)
   uint32 version = 5;             // Vote format version (uint16 stored as uint32)
   bytes group_id = 6;             // 16 bytes - group identifier
   bytes space_pov = 7;            // 16 bytes - space point of view
   blockchain_metadata.BlockchainMetadata meta = 8;
+  VoteKind kind = 9;              // curation / stance / veracity
 }

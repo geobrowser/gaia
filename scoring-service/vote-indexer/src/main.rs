@@ -269,12 +269,12 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
         // Build criteria for fetching existing data
         let user_vote_criteria: Vec<UserVoteCriteria> = user_votes
             .iter()
-            .map(|v| (v.voter_id, v.object_id, v.space_id, v.object_type))
+            .map(|v| (v.voter_id, v.object_id, v.space_id, v.object_type, v.kind))
             .collect();
 
         let vote_count_criteria: Vec<VoteCountCriteria> = user_votes
             .iter()
-            .map(|v| (v.object_id, v.space_id, v.object_type))
+            .map(|v| (v.object_id, v.space_id, v.object_type, v.kind))
             .collect();
 
         // Start transaction before reads to ensure consistency.
@@ -292,12 +292,17 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
         // Convert to HashMaps for lookup
         let stored_user_votes_map: HashMap<UserVoteCriteria, _> = stored_user_votes
             .into_iter()
-            .map(|v| ((v.voter_id, v.object_id, v.space_id, v.object_type), v))
+            .map(|v| {
+                (
+                    (v.voter_id, v.object_id, v.space_id, v.object_type, v.kind),
+                    v,
+                )
+            })
             .collect();
 
         let stored_vote_counts_map: HashMap<VoteCountCriteria, _> = stored_vote_counts
             .into_iter()
-            .map(|v| ((v.object_id, v.space_id, v.object_type), v))
+            .map(|v| ((v.object_id, v.space_id, v.object_type, v.kind), v))
             .collect();
 
         // Calculate updated vote counts

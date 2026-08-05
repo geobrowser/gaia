@@ -498,6 +498,13 @@
       "when": 1785528543090,
       "tag": "0070_relations_to_entity_type_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1785931805456,
+      "tag": "0071_vote_kind",
+      "breakpoints": true
     }
   ]
 }

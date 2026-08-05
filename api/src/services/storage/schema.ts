@@ -253,6 +253,10 @@ export const relations = pgTable(
 		// Additional composite indexes for complex queries
 		index("relations_entity_type_space_idx").on(table.entityId, table.typeId, table.spaceId),
 		index("relations_type_from_to_idx").on(table.typeId, table.fromEntityId, table.toEntityId),
+		// Created by migration 0070 but never declared here, so drizzle-kit
+		// generate emitted a DROP for it on the next migration. Declared now so
+		// the snapshot matches the database.
+		index("relations_to_entity_type_idx").on(table.toEntityId, table.typeId),
 	],
 )
 
@@ -864,7 +868,13 @@ export const spaceScores = pgTable("space_scores", {
 /**
  * votes
  *
- * Stores votes cast on entities and relations.
+ * Stores responses cast on entities and relations — the raw, append-only event
+ * log. One row per event; current state lives in `user_votes`.
+ *
+ * `vote_kind` is required here, not redundant: this table records a decoded
+ * direction (up/down/remove), never the on-chain action hash, so without the
+ * kind a "remove" row cannot say which axis it cleared and the log stops being
+ * replayable into current state.
  */
 export const votes = pgTable(
 	"votes",
@@ -875,6 +885,8 @@ export const votes = pgTable(
 		objectType: smallint("object_type").notNull(),
 		spaceId: uuid("space_id").notNull(),
 		vote: smallint("vote").notNull(),
+		/** 0 = curation, 1 = stance, 2 = veracity. See VOTE_KIND. */
+		voteKind: smallint("vote_kind").notNull().default(0),
 		blockNumber: bigint("block_number", {mode: "number"}).notNull(),
 		blockTimestamp: timestamp("block_timestamp", {
 			withTimezone: true,
@@ -898,11 +910,35 @@ export const votes = pgTable(
 )
 
 /**
+ * Response kinds. The three axes are independent: a user can hold one response
+ * of each kind on the same object at the same time, and casting one never
+ * touches another.
+ *
+ * CURATION is 0 so that every row written before this discriminator existed
+ * reads back as curation, which is what it is.
+ */
+export const VOTE_KIND = {
+	/** Upvote / downvote. Everything that isn't a Claim. */
+	CURATION: 0,
+	/** Agree / disagree — "do you hold this position". */
+	STANCE: 1,
+	/** Verify / dispute — "is this true". */
+	VERACITY: 2,
+} as const
+
+export type VoteKind = (typeof VOTE_KIND)[keyof typeof VOTE_KIND]
+
+/**
  * user_votes
  *
- * Tracks the most recent vote a user has cast on a specific object.
- * This table is used to prevent users from casting multiple votes on the same object
- * and to easily query a user's voting history.
+ * Tracks the most recent response a user has cast on a specific object, per
+ * kind. Used to stop a user holding multiple responses on the same axis and to
+ * query their response history.
+ *
+ * The uniqueness includes `vote_kind`, and that is load-bearing rather than
+ * cosmetic: with the older 4-column key the kinds are mutually exclusive per
+ * user, so a Verify overwrites that user's existing upvote with no error and no
+ * way to notice from the UI.
  */
 export const userVotes = pgTable(
 	"user_votes",
@@ -911,14 +947,25 @@ export const userVotes = pgTable(
 		objectId: uuid("object_id").notNull(),
 		objectType: smallint("object_type").notNull(),
 		spaceId: uuid("space_id").notNull(),
+		/** Direction only: 0 = positive, 1 = negative. The kind is `vote_kind`. */
 		voteType: smallint("vote_type").notNull(),
+		/** 0 = curation, 1 = stance, 2 = veracity. See VOTE_KIND. */
+		voteKind: smallint("vote_kind").notNull().default(0),
 		votedAt: timestamp("voted_at", {
 			withTimezone: true,
 			mode: "date",
 		}).notNull(),
 	},
 	(table) => ({
-		uniqueConstraint: unique().on(table.userId, table.objectId, table.objectType, table.spaceId),
+		// Named explicitly: the generated name would exceed Postgres' 63-byte
+		// identifier limit and be silently truncated.
+		uniqueConstraint: unique("user_votes_user_object_type_space_kind_unique").on(
+			table.userId,
+			table.objectId,
+			table.objectType,
+			table.spaceId,
+			table.voteKind,
+		),
 		objectIdx: index("idx_user_votes_object").on(table.objectId, table.objectType, table.spaceId),
 	}),
 )
@@ -926,9 +973,15 @@ export const userVotes = pgTable(
 /**
  * votes_count
  *
- * An aggregate table that stores the total upvotes and downvotes for each object.
- * This table is updated by the vote-indexer to provide fast access to vote counts
- * without needing to aggregate from the raw `votes` table on every query.
+ * An aggregate table holding the positive and negative tallies for each object,
+ * **per kind**. Updated by the vote-indexer so reads don't have to aggregate the
+ * raw `votes` table.
+ *
+ * ⚠️ One row per (object_id, object_type, space_id, **vote_kind**) — up to three
+ * per object, not one. Every consumer that joins or sums this table must filter
+ * the kind it means, or a SUM silently folds stance and veracity tallies into a
+ * curation score and a direct join returns an arbitrary one of the three rows.
+ * Neither errors.
  */
 export const votesCount = pgTable(
 	"votes_count",
@@ -937,16 +990,37 @@ export const votesCount = pgTable(
 		objectId: uuid("object_id").notNull(),
 		objectType: smallint("object_type").notNull(),
 		spaceId: uuid("space_id").notNull(),
-		upvotes: bigint("upvotes", {mode: "number"}).notNull().default(0),
-		downvotes: bigint("downvotes", {mode: "number"}).notNull().default(0),
+		/** 0 = curation, 1 = stance, 2 = veracity. See VOTE_KIND. */
+		voteKind: smallint("vote_kind").notNull().default(0),
+		/** Positive tally on this row's axis: upvotes / agrees / verifications. */
+		positive: bigint("positive", {mode: "number"}).notNull().default(0),
+		/** Negative tally on this row's axis: downvotes / disagrees / disputes. */
+		negative: bigint("negative", {mode: "number"}).notNull().default(0),
+		/**
+		 * @deprecated Read-only shim for the pre-vote_kind web client, which
+		 * selects `upvotes`/`downvotes` over GraphQL by name. Drop together with
+		 * `downvotes` in the migration that ships the client reading
+		 * positive/negative. Writers must target `positive`.
+		 */
+		upvotes: bigint("upvotes", {mode: "number"}).generatedAlwaysAs(sql`positive`),
+		/** @deprecated See `upvotes`. */
+		downvotes: bigint("downvotes", {mode: "number"}).generatedAlwaysAs(sql`negative`),
 		// Bumped on every upsert so the notification-indexer can poll only the
 		// rows whose counts changed since its last poll (keyset on updated_at,id).
 		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
 	},
 	(table) => ({
-		uniqueConstraint: unique().on(table.objectId, table.objectType, table.spaceId),
+		uniqueConstraint: unique("votes_count_object_type_space_kind_unique").on(
+			table.objectId,
+			table.objectType,
+			table.spaceId,
+			table.voteKind,
+		),
 		// Partial keyset index for the notification-indexer's entity-vote poller.
-		updatedAtIdx: index("idx_votes_count_updated_at").on(table.updatedAt, table.id).where(sql`object_type = 0`),
+		// Scoped to curation so the poller cannot fire on agrees or verifications.
+		updatedAtIdx: index("idx_votes_count_updated_at")
+			.on(table.updatedAt, table.id)
+			.where(sql`object_type = 0 AND vote_kind = 0`),
 	}),
 )
 

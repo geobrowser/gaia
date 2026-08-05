@@ -157,20 +157,28 @@ CREATE INDEX IF NOT EXISTS idx_outbox_rejected_proposal
     ON notification_outbox (((payload->>'proposal_id')::uuid))
     WHERE event_type = 'proposal_rejected';
 
--- Vote aggregate table for the entity-vote-threshold poller (matches migration 0018
--- + 0059). updated_at drives the poller's keyset scan.
+-- Vote aggregate table for the entity-vote-threshold poller (matches migrations
+-- 0018 + 0059 + 0071). updated_at drives the poller's keyset scan.
+--
+-- One row per (object, type, space, vote_kind). The poller is curation-only, so
+-- both the index and its query are scoped to vote_kind = 0 — an agree or a
+-- verification must never trigger an "your entity reached N upvotes" notice.
 CREATE TABLE IF NOT EXISTS votes_count (
     id serial PRIMARY KEY,
     object_id uuid NOT NULL,
     object_type smallint NOT NULL,
     space_id uuid NOT NULL,
-    upvotes bigint NOT NULL DEFAULT 0,
-    downvotes bigint NOT NULL DEFAULT 0,
+    vote_kind smallint NOT NULL DEFAULT 0,
+    positive bigint NOT NULL DEFAULT 0,
+    negative bigint NOT NULL DEFAULT 0,
+    -- Deprecated read-only shims for the pre-vote_kind web client.
+    upvotes bigint GENERATED ALWAYS AS (positive) STORED,
+    downvotes bigint GENERATED ALWAYS AS (negative) STORED,
     updated_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE(object_id, object_type, space_id)
+    UNIQUE(object_id, object_type, space_id, vote_kind)
 );
 CREATE INDEX IF NOT EXISTS idx_votes_count_updated_at
-    ON votes_count (updated_at, id) WHERE object_type = 0;
+    ON votes_count (updated_at, id) WHERE object_type = 0 AND vote_kind = 0;
 
 -- Persistent keyset cursors for the notification-indexer's pollers (vote poller).
 CREATE TABLE IF NOT EXISTS notification_poll_cursors (

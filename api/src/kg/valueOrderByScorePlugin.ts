@@ -31,6 +31,10 @@ export const ValueOrderByScorePlugin = makeAddPgTableOrderByPlugin(
 			{unique: false, nulls: "last"},
 		)
 
+		// RAW_SCORE is the curation score. votes_count holds one row per
+		// (object, type, space, vote_kind), so without the vote_kind filter this
+		// scalar subquery would match up to three rows — erroring at best, and
+		// silently returning an arbitrary kind's tally at worst.
 		const rawScore = orderByAscDesc(
 			"RAW_SCORE",
 			({queryBuilder}) => {
@@ -38,10 +42,11 @@ export const ValueOrderByScorePlugin = makeAddPgTableOrderByPlugin(
 				return sql.fragment`(
 					COALESCE(
 						(
-							SELECT (vc.upvotes - vc.downvotes) FROM public.votes_count vc
+							SELECT (vc.positive - vc.negative) FROM public.votes_count vc
 							WHERE vc.object_id = ${t}.entity_id
 								AND vc.space_id = ${t}.space_id
 								AND vc.object_type = 0
+								AND vc.vote_kind = 0
 						),
 						0
 					)
