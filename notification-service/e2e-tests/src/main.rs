@@ -2346,10 +2346,17 @@ async fn main() {
     // bump the entity_votes_threshold count, failing verification below.
     println!("  No-repeat probe: bumping votes for the already-notified entity...");
     if let Err(e) = sqlx::query(
+        // Scoped to the exact row the poller already notified on: the curation
+        // tally in VOTE_SPACE. The entity has only one votes_count row today, but
+        // the table is keyed per (object, type, space, kind) now, so an unscoped
+        // bump would also touch any row a later fixture adds — a second space
+        // would be a genuinely new (entity, space) pair and produce an extra
+        // notification, muddying what this probe is asserting.
         "UPDATE votes_count SET positive = positive + 10, updated_at = now() \
-         WHERE object_id = $1 AND object_type = 0",
+         WHERE object_id = $1 AND object_type = 0 AND space_id = $2 AND vote_kind = 0",
     )
     .bind(Uuid::from_bytes(VOTE_ENTITY_OVER_BYTES))
+    .bind(Uuid::from_bytes(VOTE_SPACE_BYTES))
     .execute(&pool)
     .await
     {
