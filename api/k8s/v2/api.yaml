@@ -178,14 +178,28 @@ spec:
               cpu: "500m"
             limits:
               memory: "2Gi"
+          # Liveness answers "is this process wedged?", not "is it busy?".
+          # At timeoutSeconds 3 / failureThreshold 3 it answered the second
+          # question: ~30s of event-loop stall killed a pod sitting at
+          # 400-534Mi of the 2Gi limit. That is actively harmful under load —
+          # the kill drops the pod's in-flight requests (straight 5xx), sheds
+          # its share of traffic onto the surviving pods, and brings it back
+          # with a cold JIT, so one burst of expensive queries cascaded into
+          # five dead pods in 30 seconds on 2026-08-06.
+          #
+          # 10s x 6 means ~60s of *consecutive* unresponsiveness before a
+          # restart, which still catches a genuinely wedged process while
+          # leaving a merely saturated one alone. Readiness below is
+          # deliberately left tighter: a slow pod should leave the
+          # load-balancer rotation and recover, not be destroyed.
           livenessProbe:
             httpGet:
               path: /health/liveness
               port: 3000
             initialDelaySeconds: 10
             periodSeconds: 10
-            timeoutSeconds: 3
-            failureThreshold: 3
+            timeoutSeconds: 10
+            failureThreshold: 6
           readinessProbe:
             httpGet:
               path: /health/readiness
