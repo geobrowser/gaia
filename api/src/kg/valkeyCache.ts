@@ -16,36 +16,55 @@ export type Cache = {
 }
 
 /**
- * Skip caching responses larger than this threshold. Serializing a large
- * response already allocates a second full copy of the data (JSON.stringify),
- * and handing that string to ioredis allocates a third in its send buffer.
- * For 30+ MB responses, this is the exact allocation spike that OOM'd pods
- * before the pagination cap landed. Skipping the SET entirely avoids the
- * ioredis buffer and the network send — the stringify still happens, but
- * the peak is bounded by one copy instead of three.
+ * Skip caching responses larger than this threshold.
  *
- * 15 MB is chosen to cover the full range of expected cacheable responses:
- *   - the 12 MB Query.spaces response (near-static, high-value to cache)
- *   - 2–15 MB Query.entities* / entitiesOrderedByProperty responses
- *   - common 2–5 MB entity-list shapes
+ * The previous value was 15 MB, sized so that the biggest responses — the
+ * ~12 MB `Query.spaces` list and the 2–15 MB `Query.entities*` lists — stayed
+ * cacheable, on the reasoning that they are expensive and near-static so
+ * caching them is where the win is. Two things were wrong with that.
  *
- * Per-request memory impact stays bounded:
- *   - Single SET peak = JS string (15 MB) + ioredis send buffer (15 MB) ≈
- *     30 MB per concurrent write — 0.7% of the 4 Gi pod limit
- *   - 8-pod cache stampede peaks at ~240 MB aggregate; each pod stays
- *     under 30 MB incremental during the stampede
- *   - SET over in-cluster networking is typically <200 ms; the 3 s
- *     commandTimeout gives ~1.5× headroom for bad network days
+ * First, the arithmetic assumed a 4 Gi pod limit ("30 MB per concurrent
+ * write — 0.7%"). `api/k8s/v2/api.yaml` and `api/k8s/production/api.yaml`
+ * both set `limits.memory: 2Gi`. The headroom was half what the sizing
+ * claimed.
  *
- * GET path on a cache hit parses the full JSON to rebuild the JS object
- * tree — ~100–250 ms CPU and up to ~90 MB transient memory per pod on
- * the biggest entries. For expensive queries this is still a net win over
- * hitting the DB; for cheap queries it can approach DB cost.
+ * Second, and the reason this is being lowered: the write path is the cheap
+ * half. On a hit the GET path parses the full JSON back into a JS object
+ * tree, which for the biggest entries costs ~100–250 ms CPU and up to ~90 MB
+ * transient per pod. Valkey is shared across all API pods, so one writer
+ * produces N readers, and `ttlPerSchemaCoordinate` in postgraphile.ts gives
+ * these exact queries the *longest* TTL (60 s) — the combination maximises
+ * hits per large entry, which is precisely the expensive direction.
  *
- * Responses over 15 MB fall through to the DB on every request rather
- * than cache, bounding the worst-case memory allocation path.
+ * Measured on the v2 cluster 2026-08-06, with the API OOMKilling on a ~2 h
+ * cycle (9 pods, 10–21 restarts each) against a production cluster on the
+ * same 2Gi limit that had run 9 days clean with the cache disabled:
+ *
+ *   DBSIZE 91, used_memory 15.08 MB, distributed as
+ *     8.39 MB   1 key
+ *     5.24 MB   1 key
+ *     1.05 MB   3 keys
+ *     ≤918 KB   86 keys (most ~17 KB)
+ *
+ * Two entries held 13.6 of 15.08 MB and both sailed under the 15 MB cap. A
+ * 1 MB cap keeps 89 of the 91 keys — ~2% of entries, ~90% of bytes — so the
+ * hit rate, which follows repeated small queries rather than one-off large
+ * ones, is largely preserved while the two amplifying entries stop being
+ * written and, more importantly, stop being re-parsed on every hit.
+ *
+ * This bounds the damage; it does not fix the cause. The responses are large
+ * because paginationCapPlugin.ts caps `first` *per argument* (max 1000,
+ * default 100) while nested lists multiply — `entities { valuesList(first:
+ * 1000) relationsList(first: 1000) }` is legal at every argument and still
+ * hundreds of thousands of rows. A per-response node budget is the real fix.
+ *
+ * Note the check below still runs *after* JSON.stringify, so lowering this
+ * avoids the ioredis send buffer, the network send, and every subsequent GET
+ * parse — but not the serialization itself. Skipping that too means bounding
+ * on row count in `shouldCacheResult` (postgraphile.ts), before the response
+ * is ever serialized.
  */
-export const MAX_CACHEABLE_BYTES = 15_000_000
+export const MAX_CACHEABLE_BYTES = 1_000_000
 
 /**
  * Decide whether to skip caching a serialized response based on its

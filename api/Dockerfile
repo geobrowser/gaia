@@ -28,4 +28,9 @@ USER geo
 
 EXPOSE 3000
 
-CMD ["bun", "run", "main.ts"]
+# --smol makes JSC collect far more eagerly instead of growing the heap
+# opportunistically. Bun does not reliably size its heap against the cgroup
+# limit, so in a 2Gi container (limits.memory in api/k8s/*/api.yaml) it can
+# walk past the limit and be OOMKilled before GC gets serious. Costs some
+# throughput; cheaper than a restart loop.
+CMD ["bun", "--smol", "run", "main.ts"]
