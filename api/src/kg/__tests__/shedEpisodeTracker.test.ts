@@ -10,6 +10,7 @@ function snapshot(overrides: Partial<SaturationSnapshot> = {}): SaturationSnapsh
 		utilizationPercent: 0,
 		waitingCount: 0,
 		recentAcquireTimeouts: 0,
+		recentSlowAcquires: 0,
 		activeSince: null,
 		lastSignalAt: null,
 		...overrides,

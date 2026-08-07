@@ -492,18 +492,44 @@ describe("query cost histogram", () => {
 		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="\+Inf"} 2$/m)
 	})
 
-	it("adversarial pathological query records to the top bucket", () => {
+	it("adversarial pathological query records to the top bucket and is rejected", () => {
 		const plugin = useCostLogger()
 		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
 		let q = "{ id }"
 		for (let i = 0; i < 50; i++) q = `{ entities(first: 1000) ${q} }`
-		onExecute({args: {document: parse(q), variableValues: {}, operationName: null}})
+
+		// This is the shape the ceiling exists for: ~10^150 worst-case nodes,
+		// which cannot be executed at all. It is still observed (recorded to
+		// the histogram) before being refused, so the metric keeps counting
+		// what enforcement turns away.
+		expect(() => onExecute({args: {document: parse(q), variableValues: {}, operationName: null}})).toThrow(
+			/exceeds the maximum/,
+		)
 
 		const out = renderQueryCostHistogram()
-		// Score ~1500 lands in the 500 bucket? No — 1500 > 500 → +Inf.
-		// Goes into le=1000 and +Inf but not le=500.
+		// Score ~1500 → above every finite bucket edge, so le="500" stays 0
+		// and only +Inf increments.
 		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="500"} 0$/m)
 		expect(out).toMatch(/gaia_api_graphql_query_cost_bucket\{le="\+Inf"} 1$/m)
+	})
+
+	it("does not reject queries below the ceiling", () => {
+		const plugin = useCostLogger()
+		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
+
+		// The 2026-08-06 incident traffic scored 228 — well over the *log*
+		// threshold of 200, and 44% of all production traffic sits above that
+		// line. Enforcement must not touch it.
+		const realistic = `{
+			entitiesOrderedByProperty(first: 40) {
+				id name
+				values(first: 50) { nodes { text } }
+				relations(first: 200) { nodes { toEntity { id name } } }
+			}
+		}`
+		expect(() =>
+			onExecute({args: {document: parse(realistic), variableValues: {}, operationName: null}}),
+		).not.toThrow()
 	})
 
 	it("skips introspection queries", () => {
