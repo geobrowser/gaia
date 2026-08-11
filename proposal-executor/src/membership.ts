@@ -42,14 +42,33 @@ export interface ProposalTally {
 	yes: bigint
 	no: bigint
 	abstain: bigint
-	/** Unix seconds the voting window opens (ProposalParameters.startDate). */
+	/**
+	 * Unix seconds the voting window opens (ProposalParameters.startDate).
+	 * Zero until the first vote is cast — see {@link isVotingOpen}.
+	 */
 	startDate: bigint
 	/** Unix seconds the voting window closes (ProposalParameters.lastDate); later votes revert. */
 	lastDate: bigint
+	/**
+	 * Whether the DAO actually knows this proposal — i.e. `_creator` is not the zero
+	 * space id. An unknown proposal id does not revert; it returns an all-zero struct
+	 * that is otherwise identical to a real proposal awaiting its first vote, so this
+	 * is the only field that separates the two. See {@link isEligibleToVote}.
+	 */
+	existsOnChain: boolean
 }
 
 /** SpaceRegistry.spaceIdToAddress returns this for an unregistered space. */
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
+/**
+ * Whether a bytes16 space id is the zero id, tolerating any hex casing and an
+ * absent `0x` prefix. `getLatestProposalInformation` returns a zero `_creator`
+ * for a proposal the DAO has never heard of.
+ */
+function isZeroSpaceId(spaceId: Hex): boolean {
+	return /^(0x)?0*$/i.test(spaceId)
+}
 
 /**
  * Seconds of slack added past the on-chain voting window's close when deciding
@@ -162,7 +181,7 @@ export function readProposalTally(
 		return Effect.tryPromise({
 			try: async () => {
 				const proposalIdHex = uuidToBytes16(proposalId)
-				const [executed, , parameters, tally] = await wallet.publicClient.readContract({
+				const [executed, creator, parameters, tally] = await wallet.publicClient.readContract({
 					address: daoSpaceAddress,
 					abi: DAOSpaceAbi,
 					functionName: "getLatestProposalInformation",
@@ -175,6 +194,7 @@ export function readProposalTally(
 					abstain: tally.abstain,
 					startDate: parameters.startDate,
 					lastDate: parameters.lastDate,
+					existsOnChain: !isZeroSpaceId(creator),
 				}
 			},
 			catch: (error) =>
@@ -204,14 +224,21 @@ export function readChainTimeSeconds(wallet: SmartWallet): Effect.Effect<bigint>
 }
 
 /**
- * A proposal's voting window is open iff now is at/after startDate and at/before
- * lastDate extended by the clock-skew buffer. The bound is inclusive on both ends,
- * matching the inclusive upper bound in the stage-1 detection SQL ($2 <= end_time +
- * skew) so the two stages agree at the skew boundary. The close is widened, not
- * narrowed:
+ * A proposal's voting window is open iff its timers have not been snapshotted yet,
+ * or now is at/after startDate and at/before lastDate extended by the clock-skew
+ * buffer. The bound is inclusive on both ends, matching the inclusive upper bound in
+ * the stage-1 detection SQL ($2 <= end_time + skew) so the two stages agree at the
+ * skew boundary. The close is widened, not narrowed:
  * during the final CLOCK_SKEW_BUFFER_SECONDS — and up to that long past lastDate —
  * the bot still votes, accepting a possible late revert over wrongly skipping a
  * still-open request. now should be a chain-sourced timestamp (readChainTimeSeconds).
+ *
+ * A zero `lastDate` means OPEN, not closed. Under governance v2 the voting window is
+ * lazy: DAOSpace leaves startDate/lastDate/executeBy at zero until the first vote is
+ * cast (`_startProposalVotingWindow`), and the contract itself uses `lastDate == 0`
+ * as that "not started" sentinel. Treating zero as a closed window is what made the
+ * whole auto-accept path dead on v2 — every untouched request, which is precisely the
+ * set the bot exists to vote on, has a zero window by definition.
  */
 export function isVotingOpen(
 	nowSeconds: bigint,
@@ -219,18 +246,30 @@ export function isVotingOpen(
 	lastDate: bigint,
 	skewSeconds: bigint = CLOCK_SKEW_BUFFER_SECONDS,
 ): boolean {
+	if (lastDate === 0n) return true
 	return startDate <= nowSeconds && nowSeconds <= lastDate + skewSeconds
 }
 
 /**
  * A request is eligible for an auto-accept YES vote iff:
+ * - the DAO actually has the proposal (see below),
  * - it has not executed,
  * - no vote of any kind is recorded on-chain — a non-zero tally covers both a human's
  *   vote (indexing lag) and the bot's own in-flight vote → SKIP (onchain_tally_nonzero),
  *   which is what makes the job idempotent across cycles, and
  * - its on-chain voting window is still open (now within [startDate, lastDate], with the
- *   clock-skew buffer applied to the close). The protocol rejects votes outside the
- *   window, so this is the authoritative stage-2 guard against voting on a closed request.
+ *   clock-skew buffer applied to the close, and a not-yet-snapshotted zero window
+ *   counting as open). The protocol rejects votes outside the window, so this is the
+ *   authoritative stage-2 guard against voting on a closed request.
+ *
+ * The `existsOnChain` term is load-bearing precisely *because* a zero window now counts
+ * as open. A proposal that lives in the database but was never created on chain — the
+ * migration artifacts described in the executor's canExecuteProposal pre-check — reads
+ * back as all zeros: not executed, empty tally, zero window. Every one of those would
+ * otherwise look permanently eligible, and the bot would burn a sponsored UserOperation
+ * on a guaranteed revert for each, every five minutes, forever. They never age out
+ * either: the membership query has no MAX_PROPOSAL_AGE cutoff. A zero `_creator` is the
+ * only thing that distinguishes them from a genuine untouched request.
  *
  * now should be a chain-sourced timestamp (readChainTimeSeconds).
  */
@@ -240,6 +279,7 @@ export function isEligibleToVote(
 	skewSeconds: bigint = CLOCK_SKEW_BUFFER_SECONDS,
 ): boolean {
 	return (
+		tally.existsOnChain &&
 		!tally.executed &&
 		tally.yes === 0n &&
 		tally.no === 0n &&

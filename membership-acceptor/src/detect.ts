@@ -62,11 +62,18 @@ export function detectMembershipRequest(
 	const spaceId = typeof p.space_id === "string" ? p.space_id : null
 	if (!proposalId || !spaceId) return null
 
-	// Best-effort still-open check: if the payload advertises an end_date already
-	// in the past, the voting window is closed — skip. Authoritative check is M3.
+	// Best-effort still-open check: if the payload advertises a positive end_date
+	// already in the past, the voting window is closed — skip. Authoritative check is M3.
+	//
+	// A zero end_date is "not started", i.e. OPEN — it must not be read as a window that
+	// closed at the epoch. Governance v2 snapshots startDate/lastDate lazily, on the
+	// first cast vote, so a freshly created proposal — the only kind this service ever
+	// sees, since it reacts to proposal_created — always advertises 0. Comparing that
+	// against `now` skips literally every request. The same inverted assumption disabled
+	// proposal-executor's membership path on v2 entirely.
 	const settings = asRecord(p.settings)
 	const endDate = settings?.end_date
-	if (typeof endDate === "number" && endDate <= nowSeconds) return null
+	if (typeof endDate === "number" && endDate > 0 && endDate <= nowSeconds) return null
 
 	const requesterSpaceId = typeof action.target_address === "string" ? action.target_address : ""
 	return {proposalId, spaceId, requesterSpaceId}

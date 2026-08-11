@@ -88,12 +88,23 @@ export const DAOSpaceAbi = [
 			{internalType: "bool", name: "_executed", type: "bool"},
 			{internalType: "bytes16", name: "_creator", type: "bytes16"},
 			{
+				// v2 ProposalParameters — 8 fields. The v1 struct this used to declare
+				// (votingMode, supportThreshold, quorum, startDate, lastDate) is a
+				// *shorter* static tuple, so decoding a v2 return through it silently
+				// slid every later slot: startDate read flatSupportThreshold and lastDate
+				// read quorum. Verified against the deployed contracts — chain 19411
+				// really is the 5-field v1 struct, chain 55516 is this one — so this ABI
+				// is now correct only for v2, which is all that outlives the 19411
+				// cluster's retirement.
 				components: [
 					{internalType: "enum IDAOSpace.VotingMode", name: "votingMode", type: "uint8"},
-					{internalType: "uint256", name: "supportThreshold", type: "uint256"},
+					{internalType: "uint256", name: "partialPercentageSupportThreshold", type: "uint256"},
+					{internalType: "uint256", name: "universalPercentageSupportThreshold", type: "uint256"},
+					{internalType: "uint256", name: "flatSupportThreshold", type: "uint256"},
 					{internalType: "uint256", name: "quorum", type: "uint256"},
 					{internalType: "uint256", name: "startDate", type: "uint256"},
 					{internalType: "uint256", name: "lastDate", type: "uint256"},
+					{internalType: "uint256", name: "executeBy", type: "uint256"},
 				],
 				internalType: "struct IDAOSpace.ProposalParameters",
 				name: "_parameters",

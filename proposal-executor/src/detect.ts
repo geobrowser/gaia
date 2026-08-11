@@ -227,12 +227,24 @@ export function findExecutableProposals(client: PgClient, nowSeconds: number): E
  * - Not yet executed (executed_at IS NULL)
  * - Created in the past (guards against corrupt future timestamps; no age cutoff
  *   — backlog is admitted, unlike the executor's MAX_PROPOSAL_AGE)
- * - Voting period has not ended (now <= end_time + CLOCK_SKEW_BUFFER) — the protocol
- *   rejects votes cast after the period closes, and an untouched Fast proposal whose
- *   period has ended is already classified REJECTED (threshold not reached). The same
- *   60s skew buffer the stage-2 eligibility check applies (isVotingOpen, membership.ts)
- *   is added here so detection never excludes a request that stage 2 would still vote
- *   on — `now` must therefore be the same chain-sourced timestamp stage 2 uses.
+ * - Voting period has not ended (end_time = 0, or now <= end_time + CLOCK_SKEW_BUFFER)
+ *   — the protocol rejects votes cast after the period closes, and an untouched Fast
+ *   proposal whose period has ended is already classified REJECTED (threshold not
+ *   reached). The same 60s skew buffer the stage-2 eligibility check applies
+ *   (isVotingOpen, membership.ts) is added here so detection never excludes a request
+ *   that stage 2 would still vote on — `now` must therefore be the same chain-sourced
+ *   timestamp stage 2 uses.
+ *
+ *   `end_time = 0` means the voting window has not been snapshotted yet, which is OPEN.
+ *   Governance v2 made the window lazy — DAOSpace leaves startDate/lastDate at zero
+ *   until the first vote is cast — so the indexer records 0 for every proposal nobody
+ *   has voted on. Without the zero branch this predicate degenerates to `now <= 60`,
+ *   false for all of recorded time, and it is mutually exclusive with the NOT EXISTS
+ *   vote check below: a proposal only earns a non-zero end_time once it has a vote,
+ *   which is exactly when this query stops considering it. No row could satisfy both,
+ *   so membership auto-accept admitted nobody on v2 from the contract migration until
+ *   this fix. Stage 2 re-reads the window from the chain, so a stale end_time here can
+ *   only cost a skipped vote, never a wrongly-cast one.
  * - Exactly one action, and it is an AddMember
  * - No indexed votes (NOT EXISTS in proposal_votes) — checks raw indexed votes,
  *   not the async-denormalized yes_count/no_count/abstain_count columns
@@ -265,7 +277,7 @@ WHERE p.space_id = ANY($1)
   AND p.voting_mode = 'Fast'
   AND p.executed_at IS NULL
   AND p.created_at::bigint <= $2::bigint
-  AND $2::bigint <= p.end_time + ${CLOCK_SKEW_BUFFER}
+  AND (p.end_time = 0 OR $2::bigint <= p.end_time + ${CLOCK_SKEW_BUFFER})
   AND a.action_type = 'AddMember'
   AND NOT EXISTS (SELECT 1 FROM proposal_votes pv WHERE pv.proposal_id = p.id)
   AND (SELECT COUNT(*) FROM proposal_actions a2 WHERE a2.proposal_id = p.id) = 1

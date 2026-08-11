@@ -81,6 +81,15 @@ describe("detectMembershipRequest", () => {
 		expect(detectMembershipRequest(p, NOW)).not.toBeNull()
 	})
 
+	// Governance v2 snapshots the voting window on the first cast vote, so a
+	// just-created proposal always advertises end_date 0 — and proposal_created is the
+	// only event this service reacts to. Reading 0 as "closed at the epoch" would skip
+	// every single request, which is precisely how the same assumption disabled
+	// proposal-executor's membership path on v2.
+	test("detects when end_date is 0 — an unsnapshotted window is open, not long expired", () => {
+		expect(detectMembershipRequest(membershipPayload({settings: {end_date: 0}}), NOW)).not.toBeNull()
+	})
+
 	test("requesterSpaceId is empty when target_address is missing", () => {
 		const actions = [{type: "add_member"}]
 		expect(detectMembershipRequest(membershipPayload({actions}), NOW)?.requesterSpaceId).toBe("")
