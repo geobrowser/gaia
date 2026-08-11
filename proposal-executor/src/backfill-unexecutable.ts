@@ -34,7 +34,7 @@
 
 import Pg from "pg"
 import {createPublicClient, getAddress, type Hex, http} from "viem"
-import {DaoSpaceAbi, getChain, SpaceRegistryAbi, type SupportedChainId} from "./contracts.js"
+import {DAOSpaceAbi, getChain, SpaceRegistryAbi, type SupportedChainId} from "./contracts.js"
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
@@ -144,7 +144,7 @@ async function main() {
 			try {
 				const version = await client.readContract({
 					address: dao,
-					abi: DaoSpaceAbi,
+					abi: DAOSpaceAbi,
 					functionName: "latestProposalVersion",
 					args: [toBytes16(candidate.id)],
 				})
