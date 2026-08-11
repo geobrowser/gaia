@@ -34,18 +34,54 @@
 
 import Pg from "pg"
 import {createPublicClient, getAddress, type Hex, http} from "viem"
-import {DAOSpaceAbi, getChain, SpaceRegistryAbi, type SupportedChainId} from "./contracts.js"
+import {DAOSpaceAbi, getChain, RATIO_BASE, SpaceRegistryAbi, type SupportedChainId} from "./contracts.js"
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
-/** Candidates: unexecuted, not already flagged, and past their voting window. */
+/**
+ * Candidates: exactly the proposals the API currently reports as `EXECUTABLE`.
+ *
+ * This mirrors `sqlIsExecutable` in `api/src/proposals/queries.ts` branch for
+ * branch, because "the API says you can execute this" is the precise definition
+ * of the problem being fixed — a proposal advertised as executable that reverts
+ * forever. Keep the two in step; a fourth copy of the decision tree is the cost
+ * of scoping this correctly (see the note at the top of `detect.ts`).
+ *
+ * The looser "everything unexecuted whose voting window closed" scope this
+ * replaced matched 3265 rows against 51. The extra ~3200 are migrated proposals
+ * that already read REJECTED because they lost their vote, so flagging them
+ * changes nothing anyone sees, while stamping a "verified unexecutable" claim
+ * across most of the table and spending ~64x the eth_calls to do it. Worse, it
+ * quietly redefines the column from "was falsely advertised as executable" to
+ * "is a migrated proposal", which is not what any reader of it expects.
+ */
 const CANDIDATE_SQL = `
 SELECT pc.id, pc.space_id AS "spaceId", pc.name
 FROM proposals_current pc
 WHERE pc.executed_at IS NULL
   AND pc.unexecutable_at IS NULL
   AND pc.end_time > 0
-  AND $1::bigint > pc.end_time
+  AND (
+    (pc.voting_mode = 'Fast' AND pc.yes_count > (CASE WHEN pc.flat_support_threshold = 0 THEN 0 ELSE pc.flat_support_threshold - 1 END))
+    OR (
+      pc.voting_mode = 'Slow'
+      AND $1::bigint <= pc.end_time
+      AND COALESCE((SELECT sec.total_editors FROM space_editor_counts sec WHERE sec.space_id = pc.space_id), 0) > 0
+      AND pc.universal_percentage_support_threshold > 0
+      AND pc.yes_count::numeric >= CEIL(
+        (pc.universal_percentage_support_threshold::numeric
+          * COALESCE((SELECT sec.total_editors FROM space_editor_counts sec WHERE sec.space_id = pc.space_id), 0)::numeric)
+        / ${RATIO_BASE}::numeric
+      )
+    )
+    OR (
+      pc.voting_mode = 'Slow'
+      AND $1::bigint > pc.end_time
+      AND (pc.yes_count + pc.no_count + pc.abstain_count) >= pc.quorum
+      AND (${RATIO_BASE}::numeric - pc.partial_percentage_support_threshold::numeric) * pc.yes_count::numeric
+          > pc.partial_percentage_support_threshold::numeric * pc.no_count::numeric
+    )
+  )
   AND ($2::uuid IS NULL OR pc.space_id = $2::uuid)
 ORDER BY pc.space_id, pc.end_time
 LIMIT $3::int
