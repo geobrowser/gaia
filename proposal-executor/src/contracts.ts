@@ -135,6 +135,16 @@ export const DAOSpaceAbi = [
 		stateMutability: "view",
 		type: "function",
 	},
+	{
+		// Needed because a v2 vote payload carries the proposal version, and
+		// getLatestProposalInformation does not return it. Zero means the DAO has no
+		// such proposal — versions start at 1 on creation.
+		inputs: [{internalType: "bytes16", name: "_proposalId", type: "bytes16"}],
+		name: "latestProposalVersion",
+		outputs: [{internalType: "uint8", name: "_version", type: "uint8"}],
+		stateMutability: "view",
+		type: "function",
+	},
 ] as const
 
 // ---------------------------------------------------------------------------

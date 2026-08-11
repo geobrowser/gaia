@@ -7,8 +7,8 @@
 
 import {describe, expect, test} from "bun:test"
 import {Cause, ConfigProvider, Effect, Exit, Option, Redacted} from "effect"
-import type {Address, Hex} from "viem"
-import {InfraError, RevertError} from "../src/contracts.js"
+import {type Address, decodeAbiParameters, decodeFunctionData, type Hex} from "viem"
+import {InfraError, RevertError, SpaceRegistryAbi} from "../src/contracts.js"
 import {findMembershipRequests, type MembershipRequest} from "../src/detect.js"
 import {type SmartWallet, uuidToBytes16} from "../src/execute.js"
 import {
@@ -391,6 +391,7 @@ function makeTally(overrides: Partial<ProposalTally> = {}): ProposalTally {
 		startDate: 0n,
 		lastDate: 10_000_000_000n,
 		existsOnChain: true,
+		version: 1,
 		...overrides,
 	}
 }
@@ -404,7 +405,7 @@ interface FakeWalletOpts {
 
 interface FakeWallet {
 	wallet: SmartWallet
-	calls: {readContract: string[]; sendTransaction: number}
+	calls: {readContract: string[]; sendTransaction: number; lastCalldata: string | undefined}
 }
 
 /**
@@ -414,7 +415,7 @@ interface FakeWallet {
  */
 function makeFakeWallet(opts: FakeWalletOpts = {}): FakeWallet {
 	const tally = opts.tally ?? makeTally()
-	const calls = {readContract: [] as string[], sendTransaction: 0}
+	const calls = {readContract: [] as string[], sendTransaction: 0, lastCalldata: undefined as string | undefined}
 	const wallet = {
 		chain: {id: 80451},
 		accountAddress: "0x0000000000000000000000000000000000000001",
@@ -423,6 +424,8 @@ function makeFakeWallet(opts: FakeWalletOpts = {}): FakeWallet {
 			readContract: async ({functionName}: any) => {
 				calls.readContract.push(functionName)
 				if (functionName === "spaceIdToAddress") return opts.daoAddress ?? DAO_ADDRESS
+				// Read alongside the tally so the vote payload can name the version.
+				if (functionName === "latestProposalVersion") return tally.version
 				if (functionName === "getLatestProposalInformation") {
 					return [
 						tally.executed,
@@ -441,8 +444,10 @@ function makeFakeWallet(opts: FakeWalletOpts = {}): FakeWallet {
 		},
 		smartAccountClient: {
 			account: {address: "0x0000000000000000000000000000000000000002"},
-			sendTransaction: async () => {
+			// biome-ignore lint/suspicious/noExplicitAny: minimal stub
+			sendTransaction: async (args: any) => {
 				calls.sendTransaction += 1
+				calls.lastCalldata = args?.data
 				if (opts.sendTransaction) return opts.sendTransaction(calls.sendTransaction)
 				return "0xtxhash"
 			},
@@ -527,6 +532,27 @@ describe("processMembershipRequest", () => {
 		)
 		expect(outcome.status).toBe("voted")
 		expect(calls.sendTransaction).toBe(1)
+	})
+
+	// Guards the threading, which a hardcoded `1` would satisfy type-wise while
+	// silently voting on the wrong version of any escalated proposal (_canVote
+	// rejects that, so the vote would revert). The vote payload's second word is the
+	// version; assert it tracks the tally rather than a constant.
+	test("the vote payload carries the tally's version, not a hardcoded 1", async () => {
+		const {wallet, calls} = makeFakeWallet({tally: makeTally({version: 4})})
+		const outcome = await Effect.runPromise(
+			processMembershipRequest(wallet, REQUEST_A, DAO_ADDRESS, BOT_SPACE, REGISTRY_ADDRESS, 1000n),
+		)
+		expect(outcome.status).toBe("voted")
+		if (!calls.lastCalldata) throw new Error("no calldata captured")
+
+		const decoded = decodeFunctionData({abi: SpaceRegistryAbi, data: calls.lastCalldata as Hex})
+		expect(decoded.functionName).toBe("enter")
+		const voteData = (decoded.args as readonly Hex[])[4]
+		if (!voteData) throw new Error("enter() had no _data argument")
+		const [, version, vote] = decodeAbiParameters([{type: "bytes16"}, {type: "uint8"}, {type: "uint8"}], voteData)
+		expect(version).toBe(4)
+		expect(vote).toBe(1) // VOTE_YES
 	})
 
 	test("a touched request is skipped without voting", async () => {

@@ -86,31 +86,45 @@ function fakeWallet(overrides: {
 // ---------------------------------------------------------------------------
 
 describe("encodeVoteData", () => {
-	test("encodes abi.encode(bytes16 proposalId, uint8 voteOption)", () => {
-		const data = encodeVoteData(PROPOSAL_BYTES16 as Hex, VOTE_YES)
-		const [proposalId, voteOption] = decodeAbiParameters(
+	const PROPOSAL_VERSION = 1
+
+	test("encodes abi.encode(bytes16 proposalId, uint8 proposalVersion, VoteOption vote)", () => {
+		const data = encodeVoteData(PROPOSAL_BYTES16 as Hex, PROPOSAL_VERSION, VOTE_YES)
+		const [proposalId, proposalVersion, voteOption] = decodeAbiParameters(
 			[
 				{name: "proposalId", type: "bytes16"},
+				{name: "proposalVersion", type: "uint8"},
 				{name: "voteOption", type: "uint8"},
 			],
 			data,
 		)
 		// bytes16 is left-aligned in its 32-byte word; viem returns it padded to bytes32.
 		expect((proposalId as string).slice(0, 34)).toBe(PROPOSAL_BYTES16)
+		expect(proposalVersion).toBe(PROPOSAL_VERSION)
 		expect(voteOption).toBe(VOTE_YES)
 	})
 
 	test("uses VOTE_YES === 1 for a YES vote", () => {
 		// Guards the documented enum discrepancy: a YES vote must encode uint8 1, not 2.
 		expect(VOTE_YES).toBe(1)
-		const data = encodeVoteData(PROPOSAL_BYTES16 as Hex, VOTE_YES)
-		const [, voteOption] = decodeAbiParameters([{type: "bytes16"}, {type: "uint8"}], data)
+		const data = encodeVoteData(PROPOSAL_BYTES16 as Hex, PROPOSAL_VERSION, VOTE_YES)
+		const [, , voteOption] = decodeAbiParameters([{type: "bytes16"}, {type: "uint8"}, {type: "uint8"}], data)
 		expect(voteOption).toBe(1)
 	})
 
-	test("two words: bytes16 proposalId then uint8 voteOption (0x + 128 hex chars)", () => {
-		const data = encodeVoteData(PROPOSAL_BYTES16 as Hex, VOTE_YES)
-		expect(data.length).toBe(2 + 128)
+	test("carries the version verbatim, so an escalated proposal votes on its own version", () => {
+		const data = encodeVoteData(PROPOSAL_BYTES16 as Hex, 3, VOTE_YES)
+		const [, proposalVersion] = decodeAbiParameters([{type: "bytes16"}, {type: "uint8"}, {type: "uint8"}], data)
+		expect(proposalVersion).toBe(3)
+	})
+
+	// The payload length IS the bug this guards. DAOSpace decodes three static words
+	// (96 bytes); a two-word (64-byte) payload makes abi.decode revert with empty data,
+	// which the bundler reports only as "reverted during simulation with reason: 0x".
+	test("three words — 96 bytes (0x + 192 hex chars), not two", () => {
+		const data = encodeVoteData(PROPOSAL_BYTES16 as Hex, PROPOSAL_VERSION, VOTE_YES)
+		expect((data.length - 2) / 2).toBe(96)
+		expect(data.length).toBe(2 + 192)
 	})
 })
 
@@ -128,7 +142,7 @@ describe("castMembershipVote calldata", () => {
 			},
 		})
 
-		const hash = await Effect.runPromise(castMembershipVote(wallet, REQUEST, BOT_SPACE_ID, REGISTRY))
+		const hash = await Effect.runPromise(castMembershipVote(wallet, REQUEST, BOT_SPACE_ID, REGISTRY, 1))
 		expect(hash).toBe("0xtxhash")
 		if (!captured) throw new Error("sendTransaction was never called")
 		expect(captured.to).toBe(REGISTRY)
@@ -151,9 +165,13 @@ describe("castMembershipVote calldata", () => {
 		expect(topic.toLowerCase()).toBe(`${PROPOSAL_BYTES16}${"0".repeat(32)}`)
 		expect(signature).toBe("0x")
 
-		// Vote data decodes to (proposalId, Yes=1).
-		const [encodedId, encodedVote] = decodeAbiParameters([{type: "bytes16"}, {type: "uint8"}], voteData)
+		// Vote data decodes to (proposalId, version=1, Yes=1) — three words, per v2.
+		const [encodedId, encodedVersion, encodedVote] = decodeAbiParameters(
+			[{type: "bytes16"}, {type: "uint8"}, {type: "uint8"}],
+			voteData,
+		)
 		expect((encodedId as string).slice(0, 34)).toBe(PROPOSAL_BYTES16)
+		expect(encodedVersion).toBe(1)
 		expect(encodedVote).toBe(1)
 	})
 })
@@ -173,7 +191,7 @@ describe("castMembershipVote error classification", () => {
 		})
 
 		const failure = await Effect.runPromise(
-			Effect.flip(castMembershipVote(wallet, REQUEST, BOT_SPACE_ID, REGISTRY)),
+			Effect.flip(castMembershipVote(wallet, REQUEST, BOT_SPACE_ID, REGISTRY, 1)),
 		)
 		expect(failure._tag).toBe("RevertError")
 		expect((failure as {proposalId: string}).proposalId).toBe(REQUEST.id)
@@ -191,7 +209,7 @@ describe("castMembershipVote error classification", () => {
 		})
 
 		const failure = await Effect.runPromise(
-			Effect.flip(castMembershipVote(wallet, REQUEST, BOT_SPACE_ID, REGISTRY)),
+			Effect.flip(castMembershipVote(wallet, REQUEST, BOT_SPACE_ID, REGISTRY, 1)),
 		)
 		expect(failure._tag).toBe("RevertError")
 		expect((failure as {expected: boolean}).expected).toBe(true)
@@ -205,7 +223,7 @@ describe("castMembershipVote error classification", () => {
 		})
 
 		const failure = await Effect.runPromise(
-			Effect.flip(castMembershipVote(wallet, REQUEST, BOT_SPACE_ID, REGISTRY)),
+			Effect.flip(castMembershipVote(wallet, REQUEST, BOT_SPACE_ID, REGISTRY, 1)),
 		)
 		expect(failure._tag).toBe("InfraError")
 		expect((failure as {proposalId?: string}).proposalId).toBe(REQUEST.id)
@@ -219,7 +237,7 @@ describe("castMembershipVote error classification", () => {
 		})
 
 		const failure = await Effect.runPromise(
-			Effect.flip(castMembershipVote(wallet, REQUEST, BOT_SPACE_ID, REGISTRY)),
+			Effect.flip(castMembershipVote(wallet, REQUEST, BOT_SPACE_ID, REGISTRY, 1)),
 		)
 		expect((failure as {message: string}).message).toContain("apikey=<redacted>")
 		expect((failure as {message: string}).message).not.toContain("secret123")
@@ -234,9 +252,10 @@ describe("readProposalTally", () => {
 	test("decodes the (executed, creator, parameters, Tally, actions) tuple into the tally", async () => {
 		const wallet = fakeWallet({
 			readContract: async (args) => {
-				expect(args.functionName).toBe("getLatestProposalInformation")
-				// proposalId passed as bytes16
+				// proposalId passed as bytes16 by both reads
 				expect(args.args[0]).toBe(PROPOSAL_BYTES16)
+				if (args.functionName === "latestProposalVersion") return 2
+				expect(args.functionName).toBe("getLatestProposalInformation")
 				return [
 					false, // executed
 					REAL_CREATOR, // creator
@@ -256,6 +275,9 @@ describe("readProposalTally", () => {
 			startDate: START_DATE,
 			lastDate: LAST_DATE,
 			existsOnChain: true,
+			// Read from the chain, not assumed to be 1 — an escalated proposal is on a
+			// later version and the vote payload must name the one it is voting on.
+			version: 2,
 		})
 	})
 
@@ -264,7 +286,10 @@ describe("readProposalTally", () => {
 	// request, so the read has to surface it or isEligibleToVote cannot tell them apart.
 	test("reports existsOnChain false when the DAO returns a zero creator", async () => {
 		const wallet = fakeWallet({
-			readContract: async () => [false, ZERO_CREATOR, UNSTARTED_PARAMS, {yes: 0n, no: 0n, abstain: 0n}, []],
+			readContract: async (args) =>
+				args.functionName === "latestProposalVersion"
+					? 0
+					: [false, ZERO_CREATOR, UNSTARTED_PARAMS, {yes: 0n, no: 0n, abstain: 0n}, []],
 		})
 
 		const tally = await Effect.runPromise(readProposalTally(wallet, DAO_SPACE_ADDR, PROPOSAL_UUID))
@@ -297,6 +322,7 @@ describe("isEligibleToVote", () => {
 		startDate: START_DATE,
 		lastDate: LAST_DATE,
 		existsOnChain: true,
+		version: 1,
 	}
 
 	test("eligible iff !executed && zero tally && voting window open", () => {
