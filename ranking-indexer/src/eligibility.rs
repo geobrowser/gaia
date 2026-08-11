@@ -67,10 +67,19 @@ pub fn window_admits(
 
 /// Does a Rolling-type block's submission remain eligible?
 ///
-/// Valid while `now - submitted_at < submission_frequency` (hours); once a
-/// submission ages past its frequency it requires resubmission. `now` is a
-/// parameter (never read via an inline `Utc::now()` call here) so callers —
-/// tests and the periodic sweep alike — control it deterministically.
+/// `submission_frequency` is a *half-life*, not a cliff: a ballot's contribution
+/// decays continuously (see `scoring::recency_weight`) and this check only drops
+/// it once decay has taken it below the resolution of the published projection,
+/// at `ROLLING_MAX_HALF_LIVES` half-lives.
+///
+/// It used to expire at exactly one `submission_frequency`, which made a block
+/// publish nothing whenever nobody had submitted inside the trailing window —
+/// the common case, since the window equalled the cadence users were told to
+/// resubmit on. That rendered a "Trending" table as empty rather than stale, and
+/// it also drove the client to blank the author's ballot on roll-off.
+///
+/// `now` is a parameter (never read via an inline `Utc::now()` call here) so
+/// callers — tests and the periodic sweep alike — control it deterministically.
 ///
 /// An absent frequency or unknown submission time can't be evaluated, so (like
 /// `window_admits`) we admit rather than silently drop.
@@ -82,7 +91,12 @@ pub fn rolling_admits(
     let (Some(submitted_at), Some(frequency_hours)) = (submitted_at, frequency_hours) else {
         return true;
     };
-    now - submitted_at < chrono::Duration::hours(frequency_hours.into())
+    if frequency_hours <= 0 {
+        return true;
+    }
+    let cutoff_hours = f64::from(frequency_hours) * crate::scoring::ROLLING_MAX_HALF_LIVES;
+    let age_hours = (now - submitted_at).num_milliseconds() as f64 / 3_600_000.0;
+    age_hours < cutoff_hours
 }
 
 /// Filter deduped submissions to those eligible for `block`.
@@ -209,19 +223,26 @@ mod tests {
     }
 
     #[test]
-    fn rolling_admits_window() {
+    fn rolling_admits_until_the_decay_cutoff_not_one_frequency() {
         let t = |n: i64| DateTime::<Utc>::from_timestamp(n, 0).unwrap();
         let hour = 3600;
-        // within: 1 hour old, 2-hour frequency
-        assert!(rolling_admits(Some(t(0)), Some(2), t(hour)));
-        // exactly-at-boundary: elapsed == frequency is expired, not admitted
-        assert!(!rolling_admits(Some(t(0)), Some(1), t(hour)));
-        // just past the boundary
-        assert!(!rolling_admits(Some(t(0)), Some(1), t(hour + 1)));
-        // just before the boundary
-        assert!(rolling_admits(Some(t(0)), Some(1), t(hour - 1)));
+        // A ballot one frequency old is NOT expired any more — it decays instead
+        // (scoring::recency_weight halves it), which is what stops a Rolling block
+        // publishing an empty table between submissions.
+        assert!(rolling_admits(Some(t(0)), Some(1), t(hour)));
+        assert!(rolling_admits(Some(t(0)), Some(1), t(hour + 1)));
+        // Still admitted just inside the cutoff (8 half-lives), dropped at/after it.
+        let cutoff = (crate::scoring::ROLLING_MAX_HALF_LIVES as i64) * hour;
+        assert!(rolling_admits(Some(t(0)), Some(1), t(cutoff - 1)));
+        assert!(!rolling_admits(Some(t(0)), Some(1), t(cutoff)));
+        assert!(!rolling_admits(Some(t(0)), Some(1), t(cutoff + hour)));
+        // The cutoff scales with the frequency: 24h frequency -> 8 days.
+        assert!(rolling_admits(Some(t(0)), Some(24), t(7 * 24 * hour)));
+        assert!(!rolling_admits(Some(t(0)), Some(24), t(8 * 24 * hour)));
         // absent frequency imposes no limit
         assert!(rolling_admits(Some(t(0)), None, t(hour * 1000)));
+        // a non-positive frequency can't define a cutoff
+        assert!(rolling_admits(Some(t(0)), Some(0), t(hour * 1000)));
         // unknown submission time can't be rejected
         assert!(rolling_admits(None, Some(1), t(hour * 1000)));
     }
@@ -230,17 +251,19 @@ mod tests {
     fn filter_eligible_uses_rolling_admits_for_rolling_blocks() {
         let t = |n: i64| DateTime::<Utc>::from_timestamp(n, 0).unwrap();
         let hour = 3600;
-        let b = rolling_block(Some(1)); // 1-hour frequency
+        let b = rolling_block(Some(1)); // 1-hour frequency -> 8-hour cutoff
         let mut members = HashSet::new();
         members.insert(Uuid::from_u128(1));
 
         let subs = vec![
-            submission(1, Some(t(0))),         // member, still within frequency -> keep
-            submission(1, Some(t(-2 * hour))), // member, expired -> drop
-            submission(2, Some(t(0))),         // non-member -> drop
+            submission(1, Some(t(0))),          // member, fresh -> keep
+            submission(1, Some(t(-2 * hour))),  // member, aged but inside cutoff -> keep (decays)
+            submission(1, Some(t(-20 * hour))), // member, past the cutoff -> drop
+            submission(2, Some(t(0))),          // non-member -> drop
         ];
         let kept = filter_eligible(&b, SpaceKind::Dao, &members, subs, t(hour / 2));
-        assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].submitted_at, Some(t(0)));
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().all(|s| s.space_id == Uuid::from_u128(1)));
+        assert!(kept.iter().all(|s| s.submitted_at != Some(t(-20 * hour))));
     }
 }
