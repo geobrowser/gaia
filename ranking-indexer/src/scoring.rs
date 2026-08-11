@@ -16,6 +16,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::models::{Ranking, RankingItem};
@@ -24,6 +25,56 @@ use crate::models::{Ranking, RankingItem};
 pub const NORM_LO: f64 = 0.5;
 /// Default normalization ceiling: the top of a ballot.
 pub const NORM_HI: f64 = 1.0;
+
+/// How many half-lives a Rolling ballot keeps contributing before it is dropped
+/// outright (see `eligibility::rolling_admits`).
+///
+/// Decay alone never reaches zero, so without a cutoff every entity ever ranked
+/// would stay in the projection forever carrying a vanishing score, and the
+/// published table would grow without bound. At eight half-lives a ballot is
+/// down to 1/256 of its original weight — far below the resolution of the
+/// integer 0–100 projection — so dropping it there is invisible in the output
+/// while keeping the table bounded.
+pub const ROLLING_MAX_HALF_LIVES: f64 = 8.0;
+
+/// Recency decay for a Rolling block: ballots lose half their weight every
+/// `half_life_hours`.
+///
+/// This replaces the hard 24h cliff that `submission_frequency` used to impose.
+/// The cliff meant a block published *nothing* whenever no one had submitted
+/// inside the window — routinely, since the window equalled the resubmission
+/// cadence — so a "Trending" table read as empty rather than stale. Decaying
+/// instead keeps fresh ballots dominant without the table ever emptying.
+#[derive(Debug, Clone, Copy)]
+pub struct RecencyDecay {
+    /// Age at which a ballot's contribution halves — the block's
+    /// `submission_frequency`, reinterpreted as a half-life rather than a cliff.
+    pub half_life_hours: f64,
+    /// Instant ages are measured against. A parameter, never an inline
+    /// `Utc::now()`, so a sweep and a test can both pin it.
+    pub now: DateTime<Utc>,
+}
+
+/// A ballot's recency multiplier: `0.5 ^ (age / half_life)`, clamped to `[0, 1]`.
+///
+/// A ballot with no `submitted_at`, or a non-positive half-life, can't be aged
+/// and so decays not at all — consistent with `eligibility`, which admits rather
+/// than silently drops what it cannot evaluate. Ballots dated in the future
+/// (clock skew between the chain and this process) are treated as brand new
+/// rather than amplified beyond full weight.
+pub fn recency_weight(decay: RecencyDecay, submitted_at: Option<DateTime<Utc>>) -> f64 {
+    let Some(submitted_at) = submitted_at else {
+        return 1.0;
+    };
+    if !decay.half_life_hours.is_finite() || decay.half_life_hours <= 0.0 {
+        return 1.0;
+    }
+    let age_hours = (decay.now - submitted_at).num_milliseconds() as f64 / 3_600_000.0;
+    if age_hours <= 0.0 {
+        return 1.0;
+    }
+    0.5_f64.powf(age_hours / decay.half_life_hours)
+}
 
 /// A computed aggregate row (mirrors `ranks.ranking_scores`).
 #[derive(Debug, Clone, PartialEq)]
@@ -112,11 +163,24 @@ fn normalize_ordinal(items: &[RankingItem], lo: f64, hi: f64) -> Vec<((Uuid, Uui
 }
 
 /// Aggregate eligible ballots into the block's ordered result.
-pub fn aggregate(ballots: &[(&Ranking, Vec<RankingItem>)], lo: f64, hi: f64) -> Vec<ScoreRow> {
+///
+/// `decay` is `Some` only for Rolling blocks, where each ballot's contribution is
+/// scaled by its recency (see [`recency_weight`]). Static blocks pass `None` and
+/// are scored exactly as before — every eligible ballot at full weight.
+pub fn aggregate(
+    ballots: &[(&Ranking, Vec<RankingItem>)],
+    lo: f64,
+    hi: f64,
+    decay: Option<RecencyDecay>,
+) -> Vec<ScoreRow> {
     let mut totals: HashMap<(Uuid, Uuid), f64> = HashMap::new();
     for (ranking, items) in ballots {
+        let weight = match decay {
+            Some(decay) => recency_weight(decay, ranking.submitted_at),
+            None => 1.0,
+        };
         for (key, value) in normalize_ballot(ranking, items, lo, hi) {
-            *totals.entry(key).or_insert(0.0) += value;
+            *totals.entry(key).or_insert(0.0) += value * weight;
         }
     }
 
@@ -234,7 +298,7 @@ mod tests {
         let b3 = vec![item(200, Some("a0"), None), item(100, Some("a1"), None)]; // B=1.0, A=0.5
 
         let ballots = vec![(&r1, b1), (&r2, b2), (&r3, b3)];
-        let rows = aggregate(&ballots, NORM_LO, NORM_HI);
+        let rows = aggregate(&ballots, NORM_LO, NORM_HI, None);
 
         // A: 1.0 + 1.0 + 0.5 = 2.5 ; B: 0.5 + 0.5 + 1.0 = 2.0
         assert_eq!(rows.len(), 2);
@@ -266,7 +330,112 @@ mod tests {
                 weight: None,
             },
         ];
-        let rows = aggregate(&[(&r, items)], NORM_LO, NORM_HI);
+        let rows = aggregate(&[(&r, items)], NORM_LO, NORM_HI, None);
         assert_eq!(rows.len(), 2); // two perspectives -> two rows
+    }
+
+    fn at(secs: i64) -> DateTime<Utc> {
+        DateTime::<Utc>::from_timestamp(secs, 0).unwrap()
+    }
+
+    fn ranking_submitted(id: u128, rank_type: &str, submitted_at: DateTime<Utc>) -> Ranking {
+        Ranking {
+            submitted_at: Some(submitted_at),
+            ..ranking(id, rank_type)
+        }
+    }
+
+    #[test]
+    fn recency_weight_halves_every_half_life() {
+        let hour = 3600;
+        let decay = |now: i64| RecencyDecay {
+            half_life_hours: 24.0,
+            now: at(now),
+        };
+        let submitted = Some(at(0));
+        assert!((recency_weight(decay(0), submitted) - 1.0).abs() < 1e-12);
+        assert!((recency_weight(decay(24 * hour), submitted) - 0.5).abs() < 1e-12);
+        assert!((recency_weight(decay(48 * hour), submitted) - 0.25).abs() < 1e-12);
+        // Never reaches zero — that is what keeps the table from emptying.
+        assert!(recency_weight(decay(1000 * hour), submitted) > 0.0);
+    }
+
+    #[test]
+    fn recency_weight_admits_what_it_cannot_age() {
+        let hour = 3600;
+        let decay = RecencyDecay {
+            half_life_hours: 24.0,
+            now: at(100 * hour),
+        };
+        // Unknown submission time -> full weight, not silently zeroed.
+        assert_eq!(recency_weight(decay, None), 1.0);
+        // Non-positive half-life can't decay anything.
+        assert_eq!(
+            recency_weight(
+                RecencyDecay {
+                    half_life_hours: 0.0,
+                    ..decay
+                },
+                Some(at(0))
+            ),
+            1.0
+        );
+        // Future-dated (clock skew) is capped at full weight, never amplified.
+        assert_eq!(recency_weight(decay, Some(at(200 * hour))), 1.0);
+    }
+
+    #[test]
+    fn decay_lets_a_fresh_ballot_outrank_an_older_agreeing_majority() {
+        let hour = 3600;
+        // Two stale ballots rank A first; one fresh ballot ranks B first.
+        let stale_a = ranking_submitted(1, "ORDINAL", at(0));
+        let stale_b = ranking_submitted(2, "ORDINAL", at(0));
+        let fresh = ranking_submitted(3, "ORDINAL", at(96 * hour));
+        let a_first = || vec![item(100, Some("a0"), None), item(200, Some("a1"), None)];
+        let b_first = vec![item(200, Some("a0"), None), item(100, Some("a1"), None)];
+
+        let ballots = vec![
+            (&stale_a, a_first()),
+            (&stale_b, a_first()),
+            (&fresh, b_first),
+        ];
+
+        // Undecayed, the two agreeing ballots win: A = 2.5, B = 2.0.
+        let flat = aggregate(&ballots, NORM_LO, NORM_HI, None);
+        assert_eq!(flat[0].entity_id, Uuid::from_u128(100));
+
+        // With a 24h half-life the 4-day-old ballots are down to 1/16, so the
+        // fresh ballot's preference leads.
+        let decayed = aggregate(
+            &ballots,
+            NORM_LO,
+            NORM_HI,
+            Some(RecencyDecay {
+                half_life_hours: 24.0,
+                now: at(96 * hour),
+            }),
+        );
+        assert_eq!(decayed[0].entity_id, Uuid::from_u128(200));
+        assert_eq!(decayed[0].position, 1);
+        // Stale ballots still contribute — they are decayed, not discarded.
+        assert!(decayed[1].score > 0.0);
+    }
+
+    #[test]
+    fn decay_never_empties_a_block_that_has_ballots() {
+        let hour = 3600;
+        let old = ranking_submitted(1, "ORDINAL", at(0));
+        let ballots = vec![(&old, vec![item(100, Some("a0"), None)])];
+        let rows = aggregate(
+            &ballots,
+            NORM_LO,
+            NORM_HI,
+            Some(RecencyDecay {
+                half_life_hours: 24.0,
+                now: at(120 * hour), // 5 days old
+            }),
+        );
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].score > 0.0);
     }
 }

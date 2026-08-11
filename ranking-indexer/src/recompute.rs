@@ -115,7 +115,17 @@ pub async fn recompute_block(
         .iter()
         .map(|r| (r, items_by_ranking.remove(&r.id).unwrap_or_default()))
         .collect();
-    let scores = scoring::aggregate(&ballots, scoring::NORM_LO, scoring::NORM_HI);
+    // Rolling blocks weight each ballot by recency, using the block's
+    // `submission_frequency` as the half-life; static blocks score every eligible
+    // ballot at full weight.
+    let decay = block
+        .ranking_type
+        .and(block.submission_frequency)
+        .map(|frequency_hours| scoring::RecencyDecay {
+            half_life_hours: f64::from(frequency_hours),
+            now,
+        });
+    let scores = scoring::aggregate(&ballots, scoring::NORM_LO, scoring::NORM_HI, decay);
     storage.replace_ranking_scores(block_id, &scores).await?;
 
     // 4. Publish: project RANK_POSITION relations (+ the integer rank-position
