@@ -505,6 +505,13 @@
       "when": 1785931805456,
       "tag": "0071_vote_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1786470235869,
+      "tag": "0072_unexecutable_proposals",
+      "breakpoints": true
     }
   ]
 }

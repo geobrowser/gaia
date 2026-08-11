@@ -72,12 +72,20 @@ export const SpaceRegistryAbi = [
 ] as const
 
 // ---------------------------------------------------------------------------
-// DAOSpace ABI — minimal subset (only getLatestProposalInformation)
+// DAOSpace ABI — the minimal view subset this service needs.
 // Source: geo-contracts-foundry/src/interfaces/IDAOSpace.sol
 //
-// The vote-tally getters live on the per-space DAOSpace contract (resolved via
-// SpaceRegistry.spaceIdToAddress), NOT on the SpaceRegistry. The membership
-// path reads this for the stage-2 authoritative "untouched" check.
+// These getters live on the per-space DAOSpace contract (resolved via
+// SpaceRegistry.spaceIdToAddress), NOT on the SpaceRegistry. The membership path
+// reads them for the stage-2 authoritative "untouched" check; the executor and
+// the unexecutable-proposal backfill read them to avoid burning sponsored
+// simulations on proposals that can never execute.
+//
+// Deliberately ONE constant. This file used to carry two — `DAOSpaceAbi` and
+// `DaoSpaceAbi`, differing only in capitalization — which is how the same
+// function ended up declared twice and how a stale v1 struct survived in one
+// copy while the other was current. Add new views here rather than forking a
+// second ABI for a second caller.
 // ---------------------------------------------------------------------------
 
 export const DAOSpaceAbi = [
@@ -136,12 +144,31 @@ export const DAOSpaceAbi = [
 		type: "function",
 	},
 	{
-		// Needed because a v2 vote payload carries the proposal version, and
-		// getLatestProposalInformation does not return it. Zero means the DAO has no
-		// such proposal — versions start at 1 on creation.
+		/**
+		 * Serves two callers. The membership path needs it because a v2 vote payload
+		 * carries the proposal version and `getLatestProposalInformation` does not
+		 * return it. The executor needs it as an absence probe: the DAO assigns
+		 * version 1 on creation, so 0 means "this DAO has never heard of this
+		 * proposal" — and `canExecuteProposal` / `isSupportThresholdReached` both
+		 * return `false` for an unknown id exactly as they do for one that merely has
+		 * not passed yet, so neither can tell "can never execute" from "not yet".
+		 */
 		inputs: [{internalType: "bytes16", name: "_proposalId", type: "bytes16"}],
 		name: "latestProposalVersion",
 		outputs: [{internalType: "uint8", name: "_version", type: "uint8"}],
+		stateMutability: "view",
+		type: "function",
+	},
+	{
+		/**
+		 * The exact predicate `_executeProposal` checks before it reverts with
+		 * `CanNotExecute()` (0xdf322356). Calling it first is a free `eth_call`;
+		 * letting it fail instead costs a sponsored UserOperation simulation and
+		 * produces a `proposal_reverted` log that reads like a fault.
+		 */
+		inputs: [{internalType: "bytes16", name: "_proposalId", type: "bytes16"}],
+		name: "canExecuteProposal",
+		outputs: [{internalType: "bool", name: "_canExecuteProposal", type: "bool"}],
 		stateMutability: "view",
 		type: "function",
 	},
@@ -211,26 +238,6 @@ export const TESTNET_SAFE_ADDRESSES = {
 // ---------------------------------------------------------------------------
 
 /** keccak256('GOVERNANCE.PROPOSAL_EXECUTED') — action hash for enter() */
-/**
- * DAOSpace ABI — the single view we need to avoid wasting sponsored simulations.
- *
- * `canExecuteProposal` is the exact predicate `_executeProposal` checks before
- * it reverts with `CanNotExecute()` (0xdf322356). Calling it first is a free
- * `eth_call`; letting it fail instead costs a sponsored UserOperation
- * simulation and produces a `proposal_reverted` log that reads like a fault.
- *
- * See geo-migration `contracts/src/contracts/DAOSpace.sol`.
- */
-export const DaoSpaceAbi = [
-	{
-		inputs: [{internalType: "bytes16", name: "_proposalId", type: "bytes16"}],
-		name: "canExecuteProposal",
-		outputs: [{internalType: "bool", name: "_canExecuteProposal", type: "bool"}],
-		stateMutability: "view",
-		type: "function",
-	},
-] as const
-
 export const PROPOSAL_EXECUTED_ACTION = "0x62a60c0a9681612871e0dafa0f24bb0c83cbdde8be5a6299979c88d382369e96" as Hex
 
 /** keccak256('GOVERNANCE.PROPOSAL_VOTED') — action hash for casting a vote via enter() */

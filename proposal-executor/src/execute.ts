@@ -31,7 +31,7 @@ import {
 import {entryPoint07Address} from "viem/account-abstraction"
 import {privateKeyToAccount} from "viem/accounts"
 import {
-	DaoSpaceAbi,
+	DAOSpaceAbi,
 	EMPTY_SIGNATURE,
 	getChain,
 	InfraError,
@@ -371,7 +371,7 @@ export function executeProposal(
 
 				const canExecute = await wallet.publicClient.readContract({
 					address: daoAddress,
-					abi: DaoSpaceAbi,
+					abi: DAOSpaceAbi,
 					functionName: "canExecuteProposal",
 					args: [proposalIdHex],
 				})

@@ -12,6 +12,9 @@
  *     for proposals that have no deadline set (NULL `execute_by`).
  *   - Adds the 60s CLOCK_SKEW_BUFFER only on the slow-late `end_time` check
  *     (slow-early runs while voting is ongoing, so no buffer needed).
+ *   - Skips `unexecutable_at IS NOT NULL`: proposals verified absent from their
+ *     DAO can never execute, so detecting them only burns an `eth_call` per tick
+ *     to re-learn that (see `proposals.unexecutable_at`).
  *
  * Fast-path proposals are NOT handled here — they auto-execute on-chain when
  * yes_count reaches `flat_support_threshold`, and the kg-indexer picks up
@@ -103,6 +106,7 @@ export const DETECTION_SQL = `
 SELECT pc.id, pc.space_id AS "spaceId"
 FROM proposals_current pc
 WHERE pc.executed_at IS NULL
+  AND pc.unexecutable_at IS NULL
   AND pc.voting_mode = 'Slow'
   AND pc.created_at::bigint <= $1::bigint
   AND (
