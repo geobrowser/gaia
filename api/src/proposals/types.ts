@@ -138,6 +138,12 @@ export interface ProposalWithVotes {
 	totalEditors: bigint
 	/** Unix timestamp when executed, null if not executed */
 	executedAt: bigint | null
+	/**
+	 * Unix timestamp when this proposal was verified permanently unexecutable
+	 * (the space's DAO has no record of it), null in the normal case. Forces
+	 * REJECTED — see `proposals.unexecutable_at`.
+	 */
+	unexecutableAt: bigint | null
 	/** Number of yes votes */
 	yesCount: bigint
 	/** Number of no votes */

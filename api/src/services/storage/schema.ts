@@ -523,6 +523,26 @@ export const proposals = pgTable(
 		 * Fast-path inline auto-exec via `_ping()`).
 		 */
 		executedAt: bigint("executed_at", {mode: "number"}),
+		/**
+		 * Unix-seconds timestamp when this proposal was *verified* to be permanently
+		 * unexecutable, or `null` (the normal case).
+		 *
+		 * Set only by an operator backfill that confirmed on-chain, per proposal,
+		 * that the space's DAO has no record of it — `latestProposalVersion` returns
+		 * 0, so `executeProposal` reverts `CanNotExecute()` and always will. The
+		 * migration copied proposal history into this database without recreating
+		 * those proposals on chain, which left them looking indefinitely pending: the
+		 * votes stored here resolve to EXECUTABLE, so the API reported
+		 * `canExecute: true` and the UI promised a "Pending execution" that no one
+		 * could ever complete.
+		 *
+		 * Identity-level for the same reason as `executed_at`: absence from the DAO
+		 * is a property of the proposal, not of any one version. Deliberately a
+		 * nullable timestamp rather than a row deletion — these proposals carry real
+		 * `PUBLISH` actions whose IPFS content is often still recoverable, so the
+		 * record has to survive; clearing the column restores the previous behaviour.
+		 */
+		unexecutableAt: bigint("unexecutable_at", {mode: "number"}),
 	},
 	(table) => [
 		index("proposals_space_id_idx").on(table.spaceId),

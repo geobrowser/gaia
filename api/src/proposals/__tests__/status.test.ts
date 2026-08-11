@@ -43,6 +43,7 @@ function makeProposal(overrides: Partial<ProposalWithVotes> = {}): ProposalWithV
 		executeBy: null,
 		totalEditors: 0n,
 		executedAt: null,
+		unexecutableAt: null,
 		yesCount: 0n,
 		noCount: 0n,
 		abstainCount: 0n,
@@ -850,5 +851,41 @@ describe("computeProposalStatus - isEarlyExecutable default", () => {
 		const result = computeProposalStatus(proposal, proposal.startTime + 1n)
 		expect(result.status).toBe("ACCEPTED")
 		expect(result.isEarlyExecutable).toBe(false)
+	})
+})
+
+// =============================================================================
+// V2: verified-unexecutable proposals (migration left them off-chain)
+// =============================================================================
+
+describe("computeProposalStatus - unexecutableAt", () => {
+	it("forces REJECTED even when the votes would otherwise pass", () => {
+		// This is the regression: these proposals resolve EXECUTABLE on their stored
+		// votes, so the API advertised canExecute=true and the UI promised a
+		// "Pending execution" that reverts CanNotExecute() forever.
+		const passing = makeProposal({votingMode: "Fast", flatSupportThreshold: 1n, yesCount: 5n})
+		expect(computeProposalStatus(passing, passing.startTime + 1n).status).toBe("EXECUTABLE")
+
+		const flagged = makeProposal({
+			votingMode: "Fast",
+			flatSupportThreshold: 1n,
+			yesCount: 5n,
+			unexecutableAt: 1234567890n,
+		})
+		const result = computeProposalStatus(flagged, flagged.startTime + 1n)
+		expect(result.status).toBe("REJECTED")
+		expect(result.isThresholdReached).toBe(false)
+		expect(result.isEarlyExecutable).toBe(false)
+	})
+
+	it("does not override ACCEPTED — execution is the stronger fact", () => {
+		const proposal = makeProposal({executedAt: 1234567890n, unexecutableAt: 1234567890n})
+		expect(computeProposalStatus(proposal, proposal.startTime + 1n).status).toBe("ACCEPTED")
+	})
+
+	it("leaves every other proposal untouched when null", () => {
+		const proposal = makeProposal({votingMode: "Fast", flatSupportThreshold: 1n, yesCount: 5n})
+		expect(proposal.unexecutableAt).toBeNull()
+		expect(computeProposalStatus(proposal, proposal.startTime + 1n).status).toBe("EXECUTABLE")
 	})
 })

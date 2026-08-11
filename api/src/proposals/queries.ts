@@ -76,6 +76,7 @@ interface BaseProposalRow extends Record<string, unknown> {
 	execute_by: string | null
 	total_editors: string
 	executed_at: string | null
+	unexecutable_at: string | null
 	yes_count: string
 	no_count: string
 	abstain_count: string
@@ -152,6 +153,7 @@ function mapBaseFields(row: BaseProposalRow) {
 		executeBy: row.execute_by !== null ? BigInt(row.execute_by) : null,
 		totalEditors: BigInt(row.total_editors),
 		executedAt: row.executed_at !== null ? BigInt(row.executed_at) : null,
+		unexecutableAt: row.unexecutable_at !== null ? BigInt(row.unexecutable_at) : null,
 		yesCount: BigInt(row.yes_count),
 		noCount: BigInt(row.no_count),
 		abstainCount: BigInt(row.abstain_count),
@@ -227,6 +229,7 @@ export function getProposalWithVotes(
           p.execute_by,
           ${sqlTotalEditors()} AS total_editors,
           p.executed_at,
+          p.unexecutable_at,
           p.yes_count,
           p.no_count,
           p.abstain_count,
@@ -358,10 +361,15 @@ function sqlIsAccepted() {
  * Deliberately does NOT gate on `execute_by` — see the note on `sqlIsRejected`
  * for why the deadline must never override an outcome the votes already
  * resolved.
+ *
+ * DOES gate on `unexecutable_at`: a proposal verified absent from its DAO can
+ * never execute no matter what the stored votes say, so it must not be offered
+ * as executable (see `proposals.unexecutable_at`).
  */
 function sqlIsExecutable(nowSeconds: bigint) {
 	return sql`(
 		p.executed_at IS NULL
+		AND p.unexecutable_at IS NULL
 		AND p.end_time > 0
 		AND (
 			(p.voting_mode = 'Fast' AND p.yes_count > (CASE WHEN p.flat_support_threshold = 0 THEN 0 ELSE p.flat_support_threshold - 1 END))
@@ -422,6 +430,7 @@ function sqlVoteOutcomeUndecided(nowSeconds: bigint) {
 function sqlIsProposed(nowSeconds: bigint) {
 	return sql`(
 		p.executed_at IS NULL
+		AND p.unexecutable_at IS NULL
 		AND ${sqlVoteOutcomeUndecided(nowSeconds)}
 		AND (p.execute_by IS NULL OR ${nowSeconds}::bigint <= p.execute_by)
 	)`
@@ -429,6 +438,9 @@ function sqlIsProposed(nowSeconds: bigint) {
 
 /**
  * Proposal is REJECTED iff not executed and either:
+ *   - it is verified permanently unexecutable (`unexecutable_at IS NOT NULL`) —
+ *     the DAO has no record of it, so no vote outcome can ever be applied and
+ *     the only honest terminal state is "not accepted", OR
  *   - the voting window started and ended (end_time > 0 AND now > end_time)
  *     without any executable path matching, regardless of `execute_by` — a
  *     proposal that lost its vote is rejected whether or not its deadline
@@ -451,7 +463,8 @@ function sqlIsRejected(nowSeconds: bigint) {
 	return sql`(
 		p.executed_at IS NULL
 		AND (
-			(
+			p.unexecutable_at IS NOT NULL
+			OR (
 				p.end_time > 0
 				AND ${nowSeconds}::bigint > p.end_time
 				AND NOT (
@@ -815,6 +828,7 @@ export function listProposalsInSpace(
           p.execute_by,
           ${sqlTotalEditors()} AS total_editors,
           p.executed_at,
+          p.unexecutable_at,
           p.created_at,
           p.yes_count,
           p.no_count,

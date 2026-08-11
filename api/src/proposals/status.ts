@@ -15,6 +15,11 @@ import {RATIO_BASE} from "./types"
  * This is a PURE function - time is injected to enable deterministic testing.
  *
  * Decision order:
+ * 0. Verified permanently unexecutable (`unexecutableAt`) → REJECTED, checked
+ *    right after execution and before any vote arithmetic. The migration left
+ *    proposals in this database that were never created on chain; their stored
+ *    votes resolve to EXECUTABLE, so without this they advertise a "Pending
+ *    execution" that reverts `CanNotExecute()` forever.
  * 1. Already executed → ACCEPTED
  * 2. Voting window not started yet (`endTime == 0`) → PROPOSED. In V2 the
  *    window (`startDate`/`lastDate`/`executeBy`) stays zero until the first
@@ -55,6 +60,20 @@ export function computeProposalStatus(
 			status: "ACCEPTED",
 			isQuorumReached: true,
 			isThresholdReached: true,
+			isEarlyExecutable: false,
+		}
+	}
+
+	// Verified permanently unexecutable -> REJECTED. Checked before any vote
+	// arithmetic because the votes are irrelevant: the DAO has no record of this
+	// proposal, so nothing can ever apply its outcome. Ranks below `executedAt` so
+	// a proposal that somehow both executed and got flagged still reads ACCEPTED —
+	// execution is the stronger fact.
+	if (proposal.unexecutableAt !== null) {
+		return {
+			status: "REJECTED",
+			isQuorumReached: false,
+			isThresholdReached: false,
 			isEarlyExecutable: false,
 		}
 	}

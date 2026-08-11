@@ -78,6 +78,7 @@ function makeDbProposalRow(overrides: Partial<Record<string, unknown>> = {}) {
 		execute_by: null,
 		total_editors: "0",
 		executed_at: null,
+		unexecutable_at: null,
 		created_at: new Date().toISOString(),
 		yes_count: "0",
 		no_count: "0",
@@ -111,6 +112,7 @@ function makeProposal(overrides: Partial<ProposalWithVotes> = {}): ProposalWithV
 		executeBy: null,
 		totalEditors: 0n,
 		executedAt: null,
+		unexecutableAt: null,
 		yesCount: 0n,
 		noCount: 0n,
 		abstainCount: 0n,
@@ -604,6 +606,25 @@ describe("SQL/TypeScript status parity", () => {
 			const proposal = makeProposal({executedAt: now - 100n})
 			const result = computeProposalStatus(proposal, now)
 			expect(result.status).toBe("ACCEPTED")
+		})
+	})
+
+	describe("REJECTED status - verified unexecutable", () => {
+		// Mirrors the `p.unexecutable_at IS NOT NULL` branch of `sqlIsRejected` and
+		// the `IS NULL` guards added to `sqlIsExecutable` / `sqlIsProposed`.
+		it("proposal is REJECTED when unexecutableAt is set, despite passing votes", () => {
+			const proposal = makeProposal({
+				votingMode: "Fast",
+				threshold: 10n,
+				yesCount: 15n,
+				unexecutableAt: now - 100n,
+			})
+			expect(computeProposalStatus(proposal, now).status).toBe("REJECTED")
+		})
+
+		it("executedAt still wins over unexecutableAt", () => {
+			const proposal = makeProposal({executedAt: now - 100n, unexecutableAt: now - 100n})
+			expect(computeProposalStatus(proposal, now).status).toBe("ACCEPTED")
 		})
 	})
 

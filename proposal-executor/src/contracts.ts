@@ -229,6 +229,22 @@ export const DaoSpaceAbi = [
 		stateMutability: "view",
 		type: "function",
 	},
+	/**
+	 * The DAO assigns version 1 when a proposal is created, so 0 means "this DAO
+	 * has never heard of this proposal".
+	 *
+	 * This is the only reliable absence probe. `canExecuteProposal` and
+	 * `isSupportThresholdReached` both return `false` for an unknown proposal id
+	 * exactly as they do for one that merely has not passed yet, so neither can
+	 * distinguish "can never execute" from "cannot execute yet".
+	 */
+	{
+		inputs: [{internalType: "bytes16", name: "_proposalId", type: "bytes16"}],
+		name: "latestProposalVersion",
+		outputs: [{internalType: "uint8", name: "_latestProposalVersion", type: "uint8"}],
+		stateMutability: "view",
+		type: "function",
+	},
 ] as const
 
 export const PROPOSAL_EXECUTED_ACTION = "0x62a60c0a9681612871e0dafa0f24bb0c83cbdde8be5a6299979c88d382369e96" as Hex
