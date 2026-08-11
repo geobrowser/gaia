@@ -11,11 +11,14 @@ import {classifyDbFailure} from "../services/dbFailures"
 import {
 	getGraphqlPressureSnapshot,
 	recordGraphqlAcquireTimeout,
+	recordGraphqlSlowAcquire,
 	type SaturationSnapshot,
+	SLOW_ACQUIRE_MS,
 	shouldShedPoolTraffic,
 } from "../services/dbSaturation"
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
+import {useAdmissionControl} from "./admissionControl"
 import {useCostLogger} from "./costLoggerPlugin"
 import EntityComputedTextFilterPlugin from "./entityComputedTextFilterPlugin"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
@@ -342,7 +345,11 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 			}
 
 			const acquireWaitMs = Date.now() - acquireStartMs
-			if (acquireWaitMs > 250) {
+			if (acquireWaitMs > SLOW_ACQUIRE_MS) {
+				// Feed the saturation FSM, not just the log. This is the signal
+				// that moves when the event loop is starved rather than the pool
+				// being exhausted — see dbSaturation.ts.
+				recordGraphqlSlowAcquire()
 				log.warn("PostGraphile pool acquire was slow", {
 					operationName,
 					acquireWaitMs,
@@ -456,6 +463,10 @@ const sharedPlugins = [
 	...(responseCachePlugin ? [responseCachePlugin] : []),
 	customValidationRules,
 	useCostLogger(),
+	// Must follow useCostLogger — it reads the score that plugin stashes on the
+	// request context. Must precede usePgClient so a refused operation never
+	// checks out a connection or touches the database.
+	useAdmissionControl(),
 	useGraphQLInstrumentation(),
 	useSearchInvocationLogger(),
 	usePgClient(pgPool),

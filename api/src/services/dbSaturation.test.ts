@@ -1,6 +1,11 @@
 import {describe, expect, it} from "vitest"
 
-import {getPoolSaturationSnapshot, recordPoolAcquireTimeout, shouldShedPoolTraffic} from "./dbSaturation"
+import {
+	getPoolSaturationSnapshot,
+	recordPoolAcquireTimeout,
+	recordPoolSlowAcquire,
+	shouldShedPoolTraffic,
+} from "./dbSaturation"
 
 type PoolStats = {
 	totalConnections: number
@@ -174,5 +179,81 @@ describe("dbSaturation load shedding", () => {
 		const afterRelease = getPoolSaturationSnapshot(poolName, normalStats, 55_001)
 		expect(afterRelease.isSaturated).toBe(false)
 		expect(shouldShedPoolTraffic(afterRelease)).toBe(false)
+	})
+
+	// Regression for the 2026-08-06 incident: the api stalled for hours while
+	// every configured input read normal. These are the numbers observed on a
+	// dying pod — a free pool, nothing queued, and acquires taking 500ms+
+	// because the event loop could not run the callback.
+	it("records slow acquires but does NOT raise a pressure reason", () => {
+		const poolName = uniquePoolName("slow-acquire")
+		const healthyStats: PoolStats = {
+			totalConnections: 33,
+			idleConnections: 19,
+			waitingCount: 0,
+			maxConnections: 50,
+		}
+
+		// Sanity: none of the pre-existing signals fire on these stats.
+		const before = getPoolSaturationSnapshot(poolName, healthyStats, 1_000)
+		expect(before.reasons).toEqual([])
+
+		for (let i = 0; i < 5; i++) {
+			recordPoolSlowAcquire(poolName, 1_000 + i)
+		}
+
+		const after = getPoolSaturationSnapshot(poolName, healthyStats, 1_100)
+		// Counted and surfaced for observability...
+		expect(after.recentSlowAcquires).toBe(5)
+		// ...but deliberately not a pressure reason. 48% of populated 30s
+		// windows in healthy production already contain >= 5 slow acquires, so
+		// shedding on this would refuse ordinary traffic — and to a client that
+		// retries 503s. See the threshold comment in dbSaturation.ts.
+		expect(after.reasons).toEqual([])
+		expect(after.isPressured).toBe(false)
+		expect(after.utilizationPercent).toBe(66)
+		expect(after.waitingCount).toBe(0)
+	})
+
+	it("counts slow acquires independently of the reported reasons", () => {
+		const poolName = uniquePoolName("slow-acquire-under")
+		recordPoolSlowAcquire(poolName, 1_000)
+		recordPoolSlowAcquire(poolName, 1_001)
+
+		const snapshot = getPoolSaturationSnapshot(poolName, baseStats, 1_100)
+		expect(snapshot.recentSlowAcquires).toBe(2)
+		expect(snapshot.reasons).toEqual([])
+	})
+
+	it("keeps slow acquires separate from acquire timeouts", () => {
+		const poolName = uniquePoolName("slow-vs-timeout")
+		for (let i = 0; i < 5; i++) recordPoolSlowAcquire(poolName, 1_000 + i)
+
+		const snapshot = getPoolSaturationSnapshot(poolName, baseStats, 1_100)
+		expect(snapshot.recentSlowAcquires).toBe(5)
+		expect(snapshot.recentAcquireTimeouts).toBe(0)
+	})
+
+	it("never sheds on slow acquires alone, however many accumulate", () => {
+		const poolName = uniquePoolName("slow-acquire-no-shed")
+		const healthyStats: PoolStats = {
+			totalConnections: 33,
+			idleConnections: 19,
+			waitingCount: 0,
+			maxConnections: 50,
+		}
+
+		// Far more than the busiest window ever observed in production (21),
+		// sustained well past the activation window. Must still not shed.
+		for (let i = 0; i < 50; i++) recordPoolSlowAcquire(poolName, 10_000 + i)
+		const first = getPoolSaturationSnapshot(poolName, healthyStats, 10_100)
+		expect(shouldShedPoolTraffic(first)).toBe(false)
+
+		for (let i = 0; i < 50; i++) recordPoolSlowAcquire(poolName, 25_000 + i)
+		const later = getPoolSaturationSnapshot(poolName, healthyStats, 25_100)
+		expect(later.recentSlowAcquires).toBeGreaterThan(21)
+		expect(later.isPressured).toBe(false)
+		expect(later.isSaturated).toBe(false)
+		expect(shouldShedPoolTraffic(later)).toBe(false)
 	})
 })

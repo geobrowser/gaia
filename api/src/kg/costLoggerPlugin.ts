@@ -4,6 +4,7 @@ import {
 	type DocumentNode,
 	type FieldNode,
 	type FragmentDefinitionNode,
+	GraphQLError,
 	Kind,
 	type OperationDefinitionNode,
 	print,
@@ -67,6 +68,40 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
 //               structurally-unbounded queries worth flagging.
 //   ~1500       50-level deeply nested adversarial probe.
 const COST_LOG_THRESHOLD = parsePositiveIntEnv("GRAPHQL_COST_LOG_THRESHOLD", 200)
+
+// ---------------------------------------------------------------------------
+// Hard ceiling (Phase 2 — enforcement)
+// ---------------------------------------------------------------------------
+// Distinct from COST_LOG_THRESHOLD, and deliberately far above it.
+//
+// The log threshold is NOT a violation line. Measured over 19,836 real
+// queries on one pod:
+//
+//   <=150  37.5%     <=220  85.9%     <=320  99.87%
+//   <=200  56.0%     <=260  96.8%     <=400  100%
+//
+// 44% of ordinary traffic already scores above 200, so enforcing there would
+// reject nearly half of all requests. Nothing in production exceeds 400.
+//
+// The ceiling exists for a different failure: the cost walker is
+// multiplicative in BigInt, and a deeply nested adversarial document scores
+// ~1500 (10^150 worst-case nodes). No legitimate client needs that. 500
+// rejects zero current traffic while closing the door on a document whose
+// worst case cannot be executed at all.
+//
+// This does NOT prevent the 2026-08-06 incident class. That load scored 228 —
+// squarely inside normal. Capacity is bounded by admission control, not here.
+//
+// Set GRAPHQL_COST_REJECT_THRESHOLD=0 to disable enforcement outright.
+function parseCeilingEnv(name: string, fallback: number): number {
+	const raw = process.env[name]
+	if (raw === undefined) return fallback
+	const parsed = Number.parseInt(raw, 10)
+	if (!Number.isFinite(parsed) || parsed < 0) return fallback
+	return parsed
+}
+
+const COST_REJECT_THRESHOLD = parseCeilingEnv("GRAPHQL_COST_REJECT_THRESHOLD", 500)
 
 // ---------------------------------------------------------------------------
 // Prometheus histogram metric — gaia_api_graphql_query_cost
@@ -596,6 +631,10 @@ function resolveValue(value: ValueNode, vars: Record<string, unknown>): unknown 
 export function useCostLogger(): Plugin {
 	return {
 		onExecute({args}) {
+			// Held outside the try so the shadow-mode catch below cannot swallow
+			// a deliberate rejection. The catch exists to stop *plugin bugs*
+			// breaking a request; it must not also suppress enforcement.
+			let rejection: GraphQLError | null = null
 			try {
 				if (isIntrospectionOnlyOperation(args.document, args.operationName)) return
 
@@ -630,6 +669,33 @@ export function useCostLogger(): Plugin {
 					ctx[GRAPHQL_QUERY_COST_CONTEXT_KEY] = cost
 				}
 
+				if (COST_REJECT_THRESHOLD > 0 && cost >= COST_REJECT_THRESHOLD) {
+					const rejectedQuery = print(args.document)
+					const rejectHeaders = (args.contextValue as {request?: Request} | undefined)?.request?.headers
+					log.warn("GraphQL query rejected: cost ceiling", {
+						cost,
+						ceiling: COST_REJECT_THRESHOLD,
+						operationName: getOperationLabel(args),
+						queryFingerprint: graphqlQueryFingerprint(rejectedQuery),
+						query: rejectedQuery,
+						variables: args.variableValues,
+						origin: rejectHeaders?.get("origin") ?? null,
+						clientIp: rejectHeaders ? extractClientIp(rejectHeaders) : null,
+					})
+					rejection = new GraphQLError(
+						`Query complexity ${cost} exceeds the maximum of ${COST_REJECT_THRESHOLD}. ` +
+							"Reduce nesting depth or the `first` values on nested list fields.",
+						{
+							extensions: {
+								code: "BAD_USER_INPUT",
+								cost,
+								maxCost: COST_REJECT_THRESHOLD,
+								http: {status: 400},
+							},
+						},
+					)
+				}
+
 				if (cost >= COST_LOG_THRESHOLD) {
 					const fullQuery = print(args.document)
 					const headers = (args.contextValue as {request?: Request} | undefined)?.request?.headers
@@ -655,6 +721,10 @@ export function useCostLogger(): Plugin {
 					// Nothing we can do; keep the request flowing.
 				}
 			}
+
+			// Outside the catch on purpose. A plugin bug must not break the
+			// request; a query over the ceiling must.
+			if (rejection) throw rejection
 		},
 	}
 }
