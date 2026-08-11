@@ -48,6 +48,15 @@ const START_DATE = NOW - 3_600n // opened an hour ago
 const LAST_DATE = NOW + 3_600n // closes in an hour
 /** A ProposalParameters tuple whose only fields the read uses are startDate/lastDate. */
 const OPEN_PARAMS = {startDate: START_DATE, lastDate: LAST_DATE}
+/**
+ * The v2 shape of a proposal nobody has voted on yet: the voting window is not
+ * snapshotted until the first vote, so both bounds are zero.
+ */
+const UNSTARTED_PARAMS = {startDate: 0n, lastDate: 0n}
+/** A creator space id the DAO actually recorded (any non-zero bytes16). */
+const REAL_CREATOR = "0x70a0a4ddda1057868ae4feebceaaacef"
+/** What getLatestProposalInformation returns for a proposal the DAO never created. */
+const ZERO_CREATOR = "0x00000000000000000000000000000000"
 
 /**
  * Minimal SmartWallet stub. sendTransaction / readContract / getBlock are injected
@@ -230,7 +239,7 @@ describe("readProposalTally", () => {
 				expect(args.args[0]).toBe(PROPOSAL_BYTES16)
 				return [
 					false, // executed
-					"0xcreator", // creator
+					REAL_CREATOR, // creator
 					OPEN_PARAMS, // parameters → startDate/lastDate
 					{yes: 3n, no: 1n, abstain: 2n}, // tally
 					[], // actions
@@ -246,7 +255,20 @@ describe("readProposalTally", () => {
 			abstain: 2n,
 			startDate: START_DATE,
 			lastDate: LAST_DATE,
+			existsOnChain: true,
 		})
+	})
+
+	// A proposal the DAO has never heard of does not revert — it returns an all-zero
+	// struct. `creator` is the only field that separates it from a genuine untouched
+	// request, so the read has to surface it or isEligibleToVote cannot tell them apart.
+	test("reports existsOnChain false when the DAO returns a zero creator", async () => {
+		const wallet = fakeWallet({
+			readContract: async () => [false, ZERO_CREATOR, UNSTARTED_PARAMS, {yes: 0n, no: 0n, abstain: 0n}, []],
+		})
+
+		const tally = await Effect.runPromise(readProposalTally(wallet, DAO_SPACE_ADDR, PROPOSAL_UUID))
+		expect(tally.existsOnChain).toBe(false)
 	})
 
 	test("surfaces a read failure as an InfraError carrying the proposalId", async () => {
@@ -274,10 +296,24 @@ describe("isEligibleToVote", () => {
 		abstain: 0n,
 		startDate: START_DATE,
 		lastDate: LAST_DATE,
+		existsOnChain: true,
 	}
 
 	test("eligible iff !executed && zero tally && voting window open", () => {
 		expect(isEligibleToVote(fresh, NOW)).toBe(true)
+	})
+
+	// The case the whole auto-accept path exists to handle, and the one v2 broke: a
+	// real request nobody has voted on has a zero window, and must still be voted on.
+	test("eligible when the voting window has not been snapshotted yet (v2 zero window)", () => {
+		expect(isEligibleToVote({...fresh, ...UNSTARTED_PARAMS}, NOW)).toBe(true)
+	})
+
+	// Counterpart guard: an all-zero read that is zero because the DAO has no such
+	// proposal must NOT be voted on, or the bot burns a sponsored revert every cycle
+	// forever. Identical to the case above in every field except existsOnChain.
+	test("ineligible when the proposal is absent from the DAO, despite looking untouched", () => {
+		expect(isEligibleToVote({...fresh, ...UNSTARTED_PARAMS, existsOnChain: false}, NOW)).toBe(false)
 	})
 
 	test("ineligible when already executed", () => {
@@ -317,6 +353,19 @@ describe("isVotingOpen", () => {
 	test("open at exactly startDate, closed just before it", () => {
 		expect(isVotingOpen(START_DATE, START_DATE, LAST_DATE)).toBe(true)
 		expect(isVotingOpen(START_DATE - 1n, START_DATE, LAST_DATE)).toBe(false)
+	})
+
+	// v2 snapshots startDate/lastDate on the first cast vote, so a zero lastDate is the
+	// contract's own "not started" sentinel — open, not closed at the epoch. Reading it
+	// as closed is what silently disabled auto-accept for every untouched request.
+	test("a zero window means not-yet-started, which is open", () => {
+		expect(isVotingOpen(NOW, 0n, 0n)).toBe(true)
+		// Open no matter how far the clock has advanced — there is no deadline yet.
+		expect(isVotingOpen(NOW + 10_000_000n, 0n, 0n)).toBe(true)
+	})
+
+	test("a real elapsed window is still closed (the zero case must not swallow it)", () => {
+		expect(isVotingOpen(LAST_DATE + 61n, START_DATE, LAST_DATE, 60n)).toBe(false)
 	})
 
 	test("the buffer extends the close, never shrinks it", () => {

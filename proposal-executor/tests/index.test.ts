@@ -381,9 +381,18 @@ const REQUEST_B: MembershipRequest = {
 	requesterId: "33333333-3333-3333-3333-333333333333",
 }
 
-/** A fully-eligible tally: not executed, zero votes, voting window wide open. */
+/** A fully-eligible tally: on chain, not executed, zero votes, voting window wide open. */
 function makeTally(overrides: Partial<ProposalTally> = {}): ProposalTally {
-	return {executed: false, yes: 0n, no: 0n, abstain: 0n, startDate: 0n, lastDate: 10_000_000_000n, ...overrides}
+	return {
+		executed: false,
+		yes: 0n,
+		no: 0n,
+		abstain: 0n,
+		startDate: 0n,
+		lastDate: 10_000_000_000n,
+		existsOnChain: true,
+		...overrides,
+	}
 }
 
 interface FakeWalletOpts {
@@ -417,7 +426,10 @@ function makeFakeWallet(opts: FakeWalletOpts = {}): FakeWallet {
 				if (functionName === "getLatestProposalInformation") {
 					return [
 						tally.executed,
-						`0x${"0".repeat(32)}`,
+						// The creator slot IS the existsOnChain signal — a zero bytes16 means
+						// the DAO never created this proposal, so it must track the fixture
+						// rather than being hardcoded zero (which would read as "absent").
+						tally.existsOnChain ? `0x${"1".repeat(32)}` : `0x${"0".repeat(32)}`,
 						{startDate: tally.startDate, lastDate: tally.lastDate},
 						{yes: tally.yes, no: tally.no, abstain: tally.abstain},
 						[],
@@ -489,6 +501,21 @@ describe("classifyMembershipSkip — stage-2 skip reasons", () => {
 		// now=1000, lastDate=100 (+60s skew) → window closed, yet the tally is zero:
 		// the cause is expiry, not a recorded vote.
 		expect(classifyMembershipSkip(makeTally({lastDate: 100n}), 1000n)).toBe("voting_window_closed")
+	})
+
+	// An absent proposal reads back all-zero, so it also satisfies "zero tally" and
+	// "not executed". It has to be named first or the reason reported would be a
+	// misleading transient one, hiding a permanently dead proposal behind a retryable label.
+	test("a proposal absent from the DAO is skipped as not_on_chain, not a transient reason", () => {
+		expect(classifyMembershipSkip(makeTally({existsOnChain: false}), 1000n)).toBe("not_on_chain")
+		// Even when another cause is also technically true, absence wins.
+		expect(classifyMembershipSkip(makeTally({existsOnChain: false, lastDate: 100n}), 1000n)).toBe("not_on_chain")
+	})
+
+	// Regression for the v2 lazy voting window: an untouched request has startDate and
+	// lastDate of 0, and must classify as eligible (null) rather than voting_window_closed.
+	test("an untouched request with a zero window is eligible, not voting_window_closed", () => {
+		expect(classifyMembershipSkip(makeTally({startDate: 0n, lastDate: 0n}), 1_800_000_000n)).toBeNull()
 	})
 })
 

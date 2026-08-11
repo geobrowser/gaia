@@ -234,6 +234,16 @@ describe("membership detection SQL", () => {
 		// on-chain eligibility check would still vote on.
 		expect(membershipSql).toContain("$2::bigint <= p.end_time + 60")
 	})
+
+	// The regression that made auto-accept admit nobody on v2. Governance v2 snapshots
+	// the voting window on the first vote, so every proposal without a vote has
+	// end_time = 0. Without the zero branch the predicate reads `now <= 60` — false for
+	// all of recorded time — and it is mutually exclusive with the NOT EXISTS vote check
+	// above: end_time only becomes non-zero once a vote exists, which is exactly when
+	// this query stops considering the row. No row could ever satisfy both.
+	test("treats end_time = 0 as a not-yet-started (open) window, not one closed at the epoch", () => {
+		expect(membershipSql).toContain("(p.end_time = 0 OR $2::bigint <= p.end_time + 60)")
+	})
 })
 
 // ---------------------------------------------------------------------------

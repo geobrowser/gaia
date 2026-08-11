@@ -378,12 +378,16 @@ export function bytes16ToUuid(spaceId: Hex): string {
  * - `voting_window_closed` — stage 2: the voting period has ended, so the protocol
  *   would reject a late vote. An untouched-but-expired request is left alone — this is
  *   independent of the tally, which may well be zero.
+ * - `not_on_chain` — stage 2: the DAO has no such proposal (zero `_creator`), so a vote
+ *   could only ever revert. These are migration artifacts — present in the v2 database,
+ *   never created on chain — and they are permanent, not transient.
  */
 export type MembershipSkipReason =
 	| "indexed_vote"
 	| "already_executed"
 	| "onchain_tally_nonzero"
 	| "voting_window_closed"
+	| "not_on_chain"
 
 /**
  * The outcome of processing one membership request:
@@ -420,11 +424,15 @@ interface MembershipSummary {
  * Returns `null` when the request is still eligible (the bot should vote), otherwise
  * the specific reason it is ineligible. Stays in lock-step with isEligibleToVote — it
  * returns null in exactly the cases that function returns true, then names the cause:
- * executed first, then a non-zero tally, and finally a closed voting window (the
- * remaining cause for an untouched, unexecuted request).
+ * absent from the DAO first, then executed, then a non-zero tally, and finally a closed
+ * voting window (the remaining cause for an untouched, unexecuted request).
+ *
+ * `not_on_chain` is tested first because an absent proposal reads back as all zeros, so
+ * every later branch would also match it and report a misleading cause.
  */
 export function classifyMembershipSkip(tally: ProposalTally, nowSeconds: bigint): MembershipSkipReason | null {
 	if (isEligibleToVote(tally, nowSeconds)) return null
+	if (!tally.existsOnChain) return "not_on_chain"
 	if (tally.executed) return "already_executed"
 	if (tally.yes !== 0n || tally.no !== 0n || tally.abstain !== 0n) return "onchain_tally_nonzero"
 	return "voting_window_closed"

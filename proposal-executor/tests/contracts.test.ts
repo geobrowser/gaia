@@ -67,50 +67,75 @@ describe("DAOSpaceAbi", () => {
 		expect(tally?.components?.every((c) => c.type === "uint256")).toBe(true)
 	})
 
-	test("ProposalParameters matches the deployed 5-field struct (votingMode, supportThreshold, quorum, startDate, lastDate)", () => {
+	test("ProposalParameters matches the deployed v2 8-field struct", () => {
 		const params = getInfo?.outputs?.[2]
 		expect(params?.type).toBe("tuple")
 		// Authoritative source: geo-contracts-foundry IDAOSpace.ProposalParameters.
-		// The struct has exactly 5 fields; an over- or under-count silently misaligns
+		// The v2 struct has exactly 8 fields; an over- or under-count silently misaligns
 		// the startDate/lastDate slot reads in readProposalTally (overflow / garbage),
 		// which is what the on-chain decode regression below guards against end-to-end.
+		// The 5-field v1 shape this used to declare belongs to chain 19411, which is
+		// being retired; on 55516 it made startDate read flatSupportThreshold.
 		expect(params?.components?.map((c) => c.name)).toEqual([
 			"votingMode",
-			"supportThreshold",
+			"partialPercentageSupportThreshold",
+			"universalPercentageSupportThreshold",
+			"flatSupportThreshold",
 			"quorum",
 			"startDate",
 			"lastDate",
+			"executeBy",
 		])
-		expect(params?.components?.map((c) => c.type)).toEqual(["uint8", "uint256", "uint256", "uint256", "uint256"])
+		expect(params?.components?.map((c) => c.type)).toEqual([
+			"uint8",
+			"uint256",
+			"uint256",
+			"uint256",
+			"uint256",
+			"uint256",
+			"uint256",
+			"uint256",
+		])
 	})
 
-	// Regression for the ABI struct-shape bug: decode REAL on-chain return bytes (captured
-	// from getLatestProposalInformation on the Geo testnet) through DAOSpaceAbi and assert the
-	// fields land correctly. The earlier 8-field ProposalParameters misaligned the parameters
-	// slots, so startDate/lastDate read garbage and viem threw a safe-integer overflow. A
-	// fixture-based decode — not a self-consistent round-trip — is the only thing that catches
-	// an ABI that doesn't match the deployed contract. Words: executed=false, creator (bytes16),
-	// params(votingMode=1, supportThreshold=0, quorum=1, startDate, lastDate), tally(0,0,0), 1 action.
-	test("decodes a real getLatestProposalInformation return with correct startDate/lastDate", () => {
+	// Regression for the ABI struct-shape bug: decode REAL on-chain return bytes through
+	// DAOSpaceAbi and assert the fields land correctly. A fixture-based decode — not a
+	// self-consistent round-trip — is the only thing that catches an ABI that doesn't
+	// match the deployed contract.
+	//
+	// Captured from chain 55516 (the v2 stack behind geobrowser.io) on 2026-08-11:
+	// DAOSpace 0xF3E30A62…111222, proposal c9b38b02…489101, a real member request that
+	// the bot had failed to auto-accept. The previous fixture came from chain 19411,
+	// whose v1 contract really does return the 5-field struct — which is exactly how an
+	// ABI wrong for v2 kept a green test suite. Decoding these v2 bytes through the
+	// 5-field shape slid every later slot and threw a safe-integer overflow.
+	//
+	// Note startDate/lastDate/executeBy are all 0 while the tally is empty: v2 snapshots
+	// the voting window on the first vote, so "untouched" and "zero window" coincide.
+	test("decodes a real v2 getLatestProposalInformation return with correct startDate/lastDate", () => {
 		const raw = ("0x" +
 			"0000000000000000000000000000000000000000000000000000000000000000" + // executed = false
-			"924ac01ba0a4355f16f40e0dfdc4823000000000000000000000000000000000" + // creator (bytes16)
+			"70a0a4ddda1057868ae4feebceaaacef00000000000000000000000000000000" + // creator (bytes16) — non-zero: the DAO knows this proposal
 			"0000000000000000000000000000000000000000000000000000000000000001" + // votingMode = Fast
-			"0000000000000000000000000000000000000000000000000000000000000000" + // supportThreshold
-			"0000000000000000000000000000000000000000000000000000000000000001" + // quorum
-			"000000000000000000000000000000000000000000000000000000006a2c457c" + // startDate = 1781286268
-			"000000000000000000000000000000000000000000000000000000006a2d96fc" + // lastDate  = 1781372668
+			"00000000000000000000000000000000000000000000000000000000004dd1e0" + // partialPercentageSupportThreshold = 5100000
+			"00000000000000000000000000000000000000000000000000000000004dd1e0" + // universalPercentageSupportThreshold = 5100000
+			"0000000000000000000000000000000000000000000000000000000000000001" + // flatSupportThreshold = 1
+			"0000000000000000000000000000000000000000000000000000000000000001" + // quorum = 1
+			"0000000000000000000000000000000000000000000000000000000000000000" + // startDate = 0 (window not snapshotted)
+			"0000000000000000000000000000000000000000000000000000000000000000" + // lastDate  = 0 (window not snapshotted)
+			"0000000000000000000000000000000000000000000000000000000000000000" + // executeBy = 0
 			"0000000000000000000000000000000000000000000000000000000000000000" + // tally.yes
 			"0000000000000000000000000000000000000000000000000000000000000000" + // tally.no
 			"0000000000000000000000000000000000000000000000000000000000000000" + // tally.abstain
-			"0000000000000000000000000000000000000000000000000000000000000160" + // actions offset
+			"00000000000000000000000000000000000000000000000000000000000001c0" + // actions offset
 			"0000000000000000000000000000000000000000000000000000000000000001" + // actions.length = 1
 			"0000000000000000000000000000000000000000000000000000000000000020" + // actions[0] offset
-			"0000000000000000000000007fadb2a38e44a34e6256273b149e6f436e911713" + // actions[0].to
+			"000000000000000000000000f3e30a621aaef2e924bbf777440999b973111222" + // actions[0].toAddress
+			"0000000000000000000000000000000000000000000000000000000000000000" + // actions[0].toSpaceId
 			"0000000000000000000000000000000000000000000000000000000000000000" + // actions[0].value
-			"0000000000000000000000000000000000000000000000000000000000000060" + // actions[0].data offset
+			"0000000000000000000000000000000000000000000000000000000000000080" + // actions[0].data offset
 			"0000000000000000000000000000000000000000000000000000000000000024" + // actions[0].data length = 36
-			"2afbe350924ac01ba0a4355f16f40e0dfdc48230000000000000000000000000" + // actions[0].data
+			"2afbe35070a0a4ddda1057868ae4feebceaaacef000000000000000000000000" + // actions[0].data — addMember(requester)
 			"0000000000000000000000000000000000000000000000000000000000000000") as `0x${string}` // data tail pad
 
 		const [executed, creator, parameters, tally] = decodeFunctionResult({
@@ -120,9 +145,11 @@ describe("DAOSpaceAbi", () => {
 		})
 
 		expect(executed).toBe(false)
-		expect(creator).toBe("0x924ac01ba0a4355f16f40e0dfdc48230")
-		expect(parameters.startDate).toBe(1781286268n)
-		expect(parameters.lastDate).toBe(1781372668n)
+		expect(creator).toBe("0x70a0a4ddda1057868ae4feebceaaacef")
+		expect(parameters.flatSupportThreshold).toBe(1n)
+		expect(parameters.quorum).toBe(1n)
+		expect(parameters.startDate).toBe(0n)
+		expect(parameters.lastDate).toBe(0n)
 		expect(tally.yes).toBe(0n)
 		expect(tally.no).toBe(0n)
 		expect(tally.abstain).toBe(0n)
