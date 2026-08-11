@@ -56,6 +56,13 @@ export interface ProposalTally {
 	 * is the only field that separates the two. See {@link isEligibleToVote}.
 	 */
 	existsOnChain: boolean
+	/**
+	 * The proposal's current version (1 on creation; bumped when a fast-path proposal
+	 * escalates). A v2 vote payload must carry it — see {@link encodeVoteData} — and
+	 * voting on a stale version would be rejected by `_canVote`, so it is read at the
+	 * same moment as the tally rather than assumed to be 1.
+	 */
+	version: number
 }
 
 /** SpaceRegistry.spaceIdToAddress returns this for an unregistered space. */
@@ -94,16 +101,27 @@ function sanitizeError(error: unknown): string {
 // ---------------------------------------------------------------------------
 
 /**
- * ABI-encode the PROPOSAL_VOTED data payload: abi.encode(bytes16 proposalId, uint8 voteOption).
+ * ABI-encode the PROPOSAL_VOTED data payload:
+ * `abi.encode(bytes16 proposalId, uint8 proposalVersion, VoteOption vote)`.
  * A YES vote passes VOTE_YES (1) — see the IDAOSpace.VoteOption enum (None=0, Yes=1, No=2, Abstain=3).
+ *
+ * All THREE fields are required. v2 added the proposal version, and `_voteProposal`
+ * decodes the payload as `(bytes16, uint8, VoteOption)` — 96 bytes. Encoding only
+ * `(proposalId, vote)` produces 64 bytes, and `abi.decode` of three static words from
+ * a 64-byte buffer reverts with EMPTY data. That surfaces far from its cause: the
+ * bundler reports `UserOperation reverted during simulation with reason: 0x`, with no
+ * selector to decode and no hint that the payload is simply too short. The revert
+ * happens in `DAOSpace.fetch` before `_canVote` is ever reached, so it is invisible to
+ * every permission and eligibility check — the vote just never lands.
  */
-export function encodeVoteData(proposalIdHex: Hex, voteOption: number): Hex {
+export function encodeVoteData(proposalIdHex: Hex, proposalVersion: number, voteOption: number): Hex {
 	return encodeAbiParameters(
 		[
 			{name: "proposalId", type: "bytes16"},
+			{name: "proposalVersion", type: "uint8"},
 			{name: "voteOption", type: "uint8"},
 		],
-		[proposalIdHex, voteOption],
+		[proposalIdHex, proposalVersion, voteOption],
 	)
 }
 
@@ -181,12 +199,22 @@ export function readProposalTally(
 		return Effect.tryPromise({
 			try: async () => {
 				const proposalIdHex = uuidToBytes16(proposalId)
-				const [executed, creator, parameters, tally] = await wallet.publicClient.readContract({
-					address: daoSpaceAddress,
-					abi: DAOSpaceAbi,
-					functionName: "getLatestProposalInformation",
-					args: [proposalIdHex],
-				})
+				// Both reads describe the same proposal at the same block height, so they
+				// are issued together rather than sequenced.
+				const [[executed, creator, parameters, tally], version] = await Promise.all([
+					wallet.publicClient.readContract({
+						address: daoSpaceAddress,
+						abi: DAOSpaceAbi,
+						functionName: "getLatestProposalInformation",
+						args: [proposalIdHex],
+					}),
+					wallet.publicClient.readContract({
+						address: daoSpaceAddress,
+						abi: DAOSpaceAbi,
+						functionName: "latestProposalVersion",
+						args: [proposalIdHex],
+					}),
+				])
 				return {
 					executed,
 					yes: tally.yes,
@@ -195,6 +223,7 @@ export function readProposalTally(
 					startDate: parameters.startDate,
 					lastDate: parameters.lastDate,
 					existsOnChain: !isZeroSpaceId(creator),
+					version,
 				}
 			},
 			catch: (error) =>
@@ -323,7 +352,7 @@ function classifyVoteError(error: unknown, proposalId: string, durationMs: numbe
  * PROPOSAL_VOTED action and the (proposalId, Yes) vote data:
  *
  *   enter(botSpaceId, daoSpaceId, PROPOSAL_VOTED, bytes32(proposalId),
- *         abi.encode(bytes16 proposalId, uint8 1), "0x")
+ *         abi.encode(bytes16 proposalId, uint8 proposalVersion, uint8 1), "0x")
  *
  * Returns the transaction hash on success. Errors are classified as RevertError /
  * InfraError; retry and timeout are composed externally in index.ts.
@@ -333,6 +362,7 @@ export function castMembershipVote(
 	request: MembershipRequest,
 	botSpaceId: Hex,
 	spaceRegistryAddress: Address,
+	proposalVersion: number,
 ): Effect.Effect<string, RevertError | InfraError> {
 	// Effect.suspend captures `start` fresh on each retry attempt so durationMs reflects
 	// only the current attempt's wall time (matches executeProposal).
@@ -352,7 +382,8 @@ export function castMembershipVote(
 						daoSpaceId, // bytes16: DAO space being joined
 						PROPOSAL_VOTED_ACTION, // bytes32: action hash
 						padBytes16ToBytes32(proposalIdHex), // bytes32: topic = bytes32(proposalId), left-aligned
-						encodeVoteData(proposalIdHex, VOTE_YES), // bytes: abi.encode(bytes16 proposalId, uint8 1)
+						// bytes: abi.encode(bytes16 proposalId, uint8 proposalVersion, uint8 1)
+						encodeVoteData(proposalIdHex, proposalVersion, VOTE_YES),
 						EMPTY_SIGNATURE, // bytes: "0x" (ignored when msg.sender == _fromSpace)
 					],
 				})

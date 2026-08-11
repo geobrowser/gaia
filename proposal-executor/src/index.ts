@@ -466,8 +466,9 @@ function castVoteWithRetry(
 	request: MembershipRequest,
 	botSpaceId: Hex,
 	spaceRegistryAddress: Address,
+	proposalVersion: number,
 ): Effect.Effect<string, InfraError | RevertError> {
-	return castMembershipVote(wallet, request, botSpaceId, spaceRegistryAddress).pipe(
+	return castMembershipVote(wallet, request, botSpaceId, spaceRegistryAddress, proposalVersion).pipe(
 		Effect.timeoutFail({
 			duration: Duration.seconds(30),
 			onTimeout: () =>
@@ -550,7 +551,9 @@ export function processMembershipRequest(
 				)
 			}
 
-			return castVoteWithRetry(wallet, request, botSpaceId, spaceRegistryAddress).pipe(
+			// tally.version, not a hardcoded 1: an escalated proposal is on a later
+			// version, and _canVote rejects a vote aimed at a stale one.
+			return castVoteWithRetry(wallet, request, botSpaceId, spaceRegistryAddress, tally.version).pipe(
 				Effect.tap((txHash) =>
 					Effect.logInfo("membership_vote_cast").pipe(
 						Effect.annotateLogs({
