@@ -267,14 +267,22 @@ async fn fetch_tip(client: &reqwest::Client, url: &str) -> Option<u64> {
         }
     };
 
-    let raw = payload.get("result").and_then(|r| r.as_str());
-    match raw.and_then(|r| u64::from_str_radix(r.trim_start_matches("0x"), 16).ok()) {
+    match parse_tip(&payload) {
         Some(tip) => Some(tip),
         None => {
             warn!(response = %payload, "Chain RPC response had no usable block number");
             None
         }
     }
+}
+
+/// Pull the block number out of an `eth_blockNumber` response.
+///
+/// Split out from the request so the shape is testable: a parse failure here
+/// silently disables the detector, which is the quiet failure most worth pinning.
+fn parse_tip(payload: &serde_json::Value) -> Option<u64> {
+    let raw = payload.get("result")?.as_str()?;
+    u64::from_str_radix(raw.trim_start_matches("0x"), 16).ok()
 }
 
 /// Spawn the watchdog. Exits the process on a confirmed stall so the
@@ -541,6 +549,37 @@ mod tests {
         let watcher = p.clone();
         p.record_block(29_500);
         assert_eq!(watcher.last_block(), 29_500);
+    }
+
+    #[test]
+    fn parses_the_live_endpoints_actual_response() {
+        // Captured verbatim from the configured Conduit RPC on 2026-08-12. A
+        // parse failure here disables the detector silently, so pin the real
+        // shape rather than a shape I assumed.
+        let payload: serde_json::Value =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"result":"0x736b"}"#).unwrap();
+        assert_eq!(parse_tip(&payload), Some(29_547));
+    }
+
+    #[test]
+    fn unusable_tip_responses_parse_to_none_rather_than_a_wrong_number() {
+        for body in [
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"nope"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":null}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":29547}"#, // number, not hex string
+            r#"{"jsonrpc":"2.0","id":1,"result":"not-hex"}"#,
+            r#"{}"#,
+        ] {
+            let payload: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(parse_tip(&payload), None, "should not parse: {body}");
+        }
+    }
+
+    #[test]
+    fn a_tip_without_the_hex_prefix_still_parses() {
+        let payload: serde_json::Value =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"result":"736b"}"#).unwrap();
+        assert_eq!(parse_tip(&payload), Some(29_547));
     }
 
     #[test]
