@@ -42,6 +42,7 @@ use atlas::persistence::{
     CheckpointConfig, CheckpointManager, PersistedEmissionBaseline, PersistedGraphState,
     RestoredCheckpoint,
 };
+use atlas::stall::{self, StreamProgress};
 use hermes_instrumentation::{debug, info, info_span, warn, Instrument};
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 use prost::Message;
@@ -73,6 +74,9 @@ struct AtlasSink {
     emitter: CanonicalGraphEmitter,
     /// Checkpoint manager for restore/persist/fail-open handling
     checkpoint_manager: CheckpointManager,
+    /// Last block the substream delivered, watched by the stall detector.
+    /// Lock-free so the block handler pays almost nothing to update it.
+    progress: StreamProgress,
 }
 
 impl AtlasSink {
@@ -146,6 +150,7 @@ impl AtlasSink {
             }),
             emitter,
             checkpoint_manager,
+            progress: StreamProgress::new(),
         };
 
         // Force-write on startup: if there's no baseline on disk yet but we
@@ -346,6 +351,28 @@ impl Sink for AtlasSink {
             .and_then(|c| c.timestamp.as_ref())
             .map(|t| t.seconds as u64)
             .unwrap_or(0);
+
+        // Mark liveness before any work: the watchdog cares that blocks are
+        // *arriving*, not that they contain events or change the graph. Quiet
+        // blocks are normal; silence is the failure.
+        self.progress.record_block(
+            block_number,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+        );
+
+        // Same gauge the hermes services publish, so the existing
+        // HermesBehindChainTip alert covers atlas too rather than needing a
+        // parallel rule. This is the outside-the-process check: it still fires if
+        // the stall detector itself fails to notice.
+        hermes_instrumentation::metrics::set_latest_processed_block(block_number);
+        if block_timestamp > 0 {
+            hermes_instrumentation::metrics::set_latest_processed_block_timestamp(
+                block_timestamp as i64,
+            );
+        }
 
         let meta = BlockMetadata {
             block_number,
@@ -697,6 +724,12 @@ async fn async_main() -> anyhow::Result<()> {
     // persistence is enabled) before we connect to Kafka.
     let _checkpoint_preflight = CheckpointConfig::from_env(root_space_id, 1)?;
 
+    // Serves /metrics so Prometheus can see how far behind the chain tip we are.
+    // Without this atlas was invisible to monitoring: it wedged for two days and
+    // no alert could have fired, because nothing published its block height.
+    let metrics_port: Option<u16> = env::var("METRICS_PORT").ok().and_then(|s| s.parse().ok());
+    hermes_instrumentation::metrics::install("atlas", metrics_port)?;
+
     info!("Atlas Topology Processor starting");
     info!(
         kafka_broker = %broker,
@@ -729,6 +762,14 @@ async fn async_main() -> anyhow::Result<()> {
         );
         StreamSource::live(endpoint, HermesModule::Actions, start_block, end_block)
     };
+
+    // Armed before the stream starts so a substream that never delivers its
+    // first block is caught too, not just one that dies mid-flight.
+    match stall::timeout_from_env() {
+        Some(timeout) if !use_mock => stall::spawn(sink.progress.clone(), timeout),
+        Some(_) => info!("Mock source in use; substream stall detection not armed"),
+        None => {}
+    }
 
     sink.run(source).await?;
 

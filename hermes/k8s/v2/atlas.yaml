@@ -22,7 +22,21 @@ spec:
         - name: atlas
           image: registry.digitalocean.com/geo/atlas:latest
           imagePullPolicy: Always
+          ports:
+            - name: metrics
+              containerPort: 9464
+              protocol: TCP
           env:
+            # Publishes hermes_latest_processed_block{,_timestamp} so monitoring can
+            # see how far behind the chain atlas is. Without this atlas was invisible:
+            # it wedged for two days on a dropped Pinax stream and no alert could fire.
+            - name: METRICS_PORT
+              value: "9464"
+            # Exit if the substream delivers no blocks for this long, so the pod
+            # restarts and resumes from its persisted cursor. A restart was the
+            # entire remedy the one time this happened.
+            - name: ATLAS_STALL_TIMEOUT_SECS
+              value: "600"
             - name: KAFKA_BROKER
               valueFrom:
                 secretKeyRef:
@@ -138,3 +152,23 @@ spec:
             limits:
               memory: "1Gi"
               cpu: "1000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas
+  namespace: gaia
+  labels:
+    app: atlas
+    # Lifted into the metrics by the ServiceMonitor's `targetLabels`, which is what
+    # joins them to chain_tip_block_number in the lag alerts.
+    gaia_namespace: gaia
+spec:
+  type: ClusterIP
+  selector:
+    app: atlas
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: metrics
+      protocol: TCP
