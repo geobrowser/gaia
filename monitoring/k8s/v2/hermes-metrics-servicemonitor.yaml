@@ -18,6 +18,9 @@ spec:
           - hermes-pipeline
           - hermes-ipfs-cache
           - chain-tip-exporter
+          # atlas publishes the same hermes_latest_processed_block gauge. Its lag
+          # thresholds differ (see atlas-lag-alerts.yaml), but the scrape is identical.
+          - atlas
   endpoints:
     - port: metrics
       path: /metrics

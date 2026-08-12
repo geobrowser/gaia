@@ -9,6 +9,10 @@ spec:
   groups:
     - name: hermes.lag
       rules:
+        # atlas is excluded from this rule and covered by atlas-lag-alerts.yaml
+        # instead. It publishes the same gauge, but replays ~1,750 blocks after a
+        # restart, so a 5-block/5-minute threshold would page on every legitimate
+        # catch-up.
         - alert: HermesBehindChainTip
           expr: |
             (
@@ -18,7 +22,7 @@ spec:
               )
               -
               on(namespace) group_right
-              max by (namespace, service) (hermes_latest_processed_block)
+              max by (namespace, service) (hermes_latest_processed_block{service!="atlas"})
             ) > 5
           for: 5m
           labels:

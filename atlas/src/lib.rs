@@ -10,6 +10,7 @@ pub mod events;
 pub mod graph;
 pub mod kafka;
 pub mod persistence;
+pub mod stall;
 
 #[cfg(test)]
 pub(crate) mod test_utils;

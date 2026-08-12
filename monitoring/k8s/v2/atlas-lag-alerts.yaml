@@ -1,0 +1,114 @@
+# Atlas canonical-graph staleness alerts.
+#
+# Why these exist: on 2026-08-10 atlas's Pinax substream died in a way the client
+# never treated as fatal — it logged `h2 protocol error: error reading a body from
+# connection`, then `Blockstreams disconnected` / `Blockstreams connected`, and no
+# block ever arrived again. The process stayed healthy (0 restarts in 8 days), so
+# nothing restarted it, and the canonical graph sat frozen at block 27694 for two
+# days while the chain reached 29448. Personal spaces silently stopped becoming
+# canonical, and search quietly stopped returning people. Nothing alerted, because
+# atlas published no metrics at all.
+#
+# atlas now (a) exits on a stalled stream so the pod restarts and resumes from its
+# persisted cursor, and (b) publishes the shared hermes_latest_processed_block{,
+# _timestamp} gauges. These rules are the outside-the-process check: they still
+# fire if the in-process detector fails to notice.
+#
+# atlas is deliberately excluded from HermesBehindChainTip in
+# ../hermes-lag-alerts.yaml. It publishes the same gauge, but replays ~1,750
+# blocks after a restart, so that rule's 5-block/5-minute threshold would page on
+# every legitimate catch-up.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: atlas-lag-observability
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: atlas.lag
+      rules:
+        # PRIMARY: the exact signature of the outage. "atlas has not observed a
+        # block whose clock is recent", which is true whether the stream died, the
+        # endpoint went away, or the process wedged.
+        #
+        # Uses the block's own timestamp rather than a chain-tip subtraction, so it
+        # does not depend on chain-tip-exporter being healthy — the failure mode
+        # where both the indexer and its reference metric are down is exactly when
+        # an alert matters most.
+        - alert: AtlasStreamStalled
+          expr: |
+            (time() - max(hermes_latest_processed_block_timestamp{service="atlas"})) > 900
+          for: 5m
+          labels:
+            severity: critical
+            service: atlas
+          annotations:
+            summary: Atlas has not processed a recent block
+            description: >-
+              Atlas has processed no block newer than 15 minutes for over 5 minutes.
+              The canonical graph is frozen, so spaces will not become canonical and
+              search will not return newly-verified people. Atlas should self-restart
+              via its stall detector; if this stays firing, the detector did not trip
+              and the pod needs restarting manually (it resumes from its cursor).
+
+        # Catches the case where atlas is running and consuming but cannot keep up,
+        # which the timestamp rule alone would miss while it slowly advances.
+        # Threshold is deliberately loose: a post-restart replay of ~1,750 blocks is
+        # normal and clears on its own well inside 30 minutes.
+        - alert: AtlasBehindChainTip
+          expr: |
+            (
+              label_replace(
+                max by (gaia_namespace) (chain_tip_block_number),
+                "namespace", "$1", "gaia_namespace", "(.*)"
+              )
+              -
+              on(namespace) group_right
+              max by (namespace, service) (hermes_latest_processed_block{service="atlas"})
+            ) > 500
+          for: 30m
+          labels:
+            severity: warning
+            service: atlas
+          annotations:
+            summary: Atlas is falling behind chain tip
+            description: >-
+              Atlas is {{ $value }} blocks behind chain tip in {{ $labels.namespace }}
+              and has not caught up in 30 minutes. A restart replay clears well inside
+              this window, so this means it is genuinely not keeping pace.
+
+        # The stall detector converts a silent two-day freeze into an automatic
+        # restart — but a self-healing loop that flaps silently is its own outage.
+        # This surfaces a chronically unstable upstream instead of hiding it.
+        - alert: AtlasRestartingRepeatedly
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace="gaia", container="atlas"}[1h]) >= 3
+          for: 5m
+          labels:
+            severity: warning
+            service: atlas
+          annotations:
+            summary: Atlas is restarting repeatedly
+            description: >-
+              Atlas has restarted {{ $value }} times in the last hour, most likely its
+              stall detector firing on a substream that keeps dropping. Recovery is
+              working, but the upstream (Pinax) needs investigating.
+
+        # Belt and braces: if atlas stops publishing metrics entirely — crash-looping
+        # before it serves /metrics, or the Service/ServiceMonitor wiring breaks — the
+        # two rules above go stale rather than firing, because their series vanish.
+        - alert: AtlasMetricsMissing
+          expr: |
+            absent(hermes_latest_processed_block_timestamp{service="atlas"})
+          for: 15m
+          labels:
+            severity: warning
+            service: atlas
+          annotations:
+            summary: Atlas is not reporting metrics
+            description: >-
+              No atlas block metrics for 15 minutes. Either atlas is not running or the
+              Service / ServiceMonitor scrape is broken — which would also blind
+              AtlasStreamStalled, so treat this as the canonical graph being unmonitored.
