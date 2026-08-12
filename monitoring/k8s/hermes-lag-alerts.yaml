@@ -9,10 +9,12 @@ spec:
   groups:
     - name: hermes.lag
       rules:
-        # atlas is excluded from this rule and covered by atlas-lag-alerts.yaml
-        # instead. It publishes the same gauge, but replays ~1,750 blocks after a
-        # restart, so a 5-block/5-minute threshold would page on every legitimate
-        # catch-up.
+        # atlas publishes the same gauge and is deliberately included here. Its
+        # cold-start replay is large in blocks (~1,750) but short in time (19s
+        # measured), so the `for: 5m` clause absorbs it without a threshold
+        # carve-out. This tip-relative rule is also immune to chain 55516's
+        # multi-hour idle windows, which is why it — and not a staleness rule — is
+        # the primary signal for a wedged substream.
         - alert: HermesBehindChainTip
           expr: |
             (
@@ -22,7 +24,7 @@ spec:
               )
               -
               on(namespace) group_right
-              max by (namespace, service) (hermes_latest_processed_block{service!="atlas"})
+              max by (namespace, service) (hermes_latest_processed_block)
             ) > 5
           for: 5m
           labels:

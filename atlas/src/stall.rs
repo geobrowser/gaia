@@ -1,4 +1,4 @@
-//! Substream stall detection.
+//! Substream stall detection, measured against the chain tip.
 //!
 //! The substream can die without the process noticing. Observed 2026-08-10:
 //! Pinax dropped the HTTP/2 body (`h2 protocol error: error reading a body from
@@ -11,21 +11,36 @@
 //! A plain restart was the entire remedy: atlas resumes from its persisted
 //! cursor and recomputes canonical state from full graph state, so re-processing
 //! is idempotent. Recovery took ~20 seconds. This module makes that automatic —
-//! on a stall it exits non-zero and lets the orchestrator restart the process.
+//! on a confirmed stall it exits non-zero and lets the orchestrator restart.
 //!
-//! ## Why this keys on block advance
+//! ## Why this compares against the chain tip
 //!
-//! **Not** on checkpoint writes or canonical changes. Those are legitimately
-//! sparse — real checkpoints landed hours apart (25278 → 25652 → 25791 → …)
-//! because atlas only persists when the graph actually changes. A detector
-//! watching for state changes would fire constantly on a healthy but quiet
-//! stream.
+//! The obvious detector — "no block arrived for N minutes" — is **wrong on this
+//! chain**, and I shipped it before measuring. Chain 55516 is transaction-driven,
+//! not a fixed-cadence chain: ~894 blocks/day, median gap between blocks 2
+//! minutes, p90 8 minutes, and the longest genuinely-idle stretch over a
+//! representative week was **130 minutes** (confirmed against two independent
+//! metric series, so it was real chain idleness and not a broken exporter). A
+//! 10-minute silence timeout would have restarted atlas 402 times in that week.
 //!
-//! Block arrival is the honest signal: chain 55516 produces blocks every couple
-//! of seconds, so a healthy stream is never idle for long. It also stays quiet
-//! during a legitimate long catch-up — replaying 1,750 blocks still advances
-//! blocks the whole way — which is the trap that made a latency-based liveness
-//! probe kill busy-but-alive api pods (#880).
+//! Lag against the tip is cadence-independent and states the actual failure
+//! condition: *blocks exist that we have not processed*. An idle chain yields
+//! `tip == processed`, so it is silent by construction, while the real wedge
+//! shows lag growing without bound.
+//!
+//! ## Why these thresholds
+//!
+//! A healthy substream consumer on this chain sits at lag **0** — measured over
+//! the same week from `hermes-pipeline`: p50 0, p90 0, p99 1, max 8, and the
+//! longest continuous stretch above lag 1 was 2 minutes. Substreams delivers at
+//! head here, with no finality-depth offset that would leave a healthy consumer
+//! permanently behind. So `lag > 10` sustained for 20 minutes has roughly two
+//! orders of magnitude of headroom over anything healthy, while the real outage
+//! (lag reaching 1,754) trips it inside an hour.
+//!
+//! Everything here fails **open**: an unreadable tip, or no processed block yet,
+//! never causes a restart. A detector that guesses wrong costs availability, so
+//! it only ever acts on a lag it has positively confirmed.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -33,54 +48,56 @@ use std::time::Duration;
 
 use hermes_instrumentation::{error, info, warn};
 
-/// How long the stream may deliver nothing before it is treated as wedged.
-///
-/// Generous on purpose: a healthy stream sees blocks every few seconds, so this
-/// is ~two orders of magnitude above normal, and it must never fire on a slow
-/// block or a brief reconnect.
-pub const DEFAULT_STALL_TIMEOUT: Duration = Duration::from_secs(600);
+/// How far behind the tip atlas may fall before the clock starts. Chosen from
+/// measured healthy lag (max 8 over a week), not from chain cadence.
+pub const DEFAULT_LAG_THRESHOLD_BLOCKS: u64 = 10;
 
-/// How often the watchdog re-checks. Bounds how long a real stall persists
-/// beyond the timeout.
-const CHECK_INTERVAL: Duration = Duration::from_secs(30);
+/// How long the lag must persist before atlas is treated as wedged. Must
+/// comfortably exceed a cold-start replay, which took 19s for ~1,750 blocks.
+pub const DEFAULT_STALL_TIMEOUT: Duration = Duration::from_secs(1200);
 
-/// Shared record of the last block the stream delivered.
+/// How often the watchdog polls the tip and re-checks.
+const CHECK_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Per-request timeout for the tip poll. Short: a slow RPC should read as
+/// "unknown tip" (fail open), never as a stall.
+const RPC_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Shared record of the last block atlas processed.
 ///
-/// Cheap enough to touch on every block: two atomics, no lock, so the hot path
-/// is unaffected.
+/// Cheap enough to touch on every block: one relaxed atomic store, so the hot
+/// path is unaffected.
 #[derive(Debug, Clone, Default)]
 pub struct StreamProgress {
-    inner: Arc<ProgressInner>,
-}
-
-#[derive(Debug, Default)]
-struct ProgressInner {
-    /// Highest block seen. `0` means "nothing yet".
-    last_block: AtomicU64,
-    /// Monotonic-ish marker for when that block arrived, in seconds since the
-    /// watchdog's epoch. Written by the stream, read by the watchdog.
-    last_advance_secs: AtomicU64,
+    last_block: Arc<AtomicU64>,
 }
 
 impl StreamProgress {
+    /// Progress with nothing processed yet. Reads as "unknown", which fails open.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Record that a block arrived. Called from the block handler.
-    pub fn record_block(&self, block_number: u64, now_secs: u64) {
-        self.inner.last_block.store(block_number, Ordering::Relaxed);
-        self.inner
-            .last_advance_secs
-            .store(now_secs, Ordering::Relaxed);
+    /// Progress seeded from a restored checkpoint.
+    ///
+    /// This matters: without it, a restart during an idle chain would leave
+    /// `last_block` at 0 while the tip sat at ~29,536, computing a lag of 29,536
+    /// out of a perfectly healthy process and restarting it every 20 minutes
+    /// until the chain happened to produce a block.
+    pub fn seeded(block_number: u64) -> Self {
+        Self {
+            last_block: Arc::new(AtomicU64::new(block_number)),
+        }
     }
 
+    /// Record that a block was processed. Called from the block handler.
+    pub fn record_block(&self, block_number: u64) {
+        self.last_block.store(block_number, Ordering::Relaxed);
+    }
+
+    /// Last processed block; `0` means nothing processed and no checkpoint.
     pub fn last_block(&self) -> u64 {
-        self.inner.last_block.load(Ordering::Relaxed)
-    }
-
-    pub fn last_advance_secs(&self) -> u64 {
-        self.inner.last_advance_secs.load(Ordering::Relaxed)
+        self.last_block.load(Ordering::Relaxed)
     }
 }
 
@@ -88,55 +105,101 @@ impl StreamProgress {
 /// decision is unit-testable without killing the test process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StallVerdict {
-    /// Blocks are arriving, or not enough time has passed to judge.
-    Healthy,
-    /// Nothing has arrived for longer than the timeout — restart.
-    Stalled { idle_secs: u64, last_block: u64 },
+    /// Caught up, or within the lag threshold.
+    Healthy { lag: u64 },
+    /// Behind the threshold, but not yet for long enough to act on.
+    Lagging { lag: u64, lagging_secs: u64 },
+    /// Behind the threshold for longer than the timeout — restart.
+    Stalled {
+        lag: u64,
+        last_block: u64,
+        lagging_secs: u64,
+    },
+    /// Cannot compute a lag. Fails open: never restarts.
+    Unknown,
 }
 
-/// Decide whether the stream is wedged.
-///
-/// `started_secs` is when the watchdog began, used as the baseline before the
-/// first block arrives — otherwise a slow startup (restore, Kafka connect, the
-/// initial substream handshake) would look like an instant stall.
-pub fn classify(
-    progress: &StreamProgress,
-    started_secs: u64,
-    now_secs: u64,
+/// Tracks how long atlas has been behind the tip.
+#[derive(Debug)]
+pub struct LagTracker {
+    threshold_blocks: u64,
     timeout: Duration,
-) -> StallVerdict {
-    let last_advance = progress.last_advance_secs();
-    // No block yet: judge against startup, so a stream that never delivers its
-    // first block is still caught rather than waiting forever.
-    let reference = if last_advance == 0 {
-        started_secs
-    } else {
-        last_advance
-    };
+    /// When the lag first exceeded the threshold, in unix seconds.
+    lagging_since: Option<u64>,
+}
 
-    let idle_secs = now_secs.saturating_sub(reference);
-    if idle_secs >= timeout.as_secs() {
-        StallVerdict::Stalled {
-            idle_secs,
-            last_block: progress.last_block(),
+impl LagTracker {
+    pub fn new(threshold_blocks: u64, timeout: Duration) -> Self {
+        Self {
+            threshold_blocks,
+            timeout,
+            lagging_since: None,
         }
-    } else {
-        StallVerdict::Healthy
+    }
+
+    /// Fold one observation into the verdict.
+    ///
+    /// `tip` is `None` when the tip could not be read.
+    pub fn observe(&mut self, processed: u64, tip: Option<u64>, now_secs: u64) -> StallVerdict {
+        // No tip to compare against: hold the clock but never act. Holding
+        // rather than clearing means a flaky RPC cannot indefinitely mask a real
+        // stall — a trip still requires a positively confirmed lag either side.
+        let Some(tip) = tip else {
+            return StallVerdict::Unknown;
+        };
+
+        // Nothing processed and no checkpoint to seed from. `tip - 0` would be a
+        // meaningless lag, so refuse to judge.
+        if processed == 0 {
+            return StallVerdict::Unknown;
+        }
+
+        // Saturating: atlas legitimately observes a block slightly before the
+        // tip poll does, and measured skew reached 12 blocks ahead. That is not
+        // negative lag, it is zero lag.
+        let lag = tip.saturating_sub(processed);
+
+        if lag <= self.threshold_blocks {
+            self.lagging_since = None;
+            return StallVerdict::Healthy { lag };
+        }
+
+        let since = *self.lagging_since.get_or_insert(now_secs);
+        let lagging_secs = now_secs.saturating_sub(since);
+        if lagging_secs >= self.timeout.as_secs() {
+            StallVerdict::Stalled {
+                lag,
+                last_block: processed,
+                lagging_secs,
+            }
+        } else {
+            StallVerdict::Lagging { lag, lagging_secs }
+        }
     }
 }
 
-/// Read the stall timeout from `ATLAS_STALL_TIMEOUT_SECS`.
+/// Stall-detector configuration, resolved from the environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StallConfig {
+    pub rpc_url: String,
+    pub threshold_blocks: u64,
+    pub timeout: Duration,
+}
+
+/// Resolve config from the environment, or `None` if detection should be off.
 ///
-/// `0` disables detection — an escape hatch for local runs against a mock or a
-/// deliberately paused stream, where no blocks arriving is expected.
-pub fn timeout_from_env() -> Option<Duration> {
-    match std::env::var("ATLAS_STALL_TIMEOUT_SECS") {
+/// - `RPC_URL` — required; without it there is no tip to compare against, so the
+///   detector stays off rather than falling back to a cadence guess.
+/// - `ATLAS_STALL_LAG_BLOCKS` — lag threshold in blocks.
+/// - `ATLAS_STALL_TIMEOUT_SECS` — how long the lag must persist; `0` disables.
+pub fn config_from_env() -> Option<StallConfig> {
+    let timeout = match std::env::var("ATLAS_STALL_TIMEOUT_SECS") {
         Ok(raw) => match raw.trim().parse::<u64>() {
             Ok(0) => {
                 warn!("ATLAS_STALL_TIMEOUT_SECS=0 — substream stall detection disabled");
-                None
+                return None;
             }
-            Ok(secs) => Some(Duration::from_secs(secs)),
+            Ok(secs) => Duration::from_secs(secs),
             Err(err) => {
                 warn!(
                     value = %raw,
@@ -144,42 +207,139 @@ pub fn timeout_from_env() -> Option<Duration> {
                     default_secs = DEFAULT_STALL_TIMEOUT.as_secs(),
                     "Invalid ATLAS_STALL_TIMEOUT_SECS; using default"
                 );
-                Some(DEFAULT_STALL_TIMEOUT)
+                DEFAULT_STALL_TIMEOUT
             }
         },
-        Err(_) => Some(DEFAULT_STALL_TIMEOUT),
+        Err(_) => DEFAULT_STALL_TIMEOUT,
+    };
+
+    let threshold_blocks = match std::env::var("ATLAS_STALL_LAG_BLOCKS") {
+        Ok(raw) => raw.trim().parse::<u64>().unwrap_or_else(|err| {
+            warn!(
+                value = %raw,
+                error = %err,
+                default_blocks = DEFAULT_LAG_THRESHOLD_BLOCKS,
+                "Invalid ATLAS_STALL_LAG_BLOCKS; using default"
+            );
+            DEFAULT_LAG_THRESHOLD_BLOCKS
+        }),
+        Err(_) => DEFAULT_LAG_THRESHOLD_BLOCKS,
+    };
+
+    match std::env::var("RPC_URL") {
+        Ok(rpc_url) if !rpc_url.trim().is_empty() => Some(StallConfig {
+            rpc_url,
+            threshold_blocks,
+            timeout,
+        }),
+        _ => {
+            warn!(
+                "RPC_URL is not set — substream stall detection disabled. Atlas cannot tell a \
+                 wedged stream from an idle chain without a chain tip to compare against."
+            );
+            None
+        }
     }
 }
 
-/// Spawn the watchdog. Exits the process on a stall so the orchestrator restarts
-/// it; safe because atlas resumes from its persisted cursor.
-pub fn spawn(progress: StreamProgress, timeout: Duration) {
-    let started = unix_secs();
+/// Fetch the chain tip. `None` on any failure, so callers fail open.
+async fn fetch_tip(client: &reqwest::Client, url: &str) -> Option<u64> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1,
+    });
+
+    let resp = match client.post(url).json(&body).send().await {
+        Ok(resp) => resp,
+        Err(err) => {
+            warn!(error = %err, "Stall detector could not reach the chain RPC");
+            return None;
+        }
+    };
+
+    let payload: serde_json::Value = match resp.json().await {
+        Ok(payload) => payload,
+        Err(err) => {
+            warn!(error = %err, "Chain RPC returned an unreadable tip response");
+            return None;
+        }
+    };
+
+    match parse_tip(&payload) {
+        Some(tip) => Some(tip),
+        None => {
+            warn!(response = %payload, "Chain RPC response had no usable block number");
+            None
+        }
+    }
+}
+
+/// Pull the block number out of an `eth_blockNumber` response.
+///
+/// Split out from the request so the shape is testable: a parse failure here
+/// silently disables the detector, which is the quiet failure most worth pinning.
+fn parse_tip(payload: &serde_json::Value) -> Option<u64> {
+    let raw = payload.get("result")?.as_str()?;
+    u64::from_str_radix(raw.trim_start_matches("0x"), 16).ok()
+}
+
+/// Spawn the watchdog. Exits the process on a confirmed stall so the
+/// orchestrator restarts it; safe because atlas resumes from its persisted
+/// cursor.
+pub fn spawn(progress: StreamProgress, config: StallConfig) {
     info!(
-        stall_timeout_secs = timeout.as_secs(),
+        lag_threshold_blocks = config.threshold_blocks,
+        stall_timeout_secs = config.timeout.as_secs(),
         check_interval_secs = CHECK_INTERVAL.as_secs(),
-        "Substream stall detector armed"
+        "Substream stall detector armed (tip-relative)"
     );
 
     tokio::spawn(async move {
+        let client = match reqwest::Client::builder().timeout(RPC_TIMEOUT).build() {
+            Ok(client) => client,
+            Err(err) => {
+                // Fail open: no detector is better than a detector that cannot
+                // read the tip and might act on a bad comparison.
+                error!(error = %err, "Could not build the stall detector's RPC client; stall detection is off");
+                return;
+            }
+        };
+
+        let mut tracker = LagTracker::new(config.threshold_blocks, config.timeout);
         let mut ticker = tokio::time::interval(CHECK_INTERVAL);
         loop {
             ticker.tick().await;
-            match classify(&progress, started, unix_secs(), timeout) {
-                StallVerdict::Healthy => {}
+            let tip = fetch_tip(&client, &config.rpc_url).await;
+            let processed = progress.last_block();
+
+            match tracker.observe(processed, tip, unix_secs()) {
+                StallVerdict::Healthy { .. } | StallVerdict::Unknown => {}
+                StallVerdict::Lagging { lag, lagging_secs } => {
+                    warn!(
+                        lag,
+                        lagging_secs,
+                        last_block = processed,
+                        stall_timeout_secs = config.timeout.as_secs(),
+                        "Atlas is behind the chain tip; will restart if this persists"
+                    );
+                }
                 StallVerdict::Stalled {
-                    idle_secs,
+                    lag,
                     last_block,
+                    lagging_secs,
                 } => {
                     // Exit rather than trying to rebuild the stream in place: a
                     // restart is the remedy already known to work, and it also
                     // clears any other state the dropped connection left behind.
                     error!(
-                        idle_secs,
+                        lag,
                         last_block,
-                        stall_timeout_secs = timeout.as_secs(),
-                        "Substream delivered no blocks past the stall timeout; exiting so the \
-                         orchestrator restarts us. Atlas resumes from its persisted cursor."
+                        lagging_secs,
+                        stall_timeout_secs = config.timeout.as_secs(),
+                        "Atlas has been behind the chain tip past the stall timeout; exiting so \
+                         the orchestrator restarts us. Atlas resumes from its persisted cursor."
                     );
                     std::process::exit(1);
                 }
@@ -199,81 +359,235 @@ fn unix_secs() -> u64 {
 mod tests {
     use super::*;
 
-    const TIMEOUT: Duration = Duration::from_secs(600);
+    const TIMEOUT: Duration = Duration::from_secs(1200);
+    const THRESHOLD: u64 = 10;
 
-    #[test]
-    fn healthy_while_blocks_keep_arriving() {
-        let p = StreamProgress::new();
-        p.record_block(29_250, 1_000);
-        // 5 minutes idle, under the 10-minute timeout.
-        assert_eq!(classify(&p, 0, 1_300, TIMEOUT), StallVerdict::Healthy);
+    fn tracker() -> LagTracker {
+        LagTracker::new(THRESHOLD, TIMEOUT)
     }
 
+    /// The regression test for the bug this module shipped with. Chain 55516 is
+    /// transaction-driven; the longest genuinely-idle window measured over a
+    /// representative week was 130 minutes, verified against two independent
+    /// metric series. A silence-based detector restarted atlas 402 times a week
+    /// on exactly this pattern. Lag-based detection must stay silent throughout.
     #[test]
-    fn stalls_once_the_timeout_elapses_with_no_new_block() {
-        let p = StreamProgress::new();
-        p.record_block(29_250, 1_000);
-        assert_eq!(
-            classify(&p, 0, 1_600, TIMEOUT),
-            StallVerdict::Stalled {
-                idle_secs: 600,
-                last_block: 29_250
-            }
-        );
-    }
-
-    #[test]
-    fn a_slow_catch_up_is_not_a_stall() {
-        // Replaying ~1,750 blocks takes a while but blocks keep advancing, which
-        // is exactly the case a latency-based probe gets wrong (#880).
-        let p = StreamProgress::new();
+    fn the_longest_observed_idle_window_is_not_a_stall() {
+        let mut t = tracker();
         let mut now = 1_000;
-        for block in 27_694..27_894 {
-            p.record_block(block, now);
-            now += 5; // 5s per block: slow, but progressing
-            assert_eq!(classify(&p, 0, now, TIMEOUT), StallVerdict::Healthy);
+        // 130 minutes of a completely idle chain: tip and processed both frozen.
+        for _ in 0..130 {
+            now += 60;
+            assert_eq!(
+                t.observe(25_748, Some(25_748), now),
+                StallVerdict::Healthy { lag: 0 },
+                "an idle chain must never read as a stall"
+            );
         }
     }
 
     #[test]
-    fn startup_is_measured_from_launch_not_from_zero() {
-        // No block yet. Without the startup baseline, `last_advance == 0` would
-        // make every fresh process look instantly stalled.
-        let p = StreamProgress::new();
-        assert_eq!(classify(&p, 1_000, 1_100, TIMEOUT), StallVerdict::Healthy);
-    }
-
-    #[test]
-    fn a_stream_that_never_delivers_a_first_block_still_trips() {
-        let p = StreamProgress::new();
+    fn a_wedged_stream_trips_once_the_lag_persists() {
+        // The real outage: processed frozen at 27694 while the tip ran to 29448.
+        let mut t = tracker();
         assert_eq!(
-            classify(&p, 1_000, 1_600, TIMEOUT),
+            t.observe(27_694, Some(27_700), 1_000),
+            StallVerdict::Healthy { lag: 6 },
+            "6 blocks behind is within measured healthy range"
+        );
+        // Tip pulls away past the threshold.
+        assert!(matches!(
+            t.observe(27_694, Some(27_750), 1_060),
+            StallVerdict::Lagging { .. }
+        ));
+        // Still lagging when the timeout elapses.
+        assert_eq!(
+            t.observe(27_694, Some(29_448), 1_060 + 1_200),
             StallVerdict::Stalled {
-                idle_secs: 600,
-                last_block: 0
+                lag: 1_754,
+                last_block: 27_694,
+                lagging_secs: 1_200
             }
         );
     }
 
     #[test]
-    fn recording_a_block_clears_a_pending_stall() {
-        let p = StreamProgress::new();
-        p.record_block(1, 1_000);
+    fn a_brief_lag_spike_does_not_trip() {
+        let mut t = tracker();
         assert!(matches!(
-            classify(&p, 0, 1_700, TIMEOUT),
-            StallVerdict::Stalled { .. }
+            t.observe(29_000, Some(29_100), 1_000),
+            StallVerdict::Lagging { lag: 100, .. }
         ));
-        // A reconnect that starts delivering again must un-stall it.
-        p.record_block(2, 1_700);
-        assert_eq!(classify(&p, 0, 1_700, TIMEOUT), StallVerdict::Healthy);
+        // Caught up well inside the timeout.
+        assert_eq!(
+            t.observe(29_100, Some(29_100), 1_300),
+            StallVerdict::Healthy { lag: 0 }
+        );
+        // And the clock was cleared, so a later spike starts fresh rather than
+        // inheriting the earlier one and tripping immediately.
+        assert!(matches!(
+            t.observe(29_100, Some(29_300), 1_360),
+            StallVerdict::Lagging {
+                lagging_secs: 0,
+                ..
+            }
+        ));
     }
 
     #[test]
-    fn progress_tracks_the_latest_block_and_time() {
+    fn the_cold_start_replay_does_not_trip() {
+        // 19s for ~1,750 blocks measured in production. Lag starts huge and
+        // collapses long before the timeout.
+        let mut t = tracker();
+        let mut now = 1_000;
+        for processed in [27_694, 28_300, 28_900, 29_400, 29_438] {
+            let v = t.observe(processed, Some(29_438), now);
+            assert!(
+                !matches!(v, StallVerdict::Stalled { .. }),
+                "cold-start replay must not trip: {v:?}"
+            );
+            now += 5;
+        }
+        assert_eq!(
+            t.observe(29_438, Some(29_438), now),
+            StallVerdict::Healthy { lag: 0 }
+        );
+    }
+
+    #[test]
+    fn head_skew_is_clamped_rather_than_read_as_lag() {
+        // Measured skew reached 12 blocks ahead of the exporter's tip.
+        let mut t = tracker();
+        assert_eq!(
+            t.observe(29_548, Some(29_536), 1_000),
+            StallVerdict::Healthy { lag: 0 }
+        );
+    }
+
+    #[test]
+    fn an_unreadable_tip_never_trips() {
+        let mut t = tracker();
+        // Establish a real lag first, then lose the RPC for a long time.
+        assert!(matches!(
+            t.observe(27_694, Some(29_448), 1_000),
+            StallVerdict::Lagging { .. }
+        ));
+        for i in 1..100 {
+            assert_eq!(
+                t.observe(27_694, None, 1_000 + i * 60),
+                StallVerdict::Unknown,
+                "an unreadable tip must fail open"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unreadable_tip_holds_the_clock_rather_than_resetting_it() {
+        let mut t = tracker();
+        assert!(matches!(
+            t.observe(27_694, Some(29_448), 1_000),
+            StallVerdict::Lagging {
+                lagging_secs: 0,
+                ..
+            }
+        ));
+        // RPC unavailable across the whole timeout window...
+        assert_eq!(t.observe(27_694, None, 1_600), StallVerdict::Unknown);
+        // ...and once it returns, the still-present lag is acted on rather than
+        // starting a fresh 20 minutes.
+        assert!(matches!(
+            t.observe(27_694, Some(29_448), 2_200),
+            StallVerdict::Stalled {
+                lagging_secs: 1_200,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn nothing_processed_yet_fails_open() {
+        // A fresh process with no checkpoint: `tip - 0` is not a lag.
+        let mut t = tracker();
+        assert_eq!(t.observe(0, Some(29_536), 1_000), StallVerdict::Unknown);
+        assert_eq!(
+            t.observe(0, Some(29_536), 1_000_000),
+            StallVerdict::Unknown,
+            "must never trip on an unseeded process, however long it waits"
+        );
+    }
+
+    #[test]
+    fn progress_seeded_from_a_checkpoint_reports_that_block() {
+        // Without seeding, a restart during an idle chain computes a lag of the
+        // entire chain height and restarts a healthy process on a loop.
+        let p = StreamProgress::seeded(29_438);
+        assert_eq!(p.last_block(), 29_438);
+        let mut t = tracker();
+        assert_eq!(
+            t.observe(p.last_block(), Some(29_438), 1_000),
+            StallVerdict::Healthy { lag: 0 }
+        );
+    }
+
+    #[test]
+    fn unseeded_progress_reads_as_nothing_processed() {
+        assert_eq!(StreamProgress::new().last_block(), 0);
+    }
+
+    #[test]
+    fn progress_tracks_the_latest_block() {
         let p = StreamProgress::new();
-        p.record_block(10, 500);
-        p.record_block(11, 505);
+        p.record_block(10);
+        p.record_block(11);
         assert_eq!(p.last_block(), 11);
-        assert_eq!(p.last_advance_secs(), 505);
+    }
+
+    #[test]
+    fn progress_is_shared_across_clones() {
+        // The watchdog holds a clone; it must observe the sink's writes.
+        let p = StreamProgress::new();
+        let watcher = p.clone();
+        p.record_block(29_500);
+        assert_eq!(watcher.last_block(), 29_500);
+    }
+
+    #[test]
+    fn parses_the_live_endpoints_actual_response() {
+        // Captured verbatim from the configured Conduit RPC on 2026-08-12. A
+        // parse failure here disables the detector silently, so pin the real
+        // shape rather than a shape I assumed.
+        let payload: serde_json::Value =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"result":"0x736b"}"#).unwrap();
+        assert_eq!(parse_tip(&payload), Some(29_547));
+    }
+
+    #[test]
+    fn unusable_tip_responses_parse_to_none_rather_than_a_wrong_number() {
+        for body in [
+            r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"nope"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":null}"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":29547}"#, // number, not hex string
+            r#"{"jsonrpc":"2.0","id":1,"result":"not-hex"}"#,
+            r#"{}"#,
+        ] {
+            let payload: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(parse_tip(&payload), None, "should not parse: {body}");
+        }
+    }
+
+    #[test]
+    fn a_tip_without_the_hex_prefix_still_parses() {
+        let payload: serde_json::Value =
+            serde_json::from_str(r#"{"jsonrpc":"2.0","id":1,"result":"736b"}"#).unwrap();
+        assert_eq!(parse_tip(&payload), Some(29_547));
+    }
+
+    #[test]
+    fn a_lag_exactly_at_the_threshold_is_healthy() {
+        let mut t = tracker();
+        assert_eq!(
+            t.observe(29_000, Some(29_010), 1_000),
+            StallVerdict::Healthy { lag: 10 }
+        );
     }
 }

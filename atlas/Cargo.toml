@@ -23,6 +23,9 @@ hermes-schema = { path = "../hermes-schema" }
 hex = "0.4"
 prost = "0.13.5"
 rdkafka = { version = "0.36", features = ["cmake-build", "zstd", "ssl"] }
+# Chain-tip polling for the substream stall detector. Mirrors
+# chain-tip-exporter's feature set so both hit the same RPC the same way.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rustls = { version = "0.23.36", default-features = false, features = ["ring", "std", "tls12"] }
 tokio = { version = "1.41", features = ["rt-multi-thread", "macros"] }
 anyhow = "1"
