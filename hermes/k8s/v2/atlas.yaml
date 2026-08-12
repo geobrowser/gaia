@@ -32,11 +32,40 @@ spec:
             # it wedged for two days on a dropped Pinax stream and no alert could fire.
             - name: METRICS_PORT
               value: "9464"
-            # Exit if the substream delivers no blocks for this long, so the pod
-            # restarts and resumes from its persisted cursor. A restart was the
-            # entire remedy the one time this happened.
+            # Substream stall detection. Exits so the pod restarts and resumes from
+            # its persisted cursor — a restart was the entire remedy the one time
+            # this happened, and took ~20s.
+            #
+            # Measured against the chain tip, NOT against time since the last block:
+            # chain 55516 only produces blocks on demand, and genuinely-idle windows
+            # reach 130 minutes (see chain-tip-exporter's
+            # LATEST_BLOCK_BEHIND_THRESHOLD_SECS for the same hazard). A silence
+            # timeout would restart a healthy atlas dozens of times a day.
+            #
+            # Thresholds come from measured healthy behaviour: a working consumer on
+            # this chain sits at lag 0 (p99 1, max 8 over a week), so 10 blocks
+            # sustained for 20 minutes has ~2 orders of magnitude of headroom, while
+            # a real wedge trips inside an hour.
+            - name: ATLAS_STALL_LAG_BLOCKS
+              value: "10"
             - name: ATLAS_STALL_TIMEOUT_SECS
-              value: "600"
+              value: "1200"
+            # The tip to compare against. `optional` on purpose: without it the
+            # detector disables itself with a warning rather than guessing, so a
+            # deploy that lands before the secret key exists degrades to the
+            # previous behaviour instead of crash-looping.
+            #
+            # Seed the key from the RPC URL already in the cluster (copied as
+            # base64 so the value is never written out in plaintext):
+            #   kubectl -n gaia patch secret atlas-secrets --type=merge -p \
+            #     "{\"data\":{\"RPC_URL\":\"$(kubectl -n gaia get secret \
+            #       proposal-executor-credentials -o jsonpath='{.data.RPC_URL}')\"}}"
+            - name: RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-secrets
+                  key: RPC_URL
+                  optional: true
             - name: KAFKA_BROKER
               valueFrom:
                 secretKeyRef:

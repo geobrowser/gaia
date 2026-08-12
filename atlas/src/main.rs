@@ -149,8 +149,15 @@ impl AtlasSink {
                 baseline_force_write_pending,
             }),
             emitter,
+            // Seed from the restored checkpoint. The stall detector measures lag
+            // against the chain tip, so an unseeded restart during an idle chain
+            // would compute the entire chain height as lag and restart a
+            // perfectly healthy process on a loop.
+            progress: match checkpoint_manager.restored_block_number() {
+                Some(block_number) => StreamProgress::seeded(block_number),
+                None => StreamProgress::new(),
+            },
             checkpoint_manager,
-            progress: StreamProgress::new(),
         };
 
         // Force-write on startup: if there's no baseline on disk yet but we
@@ -352,16 +359,11 @@ impl Sink for AtlasSink {
             .map(|t| t.seconds as u64)
             .unwrap_or(0);
 
-        // Mark liveness before any work: the watchdog cares that blocks are
-        // *arriving*, not that they contain events or change the graph. Quiet
-        // blocks are normal; silence is the failure.
-        self.progress.record_block(
-            block_number,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        );
+        // Mark progress before any work: the watchdog compares this against the
+        // chain tip, and cares only about our position. Blocks with no events and
+        // long idle gaps between blocks are both normal on this chain; falling
+        // behind blocks that exist is the failure.
+        self.progress.record_block(block_number);
 
         // Same gauge the hermes services publish, so the existing
         // HermesBehindChainTip alert covers atlas too rather than needing a
@@ -764,9 +766,11 @@ async fn async_main() -> anyhow::Result<()> {
     };
 
     // Armed before the stream starts so a substream that never delivers its
-    // first block is caught too, not just one that dies mid-flight.
-    match stall::timeout_from_env() {
-        Some(timeout) if !use_mock => stall::spawn(sink.progress.clone(), timeout),
+    // first block is caught too, not just one that dies mid-flight. Progress is
+    // seeded from the restored checkpoint, so an idle chain after a restart
+    // reads as caught-up rather than as the whole chain height of lag.
+    match stall::config_from_env() {
+        Some(config) if !use_mock => stall::spawn(sink.progress.clone(), config),
         Some(_) => info!("Mock source in use; substream stall detection not armed"),
         None => {}
     }

@@ -18,8 +18,10 @@ spec:
           - hermes-pipeline
           - hermes-ipfs-cache
           - chain-tip-exporter
-          # atlas publishes the same hermes_latest_processed_block gauge. Its lag
-          # thresholds differ (see atlas-lag-alerts.yaml), but the scrape is identical.
+          # atlas publishes the same hermes_latest_processed_block gauge and is
+          # covered by the same HermesBehindChainTip thresholds. Before this it
+          # published no metrics at all, which is why a two-day substream wedge
+          # went unnoticed. See monitoring/k8s/v2/atlas-lag-alerts.yaml.
           - atlas
   endpoints:
     - port: metrics
