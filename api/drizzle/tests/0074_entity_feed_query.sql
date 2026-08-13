@@ -11,6 +11,15 @@ INSERT INTO entities (id, created_at) VALUES
   ('33333333-3333-3333-3333-333333333333','1786000000'),  -- EXCLUDED TYPE
   ('44444444-4444-4444-4444-444444444444','1768000000'),  -- old (outside window)
   ('55555555-5555-5555-5555-555555555555','1786000000');  -- no score row at all
+-- Every fixture needs a name to be servable at all (0075). Without these the suite
+-- asserts nothing: all five entities fail candidate generation on the name rule and
+-- the blocklist/exclusion assertions below pass vacuously.
+INSERT INTO values (id, property_id, entity_id, space_id, text) VALUES
+  ('m1','a126ca53-0c8e-48d5-b888-82c734c38935','11111111-1111-1111-1111-111111111111','aaaaaaaa-0000-0000-0000-000000000000','Servable'),
+  ('m2','a126ca53-0c8e-48d5-b888-82c734c38935','22222222-2222-2222-2222-222222222222','aaaaaaaa-0000-0000-0000-000000000000','Blocklisted'),
+  ('m3','a126ca53-0c8e-48d5-b888-82c734c38935','33333333-3333-3333-3333-333333333333','aaaaaaaa-0000-0000-0000-000000000000','Excluded type'),
+  ('m4','a126ca53-0c8e-48d5-b888-82c734c38935','44444444-4444-4444-4444-444444444444','aaaaaaaa-0000-0000-0000-000000000000','Old'),
+  ('m5','a126ca53-0c8e-48d5-b888-82c734c38935','55555555-5555-5555-5555-555555555555','aaaaaaaa-0000-0000-0000-000000000000','No score row');
 INSERT INTO votes_count (object_id, object_type, space_id, vote_kind, positive, negative) VALUES
   ('11111111-1111-1111-1111-111111111111',0,'aaaaaaaa-0000-0000-0000-000000000000',0,50,2),
   ('22222222-2222-2222-2222-222222222222',0,'aaaaaaaa-0000-0000-0000-000000000000',0,99,0),

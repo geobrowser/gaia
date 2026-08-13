@@ -2,6 +2,13 @@
 CREATE OR REPLACE FUNCTION assert(cond boolean, label text) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN IF NOT cond THEN RAISE EXCEPTION 'FAIL: %', label; ELSE RAISE NOTICE 'pass: %', label; END IF; END; $$;
 
+-- This suite used to rely on being run first against a virgin database: its row-count
+-- assertions ("still exactly 6 rows after re-refresh") counted every row in
+-- entity_ranking_scores, so any fixture left behind by another suite failed it. The
+-- other suites all truncate; this one now does too, so the files can run in any order.
+TRUNCATE entities, values, relations, votes_count, entity_ranking_scores,
+         entity_type_weights, entity_type_exclusions, entity_feed_blocklist;
+
 -- ---- Wilson properties ----
 SELECT assert(wilson_lower_bound(0,0) > 0 AND wilson_lower_bound(0,0) < 1,
   'zero-vote entity lands strictly inside (0,1) via the prior, not at the floor');
