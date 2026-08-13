@@ -11,7 +11,6 @@ import numpy as np
 from .models import Entity, RankingConfig, Space, User, Vote
 
 # Constants
-HOT_SCORE_TIME_DIVISOR = 45000  # Time divisor for hot score calculation
 ACTIVITY_WEIGHT = 0.1           # Activity weight in composite space score (10%)
 
 from .utils import calculate_space_distances
@@ -81,21 +80,6 @@ class EntityScorer:
         # Apply exponential decay
         decayed_score = score * math.exp(-self.config.time_decay_factor * age_hours)
         return decayed_score
-
-    def calculate_hot_score(self, entity: Entity, votes: list[Vote]) -> float:
-        """Calculate 'hot' score using logarithmic approach."""
-        entity.calculate_scores(votes)
-
-        upvotes = entity.upvotes
-        downvotes = entity.downvotes
-
-        vote_difference = upvotes - downvotes
-        age_hours = (datetime.now() - entity.created_at).total_seconds() / 3600
-
-        # Apply hot score formula
-        hot_score = math.log(max(abs(vote_difference), 1)) + age_hours / HOT_SCORE_TIME_DIVISOR
-
-        return hot_score
 
     @staticmethod
     def _index_users_by_id(users: list[User]) -> dict[str, User]:

@@ -21,6 +21,7 @@ import {log} from "../services/telemetry"
 import {useAdmissionControl} from "./admissionControl"
 import {useCostLogger} from "./costLoggerPlugin"
 import EntityComputedTextFilterPlugin from "./entityComputedTextFilterPlugin"
+import EntityOrderByRankingScorePlugin from "./entityOrderByRankingScorePlugin"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {shouldUnmaskError} from "./errorMasking"
 import HideProceduresPlugin from "./hideProceduresPlugin"
@@ -222,6 +223,7 @@ const postgraphileOptions = {
 		EntitySpaceFilterPlugin,
 		EntityComputedTextFilterPlugin,
 		ValueOrderByScorePlugin,
+		EntityOrderByRankingScorePlugin,
 		PaginationCapPlugin,
 		HideProceduresPlugin,
 		UserVoteLegacyAccessorPlugin,

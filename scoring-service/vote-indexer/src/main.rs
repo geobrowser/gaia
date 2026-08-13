@@ -325,6 +325,13 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
             .upsert_votes_counts(&updated_vote_counts, &mut tx)
             .await?;
 
+        // Recompute the Explore feed ranking score for entities whose curation
+        // votes changed. Same transaction, so the tally and its score are never
+        // observable out of step.
+        storage
+            .refresh_ranking_scores(&updated_vote_counts, &mut tx)
+            .await?;
+
         // Mirror entity net scores into `values` under the Score system property
         // so `entities_ordered_by_property` can sort by raw score with no SQL changes.
         let score_values = build_score_values(&updated_vote_counts);

@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use crate::error::StorageError;
 use crate::models::voting::{
-    ScoreValueItem, UserVoteCriteria, UserVoteItem, VoteCountCriteria, VoteItem, VotesCountItem,
+    ResponseKind, ScoreValueItem, UserVoteCriteria, UserVoteItem, VoteCountCriteria, VoteItem,
+    VoteObjectType, VotesCountItem,
 };
 
 /// Storage for vote-related database operations.
@@ -209,6 +210,49 @@ impl Storage {
             .bind(&vote_kinds)
             .bind(&positives)
             .bind(&negatives)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Recompute the Explore feed ranking score for entities whose curation votes
+    /// just changed.
+    ///
+    /// Only curation (`vote_kind = 0`) on entities feeds the feed's quality term, so
+    /// stance and veracity votes must not trigger a recompute — they would rewrite the
+    /// row to an identical value and make `updated_at` misleading about what moved.
+    ///
+    /// Runs inside the caller's transaction so a vote and its score land atomically:
+    /// a reader can never observe the new tally against the old score.
+    ///
+    /// Because the score is time-invariant (`created_at / tau`), this is the only
+    /// thing that ever needs to run. There is no scheduled decay sweep.
+    #[instrument(
+        name = "vote_indexer.storage.refresh_ranking_scores",
+        skip(self, counts, tx)
+    )]
+    pub async fn refresh_ranking_scores(
+        &self,
+        counts: &[VotesCountItem],
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), StorageError> {
+        let mut entity_ids: Vec<Uuid> = counts
+            .iter()
+            .filter(|c| c.object_type == VoteObjectType::Entity && c.kind == ResponseKind::Curation)
+            .map(|c| c.object_id)
+            .collect();
+        // An entity voted in several spaces appears once per space; deduplicate so a
+        // single recompute covers it.
+        entity_ids.sort_unstable();
+        entity_ids.dedup();
+
+        if entity_ids.is_empty() {
+            return Ok(());
+        }
+
+        sqlx::query("SELECT public.refresh_entity_ranking_scores($1::uuid[])")
+            .bind(&entity_ids)
             .execute(&mut **tx)
             .await?;
 
