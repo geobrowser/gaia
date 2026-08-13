@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use crate::error::StorageError;
 use crate::models::voting::{
-    ScoreValueItem, UserVoteCriteria, UserVoteItem, VoteCountCriteria, VoteItem, VotesCountItem,
+    ResponseKind, ScoreValueItem, UserVoteCriteria, UserVoteItem, VoteCountCriteria, VoteItem,
+    VoteObjectType, VotesCountItem,
 };
 
 /// Storage for vote-related database operations.
@@ -213,6 +214,62 @@ impl Storage {
             .await?;
 
         Ok(())
+    }
+
+    /// Recompute the Explore feed ranking score for entities whose curation votes
+    /// just changed.
+    ///
+    /// Runs OUTSIDE the vote transaction, on the pool, and reports failure to the
+    /// caller as a warning rather than an error. Two reasons:
+    ///
+    /// 1. A stale ranking score is harmless and self-correcting — the next vote or a
+    ///    backfill run fixes it. A lost vote is permanent. So the refresh must never
+    ///    be able to abort the vote write, whatever goes wrong.
+    /// 2. It makes deploy order irrelevant. If vote-indexer ships ahead of the
+    ///    migration that creates the function, this logs and moves on instead of
+    ///    failing every vote write — the failure shape of the 08-05 incident, where a
+    ///    migration shipped without its writer.
+    ///
+    /// A catalogue guard (`WHERE to_regproc(...) IS NOT NULL`) does NOT work here and
+    /// was tried: Postgres resolves the function name at parse time, so the statement
+    /// fails before the WHERE is ever evaluated. Separating the transaction is what
+    /// actually provides the safety.
+    ///
+    /// Only curation (`vote_kind = 0`) on entities feeds the feed's quality term, so
+    /// stance and veracity votes do not trigger a recompute — they would rewrite the
+    /// row to an identical value and make `updated_at` misleading about what moved.
+    ///
+    /// Because the score is time-invariant (`created_at / tau`), this is the only
+    /// thing that ever needs to run. There is no scheduled decay sweep.
+    #[instrument(
+        name = "vote_indexer.storage.refresh_ranking_scores",
+        skip(self, counts)
+    )]
+    pub async fn refresh_ranking_scores(
+        &self,
+        counts: &[VotesCountItem],
+    ) -> Result<u64, StorageError> {
+        let mut entity_ids: Vec<Uuid> = counts
+            .iter()
+            .filter(|c| c.object_type == VoteObjectType::Entity && c.kind == ResponseKind::Curation)
+            .map(|c| c.object_id)
+            .collect();
+        // An entity voted in several spaces appears once per space; deduplicate so a
+        // single recompute covers it.
+        entity_ids.sort_unstable();
+        entity_ids.dedup();
+
+        if entity_ids.is_empty() {
+            return Ok(0);
+        }
+
+        let scored: i32 =
+            sqlx::query_scalar("SELECT public.refresh_entity_ranking_scores($1::uuid[])")
+                .bind(&entity_ids)
+                .fetch_one(&self.pool)
+                .await?;
+
+        Ok(scored.max(0) as u64)
     }
 
     /// Mirror net scores into the `values` table under the Score system property.

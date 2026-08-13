@@ -1404,3 +1404,82 @@ export const rankingScores = ranks.table(
 		index("ranking_scores_block_position_idx").on(table.blockId, table.position),
 	],
 )
+
+/**
+ * entity_ranking_config
+ *
+ * Single-row tunables for the Explore feed "Best" ranking (Phase A). A table
+ * rather than constants because tau, the Wilson prior, and the intrinsic caps all
+ * need experimentation, and retuning should not require a deploy.
+ */
+export const entityRankingConfig = pgTable("entity_ranking_config", {
+	id: boolean("id").primaryKey().default(true),
+	/** Recency divisor in SECONDS. Must be applied to seconds, not hours. */
+	tauSeconds: decimal("tau_seconds").notNull(),
+	wilsonZ: decimal("wilson_z").notNull(),
+	priorPositive: decimal("prior_positive").notNull(),
+	priorNegative: decimal("prior_negative").notNull(),
+	qualityFloor: decimal("quality_floor").notNull(),
+	intrinsicCap: decimal("intrinsic_cap").notNull(),
+	intrinsicPropertyTarget: integer("intrinsic_property_target").notNull(),
+	intrinsicRelationTarget: integer("intrinsic_relation_target").notNull(),
+	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
+})
+
+/**
+ * entity_type_weights
+ *
+ * Per-entity-type feed weight. > 1.0 boosts, < 1.0 demotes, absent defaults to
+ * 1.0. Applied as log(weight) so the log-time ranking score stays time-invariant;
+ * changing a weight requires a bulk recompute for that type's entities.
+ */
+export const entityTypeWeights = pgTable("entity_type_weights", {
+	typeId: uuid("type_id").primaryKey(),
+	weight: decimal("weight").notNull(),
+	note: text("note"),
+	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
+})
+
+/**
+ * entity_type_exclusions
+ *
+ * Types that must never be served by the feed. Enforced at candidate generation
+ * rather than as a zero weight — exclusion is editorial and must not be reachable
+ * by the weighting math.
+ */
+export const entityTypeExclusions = pgTable("entity_type_exclusions", {
+	typeId: uuid("type_id").primaryKey(),
+	note: text("note"),
+	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
+})
+
+/**
+ * entity_ranking_scores
+ *
+ * The Phase A sort key, stored per entity. A side table rather than columns on
+ * `entities` (48.9M rows / 18 GB, four indexes), matching the existing
+ * global_scores / local_scores pattern.
+ *
+ * Inputs are retained alongside the score so a surprising ranking can be explained
+ * without recomputing it.
+ */
+export const entityRankingScores = pgTable(
+	"entity_ranking_scores",
+	{
+		entityId: uuid("entity_id").primaryKey(),
+		/** Wilson lower bound on curation votes, with the pseudo-count prior. */
+		qualityScore: decimal("quality_score").notNull(),
+		/** Capped structural bonus — the only quality gradient between zero-vote entities. */
+		intrinsicScore: decimal("intrinsic_score").notNull(),
+		/** log(quality) + log(typeWeight) + intrinsic + createdAt/tau. Time-invariant. */
+		rankingScore: decimal("ranking_score").notNull(),
+		positive: bigint("positive", {mode: "number"}).notNull(),
+		negative: bigint("negative", {mode: "number"}).notNull(),
+		typeWeight: decimal("type_weight").notNull(),
+		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
+	},
+	(table) => [
+		index("entity_ranking_scores_ranking_desc_idx").on(table.rankingScore, table.entityId),
+		index("entity_ranking_scores_quality_idx").on(table.qualityScore),
+	],
+)

@@ -332,6 +332,18 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
 
         tx.commit().await?;
 
+        // Recompute the Explore feed ranking score for entities whose curation votes
+        // changed. Deliberately AFTER the commit and non-fatal: a stale score is
+        // harmless and self-correcting, a lost vote is not. This also makes deploy
+        // order irrelevant if the migration has not landed yet.
+        if let Err(e) = storage.refresh_ranking_scores(&updated_vote_counts).await {
+            warn!(
+                error = %e,
+                "Failed to refresh feed ranking scores; votes are committed and the \
+                 scores will be corrected by the next vote or a backfill run"
+            );
+        }
+
         debug!(
             raw_votes = vote_count,
             user_votes = user_votes.len(),
