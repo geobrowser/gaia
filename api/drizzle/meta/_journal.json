@@ -512,6 +512,13 @@
       "when": 1786470235869,
       "tag": "0072_unexecutable_proposals",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1786556635869,
+      "tag": "0073_entity_ranking_scores",
+      "breakpoints": true
     }
   ]
 }
