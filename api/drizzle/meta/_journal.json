@@ -526,6 +526,13 @@
       "when": 1786560235869,
       "tag": "0074_entity_feed_query",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1786563835869,
+      "tag": "0075_feed_requires_name",
+      "breakpoints": true
     }
   ]
 }
