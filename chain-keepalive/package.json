@@ -1,0 +1,22 @@
+{
+	"name": "chain-keepalive",
+	"version": "0.1.0",
+	"description": "Keeps chain 55516's bundler relayer from wedging after idle periods by sending a plain, real-gas transaction on a schedule",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"start": "bun run src/index.ts",
+		"test": "bun test",
+		"lint": "biome check",
+		"lint:fix": "biome check --write",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"viem": "^2.43.5"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.3.11",
+		"@types/bun": "latest",
+		"typescript": "^5.9.3"
+	}
+}
