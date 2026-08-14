@@ -1,0 +1,58 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: chain-keepalive
+  namespace: gaia
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 290 # 10s gap before next 5-min CronJob invocation
+      backoffLimit: 1 # Don't restart-loop on failure — try again in 5 min
+      template:
+        spec:
+          restartPolicy: Never # CronJob retries via next scheduled run, not restarts
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+          imagePullSecrets:
+            - name: regcred
+          containers:
+            - name: chain-keepalive
+              image: registry.digitalocean.com/geo/chain-keepalive:latest
+              imagePullPolicy: Always
+              env:
+                # Not sensitive — a public RPC endpoint, same one the api/proposal-executor use.
+                - name: RPC_URL
+                  value: "https://rpc-geo-testnet-irdc0cgb0w.t.conduit.xyz"
+                - name: CHAIN_ID
+                  value: "55516"
+                # Reuses the space-registry deployer key rather than a
+                # dedicated secret — it already has a real (~1000 GEO) test
+                # balance and is used interchangeably for this kind of
+                # one-off/ops chain write. See GEO-2549/GEO-2550 postmortem.
+                - name: KEEPALIVE_PRIVATE_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: space-registry-admin-credentials
+                      key: ADMIN_PRIVATE_KEY
+                # How long the chain may sit idle before this sends a nudge
+                # transaction. Comfortably under the shortest wedge-inducing
+                # gap observed historically (~11h) — see src/index.ts.
+                - name: IDLE_THRESHOLD_MS
+                  value: "600000" # 10 minutes
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "128Mi"
+                  cpu: "100m"
