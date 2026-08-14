@@ -12,11 +12,15 @@
  * than no rate limiter at all. Mirrors the failure-handling philosophy in
  * valkeyCache.ts.
  *
- * Per-IP is a blunt instrument — a shared NAT/VPN/office egress IP means
- * many real users can share one bucket — so the default is deliberately
- * generous (10 req/s sustained). This is meant to stop a single scraper
- * hammering the API from one address, not to rate-limit legitimate
- * interactive use.
+ * This is an availability/DoS safety net, not an anti-scraping tool — this
+ * is an open API and people writing scripts against it is expected, working
+ * as intended usage. Per-IP is also a blunt instrument (a shared NAT/VPN/
+ * office egress IP means many real users can share one bucket), which is
+ * the other reason the default sits far above any realistic single caller's
+ * load: it exists to stop one address from monopolizing/overloading shared
+ * infra, not to police request volume from legitimate integrations. Blocking
+ * specific unwanted crawlers (e.g. known AI-scraper user agents) is a
+ * separate, targeted mechanism — not this one.
  */
 import type {Context, Next} from "hono"
 import Redis from "ioredis"
@@ -24,7 +28,7 @@ import {log} from "../services/telemetry"
 import {extractClientIp} from "../utils/clientIp"
 
 const DEFAULT_WINDOW_MS = 60_000
-const DEFAULT_MAX_REQUESTS = 600
+const DEFAULT_MAX_REQUESTS = 6000
 
 const HEALTH_PATH_PREFIX = "/health"
 
