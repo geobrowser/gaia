@@ -5,6 +5,7 @@ import {openAPISpecs} from "hono-openapi"
 import {health} from "./src/health"
 import {createIpfsRouter} from "./src/ipfs"
 import {getGraphqlPoolPressure, graphqlServer} from "./src/kg/postgraphile"
+import {createRateLimiter} from "./src/middleware/rateLimit"
 import {canonicalRequestLogging, isClientAbortError, requestId} from "./src/middleware/requestLogging"
 import {createProfileRouter} from "./src/profile"
 import {createProposalsRouter} from "./src/proposals"
@@ -66,6 +67,16 @@ app.use("*", requestId())
 
 app.use("*", cors())
 log.info("HTTP compression disabled in API (managed by ingress)")
+
+// Per-IP rate limiting (skips /health internally). No-op if VALKEY_URL is
+// not set — see createRateLimiter.
+const rateLimiter = createRateLimiter(process.env.VALKEY_URL, {
+	windowMs: process.env.RATE_LIMIT_WINDOW_MS ? Number(process.env.RATE_LIMIT_WINDOW_MS) : undefined,
+	maxRequests: process.env.RATE_LIMIT_MAX_REQUESTS ? Number(process.env.RATE_LIMIT_MAX_REQUESTS) : undefined,
+})
+if (rateLimiter) {
+	app.use("*", rateLimiter)
+}
 
 // Health routes - no tracing (high frequency, low value)
 app.route("/health", health)
