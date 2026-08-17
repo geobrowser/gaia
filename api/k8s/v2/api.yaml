@@ -110,6 +110,32 @@ spec:
               value: "15000"
             - name: PG_POOL_SATURATION_RELEASE_MS
               value: "30000"
+            # Admission control concurrency cap. The default of 48 (see
+            # api/src/kg/admissionControl.ts) is unsafe against this pod's 2Gi
+            # limit: baseline working set is ~550Mi, leaving ~1500Mi of headroom,
+            # so 48 concurrent expensive operations budgets only ~31Mi each while
+            # observed serialized responses already reach 32MB and their
+            # pre-serialization object graphs are far larger.
+            #
+            # Proven on 2026-08-17 via container_memory_working_set_bytes: pods
+            # hold a FLAT 480-600Mi for hours, then go vertical — api-7d55b7b59b-7cjwf
+            # read 587Mi at 22:54:30 and was OOMKilled at 22:54:55, i.e. ~1.5GB
+            # allocated in under 25s. Not a leak; a concurrency burst. Every dying
+            # pod's last log lines were bursts of cost 202-334 queries
+            # (AllEntitiesConnection, entitiesConnection, relations, entities).
+            #
+            # The limiter never fired because the pod dies before reaching 48, which
+            # is why the rejection counter read zero. The cost CEILING
+            # (GRAPHQL_COST_REJECT_THRESHOLD, default 500) is already armed and also
+            # never fires — cost score badly underestimates memory for these shapes.
+            # Do not lower that ceiling to 200 instead: 3,913 queries in 6h scored
+            # >=200, so it would reject normal traffic. Concurrency is the right axis.
+            #
+            # 10 per pod x 8 replicas = 80 expensive ops cluster-wide. Rejecting a
+            # request fails one caller; an OOM kill fails every in-flight request on
+            # the pod and cascades (six pods died in three minutes on 2026-08-17).
+            - name: GRAPHQL_MAX_CONCURRENT_EXPENSIVE
+              value: "10"
             - name: IPFS_KEY
               valueFrom:
                 secretKeyRef:
