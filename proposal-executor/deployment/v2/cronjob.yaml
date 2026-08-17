@@ -88,8 +88,27 @@ spec:
                 # and admitted no one. These are the same four spaces prod
                 # auto-accepts; all four exist on 55516 under the same ids
                 # (verified 2026-07-30), since the migration preserved space ids.
+                #
+                # GEO-2580: ids 5-8 were never in this list — the four above are
+                # prod's originals — so the bot skipped those spaces by design
+                # and their onboarding flows admitted nobody. The debates space
+                # (0x41e85161…) is the one Preston reported; the other three came
+                # out of an audit of the `editors` table and are in the identical
+                # state, so they are fixed here rather than one ticket at a time.
+                #
+                # Detection filters by this allowlist, so requests in a
+                # non-allowlisted space never even counted: every run logged
+                # requestsFound=0 and the job stayed green. Same masking as above.
+                #
+                # ORDERING: adding a space here is only half the fix. The bot
+                # votes as MEMBERSHIP_BOT_SPACE_ID and voting requires EDITOR in
+                # the target space (MEMBER is not enough — _canVote reverts
+                # CanNotVote). Verified on 55516 2026-08-17: the bot holds EDITOR
+                # in the four originals and in NONE of the four added here. Do
+                # not deploy ahead of those grants, or the executor will detect
+                # real requests and revert on every 5-minute run.
                 - name: MEMBERSHIP_AUTOACCEPT_SPACE_IDS
-                  value: "0xc9f267dcb0d270718c2a3c45a64afd32,0x84a679ce188f061ac9a92380bac2bab5,0x0477636ace64280fc43a9f440a502291,0x29a5122f65295cea9f421ec7a73ac825"
+                  value: "0xc9f267dcb0d270718c2a3c45a64afd32,0x84a679ce188f061ac9a92380bac2bab5,0x0477636ace64280fc43a9f440a502291,0x29a5122f65295cea9f421ec7a73ac825,0x41e851610e13a19441c4d980f2f2ce6b,0x4582fbbee28a16589154f7e36f1ee3c5,0x52c7ae149838b6d47ce0f3b2a5974546,0x89bd89bf28ff8a0963faf92a8c905e20"
                 # Self-owned SpaceRegistry deployed 2026-07-29. The live CronJob
                 # was already patched to this address; this manifest still said
                 # 0x364231615dcEA33D13C823b13B449DD9F55381E7, so redeploying from
