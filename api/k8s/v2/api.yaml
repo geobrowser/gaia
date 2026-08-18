@@ -7,6 +7,31 @@ metadata:
     app: api
 spec:
   replicas: 1
+  # Rollout safety. A fresh pod is at its most fragile — cold JIT, cold caches —
+  # and the default 25%/25% lets two pods leave rotation while their cold
+  # replacements take a full share of traffic, which is how a routine rollout can
+  # reproduce the 2026-08-06 and 2026-08-17 cascades on its own.
+  #
+  # maxUnavailable 0 keeps all 8 replicas serving throughout (surge adds new pods
+  # before old ones go), and minReadySeconds makes a pod prove it can stay ready
+  # for 30s before the rollout advances — so a pod that OOMs 39s after boot (as
+  # three did on 2026-08-17) halts the rollout instead of taking the next one down
+  # with it. Surge needs headroom for 2 extra pods at 768Mi requests; the cluster
+  # has ~8Gi free.
+  #
+  # NOTE: this protects ROLLOUTS only. It does not protect a pod that restarts on
+  # its own after an OOM, because kube-proxy/Cilium sends traffic as soon as
+  # readiness passes regardless of minReadySeconds. Steady-state cold-start
+  # protection comes from GRAPHQL_MAX_CONCURRENT_EXPENSIVE below, which caps what
+  # a cold pod can be hit with. Do not raise readinessProbe.initialDelaySeconds
+  # hoping to fix that — it only postpones traffic, it does not warm the pod, and
+  # it sheds that load onto the surviving replicas in the meantime.
+  minReadySeconds: 30
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 25%
   selector:
     matchLabels:
       app: api
@@ -110,6 +135,32 @@ spec:
               value: "15000"
             - name: PG_POOL_SATURATION_RELEASE_MS
               value: "30000"
+            # Admission control concurrency cap. The default of 48 (see
+            # api/src/kg/admissionControl.ts) is unsafe against this pod's 2Gi
+            # limit: baseline working set is ~550Mi, leaving ~1500Mi of headroom,
+            # so 48 concurrent expensive operations budgets only ~31Mi each while
+            # observed serialized responses already reach 32MB and their
+            # pre-serialization object graphs are far larger.
+            #
+            # Proven on 2026-08-17 via container_memory_working_set_bytes: pods
+            # hold a FLAT 480-600Mi for hours, then go vertical — api-7d55b7b59b-7cjwf
+            # read 587Mi at 22:54:30 and was OOMKilled at 22:54:55, i.e. ~1.5GB
+            # allocated in under 25s. Not a leak; a concurrency burst. Every dying
+            # pod's last log lines were bursts of cost 202-334 queries
+            # (AllEntitiesConnection, entitiesConnection, relations, entities).
+            #
+            # The limiter never fired because the pod dies before reaching 48, which
+            # is why the rejection counter read zero. The cost CEILING
+            # (GRAPHQL_COST_REJECT_THRESHOLD, default 500) is already armed and also
+            # never fires — cost score badly underestimates memory for these shapes.
+            # Do not lower that ceiling to 200 instead: 3,913 queries in 6h scored
+            # >=200, so it would reject normal traffic. Concurrency is the right axis.
+            #
+            # 10 per pod x 8 replicas = 80 expensive ops cluster-wide. Rejecting a
+            # request fails one caller; an OOM kill fails every in-flight request on
+            # the pod and cascades (six pods died in three minutes on 2026-08-17).
+            - name: GRAPHQL_MAX_CONCURRENT_EXPENSIVE
+              value: "10"
             - name: IPFS_KEY
               valueFrom:
                 secretKeyRef:
