@@ -156,11 +156,32 @@ spec:
             # Do not lower that ceiling to 200 instead: 3,913 queries in 6h scored
             # >=200, so it would reject normal traffic. Concurrency is the right axis.
             #
-            # 10 per pod x 8 replicas = 80 expensive ops cluster-wide. Rejecting a
-            # request fails one caller; an OOM kill fails every in-flight request on
-            # the pod and cascades (six pods died in three minutes on 2026-08-17).
+            # MEASURED 2026-08-18, replacing the earlier estimate. 0.5s-resolution
+            # cgroup capture of five separate OOM deaths (18:00:22-18:01:43Z) shows
+            # a FLAT baseline then an 11-18s RAMP, never a single-sample spike — so
+            # this is concurrent accumulation, not one runaway query:
+            #
+            #   pod     baseline   peak    climb    ramp
+            #   b2z8z     535Mi   1976Mi  1441Mi   18.2s
+            #   48pcj     567Mi   2045Mi  1477Mi   12.7s
+            #   5lrsn     551Mi   1951Mi  1400Mi   11.6s
+            #   285hk     562Mi   1928Mi  1365Mi   11.6s
+            #   zqm79     530Mi   2041Mi  1510Mi   10.6s
+            #
+            # Mean climb 1439Mi at a cap of 10 => ~144Mi per concurrent expensive
+            # query, against ~1498Mi of headroom (2048 limit - ~550Mi baseline).
+            #
+            # That is why 10 did not work: 10 x 144Mi = 1440Mi consumes 96% of
+            # headroom, so the cap sat essentially AT the OOM threshold rather than
+            # below it. The earlier value assumed ~31Mi/query, understating the real
+            # cost by ~4.6x. 6 x 144Mi = 864Mi leaves ~40% margin.
+            #
+            # Deaths fire ~20s apart in strict sequence: one pod dies, its load
+            # shifts to the next, which ramps and dies. Rejecting a request fails one
+            # caller; an OOM kill fails every in-flight request on that pod and starts
+            # that chain.
             - name: GRAPHQL_MAX_CONCURRENT_EXPENSIVE
-              value: "10"
+              value: "6"
             - name: IPFS_KEY
               valueFrom:
                 secretKeyRef:
