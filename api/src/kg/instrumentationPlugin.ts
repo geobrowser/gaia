@@ -82,6 +82,96 @@ export function isClientError(error: unknown): boolean {
 const SLOW_QUERY_THRESHOLD_MS = 3000
 const LARGE_RESPONSE_THRESHOLD_BYTES = 1_000_000 // 1 MB
 
+// ---------------------------------------------------------------------------
+// Response size estimation
+// ---------------------------------------------------------------------------
+
+/**
+ * Approximate the serialized JSON byte size of a value WITHOUT building the string.
+ *
+ * This replaced `JSON.stringify(data).length`. The problem was never the call
+ * itself but where it ran: behind a `durationMs >= 1000` guard, which in this
+ * service selects *exactly* the pathological responses. A 62.9MB response was
+ * therefore serialized twice — once by yoga to answer the request, once here
+ * purely to measure it — and stringify costs ~2.4x the response size in RSS. So
+ * the instrumentation added hundreds of MiB to precisely the requests most likely
+ * to OOM the pod (2Gi limit; a single request measured +1,569Mi on 2026-08-19,
+ * see gaia-api-oom-not-capacity). Measuring a failure must not help cause it.
+ *
+ * This walks the structure instead: O(nodes) CPU, O(depth) stack, and no
+ * allocation proportional to the payload.
+ *
+ * The result is an ESTIMATE and deliberately so:
+ *   - string escaping is not scanned for, so payloads full of quotes/newlines
+ *     read slightly small;
+ *   - lengths are UTF-16 code units, so non-ASCII text reads small against
+ *     real UTF-8 bytes;
+ *   - `undefined` / functions are skipped, matching what JSON.stringify omits.
+ *
+ * That is fine for both consumers — a histogram bucketed by powers of ten and a
+ * 1MB warning threshold. Do not use it where an exact Content-Length matters.
+ */
+export function estimateJsonBytes(value: unknown): number {
+	switch (typeof value) {
+		case "undefined":
+		case "function":
+			return 0
+		case "boolean":
+			return value ? 4 : 5
+		case "number":
+			if (!Number.isFinite(value)) return 4 // JSON.stringify emits null
+			// Avoid allocating a string per number on million-node payloads.
+			if (Number.isInteger(value) && Math.abs(value) < 1e15) {
+				const digits = value === 0 ? 1 : Math.floor(Math.log10(Math.abs(value))) + 1
+				return digits + (value < 0 ? 1 : 0)
+			}
+			return String(value).length
+		case "bigint":
+			return String(value).length
+		case "string":
+			return value.length + 2 // surrounding quotes
+		case "object":
+			break
+		default:
+			return 0
+	}
+
+	if (value === null) return 4
+	if (Array.isArray(value)) {
+		// brackets + commas
+		let total = 2 + (value.length > 0 ? value.length - 1 : 0)
+		for (const item of value) {
+			// `undefined` inside an array serializes as `null`, not omitted.
+			total += item === undefined ? 4 : estimateJsonBytes(item)
+		}
+		return total
+	}
+
+	// `toJSON` (Date, etc.) — respect it rather than walking internals.
+	const maybeToJson = (value as {toJSON?: unknown}).toJSON
+	if (typeof maybeToJson === "function") {
+		return estimateJsonBytes((value as {toJSON: () => unknown}).toJSON())
+	}
+
+	// `for...in` + hasOwn rather than Object.entries/keys: those allocate an array
+	// (of pairs, no less) for EVERY object visited, which on a million-node payload
+	// costs more than the string this function exists to avoid. Measured: entries()
+	// ran 2x slower than JSON.stringify with a larger RSS delta.
+	const record = value as Record<string, unknown>
+	let total = 2 // braces
+	let first = true
+	for (const key in record) {
+		if (!Object.hasOwn(record, key)) continue // stringify only emits own props
+		const entry = record[key]
+		if (entry === undefined || typeof entry === "function") continue // omitted by JSON.stringify
+		if (!first) total += 1 // comma
+		first = false
+		total += key.length + 3 // "key":
+		total += estimateJsonBytes(entry)
+	}
+	return total
+}
+
 // Cap for query/variable strings sent to Sentry extras + OTEL span attributes.
 // Sentry truncates strings server-side around 8 KB. Logs are uncapped.
 const SENTRY_PAYLOAD_CHAR_LIMIT = 5000
@@ -289,15 +379,24 @@ export function useGraphQLInstrumentation(): Plugin {
 					const queryCost = ctx?.[GRAPHQL_QUERY_COST_CONTEXT_KEY]
 
 					// Measure serialized response size for large payload detection.
-					// Only stringify data (not errors) since that's the memory-heavy part.
-					// Guard behind a 1s duration check to avoid the stringify cost on fast queries.
+					// Only `data` (not errors) — that is the memory-heavy part.
+					//
+					// Estimated by walking the value, NOT by JSON.stringify: the >=1s guard
+					// below selects the slowest queries, which are also the largest, so
+					// stringifying here double-serialized exactly the responses that OOM
+					// pods. See estimateJsonBytes.
+					//
+					// The >=1s guard is kept so the CPU walk stays off the hot path for
+					// fast queries. NOTE: that means the histogram covers only queries
+					// >=1s, i.e. it is biased away from small/fast responses — worth
+					// revisiting now that measuring no longer costs a second serialization.
 					const data = "data" in result ? result.data : undefined
 					let responseSizeBytes: number | undefined
 					if (data && durationMs >= 1000) {
 						try {
-							responseSizeBytes = JSON.stringify(data).length
+							responseSizeBytes = estimateJsonBytes(data)
 						} catch {
-							// If stringify fails (circular refs, etc.), skip size measurement
+							// Never let measurement break the response it is observing.
 						}
 					}
 
