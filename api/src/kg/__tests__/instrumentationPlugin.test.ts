@@ -23,6 +23,7 @@ import {log} from "../../services/telemetry"
 import {GRAPHQL_QUERY_COST_CONTEXT_KEY} from "../costLoggerPlugin"
 import {
 	__resetResponseSizeHistogramForTests,
+	estimateJsonBytes,
 	isClientError,
 	renderResponseSizeHistogram,
 	useGraphQLInstrumentation,
@@ -309,5 +310,108 @@ describe("response size histogram", () => {
 		const out = renderResponseSizeHistogram()
 		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="100000000"} 0$/m)
 		expect(out).toMatch(/gaia_api_graphql_response_size_bytes_bucket\{le="\+Inf"} 1$/m)
+	})
+})
+
+// ---------------------------------------------------------------------------
+// estimateJsonBytes — must track JSON.stringify closely without building it
+// ---------------------------------------------------------------------------
+
+describe("estimateJsonBytes", () => {
+	// The whole point is to avoid materializing the string on huge payloads, so
+	// correctness is defined as "close to what stringify would have produced".
+	function assertWithin(value: unknown, tolerance: number) {
+		const actual = JSON.stringify(value)?.length ?? 0
+		const estimate = estimateJsonBytes(value)
+		const drift = actual === 0 ? estimate : Math.abs(estimate - actual) / actual
+		expect(drift).toBeLessThanOrEqual(tolerance)
+	}
+
+	it("is exact for primitives", () => {
+		expect(estimateJsonBytes(null)).toBe(4)
+		expect(estimateJsonBytes(true)).toBe(4)
+		expect(estimateJsonBytes(false)).toBe(5)
+		expect(estimateJsonBytes(0)).toBe(1)
+		expect(estimateJsonBytes(1234)).toBe(4)
+		expect(estimateJsonBytes(-42)).toBe(3)
+		expect(estimateJsonBytes("abc")).toBe(5) // "abc"
+	})
+
+	it("matches JSON.stringify exactly on an ASCII entity-shaped payload", () => {
+		const entity = {
+			id: "972d201ad78045689e01543f67b26bee",
+			name: "Some Episode",
+			spaceIds: ["a19c345ab9866679b001d7d2138d88a1"],
+			createdAt: 1755600000,
+			values: {nodes: [{propertyId: "p1", text: "hello", boolean: true, point: null}]},
+		}
+		expect(estimateJsonBytes(entity)).toBe(JSON.stringify(entity).length)
+	})
+
+	it("matches on the nested connection shape that OOMs pods", () => {
+		const payload = {
+			entitiesConnection: {
+				totalCount: 5218,
+				pageInfo: {hasNextPage: true, endCursor: "WyJuYW1lIiwx"},
+				nodes: Array.from({length: 50}, (_, i) => ({
+					id: `entity-${i}`,
+					name: `Episode ${i}`,
+					values: {nodes: [{propertyId: "prop", text: "x".repeat(20), integer: i}]},
+					relations: {
+						nodes: Array.from({length: 20}, (_, r) => ({
+							id: `rel-${i}-${r}`,
+							typeId: "8f151ba4de204e3c9cb499ddf96f48f1",
+							verified: r % 2 === 0,
+							entity: {id: `to-${r}`, name: null},
+						})),
+					},
+					backlinks: {nodes: [{id: "b1"}]},
+				})),
+			},
+		}
+		expect(estimateJsonBytes(payload)).toBe(JSON.stringify(payload).length)
+	})
+
+	it("omits undefined and function properties, exactly as JSON.stringify does", () => {
+		const value = {kept: 1, dropped: undefined, alsoDropped: () => 1}
+		expect(estimateJsonBytes(value)).toBe(JSON.stringify(value).length)
+	})
+
+	it("treats undefined inside an array as null, exactly as JSON.stringify does", () => {
+		const value = [1, undefined, 2]
+		expect(estimateJsonBytes(value)).toBe(JSON.stringify(value).length)
+	})
+
+	it("handles empty containers and nesting", () => {
+		expect(estimateJsonBytes({})).toBe(2)
+		expect(estimateJsonBytes([])).toBe(2)
+		expect(estimateJsonBytes({a: {}, b: []})).toBe(JSON.stringify({a: {}, b: []}).length)
+	})
+
+	it("respects toJSON (Date) like JSON.stringify", () => {
+		const value = {at: new Date(1755600000000)}
+		expect(estimateJsonBytes(value)).toBe(JSON.stringify(value).length)
+	})
+
+	it("emits 4 for non-finite numbers, matching stringify's null", () => {
+		expect(estimateJsonBytes({a: Number.NaN})).toBe(JSON.stringify({a: Number.NaN}).length)
+		expect(estimateJsonBytes({a: Number.POSITIVE_INFINITY})).toBe(
+			JSON.stringify({a: Number.POSITIVE_INFINITY}).length,
+		)
+	})
+
+	it("stays within 10% on escape-heavy and non-ASCII text (documented undercount)", () => {
+		// These are the two known approximations: escapes are not scanned and
+		// lengths are UTF-16 units. Both read small, which is acceptable for a
+		// powers-of-ten histogram but must not drift wildly.
+		assertWithin({s: 'he said "hi"\nand left\t'}, 0.3)
+		assertWithin({s: "日本語のテキスト"}, 0.5)
+	})
+
+	it("is accurate enough for the 1MB warning threshold", () => {
+		const big = {nodes: Array.from({length: 5000}, (_, i) => ({id: `id-${i}`, text: "y".repeat(180)}))}
+		const actual = JSON.stringify(big).length
+		expect(actual).toBeGreaterThan(1_000_000)
+		expect(estimateJsonBytes(big)).toBe(actual)
 	})
 })
