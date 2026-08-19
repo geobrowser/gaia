@@ -60,6 +60,52 @@ spec:
               a bare max-replicas condition this means requests are actually
               suffering, not merely that the autoscaler has hit its ceiling.
 
+        # Added 2026-08-19 after a 5-pod OOM cascade that NOTHING alerted on.
+        # The existing three alerts all missed it: readiness recovered too fast
+        # to breach 0.75, the HPA/p99 pair needs a latency tail, and the 5xx
+        # alert names the gateway rather than pod memory. The generic
+        # KubePodCrashLooping does not cover it either — it requires
+        # CrashLoopBackOff, and a pod that OOM-kills and restarts cleanly never
+        # enters that state.
+        #
+        # NOTE the difference from AtlasRestartingRepeatedly, which this is
+        # otherwise modelled on: that one is per-pod (`increase(...) >= 3`),
+        # which suits a single-replica service restarting over and over. The api
+        # failure signature is the opposite shape — N *different* pods each
+        # restarting ONCE as load shifts from a dying pod to the next. On
+        # 2026-08-19 that was 5 pods x 1 restart in ~2 minutes, which a per-pod
+        # rule scores as 1 and ignores. Hence `sum(...)` across the fleet.
+        #
+        # Rollouts do not trip this: replacements start at restartCount 0 and
+        # retired pods simply stop exporting their series, so neither produces a
+        # counter increase.
+        #
+        # 3/hour is deliberately above a lone isolated restart (not worth waking
+        # anyone for) and far below the 19-54/day seen 08-16..08-19.
+        - alert: ApiRestartingRepeatedly
+          expr: |
+            sum(increase(kube_pod_container_status_restarts_total{namespace="gaia", container="api"}[1h])) >= 3
+          for: 5m
+          labels:
+            severity: warning
+            service: api
+          annotations:
+            summary: API pods are restarting repeatedly
+            description: >-
+              {{ $value | printf "%.0f" }} api container restarts in the last hour.
+              Confirm the cause with `kubectl get pods -n gaia -l app=api -o
+              jsonpath='{range .items[*]}{.status.containerStatuses[0].lastState.terminated.reason}{"\n"}{end}'`.
+              If OOMKilled: this has always been a SINGLE-REQUEST serialization
+              kill, not capacity and not concurrency. One bulk query can allocate
+              ~1.5GB against the 2Gi limit. Find the caller in the pod logs —
+              grep for '"first":1000' and for nested `relations(first: 1000)`,
+              then read `clientIp` / `userAgent` on the "High GraphQL query cost"
+              lines. Do NOT add nodes (this is a cgroup limit, not node
+              pressure) and do NOT lower GRAPHQL_MAX_CONCURRENT_EXPENSIVE
+              (measured 2026-08-19: 6 doubled 503s to 1414/h with no OOM
+              reduction). Precedent: geo-explorers/postgres_to_geo was sweeping
+              at root first:1000, fixed in their PR #36.
+
         - alert: Api5xxRateHigh
           expr: api:gateway_5xx_ratio:rate5m > 0.02
           for: 10m
