@@ -1,6 +1,7 @@
 import type {ExecutionResult} from "graphql"
 import Redis from "ioredis"
 import {log} from "../services/telemetry"
+import {measureJsonBytes} from "./responseBudgetPlugin"
 
 /**
  * Cache interface expected by @graphql-yoga/plugin-response-cache.
@@ -21,8 +22,9 @@ export type Cache = {
  * and handing that string to ioredis allocates a third in its send buffer.
  * For 30+ MB responses, this is the exact allocation spike that OOM'd pods
  * before the pagination cap landed. Skipping the SET entirely avoids the
- * ioredis buffer and the network send — the stringify still happens, but
- * the peak is bounded by one copy instead of three.
+ * ioredis buffer and the network send, and since the size test is now made by
+ * walking the object graph (exceedsCacheableBytesEstimate) rather than by
+ * measuring the string, an oversized response is not serialized at all.
  *
  * 15 MB is chosen to cover the full range of expected cacheable responses:
  *   - the 12 MB Query.spaces response (near-static, high-value to cache)
@@ -46,6 +48,30 @@ export type Cache = {
  * than cache, bounding the worst-case memory allocation path.
  */
 export const MAX_CACHEABLE_BYTES = 15_000_000
+
+/**
+ * Decide whether a response is too large to cache WITHOUT serializing it.
+ *
+ * The exact check below needs the string, which is the copy this threshold
+ * exists to avoid — the original docstring conceded "the stringify still
+ * happens". `measureJsonBytes` walks the object graph instead and stops as soon
+ * as it passes the limit, so an oversized response is now rejected after
+ * visiting ~15 MB worth of nodes, allocating nothing.
+ *
+ * Sound in the only direction that matters, because every bias in the estimator
+ * is downward:
+ *   - it counts UTF-16 code units, and a code unit is never more than one UTF-8
+ *     byte (BMP chars are 1 unit / 1-3 bytes, astral chars 2 units / 4 bytes);
+ *   - it does not count the backslashes JSON escaping adds.
+ * So estimate <= real UTF-8 length always, and therefore
+ * `estimate > MAX_CACHEABLE_BYTES` implies the real serialized response is over
+ * the limit too. Skipping on that signal can never skip a response that would
+ * have fit. The converse does not hold, so anything the estimate passes still
+ * goes through the exact `Buffer.byteLength` check afterwards.
+ */
+export function exceedsCacheableBytesEstimate(data: unknown): boolean {
+	return measureJsonBytes(data, MAX_CACHEABLE_BYTES).exceeded
+}
 
 /**
  * Decide whether to skip caching a serialized response based on its
@@ -112,6 +138,17 @@ export function createValkeyCache(valkeyUrl: string): Cache {
 	return {
 		async set(id, data, _entities, ttl) {
 			try {
+				// Cheap pre-check first, so an oversized response is never
+				// serialized just to be discarded. See
+				// exceedsCacheableBytesEstimate for why this cannot skip a
+				// response that would have fit.
+				if (exceedsCacheableBytesEstimate(data)) {
+					log.debug("Valkey cache skip: estimated response exceeds MAX_CACHEABLE_BYTES", {
+						cacheKey: id.slice(0, 64),
+						limit: MAX_CACHEABLE_BYTES,
+					})
+					return
+				}
 				const serialized = JSON.stringify(data)
 				const bytes = Buffer.byteLength(serialized, "utf8")
 				if (bytes > MAX_CACHEABLE_BYTES) {
