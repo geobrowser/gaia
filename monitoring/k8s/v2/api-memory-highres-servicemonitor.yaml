@@ -1,0 +1,84 @@
+# High-resolution memory sampling for gaia/api, plus a fix for the app-metrics
+# ServiceMonitor that has been pointing at a namespace that no longer serves.
+#
+# Why this exists: gaia/api OOMs in sharp transients — baseline ~500Mi, then a
+# spike to 1100-1500Mi inside a single 10s scrape, occasionally clearing the 2048Mi
+# limit and killing the pod. The default cadvisor scrape is 10s, which cannot
+# resolve the rise. Three attempts at ad-hoc `kubectl exec` sampling all failed
+# (one sat dead 16h, one died when a rollout replaced every pod, one silently
+# stopped producing data while still appearing connected), so this puts the
+# sampling somewhere durable instead.
+---
+# 1. Dedicated 5s cadvisor scrape, filtered hard so the extra frequency costs
+#    almost nothing in cardinality: only the api container's memory series in the
+#    gaia namespace survive the relabel. Everything else is dropped at ingest.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gaia-api-memory-highres
+  namespace: monitoring
+  labels:
+    # Required by the Prometheus CR's serviceMonitorSelector.
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - kube-system
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubelet
+  endpoints:
+    - port: https-metrics
+      scheme: https
+      path: /metrics/cadvisor
+      interval: 5s
+      scrapeTimeout: 4s
+      honorLabels: true
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig:
+        insecureSkipVerify: true
+      metricRelabelings:
+        # Keep only the one series we need, for the one container we care about.
+        - sourceLabels: [__name__]
+          regex: container_memory_working_set_bytes
+          action: keep
+        - sourceLabels: [namespace]
+          regex: gaia
+          action: keep
+        - sourceLabels: [container]
+          regex: api
+          action: keep
+        # Rename so this does NOT collide with the default 10s cadvisor scrape.
+        # Without this there are two series per pod for the same metric name, and
+        # any existing sum()/avg()/count() over container_memory_working_set_bytes
+        # for gaia/api silently double-counts — which would break dashboards and
+        # alerts that have nothing to do with this investigation.
+        - sourceLabels: [__name__]
+          regex: container_memory_working_set_bytes
+          targetLabel: __name__
+          replacement: gaia_api_memory_working_set_bytes_highres
+          action: replace
+---
+# 2. The app-metrics ServiceMonitor in monitoring/k8s/gaia-v2-api-metrics-servicemonitor.yaml
+#    selects namespace `gaia-v2`, which stopped serving at the cluster migration.
+#    None of the API's 15 metrics (pool saturation, GraphQL query cost, response
+#    size) have been collected since. Same scrape against the live namespace.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gaia-api-metrics
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - gaia
+  selector:
+    matchLabels:
+      app: api
+  endpoints:
+    - port: http
+      path: /health/metrics
+      interval: 15s
+      scrapeTimeout: 5s
