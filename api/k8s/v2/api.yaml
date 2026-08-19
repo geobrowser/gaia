@@ -6,7 +6,18 @@ metadata:
   labels:
     app: api
 spec:
-  replicas: 1
+  # Matches the `api` HorizontalPodAutoscaler's max (min 4 / max 8), which is the
+  # real owner of this Deployment's scale. This said 1 until 2026-08-19, so every
+  # apply scaled live 8 -> 1 and left the HPA to claw it back — spawning exactly
+  # the cold pods that the rollout-safety settings above exist to avoid.
+  #
+  # Deleting the field outright would be cleaner, but does NOT work by itself:
+  # `replicas` is recorded in the live object's last-applied-configuration, so
+  # removing it makes kubectl apply delete the field and fall back to the default
+  # of 1 — verified with `kubectl diff` on 2026-08-19. Going field-less needs one
+  # controlled apply (or a switch to server-side apply), which should not ride
+  # along with an unrelated deploy. Until then, keep this equal to the HPA max.
+  replicas: 8
   # Rollout safety. A fresh pod is at its most fragile — cold JIT, cold caches —
   # and the default 25%/25% lets two pods leave rotation while their cold
   # replacements take a full share of traffic, which is how a routine rollout can
@@ -171,17 +182,41 @@ spec:
             # Mean climb 1439Mi at a cap of 10 => ~144Mi per concurrent expensive
             # query, against ~1498Mi of headroom (2048 limit - ~550Mi baseline).
             #
-            # That is why 10 did not work: 10 x 144Mi = 1440Mi consumes 96% of
-            # headroom, so the cap sat essentially AT the OOM threshold rather than
-            # below it. The earlier value assumed ~31Mi/query, understating the real
-            # cost by ~4.6x. 6 x 144Mi = 864Mi leaves ~40% margin.
+            # That reading led to 6 (10 x 144Mi = 1440Mi is 96% of headroom, 6 x 144Mi
+            # = 864Mi leaves ~40% margin). CORRECTED 2026-08-19 — see below: the
+            # per-query figure was derived by dividing ONE request's cost by the cap,
+            # so it overstated concurrency's role by roughly the cap itself.
             #
             # Deaths fire ~20s apart in strict sequence: one pod dies, its load
             # shifts to the next, which ramps and dies. Rejecting a request fails one
             # caller; an OOM kill fails every in-flight request on that pod and starts
             # that chain.
+            #
+            # CORRECTED 2026-08-19 by direct measurement on an isolated canary pod
+            # (labelled app: api-canary, so the Service cannot route to it). ONE request
+            # of the shape in the logs — entitiesConnection(first:1000) with a nested
+            # relations(first:1000), over the Episode type — returns 62.9MB and allocates
+            # +1,569Mi over 33.3 SECONDS.
+            #
+            # That refutes the "11-18s ramp => concurrent accumulation" inference above.
+            # A 33s single-request serialization produces exactly that ramp, and its
+            # +1,569Mi is the mean 1439Mi climb those five deaths recorded. So the ramp
+            # was one query building one giant JSON string, not N queries accumulating,
+            # and ~144Mi/query was that single request divided by the cap.
+            #
+            # Consequences, both measured:
+            #   - Concurrency is the WRONG axis. A cap cannot stop a single-request kill;
+            #     no value of this variable prevents one 1.5GB response.
+            #   - 6 has a real cost: 503s doubled to 1414/h (vs 696/h at 10) with NO
+            #     reduction in OOMs. So 6 rejects ~2x the callers and buys nothing.
+            #
+            # Hence 10. The source of those requests was a bulk ontology sweep in
+            # geo-explorers/postgres_to_geo opening every page at root first:1000; fixed
+            # at the source in their PR #36 (2026-08-19), after which OOMs stopped.
+            # The durable server-side fix is a runtime abort that counts bytes as they
+            # serialize (~10-15MB), NOT a static per-field or concurrency limit.
             - name: GRAPHQL_MAX_CONCURRENT_EXPENSIVE
-              value: "6"
+              value: "10"
             - name: IPFS_KEY
               valueFrom:
                 secretKeyRef:
