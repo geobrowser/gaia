@@ -1,5 +1,5 @@
 import {parse} from "graphql"
-import {beforeEach, describe, expect, it, vi} from "vitest"
+import {afterEach, beforeEach, describe, expect, it, vi} from "vitest"
 
 // Mock Sentry so we can assert on the new metric emission without a real
 // Sentry init. Order matters: this mock must precede the import of the
@@ -11,6 +11,7 @@ vi.mock("@sentry/node", () => ({
 }))
 
 import * as Sentry from "@sentry/node"
+import {log} from "../../services/telemetry"
 import {
 	__resetQueryCostHistogramForTests,
 	compressCost,
@@ -640,6 +641,79 @@ describe("useCostLogger — Sentry metric + context cost-sharing", () => {
 
 		expect(ctx[GRAPHQL_QUERY_COST_CONTEXT_KEY]).toBeUndefined()
 		expect(Sentry.metrics.distribution).not.toHaveBeenCalled()
+	})
+})
+
+// --------------------------------------------------------------------------
+// Caller attribution
+// --------------------------------------------------------------------------
+// The cost log names the *query*; these fields name the *caller*. `userAgent`
+// is the signal that separates a browser frontend from an agent or ad-hoc
+// script, and it is the only one of the three that survives when a server-side
+// caller sends no `origin` — which is exactly the shape of the bulk-fetch
+// traffic that OOMs pods.
+//
+// Spied per-test rather than `vi.mock`'d at module scope on purpose: the
+// shadow-mode test below ("does not throw when the high-cost log path throws")
+// depends on the REAL log.warn throwing on a circular value. Replacing the
+// module with vi.fn() stubs would leave that test passing while asserting
+// nothing.
+// --------------------------------------------------------------------------
+
+describe("useCostLogger — caller attribution", () => {
+	// Scores 227: above COST_LOG_THRESHOLD (200) so the log path fires, below
+	// COST_REJECT_THRESHOLD (500) so the request is not rejected.
+	const HEAVY_QUERY = `{
+		entitiesConnection(first: 1000) {
+			nodes { id relations { nodes { id entity { valuesList { text } } } } }
+		}
+	}`
+
+	beforeEach(() => {
+		__resetQueryCostHistogramForTests()
+		vi.clearAllMocks()
+	})
+
+	afterEach(() => {
+		vi.restoreAllMocks()
+	})
+
+	function executeWithHeaders(headers?: Record<string, string>) {
+		const plugin = useCostLogger()
+		const onExecute = (plugin as {onExecute: (args: unknown) => void}).onExecute
+		onExecute({
+			args: {
+				document: parse(HEAVY_QUERY),
+				variableValues: {},
+				operationName: null,
+				contextValue: headers ? {request: new Request("https://api.test/graphql", {headers})} : {},
+			},
+		})
+	}
+
+	it("records the caller's user-agent on the high-cost log", () => {
+		const warn = vi.spyOn(log, "warn").mockImplementation(() => {})
+
+		executeWithHeaders({"user-agent": "some-bulk-scanner/1.0", origin: "https://www.geobrowser.io"})
+
+		expect(warn).toHaveBeenCalledWith(
+			"High GraphQL query cost",
+			expect.objectContaining({userAgent: "some-bulk-scanner/1.0", origin: "https://www.geobrowser.io"}),
+		)
+	})
+
+	it("records a null user-agent when the header is absent, rather than dropping the field", () => {
+		// A server-side caller sends neither header. The keys must still be
+		// present so log queries can filter on `userAgent = null` instead of
+		// silently matching nothing.
+		const warn = vi.spyOn(log, "warn").mockImplementation(() => {})
+
+		executeWithHeaders({})
+
+		expect(warn).toHaveBeenCalledWith(
+			"High GraphQL query cost",
+			expect.objectContaining({userAgent: null, origin: null}),
+		)
 	})
 })
 

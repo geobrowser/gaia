@@ -680,6 +680,7 @@ export function useCostLogger(): Plugin {
 						query: rejectedQuery,
 						variables: args.variableValues,
 						origin: rejectHeaders?.get("origin") ?? null,
+						userAgent: rejectHeaders?.get("user-agent") ?? null,
 						clientIp: rejectHeaders ? extractClientIp(rejectHeaders) : null,
 					})
 					rejection = new GraphQLError(
@@ -707,6 +708,7 @@ export function useCostLogger(): Plugin {
 						query: fullQuery,
 						variables: args.variableValues,
 						origin: headers?.get("origin") ?? null,
+						userAgent: headers?.get("user-agent") ?? null,
 						clientIp: headers ? extractClientIp(headers) : null,
 					})
 				}
