@@ -205,11 +205,21 @@ pub fn calculate_vote_counts(
 /// Build the `values`-table rows mirroring net scores for entities.
 ///
 /// Skips relation votes: only entities (`object_type == Entity`) get a score row.
-/// Also skips every non-curation kind: this mirrors into the Score system
-/// property that feeds ranking, and ranking stays curation-only (PRD §8 Q4).
-/// Without that filter a claim's agrees and verifications would be written over
-/// each other's score row — they share an (entity, space) id — and whichever
-/// kind was processed last would silently become the entity's score.
+///
+/// Also skips every non-curation kind, and the reason is narrower than it used to
+/// claim. The previous wording here was "ranking stays curation-only (PRD §8
+/// Q4)". Both halves were wrong: the PRD has no §8 and no numbered questions, and
+/// since 0078 the ranking is NOT curation-only — stance feeds its participation
+/// term. That citation is why claims carrying positions ranked below claims with
+/// none for weeks; it read as a settled decision and nobody re-examined it.
+///
+/// The real and still-valid reason is a key collision, local to this function:
+/// the row `id` is a UUIDv5 over `score:<entity>:<space>` with no kind in it, so
+/// a claim's agrees and verifications would be written over each other's score
+/// row and whichever kind was processed last would silently become the entity's
+/// score. Adding a kind here means widening that id scheme, not relaxing a
+/// filter. See `storage::ranking_recompute_entity_ids` for the ranking's own
+/// kind policy, which is now deliberately different from this one.
 /// The row `id` is a deterministic UUIDv5 over the name `score:<entity>:<space>`
 /// under `GEO_SYSTEM_NAMESPACE` — the `score:` tag keeps these ids disjoint from
 /// any other scheme that might hash `(entity_id, space_id)`.
