@@ -28,6 +28,7 @@ import {
 	renderResponseSizeHistogram,
 	useGraphQLInstrumentation,
 } from "../instrumentationPlugin"
+import {GRAPHQL_RESPONSE_BYTES_CONTEXT_KEY} from "../responseBudgetPlugin"
 
 // Minimal AST-node factory — isClientError only reads `kind`, so the rest of
 // the shape doesn't matter. Cast through `unknown` to avoid TS insisting on a
@@ -235,6 +236,110 @@ describe("useGraphQLInstrumentation — query cost in slow / large logs", () => 
 
 		const slowCalls = (log.warn as ReturnType<typeof vi.fn>).mock.calls.filter((c) => c[0] === "Slow GraphQL query")
 		expect(slowCalls).toHaveLength(0)
+	})
+})
+
+// --------------------------------------------------------------------------
+// Reuse of useResponseBudget's measurement
+// --------------------------------------------------------------------------
+// useResponseBudget walks every response and leaves the result on the request
+// context, so this plugin must not walk it again — a second walk over a 62.9 MB
+// payload is precisely the kind of "measuring makes it worse" cost that the
+// walker replaced JSON.stringify to avoid.
+
+describe("useGraphQLInstrumentation — response size measurement", () => {
+	beforeEach(() => {
+		__resetResponseSizeHistogramForTests()
+		vi.clearAllMocks()
+		vi.useFakeTimers()
+	})
+
+	afterEach(() => {
+		vi.useRealTimers()
+	})
+
+	/**
+	 * A payload that reports how many times it has been walked. `toJSON` is the
+	 * hook because the walker honours it.
+	 */
+	function countingPayload(byteish: number) {
+		let walks = 0
+		return {
+			data: {
+				toJSON() {
+					walks++
+					return "x".repeat(byteish)
+				},
+			},
+			walks: () => walks,
+		}
+	}
+
+	function runRequest(opts: {durationMs: number; responseData: unknown; measured?: unknown}) {
+		const plugin = useGraphQLInstrumentation()
+		const onExecute = (plugin as {onExecute: (args: unknown) => {onExecuteDone: (r: unknown) => void}}).onExecute
+
+		const ctx: Record<string, unknown> = {}
+		if (opts.measured !== undefined) ctx[GRAPHQL_RESPONSE_BYTES_CONTEXT_KEY] = opts.measured
+
+		const startTime = Date.now()
+		vi.setSystemTime(startTime)
+		const handle = onExecute({
+			args: {
+				document: parse(`{ entity(id: "...") { id name } }`),
+				variableValues: {},
+				operationName: null,
+				contextValue: ctx,
+			},
+		})
+		vi.setSystemTime(startTime + opts.durationMs)
+		handle.onExecuteDone({result: {data: opts.responseData}})
+	}
+
+	it("uses the shared measurement instead of walking the response again", () => {
+		const payload = countingPayload(2_000_000)
+
+		runRequest({
+			durationMs: 1500,
+			responseData: payload.data,
+			measured: {bytes: 2_000_042, exceeded: false},
+		})
+
+		expect(payload.walks()).toBe(0)
+		expect(log.warn).toHaveBeenCalledWith(
+			"Large GraphQL response",
+			expect.objectContaining({responseSizeBytes: 2_000_042}),
+		)
+	})
+
+	it("walks the response itself when no measurement was shared — the control", () => {
+		// Without this, the assertion above would pass on a plugin that had
+		// simply stopped measuring altogether.
+		const payload = countingPayload(2_000_000)
+
+		runRequest({durationMs: 1500, responseData: payload.data})
+
+		expect(payload.walks()).toBe(1)
+		expect(log.warn).toHaveBeenCalledWith(
+			"Large GraphQL response",
+			expect.objectContaining({responseSizeBytes: 2_000_002}),
+		)
+	})
+
+	it("ignores a shared measurement that stopped early, rather than reporting a lower bound as the size", () => {
+		// A partial count would land in the wrong histogram bucket and
+		// under-report the very response it is warning about.
+		runRequest({
+			durationMs: 1500,
+			responseData: {data: "x".repeat(2_000_000)},
+			measured: {bytes: 10_000_001, exceeded: true},
+		})
+
+		expect(renderResponseSizeHistogram()).toContain("gaia_api_graphql_response_size_bytes_count 0")
+		const largeCalls = (log.warn as ReturnType<typeof vi.fn>).mock.calls.filter(
+			(c) => c[0] === "Large GraphQL response",
+		)
+		expect(largeCalls).toHaveLength(0)
 	})
 })
 

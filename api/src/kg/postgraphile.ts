@@ -27,6 +27,7 @@ import {shouldUnmaskError} from "./errorMasking"
 import HideProceduresPlugin from "./hideProceduresPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin, {NoFirstAndLastRule} from "./paginationCapPlugin"
+import {useResponseBudget} from "./responseBudgetPlugin"
 import {hasCacheableData} from "./responseCachePolicy"
 import {useSearchInvocationLogger} from "./searchInvocationLogger"
 import {createShedEpisodeTracker} from "./shedEpisodeTracker"
@@ -469,6 +470,13 @@ const sharedPlugins = [
 	// request context. Must precede usePgClient so a refused operation never
 	// checks out a connection or touches the database.
 	useAdmissionControl(),
+	// Must follow the response cache and precede instrumentation. The cache
+	// injects (and later strips) its own metadata fields, so measuring ahead of
+	// it would count bytes the client never receives; instrumentation reuses the
+	// measurement this plugin leaves on the request context instead of walking
+	// the response a second time. See useResponseBudget for the full ordering
+	// argument.
+	useResponseBudget(),
 	useGraphQLInstrumentation(),
 	useSearchInvocationLogger(),
 	usePgClient(pgPool),

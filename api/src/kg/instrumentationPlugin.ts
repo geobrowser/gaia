@@ -15,6 +15,11 @@ import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 import {extractClientIp} from "../utils/clientIp"
 import {GRAPHQL_QUERY_COST_CONTEXT_KEY, type GraphqlCostContext} from "./costLoggerPlugin"
+import {
+	estimateJsonBytes,
+	GRAPHQL_RESPONSE_BYTES_CONTEXT_KEY,
+	type GraphqlResponseBytesContext,
+} from "./responseBudgetPlugin"
 
 // GraphQL error codes that always indicate a client-side problem (bad input,
 // syntax/validation errors). These are the expected consequence of a
@@ -85,92 +90,10 @@ const LARGE_RESPONSE_THRESHOLD_BYTES = 1_000_000 // 1 MB
 // ---------------------------------------------------------------------------
 // Response size estimation
 // ---------------------------------------------------------------------------
-
-/**
- * Approximate the serialized JSON byte size of a value WITHOUT building the string.
- *
- * This replaced `JSON.stringify(data).length`. The problem was never the call
- * itself but where it ran: behind a `durationMs >= 1000` guard, which in this
- * service selects *exactly* the pathological responses. A 62.9MB response was
- * therefore serialized twice — once by yoga to answer the request, once here
- * purely to measure it — and stringify costs ~2.4x the response size in RSS. So
- * the instrumentation added hundreds of MiB to precisely the requests most likely
- * to OOM the pod (2Gi limit; a single request measured +1,569Mi on 2026-08-19,
- * see gaia-api-oom-not-capacity). Measuring a failure must not help cause it.
- *
- * This walks the structure instead: O(nodes) CPU, O(depth) stack, and no
- * allocation proportional to the payload.
- *
- * The result is an ESTIMATE and deliberately so:
- *   - string escaping is not scanned for, so payloads full of quotes/newlines
- *     read slightly small;
- *   - lengths are UTF-16 code units, so non-ASCII text reads small against
- *     real UTF-8 bytes;
- *   - `undefined` / functions are skipped, matching what JSON.stringify omits.
- *
- * That is fine for both consumers — a histogram bucketed by powers of ten and a
- * 1MB warning threshold. Do not use it where an exact Content-Length matters.
- */
-export function estimateJsonBytes(value: unknown): number {
-	switch (typeof value) {
-		case "undefined":
-		case "function":
-			return 0
-		case "boolean":
-			return value ? 4 : 5
-		case "number":
-			if (!Number.isFinite(value)) return 4 // JSON.stringify emits null
-			// Avoid allocating a string per number on million-node payloads.
-			if (Number.isInteger(value) && Math.abs(value) < 1e15) {
-				const digits = value === 0 ? 1 : Math.floor(Math.log10(Math.abs(value))) + 1
-				return digits + (value < 0 ? 1 : 0)
-			}
-			return String(value).length
-		case "bigint":
-			return String(value).length
-		case "string":
-			return value.length + 2 // surrounding quotes
-		case "object":
-			break
-		default:
-			return 0
-	}
-
-	if (value === null) return 4
-	if (Array.isArray(value)) {
-		// brackets + commas
-		let total = 2 + (value.length > 0 ? value.length - 1 : 0)
-		for (const item of value) {
-			// `undefined` inside an array serializes as `null`, not omitted.
-			total += item === undefined ? 4 : estimateJsonBytes(item)
-		}
-		return total
-	}
-
-	// `toJSON` (Date, etc.) — respect it rather than walking internals.
-	const maybeToJson = (value as {toJSON?: unknown}).toJSON
-	if (typeof maybeToJson === "function") {
-		return estimateJsonBytes((value as {toJSON: () => unknown}).toJSON())
-	}
-
-	// `for...in` + hasOwn rather than Object.entries/keys: those allocate an array
-	// (of pairs, no less) for EVERY object visited, which on a million-node payload
-	// costs more than the string this function exists to avoid. Measured: entries()
-	// ran 2x slower than JSON.stringify with a larger RSS delta.
-	const record = value as Record<string, unknown>
-	let total = 2 // braces
-	let first = true
-	for (const key in record) {
-		if (!Object.hasOwn(record, key)) continue // stringify only emits own props
-		const entry = record[key]
-		if (entry === undefined || typeof entry === "function") continue // omitted by JSON.stringify
-		if (!first) total += 1 // comma
-		first = false
-		total += key.length + 3 // "key":
-		total += estimateJsonBytes(entry)
-	}
-	return total
-}
+// The walker lives in responseBudgetPlugin, which owns the per-request
+// measurement and shares it on the request context. Re-exported here because
+// this module was its original home and callers (and tests) import it from here.
+export {estimateJsonBytes}
 
 // Cap for query/variable strings sent to Sentry extras + OTEL span attributes.
 // Sentry truncates strings server-side around 8 KB. Logs are uncapped.
@@ -386,17 +309,36 @@ export function useGraphQLInstrumentation(): Plugin {
 					// stringifying here double-serialized exactly the responses that OOM
 					// pods. See estimateJsonBytes.
 					//
-					// The >=1s guard is kept so the CPU walk stays off the hot path for
-					// fast queries. NOTE: that means the histogram covers only queries
-					// >=1s, i.e. it is biased away from small/fast responses — worth
-					// revisiting now that measuring no longer costs a second serialization.
+					// useResponseBudget already walked this response (it walks every
+					// response, since that is how it decides whether to refuse one) and
+					// left the result on the context. Prefer it so the payload is walked
+					// once per request rather than once per interested plugin; fall back
+					// to walking here if that plugin is absent or bailed, which is how
+					// this module's own tests exercise it.
+					//
+					// A measurement that stopped early (`exceeded`) is a lower bound, and
+					// is skipped rather than recorded: it would land in the wrong
+					// histogram bucket and under-report the response it is warning about.
+					// In practice the walk only stops early when the budget plugin is
+					// enforcing, and then `data` has already been replaced by an error.
+					//
+					// The >=1s guard is kept so this histogram keeps the population the
+					// dashboards were built against: responses to queries taking >=1s. The
+					// unbiased distribution over all responses is
+					// gaia_api_graphql_response_bytes, in responseBudgetPlugin.
 					const data = "data" in result ? result.data : undefined
+					const budgetCtx = args.contextValue as GraphqlResponseBytesContext | undefined
+					const measured = budgetCtx?.[GRAPHQL_RESPONSE_BYTES_CONTEXT_KEY]
 					let responseSizeBytes: number | undefined
 					if (data && durationMs >= 1000) {
-						try {
-							responseSizeBytes = estimateJsonBytes(data)
-						} catch {
-							// Never let measurement break the response it is observing.
+						if (measured) {
+							if (!measured.exceeded) responseSizeBytes = measured.bytes
+						} else {
+							try {
+								responseSizeBytes = estimateJsonBytes(data)
+							} catch {
+								// Never let measurement break the response it is observing.
+							}
 						}
 					}
 

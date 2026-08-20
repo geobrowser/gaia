@@ -1,6 +1,6 @@
 import {describe, expect, it} from "bun:test"
 import type {ExecutionResult} from "graphql"
-import {MAX_CACHEABLE_BYTES, shouldSkipCacheSet} from "../valkeyCache"
+import {exceedsCacheableBytesEstimate, MAX_CACHEABLE_BYTES, shouldSkipCacheSet} from "../valkeyCache"
 
 /**
  * Unit tests for the Valkey cache adapter contract.
@@ -146,5 +146,53 @@ describe("shouldSkipCacheSet", () => {
 		const asciiJustOver = "x".repeat(MAX_CACHEABLE_BYTES + 1)
 		expect(shouldSkipCacheSet(asciiJustUnder)).toBe(false)
 		expect(shouldSkipCacheSet(asciiJustOver)).toBe(true)
+	})
+})
+
+describe("exceedsCacheableBytesEstimate", () => {
+	// The pre-check exists so an oversized response is never serialized just to
+	// be measured and discarded. Its correctness rests on one asymmetry: the
+	// estimate is always <= the real UTF-8 length, so a positive answer is
+	// always right, and a negative one is only ever conservative (the exact
+	// Buffer.byteLength check still runs after it).
+
+	it("passes an ordinary response through to the exact check", () => {
+		const data = {data: {entities: [{id: "a", name: "small"}]}}
+		expect(exceedsCacheableBytesEstimate(data)).toBe(false)
+	})
+
+	it("rejects a clearly oversized response", () => {
+		// The 62.9 MB shape from the 2026-08-19 incident, in miniature: many
+		// rows rather than one huge string, so the walk has to accumulate.
+		const data = {
+			data: {
+				entities: Array.from({length: 20_000}, (_, i) => ({
+					id: `entity-${i}`,
+					name: "x".repeat(1000),
+				})),
+			},
+		}
+		expect(exceedsCacheableBytesEstimate(data)).toBe(true)
+	})
+
+	it("never rejects a response the exact check would have accepted", () => {
+		// The one-directional guarantee, over content designed to stress it:
+		// multi-byte characters and escape-heavy strings are exactly where a
+		// code-unit estimate diverges from real UTF-8 bytes, and it must
+		// diverge downward.
+		for (const filler of ["x", "日", "🌍", '"', "\n"]) {
+			const rows = Math.ceil(MAX_CACHEABLE_BYTES / (filler.length * 200))
+			const data = {data: {rows: Array.from({length: rows}, () => filler.repeat(200))}}
+			const serialized = JSON.stringify(data)
+			if (!shouldSkipCacheSet(serialized)) {
+				expect(exceedsCacheableBytesEstimate(data)).toBe(false)
+			}
+		}
+	})
+
+	it("agrees with the exact check on a clearly oversized multi-byte payload", () => {
+		const data = {data: {text: "日".repeat(MAX_CACHEABLE_BYTES)}}
+		expect(exceedsCacheableBytesEstimate(data)).toBe(true)
+		expect(shouldSkipCacheSet(JSON.stringify(data))).toBe(true)
 	})
 })

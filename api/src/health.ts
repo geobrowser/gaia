@@ -3,6 +3,7 @@ import {describeRoute} from "hono-openapi"
 import {renderQueryCostHistogram} from "./kg/costLoggerPlugin"
 import {renderResponseSizeHistogram} from "./kg/instrumentationPlugin"
 import {getGraphqlPoolPressure, getGraphqlPoolStats} from "./kg/postgraphile"
+import {renderResponseByteMetrics} from "./kg/responseBudgetPlugin"
 import {db, getPoolStats} from "./services/storage/storage"
 import {log} from "./services/telemetry"
 
@@ -121,6 +122,9 @@ function renderPrometheusMetrics(): string {
 		// GraphQL response size histogram (sampled only for queries with
 		// durationMs >= 1000ms — see comment in instrumentationPlugin.ts).
 		renderResponseSizeHistogram(),
+		// Unbiased response-byte histogram (every response) plus the byte-budget
+		// counters — see responseBudgetPlugin.ts.
+		renderResponseByteMetrics(),
 	].join("\n")
 }
 
