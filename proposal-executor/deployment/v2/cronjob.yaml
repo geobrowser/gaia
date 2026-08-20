@@ -103,10 +103,24 @@ spec:
                 # ORDERING: adding a space here is only half the fix. The bot
                 # votes as MEMBERSHIP_BOT_SPACE_ID and voting requires EDITOR in
                 # the target space (MEMBER is not enough — _canVote reverts
-                # CanNotVote). Verified on 55516 2026-08-17: the bot holds EDITOR
-                # in the four originals and in NONE of the four added here. Do
-                # not deploy ahead of those grants, or the executor will detect
-                # real requests and revert on every 5-minute run.
+                # CanNotVote). Do not add a space here ahead of its grant, or the
+                # executor will detect real requests and revert on every
+                # 5-minute run.
+                #
+                # The grants for the four added below (0x41e85161, 0x4582fbbe,
+                # 0x52c7ae14, 0x89bd89bf) have since EXECUTED. This comment used
+                # to say the bot held EDITOR "in NONE of the four added here",
+                # which was true when written on 2026-08-17 and is not true now —
+                # GEO-2580's addEditor proposals landed in the window after it.
+                #
+                # Confirmed on chain 2026-08-20, not from the indexer: the bot
+                # published an edit into each of those four spaces during the
+                # CUR-700 payout repair. That path creates a proposal and votes
+                # YES, and every one auto-executed — which _canVote only permits
+                # for an on-chain EDITOR. 0xc9f267dc likewise.
+                #
+                # The other three originals (0x84a679ce, 0x0477636a, 0x29a5122f)
+                # are unchanged from the 2026-08-17 check and were not re-tested.
                 - name: MEMBERSHIP_AUTOACCEPT_SPACE_IDS
                   value: "0xc9f267dcb0d270718c2a3c45a64afd32,0x84a679ce188f061ac9a92380bac2bab5,0x0477636ace64280fc43a9f440a502291,0x29a5122f65295cea9f421ec7a73ac825,0x41e851610e13a19441c4d980f2f2ce6b,0x4582fbbee28a16589154f7e36f1ee3c5,0x52c7ae149838b6d47ce0f3b2a5974546,0x89bd89bf28ff8a0963faf92a8c905e20"
                 # Self-owned SpaceRegistry deployed 2026-07-29. The live CronJob
