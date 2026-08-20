@@ -22,6 +22,7 @@ export default makeJSONPgSmartTagsPlugin({
 			// rather than a bare orderBy.
 			"public.wilson_lower_bound": {tags: {omit: true}},
 			"public.entity_intrinsic_score": {tags: {omit: true}},
+			"public.entity_participation_score": {tags: {omit: true}},
 			"public.entity_ranking_score": {tags: {omit: true}},
 			"public.refresh_entity_ranking_scores": {tags: {omit: true}},
 		},

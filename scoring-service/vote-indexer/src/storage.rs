@@ -216,8 +216,8 @@ impl Storage {
         Ok(())
     }
 
-    /// Recompute the Explore feed ranking score for entities whose curation votes
-    /// just changed.
+    /// Recompute the Explore feed ranking score for entities whose curation or
+    /// stance votes just changed.
     ///
     /// Runs OUTSIDE the vote transaction, on the pool, and reports failure to the
     /// caller as a warning rather than an error. Two reasons:
@@ -235,9 +235,17 @@ impl Storage {
     /// fails before the WHERE is ever evaluated. Separating the transaction is what
     /// actually provides the safety.
     ///
-    /// Only curation (`vote_kind = 0`) on entities feeds the feed's quality term, so
-    /// stance and veracity votes do not trigger a recompute — they would rewrite the
-    /// row to an identical value and make `updated_at` misleading about what moved.
+    /// Curation (`vote_kind = 0`) feeds the quality term and stance (`vote_kind = 1`)
+    /// feeds the participation term (0078), so both must trigger a recompute. Stance
+    /// was excluded until 0078 on the grounds that it could not change the score —
+    /// true then, and the reason claims carrying positions ranked below claims with
+    /// none. Adding the participation term WITHOUT this filter change would leave
+    /// scores frozen at their pre-position values until a backfill ran, which looks
+    /// exactly like the feature not working.
+    ///
+    /// Veracity (`vote_kind = 2`) is still excluded: it feeds neither term, so a
+    /// recompute would rewrite the row to an identical value and make `updated_at`
+    /// misleading about what moved.
     ///
     /// Because the score is time-invariant (`created_at / tau`), this is the only
     /// thing that ever needs to run. There is no scheduled decay sweep.
@@ -249,15 +257,7 @@ impl Storage {
         &self,
         counts: &[VotesCountItem],
     ) -> Result<u64, StorageError> {
-        let mut entity_ids: Vec<Uuid> = counts
-            .iter()
-            .filter(|c| c.object_type == VoteObjectType::Entity && c.kind == ResponseKind::Curation)
-            .map(|c| c.object_id)
-            .collect();
-        // An entity voted in several spaces appears once per space; deduplicate so a
-        // single recompute covers it.
-        entity_ids.sort_unstable();
-        entity_ids.dedup();
+        let entity_ids = ranking_recompute_entity_ids(counts);
 
         if entity_ids.is_empty() {
             return Ok(0);
@@ -455,5 +455,129 @@ impl Storage {
         }
 
         Ok(result)
+    }
+}
+
+/// Entity ids whose ranking score must be recomputed for a batch of vote counts.
+///
+/// Split out of `refresh_ranking_scores` so the kind filter is unit-testable
+/// without a database. That filter is the reason claims carrying positions ranked
+/// below claims with none for weeks: it silently dropped every stance row, and a
+/// silent filter over a stored score has no observable failure mode — the score is
+/// simply stale, and stale is indistinguishable from correct without recomputing.
+///
+/// Kinds that feed the score (0078): curation -> quality term, stance ->
+/// participation term. Veracity feeds neither, so including it would rewrite rows
+/// to identical values and make `updated_at` misleading.
+pub fn ranking_recompute_entity_ids(counts: &[VotesCountItem]) -> Vec<Uuid> {
+    let mut entity_ids: Vec<Uuid> = counts
+        .iter()
+        .filter(|c| {
+            c.object_type == VoteObjectType::Entity
+                && matches!(c.kind, ResponseKind::Curation | ResponseKind::Stance)
+        })
+        .map(|c| c.object_id)
+        .collect();
+    // An entity voted in several spaces appears once per space; deduplicate so a
+    // single recompute covers it.
+    entity_ids.sort_unstable();
+    entity_ids.dedup();
+    entity_ids
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn count(object_id: Uuid, kind: ResponseKind, object_type: VoteObjectType) -> VotesCountItem {
+        VotesCountItem {
+            object_id,
+            object_type,
+            space_id: Uuid::nil(),
+            kind,
+            positive: 1,
+            negative: 0,
+        }
+    }
+
+    #[test]
+    fn stance_triggers_a_recompute() {
+        // The regression this change exists to fix. Before 0078 a position could
+        // not move the score, so stance was filtered out; now it feeds the
+        // participation term and must schedule work.
+        let entity = Uuid::new_v4();
+        let ids = ranking_recompute_entity_ids(&[count(
+            entity,
+            ResponseKind::Stance,
+            VoteObjectType::Entity,
+        )]);
+        assert_eq!(ids, vec![entity]);
+    }
+
+    #[test]
+    fn curation_still_triggers_a_recompute() {
+        let entity = Uuid::new_v4();
+        let ids = ranking_recompute_entity_ids(&[count(
+            entity,
+            ResponseKind::Curation,
+            VoteObjectType::Entity,
+        )]);
+        assert_eq!(ids, vec![entity]);
+    }
+
+    #[test]
+    fn veracity_does_not_trigger_a_recompute() {
+        // Feeds neither term. If this ever starts passing, `updated_at` stops
+        // meaning "something that affects rank changed".
+        let ids = ranking_recompute_entity_ids(&[count(
+            Uuid::new_v4(),
+            ResponseKind::Veracity,
+            VoteObjectType::Entity,
+        )]);
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn relation_votes_are_ignored_whatever_the_kind() {
+        // entity_ranking_scores is keyed by entity; a relation id would be scored
+        // as if it were an entity.
+        for kind in [
+            ResponseKind::Curation,
+            ResponseKind::Stance,
+            ResponseKind::Veracity,
+        ] {
+            let ids = ranking_recompute_entity_ids(&[count(
+                Uuid::new_v4(),
+                kind,
+                VoteObjectType::Relation,
+            )]);
+            assert!(ids.is_empty(), "relation vote scheduled a recompute: {kind:?}");
+        }
+    }
+
+    #[test]
+    fn one_entity_voted_in_several_spaces_is_recomputed_once() {
+        let entity = Uuid::new_v4();
+        let mut a = count(entity, ResponseKind::Curation, VoteObjectType::Entity);
+        a.space_id = Uuid::new_v4();
+        let mut b = count(entity, ResponseKind::Stance, VoteObjectType::Entity);
+        b.space_id = Uuid::new_v4();
+
+        assert_eq!(ranking_recompute_entity_ids(&[a, b]), vec![entity]);
+    }
+
+    #[test]
+    fn mixed_batch_keeps_only_the_scoring_kinds() {
+        let curated = Uuid::new_v4();
+        let stanced = Uuid::new_v4();
+        let verified = Uuid::new_v4();
+        let ids = ranking_recompute_entity_ids(&[
+            count(curated, ResponseKind::Curation, VoteObjectType::Entity),
+            count(verified, ResponseKind::Veracity, VoteObjectType::Entity),
+            count(stanced, ResponseKind::Stance, VoteObjectType::Entity),
+        ]);
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&curated) && ids.contains(&stanced));
+        assert!(!ids.contains(&verified));
     }
 }

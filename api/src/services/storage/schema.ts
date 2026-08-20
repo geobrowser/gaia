@@ -1423,6 +1423,15 @@ export const entityRankingConfig = pgTable("entity_ranking_config", {
 	intrinsicCap: decimal("intrinsic_cap").notNull(),
 	intrinsicPropertyTarget: integer("intrinsic_property_target").notNull(),
 	intrinsicRelationTarget: integer("intrinsic_relation_target").notNull(),
+	/**
+	 * Multiplier on `ln(1 + positions)` (0078). 0 disables the participation term,
+	 * which is the shipped default — arming it reorders the global feed on the next
+	 * backfill, so it is an explicit operational act rather than a deploy artifact.
+	 * The value needed is a function of tauSeconds; the two cannot be tuned apart.
+	 */
+	participationWeight: decimal("participation_weight").notNull(),
+	/** Ceiling on the participation term, in score units. A brigading guardrail, not a tuning knob. */
+	participationCap: decimal("participation_cap").notNull(),
 	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
 })
 
@@ -1471,10 +1480,21 @@ export const entityRankingScores = pgTable(
 		qualityScore: decimal("quality_score").notNull(),
 		/** Capped structural bonus — the only quality gradient between zero-vote entities. */
 		intrinsicScore: decimal("intrinsic_score").notNull(),
-		/** log(quality) + log(typeWeight) + intrinsic + createdAt/tau. Time-invariant. */
+		/**
+		 * Direction-agnostic engagement from stance votes (0078):
+		 * `min(cap, weight * ln(1 + agrees + disagrees))`. Unbounded-ish by design —
+		 * every other quality input is bounded while the time term is not, which is
+		 * why recency swamped the score before this existed.
+		 */
+		participationScore: decimal("participation_score").notNull(),
+		/** log(quality) + log(typeWeight) + intrinsic + participation + createdAt/tau. Time-invariant. */
 		rankingScore: decimal("ranking_score").notNull(),
 		positive: bigint("positive", {mode: "number"}).notNull(),
 		negative: bigint("negative", {mode: "number"}).notNull(),
+		/** Agrees (`vote_kind = 1`). Stored for explainability; direction is NOT used in the term. */
+		stancePositive: bigint("stance_positive", {mode: "number"}).notNull(),
+		/** Disagrees (`vote_kind = 1`). */
+		stanceNegative: bigint("stance_negative", {mode: "number"}).notNull(),
 		typeWeight: decimal("type_weight").notNull(),
 		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
 	},
