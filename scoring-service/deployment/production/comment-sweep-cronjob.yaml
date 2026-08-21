@@ -1,0 +1,67 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vote-indexer-comment-sweep
+  namespace: scoring
+  labels:
+    app: vote-indexer-comment-sweep
+spec:
+  # The ranking score's comment term (migration 0079) has no event-driven trigger: the only
+  # thing that recomputes a score is a vote batch, and a comment is not a vote. Without this
+  # a commented entity keeps its pre-comment score until an unrelated vote touches it, which
+  # looks exactly like the feature not working.
+  #
+  # Hourly to match ranking-indexer's rolling sweep, the same pattern for the same class of
+  # problem. Cadence is a schedule edit, not a code change — the sweep re-scores every
+  # commented entity and `refresh_entity_ranking_scores` is an idempotent upsert, so running
+  # it more or less often only changes how stale a comment's effect can be.
+  #
+  # No Kafka: this needs DATABASE_URL and nothing else. Same secret and pod conventions as
+  # vote-indexer.yaml alongside it.
+  schedule: "0 * * * *"
+  failedJobsHistoryLimit: 3
+  # A sweep is not worth overlapping with itself; the next tick will pick up anything missed.
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            fsGroup: 1001
+          imagePullSecrets:
+            - name: regcred
+          containers:
+            - name: vote-indexer-comment-sweep
+              image: registry.digitalocean.com/geo/vote-indexer:latest
+              imagePullPolicy: Always
+              # One image, two entrypoints — see the vote-indexer Dockerfile.
+              command: ["comment_sweep"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: scoring-service-credentials
+                      key: DATABASE_URL
+                - name: RUST_LOG
+                  value: "info,vote_indexer=info"
+                - name: SENTRY_DSN
+                  valueFrom:
+                    secretKeyRef:
+                      name: vote-indexer-secrets
+                      key: SENTRY_DSN
+                      optional: true
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "200m"
