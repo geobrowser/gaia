@@ -1,0 +1,46 @@
+-- `name: { isInsensitive: … }` compiles to `lower(v.text) = lower($1)` (see
+-- `entityComputedTextFilterPlugin.ts`). Nothing indexes that expression, so the EXISTS subquery the
+-- plugin builds scans. GEO-2738.
+--
+-- Measured against production on the query as logged (`ExactOne`, first: 50, "University of
+-- Cambridge"), same 5 rows both ways:
+--
+--   name: { isInsensitive: $name }   29,575 ms   right at the 30s statement timeout
+--   name: { is: $name }                 402 ms   served by values_text_idx
+--
+-- `first: 1` still cost 5,072 ms, so it is the scan and not the page size. Eight of these hit the
+-- timeout in a single hour. They never showed up in 503 triage because the query scores 51, far
+-- below the 200 admission floor — nothing sheds them, they just take 30 seconds and return nothing.
+--
+-- Swapping callers to `is` is not the fix: it silently changes matching semantics and would drop
+-- entities whose stored name differs only by case.
+--
+-- WHY HASH, AND WHY NOT PARTIAL LIKE `values_text_idx`
+--
+-- The obvious mirror of `values_text_idx` — a btree on `lower(text)` carrying its
+-- `length(text) <= 2000` predicate — does not fix this, and I only found that by explaining the
+-- shape the plugin actually emits rather than the tidy one. Postgres can use a partial index only
+-- when the query's own predicate implies the index's, and the plugin's EXISTS carries no length
+-- clause:
+--
+--   WHERE v.entity_id = … AND v.property_id = … AND lower(v.text) = lower($1)
+--
+-- On 200k rows that btree variant still planned a Seq Scan with `Rows Removed by Filter: 200000`,
+-- i.e. no change. Adding the length predicate to the generated SQL instead would silently stop
+-- matching names longer than 2000 characters, which the sensitive path still matches today.
+--
+-- `values_text_idx` is partial because a btree entry has a hard size limit and long values break
+-- it. A hash index stores the hash, not the value, so it has no such limit and needs no predicate —
+-- verified by inserting a 50,000-character value with this index in place. Hash indexes serve `=`
+-- and nothing else, which is exactly and only what the insensitive-equality operators ask for; the
+-- pattern-matching ops (`includes`, `startsWith`, …) were never served here and still are not, as
+-- the plugin's own header says.
+--
+-- Verified on 200,001 rows: Seq Scan removing 200,000 rows before, `Index Scan using
+-- values_text_lower_hash_idx` returning 1 row after, on the EXISTS shape itself.
+--
+-- For large tables build it manually with CONCURRENTLY before this runs (then the IF NOT EXISTS
+-- below no-ops) — `values` is the biggest table here and a plain CREATE INDEX holds a lock that
+-- blocks writes for its duration:
+--   CREATE INDEX CONCURRENTLY IF NOT EXISTS "values_text_lower_hash_idx" ON "values" USING hash (lower("text"));
+CREATE INDEX IF NOT EXISTS "values_text_lower_hash_idx" ON "values" USING hash (lower("text"));
