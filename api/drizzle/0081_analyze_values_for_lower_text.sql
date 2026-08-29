@@ -1,0 +1,26 @@
+-- 0080 adds `values_text_lower_hash_idx` but an index alone does not fix the query, and it took
+-- explaining the real statement on production to see why. GEO-2738.
+--
+-- The plugin's SQL ends `order by __local_0__."id" ASC limit 50`. With no statistics for the
+-- `lower(text)` expression, the planner estimated **5,105** matching entities where five exist, so
+-- it believed walking `entities_pkey` in id order would reach 50 matches quickly and picked a
+-- Merge Semi Join. It then scanned **30,210,891** entity rows — 38.7 million buffer hits, 16,884 ms
+-- — with the new index sitting unused, because a merge join wants its inputs in id order and the
+-- index offers them in hash order.
+--
+-- Postgres only collects statistics for an expression once an expression index on it exists, and
+-- only at the next ANALYZE. Measured on production immediately after `ANALYZE "values"`:
+--
+--   estimate       5,105 rows -> 8 rows
+--   plan           Merge Semi Join over entities_pkey -> Nested Loop driven by the new index
+--   execution      16,884 ms -> 0.287 ms
+--
+-- End to end through the API, cold (no response-cache hit), five distinct names: 19,600-30,700 ms
+-- with two hitting the statement timeout, down to 304-467 ms.
+--
+-- So the ANALYZE is not housekeeping here, it is the half of the fix that makes the other half
+-- reachable. Without it a fresh environment gets the index and stays slow until autovacuum happens
+-- to analyze the table, which on a 5.5 GB table is not soon.
+--
+-- Cheap to run: 0.42 s against 3.7 M rows, and it takes no lock that blocks reads or writes.
+ANALYZE "values";
