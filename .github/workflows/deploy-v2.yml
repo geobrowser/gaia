@@ -85,7 +85,12 @@ jobs:
             api)               manifests="api/k8s/v2/api.yaml api/k8s/v2/hpa.yaml";         rollout="deployment/api" ;;
             valkey)            manifests="api/k8s/v2/valkey.yaml";                          rollout="deployment/api-cache" ;;
             search-indexer)    manifests="search-indexer-deploy/k8s/v2/search-indexer.yaml"; rollout="statefulset/search-indexer" ;;
-            vote-indexer)      manifests="scoring-service/deployment/v2/vote-indexer.yaml"; rollout="deployment/vote-indexer" ;;
+            # The comment sweep ships with the Deployment for the reason the
+            # ranking-indexer CronJobs do below: it runs the same image and is only
+            # useful at the same version as the consumer. #910 added the manifest
+            # and the production/staging workflows but not this line, so the v2
+            # path — the one that ships the live testnet stack — could not deploy it.
+            vote-indexer)      manifests="scoring-service/deployment/v2/vote-indexer.yaml scoring-service/deployment/v2/comment-sweep-cronjob.yaml"; rollout="deployment/vote-indexer" ;;
             topology-indexer)  manifests="scoring-service/deployment/v2/topology-indexer.yaml"; rollout="deployment/topology-indexer" ;;
             scoring-service)   manifests="scoring-service/deployment/v2/cronjob.yaml";      rollout="" ;;
             proposal-executor) manifests="proposal-executor/deployment/v2/cronjob.yaml";    rollout="" ;;
