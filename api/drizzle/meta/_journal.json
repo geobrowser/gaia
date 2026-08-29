@@ -568,6 +568,13 @@
       "when": 1786581835869,
       "tag": "0080_values_text_lower_index",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1786585435869,
+      "tag": "0081_analyze_values_for_lower_text",
+      "breakpoints": true
     }
   ]
 }
