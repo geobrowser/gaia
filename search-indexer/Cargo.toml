@@ -51,7 +51,7 @@ tracing = "0.1.41"
 
 # Relation map (SQLite persistence + LRU cache for fast DeleteRelation lookups)
 rusqlite = { version = "0.32", features = ["bundled"] }
-lru = "0.12"
+lru = "0.18"
 
 [dev-dependencies]
 serial_test = "3.4.0"
