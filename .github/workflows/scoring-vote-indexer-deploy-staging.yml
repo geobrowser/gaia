@@ -7,6 +7,7 @@ on:
     paths:
       - 'scoring-service/vote-indexer/**'
       - 'scoring-service/deployment/staging/vote-indexer.yaml'
+      - 'scoring-service/deployment/staging/comment-sweep-cronjob.yaml'
       - 'hermes-schema/**'
       - 'wire/**'
       - '.github/workflows/scoring-vote-indexer-deploy-staging.yml'
@@ -55,6 +56,10 @@ jobs:
           # Update image tag to use SHA and apply
           sed -i 's|image: registry.digitalocean.com/geo/vote-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' scoring-service/deployment/staging/vote-indexer.yaml
           kubectl apply -f scoring-service/deployment/staging/vote-indexer.yaml
+          # The comment sweep rides the same image, so it has to be pinned and applied here
+          # too or it silently keeps running whatever `:latest` resolved to at creation.
+          sed -i 's|image: registry.digitalocean.com/geo/vote-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' scoring-service/deployment/staging/comment-sweep-cronjob.yaml
+          kubectl apply -f scoring-service/deployment/staging/comment-sweep-cronjob.yaml
 
       - name: Restart deployment to pick up new image
         run: |

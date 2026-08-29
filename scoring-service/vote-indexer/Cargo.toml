@@ -4,6 +4,17 @@ version = "0.1.0"
 edition = "2021"
 description = "Vote indexer that consumes curation.votes events from Kafka and indexes into PostgreSQL"
 
+# Explicit once there is more than one binary. `comment_sweep` is the ranking score's
+# missing comment trigger — see its module doc, and `ranking-indexer` for the same
+# one-shot-binary-plus-CronJob shape.
+[[bin]]
+name = "vote-indexer"
+path = "src/main.rs"
+
+[[bin]]
+name = "comment_sweep"
+path = "src/bin/comment_sweep.rs"
+
 [dependencies]
 hermes-schema = { path = "../../hermes-schema" }
 hermes-instrumentation = { path = "../../hermes-instrumentation" }

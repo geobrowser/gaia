@@ -1,11 +1,19 @@
 //! Storage layer for vote data.
 
 use hermes_instrumentation::instrument;
+use sdk::core::content_ids::REPLY_TO_PROPERTY_ID;
 use sdk::core::ids::SCORE_PROPERTY_ID;
 use sqlx::{PgPool, Postgres, Row};
 use uuid::Uuid;
 
 use crate::error::StorageError;
+
+/// Entities per `refresh_entity_ranking_scores` call in a sweep.
+///
+/// The function takes a `uuid[]`, so this only bounds the parameter array — it is not a
+/// throughput knob. 500 keeps the array well clear of any statement-size concern while
+/// still being one round trip for the whole commented set at present volumes.
+const RANKING_REFRESH_BATCH_SIZE: usize = 500;
 use crate::models::voting::{
     ResponseKind, ScoreValueItem, UserVoteCriteria, UserVoteItem, VoteCountCriteria, VoteItem,
     VoteObjectType, VotesCountItem,
@@ -272,6 +280,74 @@ impl Storage {
         Ok(scored.max(0) as u64)
     }
 
+    /// Every entity somebody has replied to.
+    ///
+    /// The comment term (migration 0079) reads `count(DISTINCT space_id)` over reply-to
+    /// relations, but nothing recomputes a score when one arrives: `refresh_ranking_scores`
+    /// above is keyed off a vote batch, and a comment is not a vote. So a commented entity
+    /// keeps its pre-comment score until some unrelated vote happens to touch it.
+    ///
+    /// This returns the whole set rather than a recently-changed slice, because there is no
+    /// slice to take: `relations` has no `created_at`/`updated_at` (see
+    /// `0000_handy_omega_red.sql`), so "recently commented" is not answerable from the
+    /// relation. The set is small enough that it does not need to be — 243 entities across
+    /// 534 reply-to relations when this was written — and
+    /// `refresh_entity_ranking_scores` is an idempotent upsert, so re-scoring an unchanged
+    /// entity rewrites it to the same value.
+    ///
+    /// If that stops being true, the fix is a timestamp on `relations` (migration 0059 did
+    /// exactly this for `votes_count`, including the note about running
+    /// `CREATE INDEX CONCURRENTLY` on production by hand) and a keyset cursor, not a bigger
+    /// batch here. `relations_to_entity_type_idx (to_entity_id, type_id)` already covers
+    /// this query.
+    #[instrument(name = "vote_indexer.storage.commented_entity_ids", skip(self))]
+    pub async fn commented_entity_ids(&self) -> Result<Vec<Uuid>, StorageError> {
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            r#"
+            SELECT DISTINCT to_entity_id
+            FROM relations
+            WHERE type_id = $1::uuid
+            "#,
+        )
+        .bind(
+            Uuid::parse_str(REPLY_TO_PROPERTY_ID)
+                .expect("REPLY_TO_PROPERTY_ID is a valid UUID constant"),
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(ids)
+    }
+
+    /// Recompute a known set of entities.
+    ///
+    /// Split from [`Self::refresh_ranking_scores`] because that one derives its ids from a
+    /// vote batch; this takes them as given, which is what a sweep needs. Batched so the
+    /// parameter array stays bounded however large the input grows —
+    /// `api/scripts/backfill-entity-ranking-scores.sh` does the same thing from the shell.
+    #[instrument(
+        name = "vote_indexer.storage.refresh_ranking_scores_for",
+        skip(self, entity_ids),
+        fields(count = entity_ids.len())
+    )]
+    pub async fn refresh_ranking_scores_for(
+        &self,
+        entity_ids: &[Uuid],
+    ) -> Result<u64, StorageError> {
+        let mut scored = 0u64;
+
+        for batch in entity_ids.chunks(RANKING_REFRESH_BATCH_SIZE) {
+            let count: i32 =
+                sqlx::query_scalar("SELECT public.refresh_entity_ranking_scores($1::uuid[])")
+                    .bind(batch)
+                    .fetch_one(&self.pool)
+                    .await?;
+            scored += count.max(0) as u64;
+        }
+
+        Ok(scored)
+    }
+
     /// Mirror net scores into the `values` table under the Score system property.
     ///
     /// Enables sorting entities by `positive - negative` through the existing
@@ -489,6 +565,25 @@ pub fn ranking_recompute_entity_ids(counts: &[VotesCountItem]) -> Vec<Uuid> {
 mod tests {
     use super::*;
 
+    /// The sweep binds this constant as a `uuid`, so a malformed constant would fail at
+    /// runtime inside a CronJob rather than at build time. Cheap to pin here instead.
+    #[test]
+    fn reply_to_property_id_parses_as_a_uuid() {
+        assert!(Uuid::parse_str(REPLY_TO_PROPERTY_ID).is_ok());
+    }
+
+    /// The batch bound only exists to keep the parameter array bounded. A zero would make
+    /// `chunks` panic and a sweep would take the whole service's CronJob down with it.
+    #[test]
+    fn ranking_refresh_batch_size_is_a_usable_chunk_size() {
+        // No `> 0` assertion — clippy const-folds it. `chunks` panics on 0 anyway, so a
+        // zero batch size fails this test loudly rather than silently passing it.
+        let ids: Vec<Uuid> = (0..RANKING_REFRESH_BATCH_SIZE + 1)
+            .map(|_| Uuid::nil())
+            .collect();
+        assert_eq!(ids.chunks(RANKING_REFRESH_BATCH_SIZE).count(), 2);
+    }
+
     fn count(object_id: Uuid, kind: ResponseKind, object_type: VoteObjectType) -> VotesCountItem {
         VotesCountItem {
             object_id,
@@ -551,7 +646,10 @@ mod tests {
                 kind,
                 VoteObjectType::Relation,
             )]);
-            assert!(ids.is_empty(), "relation vote scheduled a recompute: {kind:?}");
+            assert!(
+                ids.is_empty(),
+                "relation vote scheduled a recompute: {kind:?}"
+            );
         }
     }
 
