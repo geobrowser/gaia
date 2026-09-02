@@ -121,8 +121,23 @@ spec:
                 #
                 # The other three originals (0x84a679ce, 0x0477636a, 0x29a5122f)
                 # are unchanged from the 2026-08-17 check and were not re-tested.
+                # Auto-accept allowlist. Being an editor is necessary but NOT sufficient —
+                # a space absent from this list is ignored entirely, which is what makes an
+                # emptied value a working kill switch.
+                #
+                # ORDER MATTERS when adding a space: the membership bot must already be an
+                # editor of it. The bot's YES vote is what accepts a request, and voting
+                # without the editor role reverts (CanNotVote, 0x543ffef7). Because detection
+                # re-finds the same request every tick, an allowlisted space the bot cannot
+                # vote in produces a revert loop every 5 minutes rather than a single failure.
+                # That is the shape of the incident fixed on 2026-09-02; do not re-create it by
+                # allowlisting ahead of the role.
+                #
+                # 0x224406e0… and 0x704e606d… added 2026-09-02 (Preston). Verify with:
+                #   SELECT EXISTS(SELECT 1 FROM editors
+                #     WHERE space_id = '<uuid>' AND member_space_id = '<MEMBERSHIP_BOT_SPACE_ID as uuid>');
                 - name: MEMBERSHIP_AUTOACCEPT_SPACE_IDS
-                  value: "0xc9f267dcb0d270718c2a3c45a64afd32,0x84a679ce188f061ac9a92380bac2bab5,0x0477636ace64280fc43a9f440a502291,0x29a5122f65295cea9f421ec7a73ac825,0x41e851610e13a19441c4d980f2f2ce6b,0x4582fbbee28a16589154f7e36f1ee3c5,0x52c7ae149838b6d47ce0f3b2a5974546,0x89bd89bf28ff8a0963faf92a8c905e20"
+                  value: "0xc9f267dcb0d270718c2a3c45a64afd32,0x84a679ce188f061ac9a92380bac2bab5,0x0477636ace64280fc43a9f440a502291,0x29a5122f65295cea9f421ec7a73ac825,0x41e851610e13a19441c4d980f2f2ce6b,0x4582fbbee28a16589154f7e36f1ee3c5,0x52c7ae149838b6d47ce0f3b2a5974546,0x89bd89bf28ff8a0963faf92a8c905e20,0x224406e0de3c48d78ef12774111b8b2f,0x704e606d4f204118b8e499df85a9b91a"
                 # Self-owned SpaceRegistry deployed 2026-07-29. The live CronJob
                 # was already patched to this address; this manifest still said
                 # 0x364231615dcEA33D13C823b13B449DD9F55381E7, so redeploying from
