@@ -804,7 +804,20 @@ const main = Effect.gen(function* () {
 						),
 					),
 				),
-			{concurrency: 10},
+			// Serialized deliberately. Every space votes from the SAME bot wallet, and each
+			// `sendTransaction` lets the smart-account client fetch the account nonce itself — so
+			// two spaces processed concurrently read the same nonce and the second userOp fails
+			// `AA25 invalid account nonce`. Observed 2026-09-02: three requests found, one admitted,
+			// and a second vote lost to AA25 on nonce 0x65 behind a concurrent one.
+			//
+			// This is a correctness bound, not a tuning knob: raising it re-introduces the race,
+			// and the race silently drops admissions in *other* spaces, which is far worse than the
+			// latency. The cost is small — a vote takes ~2s and the allowlist is single digits, so a
+			// full sweep stays well inside the 5-minute cadence.
+			//
+			// The execute path is unaffected: it uses a different wallet and keeps its own
+			// concurrency.
+			{concurrency: 1},
 		)
 
 		const {admitted, skipped, failed} = aggregateMembership(results)

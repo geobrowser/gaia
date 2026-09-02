@@ -6,6 +6,7 @@
  */
 
 import {describe, expect, test} from "bun:test"
+import {readFileSync} from "node:fs"
 import {Cause, ConfigProvider, Effect, Exit, Option, Redacted} from "effect"
 import {type Address, decodeAbiParameters, decodeFunctionData, type Hex} from "viem"
 import {InfraError, RevertError, SpaceRegistryAbi} from "../src/contracts.js"
@@ -194,6 +195,31 @@ describe("config validation contracts", () => {
 // ---------------------------------------------------------------------------
 
 describe("concurrency model contracts", () => {
+	test("membership votes are serialized, because they share one wallet", () => {
+		// A correctness bound, not a tuning knob. Every space votes from the same bot wallet and
+		// each `sendTransaction` lets the smart-account client fetch the nonce itself, so two
+		// spaces in flight together read the same nonce and the second userOp dies on
+		// `AA25 invalid account nonce`.
+		//
+		// Observed live 2026-09-02: three requests found, one admitted, and a second vote lost to
+		// AA25 on nonce 0x65. The failure mode is what makes this worth pinning — the dropped
+		// admission is in a *different, healthy* space, so raising this silently loses joiners
+		// somewhere other than wherever the trouble looks like it is.
+		// Anchored on `aggregateMembership`, not on `bySpace.entries()` — the execute path groups
+		// by space too, so the first match is the wrong loop. Search backwards from the membership
+		// aggregation to the concurrency setting that governs it.
+		const source = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8")
+		const before = source.slice(0, source.indexOf("aggregateMembership(results)"))
+		const settings = [...before.matchAll(/\{concurrency:\s*(\d+)\}/g)]
+		expect(settings.at(-1)?.[1]).toBe("1")
+
+		// And the execute path is deliberately NOT serialized — it uses a different wallet, so it
+		// keeps its concurrency. If this ever reads 1 as well, someone has over-applied the fix.
+		const afterMembership = source.slice(source.indexOf("aggregateMembership(results)"))
+		expect(/\{concurrency:\s*10\}/.test(source)).toBe(true)
+		expect(afterMembership.length).toBeGreaterThan(0)
+	})
+
 	test("proposals grouped by space ID produce correct structure", () => {
 		const proposals = [
 			{id: "p1", spaceId: "s1"},
