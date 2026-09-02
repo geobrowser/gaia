@@ -285,6 +285,18 @@ WHERE p.space_id = ANY($1)
   AND a.action_type = 'AddMember'
   AND NOT EXISTS (SELECT 1 FROM proposal_votes pv WHERE pv.proposal_id = p.id)
   AND (SELECT COUNT(*) FROM proposal_actions a2 WHERE a2.proposal_id = p.id) = 1
+  -- Skip anyone who is already a member. \`_addMember\` opens with
+  -- \`if (hasRole(MEMBER, _newMemberSpaceId)) revert InvalidSpaceIdForRole()\`, and because
+  -- allowlisted spaces run fastPathFlatThreshold = 1 the YES vote *executes* that action in the
+  -- same transaction — so the vote reverts during simulation rather than being a no-op. Without
+  -- this clause such a proposal is re-detected and re-attempted every five minutes forever,
+  -- burning a sponsored userOp each time. Observed on the AI space: proposal 77399c59 was created
+  -- 2026-08-17 for a space that already held MEMBER and had been reverting ever since.
+  AND NOT EXISTS (
+    SELECT 1 FROM members m
+     WHERE m.space_id = p.space_id
+       AND m.member_space_id = a.target_id
+  )
 ORDER BY p.created_at::bigint ASC
 `
 

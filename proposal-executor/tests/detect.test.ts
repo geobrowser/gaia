@@ -116,6 +116,22 @@ describe("V2 detection SQL", () => {
 		}
 	})
 
+	test("membership detection skips anyone who is already a member", () => {
+		// `_addMember` opens with `if (hasRole(MEMBER, ...)) revert InvalidSpaceIdForRole()`, and
+		// allowlisted spaces run fastPathFlatThreshold = 1 — so the YES vote executes that action
+		// in the same transaction and reverts during simulation. Without this clause the proposal
+		// is re-detected every five minutes forever, burning a sponsored userOp each time.
+		//
+		// Live case: AI-space proposal 77399c59, created 2026-08-17 for a space that already held
+		// MEMBER, had been reverting on every tick since. Replayed against the live indexer, the
+		// old clause set returned it and this one returns nothing.
+		expect(MEMBERSHIP_DETECTION_SQL).toMatch(/NOT\s+EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+members\s+m/)
+		// Both halves of the key matter: same space AND same target. Matching on target alone
+		// would skip a request to join space B from someone who is a member of space A.
+		expect(MEMBERSHIP_DETECTION_SQL).toMatch(/m\.space_id\s*=\s*p\.space_id/)
+		expect(MEMBERSHIP_DETECTION_SQL).toMatch(/m\.member_space_id\s*=\s*a\.target_id/)
+	})
+
 	test("the two paths stay mutually exclusive on voting_mode", () => {
 		// If both ever selected the same mode the executor and the membership bot
 		// would race for the same proposal.
