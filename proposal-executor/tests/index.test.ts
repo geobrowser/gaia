@@ -5,8 +5,8 @@
  * contracts without requiring live infrastructure.
  */
 
-import {readFileSync} from "node:fs"
 import {describe, expect, test} from "bun:test"
+import {readFileSync} from "node:fs"
 import {Cause, ConfigProvider, Effect, Exit, Option, Redacted} from "effect"
 import {type Address, decodeAbiParameters, decodeFunctionData, type Hex} from "viem"
 import {InfraError, RevertError, SpaceRegistryAbi} from "../src/contracts.js"
