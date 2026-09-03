@@ -20,6 +20,7 @@ import {
 import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 import {useAdmissionControl} from "./admissionControl"
+import AggregatesScopePlugin from "./aggregatesScopePlugin"
 import {useCostLogger} from "./costLoggerPlugin"
 import EntityComputedTextFilterPlugin from "./entityComputedTextFilterPlugin"
 import EntityOrderByRankingScorePlugin from "./entityOrderByRankingScorePlugin"
@@ -223,6 +224,7 @@ const postgraphileOptions = {
 	//   0.1.x line: 0.2.x targets PostGraphile v5 and will not load here.
 	appendPlugins: [
 		UndashedUuidPlugin,
+		AggregatesScopePlugin,
 		PgAggregatesPlugin,
 		ValueScalarsPlugin,
 		ConnectionFilterPlugin,
@@ -238,6 +240,9 @@ const postgraphileOptions = {
 	disableDefaultMutations: true,
 	simpleCollections: "both" as const,
 	graphileBuildOptions: {
+		// GEO-2796: pg-aggregates opt-in. Off everywhere; aggregatesScopePlugin re-enables
+		// relations + entities. Keeps the expensive-aggregate surface deliberate.
+		disableAggregatesByDefault: true,
 		connectionFilterRelations: true,
 		connectionFilterComputedColumns: true,
 		connectionFilterAllowNullInput: true, // default: false
