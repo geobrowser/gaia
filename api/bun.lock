@@ -9,6 +9,7 @@
         "@geoprotocol/geo-sdk": "^0.17.0",
         "@geoprotocol/grc-20": "^0.3.0",
         "@graphile-contrib/pg-simplify-inflector": "^6.1.0",
+        "@graphile/pg-aggregates": "^0.1.1",
         "@graphprotocol/grc-20": "0.32.3",
         "@graphql-tools/schema": "^10.0.23",
         "@graphql-yoga/plugin-response-cache": "^3.23.0",
@@ -199,6 +200,8 @@
     "@graphile-contrib/pg-simplify-inflector": ["@graphile-contrib/pg-simplify-inflector@6.1.0", "", {}, "sha512-3eI2FP4ulu/fxwkJBNXhR6XEzqVz4wJWFr4LfeyUNNArUtLFx0DpP6YdcARCYgwLExFcIQNE8fnul3JKiciYIw=="],
 
     "@graphile/lru": ["@graphile/lru@4.11.0", "", { "dependencies": { "tslib": "^2.0.1" } }, "sha512-Fakuk190EAKxWSa9YQyr/87g8mvAv8HBvk6yPCPuIoA3bYXF7n6kl0XSqKjSd5VfjEqhtnzQ6zJGzDf1Gv/tJg=="],
+
+    "@graphile/pg-aggregates": ["@graphile/pg-aggregates@0.1.1", "", { "dependencies": { "@types/debug": "^4.1.5", "@types/graphql": "^14.5.0", "debug": "^4.3.1", "graphile-utils": "^4.12.0-alpha.0" }, "peerDependencies": { "graphile-build": "^4.12.0-alpha.0", "graphile-build-pg": "^4.12.0-alpha.0", "graphql": ">0.6.0 <16" } }, "sha512-bPfniRw4oN9nNP8tkRlbBslNMA38fhVWNhhaReODhPVEshwquzUmSmSCtSVhS4J+StEFgrP7Z+z1IN0/ror2XA=="],
 
     "@graphprotocol/grc-20": ["@graphprotocol/grc-20@0.32.3", "", { "dependencies": { "@geoprotocol/grc-20": "^0.1.7", "effect": "^3.17.13", "fflate": "^0.8.2", "fractional-indexing-jittered": "^1.0.0", "image-size": "^2.0.2", "permissionless": "^0.2.35", "uuid": "^13.0.0", "viem": "^2.37.6" } }, "sha512-fNZkOQSvVFcXrMB8t2UYo+onqywn6PEexHtZBRQtY4aofCJDY0X3bgnT89CVTkT8aO6PrLCna5ix0rNzgAqrqA=="],
 
@@ -470,9 +473,13 @@
 
     "@types/connect": ["@types/connect@3.4.38", "", { "dependencies": { "@types/node": "*" } }, "sha512-K6uROf1LD88uDQqJCktA4yzL1YYAK6NgfsI0v/mTgyPKWsX1CnJ0XPSDhViejru1GcRkLWb8RlzFYJRqGUbaug=="],
 
+    "@types/debug": ["@types/debug@4.1.13", "", { "dependencies": { "@types/ms": "*" } }, "sha512-KSVgmQmzMwPlmtljOomayoR89W4FynCAi3E8PPs7vmDVPe84hT+vGPKkJfThkmXs0x0jAaa9U8uW8bbfyS2fWw=="],
+
     "@types/diff": ["@types/diff@8.0.0", "", { "dependencies": { "diff": "*" } }, "sha512-o7jqJM04gfaYrdCecCVMbZhNdG6T1MHg/oQoRFdERLV+4d+V7FijhiEAbFu0Usww84Yijk9yH58U4Jk4HbtzZw=="],
 
     "@types/estree": ["@types/estree@1.0.7", "", {}, "sha512-w28IoSUCJpidD/TGviZwwMJckNESJZXFu7NBZ5YJ4mEUnNraUn9Pm8HSZm/jDF1pDWYKspWE7oVphigUPRakIQ=="],
+
+    "@types/graphql": ["@types/graphql@14.5.0", "", { "dependencies": { "graphql": "*" } }, "sha512-MOkzsEp1Jk5bXuAsHsUi6BVv0zCO+7/2PTiZMXWDSsMXvNU6w/PLMQT2vHn8hy2i0JqojPz1Sz6rsFjHtsU0lA=="],
 
     "@types/js-yaml": ["@types/js-yaml@4.0.9", "", {}, "sha512-k4MGaQl5TGo/iipqb2UDG2UwjXziSWkh0uysQelTlJpX1qGlpUZYm8PnO4DxG1qBomtJUdYJ6qR6xdIah10JLg=="],
 
@@ -1359,6 +1366,8 @@
     "@geoprotocol/geo-sdk/effect": ["effect@3.21.0", "", { "dependencies": { "@standard-schema/spec": "^1.0.0", "fast-check": "^3.23.1" } }, "sha512-PPN80qRokCd1f015IANNhrwOnLO7GrrMQfk4/lnZRE/8j7UPWrNNjPV0uBrZutI/nHzernbW+J0hdqQysHiSnQ=="],
 
     "@geoprotocol/geo-sdk/uuid": ["uuid@13.0.0", "", { "bin": { "uuid": "dist-node/bin/uuid" } }, "sha512-XQegIaBTVUjSHliKqcnFqYypAd4S+WCYt5NIeRs6w/UAry7z8Y9j5ZwRRL4kzq9U3sD6v+85er9FvkEaBpji2w=="],
+
+    "@graphile/pg-aggregates/debug": ["debug@4.4.3", "", { "dependencies": { "ms": "^2.1.3" } }, "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA=="],
 
     "@graphprotocol/grc-20/@geoprotocol/grc-20": ["@geoprotocol/grc-20@0.1.7", "", { "dependencies": { "@bokuweb/zstd-wasm": "^0.0.27" } }, "sha512-BJGUwG6exJnLkoRzCwzohybxgtwsYwuzEcnyJ2YPQQ1WwDXp7o8oNwLVUjzwEqjEabw1oIRpSnDNrH/LqSEaYA=="],
 

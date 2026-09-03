@@ -25,6 +25,7 @@
 		"@geoprotocol/geo-sdk": "^0.17.0",
 		"@geoprotocol/grc-20": "^0.3.0",
 		"@graphile-contrib/pg-simplify-inflector": "^6.1.0",
+		"@graphile/pg-aggregates": "^0.1.1",
 		"@graphprotocol/grc-20": "0.32.3",
 		"@graphql-tools/schema": "^10.0.23",
 		"@graphql-yoga/plugin-response-cache": "^3.23.0",

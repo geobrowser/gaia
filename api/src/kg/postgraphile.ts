@@ -1,3 +1,4 @@
+import PgAggregatesPlugin from "@graphile/pg-aggregates"
 import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
 import {useResponseCache} from "@graphql-yoga/plugin-response-cache"
 import * as Sentry from "@sentry/node"
@@ -216,8 +217,13 @@ const postgraphileOptions = {
 	// - UserVoteLegacyAccessorPlugin re-adds the pre-0071 unique-key accessor name
 	//   for user_votes, resolving the curation row. Deprecated shim; drop it with
 	//   the votes_count upvotes/downvotes shims.
+	// - PgAggregatesPlugin adds `groupedAggregates` / `aggregates` to connections, so a faceted
+	//   menu can ask "of the rows matching this filter, how many carry each topic / live in each
+	//   space" without the client fetching the corpus to count it itself (GEO-2796). Pinned to the
+	//   0.1.x line: 0.2.x targets PostGraphile v5 and will not load here.
 	appendPlugins: [
 		UndashedUuidPlugin,
+		PgAggregatesPlugin,
 		ValueScalarsPlugin,
 		ConnectionFilterPlugin,
 		SimplifyInflectionPlugin,
