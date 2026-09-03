@@ -631,7 +631,7 @@ describe("processSpaceMembership — revert isolation", () => {
 })
 
 describe("aggregateMembership — run_end counts", () => {
-	test("counts votes as admitted, skips/reverts as skipped, infra spaces as failed", () => {
+	test("counts votes as admitted, reverts separately from skips, infra spaces as failed", () => {
 		const results = [
 			{
 				status: "ok" as const,
@@ -644,11 +644,49 @@ describe("aggregateMembership — run_end counts", () => {
 			{status: "ok" as const, spaceId: "s2", outcomes: [{status: "reverted" as const, expected: true}]},
 			{status: "infraError" as const, spaceId: "s3", outcomes: []},
 		]
-		expect(aggregateMembership(results)).toEqual({admitted: 1, skipped: 2, failed: 1})
+		expect(aggregateMembership(results)).toEqual({
+			admitted: 1,
+			skipped: 1,
+			reverted: 1,
+			revertedUnexpected: 0,
+			failed: 1,
+		})
+	})
+
+	// The GEO-2589 run: 8 requests, 4 admitted, 4 lost to AA25. It reported
+	// membershipFailed: 0 / membershipSkipped: 4 and read as a clean run.
+	test("a run that loses half its votes to unexpected reverts no longer looks clean", () => {
+		const results = [
+			{
+				status: "ok" as const,
+				spaceId: "s1",
+				outcomes: [
+					...Array.from({length: 4}, (_, i) => ({status: "voted" as const, txHash: `0x${i}`})),
+					...Array.from({length: 4}, () => ({status: "reverted" as const, expected: false})),
+				],
+			},
+		]
+		const summary = aggregateMembership(results)
+		expect(summary).toEqual({admitted: 4, skipped: 0, reverted: 4, revertedUnexpected: 4, failed: 0})
+		// The point of the split: the bad half is visible without reading per-request logs.
+		expect(summary.revertedUnexpected).toBeGreaterThan(0)
+	})
+
+	test("an expected revert is routine and does not raise revertedUnexpected", () => {
+		const results = [
+			{status: "ok" as const, spaceId: "s1", outcomes: [{status: "reverted" as const, expected: true}]},
+		]
+		expect(aggregateMembership(results)).toMatchObject({reverted: 1, revertedUnexpected: 0})
 	})
 
 	test("an empty run aggregates to all-zero", () => {
-		expect(aggregateMembership([])).toEqual({admitted: 0, skipped: 0, failed: 0})
+		expect(aggregateMembership([])).toEqual({
+			admitted: 0,
+			skipped: 0,
+			reverted: 0,
+			revertedUnexpected: 0,
+			failed: 0,
+		})
 	})
 })
 

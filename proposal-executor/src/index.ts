@@ -409,8 +409,16 @@ type MembershipSpaceResult =
 interface MembershipSummary {
 	/** YES votes cast (requesters admitted this cycle). */
 	admitted: number
-	/** Requests left alone — ineligible (stage 2) or reverted. */
+	/** Requests left alone as ineligible at stage 2. Reverts are counted separately. */
 	skipped: number
+	/** Votes attempted and rejected on-chain. */
+	reverted: number
+	/**
+	 * Reverts the bot did not anticipate — the number worth alerting on. An expected revert
+	 * is a vote deliberately cast into a closing window rather than wrongly skipping a
+	 * legitimate request; an unexpected one means the chain refused a vote we believed valid.
+	 */
+	revertedUnexpected: number
 	/** Spaces aborted by a persistent infrastructure error. */
 	failed: number
 	/** Candidate requests surfaced by stage-1 detection. */
@@ -439,25 +447,45 @@ export function classifyMembershipSkip(tally: ProposalTally, nowSeconds: bigint)
 }
 
 /**
- * Aggregate per-space results into the run summary. Votes count as `admitted`;
- * both ineligible skips and on-chain reverts count as `skipped` (non-admitting,
- * non-failing); spaces aborted by infra count as `failed`.
+ * Aggregate per-space results into the run summary.
+ *
+ * Reverts are counted separately from skips (GEO-2589). They used to share the `skipped`
+ * bucket, which made a run that lost half its votes to `AA25 invalid account nonce` report
+ * `membershipFailed: 0` and look indistinguishable from a run where every request was
+ * simply ineligible. The nonce race that produced those reverts is fixed — the vote loops
+ * are `{concurrency: 1}` — but a summary that cannot express "the vote was attempted and
+ * the chain rejected it" would hide the next cause just as well as it hid that one.
+ *
+ * `revertedUnexpected` is the number worth alerting on. An *expected* revert is a vote the
+ * bot knowingly casts into a closing window rather than wrongly skipping a legitimate
+ * request (see `isVotingOpen`), so it is routine. An unexpected one means the chain
+ * refused a vote we believed was valid.
+ *
+ * `failed` keeps its meaning — spaces aborted by infra — so the exit-code formula and any
+ * existing alerting on it are unchanged.
  */
 export function aggregateMembership(results: MembershipSpaceResult[]): {
 	admitted: number
 	skipped: number
+	reverted: number
+	revertedUnexpected: number
 	failed: number
 } {
 	let admitted = 0
 	let skipped = 0
+	let reverted = 0
+	let revertedUnexpected = 0
 	for (const r of results) {
 		for (const o of r.outcomes) {
 			if (o.status === "voted") admitted++
-			else skipped++
+			else if (o.status === "reverted") {
+				reverted++
+				if (!o.expected) revertedUnexpected++
+			} else skipped++
 		}
 	}
 	const failed = results.filter((r) => r.status === "infraError").length
-	return {admitted, skipped, failed}
+	return {admitted, skipped, reverted, revertedUnexpected, failed}
 }
 
 /** Cast a membership YES vote with the same timeout + InfraError retry the executor uses. */
@@ -737,7 +765,7 @@ const main = Effect.gen(function* () {
 			yield* Effect.logInfo("membership_start").pipe(
 				Effect.annotateLogs({allowlistSize: 0, requestsFound: 0, spaces: 0}),
 			)
-			return {admitted: 0, skipped: 0, failed: 0, total: 0, spaces: 0}
+			return {admitted: 0, skipped: 0, reverted: 0, revertedUnexpected: 0, failed: 0, total: 0, spaces: 0}
 		}
 
 		// Membership-accept bot wallet — a SECOND, distinct identity built from the
@@ -780,7 +808,7 @@ const main = Effect.gen(function* () {
 		)
 
 		if (requests.length === 0) {
-			return {admitted: 0, skipped: 0, failed: 0, total: 0, spaces: 0}
+			return {admitted: 0, skipped: 0, reverted: 0, revertedUnexpected: 0, failed: 0, total: 0, spaces: 0}
 		}
 
 		const results: MembershipSpaceResult[] = yield* Effect.forEach(
@@ -820,13 +848,21 @@ const main = Effect.gen(function* () {
 			{concurrency: 1},
 		)
 
-		const {admitted, skipped, failed} = aggregateMembership(results)
-		return {admitted, skipped, failed, total: requests.length, spaces: bySpace.size}
+		const {admitted, skipped, reverted, revertedUnexpected, failed} = aggregateMembership(results)
+		return {admitted, skipped, reverted, revertedUnexpected, failed, total: requests.length, spaces: bySpace.size}
 	}).pipe(
 		Effect.catchTag("InfraError", (e) =>
 			Effect.logError("membership_path_failed").pipe(
 				Effect.annotateLogs({error: e.message, proposalId: e.proposalId}),
-				Effect.as({admitted: 0, skipped: 0, failed: 1, total: 0, spaces: 0}),
+				Effect.as({
+					admitted: 0,
+					skipped: 0,
+					reverted: 0,
+					revertedUnexpected: 0,
+					failed: 1,
+					total: 0,
+					spaces: 0,
+				}),
 			),
 		),
 	)
@@ -844,6 +880,11 @@ const main = Effect.gen(function* () {
 			spaces: exec.spaces,
 			membershipAdmitted: membership.admitted,
 			membershipSkipped: membership.skipped,
+			// Split out of membershipSkipped (GEO-2589): a vote the chain rejected is not the
+			// same event as a request that was never eligible, and collapsing them let a run
+			// that lost half its votes report membershipFailed: 0.
+			membershipReverted: membership.reverted,
+			membershipRevertedUnexpected: membership.revertedUnexpected,
 			membershipFailed: membership.failed,
 			membershipTotal: membership.total,
 			membershipSpaces: membership.spaces,
