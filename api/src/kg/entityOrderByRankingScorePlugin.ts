@@ -73,10 +73,34 @@ function scoreOrderBy(
 		(sentinel: string) =>
 		({queryBuilder}: {queryBuilder: {getTableAlias: () => unknown}}) => {
 			const t = queryBuilder.getTableAlias()
+			// `::float8`, not `::numeric`, and this is the whole of the tie fix (GEO-2795).
+			//
+			// A cursor is base64 JSON, and PostGraphile puts the order-by value in it as a JSON
+			// number — a double. Decoding a real one shows exactly that:
+			//
+			//   ["RANKING_SCORE_DESC", [17885.66401799888, "93227664-fed5-4f48-9e46-22bd7293d665"]]
+			//
+			// `ranking_score` is unconstrained `numeric` and the stored value there is
+			// 17885.6640179988796355000000, so the cursor is a rounded copy. The continuation
+			// predicate is `(expr > $c) OR (expr = $c AND <next>)`, and against the exact numeric:
+			//
+			//   numeric = 17885.66401799888  -> false, so the id tiebreak can NEVER fire
+			//   numeric < 17885.66401799888  -> true,  so the boundary row repeats on the next page
+			//
+			// Which is why both symptoms appear and why adding ID_DESC changed nothing: the id was
+			// always in the cursor, but the score comparison fails before it is ever consulted. A
+			// value that rounds *down* duplicates, one that rounds *up* is dropped. 3 rows share
+			// that boundary score, which is exactly the 3 duplicates in the report.
+			//
+			// Ordering by the double makes the comparison exact, because the column and the cursor
+			// then hold the same value. Precision is not a concern for ranking: scores span
+			// 17679-17888 and float8 keeps ~11 decimal places at that magnitude, while real score
+			// differences are in the 4th. Any genuine tie is broken by the primary key, which
+			// PostGraphile appends and which now actually gets reached.
 			return sql.fragment`COALESCE((
 				SELECT rs.${sql.identifier(column)} FROM public.entity_ranking_scores rs
 				WHERE rs.entity_id = ${t}.id
-			), ${sql.literal(sentinel)}::numeric)`
+			), ${sql.literal(sentinel)})::float8`
 		}
 
 	return {
