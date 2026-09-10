@@ -55,12 +55,16 @@ pub async fn affected_blocks(
 
 /// Recompute a single block's aggregate end to end.
 ///
-/// `now` is the instant used to evaluate a Rolling block's per-submission
-/// expiry (see `eligibility::rolling_admits`) — a parameter, not an inline
-/// `Utc::now()` call, so a test can recompute the same block twice with an
-/// advanced `now` to simulate a submission aging out between two sweeps
-/// without a real sleep. Live callers (the edit consumer, membership events)
-/// pass `Utc::now()` at their own boundary.
+/// `now` is the instant ages are measured against — a static block's
+/// `[start, end]` window, and a Rolling block's recency decay
+/// (`scoring::recency_weight`). It is a parameter, not an inline `Utc::now()`
+/// call, so a test can recompute the same block twice with an advanced `now`
+/// and watch an old ballot's weight fall without a real sleep. Live callers
+/// (the edit consumer, membership events) pass `Utc::now()` at their own
+/// boundary.
+///
+/// Note what `now` no longer does: it does not remove anything from a Rolling
+/// block. Ballots are never aged out (GEO-2869); they are only weighted down.
 pub async fn recompute_block(
     block_id: Uuid,
     meta: BlockMeta,
@@ -99,7 +103,7 @@ pub async fn recompute_block(
         SpaceKind::Dao => storage.member_and_editor_spaces(block.space_id).await?,
         SpaceKind::Personal => HashSet::new(), // unused under "All of Geo"
     };
-    let eligible = filter_eligible(&block, space_kind, &eligible_member_spaces, deduped, now);
+    let eligible = filter_eligible(&block, space_kind, &eligible_member_spaces, deduped);
 
     // 3. Scoring: normalize each ballot to [0.5, 1] and aggregate per (entity, space).
     let eligible_ids: Vec<Uuid> = eligible.iter().map(|r| r.id).collect();

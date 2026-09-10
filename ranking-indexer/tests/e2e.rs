@@ -659,7 +659,7 @@ async fn cross_edit_block_recovers_datetime_bounds_preferring_new_property_over_
 /// injected `now` values (no real sleep) to simulate what the future sweep
 /// binary will do periodically.
 #[tokio::test]
-async fn rolling_block_drops_a_submission_once_it_ages_past_its_frequency() {
+async fn rolling_block_keeps_scoring_a_submission_long_after_its_frequency() {
     let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
         eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
         return;
@@ -805,15 +805,30 @@ async fn rolling_block_drops_a_submission_once_it_ages_past_its_frequency() {
         "a submission still within its submission_frequency must be scored"
     );
 
-    // --- recompute at now = 2h: aged past the frequency, no new edit --------
+    // --- recompute at now = 2h: past one frequency, and at 40d: past every ---
+    // Neither drops it. `submission_frequency` is a half-life for *weight*, not
+    // a cliff for membership (GEO-2869): an aged ballot's entities sink in the
+    // table, they never leave it. This assertion is the inverse of the one it
+    // replaces, which asserted the pre-GEO-2515 expiry and had been wrong since
+    // #882 changed it in August — it never failed because this whole file skips
+    // without RANKING_INDEXER_E2E_DATABASE_URL and nothing in CI sets it.
     recompute_block(u(BLOCK), BlockMeta::default(), t(2 * 3600), &storage)
         .await
         .unwrap();
     assert_eq!(
         scored_count().await,
-        0,
-        "a submission past its submission_frequency must be dropped purely from \
-         elapsed time, with no new edit required"
+        1,
+        "a submission past one submission_frequency is decayed, not dropped"
+    );
+
+    recompute_block(u(BLOCK), BlockMeta::default(), t(40 * 24 * 3600), &storage)
+        .await
+        .unwrap();
+    assert_eq!(
+        scored_count().await,
+        1,
+        "a submission 40 days past a 1-hour frequency still holds its row; \
+         removing it would delete every entity only it ranked"
     );
 }
 
