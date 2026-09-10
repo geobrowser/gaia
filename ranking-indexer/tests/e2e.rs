@@ -1344,12 +1344,16 @@ async fn recompute_is_idempotent_when_a_prior_value_row_is_orphaned() {
     let pool = storage.pool();
 
     // Distinct scenario ids so this can share a DB with the other e2e tests.
-    const SPACE: u128 = 0xE2E5_0000_4001;
-    const MEMBER: u128 = 0xE2E5_0000_4011;
-    const BLK: u128 = 0xE2E5_0000_4021;
-    const ENT_A: u128 = 0xE2E5_0000_3031;
-    const ENT_B: u128 = 0xE2E5_0000_3032;
-    const RNK: u128 = 0xE2E5_0000_4041;
+    // They were not distinct: this test, `rolling_block_keeps_scoring_...` and
+    // `cross_edit_rank_is_recovered_...` all used 4001/4021/4041 and each opens by
+    // DELETEing that space, so run in parallel they wiped each other. Nobody saw it
+    // because the suite never executed (GEO-2872). Renumbered to 5xxx.
+    const SPACE: u128 = 0xE2E5_0000_5001;
+    const MEMBER: u128 = 0xE2E5_0000_5011;
+    const BLK: u128 = 0xE2E5_0000_5021;
+    const ENT_A: u128 = 0xE2E5_0000_5031;
+    const ENT_B: u128 = 0xE2E5_0000_5032;
+    const RNK: u128 = 0xE2E5_0000_5041;
 
     // --- clean prior runs (idempotent) -------------------------------------
     for sql in [
@@ -1535,15 +1539,15 @@ async fn cross_edit_rank_is_recovered_from_kg_and_scored() {
     let storage = Storage::new(&url).await.expect("connect");
     let pool = storage.pool();
 
-    const BLOCK_SPACE: u128 = 0xE2E5_0000_4001;
-    const MEMBER_SPACE: u128 = 0xE2E5_0000_4011; // the rank's own (personal) space
-    const BLOCK: u128 = 0xE2E5_0000_4021;
-    const RANK: u128 = 0xE2E5_0000_4041;
-    const TYPE_REL: u128 = 0xE2E5_0000_4042;
-    const BLOCK_REL: u128 = 0xE2E5_0000_4043;
-    const RANK_TYPE_VAL: u128 = 0xE2E5_0000_4044;
-    const ENT_A: u128 = 0xE2E5_0000_4051;
-    const ENT_B: u128 = 0xE2E5_0000_4052;
+    const BLOCK_SPACE: u128 = 0xE2E5_0000_6001;
+    const MEMBER_SPACE: u128 = 0xE2E5_0000_6011; // the rank's own (personal) space
+    const BLOCK: u128 = 0xE2E5_0000_6021;
+    const RANK: u128 = 0xE2E5_0000_6041;
+    const TYPE_REL: u128 = 0xE2E5_0000_6042;
+    const BLOCK_REL: u128 = 0xE2E5_0000_6043;
+    const RANK_TYPE_VAL: u128 = 0xE2E5_0000_6044;
+    const ENT_A: u128 = 0xE2E5_0000_6051;
+    const ENT_B: u128 = 0xE2E5_0000_6052;
 
     let su = |s: &str| Uuid::parse_str(s).unwrap();
 
