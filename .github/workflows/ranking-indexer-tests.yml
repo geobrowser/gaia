@@ -1,0 +1,119 @@
+# ranking-indexer had no test job at all until GEO-2872 — only a deploy workflow.
+# Its unit tests therefore never ran on a change, and its e2e suite never ran
+# anywhere: every test in it returns early without RANKING_INDEXER_E2E_DATABASE_URL,
+# which nothing set, and the harness reports that as "passed". A test asserting
+# behaviour #882 falsified in August sat green for a month as a result.
+#
+# So this job does two things: run the unit tests on every change, and stand up a
+# real Postgres so the e2e suite actually executes. The suite itself now panics
+# when the URL is missing while CI is set, so a future misconfiguration here
+# fails loudly instead of going quiet again.
+name: Ranking Indexer Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, dev, staging]
+    paths:
+      - 'ranking-indexer/**'
+      - 'api/drizzle/**'
+      - '.github/workflows/ranking-indexer-tests.yml'
+  pull_request:
+    branches: [main, dev, staging]
+    paths:
+      - 'ranking-indexer/**'
+      - 'api/drizzle/**'
+      - '.github/workflows/ranking-indexer-tests.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tests:
+    name: Unit + e2e
+    runs-on: ubuntu-latest
+
+    # The e2e tests need the public schema *and* the private `ranks` schema, which
+    # is why they take their own connection string rather than a generic one.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: ranking_indexer_test
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@67ef31d5b988238dd797d409d6f9574278e20537 # master
+        with:
+          toolchain: "1.92.0"
+          components: clippy, rustfmt
+
+      # rdkafka builds from source (cmake-build feature), so the C toolchain has
+      # to be present even though these tests never talk to Kafka.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            protobuf-compiler \
+            cmake \
+            libclang-dev \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: Cache cargo registry
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      # The schema these tests run against is the API's, so it is built from the
+      # same drizzle migrations rather than a copy that could drift.
+      - name: Apply database schema
+        working-directory: ./api
+        run: |
+          bun install
+          bun drizzle-kit migrate
+        env:
+          DATABASE_URL: "postgresql://test:test@localhost:5432/ranking_indexer_test"
+
+      - name: Verify the ranks schema exists
+        run: |
+          psql "postgresql://test:test@localhost:5432/ranking_indexer_test" \
+            -c "SELECT to_regclass('ranks.ranking_blocks') IS NOT NULL AS ok" \
+            -t -A | grep -qx t
+        env:
+          PGPASSWORD: test
+
+      - name: Check formatting
+        run: cargo fmt -p ranking-indexer --check
+
+      - name: Run clippy
+        run: cargo clippy -p ranking-indexer --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test -p ranking-indexer --all-targets
+        env:
+          RUST_BACKTRACE: 1
+          RANKING_INDEXER_E2E_DATABASE_URL: "postgresql://test:test@localhost:5432/ranking_indexer_test"

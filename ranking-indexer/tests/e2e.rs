@@ -3,9 +3,15 @@
 //! Runs real edits through `detect -> apply_detected_edit` (upsert -> dedup ->
 //! eligibility -> scoring -> publish) against a live Postgres and asserts the
 //! public `RANK_POSITION` projection. Requires a DB with the public schema + the
-//! private `ranks` schema. Opt-in: set `RANKING_INDEXER_E2E_DATABASE_URL` to the
-//! connection string. Skips (passes) if unset, so it never runs on a generic
-//! CI `DATABASE_URL` that lacks the `ranks` schema.
+//! private `ranks` schema. Set `RANKING_INDEXER_E2E_DATABASE_URL` to the
+//! connection string — deliberately its own variable, so these never run against
+//! a generic `DATABASE_URL` that lacks the `ranks` schema.
+//!
+//! Locally, an unset variable skips. **In CI it is a hard failure** (see
+//! `e2e_database_url`). Skipping used to be silent everywhere, and the harness
+//! reports a `return` as *passed*: this file printed "8 passed" having run
+//! nothing, for as long as it has existed. One of these tests asserted
+//! behaviour that #882 falsified in August and never failed once. GEO-2872.
 
 use chrono::{DateTime, TimeZone, Utc};
 use grc_20::model::builder::EditBuilder;
@@ -19,6 +25,31 @@ use ranking_indexer::membership::{apply_membership_event, MembershipEvent};
 use ranking_indexer::models::BlockMeta;
 use ranking_indexer::recompute::{apply_detected_edit, recompute_block};
 use ranking_indexer::storage::Storage;
+
+/// The e2e database URL, or `None` to skip.
+///
+/// Unset locally means skip — these need a Postgres with the `ranks` schema and
+/// not every checkout has one. Unset **in CI** is a configuration error and
+/// panics, because a skip here is indistinguishable from a pass and that is
+/// exactly how this suite went a month reporting green while running nothing
+/// (GEO-2872).
+fn e2e_database_url() -> Option<String> {
+    match std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") {
+        Ok(url) => Some(url),
+        Err(_) if std::env::var("CI").is_ok() => panic!(
+            "RANKING_INDEXER_E2E_DATABASE_URL is unset in CI. These tests would skip and \
+             report as passed, which is worse than not running them at all. Provision the \
+             database in the workflow, or delete the job — do not let it go quiet."
+        ),
+        Err(_) => {
+            eprintln!(
+                "skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set (set it to a \
+                 Postgres with the public + ranks schemas to run these)"
+            );
+            None
+        }
+    }
+}
 
 fn gid(n: u128) -> [u8; 16] {
     *Uuid::from_u128(n).as_bytes()
@@ -44,8 +75,7 @@ const RANK3: u128 = 0xE2E5_0000_0043;
 
 #[tokio::test]
 async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
-    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
-        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+    let Some(url) = e2e_database_url() else {
         return;
     };
     let storage = Storage::new(&url).await.expect("connect");
@@ -289,8 +319,7 @@ async fn end_to_end_dao_block_filters_nonmembers_and_publishes() {
 /// graph and score it once a rank links to it.
 #[tokio::test]
 async fn cross_edit_block_is_recovered_from_kg_and_scored() {
-    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
-        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+    let Some(url) = e2e_database_url() else {
         return;
     };
     let storage = Storage::new(&url).await.expect("connect");
@@ -471,8 +500,7 @@ async fn cross_edit_block_is_recovered_from_kg_and_scored() {
 /// only the legacy property (must still fall back correctly).
 #[tokio::test]
 async fn cross_edit_block_recovers_datetime_bounds_preferring_new_property_over_legacy() {
-    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
-        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+    let Some(url) = e2e_database_url() else {
         return;
     };
     let storage = Storage::new(&url).await.expect("connect");
@@ -660,8 +688,7 @@ async fn cross_edit_block_recovers_datetime_bounds_preferring_new_property_over_
 /// binary will do periodically.
 #[tokio::test]
 async fn rolling_block_keeps_scoring_a_submission_long_after_its_frequency() {
-    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
-        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+    let Some(url) = e2e_database_url() else {
         return;
     };
     let storage = Storage::new(&url).await.expect("connect");
@@ -842,8 +869,7 @@ async fn rolling_block_keeps_scoring_a_submission_long_after_its_frequency() {
 /// recompute instead of crash-looping.
 #[tokio::test]
 async fn prefix_null_from_space_projection_self_heals_on_recompute() {
-    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
-        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+    let Some(url) = e2e_database_url() else {
         return;
     };
     let storage = Storage::new(&url).await.expect("connect");
@@ -1060,8 +1086,7 @@ const M_RANK2: u128 = 0xE2E6_0000_0042;
 /// member (or editor), and dropped again when the role is revoked.
 #[tokio::test]
 async fn membership_events_integrate_and_drop_rankings() {
-    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
-        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+    let Some(url) = e2e_database_url() else {
         return;
     };
     let storage = Storage::new(&url).await.expect("connect");
@@ -1312,8 +1337,7 @@ async fn membership_events_integrate_and_drop_rankings() {
 /// orphaned value row must converge instead of erroring.
 #[tokio::test]
 async fn recompute_is_idempotent_when_a_prior_value_row_is_orphaned() {
-    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
-        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+    let Some(url) = e2e_database_url() else {
         return;
     };
     let storage = Storage::new(&url).await.expect("connect");
@@ -1505,8 +1529,7 @@ async fn recompute_is_idempotent_when_a_prior_value_row_is_orphaned() {
 /// `bin/backfill_blocks.rs` runs on a schedule.
 #[tokio::test]
 async fn cross_edit_rank_is_recovered_from_kg_and_scored() {
-    let Ok(url) = std::env::var("RANKING_INDEXER_E2E_DATABASE_URL") else {
-        eprintln!("skipping e2e: RANKING_INDEXER_E2E_DATABASE_URL not set");
+    let Some(url) = e2e_database_url() else {
         return;
     };
     let storage = Storage::new(&url).await.expect("connect");
