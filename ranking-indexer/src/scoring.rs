@@ -26,16 +26,22 @@ pub const NORM_LO: f64 = 0.5;
 /// Default normalization ceiling: the top of a ballot.
 pub const NORM_HI: f64 = 1.0;
 
-/// How many half-lives a Rolling ballot keeps contributing before it is dropped
-/// outright (see `eligibility::rolling_admits`).
+/// Most rows a block publishes. Everything below the cut is scored and stored;
+/// only the projection is trimmed.
 ///
-/// Decay alone never reaches zero, so without a cutoff every entity ever ranked
-/// would stay in the projection forever carrying a vanishing score, and the
-/// published table would grow without bound. At eight half-lives a ballot is
-/// down to 1/256 of its original weight — far below the resolution of the
-/// integer 0–100 projection — so dropping it there is invisible in the output
-/// while keeping the table bounded.
-pub const ROLLING_MAX_HALF_LIVES: f64 = 8.0;
+/// This replaces the age cutoff that used to bound the table (GEO-2869). That
+/// cutoff dropped whole *ballots*, so an entity nothing recent had ranked left
+/// the table entirely rather than sinking in it — a change of row set dressed
+/// up as a change of order. Bounding by row count bounds the same thing without
+/// that side effect: an old entity falls off only when enough better-scoring
+/// ones arrive to push it past the cut, which is what a "trending" table should
+/// do.
+///
+/// 200 is deliberately far above anything live. Measured across all 27 rolling
+/// blocks on 2026-09-10, the largest table with no age cutoff at all would hold
+/// **43** rows, so this bites nothing today and exists to keep a runaway block
+/// bounded rather than to shape normal output.
+pub const MAX_PROJECTION_ROWS: usize = 200;
 
 /// Recency decay for a Rolling block: ballots lose half their weight every
 /// `half_life_hours`.
@@ -167,6 +173,10 @@ fn normalize_ordinal(items: &[RankingItem], lo: f64, hi: f64) -> Vec<((Uuid, Uui
 /// `decay` is `Some` only for Rolling blocks, where each ballot's contribution is
 /// scaled by its recency (see [`recency_weight`]). Static blocks pass `None` and
 /// are scored exactly as before — every eligible ballot at full weight.
+///
+/// Every entity on every eligible ballot gets a row, however old the ballot: a
+/// decayed ballot sinks its entities toward the bottom, it does not delete
+/// them. The result is capped at [`MAX_PROJECTION_ROWS`].
 pub fn aggregate(
     ballots: &[(&Ranking, Vec<RankingItem>)],
     lo: f64,
@@ -194,6 +204,7 @@ pub fn aggregate(
     });
 
     rows.into_iter()
+        .take(MAX_PROJECTION_ROWS)
         .enumerate()
         .map(|(i, ((entity_id, space_id), score))| ScoreRow {
             entity_id,
@@ -437,5 +448,58 @@ mod tests {
         );
         assert_eq!(rows.len(), 1);
         assert!(rows[0].score > 0.0);
+    }
+
+    #[test]
+    fn an_old_ballot_keeps_its_entities_in_the_table() {
+        // The GEO-2869 regression, as a test. Two ballots with no entity in
+        // common, one far older than the eight half-lives that used to expire
+        // it outright. Both sets must appear — the old ones simply sort last.
+        let hour = 3600;
+        let now = at(400 * 24 * hour);
+        let fresh = ranking_submitted(1, "ORDINAL", at(400 * 24 * hour - hour));
+        let ancient = ranking_submitted(2, "ORDINAL", at(0)); // ~400 half-lives
+
+        let ballots = vec![
+            (
+                &fresh,
+                vec![item(10, Some("a0"), None), item(11, Some("a1"), None)],
+            ),
+            (
+                &ancient,
+                vec![item(20, Some("a0"), None), item(21, Some("a1"), None)],
+            ),
+        ];
+        let rows = aggregate(
+            &ballots,
+            NORM_LO,
+            NORM_HI,
+            Some(RecencyDecay {
+                half_life_hours: 24.0,
+                now,
+            }),
+        );
+
+        let ids: Vec<Uuid> = rows.iter().map(|r| r.entity_id).collect();
+        assert_eq!(rows.len(), 4, "every ranked entity keeps a row");
+        for e in [10u128, 11, 20, 21] {
+            assert!(ids.contains(&Uuid::from_u128(e)), "entity {e} missing");
+        }
+        // Ordering still reflects recency: the fresh ballot's entities lead.
+        assert_eq!(ids[0], Uuid::from_u128(10));
+        assert_eq!(ids[1], Uuid::from_u128(11));
+    }
+
+    #[test]
+    fn the_projection_is_capped_by_row_count() {
+        let r = ranking(1, "WEIGHTED");
+        let items: Vec<RankingItem> = (0..(MAX_PROJECTION_ROWS + 25))
+            .map(|i| item(1_000 + i as u128, None, Some(1.0 - (i as f64) / 1_000.0)))
+            .collect();
+        let rows = aggregate(&[(&r, items)], NORM_LO, NORM_HI, None);
+        assert_eq!(rows.len(), MAX_PROJECTION_ROWS);
+        // Positions stay contiguous from 1 after the cut.
+        assert_eq!(rows.first().unwrap().position, 1);
+        assert_eq!(rows.last().unwrap().position, MAX_PROJECTION_ROWS as i32);
     }
 }
