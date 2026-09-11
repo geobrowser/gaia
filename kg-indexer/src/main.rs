@@ -1009,7 +1009,7 @@ async fn process_message(
     use models::relations::RelationOp;
     use models::values::ValueChangeType;
 
-    let mut tx = storage.pool.begin().await?;
+    let mut tx = storage.begin_with_timeout().await?;
     sqlx::query("SET CONSTRAINTS ALL DEFERRED")
         .execute(&mut *tx)
         .await?;
@@ -1356,7 +1356,7 @@ async fn process_block(
         });
     }
 
-    let mut tx = storage.pool.begin().await?;
+    let mut tx = storage.begin_with_timeout().await?;
     sqlx::query("SET CONSTRAINTS ALL DEFERRED")
         .execute(&mut *tx)
         .await?;
