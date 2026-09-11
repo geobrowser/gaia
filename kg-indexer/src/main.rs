@@ -973,6 +973,26 @@ async fn process_buffered_block(
                     "Batch failed"
                 );
             }
+
+            // The batch is one transaction, so a failure here rolled back every
+            // event in the block — governance rows included, not just the edit
+            // that actually failed. The consumer does not revisit the block, so
+            // this is permanent loss that needs a manual replay. A transient
+            // cause (statement timeout, dropped connection) means the data was
+            // valid and would have landed on a retry; say so explicitly rather
+            // than leaving an operator to infer it from a SQLSTATE.
+            if e.is_transient() {
+                error!(
+                    event = "kg_indexer.block_dropped",
+                    block_number = block_number,
+                    error = %e,
+                    event_count = event_len,
+                    counts_by_event_type = ?counts_by_event_type,
+                    "Block dropped after a TRANSIENT failure — events are permanently \
+                     missing and require manual replay"
+                );
+            }
+
             Some((0, event_len as u64))
         }
     }

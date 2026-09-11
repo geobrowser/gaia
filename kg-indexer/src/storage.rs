@@ -23,10 +23,46 @@ pub struct Storage {
     pub pool: sqlx::Pool<Postgres>,
 }
 
+/// Per-connection `statement_timeout` for the indexer pool, in milliseconds.
+///
+/// A block is written in ONE transaction (see `process_block`), so this budget
+/// has to cover the largest single edit we are willing to index, not a typical
+/// one. Ordinary blocks run 2–2,000 db ops; a large edit can run 50k–150k ops.
+/// When the server default killed such a statement, the rollback took the
+/// block's `PROPOSAL_VOTED` / `PROPOSAL_EXECUTED` rows with it and the batch
+/// was skipped — a proposal that had executed on-chain then showed as pending
+/// forever. Set generously; it is a backstop against a runaway query, not a
+/// throughput knob.
+const PG_STATEMENT_TIMEOUT_MS_DEFAULT: u64 = 300_000;
+
+fn statement_timeout_ms() -> u64 {
+    std::env::var("PG_STATEMENT_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(PG_STATEMENT_TIMEOUT_MS_DEFAULT)
+}
+
 impl Storage {
     pub async fn new(database_url: &str) -> Result<Self, IndexerError> {
+        let timeout_ms = statement_timeout_ms();
+        info!(
+            statement_timeout_ms = timeout_ms,
+            "Initialising indexer pool"
+        );
+
         let pool = PgPoolOptions::new()
             .max_connections(20)
+            .after_connect(move |conn, _meta| {
+                Box::pin(async move {
+                    // Applies to every pooled connection, including ones opened
+                    // later — a one-shot SET on startup would not cover those.
+                    sqlx::query(&format!("SET statement_timeout = {timeout_ms}"))
+                        .execute(conn)
+                        .await?;
+                    Ok(())
+                })
+            })
             .connect(database_url)
             .await?;
 
