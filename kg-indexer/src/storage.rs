@@ -55,8 +55,9 @@ impl Storage {
             .max_connections(20)
             .after_connect(move |conn, _meta| {
                 Box::pin(async move {
-                    // Applies to every pooled connection, including ones opened
-                    // later — a one-shot SET on startup would not cover those.
+                    // Best-effort: covers any statement run outside one of the
+                    // transactions opened by `begin_with_timeout`. It is NOT
+                    // sufficient on its own — see that method for why.
                     sqlx::query(&format!("SET statement_timeout = {timeout_ms}"))
                         .execute(conn)
                         .await?;
@@ -67,6 +68,34 @@ impl Storage {
             .await?;
 
         Ok(Storage { pool })
+    }
+
+    /// Begin a transaction with the indexer's statement-timeout budget applied
+    /// as `SET LOCAL`.
+    ///
+    /// This connects through **PgBouncer**, and a session-level
+    /// `SET statement_timeout` does not reliably survive to the next
+    /// transaction: in transaction pooling the server backend is returned to
+    /// the pool between transactions, so the setting applies to whichever
+    /// backend happened to serve the `SET` and not necessarily to the one that
+    /// runs the next statement. Measured against this database, a pool
+    /// configured for 300s still had its statements cancelled at the 30s
+    /// server default. (The pooler also rejects `options=-c statement_timeout`
+    /// as an unsupported startup parameter, so that route is closed too.)
+    ///
+    /// `SET LOCAL` is scoped to the enclosing transaction, so it always lands
+    /// on the backend that executes the work. Use this for every write path.
+    pub async fn begin_with_timeout(
+        &self,
+    ) -> Result<sqlx::Transaction<'_, Postgres>, IndexerError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(&format!(
+            "SET LOCAL statement_timeout = {}",
+            statement_timeout_ms()
+        ))
+        .execute(&mut *tx)
+        .await?;
+        Ok(tx)
     }
 
     pub async fn insert_entities(
@@ -1488,7 +1517,7 @@ impl Storage {
         // 1. Grab and lock a batch of queued proposals
         // 2. Update their vote counts
         // 3. Remove them from the queue
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.begin_with_timeout().await?;
 
         // Grab a batch of proposal IDs from the queue with FOR UPDATE SKIP LOCKED
         // This allows multiple workers to process concurrently without conflicts

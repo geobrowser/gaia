@@ -164,7 +164,7 @@ async fn main() -> Result<(), IndexerError> {
 
     // 4. Replicate kg-indexer's real process_message(KgMessage::Edit) path
     //    exactly (see main.rs), in one transaction.
-    let mut tx = storage.pool.begin().await?;
+    let mut tx = storage.begin_with_timeout().await?;
     sqlx::query("SET CONSTRAINTS ALL DEFERRED")
         .execute(&mut *tx)
         .await?;
