@@ -4,12 +4,14 @@
  * Instead of using computed functions (which run queries per entity),
  * this uses EXISTS subqueries with indexed lookups.
  *
- * Space filtering:
- *   Before (slow - O(n) function calls):
- *     WHERE entities_space_ids(e) @> array['space-uuid']
- *   After (fast - O(1) indexed EXISTS):
- *     WHERE EXISTS (SELECT 1 FROM values WHERE entity_id = e.id AND space_id = 'space-uuid' LIMIT 1)
- *        OR EXISTS (SELECT 1 FROM relations WHERE from_entity_id = e.id AND space_id = 'space-uuid' LIMIT 1)
+ * Space filtering (positive position) uses a semi-join:
+ *     WHERE e.id IN (SELECT v.entity_id   FROM values    v WHERE v.space_id = 'space-uuid'
+ *                    UNION
+ *                    SELECT r.from_entity_id FROM relations r WHERE r.space_id = 'space-uuid')
+ *
+ *   An `EXISTS OR EXISTS` pair cannot be planned as a semi-join, which made a sparse
+ *   space take 22.5 s per request (GEO-2882). Negated space filters keep the EXISTS
+ *   form, which measures faster there. See buildSingleSpaceSemiJoin for the numbers.
  *
  * Type filtering:
  *   Before (slow - O(n) function calls):
@@ -86,6 +88,52 @@ const buildMultiSpaceCondition = (sql: any, tableAlias: any, spaceIds: string[])
 			AND r.space_id = ANY(${sql.value(spaceIds)}::uuid[])
 			LIMIT 1
 		)
+	)`
+}
+
+// Positive-position space filter: a real semi-join.
+//
+// `EXISTS(...) OR EXISTS(...)` cannot be transformed into a semi-join, so Postgres
+// falls back to hashed SubPlans and walks `entities_pkey` row by row until the LIMIT
+// is satisfied. The counter-intuitive part is that the pathological case is the
+// SPARSE space, not the large one: a 9-entity space made the scan cross ~half the
+// table (24.6M rows removed, 39.3M buffers, 22,527 ms) on every debates page load,
+// and `first: 5` timed out just as hard as a big page — it is not result size.
+//
+// `id IN (SELECT ... UNION SELECT ...)` is a real semi-join; the Merge Append streams
+// sorted index-only scans so the LIMIT propagates down. Measured with
+// EXPLAIN (ANALYZE, BUFFERS) against the live testnet DB for GEO-2882:
+//
+//   sparse space   (9 entities)       22,527 ms / 39.3M buffers -> 0.124 ms / 57 buffers
+//   large space    (60,916 entities)     409 ms /  355K buffers -> 0.130 ms / 61 buffers
+//   multi-space ANY(), sparse         22,766 ms                 -> 0.201 ms
+//
+// No regression on large spaces — it is faster there too, because the current plan
+// materialises the whole hashed SubPlan before emitting a first row.
+// `values_space_id_idx` / `relations_space_from_to_idx` already exist.
+//
+// ONLY valid where the condition appears POSITIVELY. Negation measured worse
+// (`NOT (id IN (union))` 506 ms vs 416 ms for `NOT (EXISTS OR EXISTS)` on the large
+// space), so the isNot / notIn / isNull:true paths keep the EXISTS helpers below.
+// `values.entity_id` and `relations.from_entity_id` are both NOT NULL, so there is
+// no NOT IN null trap either way.
+const buildSingleSpaceSemiJoin = (sql: any, tableAlias: any, spaceId: string) => {
+	return sql.fragment`${tableAlias}.id IN (
+		SELECT v.entity_id FROM public.values v
+		WHERE v.space_id = ${sql.value(spaceId)}::uuid
+		UNION
+		SELECT r.from_entity_id FROM public.relations r
+		WHERE r.space_id = ${sql.value(spaceId)}::uuid
+	)`
+}
+
+const buildMultiSpaceSemiJoin = (sql: any, tableAlias: any, spaceIds: string[]) => {
+	return sql.fragment`${tableAlias}.id IN (
+		SELECT v.entity_id FROM public.values v
+		WHERE v.space_id = ANY(${sql.value(spaceIds)}::uuid[])
+		UNION
+		SELECT r.from_entity_id FROM public.relations r
+		WHERE r.space_id = ANY(${sql.value(spaceIds)}::uuid[])
 	)`
 }
 
@@ -213,7 +261,7 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 			if (!spaceId) return {}
 			return {
 				pgQuery: (queryBuilder: any) => {
-					queryBuilder.where(buildSingleSpaceCondition(sql, queryBuilder.getTableAlias(), spaceId))
+					queryBuilder.where(buildSingleSpaceSemiJoin(sql, queryBuilder.getTableAlias(), spaceId))
 				},
 			}
 		})
@@ -227,7 +275,7 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 					const tableAlias = queryBuilder.getTableAlias()
 
 					if (spaceIds.is) {
-						queryBuilder.where(buildSingleSpaceCondition(sql, tableAlias, spaceIds.is))
+						queryBuilder.where(buildSingleSpaceSemiJoin(sql, tableAlias, spaceIds.is))
 					}
 					if (spaceIds.isNot) {
 						queryBuilder.where(
@@ -235,7 +283,7 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 						)
 					}
 					if (spaceIds.in && spaceIds.in.length > 0) {
-						queryBuilder.where(buildMultiSpaceCondition(sql, tableAlias, spaceIds.in))
+						queryBuilder.where(buildMultiSpaceSemiJoin(sql, tableAlias, spaceIds.in))
 					}
 					if (spaceIds.notIn && spaceIds.notIn.length > 0) {
 						queryBuilder.where(
