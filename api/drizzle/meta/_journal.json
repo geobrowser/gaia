@@ -575,6 +575,13 @@
       "when": 1786585435869,
       "tag": "0081_analyze_values_for_lower_text",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1789172914695,
+      "tag": "0082_feed_typed_variant",
+      "breakpoints": true
     }
   ]
 }
