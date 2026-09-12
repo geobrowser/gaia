@@ -29,6 +29,26 @@ const BLOCKED_SPACES: &[uuid::Uuid] = &[
     uuid::uuid!("655d6077-dc49-e1f9-0e85-74dd57c3164e"),
 ];
 
+/// How many times a block is attempted before it is given up on.
+///
+/// Only transient failures consume attempts (see `IndexerError::is_transient`).
+/// Default 3. `KG_BATCH_MAX_ATTEMPTS=1` restores the previous
+/// fail-once behaviour; 0 or an unparseable value falls back to the default
+/// rather than disabling processing.
+fn batch_max_attempts() -> u32 {
+    static ATTEMPTS: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *ATTEMPTS.get_or_init(|| parse_batch_max_attempts(std::env::var("KG_BATCH_MAX_ATTEMPTS").ok()))
+}
+
+/// Split out from `batch_max_attempts` so the parsing rules are testable — the
+/// caller memoises in a `OnceLock`, which a test cannot re-seed.
+fn parse_batch_max_attempts(raw: Option<String>) -> u32 {
+    const DEFAULT_ATTEMPTS: u32 = 3;
+    raw.and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_ATTEMPTS)
+}
+
 /// A buffered event with its Kafka metadata for later commit.
 struct BufferedEvent {
     msg: KgMessage,
@@ -908,9 +928,49 @@ async fn process_buffered_block(
     );
     let start = Instant::now();
 
-    let result = process_block(events, storage, consumer)
-        .instrument(span.clone())
-        .await;
+    // Retry a transient failure rather than losing the block.
+    //
+    // A failed batch never reaches the offset-commit loop below, so nothing marks
+    // it done — but the in-memory buffer has already moved on, and the next
+    // block's commit supersedes it on the partition. That is what made a
+    // statement timeout silently drop every event in the block (GEO-2884). The
+    // transaction rolled back, so a retry re-applies from a clean slate.
+    //
+    // Only transient causes are retried; a payload that cannot decode will not
+    // decode on a second attempt, and retrying it would stall the partition,
+    // which is exactly what committing-on-failure exists to prevent.
+    //
+    // Attempts are deliberately few. `statement_timeout` counts as transient, so
+    // each attempt against a genuinely too-slow statement costs the full budget
+    // (300s by default, see Storage::begin_with_timeout) before it fails — three
+    // attempts is up to 15 minutes of lag on one block. The budget is meant to be
+    // generous enough that hitting it is pathological rather than routine; tune
+    // with KG_BATCH_MAX_ATTEMPTS if that stops being true.
+    let max_attempts = batch_max_attempts();
+    let mut attempt: u32 = 1;
+    let result = loop {
+        let outcome = process_block(&events, storage, consumer)
+            .instrument(span.clone())
+            .await;
+
+        match outcome {
+            Err(ref e) if e.is_transient() && attempt < max_attempts => {
+                let backoff = Duration::from_millis(250u64 << (attempt - 1));
+                warn!(
+                    event = "kg_indexer.batch_retry",
+                    block_number = block_number,
+                    attempt = attempt,
+                    max_attempts = max_attempts,
+                    backoff_ms = backoff.as_millis() as u64,
+                    error = %e,
+                    "Batch failed transiently — retrying before the block is lost"
+                );
+                tokio::time::sleep(backoff).await;
+                attempt += 1;
+            }
+            outcome => break outcome,
+        }
+    };
 
     match result {
         Ok(result) => {
@@ -1340,7 +1400,7 @@ struct ProcessBlockResult {
 }
 
 async fn process_block(
-    events: Vec<BufferedEvent>,
+    events: &[BufferedEvent],
     storage: &Storage,
     consumer: &KafkaConsumer,
 ) -> Result<ProcessBlockResult, IndexerError> {
@@ -1365,7 +1425,7 @@ async fn process_block(
     let mut pending_space_topics: HashMap<uuid::Uuid, Option<uuid::Uuid>> = HashMap::new();
 
     // Process each message in sequence order
-    for event in &events {
+    for event in events {
         let event_id = event.event_id.as_deref().unwrap_or("");
 
         // Create event-specific span with only the fields each event type needs
@@ -1954,6 +2014,25 @@ async fn process_block(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn batch_attempts_defaults_when_unset_or_unusable() {
+        // Unset, unparseable, and zero all fall back rather than disabling
+        // processing — a bad env value must not stop the indexer.
+        assert_eq!(parse_batch_max_attempts(None), 3);
+        assert_eq!(parse_batch_max_attempts(Some("banana".into())), 3);
+        assert_eq!(parse_batch_max_attempts(Some("0".into())), 3);
+        assert_eq!(parse_batch_max_attempts(Some("-1".into())), 3);
+        assert_eq!(parse_batch_max_attempts(Some("".into())), 3);
+    }
+
+    #[test]
+    fn batch_attempts_honours_an_explicit_value() {
+        assert_eq!(parse_batch_max_attempts(Some("1".into())), 1); // opt back out of retrying
+        assert_eq!(parse_batch_max_attempts(Some("5".into())), 5);
+        assert_eq!(parse_batch_max_attempts(Some(" 2 ".into())), 2); // tolerate stray whitespace
+    }
+
     use super::*;
     use crate::consumer::KgMessage;
     use crate::models::spaces::{SpaceItem, SpaceType};
