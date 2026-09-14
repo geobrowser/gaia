@@ -1399,7 +1399,7 @@ describe("OpenSearchClient", () => {
 		}
 
 		function termsFor(clauses: Array<{terms?: Record<string, string[]>}>, field: string) {
-			const hit = clauses.find(c => c.terms && Object.keys(c.terms)[0] === field)
+			const hit = clauses.find((c) => c.terms && Object.keys(c.terms)[0] === field)
 			return hit?.terms?.[field]
 		}
 
@@ -1436,8 +1436,9 @@ describe("OpenSearchClient", () => {
 		})
 
 		it("a type filter and a tag filter do not produce the same clause", () => {
-			expect(JSON.stringify(client.buildTypeFilter([TARGET])))
-				.not.toBe(JSON.stringify(client.buildTagFilter([TARGET])))
+			expect(JSON.stringify(client.buildTypeFilter([TARGET]))).not.toBe(
+				JSON.stringify(client.buildTagFilter([TARGET])),
+			)
 		})
 
 		it("returns null for empty or absent ids", () => {
