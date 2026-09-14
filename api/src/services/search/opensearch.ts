@@ -660,6 +660,7 @@ export class OpenSearchClient implements SearchClient {
 				excludeTypeIds,
 				includeNonCanonical,
 				additionalSpaceIds,
+				query.tag_ids,
 			)
 		}
 
@@ -674,6 +675,7 @@ export class OpenSearchClient implements SearchClient {
 				excludeTypeIds,
 				includeNonCanonical,
 				additionalSpaceIds,
+				query.tag_ids,
 			)
 		}
 
@@ -690,6 +692,7 @@ export class OpenSearchClient implements SearchClient {
 					excludeTypeIds,
 					includeNonCanonical,
 					additionalSpaceIds,
+					query.tag_ids,
 				)
 
 			case "GLOBAL_BY_SPACE_SCORE":
@@ -700,6 +703,7 @@ export class OpenSearchClient implements SearchClient {
 					excludeTypeIds,
 					includeNonCanonical,
 					additionalSpaceIds,
+					query.tag_ids,
 				)
 
 			case "GLOBAL_BY_ENTITY_SPACE_SCORE":
@@ -710,6 +714,7 @@ export class OpenSearchClient implements SearchClient {
 					excludeTypeIds,
 					includeNonCanonical,
 					additionalSpaceIds,
+					query.tag_ids,
 				)
 
 			case "SPACE_SINGLE": {
@@ -723,6 +728,7 @@ export class OpenSearchClient implements SearchClient {
 					includeDeleted,
 					excludeTypeIds,
 					includeNonCanonical,
+					query.tag_ids,
 				)
 			}
 
@@ -740,6 +746,7 @@ export class OpenSearchClient implements SearchClient {
 						true,
 						excludeTypeIds,
 						includeNonCanonical,
+						query.tag_ids,
 					)
 				}
 				const {subspaces, isRoot} = await this.fetchSubspaces(query.space_id)
@@ -751,6 +758,7 @@ export class OpenSearchClient implements SearchClient {
 					isRoot,
 					excludeTypeIds,
 					includeNonCanonical,
+					query.tag_ids,
 				)
 			}
 
@@ -762,6 +770,7 @@ export class OpenSearchClient implements SearchClient {
 					excludeTypeIds,
 					includeNonCanonical,
 					additionalSpaceIds,
+					query.tag_ids,
 				)
 		}
 	}
@@ -783,6 +792,7 @@ export class OpenSearchClient implements SearchClient {
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
 		additionalSpaceIds?: string[],
+		tagIds?: string[],
 	): Promise<object> {
 		// Match both dashed and dashless forms (index may contain either during migration)
 		const baseUuidQuery = {
@@ -790,6 +800,7 @@ export class OpenSearchClient implements SearchClient {
 		}
 
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const tagFilter = this.buildTagFilter(tagIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
@@ -802,6 +813,7 @@ export class OpenSearchClient implements SearchClient {
 		// evaluation in OpenSearch.
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (tagFilter) filters.push(tagFilter)
 		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -859,8 +871,10 @@ export class OpenSearchClient implements SearchClient {
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
 		additionalSpaceIds?: string[],
+		tagIds?: string[],
 	): Promise<object> {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const tagFilter = this.buildTagFilter(tagIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
@@ -873,6 +887,7 @@ export class OpenSearchClient implements SearchClient {
 		// evaluation in OpenSearch.
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (tagFilter) filters.push(tagFilter)
 		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1237,8 +1252,10 @@ export class OpenSearchClient implements SearchClient {
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
 		additionalSpaceIds?: string[],
+		tagIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const tagFilter = this.buildTagFilter(tagIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
@@ -1251,6 +1268,7 @@ export class OpenSearchClient implements SearchClient {
 		// evaluation in OpenSearch.
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (tagFilter) filters.push(tagFilter)
 		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1284,8 +1302,10 @@ export class OpenSearchClient implements SearchClient {
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
 		additionalSpaceIds?: string[],
+		tagIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const tagFilter = this.buildTagFilter(tagIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
@@ -1298,6 +1318,7 @@ export class OpenSearchClient implements SearchClient {
 		// evaluation in OpenSearch.
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (tagFilter) filters.push(tagFilter)
 		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1331,8 +1352,10 @@ export class OpenSearchClient implements SearchClient {
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
 		additionalSpaceIds?: string[],
+		tagIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const tagFilter = this.buildTagFilter(tagIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(additionalSpaceIds)
 		const filters: object[] = []
@@ -1345,6 +1368,7 @@ export class OpenSearchClient implements SearchClient {
 		// evaluation in OpenSearch.
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (tagFilter) filters.push(tagFilter)
 		if (additionalSpacesFilter && includeNonCanonical) filters.push(additionalSpacesFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
@@ -1377,14 +1401,17 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
+		tagIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const tagFilter = this.buildTagFilter(tagIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		const filters: object[] = [{terms: {space_id: uuidTermVariants(spaceId)}}]
 		const mustNot: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (tagFilter) filters.push(tagFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {
@@ -1418,8 +1445,10 @@ export class OpenSearchClient implements SearchClient {
 		isRoot: boolean = false,
 		excludeTypeIds?: string[],
 		includeNonCanonical: boolean = false,
+		tagIds?: string[],
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const tagFilter = this.buildTagFilter(tagIds)
 		const typeExclusionFilter = this.buildTypeExclusionFilter(excludeTypeIds)
 		// Root-space membership already collapses to the canonical filter, which
 		// the `!includeNonCanonical` push below already applies — don't force it
@@ -1431,6 +1460,7 @@ export class OpenSearchClient implements SearchClient {
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (!includeNonCanonical) filters.push(this.buildCanonicalFilter())
 		if (typeFilter) filters.push(typeFilter)
+		if (tagFilter) filters.push(tagFilter)
 		if (typeExclusionFilter) mustNot.push(typeExclusionFilter)
 
 		return {

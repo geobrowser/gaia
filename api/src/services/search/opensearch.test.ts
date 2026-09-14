@@ -1454,4 +1454,83 @@ describe("OpenSearchClient", () => {
 			expect(rel).toContain(TAGS_REL.replace(/-/g, ""))
 		})
 	})
+
+	// -----------------------------------------------------------------------
+	// Positional-argument regression. `tagIds` is the LAST parameter of every
+	// builder, but the builders do not share a parameter list —
+	// buildSingleSpaceQuery and buildMultiSpaceQuery have no additionalSpaceIds,
+	// so tagIds sits one position earlier there. Both are `string[] | undefined`,
+	// so passing tags into the wrong slot typechecks cleanly and silently drops
+	// the filter. These assert the tag clause actually reaches the query, per
+	// scope, which is the only way to catch it.
+	// -----------------------------------------------------------------------
+	describe("tag_ids reaches the query in every scope", () => {
+		const TAGS_REL = "25709034-1ba5-406f-94e4-d4af90042fba"
+		const TAG = "abcd1234-abcd-1234-abcd-1234abcd0009"
+
+		async function tagClausePresent(q: Record<string, unknown>) {
+			const body = await client.buildSearchBody(q as never)
+			const s = JSON.stringify(body)
+			return s.includes(TAGS_REL) && s.includes(TAG)
+		}
+
+		it("GLOBAL", async () => {
+			expect(await tagClausePresent({query: "x", scope: "GLOBAL", tag_ids: [TAG]})).toBe(true)
+		})
+
+		it("SPACE_SINGLE — the signature with no additionalSpaceIds", async () => {
+			expect(
+				await tagClausePresent({
+					query: "x",
+					scope: "SPACE_SINGLE",
+					space_id: "abcd1234-abcd-1234-abcd-1234abcd0001",
+					tag_ids: [TAG],
+				}),
+			).toBe(true)
+		})
+
+		// SPACE routes through buildMultiSpaceQuery, which needs a subspace fetch to reach
+		// via buildSearchBody. Call it directly with the exact positional argument list
+		// buildSearchBody passes — that IS the thing at risk, since tagIds sits one slot
+		// earlier here than in the builders that take additionalSpaceIds.
+		it("SPACE — buildMultiSpaceQuery takes tagIds in its own last slot", () => {
+			const body = client.buildMultiSpaceQuery(
+				{match_all: {}},
+				["abcd1234-abcd-1234-abcd-1234abcd0002"],
+				undefined,
+				false,
+				false,
+				undefined,
+				false,
+				[TAG],
+			)
+			const s = JSON.stringify(body)
+			expect(s).toContain(TAGS_REL)
+			expect(s).toContain(TAG)
+		})
+
+		it("SPACE_SINGLE — buildSingleSpaceQuery takes tagIds in its own last slot", () => {
+			const body = client.buildSingleSpaceQuery(
+				{match_all: {}},
+				"abcd1234-abcd-1234-abcd-1234abcd0002",
+				undefined,
+				false,
+				undefined,
+				false,
+				[TAG],
+			)
+			const s = JSON.stringify(body)
+			expect(s).toContain(TAGS_REL)
+			expect(s).toContain(TAG)
+		})
+
+		it("empty-query path (top ranked) still carries the tag filter", async () => {
+			expect(await tagClausePresent({query: "   ", scope: "GLOBAL", tag_ids: [TAG]})).toBe(true)
+		})
+
+		it("no tag_ids means no tag clause", async () => {
+			const body = await client.buildSearchBody({query: "x", scope: "GLOBAL"} as never)
+			expect(JSON.stringify(body)).not.toContain(TAGS_REL)
+		})
+	})
 })
