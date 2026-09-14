@@ -23,7 +23,9 @@ use crate::orchestrator::{
 use crate::relation_map::RelationMap;
 use crate::topology::persistence;
 use crate::topology::CanonicalGraphState;
-use sdk::core::ids::{AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID};
+use sdk::core::ids::{
+    AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TAGS_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID,
+};
 use search_indexer_shared::EntityDocument;
 use uuid::Uuid;
 
@@ -201,10 +203,18 @@ impl Processor {
         }
     }
 
-    /// Check if a relation type is one we index (type, avatar, or cover).
+    /// Check if a relation type is one we index (type, avatar, cover, or tags).
+    ///
+    /// Anything absent here is absent from the `relations` field entirely, so a filter
+    /// over it returns nothing for every entity however the query is written — which is
+    /// what blocked a tag filter (GEO-2876). Widening this only affects documents written
+    /// afterwards; existing ones gain the relation from a reindex, never from new writes.
     fn is_indexed_relation(&self, relation_type: &Uuid) -> bool {
         let rt = relation_type.to_string();
-        rt == TYPE_RELATION_TYPE_ID || rt == AVATAR_RELATION_TYPE_ID || rt == COVER_RELATION_TYPE_ID
+        rt == TYPE_RELATION_TYPE_ID
+            || rt == AVATAR_RELATION_TYPE_ID
+            || rt == COVER_RELATION_TYPE_ID
+            || rt == TAGS_RELATION_TYPE_ID
     }
 
     /// Returns true for approximately 1-in-N events of the given category
@@ -1537,7 +1547,9 @@ impl Processor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sdk::core::ids::{AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID};
+    use sdk::core::ids::{
+    AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TAGS_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID,
+};
     use uuid::Uuid;
 
     #[test]

@@ -256,6 +256,9 @@ function truncateToTokens(query: string, maxTokens: number): string {
 
 // System IDs from the SDK are already dashless — use directly for OpenSearch queries
 const TYPE_RELATION_TYPE_ID = SystemIds.TYPES_PROPERTY as string
+// Five entities in the graph are named "Tags"; this is the one used as a relation type
+// (15,911 relations against 3, 0, 0 and 0 for the others).
+const TAGS_RELATION_TYPE_ID = "25709034-1ba5-406f-94e4-d4af90042fba"
 const AVATAR_RELATION_TYPE_ID = ContentIds.AVATAR_PROPERTY as string
 const COVER_RELATION_TYPE_ID = SystemIds.COVER_PROPERTY as string
 
@@ -1502,6 +1505,12 @@ export class OpenSearchClient implements SearchClient {
 	/**
 	 * Build a type filter for filtering by type relation IDs.
 	 * Returns null if no typeIds are provided.
+	 *
+	 * Constrained to `relation_type`, which it did not used to be. Matching
+	 * `to_entity_id` alone was only ever correct by accident of what the index held —
+	 * type, avatar and cover, whose targets a caller would never pass as a type id. Now
+	 * that tags are indexed too (GEO-2876) an entity tagged with X would match
+	 * `type_ids=[X]`, so the clause has to say which relation it means.
 	 */
 	buildTypeFilter(typeIds?: string[]): object | null {
 		if (!typeIds || typeIds.length === 0) {
@@ -1511,12 +1520,44 @@ export class OpenSearchClient implements SearchClient {
 		// Include both dashed and dashless forms (index may contain either during migration)
 		const allVariants = typeIds.flatMap((id) => uuidTermVariants(id))
 
+		return this.buildRelationFilter(TYPE_RELATION_TYPE_ID, allVariants)
+	}
+
+	/**
+	 * Build a tag filter for filtering by tag relation targets (GEO-2876).
+	 *
+	 * Returns nothing for any document written before the tags allowlist change and the
+	 * reindex that follows it — the relation is simply not in those documents.
+	 */
+	buildTagFilter(tagIds?: string[]): object | null {
+		if (!tagIds || tagIds.length === 0) {
+			return null
+		}
+
+		const allVariants = tagIds.flatMap((id) => uuidTermVariants(id))
+
+		return this.buildRelationFilter(TAGS_RELATION_TYPE_ID, allVariants)
+	}
+
+	/**
+	 * One nested clause over `relations`, matching a specific relation type and target set.
+	 *
+	 * Both halves must sit inside the SAME nested query: `relations` is a nested field, so
+	 * two separate nested clauses would each be satisfied by a DIFFERENT element of the
+	 * array — an entity typed X and separately tagged Y would match
+	 * `relation_type = tags AND to_entity_id = X`, which is exactly the bug this shape
+	 * exists to prevent.
+	 */
+	private buildRelationFilter(relationTypeId: string, targetVariants: string[]): object {
 		return {
 			nested: {
 				path: "relations",
 				query: {
-					terms: {
-						"relations.to_entity_id": allVariants,
+					bool: {
+						filter: [
+							{terms: {"relations.relation_type": uuidTermVariants(relationTypeId)}},
+							{terms: {"relations.to_entity_id": targetVariants}},
+						],
 					},
 				},
 			},
@@ -1534,15 +1575,10 @@ export class OpenSearchClient implements SearchClient {
 
 		const allVariants = excludeTypeIds.flatMap((id) => uuidTermVariants(id))
 
+		// Same `relation_type` constraint as buildTypeFilter, and for the same reason —
+		// an unconstrained exclusion would drop entities merely TAGGED with the id.
 		return {
-			nested: {
-				path: "relations",
-				query: {
-					terms: {
-						"relations.to_entity_id": allVariants,
-					},
-				},
-			},
+			...this.buildRelationFilter(TYPE_RELATION_TYPE_ID, allVariants),
 		}
 	}
 
