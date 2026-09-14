@@ -203,3 +203,73 @@ describe("canonicalRequestLogging — span status", () => {
 		expect(spanSetStatus).not.toHaveBeenCalled()
 	})
 })
+
+// Load shedding is not a fault. `shouldShedPoolTraffic` answers 503 with Retry-After
+// when the database pool is saturated, which is the system protecting itself — it is
+// already counted as `graphql.pool_shed` and logged once per episode.
+//
+// Reporting each one at ERROR routes to Sentry.captureMessage and creates an issue
+// event per request. One shedding episode produced 210,732 of them in 30 days, 84% of
+// the org's error volume, which exhausted the plan quota and left Sentry dropping
+// everything with `error_usage_exceeded` from 2026-09-11. These assert the level,
+// because the level is the whole fix.
+describe("canonicalRequestLogging — load shedding vs genuine 5xx", () => {
+	beforeEach(() => {
+		vi.clearAllMocks()
+	})
+
+	it("503 WITH Retry-After is a shed: warn, never error", async () => {
+		const app = setupApp(() => new Response("shed", {status: 503, headers: {"Retry-After": "2"}}))
+
+		const res = await app.request("/test")
+
+		expect(res.status).toBe(503)
+		expect(log.warn).toHaveBeenCalledWith(
+			"GET /test shed under pool pressure",
+			expect.objectContaining({status: 503}),
+		)
+		// The load-bearing assertion: error creates a Sentry issue, warn does not.
+		expect(log.error).not.toHaveBeenCalled()
+	})
+
+	it("503 WITHOUT Retry-After is a genuine fault: still error", async () => {
+		// What the health probes raise when the database is actually gone.
+		const app = setupApp(() => new Response("db down", {status: 503}))
+
+		const res = await app.request("/test")
+
+		expect(res.status).toBe(503)
+		expect(log.error).toHaveBeenCalledWith("GET /test returned 503", expect.objectContaining({status: 503}))
+		expect(log.warn).not.toHaveBeenCalled()
+	})
+
+	it("500 is unaffected even if something set Retry-After", async () => {
+		// Retry-After only downgrades a 503. A 500 is a fault whatever headers ride along.
+		const app = setupApp(() => new Response("boom", {status: 500, headers: {"Retry-After": "2"}}))
+
+		await app.request("/test")
+
+		expect(log.error).toHaveBeenCalledWith("GET /test returned 500", expect.objectContaining({status: 500}))
+		expect(log.warn).not.toHaveBeenCalled()
+	})
+
+	it("502 and 504 still error", async () => {
+		for (const status of [502, 504]) {
+			vi.clearAllMocks()
+			const app = setupApp(() => new Response("upstream", {status}))
+			await app.request("/test")
+			expect(log.error).toHaveBeenCalledWith(`GET /test returned ${status}`, expect.objectContaining({status}))
+		}
+	})
+
+	it("a shed still logs, so it stays visible as a breadcrumb", async () => {
+		const app = setupApp(() => new Response("shed", {status: 503, headers: {"Retry-After": "2"}}))
+
+		await app.request("/test")
+
+		// Downgraded, not silenced — warn is a Sentry breadcrumb, so a shed still
+		// shows up as context on whatever error follows it.
+		expect(log.warn).toHaveBeenCalledTimes(1)
+		expect(log.info).not.toHaveBeenCalledWith("GET /test completed", expect.anything())
+	})
+})
