@@ -20,6 +20,8 @@ import {extractClientIp} from "../utils/clientIp"
  * `499` convention. The client is already gone, so the status is purely
  * for our own metrics/logs (it never reaches a wire).
  */
+/** Deliberate load shedding answers 503 with Retry-After; see the END log below. */
+const SERVICE_UNAVAILABLE_STATUS = 503
 const CLIENT_CLOSED_REQUEST_STATUS = 499
 
 /**
@@ -170,8 +172,29 @@ export function canonicalRequestLogging() {
 					durationMs: duration,
 					...(graphqlOperationName ? {graphqlOperationName} : {}),
 				}
-				if (status >= 500) {
+				// A 503 carrying `Retry-After` is deliberate load shedding, not a fault:
+				// `shouldShedPoolTraffic` refusing a request under database pool pressure,
+				// with the client told when to come back. It is already counted as the
+				// `graphql.pool_shed` metric and logged once per episode by
+				// `emitShedSignal`, so reporting each one as an ERROR adds no signal.
+				//
+				// It costs a great deal, though. ERROR routes to `Sentry.captureMessage`
+				// and creates one issue event per request (see services/telemetry.ts).
+				// A single shedding episode produced **210,732** of them in 30 days — 84%
+				// of the organisation's error volume — which exhausted the plan quota and
+				// left Sentry dropping EVERYTHING org-wide with `error_usage_exceeded`
+				// from 2026-09-11. The load shedder worked; reporting it is what blinded us.
+				//
+				// WARN still emits a breadcrumb, so a shed remains visible as context on
+				// whatever error follows it, and the log line is unchanged. Genuine 5xx —
+				// 500, 502, 504, and a 503 without Retry-After such as the health probes
+				// raise when the database is gone — keep creating issues.
+				const isLoadShed = status === SERVICE_UNAVAILABLE_STATUS && c.res.headers.has("Retry-After")
+
+				if (status >= 500 && !isLoadShed) {
 					log.error(`${method} ${path} returned ${status}`, endLogFields)
+				} else if (isLoadShed) {
+					log.warn(`${method} ${path} shed under pool pressure`, endLogFields)
 				} else {
 					log.info(`${method} ${path} completed`, endLogFields)
 				}
