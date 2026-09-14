@@ -112,6 +112,7 @@ const VALID_PARAMS: Set<string> = new Set([
 	"additional_space_ids",
 	"type_ids",
 	"exclude_type_ids",
+	"tag_ids",
 	"limit",
 	"offset",
 	"include_deleted",
@@ -209,6 +210,14 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					name: "type_ids",
 					in: "query",
 					description: "Comma-separated list of type UUIDs to filter by (max 10)",
+					required: false,
+					schema: {type: "string"},
+				},
+				{
+					name: "tag_ids",
+					in: "query",
+					description:
+						"Comma-separated list of tag UUIDs to filter by (max 10). Results carry at least one of them.",
 					required: false,
 					schema: {type: "string"},
 				},
@@ -371,6 +380,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 				const additionalSpaceIdsParam = c.req.query("additional_space_ids")
 				const typeIdsParam = c.req.query("type_ids")
 				const excludeTypeIdsParam = c.req.query("exclude_type_ids")
+				const tagIdsParam = c.req.query("tag_ids")
 				const limitParam = c.req.query("limit")
 				const offsetParam = c.req.query("offset")
 				const includeDeletedParam = c.req.query("include_deleted")
@@ -536,6 +546,36 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					}
 				}
 
+				// Parse and validate tagIds. Same shape and limit as type_ids — a tag filter is
+				// the same nested clause over `relations`, just naming the Tags relation.
+				let tagIds: string[] | undefined
+				if (tagIdsParam) {
+					tagIds = tagIdsParam
+						.split(",")
+						.map((id) => id.trim())
+						.filter((id) => id.length > 0)
+
+					if (tagIds.length > MAX_TYPE_IDS) {
+						return yield* Effect.fail(
+							new SearchValidationError({
+								message: `tag_ids must not contain more than ${MAX_TYPE_IDS} IDs`,
+								status: 400,
+							}),
+						)
+					}
+
+					for (const tagId of tagIds) {
+						if (!isValidUuid(tagId)) {
+							return yield* Effect.fail(
+								new SearchValidationError({
+									message: `tag_ids must contain valid UUIDs, got invalid ID: ${tagId}`,
+									status: 400,
+								}),
+							)
+						}
+					}
+				}
+
 				// Parse and validate excludeTypeIds
 				// - undefined (param not provided): use default exclusions
 				// - empty string (param provided with no value): no exclusions
@@ -630,6 +670,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					...(spaceId && {space_id: spaceId}),
 					...(additionalSpaceIds && {additional_space_ids: additionalSpaceIds}),
 					...(typeIds && {type_ids: typeIds}),
+					...(tagIds && {tag_ids: tagIds}),
 					...(excludeTypeIds && excludeTypeIds.length > 0 && {exclude_type_ids: excludeTypeIds}),
 					...(includeDeleted && {include_deleted: true}),
 					...(!includeNonCanonical && {include_non_canonical: false}),

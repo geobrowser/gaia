@@ -32,6 +32,10 @@ export interface SearchQuery {
 	space_id?: string
 	/** Set of type IDs to filter results by. Results must have at least one of the specified type IDs. */
 	type_ids?: string[]
+	/** Set of tag IDs to filter results by. Results must carry at least one of the specified tags.
+	 * Requires the Tags relation to be indexed (GEO-2876) — documents written before that
+	 * change carry no tags until they are backfilled. */
+	tag_ids?: string[]
 	/** Set of type IDs to exclude from results. Entities with any of these types will be filtered out. */
 	exclude_type_ids?: string[]
 	/**
