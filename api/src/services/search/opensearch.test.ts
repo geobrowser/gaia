@@ -1377,4 +1377,80 @@ describe("OpenSearchClient", () => {
 			expect(JSON.stringify(with_)).toBe(JSON.stringify(without))
 		})
 	})
+
+	// -----------------------------------------------------------------------
+	// GEO-2876. These are STRUCTURAL on purpose. The type_ids suite above is
+	// string-containment (`expect(queryStr).toContain(...)`), which is why every
+	// one of its assertions stayed green while the query shape changed underneath
+	// it — a containment check cannot see a missing predicate.
+	// -----------------------------------------------------------------------
+	describe("relation filters name the relation they mean", () => {
+		const TYPE_REL = "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+		const TAGS_REL = "25709034-1ba5-406f-94e4-d4af90042fba"
+		const TARGET = "abcd1234-abcd-1234-abcd-1234abcd0001"
+
+		// Reach into the single nested clause a relation filter is required to be.
+		function nestedBool(filter: object | null) {
+			const nested = (filter as {nested?: {path?: string; query?: {bool?: {filter?: object[]}}}})?.nested
+			expect(nested?.path).toBe("relations")
+			const clauses = nested?.query?.bool?.filter
+			expect(Array.isArray(clauses)).toBe(true)
+			return clauses as Array<{terms?: Record<string, string[]>}>
+		}
+
+		function termsFor(clauses: Array<{terms?: Record<string, string[]>}>, field: string) {
+			const hit = clauses.find(c => c.terms && Object.keys(c.terms)[0] === field)
+			return hit?.terms?.[field]
+		}
+
+		it("constrains type_ids to the TYPE relation, not merely to a target id", () => {
+			const clauses = nestedBool(client.buildTypeFilter([TARGET]))
+			expect(termsFor(clauses, "relations.relation_type")).toContain(TYPE_REL)
+			expect(termsFor(clauses, "relations.to_entity_id")).toContain(TARGET)
+		})
+
+		it("constrains tag_ids to the TAGS relation", () => {
+			const clauses = nestedBool(client.buildTagFilter([TARGET]))
+			expect(termsFor(clauses, "relations.relation_type")).toContain(TAGS_REL)
+			expect(termsFor(clauses, "relations.to_entity_id")).toContain(TARGET)
+		})
+
+		it("constrains exclude_type_ids too — an unconstrained exclusion drops merely-tagged entities", () => {
+			const clauses = nestedBool(client.buildTypeExclusionFilter([TARGET]))
+			expect(termsFor(clauses, "relations.relation_type")).toContain(TYPE_REL)
+		})
+
+		// The load-bearing one. `relations` is a nested field, so two SEPARATE nested
+		// clauses are each satisfied by a different element of the array: an entity typed
+		// X and separately tagged Y would satisfy "relation_type = tags" from one element
+		// and "to_entity_id = X" from another, and match a tag filter it has no tag for.
+		// Both predicates must sit inside ONE nested query.
+		it("puts relation_type and to_entity_id inside the SAME nested clause", () => {
+			for (const f of [client.buildTypeFilter([TARGET]), client.buildTagFilter([TARGET])]) {
+				const clauses = nestedBool(f)
+				expect(termsFor(clauses, "relations.relation_type")).toBeDefined()
+				expect(termsFor(clauses, "relations.to_entity_id")).toBeDefined()
+				// exactly one nested wrapper, not two side by side
+				expect(JSON.stringify(f).match(/"nested"/g)?.length).toBe(1)
+			}
+		})
+
+		it("a type filter and a tag filter do not produce the same clause", () => {
+			expect(JSON.stringify(client.buildTypeFilter([TARGET])))
+				.not.toBe(JSON.stringify(client.buildTagFilter([TARGET])))
+		})
+
+		it("returns null for empty or absent ids", () => {
+			expect(client.buildTagFilter(undefined)).toBeNull()
+			expect(client.buildTagFilter([])).toBeNull()
+			expect(client.buildTypeFilter([])).toBeNull()
+		})
+
+		it("matches both dashed and dashless forms of the relation type", () => {
+			const clauses = nestedBool(client.buildTagFilter([TARGET]))
+			const rel = termsFor(clauses, "relations.relation_type") ?? []
+			expect(rel).toContain(TAGS_REL)
+			expect(rel).toContain(TAGS_REL.replace(/-/g, ""))
+		})
+	})
 })

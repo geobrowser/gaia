@@ -22,6 +22,12 @@ pub const AVATAR_RELATION_TYPE_ID: &str = "1155beff-fad5-49b7-a2e0-da4777b8792c"
 /// The `to_entity` is an image entity whose `IMAGE_URL_PROPERTY_ID` value contains the actual URL.
 pub const COVER_RELATION_TYPE_ID: &str = "34f53507-2e6b-42c5-a844-43981a77cfa2";
 
+/// The relation type ID for tag relations.
+/// When a relation has this type ID, it indicates that the `from_entity` is tagged with
+/// `to_entity`. Indexed for search so results can be filtered by tag (GEO-2876); there are
+/// five entities named "Tags" in the graph and only this one is used as a relation type.
+pub const TAGS_RELATION_TYPE_ID: &str = "25709034-1ba5-406f-94e4-d4af90042fba";
+
 // System namespace — derived from Uuid::NAMESPACE_URL + "geo:system"
 pub const GEO_SYSTEM_NAMESPACE: &str = "ae1e004d-b125-57d8-b3bf-e85a2484f129";
 
