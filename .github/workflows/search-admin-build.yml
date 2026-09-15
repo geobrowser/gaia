@@ -3,6 +3,7 @@ name: Build Search Admin CLI
 on:
   push:
     branches:
+      - staging
       - main
       - dev
     paths:
@@ -35,10 +36,16 @@ jobs:
         id: tag
         run: |
           BRANCH="${{ github.ref_name }}"
-          if [ "$BRANCH" = "main" ]; then
+          # `staging` is the branch this repo actually ships from, so it gets its
+          # own tag. `dev` used to take the `staging` tag and is effectively dead
+          # (it sits behind main); leaving it pointed at `dev-legacy` keeps an old
+          # dispatch from silently overwriting the tag the live jobs consume.
+          if [ "$BRANCH" = "staging" ]; then
+            echo "env_tag=staging" >> "$GITHUB_OUTPUT"
+          elif [ "$BRANCH" = "main" ]; then
             echo "env_tag=latest" >> "$GITHUB_OUTPUT"
           elif [ "$BRANCH" = "dev" ]; then
-            echo "env_tag=staging" >> "$GITHUB_OUTPUT"
+            echo "env_tag=dev-legacy" >> "$GITHUB_OUTPUT"
           else
             # Sanitize branch name for Docker tag (replace / with -)
             SAFE_TAG=$(echo "$BRANCH" | sed 's|/|-|g')

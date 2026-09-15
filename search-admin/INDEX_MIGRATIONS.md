@@ -59,11 +59,43 @@ This guide walks through migrating from one index version to another using Kuber
 
 Before running any jobs, decide which environment you're migrating:
 
-| Environment | Directory | Namespace | Index Prefix |
-|-------------|-----------|-----------|--------------|
-| Production | `k8s/production/jobs/` | `search` | (none) |
-| Staging | `k8s/staging/jobs/` | `search-staging` | `staging_` |
-| Testnet (gaia-v2) | `k8s/v2/jobs/` | `gaia-v2` | `testnet_` |
+| Environment | Directory | Namespace | Index Prefix | Status |
+|-------------|-----------|-----------|--------------|--------|
+| Testnet | `k8s/v2/jobs/` | `gaia` | `testnet_` | **the live stack — use this one** |
+| Production | `k8s/production/jobs/` | `search` | (none) | old stack; namespace does not exist on either current cluster |
+| Staging | `k8s/staging/jobs/` | `search-staging` | `staging_` | old stack; namespace does not exist on either current cluster |
+
+> **⚠️ Checked 2026-09-15.** Neither `do-nyc2-geo-testnet-k8s` nor
+> `do-nyc2-k8s-geo-mainnet` has a `search` or `search-staging` namespace, so the
+> production and staging job directories cannot be run as written. The testnet
+> jobs run in namespace **`gaia`**, not `gaia-v2` as this table previously said.
+> There is consequently **no staging environment to rehearse a migration in** —
+> see *Rehearsing safely* below.
+
+> **⚠️ Check the image before you migrate.** These jobs used to pin
+> `search-admin:latest`, which is built **only from `main`** — a branch this repo
+> does not ship from and which was 125 commits behind `staging` in Sep 2026. A
+> migration run against a stale image rebuilds the index from the *old* settings,
+> swaps the alias to it, and prints five successful steps. They now pin
+> `:staging`; for a migration that matters, pin the commit-sha tag instead and
+> verify the built image carries your change first.
+
+### Rehearsing safely
+
+With no staging environment, rehearse against a throwaway version in the live
+cluster instead. This touches no alias and stops no indexer:
+
+1. `create-index --version 99` — builds a scratch index with the current settings.
+2. Query `GET <index>/_settings?filter_path=**.analysis` and `POST <index>/_analyze`
+   from inside the cluster to confirm the mapping is what you expect. Run this in
+   a pod so the OpenSearch credential never leaves it.
+3. `reindex --source-version <live> --target-version 99 --max-docs 50000` — gives a
+   real docs/sec figure to extrapolate the outage window from. Measured
+   2026-09-15: 50,000 docs in ~11s wall clock including pod scheduling, i.e.
+   roughly 6-8k docs/sec, so 2.4M documents is about 5-7 minutes.
+4. `delete-index --version 99 --confirm --yes`.
+
+Only then run the real migration.
 
 ```bash
 # For production

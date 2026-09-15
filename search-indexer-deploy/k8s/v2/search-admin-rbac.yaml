@@ -1,0 +1,60 @@
+# ServiceAccount and RBAC for the search-admin full-migration job.
+#
+# `full-migration-job.yaml` sets `serviceAccountName: search-admin`, but nothing
+# in this repo ever created that ServiceAccount — so on the testnet cluster the
+# job could not run at all. Found while shipping GEO-2904 (the `gaia` namespace
+# had no `search-admin` ServiceAccount).
+#
+# The migration needs Kubernetes access for exactly two things: scaling the
+# search-indexer StatefulSet to zero before the reindex, and scaling it back up
+# afterwards with an updated ENTITIES_INDEX_VERSION. Those are the only verbs
+# granted here. Every other search-admin job (create-index, reindex,
+# update-alias, delete-index, list-indices) talks only to OpenSearch and needs
+# no ServiceAccount.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: search-admin
+  namespace: gaia
+  labels:
+    app: opensearch-admin
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: search-admin-indexer-scaler
+  namespace: gaia
+  labels:
+    app: opensearch-admin
+rules:
+  # Read the StatefulSet to find current replicas and env, patch it to scale
+  # down/up and to set ENTITIES_INDEX_VERSION.
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    resourceNames: ["search-indexer"]
+    verbs: ["get", "patch", "update"]
+  # `list`/`watch` cannot be restricted by resourceName; needed to wait for pods
+  # to terminate and come back.
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: search-admin-indexer-scaler
+  namespace: gaia
+  labels:
+    app: opensearch-admin
+subjects:
+  - kind: ServiceAccount
+    name: search-admin
+    namespace: gaia
+roleRef:
+  kind: Role
+  name: search-admin-indexer-scaler
+  apiGroup: rbac.authorization.k8s.io
