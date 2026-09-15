@@ -172,11 +172,21 @@ export function canonicalRequestLogging() {
 					durationMs: duration,
 					...(graphqlOperationName ? {graphqlOperationName} : {}),
 				}
-				// A 503 carrying `Retry-After` is deliberate load shedding, not a fault:
-				// `shouldShedPoolTraffic` refusing a request under database pool pressure,
-				// with the client told when to come back. It is already counted as the
+				// A 503 carrying `Retry-After` is deliberate shedding, not a fault, and the
+				// client has been told when to come back. It is already counted as the
 				// `graphql.pool_shed` metric and logged once per episode by
 				// `emitShedSignal`, so reporting each one as an ERROR adds no signal.
+				//
+				// TWO different mechanisms answer this way, and the message must not pick
+				// one. `shouldShedPoolTraffic` sheds under *database pool* pressure;
+				// `useAdmissionControl` rejects when too many *expensive* operations are
+				// already executing, which is a limit on the JS event loop and pod memory
+				// rather than on connections. In 90 minutes of production logs measured
+				// 2026-09-15, 108 sheds were ALL admission control (`inFlight: 10,
+				// limit: 10`) and pool pressure did not fire once — utilisation peaked at
+				// 30% against its 90% threshold. This line used to say "shed under pool
+				// pressure" for all of them, which sends whoever reads it to look at
+				// Postgres, where nothing is wrong. Name the mechanism or name neither.
 				//
 				// It costs a great deal, though. ERROR routes to `Sentry.captureMessage`
 				// and creates one issue event per request (see services/telemetry.ts).
@@ -194,7 +204,7 @@ export function canonicalRequestLogging() {
 				if (status >= 500 && !isLoadShed) {
 					log.error(`${method} ${path} returned ${status}`, endLogFields)
 				} else if (isLoadShed) {
-					log.warn(`${method} ${path} shed under pool pressure`, endLogFields)
+					log.warn(`${method} ${path} shed (503 + Retry-After)`, endLogFields)
 				} else {
 					log.info(`${method} ${path} completed`, endLogFields)
 				}

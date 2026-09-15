@@ -1,4 +1,7 @@
-import {afterEach, describe, expect, it} from "vitest"
+import {parse, print} from "graphql"
+import {afterEach, describe, expect, it, vi} from "vitest"
+import {graphqlQueryFingerprint} from "../../services/queryFingerprint"
+import {log} from "../../services/telemetry"
 import {
 	ADMISSION_COST_FLOOR,
 	getInFlightExpensiveCount,
@@ -137,5 +140,57 @@ describe("useAdmissionControl", () => {
 		const p = plugin()
 		expect(() => p.onResponse({request: new Request("https://example.test/none")})).not.toThrow()
 		expect(getInFlightExpensiveCount()).toBe(0)
+	})
+})
+
+/**
+ * GEO-2881. A rejection used to log `operationName: "anonymous", cost: 214` and nothing
+ * else, which is not enough to act on: most callers send unnamed documents, and a rejected
+ * operation never reaches useCostLogger's high-cost warning, so it appears nowhere else.
+ * 106 of 131 rejections in a production hour were unidentifiable.
+ */
+describe("useAdmissionControl rejection is identifiable", () => {
+	function saturate(onExecute: ExecuteHook) {
+		for (let i = 0; i < MAX_CONCURRENT_EXPENSIVE; i++) execute(onExecute, ADMISSION_COST_FLOOR)
+	}
+
+	it("logs a fingerprint matching the one the cost and slow-query logs use", () => {
+		const warn = vi.spyOn(log, "warn").mockImplementation(() => {})
+		try {
+			const onExecute = hook()
+			saturate(onExecute)
+
+			const document = parse("query { entities { id } }")
+			expect(() =>
+				onExecute({args: {contextValue: ctx(ADMISSION_COST_FLOOR), operationName: null, document}}),
+			).toThrow()
+
+			const rejection = warn.mock.calls.find(([message]) => String(message).includes("rejected an operation"))
+			expect(rejection).toBeDefined()
+			const fields = rejection?.[1] as {queryFingerprint?: string | null}
+			// Correlatable with the `gql:` ids in the cost and instrumentation logs — the
+			// whole point is being able to join a rejection to those records.
+			// Derived from the printer rather than a hardcoded string: pinning graphql-js's
+			// exact whitespace here would make this fail on a library upgrade for no reason.
+			expect(fields.queryFingerprint).toBe(graphqlQueryFingerprint(print(document)))
+			expect(fields.queryFingerprint).toMatch(/^gql:[0-9a-f]{8}$/)
+		} finally {
+			warn.mockRestore()
+		}
+	})
+
+	it("degrades to null rather than throwing when there is no document", () => {
+		const warn = vi.spyOn(log, "warn").mockImplementation(() => {})
+		try {
+			const onExecute = hook()
+			saturate(onExecute)
+			// A plugin that threw while refusing a request would turn a clean 503 into a 500,
+			// so the fingerprint is never allowed to be the thing that fails.
+			expect(() => execute(onExecute, ADMISSION_COST_FLOOR)).toThrow(/at capacity for expensive queries/)
+			const rejection = warn.mock.calls.find(([message]) => String(message).includes("rejected an operation"))
+			expect((rejection?.[1] as {queryFingerprint?: string | null}).queryFingerprint).toBeNull()
+		} finally {
+			warn.mockRestore()
+		}
 	})
 })

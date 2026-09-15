@@ -1,5 +1,6 @@
-import {GraphQLError} from "graphql"
+import {GraphQLError, print} from "graphql"
 import type {Plugin} from "graphql-yoga"
+import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 import {GRAPHQL_QUERY_COST_CONTEXT_KEY, type GraphqlCostContext} from "./costLoggerPlugin"
 
@@ -130,6 +131,23 @@ function operationLabel(args: {operationName?: string | null}): string {
 	return args.operationName ?? "anonymous"
 }
 
+/**
+ * Fingerprint of the rejected document, matching the `gql:` ids useCostLogger and
+ * useGraphQLInstrumentation already log, so a rejection can be correlated with the
+ * slow-query and high-cost records for the same query.
+ *
+ * Never throws: this runs inside the rejection path, and a plugin that fails while
+ * refusing a request would turn a clean 503 into a 500.
+ */
+function safeFingerprint(args: {document?: unknown}): string | null {
+	try {
+		if (!args.document) return null
+		return graphqlQueryFingerprint(print(args.document as Parameters<typeof print>[0]))
+	} catch {
+		return null
+	}
+}
+
 export function useAdmissionControl(): Plugin {
 	return {
 		onExecute({args}) {
@@ -147,8 +165,20 @@ export function useAdmissionControl(): Plugin {
 			pruneStale(nowMs)
 
 			if (inFlight.size >= MAX_CONCURRENT_EXPENSIVE) {
+				// Identify WHICH operation was refused. Without this a rejection reads
+				// `operationName: "anonymous", cost: 214` and there is no way to tell what
+				// the query was: most callers send unnamed documents, the record carried no
+				// query text, and a rejected operation never reaches useCostLogger's
+				// high-cost warning, so it appears nowhere else either. The GEO-2881
+				// investigation stalled exactly there — 106 of 131 rejections in an hour
+				// were unidentifiable.
+				//
+				// `print` is affordable *here* because this branch only runs when we are
+				// already refusing the request. Doing it on the admitted path would pay the
+				// cost on every expensive query to serve the rare rejection.
 				log.warn("GraphQL admission control rejected an operation", {
 					operationName: operationLabel(args),
+					queryFingerprint: safeFingerprint(args),
 					cost,
 					inFlight: inFlight.size,
 					limit: MAX_CONCURRENT_EXPENSIVE,
