@@ -225,9 +225,15 @@ describe("canonicalRequestLogging — load shedding vs genuine 5xx", () => {
 
 		expect(res.status).toBe(503)
 		expect(log.warn).toHaveBeenCalledWith(
-			"GET /test shed under pool pressure",
+			"GET /test shed (503 + Retry-After)",
 			expect.objectContaining({status: 503}),
 		)
+		// The message must not name a mechanism. Two different ones answer this way —
+		// database pool shedding and admission control — and this branch cannot tell
+		// them apart, because all it sees is the status and the header. Naming pool
+		// pressure here sent a GEO-2881 investigation to look at Postgres while every
+		// one of the 108 sheds in that window was admission control.
+		expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("pool pressure"), expect.anything())
 		// The load-bearing assertion: error creates a Sentry issue, warn does not.
 		expect(log.error).not.toHaveBeenCalled()
 	})
