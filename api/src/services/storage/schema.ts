@@ -977,15 +977,17 @@ export const userVotes = pgTable(
 		}).notNull(),
 	},
 	(table) => ({
-		// Named explicitly: the generated name would exceed Postgres' 63-byte
-		// identifier limit and be silently truncated.
-		uniqueConstraint: unique("user_votes_user_object_type_space_kind_unique").on(
-			table.userId,
-			table.objectId,
-			table.objectType,
-			table.spaceId,
-			table.voteKind,
-		),
+		// PRIMARY KEY, not just UNIQUE. PostGraphile makes an ordering unique by
+		// appending the PRIMARY KEY columns, and refuses before/after cursors on
+		// any ordering it cannot prove unique — it does not use a bare unique
+		// constraint for this. While this was only a UNIQUE constraint,
+		// `userVotesConnection` issued an endCursor and then 500'd when that same
+		// cursor came back as `after`, so every page after the first failed
+		// (GEO-2916). 0086 promotes the pre-existing unique index in place.
+		pk: primaryKey({
+			name: "user_votes_pkey",
+			columns: [table.userId, table.objectId, table.objectType, table.spaceId, table.voteKind],
+		}),
 		objectIdx: index("idx_user_votes_object").on(table.objectId, table.objectType, table.spaceId),
 	}),
 )
