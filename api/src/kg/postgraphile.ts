@@ -25,6 +25,7 @@ import {useCostLogger} from "./costLoggerPlugin"
 import EntityComputedTextFilterPlugin from "./entityComputedTextFilterPlugin"
 import EntityOrderByRankingScorePlugin from "./entityOrderByRankingScorePlugin"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
+import {createErrorEpisodeTracker} from "./errorEpisodeTracker"
 import {shouldUnmaskError} from "./errorMasking"
 import HideProceduresPlugin from "./hideProceduresPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
@@ -95,6 +96,23 @@ export function getGraphqlPoolPressure() {
 // we emit an onset log on the first shed of each new episode and skip the
 // rest (avoiding log storms under load).
 const shedEpisodeTracker = createShedEpisodeTracker()
+
+// Pool lifecycle handlers fire once per PHYSICAL CONNECTION, not per request, and
+// behind PgBouncer connections churn constantly. `log.error` creates one Sentry issue
+// event each, so a single ongoing condition produced 28,096 and 13,244 events in 14
+// days — together with the shed 503s #930 fixed, ~88% of this service's error volume,
+// which exhausted the org's quota (GEO-2845). Onset still logs at ERROR so alerting is
+// unchanged; the repeats are counted instead of reported.
+const poolEpisodes = createErrorEpisodeTracker()
+
+/** Fields describing how many occurrences a single log line is standing in for. */
+function episodeFields(episode: {suppressed: number; total: number; isOnset: boolean}) {
+	return {
+		occurrencesInEpisode: episode.total,
+		suppressedSinceLastLog: episode.suppressed,
+		episodePhase: episode.isOnset ? "onset" : "ongoing",
+	}
+}
 
 function emitShedSignal(args: {
 	poolPressure: SaturationSnapshot
@@ -175,9 +193,22 @@ function toUserInputGraphQLError(error: GraphQLError, pgError: {message: string}
 const PG_STATEMENT_TIMEOUT_MS = parseInt(process.env.PG_STATEMENT_TIMEOUT_MS || "30000", 10)
 pgPool.on("connect", (client) => {
 	client.query(`SET statement_timeout = ${PG_STATEMENT_TIMEOUT_MS}`).catch((err) => {
+		// Keyed on the failure class, not the message: a message carrying a host, port or
+		// connection id would make every occurrence its own "episode" and defeat the point.
+		const failureClass = classifyDbFailure(err)
+		// Counted on EVERY occurrence, before the suppression check. Losing the true rate
+		// would trade a quota problem for a blindness problem — the same mistake in a new
+		// place. `emitShedSignal` splits metric-from-log the same way.
+		Sentry.metrics.count("graphql.pool.statement_timeout_failed", 1, {
+			attributes: {failureClass},
+		})
+		const episode = poolEpisodes.record(`statement_timeout:${failureClass}`)
+		if (!episode.shouldLog) return
 		log.error("Failed to apply statement_timeout to new pool connection", {
 			error: String(err),
+			failureClass,
 			statementTimeoutMs: PG_STATEMENT_TIMEOUT_MS,
+			...episodeFields(episode),
 		})
 	})
 })
@@ -186,10 +217,16 @@ pgPool.on("connect", (client) => {
 // network blips) become unhandled events. The pool doesn't remove the dead connection,
 // so subsequent connect() calls can check out a stale client that fails during query execution.
 pgPool.on("error", (err) => {
+	const failureClass = classifyDbFailure(err)
+	// Every occurrence counted, only the onset logged — see the statement_timeout handler.
+	Sentry.metrics.count("graphql.pool.background_error", 1, {attributes: {failureClass}})
+	const episode = poolEpisodes.record(`pool_error:${failureClass}`)
+	if (!episode.shouldLog) return
 	log.error("PostGraphile pool error", {
 		error: String(err),
-		failureClass: classifyDbFailure(err),
+		failureClass,
 		poolStats: getGraphqlPoolStats(),
+		...episodeFields(episode),
 	})
 })
 
