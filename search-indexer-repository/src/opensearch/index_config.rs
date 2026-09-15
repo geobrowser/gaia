@@ -73,7 +73,57 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
     json!({
         "settings": {
             "number_of_shards": 1,
-            "number_of_replicas": 1
+            "number_of_replicas": 1,
+            "analysis": {
+                "char_filter": {
+                    // Folds the Unicode apostrophe variants onto ASCII U+0027 so that a
+                    // query typed with one spelling reaches text written with another.
+                    //
+                    // The standard tokenizer keeps an apostrophe inside the token it
+                    // appears in (UAX #29 treats it as MidLetter), so "man\u{2019}s" and
+                    // "man's" index as two entirely unrelated terms. The corpus is mixed —
+                    // editors paste from sources that smart-quote and from sources that do
+                    // not — so without this fold, whether a search works is decided by
+                    // which apostrophe the author happened to use. Measured on testnet
+                    // 2026-09-15: `man's` scored 0.00 against a claim containing
+                    // "man\u{2019}s", while the same query with U+2019 scored 401. See
+                    // GEO-2904.
+                    "apostrophe_fold": {
+                        "type": "mapping",
+                        "mappings": [
+                            "\u{2019} => \u{0027}",
+                            "\u{2018} => \u{0027}",
+                            "\u{02BC} => \u{0027}",
+                            "\u{FF07} => \u{0027}"
+                        ]
+                    }
+                },
+                "analyzer": {
+                    // The default `standard` analyzer (tokenize + lowercase) with the
+                    // apostrophe fold applied before tokenization. Deliberately does NOT
+                    // stem: `name` and `description` are search_as_you_type, and their
+                    // prefix sub-fields index prefixes of the *indexed* term, so stemming
+                    // here would break autocomplete on partially typed words ("runn" no
+                    // longer prefixes "running" once it stems to "run"). Stemming belongs
+                    // on sibling fields, not on these.
+                    "text_apostrophe_folded": {
+                        "type": "custom",
+                        "char_filter": ["apostrophe_fold"],
+                        "tokenizer": "standard",
+                        "filter": ["lowercase"]
+                    }
+                },
+                "normalizer": {
+                    // Keyword-field counterpart for `name_raw`. Applies the same fold with
+                    // no lowercase filter, because the exact-match clause on name_raw is
+                    // case-sensitive by design (see NAME_RAW_EXACT_BOOST in the API's
+                    // opensearch.ts) and a lowercase normalizer would silently erase that.
+                    "apostrophe_folded_keyword": {
+                        "type": "custom",
+                        "char_filter": ["apostrophe_fold"]
+                    }
+                }
+            }
         },
         "mappings": {
             "properties": {
@@ -84,13 +134,16 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
                     "type": "keyword"
                 },
                 "name": {
-                    "type": "search_as_you_type"
+                    "type": "search_as_you_type",
+                    "analyzer": "text_apostrophe_folded"
                 },
                 "name_raw": {
-                    "type": "keyword"
+                    "type": "keyword",
+                    "normalizer": "apostrophe_folded_keyword"
                 },
                 "description": {
-                    "type": "search_as_you_type"
+                    "type": "search_as_you_type",
+                    "analyzer": "text_apostrophe_folded"
                 },
                 "avatar": {
                     "type": "keyword",
@@ -202,6 +255,75 @@ mod tests {
         assert_eq!(
             settings["mappings"]["properties"]["entity_space_score"]["type"],
             "float"
+        );
+    }
+
+    #[test]
+    fn test_apostrophe_fold_is_wired_into_text_fields() {
+        let settings = get_index_settings(None);
+        let analysis = &settings["settings"]["analysis"];
+
+        // The fold must map every Unicode apostrophe variant onto ASCII U+0027.
+        let mappings = analysis["char_filter"]["apostrophe_fold"]["mappings"]
+            .as_array()
+            .expect("apostrophe_fold.mappings should be an array");
+        let rules: Vec<&str> = mappings.iter().map(|m| m.as_str().unwrap()).collect();
+        assert_eq!(
+            analysis["char_filter"]["apostrophe_fold"]["type"],
+            "mapping"
+        );
+        assert!(
+            rules.contains(&"\u{2019} => \u{0027}"),
+            "U+2019 must fold: {rules:?}"
+        );
+        assert!(
+            rules.contains(&"\u{2018} => \u{0027}"),
+            "U+2018 must fold: {rules:?}"
+        );
+        assert!(
+            rules.contains(&"\u{02BC} => \u{0027}"),
+            "U+02BC must fold: {rules:?}"
+        );
+        assert!(
+            rules.contains(&"\u{FF07} => \u{0027}"),
+            "U+FF07 must fold: {rules:?}"
+        );
+
+        // The analyzer applies the fold before the standard tokenizer, and lowercases.
+        let analyzer = &analysis["analyzer"]["text_apostrophe_folded"];
+        assert_eq!(analyzer["tokenizer"], "standard");
+        assert_eq!(analyzer["char_filter"][0], "apostrophe_fold");
+        assert_eq!(analyzer["filter"][0], "lowercase");
+
+        // It must NOT stem — stemming would break search_as_you_type prefix matching.
+        let filters = analyzer["filter"].as_array().unwrap();
+        assert_eq!(filters.len(), 1, "only lowercase belongs here: {filters:?}");
+
+        // Both analyzed text fields must use it, or the fold is half-applied.
+        let props = &settings["mappings"]["properties"];
+        assert_eq!(props["name"]["analyzer"], "text_apostrophe_folded");
+        assert_eq!(props["description"]["analyzer"], "text_apostrophe_folded");
+    }
+
+    #[test]
+    fn test_name_raw_folds_apostrophes_but_preserves_case() {
+        let settings = get_index_settings(None);
+        let normalizer =
+            &settings["settings"]["analysis"]["normalizer"]["apostrophe_folded_keyword"];
+
+        assert_eq!(normalizer["char_filter"][0], "apostrophe_fold");
+        assert_eq!(
+            settings["mappings"]["properties"]["name_raw"]["normalizer"],
+            "apostrophe_folded_keyword"
+        );
+
+        // name_raw backs a deliberately case-SENSITIVE term clause
+        // (NAME_RAW_EXACT_BOOST in the API). A lowercase filter here would erase
+        // that distinction silently, so its absence is load-bearing.
+        let filters = normalizer["filter"].as_array();
+        assert!(
+            filters.is_none_or(|f| f.is_empty()),
+            "name_raw normalizer must not lowercase: {filters:?}"
         );
     }
 
