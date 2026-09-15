@@ -1040,9 +1040,16 @@ export class OpenSearchClient implements SearchClient {
 						// Exact raw name match — boosts documents where the query
 						// matches the unanalyzed name string exactly. Differentiates
 						// "World affairs" from "world-affairs" which the analyzer
-						// treats as identical tokens. Uses name_raw (separate keyword
-						// field with lowercase normalizer) because search_as_you_type
-						// ignores custom subfields (name.raw does not work).
+						// treats as identical tokens. Uses name_raw (a separate keyword
+						// field) because search_as_you_type ignores custom subfields
+						// (name.raw does not work).
+						//
+						// name_raw carries the `apostrophe_folded_keyword` normalizer,
+						// which folds the Unicode apostrophe variants onto ASCII U+0027
+						// and does nothing else. It deliberately does NOT lowercase:
+						// this clause is case-sensitive by design, and a lowercase
+						// normalizer would erase that distinction silently, collapsing
+						// it into the case_insensitive clause below. See GEO-2904.
 						term: {
 							name_raw: {
 								value: queryText,

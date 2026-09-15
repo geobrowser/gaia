@@ -28,6 +28,42 @@ Query Input
 
 ---
 
+## 0. Text Analysis
+
+`name` and `description` are `search_as_you_type` fields using the custom
+**`text_apostrophe_folded`** analyzer, defined in
+`search-indexer-repository/src/opensearch/index_config.rs`:
+
+```
+char_filter: apostrophe_fold   (' ' ʼ ＇ → ')
+tokenizer:   standard
+filter:      lowercase
+```
+
+`name_raw` carries the matching **`apostrophe_folded_keyword`** normalizer — the same
+fold, with no lowercase filter, because the exact-name clause is case-sensitive by design.
+
+Two properties of this analyzer are load-bearing:
+
+- **Apostrophes are folded, so spelling does not decide whether a search works.** The
+  standard tokenizer keeps an apostrophe inside its token (`UAX #29` MidLetter), so without
+  the fold `man's` and `man's` are unrelated terms. The corpus is genuinely mixed — of 294
+  debate claims sampled on testnet, 66 use the ASCII apostrophe and 24 the typographic one
+  — so before this fold, a query scored ~400 against one spelling and exactly 0.00 against
+  the other (GEO-2904).
+- **There is no stemming, deliberately.** The prefix sub-fields of a `search_as_you_type`
+  field index prefixes of the *indexed* term, so stemming here would break autocomplete on
+  partially typed words: once "running" stems to "run", a user who has typed "runn" no
+  longer matches it. This is why plural and possessive matching (`mans` → `man's`) cannot
+  be solved by swapping in the `english` analyzer; it needs sibling stemmed fields, which
+  is tracked separately on GEO-2904.
+
+Consequence worth knowing when reading scores: because folding merges two spellings into
+one term, document frequency rises and IDF falls, so absolute scores for previously-split
+terms drop slightly (e.g. `trump's tariffs` 354.2 → 338.8) while the ordering is unchanged.
+
+---
+
 ## 1. UUID Fast Path
 
 If the query matches a UUID pattern, it bypasses text search entirely and performs a direct `term` lookup on `entity_id`.
