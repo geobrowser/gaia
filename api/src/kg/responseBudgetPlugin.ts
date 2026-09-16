@@ -68,8 +68,23 @@ import {extractClientIp} from "../utils/clientIp"
  * response is cacheable, and (before #901) a second stringify purely to measure
  * the response. Peak RSS for the 1000x1000 shape was ~25x its 62.9 MB response,
  * so bounding the string is a large fraction of the fix — but it is honestly
- * *not* all of it, and the remainder needs streaming serialization, which is a
- * separate and larger change.
+ * *not* all of it.
+ *
+ * The remainder is NOT streaming serialization. That was the standing
+ * hypothesis here, and it was measured on 2026-09-16 and rejected: an
+ * incremental serializer was built, proved byte-identical to `JSON.stringify`,
+ * and benchmarked under Bun. `JSON.stringify` moves 37 MB in 22 ms — about
+ * 1700 MB/s — while production request duration is linear in response bytes at
+ * 446 ms/MB (r = 0.83 over 175 responses), i.e. roughly 2 MB/s. Serialization is
+ * therefore ~0.1% of what a large response costs. A pod serving 91 MB of large
+ * responses in 3 hours spends ~53 ms of that window inside stringify, so
+ * streaming would have bought 53 ms per pod per 3 hours for ~5x the
+ * serialization CPU.
+ *
+ * The 446 ms/MB is paid per row hydrated — PostGraphile builds the whole
+ * subtree in memory before anything here runs — so the only lever that makes a
+ * big response cheap is fewer rows. See DEFAULT_PAGINATION_LIMITS_BY_DEPTH in
+ * paginationCapPlugin.
  *
  * Phase 1 / Phase 2
  * -----------------

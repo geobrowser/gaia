@@ -2,6 +2,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 import {renderQueryCostHistogram} from "./kg/costLoggerPlugin"
 import {renderResponseSizeHistogram} from "./kg/instrumentationPlugin"
+import {renderPaginationDefaultMetrics} from "./kg/paginationCapPlugin"
 import {getGraphqlPoolPressure, getGraphqlPoolStats} from "./kg/postgraphile"
 import {renderResponseByteMetrics} from "./kg/responseBudgetPlugin"
 import {db, getPoolStats} from "./services/storage/storage"
@@ -125,6 +126,9 @@ function renderPrometheusMetrics(): string {
 		// Unbiased response-byte histogram (every response) plus the byte-budget
 		// counters — see responseBudgetPlugin.ts.
 		renderResponseByteMetrics(),
+		// How often a collection was given a default `first`, by nesting depth —
+		// see DEFAULT_PAGINATION_LIMITS_BY_DEPTH in paginationCapPlugin.ts.
+		renderPaginationDefaultMetrics(),
 	].join("\n")
 }
 
