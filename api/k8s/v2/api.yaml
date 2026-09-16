@@ -51,6 +51,27 @@ spec:
       labels:
         app: api
     spec:
+      # Spread replicas across nodes instead of leaving placement to the scheduler.
+      #
+      # Without this the api packed unevenly — 7/5/7/5 across four nodes at 22
+      # replicas — and a scale-out landed several pods on one node at once. Each
+      # new pod boots a Next.js server, and enough of them starting together
+      # drove node 10.100.0.6 to load1 26.43 (3.30 per core) for ~20 minutes on
+      # 2026-09-16, firing NodeSystemSaturation. It was transient and iowait
+      # stayed at zero, but it is avoidable.
+      #
+      # whenUnsatisfiable is ScheduleAnyway ON PURPOSE. DoNotSchedule would let a
+      # skew constraint block a scale-out, and the incident that morning was the
+      # HPA being UNABLE to add replicas — turning a soft preference into a hard
+      # gate would risk reproducing exactly that. Even placement is worth having;
+      # it is not worth refusing to scale for.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: api
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
