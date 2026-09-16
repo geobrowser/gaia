@@ -9,10 +9,32 @@ spec:
     kind: Deployment
     name: api
   minReplicas: 4
-  maxReplicas: 8
+  # 24, not 8. On 2026-09-16 the api sat pinned at maxReplicas=8 while asking for
+  # more (cpu 146%/70%) and fell back to shedding 503s at ~43/min for hours —
+  # every surface goes through this api, so it read to users as "Geo is slow".
+  # Raising the ceiling took shedding to ~3/min. The cluster was never the
+  # constraint: four 8-vCPU nodes sat at 18-23% CPU throughout. See GEO-2927.
+  #
+  # This file is applied by an api deploy, so leaving 8 here would have reverted
+  # the live ceiling on the next deploy and recreated the incident.
+  maxReplicas: 24
   behavior:
     scaleUp:
-      stabilizationWindowSeconds: 0
+      # 60s, not 0. With no stabilization a single evaluation above target jumped
+      # straight to the ceiling, while scaleDown drifts back at one pod per
+      # minute — so the HPA crept down and snapped back, 20 -> 24 seven times in
+      # five hours. Each snap boots up to four pods at once, which is what drove
+      # node 10.100.0.6 to load1 26.43 and fired NodeSystemSaturation.
+      #
+      # It is also self-reinforcing: pods that have just booted have no metrics
+      # yet, so the HPA averages over the older, busier ones and the reported
+      # utilisation RISES during a scale-out, inviting more scaling.
+      #
+      # 60s is deliberately small. The incident this damping is tuned against
+      # lasted hours, so a minute of confirmation costs nothing real — whereas
+      # removing responsiveness altogether risks the opposite failure, which is
+      # the one that actually hurt users.
+      stabilizationWindowSeconds: 60
       selectPolicy: Max
       policies:
         - type: Percent
