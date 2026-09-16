@@ -159,11 +159,34 @@ if (process.env.SENTRY_DSN) {
 // - 22023 invalid_parameter_value (RAISE ... USING ERRCODE = '22023' in pg functions)
 const USER_INPUT_SQLSTATES = new Set(["22023"])
 
+/** Bounds the walk below; the chain's depth follows caller-controlled nesting. */
+const MAX_ORIGINAL_ERROR_DEPTH = 10
+
+/**
+ * Walk the `originalError` chain looking for a Postgres error whose SQLSTATE
+ * says the caller's input was wrong.
+ *
+ * Structural, and walking rather than checking a single level, for the same
+ * reason as `shouldUnmaskError`: the api's dependency tree carries several
+ * copies of the `graphql` package (its own, plus ones nested under postgraphile
+ * and graphile-utils), so `instanceof GraphQLError` is not reliable across the
+ * boundary an error crosses on its way out — and the number of wrappers depends
+ * on how deeply nested the failing field was.
+ *
+ * Getting this wrong is silent and one-directional: a message a Postgres
+ * function raised deliberately, for the caller to read, becomes "Unexpected
+ * error."
+ */
 function findPgUserInputError(error: unknown): {message: string} | null {
-	if (!error || typeof error !== "object") return null
-	const code = (error as {code?: unknown}).code
-	if (typeof code === "string" && USER_INPUT_SQLSTATES.has(code)) {
-		return error as {message: string}
+	let current: unknown = error
+	for (let depth = 0; current && depth <= MAX_ORIGINAL_ERROR_DEPTH; depth++) {
+		if (typeof current === "object") {
+			const code = (current as {code?: unknown}).code
+			if (typeof code === "string" && USER_INPUT_SQLSTATES.has(code)) {
+				return current as {message: string}
+			}
+		}
+		current = (current as {originalError?: unknown}).originalError
 	}
 	return null
 }
@@ -546,11 +569,11 @@ export const graphqlServer = createYoga<GraphQLServerContext>({
 			if (shouldUnmaskError(error)) {
 				return error
 			}
-			if (error instanceof GraphQLError) {
-				const pgError = findPgUserInputError(error.originalError)
-				if (pgError) {
-					return toUserInputGraphQLError(error, pgError)
-				}
+			// Deliberately not gated on `instanceof GraphQLError` — see
+			// findPgUserInputError for why that check is unreliable here.
+			const pgError = findPgUserInputError(error)
+			if (pgError) {
+				return toUserInputGraphQLError(error as GraphQLError, pgError)
 			}
 			return maskError(error, message, isDev)
 		},
