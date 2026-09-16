@@ -63,8 +63,40 @@ type PerKindAccessorArgs = LegacyAccessorArgs & {
 export const UserVoteLegacyAccessorPlugin = makeExtendSchemaPlugin((build) => {
 	const {pgSql: sql} = build
 
-	return {
-		typeDefs: gql`
+	// Whether `user_votes` has a PRIMARY KEY decides which accessor postgraphile
+	// generates for those five columns, and therefore whether adding the legacy
+	// name here is a restoration or a duplicate definition that aborts schema
+	// build and crash-loops the api on boot.
+	//
+	//   PK present  -> postgraphile simplifies the accessor to `userVote`, the
+	//                  five-column name is free, and this plugin must supply it.
+	//   PK absent   -> postgraphile emits the five-column name itself from the
+	//                  unique constraint, and adding it again is a conflict.
+	//
+	// This is not hypothetical. Migration 0086 carried a `when` older than 0085's
+	// in _journal.json, and drizzle applies an entry only when its folderMillis
+	// exceeds the newest applied row's created_at — so it was skipped in every
+	// environment that already had 0085, while applying cleanly on a fresh
+	// database. The two states diverged, the field collided, and every new api
+	// pod died with "A naming conflict has occurred". Reading the live schema
+	// rather than assuming the migration ran removes that coupling for good.
+	const introspection = (
+		build as {
+			pgIntrospectionResultsByKind?: {
+				class?: Array<{id: string; name: string; namespaceName: string}>
+				constraint?: Array<{type: string; classId: string}>
+			}
+		}
+	).pgIntrospectionResultsByKind
+	const userVotesClass = introspection?.class?.find((c) => c.name === "user_votes" && c.namespaceName === "public")
+	const userVotesHasPrimaryKey = Boolean(
+		userVotesClass && introspection?.constraint?.some((c) => c.type === "p" && c.classId === userVotesClass.id),
+	)
+
+	// Two whole documents rather than one with an interpolated field: `gql`
+	// parses a complete GraphQL document, so a bare field list is a syntax error.
+	const typeDefs = userVotesHasPrimaryKey
+		? gql`
 			extend type Query {
 				"""
 				Deprecated: the curation-kind row only. Use
@@ -78,9 +110,8 @@ export const UserVoteLegacyAccessorPlugin = makeExtendSchemaPlugin((build) => {
 				): UserVote
 
 				"""
-				The per-kind row. Restored by hand because migration 0086 turned the
-				unique constraint into the primary key, which makes postgraphile emit
-				this accessor as plain "userVote" instead.
+				The per-kind row. Supplied here because the primary key on user_votes
+				makes postgraphile emit this accessor as plain "userVote" instead.
 				"""
 				userVoteByUserIdAndObjectIdAndObjectTypeAndSpaceIdAndVoteKind(
 					userId: UUID!
@@ -90,7 +121,26 @@ export const UserVoteLegacyAccessorPlugin = makeExtendSchemaPlugin((build) => {
 					voteKind: Int!
 				): UserVote
 			}
-		`,
+		`
+		: gql`
+			extend type Query {
+				"""
+				Deprecated: the curation-kind row only. Use
+				userVoteByUserIdAndObjectIdAndObjectTypeAndSpaceIdAndVoteKind,
+				which postgraphile is generating itself while user_votes has no
+				primary key.
+				"""
+				userVoteByUserIdAndObjectIdAndObjectTypeAndSpaceId(
+					userId: UUID!
+					objectId: UUID!
+					objectType: Int!
+					spaceId: UUID!
+				): UserVote
+			}
+		`
+
+	return {
+		typeDefs,
 		resolvers: {
 			Query: {
 				userVoteByUserIdAndObjectIdAndObjectTypeAndSpaceId: async (
