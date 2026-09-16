@@ -137,9 +137,44 @@ jobs:
           fi
 
       - name: Apply manifests
+        # A Deployment under an HPA must not have its replica count reset by the
+        # apply. The manifests carry a literal `replicas:` (api declares 8) while
+        # the autoscaler owns the live value — on 2026-09-16 the api was running
+        # 24 after its ceiling was raised, so the next apply would have cut
+        # capacity by two thirds in one step and left the HPA to climb back over
+        # several minutes. That is the same shed-503s condition a deploy is
+        # supposed to avoid causing.
+        #
+        # Deleting `replicas` from the manifests is NOT the fix: kubectl's
+        # client-side apply prunes fields that were in last-applied-configuration
+        # and are absent from the new object, so the field would be removed and
+        # default to 1 — strictly worse. Server-side apply would let the HPA keep
+        # ownership and is the tidier long-term answer, but it changes the apply
+        # semantics for every service at once and wants its own change.
+        #
+        # So: read the live count and write it into the manifest before applying.
+        # Every branch is fail-safe — if there is no HPA, no live Deployment, or
+        # no replicas line, the manifest is applied exactly as it is today.
         run: |
+          HPA_TARGETS="$(kubectl -n "$NAMESPACE" get hpa \
+            -o jsonpath='{range .items[*]}{.spec.scaleTargetRef.name}{"\n"}{end}' 2>/dev/null || true)"
+
           for m in ${{ steps.map.outputs.manifests }}; do
-            sed "s|:latest|:${{ inputs.tag }}|g" "$m" | kubectl apply -f -
+            rendered="$(sed "s|:latest|:${{ inputs.tag }}|g" "$m")"
+
+            for target in $HPA_TARGETS; do
+              # Only rewrite a manifest that actually declares this Deployment.
+              printf '%s\n' "$rendered" | grep -qE "^  name: ${target}\$" || continue
+              live="$(kubectl -n "$NAMESPACE" get deploy "$target" \
+                -o jsonpath='{.spec.replicas}' 2>/dev/null || true)"
+              case "$live" in
+                ''|*[!0-9]*) continue ;;
+              esac
+              rendered="$(printf '%s\n' "$rendered" | sed -E "s|^  replicas: [0-9]+|  replicas: ${live}|")"
+              echo "::notice::${target} is HPA-managed — applying its live replica count (${live}) instead of the manifest literal"
+            done
+
+            printf '%s\n' "$rendered" | kubectl apply -f -
           done
 
       - name: Wait for rollout
