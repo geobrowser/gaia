@@ -1,0 +1,22 @@
+-- GEO-2920: `proposalsCurrentsConnection` issues an endCursor and then answers
+-- INTERNAL_SERVER_ERROR when it is passed back as `after`, so every page after
+-- the first fails — the same symptom as GEO-2916 on user_votes, by a different
+-- route.
+--
+-- PostGraphile refuses before/after cursors on an ordering it cannot prove
+-- unique, and makes one unique by appending the relation's primary key columns.
+-- `proposals_current` is a VIEW, so there is no primary key to infer and it
+-- falls back to an offset-shaped cursor (["created_at_desc", 2]) that it then
+-- declines to read back.
+--
+-- A view cannot be given a primary key, so postgraphile is told which column
+-- identifies a row with a smart comment. `id` is a genuine key here: the view
+-- inner-joins each proposal to its CURRENT version
+-- (proposal_versions.proposal_version = proposals.current_version), so every
+-- proposal appears exactly once.
+--
+-- NOTE FOR FUTURE VIEW CHANGES: 0072 recreated this view with DROP VIEW +
+-- CREATE VIEW, which discards its comments. Any migration that recreates
+-- proposals_current must re-apply this COMMENT, or cursor pagination silently
+-- regresses to the offset form.
+COMMENT ON VIEW "public"."proposals_current" IS E'@primaryKey id';

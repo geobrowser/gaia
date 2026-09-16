@@ -610,6 +610,13 @@
       "when": 1789517437389,
       "tag": "0086_user_votes_primary_key",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1789519208619,
+      "tag": "0087_proposals_current_primary_key",
+      "breakpoints": true
     }
   ]
 }
