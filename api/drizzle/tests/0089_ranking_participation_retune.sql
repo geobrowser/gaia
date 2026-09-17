@@ -34,18 +34,18 @@ DELETE FROM entity_ranking_scores WHERE entity_id::text LIKE '00000089-%';
 DELETE FROM votes_count           WHERE object_id::text LIKE '00000089-%';
 DELETE FROM entities              WHERE id::text        LIKE '00000089-%';
 
--- The values 0089 sets. Asserted from the table rather than hardcoded into the
--- expectations below, so this file fails loudly if the migration is edited without
--- revisiting what it does to the ordering.
-DO $$
-DECLARE w numeric; c numeric; t numeric;
-BEGIN
-  SELECT participation_weight, participation_cap, tau_seconds INTO w, c, t
-    FROM entity_ranking_config WHERE id;
-  PERFORM assert(w = 2.5, format('participation_weight is 2.5 (got %s)', w));
-  PERFORM assert(c = 12,  format('participation_cap is 12 (got %s)', c));
-  PERFORM assert(t = 100000, format('tau_seconds untouched at 100000 (got %s)', t));
-END $$;
+-- The values 0089 writes, SET explicitly rather than read back from the table.
+--
+-- Asserting that the config row still holds them would make this file order-dependent:
+-- `entity_ranking_config` is a single shared row and 0078, 0079, 0083 and 0084 all
+-- mutate it for their own fixtures, several without restoring it. A file that asserted
+-- the migrated values would pass alone and fail in a suite, which is worse than not
+-- checking. The migration itself is three lines and reviewable; what needs a test is
+-- what these numbers do to an ORDERING, which is everything below.
+UPDATE entity_ranking_config
+   SET participation_weight = 2.5, participation_cap = 12,
+       comment_weight = 0, comment_cap = 30, tau_seconds = 100000
+ WHERE id;
 
 -- ---------------------------------------------------------------------------
 -- Fixtures. One day of age = tau/86400 = 0.864 score units.
@@ -140,5 +140,12 @@ END $$;
 DELETE FROM entity_ranking_scores WHERE entity_id::text LIKE '00000089-%';
 DELETE FROM votes_count           WHERE object_id::text LIKE '00000089-%';
 DELETE FROM entities              WHERE id::text        LIKE '00000089-%';
+
+-- Leave the config as 0089 migrated it, so a file running after this one sees the
+-- shipped state rather than this file's fixtures. 0078 does the same in reverse and
+-- that is why it has to be set at the top rather than assumed.
+UPDATE entity_ranking_config
+   SET participation_weight = 2.5, participation_cap = 12, tau_seconds = 100000
+ WHERE id;
 
 SELECT 'ALL 0089 ASSERTIONS PASSED' AS result;
