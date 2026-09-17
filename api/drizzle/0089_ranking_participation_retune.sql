@@ -1,0 +1,107 @@
+-- GEO-2926: participation was worth weeks of recency, so the same debates stayed on top.
+--
+-- Raised by Yaniv: "we're not weighting time enough for the debates at the top of a
+-- space and that creates a situation where it's just the same debates getting more
+-- and more entrenched."
+--
+--   rankingScore = ln(quality) + ln(w_type) + intrinsic + participation
+--                  + comment + created_at_epoch / tau
+--
+-- `created_at / tau` is a fixed bonus set at creation, not a decay — a score never
+-- moves as an entity ages (deliberate, for cursor stability). So participation does
+-- not compete with decay; it competes with the *gap* between two creation times. At
+-- tau = 100000 one day of age is 0.864 score units, and participation is
+-- `min(weight * ln(1 + votes), cap)`.
+--
+-- What was live (set by hand on 2026-08-20, never recorded in this repo — see the
+-- drift note at the bottom): weight 7, cap 30.
+--
+--   votes   participation   days of age it outranks
+--       1            4.85                       5.6
+--       8           15.38                      17.8
+--      19           20.97                      24.3
+--      72           30.00 (cap)                34.7
+--
+-- One vote outranking five and a half days of recency is the entrenchment Yaniv
+-- described, and because participation is logarithmic it saturates almost at once:
+-- eight votes already bought two and a half weeks.
+--
+-- MEASURED, not modelled from the formula alone. The top 300 of the US Politics
+-- ranked feed on 2026-09-16, re-scored under candidate parameters:
+--
+--   params              8 votes buys   top-12 median age   >7d old in top 12
+--   live (w7,  cap30)         17.8 d              4.7 d                   2
+--   w7,  cap 15               17.4 d              4.7 d                   0
+--   w7,  cap 10               11.6 d              4.6 d                   0
+--   w3.5, cap 30               8.9 d              2.9 d                   0
+--   w2.5, cap 12  (this)       6.4 d              1.2 d                   0
+--   w2,  cap 10                5.1 d              1.0 d                   0
+--
+-- THE CAP IS THE WRONG LEVER, which is the finding that changed this fix. GEO-2926
+-- proposed lowering `participation_cap` as "the most surgical" option. It is very
+-- nearly a no-op: at weight 7 the cap does not bind until 72 votes, and the highest
+-- vote count anywhere in that feed is 19 — the median is 1. Halving the cap leaves
+-- the top-12 median age unmoved at 4.7 days. It is the WEIGHT that sets what real,
+-- single-digit engagement is worth, and real engagement is all there is.
+--
+-- Weight 7 -> 2.5:
+--   * one vote is worth 2.0 days of recency instead of 5.6
+--   * eight votes buy 6.4 days instead of 17.8
+--   * the whole top-12 age span becomes 0.0-4.7 days instead of 0.6-12.5
+--
+-- Cap 30 -> 12 keeps the ceiling proportional. At weight 2.5 a cap of 30 would not
+-- bind until e^12 votes, i.e. never — removing the ceiling entirely rather than
+-- leaving it. 12 binds at ~120 votes and is worth ~13.9 days, so the ceiling keeps
+-- doing its job if engagement grows an order of magnitude.
+--
+-- Deliberately NOT weakened further. At weight 1.5 the top 12 becomes 7/12 identical
+-- to a pure reverse-chronological list — votes stop meaning anything. At 2.5 the
+-- overlap is 4/12, and the well-voted items from that 4.7-day cohort (19, 12 and 10
+-- votes) still hold places in the top 12. The goal is that engagement cannot buy
+-- *weeks*, not that engagement stops counting.
+--
+-- tau is NOT retuned. Lowering it to 50000 produces a similar top-12 age profile, but
+-- it rescales every one of 48.9M scores rather than changing one term, and it makes
+-- the recency unit mean something different everywhere. The narrower change is the
+-- one to make. (It is written below at its existing live value — see the drift note.)
+--
+-- ⚠️ THIS DOES NOT TAKE EFFECT ON ITS OWN, AND THE GAP IS VISIBLE.
+--
+-- Scores are stored, not computed on read. `refresh_entity_ranking_scores` runs only
+-- when a vote batch lands (`vote-indexer/src/storage.rs`) or for replied-to entities
+-- (`comment_sweep`). Neither is a full sweep, so after this migration the feed holds
+-- a MIXTURE of scores computed under both parameter sets until every entity is
+-- re-scored — and a mixture is worse than either setting, because the two regimes
+-- differ by up to 18 score units (~21 days of apparent age).
+--
+-- So this must be followed immediately by a full backfill:
+--
+--   kubectl -n gaia exec -i <api-pod> -- sh -c 'DATABASE_URL="$DATABASE_URL" bash -s' \
+--     < api/scripts/backfill-entity-ranking-scores.sh
+--
+-- That script is idempotent, resumable (`START=<n>`), and batches by leading uuid
+-- byte — 256 batches over ~48.9M rows. It is not run from a migration because api's
+-- initContainer runs db:migrate and a 48.9M-row backfill would stall every deploy.
+--
+-- (GEO-2926 claimed `ranking-indexer-backfill` / `ranking-indexer-rolling-sweep`
+-- would propagate a config change. They would not — those are the *ranking block*
+-- jobs and never touch `entity_ranking_scores`. The ticket is wrong on that point.)
+--
+-- ON THE DRIFT. The column DEFAULTs stay 0 and 10: 0078's own test asserts the
+-- default must remain 0 so that applying it cannot arm the term, and that decision
+-- still holds. What was missing is that the *armed* values lived only in the
+-- production database — this migration is the first record of them anywhere in the
+-- repo, so the config is now reviewable and reproducible rather than folklore.
+--
+-- `tau_seconds` is set here too, and it is NOT a change to production: live is
+-- already 100000. The column default is 45000, so until now a freshly migrated
+-- database scored on a different recency scale than production — one day of age
+-- worth 1.92 units instead of 0.864 — which makes every local reproduction of a
+-- ranking question quietly wrong. Writing it explicitly is the point of this
+-- migration as much as the retune is.
+
+UPDATE "entity_ranking_config"
+   SET "participation_weight" = 2.5,
+       "participation_cap"    = 12,
+       "tau_seconds"          = 100000
+ WHERE "id";
