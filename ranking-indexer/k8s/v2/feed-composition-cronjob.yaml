@@ -103,6 +103,13 @@ spec:
                 # — that scope fails, is logged, and the others still record.
                 - name: FEED_COMPOSITION_SPACE_IDS
                   value: "b5a31f81-82b0-4243-7ede-0f84ee02f104,89bd89bf-28ff-8a09-63fa-f92a8c905e20,c9f267dc-b0d2-7071-8c2a-3c45a64afd32,41e85161-0e13-a194-41c4-d980f2f2ce6b,52c7ae14-9838-b6d4-7ce0-f3b2a5974546,4582fbbe-e28a-1658-9154-f7e36f1ee3c5,5908c73a-d336-472c-cbd9-83491d2d17e4,da96a4c2-6e71-8bfa-6c27-c3b1f3c316cd"
+                # The app's own feed endpoint — what readers are actually served, after
+                # geogenesis applies its read-time reordering. Sampling only the ranked
+                # window is what made this canary miss the 2026-09-17 claim shortfall
+                # entirely: the window never changed, the rendered page did. Unset it and
+                # the job still runs, recording the window only.
+                - name: FEED_COMPOSITION_FEED_URL
+                  value: "https://www.geobrowser.io/api/explore/feed"
                 - name: RUST_LOG
                   value: "feed_composition_sample=info,ranking_indexer=info"
               resources:
