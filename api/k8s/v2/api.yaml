@@ -238,6 +238,26 @@ spec:
             # serialize (~10-15MB), NOT a static per-field or concurrency limit.
             - name: GRAPHQL_MAX_CONCURRENT_EXPENSIVE
               value: "10"
+            # Refuse a GraphQL response once it measures this many bytes (#902).
+            # Phase 2: the plugin has been measuring since it shipped and the
+            # ceiling has been 0 (enforcement off) until now.
+            #
+            # 40 MB, chosen from production data rather than picked round. Over
+            # 973 measured responses: p50 1.4 MB, p95 6.4 MB, max 17.9 MB. So
+            # this is 2.2x the largest response the api has ever been observed
+            # to serve, and 6x p95 — it should never fire on legitimate traffic.
+            #
+            # And it is well under what kills a pod. The canary runs in #902 put
+            # a 62.9 MB response at +1,569 Mi RSS against this pod's 2 GiB limit;
+            # ~25 Mi per MB of response means 40 MB caps a single response near
+            # 1 GiB, half the limit. The incident that prompted the issue — one
+            # client at ~19 req/min allocating ~1.5 GB each — would be refused.
+            #
+            # If this is wrong it says so immediately and cheaply:
+            # gaia_api_graphql_response_budget_refused_total at /health/metrics
+            # counts refusals, and tuning is this value, not a code change.
+            - name: GRAPHQL_RESPONSE_BYTE_CEILING
+              value: "40000000"
             - name: IPFS_KEY
               valueFrom:
                 secretKeyRef:
