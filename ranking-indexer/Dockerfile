@@ -39,5 +39,6 @@ RUN apt-get update && \
 COPY --from=builder /app/ranking-indexer/target/release/ranking-indexer /usr/local/bin/ranking-indexer
 COPY --from=builder /app/ranking-indexer/target/release/backfill_blocks /usr/local/bin/backfill_blocks
 COPY --from=builder /app/ranking-indexer/target/release/rolling_sweep /usr/local/bin/rolling_sweep
+COPY --from=builder /app/ranking-indexer/target/release/feed_composition_sample /usr/local/bin/feed_composition_sample
 
 CMD ["ranking-indexer"]
