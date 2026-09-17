@@ -30,7 +30,7 @@ LANGUAGE plpgsql AS $$
 BEGIN IF NOT cond THEN RAISE EXCEPTION 'FAIL: %', label; ELSE RAISE NOTICE 'pass: %', label; END IF; END; $$;
 
 TRUNCATE entities, values, relations, votes_count, entity_ranking_scores,
-         entity_type_weights, entity_type_exclusions, entity_type_ranking, entity_feed_blocklist;
+         entity_type_weights, entity_type_exclusions, entity_type_ranking, entity_feed_blocklist CASCADE;
 
 UPDATE entity_ranking_config
    SET participation_weight = 7, participation_cap = 30,
@@ -50,7 +50,10 @@ UPDATE entity_ranking_config
 -- entity in BOTH types, and if it topped both, a per-type cap of 1 and a global cap of 1
 -- would return the same single row and the cap assertion below could not tell them apart.
 -- ---------------------------------------------------------------------------
-INSERT INTO entities (id, created_at) VALUES
+-- The real `entities` table has created_at_block, updated_at and updated_at_block NOT NULL.
+-- The block columns are placeholders: nothing in the scoring path reads them.
+INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
+SELECT v.id::uuid, v.created_at::text, '0', v.created_at::text, '0' FROM (VALUES
   ('e0000000-0000-0000-0000-000000000001','1785478598'),
   ('e0000000-0000-0000-0000-000000000002','1785478598'),
   ('e0000000-0000-0000-0000-000000000003','1785478598'),
@@ -58,7 +61,8 @@ INSERT INTO entities (id, created_at) VALUES
   ('e0000000-0000-0000-0000-000000000005','1785478598'),
   ('e0000000-0000-0000-0000-000000000006','1785478598'),
   ('7a000000-0000-0000-0000-00000000000a','1785478598'),
-  ('7b000000-0000-0000-0000-00000000000b','1785478598');
+  ('7b000000-0000-0000-0000-00000000000b','1785478598')
+) AS v(id, created_at);
 
 -- e5 deliberately gets no name row at all.
 INSERT INTO values (id, entity_id, property_id, space_id, text)
