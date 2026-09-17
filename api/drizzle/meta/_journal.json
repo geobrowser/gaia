@@ -631,6 +631,13 @@
       "when": 1789604370047,
       "tag": "0089_ranking_participation_retune",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1789615752765,
+      "tag": "0090_ranking_participation_rebalance",
+      "breakpoints": true
     }
   ]
 }
