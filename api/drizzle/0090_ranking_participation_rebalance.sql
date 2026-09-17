@@ -1,0 +1,87 @@
+-- GEO-2926 follow-up: 0089 overcorrected and handed the feed to News stories.
+--
+-- 0089 cut participation_weight 7 -> 2.5 to stop well-voted items buying weeks of
+-- recency. It did stop that. It also removed the only term holding up the types that
+-- earn votes at all, and the default Explore feed became almost chronological — which
+-- the most numerous recent type wins by default.
+--
+-- Reported by Preston within minutes of the deploy: "Looking at the feed now, there are
+-- not enough claims."
+--
+-- MEASURED on the live ranked feed, same window, before and after 0089. Reconstructed
+-- exactly rather than modelled: nothing was capped under either parameter set, so
+-- old_score = new_score + 1.8 * participation_score. The "before" column independently
+-- reproduces the 2026-09-14 post-0083 measurement (42/13/11) by a different method,
+-- which is what makes the rest of the table trustworthy.
+--
+--   top 22 (one page)      Claim   Debate   News story
+--   before 0089 (w7)          15        4            3
+--   after  0089 (w2.5)         5        1           16
+--
+--   full 66-row window     Claim   Debate   News story
+--   before 0089 (w7)          40       13           13
+--   after  0089 (w2.5)        13        4           49
+--
+-- 74% of the window being one type is WORSE crowding than the 60% Claims that 0083 was
+-- filed to fix. 0089 measured age and overlap-with-chronological in a single space and
+-- never re-checked type composition — the exact metric GEO-2690 and 0083 exist to
+-- protect. Both of its own numbers were fine; the one it did not look at was the
+-- regression.
+--
+-- THE SWEEP. Same reconstruction, every candidate weight, top 8000 per default Explore
+-- type (Claim / Debate / News story):
+--
+--   weight   Claim  Debate  News  |  median age  >7d in top 22
+--     2.5        5       1    16  |      1.4 d              0
+--     3.0        7       2    13  |      1.5 d              1
+--     3.5        9       3    10  |      1.5 d              3
+--     4.0       11       3     8  |      2.0 d              4
+--     5.0       15       4     3  |      5.5 d              7
+--     7.0       15       4     3  |      5.5 d             10
+--
+-- Weight 4 is the knee. No type owns the page (11/3/8), while the median age of the top
+-- 22 stays at 2.0 days against the 5.5 Yaniv complained about, and items older than a
+-- week fall from 10 to 4. Above 5.0 the first page stops changing at all: the
+-- entrenchment returns as AGE, not composition, which is why an age-only measurement
+-- missed this in both directions and a composition-only one would too.
+--
+-- Not 3.5: News story is still the plurality there (9 Claim vs 10 News), i.e. it does
+-- not actually answer the report. Not 5.0: the median age jumps 2.0 -> 5.5 days for no
+-- further composition gain, which is Yaniv's complaint coming straight back.
+--
+-- What 8 votes buys at each weight, as days of recency (one day = 0.864 units at
+-- tau 100000): w7 17.8 d, w4 10.2 d, w2.5 6.4 d. Ten days is the intended landing spot
+-- — engagement outlives a news cycle without outliving a fortnight.
+--
+-- CAP 12 -> 19, which is 12 * (4 / 2.5) and therefore the SAME cap 0089 chose, just
+-- carried across the weight change. 0089's reasoning was that the ceiling must stay
+-- proportional and bind at roughly 120 votes rather than effectively never; 19 binds at
+-- 114. Leaving it at 12 would quietly make it a real constraint at ~42 votes, and the
+-- most-voted entity in the live feed has ~43 — so the cap would have started clipping
+-- the single most engaged item in the corpus, which is not a decision anyone made.
+-- (The sweep above was run at cap 15. With cap 19 nothing in the corpus is capped at
+-- all, since the largest participation at w4 is 15.13; the difference is one row by at
+-- most 0.14 units, well under the resolution of the counts.)
+--
+-- tau_seconds is rewritten unchanged, for the reason 0089 gives: the column DEFAULT is
+-- 45000 but live is 100000, so a freshly migrated database scores on a different recency
+-- scale than production unless every one of these migrations says so.
+--
+-- Does not take effect on its own: entity_ranking_scores stores scores, it does not
+-- compute them on read. This retune only moves the participation term, so only entities
+-- with votes change — 4,592 of 48.9M rows, ~4 seconds, NOT the 256-batch
+-- backfill-entity-ranking-scores.sh, which exists for 0074's first-score case:
+--
+--   SELECT public.refresh_entity_ranking_scores(ARRAY(
+--     SELECT DISTINCT object_id FROM public.votes_count WHERE object_type = 0
+--     UNION
+--     SELECT entity_id FROM public.entity_ranking_scores WHERE participation_score > 0));
+--
+-- The second arm is a completeness guard against a stored score that disagrees with its
+-- votes. Note api pods have bash but no psql: run it from a throwaway postgres:16 pod
+-- against DATABASE_URL_DIRECT, not by exec'ing into api as 0089's PR body suggested.
+UPDATE "entity_ranking_config"
+   SET "participation_weight" = 4.0,
+       "participation_cap"    = 19,
+       "tau_seconds"          = 100000
+ WHERE "id";
