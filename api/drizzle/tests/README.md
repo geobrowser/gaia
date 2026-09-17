@@ -3,7 +3,15 @@
 Assertions for migrations whose logic lives in SQL functions, where the behaviour
 is easier to pin at the SQL layer than through the app.
 
-Run against a throwaway Postgres (never a real database — these truncate tables):
+**These now run in CI.** `api/src/kg/__tests__/rankingSqlSuites.test.ts` executes every
+`.sql` file in this directory as part of the API Integration Tests job, in forward AND
+reverse order, against a scratch database it creates and drops per run. Adding a file
+here is enough to get it run; it must be named after the migration it covers. A migration
+that has no suite of its own but is still needed to build the schema goes in that file's
+`EXTRA_MIGRATIONS`.
+
+Run them by hand against a throwaway Postgres the same way (never a real database — these
+truncate tables):
 
 ```bash
 docker run -d --name migtest -e POSTGRES_PASSWORD=t -e POSTGRES_DB=t postgres:18
@@ -32,7 +40,7 @@ exclusion are each caught. Worth re-checking if you change the assertions —
 the `is_system` case originally passed a mutation because the assertion that claimed
 to cover it was written against an entity with no relations at all.
 
-Two ways these have gone stale before, both worth guarding against:
+Three ways these have gone stale, all worth guarding against:
 
 * 0075 added the name requirement, which invalidated 0074's fixtures — none of them
   had a name, so every 0074 assertion passed vacuously except the one counting rows,
@@ -41,7 +49,17 @@ Two ways these have gone stale before, both worth guarding against:
   adjusting the expected count.
 * An assertion can go green because the thing it names is unreachable. Mutating the
   code it claims to cover is the only reliable check.
+* 0083 made participation count curation votes alongside stance. 0078's entity 1 carries
+  a curation downvote, so it went from 5 votes to 6 and its direction-agnostic assertion
+  — that a 3/2 split scores the same as 5/0 — started comparing 6 votes against 5. It had
+  been failing for days when the CI harness was written, and nobody could have known.
+  Fixed by giving it a partner with the same composition (entity 5), not by relaxing the
+  assertion: the property was still true, only the fixture had gone stale.
 
-TODO: port to the vitest harness in `api/src/kg/__tests__` so they run in CI. Until
-then nothing here runs automatically, which is how both staleness cases above
-survived.
+Known limitation: these run against `0073_fixtures_schema.sql`, which is hand-maintained
+and can drift from the migrations it stands in for. They cannot run against the real
+schema because their `TRUNCATE`s fail there — `spaces` and `subspace_topics` now carry
+foreign keys to `entities`, and the closure pulls in `proposals`, `proposal_votes`,
+`subspaces` and `space_voting_settings`. 0089 and 0090 avoid this by deleting only their
+own rows by id; converting the older files the same way is what would let the whole set
+run against the real schema, and is the next thing worth doing here.
