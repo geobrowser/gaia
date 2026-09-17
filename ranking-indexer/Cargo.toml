@@ -16,6 +16,10 @@ path = "src/bin/backfill_blocks.rs"
 name = "rolling_sweep"
 path = "src/bin/rolling_sweep.rs"
 
+[[bin]]
+name = "feed_composition_sample"
+path = "src/bin/feed_composition_sample.rs"
+
 [dependencies]
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }

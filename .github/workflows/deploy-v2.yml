@@ -98,7 +98,7 @@ jobs:
             delivery-worker)   manifests="notification-service/deployment/v2/delivery-worker.yaml"; rollout="deployment/delivery-worker" ;;
             # The two CronJobs ship with the Deployment: both run the same image
             # and are only useful at the same version as the consumer.
-            ranking-indexer)   manifests="ranking-indexer/k8s/v2/ranking-indexer.yaml ranking-indexer/k8s/v2/backfill-cronjob.yaml ranking-indexer/k8s/v2/rolling-sweep-cronjob.yaml"; rollout="deployment/ranking-indexer" ;;
+            ranking-indexer)   manifests="ranking-indexer/k8s/v2/ranking-indexer.yaml ranking-indexer/k8s/v2/backfill-cronjob.yaml ranking-indexer/k8s/v2/rolling-sweep-cronjob.yaml ranking-indexer/k8s/v2/feed-composition-cronjob.yaml"; rollout="deployment/ranking-indexer" ;;
             membership-acceptor) manifests="membership-acceptor/deployment/v2/deployment.yaml"; rollout="deployment/membership-acceptor" ;;
             *) echo "unknown service"; exit 1 ;;
           esac
