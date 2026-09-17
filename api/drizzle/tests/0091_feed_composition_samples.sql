@@ -49,13 +49,17 @@ UPDATE entity_ranking_config
 -- At weight 0 they cannot (1.8 < 8.64) and the window flips to TYPE_B entirely.
 -- That flip is #948, and the last assertion is that the canary sees it.
 -- ---------------------------------------------------------------------------
-INSERT INTO entities (id, created_at) VALUES
+-- The real `entities` table has created_at_block, updated_at and updated_at_block NOT NULL.
+-- The block columns are placeholders: nothing in the scoring path reads them.
+INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
+SELECT v.id::uuid, v.created_at::text, '0', v.created_at::text, '0' FROM (VALUES
   ('00000091-0000-4000-8000-00000000000a', (extract(epoch from now())::bigint - 864000)::text),
   ('00000091-0000-4000-8000-00000000000b', (extract(epoch from now())::bigint - 864000)::text),
   ('00000091-0000-4000-8000-00000000000c', (extract(epoch from now())::bigint - 864000)::text),
   ('00000091-0000-4000-8000-00000000001a', extract(epoch from now())::bigint::text),
   ('00000091-0000-4000-8000-00000000001b', extract(epoch from now())::bigint::text),
-  ('00000091-0000-4000-8000-00000000001c', extract(epoch from now())::bigint::text);
+  ('00000091-0000-4000-8000-00000000001c', extract(epoch from now())::bigint::text)
+) AS v(id, created_at);
 
 -- Candidate generation drops unnamed entities (0075).
 INSERT INTO values (id, entity_id, property_id, space_id, text)

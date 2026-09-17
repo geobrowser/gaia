@@ -19,7 +19,7 @@ LANGUAGE plpgsql AS $$
 BEGIN IF NOT cond THEN RAISE EXCEPTION 'FAIL: %', label; ELSE RAISE NOTICE 'pass: %', label; END IF; END; $$;
 
 TRUNCATE entities, values, relations, votes_count, entity_ranking_scores,
-         entity_type_weights, entity_type_exclusions;
+         entity_type_weights, entity_type_exclusions CASCADE;
 
 UPDATE entity_ranking_config
    SET participation_weight = 0, participation_cap = 10,
@@ -62,10 +62,14 @@ SELECT assert((SELECT count(*) FROM pg_proc p
 --   NEW_QUIET     = no comments, newer
 --   BRIGADED      = 40 comments from ONE space, newer
 -- ---------------------------------------------------------------------------
-INSERT INTO entities (id, created_at) VALUES
+-- The real `entities` table has created_at_block, updated_at and updated_at_block NOT NULL.
+-- The block columns are placeholders: nothing in the scoring path reads them.
+INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
+SELECT v.id::uuid, v.created_at::text, '0', v.created_at::text, '0' FROM (VALUES
   ('c0000000-0000-0000-0000-000000000001','1785478598'),  -- old, 5 commenters
   ('c0000000-0000-0000-0000-000000000002','1786649398'),  -- new, no comments
-  ('c0000000-0000-0000-0000-000000000003','1786649398');  -- new, 40 comments from one space
+  ('c0000000-0000-0000-0000-000000000003','1786649398')
+) AS v(id, created_at);  -- new, 40 comments from one space
 
 -- 5 distinct commenters on the old entity.
 INSERT INTO relations (id, entity_id, space_id, type_id, from_entity_id, to_entity_id, is_system)

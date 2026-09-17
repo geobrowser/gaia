@@ -18,7 +18,7 @@ LANGUAGE plpgsql AS $$
 BEGIN IF NOT cond THEN RAISE EXCEPTION 'FAIL: %', label; ELSE RAISE NOTICE 'pass: %', label; END IF; END; $$;
 
 TRUNCATE entities, values, relations, votes_count, entity_ranking_scores,
-         entity_type_weights, entity_type_exclusions;
+         entity_type_weights, entity_type_exclusions CASCADE;
 
 -- entity_ranking_config is a single fixed row, so TRUNCATE cannot reset it and a
 -- suite that fails midway leaves its armed values behind — which then breaks the
@@ -52,12 +52,16 @@ SELECT assert(public.entity_participation_score(NULL, NULL, NULL) = 0,
 --   OLD_WITH   = 1785478598, 5 positions   (the claim that ranked too low)
 --   NEW_WITHOUT= 1786649398, 0 positions   (the claim that outranked it)
 -- ---------------------------------------------------------------------------
-INSERT INTO entities (id, created_at) VALUES
+-- The real `entities` table has created_at_block, updated_at and updated_at_block NOT NULL.
+-- The block columns are placeholders: nothing in the scoring path reads them.
+INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
+SELECT v.id::uuid, v.created_at::text, '0', v.created_at::text, '0' FROM (VALUES
   ('a0000000-0000-0000-0000-000000000001','1785478598'),  -- old, 5 positions
   ('a0000000-0000-0000-0000-000000000002','1786649398'),  -- new, 0 positions
   ('a0000000-0000-0000-0000-000000000003','1786649398'),  -- new, 5 positions
   ('a0000000-0000-0000-0000-000000000004','1786649398'),  -- new, veracity only
-  ('a0000000-0000-0000-0000-000000000005','1785478598');  -- the split-twin of 1 (see below)
+  ('a0000000-0000-0000-0000-000000000005','1785478598')
+) AS v(id, created_at);  -- the split-twin of 1 (see below)
 
 -- 5 positions split 3 agree / 2 disagree on the old claim, plus the single
 -- curation downvote the reported entity actually carried.

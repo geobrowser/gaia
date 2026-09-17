@@ -7,7 +7,7 @@ BEGIN IF NOT cond THEN RAISE EXCEPTION 'FAIL: %', label; ELSE RAISE NOTICE 'pass
 -- entity_ranking_scores, so any fixture left behind by another suite failed it. The
 -- other suites all truncate; this one now does too, so the files can run in any order.
 TRUNCATE entities, values, relations, votes_count, entity_ranking_scores,
-         entity_type_weights, entity_type_exclusions, entity_feed_blocklist;
+         entity_type_weights, entity_type_exclusions, entity_feed_blocklist CASCADE;
 
 -- ---- Wilson properties ----
 SELECT assert(wilson_lower_bound(0,0) > 0 AND wilson_lower_bound(0,0) < 1,
@@ -32,13 +32,17 @@ SELECT assert(entity_intrinsic_score(10,5) > entity_intrinsic_score(2,1), 'riche
 SELECT assert(entity_intrinsic_score(1000,1000) = entity_intrinsic_score(10,5), 'saturates at target, no runaway');
 
 -- ---- fixtures ----
-INSERT INTO entities (id, created_at) VALUES
+-- The real `entities` table has created_at_block, updated_at and updated_at_block NOT NULL.
+-- The block columns are placeholders: nothing in the scoring path reads them.
+INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
+SELECT v.id::uuid, v.created_at::text, '0', v.created_at::text, '0' FROM (VALUES
   ('11111111-1111-1111-1111-111111111111','1786000000'),  -- popular, recent
   ('22222222-2222-2222-2222-222222222222','1786000000'),  -- unvoted, recent, rich
   ('33333333-3333-3333-3333-333333333333','1768000000'),  -- popular, OLD
   ('44444444-4444-4444-4444-444444444444','1786000000'),  -- downvoted, recent
   ('55555555-5555-5555-5555-555555555555','1786000000'),  -- typed + boosted
-  ('66666666-6666-6666-6666-666666666666','1786000000');  -- ONLY system relations  -- typed + boosted
+  ('66666666-6666-6666-6666-666666666666','1786000000')
+) AS v(id, created_at);  -- ONLY system relations  -- typed + boosted
 INSERT INTO votes_count (object_id, object_type, space_id, vote_kind, positive, negative) VALUES
   ('11111111-1111-1111-1111-111111111111',0,'aaaaaaaa-0000-0000-0000-000000000000',0,50,2),
   ('33333333-3333-3333-3333-333333333333',0,'aaaaaaaa-0000-0000-0000-000000000000',0,50,2),
