@@ -9,7 +9,11 @@ version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
-    target-branch: "dev"
+    # staging, NOT dev: gaia ships from staging, and dev has not moved since
+    # 2026-07-13 (147 commits behind). Aimed at dev, every PR dependabot opens is
+    # born unmergeable-in-practice — five were open against it when this was
+    # changed, none of which could have affected the CI that actually runs.
+    target-branch: "staging"
     schedule:
       interval: "weekly"
     commit-message:
