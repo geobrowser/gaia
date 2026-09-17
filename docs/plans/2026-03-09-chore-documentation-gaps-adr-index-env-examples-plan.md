@@ -16,12 +16,12 @@ Follow-up to the [documentation catalog plan](./2026-03-09-chore-documentation-c
 - Three deployed services (atlas, hermes-pipeline, kg-indexer) have env vars documented in READMEs but no `.env.example` file. Other services (proposal-executor, scoring-service, search-indexer, api, hermes) already have them.
 - `kg-indexer` is a critical pipeline service (Kafka → PostgreSQL) with a 57-line README that uses bullet-list env vars and is missing several env vars found in code.
 - `ipfs/` is a library crate used by `hermes-ipfs-cache` with zero documentation.
-- `docs/runbooks/deploying.md` is a 1-line stub that adds no value over `staging-production.md`.
+- `docs/runbooks/deploying.md` is a 1-line stub that adds no value over `deployment.md`.
 - `docs/api-architecture.md` has a broken link to `docs/runbooks/monitoring.md` (deleted file).
 
 ## Acceptance Criteria
 
-- [ ] `docs/runbooks/deploying.md` is deleted; all references updated to point to `staging-production.md`
+- [ ] `docs/runbooks/deploying.md` is deleted; all references updated to point to `deployment.md`
 - [ ] Broken `monitoring.md` link in `docs/api-architecture.md` is removed
 - [ ] `docs/decisions/README.md` exists and indexes every ADR and RFC in the repo
 - [ ] `atlas/.env.example` exists with all env vars from code
@@ -42,11 +42,11 @@ Tasks are ordered by dependency — cleanup first, then `.env.example` files (re
 
 #### 1.1 Delete `docs/runbooks/deploying.md`
 
-The file contains one sentence that adds nothing beyond what `docs/runbooks/staging-production.md` already covers in detail. The staging-production runbook includes deployment to staging, promotion to production, hotfix workflow, and rollback procedures.
+The file contains one sentence that adds nothing beyond what `docs/runbooks/deployment.md` already covers in detail. The staging-production runbook includes deployment to staging, promotion to production, hotfix workflow, and rollback procedures.
 
 - **Delete:** `docs/runbooks/deploying.md`
-- **Update:** `README.md` line 144 — change `[Deploying](docs/runbooks/deploying.md)` to point to `docs/runbooks/staging-production.md` (or merge into the existing staging-production link)
-- **Update:** `docs/api-architecture.md` line 176 — change `[Deploying](./runbooks/deploying.md)` to `[Staging & Production](./runbooks/staging-production.md)`
+- **Update:** `README.md` line 144 — change `[Deploying](docs/runbooks/deploying.md)` to point to `docs/runbooks/deployment.md` (or merge into the existing staging-production link)
+- **Update:** `docs/api-architecture.md` line 176 — change `[Deploying](./runbooks/deploying.md)` to `[Staging & Production](./runbooks/deployment.md)`
 
 #### 1.2 Fix broken monitoring link
 

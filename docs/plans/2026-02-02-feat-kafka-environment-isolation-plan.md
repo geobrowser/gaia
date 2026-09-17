@@ -177,4 +177,4 @@ For production: order doesn't matter (prefix is empty, topics unchanged).
 - Brainstorm: `docs/brainstorms/2026-02-02-kafka-environment-isolation-brainstorm.md`
 - hermes-pipeline topics: `hermes-pipeline/src/emit.rs:38-49`
 - kg-indexer subscriptions: `kg-indexer/src/consumer.rs:48-56`
-- Runbook: `docs/runbooks/staging-production.md`
+- Runbook: `docs/runbooks/deployment.md`

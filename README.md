@@ -196,7 +196,7 @@ When adding a new crate, update the subsystem table above and add a crate README
 
 ### Operations
 
-- [Staging & Production Runbook](docs/runbooks/staging-production.md)
+- [Staging & Production Runbook](docs/runbooks/deployment.md)
 
 ### Protocol
 

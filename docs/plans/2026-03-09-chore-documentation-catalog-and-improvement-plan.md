@@ -150,4 +150,4 @@ After completing all phases:
 - **Gold standards:** `atlas/README.md` (service README), `proposal-executor/ARCHITECTURE.md` + `RUNBOOK.md` (architecture + operations), `hermes-pipeline/README.md` (comprehensive README)
 - **System architecture:** `docs/architecture.md`
 - **API architecture:** `docs/api-architecture.md`
-- **Staging/production runbook:** `docs/runbooks/staging-production.md`
+- **Staging/production runbook:** `docs/runbooks/deployment.md`

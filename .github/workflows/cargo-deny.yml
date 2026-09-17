@@ -7,14 +7,14 @@ name: Cargo Deny (supply-chain)
 
 on:
   push:
-    branches: [main, dev, staging]
+    branches: [main]
     paths:
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - 'deny.toml'
       - '.github/workflows/cargo-deny.yml'
   pull_request:
-    branches: [main, dev, staging]
+    branches: [main]
     paths:
       - '**/Cargo.toml'
       - 'Cargo.lock'

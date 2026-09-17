@@ -9,7 +9,7 @@ name: Dockerfile ships every binary
 
 on:
   push:
-    branches: [main, dev, staging]
+    branches: [main]
     paths:
       - '**/Cargo.toml'
       - '**/Dockerfile'
@@ -18,7 +18,7 @@ on:
       - 'scripts/check-dockerfile-bins.py'
       - '.github/workflows/dockerfile-bins.yml'
   pull_request:
-    branches: [main, dev, staging]
+    branches: [main]
     paths:
       - '**/Cargo.toml'
       - '**/Dockerfile'

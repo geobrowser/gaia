@@ -2,12 +2,12 @@ name: API Unit Tests
 
 on:
   push:
-    branches: [main, dev, staging]
+    branches: [main]
     paths:
       - 'api/**'
       - 'api/drizzle/**'
   pull_request:
-    branches: [main, dev, staging]
+    branches: [main]
     paths:
       - 'api/**'
       - 'api/drizzle/**'

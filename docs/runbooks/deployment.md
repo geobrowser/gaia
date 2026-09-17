@@ -1,17 +1,48 @@
-# Staging & Production Deployment Runbook
+# Deployment Runbook
 
 ## Overview
 
-We use GitFlow for deployments:
+**One trunk: `main`.** There is no `dev`, no `staging` branch, and no auto-deploy.
 
 ```
-feature branches → dev → main
-                    ↓      ↓
-                staging   production
+feature branch → PR → main → (manual) build image → (manual) deploy
 ```
 
-- **Push to `dev`**: Auto-deploys changed services to staging
-- **Merge `dev` → `main`**: Auto-deploys changed services to production
+`main` is protected: changes land by pull request. It was called `staging` until 2026-09-17,
+when `main` and `dev` — 147 commits behind and untouched since July — were deleted and `staging`
+was renamed. The name had come to mean two contradictory things: the branch serving production,
+and a tier of k8s environments (`api-staging`, `knowledge-staging`, …) that no longer exist.
+
+**Merging deploys NOTHING.** Every per-service auto-deploy workflow was deleted in #960/#961:
+they applied manifests into pre-v2 namespaces (`api`, `knowledge`, `scoring`, `notifications`,
+`search`, `kafka`) that no longer exist, so they reported green and changed nothing.
+
+Shipping is two manual dispatches:
+
+```sh
+# 1. build — the tag is the 8-char short SHA of the commit on main
+gh workflow run build-v2-images.yml --ref main -f service=<svc>
+
+# 2. deploy — cluster geo-testnet-k8s is namespace `gaia`, the live stack
+gh workflow run deploy-v2.yml --ref main \
+  -f service=<svc> -f tag=<8-char-sha> -f cluster=geo-testnet-k8s
+```
+
+Verify by the **running image**, never by the workflow's conclusion:
+
+```sh
+kubectl --context=do-nyc2-geo-testnet-k8s -n gaia get deploy <svc> \
+  -o jsonpath='{.spec.template.spec.containers[0].image}'
+```
+
+Database migrations apply through the api's `migrate` initContainer, so they land when the api
+deploys — an image rollback does **not** undo a migration.
+
+---
+
+> **Everything below describes the retired GitFlow** (`dev` → staging, `main` → production,
+> auto-deploy on push). It is kept for historical context; none of those branches or workflows
+> exist. Treat it as a record of how things used to work, not as instructions.
 
 ## Merge Strategy
 
