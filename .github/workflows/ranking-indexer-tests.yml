@@ -13,13 +13,13 @@ name: Ranking Indexer Tests
 on:
   workflow_dispatch:
   push:
-    branches: [main, dev, staging]
+    branches: [main]
     paths:
       - 'ranking-indexer/**'
       - 'api/drizzle/**'
       - '.github/workflows/ranking-indexer-tests.yml'
   pull_request:
-    branches: [main, dev, staging]
+    branches: [main]
     paths:
       - 'ranking-indexer/**'
       - 'api/drizzle/**'

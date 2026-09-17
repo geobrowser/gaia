@@ -174,4 +174,4 @@ Kubernetes-aware probes:
 - [Hermes Architecture](./architecture.md) — Blockchain ingestion pipeline (upstream of the API)
 - [Gotchas](./gotchas.md) — Operational knowledge including indexer performance and API tradeoffs
 - [Known Issues](./issues.md) — p99 query latency, PostGraphile vs REST decisions
-- [Staging & Production](./runbooks/staging-production.md) — Deployment runbook
+- [Staging & Production](./runbooks/deployment.md) — Deployment runbook

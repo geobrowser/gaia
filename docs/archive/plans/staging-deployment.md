@@ -110,7 +110,7 @@ After further consideration, GitFlow was chosen for simplicity:
 - Services typically ship together in this monorepo
 - Simpler mental model for the team
 
-See `docs/runbooks/staging-production.md` for operational details.
+See `docs/runbooks/deployment.md` for operational details.
 
 ### Namespace Strategy
 

@@ -2,7 +2,7 @@ name: Membership Acceptor Check
 
 on:
   pull_request:
-    branches: [main, dev, staging]
+    branches: [main]
     paths:
       - 'membership-acceptor/**'
       - '.github/workflows/membership-acceptor-check.yml'

@@ -2,11 +2,11 @@ name: API Check
 
 on:
   push:
-    branches: [main, dev, staging]
+    branches: [main]
     paths:
       - 'api/**'
   pull_request:
-    branches: [main, dev, staging]
+    branches: [main]
     paths:
       - 'api/**'
 
