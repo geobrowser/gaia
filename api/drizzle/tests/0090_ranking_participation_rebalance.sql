@@ -38,9 +38,16 @@
 
 \set ON_ERROR_STOP on
 
+-- `IS NOT TRUE`, not `NOT cond`. Under `NOT cond` a NULL condition is neither true nor
+-- false, so it takes the ELSE branch and reports a PASS — the vacuous-assertion trap in
+-- README.md. A `SELECT ... INTO` that matches no row leaves its variable NULL, and the
+-- assertion below it then proves nothing while printing "pass".
 CREATE OR REPLACE FUNCTION assert(cond boolean, label text) RETURNS void
 LANGUAGE plpgsql AS $$
-BEGIN IF NOT cond THEN RAISE EXCEPTION 'FAIL: %', label; ELSE RAISE NOTICE 'pass: %', label; END IF; END; $$;
+BEGIN
+  IF cond IS NOT TRUE THEN RAISE EXCEPTION 'FAIL: % (condition was %)', label, COALESCE(cond::text, 'NULL');
+  ELSE RAISE NOTICE 'pass: %', label; END IF;
+END $$;
 
 -- Scoped cleanup rather than TRUNCATE, for the reason 0089 documents: `spaces` and
 -- `subspace_topics` now carry foreign keys to `entities`, so the truncate lists in

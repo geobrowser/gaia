@@ -69,8 +69,11 @@ closure pulls in `proposals`, `proposal_votes`, `subspaces` and `space_voting_se
 That is a wide blast radius by design — another reason never to point these at a database
 with content in it.
 
-Remaining wart: `assert(cond, label)` is defined per-file as `IF NOT cond THEN RAISE ...
-ELSE 'pass'`, and under `NOT cond` a **NULL** condition takes the ELSE branch and reports
-a pass. A `SELECT ... INTO` that matches no row therefore passes vacuously. 0091 defines
-it as `IS NOT TRUE` instead; the older files have not been converted, and doing so will
-probably surface more stale fixtures.
+`assert(cond, label)` is defined per-file and uses **`IS NOT TRUE`**, not `NOT cond`. The
+difference is not pedantic: under `NOT cond` a **NULL** condition is neither true nor false,
+so it takes the ELSE branch and reports a **pass**. A `SELECT ... INTO` matching no row, or
+a scalar subquery matching no row, therefore passes vacuously — the trap listed above, and
+one that a draft of 0091 fell into. Keep the strict form in any new suite.
+
+Converting the older suites to it surfaced no vacuous assertions; that change is
+preventive, not a repair.
