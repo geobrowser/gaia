@@ -1,0 +1,36 @@
+name: Dockerfile ships every binary
+
+# A binary that a crate builds but its Dockerfile never copies produces an image that
+# builds, pushes, deploys, shows a healthy workload in kubectl, and whose container can
+# never start: `exec: "<name>": executable file not found in $PATH`. Every other check is
+# green, because nothing else looks at Cargo.toml and the Dockerfile together.
+#
+# Happened on 2026-09-17 with ranking-indexer's feed_composition_sample.
+
+on:
+  push:
+    branches: [main, dev, staging]
+    paths:
+      - '**/Cargo.toml'
+      - '**/Dockerfile'
+      - '**/src/bin/**'
+      - '**/src/main.rs'
+      - 'scripts/check-dockerfile-bins.py'
+      - '.github/workflows/dockerfile-bins.yml'
+  pull_request:
+    branches: [main, dev, staging]
+    paths:
+      - '**/Cargo.toml'
+      - '**/Dockerfile'
+      - '**/src/bin/**'
+      - '**/src/main.rs'
+      - 'scripts/check-dockerfile-bins.py'
+      - '.github/workflows/dockerfile-bins.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Standard library only, so there is nothing to install and nothing to pin.
+      - run: python3 scripts/check-dockerfile-bins.py
