@@ -617,6 +617,13 @@
       "when": 1789519208619,
       "tag": "0087_proposals_current_primary_key",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1789602376442,
+      "tag": "0088_entities_ordered_by_property_voted_by",
+      "breakpoints": true
     }
   ]
 }
