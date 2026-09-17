@@ -56,15 +56,23 @@ INSERT INTO entities (id, created_at) VALUES
   ('a0000000-0000-0000-0000-000000000001','1785478598'),  -- old, 5 positions
   ('a0000000-0000-0000-0000-000000000002','1786649398'),  -- new, 0 positions
   ('a0000000-0000-0000-0000-000000000003','1786649398'),  -- new, 5 positions
-  ('a0000000-0000-0000-0000-000000000004','1786649398');  -- new, veracity only
+  ('a0000000-0000-0000-0000-000000000004','1786649398'),  -- new, veracity only
+  ('a0000000-0000-0000-0000-000000000005','1785478598');  -- the split-twin of 1 (see below)
 
 -- 5 positions split 3 agree / 2 disagree on the old claim, plus the single
 -- curation downvote the reported entity actually carried.
+--
+-- Entity 5 is entity 1 with the SAME vote composition and the split reversed: 5 stance
+-- votes 5/0 instead of 3/2, and the identical single curation downvote. It exists only
+-- so the direction-agnostic assertion below compares like with like. Entity 3 used to
+-- play that role, and 0083 quietly took it away — see the note on that assertion.
 INSERT INTO votes_count (object_id, object_type, space_id, vote_kind, positive, negative) VALUES
   ('a0000000-0000-0000-0000-000000000001',0,'bbbbbbbb-0000-0000-0000-000000000000',1,3,2),
   ('a0000000-0000-0000-0000-000000000001',0,'bbbbbbbb-0000-0000-0000-000000000000',0,0,1),
   ('a0000000-0000-0000-0000-000000000003',0,'bbbbbbbb-0000-0000-0000-000000000000',1,5,0),
-  ('a0000000-0000-0000-0000-000000000004',0,'bbbbbbbb-0000-0000-0000-000000000000',2,900,0);
+  ('a0000000-0000-0000-0000-000000000004',0,'bbbbbbbb-0000-0000-0000-000000000000',2,900,0),
+  ('a0000000-0000-0000-0000-000000000005',0,'bbbbbbbb-0000-0000-0000-000000000000',1,5,0),
+  ('a0000000-0000-0000-0000-000000000005',0,'bbbbbbbb-0000-0000-0000-000000000000',0,0,1);
 
 -- ---------------------------------------------------------------------------
 -- Inert by default. This is the guarantee that applying the migration to
@@ -85,8 +93,9 @@ SELECT assert((SELECT column_default::numeric FROM information_schema.columns
 
 SELECT assert(refresh_entity_ranking_scores(ARRAY[
   'a0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-000000000002',
-  'a0000000-0000-0000-0000-000000000003','a0000000-0000-0000-0000-000000000004']::uuid[]) = 4,
-  'refresh scored all 4 entities');
+  'a0000000-0000-0000-0000-000000000003','a0000000-0000-0000-0000-000000000004',
+  'a0000000-0000-0000-0000-000000000005']::uuid[]) = 5,
+  'refresh scored all 5 entities');
 
 SELECT assert((SELECT count(*) FROM entity_ranking_scores WHERE participation_score <> 0) = 0,
   'at weight 0 no entity gets a participation term');
@@ -129,7 +138,8 @@ UPDATE entity_ranking_config
 
 SELECT assert(refresh_entity_ranking_scores(ARRAY[
   'a0000000-0000-0000-0000-000000000001','a0000000-0000-0000-0000-000000000002',
-  'a0000000-0000-0000-0000-000000000003','a0000000-0000-0000-0000-000000000004']::uuid[]) = 4,
+  'a0000000-0000-0000-0000-000000000003','a0000000-0000-0000-0000-000000000004',
+  'a0000000-0000-0000-0000-000000000005']::uuid[]) = 5,
   'rescore after arming');
 
 -- THE assertion this migration exists for.
@@ -152,8 +162,20 @@ SELECT assert((SELECT ranking_score FROM entity_ranking_scores WHERE entity_id='
 -- Direction-agnostic: 5 positions is 5 positions however they split. Pinning this
 -- is what stops someone "improving" the term into agrees - disagrees, which would
 -- bury contested claims.
+--
+-- Compared against entity 5, NOT entity 3, since 0083. This assertion originally read
+-- 1 vs 3 and both had 5 stance votes, so it held. 0083 made participation count curation
+-- votes alongside stance, and entity 1 carries a curation downvote — so it became 6 votes
+-- against entity 3's 5 and the assertion failed. It had been failing ever since, unseen,
+-- because nothing ran these suites; that is what rankingSqlSuites.test.ts now fixes.
+--
+-- The fix is a fixture that satisfies the new rule rather than a weakened expectation,
+-- which is what drizzle/tests/README.md asks for and the right call here: the property
+-- under test is real and worth keeping, it was only ever the PARTNER that went stale.
+-- Entity 5 has entity 1's exact vote composition with the stance split reversed, so the
+-- pair differs in nothing but the split.
 SELECT assert((SELECT participation_score FROM entity_ranking_scores WHERE entity_id='a0000000-0000-0000-0000-000000000001')
-            = (SELECT participation_score FROM entity_ranking_scores WHERE entity_id='a0000000-0000-0000-0000-000000000003'),
+            = (SELECT participation_score FROM entity_ranking_scores WHERE entity_id='a0000000-0000-0000-0000-000000000005'),
   'armed: 3-agree/2-disagree scores the same participation as 5-agree/0-disagree');
 
 -- ---------------------------------------------------------------------------
