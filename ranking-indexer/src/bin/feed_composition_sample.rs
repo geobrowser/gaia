@@ -15,10 +15,15 @@
 //! arithmetic relating the two parameter sets. That worked only because the change was
 //! confined to a single term. This binary means the next one does not need luck.
 //!
-//! WHAT IT DOES. One `sample_feed_composition` call per run, then reads
-//! `feed_composition_drift` and logs the move since the previous sample. Both live in
-//! migration 0091 — the logic is SQL so that it is covered by the suites in
-//! `api/drizzle/tests`, which now run in CI, rather than by a Rust test nobody runs.
+//! WHAT IT DOES. One `sample_feed_composition` call per scope, then reads
+//! `feed_composition_drift` for that scope and logs the move since its previous sample.
+//! Both live in migrations 0091/0092 — the logic is SQL so that it is covered by the
+//! suites in `api/drizzle/tests`, which run in CI, rather than by a Rust test nobody runs.
+//!
+//! SCOPES. Always the global feed, plus one sample per space in
+//! `FEED_COMPOSITION_SPACE_IDS`. Drift is per scope: a space that moved must not be
+//! reported against the global history. The original complaint behind all of this was
+//! about the top of a SINGLE space, which a global-only canary would not have caught.
 //!
 //! DRIFT IS REPORTED, NOT ENFORCED. A large move is logged at WARN and the job still
 //! succeeds. Failing the job on drift would be an alert that cries wolf: composition
@@ -33,10 +38,81 @@ use std::env;
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use ranking_indexer::error::IndexerError;
+
+/// Samples one scope and logs its drift. `space` is None for the global feed.
+async fn sample_scope(
+    pool: &sqlx::PgPool,
+    type_ids: &[Uuid],
+    window: i32,
+    space: Option<Uuid>,
+    alert_delta: f64,
+) -> Result<(), IndexerError> {
+    let sample_id: i64 = sqlx::query_scalar("SELECT public.sample_feed_composition($1, $2, $3)")
+        .bind(type_ids)
+        .bind(window)
+        .bind(space)
+        .fetch_one(pool)
+        .await
+        .map_err(IndexerError::Database)?;
+
+    info!(
+        sample_id,
+        window,
+        types = type_ids.len(),
+        space = ?space,
+        "feed composition sampled"
+    );
+
+    // share_delta is NUMERIC; cast in the query rather than enabling sqlx's `bigdecimal`
+    // feature for one log field. The precision lost is far below the alert threshold.
+    let drift = sqlx::query(
+        "SELECT type_id, previous_count, current_count, share_delta::float8 AS share_delta \
+         FROM public.feed_composition_drift($1)",
+    )
+    .bind(space)
+    .fetch_all(pool)
+    .await
+    .map_err(IndexerError::Database)?;
+
+    if drift.is_empty() {
+        // The first sample for this scope, or its only one. Not a problem and not an alarm.
+        info!(sample_id, space = ?space, "no previous sample to compare against");
+        return Ok(());
+    }
+
+    for row in drift {
+        let type_id: Uuid = row.try_get("type_id").map_err(IndexerError::Database)?;
+        let previous_count: i32 = row
+            .try_get("previous_count")
+            .map_err(IndexerError::Database)?;
+        let current_count: i32 = row
+            .try_get("current_count")
+            .map_err(IndexerError::Database)?;
+        let delta: f64 = row.try_get("share_delta").map_err(IndexerError::Database)?;
+
+        if delta.abs() >= alert_delta {
+            warn!(
+                sample_id,
+                %type_id,
+                space = ?space,
+                previous_count,
+                current_count,
+                share_delta = delta,
+                threshold = alert_delta,
+                "feed composition moved sharply — if no ranking change was deployed, something \
+                 else changed what people see"
+            );
+        } else {
+            info!(sample_id, %type_id, space = ?space, previous_count, current_count, share_delta = delta, "feed composition drift");
+        }
+    }
+
+    Ok(())
+}
 
 /// `EXPLORE_DIVERSITY_WINDOW_SIZE` in geogenesis: three pages of 22. The window Explore
 /// fetches before its diversity cap and per-space quota reorder it.
@@ -96,66 +172,40 @@ async fn main() -> Result<(), IndexerError> {
     let window: i32 = env_or("FEED_COMPOSITION_WINDOW", DEFAULT_WINDOW)?;
     let alert_delta: f64 = env_or("FEED_COMPOSITION_ALERT_SHARE_DELTA", DEFAULT_ALERT_DELTA)?;
 
+    // Optional, unlike the type list: with none set the canary watches the global feed
+    // only, which is the behaviour before per-space sampling existed.
+    let space_ids = match env::var("FEED_COMPOSITION_SPACE_IDS") {
+        Err(_) => Vec::new(),
+        Ok(raw) => raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(Uuid::parse_str)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| IndexerError::Config(format!("FEED_COMPOSITION_SPACE_IDS: {e}")))?,
+    };
+
     let pool = PgPoolOptions::new()
         .max_connections(1)
         .connect(&database_url)
         .await
         .map_err(IndexerError::Database)?;
 
-    let sample_id: i64 = sqlx::query_scalar("SELECT public.sample_feed_composition($1, $2, NULL)")
-        .bind(&type_ids)
-        .bind(window)
-        .fetch_one(&pool)
-        .await
-        .map_err(IndexerError::Database)?;
-
-    info!(
-        sample_id,
-        window,
-        types = type_ids.len(),
-        "feed composition sampled"
-    );
-
-    // share_delta is NUMERIC; cast in the query rather than enabling sqlx's `bigdecimal`
-    // feature for one log field. The precision lost is far below the alert threshold.
-    let drift = sqlx::query(
-        "SELECT type_id, previous_count, current_count, share_delta::float8 AS share_delta \
-         FROM public.feed_composition_drift(NULL)",
-    )
-    .fetch_all(&pool)
-    .await
-    .map_err(IndexerError::Database)?;
-
-    if drift.is_empty() {
-        // The first sample for a scope, or the only one. Not a problem and not an alarm.
-        info!(sample_id, "no previous sample to compare against");
-        return Ok(());
+    // Global first, then each configured space. One failure must not cost the others:
+    // a space id that no longer exists should not stop the global sample being recorded.
+    let mut failures = 0usize;
+    for scope in std::iter::once(None).chain(space_ids.iter().copied().map(Some)) {
+        if let Err(e) = sample_scope(&pool, &type_ids, window, scope, alert_delta).await {
+            failures += 1;
+            error!(space = ?scope, error = %e, "failed to sample this scope");
+        }
     }
 
-    for row in drift {
-        let type_id: Uuid = row.try_get("type_id").map_err(IndexerError::Database)?;
-        let previous_count: i32 = row
-            .try_get("previous_count")
-            .map_err(IndexerError::Database)?;
-        let current_count: i32 = row
-            .try_get("current_count")
-            .map_err(IndexerError::Database)?;
-        let delta: f64 = row.try_get("share_delta").map_err(IndexerError::Database)?;
-
-        if delta.abs() >= alert_delta {
-            warn!(
-                sample_id,
-                %type_id,
-                previous_count,
-                current_count,
-                share_delta = delta,
-                threshold = alert_delta,
-                "feed composition moved sharply — if no ranking change was deployed, something \
-                 else changed what people see"
-            );
-        } else {
-            info!(sample_id, %type_id, previous_count, current_count, share_delta = delta, "feed composition drift");
-        }
+    if failures > 0 {
+        return Err(IndexerError::Config(format!(
+            "{failures} of {} scopes failed to sample",
+            1 + space_ids.len()
+        )));
     }
 
     Ok(())
