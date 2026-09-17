@@ -1,0 +1,102 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ranking-indexer-feed-composition
+  namespace: gaia
+  labels:
+    app: ranking-indexer-feed-composition
+    environment: testnet
+spec:
+  # GEO-2926 follow-up: record what the ranked feed is made of, so a ranking change
+  # cannot quietly change what people see. See src/bin/feed_composition_sample.rs for
+  # the incident this exists because of.
+  #
+  # Hourly. The sample is one indexed walk of `entity_type_ranking` plus one insert, so
+  # the cost is negligible and 24 points a day is enough resolution to place a change
+  # against a deploy. Offset from :00 so it does not contend with the rolling sweep.
+  schedule: "17 * * * *"
+  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            environment: testnet
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            fsGroup: 1001
+          imagePullSecrets:
+            - name: regcred
+          volumes:
+            - name: ssl-certs
+              emptyDir: {}
+          initContainers:
+            - name: setup-certs
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command:
+                - sh
+                - -c
+                - |
+                  echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+              env:
+                - name: DATABASE_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_SSL_CA
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+          containers:
+            - name: ranking-indexer-feed-composition
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command: ["feed_composition_sample"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+                  readOnly: true
+              env:
+                - name: PGSSLROOTCERT
+                  value: /ssl/ca.crt
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_URL
+                # MIRRORS geogenesis DEFAULT_EXPLORE_TYPE_IDS (apps/web/core/explore/
+                # explore-constants.ts): News story, Debate, Claim — the three types
+                # Explore arrives with ticked. These two lists must be changed together;
+                # if they diverge this canary watches a feed nobody is looking at, which
+                # is why the binary refuses to start rather than compile in a default.
+                - name: FEED_COMPOSITION_TYPE_IDS
+                  value: "e550fe51-7e90-4b2c-8fff-df13408f5634,fd51f935-2063-4617-be39-7b672b23364c,96f859ef-a1ca-4b22-9372-c86ad58b694b"
+                # EXPLORE_DIVERSITY_WINDOW_SIZE: the window Explore fetches before its
+                # diversity cap and per-space quota reorder it.
+                - name: FEED_COMPOSITION_WINDOW
+                  value: "66"
+                - name: RUST_LOG
+                  value: "feed_composition_sample=info,ranking_indexer=info"
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "200m"
