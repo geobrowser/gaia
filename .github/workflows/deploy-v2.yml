@@ -106,6 +106,7 @@ jobs:
           echo "rollout=$rollout" >> "$GITHUB_OUTPUT"
 
       - name: Verify image tag exists in registry
+        id: verify
         if: inputs.service != 'valkey'
         env:
           TAG: ${{ inputs.tag }}
@@ -120,11 +121,40 @@ jobs:
             echo "::error::doctl failed listing tags for $REGISTRY/$SERVICE — registry/auth problem, not a missing tag."
             exit 1
           fi
-          if ! echo "$tags" | awk -v t="$TAG" '$1==t{found=1} END{exit !found}'; then
-            echo "::error::Tag $TAG not found in $REGISTRY/$SERVICE — run the build workflow first. Tags present:"
-            echo "$tags"
+
+          if echo "$tags" | awk -v t="$TAG" '$1==t{found=1} END{exit !found}'; then
+            echo "resolved=$TAG" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The build pushes BOTH the 8-char short tag and the full 40-char SHA, but the
+          # registry listing does not reliably show both — on 2026-09-11 (kg-indexer) and
+          # again 2026-09-17 (ranking-indexer) only the full SHA was listed, and a deploy
+          # dispatched with the documented short tag failed here while the image existed.
+          #
+          # So a tag that is an unambiguous PREFIX of exactly one listed tag resolves to it.
+          # That makes both forms work instead of making the caller guess which one the
+          # registry will admit to today. Ambiguity still fails: matching two tags means the
+          # prefix is too short to identify an image, which is not something to guess at.
+          matches=$(echo "$tags" | awk -v t="$TAG" 'index($1, t) == 1 { print $1 }' | sort -u)
+          count=$(printf '%s\n' "$matches" | grep -c . || true)
+
+          if [ "$count" = "1" ]; then
+            resolved=$(printf '%s\n' "$matches" | head -1)
+            echo "::notice::Tag $TAG is not listed, but is a unique prefix of $resolved — deploying that."
+            echo "resolved=$resolved" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$count" -gt 1 ]; then
+            echo "::error::Tag $TAG is ambiguous in $REGISTRY/$SERVICE — it prefixes $count tags:"
+            printf '%s\n' "$matches"
             exit 1
           fi
+
+          echo "::error::Tag $TAG not found in $REGISTRY/$SERVICE — run the build workflow first. Tags present:"
+          echo "$tags"
+          exit 1
 
       - name: Ensure namespace exists
         run: kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
@@ -160,7 +190,7 @@ jobs:
             -o jsonpath='{range .items[*]}{.spec.scaleTargetRef.name}{"\n"}{end}' 2>/dev/null || true)"
 
           for m in ${{ steps.map.outputs.manifests }}; do
-            rendered="$(sed "s|:latest|:${{ inputs.tag }}|g" "$m")"
+            rendered="$(sed "s|:latest|:${{ steps.verify.outputs.resolved || inputs.tag }}|g" "$m")"
 
             for target in $HPA_TARGETS; do
               # Only rewrite a manifest that actually declares this Deployment.
@@ -193,5 +223,5 @@ jobs:
       - name: Show result
         if: always()
         run: |
-          echo "## Deploy ${{ inputs.service }} @ ${{ inputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Deploy ${{ inputs.service }} @ ${{ steps.verify.outputs.resolved || inputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
           kubectl get pods -n $NAMESPACE -o wide | tee -a "$GITHUB_STEP_SUMMARY"
