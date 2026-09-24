@@ -60,15 +60,22 @@ prometheus:
         cpu: 1000m
         memory: 2Gi
 
-    # Storage - using emptyDir for now (data lost on pod restart)
-    # For production, enable persistent storage:
-    # storageSpec:
-    #   volumeClaimTemplate:
-    #     spec:
-    #       accessModes: ["ReadWriteOnce"]
-    #       resources:
-    #         requests:
-    #           storage: 50Gi
+    # Persistent TSDB. With emptyDir, every pod reschedule (node drain, node
+    # replacement, pool migration) wiped all history — the 2026-09-24 move to
+    # the Intel pool did exactly that. ~150k series at the default 30s scrape
+    # is well under 1 GB/day, so 10d fits in 20Gi; retentionSize caps the TSDB
+    # below the volume so a series explosion drops old data instead of
+    # filling the disk. The volume is expandable in place (do-block-storage
+    # has allowVolumeExpansion).
+    retentionSize: 16GB
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: do-block-storage
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 20Gi
 
 # Alertmanager configuration
 alertmanager:

@@ -39,8 +39,7 @@ The observability stack consists of:
 
 ### Cluster-Wide Stack (kube-prometheus-stack)
 
-- **Prometheus**: 10-day retention, emptyDir storage
-  > ⚠️ **Data lost on pod restart.** Do not restart the Prometheus pod unless you accept losing all stored metrics.
+- **Prometheus**: 10-day retention (capped at 16GB), on a 20Gi `do-block-storage` PVC — history survives pod restarts and node drains
 - **Grafana**: Dashboards provisioned via ConfigMap sidecar — any ConfigMap with label `grafana_dashboard: "1"` is auto-discovered
 - **node-exporter**: Host CPU, memory, disk, network on every node
 - **kube-state-metrics**: K8s object state (deployments, pods, HPA status)

@@ -87,15 +87,15 @@ helm template kube-prometheus-stack prometheus-community/kube-prometheus-stack \
 kubectl apply -f monitoring/k8s/prometheus-stack.yaml --server-side
 ```
 
-Last rendered with helm `v4.2.0` and chart `kube-prometheus-stack@81.2.2`; use the same versions to keep diffs minimal.
+Last rendered with helm `v4.3.0` and chart `kube-prometheus-stack@81.2.2`; use the same versions to keep diffs minimal.
 
 ## Values
 
 See `values.yaml` for configuration options:
 - Grafana ingress (currently disabled)
-- Prometheus retention (10 days)
+- Prometheus retention (10 days, capped at 16GB)
 - Resource limits
-- Persistent storage (currently using emptyDir)
+- Prometheus persistent storage (20Gi PVC)
 
 ## What Gets Monitored
 
