@@ -64,7 +64,6 @@ Before deploying, create the required secrets in the `search` namespace:
 | ------------------------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | `kafka-credentials`      | `KAFKA_BROKER`, `KAFKA_USERNAME`, `KAFKA_PASSWORD`, `KAFKA_SSL_CA_PEM` | Managed Kafka connection (see [hermes README](../hermes/README.md) for details) |
 | `opensearch-credentials` | `OPENSEARCH_URL`                                                       | OpenSearch connection URL                                                       |
-| `grafana-credentials`    | `ADMIN_USER`, `ADMIN_PASSWORD`                                         | Grafana admin login                                                             |
 | `search-indexer-secrets` | `SENTRY_DSN`                                                           | Optional, for Sentry telemetry and error tracking                               |
 
 Create the Sentry secret:
@@ -85,24 +84,6 @@ kubectl apply -k search-indexer-deploy/k8s/
 kustomize build search-indexer-deploy/k8s/ | kubectl apply -f -
 ```
 
-### Accessing Grafana
-
-Grafana is exposed publicly via NodePort on port `30440`. Access it at:
-
-```
-http://<node-ip>:30440
-```
-
-To find your node IP:
-
-```bash
-kubectl get nodes -o wide
-```
-
-**Note**: Grafana is accessible over HTTP (not HTTPS). For production use, consider adding TLS/HTTPS or restricting access via firewall rules.
-
-The credentials are set via the `grafana-credentials` secret created in the prerequisites step above.
-
 ## Directory Structure
 
 ```
@@ -120,7 +101,6 @@ search-indexer-deploy/
     |   +-- kustomization.yaml
     |   +-- namespace.yaml      # namespace: search
     |   +-- search-indexer.yaml
-    |   +-- monitoring.yaml
     |   +-- jobs/               # Production migration jobs (ENVIRONMENT=production)
     +-- staging/
     |   +-- namespace.yaml      # namespace: search-staging
@@ -152,7 +132,7 @@ The jobs automate the entire migration process including creating indices, stopp
 
 | Environment | OpenSearch RAM | OpenSearch Heap | Grafana RAM | Prometheus RAM |
 | ----------- | -------------- | --------------- | ----------- | -------------- |
-| Production  | 6 GB           | 3 GB            | 2 GB        | 512 MB         |
+| Production  | 6 GB           | 3 GB            | —           | —              |
 | Local       | 2 GB           | 1 GB            | 1 GB        | 256 MB         |
 
 ## Services
@@ -161,13 +141,15 @@ The jobs automate the entire migration process including creating indices, stopp
 | -------------------- | ---------------------- | ---------------------------------------------- |
 | OpenSearch REST API  | 9200                   | Search and indexing API                        |
 | OpenSearch Transport | 9300                   | Inter-node communication                       |
-| Grafana              | 4040 (NodePort: 30440) | Metrics dashboards (HTTP, publicly accessible) |
-| Prometheus           | 9090                   | Metrics collection and querying                |
+| Grafana              | 4040                   | Metrics dashboards (local only)                |
+| Prometheus           | 9090                   | Metrics collection and querying (local only)   |
 | OpenSearch Exporter  | 9114                   | Prometheus metrics exporter                    |
 
 ## Monitoring Stack
 
-The monitoring stack includes:
+In production there is no separate search monitoring stack: `opensearch-exporter` runs in the `monitoring` namespace ([`monitoring/k8s/opensearch-exporter.yaml`](../monitoring/k8s/opensearch-exporter.yaml)) and the cluster-wide Prometheus scrapes it.
+
+The local `docker-compose.yaml` stack includes:
 
 - **OpenSearch Exporter**: Exports OpenSearch metrics in Prometheus format using the [prometheus-community/elasticsearch_exporter](https://github.com/prometheus-community/elasticsearch_exporter)
 - **Prometheus**: Scrapes metrics from the exporter and stores time-series data
@@ -220,14 +202,4 @@ For production, you should:
 1. Enable the OpenSearch security plugin
 2. Configure TLS certificates
 3. Set up authentication
-4. Use Kubernetes secrets for credentials (✅ Grafana credentials are already using secrets)
-
-### Grafana Security
-
-- Grafana is **publicly exposed** via NodePort on port `30440` over **HTTP** (not HTTPS)
-- Credentials are stored in Kubernetes secrets (see Prerequisites section)
-- Ensure you use strong credentials when creating the `grafana-credentials` secret
-- **Warning**: Traffic is unencrypted. For production, consider:
-  - Adding TLS/HTTPS (via Ingress + cert-manager or Load Balancer)
-  - Restricting access via firewall rules or network policies
-  - Using OAuth/SSO authentication with Google or GitHub
+4. Use Kubernetes secrets for credentials
