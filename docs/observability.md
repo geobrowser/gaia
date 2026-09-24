@@ -11,9 +11,7 @@ The observability stack consists of:
 | Component | Purpose |
 |-----------|---------|
 | **Prometheus** (kube-prometheus-stack) | Metrics collection and storage (cluster-wide, `monitoring` namespace) |
-| **Prometheus** (standalone) | OpenSearch metrics (search-namespace, `search` namespace) |
 | **Grafana** (kube-prometheus-stack) | Dashboards for cluster-wide metrics (`monitoring` namespace) |
-| **Grafana** (standalone) | OpenSearch dashboards (`search` namespace) |
 | **Alertmanager** | Alert routing to Slack `#alerts` channel |
 | **Sentry** | Error tracking and distributed tracing |
 | **Axiom** | 100% trace retention via OTLP export (Sentry applies server-side sampling) |
@@ -27,7 +25,7 @@ The observability stack consists of:
 | `api` | api | kube-prometheus-stack (recording rules, alerts, HPA custom metrics) |
 | `knowledge` | atlas, hermes-pipeline, kg-indexer, hermes-ipfs-cache, proposal-executor | kube-prometheus-stack (alerts for atlas) |
 | `knowledge-staging` | atlas (staging) | kube-prometheus-stack (alerts, lower severity) |
-| `search` | search-indexer, opensearch-exporter | Standalone Prometheus + Grafana |
+| `search` | search-indexer | — (OpenSearch itself is scraped by `opensearch-exporter` in `monitoring`) |
 | `scoring` | scoring-service (CronJob), vote-indexer | — |
 | `kafka` | kafka-ui | — |
 | `monitoring` | Prometheus, Grafana, Alertmanager, node-exporter, kube-state-metrics | Self-monitoring |
@@ -44,11 +42,9 @@ The observability stack consists of:
 - **node-exporter**: Host CPU, memory, disk, network on every node
 - **kube-state-metrics**: K8s object state (deployments, pods, HPA status)
 
-### Search-Namespace Stack
+### OpenSearch Metrics
 
-- **Prometheus**: 15-day retention, emptyDir storage, scrapes `opensearch-exporter:9114` at 15s intervals
-- **Grafana**: Dashboards loaded via explicit volume mount from `grafana-dashboards` ConfigMap (not sidecar)
-- **OpenSearch Exporter**: `quay.io/prometheuscommunity/elasticsearch-exporter:v1.7.0`, exports index/shard/cluster metrics
+- **OpenSearch Exporter** ([`monitoring/k8s/opensearch-exporter.yaml`](monitoring/k8s/opensearch-exporter.yaml)): runs in `monitoring`, turns the managed OpenSearch cluster's REST API into `elasticsearch_*` metrics, and is scraped by the cluster-wide Prometheus through a ServiceMonitor. They feed the "OpenSearch Health" section of the Gaia Overview dashboard.
 
 ### API Ingress Recording Rules
 
@@ -65,7 +61,6 @@ The observability stack consists of:
 | API Ingress Observability | 9 panels | ConfigMap sidecar | [`monitoring/k8s/api-ingress-dashboard.yaml`](monitoring/k8s/api-ingress-dashboard.yaml) |
 | Atlas Overview (Production) | 6 panels | ConfigMap sidecar | [`hermes/k8s/production/atlas-monitoring.yaml`](hermes/k8s/production/atlas-monitoring.yaml) |
 | Atlas Overview (Staging) | 6 panels | ConfigMap sidecar | [`hermes/k8s/staging/atlas-monitoring.yaml`](hermes/k8s/staging/atlas-monitoring.yaml) |
-| OpenSearch Overview | 20+ panels | Volume mount (kustomize) | [`search-indexer-deploy/grafana/dashboards/opensearch-overview-dashboard.json`](search-indexer-deploy/grafana/dashboards/opensearch-overview-dashboard.json) |
 
 **Config:** [`monitoring/k8s/ingress-nginx-metrics.yaml`](monitoring/k8s/ingress-nginx-metrics.yaml) (ServiceMonitor for ingress-nginx), [`monitoring/k8s/api-metrics-servicemonitor.yaml`](monitoring/k8s/api-metrics-servicemonitor.yaml) (ServiceMonitor for API pool metrics)
 
@@ -313,31 +308,6 @@ kubectl port-forward -n monitoring svc/kube-prometheus-stack-alertmanager 9093:9
 # Open http://localhost:9093
 ```
 
-### Search-Namespace Stack (search namespace)
-
-**Grafana:** Exposed via NodePort `30440` on port 4040.
-
-```bash
-# If node IP is accessible:
-# Open http://<node-ip>:30440
-
-# Otherwise, port-forward:
-kubectl port-forward -n search svc/grafana 4040:4040
-# Open http://localhost:4040
-
-# Credentials: from grafana-credentials secret in search namespace
-kubectl get secret grafana-credentials -n search \
-  -o jsonpath="{.data.ADMIN_PASSWORD}" | base64 -d && echo
-```
-
-**Prometheus:**
-
-```bash
-# Note: uses port 9091 to avoid conflict with cluster-wide Prometheus on 9090
-kubectl port-forward -n search svc/prometheus 9091:9090
-# Open http://localhost:9091
-```
-
 ### Kafka UI
 
 ```bash
@@ -345,7 +315,7 @@ kubectl port-forward -n kafka svc/kafka-ui 8080:8080
 # Open http://localhost:8080
 ```
 
-**Config:** [`monitoring/README.md`](monitoring/README.md), [`search-indexer-deploy/k8s/production/monitoring.yaml`](search-indexer-deploy/k8s/production/monitoring.yaml)
+**Config:** [`monitoring/README.md`](monitoring/README.md)
 
 ## 9. Daily Metrics Report
 
