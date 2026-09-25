@@ -10,6 +10,7 @@ spec:
   failedJobsHistoryLimit: 5
   jobTemplate:
     spec:
+      ttlSecondsAfterFinished: 86400 # clear finished runs after a day, so a stale failure stops firing KubeJobFailed
       activeDeadlineSeconds: 290 # 10s gap before next 5-min CronJob invocation
       backoffLimit: 1 # Don't restart-loop on failure — try again in 5 min
       template:

@@ -8,6 +8,7 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      ttlSecondsAfterFinished: 86400 # clear finished runs after a day, so a stale failure stops firing KubeJobFailed
       template:
         spec:
           restartPolicy: OnFailure
