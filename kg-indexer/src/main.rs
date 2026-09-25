@@ -67,6 +67,11 @@ struct BlockBuffer {
     first_seen: HashMap<u64, Instant>,
     /// Block summaries keyed by block number.
     summaries: HashMap<u64, BlockSummaryInfo>,
+    /// Highest block-summary offset read per (topic, partition) and not yet
+    /// committed. Summaries are never committed with their block's events, so
+    /// without this the summary topic's committed offset never advances and every
+    /// restart replays it from the start.
+    summary_offsets: HashMap<(String, i32), i64>,
     /// Timeout before force-processing an incomplete block.
     stale_timeout: Duration,
 }
@@ -77,8 +82,37 @@ impl BlockBuffer {
             events: HashMap::new(),
             first_seen: HashMap::new(),
             summaries: HashMap::new(),
+            summary_offsets: HashMap::new(),
             stale_timeout,
         }
+    }
+
+    /// Record that a block-summary message has been read, whether it was
+    /// buffered or skipped as empty.
+    fn note_summary_offset(&mut self, topic: &str, partition: i32, offset: i64) {
+        let entry = self
+            .summary_offsets
+            .entry((topic.to_string(), partition))
+            .or_insert(offset);
+        *entry = (*entry).max(offset);
+    }
+
+    /// Summary offsets that are safe to commit, drained from the buffer.
+    ///
+    /// Summaries arrive in order within a partition, and a non-empty one stays in
+    /// `summaries` until its block is flushed. So while no summary is pending,
+    /// every summary read so far is finished and the highest offset per
+    /// partition can be committed. While one is pending, committing a later
+    /// offset would skip it on restart, so nothing is returned and the offsets
+    /// wait for the next idle moment.
+    fn take_committable_summary_offsets(&mut self) -> Vec<(String, i32, i64)> {
+        if !self.summaries.is_empty() {
+            return Vec::new();
+        }
+        self.summary_offsets
+            .drain()
+            .map(|((topic, partition), offset)| (topic, partition, offset))
+            .collect()
     }
 
     /// Add an event to the buffer.
@@ -427,10 +461,14 @@ async fn async_main() -> Result<(), IndexerError> {
                             }
                         }
 
-                        // Skip empty blocks entirely - no span created
+                        // Skip empty blocks entirely - no span created. The offset
+                        // is still recorded, so the summary topic's committed
+                        // offset advances past skipped blocks.
                         if let KgMessage::BlockSummary(ref summary) = kg_msg {
                             let expected_count = expected_count_for_indexer(summary);
                             if expected_count == 0 {
+                                buffer.note_summary_offset(&topic, partition, offset);
+                                commit_summary_offsets(&mut buffer, &consumer);
                                 continue;
                             }
                         }
@@ -472,6 +510,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     );
                                 }
 
+                                buffer.note_summary_offset(&topic, partition, offset);
                                 buffer.insert_summary(summary_block_number, summary, expected_count);
 
                                 let (processed, errors, blocks) =
@@ -825,7 +864,25 @@ async fn drain_ready_blocks(
         }
     }
 
+    commit_summary_offsets(buffer, consumer);
+
     (processed_count, error_count, blocks_processed)
+}
+
+/// Commit block-summary offsets once no summary is pending. See
+/// `BlockBuffer::take_committable_summary_offsets` for why that is safe.
+fn commit_summary_offsets(buffer: &mut BlockBuffer, consumer: &KafkaConsumer) {
+    for (topic, partition, offset) in buffer.take_committable_summary_offsets() {
+        if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+            error!(
+                topic = %topic,
+                partition = partition,
+                offset = offset,
+                error = %e,
+                "Failed to commit block summary offset"
+            );
+        }
+    }
 }
 
 async fn process_buffered_block(
@@ -2232,5 +2289,45 @@ mod tests {
 
         buffer.push(block_number, make_event(block_number));
         assert!(buffer.is_complete(block_number));
+    }
+
+    #[test]
+    fn summary_offsets_commit_highest_per_partition_when_nothing_is_pending() {
+        let mut buffer = BlockBuffer::new(Duration::from_secs(60));
+        buffer.note_summary_offset("testnet.hermes.blocks", 0, 5);
+        buffer.note_summary_offset("testnet.hermes.blocks", 0, 7);
+        buffer.note_summary_offset("testnet.hermes.blocks", 1, 3);
+
+        let mut committable = buffer.take_committable_summary_offsets();
+        committable.sort();
+        assert_eq!(
+            committable,
+            vec![
+                ("testnet.hermes.blocks".to_string(), 0, 7),
+                ("testnet.hermes.blocks".to_string(), 1, 3),
+            ]
+        );
+        // Drained: the same offsets are not committed twice.
+        assert!(buffer.take_committable_summary_offsets().is_empty());
+    }
+
+    #[test]
+    fn summary_offsets_wait_while_a_summary_is_pending() {
+        let mut buffer = BlockBuffer::new(Duration::from_secs(60));
+        // A non-empty block's summary is waiting for its events...
+        buffer.note_summary_offset("testnet.hermes.blocks", 0, 10);
+        buffer.insert_summary(100, make_summary(100), 1);
+        // ...and a later empty block is skipped on the same partition.
+        buffer.note_summary_offset("testnet.hermes.blocks", 0, 11);
+
+        // Committing 11 now would skip block 100's summary on restart.
+        assert!(buffer.take_committable_summary_offsets().is_empty());
+
+        // Once block 100 is flushed, everything up to 11 is done.
+        buffer.take_summary(100);
+        assert_eq!(
+            buffer.take_committable_summary_offsets(),
+            vec![("testnet.hermes.blocks".to_string(), 0, 11)]
+        );
     }
 }
