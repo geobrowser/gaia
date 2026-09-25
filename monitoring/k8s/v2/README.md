@@ -63,10 +63,13 @@ kubectl --context $CTX apply -f monitoring/k8s/v2/
   signals from Envoy.
 - **`prometheus-adapter-*.yaml`** — the API's HPA runs on cpu/memory via
   metrics-server. Nothing on this cluster consumes external metrics.
-- **`kafka-exporter.yaml`, `opensearch-exporter.yaml`** and their lag alerts —
-  these need this cluster's Kafka and OpenSearch credentials wiring first. Until
-  they land, `KafkaConsumerLagHigh` / `KafkaConsumerStuck` are **not** watching
-  the v2 pipeline.
+- **`opensearch-exporter.yaml`** — needs this cluster's OpenSearch credentials
+  wired into `monitoring` first.
+
+`kafka-exporter.yaml` and `kafka-consumer-lag-alerts.yaml` (in `monitoring/k8s/`,
+not ported copies) have run on this cluster since 2026-09-24, against
+`geo-testnet-kafka`. Their credentials secret, `monitoring/kafka-exporter-creds`,
+is a copy of `gaia/kafka-credentials`; see the exporter's header.
 - **Dashboards** (`*-dashboard.yaml`) — the `gaia-v2-*` ones point at the old
   cluster's `gaia-v2` namespace and need the same re-pointing treatment.
 

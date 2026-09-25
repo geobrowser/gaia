@@ -6,6 +6,18 @@
 #
 # Thresholds: aggressive defaults — tune after observing staging for a week.
 #
+# Two exclusions apply to every rule:
+#
+# - geo-chat's gateway joins with one consumer group PER POD
+#   (geo-chat-gateway-<env>-<pod name>), so every past pod leaves an abandoned
+#   group whose lag grows forever until the broker expires its offsets. Those
+#   groups are not a signal; a dead geo-chat pod shows up in its own readiness.
+# - kg-indexer skips empty block summaries on hermes.blocks with a bare
+#   `continue` that never commits, so its committed offset there only moves on
+#   non-empty blocks and "lag" is a pile of skipped empties. Its real progress
+#   is still watched on every other topic. Drop this exclusion once the skip
+#   commits its offset.
+#
 # Apply:
 #   kubectl apply -f monitoring/k8s/kafka-consumer-lag-alerts.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -22,7 +34,8 @@ spec:
         - alert: KafkaConsumerLagHigh
           expr: |
             max by (consumergroup, topic) (
-              kafka_consumergroup_lag{consumergroup!~".*search-indexer-group-scores-.*"}
+              kafka_consumergroup_lag{consumergroup!~".*search-indexer-group-scores-.*|geo-chat-gateway-.*"}
+              unless on(consumergroup, topic) kafka_consumergroup_lag{consumergroup=~"kg-indexer.*", topic=~".*hermes[.]blocks"}
             ) > 1000
           for: 2m
           labels:
@@ -52,7 +65,11 @@ spec:
               messages on topic {{ $labels.topic }} for over 2 hours.
 
         - alert: KafkaConsumerLagCritical
-          expr: max by (consumergroup, topic) (kafka_consumergroup_lag) > 10000
+          expr: |
+            max by (consumergroup, topic) (
+              kafka_consumergroup_lag{consumergroup!~"geo-chat-gateway-.*"}
+              unless on(consumergroup, topic) kafka_consumergroup_lag{consumergroup=~"kg-indexer.*", topic=~".*hermes[.]blocks"}
+            ) > 10000
           for: 5m
           labels:
             severity: critical
@@ -64,13 +81,17 @@ spec:
               consumer is falling behind faster than it can catch up.
 
         # Stuck = committed offset has not advanced while there are unprocessed
-        # messages. Catches a hung consumer that's still holding its group
+        # messages. The floor is > 10, not > 0: transactional producers write a
+        # commit marker that occupies an offset but is never delivered, so a
+        # caught-up consumer on a quiet topic sits at lag 1-2 indefinitely
+        # (seen on testnet.space.governance). Catches a hung consumer that's still holding its group
         # membership but not making progress (deadlock, long-running query,
         # external dependency outage).
         - alert: KafkaConsumerStuck
           expr: |
             (
-              kafka_consumergroup_lag > 0
+              kafka_consumergroup_lag{consumergroup!~"geo-chat-gateway-.*"} > 10
+              unless on(consumergroup, topic) kafka_consumergroup_lag{consumergroup=~"kg-indexer.*", topic=~".*hermes[.]blocks"}
               and on(consumergroup, topic, partition)
               (changes(kafka_consumergroup_current_offset[1m]) == 0)
             )
@@ -89,7 +110,7 @@ spec:
         # all consumers crashed or were scaled to 0 — distinct from "stuck"
         # because there's no heartbeat at all.
         - alert: KafkaConsumerGroupEmpty
-          expr: kafka_consumergroup_members == 0
+          expr: kafka_consumergroup_members{consumergroup!~"geo-chat-gateway-.*"} == 0
           for: 2m
           labels:
             severity: critical
