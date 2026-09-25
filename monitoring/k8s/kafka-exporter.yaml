@@ -15,11 +15,18 @@
 #
 # ─── Prerequisite: credentials Secret (NOT committed) ────────────────────────
 #
-# Copy the Kafka credentials already in <service>-secrets into a Secret in the
-# monitoring namespace that this Deployment reads from. The kg-indexer secret
-# has all four keys we need:
+# Copy the Kafka credentials into a Secret in the monitoring namespace that
+# this Deployment reads from.
 #
-#   # Production
+# Live cluster (geo-testnet-k8s): `gaia/kafka-credentials` has all four keys.
+# Copy it without printing values:
+#
+#   kubectl -n gaia get secret kafka-credentials -o json \
+#     | jq '{apiVersion, kind, type, metadata: {name: "kafka-exporter-creds", namespace: "monitoring"},
+#            data: (.data | {KAFKA_BROKER, KAFKA_USERNAME, KAFKA_PASSWORD, KAFKA_SSL_CA_PEM})}' \
+#     | kubectl apply -f -
+#
+#   # Legacy cluster (deleted 2026-09-24), kept for reference:
 #   kubectl create secret generic kafka-exporter-creds -n monitoring \
 #     --from-literal=KAFKA_BROKER="$(kubectl get secret -n knowledge kg-indexer-secrets \
 #         -o jsonpath='{.data.KAFKA_BROKER}' | base64 -d)" \
