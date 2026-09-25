@@ -20,7 +20,7 @@ spec:
   # shipping it on v2 ahead of product costs nothing.
   #
   # Modeled on k8s/staging/rolling-sweep-cronjob.yaml; v2 conventions applied
-  # (namespace gaia, `regcred` pull secret, non-root pod securityContext) to
+  # (namespace gaia, `geo` pull secret, non-root pod securityContext) to
   # match k8s/v2/ranking-indexer.yaml. Needs only DATABASE_URL — no Kafka.
   schedule: "0 * * * *"
   failedJobsHistoryLimit: 3
@@ -38,7 +38,7 @@ spec:
             runAsUser: 1001
             fsGroup: 1001
           imagePullSecrets:
-            - name: regcred
+            - name: geo
           volumes:
             - name: ssl-certs
               emptyDir: {}

@@ -12,7 +12,7 @@ spec:
         spec:
           restartPolicy: OnFailure
           imagePullSecrets:
-            - name: regcred
+            - name: geo
           containers:
             - name: scoring-service
               image: registry.digitalocean.com/geo/scoring-service:latest

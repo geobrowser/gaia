@@ -31,9 +31,10 @@ kubectl --context $CTX -n monitoring create secret generic alertmanager-slack-we
 # if this is absent.
 kubectl --context $CTX -n monitoring create secret generic kube-prometheus-stack-grafana ...
 
-# Registry pull secret, for chain-tip-exporter.
-kubectl --context $CTX -n gaia get secret regcred -o yaml \
-  | sed 's/namespace: gaia/namespace: monitoring/' | kubectl --context $CTX apply -f -
+# Registry pull secret: nothing to create. chain-tip-exporter uses `geo`, which DigitalOcean's
+# registry integration (registry_enabled on the cluster) maintains in every namespace. Don't
+# copy a hand-made `regcred` around: it is generated from one person's DO token and stops
+# working when that person is removed (GEO-3010).
 
 # RPC endpoint for chain-tip-exporter, reusing the executor's chain-55516 URL.
 kubectl --context $CTX -n monitoring create secret generic chain-tip-exporter-secrets \
