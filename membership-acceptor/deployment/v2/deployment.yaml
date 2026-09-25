@@ -3,7 +3,7 @@
 # GEO-2478: this service existed only on prod (ns `knowledge`, chain 19411) and
 # was never brought to the v2 cluster, so automatic member acceptance simply did
 # not run there. Modeled on deployment/production/deployment.yaml with the v2
-# conventions applied: namespace `gaia`, `regcred` pull secret (prod uses `geo`),
+# conventions applied: namespace `gaia`, the DO-managed `geo` pull secret,
 # and chain-55516 config.
 #
 # Sponsorship differs from prod: 55516 has no Safe infrastructure, so the
@@ -40,7 +40,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 1001
       imagePullSecrets:
-        - name: regcred
+        - name: geo
       containers:
         - name: membership-acceptor
           image: registry.digitalocean.com/geo/membership-acceptor:latest

@@ -32,7 +32,7 @@ spec:
             runAsUser: 1001
             fsGroup: 1001
           imagePullSecrets:
-            - name: regcred
+            - name: geo
           containers:
             - name: vote-indexer-comment-sweep
               image: registry.digitalocean.com/geo/vote-indexer:latest

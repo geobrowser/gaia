@@ -42,7 +42,7 @@ spec:
         app: search-indexer
     spec:
       imagePullSecrets:
-        - name: regcred
+        - name: geo
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
