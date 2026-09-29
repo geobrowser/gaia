@@ -20,6 +20,11 @@ path = "src/bin/rolling_sweep.rs"
 name = "feed_composition_sample"
 path = "src/bin/feed_composition_sample.rs"
 
+# Hourly rebuild of the onboarding topic suggestions (GEO-3079, migration 0095).
+[[bin]]
+name = "topic_suggestions_refresh"
+path = "src/bin/topic_suggestions_refresh.rs"
+
 [dependencies]
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }

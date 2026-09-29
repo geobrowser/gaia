@@ -40,5 +40,6 @@ COPY --from=builder /app/ranking-indexer/target/release/ranking-indexer /usr/loc
 COPY --from=builder /app/ranking-indexer/target/release/backfill_blocks /usr/local/bin/backfill_blocks
 COPY --from=builder /app/ranking-indexer/target/release/rolling_sweep /usr/local/bin/rolling_sweep
 COPY --from=builder /app/ranking-indexer/target/release/feed_composition_sample /usr/local/bin/feed_composition_sample
+COPY --from=builder /app/ranking-indexer/target/release/topic_suggestions_refresh /usr/local/bin/topic_suggestions_refresh
 
 CMD ["ranking-indexer"]
