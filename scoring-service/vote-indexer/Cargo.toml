@@ -15,6 +15,11 @@ path = "src/main.rs"
 name = "comment_sweep"
 path = "src/bin/comment_sweep.rs"
 
+# First score for entities nobody has voted on or commented on yet — see its module doc.
+[[bin]]
+name = "new_entity_sweep"
+path = "src/bin/new_entity_sweep.rs"
+
 [dependencies]
 hermes-schema = { path = "../../hermes-schema" }
 hermes-instrumentation = { path = "../../hermes-instrumentation" }

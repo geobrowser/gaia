@@ -1,24 +1,23 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: vote-indexer-comment-sweep
+  name: vote-indexer-new-entity-sweep
   namespace: gaia
   labels:
-    app: vote-indexer-comment-sweep
+    app: vote-indexer-new-entity-sweep
 spec:
-  # The ranking score's comment term (migration 0079) has no event-driven trigger: the only
-  # thing that recomputes a score is a vote batch, and a comment is not a vote. Without this
-  # a commented entity keeps its pre-comment score until an unrelated vote touches it, which
-  # looks exactly like the feature not working.
+  # Nothing gives a new entity a ranking score, and the Best feed INNER JOINs that score, so an
+  # entity nobody has voted on or commented on cannot appear in Best at all (2.27M entities on
+  # 2026-09-29). This scores entities created in the last NEW_ENTITY_SWEEP_LOOKBACK_HOURS that
+  # have no row. `refresh_entity_ranking_scores` is an idempotent upsert, so overlap is harmless.
   #
-  # Hourly to match ranking-indexer's rolling sweep, the same pattern for the same class of
-  # problem. Cadence is a schedule edit, not a code change — the sweep re-scores every
-  # commented entity and `refresh_entity_ranking_scores` is an idempotent upsert, so running
-  # it more or less often only changes how stale a comment's effect can be.
+  # Hourly like the comment sweep, at :30 so the two do not hit the database together. The
+  # cadence is how long a new entity can be missing from Best, and nothing else: a schedule
+  # edit, not a code change.
   #
   # No Kafka: this needs DATABASE_URL and nothing else. Same secret and pod conventions as
-  # vote-indexer.yaml alongside it.
-  schedule: "0 * * * *"
+  # comment-sweep-cronjob.yaml alongside it.
+  schedule: "30 * * * *"
   failedJobsHistoryLimit: 3
   # A sweep is not worth overlapping with itself; the next tick will pick up anything missed.
   concurrencyPolicy: Forbid
@@ -35,11 +34,11 @@ spec:
           imagePullSecrets:
             - name: geo
           containers:
-            - name: vote-indexer-comment-sweep
+            - name: vote-indexer-new-entity-sweep
               image: registry.digitalocean.com/geo/vote-indexer:latest
               imagePullPolicy: Always
               # One image, three entrypoints — see the vote-indexer Dockerfile.
-              command: ["comment_sweep"]
+              command: ["new_entity_sweep"]
               securityContext:
                 allowPrivilegeEscalation: false
                 capabilities:
@@ -51,6 +50,10 @@ spec:
                     secretKeyRef:
                       name: scoring-service-credentials
                       key: DATABASE_URL
+                # Hours of newly created entities each run scans. Widen it for a one-off
+                # backlog run (see new_entity_sweep.rs); the hourly job keeps the default.
+                - name: NEW_ENTITY_SWEEP_LOOKBACK_HOURS
+                  value: "48"
                 - name: RUST_LOG
                   value: "info,vote_indexer=info"
                 - name: SENTRY_DSN
