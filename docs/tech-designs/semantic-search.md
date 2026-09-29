@@ -198,28 +198,42 @@ with SHA-256; the **slot id** is the first 10 hex characters. Change any field �
 {
   "provider":        "onnx-local",
   "model_id":        "BAAI/bge-small-en-v1.5",
+  "source":          "hf:qdrant/bge-small-en-v1.5-onnx-q@aa8f8b060edb00e03bfdd08813a2949946c8ba55",
   "artifacts": {
-    "model.onnx":     "sha256:…",
-    "tokenizer.json": "sha256:…",
-    "config.json":    "sha256:…"
+    "model_optimized.onnx":    "sha256:51f1bd0addd6e859e42c2c8021a5e5461385bb676a649f4b269aa445449f2431",
+    "tokenizer.json":          "sha256:d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+    "config.json":             "sha256:13582bcf2effc85b7bf3d3f5532e686bc1c9ce86bb009d10f0ec33cbe92299dd",
+    "special_tokens_map.json": "sha256:5d5b662e421ea9fac075174bb0688ee0d9431699900b90662acd44b2a350503a",
+    "tokenizer_config.json":   "sha256:0b29c7bfc889e53b36d9dd3e686dd4300f6525110eaa98c76a5dafceb2029f53"
   },
   "dimensions":      384,
   "pooling":         "cls",
+  "quantization":    "static",
   "normalize":       true,
   "max_tokens":      512,
   "truncation":      "tail",
   "text_template":   "name_description_v1",
   "document_prompt": "",
-  "query_prompt":    "Represent this sentence for searching relevant passages: ",
+  "query_prompt":    "",
   "space_type":      "cosinesimil",
   "score_floor":     0.85
 }
 ```
 
+This is the exact bundle geo-lens runs today (the files Python fastembed 0.8 resolves for
+`BAAI/bge-small-en-v1.5`), hashed on 2026-09-29. Two fields deserve a note: `query_prompt` is
+**empty** because fastembed applies no instruction to bge-small (geo-lens's adapter documents that
+its query and passage paths coincide for this model); the field exists because e5, nomic and
+EmbeddingGemma do need one. `quantization` mirrors fastembed's mode for the export (`static` for
+this one; `dynamic` forces batch size 1 in fastembed 7.1).
+
 - **Artifacts are pinned by content hash, not by model name.** A model name is ambiguous: the
   Python fastembed default for "bge-small-en-v1.5" is a *quantized* ONNX export from a Qdrant
   mirror, not the BAAI fp32 file, and Hugging Face repositories change under a name. Hashing the
   files is what makes "which model" a fact rather than a label. `model_id` is documentation.
+  The ONNX Runtime *version* is reported by `/info` but is **not** part of the slot id: the spike
+  measured parity of 1e-6 in cosine between ONNX Runtime 1.28.0 (Rust) and 1.29.0 (Python) on
+  these artifacts, so the runtime does not define the space, the artifacts do.
 - `text_template` names a function in the `embedding` crate:
   `name_description_v1(name, description) = name + "\n\n" + description` (description omitted when
   absent), NFC-normalized, whitespace-collapsed, truncated to `max_tokens` by the tokenizer. The
@@ -248,16 +262,61 @@ and `search-admin`.
   `content_hash(text)`.
 - `trait EmbeddingProvider { fn descriptor(&self) -> &Descriptor; async fn embed(&self, texts:
   &[String], purpose: Purpose) -> Result<Vec<Vec<f32>>>; }` with `Purpose::{Document, Query}`.
-- `OnnxLocalProvider`: built on the `fastembed` crate (which wraps `ort`, the ONNX Runtime
-  bindings) using its user-defined-model path, so **any** ONNX text-embedding export loads from
-  a bundle — no model allowlist in code. Applies prompt, tokenizes, runs the session, pools,
-  normalizes, all per the descriptor. Configurable intra-op threads and max batch.
+- `OnnxLocalProvider`: built on the `fastembed` crate (7.1.0 at the time of the spike, over
+  `ort` 2.0.0-rc.13 = ONNX Runtime 1.28.0) using its user-defined-model path
+  (`UserDefinedEmbeddingModel::new(onnx_bytes, TokenizerFiles)` + `with_pooling` +
+  `with_quantization`; `InitOptionsUserDefined::with_max_length` / `with_intra_threads`), so
+  **any** ONNX text-embedding export loads from a bundle — no model allowlist in code. Applies
+  prompt, tokenizes, runs the session, pools, normalizes (fastembed normalizes by default;
+  verified |v| = 1.000), all per the descriptor. Configurable intra-op threads and max batch.
 - `Bundle::load(dir)`: reads `bundle.json`, hashes every artifact, fails on mismatch, returns the
   provider. Bundles are directories baked into the image (`/models/<slot>/`).
 - `HttpProvider` (behind a feature flag, not used in v1): the same trait over an HTTP endpoint
   that speaks this service's `/embed` contract, so a future hosted or GPU runtime is a config
   change, not a rewrite.
 - Backend-agnostic helpers used by the indexer: batching, in-page dedupe by text hash, LRU.
+
+### Spike results (2026-09-29, Apple M4 10-core laptop, batch 64, claim-length texts)
+
+Scratch crate at the session scratchpad `onnx-spike/` (throwaway; the numbers are what matter).
+Same five artifacts on both sides, hashes identical.
+
+| Measurement | Python fastembed 0.8 / ORT 1.29 (geo-lens) | Rust fastembed 7.1 / ORT 1.28 |
+|---|---|---|
+| Parity on 12 fixed texts + 3 queries (incl. `""`, curly apostrophe, >512-token text) | reference | worst `1 − cos` = **1.05e-6**, max per-component Δ 6e-4; empty text embeds without error |
+| Throughput, all 10 cores | 499 texts/s | **660 texts/s** |
+| Throughput, `intra_threads = 2` (pod-like) | — | **400 texts/s** |
+| `quantization` none vs static on this export | — | identical vectors and speed at batch 64 |
+| Model load | — | 0.05 s from bytes |
+| Binary | — | 30 MB, ONNX Runtime **statically linked** (no `libonnxruntime` in `otool -L`) |
+| Linux, `rust:1.92-bookworm` builder | — | **does not link**: the prebuilt static runtime references `__cxa_call_terminate` and `std::string::_M_replace_cold`, symbols that exist only in libstdc++ from GCC ≥ 13; bookworm ships GCC 12 |
+| Linux, `rust:1.92-trixie` builder → `debian:trixie-slim` runtime (GCC 14) | — | links; 33 MB binary; `ldd` shows only system libraries (`libstdc++`, `libgcc_s`, `libm`, `libc`, plus `libssl`/`libcrypto`/`libz`/`libzstd` pulled in by fastembed's default `online` feature); 135 MB image before the model |
+| Parity from inside the Linux image (2 CPUs, ORT 1.28) vs Python on the Mac (ORT 1.29) | reference | worst `1 − cos` = **9.4e-7** |
+| Throughput inside the Linux image, `--cpus=2`, `intra_threads = 2` (arm64 under Docker's VM) | — | **278 texts/s** |
+| x86_64 prebuilt (`ms@1.28.0/x86_64-unknown-linux-gnu`, 101 MB `libonnxruntime.a`, downloaded and inspected with `nm`) | — | references the same GCC ≥ 13 symbols **507 times** — the production architecture has the identical requirement |
+
+Packaging facts from the `ort-sys` build script: under the default `download-binaries` feature it
+fetches a prebuilt dist from `cdn.pyke.io` (`pyke:ort-rs/ms@1.28.0/<target>`), verifies its
+SHA-256 against a table compiled into the crate, and emits `rustc-link-lib=static=onnxruntime`.
+Dists exist for `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, both Apple targets and
+Windows; **none for musl**, which is fine — gaia ships glibc images. The build stage therefore
+needs egress to `cdn.pyke.io` in addition to crates.io; for an air-gapped or fully vendored
+build, `ORT_LIB_LOCATION` points the crate at a checked-in static library instead.
+
+**Image base (decided by the spike): the two embedding images build on `rust:1.92-trixie` and
+run on `debian:trixie-slim`**, not the bookworm pair the other Rust services use. The prebuilt
+static ONNX Runtime 1.28.0 is compiled against libstdc++ from GCC ≥ 13 on both aarch64 and
+x86_64, and the binary links `libstdc++.so.6` dynamically, so the *runtime* image needs that ABI
+too; bookworm has GCC 12 and fails at link time (and would fail at load time if the binary were
+copied in). Same toolchain pin (1.92), different Debian release; nothing else in gaia changes.
+Two alternatives were noted and not taken: `ort-load-dynamic` with Microsoft's manylinux
+`libonnxruntime.so` (works on bookworm but adds a runtime shared library and a second download
+to pin), and building ONNX Runtime from source against bookworm (hours per build).
+
+Crate configuration for the `embedding` crate: `fastembed` with `default-features = false` and
+only the ONNX download feature, since bundles are local files — this drops the Hugging Face
+client and its OpenSSL/zstd dependencies from the runtime image (the `ldd` line above shows what
+the defaults pull in). To confirm in P0's crate scaffold.
 
 Alternative runtime considered: `candle` (pure Rust, no native library) — fewer deployment
 moving parts but slower on CPU and more hand-written per-architecture code. `ort` is chosen for
@@ -587,13 +646,14 @@ slot answered.
   - claims only (≈ 320 k docs × 384 d): ≈ 0.5 GB RAM, ≈ 1 GB disk.
   - every named document (unknown count; the September sizing found 49.6 M entity ids but far
     fewer connected, named ones): measure with `list-slots` coverage before widening scope.
-- Service throughput: the ONNX runtime on 2 CPUs with batching is expected in the low hundreds of
-  texts/s for a 384-d small model (Python fastembed measured 65/s on a laptop and 15–20/s on a
-  small Railway box; the Rust path avoids the interpreter but the model dominates). Measure in P0;
-  scale the HPA for backfill windows.
-- Backfill time = in-scope docs ÷ aggregate throughput. At 200 texts/s, 320 k claims ≈ 27 min;
-  5 M documents ≈ 7 h on one pod. The extraction-api backend adds off-cluster capacity for the
-  latter case without touching the service's query lane.
+- Service throughput (measured, see Spike results): 660 texts/s on 10 laptop cores, 400 texts/s
+  at 2 intra-op threads on bare metal, **278 texts/s inside a 2-CPU Linux container** for bge-small
+  at batch 64. Cloud x86 vCPUs differ from M4 cores, so plan with 200 texts/s per 2-CPU pod until
+  measured on the cluster; scale the HPA for backfill windows.
+- Backfill time = in-scope docs ÷ aggregate throughput. At the 200 texts/s planning number,
+  320 k claims ≈ 27 min and 5 M documents ≈ 7 h on one pod; at the measured 400/s, half that. The
+  extraction-api backend adds off-cluster capacity for the large case without touching the
+  service's query lane.
 - Query cost: one in-cluster `/embed` call (≈ 5–20 ms for a small model) + one k-NN query (single
   shard, filtered HNSW; geo-lens saw 11–22 ms on 316 k vectors in Neo4j — OpenSearch expected
   similar).
@@ -700,6 +760,10 @@ None of this is on the critical path for P0–P2.
 | P3 rotation drill (staging) | bundle B with a different model (e.g. a Matryoshka-capable 2025 model at 256–768 d); service with two slots; parallel backfill; harness comparison; default flip; A retired | procedure documented in the runbook and executed once end to end |
 | P4 | widen scope beyond claims by type allowlist, driven by `list-slots` coverage and memory; if the backfill is large, bring up the extraction-api backend (External requirements) and run it descriptor-verified | per-slot RAM within cluster budget; a backfill completed through `extraction_api` with zero descriptor mismatches |
 
+The runtime half of P0 was completed on 2026-09-29 (see Spike results under the `embedding`
+crate): parity, throughput and static linking are measured facts, not assumptions. The k-NN half
+(filtered exactness, `min_score`, hybrid pagination on 2.17) is still open.
+
 The evaluation harness (a golden set of queries with expected and unexpected results, recall@k
 and floor calibration per slot) is built in P1 and is a prerequisite for P3. It is also the
 foundation the deferred "beyond similarity" track needs.
@@ -708,9 +772,13 @@ foundation the deferred "beyond similarity" track needs.
 
 1. **Production OpenSearch flavor.** Managed or self-hosted, and are the k-NN plugin and search
    pipelines enabled? Everything above assumes the official 2.17 distribution as in compose.
-2. **ONNX runtime distribution in the image.** `ort` can download its shared library at build
-   time or link a vendored copy; the reproducible choice is vendoring a pinned `libonnxruntime`
-   in the builder stage (and recording its version in `/info`). Decide in P0.
+2. **ONNX runtime distribution in the image — resolved 2026-09-29.** The default `ort` feature
+   downloads a SHA-256-verified prebuilt at build time and links it **statically**; the binary
+   carries the runtime. Build stages need egress to `cdn.pyke.io`; `ORT_LIB_LOCATION` is the
+   vendored alternative if that egress is ever unwanted. The runtime version is recorded in
+   `/info` and is not part of the slot id (see Spike results). **Consequence:** the
+   embedding-service image is built on Debian trixie (GCC 14), because the prebuilt runtime needs
+   libstdc++ ≥ GCC 13 on both architectures.
 3. **Hybrid pagination on 2.17.** `from > 0` with the `hybrid` query is believed unsupported before
    2.19; v1 returns 400 for `offset > 0` in hybrid mode. Confirm on the target version.
 4. **Vectors in `_source`.** Kept for v1 so `reindex` carries them. If disk becomes the constraint,
@@ -730,8 +798,8 @@ foundation the deferred "beyond similarity" track needs.
 | Area | Path |
 |---|---|
 | new lib crate | `embedding/` (descriptor, slot id, text template, `EmbeddingProvider`, `OnnxLocalProvider`, bundle loading) |
-| new service | `embedding-service/` (+ `Dockerfile` baking `/models/<slot>/`, `k8s/` Deployment / Service / HPA), `scripts/make-bundle.sh` |
-| new indexer | `embedding-indexer/` (+ `Dockerfile`, `k8s/`), `EmbedBackend` with `service` and `extraction_api` |
+| new service | `embedding-service/` (+ `Dockerfile` on `rust:1.92-trixie` / `debian:trixie-slim` baking `/models/<slot>/`, `k8s/` Deployment / Service / HPA), `scripts/make-bundle.sh` |
+| new indexer | `embedding-indexer/` (+ `Dockerfile`, `k8s/`), `EmbedBackend` with `service` and `extraction_api`; bookworm is fine here since it links no ONNX runtime |
 | shared | `search-indexer-shared` unchanged; the search crates depend on `embedding` only through `search-admin` |
 | mapping | `search-indexer-repository/src/opensearch/index_config.rs` |
 | stamp | `search-indexer-repository/src/opensearch/provider.rs` (`build_update_doc`), `bulk.rs`, `unset_document_properties.rs` |
