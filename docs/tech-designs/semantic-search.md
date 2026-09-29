@@ -406,6 +406,29 @@ PUT _search/pipeline/{prefix}hybrid_minmax
 
 It is applied per request (`?search_pipeline=`) in hybrid mode only; the lexical path is untouched.
 
+### Spike results — k-NN half (2026-09-29, gaia's compose OpenSearch 2.17.1, official image)
+
+Run against the local stack with a 4-dimensional toy index so every expected result could be
+computed by hand; the same checks are repeated at corpus scale in P1.
+
+| Check | Result |
+|---|---|
+| Plugins in the image | `opensearch-knn`, `opensearch-ml`, `opensearch-neural-search` present; nothing to install |
+| Index with `index.knn: true`, `knn_vector` (lucene / hnsw / cosinesimil), `_meta.embedding_slots` | accepted |
+| `knn` with both `k` and `min_score` | **rejected**: "requires exactly one of k, distance or score" → semantic mode uses the radial form |
+| `k` + filter inside the clause vs brute-force `script_score` on the filtered set | identical order and scores; a filter selecting a single document still returns it (exact fallback) |
+| radial `min_score` + filter | returns exactly the members above the floor; `from`/`size` paging works |
+| `k` with a larger `size` | `k` caps the hits (k=2, size=5 → 2 hits) |
+| filter wrapped *outside* the clause (`bool.filter` around `knn`) | **loses hits**: the clause picked its k globally, then the filter removed them — the post-filter failure D7 forbids, reproduced |
+| `hybrid` query + `normalization-processor` pipeline | works; fused scores in `[0, 1]` |
+| `hybrid` with `from > 0` | **rejected** verbatim: "In the current OpenSearch version pagination is not supported with hybrid query" → v1 returns 400 for `offset > 0` in hybrid mode |
+| `put_mapping` adding `emb_s2` and updating `_meta` on a live index | accepted; `_meta` shows both slots afterwards (D9's additive rotation step, verified) |
+
+Local-stack note: on an Apple M4 with Docker Desktop 24 the 2.17.1 image's JDK 21.0.4 aborts
+with `SIGILL` at startup (it misdetects SVE under virtualization). Start the container with
+`_JAVA_OPTIONS=-XX:UseSVE=0` (a compose override; `JAVA_TOOL_OPTIONS` is deliberately ignored by
+OpenSearch's launcher). Worth a line in `docs/gotchas.md` when the feature lands.
+
 ## search-indexer: the one change (D4)
 
 Stamp `indexed_at` (UTC now) on **every** operation that writes `name`, `description` or
@@ -531,10 +554,12 @@ route returns 400 with a clear message rather than silently paginating wrong.
 Query composition (`opensearch.ts`), reusing the existing filter builder unchanged:
 
 ```jsonc
-// mode=semantic — filters INSIDE the knn clause (R1)
+// mode=semantic — radial search, filters INSIDE the knn clause (R1)
+// On 2.17 a knn clause takes exactly one of k | min_score | distance (verified); the radial
+// form returns every member above the floor, bounded by size, and supports from/size paging.
 { "size": limit, "from": offset,
   "query": { "knn": { "emb_<slot>": {
-      "vector": <query embedding>, "k": limit + offset, "min_score": min_score,
+      "vector": <query embedding>, "min_score": min_score,
       "filter": { "bool": { "filter": [ /* scope, space, types, tags, canonical, deleted */ ] } } } } },
   "_source": { "excludes": ["emb_*"] } }
 
@@ -569,9 +594,10 @@ slot's scale; `relevanceScore` in hybrid mode is a min-max-normalized fusion and
 not comparable across queries. `QUERY_ARCHITECTURE.md` gets a "Semantic and hybrid modes"
 section.
 
-Guardrails: query text cap stays 250 chars; `HYBRID_K = 100`; `MAX_LIMIT = 100` unchanged;
-`k` is never larger than `limit + offset`; the embedding call is inside the existing request
-budget and shows in the canonical request log as its own span.
+Guardrails: query text cap stays 250 chars; `HYBRID_K = 100` (the hybrid sub-query must use `k`,
+and `k` caps its hits regardless of `size`); `MAX_LIMIT = 100` unchanged; semantic mode is
+radial so it has no `k` to size; the embedding call is inside the existing request budget and
+shows in the canonical request log as its own span.
 
 ## search-admin additions
 
@@ -762,7 +788,9 @@ None of this is on the critical path for P0–P2.
 
 The runtime half of P0 was completed on 2026-09-29 (see Spike results under the `embedding`
 crate): parity, throughput and static linking are measured facts, not assumptions. The k-NN half
-(filtered exactness, `min_score`, hybrid pagination on 2.17) is still open.
+was completed the same day on the local 2.17.1 stack (see Spike results under Index changes):
+filtered exactness, the radial form, hybrid fusion and the additive slot mapping are verified;
+only performance at corpus scale remains for P1.
 
 The evaluation harness (a golden set of queries with expected and unexpected results, recall@k
 and floor calibration per slot) is built in P1 and is a prerequisite for P3. It is also the
@@ -779,8 +807,9 @@ foundation the deferred "beyond similarity" track needs.
    `/info` and is not part of the slot id (see Spike results). **Consequence:** the
    embedding-service image is built on Debian trixie (GCC 14), because the prebuilt runtime needs
    libstdc++ ≥ GCC 13 on both architectures.
-3. **Hybrid pagination on 2.17.** `from > 0` with the `hybrid` query is believed unsupported before
-   2.19; v1 returns 400 for `offset > 0` in hybrid mode. Confirm on the target version.
+3. **Hybrid pagination on 2.17 — resolved 2026-09-29.** Verified unsupported on 2.17.1 (the engine
+   rejects `from > 0` with "pagination is not supported with hybrid query"); v1 returns 400 for
+   `offset > 0` in hybrid mode. Semantic mode pages normally (radial `knn` accepts `from`).
 4. **Vectors in `_source`.** Kept for v1 so `reindex` carries them. If disk becomes the constraint,
    exclude them and make `full-migration` trigger a re-embed instead.
 5. **Per-space duplicates.** One document per `(entity, space)` means the same text may be
