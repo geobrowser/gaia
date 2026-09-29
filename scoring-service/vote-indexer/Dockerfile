@@ -36,8 +36,9 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/scoring-service/vote-indexer/target/release/vote-indexer /usr/local/bin/vote-indexer
-# One image, two entrypoints — the CronJob overrides `command` to pick the sweep.
+# One image, three entrypoints — each CronJob overrides `command` to pick its sweep.
 # Same arrangement as ranking-indexer's three binaries.
 COPY --from=builder /app/scoring-service/vote-indexer/target/release/comment_sweep /usr/local/bin/comment_sweep
+COPY --from=builder /app/scoring-service/vote-indexer/target/release/new_entity_sweep /usr/local/bin/new_entity_sweep
 
 CMD ["vote-indexer"]

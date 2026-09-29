@@ -13,7 +13,7 @@ use crate::error::StorageError;
 /// The function takes a `uuid[]`, so this only bounds the parameter array — it is not a
 /// throughput knob. 500 keeps the array well clear of any statement-size concern while
 /// still being one round trip for the whole commented set at present volumes.
-const RANKING_REFRESH_BATCH_SIZE: usize = 500;
+pub const RANKING_REFRESH_BATCH_SIZE: usize = 500;
 use crate::models::voting::{
     ResponseKind, ScoreValueItem, UserVoteCriteria, UserVoteItem, VoteCountCriteria, VoteItem,
     VoteObjectType, VotesCountItem,
@@ -317,6 +317,57 @@ impl Storage {
         .await?;
 
         Ok(ids)
+    }
+
+    /// One page of entities created at or after `cutoff` that have no ranking score yet,
+    /// in `(created_at, id)` order, strictly after the `after` cursor.
+    ///
+    /// Nothing scores an entity when it is created: a score row appears only on a vote, a
+    /// comment (via `comment_sweep`), or a hand-run backfill. The Best feed INNER JOINs
+    /// `entity_ranking_scores`, so an entity nobody has engaged with cannot appear there at
+    /// all — on 2026-09-29, 2.27M of 51.2M entities had no row, every one created after the
+    /// 2026-08-13 backfill. See `new_entity_sweep` for the rest.
+    ///
+    /// `created_at` is text holding epoch seconds (kg-indexer writes the block's
+    /// `u64` timestamp with `to_string()`), so a text comparison against a 10-digit cutoff
+    /// orders correctly and uses `entities_created_at_id_idx (created_at, id)` — a
+    /// 2-day window was 4.4s on the live DB. Casting the column instead is a sequential scan
+    /// over every entity. The regex drops anything that is not a plain number, which
+    /// `refresh_entity_ranking_scores` would fail to cast and so fail the whole batch.
+    ///
+    /// Keyset-paged rather than `fetch_all`, so memory stays bounded when a run has a
+    /// backlog to clear, and the cursor rather than the anti-join guarantees progress: an
+    /// entity that somehow stays unscored is passed over, not returned forever.
+    #[instrument(
+        name = "vote_indexer.storage.unscored_entities_page",
+        skip(self),
+        fields(limit)
+    )]
+    pub async fn unscored_entities_page(
+        &self,
+        after: &(String, Uuid),
+        limit: i64,
+    ) -> Result<Vec<(String, Uuid)>, StorageError> {
+        let rows: Vec<(String, Uuid)> = sqlx::query_as(
+            r#"
+            SELECT e.created_at, e.id
+            FROM entities e
+            WHERE (e.created_at, e.id) > ($1::text, $2::uuid)
+              AND e.created_at ~ '^[0-9]+$'
+              AND NOT EXISTS (
+                SELECT 1 FROM entity_ranking_scores s WHERE s.entity_id = e.id
+              )
+            ORDER BY e.created_at, e.id
+            LIMIT $3
+            "#,
+        )
+        .bind(&after.0)
+        .bind(after.1)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
     }
 
     /// Recompute a known set of entities.
