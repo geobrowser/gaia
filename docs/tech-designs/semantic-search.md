@@ -417,12 +417,19 @@ computed by hand; the same checks are repeated at corpus scale in P1.
 | Index with `index.knn: true`, `knn_vector` (lucene / hnsw / cosinesimil), `_meta.embedding_slots` | accepted |
 | `knn` with both `k` and `min_score` | **rejected**: "requires exactly one of k, distance or score" → semantic mode uses the radial form |
 | `k` + filter inside the clause vs brute-force `script_score` on the filtered set | identical order and scores; a filter selecting a single document still returns it (exact fallback) |
-| radial `min_score` + filter | returns exactly the members above the floor; `from`/`size` paging works |
+| radial `min_score` + filter | correct on the toy index, but at corpus scale recall is 0.82 with no `ef_search` accepted — **rejected for semantic mode** (see the corpus-scale report) |
 | `k` with a larger `size` | `k` caps the hits (k=2, size=5 → 2 hits) |
 | filter wrapped *outside* the clause (`bool.filter` around `knn`) | **loses hits**: the clause picked its k globally, then the filter removed them — the post-filter failure D7 forbids, reproduced |
 | `hybrid` query + `normalization-processor` pipeline | works; fused scores in `[0, 1]` |
 | `hybrid` with `from > 0` | **rejected** verbatim: "In the current OpenSearch version pagination is not supported with hybrid query" → v1 returns 400 for `offset > 0` in hybrid mode |
 | `put_mapping` adding `emb_s2` and updating `_meta` on a live index | accepted; `_meta` shows both slots afterwards (D9's additive rotation step, verified) |
+
+**Corpus scale (step 0, same day):** the design's mapping was loaded with 321,408 real claim
+documents and their vectors; results, storage breakdown and the query-shape decision are in
+[`docs/benchmarks/semantic-search-poc.md`](../benchmarks/semantic-search-poc.md). Headlines:
+filtered k-NN ≥ 0.99 recall at 6–9 ms p95 with `ef_search` 256; tag-filtered queries exact at 4–6
+ms; hybrid 23–30 ms; the single-segment index is 2.4 GB of which raw vectors are 471 MB and the
+HNSW graph 17 MB; store-level parity with geo-lens 20/20.
 
 Local-stack note: on an Apple M4 with Docker Desktop 24 the 2.17.1 image's JDK 21.0.4 aborts
 with `SIGILL` at startup (it misdetects SVE under virtualization). Start the container with
@@ -554,14 +561,18 @@ route returns 400 with a clear message rather than silently paginating wrong.
 Query composition (`opensearch.ts`), reusing the existing filter builder unchanged:
 
 ```jsonc
-// mode=semantic — radial search, filters INSIDE the knn clause (R1)
-// On 2.17 a knn clause takes exactly one of k | min_score | distance (verified); the radial
-// form returns every member above the floor, bounded by size, and supports from/size paging.
+// mode=semantic — k-NN with per-request ef_search, filters INSIDE the knn clause (R1);
+// the slot's floor is applied to the returned scores by the API. The radial (min_score) form
+// was measured at corpus scale and rejected: on the Lucene engine it accepts no ef_search and
+// lands at 0.82 recall, while k + ef_search 256 reaches 0.999 (docs/benchmarks/semantic-search-poc.md).
 { "size": limit, "from": offset,
   "query": { "knn": { "emb_<slot>": {
-      "vector": <query embedding>, "min_score": min_score,
+      "vector": <query embedding>,
+      "k": max(limit + offset, K_MIN),               // k caps hits regardless of size
+      "method_parameters": { "ef_search": EF_SEARCH }, // MUST be sent: the index default is ignored by the Lucene engine
       "filter": { "bool": { "filter": [ /* scope, space, types, tags, canonical, deleted */ ] } } } } },
   "_source": { "excludes": ["emb_*"] } }
+// then: hits.filter(h => h._score >= min_score)
 
 // mode=hybrid — one request, server-side fusion
 { "size": limit,
@@ -594,10 +605,12 @@ slot's scale; `relevanceScore` in hybrid mode is a min-max-normalized fusion and
 not comparable across queries. `QUERY_ARCHITECTURE.md` gets a "Semantic and hybrid modes"
 section.
 
-Guardrails: query text cap stays 250 chars; `HYBRID_K = 100` (the hybrid sub-query must use `k`,
-and `k` caps its hits regardless of `size`); `MAX_LIMIT = 100` unchanged; semantic mode is
-radial so it has no `k` to size; the embedding call is inside the existing request budget and
-shows in the canonical request log as its own span.
+Guardrails: query text cap stays 250 chars; `K_MIN = 50` and `EF_SEARCH = 256` (measured: 0.999
+recall at 8 ms median on 192k filtered docs; 512 buys the last 0.001 for 2 ms); `HYBRID_K = 100`
+with the same `ef_search`; `MAX_LIMIT = 100` unchanged; every k-NN clause carries
+`method_parameters.ef_search` because the Lucene engine otherwise searches with ef = k and recall
+drops to ~0.86; the embedding call is inside the existing request budget and shows in the
+canonical request log as its own span.
 
 ## search-admin additions
 
@@ -667,9 +680,11 @@ slot answered.
 
 ## Sizing (to be replaced by measurements in P0/P1)
 
-- Memory per slot ≈ `N × dims × 4 B` for vectors plus ~10–20 % HNSW graph overhead (Lucene,
-  `m=16`); vectors are additionally stored in `_source` (same again on disk, not RAM).
-  - claims only (≈ 320 k docs × 384 d): ≈ 0.5 GB RAM, ≈ 1 GB disk.
+- Measured on the 321k-document claims corpus (single segment): raw vectors 471 MB (`.vec`),
+  HNSW graph 17 MB (`.vex`), so the vector working set is ≈ **0.5 GB per slot** in page cache;
+  whole index 2.4 GB, of which vectors inside `_source` are ≈ 0.6–0.7 GB. Rule of thumb that
+  matched: `N × dims × 4 B` for the working set, graph overhead ≈ 4 %.
+  - claims only: ≈ 0.5 GB RAM, ≈ 2.4 GB disk with today's mapping (≈ 1.7 GB without vectors in `_source`).
   - every named document (unknown count; the September sizing found 49.6 M entity ids but far
     fewer connected, named ones): measure with `list-slots` coverage before widening scope.
 - Service throughput (measured, see Spike results): 660 texts/s on 10 laptop cores, 400 texts/s
@@ -717,7 +732,7 @@ api: `EMBEDDING_SERVICE_URL` (unset ⇒ lexical only), `EMBEDDING_QUERY_TIMEOUT_
 | D4 | Trigger = incremental poll over `indexed_at`; search-indexer starts stamping it | the field is mapped but never written today; polling the view has precedent (tally worker); removes GRC-20 re-derivation and ordering races |
 | D5 | Text source = the search document, never the edit | one definition of "the entity's name"; the CAS guard compares text, so search-indexer needs no embedding knowledge |
 | D6 | v1 text template = `name + "\n\n" + description`; nameless docs get no vector; scope by type allowlist | claims are name-only; description helps everything else; scope is the real memory lever |
-| D7 | Lucene HNSW engine, `cosinesimil`, filters **inside** the `knn` clause | exactness contract (efficient filtering with exact fallback), radial `min_score`, no native memory to size |
+| D7 | Lucene HNSW engine, `cosinesimil`, filters **inside** the `knn` clause, `ef_search` sent on every request, floor applied client-side | exactness contract (efficient filtering with exact fallback); no native memory to size; measured at corpus scale: ≥ 0.99 recall only with per-request `ef_search`, radial `min_score` has no recall control on this engine |
 | D8 | Scores are on the slot's `(1 + cos) / 2` scale; floors live in the descriptor | a threshold is a property of a model; geo-lens's 0.85 transfers only to the same artifacts |
 | D9 | Rotation = new slot, parallel backfill, harness comparison, default flip, later retirement | zero downtime, zero reindex, rehearsed on staging before first real use |
 | D10 | Reranking / stance / query understanding deferred; `mode` and per-stage score fields are the extension points | agreed scope for this draft |
@@ -788,9 +803,10 @@ None of this is on the critical path for P0–P2.
 
 The runtime half of P0 was completed on 2026-09-29 (see Spike results under the `embedding`
 crate): parity, throughput and static linking are measured facts, not assumptions. The k-NN half
-was completed the same day on the local 2.17.1 stack (see Spike results under Index changes):
-filtered exactness, the radial form, hybrid fusion and the additive slot mapping are verified;
-only performance at corpus scale remains for P1.
+was completed the same day on the local 2.17.1 stack (see Spike results under Index changes),
+and the corpus-scale step 0 followed (`docs/benchmarks/semantic-search-poc.md`): 321k real
+documents, recall/latency per shape, storage breakdown, the k-mode decision for semantic mode,
+and store-level parity with geo-lens. What remains for P1 is the service-level parity check.
 
 The evaluation harness (a golden set of queries with expected and unexpected results, recall@k
 and floor calibration per slot) is built in P1 and is a prerequisite for P3. It is also the
@@ -810,8 +826,9 @@ foundation the deferred "beyond similarity" track needs.
 3. **Hybrid pagination on 2.17 — resolved 2026-09-29.** Verified unsupported on 2.17.1 (the engine
    rejects `from > 0` with "pagination is not supported with hybrid query"); v1 returns 400 for
    `offset > 0` in hybrid mode. Semantic mode pages normally (radial `knn` accepts `from`).
-4. **Vectors in `_source`.** Kept for v1 so `reindex` carries them. If disk becomes the constraint,
-   exclude them and make `full-migration` trigger a re-embed instead.
+4. **Vectors in `_source`.** Kept for v1 so `reindex` carries them; measured cost ≈ 0.6–0.7 GB per
+   321k documents (25–30 % of the index). If disk becomes the constraint, exclude them and make
+   `full-migration` trigger a re-embed instead.
 5. **Per-space duplicates.** One document per `(entity, space)` means the same text may be
    embedded once per space; the LRU and in-page dedupe remove the compute, not the storage. Is a
    per-entity vector store (one vector, joined at query time) worth it later?
