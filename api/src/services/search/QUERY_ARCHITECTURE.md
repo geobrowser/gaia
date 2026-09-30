@@ -99,7 +99,7 @@ If the query matches a UUID pattern, it bypasses text search entirely and perfor
 
 ## 2. Base Text Query
 
-Nine parallel matching strategies run inside a `bool.should` clause with `minimum_should_match: 1`:
+Up to eleven parallel matching strategies run inside a `bool.should` clause with `minimum_should_match: 1`:
 
 ### Strategy Breakdown
 
@@ -109,17 +109,21 @@ Nine parallel matching strategies run inside a `bool.should` clause with `minimu
 | **Raw Name (case-insensitive)** | `term` (case_insensitive) | `name_raw` | **5.0×** | Case-insensitive full-string match, still distinguishes punctuation |
 | **Exact Name Token** | `match` | `name` | **8.0×** | Strong boost for exact analyzed token match in name |
 | **Autocomplete** | `multi_match` (bool_prefix) | `name^1.5`, `name._2gram^1.5`, `name._3gram^1.5`, `description`, `description._2gram`, `description._3gram` | 1.5× on name fields | N-gram autocomplete matching |
-| **Fuzzy** | `multi_match` | `name`, `description` | **0.6×** (reduced) | Typo tolerance with AUTO fuzziness |
+| **Fuzzy** | `multi_match` | `name`, `description` | **0.6×** (reduced) | Typo tolerance with `AUTO:4,6` fuzziness; only for queries of up to 3 tokens |
+| **Real-match floor** | `constant_score` over `bool_prefix` on `name`/`description` + `match` on the stemmed fields | — | **+100** flat | Only with the fuzzy clause. Every non-fuzzy match gets it, so fuzzy-only matches rank below all of them whatever their entity score (GEO-3048) |
+| **Name coverage** | `constant_score` over `match` on `name_stemmed`, `minimum_should_match: 80%` of the content words | `name_stemmed` | **+50** flat | Only for queries with 3+ non-stopwords. Rewards names containing most of the query over short names matching fewer words (GEO-2640) |
 | **Stemmed Name** | `match` | `name_stemmed` | **10.0×** | Plurals and possessives: `mans` / `man's` reach `man` (GEO-3047) |
 | **Stemmed Desc** | `match` | `description_stemmed` | **3.0×** | The same for descriptions |
 | **Name Prefix** | `match_phrase_prefix` | `name` | **5.0×** | Strong boost for "starts with" on name |
 | **Desc Prefix** | `match_phrase_prefix` | `description` | **1.5×** | Moderate boost for "starts with" on description |
 
-### Fuzziness Behavior (AUTO)
+### Fuzziness Behavior (`AUTO:4,6`)
 
-- 1-2 character words: 0 edits allowed
-- 3-4 character words: 1 edit allowed  
-- 5+ character words: 2 edits allowed
+- 1-3 character words: 0 edits allowed (plain `AUTO` allows one from 3, which turned `nft` into `not`)
+- 4-5 character words: 1 edit allowed
+- 6+ character words: 2 edits allowed
+
+`prefix_length` is 0, so a typo in the first letter (`vitcoin`) is still corrected.
 
 ---
 
@@ -165,7 +169,7 @@ From highest to lowest impact:
 3. **Name n-gram matches** — `bool_prefix` with 1.5× field boost
 4. **Description prefix match** — `match_phrase_prefix` on description (1.5×)
 5. **Description n-gram matches** — no additional boost
-6. **Fuzzy matches** — 0.6× penalty (deliberately reduced)
+6. **Fuzzy matches** — 0.6× penalty (deliberately reduced), and below every non-fuzzy match because of the real-match floor
 7. **+ Score Fields** — additive boost from score fields via `function_score` with `script_score` (clamped, shifted, then 1.3× multiplied)
 
 ---
@@ -179,6 +183,14 @@ From highest to lowest impact:
 | `DESCRIPTION_PREFIX_BOOST` | 1.5 | `match_phrase_prefix` on description |
 | `NAME_FIELD_BOOST` | 1.5 | Field boost on name in `multi_match` |
 | `FUZZY_REDUCTION_BOOST` | 0.6 | Penalty for fuzzy matches |
+| `FUZZY_MIN_TERM_LENGTH` | 4 | Shortest term the fuzzy clause may edit |
+| `FUZZY_PREFIX_LENGTH` | 0 | Leading characters a fuzzy edit may not touch |
+| `REAL_MATCH_BOOST` | 100.0 | Flat bonus for any non-fuzzy match when the fuzzy clause is present; must exceed the entity-score spread (`SCORE_BOOST`) |
+| `NAME_COVERAGE_BOOST` | 50.0 | Flat bonus for a name containing 80% of 3+ content words |
+
+All of these, like the boosts above, can be overridden per request with the query parameter of
+the same name in lowercase (`fuzzy_min_term_length`, `fuzzy_prefix_length`, `real_match_boost`,
+`name_coverage_boost`); 0 turns a bonus off.
 
 ---
 
@@ -207,5 +219,5 @@ Each search result includes two computed score fields:
 | `relevanceScore` | Final score after all boosts | OpenSearch `_score` |
 | `textMatchScore` | Text matching score without score field boosts | `relevanceScore - scoreBoost` (clamped to 0) |
 
-The `scoreBoost` is computed via `script_fields` using the same Painless script as `buildScoreBoostFunction`. For empty queries (top-ranked), `textMatchScore` is 0 since `boost_mode: "replace"` means `_score` equals the boost. For UUID queries, `textMatchScore` equals `relevanceScore` since there is no score field boost.
+The `scoreBoost` is computed via `script_fields` using the same Painless script as `buildScoreBoostFunction`. For empty queries (top-ranked), `textMatchScore` is 0 since `boost_mode: "replace"` means `_score` equals the boost. For UUID queries, `textMatchScore` equals `relevanceScore` since there is no score field boost. `textMatchScore` includes the real-match floor and name coverage bonuses, so for queries of up to 3 tokens every non-fuzzy match scores at least 100, and a value under 100 there means the match is fuzzy-only.
 
