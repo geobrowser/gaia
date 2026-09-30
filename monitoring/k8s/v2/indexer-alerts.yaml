@@ -6,14 +6,29 @@
 # hermes-metrics-servicemonitor.yaml, so `up` and every series below carry
 # service="<name>" (the Service name) and namespace="gaia".
 #
+# Write-failure policy (GEO-2884, GEO-3101), shared by kg-indexer, vote-indexer,
+# topology-indexer and notification-indexer (each crate's src/write_retry.rs):
+#   * transient (connection, timeout, serialization, deadlock, and anything not
+#     proven permanent): retried with backoff (default 5 attempts over ~30s; 3 for
+#     kg-indexer), then the process HALTS: it sets <service>_halted to 1, holds for
+#     30s so Prometheus scrapes that, and exits 1 without committing, so the pod
+#     restarts on the same offset. A persistent fault is a visible crash-loop.
+#   * permanent (undecodable payload, SQLSTATE 22 data exception, 23 constraint
+#     violation): the one poison message is skipped, committed past, and counted
+#     in the *_dropped / db_error counters below. More than 10 in a row halts too,
+#     because that is a systemic fault, not a poison message.
+#
 # Coverage split:
 #   IndexerMetricsMissing (here)       — the signal itself is gone
-#   IndexerDroppedData (here)          — a failure path that loses data without
-#                                        stopping the consumer
-#   IndexerRestartingRepeatedly (here) — the failure paths that exit instead:
-#       search-indexer on any NACKed batch, ranking-indexer on a transient error
-#       that outlasts its retries. Their counters die with the process, so the
-#       restart count is the signal.
+#   IndexerHalted (here)               — an indexer stopped on a write it could not
+#                                        make; fires within a scrape of the first halt
+#   IndexerDroppedData (here)          — a poison message was skipped (permanent
+#                                        error); data is missing until replayed
+#   IndexerRestartingRepeatedly (here) — the crash-loop itself, for every indexer
+#       that exits on failure: the four above when they halt, search-indexer on any
+#       NACKed batch, ranking-indexer on a transient error that outlasts its
+#       retries. Their counters die with the process, so the restart count is the
+#       signal.
 #   Kafka consumer lag (../kafka-consumer-lag-alerts.yaml) — per-partition lag for
 #       the five Kafka consumers, which still works when a pod is dead. None of
 #       these services publishes a position gauge: their topics only carry
@@ -74,17 +89,46 @@ spec:
               counts), or the Service / ServiceMonitor wiring is broken. Either way
               IndexerDroppedData is blind for it until this clears.
 
+        # The halting indexer sets its gauge to 1 and holds for 30s (two scrapes)
+        # before exiting, so max_over_time sees it even though the series vanishes
+        # with the process. No `for`: the first halt is the thing worth knowing,
+        # and the 15m window keeps the alert up through a crash-loop's backoff.
+        # kg-indexer can take ~15 minutes to halt when the cause is a 300s
+        # statement timeout (3 attempts), so this fires well before
+        # IndexerRestartingRepeatedly would for it.
+        - alert: IndexerHalted
+          expr: |
+            max by (namespace, service) (
+              max_over_time({__name__=~"kg_indexer_halted|vote_indexer_halted|topology_indexer_halted|notification_indexer_halted", namespace="gaia"}[15m])
+            ) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.service }} halted on a write it could not make"
+            description: >-
+              {{ $labels.service }} failed to write a message to Postgres on every retry and
+              exited without committing its offset, so Kubernetes restarts it on the same
+              message (GEO-2884 / GEO-3101). Nothing is lost, but the consumer makes no
+              progress until the cause clears: expect Kafka lag to grow and the pod to
+              crash-loop. The error is in the previous container's log (look for
+              `.halting`):
+              kubectl -n gaia logs deploy/{{ $labels.service }} --previous | grep -E 'halting|retrying'
+
         # No `for`: each of these counters only moves when data is lost, and one
         # event is already the thing worth knowing. Every counter is registered at
         # zero on startup, so increase() sees the first event rather than treating
         # it as the series' first sample.
         #
-        #   vote_indexer_votes_dropped_total, topology_indexer_diffs_dropped_total:
-        #     a batch transaction failed; its offsets were not committed, but the
-        #     next good batch commits past them, so the batch is gone.
-        #   notification_indexer_events_failed_total{reason="db_error"}: the same
-        #     shape — the offset is left uncommitted "to retry on restart", but the
-        #     next success on the partition supersedes it.
+        # Since GEO-3101 the three indexer counters only move for a PERMANENT
+        # error: a message that can never be written (SQLSTATE 22/23, or a value
+        # out of range), skipped so it does not block the partition forever. A
+        # transient failure halts instead (IndexerHalted) and loses nothing.
+        #
+        #   vote_indexer_votes_dropped_total: votes that could never be written. A
+        #     batch with one such vote is rewritten vote by vote, so only it is lost.
+        #   topology_indexer_diffs_dropped_total: diffs that could never apply.
+        #   notification_indexer_events_failed_total{reason="db_error"}: events
+        #     whose notifications hit a permanent database error.
         #   delivery_worker_deliveries_total{outcome="failed"}: a webhook delivery
         #     given up on for good.
         - alert: IndexerDroppedData
@@ -101,22 +145,28 @@ spec:
             summary: "{{ $labels.service }} dropped data"
             description: >-
               {{ $labels.service }} lost {{ $value | humanize }} item(s) in the last 15
-              minutes that it will not retry. vote-indexer: votes whose batch transaction
-              failed. topology-indexer: canonical-graph diffs that failed to apply.
-              notification-indexer: events whose notifications hit a database error.
-              delivery-worker: webhook deliveries marked failed for good. The consumer
-              has moved past them, so they stay missing until the topic is replayed (or,
-              for delivery-worker, the rows are reset to pending). The cause is in the
-              logs:
-              kubectl -n gaia logs deploy/{{ $labels.service }} --since=1h | grep -iE 'error|failed'
+              minutes that it will not retry. For the indexers this is a permanent,
+              data-level error (a value the schema rejects, a constraint violation): the
+              message can never be written, so it was skipped rather than blocking the
+              partition. vote-indexer: votes. topology-indexer: canonical-graph diffs.
+              notification-indexer: events whose notifications hit that kind of database
+              error. delivery-worker: webhook deliveries marked failed for good. They stay
+              missing until the cause is fixed and the topic replayed (or, for
+              delivery-worker, the rows are reset to pending). The cause is in the logs:
+              kubectl -n gaia logs deploy/{{ $labels.service }} --since=1h | grep -iE 'dropped|error|failed'
 
         # Mirrors AtlasRestartingRepeatedly / ApiRestartingRepeatedly. The stock
         # KubePodCrashLooping only fires once a pod is in CrashLoopBackOff, which a
         # pod that exits every half hour and starts cleanly never reaches.
+        #
+        # A halting indexer (default policy) exits ~60s after it starts: ~30s of
+        # retries plus the 30s hold. With CrashLoopBackOff's 10s/20s/40s delays the
+        # third restart lands ~4-5 minutes in, so with `for: 5m` this fires within
+        # ~10 minutes of the first failure. IndexerHalted fires sooner.
         - alert: IndexerRestartingRepeatedly
           expr: |
             sum by (namespace, container) (
-              increase(kube_pod_container_status_restarts_total{namespace="gaia", container=~"search-indexer|vote-indexer|topology-indexer|ranking-indexer|notification-indexer|delivery-worker"}[1h])
+              increase(kube_pod_container_status_restarts_total{namespace="gaia", container=~"kg-indexer|search-indexer|vote-indexer|topology-indexer|ranking-indexer|notification-indexer|delivery-worker"}[1h])
             ) >= 3
           for: 5m
           labels:
@@ -125,9 +175,11 @@ spec:
             summary: "{{ $labels.container }} is restarting repeatedly"
             description: >-
               {{ $labels.container }} has restarted {{ $value | humanize }} times in the last
-              hour. search-indexer exits whenever a batch is NACKed (an OpenSearch bulk
-              failure or a processing error) so Kafka redelivers it; ranking-indexer exits
-              when a transient database or Kafka error outlasts its retries. Both converge
-              on restart, but a loop means the same batch keeps failing. Read the previous
+              hour. kg-indexer, vote-indexer, topology-indexer and notification-indexer
+              halt (exit without committing) when a database write fails on every retry;
+              search-indexer exits whenever a batch is NACKed (an OpenSearch bulk failure
+              or a processing error) so Kafka redelivers it; ranking-indexer exits when a
+              transient database or Kafka error outlasts its retries. All converge on
+              restart, but a loop means the same message keeps failing. Read the previous
               container's log:
               kubectl -n gaia logs <pod> -c {{ $labels.container }} --previous

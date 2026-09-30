@@ -6,6 +6,11 @@
 //! `increase()` cannot see its first event, and for [`DIFFS_DROPPED`] that first event is
 //! the one the alert exists to catch.
 //!
+//! Since GEO-3101 a diff whose write fails transiently is retried and then halts the
+//! process without committing, so [`DIFFS_DROPPED`] only counts diffs skipped for a
+//! permanent, data-level error. [`WRITE_RETRIES`] counts the retries; [`HALTED`] is 1
+//! for the few seconds between deciding to halt and exiting.
+//!
 //! There is deliberately no position gauge. topology-indexer consumes
 //! `topology.canonical`, which only carries a message when the canonical graph changes, so
 //! any "last processed" value would stall through quiet stretches. Per-partition lag is
@@ -14,6 +19,8 @@
 pub const DIFFS_APPLIED: &str = "topology_indexer_diffs_applied_total";
 pub const DIFFS_DROPPED: &str = "topology_indexer_diffs_dropped_total";
 pub const MESSAGES_UNPARSEABLE: &str = "topology_indexer_messages_unparseable_total";
+pub const WRITE_RETRIES: &str = "topology_indexer_write_retries_total";
+pub const HALTED: &str = "topology_indexer_halted";
 
 /// Describe every counter and register it at zero.
 pub fn register() {
@@ -23,9 +30,18 @@ pub fn register() {
     );
     metrics::describe_counter!(
         DIFFS_DROPPED,
-        "Diffs in a batch that failed to apply. The batch's offsets are not committed, \
-         but the next successful batch commits past them, so these changes are lost \
-         until the topic is replayed"
+        "Diffs skipped because they failed to apply for a permanent, data-level reason \
+         (SQLSTATE 22/23, or a distance out of range). A transient failure halts the \
+         indexer instead of dropping, so this stays at 0 unless a diff can never apply"
+    );
+    metrics::describe_counter!(
+        WRITE_RETRIES,
+        "Diff writes retried after a transient database error"
+    );
+    metrics::describe_gauge!(
+        HALTED,
+        "1 while topology-indexer is halting on a diff that failed transiently on every \
+         attempt; the process exits without committing so the restart re-reads it"
     );
     metrics::describe_counter!(
         MESSAGES_UNPARSEABLE,
@@ -35,6 +51,8 @@ pub fn register() {
     metrics::counter!(DIFFS_APPLIED).absolute(0);
     metrics::counter!(DIFFS_DROPPED).absolute(0);
     metrics::counter!(MESSAGES_UNPARSEABLE).absolute(0);
+    metrics::counter!(WRITE_RETRIES).absolute(0);
+    metrics::gauge!(HALTED).set(0.0);
 }
 
 pub fn diffs_applied(count: u64) {
@@ -47,6 +65,14 @@ pub fn diffs_dropped(count: u64) {
 
 pub fn message_unparseable() {
     metrics::counter!(MESSAGES_UNPARSEABLE).increment(1);
+}
+
+pub fn write_retried() {
+    metrics::counter!(WRITE_RETRIES).increment(1);
+}
+
+pub fn halted() {
+    metrics::gauge!(HALTED).set(1.0);
 }
 
 #[cfg(test)]
@@ -68,6 +94,8 @@ mod tests {
             "topology_indexer_diffs_applied_total 0",
             "topology_indexer_diffs_dropped_total 0",
             "topology_indexer_messages_unparseable_total 0",
+            "topology_indexer_write_retries_total 0",
+            "topology_indexer_halted 0",
         ] {
             assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
         }
@@ -81,11 +109,15 @@ mod tests {
             diffs_applied(2);
             diffs_dropped(4);
             message_unparseable();
+            write_retried();
+            halted();
         });
         for line in [
             "topology_indexer_diffs_applied_total 5",
             "topology_indexer_diffs_dropped_total 4",
             "topology_indexer_messages_unparseable_total 1",
+            "topology_indexer_write_retries_total 1",
+            "topology_indexer_halted 1",
         ] {
             assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
         }

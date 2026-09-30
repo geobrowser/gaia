@@ -3205,7 +3205,7 @@ data:
           "type": "timeseries",
           "title": "Retries, rejects and unparseable messages (15m increase)",
           "id": 122,
-          "description": "Recoverable trouble: retried, skipped by design, or rejected as malformed. A rising line here usually precedes the dropped panel.",
+          "description": "Recoverable trouble: retried, skipped by design, or rejected as malformed. A halted line (1) means an indexer stopped on a write it could not make and is crash-looping on it without losing data (GEO-2884 / GEO-3101).",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -3251,6 +3251,16 @@ data:
               "expr": "sum(increase(delivery_worker_claim_errors_total{namespace=\"gaia\"}[15m]))",
               "legendFormat": "delivery-worker claim errors",
               "refId": "G"
+            },
+            {
+              "expr": "sum by (service) (increase({__name__=~\"vote_indexer_write_retries_total|topology_indexer_write_retries_total|notification_indexer_write_retries_total\", namespace=\"gaia\"}[15m]))",
+              "legendFormat": "{{service}} write retries",
+              "refId": "H"
+            },
+            {
+              "expr": "max by (service) (max_over_time({__name__=~\"kg_indexer_halted|vote_indexer_halted|topology_indexer_halted|notification_indexer_halted\", namespace=\"gaia\"}[15m]))",
+              "legendFormat": "{{service}} halted (IndexerHalted)",
+              "refId": "I"
             }
           ],
           "fieldConfig": {

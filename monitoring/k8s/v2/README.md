@@ -57,7 +57,7 @@ kubectl --context $CTX apply -f monitoring/k8s/v2/
 | `gateway-metrics.yaml` | scrapes Cilium's Envoy and provides the `api:gateway_*` recording rules that replace the nginx-derived `api:ingress_*` pair |
 | `chain-tip-exporter.yaml` | this cluster had no exporter at all, so `HermesBehindChainTip` could never fire |
 | `kg-indexer-alerts.yaml` | new: `KgIndexerBlockDropped` (GEO-2884's silent loss) and `KgIndexerMetricsMissing` |
-| `indexer-alerts.yaml` | new: `IndexerMetricsMissing`, `IndexerDroppedData` and `IndexerRestartingRepeatedly` for the six indexers below |
+| `indexer-alerts.yaml` | new: `IndexerMetricsMissing`, `IndexerHalted`, `IndexerDroppedData` and `IndexerRestartingRepeatedly` for the indexers below |
 
 ## Deliberately not ported
 
@@ -95,7 +95,8 @@ runtime, and installs the metrics listener the same way.
 `hermes_latest_processed_block{,_timestamp}`, so `HermesBehindChainTip` covers
 it, plus `kg_indexer_blocks_dropped_total{transient}`,
 `kg_indexer_blocks_processed_total`, `kg_indexer_events_processed_total`,
-`kg_indexer_batch_retries_total` and `kg_indexer_messages_unparseable_total`.
+`kg_indexer_batch_retries_total`, `kg_indexer_messages_unparseable_total` and the
+gauge `kg_indexer_halted`.
 The gauge is not set from the blocks it writes: most blocks have no events for
 it and arrive only as a summary, so that would stall in quiet stretches. It
 follows the highest block summary read, empty or not, capped just below the
@@ -108,10 +109,10 @@ The others (also GEO-2959) publish counters only, plus one backlog gauge:
 | service | series |
 |---|---|
 | `search-indexer` | `search_indexer_events_processed_total`, `_documents_indexed_total`, `_operations_total`, `_operations_failed_total`, `_operations_by_kind_total{kind}`, `_bulk_calls_total`, `_bulk_{wall,took}_milliseconds_total`, gauge `_canonical_graph_nodes`. These are the in-memory `SearchIndexerMetrics`, copied into the recorder every 10s |
-| `vote-indexer` | `vote_indexer_votes_processed_total`, `_votes_dropped_total`, `_messages_rejected_total{reason}`, `_ranking_refresh_failures_total` |
-| `topology-indexer` | `topology_indexer_diffs_applied_total`, `_diffs_dropped_total`, `_messages_unparseable_total` |
+| `vote-indexer` | `vote_indexer_votes_processed_total`, `_votes_dropped_total`, `_messages_rejected_total{reason}`, `_ranking_refresh_failures_total`, `_write_retries_total`, gauge `_halted` |
+| `topology-indexer` | `topology_indexer_diffs_applied_total`, `_diffs_dropped_total`, `_messages_unparseable_total`, `_write_retries_total`, gauge `_halted` |
 | `ranking-indexer` | `ranking_indexer_messages_processed_total{topic}`, `_messages_skipped_total{topic}`, `_transient_retries_total{topic}` |
-| `notification-indexer` | `notification_indexer_events_processed_total{consumer}`, `_events_failed_total{consumer,reason}`, `_notifications_inserted_total`, `_poller_errors_total{poller}` |
+| `notification-indexer` | `notification_indexer_events_processed_total{consumer}`, `_events_failed_total{consumer,reason}`, `_notifications_inserted_total`, `_poller_errors_total{poller}`, `_write_retries_total{consumer}`, gauge `_halted{consumer}` |
 | `delivery-worker` | `delivery_worker_deliveries_total{outcome}`, `_claim_errors_total`, `_stale_claims_reset_total`, gauges `_pending_deliveries`, `_in_progress_deliveries` |
 
 None of them publishes a position gauge. Their topics only carry a message when
@@ -120,13 +121,50 @@ and look like lag; per-partition lag is already `kafka-exporter`'s job
 (`kafka-consumer-lag-alerts.yaml`). `delivery-worker` reads Postgres, not
 Kafka, and its pending-deliveries gauge is correct when idle (it reads 0).
 
-Three failure paths lose data without stopping the consumer, and are what
-`IndexerDroppedData` watches: a vote-indexer or topology-indexer batch whose
-transaction fails, and a notification-indexer database error. Each leaves the
-offset uncommitted to be "retried on restart", but the next success on the
-partition commits past it. `search-indexer` (any NACKed batch) and
-`ranking-indexer` (a transient error that outlasts its retries) exit instead,
-so their failures show as restarts (`IndexerRestartingRepeatedly`).
+### When a write fails (GEO-2884, GEO-3101)
+
+kg-indexer, vote-indexer, topology-indexer and notification-indexer share one
+policy (each crate's `src/write_retry.rs`, kept identical): **an indexer never
+moves past a message whose write failed for a reason that could go away.**
+
+* **Transient** — connection, timeout, serialization failure, deadlock, and any
+  error not proven permanent: retried with exponential backoff (default 5
+  attempts, 2s/4s/8s/16s, about 30s; kg-indexer 3 attempts, because each
+  `statement_timeout` attempt costs 300s). If it still fails the process
+  **halts**: logs `<service>.halting`, sets `<service>_halted` to 1, holds 30s
+  so Prometheus scrapes it, and exits 1 without committing. Kubernetes restarts
+  the pod on the same offset, so a persistent fault is a visible crash-loop
+  (`IndexerHalted`, `IndexerRestartingRepeatedly`) and nothing is lost.
+* **Permanent** — an undecodable payload, or SQLSTATE class 22 (data exception)
+  or 23 (constraint violation): the message can never be written, and halting
+  on it would block the partition forever, so it is skipped, committed past,
+  and counted (`kg_indexer_blocks_dropped_total{transient="false"}`,
+  `vote_indexer_votes_dropped_total`, `topology_indexer_diffs_dropped_total`,
+  `notification_indexer_events_failed_total{reason="db_error"}`), which fires
+  `KgIndexerBlockDropped` / `IndexerDroppedData`. vote-indexer rewrites a batch
+  that fails permanently vote by vote, so only the poison vote is lost. More
+  than 10 permanent failures in a row halts as well: that is a systemic fault
+  (a migration that tightened a column), not a poison message.
+
+`SQLSTATE 42` (undefined table or column) and `XX` are deliberately transient: a
+retry will not fix them, but skipping would drop every message after a bad
+deploy.
+
+Skipped messages are committed in order with the batch they arrived in (and in
+kg-indexer only once nothing earlier on their partition is still buffered), so a
+skip can never commit past a batch that then halts.
+
+Knobs (all optional): `INDEXER_WRITE_MAX_ATTEMPTS`, `INDEXER_WRITE_BACKOFF_MS`,
+`INDEXER_WRITE_BACKOFF_MAX_MS`, `INDEXER_HALT_HOLD_SECS`,
+`INDEXER_MAX_CONSECUTIVE_SKIPS`; kg-indexer keeps `KG_BATCH_MAX_ATTEMPTS` for its
+attempt count. New series: `vote_indexer_write_retries_total`,
+`topology_indexer_write_retries_total`,
+`notification_indexer_write_retries_total{consumer}` (kg-indexer's is the existing
+`kg_indexer_batch_retries_total`), and the `*_halted` gauges.
+
+`search-indexer` (any NACKed batch) and `ranking-indexer` (a transient error that
+outlasts its retries) already exited on failure, and show as restarts
+(`IndexerRestartingRepeatedly`).
 
 ## Dashboards
 

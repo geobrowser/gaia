@@ -18,6 +18,7 @@ use vote_indexer::handlers::voting::{
 use vote_indexer::metrics::{self, RejectReason};
 use vote_indexer::models::voting::{UserVoteCriteria, VoteCountCriteria, VoteItem};
 use vote_indexer::storage::Storage;
+use vote_indexer::write_retry::{self, BatchOutcome, RetryPolicy, SkipGuard};
 
 fn main() -> Result<(), IndexerError> {
     dotenv::dotenv().ok();
@@ -120,7 +121,13 @@ async fn async_main() -> Result<(), IndexerError> {
     // Main processing loop with batching
     let mut stream = consumer.stream();
     let mut vote_buffer: Vec<VoteItem> = Vec::with_capacity(batch_size);
-    let mut commit_info: Vec<(String, i32, i64)> = Vec::with_capacity(batch_size);
+    // Every message read since the last flush, in order, including ones rejected
+    // as malformed: committing a rejected message's offset at once would move its
+    // partition past votes still in the buffer, so a batch that then halted would
+    // be skipped by the restart anyway (GEO-3101).
+    let mut commit_info: Vec<PendingOffset> = Vec::with_capacity(batch_size);
+    let policy = RetryPolicy::from_env();
+    let mut skip_guard = SkipGuard::from_env();
     let mut batch_timer =
         tokio::time::interval(tokio::time::Duration::from_millis(batch_timeout_ms));
     let mut processed_count: u64 = 0;
@@ -137,12 +144,14 @@ async fn async_main() -> Result<(), IndexerError> {
             _ = shutdown_rx.recv() => {
                 info!("Shutting down...");
                 // Process any remaining votes before shutdown
-                if !vote_buffer.is_empty() {
+                if !commit_info.is_empty() {
                     flush_batch(
                         &vote_buffer,
                         &commit_info,
                         &storage,
                         &consumer,
+                        &policy,
+                        &mut skip_guard,
                         &mut processed_count,
                         &mut error_count,
                     )
@@ -152,14 +161,17 @@ async fn async_main() -> Result<(), IndexerError> {
             }
 
             _ = batch_timer.tick() => {
-                // Process batch on timeout if we have votes
-                if !vote_buffer.is_empty() {
+                // Process batch on timeout if we have votes (or rejected messages
+                // whose offsets are waiting behind them)
+                if !commit_info.is_empty() {
                     debug!(count = vote_buffer.len(), "Processing batch on timeout");
                     flush_batch(
                         &vote_buffer,
                         &commit_info,
                         &storage,
                         &consumer,
+                        &policy,
+                        &mut skip_guard,
                         &mut processed_count,
                         &mut error_count,
                     )
@@ -181,8 +193,13 @@ async fn async_main() -> Result<(), IndexerError> {
                                 Ok(vote_msg) => {
                                     match handle_vote_cast(&vote_msg) {
                                         Ok(vote_item) => {
+                                            commit_info.push(PendingOffset {
+                                                topic,
+                                                partition,
+                                                offset,
+                                                vote: Some(vote_buffer.len()),
+                                            });
                                             vote_buffer.push(vote_item);
-                                            commit_info.push((topic, partition, offset));
 
                                             // Process batch if full
                                             if vote_buffer.len() >= batch_size {
@@ -192,6 +209,8 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     &commit_info,
                                                     &storage,
                                                     &consumer,
+                                                    &policy,
+                                                    &mut skip_guard,
                                                     &mut processed_count,
                                                     &mut error_count,
                                                 )
@@ -209,10 +228,8 @@ async fn async_main() -> Result<(), IndexerError> {
                                             );
                                             error_count += 1;
                                             metrics::message_rejected(RejectReason::Invalid);
-                                            // Commit to avoid getting stuck
-                                            if let Err(e) = consumer.commit_message(&topic, partition, offset) {
-                                                error!(error = %e, "Failed to commit offset");
-                                            }
+                                            // Committed past with the next flush, in order.
+                                            commit_info.push(PendingOffset { topic, partition, offset, vote: None });
                                         }
                                     }
                                 }
@@ -225,10 +242,8 @@ async fn async_main() -> Result<(), IndexerError> {
                                     );
                                     error_count += 1;
                                     metrics::message_rejected(RejectReason::Undecodable);
-                                    // Commit to avoid getting stuck
-                                    if let Err(e) = consumer.commit_message(&topic, partition, offset) {
-                                        error!(error = %e, "Failed to commit offset");
-                                    }
+                                    // Committed past with the next flush, in order.
+                                    commit_info.push(PendingOffset { topic, partition, offset, vote: None });
                                 }
                             }
                         }
@@ -254,31 +269,96 @@ async fn async_main() -> Result<(), IndexerError> {
     Ok(())
 }
 
-/// Process a batch and commit its offsets on success, updating the running totals
-/// and the vote counters either way.
+/// One message read since the last flush, and the vote it became, if any.
+struct PendingOffset {
+    topic: String,
+    partition: i32,
+    offset: i64,
+    /// Index into the batch's votes; `None` for a message rejected as malformed.
+    vote: Option<usize>,
+}
+
+/// Write a batch, then commit its offsets.
 ///
-/// The batch is one transaction, so on failure none of its votes landed. Its
-/// offsets are not committed, but the next batch that succeeds commits past
-/// them, so the votes are lost until the topic is replayed.
-/// `vote_indexer_votes_dropped_total` counts them.
+/// The batch is one transaction. A transient failure is retried with backoff
+/// (`write_retry`); if it persists, nothing is committed and the process halts,
+/// so the restart re-reads the batch (GEO-3101). A permanent failure means some
+/// vote in it can never be written: the votes are then written one at a time so
+/// only that vote is skipped, counted in `vote_indexer_votes_dropped_total`.
+#[allow(clippy::too_many_arguments)]
 async fn flush_batch(
     votes: &[VoteItem],
-    commit_info: &[(String, i32, i64)],
+    commit_info: &[PendingOffset],
     storage: &Storage,
     consumer: &KafkaConsumer,
+    policy: &RetryPolicy,
+    skip_guard: &mut SkipGuard,
     processed_count: &mut u64,
     error_count: &mut u64,
 ) {
-    match process_vote_batch(votes, storage).await {
-        Ok(count) => {
-            *processed_count += count as u64;
-            metrics::votes_processed(count as u64);
+    let outcome = write_retry::write_batch(
+        votes.len(),
+        policy,
+        IndexerError::class,
+        skip_guard,
+        |attempt, e, delay| {
+            warn!(
+                error = %e,
+                attempt = attempt,
+                max_attempts = policy.max_attempts,
+                delay_ms = delay.as_millis() as u64,
+                "Vote batch failed transiently — retrying"
+            );
+            metrics::write_retried();
+        },
+        true,
+        |range| async move { process_vote_batch(&votes[range], storage).await.map(|_| ()) },
+    )
+    .await;
+
+    match outcome {
+        BatchOutcome::Done(report) => {
+            *processed_count += report.written as u64;
+            metrics::votes_processed(report.written as u64);
+            for (index, e) in &report.skipped {
+                error!(
+                    event = "vote_indexer.vote_dropped",
+                    error = %e,
+                    voter_id = %votes[*index].voter_id,
+                    object_id = %votes[*index].object_id,
+                    "Vote dropped after a PERMANENT write failure"
+                );
+            }
+            *error_count += report.skipped.len() as u64;
+            metrics::votes_dropped(report.skipped.len() as u64);
             commit_offsets(consumer, commit_info);
         }
-        Err(e) => {
-            error!(error = %e, dropped = votes.len(), "Failed to process batch");
-            *error_count += votes.len() as u64;
-            metrics::votes_dropped(votes.len() as u64);
+        BatchOutcome::Halt {
+            index,
+            error,
+            attempts,
+            report,
+        } => {
+            metrics::votes_processed(report.written as u64);
+            metrics::votes_dropped(report.skipped.len() as u64);
+            // Everything read before the vote that failed is finished; commit it so
+            // the restart does not write those votes a second time.
+            let finished = commit_info
+                .iter()
+                .position(|p| p.vote == Some(index))
+                .unwrap_or(0);
+            commit_offsets(consumer, &commit_info[..finished]);
+            error!(
+                event = "vote_indexer.halting",
+                error = %error,
+                attempts = attempts,
+                consecutive_skips = skip_guard.consecutive(),
+                uncommitted = commit_info.len() - finished,
+                "Vote write failed on every attempt (or too many in a row failed \
+                 permanently) — halting WITHOUT committing so the restart re-reads it"
+            );
+            metrics::halted();
+            write_retry::halt().await
         }
     }
 }
@@ -394,9 +474,15 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
     .await
 }
 
-/// Commit all offsets in the batch.
-fn commit_offsets(consumer: &KafkaConsumer, commit_info: &[(String, i32, i64)]) {
-    for (topic, partition, offset) in commit_info {
+/// Commit the given offsets, in order.
+fn commit_offsets(consumer: &KafkaConsumer, commit_info: &[PendingOffset]) {
+    for PendingOffset {
+        topic,
+        partition,
+        offset,
+        ..
+    } in commit_info
+    {
         if let Err(e) = consumer.commit_message(topic, *partition, *offset) {
             error!(error = %e, topic = %topic, partition = partition, offset = offset, "Failed to commit offset");
         }

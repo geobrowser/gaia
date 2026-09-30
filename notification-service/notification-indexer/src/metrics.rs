@@ -6,10 +6,13 @@
 //! `increase()` cannot see its first event, and for `reason="db_error"` that first event is
 //! the one the alert exists to catch.
 //!
-//! A `db_error` is quieter than the log line makes it sound. The message's offset is left
-//! uncommitted "so it is retried on restart", but the next message on the same partition
-//! that succeeds commits past it, and nothing seeks back. Unless the pod restarts first,
-//! that message's notifications are never written.
+//! Since GEO-3101 a database error is retried with backoff and, if it persists, halts
+//! the process with the offset uncommitted, so the restart re-reads the message. Before
+//! that, the offset was left uncommitted "to retry on restart" but the next success on
+//! the partition committed past it. `reason="db_error"` now only counts events skipped
+//! for a permanent, data-level database error (SQLSTATE 22/23). [`WRITE_RETRIES`]
+//! counts retries; [`HALTED`] is 1 for the few seconds between deciding to halt and
+//! exiting.
 //!
 //! There is deliberately no position gauge. Both topics only carry messages when someone
 //! acts, so any "last processed" value would stall through quiet stretches. Per-partition
@@ -20,6 +23,8 @@ pub const EVENTS_PROCESSED: &str = "notification_indexer_events_processed_total"
 pub const EVENTS_FAILED: &str = "notification_indexer_events_failed_total";
 pub const NOTIFICATIONS_INSERTED: &str = "notification_indexer_notifications_inserted_total";
 pub const POLLER_ERRORS: &str = "notification_indexer_poller_errors_total";
+pub const WRITE_RETRIES: &str = "notification_indexer_write_retries_total";
+pub const HALTED: &str = "notification_indexer_halted";
 
 /// Which Kafka consumer handled a message.
 #[derive(Debug, Clone, Copy)]
@@ -44,7 +49,8 @@ impl Consumer {
 pub enum FailReason {
     /// Malformed payload or ids; committed past on purpose, since a retry cannot succeed.
     Unprocessable,
-    /// A database call failed; left uncommitted, but see the module doc.
+    /// A database call failed for a permanent reason; committed past. A transient
+    /// failure halts instead (see the module doc).
     DbError,
 }
 
@@ -91,9 +97,18 @@ pub fn register() {
     );
     metrics::describe_counter!(
         EVENTS_FAILED,
-        "Relevant events that produced no notifications. reason=\"db_error\" is left \
-         uncommitted, but a later commit on the same partition supersedes it, so it is \
-         only retried if the pod restarts first"
+        "Relevant events that produced no notifications and were committed past. \
+         reason=\"db_error\" is a permanent, data-level database error; a transient one \
+         halts the indexer instead, so this stays at 0 unless an event can never be written"
+    );
+    metrics::describe_counter!(
+        WRITE_RETRIES,
+        "Database calls retried after a transient error, by consumer"
+    );
+    metrics::describe_gauge!(
+        HALTED,
+        "1 while notification-indexer is halting on a message whose database write failed \
+         on every attempt; the process exits without committing so the restart re-reads it"
     );
     metrics::describe_counter!(
         NOTIFICATIONS_INSERTED,
@@ -107,6 +122,8 @@ pub fn register() {
 
     for consumer in Consumer::ALL {
         metrics::counter!(EVENTS_PROCESSED, "consumer" => consumer.as_str()).absolute(0);
+        metrics::counter!(WRITE_RETRIES, "consumer" => consumer.as_str()).absolute(0);
+        metrics::gauge!(HALTED, "consumer" => consumer.as_str()).set(0.0);
         for reason in FailReason::ALL {
             metrics::counter!(
                 EVENTS_FAILED,
@@ -133,6 +150,14 @@ pub fn event_failed(consumer: Consumer, reason: FailReason) {
         "reason" => reason.as_str()
     )
     .increment(1);
+}
+
+pub fn write_retried(consumer: Consumer) {
+    metrics::counter!(WRITE_RETRIES, "consumer" => consumer.as_str()).increment(1);
+}
+
+pub fn halted(consumer: Consumer) {
+    metrics::gauge!(HALTED, "consumer" => consumer.as_str()).set(1.0);
 }
 
 pub fn notifications_inserted(count: u64) {
@@ -167,6 +192,8 @@ mod tests {
             "notification_indexer_poller_errors_total{poller=\"rejection\"} 0",
             "notification_indexer_poller_errors_total{poller=\"vote_threshold\"} 0",
             "notification_indexer_poller_errors_total{poller=\"retention\"} 0",
+            "notification_indexer_write_retries_total{consumer=\"governance\"} 0",
+            "notification_indexer_halted{consumer=\"knowledge_edits\"} 0",
         ] {
             assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
         }
@@ -182,6 +209,8 @@ mod tests {
             notifications_inserted(5);
             notifications_inserted(0);
             poller_error(Poller::Retention);
+            write_retried(Consumer::Governance);
+            halted(Consumer::KnowledgeEdits);
         });
         for line in [
             "notification_indexer_events_processed_total{consumer=\"governance\"} 2",
@@ -190,6 +219,9 @@ mod tests {
             "notification_indexer_events_failed_total{consumer=\"governance\",reason=\"db_error\"} 0",
             "notification_indexer_notifications_inserted_total 5",
             "notification_indexer_poller_errors_total{poller=\"retention\"} 1",
+            "notification_indexer_write_retries_total{consumer=\"governance\"} 1",
+            "notification_indexer_write_retries_total{consumer=\"knowledge_edits\"} 0",
+            "notification_indexer_halted{consumer=\"knowledge_edits\"} 1",
         ] {
             assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
         }

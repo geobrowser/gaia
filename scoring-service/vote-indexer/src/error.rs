@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+use crate::write_retry::{classify_sqlx, ErrorClass};
+
 /// Errors that can occur during vote handling.
 #[derive(Debug, Error)]
 pub enum HandlerError {
@@ -48,4 +50,53 @@ pub enum IndexerError {
 
     #[error("configuration error: {0}")]
     Config(String),
+}
+
+impl IndexerError {
+    /// Whether a later attempt at the same write could succeed. See
+    /// `write_retry::classify_sqlx` for which database errors count as permanent
+    /// and why everything unclassified is transient.
+    pub fn class(&self) -> ErrorClass {
+        match self {
+            IndexerError::Storage(StorageError::Database(e)) | IndexerError::Database(e) => {
+                classify_sqlx(e)
+            }
+            // A message that does not decode or does not make a vote never will.
+            IndexerError::Handler(_) | IndexerError::Decode(_) => ErrorClass::Permanent,
+            // Infrastructure and deploy problems: skipping would lose every vote
+            // until they were fixed.
+            IndexerError::Kafka(_) | IndexerError::Telemetry(_) | IndexerError::Config(_) => {
+                ErrorClass::Transient
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bad_messages_are_permanent_and_infrastructure_is_transient() {
+        assert_eq!(
+            IndexerError::Handler(HandlerError::MissingPayload).class(),
+            ErrorClass::Permanent
+        );
+        assert_eq!(
+            IndexerError::Handler(HandlerError::InvalidVoteDirection(9)).class(),
+            ErrorClass::Permanent
+        );
+        assert_eq!(
+            IndexerError::Storage(StorageError::Database(sqlx::Error::PoolTimedOut)).class(),
+            ErrorClass::Transient
+        );
+        assert_eq!(
+            IndexerError::Database(sqlx::Error::PoolClosed).class(),
+            ErrorClass::Transient
+        );
+        assert_eq!(
+            IndexerError::Config("x".into()).class(),
+            ErrorClass::Transient
+        );
+    }
 }

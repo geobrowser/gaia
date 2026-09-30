@@ -17,10 +17,12 @@ mod handlers;
 mod metrics;
 mod models;
 mod storage;
+mod write_retry;
 
 use consumer::{get_event_type, parse_message, KafkaConsumer, KgMessage};
 use error::IndexerError;
 use storage::Storage;
+use write_retry::{ErrorClass, Outcome, RetryPolicy, SkipGuard};
 
 /// Spaces whose edits should be dropped by the indexer.
 /// These spaces produced corrupt or unwanted data that was manually cleaned from the database.
@@ -30,18 +32,26 @@ const BLOCKED_SPACES: &[uuid::Uuid] = &[
     uuid::uuid!("655d6077-dc49-e1f9-0e85-74dd57c3164e"),
 ];
 
-/// How many times a block is attempted before it is given up on.
+/// How many times a block is attempted before the consumer halts on it.
 ///
-/// Only transient failures consume attempts (see `IndexerError::is_transient`).
-/// Default 3. `KG_BATCH_MAX_ATTEMPTS=1` restores the previous
-/// fail-once behaviour; 0 or an unparseable value falls back to the default
-/// rather than disabling processing.
-fn batch_max_attempts() -> u32 {
-    static ATTEMPTS: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *ATTEMPTS.get_or_init(|| parse_batch_max_attempts(std::env::var("KG_BATCH_MAX_ATTEMPTS").ok()))
+/// Only transient failures consume attempts (see `IndexerError::class`). Default
+/// 3, lower than the other indexers' 5, because `statement_timeout` is transient
+/// and every attempt against a too-slow statement costs the full budget (300s by
+/// default, see `Storage::begin_with_timeout`). After the last attempt the process
+/// exits and the restart tries again anyway, so more in-process attempts only
+/// delay the crash-loop that makes the problem visible. `KG_BATCH_MAX_ATTEMPTS=1`
+/// halts on the first failure; 0 or an unparseable value falls back to the
+/// default rather than disabling processing. The delay between attempts comes
+/// from `INDEXER_WRITE_BACKOFF_MS` / `INDEXER_WRITE_BACKOFF_MAX_MS`.
+fn batch_retry_policy() -> &'static RetryPolicy {
+    static POLICY: OnceLock<RetryPolicy> = OnceLock::new();
+    POLICY.get_or_init(|| RetryPolicy {
+        max_attempts: parse_batch_max_attempts(std::env::var("KG_BATCH_MAX_ATTEMPTS").ok()),
+        ..RetryPolicy::from_env()
+    })
 }
 
-/// Split out from `batch_max_attempts` so the parsing rules are testable — the
+/// Split out from `batch_retry_policy` so the parsing rules are testable — the
 /// caller memoises in a `OnceLock`, which a test cannot re-seed.
 fn parse_batch_max_attempts(raw: Option<String>) -> u32 {
     const DEFAULT_ATTEMPTS: u32 = 3;
@@ -86,6 +96,13 @@ struct BlockBuffer {
     summary_timestamps: BTreeMap<u64, u64>,
     /// Last position returned by `processed_position`, which never goes backwards.
     published_position: Option<u64>,
+    /// Offsets of messages that were skipped (unparseable, or handled outside a
+    /// block) while earlier events on the same (topic, partition) were still
+    /// buffered. Committing them at once would move the partition's committed
+    /// offset past those events, so a block that then halted would be skipped by
+    /// the restart anyway. They wait here until nothing on the partition is
+    /// buffered, or until a later block's commit supersedes them.
+    deferred_skips: HashMap<(String, i32), i64>,
 }
 
 impl BlockBuffer {
@@ -99,7 +116,60 @@ impl BlockBuffer {
             highest_summary_block: None,
             summary_timestamps: BTreeMap::new(),
             published_position: None,
+            deferred_skips: HashMap::new(),
         }
+    }
+
+    /// Whether any buffered event came from this (topic, partition).
+    fn has_buffered_on(&self, topic: &str, partition: i32) -> bool {
+        self.events
+            .values()
+            .flatten()
+            .any(|e| e.partition == partition && e.topic == topic)
+    }
+
+    /// Record a message that is being skipped. Returns true when its offset can be
+    /// committed now, because nothing earlier on its partition is still pending;
+    /// otherwise it is held until [`BlockBuffer::take_committable_skips`] frees it.
+    fn skip_offset(&mut self, topic: &str, partition: i32, offset: i64) -> bool {
+        if !self.has_buffered_on(topic, partition) {
+            return true;
+        }
+        let entry = self
+            .deferred_skips
+            .entry((topic.to_string(), partition))
+            .or_insert(offset);
+        *entry = (*entry).max(offset);
+        false
+    }
+
+    /// A block committed these offsets. A deferred skip below one of them is
+    /// covered by that commit, and committing it later would move the partition
+    /// backwards, so it is dropped.
+    fn note_committed(&mut self, committed: &HashMap<(String, i32), i64>) {
+        self.deferred_skips.retain(|key, skipped| {
+            committed
+                .get(key)
+                .is_none_or(|committed_offset| *committed_offset < *skipped)
+        });
+    }
+
+    /// Deferred skips whose partition has nothing buffered any more, drained.
+    fn take_committable_skips(&mut self) -> Vec<(String, i32, i64)> {
+        let ready: Vec<(String, i32)> = self
+            .deferred_skips
+            .keys()
+            .filter(|(topic, partition)| !self.has_buffered_on(topic, *partition))
+            .cloned()
+            .collect();
+        ready
+            .into_iter()
+            .filter_map(|key| {
+                self.deferred_skips
+                    .remove(&key)
+                    .map(|offset| (key.0, key.1, offset))
+            })
+            .collect()
     }
 
     /// Record that the summary for `block_number` has been read, whether the block
@@ -455,6 +525,7 @@ async fn async_main() -> Result<(), IndexerError> {
     let mut stream = consumer.stream();
     let stale_timeout = Duration::from_millis(stale_timeout_ms);
     let mut buffer = BlockBuffer::new(stale_timeout);
+    let mut skip_guard = SkipGuard::from_env();
     let mut processed_count: u64 = 0;
     let mut error_count: u64 = 0;
     let mut blocks_processed: u64 = 0;
@@ -474,7 +545,7 @@ async fn async_main() -> Result<(), IndexerError> {
 
             _ = stale_check_interval.tick() => {
                 let (processed, errors, blocks) =
-                    drain_ready_blocks(&mut buffer, &storage, &consumer).await;
+                    drain_ready_blocks(&mut buffer, &storage, &consumer, &mut skip_guard).await;
                 processed_count += processed;
                 error_count += errors;
                 blocks_processed += blocks;
@@ -508,15 +579,12 @@ async fn async_main() -> Result<(), IndexerError> {
                                 );
                                 error_count += 1;
                                 metrics::message_unparseable();
-                                // Still commit to avoid getting stuck
-                                if let Err(e) =
-                                    consumer.commit_message(&topic, partition, offset)
-                                {
-                                    error!(
-                                        event_id = event_id_header.as_deref().unwrap_or(""),
-                                        error = %e,
-                                        "Failed to commit offset"
-                                    );
+                                // A payload that does not decode never will, so it is
+                                // committed past rather than stalling the partition.
+                                // Not yet if earlier events on the partition are still
+                                // buffered: see BlockBuffer::skip_offset.
+                                if buffer.skip_offset(&topic, partition, offset) {
+                                    commit_skipped(&consumer, &topic, partition, offset);
                                 }
                                 continue;
                             }
@@ -591,7 +659,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                 buffer.insert_summary(summary_block_number, summary, expected_count);
 
                                 let (processed, errors, blocks) =
-                                    drain_ready_blocks(&mut buffer, &storage, &consumer).await;
+                                    drain_ready_blocks(&mut buffer, &storage, &consumer, &mut skip_guard).await;
                                 processed_count += processed;
                                 error_count += errors;
                                 blocks_processed += blocks;
@@ -629,6 +697,9 @@ async fn async_main() -> Result<(), IndexerError> {
                                         topic = %topic,
                                         "Message has no block metadata, processing immediately"
                                     );
+                                    // Not retried in-process: `process_message` consumes
+                                    // the message. A transient failure halts instead, and
+                                    // the restart re-reads it, which is the retry.
                                     match process_message(
                                         kg_msg,
                                         &storage,
@@ -638,28 +709,40 @@ async fn async_main() -> Result<(), IndexerError> {
                                     {
                                         Ok(_) => {
                                             processed_count += 1;
+                                            skip_guard.record_success();
                                         }
                                         Err(e) => {
                                             tracing::Span::current()
                                                 .record("otel.status_code", "ERROR");
                                             tracing::Span::current()
                                                 .record("otel.status_message", e.to_string().as_str());
+                                            error_count += 1;
+                                            if e.is_transient() || skip_guard.record_skip() {
+                                                error!(
+                                                    event = "kg_indexer.halting",
+                                                    event_id = event_id.as_deref().unwrap_or(""),
+                                                    topic = %topic,
+                                                    partition = partition,
+                                                    offset = offset,
+                                                    error = %e,
+                                                    "Message without block metadata failed — \
+                                                     halting WITHOUT committing"
+                                                );
+                                                metrics::halted();
+                                                write_retry::halt().await;
+                                            }
+                                            metrics::block_dropped(false);
                                             error!(
+                                                event = "kg_indexer.block_dropped",
                                                 event_id = event_id.as_deref().unwrap_or(""),
                                                 error = %e,
-                                                "Failed to process message"
+                                                "Message without block metadata dropped after a \
+                                                 PERMANENT failure"
                                             );
-                                            error_count += 1;
                                         }
                                     }
-                                    if let Err(e) =
-                                        consumer.commit_message(&topic, partition, offset)
-                                    {
-                                        error!(
-                                            event_id = event_id.as_deref().unwrap_or(""),
-                                            error = %e,
-                                            "Failed to commit offset"
-                                        );
+                                    if buffer.skip_offset(&topic, partition, offset) {
+                                        commit_skipped(&consumer, &topic, partition, offset);
                                     }
                                     return;
                                 }
@@ -683,7 +766,7 @@ async fn async_main() -> Result<(), IndexerError> {
                             );
 
                             let (processed, errors, blocks) =
-                                drain_ready_blocks(&mut buffer, &storage, &consumer).await;
+                                drain_ready_blocks(&mut buffer, &storage, &consumer, &mut skip_guard).await;
                             processed_count += processed;
                             error_count += errors;
                             blocks_processed += blocks;
@@ -902,6 +985,7 @@ async fn drain_ready_blocks(
     buffer: &mut BlockBuffer,
     storage: &Storage,
     consumer: &KafkaConsumer,
+    skip_guard: &mut SkipGuard,
 ) -> (u64, u64, u64) {
     let mut processed_count = 0;
     let mut error_count = 0;
@@ -932,15 +1016,27 @@ async fn drain_ready_blocks(
             );
         }
 
+        let mut block_offsets: HashMap<(String, i32), i64> = HashMap::new();
+        for event in &events {
+            let entry = block_offsets
+                .entry((event.topic.clone(), event.partition))
+                .or_insert(event.offset);
+            *entry = (*entry).max(event.offset);
+        }
+
         if let Some((processed, errors)) =
-            process_buffered_block(events, storage, consumer, summary, reason).await
+            process_buffered_block(events, storage, consumer, summary, reason, skip_guard).await
         {
             processed_count += processed;
             error_count += errors;
             blocks_processed += 1;
+            if errors == 0 {
+                buffer.note_committed(&block_offsets);
+            }
         }
     }
 
+    commit_deferred_skips(buffer, consumer);
     commit_summary_offsets(buffer, consumer);
     publish_processed_position(buffer);
 
@@ -956,6 +1052,27 @@ fn publish_processed_position(buffer: &mut BlockBuffer) {
         if let Some(ts) = timestamp.filter(|ts| *ts > 0) {
             hermes_instrumentation::metrics::set_latest_processed_block_timestamp(ts as i64);
         }
+    }
+}
+
+/// Commit the offsets of skipped messages whose partition has drained. See
+/// `BlockBuffer::skip_offset`.
+fn commit_deferred_skips(buffer: &mut BlockBuffer, consumer: &KafkaConsumer) {
+    for (topic, partition, offset) in buffer.take_committable_skips() {
+        commit_skipped(consumer, &topic, partition, offset);
+    }
+}
+
+/// Commit past a message that was deliberately not indexed.
+fn commit_skipped(consumer: &KafkaConsumer, topic: &str, partition: i32, offset: i64) {
+    if let Err(e) = consumer.commit_message(topic, partition, offset) {
+        error!(
+            topic = %topic,
+            partition = partition,
+            offset = offset,
+            error = %e,
+            "Failed to commit offset"
+        );
     }
 }
 
@@ -981,6 +1098,7 @@ async fn process_buffered_block(
     consumer: &KafkaConsumer,
     summary_info: Option<BlockSummaryInfo>,
     reason: BlockProcessReason,
+    skip_guard: &mut SkipGuard,
 ) -> Option<(u64, u64)> {
     if events.is_empty() {
         return None;
@@ -1075,49 +1193,62 @@ async fn process_buffered_block(
     );
     let start = Instant::now();
 
-    // Retry a transient failure rather than losing the block.
+    // Retry a transient failure, and halt rather than lose the block (GEO-2884).
     //
-    // A failed batch never reaches the offset-commit loop below, so nothing marks
-    // it done — but the in-memory buffer has already moved on, and the next
-    // block's commit supersedes it on the partition. That is what made a
-    // statement timeout silently drop every event in the block (GEO-2884). The
-    // transaction rolled back, so a retry re-applies from a clean slate.
+    // The block is one transaction, so a failure rolled back every event in it
+    // and a retry re-applies from a clean slate. A failed batch never reaches the
+    // offset-commit loop in `process_block`, so while the consumer stops here
+    // nothing commits past it: exiting makes the restart re-read the block from
+    // the last committed offset. Carrying on would let the next block's commit
+    // supersede it, which is how a statement timeout silently lost blocks
+    // 50294/50296/50298.
     //
-    // Only transient causes are retried; a payload that cannot decode will not
-    // decode on a second attempt, and retrying it would stall the partition,
-    // which is exactly what committing-on-failure exists to prevent.
-    //
-    // Attempts are deliberately few. `statement_timeout` counts as transient, so
-    // each attempt against a genuinely too-slow statement costs the full budget
-    // (300s by default, see Storage::begin_with_timeout) before it fails — three
-    // attempts is up to 15 minutes of lag on one block. The budget is meant to be
-    // generous enough that hitting it is pathological rather than routine; tune
-    // with KG_BATCH_MAX_ATTEMPTS if that stops being true.
-    let max_attempts = batch_max_attempts();
-    let mut attempt: u32 = 1;
-    let result = loop {
-        let outcome = process_block(&events, storage, consumer)
-            .instrument(span.clone())
-            .await;
+    // Only transient causes are retried. A permanent one (a payload that cannot
+    // be handled, a SQLSTATE 22/23 data error) fails the same way every time;
+    // halting on it would block the partition forever, so it is skipped as
+    // before and counted as transient="false".
+    let policy = batch_retry_policy();
+    let outcome = write_retry::run(
+        policy,
+        IndexerError::class,
+        |attempt, e, backoff| {
+            warn!(
+                event = "kg_indexer.batch_retry",
+                block_number = block_number,
+                attempt = attempt,
+                max_attempts = policy.max_attempts,
+                backoff_ms = backoff.as_millis() as u64,
+                error = %e,
+                "Batch failed transiently — retrying"
+            );
+            metrics::batch_retried();
+        },
+        || process_block(&events, storage, consumer).instrument(span.clone()),
+    )
+    .await;
 
-        match outcome {
-            Err(ref e) if e.is_transient() && attempt < max_attempts => {
-                let backoff = Duration::from_millis(250u64 << (attempt - 1));
-                warn!(
-                    event = "kg_indexer.batch_retry",
-                    block_number = block_number,
-                    attempt = attempt,
-                    max_attempts = max_attempts,
-                    backoff_ms = backoff.as_millis() as u64,
-                    error = %e,
-                    "Batch failed transiently — retrying before the block is lost"
-                );
-                metrics::batch_retried();
-                tokio::time::sleep(backoff).await;
-                attempt += 1;
-            }
-            outcome => break outcome,
+    let result = match outcome {
+        Outcome::Written(result) => {
+            skip_guard.record_success();
+            Ok(result)
         }
+        Outcome::Halt { error, attempts } => {
+            span.record("otel.status_code", "ERROR");
+            span.record("otel.status_message", error.to_string().as_str());
+            error!(
+                event = "kg_indexer.halting",
+                block_number = block_number,
+                attempts = attempts,
+                error = %error,
+                event_count = event_len,
+                counts_by_event_type = ?counts_by_event_type,
+                "Block failed transiently on every attempt — halting WITHOUT committing so \
+                 the restart re-reads it"
+            );
+            metrics::halted();
+            write_retry::halt().await
+        }
+        Outcome::Skip(error) => Err(error),
     };
 
     match result {
@@ -1183,24 +1314,34 @@ async fn process_buffered_block(
                 );
             }
 
-            // The batch is one transaction, so a failure here rolled back every
-            // event in the block — governance rows included, not just the edit
-            // that actually failed. The consumer does not revisit the block, so
-            // this is permanent loss that needs a manual replay. A transient
-            // cause (statement timeout, dropped connection) means the data was
-            // valid and would have landed on a retry; say so explicitly rather
-            // than leaving an operator to infer it from a SQLSTATE.
-            metrics::block_dropped(e.is_transient());
-            if e.is_transient() {
+            // Only a permanent error reaches here: transient ones halted above.
+            // The block's events were rolled back and the consumer moves past
+            // them, so they need a manual replay; the counter and
+            // KgIndexerBlockDropped make that loud. A run of them is a systemic
+            // fault rather than a poison block, and halts instead.
+            debug_assert_eq!(e.class(), ErrorClass::Permanent);
+            metrics::block_dropped(false);
+            error!(
+                event = "kg_indexer.block_dropped",
+                block_number = block_number,
+                error = %e,
+                event_count = event_len,
+                counts_by_event_type = ?counts_by_event_type,
+                consecutive_skips = skip_guard.consecutive() + 1,
+                "Block dropped after a PERMANENT failure — its events are missing and \
+                 require manual replay"
+            );
+            if skip_guard.record_skip() {
                 error!(
-                    event = "kg_indexer.block_dropped",
+                    event = "kg_indexer.halting",
                     block_number = block_number,
+                    consecutive_skips = skip_guard.consecutive(),
                     error = %e,
-                    event_count = event_len,
-                    counts_by_event_type = ?counts_by_event_type,
-                    "Block dropped after a TRANSIENT failure — events are permanently \
-                     missing and require manual replay"
+                    "Too many blocks in a row failed permanently — this is systemic, not a \
+                     poison block; halting WITHOUT committing"
                 );
+                metrics::halted();
+                write_retry::halt().await;
             }
 
             Some((0, event_len as u64))
@@ -2340,6 +2481,86 @@ mod tests {
             event_type: Some("SPACE_REGISTERED".to_string()),
             event_id: None,
         }
+    }
+
+    fn make_event_at(block_number: u64, partition: i32, offset: i64) -> BufferedEvent {
+        BufferedEvent {
+            partition,
+            offset,
+            ..make_event(block_number)
+        }
+    }
+
+    #[test]
+    fn a_skip_commits_at_once_when_nothing_on_its_partition_is_buffered() {
+        let mut buffer = BlockBuffer::new(Duration::from_secs(1));
+        // An event on another partition does not hold it back.
+        buffer.push(7, make_event_at(7, 1, 40));
+        assert!(buffer.skip_offset("space.creations", 0, 12));
+        assert!(buffer.take_committable_skips().is_empty());
+    }
+
+    #[test]
+    fn a_skip_waits_behind_a_buffered_event_on_its_partition() {
+        // GEO-2884: committing offset 12 while block 7's offset 10 is buffered
+        // would move the partition past block 7, so a halt on block 7 would
+        // not re-read it after the restart.
+        let mut buffer = BlockBuffer::new(Duration::from_secs(1));
+        buffer.push(7, make_event_at(7, 0, 10));
+        assert!(!buffer.skip_offset("space.creations", 0, 12));
+        assert!(
+            buffer.take_committable_skips().is_empty(),
+            "held while block 7 is pending"
+        );
+
+        buffer.take_block(7);
+        assert_eq!(
+            buffer.take_committable_skips(),
+            vec![("space.creations".to_string(), 0, 12)]
+        );
+        assert!(buffer.take_committable_skips().is_empty(), "drained");
+    }
+
+    #[test]
+    fn a_later_block_commit_supersedes_a_deferred_skip() {
+        let mut buffer = BlockBuffer::new(Duration::from_secs(1));
+        buffer.push(7, make_event_at(7, 0, 10));
+        buffer.skip_offset("space.creations", 0, 12);
+        buffer.take_block(7);
+
+        // Block 8 committed offset 15 on the same partition before the skip was
+        // flushed; committing 12 now would move the partition backwards.
+        let committed = HashMap::from([(("space.creations".to_string(), 0), 15)]);
+        buffer.note_committed(&committed);
+        assert!(buffer.take_committable_skips().is_empty());
+    }
+
+    #[test]
+    fn an_earlier_block_commit_does_not_supersede_a_later_skip() {
+        let mut buffer = BlockBuffer::new(Duration::from_secs(1));
+        buffer.push(7, make_event_at(7, 0, 10));
+        buffer.skip_offset("space.creations", 0, 12);
+        buffer.take_block(7);
+
+        let committed = HashMap::from([(("space.creations".to_string(), 0), 10)]);
+        buffer.note_committed(&committed);
+        assert_eq!(
+            buffer.take_committable_skips(),
+            vec![("space.creations".to_string(), 0, 12)]
+        );
+    }
+
+    #[test]
+    fn batch_retry_policy_keeps_the_kg_attempt_default() {
+        // KG_BATCH_MAX_ATTEMPTS is unset under test, so kg-indexer keeps its own
+        // default of 3 rather than the shared 5 (a statement timeout costs 300s per
+        // attempt); the backoff comes from the shared policy.
+        let policy = batch_retry_policy();
+        assert_eq!(policy.max_attempts, 3);
+        assert_eq!(
+            policy.initial_backoff,
+            RetryPolicy::default().initial_backoff
+        );
     }
 
     fn make_summary(block_number: u64) -> hermes_schema::pb::block_summary::HermesBlockSummary {
