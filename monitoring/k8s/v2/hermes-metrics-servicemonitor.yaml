@@ -23,6 +23,10 @@ spec:
           # published no metrics at all, which is why a two-day substream wedge
           # went unnoticed. See monitoring/k8s/v2/atlas-lag-alerts.yaml.
           - atlas
+          # kg-indexer publishes the same gauge, advanced on every block summary it
+          # reads (empty blocks included), plus its own kg_indexer_* counters. See
+          # monitoring/k8s/v2/kg-indexer-alerts.yaml.
+          - kg-indexer
   endpoints:
     - port: metrics
       path: /metrics
