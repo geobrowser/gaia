@@ -27,6 +27,7 @@ on:
           - api
           - valkey
           - search-indexer
+          - search-admin
           - vote-indexer
           - topology-indexer
           - scoring-service
@@ -85,6 +86,9 @@ jobs:
             api)               manifests="api/k8s/v2/api.yaml api/k8s/v2/hpa.yaml";         rollout="deployment/api" ;;
             valkey)            manifests="api/k8s/v2/valkey.yaml";                          rollout="deployment/api-cache" ;;
             search-indexer)    manifests="search-indexer-deploy/k8s/v2/search-indexer.yaml"; rollout="statefulset/search-indexer" ;;
+            # search-admin is a CLI; the only thing deployed from it on a schedule is the
+            # GEO-2548 orphan reconcile. The one-off migration Jobs in k8s/v2/jobs stay manual.
+            search-admin)      manifests="search-indexer-deploy/k8s/v2/search-orphan-reconcile-cronjob.yaml"; rollout="" ;;
             # Both sweeps ship with the Deployment for the reason the
             # ranking-indexer CronJobs do below: they run the same image and are only
             # useful at the same version as the consumer. #910 added the manifest

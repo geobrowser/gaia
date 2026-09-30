@@ -226,17 +226,17 @@ impl ReindexCommand {
                                     response_data["deleted"].as_u64().unwrap_or(0)
                                 );
 
-                                if let Some(failures) = response_data["failures"].as_array() {
-                                    if !failures.is_empty() {
-                                        println!("  Failures: {}", failures.len());
-                                        println!();
-                                        println!("⚠ Warning: Some documents failed to reindex:");
-                                        for (i, failure) in failures.iter().enumerate().take(5) {
-                                            println!("  {}. {}", i + 1, failure);
-                                        }
-                                        if failures.len() > 5 {
-                                            println!("  ... and {} more", failures.len() - 5);
-                                        }
+                                if let Some(failures) = response_data["failures"].as_array()
+                                    && !failures.is_empty()
+                                {
+                                    println!("  Failures: {}", failures.len());
+                                    println!();
+                                    println!("⚠ Warning: Some documents failed to reindex:");
+                                    for (i, failure) in failures.iter().enumerate().take(5) {
+                                        println!("  {}. {}", i + 1, failure);
+                                    }
+                                    if failures.len() > 5 {
+                                        println!("  ... and {} more", failures.len() - 5);
                                     }
                                 }
                             }
@@ -244,19 +244,14 @@ impl ReindexCommand {
                         }
 
                         // Show progress if available
-                        if let Some(status) = task_json.get("task").and_then(|t| t.get("status")) {
-                            if let Some(created) = status.get("created").and_then(|v| v.as_u64()) {
-                                if let Some(total) = status.get("total").and_then(|v| v.as_u64()) {
-                                    if total > 0 {
-                                        let percentage = (created as f64 / total as f64) * 100.0;
-                                        print!(
-                                            "\r  Progress: {:.1}% ({}/{})",
-                                            percentage, created, total
-                                        );
-                                        std::io::Write::flush(&mut std::io::stdout()).ok();
-                                    }
-                                }
-                            }
+                        if let Some(status) = task_json.get("task").and_then(|t| t.get("status"))
+                            && let Some(created) = status.get("created").and_then(|v| v.as_u64())
+                            && let Some(total) = status.get("total").and_then(|v| v.as_u64())
+                            && total > 0
+                        {
+                            let percentage = (created as f64 / total as f64) * 100.0;
+                            print!("\r  Progress: {:.1}% ({}/{})", percentage, created, total);
+                            std::io::Write::flush(&mut std::io::stdout()).ok();
                         }
                     }
                     Err(e) => {

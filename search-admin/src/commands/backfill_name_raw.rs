@@ -232,17 +232,16 @@ impl BackfillNameRawCommand {
                     }
 
                     // Show progress
-                    if let Some(task_status) = task_json.get("task").and_then(|t| t.get("status")) {
-                        if let (Some(updated), Some(total)) = (
+                    if let Some(task_status) = task_json.get("task").and_then(|t| t.get("status"))
+                        && let (Some(updated), Some(total)) = (
                             task_status.get("updated").and_then(|v| v.as_u64()),
                             task_status.get("total").and_then(|v| v.as_u64()),
-                        ) {
-                            if total > 0 {
-                                let pct = (updated as f64 / total as f64) * 100.0;
-                                print!("\r  Progress: {:.1}% ({}/{})", pct, updated, total);
-                                std::io::Write::flush(&mut std::io::stdout()).ok();
-                            }
-                        }
+                        )
+                        && total > 0
+                    {
+                        let pct = (updated as f64 / total as f64) * 100.0;
+                        print!("\r  Progress: {:.1}% ({}/{})", pct, updated, total);
+                        std::io::Write::flush(&mut std::io::stdout()).ok();
                     }
                 }
                 Err(e) => {

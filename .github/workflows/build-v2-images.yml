@@ -26,6 +26,7 @@ on:
           - proposal-executor
           - atlas
           - search-indexer
+          - search-admin
           - vote-indexer
           - topology-indexer
           - scoring-service
@@ -61,6 +62,7 @@ jobs:
             {"image":"proposal-executor","dockerfile":"proposal-executor/Dockerfile","context":"proposal-executor"},
             {"image":"atlas","dockerfile":"atlas/Dockerfile","context":"."},
             {"image":"search-indexer","dockerfile":"search-indexer/Dockerfile","context":"."},
+            {"image":"search-admin","dockerfile":"search-admin/Dockerfile","context":"."},
             {"image":"vote-indexer","dockerfile":"scoring-service/vote-indexer/Dockerfile","context":"."},
             {"image":"topology-indexer","dockerfile":"scoring-service/topology-indexer/Dockerfile","context":"."},
             {"image":"scoring-service","dockerfile":"scoring-service/cronjob/Dockerfile","context":"scoring-service/cronjob"},
