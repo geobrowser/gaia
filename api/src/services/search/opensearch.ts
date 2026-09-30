@@ -155,6 +155,28 @@ export const NAME_RAW_CASE_INSENSITIVE_BOOST = 5.0
 export const FUZZY_REDUCTION_BOOST = 0.6
 
 /**
+ * Boost value for the `match` on `name_stemmed`, the plural- and possessive-stemmed
+ * sibling of `name` (GEO-3047). "mans", "man's" and "man" all analyze to "man" there, and
+ * "pardons" to "pardon", so this is the only clause that relates an inflected query to a
+ * name written in another form. `name` itself stays unstemmed, because its
+ * search_as_you_type prefix sub-fields must keep matching partially typed words.
+ *
+ * Deliberately well below NAME_EXACT_TOKEN_BOOST: a stemmed match is weaker evidence than
+ * an exact token match, and every exact match is also a stemmed match, so for a query
+ * such as "man" the exact-token clause still decides between "man" and "mans" while this
+ * one lifts both above names that only prefix- or fuzzy-match. Tuned on the Debate claim
+ * corpus; see the GEO-3047 PR for the sweep.
+ */
+export const NAME_STEMMED_BOOST = 10.0
+
+/**
+ * Boost value for the `match` on `description_stemmed`. Same ratio to the name clause as
+ * DESCRIPTION_PREFIX_BOOST has to NAME_PREFIX_BOOST, so a stemmed description match never
+ * outranks a stemmed name match of similar BM25 quality.
+ */
+export const DESCRIPTION_STEMMED_BOOST = 3.0
+
+/**
  * Default number of results to return when no limit is specified.
  */
 export const DEFAULT_PAGE_SIZE = 20
@@ -1252,6 +1274,34 @@ export class OpenSearchClient implements SearchClient {
 								},
 							]
 						: []),
+					{
+						// Plural- and possessive-stemmed token match on the name (GEO-3047).
+						// `name_stemmed` is filled by copy_to from `name` and analyzed with
+						// `text_stemmed`, so "mans" and "man's" both reach a name containing
+						// "man", and "pardons" reaches "pardon". A plain `match`, no prefix
+						// or fuzzy expansion, so it costs one term clause per token; it uses
+						// the same cap as the exact-token match above.
+						//
+						// On an index created before v7 the field does not exist and this
+						// clause matches nothing rather than erroring, so the API can ship
+						// ahead of the reindex.
+						match: {
+							name_stemmed: {
+								query: nameMatchQuery,
+								boost: this.b("name_stemmed_boost", NAME_STEMMED_BOOST),
+							},
+						},
+					},
+					{
+						// The description counterpart, at a lower boost. Capped like the
+						// other description clauses.
+						match: {
+							description_stemmed: {
+								query: cappedQuery,
+								boost: this.b("description_stemmed_boost", DESCRIPTION_STEMMED_BOOST),
+							},
+						},
+					},
 					{
 						// Strongly boost documents where the name starts with the query text.
 						// Capped — match_phrase_prefix expands the trailing token to up to 50
