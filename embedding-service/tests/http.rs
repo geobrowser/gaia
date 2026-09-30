@@ -91,14 +91,20 @@ async fn limits_and_unknown_slot_without_a_model() {
     );
 
     let bad_purpose = serde_json::json!({ "slot": "nope", "purpose": "passage", "texts": ["hi"] });
-    assert_eq!(
-        c.post(format!("{base}/embed"))
-            .json(&bad_purpose)
-            .send()
-            .await
+    let r = c
+        .post(format!("{base}/embed"))
+        .json(&bad_purpose)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 422);
+    let body = r.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(body["error"]["code"], "invalid_body");
+    assert!(
+        body["error"]["message"]
+            .as_str()
             .unwrap()
-            .status(),
-        422
+            .contains("purpose")
     );
 
     let info: serde_json::Value = c

@@ -14,7 +14,7 @@ Nothing else in gaia embeds text. Design and measurements:
 | `GET` | `/health/live`, `/health/ready` | liveness; readiness = at least one slot loaded |
 
 Errors are `{ "error": { "code", "message" } }`: `413 batch_too_large` / `text_too_long`,
-`404 unknown_slot`, `422` for a malformed body, `500 embedding_failed`.
+`404 unknown_slot`, `422 invalid_body` for a malformed body, `500 embedding_failed`.
 
 ## Bundles and slots
 

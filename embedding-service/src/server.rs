@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::extract::State;
+use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -181,8 +182,17 @@ impl IntoResponse for ApiError {
 
 async fn embed(
     State(state): State<Arc<AppState>>,
-    Json(req): Json<EmbedRequest>,
+    body: Result<Json<EmbedRequest>, JsonRejection>,
 ) -> Result<Json<EmbedResponse>, ApiError> {
+    // A malformed body gets the same `{ "error": { code, message } }` shape as every other
+    // failure instead of axum's plain-text rejection.
+    let Json(req) = body.map_err(|e| {
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_body",
+            e.body_text(),
+        )
+    })?;
     let limits = &state.limits;
     if req.texts.len() > limits.max_batch {
         return Err(ApiError::new(
