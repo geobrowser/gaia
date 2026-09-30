@@ -25,6 +25,7 @@ use notification_indexer::consumer::{
 };
 use notification_indexer::consumer_lag::LagMonitor;
 use notification_indexer::error::IndexerError;
+use notification_indexer::error::StorageError;
 use notification_indexer::metrics::{self, Consumer, FailReason, Poller};
 use notification_indexer::models::{
     build_rejection_event, build_vote_threshold_event, extract_bounty_created,
@@ -35,6 +36,9 @@ use notification_indexer::models::{
     merge_recipients, BountyConfig, CommentThreadInfo, NotificationEventType, TargetedRecipients,
 };
 use notification_indexer::storage::Storage;
+use notification_indexer::write_retry::{
+    self, classify_sqlx, Decision, ErrorClass, Outcome, RetryPolicy, SkipGuard,
+};
 
 fn main() -> Result<(), IndexerError> {
     dotenv::dotenv().ok();
@@ -670,6 +674,8 @@ async fn async_main() -> Result<(), IndexerError> {
             }
 
             let mut ke_stream = kec.stream();
+            let ke_policy = RetryPolicy::from_env();
+            let mut ke_skip_guard = SkipGuard::from_env();
             let mut ke_processed: u64 = 0;
             let mut ke_errors: u64 = 0;
             let mut ke_skipped: u64 = 0;
@@ -812,11 +818,14 @@ async fn async_main() -> Result<(), IndexerError> {
                                     continue;
                                 }
 
-                                // Process all bounty relations in this edit.
-                                // Returns Err on DB errors (don't commit — retry on restart).
-                                // Returns Ok on success or non-retryable skips.
-                                let process_result: Result<(), ()> = async {
-                                    for (mut info, event_type) in relations {
+                                // Process all bounty relations in this edit. Returns
+                                // Err on a DB error, Ok on success or a deliberate skip.
+                                // Every write is idempotent (the outbox dedupes on an
+                                // idempotency key), so a failed attempt is re-run whole.
+                                let mut attempt: u32 = 1;
+                                let process_result: Result<(), StorageError> = loop {
+                                let attempt_result: Result<(), StorageError> = async {
+                                    for (mut info, event_type) in relations.iter().cloned() {
                                         // Block delay: wait for kg-indexer catchup
                                         if ke_bd > 0 {
                                             wait_for_kg_catchup(
@@ -845,8 +854,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     }
                                                     Err(e) => {
                                                         error!(error = %e, "DB error looking up bounty space, will retry");
-                                                        ke_errors += 1;
-                                                        return Err(());
+                                                        return Err(e);
                                                     }
                                                 }
 
@@ -855,7 +863,7 @@ async fn async_main() -> Result<(), IndexerError> {
 
                                                 let editors = ke_stor.find_editors_for_space(info.bounty_space_id).await.map_err(|e| {
                                                     error!(error = %e, "DB error looking up editors for bounty interest, will retry");
-                                                    ke_errors += 1;
+                                                    e
                                                 })?;
 
                                                 if editors.is_empty() {
@@ -875,7 +883,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     ke_processed += 1;
                                                 }).map_err(|e| {
                                                     error!(error = %e, "DB error inserting bounty interest notifications, will retry");
-                                                    ke_errors += 1;
+                                                    e
                                                 })?;
                                             }
                                             NotificationEventType::BountyAllocated
@@ -898,8 +906,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                         }
                                                         Err(e) => {
                                                             error!(error = %e, "DB error looking up curator space, will retry");
-                                                            ke_errors += 1;
-                                                            return Err(());
+                                                            return Err(e);
                                                         }
                                                     }
                                                 }
@@ -927,7 +934,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                         event_type = %event_type.as_str(),
                                                         "DB error inserting bounty notification, will retry"
                                                     );
-                                                    ke_errors += 1;
+                                                    e
                                                 })?;
                                             }
                                             _ => {
@@ -937,7 +944,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     }
 
                                     // Phase 3a: newly-created bounties → notify the space's editors.
-                                    for info in bounties_created {
+                                    for info in bounties_created.iter().cloned() {
                                         if ke_bd > 0 {
                                             wait_for_kg_catchup(&ke_stor, info.block_number, ke_bd, ke_bd_timeout).await;
                                         }
@@ -945,7 +952,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                         enrich_payload(&ke_stor, &mut event, info.space_id).await;
                                         let editors = ke_stor.find_editors_for_space(info.space_id).await.map_err(|e| {
                                             error!(error = %e, "DB error looking up editors for bounty_created, will retry");
-                                            ke_errors += 1;
+                                            e
                                         })?;
                                         if editors.is_empty() {
                                             ke_processed += 1;
@@ -964,7 +971,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                             ke_processed += 1;
                                         }).map_err(|e| {
                                             error!(error = %e, "DB error inserting bounty_created notifications, will retry");
-                                            ke_errors += 1;
+                                            e
                                         })?;
                                     }
 
@@ -990,7 +997,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     let mut processed_comments: std::collections::HashSet<uuid::Uuid> =
                                         std::collections::HashSet::new();
 
-                                    for mut info in comments {
+                                    for mut info in comments.iter().cloned() {
                                         // Cascade edges share a comment; process each comment once.
                                         if !processed_comments.insert(info.comment_entity_id) {
                                             continue;
@@ -1004,17 +1011,17 @@ async fn async_main() -> Result<(), IndexerError> {
                                                 // Phase 2b: general comment thread.
                                                 let root = ke_stor.resolve_thread_root(info.proposal_id).await.map_err(|e| {
                                                     error!(error = %e, "DB error resolving comment thread root, will retry");
-                                                    ke_errors += 1;
+                                                    e
                                                 })?;
                                                 let mut recipients = ke_stor.find_thread_participants(root).await.map_err(|e| {
                                                     error!(error = %e, "DB error resolving thread participants, will retry");
-                                                    ke_errors += 1;
+                                                    e
                                                 })?;
                                                 // Root creator: exact for proposals (proposer),
                                                 // best-effort home space otherwise.
                                                 let root_space = match ke_stor.find_proposal_proposer_and_space(root).await.map_err(|e| {
                                                     error!(error = %e, "DB error resolving thread root proposal, will retry");
-                                                    ke_errors += 1;
+                                                    e
                                                 })? {
                                                     Some((root_proposer, space)) => {
                                                         recipients.push(root_proposer);
@@ -1022,7 +1029,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     }
                                                     None => match ke_stor.find_entity_home_space(root).await.map_err(|e| {
                                                         error!(error = %e, "DB error resolving thread root home space, will retry");
-                                                        ke_errors += 1;
+                                                        e
                                                     })? {
                                                         Some(home) => {
                                                             recipients.push(home);
@@ -1051,8 +1058,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                             Ok(None) => info.proposal_id,
                                                             Err(e) => {
                                                                 error!(error = %e, "DB error resolving immediate comment parent, will retry");
-                                                                ke_errors += 1;
-                                                                return Err(());
+                                                                return Err(e);
                                                             }
                                                         }
                                                     }
@@ -1083,19 +1089,18 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     ke_processed += 1;
                                                 }).map_err(|e| {
                                                     error!(error = %e, "DB error inserting comment notifications, will retry");
-                                                    ke_errors += 1;
+                                                    e
                                                 })?;
                                                 continue;
                                             }
                                             Err(e) => {
                                                 error!(error = %e, "DB error resolving proposal for comment, will retry");
-                                                ke_errors += 1;
-                                                return Err(());
+                                                return Err(e);
                                             }
                                         };
                                         let allowed = ke_stor.is_member_or_editor(proposal_space, info.commenter_space_id).await.map_err(|e| {
                                             error!(error = %e, "DB error checking commenter membership, will retry");
-                                            ke_errors += 1;
+                                            e
                                         })?;
                                         if !allowed {
                                             debug!(
@@ -1122,22 +1127,60 @@ async fn async_main() -> Result<(), IndexerError> {
                                             ke_processed += 1;
                                         }).map_err(|e| {
                                             error!(error = %e, "DB error inserting proposal_comment notification, will retry");
-                                            ke_errors += 1;
+                                            e
                                         })?;
                                     }
 
                                     Ok(())
                                 }.await;
+                                match attempt_result {
+                                    Ok(()) => break Ok(()),
+                                    Err(e) => match ke_policy.decide(attempt, classify_storage(&e)) {
+                                        Decision::Retry(delay) => {
+                                            warn!(
+                                                error = %e,
+                                                attempt = attempt,
+                                                delay_ms = delay.as_millis() as u64,
+                                                "Knowledge edit failed transiently — retrying"
+                                            );
+                                            metrics::write_retried(Consumer::KnowledgeEdits);
+                                            tokio::time::sleep(delay).await;
+                                            attempt += 1;
+                                        }
+                                        Decision::Halt => {
+                                            halt_consumer(Consumer::KnowledgeEdits, &e, attempt, partition, offset).await
+                                        }
+                                        Decision::Skip => break Err(e),
+                                    },
+                                }
+                                };
 
-                                // Only commit offset if all relations processed successfully.
-                                // On DB error (Err): don't commit — retry on restart.
-                                if process_result.is_ok() {
-                                    metrics::event_processed(Consumer::KnowledgeEdits);
-                                    if let Err(e) = kec.commit_message(&topic, partition, offset) {
-                                        error!(error = %e, "Failed to commit knowledge edits offset");
+                                // Commit only once every relation is handled, or the edit
+                                // failed for a permanent reason (which is counted and
+                                // alerted on). A transient failure halted above, leaving
+                                // the offset uncommitted so the restart re-reads it.
+                                match process_result {
+                                    Ok(()) => {
+                                        ke_skip_guard.record_success();
+                                        metrics::event_processed(Consumer::KnowledgeEdits);
                                     }
-                                } else {
-                                    metrics::event_failed(Consumer::KnowledgeEdits, FailReason::DbError);
+                                    Err(e) => {
+                                        ke_errors += 1;
+                                        metrics::event_failed(Consumer::KnowledgeEdits, FailReason::DbError);
+                                        error!(
+                                            event = "notification_indexer.event_dropped",
+                                            error = %e,
+                                            partition = partition,
+                                            offset = offset,
+                                            "Knowledge edit dropped after a PERMANENT database error"
+                                        );
+                                        if ke_skip_guard.record_skip() {
+                                            halt_consumer(Consumer::KnowledgeEdits, &e, attempt, partition, offset).await
+                                        }
+                                    }
+                                }
+                                if let Err(e) = kec.commit_message(&topic, partition, offset) {
+                                    error!(error = %e, "Failed to commit knowledge edits offset");
                                 }
                             }
                             Some(Err(e)) => {
@@ -1163,6 +1206,8 @@ async fn async_main() -> Result<(), IndexerError> {
 
     // Main Kafka consumer loop
     let mut stream = consumer.stream();
+    let policy = RetryPolicy::from_env();
+    let mut skip_guard = SkipGuard::from_env();
     let mut processed_count: u64 = 0;
     let mut error_count: u64 = 0;
 
@@ -1253,7 +1298,7 @@ async fn async_main() -> Result<(), IndexerError> {
                             offset = offset,
                         )
                         .entered();
-                        let mut should_commit = false;
+                        let should_commit: bool;
 
                         if let Some(payload) = msg.payload() {
                             let result = match event_type.as_deref() {
@@ -1347,18 +1392,26 @@ async fn async_main() -> Result<(), IndexerError> {
                                     // Enrich payload with human-readable names (best-effort)
                                     enrich_payload(&storage, &mut event, space_id).await;
 
-                                    let editors = match storage.find_editors_for_space(space_id).await {
-                                        Ok(eds) => eds,
-                                        Err(e) => {
-                                            // DB error — don't commit offset so we retry on restart
-                                            metrics::event_failed(Consumer::Governance, FailReason::DbError);
-                                            error!(
-                                                error = %e,
-                                                space_id = %space_id,
-                                                event_type = %event.payload.event_type,
-                                                "Failed to look up editors, will retry"
-                                            );
+                                    let editors = match write_retry::run(
+                                        &policy,
+                                        classify_storage,
+                                        governance_retry,
+                                        || storage.find_editors_for_space(space_id),
+                                    )
+                                    .await
+                                    {
+                                        Outcome::Written(eds) => eds,
+                                        Outcome::Halt { error, attempts } => {
+                                            halt_consumer(Consumer::Governance, &error, attempts, partition, offset).await
+                                        }
+                                        Outcome::Skip(e) => {
+                                            // Permanent: this event can never be looked up.
+                                            // Commit past it, count it and alert on it.
+                                            drop_governance_event(&e, &mut skip_guard, partition, offset).await;
                                             error_count += 1;
+                                            if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+                                                error!(error = %e, "Failed to commit offset");
+                                            }
                                             continue;
                                         }
                                     };
@@ -1402,8 +1455,16 @@ async fn async_main() -> Result<(), IndexerError> {
                                         metrics::event_processed(Consumer::Governance);
                                         should_commit = true;
                                     } else {
-                                        match storage.insert_notifications_for_users(&event, &recipients).await {
-                                            Ok(count) => {
+                                        match write_retry::run(
+                                            &policy,
+                                            classify_storage,
+                                            governance_retry,
+                                            || storage.insert_notifications_for_users(&event, &recipients),
+                                        )
+                                        .await
+                                        {
+                                            Outcome::Written(count) => {
+                                                skip_guard.record_success();
                                                 if count > 0 {
                                                     info!(
                                                         event_type = %event.payload.event_type,
@@ -1417,15 +1478,13 @@ async fn async_main() -> Result<(), IndexerError> {
                                                 metrics::event_processed(Consumer::Governance);
                                                 should_commit = true;
                                             }
-                                            Err(e) => {
-                                                // DB error — don't commit offset so we retry on restart
-                                                metrics::event_failed(Consumer::Governance, FailReason::DbError);
-                                                error!(
-                                                    error = %e,
-                                                    event_type = %event.payload.event_type,
-                                                    "Failed to insert notifications, will retry"
-                                                );
+                                            Outcome::Halt { error, attempts } => {
+                                                halt_consumer(Consumer::Governance, &error, attempts, partition, offset).await
+                                            }
+                                            Outcome::Skip(e) => {
+                                                drop_governance_event(&e, &mut skip_guard, partition, offset).await;
                                                 error_count += 1;
+                                                should_commit = true;
                                             }
                                         }
                                     }
@@ -1448,9 +1507,9 @@ async fn async_main() -> Result<(), IndexerError> {
                             should_commit = true;
                         }
 
-                        // Only commit offset when processing succeeded or the message
-                        // is permanently unprocessable. DB errors leave the offset
-                        // uncommitted so the message is retried on restart.
+                        // Commit when processing succeeded or the message can never be
+                        // processed. A transient DB error never gets here: it halts
+                        // the process with the offset uncommitted (GEO-3101).
                         if should_commit {
                             if let Err(e) = consumer.commit_message(&topic, partition, offset) {
                                 error!(error = %e, "Failed to commit offset");
@@ -1538,6 +1597,71 @@ fn is_block_too_old(block_created_at: u64, min_age_secs: u64) -> bool {
 /// Polls `lookup_latest_block()` until `latest_kg_block >= msg_block + delay`,
 /// or until `timeout_secs` elapses. Handles Anvil/dev environments where blocks
 /// may not advance without transactions.
+/// Classify a storage error for `write_retry`: only SQLSTATE 22/23 data errors
+/// are permanent (see `write_retry::classify_sqlx`).
+fn classify_storage(error: &StorageError) -> ErrorClass {
+    match error {
+        StorageError::Database(e) => classify_sqlx(e),
+    }
+}
+
+fn governance_retry(attempt: u32, error: &StorageError, delay: std::time::Duration) {
+    warn!(
+        error = %error,
+        attempt = attempt,
+        delay_ms = delay.as_millis() as u64,
+        "Governance event write failed transiently — retrying"
+    );
+    metrics::write_retried(Consumer::Governance);
+}
+
+/// A governance event whose write failed for a permanent reason: counted as
+/// `reason="db_error"` (which `IndexerDroppedData` alerts on) and committed past.
+/// Too many in a row is systemic rather than a poison message, and halts.
+async fn drop_governance_event(
+    error: &StorageError,
+    skip_guard: &mut SkipGuard,
+    partition: i32,
+    offset: i64,
+) {
+    metrics::event_failed(Consumer::Governance, FailReason::DbError);
+    error!(
+        event = "notification_indexer.event_dropped",
+        error = %error,
+        partition = partition,
+        offset = offset,
+        "Governance event dropped after a PERMANENT database error"
+    );
+    if skip_guard.record_skip() {
+        halt_consumer(Consumer::Governance, error, 1, partition, offset).await
+    }
+}
+
+/// Stop the whole process without committing the failed message, so Kubernetes
+/// restarts it on the last committed offset (GEO-3101). Exiting takes both
+/// consumers down; the other one's uncommitted message is re-read too, which is
+/// safe because the outbox dedupes on an idempotency key.
+async fn halt_consumer(
+    consumer: Consumer,
+    error: &StorageError,
+    attempts: u32,
+    partition: i32,
+    offset: i64,
+) -> ! {
+    error!(
+        event = "notification_indexer.halting",
+        consumer = ?consumer,
+        error = %error,
+        attempts = attempts,
+        partition = partition,
+        offset = offset,
+        "Database write failed on every attempt (or too many in a row failed \
+         permanently) — halting WITHOUT committing so the restart re-reads it"
+    );
+    metrics::halted(consumer);
+    write_retry::halt().await
+}
+
 async fn wait_for_kg_catchup(storage: &Storage, msg_block: u64, delay: u64, timeout_secs: u64) {
     let target = msg_block.saturating_add(delay);
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);

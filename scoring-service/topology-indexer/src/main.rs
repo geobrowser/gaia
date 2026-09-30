@@ -13,6 +13,7 @@ use topology_indexer::consumer::{parse_diff, KafkaConsumer, ParsedDiff};
 use topology_indexer::error::IndexerError;
 use topology_indexer::metrics;
 use topology_indexer::storage::Storage;
+use topology_indexer::write_retry::{self, BatchOutcome, RetryPolicy, SkipGuard};
 
 fn main() -> Result<(), IndexerError> {
     dotenv::dotenv().ok();
@@ -116,7 +117,13 @@ async fn async_main() -> Result<(), IndexerError> {
     // Main processing loop with batching
     let mut stream = consumer.stream();
     let mut diff_buffer: Vec<ParsedDiff> = Vec::with_capacity(batch_size);
-    let mut commit_info: Vec<(String, i32, i64)> = Vec::with_capacity(batch_size);
+    // Every message read since the last flush, in order, including skipped ones:
+    // committing a skipped message at once would move its partition past diffs
+    // still in the buffer, so a batch that then halted would be skipped by the
+    // restart anyway (GEO-3101).
+    let mut commit_info: Vec<PendingOffset> = Vec::with_capacity(batch_size);
+    let policy = RetryPolicy::from_env();
+    let mut skip_guard = SkipGuard::from_env();
     let mut batch_timer =
         tokio::time::interval(tokio::time::Duration::from_millis(batch_timeout_ms));
     let mut processed_count: u64 = 0;
@@ -142,12 +149,14 @@ async fn async_main() -> Result<(), IndexerError> {
             }
             _ = shutdown_rx.recv() => {
                 info!("Shutting down...");
-                if !diff_buffer.is_empty() {
+                if !commit_info.is_empty() {
                     flush_batch(
                         &diff_buffer,
                         &commit_info,
                         &storage,
                         &consumer,
+                        &policy,
+                        &mut skip_guard,
                         &mut processed_count,
                         &mut error_count,
                     )
@@ -157,13 +166,15 @@ async fn async_main() -> Result<(), IndexerError> {
             }
 
             _ = batch_timer.tick() => {
-                if !diff_buffer.is_empty() {
+                if !commit_info.is_empty() {
                     debug!(count = diff_buffer.len(), "Processing batch on timeout");
                     flush_batch(
                         &diff_buffer,
                         &commit_info,
                         &storage,
                         &consumer,
+                        &policy,
+                        &mut skip_guard,
                         &mut processed_count,
                         &mut error_count,
                     )
@@ -181,11 +192,9 @@ async fn async_main() -> Result<(), IndexerError> {
                         let offset = msg.offset();
 
                         let Some(payload) = msg.payload() else {
-                            // Null payload (tombstone) — commit and skip
+                            // Null payload (tombstone) — committed past with the next flush
                             debug!(partition = partition, offset = offset, "Skipping null payload");
-                            if let Err(e) = consumer.commit_message(&topic, partition, offset) {
-                                error!(error = %e, "Failed to commit offset");
-                            }
+                            commit_info.push(PendingOffset { topic, partition, offset, diff: None });
                             continue;
                         };
 
@@ -198,8 +207,13 @@ async fn async_main() -> Result<(), IndexerError> {
                                     offset = offset,
                                     "Parsed topology diff"
                                 );
+                                commit_info.push(PendingOffset {
+                                    topic,
+                                    partition,
+                                    offset,
+                                    diff: Some(diff_buffer.len()),
+                                });
                                 diff_buffer.push(parsed);
-                                commit_info.push((topic, partition, offset));
 
                                 if diff_buffer.len() >= batch_size {
                                     debug!(count = diff_buffer.len(), "Processing full batch");
@@ -208,6 +222,8 @@ async fn async_main() -> Result<(), IndexerError> {
                                         &commit_info,
                                         &storage,
                                         &consumer,
+                                        &policy,
+                                        &mut skip_guard,
                                         &mut processed_count,
                                         &mut error_count,
                                     )
@@ -217,10 +233,8 @@ async fn async_main() -> Result<(), IndexerError> {
                                 }
                             }
                             Ok(None) => {
-                                // Empty diff or invalid root_id — commit and skip
-                                if let Err(e) = consumer.commit_message(&topic, partition, offset) {
-                                    error!(error = %e, "Failed to commit offset");
-                                }
+                                // Empty diff or invalid root_id — committed past with the next flush
+                                commit_info.push(PendingOffset { topic, partition, offset, diff: None });
                             }
                             Err(e) => {
                                 warn!(
@@ -231,9 +245,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                 );
                                 error_count += 1;
                                 metrics::message_unparseable();
-                                if let Err(e) = consumer.commit_message(&topic, partition, offset) {
-                                    error!(error = %e, "Failed to commit offset");
-                                }
+                                commit_info.push(PendingOffset { topic, partition, offset, diff: None });
                             }
                         }
                     }
@@ -258,50 +270,105 @@ async fn async_main() -> Result<(), IndexerError> {
     Ok(())
 }
 
-/// Apply a batch and commit its offsets on success, updating the running totals
-/// and the diff counters either way.
+/// One message read since the last flush, and the diff it became, if any.
+struct PendingOffset {
+    topic: String,
+    partition: i32,
+    offset: i64,
+    /// Index into the batch's diffs; `None` for a skipped message.
+    diff: Option<usize>,
+}
+
+/// Apply a batch diff by diff, then commit its offsets.
 ///
-/// On failure the batch's offsets are not committed, but the next batch that
-/// succeeds commits past them, so the diffs that did not apply are lost until
-/// the topic is replayed. `topology_indexer_diffs_dropped_total` counts them.
+/// Each diff is its own transaction. A transient failure is retried with backoff
+/// (`write_retry`); if it persists, the diffs before it are committed, the rest
+/// are not, and the process halts so the restart re-reads from the failed diff
+/// (GEO-3101). A diff that fails permanently is skipped and counted in
+/// `topology_indexer_diffs_dropped_total`.
+#[allow(clippy::too_many_arguments)]
 async fn flush_batch(
     diffs: &[ParsedDiff],
-    commit_info: &[(String, i32, i64)],
+    commit_info: &[PendingOffset],
     storage: &Storage,
     consumer: &KafkaConsumer,
+    policy: &RetryPolicy,
+    skip_guard: &mut SkipGuard,
     processed_count: &mut u64,
     error_count: &mut u64,
 ) {
-    match process_diff_batch(diffs, storage).await {
-        Ok(count) => {
-            *processed_count += count as u64;
-            metrics::diffs_applied(count as u64);
+    let outcome = write_retry::write_batch(
+        diffs.len(),
+        policy,
+        IndexerError::class,
+        skip_guard,
+        |attempt, e, delay| {
+            warn!(
+                error = %e,
+                attempt = attempt,
+                max_attempts = policy.max_attempts,
+                delay_ms = delay.as_millis() as u64,
+                "Topology diff failed transiently — retrying"
+            );
+            metrics::write_retried();
+        },
+        false,
+        |range| async move { process_diff_batch(&diffs[range], storage).await.map(|_| ()) },
+    )
+    .await;
+
+    match outcome {
+        BatchOutcome::Done(report) => {
+            *processed_count += report.written as u64;
+            metrics::diffs_applied(report.written as u64);
+            for (index, e) in &report.skipped {
+                error!(
+                    event = "topology_indexer.diff_dropped",
+                    error = %e,
+                    root_id = %diffs[*index].root_id,
+                    "Topology diff dropped after a PERMANENT failure"
+                );
+            }
+            *error_count += report.skipped.len() as u64;
+            metrics::diffs_dropped(report.skipped.len() as u64);
             commit_offsets(consumer, commit_info);
         }
-        Err((applied, e)) => {
-            let dropped = diffs.len().saturating_sub(applied);
+        BatchOutcome::Halt {
+            index,
+            error,
+            attempts,
+            report,
+        } => {
+            metrics::diffs_applied(report.written as u64);
+            metrics::diffs_dropped(report.skipped.len() as u64);
+            let finished = commit_info
+                .iter()
+                .position(|p| p.diff == Some(index))
+                .unwrap_or(0);
+            commit_offsets(consumer, &commit_info[..finished]);
             error!(
-                error = %e,
-                applied = applied,
-                dropped = dropped,
-                "Failed to process batch"
+                event = "topology_indexer.halting",
+                error = %error,
+                attempts = attempts,
+                root_id = %diffs[index].root_id,
+                consecutive_skips = skip_guard.consecutive(),
+                "Topology diff failed on every attempt (or too many in a row failed \
+                 permanently) — halting WITHOUT committing so the restart re-reads it"
             );
-            *processed_count += applied as u64;
-            *error_count += dropped as u64;
-            metrics::diffs_applied(applied as u64);
-            metrics::diffs_dropped(dropped as u64);
+            metrics::halted();
+            write_retry::halt().await
         }
     }
 }
 
 /// Process a batch of parsed diffs by applying changes to PostgreSQL.
 ///
-/// Each diff is its own transaction, so a failure part-way through leaves the
-/// earlier diffs committed. The error carries how many were applied before it.
+/// Each diff is its own transaction. `flush_batch` calls this one diff at a time,
+/// so a failure never leaves part of a call applied.
 async fn process_diff_batch(
     diffs: &[ParsedDiff],
     storage: &Storage,
-) -> Result<usize, (usize, IndexerError)> {
+) -> Result<usize, IndexerError> {
     if diffs.is_empty() {
         return Ok(0);
     }
@@ -315,11 +382,8 @@ async fn process_diff_batch(
     );
 
     async {
-        for (applied, diff) in diffs.iter().enumerate() {
-            storage
-                .apply_changes(diff.root_id, &diff.changes)
-                .await
-                .map_err(|e| (applied, IndexerError::from(e)))?;
+        for diff in diffs {
+            storage.apply_changes(diff.root_id, &diff.changes).await?;
         }
 
         debug!(
@@ -334,9 +398,15 @@ async fn process_diff_batch(
     .await
 }
 
-/// Commit all offsets in the batch.
-fn commit_offsets(consumer: &KafkaConsumer, commit_info: &[(String, i32, i64)]) {
-    for (topic, partition, offset) in commit_info {
+/// Commit the given offsets, in order.
+fn commit_offsets(consumer: &KafkaConsumer, commit_info: &[PendingOffset]) {
+    for PendingOffset {
+        topic,
+        partition,
+        offset,
+        ..
+    } in commit_info
+    {
         if let Err(e) = consumer.commit_message(topic, *partition, *offset) {
             error!(error = %e, topic = %topic, partition = partition, offset = offset, "Failed to commit offset");
         }
