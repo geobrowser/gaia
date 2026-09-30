@@ -1,0 +1,92 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ranking-indexer-topic-ranking
+  namespace: gaia
+  labels:
+    app: ranking-indexer-topic-ranking
+    environment: testnet
+spec:
+  # GEO-3077: repair the For you topic ranking (`reconcile_entity_topic_ranking()`, migration
+  # 0096). Adds tags, names and types that arrived without a score change, drops ones that went,
+  # and fixes drifted scores. About 20s on the live DB with nothing to change.
+  #
+  # Hourly, matching how quickly new entities get a score (vote-indexer's new_entity_sweep at
+  # :30), so a new tag reaches For you on the same clock. At :51 to stay clear of the rolling
+  # sweep (:00), the canary (:17), the new-entity sweep (:30) and topic suggestions (:41).
+  schedule: "51 * * * *"
+  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 86400 # clear finished runs after a day, so a stale failure stops firing KubeJobFailed
+      template:
+        metadata:
+          labels:
+            environment: testnet
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            fsGroup: 1001
+          imagePullSecrets:
+            - name: geo
+          volumes:
+            - name: ssl-certs
+              emptyDir: {}
+          initContainers:
+            - name: setup-certs
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command:
+                - sh
+                - -c
+                - |
+                  echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+              env:
+                - name: DATABASE_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_SSL_CA
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+          containers:
+            - name: ranking-indexer-topic-ranking
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command: ["topic_ranking_reconcile"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+                  readOnly: true
+              env:
+                - name: PGSSLROOTCERT
+                  value: /ssl/ca.crt
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_URL
+                - name: RUST_LOG
+                  value: "topic_ranking_reconcile=info,ranking_indexer=info"
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "200m"

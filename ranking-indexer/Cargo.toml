@@ -25,6 +25,11 @@ path = "src/bin/feed_composition_sample.rs"
 name = "topic_suggestions_refresh"
 path = "src/bin/topic_suggestions_refresh.rs"
 
+# Hourly repair of the For you topic ranking (GEO-3077, migration 0096); also its backfill.
+[[bin]]
+name = "topic_ranking_reconcile"
+path = "src/bin/topic_ranking_reconcile.rs"
+
 [dependencies]
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
