@@ -97,6 +97,41 @@ spec:
               {{ $labels.partition }} in 5 minutes, but {{ $value }} messages
               are unprocessed.
 
+        # Lag -1 is kafka_exporter's sentinel for "this group has NO committed
+        # offset on this partition" (v1.8.0: `if offsetFetchResponseBlock.Offset
+        # == -1 { lag = -1 }`). It is not a lag value, so every rule above,
+        # which compares lag against a positive threshold, can never fire on it.
+        #
+        # Usually it is harmless. testnet.topology.canonical has two partitions,
+        # but atlas keys every message by the canonical root space id, so all of
+        # them land on partition 1 and partition 0 stays empty (head 0).
+        # topology-indexer and the search-indexer topology group have nothing to
+        # commit there, and report -1 on it permanently. Their partition 1 is
+        # still watched normally.
+        #
+        # The case worth an alert is -1 on a partition that DOES hold messages:
+        # the group is consuming (or meant to be) but has never committed, so
+        # the lag rules are blind to it. Over the 7 days before this rule was
+        # added that only ever showed up as single 30s samples during restarts,
+        # hence the long `for:`.
+        - alert: KafkaConsumerPartitionNeverCommitted
+          expr: |
+            (
+              kafka_consumergroup_lag{consumergroup!~"geo-chat-gateway-.*"} == -1
+              and on(topic, partition)
+              (kafka_topic_partition_current_offset > kafka_topic_partition_oldest_offset)
+            )
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: Kafka consumer group {{ $labels.consumergroup }} has no committed offset
+            description: |
+              Consumer group {{ $labels.consumergroup }} has never committed an
+              offset on topic {{ $labels.topic }} partition {{ $labels.partition }},
+              although that partition holds messages. Lag cannot be measured, so
+              the other lag alerts cannot fire for it.
+
         # Group is registered with the broker but has no active members. Means
         # all consumers crashed or were scaled to 0 — distinct from "stuck"
         # because there's no heartbeat at all.

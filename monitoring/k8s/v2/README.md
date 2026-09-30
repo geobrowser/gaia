@@ -74,6 +74,48 @@ is a copy of `gaia/kafka-credentials`; see the exporter's header.
 - **Dashboards** (`*-dashboard.yaml`) — the `gaia-v2-*` ones point at the old
   cluster's `gaia-v2` namespace and need the same re-pointing treatment.
 
+## What is scraped, and what cannot be yet
+
+Checked against the live cluster on 2026-09-30 (GEO-2959).
+
+Scraped: `api`, `atlas`, `hermes-pipeline`, `hermes-ipfs-cache`,
+`chain-tip-exporter`, `kafka-exporter`, `geo-chat-api`.
+
+Not scraped, because none of them exposes a metrics endpoint:
+
+| service | what it serves today |
+|---|---|
+| `kg-indexer`, `vote-indexer`, `topology-indexer`, `ranking-indexer` | no HTTP listener, no container port |
+| `search-indexer`, `notification-indexer`, `delivery-worker` | `/healthz` and `/readyz` on 8080; `/metrics` returns 404 |
+
+All of them depend on `hermes-instrumentation`, whose `metrics::install` is
+the one-line listener `atlas` and `hermes-pipeline` use, but none calls it and
+none records a metric. `search-indexer` keeps counters in memory
+(`SearchIndexerMetrics`) and only logs them. Adding a listener would add a
+target and nothing else, so each service needs real gauges first. The
+`hermes_latest_processed_block` gauge is not a drop-in for `kg-indexer`: it
+only processes blocks that contain events (empty blocks arrive as summaries
+and are skipped), and the gauge must advance on every block or
+`HermesBehindChainTip` fires in quiet stretches. Setting it needs care in the
+summary path, not a single call.
+
+Until that lands, these services are covered only from outside: consumer lag
+by `kafka-exporter` (`kafka-consumer-lag-alerts.yaml`) and pod state by the
+stock kube-state-metrics rules.
+
+## Dashboards
+
+None of the repo's dashboards is installed. Only the stock
+`kube-prometheus-stack-*` ones are. Against live metric names on 2026-09-30:
+
+| file | state |
+|---|---|
+| `api-ingress-dashboard.yaml` | every query is an `api:ingress_*` recording rule or an nginx metric; none exists here |
+| `gaia-overview-dashboard.yaml` | ingress, `elasticsearch_*` and namespace (`api`, `knowledge`, `search`, `scoring`) queries are all empty; the `gaia_api_*` and kube-state panels would work with the namespace re-pointed to `gaia` |
+| `gaia-v2-overview-dashboard.yaml` | the same, for namespace `gaia-v2` and `gaia_v2:ingress_*` |
+| `hermes-lag-dashboard.yaml` | the metrics exist, but it filters `gaia_namespace` on `knowledge` / `knowledge-staging`; live values are `gaia` or absent |
+| `kafka-consumer-lag-dashboard.yaml` | current; every metric exists |
+
 ## Alert routing
 
 `values.yaml` routes `namespace =~ ".*-staging"` to `#infra-alerts-staging` and
