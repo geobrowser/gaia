@@ -1,0 +1,949 @@
+{
+  "index": "testnet_entities_poc",
+  "slot": "79502860cd",
+  "descriptor_hash": "79502860cd7cbe8379ae591221ee8eaf1c03642a0193280e2486bb1ce4d657c9",
+  "model_id": "BAAI/bge-small-en-v1.5",
+  "golden": "testnet-debate-claims",
+  "top": 10,
+  "k": 50,
+  "ef_search": 256,
+  "queries": [
+    {
+      "id": "voter-id-verbatim",
+      "kind": "verbatim",
+      "text": "Voter ID laws suppress voter turnout",
+      "top1": {
+        "rank": 1,
+        "name": "Voter ID laws suppress voter turnout",
+        "score": 1.0
+      },
+      "expect": [
+        {
+          "name": "Voter ID laws suppress voter turnout",
+          "rank": 1,
+          "score": 1.0
+        }
+      ],
+      "reject": [
+        {
+          "name": "Voter ID should be required nationwide",
+          "rank": 9,
+          "score": 0.87175757
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": true
+    },
+    {
+      "id": "voter-id-turnout",
+      "kind": "paraphrase",
+      "text": "Requiring identification at the polls lowers participation",
+      "top1": {
+        "rank": 1,
+        "name": "Voters should be required to show photo ID",
+        "score": 0.91902804
+      },
+      "expect": [
+        {
+          "name": "Voter ID laws suppress voter turnout",
+          "rank": 3,
+          "score": 0.9127104
+        },
+        {
+          "name": "Voter ID laws disproportionately burden minority voters",
+          "rank": 4,
+          "score": 0.8967414
+        }
+      ],
+      "reject": [
+        {
+          "name": "Voter ID should be required nationwide",
+          "rank": 7,
+          "score": 0.88600177
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 0.3333333333333333,
+      "contrastive": true
+    },
+    {
+      "id": "voter-id-mandate",
+      "kind": "contrastive",
+      "text": "Voters should have to show identification everywhere in the country",
+      "top1": {
+        "rank": 1,
+        "name": "Voters should be required to show photo ID",
+        "score": 0.94779164
+      },
+      "expect": [
+        {
+          "name": "Voter ID should be required nationwide",
+          "rank": 2,
+          "score": 0.93309605
+        }
+      ],
+      "reject": [
+        {
+          "name": "Voter ID laws suppress voter turnout",
+          "rank": 50,
+          "score": 0.8523501
+        },
+        {
+          "name": "Voter ID laws solve a problem that is too rare to justify the burden",
+          "rank": 7,
+          "score": 0.8913561
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 0.5,
+      "contrastive": true
+    },
+    {
+      "id": "ai-jobs-replace",
+      "kind": "paraphrase",
+      "text": "Machines will take over the majority of work in the near future",
+      "top1": {
+        "rank": 1,
+        "name": "Mundane and repetitive jobs are the most likely to be automated by AI and robotics in the future",
+        "score": 0.9115393
+      },
+      "expect": [
+        {
+          "name": "AI will replace most jobs soon",
+          "rank": 8,
+          "score": 0.8890619
+        }
+      ],
+      "reject": [
+        {
+          "name": "AI will create more jobs than it eliminates",
+          "rank": 15,
+          "score": 0.8847837
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 0.125,
+      "contrastive": true
+    },
+    {
+      "id": "ai-jobs-create",
+      "kind": "contrastive",
+      "text": "Automation creates more employment than it destroys",
+      "top1": {
+        "rank": 1,
+        "name": "AI will create more jobs than it eliminates",
+        "score": 0.91441905
+      },
+      "expect": [
+        {
+          "name": "AI will create more jobs than it eliminates",
+          "rank": 1,
+          "score": 0.91441905
+        }
+      ],
+      "reject": [
+        {
+          "name": "AI will replace most jobs soon",
+          "rank": null,
+          "score": null
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": true
+    },
+    {
+      "id": "ai-jobs-hedged",
+      "kind": "hedged",
+      "text": "Some economists suggest AI might eliminate a large share of jobs within a few years",
+      "top1": {
+        "rank": 1,
+        "name": "There is widespread public concern that AI will eliminate jobs.",
+        "score": 0.93746614
+      },
+      "expect": [
+        {
+          "name": "AI will replace most jobs soon",
+          "rank": 6,
+          "score": 0.91973114
+        }
+      ],
+      "reject": [],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 0.16666666666666666,
+      "contrastive": null
+    },
+    {
+      "id": "sleep-weekend",
+      "kind": "paraphrase",
+      "text": "Catching up on sleep at the weekend compensates for a short week",
+      "top1": {
+        "rank": 1,
+        "name": "Sleeping in on weekends can make up for lost sleep",
+        "score": 0.9186733
+      },
+      "expect": [
+        {
+          "name": "Sleeping in on weekends can make up for lost sleep",
+          "rank": 1,
+          "score": 0.9186733
+        }
+      ],
+      "reject": [
+        {
+          "name": "Consistent sleep timing is more important than sleep duration",
+          "rank": 13,
+          "score": 0.8579695
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": true
+    },
+    {
+      "id": "sleep-timing",
+      "kind": "contrastive",
+      "text": "A regular bedtime matters more than how many hours you sleep",
+      "top1": {
+        "rank": 1,
+        "name": "Consistent sleep timing is more important than sleep duration",
+        "score": 0.92599326
+      },
+      "expect": [
+        {
+          "name": "Consistent sleep timing is more important than sleep duration",
+          "rank": 1,
+          "score": 0.92599326
+        }
+      ],
+      "reject": [
+        {
+          "name": "Sleeping in on weekends can make up for lost sleep",
+          "rank": 28,
+          "score": 0.8897172
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": true
+    },
+    {
+      "id": "ukraine-stop-aid",
+      "kind": "paraphrase",
+      "text": "Washington should cut off military aid to Kyiv",
+      "top1": {
+        "rank": 1,
+        "name": "President Donald Trump has cut off additional direct military aid to Ukraine.",
+        "score": 0.89889705
+      },
+      "expect": [
+        {
+          "name": "The United States should stop funding Ukraine",
+          "rank": 2,
+          "score": 0.89584553
+        }
+      ],
+      "reject": [
+        {
+          "name": "Western military aid to Ukraine should continue until Ukraine restores its territorial sovereignty",
+          "rank": 6,
+          "score": 0.85989845
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 0.5,
+      "contrastive": true
+    },
+    {
+      "id": "ukraine-negation",
+      "kind": "negation",
+      "text": "The United States should not stop funding Ukraine",
+      "top1": {
+        "rank": 1,
+        "name": "The United States should stop funding Ukraine",
+        "score": 0.9735548
+      },
+      "expect": [
+        {
+          "name": "Western military aid to Ukraine should continue until Ukraine restores its territorial sovereignty",
+          "rank": 6,
+          "score": 0.87037754
+        }
+      ],
+      "reject": [
+        {
+          "name": "The United States should stop funding Ukraine",
+          "rank": 1,
+          "score": 0.9735548
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 0.16666666666666666,
+      "contrastive": false
+    },
+    {
+      "id": "nato-leave",
+      "kind": "contrastive",
+      "text": "America should quit the NATO alliance",
+      "top1": {
+        "rank": 1,
+        "name": "The US should leave NATO",
+        "score": 0.9722359
+      },
+      "expect": [
+        {
+          "name": "The US should leave NATO",
+          "rank": 1,
+          "score": 0.9722359
+        }
+      ],
+      "reject": [
+        {
+          "name": "The United States should remain NATO's principal security guarantor",
+          "rank": 2,
+          "score": 0.8975408
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": true
+    },
+    {
+      "id": "nato-stay",
+      "kind": "contrastive",
+      "text": "Washington must stay the alliance's main security provider",
+      "top1": {
+        "rank": 1,
+        "name": "The United States should remain NATO's principal security guarantor",
+        "score": 0.8834533
+      },
+      "expect": [
+        {
+          "name": "The United States should remain NATO's principal security guarantor",
+          "rank": 1,
+          "score": 0.8834533
+        }
+      ],
+      "reject": [
+        {
+          "name": "The US should leave NATO",
+          "rank": 33,
+          "score": 0.82796025
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": true
+    },
+    {
+      "id": "settlements-illegal",
+      "kind": "paraphrase",
+      "text": "West Bank settlements violate international law",
+      "top1": {
+        "rank": 1,
+        "name": "Israeli settlements in the West Bank are illegal under international law",
+        "score": 0.96589345
+      },
+      "expect": [
+        {
+          "name": "Israeli settlements in the West Bank are illegal under international law",
+          "rank": 1,
+          "score": 0.96589345
+        },
+        {
+          "name": "Most of the international community considers Israeli settlements in the West Bank illegal",
+          "rank": 4,
+          "score": 0.91556346
+        }
+      ],
+      "reject": [],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": null
+    },
+    {
+      "id": "open-weights-not-open-source",
+      "kind": "paraphrase",
+      "text": "Open weights are not the same thing as open source",
+      "top1": {
+        "rank": 1,
+        "name": "Open-weight models should not be called open source",
+        "score": 0.93719846
+      },
+      "expect": [
+        {
+          "name": "Open-weight models should not be called open source",
+          "rank": 1,
+          "score": 0.93719846
+        }
+      ],
+      "reject": [
+        {
+          "name": "Governments should fund open-weight models",
+          "rank": 23,
+          "score": 0.86842644
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": true
+    },
+    {
+      "id": "online-therapy",
+      "kind": "paraphrase",
+      "text": "Therapy over video calls works as well as seeing a therapist in person",
+      "top1": {
+        "rank": 1,
+        "name": "Online therapy is as effective as in-person therapy",
+        "score": 0.92005897
+      },
+      "expect": [
+        {
+          "name": "Online therapy is as effective as in-person therapy",
+          "rank": 1,
+          "score": 0.92005897
+        }
+      ],
+      "reject": [],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": null
+    },
+    {
+      "id": "hardware-wallet",
+      "kind": "paraphrase",
+      "text": "Keeping crypto safe does not require a hardware wallet",
+      "top1": {
+        "rank": 1,
+        "name": "You don't need a hardware wallet to store crypto safely",
+        "score": 0.9763167
+      },
+      "expect": [
+        {
+          "name": "You don't need a hardware wallet to store crypto safely",
+          "rank": 1,
+          "score": 0.9763167
+        }
+      ],
+      "reject": [],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": null
+    },
+    {
+      "id": "ethereum-pos",
+      "kind": "paraphrase",
+      "text": "Ethereum should have kept proof of work",
+      "top1": {
+        "rank": 1,
+        "name": "Ethereum should maintain the requirement that light clients can trustlessly verify correctness of the chain",
+        "score": 0.92297673
+      },
+      "expect": [
+        {
+          "name": "Ethereum's transition to proof of stake was a mistake",
+          "rank": 2,
+          "score": 0.9216475
+        }
+      ],
+      "reject": [],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 0.5,
+      "contrastive": null
+    },
+    {
+      "id": "felony-voting",
+      "kind": "paraphrase",
+      "text": "People who served their sentence should get their vote back",
+      "top1": {
+        "rank": 1,
+        "name": "Voting rights should be restored after people complete felony sentences",
+        "score": 0.9336006
+      },
+      "expect": [
+        {
+          "name": "Voting rights should be restored after people complete felony sentences",
+          "rank": 1,
+          "score": 0.9336006
+        }
+      ],
+      "reject": [],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": null
+    },
+    {
+      "id": "vaccine-liability",
+      "kind": "paraphrase",
+      "text": "Drug companies should pay for harm caused by their vaccines",
+      "top1": {
+        "rank": 1,
+        "name": "Vaccine manufacturers should be liable for serious vaccine injuries",
+        "score": 0.9079901
+      },
+      "expect": [
+        {
+          "name": "Vaccine manufacturers should be liable for serious vaccine injuries",
+          "rank": 1,
+          "score": 0.9079901
+        }
+      ],
+      "reject": [],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": null
+    },
+    {
+      "id": "two-state",
+      "kind": "paraphrase",
+      "text": "Two states remain the fairest way to end the Israel-Palestine conflict",
+      "top1": {
+        "rank": 1,
+        "name": "A negotiated two-state solution remains the most just and viable resolution to the Israel–Palestine conflict",
+        "score": 0.9242662
+      },
+      "expect": [
+        {
+          "name": "A negotiated two-state solution remains the most just and viable resolution to the Israel–Palestine conflict",
+          "rank": 1,
+          "score": 0.9242662
+        }
+      ],
+      "reject": [],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": null
+    },
+    {
+      "id": "canada-counter-tariffs",
+      "kind": "paraphrase",
+      "text": "Ottawa should retaliate against American tariffs in kind",
+      "top1": {
+        "rank": 1,
+        "name": "Canada should match U.S. tariffs with equivalent counter-tariffs",
+        "score": 0.9105873
+      },
+      "expect": [
+        {
+          "name": "Canada should match U.S. tariffs with equivalent counter-tariffs",
+          "rank": 1,
+          "score": 0.9105873
+        }
+      ],
+      "reject": [
+        {
+          "name": "Canada's trade policies justify U.S. tariffs on Canadian goods",
+          "rank": 3,
+          "score": 0.889773
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": true
+    },
+    {
+      "id": "us-tariffs-justified",
+      "kind": "contrastive",
+      "text": "American tariffs on Canada are warranted by Canadian trade practices",
+      "top1": {
+        "rank": 1,
+        "name": "Canada's trade policies justify U.S. tariffs on Canadian goods",
+        "score": 0.9376633
+      },
+      "expect": [
+        {
+          "name": "Canada's trade policies justify U.S. tariffs on Canadian goods",
+          "rank": 1,
+          "score": 0.9376633
+        }
+      ],
+      "reject": [
+        {
+          "name": "U.S.–Canada tariffs undermine the economic benefits of the USMCA",
+          "rank": 8,
+          "score": 0.9018121
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": true
+    },
+    {
+      "id": "foreign-aid-cut",
+      "kind": "paraphrase",
+      "text": "Washington should spend less on aid abroad",
+      "top1": {
+        "rank": 1,
+        "name": "The United States should reduce foreign aid spending",
+        "score": 0.9346286
+      },
+      "expect": [
+        {
+          "name": "The United States should reduce foreign aid spending",
+          "rank": 1,
+          "score": 0.9346286
+        }
+      ],
+      "reject": [],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": null
+    },
+    {
+      "id": "homework-ai",
+      "kind": "paraphrase",
+      "text": "Homework in its traditional form is obsolete now that students have AI",
+      "top1": {
+        "rank": 1,
+        "name": "Traditional homework is no longer fit for the age of AI",
+        "score": 0.9739938
+      },
+      "expect": [
+        {
+          "name": "Traditional homework is no longer fit for the age of AI",
+          "rank": 1,
+          "score": 0.9739938
+        }
+      ],
+      "reject": [],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": null
+    },
+    {
+      "id": "ai-companions-pro",
+      "kind": "contrastive",
+      "text": "An AI friend is preferable to loneliness",
+      "top1": {
+        "rank": 1,
+        "name": "AI companions are better than social isolation",
+        "score": 0.9453913
+      },
+      "expect": [
+        {
+          "name": "AI companions are better than social isolation",
+          "rank": 1,
+          "score": 0.9453913
+        }
+      ],
+      "reject": [
+        {
+          "name": "AI companions are exploiting human emotional vulnerability",
+          "rank": 8,
+          "score": 0.9030478
+        },
+        {
+          "name": "AI companions can never replace human relationships",
+          "rank": 11,
+          "score": 0.8886101
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": true
+    },
+    {
+      "id": "ai-companions-con",
+      "kind": "contrastive",
+      "text": "AI companion apps prey on lonely people's emotions",
+      "top1": {
+        "rank": 1,
+        "name": "AI companions are exploiting human emotional vulnerability",
+        "score": 0.93605906
+      },
+      "expect": [
+        {
+          "name": "AI companions are exploiting human emotional vulnerability",
+          "rank": 1,
+          "score": 0.93605906
+        }
+      ],
+      "reject": [
+        {
+          "name": "AI companions are better than social isolation",
+          "rank": 3,
+          "score": 0.92665076
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": true
+    },
+    {
+      "id": "refugee-quotas",
+      "kind": "paraphrase",
+      "text": "Rich nations should be bound to take in a set number of refugees",
+      "top1": {
+        "rank": 1,
+        "name": "Wealthy countries should accept binding refugee-resettlement quotas",
+        "score": 0.9354705
+      },
+      "expect": [
+        {
+          "name": "Wealthy countries should accept binding refugee-resettlement quotas",
+          "rank": 1,
+          "score": 0.9354705
+        }
+      ],
+      "reject": [],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": null
+    },
+    {
+      "id": "hormuz-justified",
+      "kind": "contrastive",
+      "text": "Iran is within its rights to close the Strait of Hormuz after being attacked",
+      "top1": {
+        "rank": 1,
+        "name": "Iran closed the Strait of Hormuz",
+        "score": 0.9377609
+      },
+      "expect": [
+        {
+          "name": "Iran's blockage of the Strait of Hormuz is justified in response to the US-Israeli aggression",
+          "rank": null,
+          "score": null
+        }
+      ],
+      "reject": [
+        {
+          "name": "Iran's blockade of the Strait of Hormuz is an unlawful attack on international navigation",
+          "rank": null,
+          "score": null
+        }
+      ],
+      "missing": [],
+      "recall": 0.0,
+      "rr": 0.0,
+      "contrastive": false
+    },
+    {
+      "id": "hormuz-unlawful",
+      "kind": "contrastive",
+      "text": "Closing the Strait of Hormuz is an illegal assault on freedom of navigation",
+      "top1": {
+        "rank": 1,
+        "name": "Iran's blockade of the Strait of Hormuz is an unlawful attack on international navigation",
+        "score": 0.9298382
+      },
+      "expect": [
+        {
+          "name": "Iran's blockade of the Strait of Hormuz is an unlawful attack on international navigation",
+          "rank": 1,
+          "score": 0.9298382
+        }
+      ],
+      "reject": [
+        {
+          "name": "Iran's blockage of the Strait of Hormuz is justified in response to the US-Israeli aggression",
+          "rank": null,
+          "score": null
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": true
+    },
+    {
+      "id": "cuba-embargo",
+      "kind": "paraphrase",
+      "text": "Lift the trade embargo on Cuba",
+      "top1": {
+        "rank": 1,
+        "name": "The United States should end its economic embargo on Cuba",
+        "score": 0.9157299
+      },
+      "expect": [
+        {
+          "name": "The United States should end its economic embargo on Cuba",
+          "rank": 1,
+          "score": 0.9157299
+        }
+      ],
+      "reject": [],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": null
+    },
+    {
+      "id": "social-media-teens",
+      "kind": "paraphrase",
+      "text": "Teenagers' mental health suffers because of social media",
+      "top1": {
+        "rank": 1,
+        "name": "Social media causes anxiety and depression in young people",
+        "score": 0.9377241
+      },
+      "expect": [
+        {
+          "name": "Social media causes anxiety and depression in young people",
+          "rank": 1,
+          "score": 0.9377241
+        }
+      ],
+      "reject": [],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": null
+    },
+    {
+      "id": "immigration-hedged",
+      "kind": "hedged",
+      "text": "It is sometimes argued that immigration on a large scale strains public services",
+      "top1": {
+        "rank": 1,
+        "name": "Large-scale immigration places an unsustainable burden on public services and social cohesion",
+        "score": 0.9323026
+      },
+      "expect": [
+        {
+          "name": "Large-scale immigration places an unsustainable burden on public services and social cohesion",
+          "rank": 1,
+          "score": 0.9323026
+        }
+      ],
+      "reject": [
+        {
+          "name": "Governments should expand legal immigration pathways to meet labour and demographic needs",
+          "rank": 21,
+          "score": 0.86492956
+        }
+      ],
+      "missing": [],
+      "recall": 1.0,
+      "rr": 1.0,
+      "contrastive": true
+    },
+    {
+      "id": "novel-sourdough",
+      "kind": "novel",
+      "text": "best sourdough starter recipe",
+      "top1": {
+        "rank": 1,
+        "name": "Common fermented foods include yogurt, kefir, kombucha, kimchi, sauerkraut, miso paste, and sourdough.",
+        "score": 0.81994224
+      },
+      "expect": [],
+      "reject": [],
+      "missing": [],
+      "recall": null,
+      "rr": null,
+      "contrastive": null
+    },
+    {
+      "id": "novel-knot",
+      "kind": "novel",
+      "text": "how to tie a bowline knot",
+      "top1": {
+        "rank": 1,
+        "name": "For pain at the base of the thumb, doctors recommend placing the hand flat on a surface and pulling the thumb away from other fingers for approximately 30 seconds.",
+        "score": 0.80150366
+      },
+      "expect": [],
+      "reject": [],
+      "missing": [],
+      "recall": null,
+      "rr": null,
+      "contrastive": null
+    },
+    {
+      "id": "novel-espresso",
+      "kind": "novel",
+      "text": "how to descale an espresso machine",
+      "top1": {
+        "rank": 1,
+        "name": "The Michigan Department of Agriculture and Rural Development recommends washing all fruits and vegetables thoroughly under running water and refrigerating cut, peeled, or cooked produce within two hours",
+        "score": 0.8135201
+      },
+      "expect": [],
+      "reject": [],
+      "missing": [],
+      "recall": null,
+      "rr": null,
+      "contrastive": null
+    },
+    {
+      "id": "novel-jazz",
+      "kind": "novel",
+      "text": "jazz piano voicings for beginners",
+      "top1": {
+        "rank": 1,
+        "name": "The vibration of vocal folds as air passes through them creates the sound known as voicing.",
+        "score": 0.83353543
+      },
+      "expect": [],
+      "reject": [],
+      "missing": [],
+      "recall": null,
+      "rr": null,
+      "contrastive": null
+    }
+  ],
+  "mean_recall": 0.96875,
+  "mrr": 0.8216145833333334,
+  "contrastive_pass": 17,
+  "contrastive_total": 19,
+  "floor": {
+    "declared": 0.85,
+    "expected_hits": {
+      "n": 33,
+      "min": 0.87037754,
+      "p10": 0.89584553,
+      "median": 0.92599326,
+      "p90": 0.9722359,
+      "max": 1.0
+    },
+    "reject_hits": {
+      "n": 18,
+      "min": 0.82796025,
+      "p10": 0.8579695,
+      "median": 0.8886101,
+      "p90": 0.9030478,
+      "max": 0.9735548
+    },
+    "novel_top1": {
+      "n": 4,
+      "min": 0.80150366,
+      "p10": 0.80150366,
+      "median": 0.81994224,
+      "p90": 0.83353543,
+      "max": 0.83353543
+    },
+    "expected_below_declared": 0,
+    "novel_above_declared": 0,
+    "suggested": 0.851956485
+  },
+  "gate_passed": true
+}

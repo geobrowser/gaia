@@ -30,6 +30,7 @@ is static); `add-embedding-slot` refuses it and the fix is the next version plus
 | `retire-embedding-slot [--version N] <slot>` | removes the slot from `_meta`; refuses the default; the fields stay until the next index version |
 | `list-slots [--version N] [--embedding-service <url>]` | slots, default, `index.knn`, vector coverage vs named live documents, and whether the service has each slot loaded with the same descriptor hash |
 | `ensure-search-pipeline` | creates/updates `<alias>_hybrid_minmax` (min-max normalization, arithmetic mean) for hybrid mode; idempotent |
+| `eval-slot [--version N] --slot <id> --embedding-service <url> [--golden file] [--min-recall 0.9] [--gate-contrastive] [--json out]` | the evaluation harness: embeds the golden queries through the service, runs the api's k-NN query, prints recall@top, MRR, contrastive pairs and a floor calibration; non-zero exit when recall is under the gate. The default golden set (`golden/testnet-debate-claims.json`) is compiled in |
 
 Without `--version` the commands act on the index the alias currently points to; `--index NAME`
 names an exact index instead (a PoC or a not-yet-aliased version).

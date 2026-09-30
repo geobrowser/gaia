@@ -10,10 +10,10 @@ mod opensearch_client;
 use commands::{
     add_embedding_slot::AddEmbeddingSlotCommand, backfill_name_raw::BackfillNameRawCommand,
     create::CreateIndexCommand, delete::DeleteIndexCommand,
-    ensure_search_pipeline::EnsureSearchPipelineCommand, full_migration::FullMigrationCommand,
-    list::ListIndicesCommand, list_slots::ListSlotsCommand, reindex::ReindexCommand,
-    retire_embedding_slot::RetireEmbeddingSlotCommand, set_default_slot::SetDefaultSlotCommand,
-    update_alias::UpdateAliasCommand,
+    ensure_search_pipeline::EnsureSearchPipelineCommand, eval_slot::EvalSlotCommand,
+    full_migration::FullMigrationCommand, list::ListIndicesCommand, list_slots::ListSlotsCommand,
+    reindex::ReindexCommand, retire_embedding_slot::RetireEmbeddingSlotCommand,
+    set_default_slot::SetDefaultSlotCommand, update_alias::UpdateAliasCommand,
 };
 
 /// Get the prefixed alias name based on environment.
@@ -86,6 +86,9 @@ enum Commands {
 
     /// Create or update the hybrid (lexical + k-NN) search pipeline for this alias
     EnsureSearchPipeline(EnsureSearchPipelineCommand),
+
+    /// Evaluate an embedding slot on a golden query set: recall@k, MRR, contrastive pairs, floor
+    EvalSlot(EvalSlotCommand),
 }
 
 #[tokio::main]
@@ -151,6 +154,7 @@ async fn main() -> Result<()> {
         Commands::RetireEmbeddingSlot(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
         Commands::ListSlots(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
         Commands::EnsureSearchPipeline(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
+        Commands::EvalSlot(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
     };
 
     if let Err(ref e) = result {

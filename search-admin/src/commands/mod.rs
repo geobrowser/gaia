@@ -3,6 +3,7 @@ pub mod backfill_name_raw;
 pub mod create;
 pub mod delete;
 pub mod ensure_search_pipeline;
+pub mod eval_slot;
 pub mod full_migration;
 pub mod get;
 pub mod index_meta;

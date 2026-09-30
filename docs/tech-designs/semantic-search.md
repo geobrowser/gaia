@@ -661,6 +661,7 @@ there — slots arrive only through the commands below, which derive the slot id
 | `retire-embedding-slot [--version N] <slot>` | removes the slot from `_meta`; refuses the default; fields stay until the next index version |
 | `list-slots [--version N] [--embedding-service <url>]` | slots, default, `index.knn`, vector coverage vs named live documents, and per slot whether the service has it loaded with the same descriptor hash |
 | `ensure-search-pipeline` | idempotent `PUT` of `<alias>_hybrid_minmax` (min-max, arithmetic mean, equal weights) — one pipeline per alias so staging and production never share one |
+| `eval-slot [--version N] --slot <id> --embedding-service <url> [--golden f] [--min-recall 0.9] [--gate-contrastive] [--json out]` | the evaluation harness (step 8): embeds the golden queries through the service, runs the api's k-NN query, reports recall@top, MRR, contrastive pairs and a floor calibration; the exit status gates a slot |
 | `full-migration` | unchanged; the new mapping includes `index.knn`, slots are added afterwards |
 
 The pure rules (field mappings, `_meta` merge, default/retire, pipeline body) live in
@@ -696,6 +697,52 @@ first build compiles the ONNX runtime and fetches the model. The api's compose e
 Bring-up order, the force-merge after a backfill, rotation with the jobs, and a failure-mode
 table are in the runbook; local-stack traps (M4 JVM flag, `postgres:18` volume path, per-request
 `ef_search`, cargo feature unification) are in `docs/gotchas.md`.
+
+## Evaluation harness (step 8)
+
+`search-admin eval-slot` (`search-admin/src/commands/eval_slot.rs`; golden set
+`search-admin/golden/testnet-debate-claims.json`, compiled into the binary so the
+`eval-slot-job.yaml` needs no file; unit tests on the scoring). A golden query names what a
+searcher typing it wants (`expect`) and, for a contrastive pair, what must not rank above that
+(`reject`: the opposite stance, the negated claim). A `novel` query has no answer in the corpus;
+its top-1 score is the unrelated baseline for the floor. Names, not ids, so the set survives a
+reindex and reports (rather than counts) a claim that has left the corpus.
+
+The harness embeds every query through the running service with purpose `query` and refuses a
+vector whose descriptor hash is not the index slot's, then runs **the api's own k-NN query** —
+`k = max(top, 50)`, `ef_search = 256`, the non-deleted filter inside the clause — and reports
+recall@top, MRR, contrastive outcomes and a floor calibration. The exit status gates on
+`--min-recall` (default 0.9); `--gate-contrastive` is opt-in because stance is deferred (D10).
+In a rotation it runs once per slot on the same index (`--slot`), and the new slot must not lose
+recall or floor separability.
+
+**First run** — slot 79502860cd (bge-small) on the 321k-document PoC index, 2026-09-30; full
+report in `docs/benchmarks/semantic-search-poc/eval-79502860cd.json`:
+
+| Metric | Value |
+|---|---|
+| recall@10 over 32 scored queries (1 verbatim, 18 paraphrase, 10 contrastive, 2 hedged, 1 negation) | **0.969** |
+| MRR | 0.822 |
+| contrastive pairs | 17 / 19 pass |
+| scores of expected hits | n = 33, min 0.870, median 0.926, max 1.000 |
+| scores of reject (hard-negative) hits | n = 18, min 0.828, median 0.889, max 0.974 |
+| novel top-1 scores | n = 4, 0.802 – 0.834 |
+| declared floor 0.85 | drops 0 expected hits, admits 0 novel top-1s; suggested 0.852 |
+
+So the 0.85 floor geo-lens used transfers to this slot by measurement, not by inheritance (D8).
+The two failures are the two things the design deferred, now quantified:
+
+- **Negation.** "The United States should *not* stop funding Ukraine" ranks "The United States
+  should stop funding Ukraine" first at 0.974; the intended claim is 6th. Similarity does not
+  read negation.
+- **Dense topics.** For "Iran is within its rights to close the Strait of Hormuz after being
+  attacked" the expected claim is 69th by brute-force cosine (0.897), behind 50 claims that all
+  mention Hormuz. Not an HNSW error (brute force agrees); the api's `k = max(limit + offset, 50)`
+  reaches it on a later page. Topic density, not recall, bounds such queries.
+
+Hard negatives sit at a median of 0.889 against 0.926 for expected hits: on this slot a floor can
+separate relevant from unrelated, not one stance from the other. That is the measured case for
+the deferred reranking track, and the harness is where a candidate for it gets judged.
 
 ## Model rotation procedure (D9)
 
@@ -887,14 +934,16 @@ None of this is on the critical path for P0–P2.
 | P3 rotation drill (staging) | bundle B with a different model (e.g. a Matryoshka-capable 2025 model at 256–768 d); service with two slots; parallel backfill; harness comparison; default flip; A retired | procedure documented in the runbook and executed once end to end |
 | P4 | widen scope beyond claims by type allowlist, driven by `list-slots` coverage and memory; if the backfill is large, bring up the extraction-api backend (External requirements) and run it descriptor-verified | per-slot RAM within cluster budget; a backfill completed through `extraction_api` with zero descriptor mismatches |
 
-**Status 2026-09-30:** steps 1–6 are implemented on `feat/semantic-search` and verified on the
-local stack end to end — the committed bundle served by `embedding-service`, the slot registered by
-`search-admin`, `indexed_at` stamped by search-indexer, 321,408 documents embedded by
+**Status 2026-09-30:** steps 1–8 are implemented on `feat/semantic-search`. Verified on the
+local stack end to end: the committed bundle served by `embedding-service`, the slot registered
+by `search-admin`, `indexed_at` stamped by search-indexer, 321,408 documents embedded by
 `embedding-indexer` through the real path (vectors identical to geo-lens's on identical text,
-cosine ≥ 0.999999), and `/search?mode=semantic|hybrid` answering with parity against geo-lens's
-own query route on ten queries (10/10 top-1). Details and numbers:
-`docs/benchmarks/semantic-search-poc.md`, "Step 4–6 follow-up". Not yet done: step 7 (k8s,
-compose, runbook), step 8 (harness), the rollout milestones, and step 9.
+cosine ≥ 0.999999), `/search?mode=semantic|hybrid` at parity with geo-lens's query route (10/10
+top-1), and the evaluation harness at recall@10 0.969 with the declared floor confirmed (see
+"Evaluation harness"). Deployment manifests, workflows, compose profile, runbook and gotchas are
+in (see "Deployment"). Details and numbers: `docs/benchmarks/semantic-search-poc.md`. Not yet
+done: the rollout milestones below (they need the cluster), the first-consumer decision, and
+step 9 (the extraction-api backfill backend).
 
 The runtime half of P0 was completed on 2026-09-29 (see Spike results under the `embedding`
 crate): parity, throughput and static linking are measured facts, not assumptions. The k-NN half
@@ -903,9 +952,9 @@ and the corpus-scale step 0 followed (`docs/benchmarks/semantic-search-poc.md`):
 documents, recall/latency per shape, storage breakdown, the k-mode decision for semantic mode,
 and store-level parity with geo-lens. What remains for P1 is the service-level parity check.
 
-The evaluation harness (a golden set of queries with expected and unexpected results, recall@k
-and floor calibration per slot) is built in P1 and is a prerequisite for P3. It is also the
-foundation the deferred "beyond similarity" track needs.
+The evaluation harness (golden queries with expected and rejected results, recall@k, MRR and
+floor calibration per slot) is built — step 8, `search-admin eval-slot` — and is the gate P3
+uses. It is also the foundation the deferred "beyond similarity" track needs.
 
 # Open questions
 

@@ -169,3 +169,33 @@ single Neo4j index: ≈ 50 ms). After `_forcemerge` to one segment (5.3 GB with 
 
 Operationally: a large backfill should be followed by a merge, or scheduled where the merge policy
 catches up, before latency is judged. Steady-state follow writes are small and merge normally.
+
+## Step 8: the evaluation harness on the same index (2026-09-30)
+
+`search-admin eval-slot --index testnet_entities_poc --embedding-service http://localhost:8090`
+(golden set `search-admin/golden/testnet-debate-claims.json`: 36 queries — 1 verbatim,
+18 paraphrase, 10 contrastive, 2 hedged, 1 negation, 4 novel — over 37 Debate-tagged claim names,
+all present). Query shape = the api's: k 50, ef_search 256, non-deleted filter inside the clause.
+Full report: `eval-79502860cd.json` beside this file.
+
+| | |
+|---|---|
+| recall@10 (32 scored queries) | 0.969 |
+| MRR | 0.822 |
+| contrastive pairs | 17 / 19 |
+| expected hits | n 33, min 0.870, median 0.926 |
+| reject hits | n 18, min 0.828, median 0.889, max 0.974 |
+| novel top-1 | n 4, 0.802 – 0.834 |
+| floor 0.85 | 0 expected dropped, 0 novel admitted; suggested 0.852 |
+
+Failures: the negation query ("should *not* stop funding Ukraine") puts the negated claim first
+at 0.974 (target 6th); the Hormuz paraphrase's target is 69th by brute force behind 50 Hormuz
+claims (not an HNSW miss). Both are the deferred D10 track, now with numbers. Ten of the
+paraphrases have the target at rank 1; the hedged AI-jobs query has it 6th behind five closely
+related claims. Wall time for the run: 36 embeddings in one request plus 36 k-NN queries and 37
+presence counts, a few seconds.
+
+To reproduce, the index and service from "Reproduce" above, then the command; `--json` writes the
+report. The gate (`--min-recall 0.9`) passed; `--gate-contrastive` would have failed it, which is
+the intended reading of that flag until reranking exists.
+

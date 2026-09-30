@@ -1,0 +1,95 @@
+# Runs the evaluation harness (design step 8) against one slot: embeds every golden query
+# through embedding-service, runs the same k-NN query the api runs, and reports recall@10, MRR,
+# the contrastive pairs (does the opposite stance rank below the expected claim?) and a floor
+# calibration for the slot. Exit code is the gate: non-zero when recall@10 is under
+# EVAL_MIN_RECALL. Run it before set-default-slot in a rotation, and after any bundle change.
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-eval-slot
+  namespace: gaia
+  labels:
+    app: opensearch-admin
+    task: eval-slot
+    environment: testnet
+spec:
+  ttlSecondsAfterFinished: 86400  # 24 hours
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: opensearch-admin
+        task: eval-slot
+        environment: testnet
+    spec:
+      imagePullSecrets:
+      - name: geo
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: eval-slot
+        # `latest` is built from `main` by search-admin-build.yml (main has been the only trunk
+        # since 2026-09-17). The embedding-slot commands exist only from the semantic-search
+        # merge onward, so before that lands use a commit-sha tag from a workflow_dispatch of
+        # that workflow on the feature branch, and always confirm the running image carries the
+        # command you need: `kubectl logs` shows the CLI's own usage error otherwise.
+        image: registry.digitalocean.com/geo/search-admin:latest
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: OPENSEARCH_URL
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-credentials
+              key: OPENSEARCH_URL
+        - name: ENVIRONMENT
+          value: "testnet"
+        - name: INDEX_ALIAS
+          value: "entities"
+        # Empty = the index the alias points to (the normal case). Set N to act on <alias>_vN during a migration, before the alias moves.
+        - name: INDEX_VERSION
+          value: ""
+        # Slot id = hash of the bundle descriptor (`embedding-service bundle slot <bundle.json>`).
+        - name: EMBEDDING_SLOT
+          value: "79502860cd"
+        - name: EMBEDDING_SERVICE_URL
+          value: "http://embedding-service:8080"
+        # Gate: fail the job when recall@10 over the golden set's expected results is below this.
+        - name: EVAL_MIN_RECALL
+          value: "0.9"
+        # Empty = the golden set built into the binary (search-admin/golden/testnet-debate-claims.json). A path to another file if one was mounted.
+        - name: EVAL_GOLDEN
+          value: ""
+        - name: RUST_LOG
+          value: "info"
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          V=""; [ -n "$INDEX_VERSION" ] && V="--version $INDEX_VERSION"
+          G=""; [ -n "$EVAL_GOLDEN" ] && G="--golden $EVAL_GOLDEN"
+          search-admin eval-slot $V --slot "$EMBEDDING_SLOT" --embedding-service "$EMBEDDING_SERVICE_URL" --min-recall "$EVAL_MIN_RECALL" $G
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
