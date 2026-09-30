@@ -17,7 +17,8 @@ type AppEnv = {
 	}
 }
 
-import type {BoostOverrides, SearchClient, SearchResponse, SearchScope} from "../services/search"
+import type {BoostOverrides, SearchClient, SearchMode, SearchResponse, SearchScope} from "../services/search"
+import {isSearchError, SearchErrorType} from "../services/search/types"
 import {isValidUuid} from "../utils/uuid"
 
 /**
@@ -115,6 +116,9 @@ const VALID_PARAMS: Set<string> = new Set([
 	"tag_ids",
 	"limit",
 	"offset",
+	"mode",
+	"min_score",
+	"slot",
 	"include_deleted",
 	"include_non_canonical",
 	...BOOST_PARAMS,
@@ -131,12 +135,19 @@ class SearchValidationError extends Data.TaggedError("SearchValidationError")<{
 	status: 400
 }> {}
 
+class SearchUnavailableError extends Data.TaggedError("SearchUnavailableError")<{
+	message: string
+	status: 503
+}> {}
+
 class SearchExecutionError extends Data.TaggedError("SearchExecutionError")<{
 	message: string
 	status: 500
 }> {}
 
-type SearchError = SearchValidationError | SearchExecutionError
+type SearchError = SearchValidationError | SearchUnavailableError | SearchExecutionError
+
+const VALID_MODES: Set<SearchMode> = new Set(["lexical", "semantic", "hybrid"])
 
 /**
  * Create the search router with dependency-injected search client.
@@ -385,6 +396,52 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 				const offsetParam = c.req.query("offset")
 				const includeDeletedParam = c.req.query("include_deleted")
 				const includeNonCanonicalParam = c.req.query("include_non_canonical")
+				const modeParam = c.req.query("mode")
+				const minScoreParam = c.req.query("min_score")
+				const slotParam = c.req.query("slot")
+
+				const mode: SearchMode = (modeParam as SearchMode | undefined) ?? "lexical"
+				if (modeParam !== undefined && !VALID_MODES.has(mode)) {
+					return yield* Effect.fail(
+						new SearchValidationError({
+							message: `Invalid mode '${modeParam}'. Valid values: ${Array.from(VALID_MODES).join(", ")}`,
+							status: 400,
+						}),
+					)
+				}
+				let minScore: number | undefined
+				if (minScoreParam !== undefined) {
+					minScore = Number(minScoreParam)
+					if (!Number.isFinite(minScore) || minScore < 0 || minScore > 1) {
+						return yield* Effect.fail(
+							new SearchValidationError({
+								message: "min_score must be a number between 0 and 1",
+								status: 400,
+							}),
+						)
+					}
+					if (mode === "lexical") {
+						return yield* Effect.fail(
+							new SearchValidationError({
+								message: "min_score applies to semantic and hybrid modes only",
+								status: 400,
+							}),
+						)
+					}
+				}
+				if (slotParam !== undefined && !/^[0-9a-f]{10}$/.test(slotParam)) {
+					return yield* Effect.fail(
+						new SearchValidationError({message: "slot must be a 10-character hex slot id", status: 400}),
+					)
+				}
+				if (slotParam !== undefined && mode === "lexical") {
+					return yield* Effect.fail(
+						new SearchValidationError({
+							message: "slot applies to semantic and hybrid modes only",
+							status: 400,
+						}),
+					)
+				}
 
 				// Validate query length
 				const trimmedQuery = query?.trim() ?? ""
@@ -675,15 +732,33 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					...(includeDeleted && {include_deleted: true}),
 					...(!includeNonCanonical && {include_non_canonical: false}),
 					...(hasBoosts && {boosts}),
+					...(mode !== "lexical" && {mode}),
+					...(minScore !== undefined && {min_score: minScore}),
+					...(slotParam !== undefined && {slot: slotParam}),
+				}
+				if (mode === "hybrid" && offset > 0) {
+					return yield* Effect.fail(
+						new SearchValidationError({
+							message: "hybrid mode does not support offset on this OpenSearch version",
+							status: 400,
+						}),
+					)
 				}
 
 				const response = yield* Effect.tryPromise({
 					try: () => searchClient.search(searchQuery),
-					catch: (error) =>
-						new SearchExecutionError({
+					catch: (error) => {
+						if (isSearchError(error) && error.type === SearchErrorType.Unavailable) {
+							return new SearchUnavailableError({message: error.message, status: 503})
+						}
+						if (isSearchError(error) && error.type === SearchErrorType.ValidationError) {
+							return new SearchValidationError({message: error.message, status: 400})
+						}
+						return new SearchExecutionError({
 							message: error instanceof Error ? error.message : "An unexpected error occurred",
 							status: 500,
-						}),
+						})
+					},
 				}).pipe(Effect.withSpan("search.execute"))
 
 				return response
@@ -695,6 +770,9 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 				onLeft: (error: SearchError) => {
 					if (error._tag === "SearchValidationError") {
 						return c.json({error: "Invalid parameter", message: error.message}, 400)
+					}
+					if (error._tag === "SearchUnavailableError") {
+						return c.json({error: "SEMANTIC_SEARCH_UNAVAILABLE", message: error.message}, 503)
 					}
 					return c.json({error: "Search failed", message: error.message}, 500)
 				},

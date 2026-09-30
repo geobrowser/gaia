@@ -158,3 +158,54 @@ Each search result includes two computed score fields:
 
 The `scoreBoost` is computed via `script_fields` using the same Painless script as `buildScoreBoostFunction`. For empty queries (top-ranked), `textMatchScore` is 0 since `boost_mode: "replace"` means `_score` equals the boost. For UUID queries, `textMatchScore` equals `relevanceScore` since there is no score field boost.
 
+
+---
+
+## Semantic and hybrid modes
+
+`mode=semantic` and `mode=hybrid` (default `lexical`) come from the semantic-search work
+(`docs/tech-designs/semantic-search.md`; measurements in `docs/benchmarks/semantic-search-poc.md`).
+Both need `EMBEDDING_SERVICE_URL`; without it they answer `503 SEMANTIC_SEARCH_UNAVAILABLE` and
+lexical mode is untouched.
+
+### Slots
+
+Vectors live in `emb_<slot>` fields. A **slot** is a model descriptor pinned by content hash,
+registered in the index `_meta` by `search-admin add-embedding-slot`. At boot and every
+`EMBEDDING_SLOTS_REFRESH_S` the API reads `_meta` and the embedding-service's `/info` and marks a
+slot **ready** only when both agree on the descriptor (compared as canonical JSON). Requests may
+name `slot=`; otherwise the index's default is used. Every semantic/hybrid response carries
+`embeddingSlot`, and the vector the service returns is refused if its descriptor hash is not the
+slot's. Nothing about an embedding is implicit.
+
+### Semantic mode
+
+```
+query text ─▶ POST /embed (purpose: query) ─▶ knn { emb_<slot>: { vector, k, method_parameters.ef_search, filter } }
+                                                                                            └── the SAME eligibility filters the lexical path applies
+hits ─▶ drop _score < min_score (default: the slot's score_floor) ─▶ results with semanticScore
+```
+
+- Filters go **inside** the k-NN clause. OpenSearch then filters during the graph walk and falls
+  back to exact scoring when the filter is restrictive, so a space- or tag-filtered semantic
+  query is exact within the filter. A `bool` wrapped around the clause would be a post-filter
+  over an approximate neighbor list and lose hits (reproduced in the PoC).
+- `k = max(limit + offset, 50)` and `method_parameters.ef_search = 256` on every request: the
+  Lucene engine on 2.17 ignores the index-level `ef_search` and searches with ef = k, which
+  measured at 0.86 recall@10; 256 gives ≥ 0.99 for one to two extra milliseconds.
+- The radial form (`min_score` inside the clause) is not used: on 2.17 it excludes `k`, accepts
+  no `ef_search`, and measured 0.82 recall. The floor is applied to the returned scores instead,
+  so `total` in semantic mode is the number of hits above the floor on this page's candidates.
+- `semanticScore` is the k-NN score on the slot's `(1 + cos) / 2` scale; `relevanceScore` equals
+  it; `textMatchScore` is absent. A verbatim duplicate scores 0.99+, a paraphrase ≈ 0.95–0.97,
+  a topical-but-different claim ≈ 0.85, unrelated < 0.8 (bge-small).
+- Ids and empty text are rejected (an id is not text). `boosts` are ignored.
+
+### Hybrid mode
+
+`{ hybrid: { queries: [ <the lexical query for this request, unchanged>, <knn with k = 100> ] } }`
+sent with `?search_pipeline=<index alias>_hybrid_minmax` (created by `search-admin
+ensure-search-pipeline`: min-max normalization of each sub-query's scores, arithmetic mean).
+`relevanceScore` is the fused score in `[0, 1]` and is not comparable across queries;
+`semanticScore` and `textMatchScore` are absent. `offset` must be 0: the engine rejects
+pagination with the hybrid query on 2.17.1.

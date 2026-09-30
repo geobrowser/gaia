@@ -10,10 +10,13 @@
 import {ContentIds, SystemIds} from "@geoprotocol/geo-sdk"
 import {Client} from "@opensearch-project/opensearch"
 import {normalizeUuid, toDashedUuid} from "../../utils/uuid"
+import type {EmbeddingServiceClient} from "../embedding/client"
+import type {ReadySlot, SlotRegistry} from "../embedding/slots"
 import type {SearchClient} from "./client"
 import {
 	type BoostOverrides,
 	SearchError,
+	type SearchMode,
 	type SearchQuery,
 	type SearchResponse,
 	type SearchResult,
@@ -33,6 +36,11 @@ const UUID_DASHLESS_PATTERN = /^[0-9a-f]{32}$/i
  * Return both dashed and dashless forms of a UUID for OpenSearch term queries.
  * The index may contain either format during migration, so we match both.
  */
+/** Keep hits at or above the slot's floor; k-NN scores are on the (1 + cos) / 2 scale. */
+export function applyScoreFloor<H extends {_score: number}>(hits: H[], floor: number): H[] {
+	return hits.filter((h) => h._score >= floor)
+}
+
 function uuidTermVariants(uuid: string): [string, string] {
 	const dashless = normalizeUuid(uuid) as string
 	const dashed = toDashedUuid(uuid)
@@ -233,6 +241,35 @@ export const FUZZY_MAX_EXPANSIONS = 25
 export const PHRASE_PREFIX_MAX_EXPANSIONS = 50
 
 /**
+ * Semantic mode (docs/tech-designs/semantic-search.md, measured in docs/benchmarks/semantic-search-poc.md).
+ *
+ * `k` is the number of candidates the HNSW walk returns *before* the score floor is applied
+ * client-side; it caps hits regardless of `size`, so it is never below `limit + offset`.
+ * `ef_search` must travel on every k-NN clause: OpenSearch 2.17's Lucene engine ignores the
+ * index default and searches with ef = k, which measured at 0.86 recall@10; 256 gives >= 0.99
+ * for one to two extra milliseconds. The radial (`min_score`) form was rejected: it accepts no
+ * `ef_search` and landed at 0.82 recall.
+ */
+export const SEMANTIC_K_MIN = 50
+export const SEMANTIC_EF_SEARCH = 256
+/** Candidate depth of the k-NN sub-query in hybrid mode. */
+export const HYBRID_K = 100
+
+/** What semantic and hybrid modes need beyond OpenSearch. Absent ⇒ those modes return 503. */
+export interface SemanticConfig {
+	embedding: Pick<EmbeddingServiceClient, "embed">
+	slots: Pick<SlotRegistry, "resolve">
+	/** Search pipeline for hybrid fusion, `<index alias>_hybrid_minmax` (created by search-admin). */
+	pipelineName: string
+}
+
+/** The filters every mode applies: who is eligible before any ranking happens. */
+export interface Eligibility {
+	filter: object[]
+	must_not: object[]
+}
+
+/**
  * Count tokens in the query (drops empty splits from leading/trailing
  * separators).
  */
@@ -296,6 +333,21 @@ export class OpenSearchClient implements SearchClient {
 	 * @param indexName - The index name to use (default: "entities")
 	 * @param topologyServiceUrl - The topology service URL for subspace lookups (optional)
 	 */
+	private semantic: SemanticConfig | undefined
+
+	/** Turn on semantic and hybrid modes. Without this they answer 503. */
+	enableSemantic(config: SemanticConfig): void {
+		this.semantic = config
+	}
+
+	/** The index mapping's `_meta` (embedding slots live there). */
+	async readIndexMeta(): Promise<Record<string, unknown> | undefined> {
+		const response = await this.client.indices.getMapping({index: this.indexName})
+		const body = response.body as Record<string, {mappings?: {_meta?: Record<string, unknown>}}>
+		const first = Object.values(body)[0]
+		return first?.mappings?._meta
+	}
+
 	constructor(nodeUrl: string, indexName: string = "entities", topologyServiceUrl?: string) {
 		this.client = new Client({node: nodeUrl})
 		this.indexName = indexName
@@ -357,6 +409,13 @@ export class OpenSearchClient implements SearchClient {
 	 * Execute a search query against the index.
 	 */
 	async search(query: SearchQuery): Promise<SearchResponse> {
+		const mode: SearchMode = query.mode ?? "lexical"
+		if (mode === "lexical") return this.lexicalSearch(query)
+		return this.vectorSearch(query, mode)
+	}
+
+	/** The pre-existing BM25 path, unchanged in behavior. */
+	private async lexicalSearch(query: SearchQuery): Promise<SearchResponse> {
 		this.activeBoosts = query.boosts
 		const searchBody = (await this.buildSearchBody(query)) as Record<string, unknown>
 
@@ -378,7 +437,180 @@ export class OpenSearchClient implements SearchClient {
 			_score: number
 			fields?: Record<string, number[]>
 		}>
+		const results = await this.mapHits(hits, "lexical")
+		return {
+			mode: "lexical",
+			results,
+			total: typeof body.hits.total === "number" ? body.hits.total : (body.hits.total?.value ?? 0),
+			tookMs: body.took,
+		}
+	}
 
+	/**
+	 * Semantic and hybrid modes. The eligibility filters are the same ones the lexical path
+	 * applies for the scope; in semantic mode they go *inside* the k-NN clause so filtered
+	 * queries stay exact (never a post-filter over an approximate neighbor list).
+	 */
+	private async vectorSearch(query: SearchQuery, mode: "semantic" | "hybrid"): Promise<SearchResponse> {
+		if (!this.semantic) {
+			throw SearchError.unavailable(
+				"semantic search is not configured on this deployment (EMBEDDING_SERVICE_URL unset)",
+			)
+		}
+		const text = query.query.trim()
+		if (text.length === 0) throw SearchError.validationError(`${mode} mode requires query text`)
+		if (UUID_DASHED_PATTERN.test(text) || UUID_DASHLESS_PATTERN.test(text)) {
+			throw SearchError.validationError(`${mode} mode requires text, not an id`)
+		}
+		const size = Math.min(query.limit ?? DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE)
+		const from = query.offset ?? 0
+		if (mode === "hybrid" && from > 0) {
+			throw SearchError.validationError("hybrid mode does not support offset on this OpenSearch version")
+		}
+		const slot = this.semantic.slots.resolve(query.slot)
+		const floor = query.min_score ?? slot.scoreFloor
+		if (floor < 0 || floor > 1) throw SearchError.validationError("min_score must be between 0 and 1")
+
+		const embedded = await this.semantic.embedding.embed(slot.id, "query", [text])
+		if (embedded.descriptorHash !== slot.descriptorHash) {
+			throw SearchError.unavailable(
+				`embedding-service answered with descriptor ${embedded.descriptorHash}, the index registered ${slot.descriptorHash}`,
+			)
+		}
+		const vector = embedded.vectors[0]
+		if (!vector || vector.length !== slot.dimensions) {
+			throw SearchError.unavailable(
+				`embedding-service returned ${vector?.length ?? 0} dimensions, slot has ${slot.dimensions}`,
+			)
+		}
+
+		this.activeBoosts = query.boosts
+		const eligibility = await this.buildEligibility(query)
+		let response: {body: {hits: {hits: unknown[]; total?: number | {value: number}}; took: number}}
+		if (mode === "semantic") {
+			const body = this.buildSemanticBody(slot, vector, eligibility, size, from)
+			response = (await this.client.search({index: this.indexName, body})) as typeof response
+		} else {
+			const lexical = (await this.buildSearchBody(query)) as {query: object}
+			const body = this.buildHybridBody(lexical.query, slot, vector, eligibility, size)
+			response = (await this.client.transport.request({
+				method: "POST",
+				path: `/${this.indexName}/_search`,
+				querystring: {search_pipeline: this.semantic.pipelineName},
+				body,
+			})) as typeof response
+		}
+		const allHits = response.body.hits.hits as Array<{
+			_source: Record<string, unknown>
+			_score: number
+			fields?: Record<string, number[]>
+		}>
+		const hits = mode === "semantic" ? applyScoreFloor(allHits, floor) : allHits
+		const results = await this.mapHits(hits, mode)
+		const total = response.body.hits.total
+		return {
+			mode,
+			embeddingSlot: slot.id,
+			results,
+			total: mode === "semantic" ? hits.length : typeof total === "number" ? total : (total?.value ?? 0),
+			tookMs: response.body.took,
+		}
+	}
+
+	/**
+	 * The filters the lexical builders apply for this query's scope, in one place, so the k-NN
+	 * clause is filtered identically. Kept in step with `buildUuidQuery` / the scope builders.
+	 */
+	async buildEligibility(query: SearchQuery): Promise<Eligibility> {
+		const includeDeleted = query.include_deleted ?? false
+		const includeNonCanonical = query.include_non_canonical ?? true
+		const filter: object[] = []
+		const must_not: object[] = []
+		if (!includeDeleted) filter.push(this.buildNonDeletedFilter())
+		if (!includeNonCanonical) filter.push(this.buildCanonicalFilter())
+		const typeFilter = this.buildTypeFilter(query.type_ids)
+		const tagFilter = this.buildTagFilter(query.tag_ids)
+		const additionalSpacesFilter = this.buildAdditionalSpacesFilter(query.additional_space_ids)
+		const exclusion = this.buildTypeExclusionFilter(query.exclude_type_ids)
+		if (typeFilter) filter.push(typeFilter)
+		if (tagFilter) filter.push(tagFilter)
+		if (additionalSpacesFilter && includeNonCanonical) filter.push(additionalSpacesFilter)
+		if (exclusion) must_not.push(exclusion)
+		switch (query.scope) {
+			case "SPACE_SINGLE": {
+				if (!query.space_id) throw SearchError.validationError("SPACE_SINGLE scope requires space_id")
+				filter.push({terms: {space_id: uuidTermVariants(query.space_id)}})
+				break
+			}
+			case "SPACE": {
+				if (!query.space_id) throw SearchError.validationError("SPACE scope requires space_id")
+				if (!this.isRootSpace(query.space_id)) {
+					const {subspaces, isRoot} = await this.fetchSubspaces(query.space_id)
+					if (!isRoot) filter.push({terms: {space_id: subspaces.flatMap(uuidTermVariants)}})
+				}
+				break
+			}
+			default:
+				break
+		}
+		return {filter, must_not}
+	}
+
+	private knnClause(slot: ReadySlot, vector: number[], eligibility: Eligibility, k: number): object {
+		const hasFilters = eligibility.filter.length > 0 || eligibility.must_not.length > 0
+		return {
+			knn: {
+				[slot.vectorField]: {
+					vector,
+					k,
+					method_parameters: {ef_search: SEMANTIC_EF_SEARCH},
+					...(hasFilters && {
+						filter: {
+							bool: {
+								filter: eligibility.filter,
+								...(eligibility.must_not.length > 0 && {must_not: eligibility.must_not}),
+							},
+						},
+					}),
+				},
+			},
+		}
+	}
+
+	/** k-NN request for semantic mode. The score floor is applied to the returned hits. */
+	buildSemanticBody(slot: ReadySlot, vector: number[], eligibility: Eligibility, size: number, from: number): object {
+		return {
+			size,
+			from,
+			_source: {excludes: ["emb_*"]},
+			query: this.knnClause(slot, vector, eligibility, Math.max(size + from, SEMANTIC_K_MIN)),
+		}
+	}
+
+	/** Hybrid request: the lexical query and a k-NN sub-query, fused by the search pipeline. */
+	buildHybridBody(
+		lexicalQuery: object,
+		slot: ReadySlot,
+		vector: number[],
+		eligibility: Eligibility,
+		size: number,
+	): object {
+		return {
+			size,
+			_source: {excludes: ["emb_*"]},
+			query: {hybrid: {queries: [lexicalQuery, this.knnClause(slot, vector, eligibility, HYBRID_K)]}},
+		}
+	}
+
+	/** Turn raw hits into results, resolving type names, space metadata and image URLs. */
+	private async mapHits(
+		hits: Array<{
+			_source: Record<string, unknown>
+			_score: number
+			fields?: Record<string, number[]>
+		}>,
+		mode: SearchMode,
+	): Promise<SearchResult[]> {
 		// Collect unique entity IDs for batch resolution
 		const allTypeEntityIds = new Set<string>()
 		const allSpaceTopicEntityIds = new Set<string>()
@@ -433,8 +665,15 @@ export class OpenSearchClient implements SearchClient {
 				// Compute relevanceScore and textMatchScore
 				const relevanceScore = hit._score
 				const scoreBoost = hit.fields?.score_boost?.[0]
+				// textMatchScore is a lexical notion; semanticScore is the k-NN similarity itself.
+				// Hybrid scores are min-max fused and carry neither.
 				const textMatchScore =
-					scoreBoost !== undefined ? Math.max(0, relevanceScore - scoreBoost) : relevanceScore
+					mode === "lexical"
+						? scoreBoost !== undefined
+							? Math.max(0, relevanceScore - scoreBoost)
+							: relevanceScore
+						: undefined
+				const semanticScore = mode === "semantic" ? relevanceScore : undefined
 
 				// Build enriched types array
 				const types: SearchResultType[] | undefined = typeIds?.length
@@ -471,17 +710,14 @@ export class OpenSearchClient implements SearchClient {
 					spaceScore: hit._source.space_score as number | undefined,
 					entitySpaceScore: hit._source.entity_space_score as number | undefined,
 					relevanceScore,
-					textMatchScore,
+					...(textMatchScore !== undefined && {textMatchScore}),
+					...(semanticScore !== undefined && {semanticScore}),
 					inCanonicalGraph: (hit._source.in_canonical_graph as boolean) ?? false,
 				}
 			},
 		)
 
-		return {
-			results,
-			total: typeof body.hits.total === "number" ? body.hits.total : (body.hits.total?.value ?? 0),
-			tookMs: body.took,
-		}
+		return results
 	}
 
 	/**

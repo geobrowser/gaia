@@ -548,7 +548,10 @@ endpoint reports degraded; nothing is skipped. Poison inputs cannot occur — th
 A service outage therefore stalls freshness, never correctness; the staleness bound is
 `poll interval + outage`, and `emb_<slot>_at` makes it observable per document.
 
-**Throughput controls.** `EMBED_BATCH_SIZE` (64 for `service`, 256 for `extraction_api`),
+**Throughput controls.** Measured on the PoC corpus: ≈ 150 docs/s end to end with everything on
+one machine, bounded by the serial page loop rather than the service (660 texts/s alone);
+pipelining the next page's embedding with the current page's bulk write is the first optimization
+to make when a backfill is on the critical path. `EMBED_BATCH_SIZE` (64 for `service`, 256 for `extraction_api`),
 `EMBED_CONCURRENCY` (2 in-flight batches), `EMBED_MAX_DOCS_PER_CYCLE` (bounds a cycle so follow
 mode never starves), `EMBED_RATE_LIMIT_TPS` (optional ceiling). Backfill and follow share one
 code path; a backfill is just a first run with a possibly different backend.
@@ -845,6 +848,15 @@ None of this is on the critical path for P0–P2.
 | P2 | `mode=hybrid` + pipeline; production rollout of P1+P2 | hybrid returns for the staging query set; production coverage complete; dashboards for cycle stats, service and query latency |
 | P3 rotation drill (staging) | bundle B with a different model (e.g. a Matryoshka-capable 2025 model at 256–768 d); service with two slots; parallel backfill; harness comparison; default flip; A retired | procedure documented in the runbook and executed once end to end |
 | P4 | widen scope beyond claims by type allowlist, driven by `list-slots` coverage and memory; if the backfill is large, bring up the extraction-api backend (External requirements) and run it descriptor-verified | per-slot RAM within cluster budget; a backfill completed through `extraction_api` with zero descriptor mismatches |
+
+**Status 2026-09-30:** steps 1–6 are implemented on `feat/semantic-search` and verified on the
+local stack end to end — the committed bundle served by `embedding-service`, the slot registered by
+`search-admin`, `indexed_at` stamped by search-indexer, 321,408 documents embedded by
+`embedding-indexer` through the real path (vectors identical to geo-lens's on identical text,
+cosine ≥ 0.999999), and `/search?mode=semantic|hybrid` answering with parity against geo-lens's
+own query route on ten queries (10/10 top-1). Details and numbers:
+`docs/benchmarks/semantic-search-poc.md`, "Step 4–6 follow-up". Not yet done: step 7 (k8s,
+compose, runbook), step 8 (harness), the rollout milestones, and step 9.
 
 The runtime half of P0 was completed on 2026-09-29 (see Spike results under the `embedding`
 crate): parity, throughput and static linking are measured facts, not assumptions. The k-NN half

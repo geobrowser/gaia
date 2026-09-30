@@ -18,6 +18,16 @@
 export type SearchScope = "GLOBAL" | "GLOBAL_BY_SPACE_SCORE" | "GLOBAL_BY_ENTITY_SPACE_SCORE" | "SPACE_SINGLE" | "SPACE"
 
 /**
+ * How results are retrieved and ranked.
+ *
+ * - lexical (default): the existing BM25-based query with score boosts
+ * - semantic: k-NN over the embedding slot; results carry `semanticScore` on the (1 + cos) / 2 scale
+ * - hybrid: lexical and k-NN fused server-side (min-max normalized, arithmetic mean); no `offset`
+ *   on OpenSearch 2.17
+ */
+export type SearchMode = "lexical" | "semantic" | "hybrid"
+
+/**
  * Search query parameters.
  */
 export interface SearchQuery {
@@ -61,6 +71,15 @@ export interface SearchQuery {
 	include_non_canonical?: boolean
 	/** Optional boost overrides for tuning search relevance. */
 	boosts?: BoostOverrides
+	/** Retrieval mode (default: lexical). */
+	mode?: SearchMode
+	/**
+	 * Minimum `semanticScore` for semantic/hybrid modes, on the slot's (1 + cos) / 2 scale.
+	 * Defaults to the slot's calibrated floor from its descriptor.
+	 */
+	min_score?: number
+	/** Embedding slot id (default: the index's default slot). Every response names the slot it used. */
+	slot?: string
 }
 
 /**
@@ -130,8 +149,10 @@ export interface SearchResult {
 	entitySpaceScore?: number
 	/** Final relevance score after all boosts (OpenSearch _score). */
 	relevanceScore?: number
-	/** Text matching score without score field boosts. */
+	/** Text matching score without score field boosts (lexical mode only). */
 	textMatchScore?: number
+	/** Cosine similarity to the query on the slot's (1 + cos) / 2 scale (semantic mode only). */
+	semanticScore?: number
 	/** Whether this entity's space is in the canonical graph. */
 	inCanonicalGraph: boolean
 }
@@ -146,6 +167,10 @@ export interface SearchResponse {
 	total: number
 	/** Time taken to execute the search in milliseconds. */
 	tookMs: number
+	/** Retrieval mode that produced these results. */
+	mode?: SearchMode
+	/** Embedding slot used (semantic and hybrid modes). */
+	embeddingSlot?: string
 }
 
 /**
@@ -153,6 +178,8 @@ export interface SearchResponse {
  */
 export enum SearchErrorType {
 	ValidationError = "ValidationError",
+	/** Semantic search cannot be served right now (no embedding-service, or no servable slot). */
+	Unavailable = "Unavailable",
 }
 
 /**
@@ -171,6 +198,10 @@ export class SearchError extends Error {
 
 	static validationError(message: string, details?: unknown): SearchError {
 		return new SearchError(SearchErrorType.ValidationError, message, details)
+	}
+
+	static unavailable(message: string, details?: unknown): SearchError {
+		return new SearchError(SearchErrorType.Unavailable, message, details)
 	}
 }
 

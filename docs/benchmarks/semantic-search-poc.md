@@ -101,3 +101,71 @@ P1 queries through `/search?mode=semantic` vs geo-lens `/query`) remains the P1 
    Python; see the design doc for the exact additions).
 4. `load.py`, `bench.py [n] [--forcemerge]`, `bench_radial.py`, `parity_store.py` from the geo-lens
    venv (needs `neo4j` and `httpx`, both geo-lens dependencies).
+
+---
+
+## Step 4–6 follow-up: the real path over the same corpus (2026-09-30)
+
+Same local stack, now through the components that will ship rather than a loader script:
+`embedding-service` (release build) → `embedding-indexer` (release build, `EMBED_ONCE`) → the
+API's `/search?mode=semantic|hybrid`. The slot is the committed bundle `79502860cd`, registered on
+the PoC index with `search-admin add-embedding-slot --index testnet_entities_poc`.
+
+### Backfill through the indexer
+
+| | |
+|---|---|
+| Documents | 321,408 (every named document; scope = all) |
+| Wall time | ≈ 35 min in `--once` mode, page 500, batch 128 |
+| Rate | ≈ 150 docs/s with OpenSearch, the service and the indexer sharing one laptop; the service alone did 660 texts/s on this machine, so the indexer's serial page loop (search → embed → bulk write) is the ceiling here, and pipelining pages is the obvious next step |
+| Interruptions | one: the Docker VM hit OpenSearch's flood-stage watermark mid-run (index read-only, 429s). The indexer classified it transient and, in `--once` mode, exited; it now retries transient errors with backoff instead. After freeing disk it resumed from its persisted cursor with no duplicate work |
+| Handover | `backfill_complete` → `follow` with the checkpoint at the backfill start; the first follow pass scanned 0 |
+| CAS no-ops | 0 (no text changed under the writer during the run) |
+
+### Vector parity with geo-lens, real path
+
+geo-lens's vectors were imported into the same documents (`emb_14a3531800c8`, text = name only).
+
+| Documents | n | min cos | p50 | max |
+|---|---|---|---|---|
+| name only (identical text) | 300 | **0.999999** | 1.000000 | 1.000000 |
+| name + description (template now includes the description) | 300 | 0.68 | 0.91 | 0.995 |
+
+The first row is the claim the design rests on: the shipped path — text template, service,
+indexer, index — reproduces geo-lens's vectors. The second row is the intended effect of the
+`name_description_v1` template, not drift.
+
+### Service-level parity (the P1 exit criterion)
+
+Ten natural-language queries through `GET /search?mode=semantic&limit=10&min_score=0` against the
+API, and the same texts through geo-lens `POST /caches/claims/query` (vector strategy) on its Neo4j
+mirror, both running locally:
+
+| | |
+|---|---|
+| Top-1 identical (id, or score within 0.002) | **10 / 10** |
+| Mean top score difference | 0.0000 |
+| Mean id overlap @10 | 0.95 (the rest are ties among duplicate claims and description-template documents) |
+
+### API behavior observed
+
+Semantic and hybrid answer with `mode` and `embeddingSlot`; `min_score` above the floor returns
+nothing when nothing qualifies; scope (`SPACE_SINGLE`) and `tag_ids` filters apply inside the k-NN
+clause; lexical mode is byte-for-byte the previous contract; hybrid with `offset` → 400, unknown
+slot → 400, unknown mode → 400, an id as query text → 400, no embedding service → 503
+`SEMANTIC_SEARCH_UNAVAILABLE`.
+
+### Latency after the backfill
+
+The backfill rewrote every document, leaving dozens of unmerged segments; Lucene walks one HNSW
+graph per segment, so semantic queries measured ≈ 440 ms server-side right after it (geo-lens's
+single Neo4j index: ≈ 50 ms). After `_forcemerge` to one segment (5.3 GB with both vector fields), the same ten queries:
+
+| | gaia `/search?mode=semantic` | geo-lens `/query` |
+|---|---|---|
+| server-side p50 | **22 ms** | 18 ms |
+| end-to-end HTTP, semantic (embed call + k-NN + type/space/image lookups) | 21–24 ms | — |
+| end-to-end HTTP, hybrid (lexical + k-NN, fused by the pipeline) | 29–62 ms | — |
+
+Operationally: a large backfill should be followed by a merge, or scheduled where the merge policy
+catches up, before latency is judged. Steady-state follow writes are small and merge normally.
