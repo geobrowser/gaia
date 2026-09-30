@@ -2283,6 +2283,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedding-indexer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum 0.7.9",
+ "chrono",
+ "clap",
+ "embedding",
+ "lru 0.18.3",
+ "opensearch",
+ "rand 0.8.5",
+ "reqwest",
+ "sdk",
+ "search-indexer-shared",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "embedding-service"
 version = "0.1.0"
 dependencies = [

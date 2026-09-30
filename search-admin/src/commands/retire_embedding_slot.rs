@@ -11,8 +11,12 @@ use crate::opensearch_client;
 #[derive(Args)]
 pub struct RetireEmbeddingSlotCommand {
     /// Index version to modify (default: the index the alias points to)
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "index")]
     version: Option<u32>,
+
+    /// Exact index name to act on (instead of --version or the alias)
+    #[arg(long)]
+    index: Option<String>,
 
     /// Slot id to retire
     slot: String,
@@ -21,7 +25,9 @@ pub struct RetireEmbeddingSlotCommand {
 impl RetireEmbeddingSlotCommand {
     pub async fn execute(&self, opensearch_url: &str, index_alias: &str) -> Result<()> {
         let client = opensearch_client::create_client(opensearch_url)?;
-        let index = index_meta::resolve_index(&client, index_alias, self.version).await?;
+        let index =
+            index_meta::resolve_index(&client, index_alias, self.version, self.index.as_deref())
+                .await?;
         let mappings = index_meta::get_mappings(&client, &index).await?;
         let meta = embedding_slots::meta_without_slot(
             index_meta::meta_of(&mappings).as_ref(),

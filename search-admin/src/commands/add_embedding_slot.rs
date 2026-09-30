@@ -16,8 +16,12 @@ use crate::opensearch_client;
 #[derive(Args)]
 pub struct AddEmbeddingSlotCommand {
     /// Index version to modify (default: the index the alias points to)
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "index")]
     version: Option<u32>,
+
+    /// Exact index name to act on (instead of --version or the alias)
+    #[arg(long)]
+    index: Option<String>,
 
     /// Descriptor file (a bundle.json)
     #[arg(long, conflicts_with_all = ["from_service", "slot"])]
@@ -80,7 +84,9 @@ impl AddEmbeddingSlotCommand {
         let slot = d.slot_id();
         let field = d.vector_field();
         let client = opensearch_client::create_client(opensearch_url)?;
-        let index = index_meta::resolve_index(&client, index_alias, self.version).await?;
+        let index =
+            index_meta::resolve_index(&client, index_alias, self.version, self.index.as_deref())
+                .await?;
 
         if !index_meta::knn_enabled(&client, &index).await? {
             bail!(

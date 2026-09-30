@@ -458,7 +458,19 @@ indexer its cursor. The search-indexer runs as a single-replica StatefulSet, so 
 stamps every document; the poller still uses an overlap window (below) so clock jitter or a
 future second replica cannot lose updates.
 
-## `embedding-indexer` (binary)
+## `embedding-indexer` (binary) — built in step 4
+
+Implemented as `embedding-indexer/` (2026-09-30): `config.rs` (env-driven), `scope.rs`
+(classification), `queries.rs` (query and script shapes, unit-tested), `store.rs` (OpenSearch:
+`_meta`, paged search, bulk scripted updates, the control document), `service.rs` (the
+embedding-service client with descriptor verification on every response), `engine.rs` (the loop),
+`health.rs`. Two details found while building it: (1) an in-process memory of recent writes
+(`doc id → text hash`) is needed because the follow pass can re-read a document inside the overlap
+window before OpenSearch refreshed, and would otherwise embed it twice on every backfill→follow
+handover; (2) the backfill query is `in-scope OR has emb_<slot>_src_hash`, so out-of-scope
+leftovers are cleaned without scanning every nameless id. The integration test
+(`tests/integration.rs`, gated on a live OpenSearch + service; CI runs it) drives backfill, a
+name change, an unchanged pass, a name unset, a scope change and a filtered k-NN query.
 
 **Purpose.** Maintain the invariant: for every in-scope document,
 `emb_<slot>` = embed(text_template(doc.name, doc.description)) and
@@ -554,7 +566,16 @@ OpenSearch p95), metrics tagged by `slot` and `backend`, Sentry via `hermes-inst
 no volume). CI: `embedding-indexer-check.yml` + `embedding-indexer-tests.yml`, and
 `dockerfile-bins.yml` already checks every crate ships its binaries.
 
-## API changes
+## API changes — built in steps 5 and 6
+
+Implemented 2026-09-30: `api/src/services/embedding/{client,slots}.ts` (service client; slot
+registry that marks a slot ready only when the index `_meta` and the service `/info` agree on the
+descriptor, compared as canonical JSON, refreshed on an interval), `OpenSearchClient.search`
+dispatching on `mode` with the lexical path unchanged, `buildEligibility` (one place for the
+filters the lexical builders apply per scope, with a test asserting parity), `buildSemanticBody`,
+`buildHybridBody`, and the route's `mode` / `min_score` / `slot` validation with
+`503 SEMANTIC_SEARCH_UNAVAILABLE`. `main.ts` enables the modes only when `EMBEDDING_SERVICE_URL`
+is set. `QUERY_ARCHITECTURE.md` documents both modes.
 
 `SearchQuery` (`api/src/services/search/types.ts`) gains:
 
@@ -869,7 +890,7 @@ foundation the deferred "beyond similarity" track needs.
 |---|---|
 | new lib crate | `embedding/` (descriptor, slot id, text template, `EmbeddingProvider`, `OnnxLocalProvider`, bundle loading) |
 | new service | `embedding-service/` (+ `Dockerfile` on `rust:1.92-trixie` / `debian:trixie-slim` baking `/models/<slot>/` via `bundle fetch`, `bundles/<name>/bundle.json`, `k8s/` Deployment / Service / HPA) |
-| new indexer | `embedding-indexer/` (+ `Dockerfile`, `k8s/`), `EmbedBackend` with `service` and `extraction_api`; bookworm is fine here since it links no ONNX runtime |
+| new indexer | `embedding-indexer/` (+ `Dockerfile` on bookworm, standalone build; `k8s/` in step 7). Backend `service` implemented; `extraction_api` reserved (refused at startup) — done in step 4 |
 | shared | `search-indexer-shared` unchanged; `search-admin` depends on `embedding` with `default-features = false` (descriptor + slot id only) |
 | mapping | `search-indexer-repository/src/opensearch/index_config.rs` |
 | stamp | `search-indexer-repository/src/opensearch/{provider,scripts,unset_document_properties}.rs` — done in step 3 |

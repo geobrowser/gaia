@@ -39,6 +39,8 @@ pub enum Error {
     UnknownTemplate(String),
     #[error("unsupported artifact source {0:?} (expected \"hf:<repo>@<revision>\")")]
     UnsupportedSource(String),
+    #[error("embedding slots: {0}")]
+    Slot(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

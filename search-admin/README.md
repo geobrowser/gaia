@@ -31,7 +31,8 @@ is static); `add-embedding-slot` refuses it and the fix is the next version plus
 | `list-slots [--version N] [--embedding-service <url>]` | slots, default, `index.knn`, vector coverage vs named live documents, and whether the service has each slot loaded with the same descriptor hash |
 | `ensure-search-pipeline` | creates/updates `<alias>_hybrid_minmax` (min-max normalization, arithmetic mean) for hybrid mode; idempotent |
 
-Without `--version` the commands act on the index the alias currently points to.
+Without `--version` the commands act on the index the alias currently points to; `--index NAME`
+names an exact index instead (a PoC or a not-yet-aliased version).
 
 Model rotation is: register slot B (`add-embedding-slot`), backfill it with a second
 embedding-indexer, compare on the harness, `set-default-slot B`, then `retire-embedding-slot A`

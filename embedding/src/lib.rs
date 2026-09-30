@@ -18,6 +18,7 @@ pub mod error;
 #[cfg(feature = "onnx")]
 pub mod onnx;
 pub mod provider;
+pub mod slots;
 pub mod template;
 
 pub use bundle::VerifiedBundle;

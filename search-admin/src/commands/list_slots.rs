@@ -11,8 +11,12 @@ use crate::opensearch_client;
 #[derive(Args)]
 pub struct ListSlotsCommand {
     /// Index version to inspect (default: the index the alias points to)
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with = "index")]
     version: Option<u32>,
+
+    /// Exact index name to act on (instead of --version or the alias)
+    #[arg(long)]
+    index: Option<String>,
 
     /// Compare against a running embedding-service, e.g. http://embedding-service:8080
     #[arg(long)]
@@ -22,11 +26,13 @@ pub struct ListSlotsCommand {
 impl ListSlotsCommand {
     pub async fn execute(&self, opensearch_url: &str, index_alias: &str) -> Result<()> {
         let client = opensearch_client::create_client(opensearch_url)?;
-        let index = index_meta::resolve_index(&client, index_alias, self.version).await?;
+        let index =
+            index_meta::resolve_index(&client, index_alias, self.version, self.index.as_deref())
+                .await?;
         let knn = index_meta::knn_enabled(&client, &index).await?;
         let mappings = index_meta::get_mappings(&client, &index).await?;
         let meta = index_meta::meta_of(&mappings).unwrap_or(json!({}));
-        let slots = embedding_slots::slots(&meta)?;
+        let (slots, broken) = embedding_slots::slots_lenient(&meta);
         let default = embedding_slots::default_slot(&meta);
 
         let total =
@@ -98,6 +104,14 @@ impl ListSlotsCommand {
             );
         }
         println!("\n(* = default)");
+        for (id, why) in &broken {
+            println!("! {id}  BROKEN _meta entry — {why}");
+        }
+        if !broken.is_empty() {
+            println!(
+                "  A broken entry means the index claims a slot nobody can serve; retire it or fix _meta."
+            );
+        }
         Ok(())
     }
 }

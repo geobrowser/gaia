@@ -1,0 +1,37 @@
+[package]
+name = "embedding-indexer"
+version = "0.1.0"
+edition = "2024"
+description = "Keeps emb_<slot> on every in-scope search document equal to the embedding of its current text, by polling the search index and calling embedding-service"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "embedding-indexer"
+path = "src/main.rs"
+
+[dependencies]
+# Descriptor, slot field names and the text template only — no ONNX runtime in this binary.
+embedding = { path = "../embedding", default-features = false }
+search-indexer-shared = { path = "../search-indexer-shared" }
+sdk = { path = "../sdk" }
+
+opensearch = "2.3.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+axum = "0.7"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+clap = { version = "4", features = ["derive", "env"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+uuid = "1"
+lru = "0.18"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+url = "2"
+
+[dev-dependencies]
+rand = "0.8"

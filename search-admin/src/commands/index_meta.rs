@@ -8,12 +8,20 @@ use tracing::info;
 
 use crate::commands::get;
 
-/// `--version N` → `<alias>_vN` (must exist); no version → the single index behind the alias.
+/// `--index NAME` → that index (must exist); `--version N` → `<alias>_vN` (must exist); neither →
+/// the single index behind the alias.
 pub async fn resolve_index(
     client: &OpenSearch,
     index_alias: &str,
     version: Option<u32>,
+    index: Option<&str>,
 ) -> Result<String> {
+    if let Some(name) = index {
+        if !get::index_exists(client, name).await? {
+            bail!("index {name} does not exist");
+        }
+        return Ok(name.to_string());
+    }
     if let Some(v) = version {
         let name = format!("{index_alias}_v{v}");
         if !get::index_exists(client, &name).await? {
