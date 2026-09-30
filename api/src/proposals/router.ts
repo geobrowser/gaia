@@ -237,6 +237,8 @@ function computeResponseFields(proposal: ProposalWithVotes | ProposalListItem, n
 			timeRemaining,
 			isVotingEnded,
 		},
+		// `computeProposalStatus` already downgrades a proposal whose `executeBy`
+		// window has closed to REJECTED, so this honours the contract's deadline.
 		canExecute: status === "EXECUTABLE",
 	}
 }

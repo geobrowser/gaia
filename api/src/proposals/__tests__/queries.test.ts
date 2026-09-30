@@ -268,6 +268,59 @@ describe("GET /proposals/space/:spaceId/status", () => {
 			expect(body.proposals[0].executeBy).toBeNull()
 		})
 
+		it("reports canExecute false and REJECTED once execute_by has passed", async () => {
+			// Proposal 995f9dda… on testnet: slow, passed its vote, never executed,
+			// execute_by 2026-08-23. On chain `canExecuteProposal` is false.
+			const now = Math.floor(Date.now() / 1000)
+			const row = makeDbProposalRow({
+				voting_mode: "Slow",
+				threshold: "5100000",
+				quorum: "1",
+				yes_count: "1",
+				start_time: String(now - 90 * 86_400),
+				end_time: String(now - 89 * 86_400),
+				execute_by: String(now - 82 * 86_400),
+			})
+			db.execute.mockResolvedValueOnce({rows: [row]})
+
+			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status")
+
+			const body = await res.json()
+			expect(body.proposals[0].status).toBe("REJECTED")
+			expect(body.proposals[0].canExecute).toBe(false)
+			expect(body.proposals[0].threshold.reached).toBe(true)
+		})
+
+		it("reports canExecute true while execute_by is still ahead", async () => {
+			const now = Math.floor(Date.now() / 1000)
+			const row = makeDbProposalRow({
+				voting_mode: "Slow",
+				threshold: "5100000",
+				quorum: "1",
+				yes_count: "1",
+				end_time: String(now - 10),
+				execute_by: String(now + 86_400),
+			})
+			db.execute.mockResolvedValueOnce({rows: [row]})
+
+			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status")
+
+			const body = await res.json()
+			expect(body.proposals[0].status).toBe("EXECUTABLE")
+			expect(body.proposals[0].canExecute).toBe(true)
+		})
+
+		it("treats execute_by = 0 as no window when computing canExecute", async () => {
+			const row = makeDbProposalRow({voting_mode: "Fast", threshold: "1", yes_count: "1", execute_by: "0"})
+			db.execute.mockResolvedValueOnce({rows: [row]})
+
+			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status")
+
+			const body = await res.json()
+			expect(body.proposals[0].status).toBe("EXECUTABLE")
+			expect(body.proposals[0].canExecute).toBe(true)
+		})
+
 		it("reports voting as not ended when the window has not started (end_time = 0)", async () => {
 			// V2: window is unset until the first vote. It has neither started nor
 			// ended, so isVotingEnded must be false and timeRemaining null (not a
@@ -728,14 +781,12 @@ describe("SQL/TypeScript status parity", () => {
 		})
 	})
 
-	describe("execute_by deadline does not override a resolved vote outcome", () => {
-		// Mirrors sqlIsExecutable/sqlIsRejected: execute_by only downgrades a
-		// proposal that's still vote-undecided (sqlVoteOutcomeUndecided) to
-		// REJECTED — it must never override an outcome the votes already
-		// resolved. This is the real-world shape of every migrated historical
-		// proposal, where execute_by is synthesized from long-past timestamps
-		// and is always already expired by the time anyone looks at it.
-		it("stays EXECUTABLE past execute_by when the fast-path threshold was met", () => {
+	describe("execute_by deadline closes the execution window", () => {
+		// Mirrors sqlExecutionWindowClosed: once `now > execute_by` (with
+		// execute_by > 0) sqlIsExecutable and sqlIsProposed are false and
+		// sqlIsRejected is true, whatever the votes say — the contract's
+		// `canExecuteProposal` is false from then on (GEO-2609).
+		it("REJECTS past execute_by even when the fast-path threshold was met", () => {
 			const proposal = makeProposal({
 				votingMode: "Fast",
 				threshold: 3n,
@@ -744,7 +795,7 @@ describe("SQL/TypeScript status parity", () => {
 				endTime: now + 3600n,
 			})
 			const result = computeProposalStatus(proposal, now)
-			expect(result.status).toBe("EXECUTABLE")
+			expect(result.status).toBe("REJECTED")
 		})
 
 		it("REJECTS past execute_by when still vote-undecided", () => {
@@ -757,6 +808,17 @@ describe("SQL/TypeScript status parity", () => {
 			})
 			const result = computeProposalStatus(proposal, now)
 			expect(result.status).toBe("REJECTED")
+		})
+
+		it("ignores execute_by = 0 (no window set yet)", () => {
+			const proposal = makeProposal({
+				votingMode: "Fast",
+				threshold: 3n,
+				yesCount: 100n,
+				executeBy: 0n,
+				endTime: now + 3600n,
+			})
+			expect(computeProposalStatus(proposal, now).status).toBe("EXECUTABLE")
 		})
 	})
 

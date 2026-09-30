@@ -358,9 +358,10 @@ function sqlIsAccepted() {
  *   - Slow late:  voting ended AND quorum met
  *                 AND (RATIO_BASE - partial) * yes > partial * no
  *
- * Deliberately does NOT gate on `execute_by` — see the note on `sqlIsRejected`
- * for why the deadline must never override an outcome the votes already
- * resolved.
+ * DOES gate on `execute_by` (see `sqlExecutionWindowClosed`): once the
+ * contract's execution window has closed, `canExecuteProposal` is false, so a
+ * proposal that passed its vote but was never executed is REJECTED, not
+ * EXECUTABLE.
  *
  * DOES gate on `unexecutable_at`: a proposal verified absent from its DAO can
  * never execute no matter what the stored votes say, so it must not be offered
@@ -371,6 +372,7 @@ function sqlIsExecutable(nowSeconds: bigint) {
 		p.executed_at IS NULL
 		AND p.unexecutable_at IS NULL
 		AND p.end_time > 0
+		AND NOT ${sqlExecutionWindowClosed(nowSeconds)}
 		AND (
 			(p.voting_mode = 'Fast' AND p.yes_count > (CASE WHEN p.flat_support_threshold = 0 THEN 0 ELSE p.flat_support_threshold - 1 END))
 			OR (
@@ -394,11 +396,23 @@ function sqlIsExecutable(nowSeconds: bigint) {
 }
 
 /**
+ * The contract's execution window has closed: `block.timestamp > executeBy`,
+ * as `canExecuteProposal` checks it. A NULL or zero `execute_by` means no
+ * window has been set yet (V2 leaves it at zero until the first vote), so it
+ * is never closed. COALESCE keeps the result a strict boolean, so `NOT` of it
+ * never turns into NULL and silently drops the row. Mirrors
+ * `isExecutionWindowClosed` in `status.ts`.
+ */
+function sqlExecutionWindowClosed(nowSeconds: bigint) {
+	return sql`(COALESCE(p.execute_by, 0) > 0 AND ${nowSeconds}::bigint > p.execute_by)`
+}
+
+/**
  * Vote-based "still undecided" condition, independent of the `execute_by`
  * deadline: either the voting window hasn't started yet (end_time = 0 —
  * open, awaiting the first vote) or voting is ongoing with no executable
- * path matched yet. Shared by `sqlIsProposed` and `sqlIsRejected` so the two
- * stay in sync by construction.
+ * path matched yet. Used by `sqlIsProposed`; the deadline is applied there
+ * (see `sqlExecutionWindowClosed`).
  */
 function sqlVoteOutcomeUndecided(nowSeconds: bigint) {
 	return sql`(
@@ -432,7 +446,7 @@ function sqlIsProposed(nowSeconds: bigint) {
 		p.executed_at IS NULL
 		AND p.unexecutable_at IS NULL
 		AND ${sqlVoteOutcomeUndecided(nowSeconds)}
-		AND (p.execute_by IS NULL OR ${nowSeconds}::bigint <= p.execute_by)
+		AND NOT ${sqlExecutionWindowClosed(nowSeconds)}
 	)`
 }
 
@@ -445,19 +459,12 @@ function sqlIsProposed(nowSeconds: bigint) {
  *     without any executable path matching, regardless of `execute_by` — a
  *     proposal that lost its vote is rejected whether or not its deadline
  *     also happened to pass, OR
- *   - it's still vote-undecided (see `sqlVoteOutcomeUndecided`) AND the
- *     `execute_by` deadline has passed — an open proposal that never got
- *     resolved lapses once its execution window closes.
- * A zero window (end_time = 0) is never rejected by the first branch — the
+ *   - the execution window has closed (see `sqlExecutionWindowClosed`),
+ *     whatever the votes say: an undecided proposal lapses, and one that
+ *     passed but was never executed can no longer be (GEO-2609).
+ * A zero window (end_time = 0) is never rejected by the vote branch — the
  * proposal is still open (see `sqlIsProposed`) unless it lapses via the
- * second branch.
- *
- * `execute_by` deliberately never overrides an outcome that already resolved
- * to EXECUTABLE via the vote-count conditions (see `sqlIsExecutable`) — it
- * only closes out proposals that were still undecided. This matters for
- * historical/migrated proposals, where `execute_by` is synthesized from
- * long-past timestamps and will always appear expired by the time anyone
- * looks at it.
+ * window branch.
  */
 function sqlIsRejected(nowSeconds: bigint) {
 	return sql`(
@@ -476,11 +483,7 @@ function sqlIsRejected(nowSeconds: bigint) {
 					)
 				)
 			)
-			OR (
-				${sqlVoteOutcomeUndecided(nowSeconds)}
-				AND p.execute_by IS NOT NULL
-				AND ${nowSeconds}::bigint > p.execute_by
-			)
+			OR ${sqlExecutionWindowClosed(nowSeconds)}
 		)
 	)`
 }

@@ -32,15 +32,22 @@ import {RATIO_BASE} from "./types"
  *    `yesCount >= ceil(universalPercentageSupportThreshold × totalEditors / RATIO_BASE)`.
  * 5. Slow-path late execution (after voting ends): quorum + the classic
  *    `(RATIO_BASE - partial) × yes > partial × no` ratio.
- * 6. Past `executeBy` deadline → downgrades an otherwise-still-undecided
- *    (PROPOSED) outcome to REJECTED. Deliberately does NOT override an
- *    outcome that already resolved to EXECUTABLE (or REJECTED by vote) —
- *    `executeBy` means "this open proposal lapsed without a decision," not
- *    "ignore what the votes say." This matters for historical/migrated
- *    proposals, where `executeBy` is synthesized from long-past timestamps
- *    and will always appear expired by the time anyone looks at it; treating
- *    it as an unconditional override would make every migrated proposal that
- *    actually passed its vote display as REJECTED.
+ * 6. Past the `executeBy` deadline (`executeBy > 0 && now > executeBy`) →
+ *    REJECTED for anything not already ACCEPTED, including an outcome the
+ *    votes resolved to EXECUTABLE. The contract's `canExecuteProposal` checks
+ *    `block.timestamp > executeBy` and returns false from then on, so a passed
+ *    but unexecuted proposal can never be executed, and reporting it as
+ *    EXECUTABLE (with `canExecute: true`) promises an action that always
+ *    reverts. A zero or null `executeBy` means no window has been set yet (V2
+ *    leaves it zero until the first vote) and never closes anything.
+ *
+ *    This used to spare EXECUTABLE outcomes, because migrated proposals carry
+ *    a synthesized, long-expired `executeBy` and 58% of them would have read
+ *    REJECTED. That population now reads ACCEPTED (the kg-indexer infers the
+ *    fast-path `executed_at`) or REJECTED (`unexecutableAt`): on 2026-09-30
+ *    only 2 proposals across all 1,425 spaces reported EXECUTABLE, and both
+ *    were past `executeBy`. The exemption was only keeping dead proposals
+ *    looking executable (GEO-2609).
  *
  * Must stay byte-for-byte consistent with the SQL fragments in `queries.ts`
  * (`sqlIsExecutable` / `sqlIsProposed` / `sqlIsRejected`). The parity tests
@@ -80,19 +87,31 @@ export function computeProposalStatus(
 
 	const result = computeVoteBasedStatus(proposal, nowSeconds)
 
-	// Past the on-chain `executeBy` deadline: only downgrades a proposal that's
-	// still genuinely undecided (PROPOSED) to REJECTED. See the deadline note
-	// above for why this must not override an already-resolved outcome.
-	if (result.status === "PROPOSED" && proposal.executeBy !== null && nowSeconds > proposal.executeBy) {
+	// Past the on-chain `executeBy` deadline nothing can execute any more, so
+	// both a still-undecided and a passed-but-unexecuted proposal lapse to
+	// REJECTED. The quorum/threshold flags keep describing the votes; only the
+	// status (and so `canExecute`) reflects the closed window.
+	if (result.status !== "REJECTED" && isExecutionWindowClosed(proposal.executeBy, nowSeconds)) {
 		return {
 			status: "REJECTED",
 			isQuorumReached: result.isQuorumReached,
-			isThresholdReached: false,
+			isThresholdReached: result.status === "EXECUTABLE" ? result.isThresholdReached : false,
 			isEarlyExecutable: false,
 		}
 	}
 
 	return result
+}
+
+/**
+ * True once the contract's execution window has closed: it mirrors
+ * `canExecuteProposal`'s `block.timestamp > executeBy`. A null or zero
+ * `executeBy` means the window has not been set yet (V2 leaves it at zero
+ * until the first vote), so it is never closed. Must match
+ * `sqlExecutionWindowClosed` in `queries.ts`.
+ */
+export function isExecutionWindowClosed(executeBy: bigint | null, nowSeconds: bigint): boolean {
+	return executeBy !== null && executeBy > 0n && nowSeconds > executeBy
 }
 
 function computeVoteBasedStatus(
