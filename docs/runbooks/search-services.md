@@ -155,10 +155,32 @@ For one-off ops (create-only, list, delete-old, alias-only), use the per-command
 - Defaults to know:
   - `SCORE_BOOST = 75` (PR #528)
   - unscored entities sit at `0.08` (PR #559)
+  - scores are clamped to [0, 1] before boosting. `entity_global_score` is a sum over an entity's spaces and can exceed 1 (GEO-3108)
   - `Comment` type excluded by default (PR #532)
   - `include_non_canonical` defaults to `true` (PR #530)
   - canonical-graph filter applied by default (PR #527)
 - "I searched a UUID and got nothing" → the UUID fast path does a `term` lookup on `entity_id`. If the entity isn't in the index at all, that's an indexing problem, not a query problem.
+
+### No document has `entity_global_score` (search ignores entity quality)
+
+Scores reach the index only through Kafka: scoring-service's `scoring-service` CronJob (daily 03:00 UTC, ~66 min) writes `global_scores` / `local_scores` / `space_scores` to Postgres **and** publishes the same scores as `HermesScoresBatch` messages to `<ENVIRONMENT>.curation.scores`; search-indexer's scores consumer reads that topic. The managed Kafka cluster has `AutoCreateTopicsEnable=false`, so the topic must be created by hand. It was missing on `geo-testnet-kafka` until GEO-3108, and every run delivered 0 of ~3,000 messages while the Job reported success.
+
+Check, in order:
+
+```bash
+doctl databases topics list <kafka-cluster-id> | grep curation.scores   # topic exists?
+kubectl -n gaia logs job/<latest scoring-service job> | tail -5          # delivered count
+kubectl -n gaia logs search-indexer-0 | grep -i "curation.scores"        # "Subscribed topic not available" = missing topic
+```
+
+Since GEO-3108 a run that fails to deliver exits 3 and the Job fails without retrying (`podFailurePolicy`), so `KubeJobFailed` fires. To create the topic (one partition keeps a run's batches in order; the consumer is a single replica):
+
+```bash
+doctl databases topics create <kafka-cluster-id> testnet.curation.scores \
+  --partition-count 1 --replication-factor 2
+```
+
+The backfill is just the next run. The consumer group has no committed offset and starts from `earliest`, so it picks up the first run after the topic exists. To avoid waiting for 03:00, run `kubectl -n gaia create job --from=cronjob/scoring-service scoring-service-manual-<date>`. Expect a burst of about 5M partial document updates through the shared loader (every doc gets `entity_global_score` and `space_score`; perspective scores set `entity_space_score`). See the note on loader contention above.
 
 ### `additional_space_ids` looks wrong
 

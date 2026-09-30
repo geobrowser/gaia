@@ -9,9 +9,22 @@ spec:
   jobTemplate:
     spec:
       ttlSecondsAfterFinished: 86400 # clear finished runs after a day, so a stale failure stops firing KubeJobFailed
+      # A run takes ~66 min. Retry other failures (e.g. a dropped DB connection) twice, but
+      # fail the Job at once on exit 3: scores were computed and written to Postgres but not
+      # delivered to Kafka, and a rerun would recompute for another hour to fail the same
+      # way (GEO-3108: the topic was missing and every night "succeeded" with 0 delivered).
+      # podFailurePolicy requires restartPolicy: Never.
+      backoffLimit: 2
+      podFailurePolicy:
+        rules:
+          - action: FailJob
+            onExitCodes:
+              containerName: scoring-service
+              operator: In
+              values: [3]
       template:
         spec:
-          restartPolicy: OnFailure
+          restartPolicy: Never
           imagePullSecrets:
             - name: geo
           containers:

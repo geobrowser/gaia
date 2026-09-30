@@ -20,6 +20,16 @@ from src.scoring_data_writer import ScoringDataWriter
 
 logger = logging.getLogger(__name__)
 
+# Exit code for a run whose scores were computed (and written to Postgres, in "all" mode)
+# but not delivered to Kafka. Distinct from 1 so the CronJob's podFailurePolicy can fail
+# the Job at once: re-running recomputes for an hour and fails the same way, because the
+# usual cause is a missing topic, not a transient broker error.
+KAFKA_DELIVERY_EXIT_CODE = 3
+
+
+class KafkaDeliveryError(RuntimeError):
+    """Scores were emitted but some or all Kafka messages were not delivered."""
+
 
 class OutputMode(Enum):
     """Output mode for the scoring pipeline."""
@@ -196,19 +206,22 @@ class ScoringPipeline:
                 logger.info("Emitting scores to Kafka")
                 self._emitter.emit_all(entities, spaces)
                 remaining = self._emitter.flush()
+                produced = self._emitter.messages_produced
+                errors = self._emitter.delivery_errors
 
-                if remaining > 0:
-                    logger.warning("Some Kafka messages may not have been delivered: %d remaining", remaining)
-                else:
-                    logger.info(
-                        "Scores emitted to Kafka successfully: %d messages, %d errors",
-                        self._emitter.messages_produced,
-                        self._emitter.delivery_errors,
-                        extra={
-                            "kafka_messages_produced": self._emitter.messages_produced,
-                            "kafka_delivery_errors": self._emitter.delivery_errors,
-                        },
+                # Until GEO-3108 this logged "emitted successfully: 0 messages, 3044 errors"
+                # and exited 0 every night, because the topic did not exist. Search then
+                # never received a score, and nothing alerted.
+                if remaining > 0 or errors > 0:
+                    raise KafkaDeliveryError(
+                        f"Kafka delivery failed: {produced} delivered, {errors} failed, "
+                        f"{remaining} undelivered at flush"
                     )
+                logger.info(
+                    "Scores emitted to Kafka successfully: %d messages",
+                    produced,
+                    extra={"kafka_messages_produced": produced, "kafka_delivery_errors": 0},
+                )
 
 
 def main() -> None:
@@ -333,6 +346,11 @@ def main() -> None:
                 "space_count": space_count,
             },
         )
+    except KafkaDeliveryError:
+        sentry_sdk.set_tag("pipeline.status", "kafka_delivery_failed")
+        sentry_sdk.set_tag("output_mode", output_mode.value)
+        logger.exception("Scoring pipeline computed scores but did not deliver them to Kafka")
+        sys.exit(KAFKA_DELIVERY_EXIT_CODE)
     except Exception:
         # Add error context to Sentry
         sentry_sdk.set_tag("pipeline.status", "error")

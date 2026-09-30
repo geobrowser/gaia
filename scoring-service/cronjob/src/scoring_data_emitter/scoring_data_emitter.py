@@ -11,6 +11,11 @@ from src.pb import HermesScoresBatch
 
 logger = logging.getLogger(__name__)
 
+# How many individual delivery failures are logged at ERROR before the rest are only
+# counted. A missing topic fails every batch (3,044 a night on testnet), and each ERROR
+# line becomes a Sentry event; the count is reported once at flush either way.
+MAX_LOGGED_DELIVERY_ERRORS = 5
+
 
 class ScoringDataEmitter:
     """Publishes calculated scores to Kafka using protobuf serialization."""
@@ -77,8 +82,13 @@ class ScoringDataEmitter:
     def _delivery_callback(self, err: Exception | None, msg: object) -> None:
         """Callback for message delivery reports."""
         if err is not None:
-            logger.error(f"Message delivery failed: {err}")
             self._delivery_errors += 1
+            if self._delivery_errors < MAX_LOGGED_DELIVERY_ERRORS:
+                logger.error(f"Message delivery failed: {err}")
+            elif self._delivery_errors == MAX_LOGGED_DELIVERY_ERRORS:
+                logger.error(
+                    f"Message delivery failed: {err} (further failures are counted, not logged)"
+                )
         else:
             self._messages_produced += 1
 

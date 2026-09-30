@@ -57,6 +57,17 @@ export const DEFAULT_AVERAGE_SCORE = 0.08
 export const MIN_SCORE_THRESHOLD = 0.0
 
 /**
+ * Maximum score used for search boosting; anything above is clamped to it.
+ *
+ * `space_score` and `entity_space_score` are in [0, 1], but scoring-service's
+ * `entity_global_score` is a sum over the entity's spaces (normalized perspective score x
+ * space score), so an entity present in many spaces exceeds 1: 652 of 1,532,522 entities
+ * on testnet (2026-09-30), up to 5.13. Unclamped, that is a boost of up to 460 against
+ * REAL_MATCH_BOOST = 100, and the fuzzy floor stops holding (GEO-3108).
+ */
+export const MAX_SCORE_THRESHOLD = 1.0
+
+/**
  * Score shift value to ensure all scores are positive.
  * With scores in [0, 1], a shift of 1 ensures the minimum boost is
  * always positive: (0 + 1) * SCORE_BOOST > 0.
@@ -1500,7 +1511,7 @@ export class OpenSearchClient implements SearchClient {
 			def scoreValue = doc.containsKey('${scoreField}') && !doc['${scoreField}'].empty
 				? doc['${scoreField}'].value
 				: ${DEFAULT_AVERAGE_SCORE};
-			def clampedScore = Math.max(scoreValue, ${MIN_SCORE_THRESHOLD});
+			def clampedScore = Math.min(Math.max(scoreValue, ${MIN_SCORE_THRESHOLD}), ${MAX_SCORE_THRESHOLD});
 			return (clampedScore + ${SCORE_SHIFT}) * ${scoreBoost};
 		`
 	}
@@ -1539,8 +1550,8 @@ export class OpenSearchClient implements SearchClient {
 	 * Strategy:
 	 * 1. Read both entity_space_score and space_score (default to 0 if missing)
 	 * 2. Multiply them together
-	 * 3. Clamp at MIN_SCORE_THRESHOLD (-10) to limit extreme outliers
-	 * 4. Shift by SCORE_SHIFT (10) to ensure positive values
+	 * 3. Clamp to [MIN_SCORE_THRESHOLD, MAX_SCORE_THRESHOLD] ([0, 1])
+	 * 4. Shift by SCORE_SHIFT (1) to ensure positive values
 	 * 5. Apply SCORE_BOOST multiplier
 	 */
 	buildGlobalByEntitySpaceBoost(): object {
@@ -1555,7 +1566,7 @@ export class OpenSearchClient implements SearchClient {
 							? doc['space_score'].value
 							: ${DEFAULT_AVERAGE_SCORE};
 						def product = entitySpaceScore * spaceScore;
-						def clampedScore = Math.max(product, ${MIN_SCORE_THRESHOLD});
+						def clampedScore = Math.min(Math.max(product, ${MIN_SCORE_THRESHOLD}), ${MAX_SCORE_THRESHOLD});
 						return (clampedScore + ${SCORE_SHIFT}) * ${SCORE_BOOST};
 					`,
 				},
