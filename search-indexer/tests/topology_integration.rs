@@ -720,6 +720,7 @@ async fn test_topology_entities_get_canonical_flag() {
         relation_id: None,
         relation_type: None,
         to_entity_id: None,
+        block_number: None,
     };
 
     let non_canonical_entity = EntityEvent {
@@ -735,6 +736,7 @@ async fn test_topology_entities_get_canonical_flag() {
         relation_id: None,
         relation_type: None,
         to_entity_id: None,
+        block_number: None,
     };
 
     let events = vec![canonical_entity, non_canonical_entity];

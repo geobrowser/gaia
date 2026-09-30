@@ -452,6 +452,9 @@ impl RelationMap {
 
     /// Rebuild the SQLite database from a Postgres connection pool.
     /// Uses cursor-based pagination to avoid loading the entire table into memory.
+    ///
+    /// Maps each relation to `from_entity_id`, the entity whose document holds it.
+    /// `relations.entity_id` is the relation's own reified entity, which has no document.
     pub async fn rebuild_from_postgres(
         &self,
         pool: &sqlx::PgPool,
@@ -467,7 +470,7 @@ impl RelationMap {
             let rows: Vec<(Uuid, Uuid, Uuid)> = match last_id {
                 None => {
                     sqlx::query_as(
-                        "SELECT id, entity_id, space_id FROM relations ORDER BY id LIMIT $1",
+                        "SELECT id, from_entity_id, space_id FROM relations ORDER BY id LIMIT $1",
                     )
                     .bind(BATCH_SIZE)
                     .fetch_all(pool)
@@ -475,7 +478,7 @@ impl RelationMap {
                 }
                 Some(cursor) => {
                     sqlx::query_as(
-                        "SELECT id, entity_id, space_id FROM relations WHERE id > $1 ORDER BY id LIMIT $2",
+                        "SELECT id, from_entity_id, space_id FROM relations WHERE id > $1 ORDER BY id LIMIT $2",
                     )
                     .bind(cursor)
                     .bind(BATCH_SIZE)

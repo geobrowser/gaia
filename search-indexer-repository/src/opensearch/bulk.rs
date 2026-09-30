@@ -275,7 +275,8 @@ pub fn parse_bulk_response(
                     || meta.operation_type == "UpdateEntitySpaceScore"
                     || meta.operation_type == "UpdateSpaceTopicEntityIdByDoc"
                     || meta.operation_type == "ClearSpaceTopicEntityIdByDoc"
-                    || meta.operation_type == "UpdateInCanonicalGraphByDoc");
+                    || meta.operation_type == "UpdateInCanonicalGraphByDoc"
+                    || meta.operation_type == "RetireEmptyDoc");
             let is_success = (200..300).contains(&(status as u16)) || is_not_found_ok;
 
             if is_success {
@@ -327,5 +328,49 @@ pub fn parse_bulk_response(
         results,
         wall_ms: 0,
         took_ms: 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn meta(operation_type: &str) -> BulkOperationMeta {
+        BulkOperationMeta {
+            entity_id: "doc".to_string(),
+            space_id: String::new(),
+            operation_type: operation_type.to_string(),
+        }
+    }
+
+    #[test]
+    fn retiring_a_missing_doc_is_not_a_failure() {
+        // A doc that is already gone is the outcome a retirement wants. Counting the 404 as a
+        // failure would NACK the batch and shut the indexer down.
+        let body = json!({ "items": [
+            { "update": { "_id": "a", "status": 404,
+                          "error": { "type": "document_missing_exception" } } },
+            { "update": { "_id": "b", "status": 200, "result": "deleted" } },
+            { "update": { "_id": "c", "status": 200, "result": "noop" } }
+        ]});
+        let metas = [
+            meta("RetireEmptyDoc"),
+            meta("RetireEmptyDoc"),
+            meta("RetireEmptyDoc"),
+        ];
+        let summary = parse_bulk_response(&body, &metas, BulkAction::Update);
+        assert_eq!(summary.succeeded, 3);
+        assert_eq!(summary.failed, 0);
+    }
+
+    #[test]
+    fn a_404_on_an_upsert_is_still_a_failure() {
+        let body = json!({ "items": [
+            { "update": { "_id": "a", "status": 404,
+                          "error": { "reason": "missing" } } }
+        ]});
+        let summary = parse_bulk_response(&body, &[meta("Update")], BulkAction::Update);
+        assert_eq!(summary.failed, 1);
     }
 }

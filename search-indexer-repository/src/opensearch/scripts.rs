@@ -35,6 +35,31 @@ pub const REMOVE_RELATION_SCRIPT: &str = r#"
     }
 "#;
 
+/// Delete a per-space document whose entity has nothing left in the space (GEO-2548).
+///
+/// The caller has already confirmed in Postgres that the entity has no value and no
+/// outgoing relation in the space. Two kinds of document are kept anyway, exactly as
+/// `search-admin reconcile-orphans` keeps them:
+///
+/// - tombstones (`deleted: true`), which record a `DeleteEntity` that kg-indexer does not
+///   apply, so Postgres cannot speak for them, and which `/search` already hides;
+/// - space-topic stubs (`space_topic_entity_id == entity_id`), which search-indexer writes
+///   from `space.topics` with no edit behind them.
+///
+/// Deleting rather than tombstoning is deliberate: a tombstone dominates every later
+/// update, so an entity that gains a value in the space again would stay hidden. After a
+/// delete, the next upsert simply recreates the document.
+pub const RETIRE_EMPTY_DOC_SCRIPT: &str = r#"
+    if (ctx._source.deleted == true) {
+        ctx.op = 'noop';
+    } else if (ctx._source.space_topic_entity_id != null
+            && ctx._source.space_topic_entity_id == ctx._source.entity_id) {
+        ctx.op = 'noop';
+    } else {
+        ctx.op = 'delete';
+    }
+"#;
+
 /// Script for updating document fields with tombstone dominance.
 /// If entity is deleted, the update is ignored (noop) unless the update explicitly sets the deleted field
 /// (either to true for re-delete or false for restore).
