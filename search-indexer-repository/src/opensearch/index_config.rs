@@ -189,6 +189,9 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
                 "space_topic_entity_id": {
                     "type": "keyword"
                 },
+                // Last *content* write: name, description, images, relations, the soft-delete
+                // flag, and unsets. Enrichment writes (scores, space topic, canonical flag) do
+                // not stamp it. The embedding-indexer polls on this field.
                 "indexed_at": {
                     "type": "date"
                 },

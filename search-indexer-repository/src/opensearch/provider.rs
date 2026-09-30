@@ -25,7 +25,7 @@ use crate::opensearch::scripts::{
     ADD_RELATION_SCRIPT, REMOVE_RELATION_SCRIPT, UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
 };
 
-use crate::opensearch::unset_document_properties::create_unset_properties_script;
+use crate::opensearch::unset_document_properties::create_unset_properties_script_stamped;
 use crate::types::{
     BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
     UnsetEntityPropertiesRequest, UpdateEntityRequest,
@@ -306,8 +306,35 @@ impl OpenSearchProvider {
         }
     }
 
+    /// RFC 3339 UTC timestamp (millisecond precision) for `indexed_at`.
+    pub(crate) fn now_rfc3339() -> String {
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    }
+
+    /// Whether a request writes the document's *content*: the fields that come from the edit
+    /// stream (name, description, images, the soft-delete flag). Enrichment writes — scores,
+    /// the space topic, the canonical flag — are not content. Only content writes stamp
+    /// `indexed_at`, so the embedding-indexer, which polls on it, sees exactly the changes that
+    /// can alter what is embedded or whether a document should be.
+    fn is_content_write(request: &UpdateEntityRequest) -> bool {
+        request.name.is_some()
+            || request.description.is_some()
+            || request.avatar.is_some()
+            || request.cover.is_some()
+            || request.image_url.is_some()
+            || request.deleted.is_some()
+    }
+
     /// Build a document map from an UpdateEntityRequest with only the provided fields.
     fn build_update_doc(request: &UpdateEntityRequest) -> serde_json::Map<String, Value> {
+        Self::build_update_doc_at(request, &Self::now_rfc3339())
+    }
+
+    /// `build_update_doc` with an explicit `indexed_at`, so tests can pin the clock.
+    fn build_update_doc_at(
+        request: &UpdateEntityRequest,
+        indexed_at: &str,
+    ) -> serde_json::Map<String, Value> {
         let mut doc = serde_json::Map::new();
         // Always include entity_id and space_id
         doc.insert("entity_id".to_string(), json!(request.entity_id));
@@ -351,6 +378,9 @@ impl OpenSearchProvider {
         }
         if let Some(in_canonical_graph) = request.in_canonical_graph {
             doc.insert("in_canonical_graph".to_string(), json!(in_canonical_graph));
+        }
+        if Self::is_content_write(request) {
+            doc.insert("indexed_at".to_string(), json!(indexed_at));
         }
         doc
     }
@@ -520,10 +550,12 @@ impl SearchIndexProvider for OpenSearchProvider {
                     ))
                 })?;
 
+            let indexed_at = Self::now_rfc3339();
             let params = json!({
                 "relation_id": relation_id.to_string(),
                 "relation_type": relation_data.relation_type.clone(),
-                "to_entity_id": to_entity_id.to_string()
+                "to_entity_id": to_entity_id.to_string(),
+                "indexed_at": indexed_at
             });
 
             let upsert_relation = json!({
@@ -544,7 +576,8 @@ impl SearchIndexProvider for OpenSearchProvider {
                     "upsert": {
                         "entity_id": entity_id.to_string(),
                         "space_id": space_id.to_string(),
-                        "relations": [upsert_relation]
+                        "relations": [upsert_relation],
+                        "indexed_at": indexed_at
                     }
                 }))
                 .send()
@@ -666,7 +699,7 @@ impl SearchIndexProvider for OpenSearchProvider {
         // Build Painless script to safely remove multiple fields
         // Validation and sanitization of property_keys happens
         //  inside create_unset_properties_script
-        let script_source = create_unset_properties_script(&request.property_keys)?;
+        let script_source = create_unset_properties_script_stamped(&request.property_keys)?;
 
         // Use update API with script to remove fields
         let response = self
@@ -675,7 +708,8 @@ impl SearchIndexProvider for OpenSearchProvider {
             .body(json!({
                 "script": {
                     "source": script_source,
-                    "lang": "painless"
+                    "lang": "painless",
+                    "params": { "indexed_at": Self::now_rfc3339() }
                 }
             }))
             .send()
@@ -793,7 +827,8 @@ impl SearchIndexProvider for OpenSearchProvider {
                             "source": REMOVE_RELATION_SCRIPT,
                             "lang": "painless",
                             "params": {
-                                "relation_id": relation_uuid.to_string()
+                                "relation_id": relation_uuid.to_string(),
+                                "indexed_at": Self::now_rfc3339()
                             }
                         }
                     });
@@ -867,10 +902,12 @@ impl SearchIndexProvider for OpenSearchProvider {
                                 ))
                             })?;
 
+                        let indexed_at = Self::now_rfc3339();
                         let params = json!({
                             "relation_id": relation_id.to_string(),
                             "relation_type": relation_data.relation_type.clone(),
-                            "to_entity_id": to_entity_id.to_string()
+                            "to_entity_id": to_entity_id.to_string(),
+                            "indexed_at": indexed_at
                         });
 
                         let upsert_relation = json!({
@@ -888,7 +925,8 @@ impl SearchIndexProvider for OpenSearchProvider {
                             "upsert": {
                                 "entity_id": entity_id.to_string(),
                                 "space_id": space_id.to_string(),
-                                "relations": [upsert_relation]
+                                "relations": [upsert_relation],
+                                "indexed_at": indexed_at
                             }
                         });
                         debug!(
@@ -1018,13 +1056,15 @@ impl SearchIndexProvider for OpenSearchProvider {
                         utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
                     let doc_id = Self::document_id(&entity_id, &space_id);
 
-                    let script_source = create_unset_properties_script(&request.property_keys)?;
+                    let script_source =
+                        create_unset_properties_script_stamped(&request.property_keys)?;
                     // Use upsert to handle case where document doesn't exist yet
                     // (can happen when replaying from offset 0 with different batch groupings)
                     let body = json!({
                         "script": {
                             "source": script_source,
-                            "lang": "painless"
+                            "lang": "painless",
+                            "params": { "indexed_at": Self::now_rfc3339() }
                         },
                         "upsert": {
                             "entity_id": entity_id.to_string(),
@@ -1695,6 +1735,77 @@ mod tests {
         assert!(!doc.is_empty());
         assert_eq!(doc.get("name"), Some(&json!("Test Name")));
         assert!(doc.get("description").is_none());
+    }
+
+    fn empty_request() -> UpdateEntityRequest {
+        UpdateEntityRequest {
+            entity_id: "entity-1".to_string(),
+            space_id: "space-1".to_string(),
+            name: None,
+            description: None,
+            avatar: None,
+            cover: None,
+            image_url: None,
+            add_relation: None,
+            entity_global_score: None,
+            space_score: None,
+            entity_space_score: None,
+            deleted: None,
+            space_topic_entity_id: None,
+            in_canonical_graph: None,
+        }
+    }
+
+    #[test]
+    fn test_build_update_doc_stamps_indexed_at_on_content_writes() {
+        let at = "2026-09-30T12:00:00.000Z";
+        for make in [
+            |r: &mut UpdateEntityRequest| r.name = Some("n".into()),
+            |r: &mut UpdateEntityRequest| r.description = Some("d".into()),
+            |r: &mut UpdateEntityRequest| r.image_url = Some("u".into()),
+            |r: &mut UpdateEntityRequest| r.deleted = Some(true),
+            |r: &mut UpdateEntityRequest| r.deleted = Some(false),
+        ] {
+            let mut r = empty_request();
+            make(&mut r);
+            let doc = OpenSearchProvider::build_update_doc_at(&r, at);
+            assert_eq!(doc.get("indexed_at"), Some(&json!(at)), "{r:?}");
+        }
+    }
+
+    #[test]
+    fn test_build_update_doc_does_not_stamp_enrichment_only_writes() {
+        let at = "2026-09-30T12:00:00.000Z";
+        for make in [
+            |r: &mut UpdateEntityRequest| r.entity_global_score = Some(0.5),
+            |r: &mut UpdateEntityRequest| r.space_score = Some(0.5),
+            |r: &mut UpdateEntityRequest| r.entity_space_score = Some(0.5),
+            |r: &mut UpdateEntityRequest| r.space_topic_entity_id = Some("t".into()),
+            |r: &mut UpdateEntityRequest| r.in_canonical_graph = Some(true),
+        ] {
+            let mut r = empty_request();
+            make(&mut r);
+            let doc = OpenSearchProvider::build_update_doc_at(&r, at);
+            assert!(doc.get("indexed_at").is_none(), "{r:?}");
+        }
+        assert!(
+            OpenSearchProvider::build_update_doc_at(&empty_request(), at)
+                .get("indexed_at")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_now_rfc3339_is_a_utc_instant_opensearch_parses() {
+        let now = OpenSearchProvider::now_rfc3339();
+        assert!(now.ends_with('Z'), "{now}");
+        assert!(chrono::DateTime::parse_from_rfc3339(&now).is_ok(), "{now}");
+    }
+
+    #[test]
+    fn test_relation_scripts_stamp_indexed_at() {
+        assert!(ADD_RELATION_SCRIPT.contains("ctx._source.indexed_at = params.indexed_at"));
+        assert!(REMOVE_RELATION_SCRIPT.contains("ctx._source.indexed_at = params.indexed_at"));
     }
 
     #[test]

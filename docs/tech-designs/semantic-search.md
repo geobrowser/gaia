@@ -441,12 +441,19 @@ with `SIGILL` at startup (it misdetects SVE under virtualization). Start the con
 `_JAVA_OPTIONS=-XX:UseSVE=0` (a compose override; `JAVA_TOOL_OPTIONS` is deliberately ignored by
 OpenSearch's launcher). Worth a line in `docs/gotchas.md` when the feature lands.
 
-## search-indexer: the one change (D4)
+## search-indexer: the one change (D4) — done in step 3
 
-Stamp `indexed_at` (UTC now) on **every** operation that writes `name`, `description` or
-`deleted`, and on `unset_document_properties`. Sites: `build_update_doc` in
-`search-indexer-repository/src/opensearch/provider.rs`, the equivalent in `bulk.rs`, and the unset
-path. This fixes a latent gap (the field is mapped but never written) and gives the embedding
+`indexed_at` (RFC 3339 UTC, millisecond precision) is stamped on every **content write**:
+`name`, `description`, the image fields, the soft-delete flag, relation add/remove (a relation
+can move a document in or out of an embedding scope; the scripts stamp only when they actually
+changed the array, so replays do not), and property unsets (an unset `name` takes a document out
+of scope). **Enrichment writes do not stamp**: scores, `space_topic_entity_id` and
+`in_canonical_graph` are written by other consumers in bulk and would otherwise make the
+embedding-indexer re-scan the corpus for nothing. All sites live in
+`search-indexer-repository/src/opensearch/` (`provider.rs` single and bulk paths, `scripts.rs`,
+`unset_document_properties.rs`); the rule is one predicate, `is_content_write`, with pinned-clock
+unit tests, and the e2e validator reads the field back from OpenSearch for the upsert and unset
+paths. This fixes a latent gap (the field was mapped but never written) and gives the embedding
 indexer its cursor. The search-indexer runs as a single-replica StatefulSet, so one wall clock
 stamps every document; the poller still uses an overlap window (below) so clock jitter or a
 future second replica cannot lose updates.
@@ -865,7 +872,7 @@ foundation the deferred "beyond similarity" track needs.
 | new indexer | `embedding-indexer/` (+ `Dockerfile`, `k8s/`), `EmbedBackend` with `service` and `extraction_api`; bookworm is fine here since it links no ONNX runtime |
 | shared | `search-indexer-shared` unchanged; `search-admin` depends on `embedding` with `default-features = false` (descriptor + slot id only) |
 | mapping | `search-indexer-repository/src/opensearch/index_config.rs` |
-| stamp | `search-indexer-repository/src/opensearch/provider.rs` (`build_update_doc`), `bulk.rs`, `unset_document_properties.rs` |
+| stamp | `search-indexer-repository/src/opensearch/{provider,scripts,unset_document_properties}.rs` — done in step 3 |
 | admin | `search-admin/src/embedding_slots.rs` (pure, tested), `search-admin/src/commands/{index_meta,add_embedding_slot,set_default_slot,retire_embedding_slot,list_slots,ensure_search_pipeline}.rs` — done in step 2 |
 | api | `api/src/services/search/types.ts`, `opensearch.ts`, `QUERY_ARCHITECTURE.md`, `api/src/search/index.ts`, `api/src/services/embedding/client.ts`, `api/main.ts` |
 | infra | `Cargo.toml` (three members), `docker-compose.yml` (two services), `.github/workflows/embedding-{service,indexer}-*.yml`, `docs/runbooks/deployment.md` (rotation procedure) |

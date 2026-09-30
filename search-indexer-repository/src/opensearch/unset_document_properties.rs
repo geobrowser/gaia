@@ -53,6 +53,18 @@ pub fn create_unset_properties_script(
         .join("\n"))
 }
 
+/// The unset script followed by the `indexed_at` stamp (`params.indexed_at`). Removing a content
+/// field is a content write: an unset `name` takes the document out of embedding scope, and the
+/// embedding-indexer, which polls on `indexed_at`, has to see it.
+pub fn create_unset_properties_script_stamped(
+    property_keys: &[String],
+) -> Result<String, SearchIndexError> {
+    let base = create_unset_properties_script(property_keys)?;
+    Ok(format!(
+        "{base}\nctx._source.indexed_at = params.indexed_at;"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,5 +238,15 @@ mod tests {
             result.unwrap_err(),
             SearchIndexError::ValidationError(_)
         ));
+    }
+
+    #[test]
+    fn test_create_unset_properties_script_stamped_appends_indexed_at() {
+        let script = create_unset_properties_script_stamped(&["name".to_string()]).unwrap();
+        assert_eq!(
+            script,
+            "if (ctx._source.containsKey(\"name\")) { ctx._source.remove(\"name\") }\nctx._source.indexed_at = params.indexed_at;"
+        );
+        assert!(create_unset_properties_script_stamped(&["bad key".to_string()]).is_err());
     }
 }
