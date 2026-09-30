@@ -332,7 +332,14 @@ An orphan is either:
 - `missing_in_space`: the entity exists but has no value and no outgoing relation in the
   document's space. These are only deleted with `--prune-missing-in-space` as well.
 
-Space-topic stub documents (`space_topic_entity_id == entity_id`) are counted and skipped.
+Two kinds of document are counted and skipped without a Postgres check, so they are never
+orphans, never pruned and never fill `--max-candidates`:
+- tombstones (`deleted: true`), counted as `tombstones`. search-indexer writes these for a
+  `DeleteEntity`, `/search` already hides them, and kg-indexer ignores `DeleteEntity`, so
+  Postgres has nothing to compare them against.
+- space-topic stubs (`space_topic_entity_id == entity_id`), counted as `topic_stubs`.
+
+The up to `--log-limit` (200) orphans logged individually are therefore all live documents.
 
 Every count goes on one `search_orphan_reconcile_summary` log line. Each flag also reads an
 environment variable (`RECONCILE_PRUNE`, `RECONCILE_MAX_PRUNE`, and so on; see `--help`).
