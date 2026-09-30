@@ -630,12 +630,14 @@ describe("computeProposalStatus - V2 slow early execution", () => {
 // =============================================================================
 
 describe("computeProposalStatus - V2 executeBy deadline", () => {
-	it("stays EXECUTABLE for a fast proposal that passed its vote, even past executeBy", () => {
-		// executeBy must never override an outcome the votes already resolved —
-		// this is exactly the shape of every migrated historical proposal, where
-		// executeBy is synthesized from long-past timestamps and is always
-		// already expired by the time anyone looks at it (see the doc comment
-		// on computeProposalStatus).
+	// The contract's `canExecuteProposal` returns false once
+	// `block.timestamp > executeBy`, so past the deadline nothing can execute:
+	// the API must not report EXECUTABLE (and so `canExecute: true`) for it
+	// (GEO-2609). Zero or null `executeBy` means no window has been set yet.
+
+	it("REJECTS a fast proposal that passed its vote once executeBy passes", () => {
+		// The shape of proposal 995f9dda… on testnet: passed, never executed,
+		// window closed, and on chain `canExecuteProposal` is false.
 		const now = BigInt(Math.floor(Date.now() / 1000))
 		const proposal = makeProposal({
 			votingMode: "Fast",
@@ -647,10 +649,12 @@ describe("computeProposalStatus - V2 executeBy deadline", () => {
 
 		const result = computeProposalStatus(proposal, now)
 
-		expect(result.status).toBe("EXECUTABLE")
+		expect(result.status).toBe("REJECTED")
+		// The flags still describe the votes, which did pass.
+		expect(result.isThresholdReached).toBe(true)
 	})
 
-	it("stays EXECUTABLE for a slow proposal that early-executed, even past executeBy", () => {
+	it("REJECTS a slow proposal that early-executed once executeBy passes", () => {
 		const now = BigInt(Math.floor(Date.now() / 1000))
 		const proposal = makeProposal({
 			votingMode: "Slow",
@@ -665,8 +669,73 @@ describe("computeProposalStatus - V2 executeBy deadline", () => {
 
 		const result = computeProposalStatus(proposal, now)
 
-		expect(result.status).toBe("EXECUTABLE")
-		expect(result.isEarlyExecutable).toBe(true)
+		expect(result.status).toBe("REJECTED")
+		expect(result.isEarlyExecutable).toBe(false)
+	})
+
+	it("REJECTS a slow proposal that passed its late vote once executeBy passes", () => {
+		const now = BigInt(Math.floor(Date.now() / 1000))
+		const proposal = makeProposal({
+			votingMode: "Slow",
+			partialPercentageSupportThreshold: 5_100_000n,
+			quorum: 1n,
+			yesCount: 1n,
+			startTime: now - 90n * 86_400n,
+			endTime: now - 89n * 86_400n, // voting ended long ago
+			executeBy: now - 82n * 86_400n, // endTime + 7 days, also long ago
+		})
+
+		const result = computeProposalStatus(proposal, now)
+
+		expect(result.status).toBe("REJECTED")
+		expect(result.isQuorumReached).toBe(true)
+		expect(result.isThresholdReached).toBe(true)
+	})
+
+	it("stays EXECUTABLE for a passed proposal while executeBy is still ahead", () => {
+		const now = BigInt(Math.floor(Date.now() / 1000))
+		const proposal = makeProposal({
+			votingMode: "Slow",
+			partialPercentageSupportThreshold: 5_100_000n,
+			quorum: 1n,
+			yesCount: 1n,
+			endTime: now - 10n,
+			executeBy: now + 86_400n,
+		})
+
+		expect(computeProposalStatus(proposal, now).status).toBe("EXECUTABLE")
+	})
+
+	it("treats executeBy = 0 as no window, not an expired one", () => {
+		const now = BigInt(Math.floor(Date.now() / 1000))
+		const passed = makeProposal({
+			votingMode: "Fast",
+			flatSupportThreshold: 3n,
+			yesCount: 5n,
+			executeBy: 0n,
+			endTime: now + 3600n,
+		})
+		const open = makeProposal({
+			votingMode: "Fast",
+			flatSupportThreshold: 3n,
+			yesCount: 0n,
+			executeBy: 0n,
+			endTime: now + 3600n,
+		})
+
+		expect(computeProposalStatus(passed, now).status).toBe("EXECUTABLE")
+		expect(computeProposalStatus(open, now).status).toBe("PROPOSED")
+	})
+
+	it("keeps an executed proposal ACCEPTED past executeBy", () => {
+		const now = BigInt(Math.floor(Date.now() / 1000))
+		const proposal = makeProposal({
+			yesCount: 100n,
+			executeBy: now - 10n,
+			executedAt: now - 20n,
+		})
+
+		expect(computeProposalStatus(proposal, now).status).toBe("ACCEPTED")
 	})
 
 	it("REJECTS a still-undecided fast proposal once executeBy passes", () => {

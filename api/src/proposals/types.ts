@@ -375,7 +375,7 @@ interface ProposalResponseBase {
 	proposedBy: string
 	/** Proposal version number (incremented on each update; starts at 1) */
 	proposalVersion: number
-	/** Execution deadline (Unix seconds) — past this, the proposal is REJECTED. Null on legacy rows. */
+	/** Execution deadline (Unix seconds) — past this, an unexecuted proposal is REJECTED and `canExecute` is false. Null when no window is set. */
 	executeBy: number | null
 	status: ProposalStatus
 	votingMode: "FAST" | "SLOW"
@@ -410,6 +410,11 @@ interface ProposalResponseBase {
 		timeRemaining: number | null
 		isVotingEnded: boolean
 	}
+	/**
+	 * True iff `status` is EXECUTABLE. That already accounts for `executeBy`:
+	 * once the execution window has closed the contract's `canExecuteProposal`
+	 * is false, and the status is REJECTED.
+	 */
 	canExecute: boolean
 }
 

@@ -561,7 +561,8 @@ app.get(
 							},
 							canExecute: {
 								type: "boolean",
-								description: "True if proposal can be executed on-chain",
+								description:
+									"True if proposal can be executed on-chain: status is EXECUTABLE, which also requires the executeBy window to be open (now <= executeBy, or executeBy unset)",
 							},
 						},
 						required: [
