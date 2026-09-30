@@ -59,7 +59,18 @@ jobs:
           DEPLOYER_PK: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
       
       - name: Run integration tests
-        run: bun run test src/kg/__tests__/ src/versioned/__tests__/
+        # Every api __tests__ folder must be listed here: the unit workflow
+        # excludes **/__tests__/**, so a folder missing from this list runs nowhere.
+        run: >-
+          bun run test
+          src/kg/__tests__/
+          src/versioned/__tests__/
+          src/proposals/__tests__/
+          src/ipfs/__tests__/
+          src/middleware/__tests__/
+          src/profile/__tests__/
+          src/services/__tests__/
+          src/utils/__tests__/
         env:
           DATABASE_URL: "postgresql://test:test@localhost:5432/test"
           IPFS_KEY: "test-key"
