@@ -270,8 +270,11 @@ const postgraphileOptions = {
 	// - ValueScalarsPlugin registers custom scalars (GeoPoint, GeoRect, Date, etc.)
 	//   and remaps Value fields to use them for self-documenting schema
 	// - EntitySpaceFilterPlugin adds efficient spaceId filter using EXISTS instead of computed column
-	// - EntityVotedByFilterPlugin adds votedBy/votedByKinds, so a person's positions
-	//   can be fetched as an ordinary entity feed (GEO-2913)
+	// - EntityVotedByFilterPlugin adds votedBy/votedByKinds/votedByTypes, so a person's
+	//   positions can be fetched as an ordinary entity feed (GEO-2913, GEO-2962), and
+	//   EntityFilter.votedBy, so `not: {votedBy}` excludes what a viewer has already
+	//   answered (GEO-2894). Must run AFTER ConnectionFilterPlugin, whose build hook
+	//   provides `connectionFilterRegisterResolver`.
 	// - EntityComputedTextFilterPlugin rewrites EntityFilter.name / .description filters
 	//   (and any other computed text fields backed by entities_<field>() STABLE functions)
 	//   as indexed EXISTS subqueries on values, replacing per-row function calls.

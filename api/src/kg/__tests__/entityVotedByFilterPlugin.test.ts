@@ -13,7 +13,11 @@ async function executeGraphQL(query: string, variables?: Record<string, unknown>
 	)
 	return response.json() as Promise<{
 		errors?: Array<{message: string}>
-		data?: {entities?: Array<{id: string}>}
+		data?: {
+			entities?: Array<{id: string}>
+			entitiesConnection?: {totalCount: number; nodes: Array<{id: string}>}
+			relationsConnection?: {nodes: Array<{fromEntityId: string}>}
+		}
 	}>
 }
 
@@ -25,8 +29,18 @@ const OTHER_VOTER = "00000000-beef-4000-8000-000000000002"
 const STANCE_ENTITY = "00000000-beef-4000-8000-00000000000a"
 const CURATION_ENTITY = "00000000-beef-4000-8000-00000000000b"
 const UNVOTED_ENTITY = "00000000-beef-4000-8000-00000000000c"
+// A stance the voter took and then took back: the row survives, rewritten to
+// vote_type 2 ("neither"). GEO-2962.
+const RETRACTED_ENTITY = "00000000-beef-4000-8000-00000000000d"
+// A veracity answer of "dispute" (vote_type 1) — held, on the other side.
+const DISPUTED_ENTITY = "00000000-beef-4000-8000-00000000000e"
+// Target of the fixture relations the facet test groups over.
+const TAG_ENTITY = "00000000-beef-4000-8000-00000000000f"
+const TAG_PROPERTY = "00000000-beef-4000-8000-000000000010"
 const SPACE = "00000000-beef-4000-8000-000000000003"
-const ALL_ENTITIES = [STANCE_ENTITY, CURATION_ENTITY, UNVOTED_ENTITY]
+const VOTED_OR_NOT = [STANCE_ENTITY, CURATION_ENTITY, UNVOTED_ENTITY, RETRACTED_ENTITY, DISPUTED_ENTITY]
+const ALL_ENTITIES = [...VOTED_OR_NOT, TAG_ENTITY]
+const REL_IDS = VOTED_OR_NOT.map((_, i) => `00000000-beef-4000-8000-0000000001${String(i).padStart(2, "0")}`)
 
 const undash = (s: string) => s.replace(/-/g, "")
 const idsOf = (r: {data?: {entities?: Array<{id: string}>}}) => (r.data?.entities ?? []).map((e) => e.id)
@@ -37,6 +51,7 @@ describe("EntityVotedByFilterPlugin", () => {
 	beforeAll(async () => {
 		pool = new Pool({connectionString: process.env.DATABASE_URL})
 		await pool.query(`DELETE FROM user_votes WHERE user_id = ANY($1::uuid[])`, [[VOTER, OTHER_VOTER]])
+		await pool.query(`DELETE FROM relations WHERE id = ANY($1::uuid[])`, [REL_IDS])
 		await pool.query(`DELETE FROM entities WHERE id = ANY($1::uuid[])`, [ALL_ENTITIES])
 		await pool.query(
 			`INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
@@ -44,17 +59,37 @@ describe("EntityVotedByFilterPlugin", () => {
 			[ALL_ENTITIES],
 		)
 		// vote_kind: 0 curation, 1 stance, 2 veracity
+		// vote_type: 0 agree/verify, 1 disagree/dispute, 2 neither (retracted)
 		await pool.query(
 			`INSERT INTO user_votes (user_id,object_id,object_type,space_id,vote_type,vote_kind,voted_at) VALUES
 			 ($1,$3,0,$5,0,1,now()),
 			 ($1,$4,0,$5,0,0,now()),
-			 ($2,$6,0,$5,0,1,now())`,
-			[VOTER, OTHER_VOTER, STANCE_ENTITY, CURATION_ENTITY, SPACE, UNVOTED_ENTITY],
+			 ($2,$6,0,$5,0,1,now()),
+			 ($1,$7,0,$5,2,1,now()),
+			 ($1,$8,0,$5,1,2,now())`,
+			[
+				VOTER,
+				OTHER_VOTER,
+				STANCE_ENTITY,
+				CURATION_ENTITY,
+				SPACE,
+				UNVOTED_ENTITY,
+				RETRACTED_ENTITY,
+				DISPUTED_ENTITY,
+			],
+		)
+		// Every voted-or-not fixture carries one TAG_PROPERTY relation to TAG_ENTITY,
+		// so a relationsConnection over them is the shape of a facet count.
+		await pool.query(
+			`INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id)
+			 SELECT unnest($1::uuid[]), unnest($2::uuid[]), $3, unnest($2::uuid[]), $4, $5`,
+			[REL_IDS, VOTED_OR_NOT, TAG_PROPERTY, TAG_ENTITY, SPACE],
 		)
 	})
 
 	afterAll(async () => {
 		await pool.query(`DELETE FROM user_votes WHERE user_id = ANY($1::uuid[])`, [[VOTER, OTHER_VOTER]])
+		await pool.query(`DELETE FROM relations WHERE id = ANY($1::uuid[])`, [REL_IDS])
 		await pool.query(`DELETE FROM entities WHERE id = ANY($1::uuid[])`, [ALL_ENTITIES])
 		await pool.end()
 	})
@@ -129,5 +164,127 @@ describe("EntityVotedByFilterPlugin", () => {
 		// what matters is that both arguments apply and neither errors.
 		expect(r.errors).toBeUndefined()
 		expect(idsOf(r)).not.toContain(undash(CURATION_ENTITY))
+	})
+
+	// ==========================================================================
+	// votedByTypes (GEO-2962)
+	// ==========================================================================
+
+	it("still counts a retracted position when votedByTypes is omitted", async () => {
+		// Today's behaviour, which must not move for existing callers.
+		const r = await executeGraphQL(
+			`{ entities(votedBy: "${undash(VOTER)}", votedByKinds: [1, 2], first: 50) { id } }`,
+		)
+		expect(r.errors).toBeUndefined()
+		expect(idsOf(r)).toContain(undash(RETRACTED_ENTITY))
+	})
+
+	it("leaves out retracted positions with votedByTypes: [0, 1]", async () => {
+		const r = await executeGraphQL(
+			`{ entities(votedBy: "${undash(VOTER)}", votedByKinds: [1, 2], votedByTypes: [0, 1], first: 50) { id } }`,
+		)
+		expect(r.errors).toBeUndefined()
+		const ids = idsOf(r)
+		expect(ids).not.toContain(undash(RETRACTED_ENTITY))
+		// Both sides of a held position stay: agree on a stance, dispute on veracity.
+		expect(ids).toContain(undash(STANCE_ENTITY))
+		expect(ids).toContain(undash(DISPUTED_ENTITY))
+		expect(ids).not.toContain(undash(CURATION_ENTITY))
+	})
+
+	it("selects only the retracted rows with votedByTypes: [2]", async () => {
+		const r = await executeGraphQL(`{ entities(votedBy: "${undash(VOTER)}", votedByTypes: [2], first: 50) { id } }`)
+		expect(r.errors).toBeUndefined()
+		expect(idsOf(r)).toEqual([undash(RETRACTED_ENTITY)])
+	})
+
+	it("counts held positions in totalCount, which is what the profile rail reads", async () => {
+		const r = await executeGraphQL(
+			`{ entitiesConnection(votedBy: "${undash(VOTER)}", votedByKinds: [1, 2], votedByTypes: [0, 1]) { totalCount } }`,
+		)
+		expect(r.errors).toBeUndefined()
+		expect(r.data?.entitiesConnection?.totalCount).toBe(2)
+	})
+
+	it("treats an empty votedByTypes as no restriction", async () => {
+		const r = await executeGraphQL(
+			`{ entities(votedBy: "${undash(VOTER)}", votedByKinds: [1, 2], votedByTypes: [], first: 50) { id } }`,
+		)
+		expect(r.errors).toBeUndefined()
+		expect(idsOf(r)).toContain(undash(RETRACTED_ENTITY))
+	})
+
+	it("ignores votedByTypes when votedBy is absent, rather than erroring", async () => {
+		const r = await executeGraphQL(`{ entities(votedByTypes: [0, 1], first: 3) { id } }`)
+		expect(r.errors).toBeUndefined()
+		expect(Array.isArray(r.data?.entities)).toBe(true)
+	})
+
+	// ==========================================================================
+	// EntityFilter.votedBy (GEO-2894)
+	// ==========================================================================
+
+	const fixtureIds = `[${VOTED_OR_NOT.map((id) => `"${undash(id)}"`).join(", ")}]`
+	const heldPositions = `{userId: "${undash(VOTER)}", kinds: [1, 2], types: [0, 1]}`
+
+	it("matches the argument form when used positively in filter", async () => {
+		const r = await executeGraphQL(
+			`{ entities(filter: {id: {in: ${fixtureIds}}, votedBy: ${heldPositions}}, first: 50) { id } }`,
+		)
+		expect(r.errors).toBeUndefined()
+		expect(idsOf(r).sort()).toEqual([STANCE_ENTITY, DISPUTED_ENTITY].map(undash).sort())
+	})
+
+	it("excludes what the viewer has answered with not: {votedBy}", async () => {
+		const r = await executeGraphQL(
+			`{ entitiesConnection(filter: {id: {in: ${fixtureIds}}, not: {votedBy: ${heldPositions}}}) {
+				totalCount
+				nodes { id }
+			} }`,
+		)
+		expect(r.errors).toBeUndefined()
+		const ids = (r.data?.entitiesConnection?.nodes ?? []).map((n) => n.id).sort()
+		// Held positions are gone. What remains: never voted on by this user, voted
+		// on only as curation, and the retracted one — which is unanswered again.
+		expect(ids).toEqual([UNVOTED_ENTITY, CURATION_ENTITY, RETRACTED_ENTITY].map(undash).sort())
+		expect(r.data?.entitiesConnection?.totalCount).toBe(3)
+	})
+
+	it("excludes any vote at all when kinds and types are omitted", async () => {
+		const r = await executeGraphQL(
+			`{ entities(filter: {id: {in: ${fixtureIds}}, not: {votedBy: {userId: "${undash(VOTER)}"}}}, first: 50) { id } }`,
+		)
+		expect(r.errors).toBeUndefined()
+		// Another user's vote on UNVOTED_ENTITY does not count against this viewer.
+		expect(idsOf(r)).toEqual([undash(UNVOTED_ENTITY)])
+	})
+
+	it("composes with the type argument", async () => {
+		const r = await executeGraphQL(
+			`{ entities(typeIds: {in: ["${undash(SPACE)}"]}, filter: {not: {votedBy: ${heldPositions}}}, first: 50) { id } }`,
+		)
+		// The fixtures carry no types, so nothing matches; both must apply without error.
+		expect(r.errors).toBeUndefined()
+		expect(idsOf(r)).toEqual([])
+	})
+
+	it("reaches a relation facet through fromEntity", async () => {
+		// The facet counts are relationsConnection aggregates filtered by
+		// `fromEntity: EntityFilter`, so the same exclusion must hold there or the
+		// counts describe a different corpus from the list.
+		const r = await executeGraphQL(
+			`{ relationsConnection(filter: {
+				typeId: {is: "${undash(TAG_PROPERTY)}"}
+				fromEntity: {not: {votedBy: ${heldPositions}}}
+			}) { nodes { fromEntityId } } }`,
+		)
+		expect(r.errors).toBeUndefined()
+		const from = (r.data?.relationsConnection?.nodes ?? []).map((n) => n.fromEntityId).sort()
+		expect(from).toEqual([UNVOTED_ENTITY, CURATION_ENTITY, RETRACTED_ENTITY].map(undash).sort())
+	})
+
+	it("rejects a votedBy filter without a userId", async () => {
+		const r = await executeGraphQL(`{ entities(filter: {votedBy: {kinds: [1]}}, first: 1) { id } }`)
+		expect(r.errors?.[0]?.message).toMatch(/userId/)
 	})
 })
