@@ -39,12 +39,16 @@ uuid = { version = "1.17.0", features = ["v4", "v5"] }
 dotenv = "0.15.0"
 hex = "0.4"
 
+# Metrics (recorder and /metrics listener installed via hermes-instrumentation)
+metrics = "0.24"
+
 # Logging
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 
 [dev-dependencies]
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "test-util"] }
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
 
 [[test]]
 name = "e2e"

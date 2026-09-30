@@ -1,0 +1,72 @@
+# kg-indexer alerts (GEO-2959, GEO-2884).
+#
+# kg-indexer writes each block in one transaction. When that transaction fails on
+# every attempt, the block's events are skipped: the next block's offset commit
+# supersedes them, so they are missing from Postgres until someone replays the
+# block by hand. Until this rule existed, the only trace was a `block_dropped` log
+# line, which is how three proposals in the Industries space sat half-indexed on
+# 2026-09-11 with nothing firing.
+#
+# Coverage split:
+#   HermesBehindChainTip (../hermes-lag-alerts.yaml)  — kg-indexer is behind the tip.
+#       It publishes hermes_latest_processed_block, advanced on every block summary it
+#       reads, empty blocks included, so quiet stretches on chain 55516 do not make a
+#       healthy indexer look behind.
+#   KgIndexerBlockDropped (here)                      — a block's events were lost
+#   KgIndexerMetricsMissing (here)                    — the signal itself is gone
+#   Kafka consumer lag (../../kafka-consumer-lag-alerts.yaml) — per-partition lag,
+#       which still works when the pod is dead
+#
+# Apply after kg-indexer is running an image that serves /metrics, or
+# KgIndexerMetricsMissing fires in between:
+#   kubectl apply -f monitoring/k8s/v2/kg-indexer-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: kg-indexer-observability
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: kg-indexer
+      rules:
+        # No `for`: one dropped block is already data loss, and the counter only
+        # moves when it happens. The counter is registered at zero on startup, so
+        # increase() sees the first drop rather than treating it as the series'
+        # first sample.
+        - alert: KgIndexerBlockDropped
+          expr: |
+            sum by (namespace, transient) (
+              increase(kg_indexer_blocks_dropped_total{namespace="gaia"}[15m])
+            ) > 0
+          labels:
+            severity: warning
+            service: kg-indexer
+          annotations:
+            summary: kg-indexer dropped a block
+            description: >-
+              kg-indexer gave up on {{ $value | humanize }} block(s) in the last 15 minutes
+              (transient={{ $labels.transient }}). Every event in each block was rolled back
+              and the consumer has moved past it, so votes, executions and edits from it
+              are missing until the block is replayed. transient="true" is a statement
+              timeout or connection failure: the data was valid and a replay should land
+              (GEO-2884). transient="false" is a payload that could not be handled. Find the
+              block number with:
+              kubectl -n gaia logs deploy/kg-indexer --since=1h | grep -E 'block_dropped|"Batch failed"'
+
+        # Without this, a kg-indexer that stops serving /metrics silences both rules
+        # above, because their series vanish instead of firing.
+        - alert: KgIndexerMetricsMissing
+          expr: |
+            absent(up{namespace="gaia", service="kg-indexer"} == 1)
+          for: 15m
+          labels:
+            severity: warning
+            service: kg-indexer
+          annotations:
+            summary: kg-indexer is not reporting metrics
+            description: >-
+              Prometheus has not scraped kg-indexer for 15 minutes. Either the pod is not
+              running or the Service / ServiceMonitor wiring is broken, which also blinds
+              HermesBehindChainTip and KgIndexerBlockDropped for kg-indexer.

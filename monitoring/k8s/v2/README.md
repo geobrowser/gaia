@@ -56,6 +56,7 @@ kubectl --context $CTX apply -f monitoring/k8s/v2/
 | `api-capacity-alerts.yaml` | targets `gaia`; drops the `api-staging` duplicate; latency/5xx alerts rebased onto the Gateway |
 | `gateway-metrics.yaml` | scrapes Cilium's Envoy and provides the `api:gateway_*` recording rules that replace the nginx-derived `api:ingress_*` pair |
 | `chain-tip-exporter.yaml` | this cluster had no exporter at all, so `HermesBehindChainTip` could never fire |
+| `kg-indexer-alerts.yaml` | new: `KgIndexerBlockDropped` (GEO-2884's silent loss) and `KgIndexerMetricsMissing` |
 
 ## Deliberately not ported
 
@@ -85,19 +86,27 @@ Not scraped, because none of them exposes a metrics endpoint:
 
 | service | what it serves today |
 |---|---|
-| `kg-indexer`, `vote-indexer`, `topology-indexer`, `ranking-indexer` | no HTTP listener, no container port |
+| `vote-indexer`, `topology-indexer`, `ranking-indexer` | no HTTP listener, no container port |
 | `search-indexer`, `notification-indexer`, `delivery-worker` | `/healthz` and `/readyz` on 8080; `/metrics` returns 404 |
 
 All of them depend on `hermes-instrumentation`, whose `metrics::install` is
 the one-line listener `atlas` and `hermes-pipeline` use, but none calls it and
 none records a metric. `search-indexer` keeps counters in memory
 (`SearchIndexerMetrics`) and only logs them. Adding a listener would add a
-target and nothing else, so each service needs real gauges first. The
-`hermes_latest_processed_block` gauge is not a drop-in for `kg-indexer`: it
-only processes blocks that contain events (empty blocks arrive as summaries
-and are skipped), and the gauge must advance on every block or
-`HermesBehindChainTip` fires in quiet stretches. Setting it needs care in the
-summary path, not a single call.
+target and nothing else, so each service needs real gauges first.
+
+`kg-indexer` is the first one done (GEO-2959). It serves `/metrics` on 9464 and
+is in `hermes-metrics-servicemonitor.yaml`. It publishes
+`hermes_latest_processed_block{,_timestamp}`, so `HermesBehindChainTip` covers
+it, plus `kg_indexer_blocks_dropped_total{transient}`,
+`kg_indexer_blocks_processed_total`, `kg_indexer_events_processed_total`,
+`kg_indexer_batch_retries_total` and `kg_indexer_messages_unparseable_total`.
+The gauge is not set from the blocks it writes: most blocks have no events for
+it and arrive only as a summary, so that would stall in quiet stretches. It
+follows the highest block summary read, empty or not, capped just below the
+lowest block still buffered. hermes-pipeline emits one summary per chain block
+(889 summaries against 889 tip blocks over 24h on 2026-09-30), so it tracks
+the tip whenever kg-indexer is keeping up.
 
 Until that lands, these services are covered only from outside: consumer lag
 by `kafka-exporter` (`kafka-consumer-lag-alerts.yaml`) and pod state by the

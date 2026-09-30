@@ -3615,6 +3615,8 @@ dependencies = [
  "hermes-schema",
  "hex",
  "indexer_utils",
+ "metrics",
+ "metrics-exporter-prometheus",
  "prost 0.13.5",
  "rdkafka 0.38.0",
  "sdk",

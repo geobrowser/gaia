@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::time::{Duration, Instant};
 
@@ -14,6 +14,7 @@ use tracing::field::display;
 mod consumer;
 mod error;
 mod handlers;
+mod metrics;
 mod models;
 mod storage;
 
@@ -74,6 +75,17 @@ struct BlockBuffer {
     summary_offsets: HashMap<(String, i32), i64>,
     /// Timeout before force-processing an incomplete block.
     stale_timeout: Duration,
+    /// Highest block whose summary has been read, empty or not. Every chain block
+    /// gets a summary from hermes-pipeline, so this keeps moving through stretches
+    /// with no events for kg-indexer, which is what the processed-position gauge
+    /// needs. Block numbers of events alone would stall there.
+    highest_summary_block: Option<u64>,
+    /// Block timestamps (`created_at`, Unix seconds) of summaries at or above the
+    /// last published position, so the timestamp gauge can name the block the
+    /// position gauge names. Pruned as the position advances.
+    summary_timestamps: BTreeMap<u64, u64>,
+    /// Last position returned by `processed_position`, which never goes backwards.
+    published_position: Option<u64>,
 }
 
 impl BlockBuffer {
@@ -84,7 +96,61 @@ impl BlockBuffer {
             summaries: HashMap::new(),
             summary_offsets: HashMap::new(),
             stale_timeout,
+            highest_summary_block: None,
+            summary_timestamps: BTreeMap::new(),
+            published_position: None,
         }
+    }
+
+    /// Record that the summary for `block_number` has been read, whether the block
+    /// is buffered or skipped as empty.
+    fn note_summary_block(&mut self, block_number: u64, created_at: u64) {
+        self.highest_summary_block = Some(
+            self.highest_summary_block
+                .map_or(block_number, |h| h.max(block_number)),
+        );
+        self.summary_timestamps.insert(block_number, created_at);
+    }
+
+    /// The highest block kg-indexer is finished with, and that block's timestamp.
+    ///
+    /// Finished means its summary has been read and nothing at or below it is still
+    /// buffered: the highest summary seen, capped just below the lowest pending
+    /// block. Blocks are flushed strictly in order, so everything under that cap is
+    /// done. Empty blocks are finished the moment their summary is read, which is
+    /// what keeps the position moving when the chain has no events for us.
+    ///
+    /// A block whose transaction failed for good also counts as finished, because
+    /// the consumer has moved past it; `kg_indexer_blocks_dropped_total` is the
+    /// signal for that, not this gauge.
+    ///
+    /// Summaries are keyed by block number across partitions, so a later block's
+    /// summary can be read before an earlier one's. The position then leads by that
+    /// gap until the earlier summary lands. Per-partition consumer lag is watched by
+    /// kafka-exporter; this gauge is for distance from the chain tip. It never moves
+    /// backwards, so the overshoot does not make it jitter.
+    fn processed_position(&mut self) -> Option<(u64, Option<u64>)> {
+        let highest = self.highest_summary_block?;
+        let mut position = match self.min_pending_block() {
+            Some(pending) if pending <= highest => pending.checked_sub(1)?,
+            _ => highest,
+        };
+        if let Some(published) = self.published_position {
+            position = position.max(published);
+        }
+        self.published_position = Some(position);
+
+        let timestamp = self
+            .summary_timestamps
+            .range(..=position)
+            .next_back()
+            .map(|(block, ts)| (*block, *ts));
+        if let Some((block, _)) = timestamp {
+            // Keep the entry just used so a later call at the same position still
+            // finds it; everything below it is no longer needed.
+            self.summary_timestamps = self.summary_timestamps.split_off(&block);
+        }
+        Some((position, timestamp.map(|(_, ts)| ts)))
     }
 
     /// Record that a block-summary message has been read, whether it was
@@ -258,6 +324,13 @@ fn main() -> Result<(), IndexerError> {
 
 async fn async_main() -> Result<(), IndexerError> {
     info!("Starting kg-indexer");
+
+    // Prometheus /metrics on 9464 (hermes_instrumentation::metrics::DEFAULT_PORT),
+    // the port the ServiceMonitor scrapes; override with METRICS_PORT for local runs.
+    let metrics_port: Option<u16> = env::var("METRICS_PORT").ok().and_then(|s| s.parse().ok());
+    hermes_instrumentation::metrics::install("kg-indexer", metrics_port)
+        .map_err(|e| IndexerError::config(format!("metrics install failed: {}", e)))?;
+    metrics::register();
 
     // Load configuration from environment
     let database_url =
@@ -434,6 +507,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     "Failed to parse message"
                                 );
                                 error_count += 1;
+                                metrics::message_unparseable();
                                 // Still commit to avoid getting stuck
                                 if let Err(e) =
                                     consumer.commit_message(&topic, partition, offset)
@@ -468,7 +542,9 @@ async fn async_main() -> Result<(), IndexerError> {
                             let expected_count = expected_count_for_indexer(summary);
                             if expected_count == 0 {
                                 buffer.note_summary_offset(&topic, partition, offset);
+                                buffer.note_summary_block(summary.block_number, summary.created_at);
                                 commit_summary_offsets(&mut buffer, &consumer);
+                                publish_processed_position(&mut buffer);
                                 continue;
                             }
                         }
@@ -511,6 +587,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                 }
 
                                 buffer.note_summary_offset(&topic, partition, offset);
+                                buffer.note_summary_block(summary_block_number, summary.created_at);
                                 buffer.insert_summary(summary_block_number, summary, expected_count);
 
                                 let (processed, errors, blocks) =
@@ -865,8 +942,21 @@ async fn drain_ready_blocks(
     }
 
     commit_summary_offsets(buffer, consumer);
+    publish_processed_position(buffer);
 
     (processed_count, error_count, blocks_processed)
+}
+
+/// Set the shared `hermes_latest_processed_block{,_timestamp}` gauges from
+/// `BlockBuffer::processed_position`. Called after every drain, which the 100ms tick
+/// runs even when no message arrives, and on the empty-summary skip path.
+fn publish_processed_position(buffer: &mut BlockBuffer) {
+    if let Some((block, timestamp)) = buffer.processed_position() {
+        hermes_instrumentation::metrics::set_latest_processed_block(block);
+        if let Some(ts) = timestamp.filter(|ts| *ts > 0) {
+            hermes_instrumentation::metrics::set_latest_processed_block_timestamp(ts as i64);
+        }
+    }
 }
 
 /// Commit block-summary offsets once no summary is pending. See
@@ -1022,6 +1112,7 @@ async fn process_buffered_block(
                     error = %e,
                     "Batch failed transiently — retrying before the block is lost"
                 );
+                metrics::batch_retried();
                 tokio::time::sleep(backoff).await;
                 attempt += 1;
             }
@@ -1059,6 +1150,7 @@ async fn process_buffered_block(
                     "Batch end"
                 );
             }
+            metrics::block_processed(event_len as u64);
             Some((event_len as u64, 0))
         }
         Err(e) => {
@@ -1098,6 +1190,7 @@ async fn process_buffered_block(
             // cause (statement timeout, dropped connection) means the data was
             // valid and would have landed on a retry; say so explicitly rather
             // than leaving an operator to infer it from a SQLSTATE.
+            metrics::block_dropped(e.is_transient());
             if e.is_transient() {
                 error!(
                     event = "kg_indexer.block_dropped",
@@ -2329,5 +2422,78 @@ mod tests {
             buffer.take_committable_summary_offsets(),
             vec![("testnet.hermes.blocks".to_string(), 0, 11)]
         );
+    }
+
+    #[test]
+    fn processed_position_is_none_before_any_summary() {
+        let mut buffer = BlockBuffer::new(Duration::from_secs(60));
+        buffer.push(5, make_event(5));
+        assert_eq!(buffer.processed_position(), None);
+    }
+
+    #[test]
+    fn processed_position_advances_through_empty_blocks() {
+        // The quiet-stretch case: no events for kg-indexer, only empty summaries.
+        // The position must follow them or HermesBehindChainTip fires on a healthy
+        // indexer.
+        let mut buffer = BlockBuffer::new(Duration::from_secs(60));
+        for block in 100..=110 {
+            buffer.note_summary_block(block, 1_700_000_000 + block);
+        }
+        assert_eq!(
+            buffer.processed_position(),
+            Some((110, Some(1_700_000_110)))
+        );
+    }
+
+    #[test]
+    fn processed_position_stops_below_a_pending_block() {
+        let mut buffer = BlockBuffer::new(Duration::from_secs(60));
+        buffer.note_summary_block(99, 1_000);
+        // Block 100 has a summary and is waiting for its events...
+        buffer.note_summary_block(100, 1_001);
+        buffer.insert_summary(100, make_summary(100), 1);
+        // ...and later empty blocks keep arriving.
+        buffer.note_summary_block(101, 1_002);
+        buffer.note_summary_block(102, 1_003);
+
+        assert_eq!(buffer.processed_position(), Some((99, Some(1_000))));
+
+        // Once 100 is flushed, the position jumps to the highest summary.
+        buffer.take_summary(100);
+        buffer.take_block(100);
+        assert_eq!(buffer.processed_position(), Some((102, Some(1_003))));
+    }
+
+    #[test]
+    fn processed_position_ignores_events_ahead_of_their_summary() {
+        let mut buffer = BlockBuffer::new(Duration::from_secs(60));
+        buffer.note_summary_block(50, 500);
+        // Events for 51 arrived before its summary; 50 is still finished.
+        buffer.push(51, make_event(51));
+        assert_eq!(buffer.processed_position(), Some((50, Some(500))));
+    }
+
+    #[test]
+    fn processed_position_never_moves_backwards() {
+        let mut buffer = BlockBuffer::new(Duration::from_secs(60));
+        // Summaries are spread across partitions, so 20 can be read before 19.
+        buffer.note_summary_block(20, 200);
+        assert_eq!(buffer.processed_position(), Some((20, Some(200))));
+
+        buffer.note_summary_block(19, 190);
+        buffer.insert_summary(19, make_summary(19), 1);
+        assert_eq!(buffer.processed_position(), Some((20, Some(200))));
+    }
+
+    #[test]
+    fn processed_position_prunes_old_timestamps() {
+        let mut buffer = BlockBuffer::new(Duration::from_secs(60));
+        for block in 1..=1_000 {
+            buffer.note_summary_block(block, block);
+            buffer.processed_position();
+        }
+        assert_eq!(buffer.summary_timestamps.len(), 1);
+        assert_eq!(buffer.processed_position(), Some((1_000, Some(1_000))));
     }
 }

@@ -51,6 +51,10 @@ spec:
         - name: kg-indexer
           image: registry.digitalocean.com/geo/kg-indexer:latest
           imagePullPolicy: Always
+          ports:
+            - name: metrics
+              containerPort: 9464
+              protocol: TCP
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -144,6 +148,8 @@ spec:
                   optional: true
             - name: RUST_LOG
               value: "kg_indexer=info"
+            - name: METRICS_PORT
+              value: "9464"
           resources:
             requests:
               memory: "768Mi"
@@ -152,3 +158,24 @@ spec:
               memory: "2Gi"
               cpu: "500m"
       restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kg-indexer
+  namespace: gaia
+  labels:
+    app: kg-indexer
+    # Lifted into the metrics by the ServiceMonitor's `targetLabels`, which is what
+    # joins hermes_latest_processed_block to chain_tip_block_number in
+    # HermesBehindChainTip.
+    gaia_namespace: gaia
+spec:
+  type: ClusterIP
+  selector:
+    app: kg-indexer
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: metrics
+      protocol: TCP
