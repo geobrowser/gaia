@@ -20,5 +20,9 @@ serde_json = "1.0"
 dotenv = "0.15.0"
 tracing = "0.1.41"
 
+# Metrics (recorder and /metrics listener installed via hermes-instrumentation)
+metrics = "0.24"
+
 [dev-dependencies]
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "test-util"] }
+metrics-exporter-prometheus = { version = "0.17", default-features = false }

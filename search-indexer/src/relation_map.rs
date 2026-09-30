@@ -566,7 +566,6 @@ impl RelationMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn test_config(dir: &tempfile::TempDir) -> RelationMapConfig {
         RelationMapConfig {

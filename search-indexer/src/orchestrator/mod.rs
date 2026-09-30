@@ -290,6 +290,11 @@ impl Orchestrator {
         let shutdown_tx = self.shutdown_tx;
         let metrics = self.metrics;
 
+        // Register every exported series now, so each counter has a zero sample
+        // before its first increment and `increase()` can see that increment.
+        SearchIndexerMetrics::describe();
+        metrics.publish();
+
         // Check if loader is ready
         loader.check_ready().await?;
 
@@ -522,6 +527,8 @@ impl Orchestrator {
                     break;
                 }
                 _ = progress_timer.tick() => {
+                    metrics_ref.publish();
+
                     let events = total_events.load(Ordering::Relaxed);
                     let docs = total_docs.load(Ordering::Relaxed);
                     let bulk_calls = metrics_ref.total_bulk_calls.load(Ordering::Relaxed);
@@ -651,6 +658,7 @@ impl Orchestrator {
         };
         info!("Entities consumer shutdown complete");
 
+        metrics.publish();
         let final_events = metrics.total_events_processed.load(Ordering::Relaxed);
         let final_docs = metrics.total_documents_indexed.load(Ordering::Relaxed);
         info!(

@@ -53,9 +53,14 @@ spec:
             # Logging
             - name: RUST_LOG
               value: "info,delivery_worker=debug"
+            - name: METRICS_PORT
+              value: "9464"
           ports:
             - containerPort: 8080
               name: health
+              protocol: TCP
+            - name: metrics
+              containerPort: 9464
               protocol: TCP
           startupProbe:
             httpGet:
@@ -89,3 +94,23 @@ spec:
             limits:
               memory: "256Mi"
               cpu: "250m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: delivery-worker
+  namespace: gaia
+  labels:
+    app: delivery-worker
+    # Copied onto every scraped series by the hermes-metrics ServiceMonitor's
+    # `targetLabels`, the same as kg-indexer and atlas.
+    gaia_namespace: gaia
+spec:
+  type: ClusterIP
+  selector:
+    app: delivery-worker
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: metrics
+      protocol: TCP

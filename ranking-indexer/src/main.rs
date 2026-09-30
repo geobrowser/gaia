@@ -30,6 +30,7 @@ use ranking_indexer::consumer::{
 use ranking_indexer::detect::detect;
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::membership::apply_membership_event;
+use ranking_indexer::metrics::{self, Topic};
 use ranking_indexer::recompute;
 use ranking_indexer::storage::Storage;
 
@@ -51,6 +52,13 @@ async fn main() -> Result<(), IndexerError> {
         .map_err(|_| IndexerError::Config("DATABASE_URL not set".into()))?;
     let brokers = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".into());
     let group_id = env::var("KAFKA_GROUP_ID").unwrap_or_else(|_| "ranking-indexer".into());
+
+    // Prometheus /metrics on 9464 (hermes_instrumentation::metrics::DEFAULT_PORT),
+    // the port the ServiceMonitor scrapes; override with METRICS_PORT for local runs.
+    let metrics_port: Option<u16> = env::var("METRICS_PORT").ok().and_then(|s| s.parse().ok());
+    hermes_instrumentation::metrics::install("ranking-indexer", metrics_port)
+        .map_err(|e| IndexerError::Config(format!("metrics install failed: {}", e)))?;
+    metrics::register();
 
     let storage = Storage::new(&database_url).await?;
     storage.check_membership_view().await?;
@@ -81,12 +89,16 @@ async fn main() -> Result<(), IndexerError> {
 
         match consumer.topic_kind(&topic) {
             Some(TopicKind::Edits) => {
-                if let Err(e) =
-                    with_transient_retry("edit", offset, || process_edit(payload, &storage)).await
+                match with_transient_retry(Topic::Edits, offset, || process_edit(payload, &storage))
+                    .await
                 {
-                    // Poison: a malformed edit is logged and skipped rather
-                    // than stalling the partition (design §10).
-                    warn!(error = %e, offset = offset, "Skipping unprocessable edit");
+                    Ok(()) => metrics::message_processed(Topic::Edits),
+                    Err(e) => {
+                        // Poison: a malformed edit is logged and skipped rather
+                        // than stalling the partition (design §10).
+                        warn!(error = %e, offset = offset, "Skipping unprocessable edit");
+                        metrics::message_skipped(Topic::Edits);
+                    }
                 }
                 if let Err(e) = consumer.commit_message(&topic, partition, offset) {
                     error!(error = %e, "Failed to commit offset");
@@ -96,22 +108,28 @@ async fn main() -> Result<(), IndexerError> {
                 let event_type = get_event_type(msg.headers());
                 match parse_membership_event(payload, event_type.as_deref()) {
                     Ok(Some(event)) => {
-                        if let Err(e) = with_transient_retry("membership event", offset, || {
+                        match with_transient_retry(Topic::Membership, offset, || {
                             apply_membership_event(&event, &storage)
                         })
                         .await
                         {
-                            // Poison: unknown role or malformed ids.
-                            warn!(error = %e, offset = offset, "Skipping unprocessable membership event");
+                            Ok(()) => metrics::message_processed(Topic::Membership),
+                            Err(e) => {
+                                // Poison: unknown role or malformed ids.
+                                warn!(error = %e, offset = offset, "Skipping unprocessable membership event");
+                                metrics::message_skipped(Topic::Membership);
+                            }
                         }
                     }
                     // Known event type this indexer intentionally ignores
                     // (SPACE_LEFT, kg-indexer parity) — not warn-worthy.
                     Ok(None) => {
-                        debug!(offset = offset, "Ignoring unhandled membership event type")
+                        debug!(offset = offset, "Ignoring unhandled membership event type");
+                        metrics::message_processed(Topic::Membership);
                     }
                     Err(e) => {
                         warn!(error = %e, offset = offset, "Skipping undecodable membership event");
+                        metrics::message_skipped(Topic::Membership);
                     }
                 }
                 if let Err(e) = consumer.commit_message(&topic, partition, offset) {
@@ -137,7 +155,7 @@ async fn main() -> Result<(), IndexerError> {
 /// the offset is never committed, so Kafka redelivers the message on restart
 /// and the idempotent writes converge.
 async fn with_transient_retry<F, Fut>(
-    kind: &str,
+    topic: Topic,
     offset: i64,
     mut op: F,
 ) -> Result<(), IndexerError>
@@ -152,9 +170,10 @@ where
             Err(e) if e.is_poison() => return Err(e),
             Err(e) if attempt < MAX_TRANSIENT_ATTEMPTS => {
                 let delay_ms = BACKOFF_BASE_MS << (attempt - 1);
+                metrics::transient_retry(topic);
                 warn!(
                     error = %e,
-                    kind = kind,
+                    kind = ?topic,
                     offset = offset,
                     attempt = attempt,
                     delay_ms = delay_ms,
@@ -166,7 +185,7 @@ where
             Err(e) => {
                 error!(
                     error = %e,
-                    kind = kind,
+                    kind = ?topic,
                     offset = offset,
                     attempts = attempt,
                     "Transient error persisted — exiting so Kafka redelivers from the last \

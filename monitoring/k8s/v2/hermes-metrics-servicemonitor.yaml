@@ -27,6 +27,16 @@ spec:
           # reads (empty blocks included), plus its own kg_indexer_* counters. See
           # monitoring/k8s/v2/kg-indexer-alerts.yaml.
           - kg-indexer
+          # The rest of the long-running indexers (GEO-2959). None publishes the
+          # hermes_latest_processed_block gauge, so HermesBehindChainTip ignores
+          # them; each has its own <service>_* counters. See
+          # monitoring/k8s/v2/indexer-alerts.yaml.
+          - search-indexer
+          - vote-indexer
+          - topology-indexer
+          - ranking-indexer
+          - notification-indexer
+          - delivery-worker
   endpoints:
     - port: metrics
       path: /metrics

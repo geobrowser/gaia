@@ -11,6 +11,7 @@ use rdkafka::message::Message;
 
 use topology_indexer::consumer::{parse_diff, KafkaConsumer, ParsedDiff};
 use topology_indexer::error::IndexerError;
+use topology_indexer::metrics;
 use topology_indexer::storage::Storage;
 
 fn main() -> Result<(), IndexerError> {
@@ -73,6 +74,13 @@ fn build_telemetry_config() -> hermes_instrumentation::Config {
 }
 
 async fn async_main() -> Result<(), IndexerError> {
+    // Prometheus /metrics on 9464 (hermes_instrumentation::metrics::DEFAULT_PORT),
+    // the port the ServiceMonitor scrapes; override with METRICS_PORT for local runs.
+    let metrics_port: Option<u16> = env::var("METRICS_PORT").ok().and_then(|s| s.parse().ok());
+    hermes_instrumentation::metrics::install("topology-indexer", metrics_port)
+        .map_err(|e| IndexerError::Config(format!("metrics install failed: {}", e)))?;
+    metrics::register();
+
     // Load configuration from environment
     let database_url = env::var("DATABASE_URL")
         .map_err(|_| IndexerError::Config("DATABASE_URL not set".into()))?;
@@ -135,16 +143,15 @@ async fn async_main() -> Result<(), IndexerError> {
             _ = shutdown_rx.recv() => {
                 info!("Shutting down...");
                 if !diff_buffer.is_empty() {
-                    match process_diff_batch(&diff_buffer, &storage).await {
-                        Ok(count) => {
-                            processed_count += count as u64;
-                            commit_offsets(&consumer, &commit_info);
-                        }
-                        Err(e) => {
-                            error!(error = %e, "Failed to process final batch");
-                            error_count += diff_buffer.len() as u64;
-                        }
-                    }
+                    flush_batch(
+                        &diff_buffer,
+                        &commit_info,
+                        &storage,
+                        &consumer,
+                        &mut processed_count,
+                        &mut error_count,
+                    )
+                    .await;
                 }
                 break;
             }
@@ -152,16 +159,15 @@ async fn async_main() -> Result<(), IndexerError> {
             _ = batch_timer.tick() => {
                 if !diff_buffer.is_empty() {
                     debug!(count = diff_buffer.len(), "Processing batch on timeout");
-                    match process_diff_batch(&diff_buffer, &storage).await {
-                        Ok(count) => {
-                            processed_count += count as u64;
-                            commit_offsets(&consumer, &commit_info);
-                        }
-                        Err(e) => {
-                            error!(error = %e, "Failed to process batch");
-                            error_count += diff_buffer.len() as u64;
-                        }
-                    }
+                    flush_batch(
+                        &diff_buffer,
+                        &commit_info,
+                        &storage,
+                        &consumer,
+                        &mut processed_count,
+                        &mut error_count,
+                    )
+                    .await;
                     diff_buffer.clear();
                     commit_info.clear();
                 }
@@ -197,16 +203,15 @@ async fn async_main() -> Result<(), IndexerError> {
 
                                 if diff_buffer.len() >= batch_size {
                                     debug!(count = diff_buffer.len(), "Processing full batch");
-                                    match process_diff_batch(&diff_buffer, &storage).await {
-                                        Ok(count) => {
-                                            processed_count += count as u64;
-                                            commit_offsets(&consumer, &commit_info);
-                                        }
-                                        Err(e) => {
-                                            error!(error = %e, "Failed to process batch");
-                                            error_count += diff_buffer.len() as u64;
-                                        }
-                                    }
+                                    flush_batch(
+                                        &diff_buffer,
+                                        &commit_info,
+                                        &storage,
+                                        &consumer,
+                                        &mut processed_count,
+                                        &mut error_count,
+                                    )
+                                    .await;
                                     diff_buffer.clear();
                                     commit_info.clear();
                                 }
@@ -225,6 +230,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     "Failed to parse topology diff message"
                                 );
                                 error_count += 1;
+                                metrics::message_unparseable();
                                 if let Err(e) = consumer.commit_message(&topic, partition, offset) {
                                     error!(error = %e, "Failed to commit offset");
                                 }
@@ -252,11 +258,50 @@ async fn async_main() -> Result<(), IndexerError> {
     Ok(())
 }
 
+/// Apply a batch and commit its offsets on success, updating the running totals
+/// and the diff counters either way.
+///
+/// On failure the batch's offsets are not committed, but the next batch that
+/// succeeds commits past them, so the diffs that did not apply are lost until
+/// the topic is replayed. `topology_indexer_diffs_dropped_total` counts them.
+async fn flush_batch(
+    diffs: &[ParsedDiff],
+    commit_info: &[(String, i32, i64)],
+    storage: &Storage,
+    consumer: &KafkaConsumer,
+    processed_count: &mut u64,
+    error_count: &mut u64,
+) {
+    match process_diff_batch(diffs, storage).await {
+        Ok(count) => {
+            *processed_count += count as u64;
+            metrics::diffs_applied(count as u64);
+            commit_offsets(consumer, commit_info);
+        }
+        Err((applied, e)) => {
+            let dropped = diffs.len().saturating_sub(applied);
+            error!(
+                error = %e,
+                applied = applied,
+                dropped = dropped,
+                "Failed to process batch"
+            );
+            *processed_count += applied as u64;
+            *error_count += dropped as u64;
+            metrics::diffs_applied(applied as u64);
+            metrics::diffs_dropped(dropped as u64);
+        }
+    }
+}
+
 /// Process a batch of parsed diffs by applying changes to PostgreSQL.
+///
+/// Each diff is its own transaction, so a failure part-way through leaves the
+/// earlier diffs committed. The error carries how many were applied before it.
 async fn process_diff_batch(
     diffs: &[ParsedDiff],
     storage: &Storage,
-) -> Result<usize, IndexerError> {
+) -> Result<usize, (usize, IndexerError)> {
     if diffs.is_empty() {
         return Ok(0);
     }
@@ -270,8 +315,11 @@ async fn process_diff_batch(
     );
 
     async {
-        for diff in diffs {
-            storage.apply_changes(diff.root_id, &diff.changes).await?;
+        for (applied, diff) in diffs.iter().enumerate() {
+            storage
+                .apply_changes(diff.root_id, &diff.changes)
+                .await
+                .map_err(|e| (applied, IndexerError::from(e)))?;
         }
 
         debug!(

@@ -1547,9 +1547,7 @@ impl Processor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sdk::core::ids::{
-    AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TAGS_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID,
-};
+    use sdk::core::ids::{AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID};
     use uuid::Uuid;
 
     #[test]

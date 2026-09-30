@@ -25,6 +25,7 @@ use notification_indexer::consumer::{
 };
 use notification_indexer::consumer_lag::LagMonitor;
 use notification_indexer::error::IndexerError;
+use notification_indexer::metrics::{self, Consumer, FailReason, Poller};
 use notification_indexer::models::{
     build_rejection_event, build_vote_threshold_event, extract_bounty_created,
     extract_bounty_relations, extract_proposal_comments, handle_bounty_allocated,
@@ -95,6 +96,14 @@ fn build_telemetry_config() -> hermes_instrumentation::Config {
 }
 
 async fn async_main() -> Result<(), IndexerError> {
+    // Prometheus /metrics on 9464 (hermes_instrumentation::metrics::DEFAULT_PORT),
+    // the port the ServiceMonitor scrapes; override with METRICS_PORT for local runs.
+    // Separate from the health server on HEALTH_PORT, matching the other indexers.
+    let metrics_port: Option<u16> = env::var("METRICS_PORT").ok().and_then(|s| s.parse().ok());
+    hermes_instrumentation::metrics::install("notification-indexer", metrics_port)
+        .map_err(|e| IndexerError::Config(format!("metrics install failed: {}", e)))?;
+    metrics::register();
+
     let database_url = env::var("DATABASE_URL")
         .map_err(|_| IndexerError::Config("DATABASE_URL not set".into()))?;
     let kafka_broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
@@ -330,6 +339,7 @@ async fn async_main() -> Result<(), IndexerError> {
                 // Without a floor we would notify the entire historical backlog,
                 // which on a migrated chain is thousands of replayed proposals.
                 // Skipping a poll cycle is strictly better than that.
+                metrics::poller_error(Poller::Rejection);
                 error!(error = %e, "Failed to resolve rejection floor; rejection poller disabled");
                 return;
             }
@@ -365,6 +375,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     let editors = match poller_storage.find_editors_for_space(proposal.space_id).await {
                                         Ok(eds) => eds,
                                         Err(e) => {
+                                            metrics::poller_error(Poller::Rejection);
                                             error!(error = %e, space_id = %proposal.space_id, "Failed to look up editors for rejection, will retry next poll");
                                             continue;
                                         }
@@ -389,6 +400,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                             // All duplicates, already notified
                                         }
                                         Err(e) => {
+                                            metrics::poller_error(Poller::Rejection);
                                             error!(
                                                 error = %e,
                                                 proposal_id = %proposal.id,
@@ -403,6 +415,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                 }
                             }
                             Err(e) => {
+                                metrics::poller_error(Poller::Rejection);
                                 error!(error = %e, "Failed to query expired proposals");
                                 break;
                             }
@@ -448,7 +461,10 @@ async fn async_main() -> Result<(), IndexerError> {
                                     );
                                 }
                             }
-                            Err(e) => error!(error = %e, "Retention cleanup failed"),
+                            Err(e) => {
+                                metrics::poller_error(Poller::Retention);
+                                error!(error = %e, "Retention cleanup failed");
+                            }
                         }
                     }
                 }
@@ -508,6 +524,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                 (start, 0i64)
                             }
                             Err(e) => {
+                                metrics::poller_error(Poller::VoteThreshold);
                                 error!(error = %e, "Failed to read vote poll cursor; skipping tick");
                                 continue;
                             }
@@ -534,6 +551,7 @@ async fn async_main() -> Result<(), IndexerError> {
                             {
                                 Ok(r) => r,
                                 Err(e) => {
+                                    metrics::poller_error(Poller::VoteThreshold);
                                     error!(error = %e, "Failed to query entity vote counts");
                                     break;
                                 }
@@ -569,6 +587,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                 }
                                                 Ok(_) => { /* already notified at this threshold */ }
                                                 Err(e) => {
+                                                    metrics::poller_error(Poller::VoteThreshold);
                                                     error!(error = %e, entity_id = %row.entity_id, "Failed to insert vote-threshold notification");
                                                     had_error = true;
                                                     break;
@@ -579,6 +598,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                             debug!(entity_id = %row.entity_id, "No creator/home space; skipping vote-threshold notification");
                                         }
                                         Err(e) => {
+                                            metrics::poller_error(Poller::VoteThreshold);
                                             error!(error = %e, entity_id = %row.entity_id, "DB error resolving entity creator");
                                             had_error = true;
                                             break;
@@ -603,6 +623,7 @@ async fn async_main() -> Result<(), IndexerError> {
                             // mid-batch DB error retries (idempotency makes re-inserts
                             // a no-op).
                             if let Err(e) = vote_storage.set_poll_cursor(CURSOR_NAME, hw_ts, hw_id).await {
+                                metrics::poller_error(Poller::VoteThreshold);
                                 error!(error = %e, "Failed to persist vote poll cursor");
                                 break;
                             }
@@ -718,6 +739,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     Ok(edit) => edit,
                                     Err(e) => {
                                         // Parse error — commit to avoid poison pill
+                                        metrics::event_failed(Consumer::KnowledgeEdits, FailReason::Unprocessable);
                                         warn!(
                                             error = %e,
                                             partition = partition,
@@ -737,6 +759,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     Ok(rels) => rels,
                                     Err(e) => {
                                         // Decode error — commit to avoid poison pill
+                                        metrics::event_failed(Consumer::KnowledgeEdits, FailReason::Unprocessable);
                                         warn!(
                                             error = %e,
                                             partition = partition,
@@ -756,6 +779,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                 let bounties_created = match extract_bounty_created(&hermes_edit) {
                                     Ok(b) => b,
                                     Err(e) => {
+                                        metrics::event_failed(Consumer::KnowledgeEdits, FailReason::Unprocessable);
                                         warn!(error = %e, partition = partition, offset = offset, "Failed to extract bounty-created, committing to skip");
                                         ke_errors += 1;
                                         if let Err(e) = kec.commit_message(&topic, partition, offset) {
@@ -767,6 +791,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                 let comments = match extract_proposal_comments(&hermes_edit) {
                                     Ok(c) => c,
                                     Err(e) => {
+                                        metrics::event_failed(Consumer::KnowledgeEdits, FailReason::Unprocessable);
                                         warn!(error = %e, partition = partition, offset = offset, "Failed to extract proposal comments, committing to skip");
                                         ke_errors += 1;
                                         if let Err(e) = kec.commit_message(&topic, partition, offset) {
@@ -1107,9 +1132,12 @@ async fn async_main() -> Result<(), IndexerError> {
                                 // Only commit offset if all relations processed successfully.
                                 // On DB error (Err): don't commit — retry on restart.
                                 if process_result.is_ok() {
+                                    metrics::event_processed(Consumer::KnowledgeEdits);
                                     if let Err(e) = kec.commit_message(&topic, partition, offset) {
                                         error!(error = %e, "Failed to commit knowledge edits offset");
                                     }
+                                } else {
+                                    metrics::event_failed(Consumer::KnowledgeEdits, FailReason::DbError);
                                 }
                             }
                             Some(Err(e)) => {
@@ -1306,6 +1334,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                         Ok(sid) => sid,
                                         Err(e) => {
                                             // Malformed space_id — cannot reprocess, commit to avoid poison pill
+                                            metrics::event_failed(Consumer::Governance, FailReason::Unprocessable);
                                             error!(error = %e, "Invalid space_id in event");
                                             error_count += 1;
                                             if let Err(e) = consumer.commit_message(&topic, partition, offset) {
@@ -1322,6 +1351,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                         Ok(eds) => eds,
                                         Err(e) => {
                                             // DB error — don't commit offset so we retry on restart
+                                            metrics::event_failed(Consumer::Governance, FailReason::DbError);
                                             error!(
                                                 error = %e,
                                                 space_id = %space_id,
@@ -1369,6 +1399,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     if recipients.is_empty() {
                                         // Genuinely no recipients — this is normal, not an error
                                         processed_count += 1;
+                                        metrics::event_processed(Consumer::Governance);
                                         should_commit = true;
                                     } else {
                                         match storage.insert_notifications_for_users(&event, &recipients).await {
@@ -1383,10 +1414,12 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     );
                                                 }
                                                 processed_count += 1;
+                                                metrics::event_processed(Consumer::Governance);
                                                 should_commit = true;
                                             }
                                             Err(e) => {
                                                 // DB error — don't commit offset so we retry on restart
+                                                metrics::event_failed(Consumer::Governance, FailReason::DbError);
                                                 error!(
                                                     error = %e,
                                                     event_type = %event.payload.event_type,
@@ -1399,6 +1432,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                 }
                                 Err(e) => {
                                     // Handler/parse error — cannot reprocess, commit to avoid poison pill
+                                    metrics::event_failed(Consumer::Governance, FailReason::Unprocessable);
                                     warn!(
                                         error = %e,
                                         partition = partition,

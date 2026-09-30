@@ -15,6 +15,7 @@ use vote_indexer::error::IndexerError;
 use vote_indexer::handlers::voting::{
     build_score_values, calculate_vote_counts, get_latest_user_votes, handle_vote_cast,
 };
+use vote_indexer::metrics::{self, RejectReason};
 use vote_indexer::models::voting::{UserVoteCriteria, VoteCountCriteria, VoteItem};
 use vote_indexer::storage::Storage;
 
@@ -78,6 +79,13 @@ fn build_telemetry_config() -> hermes_instrumentation::Config {
 }
 
 async fn async_main() -> Result<(), IndexerError> {
+    // Prometheus /metrics on 9464 (hermes_instrumentation::metrics::DEFAULT_PORT),
+    // the port the ServiceMonitor scrapes; override with METRICS_PORT for local runs.
+    let metrics_port: Option<u16> = env::var("METRICS_PORT").ok().and_then(|s| s.parse().ok());
+    hermes_instrumentation::metrics::install("vote-indexer", metrics_port)
+        .map_err(|e| IndexerError::Config(format!("metrics install failed: {}", e)))?;
+    metrics::register();
+
     // Load configuration from environment
     let database_url = env::var("DATABASE_URL")
         .map_err(|_| IndexerError::Config("DATABASE_URL not set".into()))?;
@@ -130,16 +138,15 @@ async fn async_main() -> Result<(), IndexerError> {
                 info!("Shutting down...");
                 // Process any remaining votes before shutdown
                 if !vote_buffer.is_empty() {
-                    match process_vote_batch(&vote_buffer, &storage).await {
-                        Ok(count) => {
-                            processed_count += count as u64;
-                            commit_offsets(&consumer, &commit_info);
-                        }
-                        Err(e) => {
-                            error!(error = %e, "Failed to process final batch");
-                            error_count += vote_buffer.len() as u64;
-                        }
-                    }
+                    flush_batch(
+                        &vote_buffer,
+                        &commit_info,
+                        &storage,
+                        &consumer,
+                        &mut processed_count,
+                        &mut error_count,
+                    )
+                    .await;
                 }
                 break;
             }
@@ -148,16 +155,15 @@ async fn async_main() -> Result<(), IndexerError> {
                 // Process batch on timeout if we have votes
                 if !vote_buffer.is_empty() {
                     debug!(count = vote_buffer.len(), "Processing batch on timeout");
-                    match process_vote_batch(&vote_buffer, &storage).await {
-                        Ok(count) => {
-                            processed_count += count as u64;
-                            commit_offsets(&consumer, &commit_info);
-                        }
-                        Err(e) => {
-                            error!(error = %e, "Failed to process batch");
-                            error_count += vote_buffer.len() as u64;
-                        }
-                    }
+                    flush_batch(
+                        &vote_buffer,
+                        &commit_info,
+                        &storage,
+                        &consumer,
+                        &mut processed_count,
+                        &mut error_count,
+                    )
+                    .await;
                     vote_buffer.clear();
                     commit_info.clear();
                 }
@@ -181,16 +187,15 @@ async fn async_main() -> Result<(), IndexerError> {
                                             // Process batch if full
                                             if vote_buffer.len() >= batch_size {
                                                 debug!(count = vote_buffer.len(), "Processing full batch");
-                                                match process_vote_batch(&vote_buffer, &storage).await {
-                                                    Ok(count) => {
-                                                        processed_count += count as u64;
-                                                        commit_offsets(&consumer, &commit_info);
-                                                    }
-                                                    Err(e) => {
-                                                        error!(error = %e, "Failed to process batch");
-                                                        error_count += vote_buffer.len() as u64;
-                                                    }
-                                                }
+                                                flush_batch(
+                                                    &vote_buffer,
+                                                    &commit_info,
+                                                    &storage,
+                                                    &consumer,
+                                                    &mut processed_count,
+                                                    &mut error_count,
+                                                )
+                                                .await;
                                                 vote_buffer.clear();
                                                 commit_info.clear();
                                             }
@@ -203,6 +208,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                 "Failed to handle vote message"
                                             );
                                             error_count += 1;
+                                            metrics::message_rejected(RejectReason::Invalid);
                                             // Commit to avoid getting stuck
                                             if let Err(e) = consumer.commit_message(&topic, partition, offset) {
                                                 error!(error = %e, "Failed to commit offset");
@@ -218,6 +224,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                         "Failed to parse vote message"
                                     );
                                     error_count += 1;
+                                    metrics::message_rejected(RejectReason::Undecodable);
                                     // Commit to avoid getting stuck
                                     if let Err(e) = consumer.commit_message(&topic, partition, offset) {
                                         error!(error = %e, "Failed to commit offset");
@@ -245,6 +252,35 @@ async fn async_main() -> Result<(), IndexerError> {
     );
 
     Ok(())
+}
+
+/// Process a batch and commit its offsets on success, updating the running totals
+/// and the vote counters either way.
+///
+/// The batch is one transaction, so on failure none of its votes landed. Its
+/// offsets are not committed, but the next batch that succeeds commits past
+/// them, so the votes are lost until the topic is replayed.
+/// `vote_indexer_votes_dropped_total` counts them.
+async fn flush_batch(
+    votes: &[VoteItem],
+    commit_info: &[(String, i32, i64)],
+    storage: &Storage,
+    consumer: &KafkaConsumer,
+    processed_count: &mut u64,
+    error_count: &mut u64,
+) {
+    match process_vote_batch(votes, storage).await {
+        Ok(count) => {
+            *processed_count += count as u64;
+            metrics::votes_processed(count as u64);
+            commit_offsets(consumer, commit_info);
+        }
+        Err(e) => {
+            error!(error = %e, dropped = votes.len(), "Failed to process batch");
+            *error_count += votes.len() as u64;
+            metrics::votes_dropped(votes.len() as u64);
+        }
+    }
 }
 
 /// Process a batch of votes within a single transaction.
@@ -337,6 +373,7 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
         // harmless and self-correcting, a lost vote is not. This also makes deploy
         // order irrelevant if the migration has not landed yet.
         if let Err(e) = storage.refresh_ranking_scores(&updated_vote_counts).await {
+            metrics::ranking_refresh_failed();
             warn!(
                 error = %e,
                 "Failed to refresh feed ranking scores; votes are committed and the \

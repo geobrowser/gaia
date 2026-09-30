@@ -114,7 +114,7 @@ pub fn get_latest_user_votes(votes: &[VoteItem]) -> Vec<UserVoteItem> {
                 object_id,
                 object_type,
                 space_id,
-                vote_type: vote.vote.clone(),
+                vote_type: vote.vote,
                 kind,
                 voted_at: vote.block_timestamp,
             },
@@ -129,8 +129,8 @@ pub fn compute_vote_delta(
     saved_vote: Option<&UserVoteItem>,
     new_vote: &UserVoteItem,
 ) -> VotesDelta {
-    let saved_vote_value = saved_vote.map(|vote| vote.vote_type.clone());
-    let new_vote_value = new_vote.vote_type.clone();
+    let saved_vote_value = saved_vote.map(|vote| vote.vote_type);
+    let new_vote_value = new_vote.vote_type;
 
     let (positive, negative) = match (saved_vote_value, new_vote_value) {
         (Some(VoteValue::Up), VoteValue::Down) => (-1, 1),
@@ -852,7 +852,7 @@ mod tests {
             negative: 0,
         };
 
-        let first = build_score_values(&[count.clone()]);
+        let first = build_score_values(std::slice::from_ref(&count));
         let second = build_score_values(&[count]);
 
         assert_eq!(first[0].id, second[0].id);

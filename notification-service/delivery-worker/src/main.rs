@@ -14,6 +14,7 @@ use delivery_worker::deliver::{
     backoff_seconds, deliver_webhook, is_success, should_retry, MAX_RETRIES,
 };
 use delivery_worker::error::WorkerError;
+use delivery_worker::metrics::{self, Outcome};
 use delivery_worker::storage::Storage;
 
 /// Outcome of a single delivery attempt, returned from spawned tasks.
@@ -117,6 +118,14 @@ async fn async_main() -> Result<(), WorkerError> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(8080);
 
+    // Prometheus /metrics on 9464 (hermes_instrumentation::metrics::DEFAULT_PORT),
+    // the port the ServiceMonitor scrapes; override with METRICS_PORT for local runs.
+    // Separate from the health server on HEALTH_PORT, matching the other indexers.
+    let metrics_port: Option<u16> = env::var("METRICS_PORT").ok().and_then(|s| s.parse().ok());
+    hermes_instrumentation::metrics::install("delivery-worker", metrics_port)
+        .map_err(|e| WorkerError::Config(format!("metrics install failed: {}", e)))?;
+    metrics::register();
+
     // Initialize storage (wrapped in Arc for concurrent task access)
     let storage = Arc::new(Storage::connect(&database_url).await?);
     info!("Connected to database");
@@ -189,6 +198,7 @@ async fn async_main() -> Result<(), WorkerError> {
                 )
                 .fetch_one(storage.pool())
                 .await
+                .inspect(|n| metrics::set_pending(*n))
                 .unwrap_or(-1);
 
                 let in_progress_count = sqlx::query_scalar::<_, i64>(
@@ -196,6 +206,7 @@ async fn async_main() -> Result<(), WorkerError> {
                 )
                 .fetch_one(storage.pool())
                 .await
+                .inspect(|n| metrics::set_in_progress(*n))
                 .unwrap_or(-1);
 
                 let pool_size = storage.pool().size();
@@ -215,6 +226,7 @@ async fn async_main() -> Result<(), WorkerError> {
                 match storage.reset_stale_claims(300).await {
                     Ok(count) if count > 0 => {
                         warn!(reset = count, "Reset stale in_progress deliveries to pending");
+                        metrics::stale_claims_reset(count);
                     }
                     Ok(_) => {}
                     Err(e) => {
@@ -253,6 +265,7 @@ async fn async_main() -> Result<(), WorkerError> {
                     }
                     Err(e) => {
                         error!(error = %e, "Failed to claim pending deliveries");
+                        metrics::claim_error();
                     }
                 }
             }
@@ -392,10 +405,20 @@ fn collect_outcome(
     failed_count: &mut u64,
 ) {
     match result {
-        Ok(DeliveryOutcome::Delivered) => *delivered_count += 1,
-        Ok(DeliveryOutcome::Failed) => *failed_count += 1,
-        Ok(DeliveryOutcome::Retried | DeliveryOutcome::Error) => {}
-        Err(e) => error!(error = %e, "Delivery task panicked"),
+        Ok(DeliveryOutcome::Delivered) => {
+            *delivered_count += 1;
+            metrics::delivery(Outcome::Delivered);
+        }
+        Ok(DeliveryOutcome::Failed) => {
+            *failed_count += 1;
+            metrics::delivery(Outcome::Failed);
+        }
+        Ok(DeliveryOutcome::Retried) => metrics::delivery(Outcome::Retried),
+        Ok(DeliveryOutcome::Error) => metrics::delivery(Outcome::Error),
+        Err(e) => {
+            error!(error = %e, "Delivery task panicked");
+            metrics::delivery(Outcome::Error);
+        }
     }
 }
 

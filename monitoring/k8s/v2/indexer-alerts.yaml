@@ -1,0 +1,133 @@
+# Alerts for the long-running indexers that gained /metrics in GEO-2959, after
+# kg-indexer (./kg-indexer-alerts.yaml): search-indexer, vote-indexer,
+# topology-indexer, ranking-indexer, notification-indexer and delivery-worker.
+#
+# Each one serves /metrics on 9464 and is scraped through
+# hermes-metrics-servicemonitor.yaml, so `up` and every series below carry
+# service="<name>" (the Service name) and namespace="gaia".
+#
+# Coverage split:
+#   IndexerMetricsMissing (here)       — the signal itself is gone
+#   IndexerDroppedData (here)          — a failure path that loses data without
+#                                        stopping the consumer
+#   IndexerRestartingRepeatedly (here) — the failure paths that exit instead:
+#       search-indexer on any NACKed batch, ranking-indexer on a transient error
+#       that outlasts its retries. Their counters die with the process, so the
+#       restart count is the signal.
+#   Kafka consumer lag (../kafka-consumer-lag-alerts.yaml) — per-partition lag for
+#       the five Kafka consumers, which still works when a pod is dead. None of
+#       these services publishes a position gauge: their topics only carry
+#       messages when someone acts, so a "last processed" value would stall in
+#       quiet stretches. delivery-worker reads Postgres, not Kafka; its
+#       delivery_worker_pending_deliveries gauge is the backlog signal there.
+#
+# Apply after every service listed here is running an image that serves
+# /metrics, or IndexerMetricsMissing fires in between:
+#   kubectl apply -f monitoring/k8s/v2/indexer-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: indexer-observability
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: indexers
+      rules:
+        # One rule for all six, keyed on the workload rather than on six absent()
+        # calls. It fires for a Deployment or StatefulSet that kube-state-metrics
+        # says should be running (replicas > 0) and that has no `up == 1` target,
+        # so it catches a crash-looping pod, a pod that never serves /metrics, and
+        # broken Service / ServiceMonitor wiring, but stays quiet while a service
+        # is deliberately scaled to 0 (the Kafka replay procedure does this).
+        # label_replace writes the workload name into `service` so it joins on the
+        # scrape target's Service name, which is the same for every entry here.
+        - alert: IndexerMetricsMissing
+          expr: |
+            (
+              label_replace(
+                max by (namespace, deployment) (
+                  kube_deployment_spec_replicas{namespace="gaia", deployment=~"vote-indexer|topology-indexer|ranking-indexer|notification-indexer|delivery-worker"}
+                ) > 0,
+                "service", "$1", "deployment", "(.*)"
+              )
+              or
+              label_replace(
+                max by (namespace, statefulset) (
+                  kube_statefulset_replicas{namespace="gaia", statefulset="search-indexer"}
+                ) > 0,
+                "service", "$1", "statefulset", "(.*)"
+              )
+            )
+            unless on (namespace, service)
+              max by (namespace, service) (up{namespace="gaia"} == 1)
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.service }} is not reporting metrics"
+            description: >-
+              {{ $labels.service }} should be running in {{ $labels.namespace }}, but
+              Prometheus has had no healthy scrape of it for 15 minutes. Either no pod is
+              ready (a Service only publishes ready pods, so a failing readiness probe
+              counts), or the Service / ServiceMonitor wiring is broken. Either way
+              IndexerDroppedData is blind for it until this clears.
+
+        # No `for`: each of these counters only moves when data is lost, and one
+        # event is already the thing worth knowing. Every counter is registered at
+        # zero on startup, so increase() sees the first event rather than treating
+        # it as the series' first sample.
+        #
+        #   vote_indexer_votes_dropped_total, topology_indexer_diffs_dropped_total:
+        #     a batch transaction failed; its offsets were not committed, but the
+        #     next good batch commits past them, so the batch is gone.
+        #   notification_indexer_events_failed_total{reason="db_error"}: the same
+        #     shape — the offset is left uncommitted "to retry on restart", but the
+        #     next success on the partition supersedes it.
+        #   delivery_worker_deliveries_total{outcome="failed"}: a webhook delivery
+        #     given up on for good.
+        - alert: IndexerDroppedData
+          expr: |
+            sum by (namespace, service) (
+                 increase(vote_indexer_votes_dropped_total{namespace="gaia"}[15m])
+              or increase(topology_indexer_diffs_dropped_total{namespace="gaia"}[15m])
+              or increase(notification_indexer_events_failed_total{namespace="gaia", reason="db_error"}[15m])
+              or increase(delivery_worker_deliveries_total{namespace="gaia", outcome="failed"}[15m])
+            ) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.service }} dropped data"
+            description: >-
+              {{ $labels.service }} lost {{ $value | humanize }} item(s) in the last 15
+              minutes that it will not retry. vote-indexer: votes whose batch transaction
+              failed. topology-indexer: canonical-graph diffs that failed to apply.
+              notification-indexer: events whose notifications hit a database error.
+              delivery-worker: webhook deliveries marked failed for good. The consumer
+              has moved past them, so they stay missing until the topic is replayed (or,
+              for delivery-worker, the rows are reset to pending). The cause is in the
+              logs:
+              kubectl -n gaia logs deploy/{{ $labels.service }} --since=1h | grep -iE 'error|failed'
+
+        # Mirrors AtlasRestartingRepeatedly / ApiRestartingRepeatedly. The stock
+        # KubePodCrashLooping only fires once a pod is in CrashLoopBackOff, which a
+        # pod that exits every half hour and starts cleanly never reaches.
+        - alert: IndexerRestartingRepeatedly
+          expr: |
+            sum by (namespace, container) (
+              increase(kube_pod_container_status_restarts_total{namespace="gaia", container=~"search-indexer|vote-indexer|topology-indexer|ranking-indexer|notification-indexer|delivery-worker"}[1h])
+            ) >= 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.container }} is restarting repeatedly"
+            description: >-
+              {{ $labels.container }} has restarted {{ $value | humanize }} times in the last
+              hour. search-indexer exits whenever a batch is NACKed (an OpenSearch bulk
+              failure or a processing error) so Kafka redelivers it; ranking-indexer exits
+              when a transient database or Kafka error outlasts its retries. Both converge
+              on restart, but a loop means the same batch keeps failing. Read the previous
+              container's log:
+              kubectl -n gaia logs <pod> -c {{ $labels.container }} --previous

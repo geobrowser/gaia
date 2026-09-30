@@ -57,6 +57,7 @@ kubectl --context $CTX apply -f monitoring/k8s/v2/
 | `gateway-metrics.yaml` | scrapes Cilium's Envoy and provides the `api:gateway_*` recording rules that replace the nginx-derived `api:ingress_*` pair |
 | `chain-tip-exporter.yaml` | this cluster had no exporter at all, so `HermesBehindChainTip` could never fire |
 | `kg-indexer-alerts.yaml` | new: `KgIndexerBlockDropped` (GEO-2884's silent loss) and `KgIndexerMetricsMissing` |
+| `indexer-alerts.yaml` | new: `IndexerMetricsMissing`, `IndexerDroppedData` and `IndexerRestartingRepeatedly` for the six indexers below |
 
 ## Deliberately not ported
 
@@ -75,28 +76,23 @@ is a copy of `gaia/kafka-credentials`; see the exporter's header.
 - **Dashboards** (`*-dashboard.yaml`) — the `gaia-v2-*` ones point at the old
   cluster's `gaia-v2` namespace and need the same re-pointing treatment.
 
-## What is scraped, and what cannot be yet
+## What is scraped
 
 Checked against the live cluster on 2026-09-30 (GEO-2959).
 
 Scraped: `api`, `atlas`, `hermes-pipeline`, `hermes-ipfs-cache`,
-`chain-tip-exporter`, `kafka-exporter`, `geo-chat-api`.
+`chain-tip-exporter`, `kafka-exporter`, `geo-chat-api`, `kg-indexer`.
 
-Not scraped, because none of them exposes a metrics endpoint:
+All of the Kafka consumers and indexers now serve `/metrics` on 9464 through
+`hermes_instrumentation::metrics::install` and are in
+`hermes-metrics-servicemonitor.yaml`. Port 9464 is separate from the `/healthz`
+server that `search-indexer`, `notification-indexer` and `delivery-worker` run
+on 8080, so every service has the same `metrics` port and the ServiceMonitor
+needs one endpoint. It also keeps scrapes off the health server:
+`search-indexer` runs that on its own thread so probes survive a saturated
+runtime, and installs the metrics listener the same way.
 
-| service | what it serves today |
-|---|---|
-| `vote-indexer`, `topology-indexer`, `ranking-indexer` | no HTTP listener, no container port |
-| `search-indexer`, `notification-indexer`, `delivery-worker` | `/healthz` and `/readyz` on 8080; `/metrics` returns 404 |
-
-All of them depend on `hermes-instrumentation`, whose `metrics::install` is
-the one-line listener `atlas` and `hermes-pipeline` use, but none calls it and
-none records a metric. `search-indexer` keeps counters in memory
-(`SearchIndexerMetrics`) and only logs them. Adding a listener would add a
-target and nothing else, so each service needs real gauges first.
-
-`kg-indexer` is the first one done (GEO-2959). It serves `/metrics` on 9464 and
-is in `hermes-metrics-servicemonitor.yaml`. It publishes
+`kg-indexer` was first (GEO-2959, #988). It publishes
 `hermes_latest_processed_block{,_timestamp}`, so `HermesBehindChainTip` covers
 it, plus `kg_indexer_blocks_dropped_total{transient}`,
 `kg_indexer_blocks_processed_total`, `kg_indexer_events_processed_total`,
@@ -108,9 +104,30 @@ lowest block still buffered. hermes-pipeline emits one summary per chain block
 (889 summaries against 889 tip blocks over 24h on 2026-09-30), so it tracks
 the tip whenever kg-indexer is keeping up.
 
-Until that lands, these services are covered only from outside: consumer lag
-by `kafka-exporter` (`kafka-consumer-lag-alerts.yaml`) and pod state by the
-stock kube-state-metrics rules.
+The others (also GEO-2959) publish counters only, plus one backlog gauge:
+
+| service | series |
+|---|---|
+| `search-indexer` | `search_indexer_events_processed_total`, `_documents_indexed_total`, `_operations_total`, `_operations_failed_total`, `_operations_by_kind_total{kind}`, `_bulk_calls_total`, `_bulk_{wall,took}_milliseconds_total`, gauge `_canonical_graph_nodes`. These are the in-memory `SearchIndexerMetrics`, copied into the recorder every 10s |
+| `vote-indexer` | `vote_indexer_votes_processed_total`, `_votes_dropped_total`, `_messages_rejected_total{reason}`, `_ranking_refresh_failures_total` |
+| `topology-indexer` | `topology_indexer_diffs_applied_total`, `_diffs_dropped_total`, `_messages_unparseable_total` |
+| `ranking-indexer` | `ranking_indexer_messages_processed_total{topic}`, `_messages_skipped_total{topic}`, `_transient_retries_total{topic}` |
+| `notification-indexer` | `notification_indexer_events_processed_total{consumer}`, `_events_failed_total{consumer,reason}`, `_notifications_inserted_total`, `_poller_errors_total{poller}` |
+| `delivery-worker` | `delivery_worker_deliveries_total{outcome}`, `_claim_errors_total`, `_stale_claims_reset_total`, gauges `_pending_deliveries`, `_in_progress_deliveries` |
+
+None of them publishes a position gauge. Their topics only carry a message when
+someone acts, so a "last processed" value would stall through quiet stretches
+and look like lag; per-partition lag is already `kafka-exporter`'s job
+(`kafka-consumer-lag-alerts.yaml`). `delivery-worker` reads Postgres, not
+Kafka, and its pending-deliveries gauge is correct when idle (it reads 0).
+
+Three failure paths lose data without stopping the consumer, and are what
+`IndexerDroppedData` watches: a vote-indexer or topology-indexer batch whose
+transaction fails, and a notification-indexer database error. Each leaves the
+offset uncommitted to be "retried on restart", but the next success on the
+partition commits past it. `search-indexer` (any NACKed batch) and
+`ranking-indexer` (a transient error that outlasts its retries) exit instead,
+so their failures show as restarts (`IndexerRestartingRepeatedly`).
 
 ## Dashboards
 

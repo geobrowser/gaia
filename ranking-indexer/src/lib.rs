@@ -9,6 +9,7 @@ pub mod detect;
 pub mod eligibility;
 pub mod error;
 pub mod membership;
+pub mod metrics;
 pub mod models;
 pub mod publish;
 pub mod recompute;

@@ -8,6 +8,9 @@ metadata:
   namespace: gaia
   labels:
     app: search-indexer
+    # Copied onto every scraped series by the hermes-metrics ServiceMonitor's
+    # `targetLabels`, the same as kg-indexer and atlas.
+    gaia_namespace: gaia
 spec:
   clusterIP: None
   selector:
@@ -16,6 +19,11 @@ spec:
     - name: http
       port: 8080
       targetPort: health
+    # Scraped by the hermes-metrics ServiceMonitor. A headless Service still
+    # publishes Endpoints, which is all Prometheus needs.
+    - name: metrics
+      port: 9464
+      targetPort: metrics
 ---
 # =============================================================================
 # Search Indexer StatefulSet
@@ -113,6 +121,8 @@ spec:
             - name: RUST_LOG
               value: "info"
               # Set with kubectl for debugging: "info,search_indexer=debug,search_indexer_repository=debug"
+            - name: METRICS_PORT
+              value: "9464"
             # Sentry telemetry and monitoring
             - name: SENTRY_DSN
               valueFrom:
@@ -133,6 +143,9 @@ spec:
           ports:
             - name: health
               containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9464
               protocol: TCP
           resources:
             requests:
