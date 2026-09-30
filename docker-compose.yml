@@ -339,6 +339,61 @@ services:
       opensearch:
         condition: service_healthy
 
+  # ---------------------------------------------------------------------------
+  # Semantic search (profile: semantic) — docs/tech-designs/semantic-search.md
+  #
+  # Opt-in profile: embedding-service compiles the ONNX runtime and fetches the model bundle
+  # at build time (a long first build), so it is not part of `services`. Bring-up:
+  #   docker compose --profile infra --profile semantic up -d --build
+  #   cargo run -p search-admin -- --environment $ENVIRONMENT add-embedding-slot \
+  #       --from-service http://localhost:8090 --slot 79502860cd   # once per index
+  #   EMBEDDING_SERVICE_URL=http://embedding-service:8080 docker compose --profile services up api
+  # embedding-indexer refuses to start until the slot is on the index; `docker compose up
+  # embedding-indexer` again after the search-admin step.
+  # ---------------------------------------------------------------------------
+
+  embedding-service:
+    profiles: [semantic]
+    build:
+      context: .
+      dockerfile: embedding-service/Dockerfile
+    user: "1000:1000"
+    read_only: true
+    ports:
+      - "127.0.0.1:8090:8080"
+    environment:
+      EMBEDDING_INTRA_OP_THREADS: "2"
+      RUST_LOG: info
+    healthcheck:
+      # The image has no curl; bash's /dev/tcp is enough for a status line.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health/ready HTTP/1.0\r\n\r\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    mem_limit: 2g
+
+  embedding-indexer:
+    profiles: [semantic]
+    build:
+      context: .
+      dockerfile: embedding-indexer/Dockerfile
+    user: "1000:1000"
+    read_only: true
+    environment:
+      OPENSEARCH_URL: http://opensearch:9200
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      INDEX_ALIAS: ${INDEX_ALIAS:-entities}
+      EMBEDDING_SERVICE_URL: http://embedding-service:8080
+      EMBEDDING_SLOT: ${EMBEDDING_SLOT:-79502860cd}
+      EMBED_SCOPE_TYPE_IDS: ${EMBED_SCOPE_TYPE_IDS:-}
+      RUST_LOG: info
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      embedding-service:
+        condition: service_healthy
+
   hermes-ipfs-cache:
     profiles: [services]
     build:
@@ -391,6 +446,8 @@ services:
       SENTRY_DSN: ${SENTRY_DSN:-}
       IPFS_KEY: ${IPFS_KEY:-}
       IPFS_GATEWAY_WRITE: ${IPFS_GATEWAY_WRITE:-}
+      # Set to http://embedding-service:8080 with the `semantic` profile up to enable mode=semantic|hybrid.
+      EMBEDDING_SERVICE_URL: ${EMBEDDING_SERVICE_URL:-}
     depends_on:
       migrate:
         condition: service_completed_successfully

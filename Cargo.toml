@@ -25,6 +25,10 @@ members = [
 
     "kg-indexer",
     "ranking-indexer",
+
+    "embedding",
+    "embedding-service",
+    "embedding-indexer",
     "scoring-service/vote-indexer",
     "scoring-service/topology-indexer",
 

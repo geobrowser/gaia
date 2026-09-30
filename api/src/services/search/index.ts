@@ -9,6 +9,7 @@ export {OpenSearchClient} from "./opensearch"
 export type {
 	BoostOverrides,
 	SearchErrorType,
+	SearchMode,
 	SearchQuery,
 	SearchResponse,
 	SearchResult,

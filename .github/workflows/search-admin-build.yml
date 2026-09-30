@@ -10,6 +10,7 @@ on:
       - 'search-admin/**'
       - 'search-indexer-repository/**'
       - 'search-indexer-shared/**'
+      - 'embedding/**'
       - '.github/workflows/search-admin-build.yml'
   workflow_dispatch:
 

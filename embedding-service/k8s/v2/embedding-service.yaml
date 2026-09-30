@@ -1,0 +1,133 @@
+# Embedding Service
+#
+# The in-cluster embedding runtime behind semantic search. It serves the model bundles baked
+# into its image — one *slot* per bundle, identified by the hash of the bundle descriptor — over
+# `POST /embed`, and describes them on `GET /info`. Two callers: embedding-indexer (document
+# vectors) and the api (query vectors, one call per semantic/hybrid search). Because it sits on
+# the query path it keeps at least two replicas and rolls with maxUnavailable 0; if every pod is
+# down, semantic/hybrid requests answer 503 and lexical search is unaffected.
+#
+# Design: docs/tech-designs/semantic-search.md. Operations: docs/runbooks/deployment.md,
+# "Semantic search". Image: embedding-service/Dockerfile (Debian trixie — the statically linked
+# ONNX Runtime needs libstdc++ from GCC >= 13; weights are fetched and hash-verified at build).
+apiVersion: v1
+kind: Service
+metadata:
+  name: embedding-service
+  namespace: gaia
+  labels:
+    app: embedding-service
+spec:
+  type: ClusterIP
+  selector:
+    app: embedding-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedding-service
+  namespace: gaia
+  labels:
+    app: embedding-service
+spec:
+  # HPA-managed (hpa.yaml). deploy-v2 rewrites this literal with the live count before applying,
+  # so a deploy never shrinks a scaled-out service.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: embedding-service
+  minReadySeconds: 10
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: embedding-service
+    spec:
+      restartPolicy: Always
+      imagePullSecrets:
+        - name: geo
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: embedding-service
+          image: registry.digitalocean.com/geo/embedding-service:latest
+          imagePullPolicy: Always
+          # Verified against the built image: it serves under a read-only root filesystem, as uid
+          # 1000, with every capability dropped (the runtime writes nothing; /models is read-only).
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: EMBEDDING_MODELS_DIR
+              value: "/models"
+            # Match the CPU limit below: ONNX Runtime spins this many threads per session, and a
+            # session with more threads than quota stalls on the CFS throttle.
+            - name: EMBEDDING_INTRA_OP_THREADS
+              value: "2"
+            - name: EMBEDDING_BATCH_SIZE
+              value: "64"
+            - name: EMBEDDING_MAX_BATCH
+              value: "256"
+            # Document batches (indexer) and queries (api) run in separate lanes with separate
+            # concurrency caps, so a backfill never queues in front of a user's search.
+            - name: EMBEDDING_MAX_INFLIGHT
+              value: "4"
+            - name: EMBEDDING_QUERY_INFLIGHT
+              value: "2"
+            - name: EMBEDDING_QUERY_LANE
+              value: "true"
+            - name: PORT
+              value: "8080"
+            - name: RUST_LOG
+              value: "embedding_service=info,embedding=info"
+            - name: LOG_FORMAT
+              value: "json"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            # Measured on the built image (bge-small, query lane on, 2 threads): ~570 MiB
+            # resident after repeated 256-text document batches — the ONNX Runtime arena keeps
+            # the largest batch's buffers. The limit leaves room for a second slot loaded during
+            # a model rotation (D9); a larger bundle raises it. 2 CPUs ≈ 280 texts/s of document
+            # embedding per pod (measured in a 2-CPU container); one query embeds in 5–20 ms.
+            requests:
+              memory: "640Mi"
+              cpu: "500m"
+            limits:
+              memory: "1536Mi"
+              cpu: "2"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Ready once every configured bundle is loaded and verified (about 1 s for bge-small).
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3

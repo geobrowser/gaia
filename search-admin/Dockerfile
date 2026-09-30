@@ -13,6 +13,7 @@ WORKDIR /build
 COPY search-admin ./search-admin
 COPY search-indexer-repository ./search-indexer-repository
 COPY search-indexer-shared ./search-indexer-shared
+COPY embedding ./embedding
 
 # Copy Cargo.lock for dependency resolution
 COPY Cargo.lock ./
@@ -23,13 +24,20 @@ RUN echo '[workspace]' > Cargo.toml && \
     echo '    "search-admin",' >> Cargo.toml && \
     echo '    "search-indexer-repository",' >> Cargo.toml && \
     echo '    "search-indexer-shared",' >> Cargo.toml && \
+    echo '    "embedding",' >> Cargo.toml && \
     echo ']' >> Cargo.toml && \
     echo 'resolver = "2"' >> Cargo.toml
 
 # Build the CLI tool in release mode
 # Note: We copy Cargo.lock but don't use --locked because the workspace
-# structure here differs from the full repo (only 3 members vs all members)
-RUN cargo build --release --bin search-admin
+# structure here differs from the full repo (only 4 members vs all members)
+#
+# `-p search-admin` matters: without it cargo selects every member of this
+# mini-workspace, and `embedding`'s default `onnx` feature (fastembed + a
+# statically linked ONNX Runtime that needs GCC >= 13) would be unified into
+# the build and fail to link on bookworm. search-admin depends on `embedding`
+# with default-features = false and must be resolved on its own.
+RUN cargo build --release -p search-admin --bin search-admin
 
 # Runtime stage
 FROM debian:bookworm-slim

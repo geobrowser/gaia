@@ -1,0 +1,68 @@
+# search-admin had a build-and-push workflow but no test job, so its unit tests (the pure
+# embedding-slot rules in embedding_slots.rs and the eval-slot scoring) never ran in CI. This
+# job runs them on every change to the crate or to the crates it links.
+#
+# No clippy step yet: the crate carries 13 pre-existing `collapsible_if` warnings, so
+# `-D warnings` would fail on code this workflow does not own. Add the step when they are fixed.
+name: Search Admin Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'search-admin/**'
+      - 'search-indexer-repository/**'
+      - 'search-indexer-shared/**'
+      - 'embedding/**'
+      - '.github/workflows/search-admin-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'search-admin/**'
+      - 'search-indexer-repository/**'
+      - 'search-indexer-shared/**'
+      - 'embedding/**'
+      - '.github/workflows/search-admin-tests.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tests:
+    name: Format + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: "1.92.0"
+          components: rustfmt
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Cache cargo registry
+        uses: actions/cache@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-search-admin-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-search-admin-
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt -p search-admin --check
+
+      # `-p search-admin` alone: the crate depends on `embedding` with default-features = false,
+      # and selecting more packages would unify the ONNX runtime feature into the build.
+      - name: Run tests
+        run: cargo test -p search-admin --all-targets
+        env:
+          RUST_BACKTRACE: 1

@@ -3748,6 +3748,50 @@ class SearchValidator {
         : `expected only ASID_CANON, got [${ids.join(', ')}]`);
   }
 
+  /**
+   * Verifies `indexed_at` is stamped by the search-indexer on content writes (upsert and unset paths),
+   * reading the document straight from OpenSearch — the search API does not expose the field. The
+   * embedding-indexer polls on it (docs/tech-designs/semantic-search.md, step 3).
+   */
+  async test75_IndexedAtStampedOnContentWrites(): Promise<void> {
+    console.log(`\n${BLUE}Test 75: Verify indexed_at is stamped on documents (upsert + unset paths)${NC}`);
+    const osUrl = process.env.OPENSEARCH_URL || 'http://localhost:9200';
+    const index = process.env.OPENSEARCH_INDEX || 'staging_entities';
+    const dashed = (id: string) =>
+      `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
+    const cases: Array<[string, string, string]> = [
+      ['test75_upsert_path', 'Alice High (upsert)', TEST_ENTITIES.ALICE_HIGH_ID],
+      ['test75_unset_path', 'Unset Test 1 (unset)', TEST_ENTITIES.UNSET_TEST_1_ID],
+    ];
+    for (const [name, label, entityId] of cases) {
+      try {
+        const res = await fetch(`${osUrl}/${index}/_search`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            size: 1,
+            _source: ['entity_id', 'indexed_at'],
+            query: { term: { entity_id: dashed(entityId) } },
+          }),
+        });
+        const body = (await res.json()) as { hits?: { hits?: Array<{ _source?: { indexed_at?: string } }> } };
+        const hit = body.hits?.hits?.[0];
+        const stamp = hit?._source?.indexed_at;
+        const parsed = stamp ? Date.parse(stamp) : NaN;
+        const ageMs = Date.now() - parsed;
+        if (hit && stamp && !Number.isNaN(parsed) && ageMs >= -60_000 && ageMs < 24 * 3600_000) {
+          this.addResult(name, true, `${label} has indexed_at=${stamp} (${Math.round(ageMs / 1000)}s old)`);
+        } else if (!hit) {
+          this.addResult(name, false, `${label}: document not found in ${index} at ${osUrl}`);
+        } else {
+          this.addResult(name, false, `${label}: indexed_at missing or not a recent date (got ${JSON.stringify(stamp)})`);
+        }
+      } catch (e) {
+        this.addResult(name, false, `${label}: OpenSearch query failed: ${e}`);
+      }
+    }
+  }
+
   /** Numeric (non-UUID) values in additional_space_ids are rejected. */
   async test74_AdditionalSpaceIdsRejectsNumericValue(): Promise<void> {
     console.log(`\n${BLUE}Test 74: numeric (non-UUID) value returns 400${NC}`);
@@ -3904,6 +3948,7 @@ async function main() {
     await validator.test72_AdditionalSpaceIdsRejectsTrailingCharsInUuid();
     await validator.test73_AdditionalSpaceIdsUnknownSpacesFallsBackToCanonical();
     await validator.test74_AdditionalSpaceIdsRejectsNumericValue();
+    await validator.test75_IndexedAtStampedOnContentWrites();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

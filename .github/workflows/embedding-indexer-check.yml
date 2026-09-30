@@ -1,0 +1,91 @@
+name: Embedding Indexer Check
+
+# fmt, clippy, unit tests, and the integration test against a real OpenSearch 2.17.1 and a real
+# embedding-service (built here, serving the bge-small bundle fetched from its pinned source).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'embedding/**'
+      - 'embedding-service/**'
+      - 'embedding-indexer/**'
+      - 'search-indexer-shared/**'
+      - 'sdk/**'
+      - 'Cargo.lock'
+      - '.github/workflows/embedding-indexer-check.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'embedding/**'
+      - 'embedding-service/**'
+      - 'embedding-indexer/**'
+      - 'search-indexer-shared/**'
+      - 'sdk/**'
+      - 'Cargo.lock'
+      - '.github/workflows/embedding-indexer-check.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Build, Lint & Test
+    runs-on: ubuntu-24.04
+
+    services:
+      opensearch:
+        image: opensearchproject/opensearch:2.17.1
+        env:
+          discovery.type: single-node
+          plugins.security.disabled: "true"
+          OPENSEARCH_INITIAL_ADMIN_PASSWORD: E2eTest@SecurePass789!
+          OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+        options: >-
+          --health-cmd "curl -s http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 9200:9200
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+          components: rustfmt, clippy
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt -p embedding-indexer -- --check
+
+      - name: Clippy
+        run: cargo clippy -p embedding-indexer --all-targets -- -D warnings
+
+      - name: Build embedding-service and fetch the bundle
+        run: |
+          cargo build -p embedding-service
+          ./target/debug/embedding-service bundle fetch --spec embedding-service/bundles/bge-small-en-v1.5-q/bundle.json --out ./models
+
+      - name: Start embedding-service
+        run: |
+          EMBEDDING_MODELS_DIR=./models EMBEDDING_INTRA_OP_THREADS=2 PORT=8090 \
+            ./target/debug/embedding-service serve > /tmp/embedding-service.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf localhost:8090/health/ready && break; sleep 1; done
+          curl -sf localhost:8090/info | head -c 300
+
+      - name: Test (unit + integration)
+        env:
+          EMBED_TEST_OPENSEARCH_URL: http://localhost:9200
+          EMBED_TEST_SERVICE_URL: http://localhost:8090
+          EMBED_TEST_SLOT: "79502860cd"
+        run: cargo test -p embedding-indexer -- --nocapture
+
+      - name: Service log on failure
+        if: failure()
+        run: tail -50 /tmp/embedding-service.log

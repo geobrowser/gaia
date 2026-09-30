@@ -11,6 +11,7 @@ import {createProfileRouter} from "./src/profile"
 import {createProposalsRouter} from "./src/proposals"
 import {createSearchRouter} from "./src/search"
 import {isPoolConnectTimeout} from "./src/services/dbFailures"
+import {EmbeddingServiceClient, SlotRegistry} from "./src/services/embedding"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
 import {runtime} from "./src/services/runtime"
 import {OpenSearchClient} from "./src/services/search"
@@ -113,6 +114,26 @@ if (opensearchUrl) {
 
 	const searchClient = new OpenSearchClient(opensearchUrl, indexName)
 	await searchClient.init()
+
+	// Semantic and hybrid modes need the in-cluster embedding-service. Without it the search
+	// route serves lexical mode only and answers 503 for the others.
+	const embeddingServiceUrl = process.env.EMBEDDING_SERVICE_URL
+	if (embeddingServiceUrl) {
+		const embedding = new EmbeddingServiceClient(
+			embeddingServiceUrl,
+			process.env.EMBEDDING_QUERY_TIMEOUT_MS ? Number(process.env.EMBEDDING_QUERY_TIMEOUT_MS) : 2000,
+		)
+		const slots = new SlotRegistry({readMeta: () => searchClient.readIndexMeta(), service: embedding, log})
+		await slots.refresh()
+		slots.start(
+			(process.env.EMBEDDING_SLOTS_REFRESH_S ? Number(process.env.EMBEDDING_SLOTS_REFRESH_S) : 300) * 1000,
+		)
+		searchClient.enableSemantic({embedding, slots, pipelineName: `${indexName}_hybrid_minmax`})
+		log.info("Semantic search enabled", {embeddingServiceUrl, slots: slots.status()})
+	} else {
+		log.info("Semantic search disabled - EMBEDDING_SERVICE_URL not set")
+	}
+
 	app.route("/search", createSearchRouter(searchClient, runtime))
 	log.info("Search routes enabled", {url: opensearchUrl, indexName, environment: environment ?? "production"})
 } else {

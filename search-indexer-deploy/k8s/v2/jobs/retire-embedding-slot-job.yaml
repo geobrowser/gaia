@@ -1,0 +1,85 @@
+# Removes a slot from the index _meta so no request can select it. Refuses the default slot
+# (set-default-slot to another one first). Stop that slot's embedding-indexer and drop the bundle
+# from the embedding-service image around the same time; the fields and stored vectors remain
+# until the next index version, which is the only way to remove a mapping.
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-retire-embedding-slot
+  namespace: gaia
+  labels:
+    app: opensearch-admin
+    task: retire-embedding-slot
+    environment: testnet
+spec:
+  ttlSecondsAfterFinished: 86400  # 24 hours
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: opensearch-admin
+        task: retire-embedding-slot
+        environment: testnet
+    spec:
+      imagePullSecrets:
+      - name: geo
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: retire-embedding-slot
+        # `latest` is built from `main` by search-admin-build.yml (main has been the only trunk
+        # since 2026-09-17). The embedding-slot commands exist only from the semantic-search
+        # merge onward, so before that lands use a commit-sha tag from a workflow_dispatch of
+        # that workflow on the feature branch, and always confirm the running image carries the
+        # command you need: `kubectl logs` shows the CLI's own usage error otherwise.
+        image: registry.digitalocean.com/geo/search-admin:latest
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: OPENSEARCH_URL
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-credentials
+              key: OPENSEARCH_URL
+        - name: ENVIRONMENT
+          value: "testnet"
+        - name: INDEX_ALIAS
+          value: "entities"
+        # Empty = the index the alias points to (the normal case). Set N to act on <alias>_vN during a migration, before the alias moves.
+        - name: INDEX_VERSION
+          value: ""
+        # Slot id = hash of the bundle descriptor (`embedding-service bundle slot <bundle.json>`).
+        - name: EMBEDDING_SLOT
+          value: "79502860cd"
+        - name: RUST_LOG
+          value: "info"
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          V=""; [ -n "$INDEX_VERSION" ] && V="--version $INDEX_VERSION"
+          search-admin retire-embedding-slot $V "$EMBEDDING_SLOT"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"

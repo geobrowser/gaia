@@ -1,7 +1,9 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest"
 
 import {
+	applyScoreFloor,
 	FUZZY_MAX_EXPANSIONS,
+	HYBRID_K,
 	MAX_NAME_MATCH_TEXT_TOKENS,
 	MAX_TEXT_TOKENS,
 	MIN_SCORE_THRESHOLD,
@@ -9,6 +11,8 @@ import {
 	PHRASE_PREFIX_MAX_EXPANSIONS,
 	SCORE_BOOST,
 	SCORE_SHIFT,
+	SEMANTIC_EF_SEARCH,
+	SEMANTIC_K_MIN,
 } from "./opensearch"
 
 describe("OpenSearchClient", () => {
@@ -1531,6 +1535,191 @@ describe("OpenSearchClient", () => {
 		it("no tag_ids means no tag clause", async () => {
 			const body = await client.buildSearchBody({query: "x", scope: "GLOBAL"} as never)
 			expect(JSON.stringify(body)).not.toContain(TAGS_REL)
+		})
+	})
+})
+
+describe("semantic and hybrid modes", () => {
+	const slot = {
+		id: "79502860cd",
+		vectorField: "emb_79502860cd",
+		descriptorHash: "h".repeat(64),
+		dimensions: 4,
+		modelId: "test",
+		scoreFloor: 0.85,
+	}
+	const vector = [0.5, 0.5, 0.5, 0.5]
+
+	function findBoolFilter(node: unknown): {filter?: unknown[]; must_not?: unknown[]} | undefined {
+		// The lexical builders put the eligibility filter on the first `bool` that has a `filter` array.
+		if (!node || typeof node !== "object") return undefined
+		const obj = node as Record<string, unknown>
+		if (obj.bool && typeof obj.bool === "object" && Array.isArray((obj.bool as {filter?: unknown[]}).filter)) {
+			return obj.bool as {filter?: unknown[]; must_not?: unknown[]}
+		}
+		for (const v of Object.values(obj)) {
+			const found = findBoolFilter(v)
+			if (found) return found
+		}
+		return undefined
+	}
+
+	it("puts the eligibility filters INSIDE the knn clause, with k >= limit+offset and ef_search on every request", async () => {
+		const client = new OpenSearchClient("http://localhost:9200", "test-index")
+		const eligibility = await client.buildEligibility({
+			query: "x",
+			scope: "GLOBAL",
+			type_ids: ["abcd1234abcd1234abcd1234abcd0001"],
+			exclude_type_ids: ["abcd1234abcd1234abcd1234abcd0002"],
+			include_non_canonical: false,
+		})
+		const body = client.buildSemanticBody(slot, vector, eligibility, 10, 5) as {
+			size: number
+			from: number
+			_source: {excludes: string[]}
+			query: {
+				knn: {
+					emb_79502860cd: {
+						vector: number[]
+						k: number
+						method_parameters: {ef_search: number}
+						filter: {bool: {filter: unknown[]; must_not?: unknown[]}}
+						min_score?: number
+					}
+				}
+			}
+		}
+		expect(body.size).toBe(10)
+		expect(body.from).toBe(5)
+		expect(body._source.excludes).toEqual(["emb_*"])
+		const clause = body.query.knn.emb_79502860cd
+		expect(clause.vector).toEqual(vector)
+		expect(clause.k).toBe(SEMANTIC_K_MIN) // max(15, 50)
+		expect(clause.method_parameters.ef_search).toBe(SEMANTIC_EF_SEARCH)
+		expect(clause.min_score).toBeUndefined() // radial form rejected on 2.17; the floor is applied client-side
+		expect(clause.filter.bool.filter.length).toBe(3) // non-deleted, canonical, type
+		expect(clause.filter.bool.must_not?.length).toBe(1) // exclusion
+		expect(Object.keys(body.query)).toEqual(["knn"]) // no outer bool wrapper: that would be a post-filter
+	})
+
+	it("k grows with limit + offset", async () => {
+		const client = new OpenSearchClient("http://localhost:9200", "test-index")
+		const eligibility = await client.buildEligibility({query: "x", scope: "GLOBAL"})
+		const body = client.buildSemanticBody(slot, vector, eligibility, 100, 40) as {
+			query: {knn: {emb_79502860cd: {k: number}}}
+		}
+		expect(body.query.knn.emb_79502860cd.k).toBe(140)
+	})
+
+	it("omits the filter when nothing restricts eligibility", async () => {
+		const client = new OpenSearchClient("http://localhost:9200", "test-index")
+		const eligibility = await client.buildEligibility({
+			query: "x",
+			scope: "GLOBAL",
+			include_deleted: true,
+			include_non_canonical: true,
+		})
+		expect(eligibility).toEqual({filter: [], must_not: []})
+		const body = client.buildSemanticBody(slot, vector, eligibility, 10, 0) as {
+			query: {knn: {emb_79502860cd: {filter?: unknown}}}
+		}
+		expect(body.query.knn.emb_79502860cd.filter).toBeUndefined()
+	})
+
+	it("uses the same eligibility filters as the lexical query for GLOBAL and SPACE_SINGLE", async () => {
+		const client = new OpenSearchClient("http://localhost:9200", "test-index")
+		const cases = [
+			{
+				query: "bitcoin",
+				scope: "GLOBAL" as const,
+				type_ids: ["abcd1234abcd1234abcd1234abcd0001"],
+				tag_ids: ["abcd1234abcd1234abcd1234abcd0003"],
+				exclude_type_ids: ["abcd1234abcd1234abcd1234abcd0002"],
+				include_non_canonical: false,
+			},
+			{
+				query: "bitcoin",
+				scope: "SPACE_SINGLE" as const,
+				space_id: "abcd1234abcd1234abcd1234abcd5678",
+				include_deleted: true,
+			},
+		]
+		for (const q of cases) {
+			const lexical = (await client.buildSearchBody(q)) as {query: unknown}
+			const lexicalBool = findBoolFilter(lexical.query)
+			const eligibility = await client.buildEligibility(q)
+			expect(JSON.stringify(eligibility.filter)).toBe(JSON.stringify(lexicalBool?.filter ?? []))
+			expect(JSON.stringify(eligibility.must_not)).toBe(JSON.stringify(lexicalBool?.must_not ?? []))
+		}
+	})
+
+	it("hybrid body carries the lexical query and a k-NN sub-query with HYBRID_K", async () => {
+		const client = new OpenSearchClient("http://localhost:9200", "test-index")
+		const eligibility = await client.buildEligibility({query: "x", scope: "GLOBAL"})
+		const lexical = (await client.buildSearchBody({query: "bitcoin", scope: "GLOBAL"})) as {query: object}
+		const body = client.buildHybridBody(lexical.query, slot, vector, eligibility, 10) as {
+			size: number
+			query: {
+				hybrid: {
+					queries: [object, {knn: {emb_79502860cd: {k: number; method_parameters: {ef_search: number}}}}]
+				}
+			}
+		}
+		expect(body.size).toBe(10)
+		expect(body.query.hybrid.queries).toHaveLength(2)
+		expect(body.query.hybrid.queries[0]).toEqual(lexical.query)
+		expect(body.query.hybrid.queries[1].knn.emb_79502860cd.k).toBe(HYBRID_K)
+		expect(body.query.hybrid.queries[1].knn.emb_79502860cd.method_parameters.ef_search).toBe(SEMANTIC_EF_SEARCH)
+	})
+
+	it("applies the score floor client-side", () => {
+		const hits = [{_score: 0.99}, {_score: 0.85}, {_score: 0.8499}, {_score: 0.2}]
+		expect(applyScoreFloor(hits, 0.85)).toEqual([{_score: 0.99}, {_score: 0.85}])
+	})
+
+	it("answers 'unavailable' for semantic/hybrid when no embedding service is configured", async () => {
+		const client = new OpenSearchClient("http://localhost:9200", "test-index")
+		await expect(client.search({query: "bitcoin", scope: "GLOBAL", mode: "semantic"})).rejects.toMatchObject({
+			type: "Unavailable",
+		})
+	})
+
+	it("rejects ids, empty text, offset in hybrid, and out-of-range floors before touching the service", async () => {
+		const client = new OpenSearchClient("http://localhost:9200", "test-index")
+		const embed = vi.fn()
+		client.enableSemantic({
+			embedding: {embed},
+			slots: {resolve: () => slot},
+			pipelineName: "test-index_hybrid_minmax",
+		})
+		await expect(
+			client.search({query: "123e4567-e89b-12d3-a456-426614174000", scope: "GLOBAL", mode: "semantic"}),
+		).rejects.toMatchObject({type: "ValidationError"})
+		await expect(client.search({query: "   ", scope: "GLOBAL", mode: "semantic"})).rejects.toMatchObject({
+			type: "ValidationError",
+		})
+		await expect(
+			client.search({query: "bitcoin", scope: "GLOBAL", mode: "hybrid", offset: 10}),
+		).rejects.toMatchObject({type: "ValidationError"})
+		await expect(
+			client.search({query: "bitcoin", scope: "GLOBAL", mode: "semantic", min_score: 1.5}),
+		).rejects.toMatchObject({type: "ValidationError"})
+		expect(embed).not.toHaveBeenCalled()
+	})
+
+	it("refuses a vector from a descriptor other than the slot's", async () => {
+		const client = new OpenSearchClient("http://localhost:9200", "test-index")
+		client.enableSemantic({
+			embedding: {
+				embed: vi
+					.fn()
+					.mockResolvedValue({descriptorHash: "other", dimensions: 4, vectors: [vector], tookMs: 1}),
+			},
+			slots: {resolve: () => slot},
+			pipelineName: "p",
+		})
+		await expect(client.search({query: "bitcoin", scope: "GLOBAL", mode: "semantic"})).rejects.toMatchObject({
+			type: "Unavailable",
 		})
 	})
 })

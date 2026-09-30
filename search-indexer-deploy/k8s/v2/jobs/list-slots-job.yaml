@@ -1,0 +1,85 @@
+# Read-only: the slots the index carries, the default, index.knn, and per slot the vector
+# coverage (documents with a vector / named live documents) and whether embedding-service serves
+# it with the same descriptor hash. Coverage climbing toward the in-scope count is how a
+# backfill is watched; a BROKEN entry or HASH MISMATCH means the index claims a slot nobody can
+# serve, and the api will not use that slot until it is fixed or retired.
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-list-slots
+  namespace: gaia
+  labels:
+    app: opensearch-admin
+    task: list-slots
+    environment: testnet
+spec:
+  ttlSecondsAfterFinished: 86400  # 24 hours
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: opensearch-admin
+        task: list-slots
+        environment: testnet
+    spec:
+      imagePullSecrets:
+      - name: geo
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: list-slots
+        # `latest` is built from `main` by search-admin-build.yml (main has been the only trunk
+        # since 2026-09-17). The embedding-slot commands exist only from the semantic-search
+        # merge onward, so before that lands use a commit-sha tag from a workflow_dispatch of
+        # that workflow on the feature branch, and always confirm the running image carries the
+        # command you need: `kubectl logs` shows the CLI's own usage error otherwise.
+        image: registry.digitalocean.com/geo/search-admin:latest
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: OPENSEARCH_URL
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-credentials
+              key: OPENSEARCH_URL
+        - name: ENVIRONMENT
+          value: "testnet"
+        - name: INDEX_ALIAS
+          value: "entities"
+        # Empty = the index the alias points to (the normal case). Set N to act on <alias>_vN during a migration, before the alias moves.
+        - name: INDEX_VERSION
+          value: ""
+        - name: EMBEDDING_SERVICE_URL
+          value: "http://embedding-service:8080"
+        - name: RUST_LOG
+          value: "info"
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          V=""; [ -n "$INDEX_VERSION" ] && V="--version $INDEX_VERSION"
+          search-admin list-slots $V --embedding-service "$EMBEDDING_SERVICE_URL"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"

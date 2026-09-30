@@ -78,3 +78,57 @@ There may be some stored procedures that aren't really used anymore. We should a
 ### Drizzle migrations diverge across dev/main
 
 `dev` and `main` each auto-migrate their own database, so if both branches generate a migration at the same index (e.g. two different `0062_*`) in parallel, the branches can't be merged cleanly — duplicate files, a conflicting `_journal.json`, and a broken snapshot chain. Avoid it by keeping migration creation linear (`dev` → `main`), and when something reaches `main` directly, backport `main` → `dev` promptly. See [Drizzle Migrations Across Branches](runbooks/deployment.md#drizzle-migrations-across-branches) for the avoid/fix playbook.
+
+### OpenSearch 2.17 on Apple Silicon M4 under Docker Desktop
+
+The official `opensearchproject/opensearch:2.17.1` image ships JDK 21.0.4, which crashes with
+`SIGILL` on M4 under Docker Desktop's VM (an SVE detection bug fixed in later JDKs). Fix is a JVM
+flag through a compose override — `JAVA_TOOL_OPTIONS` is ignored by OpenSearch's launcher, only
+`_JAVA_OPTIONS` reaches the JVM:
+
+```yaml
+# m4-override.yml — docker compose -f docker-compose.yml -f m4-override.yml --profile infra up -d opensearch
+services:
+  opensearch:
+    environment:
+      - _JAVA_OPTIONS=-XX:UseSVE=0
+```
+
+### `postgres:18` refuses the compose volume path
+
+`docker-compose.yml` mounts `postgres-gaia:/var/lib/postgresql/data`. The 18 image moved its data
+directory and exits on a fresh volume with:
+
+```
+Error: in 18+, these Docker images are configured to store database data in a
+       ... /var/lib/postgresql/data (unused mount/volume)
+```
+
+Verified 2026-09-30: mounting the volume at `/var/lib/postgresql` instead starts cleanly. An
+existing volume initialised by an older image keeps working, which is why long-running checkouts
+do not see this and fresh ones do. Until the compose file changes, a throwaway
+`docker run -p 15432:5432 postgres:18` is the quick way to get a database for the api locally.
+
+### k-NN search: send `ef_search` per request, force-merge after a backfill
+
+Two facts about OpenSearch 2.17's Lucene HNSW engine that the semantic-search code depends on
+(`docs/tech-designs/semantic-search.md`, D7). `ef_search` is the size of the candidate list the
+graph walk keeps; larger means more recall for a little more latency. The Lucene engine **ignores
+the index-level `ef_search` setting** and searches with `ef = k`, which measured 0.86 recall@10
+on the 321k-document corpus; sending `method_parameters.ef_search: 256` on every request gives
+≥ 0.99. And a bulk vector backfill leaves the graph spread over many segments, so queries scan
+them all: 440 ms p50 until a `_forcemerge?max_num_segments=1`, 22 ms after. Filters go *inside*
+the `knn` clause (exact within the filter); a `bool` wrapped around it post-filters an
+approximate neighbour list and loses hits.
+
+### Cargo feature unification in the mini-workspace Dockerfiles
+
+Several Dockerfiles copy a handful of crates and build them as a small workspace. Cargo unifies
+features across every member it builds, so if one member enables a default feature of a shared
+crate, every other member gets it too. The `embedding` crate's default `onnx` feature pulls in
+`fastembed` and a statically linked ONNX Runtime that only links on Debian trixie (GCC ≥ 13);
+`search-admin` and `embedding-indexer` depend on it with `default-features = false` and must be
+built standalone or with `cargo build -p <crate>` — otherwise their bookworm images fail to link
+with `__cxa_call_terminate` / `_M_replace_cold` undefined. The `embedding-service` image is on
+trixie for the same reason.
+

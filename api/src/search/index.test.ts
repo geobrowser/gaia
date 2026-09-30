@@ -3,6 +3,7 @@ import {Hono} from "hono"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {runtime} from "../services/runtime"
 import type {SearchClient, SearchResponse} from "../services/search"
+import {SearchError} from "../services/search/types"
 
 import {createSearchRouter} from "./index"
 
@@ -918,5 +919,80 @@ describe("Search Router - Integration Tests", () => {
 			expect(response.status).toBe(503)
 			expect(result).toEqual({status: "unhealthy"})
 		})
+	})
+})
+
+describe("Search Router - semantic and hybrid modes", () => {
+	let mockSearchClient: SearchClient
+	let app: Hono
+
+	beforeEach(() => {
+		mockSearchClient = {
+			search: vi
+				.fn()
+				.mockResolvedValue({results: [], total: 0, tookMs: 3, mode: "semantic", embeddingSlot: "79502860cd"}),
+			healthCheck: vi.fn().mockResolvedValue(true),
+		}
+		app = new Hono()
+		app.route("/search", createSearchRouter(mockSearchClient, runtime))
+	})
+
+	it("passes mode, min_score and slot through to the client", async () => {
+		const response = await app.fetch(
+			new Request("http://localhost/search?query=bitcoin&mode=semantic&min_score=0.9&slot=79502860cd"),
+		)
+		expect(response.status).toBe(200)
+		expect(mockSearchClient.search).toHaveBeenCalledWith(
+			expect.objectContaining({query: "bitcoin", mode: "semantic", min_score: 0.9, slot: "79502860cd"}),
+		)
+		const body = (await response.json()) as {mode: string; embeddingSlot: string}
+		expect(body.mode).toBe("semantic")
+		expect(body.embeddingSlot).toBe("79502860cd")
+	})
+
+	it("does not send mode for lexical requests (unchanged contract)", async () => {
+		await app.fetch(new Request("http://localhost/search?query=bitcoin"))
+		const call = (mockSearchClient.search as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+			| {mode?: string}
+			| undefined
+		expect(call).toBeDefined()
+		expect(call?.mode).toBeUndefined()
+	})
+
+	it("rejects an invalid mode, an out-of-range min_score, a malformed slot, and offset in hybrid mode", async () => {
+		for (const qs of [
+			"query=x&mode=vector",
+			"query=x&mode=semantic&min_score=1.5",
+			"query=x&mode=semantic&min_score=abc",
+			"query=x&mode=semantic&slot=not-a-slot",
+			"query=x&mode=hybrid&offset=20",
+			"query=x&min_score=0.9", // lexical mode does not take a floor
+			"query=x&slot=79502860cd", // nor a slot
+		]) {
+			const response = await app.fetch(new Request(`http://localhost/search?${qs}`))
+			expect(response.status, qs).toBe(400)
+		}
+		expect(mockSearchClient.search).not.toHaveBeenCalled()
+	})
+
+	it("maps an unavailable semantic search to 503 with a stable error code", async () => {
+		mockSearchClient.search = vi.fn().mockRejectedValue(SearchError.unavailable("no embedding slot is servable"))
+		app = new Hono()
+		app.route("/search", createSearchRouter(mockSearchClient, runtime))
+		const response = await app.fetch(new Request("http://localhost/search?query=bitcoin&mode=semantic"))
+		expect(response.status).toBe(503)
+		const body = (await response.json()) as {error: string; message: string}
+		expect(body.error).toBe("SEMANTIC_SEARCH_UNAVAILABLE")
+		expect(body.message).toContain("servable")
+	})
+
+	it("maps a client-side validation error from the search client to 400", async () => {
+		mockSearchClient.search = vi
+			.fn()
+			.mockRejectedValue(SearchError.validationError("semantic mode requires text, not an id"))
+		app = new Hono()
+		app.route("/search", createSearchRouter(mockSearchClient, runtime))
+		const response = await app.fetch(new Request("http://localhost/search?query=bitcoin&mode=semantic"))
+		expect(response.status).toBe(400)
 	})
 })

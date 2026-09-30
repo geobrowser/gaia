@@ -1,0 +1,62 @@
+name: Embedding Check
+
+# `embedding` (library) and `embedding-service` (binary) together: fmt, clippy, unit tests, and
+# the golden-vector test against the real bge-small bundle, fetched from the pinned source so
+# every change proves it still reproduces the reference vectors.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'embedding/**'
+      - 'embedding-service/**'
+      - 'Cargo.lock'
+      - '.github/workflows/embedding-check.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'embedding/**'
+      - 'embedding-service/**'
+      - 'Cargo.lock'
+      - '.github/workflows/embedding-check.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Build, Lint & Test
+    # ubuntu-24.04 ships GCC 13, which the prebuilt static ONNX Runtime needs (bookworm's GCC 12
+    # does not link it; see embedding-service/Dockerfile).
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+          components: rustfmt, clippy
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt -p embedding -p embedding-service -- --check
+
+      - name: Clippy
+        run: cargo clippy -p embedding -p embedding-service --all-targets -- -D warnings
+
+      - name: Check the runtime-free build (what search-admin and the indexer link)
+        run: cargo check -p embedding --no-default-features
+
+      - name: Build
+        run: cargo build -p embedding-service
+
+      - name: Fetch the bge-small bundle (hash-verified)
+        run: ./target/debug/embedding-service bundle fetch --spec embedding-service/bundles/bge-small-en-v1.5-q/bundle.json --out ./models
+
+      - name: Test (unit, golden vectors, HTTP)
+        # Absolute: cargo runs each crate's integration tests from that crate's directory.
+        run: EMBEDDING_TEST_BUNDLE=${{ github.workspace }}/models/79502860cd cargo test -p embedding -p embedding-service
