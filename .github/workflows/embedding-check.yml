@@ -55,4 +55,5 @@ jobs:
         run: ./target/debug/embedding-service bundle fetch --spec embedding-service/bundles/bge-small-en-v1.5-q/bundle.json --out ./models
 
       - name: Test (unit, golden vectors, HTTP)
-        run: EMBEDDING_TEST_BUNDLE=./models/79502860cd cargo test -p embedding -p embedding-service
+        # Absolute: cargo runs each crate's integration tests from that crate's directory.
+        run: EMBEDDING_TEST_BUNDLE=${{ github.workspace }}/models/79502860cd cargo test -p embedding -p embedding-service
