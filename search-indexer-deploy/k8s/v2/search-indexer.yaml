@@ -74,8 +74,9 @@ spec:
             # Index version (defaults to 0 if not set). Must equal the index the
             # `testnet_entities` alias points at, or the indexer refuses to start.
             # Raise it only in the same change that flips the alias (GEO-3047 runbook).
+            # 7 = stemmed name/description siblings (GEO-3047), live since the v7 reindex.
             - name: ENTITIES_INDEX_VERSION
-              value: "6"
+              value: "7"
             # Kafka connection (managed Kafka with SSL)
             - name: KAFKA_BROKER
               valueFrom:
