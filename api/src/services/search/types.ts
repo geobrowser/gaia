@@ -78,6 +78,10 @@ export interface BoostOverrides {
 	fuzzy_reduction_boost?: number
 	name_stemmed_boost?: number
 	description_stemmed_boost?: number
+	fuzzy_prefix_length?: number
+	fuzzy_min_term_length?: number
+	name_coverage_boost?: number
+	real_match_boost?: number
 }
 
 /**

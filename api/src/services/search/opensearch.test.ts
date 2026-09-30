@@ -3,14 +3,17 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest"
 import {
 	DESCRIPTION_STEMMED_BOOST,
 	FUZZY_MAX_EXPANSIONS,
+	FUZZY_PREFIX_LENGTH,
 	MAX_NAME_MATCH_TEXT_TOKENS,
 	MAX_OTHER_SPACES,
 	MAX_TEXT_TOKENS,
 	MIN_SCORE_THRESHOLD,
+	NAME_COVERAGE_BOOST,
 	NAME_EXACT_TOKEN_BOOST,
 	NAME_STEMMED_BOOST,
 	OpenSearchClient,
 	PHRASE_PREFIX_MAX_EXPANSIONS,
+	REAL_MATCH_BOOST,
 	SCORE_BOOST,
 	SCORE_SHIFT,
 } from "./opensearch"
@@ -164,7 +167,7 @@ describe("OpenSearchClient", () => {
 			) as {multi_match: {query: string; fuzziness: string; max_expansions: number}}
 
 			expect(fuzzy).toBeDefined()
-			expect(fuzzy.multi_match.fuzziness).toBe("AUTO")
+			expect(fuzzy.multi_match.fuzziness).toBe("AUTO:4,6")
 			expect(fuzzy.multi_match.query).toBe("alpha beta gamma")
 			// max_expansions is capped (default OS value is 50; we pin lower for safety).
 			expect(fuzzy.multi_match.max_expansions).toBe(FUZZY_MAX_EXPANSIONS)
@@ -182,7 +185,7 @@ describe("OpenSearchClient", () => {
 			) as {multi_match: {query: string; fuzziness: string; max_expansions: number}}
 
 			expect(fuzzy).toBeDefined()
-			expect(fuzzy.multi_match.fuzziness).toBe("AUTO")
+			expect(fuzzy.multi_match.fuzziness).toBe("AUTO:4,6")
 			expect(fuzzy.multi_match.query).toBe(fullQuery)
 			expect(fuzzy.multi_match.max_expansions).toBe(FUZZY_MAX_EXPANSIONS)
 		})
@@ -314,6 +317,91 @@ describe("OpenSearchClient", () => {
 				expect(body).toContain('"name_stemmed":{"query":"pardons","boost":2}')
 				expect(body).toContain('"description_stemmed":{"query":"pardons","boost":0}')
 			})
+		})
+	})
+
+	describe("fuzzy floor and name coverage (GEO-3048, GEO-2640)", () => {
+		type Clause = Record<string, unknown>
+		const shouldOf = (q: string) => (client.buildBaseTextQuery(q) as {bool: {should: Clause[]}}).bool.should
+		const fuzzyOf = (should: Clause[]) =>
+			should.find((c) => "multi_match" in c && (c.multi_match as {fuzziness?: string}).fuzziness !== undefined) as
+				| {multi_match: {fuzziness: string; prefix_length: number}}
+				| undefined
+		type Flat = {constant_score: {filter: Record<string, unknown>; boost: number}}
+		const flat = (should: Clause[]) => should.filter((c) => "constant_score" in c) as unknown as Flat[]
+		const realFloor = (should: Clause[]) => flat(should).find((c) => "bool" in c.constant_score.filter)
+		const coverage = (should: Clause[]) =>
+			flat(should).find((c) => "match" in c.constant_score.filter) as
+				| {
+						constant_score: {
+							filter: {match: {name_stemmed: {query: string; minimum_should_match: string}}}
+							boost: number
+						}
+				  }
+				| undefined
+		const bodyFor = async (query: string, boosts: Record<string, number>) => {
+			const search = vi.fn().mockResolvedValue({body: {hits: {total: {value: 0}, hits: []}}})
+			;(client as unknown as {client: {search: typeof search}}).client.search = search
+			await client.search({query, scope: "GLOBAL", boosts})
+			return search.mock.calls[0]?.[0] as {body: {query: {function_score: {query: {bool: {must: Clause[]}}}}}}
+		}
+		const shouldOfBody = (body: Awaited<ReturnType<typeof bodyFor>>) =>
+			(body.body.query.function_score.query.bool.must[0] as {bool: {should: Clause[]}}).bool.should
+
+		it("does not fuzz terms shorter than four characters, and keeps first-letter edits", () => {
+			const fuzzy = fuzzyOf(shouldOf("nft"))
+			expect(fuzzy?.multi_match.fuzziness).toBe("AUTO:4,6")
+			expect(fuzzy?.multi_match.prefix_length).toBe(FUZZY_PREFIX_LENGTH)
+			expect(FUZZY_PREFIX_LENGTH).toBe(0)
+		})
+
+		it("gives every non-fuzzy match a flat bonus when the fuzzy clause is present", () => {
+			const floor = realFloor(shouldOf("reguated"))
+			expect(floor?.constant_score.boost).toBe(REAL_MATCH_BOOST)
+			// It must exceed the entity-score spread, or a fuzzy-only match with a high entity
+			// score could still outrank a real match with a low one.
+			expect(REAL_MATCH_BOOST).toBeGreaterThan(SCORE_BOOST)
+			const filter = JSON.stringify(floor?.constant_score.filter)
+			expect(filter).not.toContain("fuzziness")
+			expect(filter).toContain('"type":"bool_prefix"')
+			expect(filter).toContain("name_stemmed")
+			expect(filter).toContain("description_stemmed")
+		})
+
+		it("leaves the floor out when the query is too long for the fuzzy clause", () => {
+			const should = shouldOf("alpha beta gamma delta")
+			expect(fuzzyOf(should)).toBeUndefined()
+			expect(realFloor(should)).toBeUndefined()
+		})
+
+		it("rewards names that contain most of a multi-word query's content words", () => {
+			const cov = coverage(shouldOf("AI should be better regulated"))
+			expect(cov?.constant_score.boost).toBe(NAME_COVERAGE_BOOST)
+			// "be" is a stopword and does not count towards coverage.
+			expect(cov?.constant_score.filter.match.name_stemmed).toEqual({
+				query: "AI should better regulated",
+				minimum_should_match: "80%",
+			})
+		})
+
+		it("skips coverage when fewer than three content words remain", () => {
+			expect(coverage(shouldOf("crypto is a scam"))).toBeUndefined()
+			expect(coverage(shouldOf("man role"))).toBeUndefined()
+			// Surrounding punctuation does not hide a stopword.
+			expect(coverage(shouldOf("crypto, is (a) scam"))).toBeUndefined()
+		})
+
+		it("honours the fuzzy and bonus overrides", async () => {
+			const should = shouldOfBody(
+				await bodyFor("bitcion", {fuzzy_min_term_length: 3, fuzzy_prefix_length: 1.7, real_match_boost: 0}),
+			)
+			expect(fuzzyOf(should)?.multi_match).toMatchObject({fuzziness: "AUTO:3,6", prefix_length: 1})
+			expect(realFloor(should)).toBeUndefined()
+
+			const cov = shouldOfBody(await bodyFor("AI should be better regulated", {name_coverage_boost: 0}))
+			expect(coverage(cov)).toBeUndefined()
+			const cov2 = shouldOfBody(await bodyFor("AI should be better regulated", {name_coverage_boost: 7}))
+			expect(coverage(cov2)?.constant_score.boost).toBe(7)
 		})
 	})
 

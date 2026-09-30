@@ -260,6 +260,76 @@ export const FUZZY_MAX_TOKENS = 3
 export const FUZZY_MAX_EXPANSIONS = 25
 
 /**
+ * Shortest query term the fuzzy clause may edit (GEO-3048). The clause's fuzziness is
+ * `AUTO:<this>,<FUZZY_TWO_EDIT_MIN_TERM_LENGTH>`: shorter terms must match exactly, terms
+ * from this length get one edit, and terms from six characters get two.
+ *
+ * OpenSearch's plain `AUTO` is `AUTO:3,6`, which lets a three-letter term take one edit.
+ * At that length one edit reaches a large share of the dictionary and almost none of it is
+ * a typo: `nft` matched `not` (183 Debate claims, none about NFTs), `dao` matched `do`
+ * and `geo` matched `go`. Starting at four keeps every typo in the GEO-3048 test set
+ * working and drops those, see the PR for the sweep.
+ */
+export const FUZZY_MIN_TERM_LENGTH = 4
+
+/**
+ * Shortest query term that may take two fuzzy edits: 6, as in OpenSearch's plain `AUTO`.
+ * Raising it to 7 was measured for GEO-3048: it gained no typo and changed autocomplete
+ * (`ethere` lost half its results), so only the low end moved.
+ */
+export const FUZZY_TWO_EDIT_MIN_TERM_LENGTH = 6
+
+/** The `AUTO:low,high` fuzziness string; high never falls below low. */
+function fuzzyAuto(low: number, high: number): string {
+	return `AUTO:${low},${Math.max(low, high)}`
+}
+
+/**
+ * Flat bonus for a document that matched any clause other than the fuzzy one (GEO-3048),
+ * applied only when the fuzzy clause is in the query.
+ *
+ * A fuzzy-only match scores a few points of text relevance, and the entity score adds up
+ * to SCORE_BOOST (75) more on top, so once entity scores vary a fuzzy-only match with a
+ * high entity score outranks a real word match with a low one. With 1.0-spread entity
+ * scores on the local corpus that happened 180 times in the top 20 of 212 queries (see
+ * the PR). The bonus has to exceed that spread plus a fuzzy match's own text score, hence
+ * 100 against SCORE_BOOST = 75; a request that raises `score_boost` should raise
+ * `real_match_boost` with it.
+ */
+export const REAL_MATCH_BOOST = 100.0
+
+/**
+ * Number of leading characters a fuzzy edit may not touch. 0 keeps first-letter typos
+ * (`vitcoin` for `bitcoin`) correctable. 1 and 2 were measured for GEO-3048 and cost
+ * those typos while removing no junk that FUZZY_MIN_TERM_LENGTH does not already remove,
+ * so this stays at the OpenSearch default. Overridable per request for tuning.
+ */
+export const FUZZY_PREFIX_LENGTH = 0
+
+/**
+ * Flat bonus for a name that contains most of a multi-word query's content words
+ * (GEO-2640).
+ *
+ * The name clauses sum BM25 per matched term, and BM25 normalises by name length, so a
+ * short name matching three of five query words can outscore a longer one matching four.
+ * "AI should be better regulated" ranked "Financial prediction markets should be regulated
+ * as gambling" (should, be, regulated) above "Any government power to pause frontier AI
+ * models should be a regulated process." (ai, should, be, regulated). This clause adds a
+ * constant, so it rewards covering the query without re-rewarding short names, and it
+ * only adds score: nothing that matched before stops matching.
+ *
+ * Stopwords are left out of the count (COVERAGE_STOPWORDS), otherwise "is" and "a" would
+ * earn "crypto is a scam" its bonus on names that share nothing with it but grammar.
+ */
+export const NAME_COVERAGE_BOOST = 50.0
+
+/** Content words a query needs before the coverage bonus applies. */
+export const NAME_COVERAGE_MIN_TOKENS = 3
+
+/** Share of the content words a name must contain: 3 → 2, 4 → 3, 5 → 4. */
+export const NAME_COVERAGE_MINIMUM_SHOULD_MATCH = "80%"
+
+/**
  * Maximum number of terms the trailing token can expand to in
  * `match_phrase_prefix` queries. This matches OpenSearch's default, but
  * keeping it explicit makes the clause budget auditable.
@@ -286,6 +356,27 @@ function truncateToTokens(query: string, maxTokens: number): string {
 	const tokens = query.split(TOKEN_BOUNDARY_REGEX).filter((t) => t.length > 0)
 	if (tokens.length <= maxTokens) return query
 	return tokens.slice(0, maxTokens).join(" ")
+}
+
+/** Lucene's English stopword list, used only to count a query's content words for the coverage bonus. */
+const COVERAGE_STOPWORDS = new Set(
+	"a an and are as at be but by for if in into is it no not of on or such that the their then there these they this to was will with".split(
+		" ",
+	),
+)
+
+/**
+ * The query's content words for the name coverage clause, or null when there are fewer
+ * than NAME_COVERAGE_MIN_TOKENS of them. Words are split on whitespace only and passed on
+ * unchanged, so `name_stemmed`'s analyzer still folds apostrophes and strips plurals; the
+ * stopword check ignores surrounding punctuation.
+ */
+function buildCoverageQuery(query: string): string | null {
+	const content = query.split(/\s+/).filter((t) => {
+		const bare = t.toLowerCase().replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, "")
+		return bare.length > 0 && !COVERAGE_STOPWORDS.has(bare)
+	})
+	return content.length >= NAME_COVERAGE_MIN_TOKENS ? content.join(" ") : null
 }
 
 // System IDs from the SDK are already dashless — use directly for OpenSearch queries
@@ -1165,6 +1256,7 @@ export class OpenSearchClient implements SearchClient {
 		// clauses cover the typo cases. Single- and few-word queries keep
 		// fuzzy for the typical "user typed `etereum`" case.
 		const includeFuzzy = countTokens(queryText) <= FUZZY_MAX_TOKENS
+		const coverageQuery = buildCoverageQuery(nameMatchQuery)
 		return {
 			bool: {
 				should: [
@@ -1255,7 +1347,8 @@ export class OpenSearchClient implements SearchClient {
 						},
 					},
 					// Fuzzy text match to tolerate minor typos.
-					// AUTO fuzziness: 1-2 chars: 0 edits, 3-4 chars: 1 edit, 5+ chars: 2 edits.
+					// AUTO:4,6 fuzziness (FUZZY_MIN_TERM_LENGTH): 1-3 chars: 0 edits,
+					// 4-5 chars: 1 edit, 6+ chars: 2 edits.
 					// Skipped when the query has more than FUZZY_MAX_TOKENS analyzer-aligned
 					// tokens — fuzzy AUTO expands each term into many edit-distance variants
 					// across 2 fields and is the worst per-token offender for clause fan-out.
@@ -1267,9 +1360,71 @@ export class OpenSearchClient implements SearchClient {
 									multi_match: {
 										query: cappedQuery,
 										fields: ["name", "description"],
-										fuzziness: "AUTO",
+										fuzziness: fuzzyAuto(
+											Math.floor(this.b("fuzzy_min_term_length", FUZZY_MIN_TERM_LENGTH)),
+											FUZZY_TWO_EDIT_MIN_TERM_LENGTH,
+										),
+										prefix_length: Math.floor(this.b("fuzzy_prefix_length", FUZZY_PREFIX_LENGTH)),
 										max_expansions: FUZZY_MAX_EXPANSIONS,
 										boost: this.b("fuzzy_reduction_boost", FUZZY_REDUCTION_BOOST),
+									},
+								},
+							]
+						: []),
+					...(includeFuzzy && this.b("real_match_boost", REAL_MATCH_BOOST) > 0
+						? [
+								{
+									// The fuzzy floor (GEO-3048): a flat bonus for matching any
+									// clause other than the fuzzy one. The filter mirrors those
+									// clauses without scoring them: bool_prefix on name and
+									// description covers every exact, token and prefix clause, and
+									// the stemmed match covers the stemmed ones. Every real match
+									// gets the same constant, so their order among themselves does
+									// not change; what changes is that a fuzzy-only match can no
+									// longer climb above one on entity score. Only built with the
+									// fuzzy clause, because without it every match is real and the
+									// bonus would shift all scores equally for nothing. Costs at most
+									// 2 × MAX_TEXT_TOKENS term clauses per field pair, in filter
+									// context.
+									constant_score: {
+										filter: {
+											bool: {
+												should: [
+													{
+														multi_match: {
+															query: cappedQuery,
+															type: "bool_prefix",
+															fields: ["name", "description"],
+														},
+													},
+													{
+														multi_match: {
+															query: cappedQuery,
+															fields: ["name_stemmed", "description_stemmed"],
+														},
+													},
+												],
+												minimum_should_match: 1,
+											},
+										},
+										boost: this.b("real_match_boost", REAL_MATCH_BOOST),
+									},
+								},
+							]
+						: []),
+					...(coverageQuery !== null && this.b("name_coverage_boost", NAME_COVERAGE_BOOST) > 0
+						? [
+								{
+									constant_score: {
+										filter: {
+											match: {
+												name_stemmed: {
+													query: coverageQuery,
+													minimum_should_match: NAME_COVERAGE_MINIMUM_SHOULD_MATCH,
+												},
+											},
+										},
+										boost: this.b("name_coverage_boost", NAME_COVERAGE_BOOST),
 									},
 								},
 							]
