@@ -680,6 +680,13 @@
       "when": 1790726536072,
       "tag": "0096_entity_topic_ranking",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1790728450234,
+      "tag": "0097_topic_ranking_debate_tagged_claims",
+      "breakpoints": true
     }
   ]
 }
