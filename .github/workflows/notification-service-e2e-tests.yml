@@ -136,6 +136,7 @@ jobs:
           VOTE_NOTIFICATION_THRESHOLD=3 \
           VOTE_POLL_INTERVAL_SECS=2 \
           RUST_LOG=info,notification_indexer=debug \
+          METRICS_PORT=19464 \
           ./target/debug/notification-indexer > /tmp/notification-indexer.log 2>&1 &
           echo $! > /tmp/notification-indexer.pid
           echo "notification-indexer started (pid: $(cat /tmp/notification-indexer.pid))"
@@ -146,6 +147,7 @@ jobs:
           POLL_INTERVAL_MS=1000 \
           MAX_RETRIES=3 \
           RUST_LOG=info,delivery_worker=debug \
+          METRICS_PORT=19465 \
           ./target/debug/delivery-worker > /tmp/delivery-worker.log 2>&1 &
           echo $! > /tmp/delivery-worker.pid
           echo "delivery-worker started (pid: $(cat /tmp/delivery-worker.pid))"
