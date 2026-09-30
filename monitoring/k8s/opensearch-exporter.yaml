@@ -2,9 +2,9 @@
 #
 # Translates the OpenSearch REST API (`/_cluster/health`, `/_nodes/stats`,
 # `/_cat/indices`, `/_snapshot/_all`, ...) into the `elasticsearch_*` metric
-# names that monitoring/k8s/gaia-overview-dashboard.yaml references. The
-# "OpenSearch Health" section of that dashboard stays empty until this
-# exporter is running and being scraped.
+# names. It is not deployed on the live cluster (see monitoring/k8s/v2/README.md),
+# so gaia-overview-dashboard.yaml no longer has an OpenSearch row; restore it
+# from git history if this exporter is installed.
 #
 # OpenSearch is wire-compatible with Elasticsearch, so the upstream
 # prometheus-community/elasticsearch_exporter works against it unmodified.

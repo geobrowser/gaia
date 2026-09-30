@@ -7,12 +7,11 @@ data:
       "title": "Gaia Overview",
       "tags": [
         "gaia",
-        "overview",
-        "production"
+        "overview"
       ],
       "timezone": "browser",
       "schemaVersion": 39,
-      "version": 4,
+      "version": 5,
       "refresh": "30s",
       "time": {
         "from": "now-6h",
@@ -29,29 +28,6 @@ data:
               "text": "Prometheus",
               "value": "Prometheus"
             }
-          },
-          {
-            "name": "namespace",
-            "label": "Namespace",
-            "type": "custom",
-            "query": "knowledge,knowledge-staging",
-            "current": {
-              "selected": true,
-              "text": "knowledge",
-              "value": "knowledge"
-            },
-            "options": [
-              {
-                "selected": true,
-                "text": "knowledge",
-                "value": "knowledge"
-              },
-              {
-                "selected": false,
-                "text": "knowledge-staging",
-                "value": "knowledge-staging"
-              }
-            ]
           }
         ]
       },
@@ -85,7 +61,7 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_requests_per_second:rate5m",
+              "expr": "sum(rate(envoy_cluster_upstream_rq_xx{envoy_cluster_name=~\".*gaia_api_3000\"}[5m]))",
               "legendFormat": "rps",
               "refId": "A"
             }
@@ -137,7 +113,7 @@ data:
           "targets": [
             {
               "refId": "A",
-              "expr": "sum(increase(nginx_ingress_controller_requests{host=\"testnet-api.geobrowser.io\",status=~\"5..\"}[$__range]))",
+              "expr": "sum(increase(envoy_cluster_upstream_rq_xx{envoy_cluster_name=~\".*gaia_api_3000\", envoy_response_code_class=\"5\"}[$__range]))",
               "instant": true
             }
           ],
@@ -194,7 +170,7 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_p99_latency_seconds:5m",
+              "expr": "api:gateway_p99_latency_seconds:5m",
               "legendFormat": "p99",
               "refId": "A"
             }
@@ -230,7 +206,8 @@ data:
               ]
             },
             "colorMode": "value"
-          }
+          },
+          "description": "Envoy -> API upstream p99 (api:gateway_p99_latency_seconds:5m). Upstream leg only, so it reads slightly below a client-facing measurement."
         },
         {
           "type": "stat",
@@ -248,7 +225,7 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_5xx_ratio:rate5m",
+              "expr": "api:gateway_5xx_ratio:rate5m",
               "legendFormat": "5xx",
               "refId": "A"
             }
@@ -303,12 +280,12 @@ data:
           },
           "targets": [
             {
-              "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"api\", horizontalpodautoscaler=\"api\"}",
+              "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"gaia\", horizontalpodautoscaler=\"api\"}",
               "legendFormat": "current",
               "refId": "A"
             },
             {
-              "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"api\", horizontalpodautoscaler=\"api\"}",
+              "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"gaia\", horizontalpodautoscaler=\"api\"}",
               "legendFormat": "max",
               "refId": "B"
             }
@@ -430,12 +407,12 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_requests_per_second:rate5m",
+              "expr": "sum(rate(envoy_cluster_upstream_rq_xx{envoy_cluster_name=~\".*gaia_api_3000\"}[5m]))",
               "legendFormat": "total",
               "refId": "A"
             },
             {
-              "expr": "api:ingress_5xx_per_second:rate5m",
+              "expr": "sum(rate(envoy_cluster_upstream_rq_xx{envoy_cluster_name=~\".*gaia_api_3000\", envoy_response_code_class=\"5\"}[5m]))",
               "legendFormat": "5xx",
               "refId": "B"
             }
@@ -489,22 +466,22 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_p50_latency_seconds:5m",
+              "expr": "histogram_quantile(0.50, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{envoy_cluster_name=~\".*gaia_api_3000\"}[5m]))) / 1000",
               "legendFormat": "p50",
               "refId": "A"
             },
             {
-              "expr": "api:ingress_p75_latency_seconds:5m",
+              "expr": "histogram_quantile(0.75, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{envoy_cluster_name=~\".*gaia_api_3000\"}[5m]))) / 1000",
               "legendFormat": "p75",
               "refId": "B"
             },
             {
-              "expr": "api:ingress_p95_latency_seconds:5m",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{envoy_cluster_name=~\".*gaia_api_3000\"}[5m]))) / 1000",
               "legendFormat": "p95",
               "refId": "C"
             },
             {
-              "expr": "api:ingress_p99_latency_seconds:5m",
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{envoy_cluster_name=~\".*gaia_api_3000\"}[5m]))) / 1000",
               "legendFormat": "p99",
               "refId": "D"
             }
@@ -524,11 +501,12 @@ data:
             "tooltip": {
               "mode": "multi"
             }
-          }
+          },
+          "description": "Envoy upstream request time (milliseconds in the source histogram, divided to seconds). Buckets are coarse near the tail, so read high percentiles as an order of magnitude."
         },
         {
           "type": "timeseries",
-          "title": "Error Rates (499 / 500 / 503)",
+          "title": "Error Rates (500 / 503 / upstream timeout)",
           "id": 12,
           "gridPos": {
             "h": 8,
@@ -542,18 +520,18 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_499_per_second:rate5m",
-              "legendFormat": "499 (client cancel)",
+              "expr": "sum(rate(envoy_cluster_upstream_rq{envoy_cluster_name=~\".*gaia_api_3000\", envoy_response_code=\"500\"}[5m]))",
+              "legendFormat": "500 (server error)",
               "refId": "A"
             },
             {
-              "expr": "api:ingress_500_per_second:rate5m",
-              "legendFormat": "500 (server error)",
+              "expr": "sum(rate(envoy_cluster_upstream_rq{envoy_cluster_name=~\".*gaia_api_3000\", envoy_response_code=\"503\"}[5m]))",
+              "legendFormat": "503 (unavailable / shed)",
               "refId": "B"
             },
             {
-              "expr": "api:ingress_503_per_second:rate5m",
-              "legendFormat": "503 (unavailable)",
+              "expr": "sum(rate(envoy_cluster_upstream_rq_timeout{envoy_cluster_name=~\".*gaia_api_3000\"}[5m]))",
+              "legendFormat": "upstream timeout",
               "refId": "C"
             }
           ],
@@ -580,7 +558,7 @@ data:
               {
                 "matcher": {
                   "id": "byName",
-                  "options": "503 (unavailable)"
+                  "options": "503 (unavailable / shed)"
                 },
                 "properties": [
                   {
@@ -603,7 +581,8 @@ data:
             "tooltip": {
               "mode": "multi"
             }
-          }
+          },
+          "description": "Envoy has no 499: a client disconnect is not an upstream response code. Upstream timeouts are the closest gateway-side failure signal."
         },
         {
           "type": "timeseries",
@@ -621,8 +600,8 @@ data:
           },
           "targets": [
             {
-              "expr": "api:ingress_status_requests_per_second:rate5m",
-              "legendFormat": "{{status}}",
+              "expr": "sum by (envoy_response_code) (rate(envoy_cluster_upstream_rq{envoy_cluster_name=~\".*gaia_api_3000\"}[5m]))",
+              "legendFormat": "{{envoy_response_code}}",
               "refId": "A"
             }
           ],
@@ -855,7 +834,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"api\",container=\"api\"}) / sum(kube_pod_container_resource_limits{namespace=\"api\",container=\"api\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"api\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"api\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -885,7 +864,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22api%5C%22,container%3D%5C%22api%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28container_memory_working_set_bytes%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22api%5C%22%7D%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -918,7 +897,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"atlas\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"atlas\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -948,7 +927,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22atlas%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28container_memory_working_set_bytes%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22atlas%5C%22%7D%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -981,7 +960,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-pipeline\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"hermes-pipeline\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -1011,7 +990,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28container_memory_working_set_bytes%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1044,7 +1023,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"kg-indexer\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"kg-indexer\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -1074,7 +1053,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22kg-indexer%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28container_memory_working_set_bytes%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22kg-indexer%5C%22%7D%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1107,7 +1086,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"search\",container=\"search-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"search\",container=\"search-indexer\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"search-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"search-indexer\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -1137,7 +1116,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22search%5C%22,container%3D%5C%22search-indexer%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28container_memory_working_set_bytes%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22search-indexer%5C%22%7D%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1170,7 +1149,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-ipfs-cache\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"hermes-ipfs-cache\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -1200,7 +1179,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28container_memory_working_set_bytes%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1219,7 +1198,7 @@ data:
         },
         {
           "type": "stat",
-          "title": "scoring mem%",
+          "title": "vote-idx mem%",
           "id": 66,
           "gridPos": {
             "h": 5,
@@ -1233,7 +1212,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(container_memory_working_set_bytes{namespace=\"scoring\",container=\"scoring-service\"}) / sum(kube_pod_container_resource_limits{namespace=\"scoring\",container=\"scoring-service\",resource=\"memory\"})",
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"vote-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"vote-indexer\",resource=\"memory\"})",
               "refId": "A"
             }
           ],
@@ -1263,7 +1242,7 @@ data:
               "links": [
                 {
                   "title": "Explore memory history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(container_memory_working_set_bytes%7Bnamespace%3D%5C%22scoring%5C%22,container%3D%5C%22scoring-service%5C%22%7D)%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28container_memory_working_set_bytes%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22vote-indexer%5C%22%7D%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1282,7 +1261,7 @@ data:
         },
         {
           "type": "stat",
-          "title": "api cpu%",
+          "title": "api cpu% (of request)",
           "id": 70,
           "gridPos": {
             "h": 5,
@@ -1296,7 +1275,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"api\",container=\"api\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"api\",container=\"api\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"api\"}[5m])) / sum(kube_pod_container_resource_requests{namespace=\"gaia\",container=\"api\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1326,7 +1305,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22api%5C%22,container%3D%5C%22api%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28rate%28container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22api%5C%22%7D%5B5m%5D%29%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1359,7 +1338,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"atlas\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"atlas\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1389,7 +1368,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22atlas%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28rate%28container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22atlas%5C%22%7D%5B5m%5D%29%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1422,7 +1401,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-pipeline\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"hermes-pipeline\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1452,7 +1431,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28rate%28container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22hermes-pipeline%5C%22%7D%5B5m%5D%29%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1485,7 +1464,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"kg-indexer\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"kg-indexer\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1515,7 +1494,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22kg-indexer%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28rate%28container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22kg-indexer%5C%22%7D%5B5m%5D%29%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1548,7 +1527,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"search\",container=\"search-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"search\",container=\"search-indexer\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"search-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"search-indexer\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1578,7 +1557,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22search%5C%22,container%3D%5C%22search-indexer%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28rate%28container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22search-indexer%5C%22%7D%5B5m%5D%29%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1611,7 +1590,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-ipfs-cache\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"hermes-ipfs-cache\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1641,7 +1620,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22%24namespace%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28rate%28container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22hermes-ipfs-cache%5C%22%7D%5B5m%5D%29%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1660,7 +1639,7 @@ data:
         },
         {
           "type": "stat",
-          "title": "scoring cpu%",
+          "title": "vote-idx cpu%",
           "id": 76,
           "gridPos": {
             "h": 5,
@@ -1674,7 +1653,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"scoring\",container=\"scoring-service\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"scoring\",container=\"scoring-service\",resource=\"cpu\"})",
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"vote-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"vote-indexer\",resource=\"cpu\"})",
               "refId": "A"
             }
           ],
@@ -1704,7 +1683,7 @@ data:
               "links": [
                 {
                   "title": "Explore CPU history",
-                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum(rate(container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22scoring%5C%22,container%3D%5C%22scoring-service%5C%22%7D%5B5m%5D))%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
+                  "url": "/explore?orgId=1&left=%7B%22queries%22:%5B%7B%22expr%22:%22sum%28rate%28container_cpu_usage_seconds_total%7Bnamespace%3D%5C%22gaia%5C%22,container%3D%5C%22vote-indexer%5C%22%7D%5B5m%5D%29%29%22,%22refId%22:%22A%22%7D%5D,%22range%22:%7B%22from%22:%22now-6h%22,%22to%22:%22now%22%7D%7D",
                   "targetBlank": true
                 }
               ]
@@ -1733,7 +1712,7 @@ data:
           },
           "options": {
             "mode": "markdown",
-            "content": "### Peak % of Limit (last 48h)\nMemory (top) &nbsp;\u00b7&nbsp; CPU (bottom)"
+            "content": "### Peak % of Limit (last 48h)\nMemory (top) &nbsp;·&nbsp; CPU (bottom)"
           }
         },
         {
@@ -1752,7 +1731,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"api\",container=\"api\"}) / sum(kube_pod_container_resource_limits{namespace=\"api\",container=\"api\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"api\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"api\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -1808,7 +1787,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"atlas\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"atlas\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"atlas\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -1864,7 +1843,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-pipeline\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"hermes-pipeline\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"hermes-pipeline\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -1920,7 +1899,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"kg-indexer\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"kg-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"kg-indexer\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -1976,7 +1955,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"search\",container=\"search-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"search\",container=\"search-indexer\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"search-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"search-indexer\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2032,7 +2011,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"$namespace\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-ipfs-cache\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"hermes-ipfs-cache\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"hermes-ipfs-cache\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2074,7 +2053,7 @@ data:
         },
         {
           "type": "stat",
-          "title": "scoring peak 48h",
+          "title": "vote-idx peak 48h",
           "id": 86,
           "gridPos": {
             "h": 4,
@@ -2088,7 +2067,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"scoring\",container=\"scoring-service\"}) / sum(kube_pod_container_resource_limits{namespace=\"scoring\",container=\"scoring-service\",resource=\"memory\"}))[48h:])",
+              "expr": "max_over_time((sum(container_memory_working_set_bytes{namespace=\"gaia\",container=\"vote-indexer\"}) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"vote-indexer\",resource=\"memory\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2130,7 +2109,7 @@ data:
         },
         {
           "type": "stat",
-          "title": "api peak cpu 48h",
+          "title": "api peak cpu 48h (of request)",
           "id": 90,
           "gridPos": {
             "h": 4,
@@ -2144,7 +2123,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"api\",container=\"api\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"api\",container=\"api\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"api\"}[5m])) / sum(kube_pod_container_resource_requests{namespace=\"gaia\",container=\"api\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2200,7 +2179,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"atlas\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"atlas\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"atlas\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2256,7 +2235,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-pipeline\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"hermes-pipeline\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"hermes-pipeline\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2312,7 +2291,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"kg-indexer\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"kg-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"kg-indexer\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2368,7 +2347,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"search\",container=\"search-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"search\",container=\"search-indexer\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"search-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"search-indexer\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2424,7 +2403,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"$namespace\",container=\"hermes-ipfs-cache\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"hermes-ipfs-cache\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"hermes-ipfs-cache\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2466,7 +2445,7 @@ data:
         },
         {
           "type": "stat",
-          "title": "scoring peak cpu 48h",
+          "title": "vote-idx peak cpu 48h",
           "id": 96,
           "gridPos": {
             "h": 4,
@@ -2480,7 +2459,7 @@ data:
           },
           "targets": [
             {
-              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"scoring\",container=\"scoring-service\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"scoring\",container=\"scoring-service\",resource=\"cpu\"}))[48h:])",
+              "expr": "max_over_time((sum(rate(container_cpu_usage_seconds_total{namespace=\"gaia\",container=\"vote-indexer\"}[5m])) / sum(kube_pod_container_resource_limits{namespace=\"gaia\",container=\"vote-indexer\",resource=\"cpu\"}))[48h:])",
               "refId": "A"
             }
           ],
@@ -2550,7 +2529,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (container) (increase(kube_pod_container_status_restarts_total{namespace=~\"api|knowledge|search|scoring\", container=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}[5m]))",
+              "expr": "sum by (container) (increase(kube_pod_container_status_restarts_total{namespace=\"gaia\", container=~\"api|valkey|atlas|hermes-pipeline|hermes-ipfs-cache|kg-indexer|search-indexer|vote-indexer|topology-indexer|ranking-indexer|notification-indexer|delivery-worker\"}[5m]))",
               "legendFormat": "{{container}}",
               "refId": "A"
             }
@@ -2573,7 +2552,7 @@ data:
         {
           "type": "table",
           "title": "Deployment Availability",
-          "description": "Available vs desired replicas for all Gaia deployments",
+          "description": "Available vs desired replicas for the long-running gaia Deployments. search-indexer is a StatefulSet; see the panel beside Atlas.",
           "id": 31,
           "gridPos": {
             "h": 8,
@@ -2587,13 +2566,13 @@ data:
           },
           "targets": [
             {
-              "expr": "kube_deployment_status_replicas_available{namespace=~\"api|knowledge|search|scoring\", deployment=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}",
+              "expr": "kube_deployment_status_replicas_available{namespace=\"gaia\", deployment=~\"api|api-cache|atlas|hermes-pipeline|hermes-ipfs-cache|kg-indexer|vote-indexer|topology-indexer|ranking-indexer|notification-indexer|delivery-worker\"}",
               "format": "table",
               "instant": true,
               "refId": "A"
             },
             {
-              "expr": "kube_deployment_spec_replicas{namespace=~\"api|knowledge|search|scoring\", deployment=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}",
+              "expr": "kube_deployment_spec_replicas{namespace=\"gaia\", deployment=~\"api|api-cache|atlas|hermes-pipeline|hermes-ipfs-cache|kg-indexer|vote-indexer|topology-indexer|ranking-indexer|notification-indexer|delivery-worker\"}",
               "format": "table",
               "instant": true,
               "refId": "B"
@@ -2649,7 +2628,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{namespace=~\"api|knowledge|search|scoring\", container=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"}[5m]))",
+              "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{namespace=\"gaia\", container=~\"api|valkey|atlas|hermes-pipeline|hermes-ipfs-cache|kg-indexer|search-indexer|vote-indexer|topology-indexer|ranking-indexer|notification-indexer|delivery-worker\"}[5m]))",
               "legendFormat": "{{container}}",
               "refId": "A"
             }
@@ -2687,7 +2666,7 @@ data:
           },
           "targets": [
             {
-              "expr": "sum by (container) (container_memory_working_set_bytes{namespace=~\"api|knowledge|search|scoring\", container=~\"api|atlas|hermes-pipeline|kg-indexer|search-indexer|hermes-ipfs-cache|scoring-service\"})",
+              "expr": "sum by (container) (container_memory_working_set_bytes{namespace=\"gaia\", container=~\"api|valkey|atlas|hermes-pipeline|hermes-ipfs-cache|kg-indexer|search-indexer|vote-indexer|topology-indexer|ranking-indexer|notification-indexer|delivery-worker\"})",
               "legendFormat": "{{container}}",
               "refId": "A"
             }
@@ -2725,7 +2704,7 @@ data:
           },
           "targets": [
             {
-              "expr": "kube_deployment_status_replicas_available{namespace=\"$namespace\",deployment=\"atlas\"}",
+              "expr": "kube_deployment_status_replicas_available{namespace=\"gaia\",deployment=\"atlas\"}",
               "refId": "A"
             }
           ],
@@ -2772,7 +2751,7 @@ data:
           },
           "targets": [
             {
-              "expr": "kube_deployment_spec_replicas{namespace=\"$namespace\",deployment=\"atlas\"}",
+              "expr": "kube_deployment_spec_replicas{namespace=\"gaia\",deployment=\"atlas\"}",
               "refId": "A"
             }
           ],
@@ -2790,27 +2769,14 @@ data:
           }
         },
         {
-          "type": "row",
-          "title": "OpenSearch Health",
-          "id": 104,
+          "type": "stat",
+          "title": "search-indexer Ready / Desired",
+          "id": 37,
           "gridPos": {
-            "h": 1,
-            "w": 24,
+            "h": 4,
+            "w": 12,
             "x": 0,
-            "y": 85
-          },
-          "collapsed": false,
-          "panels": []
-        },
-        {
-          "type": "stat",
-          "title": "Search QPS",
-          "id": 40,
-          "gridPos": {
-            "h": 4,
-            "w": 4,
-            "x": 0,
-            "y": 86
+            "y": 68
           },
           "datasource": {
             "type": "prometheus",
@@ -2818,165 +2784,18 @@ data:
           },
           "targets": [
             {
-              "expr": "sum(rate(elasticsearch_indices_search_query_total[5m]))",
-              "legendFormat": "QPS",
+              "expr": "kube_statefulset_status_replicas_ready{namespace=\"gaia\",statefulset=\"search-indexer\"}",
+              "legendFormat": "ready",
               "refId": "A"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "reqps",
-              "decimals": 1,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              }
             },
-            "overrides": []
-          },
-          "options": {
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ]
-            },
-            "colorMode": "value"
-          }
-        },
-        {
-          "type": "stat",
-          "title": "Avg Search Latency (ms)",
-          "id": 41,
-          "gridPos": {
-            "h": 4,
-            "w": 4,
-            "x": 4,
-            "y": 86
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "targets": [
             {
-              "expr": "1000 * (sum(rate(elasticsearch_indices_search_query_time_seconds[5m])) / sum(rate(elasticsearch_indices_search_query_total[5m])))",
-              "legendFormat": "latency",
-              "refId": "A"
+              "expr": "kube_statefulset_replicas{namespace=\"gaia\",statefulset=\"search-indexer\"}",
+              "legendFormat": "desired",
+              "refId": "B"
             }
           ],
           "fieldConfig": {
             "defaults": {
-              "unit": "ms",
-              "decimals": 1,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "yellow",
-                    "value": 50
-                  },
-                  {
-                    "color": "red",
-                    "value": 200
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ]
-            },
-            "colorMode": "value"
-          }
-        },
-        {
-          "type": "stat",
-          "title": "Total Docs",
-          "id": 42,
-          "gridPos": {
-            "h": 4,
-            "w": 4,
-            "x": 8,
-            "y": 86
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "targets": [
-            {
-              "expr": "sum(elasticsearch_indices_docs{index!~\"\\\\..*\"})",
-              "legendFormat": "docs",
-              "refId": "A"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "short"
-            },
-            "overrides": []
-          },
-          "options": {
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ]
-            },
-            "colorMode": "value"
-          }
-        },
-        {
-          "type": "stat",
-          "title": "Cluster Health",
-          "description": "1 = healthy (green), 0 = degraded",
-          "id": 43,
-          "gridPos": {
-            "h": 4,
-            "w": 4,
-            "x": 12,
-            "y": 86
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "targets": [
-            {
-              "expr": "sum(elasticsearch_cluster_health_status{color=\"green\"})",
-              "legendFormat": "green",
-              "refId": "A"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "mappings": [
-                {
-                  "type": "value",
-                  "options": {
-                    "0": {
-                      "text": "DEGRADED",
-                      "color": "red"
-                    },
-                    "1": {
-                      "text": "GREEN",
-                      "color": "green"
-                    }
-                  }
-                }
-              ],
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
@@ -2999,408 +2818,9 @@ data:
                 "lastNotNull"
               ]
             },
-            "colorMode": "background"
-          }
-        },
-        {
-          "type": "stat",
-          "title": "Unassigned Shards",
-          "id": 44,
-          "gridPos": {
-            "h": 4,
-            "w": 4,
-            "x": 16,
-            "y": 86
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "targets": [
-            {
-              "expr": "elasticsearch_cluster_health_unassigned_shards",
-              "legendFormat": "unassigned",
-              "refId": "A"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "red",
-                    "value": 1
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ]
-            },
             "colorMode": "value"
-          }
-        },
-        {
-          "type": "stat",
-          "title": "Last Snapshot Age",
-          "id": 45,
-          "gridPos": {
-            "h": 4,
-            "w": 4,
-            "x": 20,
-            "y": 86
           },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "targets": [
-            {
-              "expr": "(time() - max(elasticsearch_snapshot_stats_latest_snapshot_timestamp_seconds)) / 3600",
-              "legendFormat": "hours",
-              "refId": "A"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "h",
-              "decimals": 1,
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "yellow",
-                    "value": 24
-                  },
-                  {
-                    "color": "red",
-                    "value": 48
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "reduceOptions": {
-              "calcs": [
-                "lastNotNull"
-              ]
-            },
-            "colorMode": "value"
-          }
-        },
-        {
-          "type": "timeseries",
-          "title": "Search QPS by Index",
-          "id": 46,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 90
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "targets": [
-            {
-              "expr": "rate(elasticsearch_indices_search_query_total[5m])",
-              "legendFormat": "{{index}}",
-              "refId": "A"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "reqps"
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "type": "timeseries",
-          "title": "Indexing Rate & Failures",
-          "id": 47,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 90
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "targets": [
-            {
-              "expr": "sum(rate(elasticsearch_indices_indexing_index_total[5m]))",
-              "legendFormat": "index ops/s",
-              "refId": "A"
-            },
-            {
-              "expr": "sum(rate(elasticsearch_indices_indexing_index_failed_total[5m]))",
-              "legendFormat": "failed ops/s",
-              "refId": "B"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "failed ops/s"
-                },
-                "properties": [
-                  {
-                    "id": "color",
-                    "value": {
-                      "fixedColor": "red",
-                      "mode": "fixed"
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "type": "timeseries",
-          "title": "JVM Heap Usage vs Max",
-          "id": 48,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 98
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "targets": [
-            {
-              "expr": "sum(elasticsearch_jvm_memory_used_bytes{area=\"heap\"})",
-              "legendFormat": "heap used",
-              "refId": "A"
-            },
-            {
-              "expr": "sum(elasticsearch_jvm_memory_max_bytes{area=\"heap\"})",
-              "legendFormat": "heap max",
-              "refId": "B"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "bytes"
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "type": "timeseries",
-          "title": "GC Time & Frequency (5m rate)",
-          "id": 49,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 98
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "targets": [
-            {
-              "expr": "sum(rate(elasticsearch_jvm_gc_collection_seconds_sum[5m]))",
-              "legendFormat": "GC time (s/s)",
-              "refId": "A"
-            },
-            {
-              "expr": "sum(rate(elasticsearch_jvm_gc_collection_seconds_count[5m]))",
-              "legendFormat": "GC runs (/s)",
-              "refId": "B"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "s"
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "type": "timeseries",
-          "title": "Thread Pool Rejections (5m rate)",
-          "id": 50,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 106
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "targets": [
-            {
-              "expr": "rate(elasticsearch_thread_pool_rejected_count[5m])",
-              "legendFormat": "{{node}} {{type}}",
-              "refId": "A"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "type": "timeseries",
-          "title": "Circuit Breaker Trips (5m rate)",
-          "id": 51,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 106
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "targets": [
-            {
-              "expr": "rate(elasticsearch_breakers_tripped[5m])",
-              "legendFormat": "{{name}}",
-              "refId": "A"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "table",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "multi"
-            }
-          }
-        },
-        {
-          "type": "timeseries",
-          "title": "Total Docs Indexed (over time)",
-          "description": "Primary-shard document count across user indices (excludes internal `.`-prefixed indices). Use to spot sudden drops (re-indexing, deletion, index recreation) or gradual growth.",
-          "id": 108,
-          "gridPos": {
-            "h": 8,
-            "w": 24,
-            "x": 0,
-            "y": 114
-          },
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$datasource"
-          },
-          "targets": [
-            {
-              "expr": "sum(elasticsearch_indices_docs{index!~\"\\\\..*\"})",
-              "legendFormat": "docs",
-              "refId": "A"
-            }
-          ],
-          "fieldConfig": {
-            "defaults": {
-              "unit": "short",
-              "custom": {
-                "drawStyle": "line",
-                "fillOpacity": 10,
-                "lineInterpolation": "smooth",
-                "spanNulls": true
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "displayMode": "list",
-              "placement": "bottom",
-              "showLegend": true
-            },
-            "tooltip": {
-              "mode": "single"
-            }
-          }
+          "description": "search-indexer runs as a StatefulSet, so it is not in the Deployment table."
         },
         {
           "type": "row",
@@ -3624,6 +3044,353 @@ data:
                 "mean",
                 "max"
               ]
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "row",
+          "title": "Indexers",
+          "id": 109,
+          "collapsed": false,
+          "panels": [],
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 103
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Indexer throughput (per second)",
+          "id": 120,
+          "description": "Work done per second by each consumer. Their topics only carry messages when someone acts, so zero in a quiet stretch is normal; Kafka lag is on the Kafka Consumer Lag dashboard.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 104
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(kg_indexer_blocks_processed_total{namespace=\"gaia\"}[5m]))",
+              "legendFormat": "kg-indexer blocks",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(kg_indexer_events_processed_total{namespace=\"gaia\"}[5m]))",
+              "legendFormat": "kg-indexer events",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(search_indexer_documents_indexed_total{namespace=\"gaia\"}[5m]))",
+              "legendFormat": "search-indexer docs",
+              "refId": "C"
+            },
+            {
+              "expr": "sum(rate(vote_indexer_votes_processed_total{namespace=\"gaia\"}[5m]))",
+              "legendFormat": "vote-indexer votes",
+              "refId": "D"
+            },
+            {
+              "expr": "sum(rate(topology_indexer_diffs_applied_total{namespace=\"gaia\"}[5m]))",
+              "legendFormat": "topology-indexer diffs",
+              "refId": "E"
+            },
+            {
+              "expr": "sum(rate(ranking_indexer_messages_processed_total{namespace=\"gaia\"}[5m]))",
+              "legendFormat": "ranking-indexer messages",
+              "refId": "F"
+            },
+            {
+              "expr": "sum(rate(notification_indexer_events_processed_total{namespace=\"gaia\"}[5m]))",
+              "legendFormat": "notification-indexer events",
+              "refId": "G"
+            },
+            {
+              "expr": "sum(rate(delivery_worker_deliveries_total{namespace=\"gaia\"}[5m]))",
+              "legendFormat": "delivery-worker deliveries",
+              "refId": "H"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Data dropped or failed (15m increase)",
+          "id": 121,
+          "description": "Same series as KgIndexerBlockDropped and IndexerDroppedData (monitoring/k8s/v2/*-alerts.yaml). Any non-zero value is data that did not land.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 104
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum by (transient) (increase(kg_indexer_blocks_dropped_total{namespace=\"gaia\"}[15m]))",
+              "legendFormat": "kg-indexer blocks dropped (transient={{transient}})",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(increase(vote_indexer_votes_dropped_total{namespace=\"gaia\"}[15m]))",
+              "legendFormat": "vote-indexer votes dropped",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(increase(topology_indexer_diffs_dropped_total{namespace=\"gaia\"}[15m]))",
+              "legendFormat": "topology-indexer diffs dropped",
+              "refId": "C"
+            },
+            {
+              "expr": "sum by (reason) (increase(notification_indexer_events_failed_total{namespace=\"gaia\"}[15m]))",
+              "legendFormat": "notification-indexer failed ({{reason}})",
+              "refId": "D"
+            },
+            {
+              "expr": "sum(increase(delivery_worker_deliveries_total{namespace=\"gaia\", outcome=\"failed\"}[15m]))",
+              "legendFormat": "delivery-worker failed deliveries",
+              "refId": "E"
+            },
+            {
+              "expr": "sum(increase(search_indexer_operations_failed_total{namespace=\"gaia\"}[15m]))",
+              "legendFormat": "search-indexer operations failed",
+              "refId": "F"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Retries, rejects and unparseable messages (15m increase)",
+          "id": 122,
+          "description": "Recoverable trouble: retried, skipped by design, or rejected as malformed. A rising line here usually precedes the dropped panel.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 112
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(increase(kg_indexer_batch_retries_total{namespace=\"gaia\"}[15m]))",
+              "legendFormat": "kg-indexer batch retries",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(increase(kg_indexer_messages_unparseable_total{namespace=\"gaia\"}[15m]))",
+              "legendFormat": "kg-indexer unparseable",
+              "refId": "B"
+            },
+            {
+              "expr": "sum by (topic) (increase(ranking_indexer_transient_retries_total{namespace=\"gaia\"}[15m]))",
+              "legendFormat": "ranking-indexer retries ({{topic}})",
+              "refId": "C"
+            },
+            {
+              "expr": "sum by (topic) (increase(ranking_indexer_messages_skipped_total{namespace=\"gaia\"}[15m]))",
+              "legendFormat": "ranking-indexer skipped ({{topic}})",
+              "refId": "D"
+            },
+            {
+              "expr": "sum by (reason) (increase(vote_indexer_messages_rejected_total{namespace=\"gaia\"}[15m]))",
+              "legendFormat": "vote-indexer rejected ({{reason}})",
+              "refId": "E"
+            },
+            {
+              "expr": "sum(increase(topology_indexer_messages_unparseable_total{namespace=\"gaia\"}[15m]))",
+              "legendFormat": "topology-indexer unparseable",
+              "refId": "F"
+            },
+            {
+              "expr": "sum(increase(delivery_worker_claim_errors_total{namespace=\"gaia\"}[15m]))",
+              "legendFormat": "delivery-worker claim errors",
+              "refId": "G"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Delivery queue",
+          "id": 123,
+          "description": "Notification deliveries waiting in Postgres. Reads 0 when idle.",
+          "gridPos": {
+            "h": 8,
+            "w": 6,
+            "x": 12,
+            "y": 112
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(delivery_worker_pending_deliveries{namespace=\"gaia\"})",
+              "legendFormat": "pending",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(delivery_worker_in_progress_deliveries{namespace=\"gaia\"})",
+              "legendFormat": "in progress",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "search-indexer bulk latency (avg ms per bulk call)",
+          "id": 124,
+          "description": "OpenSearch-reported `took` versus the indexer's own wall-clock time per bulk request. A widening gap is network or client-side queueing.",
+          "gridPos": {
+            "h": 8,
+            "w": 6,
+            "x": 18,
+            "y": 112
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(search_indexer_bulk_took_milliseconds_total{namespace=\"gaia\"}[5m])) / sum(rate(search_indexer_bulk_calls_total{namespace=\"gaia\"}[5m]))",
+              "legendFormat": "OpenSearch took",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(search_indexer_bulk_wall_milliseconds_total{namespace=\"gaia\"}[5m])) / sum(rate(search_indexer_bulk_calls_total{namespace=\"gaia\"}[5m]))",
+              "legendFormat": "wall clock",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Indexer scrape up",
+          "id": 125,
+          "description": "1 = scraped. KgIndexerMetricsMissing and IndexerMetricsMissing fire when these disappear.",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 120
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "up{namespace=\"gaia\", job=~\"kg-indexer|search-indexer|vote-indexer|topology-indexer|ranking-indexer|notification-indexer|delivery-worker\"}",
+              "legendFormat": "{{job}} {{pod}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
             },
             "tooltip": {
               "mode": "multi"

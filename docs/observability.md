@@ -58,7 +58,9 @@ The observability stack consists of:
 
 | Dashboard | Panels | Provisioned By | Config |
 |-----------|--------|---------------|--------|
-| API Ingress Observability | 9 panels | ConfigMap sidecar | [`monitoring/k8s/api-ingress-dashboard.yaml`](monitoring/k8s/api-ingress-dashboard.yaml) |
+| Gaia Overview | API (Gateway), pools, resources, pods, GraphQL, indexers | ConfigMap sidecar | [`monitoring/k8s/gaia-overview-dashboard.yaml`](monitoring/k8s/gaia-overview-dashboard.yaml) |
+| Hermes Lag | chain tip vs processed block | ConfigMap sidecar | [`monitoring/k8s/hermes-lag-dashboard.yaml`](monitoring/k8s/hermes-lag-dashboard.yaml) |
+| Kafka Consumer Lag | per-group lag | ConfigMap sidecar | [`monitoring/k8s/kafka-consumer-lag-dashboard.yaml`](monitoring/k8s/kafka-consumer-lag-dashboard.yaml) |
 | Atlas Overview (Production) | 6 panels | ConfigMap sidecar | [`hermes/k8s/production/atlas-monitoring.yaml`](hermes/k8s/production/atlas-monitoring.yaml) |
 | Atlas Overview (Staging) | 6 panels | ConfigMap sidecar | [`hermes/k8s/staging/atlas-monitoring.yaml`](hermes/k8s/staging/atlas-monitoring.yaml) |
 

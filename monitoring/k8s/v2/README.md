@@ -61,9 +61,10 @@ kubectl --context $CTX apply -f monitoring/k8s/v2/
 
 ## Deliberately not ported
 
-- **`ingress-nginx-metrics.yaml`, `api-ingress-rules.yaml`, `api-ingress-dashboard.yaml`** —
-  there is no ingress-nginx here. `gateway-metrics.yaml` supplies the equivalent
-  signals from Envoy.
+- **`ingress-nginx-metrics.yaml`, `api-ingress-rules.yaml`** — there is no
+  ingress-nginx here. `gateway-metrics.yaml` supplies the equivalent signals
+  from Envoy. (`api-ingress-dashboard.yaml` was deleted: nothing it queried
+  exists on this cluster.)
 - **`prometheus-adapter-*.yaml`** — the API's HPA runs on cpu/memory via
   metrics-server. Nothing on this cluster consumes external metrics.
 - **`opensearch-exporter.yaml`** — needs this cluster's OpenSearch credentials
@@ -73,8 +74,6 @@ kubectl --context $CTX apply -f monitoring/k8s/v2/
 not ported copies) have run on this cluster since 2026-09-24, against
 `geo-testnet-kafka`. Their credentials secret, `monitoring/kafka-exporter-creds`,
 is a copy of `gaia/kafka-credentials`; see the exporter's header.
-- **Dashboards** (`*-dashboard.yaml`) — the `gaia-v2-*` ones point at the old
-  cluster's `gaia-v2` namespace and need the same re-pointing treatment.
 
 ## What is scraped
 
@@ -131,16 +130,54 @@ so their failures show as restarts (`IndexerRestartingRepeatedly`).
 
 ## Dashboards
 
-None of the repo's dashboards is installed. Only the stock
-`kube-prometheus-stack-*` ones are. Against live metric names on 2026-09-30:
+The dashboards are ConfigMaps labelled `grafana_dashboard: "1"`. Grafana's
+dashboard sidecar watches every namespace for that label (`LABEL` /
+`NAMESPACE=ALL` in `prometheus-stack.yaml`) and loads them without a restart.
+**None is installed yet** — on 2026-09-30 the only labelled ConfigMaps on the
+cluster were the stock `kube-prometheus-stack-*` ones.
 
-| file | state |
-|---|---|
-| `api-ingress-dashboard.yaml` | every query is an `api:ingress_*` recording rule or an nginx metric; none exists here |
-| `gaia-overview-dashboard.yaml` | ingress, `elasticsearch_*` and namespace (`api`, `knowledge`, `search`, `scoring`) queries are all empty; the `gaia_api_*` and kube-state panels would work with the namespace re-pointed to `gaia` |
-| `gaia-v2-overview-dashboard.yaml` | the same, for namespace `gaia-v2` and `gaia_v2:ingress_*` |
-| `hermes-lag-dashboard.yaml` | the metrics exist, but it filters `gaia_namespace` on `knowledge` / `knowledge-staging`; live values are `gaia` or absent |
-| `kafka-consumer-lag-dashboard.yaml` | current; every metric exists |
+| file | uid | what it shows |
+|---|---|---|
+| `gaia-overview-dashboard.yaml` | `gaia-overview` | API traffic, latency and error codes from the Cilium Gateway (Envoy), DB/GraphQL pool health, per-service resource % of limit, pod health, GraphQL cost and response size, and an **Indexers** row: throughput, dropped/failed data, retries and rejects, delivery queue, search-indexer bulk latency, scrape `up` |
+| `hermes-lag-dashboard.yaml` | `hermes-lag` | chain tip against `hermes_latest_processed_block` for hermes-pipeline, hermes-ipfs-cache, atlas and kg-indexer |
+| `kafka-consumer-lag-dashboard.yaml` | `kafka-consumer-lag` | per-group, per-topic consumer lag from `kafka-exporter` |
+
+Every query in all three returned data from this cluster's Prometheus on
+2026-09-30 (114 queries, none empty). They live in the parent directory, but
+target this cluster only: `namespace="gaia"`, the Gateway's
+`envoy_cluster_name=~".*gaia_api_3000"`, and chain-tip's `gaia_namespace="gaia"`.
+
+Install (server-side apply: the overview is ~100 KB, which is close to the
+256 KB limit on client-side apply's last-applied annotation):
+
+```bash
+CTX=do-nyc2-geo-testnet-k8s
+kubectl --context $CTX apply --server-side -f monitoring/k8s/gaia-overview-dashboard.yaml
+kubectl --context $CTX apply --server-side -f monitoring/k8s/hermes-lag-dashboard.yaml
+kubectl --context $CTX apply --server-side -f monitoring/k8s/kafka-consumer-lag-dashboard.yaml
+
+# confirm the sidecar picked them up
+kubectl --context $CTX -n monitoring logs deploy/kube-prometheus-stack-grafana -c grafana-sc-dashboard --tail=20
+```
+
+Notes on what changed from the old-cluster versions:
+
+- **API traffic** comes from Envoy, not nginx. Latency is the upstream leg
+  only (`envoy_cluster_upstream_rq_time`, milliseconds divided to seconds), so
+  it reads a little below the old client-facing figure. Envoy has no 499; the
+  error panel shows 500, 503 and upstream timeouts instead.
+- **api CPU %** is against its *request*: the api container has a memory
+  limit but no CPU limit, so a %-of-limit query would be empty.
+- **The OpenSearch row is gone.** Its `elasticsearch_*` series need
+  `opensearch-exporter.yaml`, which is not deployed here (see above). The
+  panels are in git history if the exporter is ever installed.
+- `gaia-v2-overview-dashboard.yaml` (namespace `gaia-v2` on the deleted
+  cluster) and `api-ingress-dashboard.yaml` (nginx only) were deleted.
+
+`search-indexer-deploy/grafana/dashboards/opensearch-overview-dashboard.json`
+is not a cluster dashboard: it is provisioned by that directory's local
+`docker-compose.yaml`, which runs its own `elasticsearch-exporter`, so its
+`elasticsearch_*` queries do have data there.
 
 ## Alert routing
 
