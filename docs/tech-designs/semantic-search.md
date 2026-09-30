@@ -409,6 +409,7 @@ PUT _search/pipeline/{prefix}hybrid_minmax
 ```
 
 It is applied per request (`?search_pipeline=`) in hybrid mode only; the lexical path is untouched.
+The pipeline is named `<alias>_hybrid_minmax` (e.g. `testnet_entities_hybrid_minmax`).
 
 ### Spike results — k-NN half (2026-09-29, gaia's compose OpenSearch 2.17.1, official image)
 
@@ -618,13 +619,22 @@ canonical request log as its own span.
 
 ## search-admin additions
 
+Implemented in step 2 (2026-09-30). `index.knn: true` is part of `get_index_settings` in
+`search-indexer-repository`, so every index created from now on accepts slots; no model is named
+there — slots arrive only through the commands below, which derive the slot id from the descriptor.
+
 | Command | Does |
 |---|---|
-| `add-embedding-slot --bundle <dir>` | loads `bundle.json`, verifies artifact hashes, computes the slot id, `put_mapping` for the three fields, writes `_meta.embedding_slots.<slot>` |
-| `set-default-slot <slot>` | writes `_meta.embedding_default_slot` (the API picks it up on refresh) |
-| `list-slots` | prints slots, default, whether the service has each loaded (`/info`), and per-slot coverage (`exists: emb_<slot>` count vs in-scope count) |
-| `ensure-search-pipeline` | idempotent `PUT` of the hybrid pipeline for the environment prefix |
-| `full-migration` | unchanged; the new mapping simply includes `index.knn` and the slot fields |
+| `add-embedding-slot [--version N] --spec <bundle.json>` or `--from-service <url> --slot <id>` | validates the descriptor (from a file, or from a running embedding-service's `/info`, refusing a descriptor that does not hash to the requested id), refuses an index without `index.knn`, `put_mapping` for the three fields, files the descriptor in `_meta.embedding_slots.<slot>`; the first slot becomes the default (`--set-default` overrides); idempotent |
+| `set-default-slot [--version N] <slot>` | writes `_meta.embedding_default_slot` (must be registered) |
+| `retire-embedding-slot [--version N] <slot>` | removes the slot from `_meta`; refuses the default; fields stay until the next index version |
+| `list-slots [--version N] [--embedding-service <url>]` | slots, default, `index.knn`, vector coverage vs named live documents, and per slot whether the service has it loaded with the same descriptor hash |
+| `ensure-search-pipeline` | idempotent `PUT` of `<alias>_hybrid_minmax` (min-max, arithmetic mean, equal weights) — one pipeline per alias so staging and production never share one |
+| `full-migration` | unchanged; the new mapping includes `index.knn`, slots are added afterwards |
+
+The pure rules (field mappings, `_meta` merge, default/retire, pipeline body) live in
+`search-admin/src/embedding_slots.rs` with unit tests; `search-admin` depends on the `embedding`
+crate with `default-features = false`, so it links no ONNX runtime and keeps its bookworm image.
 
 Per-environment k8s jobs follow the existing pattern in `search-indexer-deploy/k8s/*/jobs/`.
 
@@ -853,10 +863,10 @@ foundation the deferred "beyond similarity" track needs.
 | new lib crate | `embedding/` (descriptor, slot id, text template, `EmbeddingProvider`, `OnnxLocalProvider`, bundle loading) |
 | new service | `embedding-service/` (+ `Dockerfile` on `rust:1.92-trixie` / `debian:trixie-slim` baking `/models/<slot>/` via `bundle fetch`, `bundles/<name>/bundle.json`, `k8s/` Deployment / Service / HPA) |
 | new indexer | `embedding-indexer/` (+ `Dockerfile`, `k8s/`), `EmbedBackend` with `service` and `extraction_api`; bookworm is fine here since it links no ONNX runtime |
-| shared | `search-indexer-shared` unchanged; the search crates depend on `embedding` only through `search-admin` |
+| shared | `search-indexer-shared` unchanged; `search-admin` depends on `embedding` with `default-features = false` (descriptor + slot id only) |
 | mapping | `search-indexer-repository/src/opensearch/index_config.rs` |
 | stamp | `search-indexer-repository/src/opensearch/provider.rs` (`build_update_doc`), `bulk.rs`, `unset_document_properties.rs` |
-| admin | `search-admin/src/commands/{add_embedding_slot,set_default_slot,list_slots,ensure_search_pipeline}.rs` |
+| admin | `search-admin/src/embedding_slots.rs` (pure, tested), `search-admin/src/commands/{index_meta,add_embedding_slot,set_default_slot,retire_embedding_slot,list_slots,ensure_search_pipeline}.rs` — done in step 2 |
 | api | `api/src/services/search/types.ts`, `opensearch.ts`, `QUERY_ARCHITECTURE.md`, `api/src/search/index.ts`, `api/src/services/embedding/client.ts`, `api/main.ts` |
 | infra | `Cargo.toml` (three members), `docker-compose.yml` (two services), `.github/workflows/embedding-{service,indexer}-*.yml`, `docs/runbooks/deployment.md` (rotation procedure) |
 | docs | this file; `README.md` subsystem table (+ `embedding`, `embedding-service`, `embedding-indexer`) |

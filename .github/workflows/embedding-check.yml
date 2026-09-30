@@ -48,6 +48,9 @@ jobs:
       - name: Clippy
         run: cargo clippy -p embedding -p embedding-service --all-targets -- -D warnings
 
+      - name: Check the runtime-free build (what search-admin and the indexer link)
+        run: cargo check -p embedding --no-default-features
+
       - name: Build
         run: cargo build -p embedding-service
 

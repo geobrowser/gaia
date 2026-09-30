@@ -1,8 +1,14 @@
+pub mod add_embedding_slot;
 pub mod backfill_name_raw;
 pub mod create;
 pub mod delete;
+pub mod ensure_search_pipeline;
 pub mod full_migration;
 pub mod get;
+pub mod index_meta;
 pub mod list;
+pub mod list_slots;
 pub mod reindex;
+pub mod retire_embedding_slot;
+pub mod set_default_slot;
 pub mod update_alias;

@@ -15,6 +15,7 @@
 pub mod bundle;
 pub mod descriptor;
 pub mod error;
+#[cfg(feature = "onnx")]
 pub mod onnx;
 pub mod provider;
 pub mod template;
@@ -22,5 +23,6 @@ pub mod template;
 pub use bundle::VerifiedBundle;
 pub use descriptor::{Descriptor, Pooling, Quantization};
 pub use error::{Error, Result};
+#[cfg(feature = "onnx")]
 pub use onnx::{BundleFiles, OnnxLocalProvider, OnnxOptions};
 pub use provider::{EmbeddingProvider, Purpose};

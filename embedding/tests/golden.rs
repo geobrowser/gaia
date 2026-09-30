@@ -1,3 +1,4 @@
+#![cfg(feature = "onnx")]
 //! Golden-vector test against a real bundle. Skipped unless `EMBEDDING_TEST_BUNDLE` points at a
 //! verified bundle directory for `bundles/bge-small-en-v1.5-q` (see embedding-service/README.md
 //! for how to fetch it). The fixture holds vectors from Python fastembed on the same artifacts;

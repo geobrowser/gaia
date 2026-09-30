@@ -11,6 +11,11 @@ path = "src/main.rs"
 [dependencies]
 search-indexer-repository = { path = "../search-indexer-repository" }
 search-indexer-shared = { path = "../search-indexer-shared" }
+# Embedding descriptors and slot ids only — no ONNX runtime in this binary.
+embedding = { path = "../embedding", default-features = false }
+
+# Reads a running embedding-service's /info (add-embedding-slot --from-service, list-slots).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 # OpenSearch
 # The experimental-apis feature is required for the Tasks API in 2.3.0

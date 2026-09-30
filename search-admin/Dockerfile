@@ -13,6 +13,7 @@ WORKDIR /build
 COPY search-admin ./search-admin
 COPY search-indexer-repository ./search-indexer-repository
 COPY search-indexer-shared ./search-indexer-shared
+COPY embedding ./embedding
 
 # Copy Cargo.lock for dependency resolution
 COPY Cargo.lock ./
@@ -23,6 +24,7 @@ RUN echo '[workspace]' > Cargo.toml && \
     echo '    "search-admin",' >> Cargo.toml && \
     echo '    "search-indexer-repository",' >> Cargo.toml && \
     echo '    "search-indexer-shared",' >> Cargo.toml && \
+    echo '    "embedding",' >> Cargo.toml && \
     echo ']' >> Cargo.toml && \
     echo 'resolver = "2"' >> Cargo.toml
 

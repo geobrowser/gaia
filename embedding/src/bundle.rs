@@ -11,9 +11,8 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::descriptor::{Descriptor, TOKENIZER_FILES, is_slot_id};
+use crate::descriptor::{Descriptor, is_slot_id};
 use crate::error::{Error, Result};
-use crate::onnx::{BundleFiles, OnnxLocalProvider, OnnxOptions};
 
 pub const BUNDLE_FILE: &str = "bundle.json";
 
@@ -95,13 +94,20 @@ pub fn verify(dir: &Path) -> Result<VerifiedBundle> {
     })
 }
 
+#[cfg(feature = "onnx")]
 fn read_artifact(dir: &Path, file: &str) -> Result<Vec<u8>> {
     let path = dir.join(file);
     fs::read(&path).map_err(|e| io(&path, e))
 }
 
 /// Verify a bundle and build its provider.
-pub fn load(dir: &Path, options: OnnxOptions) -> Result<(VerifiedBundle, OnnxLocalProvider)> {
+#[cfg(feature = "onnx")]
+pub fn load(
+    dir: &Path,
+    options: crate::onnx::OnnxOptions,
+) -> Result<(VerifiedBundle, crate::onnx::OnnxLocalProvider)> {
+    use crate::descriptor::TOKENIZER_FILES;
+    use crate::onnx::{BundleFiles, OnnxLocalProvider};
     let verified = verify(dir)?;
     let d = &verified.descriptor;
     let files = BundleFiles {

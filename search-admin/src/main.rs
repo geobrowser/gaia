@@ -4,12 +4,16 @@ use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod commands;
+mod embedding_slots;
 mod opensearch_client;
 
 use commands::{
-    backfill_name_raw::BackfillNameRawCommand, create::CreateIndexCommand,
-    delete::DeleteIndexCommand, full_migration::FullMigrationCommand, list::ListIndicesCommand,
-    reindex::ReindexCommand, update_alias::UpdateAliasCommand,
+    add_embedding_slot::AddEmbeddingSlotCommand, backfill_name_raw::BackfillNameRawCommand,
+    create::CreateIndexCommand, delete::DeleteIndexCommand,
+    ensure_search_pipeline::EnsureSearchPipelineCommand, full_migration::FullMigrationCommand,
+    list::ListIndicesCommand, list_slots::ListSlotsCommand, reindex::ReindexCommand,
+    retire_embedding_slot::RetireEmbeddingSlotCommand, set_default_slot::SetDefaultSlotCommand,
+    update_alias::UpdateAliasCommand,
 };
 
 /// Get the prefixed alias name based on environment.
@@ -67,6 +71,21 @@ enum Commands {
 
     /// Backfill name_raw field from existing name values
     BackfillNameRaw(BackfillNameRawCommand),
+
+    /// Register an embedding slot: its k-NN fields and descriptor in the index _meta
+    AddEmbeddingSlot(AddEmbeddingSlotCommand),
+
+    /// Make a registered embedding slot the index default
+    SetDefaultSlot(SetDefaultSlotCommand),
+
+    /// Remove an embedding slot from the index _meta (its fields stay until the next migration)
+    RetireEmbeddingSlot(RetireEmbeddingSlotCommand),
+
+    /// Show embedding slots, the default, coverage, and whether the service has them loaded
+    ListSlots(ListSlotsCommand),
+
+    /// Create or update the hybrid (lexical + k-NN) search pipeline for this alias
+    EnsureSearchPipeline(EnsureSearchPipelineCommand),
 }
 
 #[tokio::main]
@@ -127,6 +146,11 @@ async fn main() -> Result<()> {
         Commands::UpdateAlias(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
         Commands::FullMigration(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
         Commands::BackfillNameRaw(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
+        Commands::AddEmbeddingSlot(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
+        Commands::SetDefaultSlot(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
+        Commands::RetireEmbeddingSlot(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
+        Commands::ListSlots(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
+        Commands::EnsureSearchPipeline(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
     };
 
     if let Err(ref e) = result {

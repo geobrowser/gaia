@@ -60,6 +60,7 @@ pub fn get_versioned_index_name_with_base(base_name: &str, version: Option<u32>)
 /// - **search_as_you_type**: Built-in field type for autocomplete on name and description
 /// - **float**: Score fields that support zero, negative, and positive values
 /// - **Keyword fields**: For filtering and exact ID lookups
+/// - **index.knn**: Enabled so embedding slots (`emb_<slot>` k-NN fields) can be added without a reindex
 ///
 /// # Sharding Configuration
 ///
@@ -74,6 +75,11 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
         "settings": {
             "number_of_shards": 1,
             "number_of_replicas": 1,
+            // k-NN is a static index setting: it must be on at creation for `knn_vector`
+            // fields to be usable with the `knn` query. Embedding slots themselves are added
+            // later, additively, by `search-admin add-embedding-slot`; no model is named here.
+            // See docs/tech-designs/semantic-search.md.
+            "index.knn": true,
             "analysis": {
                 "char_filter": {
                     // Folds the Unicode apostrophe variants onto ASCII U+0027 so that a
@@ -208,6 +214,7 @@ mod tests {
         // Check settings exist
         assert!(settings["settings"]["number_of_shards"].is_number());
         assert!(settings["settings"]["number_of_replicas"].is_number());
+        assert_eq!(settings["settings"]["index.knn"], true);
 
         // Check mappings exist
         assert!(settings["mappings"]["properties"]["entity_id"].is_object());

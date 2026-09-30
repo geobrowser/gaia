@@ -1,0 +1,230 @@
+//! Embedding slots in the entities index, as pure data transformations: the per-slot k-NN field
+//! mappings, the `_meta` bookkeeping (`embedding_slots`, `embedding_default_slot`), and the
+//! hybrid search pipeline. No I/O here so every rule is unit-tested; the commands do the calls.
+//!
+//! A slot is identified by the hash of its descriptor (`embedding::Descriptor::slot_id`), never
+//! by a name typed at the command line. Design: docs/tech-designs/semantic-search.md.
+
+use anyhow::{Result, bail};
+use embedding::Descriptor;
+use serde_json::{Map, Value, json};
+
+pub const META_SLOTS: &str = "embedding_slots";
+pub const META_DEFAULT: &str = "embedding_default_slot";
+
+/// HNSW graph parameters for every slot (measured in the step 0 PoC; ef_search is per query).
+pub const HNSW_M: u32 = 16;
+pub const HNSW_EF_CONSTRUCTION: u32 = 128;
+
+/// The three fields a slot occupies: the vector, the hash of the embedded text, and the write time.
+pub fn slot_field_mappings(d: &Descriptor) -> Map<String, Value> {
+    let field = d.vector_field();
+    let mut m = Map::new();
+    m.insert(
+        field.clone(),
+        json!({
+            "type": "knn_vector",
+            "dimension": d.dimensions,
+            "method": {
+                "name": "hnsw",
+                "engine": "lucene",
+                "space_type": d.space_type,
+                "parameters": { "m": HNSW_M, "ef_construction": HNSW_EF_CONSTRUCTION }
+            }
+        }),
+    );
+    m.insert(format!("{field}_src_hash"), json!({ "type": "keyword" }));
+    m.insert(format!("{field}_at"), json!({ "type": "date" }));
+    m
+}
+
+fn as_object(meta: Option<&Value>) -> Map<String, Value> {
+    meta.and_then(Value::as_object).cloned().unwrap_or_default()
+}
+
+/// `_meta` with the slot registered. The first slot registered becomes the default; later ones
+/// only when `make_default` is set.
+pub fn meta_with_slot(meta: Option<&Value>, d: &Descriptor, make_default: bool) -> Value {
+    let mut obj = as_object(meta);
+    let slot = d.slot_id();
+    let slots = obj.entry(META_SLOTS).or_insert_with(|| json!({}));
+    if !slots.is_object() {
+        *slots = json!({});
+    }
+    slots[&slot] = serde_json::to_value(d).expect("descriptor serializes");
+    if make_default || !obj.get(META_DEFAULT).is_some_and(Value::is_string) {
+        obj.insert(META_DEFAULT.into(), Value::String(slot));
+    }
+    Value::Object(obj)
+}
+
+/// `_meta` with `slot` as the default. The slot must be registered.
+pub fn meta_with_default(meta: Option<&Value>, slot: &str) -> Result<Value> {
+    let mut obj = as_object(meta);
+    if !registered(&obj).contains(&slot.to_string()) {
+        bail!("slot {slot} is not registered in _meta.{META_SLOTS}");
+    }
+    obj.insert(META_DEFAULT.into(), Value::String(slot.to_string()));
+    Ok(Value::Object(obj))
+}
+
+/// `_meta` without `slot`. Refuses to remove the default: point the default elsewhere first.
+pub fn meta_without_slot(meta: Option<&Value>, slot: &str) -> Result<Value> {
+    let mut obj = as_object(meta);
+    if default_slot(&Value::Object(obj.clone())).as_deref() == Some(slot) {
+        bail!("slot {slot} is the default; run set-default-slot for another slot first");
+    }
+    let Some(slots) = obj.get_mut(META_SLOTS).and_then(Value::as_object_mut) else {
+        bail!("slot {slot} is not registered (no _meta.{META_SLOTS})");
+    };
+    if slots.remove(slot).is_none() {
+        bail!("slot {slot} is not registered in _meta.{META_SLOTS}");
+    }
+    Ok(Value::Object(obj))
+}
+
+fn registered(obj: &Map<String, Value>) -> Vec<String> {
+    obj.get(META_SLOTS)
+        .and_then(Value::as_object)
+        .map(|s| s.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+pub fn default_slot(meta: &Value) -> Option<String> {
+    meta.get(META_DEFAULT)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// Every registered slot with its parsed descriptor. A descriptor that no longer parses is an
+/// error: the index would be claiming a slot nobody can serve.
+pub fn slots(meta: &Value) -> Result<Vec<(String, Descriptor)>> {
+    let mut out = Vec::new();
+    if let Some(slots) = meta.get(META_SLOTS).and_then(Value::as_object) {
+        for (id, v) in slots {
+            let d: Descriptor = serde_json::from_value(v.clone()).map_err(|e| {
+                anyhow::anyhow!("_meta.{META_SLOTS}.{id} does not parse as a descriptor: {e}")
+            })?;
+            if d.slot_id() != *id {
+                bail!(
+                    "_meta.{META_SLOTS}.{id}: descriptor hashes to {}, not {id}",
+                    d.slot_id()
+                );
+            }
+            out.push((id.clone(), d));
+        }
+    }
+    Ok(out)
+}
+
+/// One pipeline per alias, so staging and production never share one.
+pub fn pipeline_name(index_alias: &str) -> String {
+    format!("{index_alias}_hybrid_minmax")
+}
+
+/// Min-max normalization of each sub-query's scores, then the arithmetic mean: the hybrid mode
+/// fusion from the design. Weights are equal; the API can override per request later.
+pub fn hybrid_pipeline_body() -> Value {
+    json!({
+        "description": "Semantic search hybrid mode: min-max normalized lexical + k-NN scores, arithmetic mean",
+        "phase_results_processors": [{
+            "normalization-processor": {
+                "normalization": { "technique": "min_max" },
+                "combination": { "technique": "arithmetic_mean", "parameters": { "weights": [0.5, 0.5] } }
+            }
+        }]
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn descriptor(dims: usize) -> Descriptor {
+        let digest = |n: u8| format!("sha256:{}", format!("{n:02x}").repeat(32));
+        serde_json::from_value(json!({
+            "provider": "onnx-local", "model_id": "test/model",
+            "source": "hf:test/model@0123456789abcdef0123456789abcdef01234567",
+            "model_file": "model.onnx",
+            "artifacts": {
+                "model.onnx": digest(1), "tokenizer.json": digest(2), "config.json": digest(3),
+                "special_tokens_map.json": digest(4), "tokenizer_config.json": digest(5)
+            },
+            "dimensions": dims, "pooling": "cls", "quantization": "static", "normalize": true,
+            "max_tokens": 512, "truncation": "tail", "text_template": "name_description_v1",
+            "document_prompt": "", "query_prompt": "", "space_type": "cosinesimil", "score_floor": 0.85
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn field_mappings_are_named_by_slot_and_sized_by_descriptor() {
+        let d = descriptor(384);
+        let m = slot_field_mappings(&d);
+        let f = d.vector_field();
+        assert_eq!(m[&f]["type"], "knn_vector");
+        assert_eq!(m[&f]["dimension"], 384);
+        assert_eq!(m[&f]["method"]["engine"], "lucene");
+        assert_eq!(m[&f]["method"]["space_type"], "cosinesimil");
+        assert_eq!(m[&format!("{f}_src_hash")]["type"], "keyword");
+        assert_eq!(m[&format!("{f}_at")]["type"], "date");
+        assert_eq!(m.len(), 3);
+    }
+
+    #[test]
+    fn first_slot_becomes_default_later_ones_only_on_request() {
+        let a = descriptor(384);
+        let b = descriptor(768);
+        let meta = meta_with_slot(None, &a, false);
+        assert_eq!(default_slot(&meta).as_deref(), Some(a.slot_id().as_str()));
+        let meta = meta_with_slot(Some(&meta), &b, false);
+        assert_eq!(default_slot(&meta).as_deref(), Some(a.slot_id().as_str()));
+        assert_eq!(slots(&meta).unwrap().len(), 2);
+        let meta = meta_with_slot(Some(&meta), &b, true);
+        assert_eq!(default_slot(&meta).as_deref(), Some(b.slot_id().as_str()));
+        // Existing unrelated _meta keys survive.
+        let meta = meta_with_slot(Some(&json!({"owner": "search"})), &a, false);
+        assert_eq!(meta["owner"], "search");
+    }
+
+    #[test]
+    fn default_and_retire_rules() {
+        let a = descriptor(384);
+        let b = descriptor(768);
+        let meta = meta_with_slot(Some(&meta_with_slot(None, &a, false)), &b, false);
+        assert!(meta_with_default(Some(&meta), "0000000000").is_err());
+        let meta = meta_with_default(Some(&meta), &b.slot_id()).unwrap();
+        assert_eq!(default_slot(&meta).as_deref(), Some(b.slot_id().as_str()));
+        assert!(
+            meta_without_slot(Some(&meta), &b.slot_id()).is_err(),
+            "cannot retire the default"
+        );
+        let meta = meta_without_slot(Some(&meta), &a.slot_id()).unwrap();
+        assert_eq!(slots(&meta).unwrap().len(), 1);
+        assert!(
+            meta_without_slot(Some(&meta), &a.slot_id()).is_err(),
+            "already gone"
+        );
+    }
+
+    #[test]
+    fn slots_refuses_a_descriptor_filed_under_the_wrong_id() {
+        let a = descriptor(384);
+        let meta = json!({ META_SLOTS: { "0123456789": serde_json::to_value(&a).unwrap() } });
+        assert!(slots(&meta).is_err());
+    }
+
+    #[test]
+    fn pipeline_is_per_alias() {
+        assert_eq!(
+            pipeline_name("testnet_entities"),
+            "testnet_entities_hybrid_minmax"
+        );
+        assert_eq!(pipeline_name("entities"), "entities_hybrid_minmax");
+        let body = hybrid_pipeline_body();
+        assert_eq!(
+            body["phase_results_processors"][0]["normalization-processor"]["normalization"]["technique"],
+            "min_max"
+        );
+    }
+}

@@ -10,6 +10,33 @@ A Rust tool for managing OpenSearch indices. This tool provides commands for cre
 - **Kubernetes-native**: Designed to run as Kubernetes Jobs via CI/CD-built images
 - **DRY**: Reuses index configuration defined in `search-indexer-repository/src/opensearch/index_config.rs`
 
+## Embedding slots (semantic search)
+
+The entities index carries one **embedding slot** per model it holds vectors for. A slot is
+identified by the hash of its descriptor (`embedding-service/bundles/<name>/bundle.json`), never
+by a typed name; its fields are `emb_<slot>` (k-NN vector), `emb_<slot>_src_hash`, `emb_<slot>_at`,
+and its descriptor lives in the index `_meta.embedding_slots`. Design and measurements:
+[`docs/tech-designs/semantic-search.md`](../docs/tech-designs/semantic-search.md).
+
+`index.knn` is part of the index settings since the semantic-search work, so any index created
+with `create-index` from now on accepts slots. An index created before that cannot (the setting
+is static); `add-embedding-slot` refuses it and the fix is the next version plus `full-migration`.
+
+| Command | Does |
+|---|---|
+| `add-embedding-slot [--version N] --spec bundle.json` | adds the slot's three fields (additive `put_mapping`) and files the descriptor in `_meta`; the first slot becomes the default (`--set-default` to override later); idempotent |
+| `add-embedding-slot [--version N] --from-service http://embedding-service:8080 --slot <id>` | same, taking the descriptor from a running service's `/info` (refuses if the service's descriptor does not hash to `<id>`) |
+| `set-default-slot [--version N] <slot>` | the slot the API uses when a request names none |
+| `retire-embedding-slot [--version N] <slot>` | removes the slot from `_meta`; refuses the default; the fields stay until the next index version |
+| `list-slots [--version N] [--embedding-service <url>]` | slots, default, `index.knn`, vector coverage vs named live documents, and whether the service has each slot loaded with the same descriptor hash |
+| `ensure-search-pipeline` | creates/updates `<alias>_hybrid_minmax` (min-max normalization, arithmetic mean) for hybrid mode; idempotent |
+
+Without `--version` the commands act on the index the alias currently points to.
+
+Model rotation is: register slot B (`add-embedding-slot`), backfill it with a second
+embedding-indexer, compare on the harness, `set-default-slot B`, then `retire-embedding-slot A`
+and drop A's fields in the next migration. No step reindexes and no step overwrites a vector.
+
 ## CI/CD Workflow
 
 The tool is automatically built and deployed via GitHub Actions. No local Docker required!
