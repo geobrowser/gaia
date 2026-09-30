@@ -262,6 +262,8 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 								properties: {
 									results: {
 										type: "array",
+										description:
+											"One row per entity, ordered by relevance. Exact ties are broken by canonical-graph membership, then entity id, so offset paging is stable. limit and offset count entities.",
 										items: {
 											type: "object",
 											properties: {
@@ -314,10 +316,51 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 													description:
 														"Whether this entity's space is part of the canonical graph (trust-based subset of spaces)",
 												},
+												otherSpaces: {
+													type: "array",
+													description:
+														"The entity's other matching spaces, best first (at most 20). The row itself is the entity's best-ranked space. Omitted when the entity matched in one space only.",
+													items: {
+														type: "object",
+														properties: {
+															space: {
+																type: "object",
+																properties: {
+																	id: {type: "string", format: "uuid"},
+																	name: {type: "string"},
+																	description: {type: "string"},
+																	avatar: {type: "string"},
+																	cover: {type: "string"},
+																},
+																required: ["id"],
+															},
+															name: {type: "string"},
+															description: {type: "string"},
+															avatar: {type: "string"},
+															cover: {type: "string"},
+															types: {
+																type: "array",
+																items: {
+																	type: "object",
+																	properties: {
+																		id: {type: "string", format: "uuid"},
+																		name: {type: "string"},
+																	},
+																	required: ["id"],
+																},
+															},
+															inCanonicalGraph: {type: "boolean"},
+														},
+													},
+												},
 											},
 										},
 									},
-									total: {type: "integer", description: "Total number of matching documents"},
+									total: {
+										type: "integer",
+										description:
+											"Total number of matching documents. The index holds one document per (entity, space), so this is an upper bound on the number of rows reachable by paging.",
+									},
 									tookMs: {
 										type: "number",
 										description: "Time taken to execute the search in milliseconds",

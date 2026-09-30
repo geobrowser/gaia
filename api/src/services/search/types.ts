@@ -134,15 +134,41 @@ export interface SearchResult {
 	textMatchScore?: number
 	/** Whether this entity's space is in the canonical graph. */
 	inCanonicalGraph: boolean
+	/**
+	 * The entity's other matching spaces, best first.
+	 *
+	 * The index holds one document per (entity, space). Results are collapsed to one row
+	 * per entity, the entity's best-ranked document; the rest of its matching documents
+	 * are listed here (at most MAX_OTHER_SPACES). Omitted when the entity matched in only
+	 * one space.
+	 */
+	otherSpaces?: SearchResultInSpace[]
 }
+
+/**
+ * The per-space fields of one of an entity's documents, as listed in
+ * `SearchResult.otherSpaces`.
+ */
+export type SearchResultInSpace = Pick<
+	SearchResult,
+	"space" | "name" | "description" | "avatar" | "cover" | "types" | "inCanonicalGraph"
+>
 
 /**
  * Complete search response with results and metadata.
  */
 export interface SearchResponse {
-	/** The list of search results, ordered by relevance. */
+	/**
+	 * The list of search results, one per entity, ordered by relevance. Exact score
+	 * ties are broken by canonical-graph membership, then entity id, so the order is
+	 * total and offset paging is stable.
+	 */
 	results: SearchResult[]
-	/** Total number of matching documents. */
+	/**
+	 * Total number of matching documents. The index holds one document per (entity,
+	 * space) and results are one row per entity, so this is an upper bound on the
+	 * number of results reachable by paging.
+	 */
 	total: number
 	/** Time taken to execute the search in milliseconds. */
 	tookMs: number
