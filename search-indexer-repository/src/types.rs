@@ -209,6 +209,19 @@ pub struct ClearSpaceTopicEntityIdByDocRequest {
     pub doc_id: String,
 }
 
+/// Request to retire a per-space document whose entity has nothing left in that space.
+///
+/// Sent once Postgres shows no value and no outgoing relation for the entity in the space,
+/// which is the rule `/search`'s space membership and `search-admin reconcile-orphans` use.
+/// Applied as a scripted update that deletes the document unless it is a tombstone
+/// (`deleted: true`) or a space-topic stub (`space_topic_entity_id == entity_id`); both of
+/// those are kept, as the reconcile keeps them. A missing document is already retired.
+#[derive(Debug, Clone)]
+pub struct RetireEmptyDocRequest {
+    /// The document ID (`{entity_id}_{space_id}`).
+    pub doc_id: String,
+}
+
 /// Request to clear `space_topic_entity_id` from all entities in a space.
 ///
 /// Mirrors `UpdateSpaceTopicEntityIdRequest` but removes the field instead
@@ -282,6 +295,9 @@ pub enum EntityOperation {
     /// Update in_canonical_graph by direct doc ID (resolved via Postgres lookup).
     /// Uses the bulk API instead of update_by_query.
     UpdateInCanonicalGraphByDoc(UpdateInCanonicalGraphByDocRequest),
+    /// Delete a per-space document whose entity has nothing left in the space.
+    /// Uses the bulk API with a painless script that spares tombstones and topic stubs.
+    RetireEmptyDoc(RetireEmptyDocRequest),
 }
 
 impl EntityOperation {
@@ -305,6 +321,7 @@ impl EntityOperation {
             EntityOperation::ClearSpaceTopicEntityIdByDoc(_) => "",
             EntityOperation::UpdateInCanonicalGraph(_) => "",
             EntityOperation::UpdateInCanonicalGraphByDoc(_) => "",
+            EntityOperation::RetireEmptyDoc(_) => "",
         }
     }
 
@@ -328,6 +345,7 @@ impl EntityOperation {
             EntityOperation::ClearSpaceTopicEntityIdByDoc(_) => "",
             EntityOperation::UpdateInCanonicalGraph(r) => &r.space_id,
             EntityOperation::UpdateInCanonicalGraphByDoc(_) => "",
+            EntityOperation::RetireEmptyDoc(_) => "",
         }
     }
 
@@ -350,6 +368,7 @@ impl EntityOperation {
             EntityOperation::ClearSpaceTopicEntityIdByDoc(_) => "ClearSpaceTopicEntityIdByDoc",
             EntityOperation::UpdateInCanonicalGraph(_) => "UpdateInCanonicalGraph",
             EntityOperation::UpdateInCanonicalGraphByDoc(_) => "UpdateInCanonicalGraphByDoc",
+            EntityOperation::RetireEmptyDoc(_) => "RetireEmptyDoc",
         }
     }
 }

@@ -32,6 +32,8 @@ pub const OPERATIONS: &str = "search_indexer_operations_total";
 pub const OPERATIONS_FAILED: &str = "search_indexer_operations_failed_total";
 pub const OPERATIONS_BY_KIND: &str = "search_indexer_operations_by_kind_total";
 pub const CANONICAL_GRAPH_NODES: &str = "search_indexer_canonical_graph_nodes";
+pub const RETIRE_DROPPED: &str = "search_indexer_retire_candidates_dropped_total";
+pub const RETIRE_PENDING: &str = "search_indexer_retire_candidates_pending";
 
 /// Metrics for the search indexer orchestrator.
 #[derive(Debug)]
@@ -68,6 +70,19 @@ pub struct SearchIndexerMetrics {
     pub total_space_topic_updates: Arc<AtomicU64>,
     /// Current number of nodes in the canonical topology graph.
     pub canonical_graph_size: Arc<AtomicU64>,
+
+    // Emptied-document retirement (GEO-2548)
+    /// Retirements sent to OpenSearch that did not fail (a no-op on a tombstone or topic stub,
+    /// or a document already gone, counts too).
+    pub total_retires: Arc<AtomicU64>,
+    /// Candidates dropped because kg-indexer never reached their block within the TTL.
+    pub retire_expired: Arc<AtomicU64>,
+    /// Candidates refused because the tracker was full.
+    pub retire_overflow: Arc<AtomicU64>,
+    /// Deleted relations whose document could not be found in Postgres.
+    pub retire_unresolved: Arc<AtomicU64>,
+    /// Candidates currently waiting for kg-indexer.
+    pub retire_pending: Arc<AtomicU64>,
 }
 
 impl SearchIndexerMetrics {
@@ -88,6 +103,11 @@ impl SearchIndexerMetrics {
             total_score_updates: Arc::new(AtomicU64::new(0)),
             total_space_topic_updates: Arc::new(AtomicU64::new(0)),
             canonical_graph_size: Arc::new(AtomicU64::new(0)),
+            total_retires: Arc::new(AtomicU64::new(0)),
+            retire_expired: Arc::new(AtomicU64::new(0)),
+            retire_overflow: Arc::new(AtomicU64::new(0)),
+            retire_unresolved: Arc::new(AtomicU64::new(0)),
+            retire_pending: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -130,6 +150,16 @@ impl SearchIndexerMetrics {
             CANONICAL_GRAPH_NODES,
             "Spaces in the in-memory canonical topology graph"
         );
+        metrics::describe_counter!(
+            RETIRE_DROPPED,
+            "Emptied-document candidates dropped unchecked, by reason: expired (kg-indexer \
+             never reached their block), overflow (tracker full), unresolved (deleted \
+             relation not found in Postgres). The daily orphan reconcile catches these"
+        );
+        metrics::describe_gauge!(
+            RETIRE_PENDING,
+            "Emptied-document candidates waiting for kg-indexer to reach their block"
+        );
     }
 
     /// Copy every counter into the Prometheus recorder.
@@ -152,10 +182,19 @@ impl SearchIndexerMetrics {
             ("remove_relation", &self.total_remove_relations),
             ("score_update", &self.total_score_updates),
             ("space_topic_update", &self.total_space_topic_updates),
+            ("retire", &self.total_retires),
         ] {
             metrics::counter!(OPERATIONS_BY_KIND, "kind" => kind).absolute(get(value));
         }
         metrics::gauge!(CANONICAL_GRAPH_NODES).set(get(&self.canonical_graph_size) as f64);
+        for (reason, value) in [
+            ("expired", &self.retire_expired),
+            ("overflow", &self.retire_overflow),
+            ("unresolved", &self.retire_unresolved),
+        ] {
+            metrics::counter!(RETIRE_DROPPED, "reason" => reason).absolute(get(value));
+        }
+        metrics::gauge!(RETIRE_PENDING).set(get(&self.retire_pending) as f64);
     }
 }
 

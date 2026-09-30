@@ -21,6 +21,7 @@ use crate::orchestrator::{
     SpaceTopicProcessingBatch, TopologyProcessingBatch,
 };
 use crate::relation_map::RelationMap;
+use crate::retire::{self, RetireConfig, RetireTracker};
 use crate::topology::persistence;
 use crate::topology::CanonicalGraphState;
 use sdk::core::ids::{
@@ -104,6 +105,9 @@ pub enum ProcessedEvent {
         space_id: uuid::Uuid,
         in_canonical_graph: bool,
     },
+    /// Delete a document whose entity has no value and no outgoing relation left in its
+    /// space, unless it is a tombstone or a topic stub (GEO-2548). See [`crate::retire`].
+    RetireDoc { doc_id: String },
 }
 
 /// Index into the per-event-type sample counters.
@@ -144,6 +148,9 @@ pub struct Processor {
     /// Optional SQLite-backed relation map for fast DeleteRelation lookups.
     /// Avoids the race condition where Postgres has already deleted the relation.
     relation_map: Option<Arc<RelationMap>>,
+    /// Documents that may have been emptied out of their space, waiting for kg-indexer.
+    /// Needs the Postgres lookup to decide anything, so it is only set alongside it.
+    retire: Option<RetireTracker>,
     sample_counters: [AtomicU64; SAMPLE_CATEGORY_COUNT],
     sample_interval: u64,
 }
@@ -156,6 +163,7 @@ impl Processor {
             topology_state: CanonicalGraphState::new(),
             entity_space_lookup: None,
             relation_map: None,
+            retire: None,
             sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
             sample_interval: 0,
         }
@@ -177,11 +185,24 @@ impl Processor {
             has_relation_map = relation_map.is_some(),
             "Processor created with space topic cache and topology state"
         );
+        let retire_config = RetireConfig::from_env();
+        let retire = if entity_space_lookup.is_some() && retire_config.enabled {
+            info!(
+                sweep_interval_s = retire_config.sweep_interval.as_secs(),
+                ttl_s = retire_config.ttl.as_secs(),
+                max_pending = retire_config.max_pending,
+                "Retiring emptied documents"
+            );
+            Some(RetireTracker::new(retire_config))
+        } else {
+            None
+        };
         Self {
             space_topic_cache: cache,
             topology_state,
             entity_space_lookup,
             relation_map,
+            retire,
             sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
             sample_interval,
         }
@@ -198,9 +219,22 @@ impl Processor {
             topology_state: CanonicalGraphState::new(),
             entity_space_lookup: None,
             relation_map: None,
+            retire: None,
             sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
             sample_interval,
         }
+    }
+
+    /// Track emptied documents with this tracker. Without a Postgres lookup the tracker only
+    /// collects candidates; nothing is ever retired.
+    pub fn with_retire_tracker(mut self, tracker: RetireTracker) -> Self {
+        self.retire = Some(tracker);
+        self
+    }
+
+    /// The emptied-document tracker, if retirement is on.
+    pub fn retire_tracker(&self) -> Option<&RetireTracker> {
+        self.retire.as_ref()
     }
 
     /// Check if a relation type is one we index (type, avatar, cover, or tags).
@@ -245,7 +279,16 @@ impl Processor {
     ) -> Result<Vec<ProcessedEvent>, IngestError> {
         let mut processed = Vec::with_capacity(events.len());
 
+        let now = std::time::Instant::now();
         for event in events {
+            if let Some(tracker) = &self.retire {
+                // A relation the local map knows needs no Postgres resolution later.
+                let resolved = match (&event.event_type, event.relation_id, &self.relation_map) {
+                    (EntityEventType::DeleteRelation, Some(rid), Some(rm)) => rm.lookup(&rid),
+                    _ => None,
+                };
+                tracker.observe(&event, resolved, now);
+            }
             if let Some(result) = self.process_event(event)? {
                 processed.push(result);
             }
@@ -807,6 +850,109 @@ impl Processor {
         ops
     }
 
+    /// Check the emptied-document candidates kg-indexer has caught up with, and return a
+    /// retirement for each one Postgres shows has nothing left in its space.
+    ///
+    /// Any Postgres failure puts the candidates back for the next sweep; nothing here can
+    /// fail the pipeline. See [`crate::retire`] for why the wait is needed.
+    pub async fn sweep_retirements(&self, metrics: &SearchIndexerMetrics) -> Vec<ProcessedEvent> {
+        let (Some(tracker), Some(lookup)) = (&self.retire, &self.entity_space_lookup) else {
+            return Vec::new();
+        };
+        metrics
+            .retire_pending
+            .store(tracker.pending() as u64, Ordering::Relaxed);
+        if tracker.pending() == 0 {
+            return Vec::new();
+        }
+
+        let kg_block = match lookup.kg_applied_block().await {
+            Ok(Some(block)) => block,
+            Ok(None) => return Vec::new(),
+            Err(e) => {
+                warn!(error = %e, "Retire sweep: could not read kg-indexer's block; will retry");
+                return Vec::new();
+            }
+        };
+        let now = std::time::Instant::now();
+        let ready = tracker.take_ready(kg_block, now);
+        metrics
+            .retire_expired
+            .fetch_add(ready.expired, Ordering::Relaxed);
+        metrics
+            .retire_overflow
+            .fetch_add(ready.overflow, Ordering::Relaxed);
+        if ready.expired > 0 || ready.overflow > 0 {
+            warn!(
+                expired = ready.expired,
+                overflow = ready.overflow,
+                kg_block,
+                "Retire sweep dropped candidates; the daily reconcile will find any it missed"
+            );
+        }
+
+        let mut pairs = ready.pairs;
+        if !ready.relations.is_empty() {
+            match lookup.docs_for_relations(&ready.relations).await {
+                Ok(rows) => {
+                    let found: std::collections::HashSet<Uuid> =
+                        rows.iter().map(|(rid, _, _)| *rid).collect();
+                    let unresolved = ready
+                        .relations
+                        .iter()
+                        .filter(|rid| !found.contains(rid))
+                        .count() as u64;
+                    metrics
+                        .retire_unresolved
+                        .fetch_add(unresolved, Ordering::Relaxed);
+                    pairs.extend(tracker.add_resolved(
+                        rows.into_iter().map(|(_, e, s)| (e, s)),
+                        kg_block,
+                        now,
+                    ));
+                }
+                Err(e) => {
+                    warn!(error = %e, relations = ready.relations.len(), "Retire sweep: relation lookup failed; will retry");
+                    tracker.requeue(&pairs, &ready.relations, kg_block, now);
+                    return Vec::new();
+                }
+            }
+        }
+        pairs.sort_unstable();
+        pairs.dedup();
+        if pairs.is_empty() {
+            return Vec::new();
+        }
+
+        match lookup.empty_in_space(&pairs).await {
+            Ok(empty) => {
+                if !empty.is_empty() {
+                    info!(
+                        checked = pairs.len(),
+                        retiring = empty.len(),
+                        kg_block,
+                        pending = tracker.pending(),
+                        "Retire sweep"
+                    );
+                }
+                for pair in empty.iter().take(20) {
+                    debug!(doc_id = %retire::doc_id(pair), "Retiring emptied document");
+                }
+                empty
+                    .iter()
+                    .map(|pair| ProcessedEvent::RetireDoc {
+                        doc_id: retire::doc_id(pair),
+                    })
+                    .collect()
+            }
+            Err(e) => {
+                warn!(error = %e, pairs = pairs.len(), "Retire sweep: emptiness check failed; will retry");
+                tracker.requeue(&pairs, &[], kg_block, now);
+                Vec::new()
+            }
+        }
+    }
+
     /// Get a reference to the topology state (for persistence).
     pub fn topology_state(&self) -> &CanonicalGraphState {
         &self.topology_state
@@ -941,6 +1087,17 @@ impl Processor {
                 tokio::time::interval(tokio::time::Duration::from_secs(120));
             topology_heartbeat.tick().await; // skip immediate first tick
 
+            // Emptied-document sweep. Runs here, between batches, so its retirements enter the
+            // loader channel in order with every other write.
+            let retire_every = self
+                .retire
+                .as_ref()
+                .map(|t| t.config().sweep_interval)
+                .unwrap_or(tokio::time::Duration::from_secs(3600));
+            let mut retire_tick = tokio::time::interval(retire_every);
+            retire_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            retire_tick.tick().await; // skip immediate first tick
+
             // Set initial topology node count in metrics
             metrics.canonical_graph_size.store(
                 self.topology_state.len() as u64,
@@ -955,6 +1112,20 @@ impl Processor {
 
                 // Use tokio::select to handle all channels
                 tokio::select! {
+                    _ = retire_tick.tick(), if self.retire.is_some() => {
+                        let events = self.sweep_retirements(&metrics).await;
+                        if !events.is_empty() {
+                            let batch = ProcessedBatch {
+                                events,
+                                offsets: Vec::new(),
+                                index_count: 0,
+                                source: BatchSource::Retire,
+                            };
+                            if let Err(send_err) = loader_tx.send(batch).await {
+                                error!(error = %send_err, "Failed to send retire batch to loader - channel closed");
+                            }
+                        }
+                    }
                     _ = topology_heartbeat.tick() => {
                         let node_count = self.topology_state.len();
                         let root_id = self.topology_state.root_id()
@@ -1487,6 +1658,8 @@ impl Processor {
                     Ok(None)
                 }
             }
+            // Only a marker for the retirement check, recorded in process_batch.
+            EntityEventType::ValuesUnset => Ok(None),
             EntityEventType::DeleteRelation => {
                 if let Some(relation_id) = event.relation_id {
                     debug!(
@@ -2084,5 +2257,81 @@ mod tests {
         } else {
             panic!("Expected ProcessedEvent::Index");
         }
+    }
+
+    // ==================== Emptied-document retirement (GEO-2548) ====================
+
+    #[tokio::test]
+    async fn an_unset_nominates_its_document_and_writes_nothing_itself() {
+        let processor =
+            Processor::new().with_retire_tracker(RetireTracker::new(RetireConfig::default()));
+        let entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let processed = processor
+            .process_batch(vec![
+                EntityEvent::unset_properties(entity_id, space_id, vec!["name".into()])
+                    .at_block(Some(40)),
+                EntityEvent::values_unset(entity_id, space_id).at_block(Some(40)),
+            ])
+            .await
+            .unwrap();
+
+        // The marker changes nothing in the index; only the name unset is loaded.
+        assert_eq!(processed.len(), 1);
+        assert!(matches!(
+            processed[0],
+            ProcessedEvent::UnsetProperties { .. }
+        ));
+
+        let tracker = processor.retire_tracker().unwrap();
+        assert!(tracker
+            .take_ready(39, std::time::Instant::now())
+            .pairs
+            .is_empty());
+        assert_eq!(
+            tracker.take_ready(40, std::time::Instant::now()).pairs,
+            vec![(entity_id, space_id)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_deleted_relation_is_nominated_for_resolution() {
+        let processor =
+            Processor::new().with_retire_tracker(RetireTracker::new(RetireConfig::default()));
+        let relation_id = Uuid::new_v4();
+        processor
+            .process_batch(vec![
+                EntityEvent::delete_relation(relation_id).at_block(Some(3))
+            ])
+            .await
+            .unwrap();
+        let ready = processor
+            .retire_tracker()
+            .unwrap()
+            .take_ready(3, std::time::Instant::now());
+        assert_eq!(ready.relations, vec![relation_id]);
+    }
+
+    #[tokio::test]
+    async fn without_postgres_nothing_is_retired() {
+        // The tracker can collect candidates, but only Postgres can say a document is empty.
+        let processor =
+            Processor::new().with_retire_tracker(RetireTracker::new(RetireConfig::default()));
+        let (e, s) = (Uuid::new_v4(), Uuid::new_v4());
+        processor
+            .process_batch(vec![EntityEvent::values_unset(e, s).at_block(Some(1))])
+            .await
+            .unwrap();
+        let metrics = SearchIndexerMetrics::new();
+        assert!(processor.sweep_retirements(&metrics).await.is_empty());
+        assert_eq!(processor.retire_tracker().unwrap().pending(), 1);
+    }
+
+    #[test]
+    fn retirement_is_off_without_a_lookup() {
+        let processor =
+            Processor::with_config(HashMap::new(), CanonicalGraphState::new(), 0, None, None);
+        assert!(processor.retire_tracker().is_none());
     }
 }

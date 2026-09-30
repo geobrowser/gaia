@@ -327,7 +327,8 @@ impl SearchIndexProvider for MockSearchProvider {
                 | EntityOperation::ClearSpaceTopicEntityId(_)
                 | EntityOperation::ClearSpaceTopicEntityIdByDoc(_)
                 | EntityOperation::UpdateInCanonicalGraph(_)
-                | EntityOperation::UpdateInCanonicalGraphByDoc(_) => false,
+                | EntityOperation::UpdateInCanonicalGraphByDoc(_)
+                | EntityOperation::RetireEmptyDoc(_) => false,
             };
 
             if should_fail {
@@ -371,7 +372,8 @@ impl SearchIndexProvider for MockSearchProvider {
                     | EntityOperation::ClearSpaceTopicEntityId(_)
                     | EntityOperation::ClearSpaceTopicEntityIdByDoc(_)
                     | EntityOperation::UpdateInCanonicalGraph(_)
-                    | EntityOperation::UpdateInCanonicalGraphByDoc(_) => {
+                    | EntityOperation::UpdateInCanonicalGraphByDoc(_)
+                    | EntityOperation::RetireEmptyDoc(_) => {
                         // Tracked via all_operations
                     }
                 }

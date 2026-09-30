@@ -17,8 +17,8 @@ use crate::processor::ProcessedEvent;
 use crate::relation_map::RelationMap;
 use search_indexer_repository::{
     ClearSpaceTopicEntityIdByDocRequest, ClearSpaceTopicEntityIdRequest, EntityOperation,
-    RelationData, RemoveRelationByDocRequest, RemoveRelationData, SearchIndexProvider,
-    UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreByDocRequest,
+    RelationData, RemoveRelationByDocRequest, RemoveRelationData, RetireEmptyDocRequest,
+    SearchIndexProvider, UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreByDocRequest,
     UpdateEntityGlobalScoreRequest, UpdateEntityRequest, UpdateEntitySpaceScoreRequest,
     UpdateInCanonicalGraphByDocRequest, UpdateInCanonicalGraphRequest,
     UpdateSpaceScoreByDocRequest, UpdateSpaceScoreRequest, UpdateSpaceTopicEntityIdByDocRequest,
@@ -270,6 +270,12 @@ impl SearchLoader {
                             },
                         ));
                 }
+                ProcessedEvent::RetireDoc { doc_id } => {
+                    self.pending_operations
+                        .push(EntityOperation::RetireEmptyDoc(RetireEmptyDocRequest {
+                            doc_id,
+                        }));
+                }
             }
         }
 
@@ -358,6 +364,51 @@ impl SearchLoader {
         }
     }
 
+    /// Load a batch of retirements from the processor's sweep.
+    ///
+    /// These carry no Kafka offsets, so there is nothing to acknowledge, and a failure must not
+    /// NACK: that would shut the indexer down over a best-effort cleanup. The candidates are
+    /// dropped and counted, and the daily reconcile finds the documents instead.
+    pub async fn load_retire_batch(
+        &mut self,
+        events: Vec<ProcessedEvent>,
+        metrics: &SearchIndexerMetrics,
+    ) {
+        let count = events.len() as u64;
+        match self.load(events).await {
+            Ok(summaries) => {
+                let failed: u64 = summaries.iter().map(|s| s.failed as u64).sum();
+                for summary in &summaries {
+                    metrics.total_bulk_calls.fetch_add(1, Ordering::Relaxed);
+                    metrics
+                        .total_bulk_wall_ms
+                        .fetch_add(summary.wall_ms, Ordering::Relaxed);
+                    metrics
+                        .total_bulk_took_ms
+                        .fetch_add(summary.took_ms, Ordering::Relaxed);
+                    metrics
+                        .total_operations
+                        .fetch_add(summary.total as u64, Ordering::Relaxed);
+                    metrics
+                        .total_failed_operations
+                        .fetch_add(summary.failed as u64, Ordering::Relaxed);
+                }
+                metrics
+                    .total_retires
+                    .fetch_add(count - failed.min(count), Ordering::Relaxed);
+                if failed > 0 {
+                    error!(
+                        failed,
+                        count, "Some document retirements failed; not retried"
+                    );
+                }
+            }
+            Err(e) => {
+                error!(error = %e, count, "Retire batch failed; not retried");
+            }
+        }
+    }
+
     /// Check if the provider is ready (for health checks).
     /// Note: The current SearchIndexProvider doesn't have a health_check method,
     /// so we just return Ok for now.
@@ -395,6 +446,10 @@ impl SearchLoader {
                     BatchSource::Score => &scores_ack_tx,
                     BatchSource::Entity => &entity_ack_tx,
                     BatchSource::Topology => &topology_ack_tx,
+                    BatchSource::Retire => {
+                        self.load_retire_batch(batch.events, &metrics).await;
+                        continue;
+                    }
                 };
 
                 // Count operation types for metrics
@@ -431,6 +486,8 @@ impl SearchLoader {
                         | ProcessedEvent::UpdateInCanonicalGraphByDoc { .. } => {
                             metrics.total_updates.fetch_add(1, Ordering::Relaxed);
                         }
+                        // Only ever in Retire batches, counted by load_retire_batch.
+                        ProcessedEvent::RetireDoc { .. } => {}
                     }
                 }
 
@@ -545,6 +602,9 @@ mod tests {
         RemoveRelationById {
             relation_id: String,
         },
+        Retire {
+            doc_id: String,
+        },
     }
 
     /// Mock search provider for testing.
@@ -632,6 +692,11 @@ mod tests {
                     EntityOperation::RemoveRelationById(r) => {
                         ops.push(TrackedOperation::RemoveRelationById {
                             relation_id: r.relation_id.clone(),
+                        });
+                    }
+                    EntityOperation::RetireEmptyDoc(r) => {
+                        ops.push(TrackedOperation::Retire {
+                            doc_id: r.doc_id.clone(),
                         });
                     }
                     // Score, space topic, topology, and ByDoc updates pass through - no special tracking needed
@@ -918,6 +983,84 @@ mod tests {
 
         // RemoveRelationById goes through bulk_operations
         assert_eq!(provider.get_operation_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn retirements_become_retire_ops_in_order() {
+        let provider = Arc::new(MockSearchProvider::new());
+        let mut loader = SearchLoader::new(provider.clone());
+        let entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+        let doc_id = format!("{entity_id}_{space_id}");
+
+        loader
+            .load(vec![
+                ProcessedEvent::UnsetProperties {
+                    entity_id,
+                    space_id,
+                    property_keys: vec!["name".to_string()],
+                },
+                ProcessedEvent::RetireDoc {
+                    doc_id: doc_id.clone(),
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            provider.get_operation_order(),
+            vec![
+                TrackedOperation::Unset {
+                    entity_id: entity_id.to_string(),
+                    property_keys: vec!["name".to_string()],
+                },
+                TrackedOperation::Retire { doc_id },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_retire_batch_is_counted_and_never_acknowledged() {
+        let provider = Arc::new(MockSearchProvider::new());
+        let loader = SearchLoader::new(provider.clone());
+        let metrics = Arc::new(SearchIndexerMetrics::new());
+        let (loader_tx, loader_rx) = mpsc::channel(4);
+        let (entity_ack_tx, mut entity_ack_rx) = mpsc::channel(4);
+        let (scores_ack_tx, _scores_ack_rx) = mpsc::channel(4);
+        let (topics_ack_tx, _topics_ack_rx) = mpsc::channel(4);
+        let (topology_ack_tx, _topology_ack_rx) = mpsc::channel(4);
+        let handle = loader.run(
+            loader_rx,
+            entity_ack_tx,
+            scores_ack_tx,
+            topics_ack_tx,
+            topology_ack_tx,
+            Arc::clone(&metrics),
+        );
+
+        loader_tx
+            .send(ProcessedBatch {
+                events: vec![
+                    ProcessedEvent::RetireDoc {
+                        doc_id: "a_b".to_string(),
+                    },
+                    ProcessedEvent::RetireDoc {
+                        doc_id: "c_d".to_string(),
+                    },
+                ],
+                offsets: Vec::new(),
+                index_count: 0,
+                source: BatchSource::Retire,
+            })
+            .await
+            .unwrap();
+        drop(loader_tx);
+        handle.await.unwrap();
+
+        assert_eq!(metrics.total_retires.load(Ordering::Relaxed), 2);
+        assert_eq!(provider.get_operation_count(), 2);
+        // No offsets to commit, so nothing may reach any consumer's ack channel.
+        assert!(entity_ack_rx.try_recv().is_err());
     }
 
     #[tokio::test]

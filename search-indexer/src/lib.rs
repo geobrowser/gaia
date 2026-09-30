@@ -32,6 +32,7 @@ pub mod metrics;
 pub mod orchestrator;
 pub mod processor;
 pub mod relation_map;
+pub mod retire;
 pub mod topology;
 
 pub use config::Dependencies;

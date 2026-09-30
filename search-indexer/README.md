@@ -92,6 +92,10 @@ See the [search-admin documentation](../search-admin/README.md) for manual index
 | `HEALTH_PORT` | HTTP port for health check endpoints | `8080` |
 | `RELATION_MAP_DB_PATH` | SQLite file path for relation map persistence | `/data/relation_map.sqlite` |
 | `RELATION_MAP_CACHE_SIZE` | Max entries in the relation map LRU cache | `500000` |
+| `RETIRE_EMPTY_DOCS` | Delete a per-space document once its entity has no value and no outgoing relation left in the space (needs `DATABASE_URL`). `false` turns it off | `true` |
+| `RETIRE_SWEEP_INTERVAL_SECS` | How often emptied-document candidates are checked against Postgres | `15` |
+| `RETIRE_PENDING_TTL_SECS` | How long a candidate waits for kg-indexer to reach its block before it is dropped | `3600` |
+| `RETIRE_MAX_PENDING` | Most candidates held in memory; more are dropped and counted | `200000` |
 
 ### Telemetry Configuration
 

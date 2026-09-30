@@ -122,6 +122,10 @@ pub enum BatchSource {
     Score,
     SpaceTopic,
     Topology,
+    /// Emptied-document retirements from the processor's own sweep. No Kafka offsets, so
+    /// nothing is acknowledged, and a failure is logged rather than NACKed: the candidates
+    /// are lost and the daily reconcile finds them.
+    Retire,
 }
 
 /// Processed batch ready for loading with associated offsets for acknowledgment.

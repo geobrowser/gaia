@@ -22,7 +22,8 @@ use crate::opensearch::index_config::IndexConfig;
 use crate::opensearch::index_management;
 use crate::opensearch::retry::{self, RetryConfig};
 use crate::opensearch::scripts::{
-    ADD_RELATION_SCRIPT, REMOVE_RELATION_SCRIPT, UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
+    ADD_RELATION_SCRIPT, REMOVE_RELATION_SCRIPT, RETIRE_EMPTY_DOC_SCRIPT,
+    UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
 };
 
 use crate::opensearch::unset_document_properties::create_unset_properties_script;
@@ -1295,6 +1296,34 @@ impl SearchIndexProvider for OpenSearchProvider {
                         entity_id: request.doc_id.clone(),
                         space_id: request.relation_id.clone(),
                         operation_type: "RemoveRelationByDoc".to_string(),
+                    });
+                    flush_bulk_if_full!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
+                }
+                EntityOperation::RetireEmptyDoc(request) => {
+                    // Scripted update that deletes the doc unless it is a tombstone or a
+                    // topic stub. No upsert: a missing doc is already retired, and 404 is
+                    // treated as success in parse_bulk_response.
+                    let body = json!({
+                        "script": {
+                            "source": RETIRE_EMPTY_DOC_SCRIPT,
+                            "lang": "painless"
+                        }
+                    });
+                    bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: request.doc_id.clone(),
+                        space_id: String::new(),
+                        operation_type: "RetireEmptyDoc".to_string(),
                     });
                     flush_bulk_if_full!(
                         self,

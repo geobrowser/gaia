@@ -23,6 +23,10 @@ pub enum EntityEventType {
     CreateRelation,
     /// Relation was deleted, which may affect entity's relations.
     DeleteRelation,
+    /// An `UpdateEntity` unset one or more values, of any property. Changes nothing in the
+    /// index by itself; it marks the entity's document in the space as one that may now be
+    /// empty, so the processor can retire it once the graph confirms (GEO-2548).
+    ValuesUnset,
 }
 
 /// An entity event received from Kafka.
@@ -52,6 +56,9 @@ pub struct EntityEvent {
     pub relation_type: Option<Uuid>,
     /// To entity ID (for relation events).
     pub to_entity_id: Option<Uuid>,
+    /// Chain block of the edit this event came from, when the edit carried metadata.
+    /// Used to wait for kg-indexer to reach the same block before trusting Postgres.
+    pub block_number: Option<u64>,
 }
 
 impl EntityEvent {
@@ -78,6 +85,7 @@ impl EntityEvent {
             relation_id: None,
             relation_type: None,
             to_entity_id: None,
+            block_number: None,
         }
     }
 
@@ -96,6 +104,7 @@ impl EntityEvent {
             relation_id: None,
             relation_type: None,
             to_entity_id: None,
+            block_number: None,
         }
     }
 
@@ -114,6 +123,7 @@ impl EntityEvent {
             relation_id: None,
             relation_type: None,
             to_entity_id: None,
+            block_number: None,
         }
     }
 
@@ -132,6 +142,7 @@ impl EntityEvent {
             relation_id: None,
             relation_type: None,
             to_entity_id: None,
+            block_number: None,
         }
     }
 
@@ -156,6 +167,7 @@ impl EntityEvent {
             relation_id: Some(relation_id),
             relation_type: Some(relation_type),
             to_entity_id: Some(to_entity_id),
+            block_number: None,
         }
     }
 
@@ -177,7 +189,33 @@ impl EntityEvent {
             relation_id: Some(relation_id),
             relation_type: None, // No relation type info available
             to_entity_id: None,  // No entity info available
+            block_number: None,
         }
+    }
+
+    /// Create a values-unset marker for an entity in a space.
+    pub fn values_unset(entity_id: Uuid, space_id: Uuid) -> Self {
+        Self {
+            event_type: EntityEventType::ValuesUnset,
+            entity_id,
+            space_id,
+            name: None,
+            description: None,
+            avatar: None,
+            cover: None,
+            image_url: None,
+            unset_property_keys: Vec::new(),
+            relation_id: None,
+            relation_type: None,
+            to_entity_id: None,
+            block_number: None,
+        }
+    }
+
+    /// Tag the event with the chain block of the edit it came from.
+    pub fn at_block(mut self, block_number: Option<u64>) -> Self {
+        self.block_number = block_number;
+        self
     }
 }
 

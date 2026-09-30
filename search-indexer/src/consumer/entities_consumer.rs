@@ -445,6 +445,7 @@ impl EntitiesConsumer {
         };
 
         let grc20_edit = Self::decode_payload(&edit.payload)?;
+        let block_number = edit.meta.as_ref().map(|m| m.block_number);
 
         let mut events = Vec::new();
         let mut skipped_entities = 0;
@@ -531,7 +532,10 @@ impl EntitiesConsumer {
             );
         }
 
-        Ok(events)
+        Ok(events
+            .into_iter()
+            .map(|e| e.at_block(block_number))
+            .collect())
     }
 
     /// Process a CreateEntity operation.
@@ -668,6 +672,11 @@ impl EntitiesConsumer {
                     property_keys,
                 ));
             }
+
+            // Any unset, of any property, may have emptied the entity out of this space.
+            // Cleanup proposals remove entities this way, without a DeleteEntity, and the
+            // indexed fields alone cannot say whether anything is left (GEO-2548).
+            events.push(EntityEvent::values_unset(entity_id, space_id));
         }
 
         // Extract name, description, and image_url from set_properties
@@ -855,12 +864,13 @@ mod tests {
 
         let result = consumer.process_update_entity(&update_entity, space_id);
 
-        assert_eq!(result.len(), 1);
+        assert_eq!(result.len(), 2);
         let event = &result[0];
         assert_eq!(event.entity_id, entity_id);
         assert_eq!(event.space_id, space_id);
         assert_eq!(event.event_type, EntityEventType::UnsetProperties);
         assert_eq!(event.unset_property_keys, vec!["name", "name_raw"]);
+        assert_eq!(result[1].event_type, EntityEventType::ValuesUnset);
     }
 
     #[tokio::test]
@@ -887,7 +897,7 @@ mod tests {
 
         let result = consumer.process_update_entity(&update_entity, space_id);
 
-        assert_eq!(result.len(), 1);
+        assert_eq!(result.len(), 2);
         let event = &result[0];
         assert_eq!(event.entity_id, entity_id);
         assert_eq!(event.space_id, space_id);
@@ -918,7 +928,12 @@ mod tests {
         };
 
         let result = consumer.process_update_entity(&update_entity, space_id);
-        assert!(result.is_empty());
+        // No indexed field to clear, but the unset may still have emptied the entity out of
+        // the space, so it is flagged for the retirement check.
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].event_type, EntityEventType::ValuesUnset);
+        assert_eq!(result[0].entity_id, entity_id);
+        assert_eq!(result[0].space_id, space_id);
     }
 
     #[tokio::test]
@@ -945,7 +960,7 @@ mod tests {
 
         let result = consumer.process_update_entity(&update_entity, space_id);
 
-        assert_eq!(result.len(), 2);
+        assert_eq!(result.len(), 3);
 
         let unset_event = &result[0];
         assert_eq!(unset_event.entity_id, entity_id);
@@ -953,7 +968,9 @@ mod tests {
         assert_eq!(unset_event.event_type, EntityEventType::UnsetProperties);
         assert_eq!(unset_event.unset_property_keys, vec!["description"]);
 
-        let upsert_event = &result[1];
+        assert_eq!(result[1].event_type, EntityEventType::ValuesUnset);
+
+        let upsert_event = &result[2];
         assert_eq!(upsert_event.entity_id, entity_id);
         assert_eq!(upsert_event.space_id, space_id);
         assert_eq!(upsert_event.event_type, EntityEventType::Upsert);
