@@ -67,6 +67,22 @@ async fn main() -> Result<(), IndexingError> {
         "Starting Geo Search Indexer"
     );
 
+    // Prometheus /metrics on 9464 (hermes_instrumentation::metrics::DEFAULT_PORT),
+    // the port the ServiceMonitor scrapes; override with METRICS_PORT for local runs.
+    //
+    // Installed from a thread with no Tokio runtime on purpose: the exporter then
+    // runs its listener on a dedicated thread with its own runtime, for the reason
+    // `start_http_server` does. The pipeline can saturate the main runtime during
+    // bulk work, and a scrape that times out there reads as the indexer being down.
+    // Separate from the health server on HEALTH_PORT, matching the other indexers.
+    let metrics_port: Option<u16> = env::var("METRICS_PORT").ok().and_then(|s| s.parse().ok());
+    std::thread::spawn(move || {
+        hermes_instrumentation::metrics::install("search-indexer", metrics_port)
+    })
+    .join()
+    .map_err(|_| IndexingError::config("metrics install panicked"))?
+    .map_err(|e| IndexingError::config(format!("metrics install failed: {}", e)))?;
+
     // Initialize dependencies
     let deps = match Dependencies::new().await {
         Ok(deps) => {

@@ -8,5 +8,6 @@ pub mod consumer_lag;
 pub mod error;
 pub mod health;
 pub mod ids;
+pub mod metrics;
 pub mod models;
 pub mod storage;

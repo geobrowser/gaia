@@ -53,8 +53,12 @@ tracing = "0.1.41"
 rusqlite = { version = "0.32", features = ["bundled"] }
 lru = "0.18"
 
+# Metrics (recorder and /metrics listener installed via hermes-instrumentation)
+metrics = "0.24"
+
 [dev-dependencies]
 serial_test = "3.4.0"
 temp-env = { version = "0.3", features = ["async_closure"] }
 tempfile = "3"
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "test-util"] }

@@ -6,6 +6,7 @@
 pub mod consumer;
 pub mod error;
 pub mod handlers;
+pub mod metrics;
 pub mod models;
 pub mod new_entity_sweep;
 pub mod storage;

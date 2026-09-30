@@ -55,6 +55,10 @@ spec:
         - name: ranking-indexer
           image: registry.digitalocean.com/geo/ranking-indexer:latest
           imagePullPolicy: Always
+          ports:
+            - name: metrics
+              containerPort: 9464
+              protocol: TCP
           volumeMounts:
             - name: ssl-certs
               mountPath: /ssl
@@ -96,6 +100,8 @@ spec:
               value: "ranking-indexer-testnet-v1"
             - name: RUST_LOG
               value: "ranking_indexer=info"
+            - name: METRICS_PORT
+              value: "9464"
           resources:
             requests:
               memory: "768Mi"
@@ -103,3 +109,23 @@ spec:
             limits:
               memory: "2Gi"
               cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ranking-indexer
+  namespace: gaia
+  labels:
+    app: ranking-indexer
+    # Copied onto every scraped series by the hermes-metrics ServiceMonitor's
+    # `targetLabels`, the same as kg-indexer and atlas.
+    gaia_namespace: gaia
+spec:
+  type: ClusterIP
+  selector:
+    app: ranking-indexer
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: metrics
+      protocol: TCP

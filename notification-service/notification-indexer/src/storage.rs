@@ -317,6 +317,7 @@ impl Storage {
         }
 
         tx.commit().await?;
+        crate::metrics::notifications_inserted(inserted_count);
 
         Ok(inserted_count)
     }

@@ -30,6 +30,10 @@ spec:
         - name: topology-indexer
           image: registry.digitalocean.com/geo/topology-indexer:latest
           imagePullPolicy: Always
+          ports:
+            - name: metrics
+              containerPort: 9464
+              protocol: TCP
           env:
             # Database configuration
             - name: DATABASE_URL
@@ -73,6 +77,8 @@ spec:
             # Logging
             - name: RUST_LOG
               value: "info,topology_indexer=debug"
+            - name: METRICS_PORT
+              value: "9464"
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
@@ -116,3 +122,23 @@ spec:
             limits:
               memory: "256Mi"
               cpu: "250m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: topology-indexer
+  namespace: gaia
+  labels:
+    app: topology-indexer
+    # Copied onto every scraped series by the hermes-metrics ServiceMonitor's
+    # `targetLabels`, the same as kg-indexer and atlas.
+    gaia_namespace: gaia
+spec:
+  type: ClusterIP
+  selector:
+    app: topology-indexer
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: metrics
+      protocol: TCP

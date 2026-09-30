@@ -42,8 +42,11 @@ pub enum Error {
 
 /// Install the Prometheus recorder and start an HTTP `/metrics` listener.
 ///
-/// Must be called from inside a Tokio runtime — the listener is spawned via
-/// `Handle::current()`. Calling outside a runtime will panic.
+/// Called from inside a Tokio runtime, the listener is spawned onto that
+/// runtime. Called from a thread with no runtime, `metrics-exporter-prometheus`
+/// builds a current-thread runtime and serves the listener from its own
+/// dedicated thread instead, which keeps scrapes answering when the service's
+/// main runtime is saturated (search-indexer relies on this).
 ///
 /// `port: None` binds on [`DEFAULT_PORT`]; pass `Some(port)` to override
 /// (e.g. from a `METRICS_PORT` env var).

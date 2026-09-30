@@ -89,9 +89,14 @@ spec:
             # Logging
             - name: RUST_LOG
               value: "info,notification_indexer=debug"
+            - name: METRICS_PORT
+              value: "9464"
           ports:
             - containerPort: 8080
               name: health
+              protocol: TCP
+            - name: metrics
+              containerPort: 9464
               protocol: TCP
           startupProbe:
             httpGet:
@@ -125,3 +130,23 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-indexer
+  namespace: gaia
+  labels:
+    app: notification-indexer
+    # Copied onto every scraped series by the hermes-metrics ServiceMonitor's
+    # `targetLabels`, the same as kg-indexer and atlas.
+    gaia_namespace: gaia
+spec:
+  type: ClusterIP
+  selector:
+    app: notification-indexer
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: metrics
+      protocol: TCP

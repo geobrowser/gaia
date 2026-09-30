@@ -87,7 +87,7 @@ async fn main() -> Result<(), IndexerError> {
         }
 
         pages += 1;
-        if pages % PROGRESS_EVERY_PAGES == 0 {
+        if pages.is_multiple_of(PROGRESS_EVERY_PAGES) {
             info!(pages, scored, through = %cursor.0, "new entity sweep: progress");
         }
         if page.len() < RANKING_REFRESH_BATCH_SIZE {

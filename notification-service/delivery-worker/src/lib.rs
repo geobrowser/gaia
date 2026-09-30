@@ -6,4 +6,5 @@
 pub mod deliver;
 pub mod error;
 pub mod health;
+pub mod metrics;
 pub mod storage;

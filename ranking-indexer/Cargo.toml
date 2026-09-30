@@ -54,3 +54,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
+
+# Metrics (recorder and /metrics listener installed via hermes-instrumentation)
+metrics = "0.24"
+
+[dev-dependencies]
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
