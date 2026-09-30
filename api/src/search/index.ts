@@ -102,6 +102,8 @@ const BOOST_PARAMS = [
 	"name_raw_exact_boost",
 	"name_raw_case_insensitive_boost",
 	"fuzzy_reduction_boost",
+	"name_stemmed_boost",
+	"description_stemmed_boost",
 ] as const
 
 const VALID_PARAMS: Set<string> = new Set([

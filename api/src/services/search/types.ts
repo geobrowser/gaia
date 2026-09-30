@@ -76,6 +76,8 @@ export interface BoostOverrides {
 	name_raw_exact_boost?: number
 	name_raw_case_insensitive_boost?: number
 	fuzzy_reduction_boost?: number
+	name_stemmed_boost?: number
+	description_stemmed_boost?: number
 }
 
 /**

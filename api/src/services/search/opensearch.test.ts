@@ -1,11 +1,14 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest"
 
 import {
+	DESCRIPTION_STEMMED_BOOST,
 	FUZZY_MAX_EXPANSIONS,
 	MAX_NAME_MATCH_TEXT_TOKENS,
 	MAX_OTHER_SPACES,
 	MAX_TEXT_TOKENS,
 	MIN_SCORE_THRESHOLD,
+	NAME_EXACT_TOKEN_BOOST,
+	NAME_STEMMED_BOOST,
 	OpenSearchClient,
 	PHRASE_PREFIX_MAX_EXPANSIONS,
 	SCORE_BOOST,
@@ -238,6 +241,79 @@ describe("OpenSearchClient", () => {
 			) as {multi_match: {query: string}}
 
 			expect(fuzzy.multi_match.query).toBe(shortQuery)
+		})
+
+		describe("stemmed sibling fields (GEO-3047)", () => {
+			type Clause = Record<string, unknown>
+			const shouldOf = (q: string) => (client.buildBaseTextQuery(q) as {bool: {should: Clause[]}}).bool.should
+			const stemmedMatch = (should: Clause[], field: "name_stemmed" | "description_stemmed") =>
+				should.find((c) => "match" in c && (c.match as Record<string, unknown>)[field] !== undefined) as
+					| {match: Record<string, {query: string; boost: number}>}
+					| undefined
+
+			it("matches name_stemmed and description_stemmed at their own boosts", () => {
+				const should = shouldOf("mans role")
+				const name = stemmedMatch(should, "name_stemmed")
+				const description = stemmedMatch(should, "description_stemmed")
+
+				expect(name?.match.name_stemmed).toEqual({query: "mans role", boost: NAME_STEMMED_BOOST})
+				expect(description?.match.description_stemmed).toEqual({
+					query: "mans role",
+					boost: DESCRIPTION_STEMMED_BOOST,
+				})
+				// A stemmed match is weaker evidence than an exact token match, and a
+				// stemmed description match weaker than a stemmed name match.
+				expect(NAME_STEMMED_BOOST).toBeLessThan(NAME_EXACT_TOKEN_BOOST)
+				expect(DESCRIPTION_STEMMED_BOOST).toBeLessThan(NAME_STEMMED_BOOST)
+			})
+
+			it("leaves the autocomplete clauses on the unstemmed search_as_you_type fields", () => {
+				// Stemming the prefix sub-fields would stop "runn" matching "running", so
+				// the bool_prefix and phrase-prefix clauses must never name a stemmed field.
+				const should = shouldOf("runn")
+				const prefixClauses = should.filter(
+					(c) =>
+						"match_phrase_prefix" in c ||
+						("multi_match" in c && (c.multi_match as {type?: string}).type === "bool_prefix"),
+				)
+				expect(prefixClauses).toHaveLength(3)
+				expect(JSON.stringify(prefixClauses)).not.toContain("_stemmed")
+			})
+
+			it("does not replace the unstemmed exact-token match on name", () => {
+				const should = shouldOf("man")
+				const exact = should.find((c) => "match" in c && (c.match as {name?: unknown}).name !== undefined) as {
+					match: {name: {boost: number}}
+				}
+				expect(exact.match.name.boost).toBe(NAME_EXACT_TOKEN_BOOST)
+			})
+
+			it("caps the stemmed clauses like their unstemmed counterparts", () => {
+				const tokens = Array.from({length: 64}, (_, i) => `t${i + 1}`)
+				const should = shouldOf(tokens.join(" "))
+
+				expect(stemmedMatch(should, "name_stemmed")?.match.name_stemmed?.query).toBe(
+					tokens.slice(0, MAX_NAME_MATCH_TEXT_TOKENS).join(" "),
+				)
+				expect(stemmedMatch(should, "description_stemmed")?.match.description_stemmed?.query).toBe(
+					tokens.slice(0, MAX_TEXT_TOKENS).join(" "),
+				)
+			})
+
+			it("honours the name_stemmed_boost and description_stemmed_boost overrides", async () => {
+				const search = vi.fn().mockResolvedValue({body: {hits: {total: {value: 0}, hits: []}}})
+				;(client as unknown as {client: {search: typeof search}}).client.search = search
+
+				await client.search({
+					query: "pardons",
+					scope: "GLOBAL",
+					boosts: {name_stemmed_boost: 2, description_stemmed_boost: 0},
+				})
+
+				const body = JSON.stringify(search.mock.calls[0]?.[0])
+				expect(body).toContain('"name_stemmed":{"query":"pardons","boost":2}')
+				expect(body).toContain('"description_stemmed":{"query":"pardons","boost":0}')
+			})
 		})
 	})
 

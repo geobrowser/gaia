@@ -105,12 +105,57 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
                     // prefix sub-fields index prefixes of the *indexed* term, so stemming
                     // here would break autocomplete on partially typed words ("runn" no
                     // longer prefixes "running" once it stems to "run"). Stemming belongs
-                    // on sibling fields, not on these.
+                    // on sibling fields, not on these: see `text_stemmed`.
                     "text_apostrophe_folded": {
                         "type": "custom",
                         "char_filter": ["apostrophe_fold"],
                         "tokenizer": "standard",
                         "filter": ["lowercase"]
+                    },
+                    // The same fold, tokenizer and lowercase, then the possessive and
+                    // minimal English stemmers, so "man's", "mans" and "man" all index
+                    // as "man", and "pardons" as "pardon" (GEO-3047). Used only by the
+                    // `name_stemmed` / `description_stemmed` sibling fields, which are
+                    // plain `text` and have no prefix sub-fields to break.
+                    //
+                    // `minimal_english` rather than `english` (Porter) or
+                    // `light_english`: it only strips plural endings (-s, -es, -ies),
+                    // which is what the ticket asks for, and does not conflate
+                    // unrelated words the way Porter does ("university" and "universe"
+                    // both become "univers"). It leaves verb forms alone ("running"
+                    // stays "running"). The fold runs first so the possessive stemmer
+                    // sees one apostrophe spelling.
+                    //
+                    // `stemmer_overrides` protects words the plural rule gets wrong
+                    // and that matter here: without it "news" stems to "new", so a
+                    // search for "new" would reach every "News story" entity.
+                    "text_stemmed": {
+                        "type": "custom",
+                        "char_filter": ["apostrophe_fold"],
+                        "tokenizer": "standard",
+                        "filter": [
+                            "lowercase",
+                            "possessive_english_stemmer",
+                            "stemmer_overrides",
+                            "minimal_english_stemmer"
+                        ]
+                    }
+                },
+                "filter": {
+                    // Marks each left-hand word as a keyword so the stemmers after it
+                    // skip it. Runs after the possessive stemmer, so "news's" is still
+                    // reduced to "news" first.
+                    "stemmer_overrides": {
+                        "type": "stemmer_override",
+                        "rules": ["news => news"]
+                    },
+                    "possessive_english_stemmer": {
+                        "type": "stemmer",
+                        "language": "possessive_english"
+                    },
+                    "minimal_english_stemmer": {
+                        "type": "stemmer",
+                        "language": "minimal_english"
                     }
                 },
                 "normalizer": {
@@ -133,9 +178,20 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
                 "space_id": {
                     "type": "keyword"
                 },
+                // `copy_to` rather than a `fields` multi-field: search_as_you_type
+                // silently drops `fields` (the mapping is accepted and the sub-field
+                // never exists, which is also why `name_raw` is top-level). copy_to is
+                // honoured, and because it is applied at index time from `_source`, a
+                // plain `_reindex` from an older index populates the stemmed fields
+                // with no indexer change. Copied values are not added to `_source`.
                 "name": {
                     "type": "search_as_you_type",
-                    "analyzer": "text_apostrophe_folded"
+                    "analyzer": "text_apostrophe_folded",
+                    "copy_to": "name_stemmed"
+                },
+                "name_stemmed": {
+                    "type": "text",
+                    "analyzer": "text_stemmed"
                 },
                 "name_raw": {
                     "type": "keyword",
@@ -143,7 +199,12 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
                 },
                 "description": {
                     "type": "search_as_you_type",
-                    "analyzer": "text_apostrophe_folded"
+                    "analyzer": "text_apostrophe_folded",
+                    "copy_to": "description_stemmed"
+                },
+                "description_stemmed": {
+                    "type": "text",
+                    "analyzer": "text_stemmed"
                 },
                 "avatar": {
                     "type": "keyword",
@@ -303,6 +364,72 @@ mod tests {
         let props = &settings["mappings"]["properties"];
         assert_eq!(props["name"]["analyzer"], "text_apostrophe_folded");
         assert_eq!(props["description"]["analyzer"], "text_apostrophe_folded");
+    }
+
+    #[test]
+    fn test_stemmed_siblings_are_wired_without_touching_prefix_fields() {
+        let settings = get_index_settings(None);
+        let analysis = &settings["settings"]["analysis"];
+        let props = &settings["mappings"]["properties"];
+
+        // The stemming analyzer: same fold and tokenizer as the unstemmed one, then
+        // lowercase before the stemmers (they are case-sensitive), possessive first.
+        let analyzer = &analysis["analyzer"]["text_stemmed"];
+        assert_eq!(analyzer["char_filter"][0], "apostrophe_fold");
+        assert_eq!(analyzer["tokenizer"], "standard");
+        let filters: Vec<&str> = analyzer["filter"]
+            .as_array()
+            .expect("text_stemmed.filter should be an array")
+            .iter()
+            .map(|f| f.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            filters,
+            [
+                "lowercase",
+                "possessive_english_stemmer",
+                "stemmer_overrides",
+                "minimal_english_stemmer"
+            ]
+        );
+        assert!(
+            analysis["filter"]["stemmer_overrides"]["rules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r == "news => news"),
+            "\"news\" must not stem to \"new\""
+        );
+        assert_eq!(
+            analysis["filter"]["possessive_english_stemmer"]["language"],
+            "possessive_english"
+        );
+        assert_eq!(
+            analysis["filter"]["minimal_english_stemmer"]["language"],
+            "minimal_english"
+        );
+
+        for (field, stemmed) in [
+            ("name", "name_stemmed"),
+            ("description", "description_stemmed"),
+        ] {
+            // The stemmed sibling is plain text: no prefix sub-fields to break.
+            assert_eq!(props[stemmed]["type"], "text", "{stemmed}");
+            assert_eq!(props[stemmed]["analyzer"], "text_stemmed", "{stemmed}");
+            // Populated by copy_to, not a multi-field, because search_as_you_type
+            // silently ignores `fields`.
+            assert_eq!(props[field]["copy_to"], stemmed, "{field}");
+            assert!(
+                props[field]["fields"].is_null(),
+                "{field} must not use fields"
+            );
+            // And the autocomplete field itself stays unstemmed.
+            assert_eq!(props[field]["type"], "search_as_you_type", "{field}");
+            assert_eq!(
+                props[field]["analyzer"], "text_apostrophe_folded",
+                "{field}"
+            );
+        }
     }
 
     #[test]

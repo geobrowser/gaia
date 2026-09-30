@@ -71,9 +71,13 @@ spec:
                 secretKeyRef:
                   name: opensearch-credentials
                   key: OPENSEARCH_URL
-            # Index version (defaults to 0 if not set)
+            # Index version (defaults to 0 if not set). Must equal the index the
+            # `testnet_entities` alias points at, or the indexer refuses to start.
+            # 7 = stemmed name/description siblings (GEO-3047). Do NOT deploy this
+            # manifest until testnet_entities_v7 exists and the alias points at it;
+            # see the GEO-3047 PR for the migration runbook.
             - name: ENTITIES_INDEX_VERSION
-              value: "6"
+              value: "7"
             # Kafka connection (managed Kafka with SSL)
             - name: KAFKA_BROKER
               valueFrom:
