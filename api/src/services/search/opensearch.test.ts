@@ -3,6 +3,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from "vitest"
 import {
 	FUZZY_MAX_EXPANSIONS,
 	MAX_NAME_MATCH_TEXT_TOKENS,
+	MAX_OTHER_SPACES,
 	MAX_TEXT_TOKENS,
 	MIN_SCORE_THRESHOLD,
 	OpenSearchClient,
@@ -10,6 +11,13 @@ import {
 	SCORE_BOOST,
 	SCORE_SHIFT,
 } from "./opensearch"
+
+/**
+ * The `query` part of a search body. buildSearchBody adds `sort` and `collapse`, which name
+ * `entity_id`, `space_id` and `in_canonical_graph`; asserting on the whole body would let
+ * a missing filter pass because the sort mentions the same field.
+ */
+const queryOnly = (body: unknown) => (body as {query: unknown}).query
 
 describe("OpenSearchClient", () => {
 	let client: OpenSearchClient
@@ -239,7 +247,7 @@ describe("OpenSearchClient", () => {
 
 		it("should include both dashed and dashless UUID variants in terms query", async () => {
 			const query = await client.buildUuidQuery(testUuidDashed, "GLOBAL")
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain(testUuidDashed)
 			expect(queryStr).toContain(testUuidDashless)
@@ -249,7 +257,7 @@ describe("OpenSearchClient", () => {
 
 		it("should include both variants when given a dashless UUID", async () => {
 			const query = await client.buildUuidQuery(testUuidDashless, "GLOBAL")
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain(testUuidDashed)
 			expect(queryStr).toContain(testUuidDashless)
@@ -258,7 +266,7 @@ describe("OpenSearchClient", () => {
 
 		it("should build terms query for GLOBAL_BY_SPACE_SCORE scope", async () => {
 			const query = await client.buildUuidQuery(testUuidDashed, "GLOBAL_BY_SPACE_SCORE")
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain(testUuidDashed)
 			expect(queryStr).toContain(testUuidDashless)
@@ -267,7 +275,7 @@ describe("OpenSearchClient", () => {
 
 		it("should build terms query for GLOBAL_BY_ENTITY_SPACE_SCORE scope", async () => {
 			const query = await client.buildUuidQuery(testUuidDashed, "GLOBAL_BY_ENTITY_SPACE_SCORE")
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain(testUuidDashed)
 			expect(queryStr).toContain(testUuidDashless)
@@ -278,7 +286,7 @@ describe("OpenSearchClient", () => {
 			const dashedSpaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
 			const dashlessSpaceId = "abcd1234abcd1234abcd1234abcd5678"
 			const query = await client.buildUuidQuery(testUuidDashed, "SPACE_SINGLE", dashedSpaceId)
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain(dashedSpaceId)
 			expect(queryStr).toContain(dashlessSpaceId)
@@ -289,7 +297,7 @@ describe("OpenSearchClient", () => {
 			const dashlessSpaceId = "abcd1234abcd1234abcd1234abcd5678"
 			const dashedSpaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
 			const query = await client.buildUuidQuery(testUuidDashed, "SPACE_SINGLE", dashlessSpaceId)
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain(dashedSpaceId)
 			expect(queryStr).toContain(dashlessSpaceId)
@@ -297,7 +305,7 @@ describe("OpenSearchClient", () => {
 
 		it("should build query for SPACE_SINGLE scope without space_id", async () => {
 			const query = await client.buildUuidQuery(testUuidDashed, "SPACE_SINGLE")
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain(testUuidDashed)
 			expect(queryStr).toContain("entity_id")
@@ -307,7 +315,7 @@ describe("OpenSearchClient", () => {
 			const dashedSpaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
 			const dashlessSpaceId = "abcd1234abcd1234abcd1234abcd5678"
 			const query = await client.buildUuidQuery(testUuidDashed, "SPACE", dashedSpaceId)
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain(dashedSpaceId)
 			expect(queryStr).toContain(dashlessSpaceId)
@@ -324,7 +332,7 @@ describe("OpenSearchClient", () => {
 		it("should wrap base text query with entity_global_score boost", () => {
 			const baseQuery = client.buildBaseTextQuery("test")
 			const query = client.buildGlobalQuery(baseQuery)
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain("entity_global_score")
 			expect(queryStr).toContain(`* ${SCORE_BOOST}`)
@@ -348,7 +356,7 @@ describe("OpenSearchClient", () => {
 		it("should wrap base text query with space_score boost", () => {
 			const baseQuery = client.buildBaseTextQuery("test")
 			const query = client.buildGlobalBySpaceScoreQuery(baseQuery)
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain("space_score")
 			expect(queryStr).toContain(`* ${SCORE_BOOST}`)
@@ -362,7 +370,7 @@ describe("OpenSearchClient", () => {
 		it("should wrap base text query with entity_space_score boost", () => {
 			const baseQuery = client.buildBaseTextQuery("test")
 			const query = client.buildGlobalByEntitySpaceScoreQuery(baseQuery)
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain("entity_space_score")
 			expect(queryStr).toContain(`* ${SCORE_BOOST}`)
@@ -378,7 +386,7 @@ describe("OpenSearchClient", () => {
 			const dashedSpaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
 			const dashlessSpaceId = "abcd1234abcd1234abcd1234abcd5678"
 			const query = client.buildSingleSpaceQuery(baseQuery, dashedSpaceId)
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain(dashedSpaceId)
 			expect(queryStr).toContain(dashlessSpaceId)
@@ -392,7 +400,7 @@ describe("OpenSearchClient", () => {
 			const dashlessSpaceId = "abcd1234abcd1234abcd1234abcd5678"
 			const dashedSpaceId = "abcd1234-abcd-1234-abcd-1234abcd5678"
 			const query = client.buildSingleSpaceQuery(baseQuery, dashlessSpaceId)
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain(dashedSpaceId)
 			expect(queryStr).toContain(dashlessSpaceId)
@@ -435,7 +443,7 @@ describe("OpenSearchClient", () => {
 				scope: "GLOBAL",
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain(uuid)
 			expect(queryStr).toContain("entity_id")
 		})
@@ -448,7 +456,7 @@ describe("OpenSearchClient", () => {
 				scope: "GLOBAL",
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			// Should contain both variants (index may have either format)
 			expect(queryStr).toContain(dashedUuid)
 			expect(queryStr).toContain(dashlessUuid)
@@ -464,7 +472,7 @@ describe("OpenSearchClient", () => {
 				type_ids: typeIds,
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain(uuid)
 			expect(queryStr).toContain("entity_id")
 			expect(queryStr).toContain("relations.to_entity_id")
@@ -482,7 +490,7 @@ describe("OpenSearchClient", () => {
 				type_ids: dashlessTypeIds,
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain("relations.to_entity_id")
 			// Both formats should be present for each type ID
 			expect(queryStr).toContain(dashedTypeIds[0])
@@ -502,7 +510,7 @@ describe("OpenSearchClient", () => {
 				type_ids: typeIds,
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain(uuid)
 			expect(queryStr).toContain(spaceId)
 			expect(queryStr).toContain("entity_id")
@@ -516,7 +524,7 @@ describe("OpenSearchClient", () => {
 				scope: "GLOBAL",
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain("entity_global_score")
 			expect(queryStr).toContain("blockchain")
 		})
@@ -533,7 +541,7 @@ describe("OpenSearchClient", () => {
 				type_ids: typeIds,
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain("entity_global_score")
 			expect(queryStr).toContain("blockchain")
 			expect(queryStr).toContain("relations.to_entity_id")
@@ -548,7 +556,7 @@ describe("OpenSearchClient", () => {
 				scope: "GLOBAL_BY_SPACE_SCORE",
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain("space_score")
 			expect(queryStr).toContain("blockchain")
 		})
@@ -561,7 +569,7 @@ describe("OpenSearchClient", () => {
 				type_ids: typeIds,
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain("space_score")
 			expect(queryStr).toContain("blockchain")
 			expect(queryStr).toContain("relations.to_entity_id")
@@ -574,7 +582,7 @@ describe("OpenSearchClient", () => {
 				scope: "GLOBAL_BY_ENTITY_SPACE_SCORE",
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain("entity_space_score")
 			expect(queryStr).toContain("blockchain")
 		})
@@ -587,7 +595,7 @@ describe("OpenSearchClient", () => {
 				type_ids: typeIds,
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain("entity_space_score")
 			expect(queryStr).toContain("blockchain")
 			expect(queryStr).toContain("relations.to_entity_id")
@@ -602,7 +610,7 @@ describe("OpenSearchClient", () => {
 				space_id: spaceId,
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain(spaceId)
 			expect(queryStr).toContain("entity_space_score")
 			expect(queryStr).toContain("blockchain")
@@ -617,7 +625,7 @@ describe("OpenSearchClient", () => {
 				space_id: dashlessSpaceId,
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain(dashedSpaceId)
 			expect(queryStr).toContain(dashlessSpaceId)
 			expect(queryStr).toContain("entity_space_score")
@@ -633,7 +641,7 @@ describe("OpenSearchClient", () => {
 				type_ids: typeIds,
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain(spaceId)
 			expect(queryStr).toContain("entity_space_score")
 			expect(queryStr).toContain("blockchain")
@@ -653,7 +661,7 @@ describe("OpenSearchClient", () => {
 				type_ids: typeIds,
 			})
 
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 			expect(queryStr).toContain(spaceId)
 			expect(queryStr).toContain("blockchain")
 			expect(queryStr).toContain("relations.to_entity_id")
@@ -684,7 +692,7 @@ describe("OpenSearchClient", () => {
 			const baseQuery = client.buildBaseTextQuery("test")
 			const spaceIds = ["abcd1234-abcd-1234-abcd-1234abcd0001", "abcd1234-abcd-1234-abcd-1234abcd0002"]
 			const query = client.buildMultiSpaceQuery(baseQuery, spaceIds, undefined, false, false, undefined, true)
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain("space_id")
 			expect(queryStr).toContain(spaceIds[0])
@@ -697,7 +705,7 @@ describe("OpenSearchClient", () => {
 			const baseQuery = client.buildBaseTextQuery("test")
 			const spaceIds = ["abcd1234-abcd-1234-abcd-1234abcd0001"]
 			const query = client.buildMultiSpaceQuery(baseQuery, spaceIds, undefined, false, true)
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain("in_canonical_graph")
 			expect(queryStr).not.toContain(spaceIds[0])
@@ -806,7 +814,7 @@ describe("OpenSearchClient", () => {
 				space_id: spaceId,
 				include_non_canonical: false,
 			})
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).toContain("in_canonical_graph")
 			expect(queryStr).not.toContain(spaceId)
@@ -829,7 +837,7 @@ describe("OpenSearchClient", () => {
 				scope: "SPACE",
 				space_id: spaceId,
 			})
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(queryStr).not.toContain("in_canonical_graph")
 		})
@@ -849,7 +857,7 @@ describe("OpenSearchClient", () => {
 				scope: "SPACE",
 				space_id: spaceId,
 			})
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			// in_canonical_graph not present — default is include_non_canonical=true
 			expect(queryStr).not.toContain("in_canonical_graph")
@@ -930,7 +938,7 @@ describe("OpenSearchClient", () => {
 				space_id: rootId,
 				include_non_canonical: false,
 			})
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(fetchSpy).not.toHaveBeenCalled()
 			expect(queryStr).toContain("in_canonical_graph")
@@ -963,7 +971,7 @@ describe("OpenSearchClient", () => {
 				scope: "SPACE",
 				space_id: otherSpaceId,
 			})
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			// Should have called fetch for subspaces (2nd call after init)
 			expect(fetchSpy).toHaveBeenCalledTimes(2)
@@ -995,7 +1003,7 @@ describe("OpenSearchClient", () => {
 				space_id: rootId,
 				include_non_canonical: false,
 			})
-			expect(JSON.stringify(query1)).toContain("in_canonical_graph")
+			expect(JSON.stringify(queryOnly(query1))).toContain("in_canonical_graph")
 
 			fetchSpy.mockClear()
 
@@ -1006,7 +1014,7 @@ describe("OpenSearchClient", () => {
 				space_id: rootId,
 				include_non_canonical: false,
 			})
-			expect(JSON.stringify(query2)).toContain("in_canonical_graph")
+			expect(JSON.stringify(queryOnly(query2))).toContain("in_canonical_graph")
 			expect(fetchSpy).not.toHaveBeenCalled()
 		})
 
@@ -1024,7 +1032,7 @@ describe("OpenSearchClient", () => {
 
 			const uuid = "123e4567-e89b-12d3-a456-426614174000"
 			const query = await topologyClient.buildUuidQuery(uuid, "SPACE", rootId)
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(fetchSpy).not.toHaveBeenCalled()
 			expect(queryStr).toContain("in_canonical_graph")
@@ -1044,7 +1052,7 @@ describe("OpenSearchClient", () => {
 			fetchSpy.mockClear()
 
 			const query = await topologyClient.buildTopRankedQuery("SPACE", rootId)
-			const queryStr = JSON.stringify(query)
+			const queryStr = JSON.stringify(queryOnly(query))
 
 			expect(fetchSpy).not.toHaveBeenCalled()
 			expect(queryStr).toContain("in_canonical_graph")
@@ -1236,7 +1244,7 @@ describe("OpenSearchClient", () => {
 				include_non_canonical: true,
 			})) as Record<string, unknown>
 
-			const bodyStr = JSON.stringify(body)
+			const bodyStr = JSON.stringify(queryOnly(body))
 			// The bool.should from buildAdditionalSpacesFilter must be present
 			expect(bodyStr).toContain('"in_canonical_graph":true')
 			expect(bodyStr).toContain('"minimum_should_match":1')
@@ -1297,7 +1305,7 @@ describe("OpenSearchClient", () => {
 				include_non_canonical: true,
 			})) as Record<string, unknown>
 
-			const bodyStr = JSON.stringify(body)
+			const bodyStr = JSON.stringify(queryOnly(body))
 			expect(bodyStr).toContain('"in_canonical_graph":true')
 			expect(bodyStr).toContain(SPACE_A)
 		})
@@ -1312,7 +1320,7 @@ describe("OpenSearchClient", () => {
 				include_non_canonical: true,
 			})) as Record<string, unknown>
 
-			const bodyStr = JSON.stringify(body)
+			const bodyStr = JSON.stringify(queryOnly(body))
 			expect(bodyStr).toContain(entityId)
 			expect(bodyStr).toContain(SPACE_A)
 		})
@@ -1531,6 +1539,129 @@ describe("OpenSearchClient", () => {
 		it("no tag_ids means no tag clause", async () => {
 			const body = await client.buildSearchBody({query: "x", scope: "GLOBAL"} as never)
 			expect(JSON.stringify(body)).not.toContain(TAGS_REL)
+		})
+	})
+
+	describe("result order and one row per entity (GEO-2394)", () => {
+		const EXPECTED_SORT = [
+			{_score: {order: "desc"}},
+			{in_canonical_graph: {order: "desc", missing: "_last"}},
+			{entity_id: {order: "asc"}},
+			{space_id: {order: "asc"}},
+		]
+
+		const bodies: Array<[string, Parameters<OpenSearchClient["buildSearchBody"]>[0]]> = [
+			["text GLOBAL", {query: "OpenAI", scope: "GLOBAL"}],
+			["empty query", {query: "", scope: "GLOBAL"}],
+			["uuid lookup", {query: "1f5ae430e3994a5292a664f41b708fd5", scope: "GLOBAL"}],
+			["SPACE_SINGLE", {query: "OpenAI", scope: "SPACE_SINGLE", space_id: "a070b8c196f28118335186ec4b4abce7"}],
+			["GLOBAL_BY_ENTITY_SPACE_SCORE", {query: "OpenAI", scope: "GLOBAL_BY_ENTITY_SPACE_SCORE"}],
+		]
+
+		for (const [label, query] of bodies) {
+			it(`${label}: sorts by score with a total tiebreak and collapses on entity_id`, async () => {
+				const body = (await client.buildSearchBody(query)) as {
+					sort: unknown
+					collapse: {field: string; inner_hits: {sort: unknown; size: number}}
+				}
+				expect(body.sort).toEqual(EXPECTED_SORT)
+				expect(body.collapse.field).toBe("entity_id")
+				// The representative must be the entity's best document, which only holds if
+				// the inner hits are ordered exactly like the outer results.
+				expect(body.collapse.inner_hits.sort).toEqual(EXPECTED_SORT)
+				expect(body.collapse.inner_hits.size).toBe(MAX_OTHER_SPACES + 1)
+			})
+		}
+
+		it("keeps the scope's query intact", async () => {
+			const body = (await client.buildSearchBody({query: "OpenAI", scope: "GLOBAL"})) as Record<string, unknown>
+			const {sort: _sort, collapse: _collapse, ...rest} = body
+			expect(rest).toEqual(
+				client.buildGlobalQuery(
+					client.buildBaseTextQuery("OpenAI"),
+					undefined,
+					false,
+					undefined,
+					true,
+					undefined,
+				),
+			)
+		})
+
+		it("returns one row per entity and lists the other spaces without the representative", async () => {
+			const E1 = "1f5ae430-e399-4a52-92a6-64f41b708fd5"
+			const E2 = "5f21cad2-0000-4000-8000-000000000000"
+			const CANON = "b5a31f81-82b0-4243-7ede-0f84ee02f104"
+			const OTHER = "a070b8c1-96f2-8118-3351-86ec4b4abce7"
+			const doc = (entity: string, space: string, canonical: boolean, description?: string) => ({
+				_id: `${entity}_${space}`,
+				_source: {
+					entity_id: entity,
+					space_id: space,
+					name: "OpenAI",
+					description,
+					in_canonical_graph: canonical,
+				},
+			})
+			const search = vi.fn(async ({body}: {body: Record<string, unknown>}) => {
+				if (!body.collapse) return {body: {hits: {hits: []}}}
+				return {
+					body: {
+						took: 3,
+						hits: {
+							total: {value: 3},
+							hits: [
+								{
+									...doc(E1, CANON, true),
+									_score: 529.5,
+									fields: {score_boost: [81]},
+									inner_hits: {
+										other_spaces: {
+											hits: {
+												hits: [
+													doc(E1, CANON, true),
+													doc(E1, OTHER, false, "Research Lab, USA"),
+												],
+											},
+										},
+									},
+								},
+								{
+									...doc(E2, OTHER, false),
+									_score: 529.5,
+									fields: {score_boost: [81]},
+									inner_hits: {other_spaces: {hits: {hits: [doc(E2, OTHER, false)]}}},
+								},
+							],
+						},
+					},
+				}
+			})
+			;(client as unknown as {client: {search: typeof search}}).client = {search}
+
+			const response = await client.search({query: "OpenAI", scope: "GLOBAL", limit: 10})
+
+			expect(response.results.map((r) => r.entityId)).toEqual([E1.replace(/-/g, ""), E2.replace(/-/g, "")])
+			const [first, second] = response.results
+			if (!first || !second) throw new Error("expected two results")
+			expect(first.space.id).toBe(CANON.replace(/-/g, ""))
+			expect(first.inCanonicalGraph).toBe(true)
+			expect(first.relevanceScore).toBe(529.5)
+			expect(first.textMatchScore).toBe(448.5)
+			expect(first.otherSpaces).toEqual([
+				{
+					space: {id: OTHER.replace(/-/g, "")},
+					name: "OpenAI",
+					description: "Research Lab, USA",
+					avatar: undefined,
+					cover: undefined,
+					types: undefined,
+					inCanonicalGraph: false,
+				},
+			])
+			// An entity in a single space carries no otherSpaces at all.
+			expect(second.otherSpaces).toBeUndefined()
+			expect(response.total).toBe(3)
 		})
 	})
 })

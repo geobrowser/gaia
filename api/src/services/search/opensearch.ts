@@ -17,6 +17,7 @@ import {
 	type SearchQuery,
 	type SearchResponse,
 	type SearchResult,
+	type SearchResultInSpace,
 	type SearchResultSpace,
 	type SearchResultType,
 	type SearchScope,
@@ -164,6 +165,17 @@ export const DEFAULT_PAGE_SIZE = 20
 export const MAX_PAGE_SIZE = 100
 
 /**
+ * Maximum number of an entity's other space documents returned in `otherSpaces`.
+ *
+ * The index holds one document per (entity, space), and results are collapsed to one row
+ * per entity. The collapsed-away rows come back as `otherSpaces` so callers can still
+ * show every space an entity lives in. Each collapsed row costs one small inner query, so
+ * this is bounded rather than unlimited; it must stay within the index's
+ * `max_inner_result_window` (default 100).
+ */
+export const MAX_OTHER_SPACES = 20
+
+/**
  * Approximation of OpenSearch's standard analyzer for token counting:
  * splits on whitespace, Unicode punctuation, and Unicode symbols. Covers
  * the basics — spaces, tabs, periods, dashes, commas, slashes, colons,
@@ -265,6 +277,43 @@ const COVER_RELATION_TYPE_ID = SystemIds.COVER_PROPERTY as string
 interface SubspacesResult {
 	subspaces: string[]
 	isRoot: boolean
+}
+
+type IndexedRelation = {relation_type: string; to_entity_id: string}
+
+type SearchHit = {
+	_id?: string
+	_source: Record<string, unknown>
+	_score: number | null
+	fields?: Record<string, number[]>
+	inner_hits?: Record<string, {hits: {hits: Array<{_id?: string; _source: Record<string, unknown>}>}}>
+}
+
+/** Name of the collapse inner_hits block that carries an entity's other space documents. */
+const OTHER_SPACES_INNER_HITS = "other_spaces"
+
+/**
+ * Pull the per-document ids that need enriching (types, space topic, images) out of a
+ * document's _source.
+ */
+function extractDocIds(source: Record<string, unknown>) {
+	const relations = source.relations as IndexedRelation[] | undefined
+	const typeIds = relations
+		?.filter((rel) => normalizeUuid(rel.relation_type) === TYPE_RELATION_TYPE_ID)
+		.map((rel) => normalizeUuid(rel.to_entity_id) as string)
+	const avatarImageEntityId = relations?.find(
+		(rel) => normalizeUuid(rel.relation_type) === AVATAR_RELATION_TYPE_ID,
+	)?.to_entity_id
+	const coverImageEntityId = relations?.find(
+		(rel) => normalizeUuid(rel.relation_type) === COVER_RELATION_TYPE_ID,
+	)?.to_entity_id
+	const spaceTopicEntityId = source.space_topic_entity_id as string | undefined
+	return {
+		typeIds,
+		spaceTopicEntityId: spaceTopicEntityId ? (normalizeUuid(spaceTopicEntityId) as string) : undefined,
+		avatarImageEntityId: avatarImageEntityId ? (normalizeUuid(avatarImageEntityId) as string) : undefined,
+		coverImageEntityId: coverImageEntityId ? (normalizeUuid(coverImageEntityId) as string) : undefined,
+	}
 }
 
 /**
@@ -373,52 +422,32 @@ export class OpenSearchClient implements SearchClient {
 		})
 
 		const body = response.body
-		const hits = body.hits.hits as Array<{
-			_source: Record<string, unknown>
-			_score: number
-			fields?: Record<string, number[]>
-		}>
+		const hits = body.hits.hits as SearchHit[]
+
+		// Each hit is the best-ranked document of one entity (the query collapses on
+		// entity_id); its other matching space documents arrive as inner hits.
+		const hitDocs = hits.map((hit) => {
+			const others = (hit.inner_hits?.[OTHER_SPACES_INNER_HITS]?.hits.hits ?? [])
+				.filter((inner) => inner._id !== hit._id)
+				.map((inner) => inner._source)
+			return {hit, others}
+		})
 
 		// Collect unique entity IDs for batch resolution
 		const allTypeEntityIds = new Set<string>()
 		const allSpaceTopicEntityIds = new Set<string>()
 		const allImageEntityIds = new Set<string>()
-
-		// First pass: extract IDs from hits
-		const hitData = hits.map((hit) => {
-			const relations = hit._source.relations as Array<{relation_type: string; to_entity_id: string}> | undefined
-			const typeIds = relations
-				?.filter((rel) => normalizeUuid(rel.relation_type) === TYPE_RELATION_TYPE_ID)
-				.map((rel) => normalizeUuid(rel.to_entity_id) as string)
-			typeIds?.forEach((id) => {
-				allTypeEntityIds.add(id)
-			})
-
-			// Extract avatar/cover image entity IDs from relations
-			const avatarImageEntityId = relations?.find(
-				(rel) => normalizeUuid(rel.relation_type) === AVATAR_RELATION_TYPE_ID,
-			)?.to_entity_id
-			const coverImageEntityId = relations?.find(
-				(rel) => normalizeUuid(rel.relation_type) === COVER_RELATION_TYPE_ID,
-			)?.to_entity_id
-			const normalizedAvatarId = avatarImageEntityId ? (normalizeUuid(avatarImageEntityId) as string) : undefined
-			const normalizedCoverId = coverImageEntityId ? (normalizeUuid(coverImageEntityId) as string) : undefined
-			if (normalizedAvatarId) allImageEntityIds.add(normalizedAvatarId)
-			if (normalizedCoverId) allImageEntityIds.add(normalizedCoverId)
-
-			const spaceTopicEntityId = hit._source.space_topic_entity_id as string | undefined
-			if (spaceTopicEntityId) {
-				allSpaceTopicEntityIds.add(normalizeUuid(spaceTopicEntityId) as string)
+		for (const {hit, others} of hitDocs) {
+			for (const source of [hit._source, ...others]) {
+				const ids = extractDocIds(source)
+				ids.typeIds?.forEach((id) => {
+					allTypeEntityIds.add(id)
+				})
+				if (ids.spaceTopicEntityId) allSpaceTopicEntityIds.add(ids.spaceTopicEntityId)
+				if (ids.avatarImageEntityId) allImageEntityIds.add(ids.avatarImageEntityId)
+				if (ids.coverImageEntityId) allImageEntityIds.add(ids.coverImageEntityId)
 			}
-
-			return {
-				hit,
-				typeIds,
-				spaceTopicEntityId,
-				avatarImageEntityId: normalizedAvatarId,
-				coverImageEntityId: normalizedCoverId,
-			}
-		})
+		}
 
 		// Batch-resolve type names, space metadata, and image URLs in parallel
 		const [typeNameMap, spaceMetadataMap, imageUrlMap] = await Promise.all([
@@ -427,55 +456,65 @@ export class OpenSearchClient implements SearchClient {
 			this.resolveImageUrls([...allImageEntityIds]),
 		])
 
-		// Second pass: build results with enriched data
-		const results: SearchResult[] = hitData.map(
-			({hit, typeIds, spaceTopicEntityId, avatarImageEntityId, coverImageEntityId}) => {
-				// Compute relevanceScore and textMatchScore
-				const relevanceScore = hit._score
-				const scoreBoost = hit.fields?.score_boost?.[0]
-				const textMatchScore =
-					scoreBoost !== undefined ? Math.max(0, relevanceScore - scoreBoost) : relevanceScore
+		// The per-document fields shared by a result row and its `otherSpaces` entries.
+		const toSpaceResult = (source: Record<string, unknown>): SearchResultInSpace => {
+			const {typeIds, spaceTopicEntityId, avatarImageEntityId, coverImageEntityId} = extractDocIds(source)
 
-				// Build enriched types array
-				const types: SearchResultType[] | undefined = typeIds?.length
-					? typeIds.map((id) => ({id, name: typeNameMap.get(id)}))
-					: undefined
+			// Build enriched types array
+			const types: SearchResultType[] | undefined = typeIds?.length
+				? typeIds.map((id) => ({id, name: typeNameMap.get(id)}))
+				: undefined
 
-				// Build enriched space object
-				const spaceId = normalizeUuid(hit._source.space_id as string) as string
-				const normalizedTopicId = spaceTopicEntityId ? (normalizeUuid(spaceTopicEntityId) as string) : undefined
-				const spaceMeta = normalizedTopicId ? spaceMetadataMap.get(normalizedTopicId) : undefined
-				const space: SearchResultSpace = {
-					id: spaceId,
-					...(spaceMeta && {
-						name: spaceMeta.name,
-						description: spaceMeta.description,
-						avatar: spaceMeta.avatar,
-						cover: spaceMeta.cover,
-					}),
-				}
+			// Build enriched space object
+			const spaceId = normalizeUuid(source.space_id as string) as string
+			const spaceMeta = spaceTopicEntityId ? spaceMetadataMap.get(spaceTopicEntityId) : undefined
+			const space: SearchResultSpace = {
+				id: spaceId,
+				...(spaceMeta && {
+					name: spaceMeta.name,
+					description: spaceMeta.description,
+					avatar: spaceMeta.avatar,
+					cover: spaceMeta.cover,
+				}),
+			}
 
+			return {
+				space,
+				name: source.name as string | undefined,
+				description: source.description as string | undefined,
 				// Resolve avatar/cover from image entity URLs
-				const avatar = avatarImageEntityId ? imageUrlMap.get(avatarImageEntityId) : undefined
-				const cover = coverImageEntityId ? imageUrlMap.get(coverImageEntityId) : undefined
+				avatar: avatarImageEntityId ? imageUrlMap.get(avatarImageEntityId) : undefined,
+				cover: coverImageEntityId ? imageUrlMap.get(coverImageEntityId) : undefined,
+				types,
+				inCanonicalGraph: (source.in_canonical_graph as boolean) ?? false,
+			}
+		}
 
-				return {
-					entityId: normalizeUuid(hit._source.entity_id as string) as string,
-					space,
-					name: hit._source.name as string | undefined,
-					description: hit._source.description as string | undefined,
-					avatar,
-					cover,
-					types,
-					entityGlobalScore: hit._source.entity_global_score as number | undefined,
-					spaceScore: hit._source.space_score as number | undefined,
-					entitySpaceScore: hit._source.entity_space_score as number | undefined,
-					relevanceScore,
-					textMatchScore,
-					inCanonicalGraph: (hit._source.in_canonical_graph as boolean) ?? false,
-				}
-			},
-		)
+		// Second pass: build results with enriched data
+		const results: SearchResult[] = hitDocs.map(({hit, others}) => {
+			// Compute relevanceScore and textMatchScore
+			const relevanceScore = hit._score ?? 0
+			const scoreBoost = hit.fields?.score_boost?.[0]
+			const textMatchScore = scoreBoost !== undefined ? Math.max(0, relevanceScore - scoreBoost) : relevanceScore
+
+			const {space, name, description, avatar, cover, types, inCanonicalGraph} = toSpaceResult(hit._source)
+			return {
+				entityId: normalizeUuid(hit._source.entity_id as string) as string,
+				space,
+				name,
+				description,
+				avatar,
+				cover,
+				types,
+				entityGlobalScore: hit._source.entity_global_score as number | undefined,
+				spaceScore: hit._source.space_score as number | undefined,
+				entitySpaceScore: hit._source.entity_space_score as number | undefined,
+				relevanceScore,
+				textMatchScore,
+				inCanonicalGraph,
+				...(others.length > 0 && {otherSpaces: others.map(toSpaceResult)}),
+			}
+		})
 
 		return {
 			results,
@@ -643,6 +682,77 @@ export class OpenSearchClient implements SearchClient {
 	 * - Empty queries return top ranked results based on scope-specific score fields
 	 */
 	async buildSearchBody(query: SearchQuery): Promise<object> {
+		const body = (await this.buildScopedQueryBody(query)) as Record<string, unknown>
+		const sort = this.buildResultSort()
+		return {
+			...body,
+			sort,
+			collapse: this.buildEntityCollapse(sort),
+		}
+	}
+
+	/**
+	 * The result order: relevance, then tiebreakers that make the order total (GEO-2394).
+	 *
+	 * Relevance ties exactly and often. The score is dominated by the name clauses, so N
+	 * entities with the same name score identically ("OpenAI" had 7 of the top 10 rows at
+	 * one score), and OpenSearch then orders them by internal Lucene doc id: effectively
+	 * the order they were last written, which moves every time the indexer rewrites one of
+	 * them. `from`/`size` paging over an order that can shift between requests repeats and
+	 * skips rows.
+	 *
+	 * - `in_canonical_graph` first, because it carries meaning: among equally relevant
+	 *   rows, prefer the curated one. It also decides which of an entity's documents
+	 *   represents it when they tie (see buildEntityCollapse).
+	 * - `entity_id` then `space_id` make the order total: the index has exactly one
+	 *   document per (entity, space).
+	 *
+	 * The index's score fields (entity_global_score etc.) are already inside `_score` for
+	 * the scopes that use them, so they are not repeated here.
+	 */
+	buildResultSort(): object[] {
+		return [
+			{_score: {order: "desc"}},
+			{in_canonical_graph: {order: "desc", missing: "_last"}},
+			{entity_id: {order: "asc"}},
+			{space_id: {order: "asc"}},
+		]
+	}
+
+	/**
+	 * Collapse results to one row per entity (GEO-2394).
+	 *
+	 * The index holds one document per (entity, space), so an entity that matches in two
+	 * spaces used to take two rows, e.g. `1f5ae430` twice in the top 10 for "OpenAI".
+	 * Collapsing in OpenSearch rather than deduplicating a fetched page keeps paging
+	 * correct: `from`/`size` count collapsed groups, so every page is full and nothing is
+	 * skipped. The row kept is the entity's first document in `sort` order, i.e. its
+	 * best-scoring one, canonical on a tie. Its other matching documents come back as
+	 * inner hits and are returned as `otherSpaces`, so callers keep the per-space names,
+	 * types and space metadata they used to get from the extra rows.
+	 */
+	buildEntityCollapse(sort: object[]): object {
+		return {
+			field: "entity_id",
+			inner_hits: {
+				name: OTHER_SPACES_INNER_HITS,
+				// +1 because the representative document is itself one of the inner hits.
+				size: MAX_OTHER_SPACES + 1,
+				sort,
+				_source: [
+					"entity_id",
+					"space_id",
+					"name",
+					"description",
+					"relations",
+					"space_topic_entity_id",
+					"in_canonical_graph",
+				],
+			},
+		}
+	}
+
+	private async buildScopedQueryBody(query: SearchQuery): Promise<object> {
 		const includeDeleted = query.include_deleted ?? false
 		const includeNonCanonical = query.include_non_canonical ?? true
 

@@ -23,6 +23,11 @@ Query Input
 └────────┬────────┘
          │
          ▼
+┌─────────────────┐
+│ Sort + Collapse │ ◀── Total tiebreak order, one row per entity
+└────────┬────────┘
+         │
+         ▼
     Search Results
 ```
 
@@ -102,6 +107,28 @@ Seven parallel matching strategies run inside a `bool.should` clause with `minim
 | `GLOBAL_BY_SPACE_SCORE` | None | `space_score` |
 | `GLOBAL_BY_ENTITY_SPACE_SCORE` | None | `entity_space_score` |
 | `SPACE_SINGLE` / `SPACE` | `space_id` term filter | `entity_space_score` |
+
+---
+
+## 4. Order and One Row Per Entity
+
+`buildSearchBody` adds the same `sort` and `collapse` to every scope (GEO-2394).
+
+**Sort:** `_score` desc, then `in_canonical_graph` desc, `entity_id` asc, `space_id` asc. Scores tie
+exactly whenever several entities share a name, because the name clauses dominate the score. Without
+a tiebreak OpenSearch orders tied rows by internal doc id, which changes whenever the indexer rewrites
+a document, so `from`/`size` paging could repeat or skip rows. Canonical-first is the tiebreak that
+carries meaning; the two ids make the order total, since there is one document per (entity, space).
+
+**Collapse:** the index holds one document per (entity, space), so an entity in two spaces used to
+fill two rows. `collapse` on `entity_id` keeps each entity's first document in sort order (best
+score, canonical on a tie). `from`/`size` count collapsed entities, so pages stay full and nothing
+is skipped. The entity's other matching documents come back through `inner_hits` and are returned
+as `otherSpaces` (at most `MAX_OTHER_SPACES`). `total` still counts documents, so it is an upper
+bound on the rows reachable by paging.
+
+Each collapsed row runs one small inner query to fetch its `otherSpaces`. That is the main cost of
+the collapse: locally about 0.4 ms per row, so under 10 ms for a 20-row page.
 
 ---
 
