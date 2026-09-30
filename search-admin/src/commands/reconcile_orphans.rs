@@ -14,8 +14,16 @@
 //!   document's space, which is how the API decides an entity belongs to a space
 //!   (`entitySpaceFilterPlugin.ts`).
 //!
-//! Space-topic stub documents (`space_topic_entity_id == entity_id`) are written by search-indexer
-//! from `space.topics` alone, with no edit behind them, so they are counted but never orphans.
+//! Two kinds of document are counted and never checked, so they are never orphans and never
+//! pruned:
+//!
+//! - **Tombstones** (`deleted: true`) are how search-indexer records a `DeleteEntity`: it upserts
+//!   the flag onto the document, creating an empty one when the entity was never indexed in that
+//!   space. `/search` hides them unless `include_deleted=true`, and kg-indexer does not act on
+//!   `DeleteEntity` at all, so Postgres cannot confirm or refute one. They are expected, and they
+//!   are most of what a naive count finds (88,297 of the first 100,000 candidates on 2026-09-30).
+//! - **Space-topic stubs** (`space_topic_entity_id == entity_id`) are written by search-indexer
+//!   from `space.topics` alone, with no edit behind them.
 //!
 //! **Report is the default.** `--prune` deletes missing-entity orphans; missing-in-space orphans
 //! are only deleted with `--prune-missing-in-space` as well. Pruning refuses to run past
@@ -25,8 +33,9 @@
 //!
 //! Memory and time stay bounded: the index is read with a scroll, one page at a time, and each
 //! page is one Postgres statement over index lookups, far inside the 30s role statement timeout.
-//! Only candidate orphans are kept, and they are re-checked after the scan so an entity that
-//! search-indexer wrote a moment before kg-indexer (the two race by design) is not reported.
+//! Only candidate orphans are kept (live documents only, so tombstones cannot fill the cap), and
+//! they are re-checked after the scan so an entity that search-indexer wrote a moment before
+//! kg-indexer (the two race by design) is not reported.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -161,9 +170,36 @@ pub fn parse_hit(hit: &Value) -> std::result::Result<DocRef, String> {
     })
 }
 
+/// What the scan does with a document before asking Postgres anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Triage {
+    /// `deleted: true`. Counted, never checked, never an orphan, never pruned.
+    Tombstone,
+    /// A space-topic stub. Counted, never checked.
+    TopicStub,
+    /// A live document: checked against Postgres.
+    Check,
+}
+
+/// Tombstones win over topic stubs: a deleted document is hidden from `/search` either way.
+pub fn triage(doc: &DocRef) -> Triage {
+    if doc.soft_deleted {
+        Triage::Tombstone
+    } else if doc.topic_stub {
+        Triage::TopicStub
+    } else {
+        Triage::Check
+    }
+}
+
 /// Decide whether a document is an orphan, given what Postgres says about it.
-pub fn classify(entity_exists: bool, in_space: bool, topic_stub: bool) -> Option<OrphanKind> {
-    if topic_stub {
+pub fn classify(
+    entity_exists: bool,
+    in_space: bool,
+    topic_stub: bool,
+    soft_deleted: bool,
+) -> Option<OrphanKind> {
+    if topic_stub || soft_deleted {
         None
     } else if !entity_exists {
         Some(OrphanKind::MissingEntity)
@@ -215,6 +251,7 @@ pub fn bulk_delete_body(doc_ids: &[&str]) -> Vec<JsonBody<Value>> {
 pub struct Tally {
     pub scanned: u64,
     pub unparseable: u64,
+    pub tombstones: u64,
     pub topic_stubs: u64,
     pub candidates_truncated: bool,
 }
@@ -325,8 +362,11 @@ impl ReconcileOrphansCommand {
                 for hit in &hits {
                     tally.scanned += 1;
                     match parse_hit(hit) {
-                        Ok(doc) if doc.topic_stub => tally.topic_stubs += 1,
-                        Ok(doc) => docs.push(doc),
+                        Ok(doc) => match triage(&doc) {
+                            Triage::Tombstone => tally.tombstones += 1,
+                            Triage::TopicStub => tally.topic_stubs += 1,
+                            Triage::Check => docs.push(doc),
+                        },
                         Err(reason) => {
                             tally.unparseable += 1;
                             if tally.unparseable <= 20 {
@@ -335,6 +375,7 @@ impl ReconcileOrphansCommand {
                         }
                     }
                 }
+                // Only live documents reach check_page, so the cap counts live orphans alone.
                 for found in check_page(pool, &docs).await? {
                     if candidates.len() < self.max_candidates {
                         candidates.push(found);
@@ -389,12 +430,10 @@ impl ReconcileOrphansCommand {
         let mut by_kind: BTreeMap<OrphanKind, usize> = BTreeMap::new();
         let mut by_space: HashMap<Uuid, usize> = HashMap::new();
         let mut named = 0usize;
-        let mut soft_deleted = 0usize;
         for (doc, kind) in confirmed {
             *by_kind.entry(*kind).or_default() += 1;
             *by_space.entry(doc.space_id).or_default() += 1;
             named += doc.name.is_some() as usize;
-            soft_deleted += doc.soft_deleted as usize;
         }
         let mut spaces: Vec<(Uuid, usize)> = by_space.into_iter().collect();
         spaces.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -405,11 +444,11 @@ impl ReconcileOrphansCommand {
             .collect::<Vec<_>>()
             .join(",");
 
+        // Every confirmed orphan is a live document; tombstones never get this far.
         for (doc, kind) in confirmed.iter().take(self.log_limit) {
             info!(
                 doc_id = %doc.doc_id,
                 kind = kind.as_str(),
-                soft_deleted = doc.soft_deleted,
                 name = doc.name.as_deref().unwrap_or(""),
                 "orphan"
             );
@@ -422,10 +461,10 @@ impl ReconcileOrphansCommand {
             missing_entity = by_kind.get(&OrphanKind::MissingEntity).copied().unwrap_or(0),
             missing_in_space = by_kind.get(&OrphanKind::MissingInSpace).copied().unwrap_or(0),
             named,
-            soft_deleted,
             spaces = spaces.len(),
             top_spaces = %top_spaces,
             transient,
+            tombstones = tally.tombstones,
             topic_stubs = tally.topic_stubs,
             unparseable = tally.unparseable,
             candidates_truncated = tally.candidates_truncated,
@@ -443,6 +482,8 @@ impl ReconcileOrphansCommand {
     ) -> Result<()> {
         let doomed: Vec<&DocRef> = confirmed
             .iter()
+            // Tombstones never become candidates; the check here keeps it that way if they ever do.
+            .filter(|(d, _)| !d.soft_deleted)
             .filter(|(_, k)| {
                 *k == OrphanKind::MissingEntity
                     || (self.prune_missing_in_space && *k == OrphanKind::MissingInSpace)
@@ -538,7 +579,8 @@ async fn check_page(pool: &PgPool, docs: &[DocRef]) -> Result<Vec<(DocRef, Orpha
         .into_iter()
         .filter_map(|(i, entity_exists, in_space)| {
             let doc = docs.get(i as usize)?;
-            classify(entity_exists, in_space, doc.topic_stub).map(|k| (doc.clone(), k))
+            classify(entity_exists, in_space, doc.topic_stub, doc.soft_deleted)
+                .map(|k| (doc.clone(), k))
         })
         .collect())
 }
@@ -624,26 +666,66 @@ mod tests {
 
     #[test]
     fn classifies_orphans() {
-        assert_eq!(classify(true, true, false), None);
+        assert_eq!(classify(true, true, false, false), None);
         assert_eq!(
-            classify(false, false, false),
+            classify(false, false, false, false),
             Some(OrphanKind::MissingEntity)
         );
         // No entities row wins even if a stray value somehow exists.
         assert_eq!(
-            classify(false, true, false),
+            classify(false, true, false, false),
             Some(OrphanKind::MissingEntity)
         );
         assert_eq!(
-            classify(true, false, false),
+            classify(true, false, false, false),
             Some(OrphanKind::MissingInSpace)
         );
     }
 
     #[test]
     fn topic_stubs_are_never_orphans() {
-        assert_eq!(classify(false, false, true), None);
-        assert_eq!(classify(true, false, true), None);
+        assert_eq!(classify(false, false, true, false), None);
+        assert_eq!(classify(true, false, true, false), None);
+    }
+
+    #[test]
+    fn tombstones_are_never_orphans_whatever_postgres_says() {
+        // The first production run's whole top-200 sample: deleted, unnamed, missing in space.
+        assert_eq!(classify(true, false, false, true), None);
+        assert_eq!(classify(false, false, false, true), None);
+        assert_eq!(classify(false, true, false, true), None);
+        assert_eq!(classify(true, true, false, true), None);
+        assert_eq!(classify(false, false, true, true), None);
+    }
+
+    #[test]
+    fn triage_counts_tombstones_before_checking_anything() {
+        let tombstone = parse_hit(&hit(json!({
+            "entity_id": E, "space_id": S, "deleted": true, "name": ""
+        })))
+        .unwrap();
+        assert_eq!(triage(&tombstone), Triage::Tombstone);
+
+        // A deleted topic stub is a tombstone: hidden from /search either way.
+        let deleted_stub = parse_hit(&hit(json!({
+            "entity_id": E, "space_id": S, "space_topic_entity_id": E, "deleted": true
+        })))
+        .unwrap();
+        assert_eq!(triage(&deleted_stub), Triage::Tombstone);
+
+        let stub = parse_hit(&hit(json!({
+            "entity_id": E, "space_id": S, "space_topic_entity_id": E
+        })))
+        .unwrap();
+        assert_eq!(triage(&stub), Triage::TopicStub);
+
+        // `deleted: false` is a restored document, and a missing field is live (81% of docs).
+        for source in [
+            json!({ "entity_id": E, "space_id": S, "deleted": false }),
+            json!({ "entity_id": E, "space_id": S }),
+        ] {
+            assert_eq!(triage(&parse_hit(&hit(source)).unwrap()), Triage::Check);
+        }
     }
 
     #[test]
