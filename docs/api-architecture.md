@@ -166,6 +166,7 @@ Kubernetes-aware probes:
 5. **Denormalized vote counts** — Proposal vote tallies are updated asynchronously via a queue to decouple the write path from tally computation.
 
 6. **Search is optional** — If `OPENSEARCH_URL` is not set, search routes aren't mounted. The search indexer is independent.
+7. **Semantic search is optional on top of search** — `EMBEDDING_SERVICE_URL` enables `mode=semantic|hybrid` on `/search` (vectors come from the in-cluster `embedding-service`, written by `embedding-indexer`). Unset, or with the service unreachable, those modes answer `503 SEMANTIC_SEARCH_UNAVAILABLE`; lexical mode never changes. See `docs/tech-designs/semantic-search.md`.
 
 7. **Two connection pools** — PostGraphile and REST endpoints use separate pools to prevent mutual starvation.
 

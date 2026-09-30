@@ -1,0 +1,79 @@
+# Creates or updates the search pipeline hybrid mode uses (`<alias>_hybrid_minmax`: min-max
+# normalisation of the lexical and k-NN sub-query scores, arithmetic mean). One pipeline per
+# alias, so environments never share one. Idempotent; run once per cluster and again after any
+# change to the pipeline body in the embedding crate. Without it `mode=hybrid` answers 503.
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-ensure-search-pipeline
+  namespace: gaia
+  labels:
+    app: opensearch-admin
+    task: ensure-search-pipeline
+    environment: testnet
+spec:
+  ttlSecondsAfterFinished: 86400  # 24 hours
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: opensearch-admin
+        task: ensure-search-pipeline
+        environment: testnet
+    spec:
+      imagePullSecrets:
+      - name: geo
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: ensure-search-pipeline
+        # `latest` is built from `main` by search-admin-build.yml (main has been the only trunk
+        # since 2026-09-17). The embedding-slot commands exist only from the semantic-search
+        # merge onward, so before that lands use a commit-sha tag from a workflow_dispatch of
+        # that workflow on the feature branch, and always confirm the running image carries the
+        # command you need: `kubectl logs` shows the CLI's own usage error otherwise.
+        image: registry.digitalocean.com/geo/search-admin:latest
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: OPENSEARCH_URL
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-credentials
+              key: OPENSEARCH_URL
+        - name: ENVIRONMENT
+          value: "testnet"
+        - name: INDEX_ALIAS
+          value: "entities"
+        - name: RUST_LOG
+          value: "info"
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          V=""; [ -n "$INDEX_VERSION" ] && V="--version $INDEX_VERSION"
+          search-admin ensure-search-pipeline
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"

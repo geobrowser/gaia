@@ -67,3 +67,17 @@ only with `EMBEDDING_TEST_BUNDLE=./models/<slot>`; the rest need no model.
 `rust:1.92-trixie` → `debian:trixie-slim`. Trixie rather than bookworm because the prebuilt ONNX
 Runtime needs libstdc++ from GCC ≥ 13 (measured on both architectures). The runtime is linked
 statically; the image needs no extra packages.
+
+## Deployment
+
+`embedding-service/k8s/v2/` — a Deployment (2+ pods, rolling with `maxUnavailable: 0` because
+the api's semantic queries go through it), a ClusterIP Service on `:8080`, and an HPA (2–6 pods
+on CPU) that absorbs backfill windows. Built by `build-v2-images.yml` and deployed by
+`deploy-v2.yml` (service `embedding-service`). Runs read-only, as uid 1000, with every capability
+dropped. Adding a model = adding a bundle under `bundles/` and shipping the image; the slot then
+has to be registered on the index (`search-admin add-embedding-slot --from-service`). Runbook:
+`docs/runbooks/deployment.md`, "Semantic search".
+
+Compose: profile `semantic` (`docker compose --profile infra --profile semantic up -d --build`),
+published on `127.0.0.1:8090`.
+

@@ -410,3 +410,26 @@ For more detailed information:
 - **Search Admin Tool**: See `search-admin/README.md` for command reference
 - **CI/CD Pipeline**: See `.github/workflows/search-admin-build.yml`
 - **Index Config**: See `search-indexer-repository/src/opensearch/index_config.rs`
+
+## Embedding slots (semantic search)
+
+Six more jobs in `v2/jobs/` drive the semantic-search slots on the entities index (design:
+`docs/tech-designs/semantic-search.md`; operations: `docs/runbooks/deployment.md`, "Semantic
+search"). They talk to OpenSearch and to the in-cluster `embedding-service`, need no
+ServiceAccount, and take the slot from the `EMBEDDING_SLOT` env in the manifest.
+
+| Job | Purpose |
+|---|---|
+| `add-embedding-slot-job.yaml` | register a slot the running embedding-service serves (fields + `_meta`); idempotent |
+| `ensure-search-pipeline-job.yaml` | create/update the `<alias>_hybrid_minmax` pipeline hybrid mode needs |
+| `list-slots-job.yaml` | slots, default, vector coverage, service agreement — how a backfill is watched |
+| `eval-slot-job.yaml` | the evaluation harness; exit code gates a slot on recall@10 |
+| `set-default-slot-job.yaml` | the switch in a model rotation |
+| `retire-embedding-slot-job.yaml` | remove a non-default slot from `_meta` |
+
+```bash
+kubectl delete job opensearch-add-embedding-slot -n gaia 2>/dev/null || true
+kubectl apply -f v2/jobs/add-embedding-slot-job.yaml
+kubectl logs -n gaia -f job/opensearch-add-embedding-slot
+```
+

@@ -71,3 +71,18 @@ integration test runs only with `EMBED_TEST_OPENSEARCH_URL` and `EMBED_TEST_SERV
 (CI sets them; locally the compose OpenSearch and a running service do): it creates a throwaway
 index shaped like gaia's, registers the slot, and drives backfill, a name change, an unchanged
 pass, a name unset, and a filtered k-NN query.
+
+## Deployment
+
+`embedding-indexer/k8s/v2/embedding-indexer.yaml` — one Deployment per slot, `strategy: Recreate`
+(two pollers on one slot would share the checkpoint and embed everything twice). `EMBEDDING_SLOT`
+and `EMBED_SCOPE_TYPE_IDS` (P1: the Claim type) are set there; the slot must already be on the
+index and served by embedding-service or the pod refuses to start. Built by
+`build-v2-images.yml`, deployed by `deploy-v2.yml` (service `embedding-indexer`). A model
+rotation is a second copy of the manifest with the new slot. Watch a backfill with the
+`list-slots` job (coverage) and force-merge the index once it finishes (runbook:
+`docs/runbooks/deployment.md`, "Semantic search").
+
+Compose: profile `semantic`, after the slot is registered (see the block comment in
+`docker-compose.yml`).
+

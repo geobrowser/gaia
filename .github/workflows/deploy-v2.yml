@@ -35,6 +35,8 @@ on:
           - delivery-worker
           - ranking-indexer
           - membership-acceptor
+          - embedding-service
+          - embedding-indexer
       tag:
         description: "Image tag to deploy (from the build workflow, e.g. short SHA). Ignored for valkey (pinned public image)."
         required: true
@@ -100,6 +102,10 @@ jobs:
             # and are only useful at the same version as the consumer.
             ranking-indexer)   manifests="ranking-indexer/k8s/v2/ranking-indexer.yaml ranking-indexer/k8s/v2/backfill-cronjob.yaml ranking-indexer/k8s/v2/rolling-sweep-cronjob.yaml ranking-indexer/k8s/v2/feed-composition-cronjob.yaml"; rollout="deployment/ranking-indexer" ;;
             membership-acceptor) manifests="membership-acceptor/deployment/v2/deployment.yaml"; rollout="deployment/membership-acceptor" ;;
+            # Semantic search (docs/tech-designs/semantic-search.md). The HPA ships with the
+            # service so its ceiling is versioned next to the resources it scales.
+            embedding-service) manifests="embedding-service/k8s/v2/embedding-service.yaml embedding-service/k8s/v2/hpa.yaml"; rollout="deployment/embedding-service" ;;
+            embedding-indexer) manifests="embedding-indexer/k8s/v2/embedding-indexer.yaml"; rollout="deployment/embedding-indexer" ;;
             *) echo "unknown service"; exit 1 ;;
           esac
           echo "manifests=$manifests" >> "$GITHUB_OUTPUT"

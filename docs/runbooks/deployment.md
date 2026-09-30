@@ -38,6 +38,99 @@ kubectl --context=do-nyc2-geo-testnet-k8s -n gaia get deploy <svc> \
 Database migrations apply through the api's `migrate` initContainer, so they land when the api
 deploys — an image rollback does **not** undo a migration.
 
+
+## Semantic search (embedding-service, embedding-indexer, slots)
+
+Design and measurements: `docs/tech-designs/semantic-search.md`. Everything lives in namespace
+`gaia` and ships with the same two dispatches as any other service.
+
+| Part | Kind | Manifests | Talks to |
+|---|---|---|---|
+| `embedding-service` | Deployment + HPA (2–6 pods) | `embedding-service/k8s/v2/` | nothing; serves `POST /embed`, `GET /info` |
+| `embedding-indexer` | Deployment, 1 pod **per slot** | `embedding-indexer/k8s/v2/` | OpenSearch, embedding-service |
+| slot jobs | `search-admin` Jobs | `search-indexer-deploy/k8s/v2/jobs/*-slot*-job.yaml`, `ensure-search-pipeline-job.yaml`, `eval-slot-job.yaml` | OpenSearch, embedding-service |
+| api | `EMBEDDING_SERVICE_URL` in `api/k8s/v2/api.yaml` | — | embedding-service |
+
+A **slot** is a model pinned by the hash of its bundle descriptor
+(`embedding-service/bundles/<name>/bundle.json`); the id is derived, never typed
+(`embedding-service bundle slot <bundle.json>` prints it). The index `_meta`, the service's `/info`
+and every semantic response name the slot, and the api uses a slot only when index and service
+agree on its descriptor. If the service is down, `mode=semantic|hybrid` answers
+`503 SEMANTIC_SEARCH_UNAVAILABLE` and lexical search is untouched.
+
+### First bring-up (once per cluster)
+
+```sh
+# 1. the runtime
+gh workflow run build-v2-images.yml --ref main -f service=embedding-service
+gh workflow run deploy-v2.yml --ref main -f service=embedding-service -f tag=<sha> -f cluster=geo-testnet-k8s
+kubectl -n gaia port-forward svc/embedding-service 8080 &  ; curl -s localhost:8080/info | jq '.slots | keys'
+
+# 2. the slot on the index (needs index.knn — an index created before the semantic-search merge
+#    lacks it: create the next version and full-migration first) and the hybrid pipeline
+kubectl apply -f search-indexer-deploy/k8s/v2/jobs/add-embedding-slot-job.yaml
+kubectl -n gaia logs -f job/opensearch-add-embedding-slot
+kubectl apply -f search-indexer-deploy/k8s/v2/jobs/ensure-search-pipeline-job.yaml
+
+# 3. the writer — backfills the scope (P1: the Claim type), then follows indexed_at
+gh workflow run build-v2-images.yml --ref main -f service=embedding-indexer
+gh workflow run deploy-v2.yml --ref main -f service=embedding-indexer -f tag=<sha> -f cluster=geo-testnet-k8s
+kubectl apply -f search-indexer-deploy/k8s/v2/jobs/list-slots-job.yaml   # coverage n/m per slot
+
+# 4. the reader — api.yaml already carries EMBEDDING_SERVICE_URL; deploy the api as usual, then
+curl -s 'https://<api>/search?q=voter+id+laws&mode=semantic&limit=3' | jq '{embeddingSlot, r: [.results[].name]}'
+
+# 5. the gate
+kubectl apply -f search-indexer-deploy/k8s/v2/jobs/eval-slot-job.yaml   # recall@10 ≥ EVAL_MIN_RECALL or the job fails
+```
+
+The search-admin jobs run `search-admin:latest` (built from `main` by `search-admin-build.yml`).
+Before the semantic-search merge that image has no slot commands: dispatch that workflow on the
+feature branch and pin the commit-sha tag in the job. Always check the running image carries the
+command — the CLI's own usage error in the job log is the symptom when it does not.
+
+**After a large backfill, force-merge once.** A fresh backfill leaves the k-NN graph across many
+segments and a semantic query then scans them all: measured 440 ms p50 → 22 ms after
+`POST /<index>/_forcemerge?max_num_segments=1` (through a port-forward to OpenSearch, with the
+credentials from the `opensearch-credentials` secret). The merge itself took ~30 min on 321k
+documents; the `curl` may time out while the merge completes server-side.
+
+A backfill is embedding-bound: ~300 texts/s per service pod on 2 CPUs. The HPA adds pods as the
+indexer saturates one; raise `maxReplicas` in `embedding-service/k8s/v2/hpa.yaml` for a large
+scope rather than waiting.
+
+### Model rotation (design D9)
+
+No step reindexes or overwrites a vector, and at every step every response says which slot
+answered.
+
+1. Add bundle B under `embedding-service/bundles/`, build and deploy the service (both slots
+   loaded; `/info` lists both).
+2. `add-embedding-slot-job.yaml` with `EMBEDDING_SLOT=<B>` (A keeps serving).
+3. Copy `embedding-indexer.yaml` to a second Deployment (`embedding-indexer-<B>`,
+   `EMBEDDING_SLOT=<B>`); it backfills B in parallel with A's follow loop.
+4. `eval-slot-job.yaml` for A and for B; compare recall, MRR and the contrastive rows.
+5. `set-default-slot-job.yaml` with `EMBEDDING_SLOT=<B>`. Callers that pin `slot=A` keep working.
+6. Grace period, then: delete A's indexer Deployment, `retire-embedding-slot-job.yaml` for A,
+   drop A's bundle from the image. A's fields stay until the next index version.
+
+### Failure modes
+
+| Symptom | Where to look | Usual cause |
+|---|---|---|
+| semantic/hybrid 503, lexical fine | api logs "embedding slots refresh failed"; `list-slots` job | service down, or `HASH MISMATCH` / `NOT LOADED`: image and index disagree on the slot |
+| coverage stops climbing | indexer logs (cycle stats), `/health/ready` | service unreachable (indexer backs off, no data loss), or OpenSearch write block (`read_only_allow_delete`: disk) |
+| hybrid 503 but semantic works | `ensure-search-pipeline` job | pipeline missing for this alias |
+| slow semantic queries after a backfill | `_cat/segments` | not force-merged (see above) |
+| indexer CrashLoop at start | its first log lines | slot not on the index, or descriptor hash differs from the service's |
+
+### Locally
+
+`docker compose --profile infra --profile semantic up -d --build` starts both services next to
+the compose OpenSearch (the first build compiles the ONNX runtime and fetches the model). The
+header comment of that block in `docker-compose.yml` has the slot-registration step; on Apple
+M4 see `docs/gotchas.md` for the JVM flag OpenSearch needs.
+
 ---
 
 > **Everything below describes the retired GitFlow** (`dev` → staging, `main` → production,

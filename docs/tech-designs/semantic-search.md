@@ -565,7 +565,7 @@ OpenSearch p95), metrics tagged by `slot` and `backend`, Sentry via `hermes-inst
 `HEALTH_PORT` with `/health/live`, `/health/ready` (service `/info` verified, OpenSearch reachable).
 
 **Deployment.** `embedding-indexer/` crate (workspace member, `Dockerfile` copied from
-`ranking-indexer`, `k8s/{staging,production,v2}/` Deployment, 1 replica, 100m/256Mi request,
+`ranking-indexer`, `k8s/v2/` Deployment, 1 replica per slot (`Recreate`), 100m/384Mi request,
 no volume). CI: `embedding-indexer-check.yml` + `embedding-indexer-tests.yml`, and
 `dockerfile-bins.yml` already checks every crate ships its binaries.
 
@@ -667,7 +667,35 @@ The pure rules (field mappings, `_meta` merge, default/retire, pipeline body) li
 `search-admin/src/embedding_slots.rs` with unit tests; `search-admin` depends on the `embedding`
 crate with `default-features = false`, so it links no ONNX runtime and keeps its bookworm image.
 
-Per-environment k8s jobs follow the existing pattern in `search-indexer-deploy/k8s/*/jobs/`.
+Each command has a Kubernetes Job in `search-indexer-deploy/k8s/v2/jobs/` (step 7); they take the
+descriptor from the running service, so the image needs no bundle file.
+
+## Deployment (step 7)
+
+Only the v2 stack exists (`docs/runbooks/deployment.md`: one trunk `main`, namespace `gaia`,
+manual build and deploy dispatches; the pre-v2 `search`/`search-staging` namespaces and their
+auto-deploy workflows were removed in #960/#961). So the manifests live under `k8s/v2/` only, and
+both services are entries in `build-v2-images.yml` and `deploy-v2.yml`.
+
+| Part | Manifest | Shape | Resources |
+|---|---|---|---|
+| embedding-service | `embedding-service/k8s/v2/embedding-service.yaml`, `hpa.yaml` | Deployment (2 replicas, `maxUnavailable: 0`, `minReadySeconds: 10`), ClusterIP `:8080`, HPA 2–6 on CPU 70 % | req 500m / 640Mi, lim 2 CPU / 1.5Gi — measured ≈ 570 MiB resident after repeated 256-text batches (the runtime arena keeps the largest batch), 2 threads to match the CPU limit |
+| embedding-indexer | `embedding-indexer/k8s/v2/embedding-indexer.yaml` | Deployment, 1 replica per slot, `Recreate` | req 100m / 384Mi, lim 500m / 768Mi (the 100k-entry vector LRU ≈ 150 MiB) |
+| slot jobs | `search-indexer-deploy/k8s/v2/jobs/{add-embedding-slot,set-default-slot,retire-embedding-slot,list-slots,ensure-search-pipeline,eval-slot}-job.yaml` | `search-admin` Jobs, `--from-service` | as the existing admin jobs |
+| api | `api/k8s/v2/api.yaml` | `EMBEDDING_SERVICE_URL=http://embedding-service:8080` | — |
+
+All pods run as uid 1000 with a read-only root filesystem and every capability dropped; both
+images were verified to serve under exactly that context. The indexer's P1 scope is set in the
+manifest: `EMBED_SCOPE_TYPE_IDS` = the Claim type (`96f859ef-a1ca-4b22-9372-c86ad58b694b`).
+
+`docker-compose.yml` gains a `semantic` profile with both services (the service published on
+`127.0.0.1:8090`, the indexer gated on the service's health), kept out of `services` because the
+first build compiles the ONNX runtime and fetches the model. The api's compose entry reads
+`EMBEDDING_SERVICE_URL` from the environment.
+
+Bring-up order, the force-merge after a backfill, rotation with the jobs, and a failure-mode
+table are in the runbook; local-stack traps (M4 JVM flag, `postgres:18` volume path, per-request
+`ef_search`, cargo feature unification) are in `docs/gotchas.md`.
 
 ## Model rotation procedure (D9)
 
@@ -751,22 +779,32 @@ slot answered.
 
 ## Configuration reference
 
-embedding-service: `EMBEDDING_MODELS_DIR=/models`, `EMBEDDING_SLOTS` (csv of slot ids to load),
-`EMBEDDING_INTRA_OP_THREADS`, `EMBEDDING_MAX_BATCH=256`, `EMBEDDING_MAX_TEXT_CHARS=8000`,
-`EMBEDDING_MAX_INFLIGHT=4`, `EMBEDDING_QUERY_INFLIGHT=2`, `PORT=8080`, `SENTRY_*`.
+As implemented (steps 1–7); the per-crate READMEs carry the same tables with defaults.
 
-embedding-indexer: `OPENSEARCH_URL`, `INDEX_ALIAS` (`entities`), `ENVIRONMENT` (prefix),
-`EMBEDDING_SERVICE_URL`, `EMBEDDING_SLOT`, `EMBED_FOLLOW_BACKEND=service` (only value),
-`EMBED_BACKFILL_BACKEND=service|extraction_api`, `EMBED_POLL_INTERVAL_MS=5000`,
-`EMBED_OVERLAP_S=30`, `EMBED_PAGE_SIZE=500`, `EMBED_BATCH_SIZE=64`, `EMBED_CONCURRENCY=2`,
-`EMBED_MAX_DOCS_PER_CYCLE=20000`, `EMBED_SCOPE_TYPE_IDS`, `EMBED_SCOPE_SPACE_IDS`,
-`EMBED_REQUIRE_NAME=true`, `EMBED_SKIP_DELETED=true`, `EMBED_LRU_SIZE=100000`,
-`EMBED_RATE_LIMIT_TPS`, `EXTRACTION_API_URL`, `EXTRACTION_API_KEY`,
-`EXTRACTION_API_BATCH_SIZE=256`, `EXTRACTION_API_POLL_MS=500`, `EXTRACTION_API_MAX_INFLIGHT=8`,
-`EXTRACTION_API_MAX_FAILURES=5`, `HEALTH_PORT=8080`, `SENTRY_*`.
+embedding-service: `EMBEDDING_MODELS_DIR=/models`, `EMBEDDING_SLOTS` (csv of slot ids to load;
+default all found), `EMBEDDING_INTRA_OP_THREADS`, `EMBEDDING_BATCH_SIZE=64`,
+`EMBEDDING_MAX_BATCH=256`, `EMBEDDING_MAX_TEXT_CHARS=8000`, `EMBEDDING_MAX_INFLIGHT=4`,
+`EMBEDDING_QUERY_INFLIGHT=2`, `EMBEDDING_QUERY_LANE=true`, `EMBEDDING_BIND`, `PORT=8080`,
+`RUST_LOG`, `LOG_FORMAT=json`.
+
+embedding-indexer: `OPENSEARCH_URL`, `INDEX_ALIAS=entities`, `ENVIRONMENT` (index prefix),
+`EMBED_INDEX` (exact index, bypasses the alias), `EMBED_CONTROL_INDEX=<prefix>search_control`,
+`EMBEDDING_SERVICE_URL`, `EMBEDDING_SLOT`, `EMBED_POLL_INTERVAL_MS=5000`, `EMBED_OVERLAP_S=30`,
+`EMBED_PAGE_SIZE=500`, `EMBED_BATCH_SIZE=64`, `EMBED_MAX_DOCS_PER_CYCLE=20000`,
+`EMBED_SCOPE_TYPE_IDS`, `EMBED_SCOPE_SPACE_IDS`, `EMBED_SKIP_DELETED=true`,
+`EMBED_LRU_SIZE=100000`, `EMBED_BACKFILL_BACKEND=service` (`extraction_api` is reserved for
+step 9 and refused at startup), `EMBED_ONCE`, `HEALTH_PORT=8080`, `RUST_LOG`, `LOG_FORMAT=json`.
+Reserved for the step-9 backend, not read today: `EXTRACTION_API_URL`, `EXTRACTION_API_KEY`,
+`EXTRACTION_API_BATCH_SIZE`, `EXTRACTION_API_POLL_MS`, `EXTRACTION_API_MAX_INFLIGHT`,
+`EXTRACTION_API_MAX_FAILURES`.
 
 api: `EMBEDDING_SERVICE_URL` (unset ⇒ lexical only), `EMBEDDING_QUERY_TIMEOUT_MS=2000`,
-`EMBEDDING_SLOTS_REFRESH_S=300`.
+`EMBEDDING_SLOTS_REFRESH_S=300`. Query-shape constants in `api/src/services/search/opensearch.ts`:
+`SEMANTIC_K_MIN=50`, `SEMANTIC_EF_SEARCH=256`, `HYBRID_K=100`.
+
+search-admin: `OPENSEARCH_URL`, `INDEX_ALIAS`, `ENVIRONMENT`; per command `--version N` |
+`--index NAME`, `--from-service <url>`, `--embedding-service <url>`, `--slot <id>`,
+`--set-default`, `--golden <file>`, `--min-recall`.
 
 ---
 
@@ -901,8 +939,8 @@ foundation the deferred "beyond similarity" track needs.
 | Area | Path |
 |---|---|
 | new lib crate | `embedding/` (descriptor, slot id, text template, `EmbeddingProvider`, `OnnxLocalProvider`, bundle loading) |
-| new service | `embedding-service/` (+ `Dockerfile` on `rust:1.92-trixie` / `debian:trixie-slim` baking `/models/<slot>/` via `bundle fetch`, `bundles/<name>/bundle.json`, `k8s/` Deployment / Service / HPA) |
-| new indexer | `embedding-indexer/` (+ `Dockerfile` on bookworm, standalone build; `k8s/` in step 7). Backend `service` implemented; `extraction_api` reserved (refused at startup) — done in step 4 |
+| new service | `embedding-service/` (+ `Dockerfile` on `rust:1.92-trixie` / `debian:trixie-slim` baking `/models/<slot>/` via `bundle fetch`, `bundles/<name>/bundle.json`, `k8s/v2/` Deployment / Service / HPA) |
+| new indexer | `embedding-indexer/` (+ `Dockerfile` on bookworm, standalone build; `k8s/v2/` — step 7). Backend `service` implemented; `extraction_api` reserved (refused at startup) — done in step 4 |
 | shared | `search-indexer-shared` unchanged; `search-admin` depends on `embedding` with `default-features = false` (descriptor + slot id only) |
 | mapping | `search-indexer-repository/src/opensearch/index_config.rs` |
 | stamp | `search-indexer-repository/src/opensearch/{provider,scripts,unset_document_properties}.rs` — done in step 3 |

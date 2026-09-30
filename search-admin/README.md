@@ -34,6 +34,11 @@ is static); `add-embedding-slot` refuses it and the fix is the next version plus
 Without `--version` the commands act on the index the alias currently points to; `--index NAME`
 names an exact index instead (a PoC or a not-yet-aliased version).
 
+Each command has a Kubernetes Job in `search-indexer-deploy/k8s/v2/jobs/` (`add-embedding-slot`,
+`set-default-slot`, `retire-embedding-slot`, `list-slots`, `ensure-search-pipeline`, `eval-slot`);
+the jobs take the descriptor from the running `embedding-service` so no bundle file is needed in
+the image. Bring-up order and rotation: `docs/runbooks/deployment.md`, "Semantic search".
+
 Model rotation is: register slot B (`add-embedding-slot`), backfill it with a second
 embedding-indexer, compare on the harness, `set-default-slot B`, then `retire-embedding-slot A`
 and drop A's fields in the next migration. No step reindexes and no step overwrites a vector.

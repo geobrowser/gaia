@@ -1,0 +1,95 @@
+# Registers an embedding slot on the entities index: adds the slot's three fields (an additive
+# put_mapping) and files the descriptor in the index _meta. The descriptor is taken from the
+# running embedding-service, which must already serve the slot — so the image, the index and the
+# indexer can never disagree about what a slot means. Idempotent; refuses an index without
+# index.knn (one created before the semantic-search work: fix = next version + full-migration).
+#
+# Order of operations for a new slot: deploy embedding-service with the bundle → this job →
+# deploy embedding-indexer with EMBEDDING_SLOT → list-slots to watch coverage → eval-slot.
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-add-embedding-slot
+  namespace: gaia
+  labels:
+    app: opensearch-admin
+    task: add-embedding-slot
+    environment: testnet
+spec:
+  ttlSecondsAfterFinished: 86400  # 24 hours
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: opensearch-admin
+        task: add-embedding-slot
+        environment: testnet
+    spec:
+      imagePullSecrets:
+      - name: geo
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: add-embedding-slot
+        # `latest` is built from `main` by search-admin-build.yml (main has been the only trunk
+        # since 2026-09-17). The embedding-slot commands exist only from the semantic-search
+        # merge onward, so before that lands use a commit-sha tag from a workflow_dispatch of
+        # that workflow on the feature branch, and always confirm the running image carries the
+        # command you need: `kubectl logs` shows the CLI's own usage error otherwise.
+        image: registry.digitalocean.com/geo/search-admin:latest
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: OPENSEARCH_URL
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-credentials
+              key: OPENSEARCH_URL
+        - name: ENVIRONMENT
+          value: "testnet"
+        - name: INDEX_ALIAS
+          value: "entities"
+        # Empty = the index the alias points to (the normal case). Set N to act on <alias>_vN during a migration, before the alias moves.
+        - name: INDEX_VERSION
+          value: ""
+        # Slot id = hash of the bundle descriptor (`embedding-service bundle slot <bundle.json>`).
+        - name: EMBEDDING_SLOT
+          value: "79502860cd"
+        - name: EMBEDDING_SERVICE_URL
+          value: "http://embedding-service:8080"
+        # "true" makes this slot the index default even if another slot already is. The first slot registered on an index becomes the default regardless.
+        - name: SET_DEFAULT
+          value: "false"
+        - name: RUST_LOG
+          value: "info"
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          V=""; [ -n "$INDEX_VERSION" ] && V="--version $INDEX_VERSION"
+          D=""; [ "$SET_DEFAULT" = "true" ] && D="--set-default"
+          search-admin add-embedding-slot $V --from-service "$EMBEDDING_SERVICE_URL" --slot "$EMBEDDING_SLOT" $D
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"

@@ -1,0 +1,132 @@
+# Embedding Indexer
+#
+# Keeps vectors on search documents. It polls the entities index on `indexed_at` (stamped by
+# search-indexer on every content write), embeds `name + description` through embedding-service,
+# and writes `emb_<slot>` with a compare-and-set script that refuses to store a vector for text
+# the document no longer has. Startup is a backfill of everything in scope that lacks a current
+# vector; afterwards it follows, one poll interval behind search-indexer.
+#
+# One replica per slot, strategy Recreate: two pollers on one slot would share a checkpoint and
+# embed everything twice (the CAS keeps them correct, not cheap). A second slot — a model
+# rotation — is a second Deployment of this manifest with another EMBEDDING_SLOT and name.
+#
+# Design: docs/tech-designs/semantic-search.md (D4–D6). Operations: docs/runbooks/deployment.md,
+# "Semantic search". Image: embedding-indexer/Dockerfile (no ONNX runtime; bookworm).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: embedding-indexer
+  namespace: gaia
+  labels:
+    app: embedding-indexer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: embedding-indexer
+  template:
+    metadata:
+      labels:
+        app: embedding-indexer
+    spec:
+      restartPolicy: Always
+      imagePullSecrets:
+        - name: geo
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: embedding-indexer
+          image: registry.digitalocean.com/geo/embedding-indexer:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            # Same OpenSearch credentials as search-indexer; it writes only the slot fields.
+            - name: OPENSEARCH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-credentials
+                  key: OPENSEARCH_URL
+            - name: ENVIRONMENT
+              value: "testnet"
+            - name: INDEX_ALIAS
+              value: "entities"
+            - name: EMBEDDING_SERVICE_URL
+              value: "http://embedding-service:8080"
+            # The slot this indexer fills. A slot id is the hash of a bundle descriptor, never a
+            # typed name: `embedding-service bundle slot <bundle.json>` prints it. The index must
+            # already carry the slot (search-admin add-embedding-slot) and the service must serve
+            # it with the same descriptor hash, or the indexer refuses to start.
+            - name: EMBEDDING_SLOT
+              value: "79502860cd"
+            # Scope (D6): comma-separated type entity ids a document must carry to get a vector;
+            # empty means every named, live document. The P1 scope is claims: the id below is
+            # the Claim type (geo-lens's CLAIM constant; every document in the corpus PoC carries it). Widen by allowlist as list-slots
+            # coverage and the memory budget allow (milestone P4); the indexer removes vectors
+            # from documents that leave the scope.
+            - name: EMBED_SCOPE_TYPE_IDS
+              value: "96f859ef-a1ca-4b22-9372-c86ad58b694b"
+            - name: EMBED_POLL_INTERVAL_MS
+              value: "5000"
+            # Re-read documents stamped this long before the checkpoint: covers OpenSearch's
+            # refresh lag and clock skew between search-indexer replicas.
+            - name: EMBED_OVERLAP_S
+              value: "30"
+            - name: EMBED_PAGE_SIZE
+              value: "500"
+            - name: EMBED_BATCH_SIZE
+              value: "64"
+            # Per-cycle bound so the follow loop never starves behind a long backfill.
+            - name: EMBED_MAX_DOCS_PER_CYCLE
+              value: "20000"
+            - name: EMBED_SKIP_DELETED
+              value: "true"
+            - name: EMBED_BACKFILL_BACKEND
+              value: "service"
+            - name: HEALTH_PORT
+              value: "8080"
+            - name: RUST_LOG
+              value: "embedding_indexer=info"
+            - name: LOG_FORMAT
+              value: "json"
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            # The text-hash → vector LRU (EMBED_LRU_SIZE, default 100k) is the only sizeable
+            # allocation: 100k × 384 × 4 B ≈ 150 MiB. Pages of 500 documents are small.
+            requests:
+              memory: "384Mi"
+              cpu: "100m"
+            limits:
+              memory: "768Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Ready once the slot is verified on both the index and the service.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
