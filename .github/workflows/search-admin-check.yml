@@ -1,0 +1,50 @@
+name: Search Admin Check
+
+# search-admin had no lint or test gate: its only workflow builds the image. The
+# orphan reconcile (GEO-2548) runs from this image on a schedule and can delete
+# documents, so its tests should run on every change.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'search-admin/**'
+      - 'search-indexer-repository/**'
+      - 'search-indexer-shared/**'
+      - '.github/workflows/search-admin-check.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'search-admin/**'
+      - 'search-indexer-repository/**'
+      - 'search-indexer-shared/**'
+      - '.github/workflows/search-admin-check.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+          components: rustfmt, clippy
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt -p search-admin --check
+
+      - name: Run clippy
+        run: cargo clippy -p search-admin --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test -p search-admin

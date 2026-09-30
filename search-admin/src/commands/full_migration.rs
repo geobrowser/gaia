@@ -403,18 +403,18 @@ impl FullMigrationCommand {
                                 response_data["updated"].as_u64().unwrap_or(0)
                             );
 
-                            if let Some(failures) = response_data["failures"].as_array() {
-                                if !failures.is_empty() {
-                                    println!("  Failures: {}", failures.len());
-                                    println!();
-                                    warn!("Some documents failed to reindex");
-                                    println!("⚠ Warning: Some documents failed to reindex:");
-                                    for (i, failure) in failures.iter().enumerate().take(5) {
-                                        println!("  {}. {}", i + 1, failure);
-                                    }
-                                    if failures.len() > 5 {
-                                        println!("  ... and {} more", failures.len() - 5);
-                                    }
+                            if let Some(failures) = response_data["failures"].as_array()
+                                && !failures.is_empty()
+                            {
+                                println!("  Failures: {}", failures.len());
+                                println!();
+                                warn!("Some documents failed to reindex");
+                                println!("⚠ Warning: Some documents failed to reindex:");
+                                for (i, failure) in failures.iter().enumerate().take(5) {
+                                    println!("  {}. {}", i + 1, failure);
+                                }
+                                if failures.len() > 5 {
+                                    println!("  ... and {} more", failures.len() - 5);
                                 }
                             }
                         }
@@ -422,19 +422,14 @@ impl FullMigrationCommand {
                     }
 
                     // Show progress
-                    if let Some(status_obj) = task_json.get("task").and_then(|t| t.get("status")) {
-                        if let Some(created) = status_obj.get("created").and_then(|v| v.as_u64()) {
-                            if let Some(total) = status_obj.get("total").and_then(|v| v.as_u64()) {
-                                if total > 0 {
-                                    let percentage = (created as f64 / total as f64) * 100.0;
-                                    print!(
-                                        "\r  Progress: {:.1}% ({}/{})",
-                                        percentage, created, total
-                                    );
-                                    std::io::Write::flush(&mut std::io::stdout()).ok();
-                                }
-                            }
-                        }
+                    if let Some(status_obj) = task_json.get("task").and_then(|t| t.get("status"))
+                        && let Some(created) = status_obj.get("created").and_then(|v| v.as_u64())
+                        && let Some(total) = status_obj.get("total").and_then(|v| v.as_u64())
+                        && total > 0
+                    {
+                        let percentage = (created as f64 / total as f64) * 100.0;
+                        print!("\r  Progress: {:.1}% ({}/{})", percentage, created, total);
+                        std::io::Write::flush(&mut std::io::stdout()).ok();
                     }
                 }
                 Err(e) => {

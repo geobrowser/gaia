@@ -56,17 +56,17 @@ impl UpdateAliasCommand {
             .await;
 
         let mut old_index: Option<String> = None;
-        if let Ok(response) = alias_response {
-            if response.status_code().is_success() {
-                let alias_data: serde_json::Value = response
-                    .json()
-                    .await
-                    .context("Failed to parse alias response")?;
+        if let Ok(response) = alias_response
+            && response.status_code().is_success()
+        {
+            let alias_data: serde_json::Value = response
+                .json()
+                .await
+                .context("Failed to parse alias response")?;
 
-                // Get the first index that has this alias
-                if let Some(obj) = alias_data.as_object() {
-                    old_index = obj.keys().next().map(|s| s.to_string());
-                }
+            // Get the first index that has this alias
+            if let Some(obj) = alias_data.as_object() {
+                old_index = obj.keys().next().map(|s| s.to_string());
             }
         }
 

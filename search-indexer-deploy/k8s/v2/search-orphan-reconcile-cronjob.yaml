@@ -1,0 +1,105 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: search-orphan-reconcile
+  namespace: gaia
+  labels:
+    app: search-orphan-reconcile
+    environment: testnet
+spec:
+  # GEO-2548: find search documents the knowledge graph does not have. search-indexer and
+  # kg-indexer consume knowledge.edits independently, so a block kg-indexer drops (GEO-2884)
+  # still reaches the index, and /search serves an entity that resolves to nothing.
+  #
+  # `search-admin reconcile-orphans` scrolls the whole index and checks each page against
+  # Postgres in one indexed statement, so no statement comes near the 30s role timeout. It
+  # logs one `search_orphan_reconcile_summary` line with every count.
+  #
+  # REPORT ONLY. Pruning is opt-in: set RECONCILE_PRUNE to "true" (and read the summary of a
+  # report run first). Even then it refuses past RECONCILE_MAX_PRUNE documents or
+  # RECONCILE_MAX_ORPHAN_RATIO of the index, which is what a wrong DATABASE_URL looks like.
+  #
+  # Daily at 04:23 UTC, clear of scoring-service (03:00) and the hourly ranking jobs.
+  schedule: "23 4 * * *"
+  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      # Never + backoffLimit 0: one run per day, and a failed pod is kept with its logs.
+      # OnFailure retries would rescan the index and the job-controller deletes the pods.
+      backoffLimit: 0
+      activeDeadlineSeconds: 3600
+      ttlSecondsAfterFinished: 86400 # clear finished runs after a day, so a stale failure stops firing KubeJobFailed
+      template:
+        metadata:
+          labels:
+            app: search-orphan-reconcile
+            environment: testnet
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: geo
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: search-orphan-reconcile
+              # deploy-v2 rewrites :latest to the tag being deployed.
+              image: registry.digitalocean.com/geo/search-admin:latest
+              imagePullPolicy: IfNotPresent
+              args: ["reconcile-orphans"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                runAsNonRoot: true
+                runAsUser: 1000
+                runAsGroup: 1000
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+                seccompProfile:
+                  type: RuntimeDefault
+              env:
+                - name: OPENSEARCH_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: opensearch-credentials
+                      key: OPENSEARCH_URL
+                # The same read path search-indexer uses for its entity-space lookups.
+                # Nothing is written to Postgres.
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: search-indexer-secrets
+                      key: DATABASE_URL
+                - name: ENVIRONMENT
+                  value: "testnet"
+                - name: INDEX_ALIAS
+                  value: "entities"
+                - name: RECONCILE_PRUNE
+                  value: "false"
+                - name: RECONCILE_PRUNE_MISSING_IN_SPACE
+                  value: "false"
+                - name: RECONCILE_MAX_PRUNE
+                  value: "1000"
+                - name: RECONCILE_MAX_ORPHAN_RATIO
+                  value: "0.01"
+                # Uncomment to fail the Job (and fire KubeJobFailed) above this many orphans.
+                # - name: RECONCILE_FAIL_ABOVE
+                #   value: "100"
+                - name: RUST_LOG
+                  value: "info"
+                - name: NO_COLOR
+                  value: "1"
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "500m"

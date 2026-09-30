@@ -9,7 +9,8 @@ mod opensearch_client;
 use commands::{
     backfill_name_raw::BackfillNameRawCommand, create::CreateIndexCommand,
     delete::DeleteIndexCommand, full_migration::FullMigrationCommand, list::ListIndicesCommand,
-    reindex::ReindexCommand, update_alias::UpdateAliasCommand,
+    reconcile_orphans::ReconcileOrphansCommand, reindex::ReindexCommand,
+    update_alias::UpdateAliasCommand,
 };
 
 /// Get the prefixed alias name based on environment.
@@ -67,6 +68,9 @@ enum Commands {
 
     /// Backfill name_raw field from existing name values
     BackfillNameRaw(BackfillNameRawCommand),
+
+    /// Report (and optionally prune) index documents the knowledge graph does not have
+    ReconcileOrphans(ReconcileOrphansCommand),
 }
 
 #[tokio::main]
@@ -127,6 +131,7 @@ async fn main() -> Result<()> {
         Commands::UpdateAlias(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
         Commands::FullMigration(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
         Commands::BackfillNameRaw(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
+        Commands::ReconcileOrphans(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
     };
 
     if let Err(ref e) = result {

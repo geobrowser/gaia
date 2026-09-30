@@ -315,6 +315,38 @@ search-admin delete-index --version 2 --confirm --yes
 5. Requires typing "DELETE" to confirm (unless `--yes` is used)
 6. Verifies deletion was successful
 
+### reconcile-orphans
+
+Find index documents the knowledge graph does not have (GEO-2548). It pages through the
+whole index with a scroll and checks each page against Postgres, then re-checks the
+candidates after `--recheck-delay-secs`. It runs daily as the `search-orphan-reconcile`
+CronJob (`search-indexer-deploy/k8s/v2/search-orphan-reconcile-cronjob.yaml`).
+
+```bash
+DATABASE_URL=postgres://... search-admin reconcile-orphans            # report only
+DATABASE_URL=postgres://... search-admin reconcile-orphans --prune    # delete missing-entity orphans
+```
+
+An orphan is either:
+- `missing_entity`: no row in `entities`, which is what a block lost by kg-indexer looks like, or
+- `missing_in_space`: the entity exists but has no value and no outgoing relation in the
+  document's space. These are only deleted with `--prune-missing-in-space` as well.
+
+Space-topic stub documents (`space_topic_entity_id == entity_id`) are counted and skipped.
+
+Every count goes on one `search_orphan_reconcile_summary` log line. Each flag also reads an
+environment variable (`RECONCILE_PRUNE`, `RECONCILE_MAX_PRUNE`, and so on; see `--help`).
+
+**Safety features:**
+1. Report only unless `--prune` is set.
+2. Refuses to run against a database whose `entities` table is empty.
+3. Refuses to prune more than `--max-prune` (1000) documents, or when orphans exceed
+   `--max-orphan-ratio` (1%) of the index. A wrong `DATABASE_URL` looks like "everything is an
+   orphan", and this is what stops it.
+4. Refuses to prune if the candidate list hit `--max-candidates`.
+5. `--fail-above N` exits non-zero past N confirmed orphans, so the Job fails and
+   `KubeJobFailed` reaches Slack.
+
 ## Development
 
 ### Running unit tests

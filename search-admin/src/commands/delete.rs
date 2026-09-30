@@ -84,23 +84,23 @@ impl DeleteIndexCommand {
                 .await
                 .context("Failed to parse stats response")?;
 
-            if let Some(indices) = stats_json["indices"].as_object() {
-                if let Some(index_stats) = indices.get(&versioned_index_name) {
-                    let doc_count = index_stats["primaries"]["docs"]["count"]
-                        .as_u64()
-                        .unwrap_or(0);
-                    let store_size = index_stats["primaries"]["store"]["size_in_bytes"]
-                        .as_u64()
-                        .unwrap_or(0);
+            if let Some(indices) = stats_json["indices"].as_object()
+                && let Some(index_stats) = indices.get(&versioned_index_name)
+            {
+                let doc_count = index_stats["primaries"]["docs"]["count"]
+                    .as_u64()
+                    .unwrap_or(0);
+                let store_size = index_stats["primaries"]["store"]["size_in_bytes"]
+                    .as_u64()
+                    .unwrap_or(0);
 
-                    println!("Index statistics:");
-                    println!("  Documents: {}", doc_count);
-                    println!(
-                        "  Size: {} MB",
-                        (store_size as f64 / 1024.0 / 1024.0).round()
-                    );
-                    println!();
-                }
+                println!("Index statistics:");
+                println!("  Documents: {}", doc_count);
+                println!(
+                    "  Size: {} MB",
+                    (store_size as f64 / 1024.0 / 1024.0).round()
+                );
+                println!();
             }
         }
 

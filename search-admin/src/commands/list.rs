@@ -185,18 +185,14 @@ impl ListIndicesCommand {
                             if let Some(replicas) = settings.get("number_of_replicas") {
                                 println!("    Replicas: {}", replicas);
                             }
-                            if let Some(created) = settings.get("creation_date") {
-                                if let Some(timestamp) =
+                            if let Some(created) = settings.get("creation_date")
+                                && let Some(timestamp) =
                                     created.as_str().and_then(|s| s.parse::<i64>().ok())
-                                {
-                                    use chrono::{DateTime, Utc};
-                                    let dt = DateTime::<Utc>::from_timestamp(timestamp / 1000, 0);
-                                    if let Some(dt) = dt {
-                                        println!(
-                                            "    Created: {}",
-                                            dt.format("%Y-%m-%d %H:%M:%S UTC")
-                                        );
-                                    }
+                            {
+                                use chrono::{DateTime, Utc};
+                                let dt = DateTime::<Utc>::from_timestamp(timestamp / 1000, 0);
+                                if let Some(dt) = dt {
+                                    println!("    Created: {}", dt.format("%Y-%m-%d %H:%M:%S UTC"));
                                 }
                             }
                             if let Some(version) =
