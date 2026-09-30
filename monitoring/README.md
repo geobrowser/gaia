@@ -25,8 +25,11 @@ kubectl apply -f monitoring/k8s/prometheus-stack.yaml --server-side
 # Scrape ingress-nginx request metrics + API ingress recording rules
 kubectl apply -f monitoring/k8s/ingress-nginx-metrics.yaml
 kubectl apply -f monitoring/k8s/api-ingress-rules.yaml
-kubectl apply -f monitoring/k8s/api-ingress-dashboard.yaml
 ```
+
+For the live cluster (`do-nyc2-geo-testnet-k8s`, Cilium Gateway, namespace
+`gaia`) follow [`k8s/v2/README.md`](k8s/v2/README.md) instead, including its
+Dashboards section.
 
 ## Access Grafana
 
