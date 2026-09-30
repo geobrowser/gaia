@@ -56,12 +56,34 @@ Two properties of this analyzer are load-bearing:
   debate claims sampled on testnet, 66 use the ASCII apostrophe and 24 the typographic one
   — so before this fold, a query scored ~400 against one spelling and exactly 0.00 against
   the other (GEO-2904).
-- **There is no stemming, deliberately.** The prefix sub-fields of a `search_as_you_type`
-  field index prefixes of the *indexed* term, so stemming here would break autocomplete on
-  partially typed words: once "running" stems to "run", a user who has typed "runn" no
-  longer matches it. This is why plural and possessive matching (`mans` → `man's`) cannot
-  be solved by swapping in the `english` analyzer; it needs sibling stemmed fields, which
-  is tracked separately on GEO-2904.
+- **`name` and `description` are not stemmed, deliberately.** The prefix sub-fields of a
+  `search_as_you_type` field index prefixes of the *indexed* term, so stemming here would
+  break autocomplete on partially typed words: once "running" stems to "run", a user who
+  has typed "runn" no longer matches it. Stemming lives on sibling fields instead (below).
+
+### Stemmed siblings (index v7, GEO-3047)
+
+`name_stemmed` and `description_stemmed` are plain `text` fields analyzed with
+**`text_stemmed`**:
+
+```
+char_filter: apostrophe_fold
+tokenizer:   standard
+filter:      lowercase, possessive_english, stemmer_overrides (news => news), minimal_english
+```
+
+so `man's`, `man’s`, `mans` and `man` all index as `man`, and `pardons` as `pardon`.
+`minimal_english` only strips plural endings; it leaves verb forms alone and does not
+conflate unrelated words the way Porter does (`university` / `universe`).
+
+They are filled by **`copy_to`** from `name` and `description`, not by a `fields`
+multi-field: `search_as_you_type` accepts `fields` in the mapping and then silently drops
+it (the same reason `name_raw` is top-level). Because copy_to runs at index time from
+`_source`, a plain `_reindex` from a v6 index populates them, and the indexer needs no
+change. Copied values are not added to `_source`, so responses are unchanged.
+
+On an index without these fields (v6 and older) the stemmed clauses match nothing and do
+not error, so the API change is a no-op until the alias points at v7.
 
 Consequence worth knowing when reading scores: because folding merges two spellings into
 one term, document frequency rises and IDF falls, so absolute scores for previously-split
@@ -77,7 +99,7 @@ If the query matches a UUID pattern, it bypasses text search entirely and perfor
 
 ## 2. Base Text Query
 
-Seven parallel matching strategies run inside a `bool.should` clause with `minimum_should_match: 1`:
+Nine parallel matching strategies run inside a `bool.should` clause with `minimum_should_match: 1`:
 
 ### Strategy Breakdown
 
@@ -88,6 +110,8 @@ Seven parallel matching strategies run inside a `bool.should` clause with `minim
 | **Exact Name Token** | `match` | `name` | **8.0×** | Strong boost for exact analyzed token match in name |
 | **Autocomplete** | `multi_match` (bool_prefix) | `name^1.5`, `name._2gram^1.5`, `name._3gram^1.5`, `description`, `description._2gram`, `description._3gram` | 1.5× on name fields | N-gram autocomplete matching |
 | **Fuzzy** | `multi_match` | `name`, `description` | **0.6×** (reduced) | Typo tolerance with AUTO fuzziness |
+| **Stemmed Name** | `match` | `name_stemmed` | **10.0×** | Plurals and possessives: `mans` / `man's` reach `man` (GEO-3047) |
+| **Stemmed Desc** | `match` | `description_stemmed` | **3.0×** | The same for descriptions |
 | **Name Prefix** | `match_phrase_prefix` | `name` | **5.0×** | Strong boost for "starts with" on name |
 | **Desc Prefix** | `match_phrase_prefix` | `description` | **1.5×** | Moderate boost for "starts with" on description |
 
