@@ -199,6 +199,7 @@ with SHA-256; the **slot id** is the first 10 hex characters. Change any field �
   "provider":        "onnx-local",
   "model_id":        "BAAI/bge-small-en-v1.5",
   "source":          "hf:qdrant/bge-small-en-v1.5-onnx-q@aa8f8b060edb00e03bfdd08813a2949946c8ba55",
+  "model_file":      "model_optimized.onnx",
   "artifacts": {
     "model_optimized.onnx":    "sha256:51f1bd0addd6e859e42c2c8021a5e5461385bb676a649f4b269aa445449f2431",
     "tokenizer.json":          "sha256:d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
@@ -221,7 +222,9 @@ with SHA-256; the **slot id** is the first 10 hex characters. Change any field �
 ```
 
 This is the exact bundle geo-lens runs today (the files Python fastembed 0.8 resolves for
-`BAAI/bge-small-en-v1.5`), hashed on 2026-09-29. Two fields deserve a note: `query_prompt` is
+`BAAI/bge-small-en-v1.5`), hashed on 2026-09-29. It is committed as
+`embedding-service/bundles/bge-small-en-v1.5-q/bundle.json`; its slot id is **`79502860cd`** and
+its vector field `emb_79502860cd` (the Rust and an independent Python canonicalization agree). Two fields deserve a note: `query_prompt` is
 **empty** because fastembed applies no instruction to bge-small (geo-lens's adapter documents that
 its query and passage paths coincide for this model); the field exists because e5, nomic and
 EmbeddingGemma do need one. `quantization` mirrors fastembed's mode for the export (`static` for
@@ -326,13 +329,14 @@ choice is confined to `OnnxLocalProvider` and can change behind the trait.
 
 ## Model bundles and images
 
-`models/<slot>/` in the image contains `model.onnx`, `tokenizer.json`, `config.json` (and
-`special_tokens_map.json` / `tokenizer_config.json` where the tokenizer needs them) plus
-`bundle.json` = the descriptor. Bundles are produced by a script (`scripts/make-bundle.sh
-<hf-repo> <revision> <file list>`) that downloads at build time, hashes, and writes
-`bundle.json`; the resulting slot id is printed and becomes part of the image tag
-(`geo/embedding-service:<slot>[,<slot>]`). A running image therefore *is* its slot list; no
-weights are downloaded at runtime and a cold pod serves immediately.
+`/models/<slot>/` in the image contains the ONNX file named by `model_file`, the four tokenizer
+files, and `bundle.json` = the descriptor. Descriptors are **committed** under
+`embedding-service/bundles/<human-name>/bundle.json`; weights never are. The image build runs
+`embedding-service bundle fetch --spec <bundle.json> --out /models` for each, which downloads
+from the pinned `source`, refuses any file whose SHA-256 differs from the descriptor, and places
+the bundle under the derived slot id; startup verifies every hash again. A running image
+therefore *is* its slot list; no weights are downloaded at runtime and a cold pod serves
+immediately. (Implemented in step 1: `embedding/src/bundle.rs`, `embedding-service/src/bundle_cmd.rs`.)
 
 ## `embedding-service` (binary)
 
@@ -680,6 +684,9 @@ slot answered.
 
 ## Sizing (to be replaced by measurements in P0/P1)
 
+- embedding-service image (step 1, `rust:1.92-trixie` → `debian:trixie-slim`, bge-small baked in):
+  209 MB, runtime links only `libstdc++`/`libgcc_s`/`libm`/`libc`, ready in ~2 s; in a 2-CPU
+  container: single query ≈ 30–50 ms end to end over HTTP, a 256-text document batch ≈ 300 texts/s.
 - Measured on the 321k-document claims corpus (single segment): raw vectors 471 MB (`.vec`),
   HNSW graph 17 MB (`.vex`), so the vector working set is ≈ **0.5 GB per slot** in page cache;
   whole index 2.4 GB, of which vectors inside `_source` are ≈ 0.6–0.7 GB. Rule of thumb that
@@ -844,7 +851,7 @@ foundation the deferred "beyond similarity" track needs.
 | Area | Path |
 |---|---|
 | new lib crate | `embedding/` (descriptor, slot id, text template, `EmbeddingProvider`, `OnnxLocalProvider`, bundle loading) |
-| new service | `embedding-service/` (+ `Dockerfile` on `rust:1.92-trixie` / `debian:trixie-slim` baking `/models/<slot>/`, `k8s/` Deployment / Service / HPA), `scripts/make-bundle.sh` |
+| new service | `embedding-service/` (+ `Dockerfile` on `rust:1.92-trixie` / `debian:trixie-slim` baking `/models/<slot>/` via `bundle fetch`, `bundles/<name>/bundle.json`, `k8s/` Deployment / Service / HPA) |
 | new indexer | `embedding-indexer/` (+ `Dockerfile`, `k8s/`), `EmbedBackend` with `service` and `extraction_api`; bookworm is fine here since it links no ONNX runtime |
 | shared | `search-indexer-shared` unchanged; the search crates depend on `embedding` only through `search-admin` |
 | mapping | `search-indexer-repository/src/opensearch/index_config.rs` |

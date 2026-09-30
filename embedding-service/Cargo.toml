@@ -1,0 +1,30 @@
+[package]
+name = "embedding-service"
+version = "0.1.0"
+edition = "2024"
+description = "gaia's in-cluster embedding runtime: serves hash-verified model bundles over HTTP for the search API and the embedding-indexer"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "embedding-service"
+path = "src/main.rs"
+
+[dependencies]
+embedding = { path = "../embedding" }
+
+axum = "0.7"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# Only the `bundle fetch` subcommand goes outbound (at image build time). rustls to match the
+# other services and keep OpenSSL out of the image.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
