@@ -460,6 +460,21 @@ class TestDeliveryCallback:
         assert emitter.delivery_errors == 1
         assert emitter.messages_produced == 0
 
+    def test_delivery_failures_are_all_counted_but_only_the_first_few_logged(
+        self, emitter, caplog
+    ):
+        """A missing topic fails every batch; each ERROR line is a Sentry event, so cap them."""
+        from src.scoring_data_emitter.scoring_data_emitter import MAX_LOGGED_DELIVERY_ERRORS
+
+        with caplog.at_level("ERROR"):
+            for _ in range(MAX_LOGGED_DELIVERY_ERRORS + 50):
+                emitter._delivery_callback(Exception("Unknown topic or partition"), MagicMock())
+
+        assert emitter.delivery_errors == MAX_LOGGED_DELIVERY_ERRORS + 50
+        failures = [r for r in caplog.records if "Message delivery failed" in r.getMessage()]
+        assert len(failures) == MAX_LOGGED_DELIVERY_ERRORS
+        assert "counted, not logged" in failures[-1].getMessage()
+
 
 class TestFlush:
     """Tests for flush method."""

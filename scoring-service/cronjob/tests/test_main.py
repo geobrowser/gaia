@@ -521,3 +521,94 @@ class TestOutputModes:
             pipeline._write_scores()
 
             mock_writer.write_all.assert_called_once_with(mock_entities, mock_spaces)
+
+
+class TestKafkaDeliveryFailure:
+    """GEO-3108: a run that delivers nothing to Kafka must fail, not report success."""
+
+    @staticmethod
+    def _pipeline(mock_emitter: MagicMock) -> ScoringPipeline:
+        with patch("main.ScoringDataWriter"), patch("main.ScoringDataEmitter", return_value=mock_emitter):
+            pipeline = ScoringPipeline(
+                "postgresql://test/db",
+                MagicMock(),
+                output_mode=OutputMode.ALL,
+                kafka_broker="localhost:9092",
+            )
+        pipeline.scoring_data = ScoringData(
+            entities=[Entity(id="11111111111111111111111111111111", created_at=datetime.now())],
+            votes=[],
+            users=[],
+            spaces=[Space(id="22222222222222222222222222222222", created_at=datetime.now())],
+        )
+        return pipeline
+
+    @pytest.mark.parametrize(
+        ("remaining", "produced", "errors"),
+        [
+            (0, 0, 3044),  # the live failure: topic missing, every batch rejected
+            (0, 3000, 44),  # partial delivery is still a failed run
+            (7, 3037, 0),  # flush timed out with messages still queued
+        ],
+    )
+    def test_write_scores_raises_on_undelivered_messages(
+        self, remaining: int, produced: int, errors: int
+    ) -> None:
+        from main import KafkaDeliveryError
+
+        emitter = MagicMock()
+        emitter.flush.return_value = remaining
+        emitter.messages_produced = produced
+        emitter.delivery_errors = errors
+        pipeline = self._pipeline(emitter)
+
+        with pytest.raises(KafkaDeliveryError) as exc_info:
+            pipeline._write_scores()
+
+        assert f"{produced} delivered, {errors} failed, {remaining} undelivered" in str(exc_info.value)
+
+    def test_postgres_is_written_before_kafka_failure(self) -> None:
+        """Postgres scores must still land when Kafka fails; the Kafka half is what is retried."""
+        from main import KafkaDeliveryError
+
+        emitter = MagicMock()
+        emitter.flush.return_value = 0
+        emitter.messages_produced = 0
+        emitter.delivery_errors = 1
+        pipeline = self._pipeline(emitter)
+
+        with pytest.raises(KafkaDeliveryError):
+            pipeline._write_scores()
+
+        assert pipeline._writer is not None
+        pipeline._writer.write_all.assert_called_once()  # type: ignore[attr-defined]
+
+    def test_clean_delivery_does_not_raise(self) -> None:
+        emitter = MagicMock()
+        emitter.flush.return_value = 0
+        emitter.messages_produced = 3044
+        emitter.delivery_errors = 0
+        self._pipeline(emitter)._write_scores()
+
+    def test_main_exits_with_kafka_delivery_code(self) -> None:
+        from main import KAFKA_DELIVERY_EXIT_CODE, KafkaDeliveryError, main
+
+        with (
+            patch.dict(
+                "os.environ",
+                {
+                    "DATABASE_URL": "postgresql://test:test@localhost/test",
+                    "OUTPUT_MODE": "all",
+                    "ENVIRONMENT": "testnet",
+                },
+            ),
+            patch("main.load_dotenv"),
+            patch("main.start_memory_monitor"),
+            patch("main.ScoringPipeline") as mock_pipeline_class,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            mock_pipeline_class.return_value.run.side_effect = KafkaDeliveryError("0 delivered")
+            main()
+
+        assert exc_info.value.code == KAFKA_DELIVERY_EXIT_CODE
+        assert KAFKA_DELIVERY_EXIT_CODE not in (0, 1)

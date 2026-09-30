@@ -6,6 +6,7 @@ import {
 	FUZZY_PREFIX_LENGTH,
 	MAX_NAME_MATCH_TEXT_TOKENS,
 	MAX_OTHER_SPACES,
+	MAX_SCORE_THRESHOLD,
 	MAX_TEXT_TOKENS,
 	MIN_SCORE_THRESHOLD,
 	NAME_COVERAGE_BOOST,
@@ -1237,7 +1238,7 @@ describe("OpenSearchClient", () => {
 		 */
 
 		function computeScoreBoost(score: number): number {
-			const clamped = Math.max(score, MIN_SCORE_THRESHOLD)
+			const clamped = Math.min(Math.max(score, MIN_SCORE_THRESHOLD), MAX_SCORE_THRESHOLD)
 			return (clamped + SCORE_SHIFT) * SCORE_BOOST
 		}
 
@@ -1258,6 +1259,31 @@ describe("OpenSearchClient", () => {
 			// The score boost gap must exceed this text match advantage.
 			const estimatedDescriptionAdvantage = 5.0
 			expect(boostGap).toBeGreaterThan(estimatedDescriptionAdvantage)
+		})
+
+		it("clamps entity_global_score above 1, which scoring-service produces for multi-space entities", () => {
+			// Live max on 2026-09-30 was 5.13; unclamped that is a 460-point boost.
+			expect(computeScoreBoost(5.13)).toBe(computeScoreBoost(1.0))
+			expect(computeScoreBoost(1.0)).toBe(150)
+		})
+
+		it("keeps the whole score-boost spread below the fuzzy floor (GEO-3048, GEO-3108)", () => {
+			const spread = computeScoreBoost(Number.MAX_VALUE) - computeScoreBoost(-Number.MAX_VALUE)
+			expect(spread).toBe(SCORE_BOOST)
+			expect(spread).toBeLessThan(REAL_MATCH_BOOST)
+		})
+
+		it("applies the upper clamp in every scope's boost script", () => {
+			const baseQuery = client.buildBaseTextQuery("Geo")
+			const clamp = `Math.min(Math.max(`
+			const upper = `), ${MAX_SCORE_THRESHOLD});`
+			const scripts = [client.buildGlobalQuery(baseQuery), client.buildGlobalByEntitySpaceBoost()].map((q) =>
+				JSON.stringify(q),
+			)
+			for (const str of scripts) {
+				expect(str).toContain(clamp)
+				expect(str).toContain(upper)
+			}
 		})
 
 		it("should include entity_global_score in the global query boost script", () => {

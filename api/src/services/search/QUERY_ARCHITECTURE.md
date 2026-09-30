@@ -201,10 +201,10 @@ the same name in lowercase (`fuzzy_min_term_length`, `fuzzy_prefix_length`, `rea
 - **NAME_PREFIX_BOOST and BM25 field length normalization**: The `NAME_PREFIX_BOOST` (5.0) is intentionally much higher than `DESCRIPTION_PREFIX_BOOST` (1.5) — a 3.3× ratio. This is necessary because BM25 scoring includes a field length normalization factor (`dl/avgdl`) that can cause short description matches to outscore name matches. In production, when the average description length across the index is much longer than a given entity's description (e.g., average 50 tokens but description is 2 tokens), BM25 amplifies the description match score significantly. A smaller ratio (e.g., 2.0/1.5 = 1.33×) is insufficient to overcome this effect, leading to entities like "Rex" (description: "Researcher @Wonderland") outranking "Wonderland" (name match) for the query "Wonderland". If this becomes an issue again as index composition changes, consider wrapping `match_phrase_prefix` clauses in `constant_score` to bypass BM25 normalization entirely.
 - **Fuzzy penalty**: Fuzzy matches are useful for typo tolerance but should rank below exact/prefix matches to prevent false positives.
 - **Score field normalization**: Score fields use `float` type normalized to [0, 1] with 0.5 as average. Boosting is done via `function_score` with `script_score` (see `buildScoreBoostFunction` in opensearch.ts). The script applies:
-  1. **Clamping**: Scores below `MIN_SCORE_THRESHOLD` (0.0) are clamped to 0.0
+  1. **Clamping**: Scores are clamped to [`MIN_SCORE_THRESHOLD`, `MAX_SCORE_THRESHOLD`] = [0.0, 1.0]. The upper clamp matters for `entity_global_score`, which scoring-service computes as a sum over the entity's spaces and which exceeds 1 for entities in many spaces (652 on testnet, up to 5.13). Without it the boost spread would exceed `REAL_MATCH_BOOST` and the fuzzy floor would stop holding
   2. **Shifting**: Scores are shifted by `SCORE_SHIFT` (1.0) to ensure all values are positive (OpenSearch requirement)
   3. **Multiplier**: The shifted score is multiplied by `SCORE_BOOST` (75.0) for the final boost value
-  4. **Formula**: `(max(score, 0.0) + 1.0) * 75.0`
+  4. **Formula**: `(min(max(score, 0.0), 1.0) + 1.0) * 75.0`
   5. **Range**: score=0.0 → boost=75, score=0.5 → boost=112.5, score=1.0 → boost=150
 - **Autocomplete support**: `search_as_you_type` field type with n-gram sub-fields enables smooth autocomplete UX.
 
