@@ -54,7 +54,7 @@ only with `EMBEDDING_TEST_BUNDLE=./models/<slot>`; the rest need no model.
 | `EMBEDDING_MODELS_DIR` | `/models` | bundle root |
 | `EMBEDDING_SLOTS` | all found | comma-separated slot ids to load |
 | `EMBEDDING_INTRA_OP_THREADS` | runtime default | ONNX Runtime threads per session; set to the CPU limit |
-| `EMBEDDING_BATCH_SIZE` | 64 | texts per inference call |
+| `EMBEDDING_BATCH_SIZE` | 64 | texts per inference call; texts are grouped by length so one long description never pads a whole batch (see `plan_batches`) |
 | `EMBEDDING_MAX_BATCH` | 256 | largest request |
 | `EMBEDDING_MAX_TEXT_CHARS` | 8000 | longest text |
 | `EMBEDDING_MAX_INFLIGHT` / `EMBEDDING_QUERY_INFLIGHT` | 4 / 2 | concurrent document / query requests |
