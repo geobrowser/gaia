@@ -286,7 +286,10 @@ impl Engine {
             // Only a drained window moves the checkpoint. A cycle that stopped at its bound inside
             // a burst of identical stamps must not: the next cycle would start the same window
             // over, see the same first `max_docs_per_cycle` documents, and never reach the rest.
-            self.control.checkpoint_ms = Some(max_seen);
+            // A drained window is complete up to the wall clock, not just up to the newest stamp
+            // seen; anchoring on the clock keeps the overlap a window of *time*, otherwise a
+            // dense burst just below the newest stamp is rescanned every cycle forever.
+            self.control.checkpoint_ms = Some(max_seen.max(now_ms()));
             self.control.follow_after = None;
         } else {
             self.control.follow_after = after;
