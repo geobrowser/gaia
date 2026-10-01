@@ -16,6 +16,7 @@ import {runtime} from "./src/services/runtime"
 import {OpenSearchClient} from "./src/services/search"
 import {db} from "./src/services/storage/storage"
 import {log} from "./src/services/telemetry"
+import {redactUrlCredentials} from "./src/utils/redactUrl"
 import {createVersionedRouter} from "./src/versioned"
 import {createVersionedV2Router} from "./src/versioned/v2"
 
@@ -99,7 +100,7 @@ if (opensearchUrl) {
 	try {
 		new URL(opensearchUrl)
 	} catch (error) {
-		log.error("Invalid OPENSEARCH_URL", {url: opensearchUrl})
+		log.error("Invalid OPENSEARCH_URL", {url: redactUrlCredentials(opensearchUrl)})
 		throw error
 	}
 
@@ -114,7 +115,11 @@ if (opensearchUrl) {
 	const searchClient = new OpenSearchClient(opensearchUrl, indexName)
 	await searchClient.init()
 	app.route("/search", createSearchRouter(searchClient, runtime))
-	log.info("Search routes enabled", {url: opensearchUrl, indexName, environment: environment ?? "production"})
+	log.info("Search routes enabled", {
+		url: redactUrlCredentials(opensearchUrl),
+		indexName,
+		environment: environment ?? "production",
+	})
 } else {
 	log.info("Search routes disabled - OPENSEARCH_URL not set")
 }

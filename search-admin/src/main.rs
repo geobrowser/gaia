@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use search_indexer_shared::redact_url_credentials;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -96,16 +97,7 @@ async fn main() -> Result<()> {
     }
 
     // Sanitize OpenSearch URL to avoid logging credentials
-    let sanitized_url = if let Ok(parsed) = url::Url::parse(&cli.opensearch_url) {
-        // Create URL without userinfo (username:password)
-        let mut sanitized = parsed.clone();
-        sanitized.set_username("").ok();
-        sanitized.set_password(None).ok();
-        sanitized.to_string()
-    } else {
-        // If parsing fails, just log a placeholder
-        "[invalid-url]".to_string()
-    };
+    let sanitized_url = redact_url_credentials(&cli.opensearch_url);
 
     // Apply environment prefix to index alias
     let index_alias = get_prefixed_alias(&cli.environment, &cli.index_alias);

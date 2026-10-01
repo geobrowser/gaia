@@ -12,6 +12,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
+use search_indexer_shared::redact_url_credentials;
 use tracing_subscriber::EnvFilter;
 
 use config::LoadTestConfig;
@@ -35,7 +36,7 @@ async fn main() -> Result<()> {
     println!("  Seed:    {}", config.seed);
     println!("  Scale:   {}", config.scale);
     println!("  Broker:  {}", config.broker);
-    println!("  OpenSearch: {}", config.opensearch_url);
+    println!("  OpenSearch: {}", redact_url_credentials(&config.opensearch_url));
     println!("  Index:   {}", config.resolved_index());
     println!();
 

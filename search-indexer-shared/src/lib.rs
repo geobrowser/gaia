@@ -4,7 +4,9 @@
 //! It includes common definitions for entity documents used during indexing.
 
 pub mod env;
+pub mod redact;
 pub mod types;
 
 pub use env::{get_consumer_group_prefix, get_index_prefix};
+pub use redact::redact_url_credentials;
 pub use types::entity_document::{EntityDocument, RelationEntry};

@@ -7,6 +7,7 @@ description = "End-to-end tests for the notification service pipeline"
 [dependencies]
 hermes-schema = { path = "../../hermes-schema" }
 hermes-kafka = { path = "../../hermes-kafka" }
+search-indexer-shared = { path = "../../search-indexer-shared" }
 rdkafka = { version = "0.38.0", features = ["cmake-build", "ssl", "zstd"] }
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "net"] }
 axum = "0.7"

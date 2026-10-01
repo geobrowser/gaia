@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Args;
+use search_indexer_shared::redact_url_credentials;
 use serde_json::json;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -294,8 +295,12 @@ impl ReindexCommand {
             println!("To monitor the reindex progress, run:");
             println!("  search-admin monitor-reindex --task-id {}", task_id);
             println!();
-            println!("Or check manually:");
-            println!("  curl {}/_tasks/{}", opensearch_url, task_id);
+            println!("Or check manually (add your own -u user:pass, this URL is redacted):");
+            println!(
+                "  curl {}/_tasks/{}",
+                redact_url_credentials(opensearch_url),
+                task_id
+            );
         }
 
         println!();
