@@ -17,6 +17,7 @@ rdkafka = { version = "0.37", features = ["cmake-build", "ssl", "sasl"] }
 # Protobuf
 prost = "0.13.5"
 hermes-schema = { path = "../../../hermes-schema" }
+search-indexer-shared = { path = "../../../search-indexer-shared" }
 
 # Database
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "uuid", "tls-rustls"] }

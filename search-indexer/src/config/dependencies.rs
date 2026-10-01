@@ -1,7 +1,7 @@
 //! Dependency initialization and wiring for the search indexer.
 
 use hermes_instrumentation::{info, warn};
-use search_indexer_shared::{get_consumer_group_prefix, get_index_prefix};
+use search_indexer_shared::{get_consumer_group_prefix, get_index_prefix, redact_url_credentials};
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;
@@ -138,8 +138,12 @@ impl Dependencies {
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(DEFAULT_RETRY_INTERVAL_SECS);
 
+        // Never log the raw OpenSearch URL: it carries the doadmin username
+        // and password as userinfo. Log scheme://host:port only.
+        let redacted_opensearch_url = redact_url_credentials(&opensearch_url);
+
         info!(
-            opensearch_url = %opensearch_url,
+            opensearch_url = %redacted_opensearch_url,
             kafka_broker = %kafka_broker,
             kafka_group_edits_id = %kafka_group_edits_id,
             kafka_group_scores_id = %kafka_group_scores_id,
@@ -372,7 +376,7 @@ impl Dependencies {
                     }
                     ConnectionMode::Retry => {
                         warn!(
-                            opensearch_url = %url,
+                            opensearch_url = %redact_url_credentials(url),
                             error = %e,
                             retry_interval_secs = retry_interval.as_secs(),
                             "Failed to connect to OpenSearch, retrying..."

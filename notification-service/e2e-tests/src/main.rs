@@ -28,6 +28,7 @@ use prost::Message;
 use rdkafka::config::ClientConfig;
 use rdkafka::message::{Header, OwnedHeaders};
 use rdkafka::producer::{FutureProducer, FutureRecord};
+use search_indexer_shared::redact_url_credentials;
 use sha2::Sha256;
 use sqlx::PgPool;
 use tokio::sync::mpsc;
@@ -2298,7 +2299,10 @@ async fn main() {
 
     println!("=== Notification Service E2E Tests ===");
     println!();
-    println!("  database:       {}", database_url);
+    println!(
+        "  database:       {}",
+        redact_url_credentials(&database_url)
+    );
     println!("  kafka:          {}", kafka_broker);
     println!("  webhook port:   {}", webhook_port);
     println!("  timeout:        {}s", timeout_secs);

@@ -10,6 +10,7 @@ use opensearch::{
     http::transport::{SingleNodeConnectionPool, TransportBuilder},
     BulkOperation, DeleteParts, OpenSearch, SearchParts, UpdateByQueryParts, UpdateParts,
 };
+use search_indexer_shared::redact_url_credentials;
 use serde_json::{json, Value};
 use tracing::{debug, error, info, instrument, warn};
 use url::Url;
@@ -181,7 +182,7 @@ impl OpenSearchProvider {
         let client = OpenSearch::new(transport);
 
         info!(
-            url = %url,
+            url = %redact_url_credentials(url),
             alias = %index_config.alias,
             version = index_config.version,
             "Created OpenSearch provider"

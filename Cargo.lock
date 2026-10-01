@@ -4055,6 +4055,7 @@ dependencies = [
  "hmac",
  "prost 0.13.5",
  "rdkafka 0.38.0",
+ "search-indexer-shared",
  "serde",
  "serde_json",
  "sha2",
@@ -5958,6 +5959,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "url",
  "uuid",
 ]
 

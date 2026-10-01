@@ -12,6 +12,7 @@
 use prost::Message;
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord};
+use search_indexer_shared::redact_url_credentials;
 use sqlx::PgPool;
 use std::env;
 use std::time::Duration;
@@ -390,9 +391,9 @@ async fn main() {
         .unwrap_or(120);
 
     println!("=== Score Lookup E2E Test ===");
-    println!("  database:   {}", database_url);
+    println!("  database:   {}", redact_url_credentials(&database_url));
     println!("  kafka:      {}", kafka_broker);
-    println!("  opensearch: {}", opensearch_url);
+    println!("  opensearch: {}", redact_url_credentials(&opensearch_url));
     println!("  index:      {}", index);
     println!("  timeout:    {}s\n", timeout_secs);
 
