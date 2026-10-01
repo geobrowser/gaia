@@ -801,6 +801,13 @@ slot answered.
    advertised `max_text_chars` (from `/info`) *before* hashing, and batches to `max_batch`. Found
    by the subgraph PoC on 2026-10-01: one 10,024-character description made the service answer
    413 and the indexer exit as fatal, which in a cluster is a crashloop on a single document.
+8. Follow mode moves its checkpoint only after draining a window. A cycle that stops at
+   `EMBED_MAX_DOCS_PER_CYCLE` inside the window keeps a cursor (`follow_after` in the control
+   document) and resumes there next cycle. Found by the subgraph PoC: one relation sweep stamped
+   more than 20,000 documents inside a single second; the checkpoint froze at that millisecond
+   and 1,563 documents whose vector writes had lost a version conflict were never revisited.
+   The CAS bulk updates now also carry `retry_on_conflict: 3`, so a concurrent content write
+   re-runs the guard script instead of failing the item.
 
 ## Sizing (to be replaced by measurements in P0/P1)
 

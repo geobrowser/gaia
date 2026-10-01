@@ -45,6 +45,12 @@ pub struct ControlDoc {
     /// Backfill mode: sort values of the last processed document.
     pub backfill_after: Option<Value>,
     pub backfill_started_ms: Option<i64>,
+    /// Follow mode: sort values of the last processed document when the previous cycle hit its
+    /// per-cycle bound before draining the window. The checkpoint moves only once a window is
+    /// drained; otherwise a burst of more than `max_docs_per_cycle` documents stamped within the
+    /// overlap window would pin the checkpoint forever (seen with one relation sweep).
+    #[serde(default)]
+    pub follow_after: Option<Value>,
     pub updated_at: String,
     #[serde(default)]
     pub last_cycle: Value,
@@ -134,7 +140,13 @@ impl Store {
         let started = Instant::now();
         let mut lines: Vec<JsonBody<Value>> = Vec::with_capacity(ops.len() * 2);
         for (id, body) in ops {
-            lines.push(JsonBody::new(json!({ "update": { "_id": id } })));
+            // retry_on_conflict: a concurrent content write (search-indexer adding a relation to
+            // the same document) raises a version conflict; OpenSearch then re-runs the script on
+            // the fresh document, and the script's own name/description guard decides. Without
+            // it the item fails, and heals only when follow mode revisits the document.
+            lines.push(JsonBody::new(
+                json!({ "update": { "_id": id, "retry_on_conflict": 3 } }),
+            ));
             lines.push(JsonBody::new(body.clone()));
         }
         let response = self
@@ -200,6 +212,7 @@ impl Store {
                     "slot": { "type": "keyword" }, "mode": { "type": "keyword" },
                     "checkpoint_ms": { "type": "long" }, "backfill_started_ms": { "type": "long" },
                     "updated_at": { "type": "date" }, "backfill_after": { "type": "object", "enabled": false },
+                    "follow_after": { "type": "object", "enabled": false },
                     "last_cycle": { "type": "object", "enabled": false }
                 } }
             }))

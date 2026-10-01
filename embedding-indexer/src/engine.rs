@@ -104,6 +104,7 @@ impl Engine {
                     checkpoint_ms: None,
                     backfill_after: None,
                     backfill_started_ms: Some(now_ms()),
+                    follow_after: None,
                     updated_at: now_rfc3339(),
                     last_cycle: json!({}),
                 };
@@ -249,14 +250,17 @@ impl Engine {
         let vf = self.fields.vec.clone();
         let checkpoint = self.control.checkpoint_ms.unwrap_or_else(now_ms);
         let since = checkpoint - (self.cfg.overlap_s as i64) * 1000;
-        let mut after: Option<Value> = None;
+        // Resume inside a window the previous cycle could not drain within its bound.
+        let mut after: Option<Value> = self.control.follow_after.take();
         let mut max_seen = checkpoint;
+        let mut drained = false;
         while stats.scanned < self.cfg.max_docs_per_cycle {
             let body = queries::follow_query(&vf, since, after.as_ref(), self.cfg.page_size);
             let (hits, took) = self.store.search(body).await?;
             stats.opensearch_ms += took;
             stats.pages += 1;
             if hits.is_empty() {
+                drained = true;
                 break;
             }
             let docs: Vec<Doc> = hits.iter().map(|h| parse_hit(h, &vf)).collect();
@@ -274,10 +278,19 @@ impl Engine {
             let n = docs.len();
             self.process_page(docs, stats).await?;
             if n < self.cfg.page_size {
+                drained = true;
                 break;
             }
         }
-        self.control.checkpoint_ms = Some(max_seen);
+        if drained {
+            // Only a drained window moves the checkpoint. A cycle that stopped at its bound inside
+            // a burst of identical stamps must not: the next cycle would start the same window
+            // over, see the same first `max_docs_per_cycle` documents, and never reach the rest.
+            self.control.checkpoint_ms = Some(max_seen);
+            self.control.follow_after = None;
+        } else {
+            self.control.follow_after = after;
+        }
         Ok(())
     }
 
