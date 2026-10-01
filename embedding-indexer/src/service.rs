@@ -1,6 +1,8 @@
 //! Client for embedding-service. Every response's descriptor hash is checked against the slot's:
 //! a vector from a different descriptor is never written.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -16,7 +18,17 @@ pub struct ServiceClient {
     slot: String,
     expected_hash: String,
     dimensions: usize,
+    /// The service's request limits, read from `/info` by [`verify`](Self::verify). Texts are
+    /// capped to `max_text_chars` *before* hashing and batches to `max_batch`, so a document
+    /// can never make the service answer 413 — which the client treats as fatal, because
+    /// after this clamp it can only mean a misconfiguration.
+    max_text_chars: Arc<AtomicUsize>,
+    max_batch: Arc<AtomicUsize>,
 }
+
+/// Defaults when `/info` does not advertise limits (an older service).
+pub const DEFAULT_MAX_TEXT_CHARS: usize = 8000;
+pub const DEFAULT_MAX_BATCH: usize = 256;
 
 #[derive(Deserialize)]
 struct EmbedResponse {
@@ -37,7 +49,19 @@ impl ServiceClient {
             slot: slot.to_string(),
             expected_hash: expected_hash.to_string(),
             dimensions,
+            max_text_chars: Arc::new(AtomicUsize::new(DEFAULT_MAX_TEXT_CHARS)),
+            max_batch: Arc::new(AtomicUsize::new(DEFAULT_MAX_BATCH)),
         })
+    }
+
+    /// Longest text (in chars) the service accepts per item.
+    pub fn max_text_chars(&self) -> usize {
+        self.max_text_chars.load(Ordering::Relaxed)
+    }
+
+    /// Most texts the service accepts per request.
+    pub fn max_batch(&self) -> usize {
+        self.max_batch.load(Ordering::Relaxed)
     }
 
     /// `GET /info` must list the slot with the descriptor hash the index registered.
@@ -63,7 +87,18 @@ impl ServiceClient {
                 self.slot, self.expected_hash
             ))),
             Some(_) => {
-                info!(slot = %self.slot, service = %self.base, "embedding-service verified");
+                if let Some(n) = info["limits"]["max_text_chars"].as_u64() {
+                    self.max_text_chars
+                        .store(n.max(1) as usize, Ordering::Relaxed);
+                }
+                if let Some(n) = info["limits"]["max_batch"].as_u64() {
+                    self.max_batch.store(n.max(1) as usize, Ordering::Relaxed);
+                }
+                info!(
+                    slot = %self.slot, service = %self.base,
+                    max_text_chars = self.max_text_chars(), max_batch = self.max_batch(),
+                    "embedding-service verified"
+                );
                 Ok(())
             }
         }

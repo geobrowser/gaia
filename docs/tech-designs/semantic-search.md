@@ -797,6 +797,10 @@ slot answered.
    approximate neighbor list.
 6. No vector is written whose producing descriptor (in-cluster or external) differs from the
    slot's descriptor.
+7. The text the indexer hashes is the text the service embeds: it is capped to the service's
+   advertised `max_text_chars` (from `/info`) *before* hashing, and batches to `max_batch`. Found
+   by the subgraph PoC on 2026-10-01: one 10,024-character description made the service answer
+   413 and the indexer exit as fatal, which in a cluster is a crashloop on a single document.
 
 ## Sizing (to be replaced by measurements in P0/P1)
 

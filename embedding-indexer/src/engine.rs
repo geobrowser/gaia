@@ -30,6 +30,8 @@ pub struct CycleStats {
     pub missing: usize,
     pub skipped: usize,
     pub failed: usize,
+    /// Texts cut to the service's `max_text_chars` before hashing.
+    pub truncated: usize,
     pub lru_hits: usize,
     pub service_ms: u64,
     pub opensearch_ms: u64,
@@ -160,7 +162,7 @@ impl Engine {
         info!(
             mode = %stats.mode, pages = stats.pages, scanned = stats.scanned, unchanged = stats.unchanged,
             embedded = stats.embedded, removed = stats.removed, cas_noop = stats.cas_noop, missing = stats.missing,
-            skipped = stats.skipped, failed = stats.failed, lru_hits = stats.lru_hits,
+            skipped = stats.skipped, failed = stats.failed, truncated = stats.truncated, lru_hits = stats.lru_hits,
             service_ms = stats.service_ms, opensearch_ms = stats.opensearch_ms, wall_ms = stats.wall_ms,
             backfill_complete = stats.backfill_complete,
             "embedding_indexer.cycle_end"
@@ -285,16 +287,26 @@ impl Engine {
         let mut removes: Vec<(String, Value)> = Vec::new();
         let mut to_embed: Vec<(Doc, String, String)> = Vec::new(); // doc, text, hash
         for doc in docs {
-            match classify(&doc, &self.scope, &self.descriptor.text_template)? {
+            match classify(
+                &doc,
+                &self.scope,
+                &self.descriptor.text_template,
+                self.service.max_text_chars(),
+            )? {
                 Action::Skip(_) => stats.skipped += 1,
                 Action::Unchanged => stats.unchanged += 1,
                 Action::Remove => {
                     removes.push((doc.id.clone(), queries::remove_body(&self.fields)))
                 }
-                Action::Embed { text, hash } => {
+                Action::Embed {
+                    text,
+                    hash,
+                    truncated,
+                } => {
                     if self.recent_writes.peek(&doc.id) == Some(&hash) {
                         stats.unchanged += 1;
                     } else {
+                        stats.truncated += truncated as usize;
                         to_embed.push((doc, text, hash));
                     }
                 }
@@ -325,7 +337,7 @@ impl Engine {
                 pending.push((hash.clone(), text.clone()));
             }
         }
-        for chunk in pending.chunks(self.cfg.batch_size.max(1)) {
+        for chunk in pending.chunks(self.cfg.batch_size.max(1).min(self.service.max_batch())) {
             let texts: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
             let t = Instant::now();
             let got = self.service.embed_documents(&texts).await?;

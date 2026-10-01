@@ -119,7 +119,12 @@ pub enum Action {
     /// In scope and the stored hash matches the current text.
     Unchanged,
     /// In scope and the text is new or changed.
-    Embed { text: String, hash: String },
+    Embed {
+        text: String,
+        hash: String,
+        /// The text was cut to the service's `max_text_chars` before hashing.
+        truncated: bool,
+    },
 }
 
 pub fn in_scope(doc: &Doc, scope: &Scope) -> bool {
@@ -137,7 +142,17 @@ pub fn in_scope(doc: &Doc, scope: &Scope) -> bool {
     true
 }
 
-pub fn classify(doc: &Doc, scope: &Scope, text_template: &str) -> Result<Action> {
+/// Cut `text` to at most `max_chars` Unicode scalar values (the unit the service counts).
+/// Returns whether anything was cut. The model truncates at `max_tokens` anyway, far below
+/// any sane transport limit, so the cap changes no vector that could have been computed.
+pub fn cap_chars(text: String, max_chars: usize) -> (String, bool) {
+    if text.len() <= max_chars || text.chars().count() <= max_chars {
+        return (text, false);
+    }
+    (text.chars().take(max_chars).collect(), true)
+}
+
+pub fn classify(doc: &Doc, scope: &Scope, text_template: &str, max_chars: usize) -> Result<Action> {
     if doc.deleted && scope.skip_deleted {
         return Ok(Action::Skip("deleted"));
     }
@@ -161,11 +176,16 @@ pub fn classify(doc: &Doc, scope: &Scope, text_template: &str) -> Result<Action>
             Action::Skip("out of scope")
         });
     }
+    let (text, truncated) = cap_chars(text, max_chars);
     let hash = template::content_hash(&text);
     if doc.src_hash.as_deref() == Some(hash.as_str()) {
         return Ok(Action::Unchanged);
     }
-    Ok(Action::Embed { text, hash })
+    Ok(Action::Embed {
+        text,
+        hash,
+        truncated,
+    })
 }
 
 #[cfg(test)]
@@ -227,8 +247,8 @@ mod tests {
     #[test]
     fn classify_embeds_in_scope_named_docs_and_detects_unchanged() {
         let d = parse_hit(&hit(Some("Bitcoin"), None, false, &[T1], None), "emb_s1");
-        let Action::Embed { text, hash } =
-            classify(&d, &scope(&[T1]), template::NAME_DESCRIPTION_V1).unwrap()
+        let Action::Embed { text, hash, .. } =
+            classify(&d, &scope(&[T1]), template::NAME_DESCRIPTION_V1, usize::MAX).unwrap()
         else {
             panic!()
         };
@@ -238,7 +258,13 @@ mod tests {
             "emb_s1",
         );
         assert_eq!(
-            classify(&same, &scope(&[T1]), template::NAME_DESCRIPTION_V1).unwrap(),
+            classify(
+                &same,
+                &scope(&[T1]),
+                template::NAME_DESCRIPTION_V1,
+                usize::MAX
+            )
+            .unwrap(),
             Action::Unchanged
         );
         let changed = parse_hit(
@@ -246,7 +272,13 @@ mod tests {
             "emb_s1",
         );
         assert!(matches!(
-            classify(&changed, &scope(&[T1]), template::NAME_DESCRIPTION_V1).unwrap(),
+            classify(
+                &changed,
+                &scope(&[T1]),
+                template::NAME_DESCRIPTION_V1,
+                usize::MAX
+            )
+            .unwrap(),
             Action::Embed { .. }
         ));
     }
@@ -259,7 +291,8 @@ mod tests {
             classify(
                 &parse_hit(&hit(None, Some("d"), false, &[T1], None), "emb_s1"),
                 &scope(&[T1]),
-                tpl
+                tpl,
+                usize::MAX,
             )
             .unwrap(),
             Action::Skip("nameless")
@@ -268,7 +301,8 @@ mod tests {
             classify(
                 &parse_hit(&hit(None, None, false, &[T1], Some("h")), "emb_s1"),
                 &scope(&[T1]),
-                tpl
+                tpl,
+                usize::MAX,
             )
             .unwrap(),
             Action::Remove
@@ -278,7 +312,8 @@ mod tests {
             classify(
                 &parse_hit(&hit(Some("N"), None, false, &[T2], None), "emb_s1"),
                 &scope(&[T1]),
-                tpl
+                tpl,
+                usize::MAX,
             )
             .unwrap(),
             Action::Skip("out of scope")
@@ -287,7 +322,8 @@ mod tests {
             classify(
                 &parse_hit(&hit(Some("N"), None, false, &[T2], Some("h")), "emb_s1"),
                 &scope(&[T1]),
-                tpl
+                tpl,
+                usize::MAX,
             )
             .unwrap(),
             Action::Remove
@@ -297,7 +333,8 @@ mod tests {
             classify(
                 &parse_hit(&hit(Some("N"), None, false, &[], None), "emb_s1"),
                 &Scope::all_named(),
-                tpl
+                tpl,
+                usize::MAX,
             )
             .unwrap(),
             Action::Embed { .. }
@@ -307,7 +344,8 @@ mod tests {
             classify(
                 &parse_hit(&hit(Some("N"), None, true, &[T1], Some("h")), "emb_s1"),
                 &scope(&[T1]),
-                tpl
+                tpl,
+                usize::MAX,
             )
             .unwrap(),
             Action::Skip("deleted")
@@ -319,5 +357,31 @@ mod tests {
         assert_eq!(dashed("00000000000000000000000000000B01").unwrap(), T1);
         assert_eq!(dashed(T1).unwrap(), T1);
         assert!(dashed("nope").is_err());
+    }
+
+    #[test]
+    fn classify_caps_text_to_the_service_limit_before_hashing() {
+        let long = "x".repeat(50);
+        let d = parse_hit(
+            &hit(Some("Long"), Some(&long), false, &[T1], None),
+            "emb_s1",
+        );
+        let Action::Embed {
+            text,
+            hash,
+            truncated,
+        } = classify(&d, &scope(&[T1]), template::NAME_DESCRIPTION_V1, 20).unwrap()
+        else {
+            panic!("expected Embed")
+        };
+        assert!(truncated);
+        assert_eq!(text.chars().count(), 20);
+        assert_eq!(hash, template::content_hash(&text));
+        // Under the cap nothing changes, and multi-byte text is cut on a character boundary.
+        assert_eq!(
+            cap_chars("héllo".to_string(), 5),
+            ("héllo".to_string(), false)
+        );
+        assert_eq!(cap_chars("héllo".to_string(), 2), ("hé".to_string(), true));
     }
 }

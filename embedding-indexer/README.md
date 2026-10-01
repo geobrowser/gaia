@@ -64,6 +64,10 @@ Job. Without it the process follows forever, pacing itself with `EMBED_POLL_INTE
 | `EMBED_ONCE` | false | backfill + one follow pass, then exit |
 | `HEALTH_PORT` | 8080 | `/health/live`, `/health/ready` |
 
+Texts longer than the service's `max_text_chars` (read from `/info`, default 8000) are cut before
+hashing and sending, and batches never exceed its `max_batch`; the cycle log counts `truncated`.
+The model stops at `max_tokens` long before that, so the cap changes no vector.
+
 ## Tests
 
 `cargo test -p embedding-indexer` runs the unit tests (classification, query shapes, scripts). The
