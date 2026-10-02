@@ -11,6 +11,7 @@ import {
 	MIN_SCORE_THRESHOLD,
 	NAME_COVERAGE_BOOST,
 	NAME_EXACT_TOKEN_BOOST,
+	NAME_PHRASE_BOOST,
 	NAME_STEMMED_BOOST,
 	OpenSearchClient,
 	PHRASE_PREFIX_MAX_EXPANSIONS,
@@ -413,6 +414,104 @@ describe("OpenSearchClient", () => {
 			expect(coverage(cov)).toBeUndefined()
 			const cov2 = shouldOfBody(await bodyFor("AI should be better regulated", {name_coverage_boost: 7}))
 			expect(coverage(cov2)?.constant_score.boost).toBe(7)
+		})
+	})
+
+	describe("per-term clauses score content words only", () => {
+		type Clause = Record<string, unknown>
+		const shouldOf = (q: string) => (client.buildBaseTextQuery(q) as {bool: {should: Clause[]}}).bool.should
+		// The query string each clause sends, keyed by clause kind and field; one key per
+		// clause except `term.name_raw`, which the two raw-name clauses share.
+		const queries = (should: Clause[]) => {
+			const out: Record<string, string> = {}
+			for (const c of should) {
+				const [kind, body] = Object.entries(c)[0] as [string, Record<string, unknown>]
+				if (kind === "multi_match") {
+					const mm = body as {query: string; type?: string; fuzziness?: string}
+					out[mm.fuzziness ? "fuzzy" : (mm.type ?? "multi_match")] = mm.query
+				} else if (kind === "constant_score") {
+					const filter = (body as {filter: Clause}).filter
+					out[`constant_score.${Object.keys(filter)[0]}`] = JSON.stringify(filter)
+				} else {
+					const [field, value] = Object.entries(body)[0] as [string, {query?: string; value?: string}]
+					out[`${kind}.${field}`] = (value.query ?? value.value) as string
+				}
+			}
+			return out
+		}
+		const phraseBonus = (should: Clause[]) =>
+			(
+				should.filter((c) => "constant_score" in c) as unknown as {
+					constant_score: {filter: Clause; boost: number}
+				}[]
+			).find((c) => "match_phrase_prefix" in c.constant_score.filter)
+
+		it("drops stopwords and modal verbs from the term clauses, keeping the phrase clauses whole", () => {
+			// 2026-10-02: "should be regulated" was worth ~900 and "AI" ~300, so names sharing only
+			// "should be regulated" outranked AI-regulation claims.
+			const q = queries(shouldOf("AI should be regulated"))
+			expect(q["match.name"]).toBe("AI regulated")
+			expect(q["match.name_stemmed"]).toBe("AI regulated")
+			expect(q["match.description_stemmed"]).toBe("AI regulated")
+			expect(q.bool_prefix).toBe("AI regulated")
+			expect(q["match_phrase_prefix.name"]).toBe("AI should be regulated")
+			expect(q["match_phrase_prefix.description"]).toBe("AI should be regulated")
+			expect(q["term.name_raw"]).toBe("AI should be regulated")
+		})
+
+		it("keeps the fuzzy clause and its real-match floor on the same content words", () => {
+			const should = shouldOf("the bitcion")
+			const q = queries(should)
+			expect(q.fuzzy).toBe("bitcion")
+			const floor = q["constant_score.bool"] as string
+			expect(floor).toContain('"query":"bitcion"')
+			expect(floor).not.toContain("the bitcion")
+		})
+
+		it("leaves a query of only stopwords exactly as it was", () => {
+			const q = queries(shouldOf("to be or not to be"))
+			expect(q["match.name"]).toBe("to be or not to be")
+			expect(q.bool_prefix).toBe("to be or not to be")
+			expect(phraseBonus(shouldOf("to be or not to be"))).toBeUndefined()
+			expect(queries(shouldOf("The"))["match.name"]).toBe("The")
+		})
+
+		it("leaves a query without stopwords exactly as it was, with no phrase bonus", () => {
+			const should = shouldOf("mans  role")
+			expect(queries(should)["match.name"]).toBe("mans  role")
+			expect(phraseBonus(should)).toBeUndefined()
+		})
+
+		it("adds a flat bonus for the full query as a name phrase when stopwords were dropped", () => {
+			// Without it "the man" scores only "man", and "Spider-Man 2" overtakes
+			// "The Man in the High Castle".
+			const bonus = phraseBonus(shouldOf("the man"))
+			expect(bonus?.constant_score.boost).toBe(NAME_PHRASE_BOOST)
+			expect(bonus?.constant_score.filter).toEqual({
+				match_phrase_prefix: {name: {query: "the man", max_expansions: PHRASE_PREFIX_MAX_EXPANSIONS}},
+			})
+		})
+
+		it("drops stopwords before the token caps, so a wordy query keeps its content words", () => {
+			const content = Array.from({length: MAX_TEXT_TOKENS}, (_, i) => `t${i + 1}`)
+			const q = queries(shouldOf(content.map((t) => `the ${t}`).join(" ")))
+			expect(q.bool_prefix).toBe(content.join(" "))
+			expect(q["match.name"]).toBe(content.join(" "))
+		})
+
+		it("honours the name_phrase_boost override", async () => {
+			const search = vi.fn().mockResolvedValue({body: {hits: {total: {value: 0}, hits: []}}})
+			;(client as unknown as {client: {search: typeof search}}).client.search = search
+			const shouldFor = async (boosts: Record<string, number>) => {
+				search.mockClear()
+				await client.search({query: "the man", scope: "GLOBAL", boosts})
+				const body = search.mock.calls[0]?.[0] as {
+					body: {query: {function_score: {query: {bool: {must: Clause[]}}}}}
+				}
+				return (body.body.query.function_score.query.bool.must[0] as {bool: {should: Clause[]}}).bool.should
+			}
+			expect(phraseBonus(await shouldFor({name_phrase_boost: 0}))).toBeUndefined()
+			expect(phraseBonus(await shouldFor({name_phrase_boost: 7}))?.constant_score.boost).toBe(7)
 		})
 	})
 
