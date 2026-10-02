@@ -334,11 +334,22 @@ export const FUZZY_PREFIX_LENGTH = 0
  */
 export const NAME_COVERAGE_BOOST = 50.0
 
-/** Content words a query needs before the coverage bonus applies. */
-export const NAME_COVERAGE_MIN_TOKENS = 3
+/**
+ * Content words a query needs before the coverage bonus applies.
+ *
+ * Two, not three: "AI should be regulated" has two content words once "should" is a
+ * stopword, and below the old threshold of three it got no bonus at all, so names sharing
+ * only "should be regulated" outranked AI-regulation claims (2026-10-02).
+ */
+export const NAME_COVERAGE_MIN_TOKENS = 2
 
-/** Share of the content words a name must contain: 3 → 2, 4 → 3, 5 → 4. */
-export const NAME_COVERAGE_MINIMUM_SHOULD_MATCH = "80%"
+/**
+ * Share of the content words a name must contain: 2 → both, 3 → 2, 4 → 3, 5 → 4.
+ *
+ * A bare "80%" rounds down, so two content words would need only one and the bonus would
+ * reward any name sharing a single word. `2<80%` requires every clause up to two.
+ */
+export const NAME_COVERAGE_MINIMUM_SHOULD_MATCH = "2<80%"
 
 /**
  * Maximum number of terms the trailing token can expand to in
@@ -369,9 +380,13 @@ function truncateToTokens(query: string, maxTokens: number): string {
 	return tokens.slice(0, maxTokens).join(" ")
 }
 
-/** Lucene's English stopword list, used only to count a query's content words for the coverage bonus. */
+/**
+ * Lucene's English stopword list, used only to count a query's content words for the coverage
+ * bonus, plus the modal verbs. Claims are mostly "X should Y", so a counted "should" let any
+ * "... should ... regulated" name cover "AI should be regulated" without containing "AI".
+ */
 const COVERAGE_STOPWORDS = new Set(
-	"a an and are as at be but by for if in into is it no not of on or such that the their then there these they this to was will with".split(
+	"a an and are as at be but by for if in into is it no not of on or such that the their then there these they this to was will with should would could must can may might shall".split(
 		" ",
 	),
 )
