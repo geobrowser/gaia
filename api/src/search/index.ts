@@ -108,6 +108,7 @@ const BOOST_PARAMS = [
 	"fuzzy_prefix_length",
 	"real_match_boost",
 	"name_coverage_boost",
+	"name_phrase_boost",
 ] as const
 
 const VALID_PARAMS: Set<string> = new Set([

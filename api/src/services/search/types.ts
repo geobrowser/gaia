@@ -82,6 +82,7 @@ export interface BoostOverrides {
 	fuzzy_min_term_length?: number
 	name_coverage_boost?: number
 	real_match_boost?: number
+	name_phrase_boost?: number
 }
 
 /**

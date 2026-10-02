@@ -352,6 +352,18 @@ export const NAME_COVERAGE_MIN_TOKENS = 2
 export const NAME_COVERAGE_MINIMUM_SHOULD_MATCH = "2<80%"
 
 /**
+ * Flat bonus for a name containing the whole query as a phrase (prefix), applied only when
+ * the per-term clauses dropped the query's stopwords (buildTermQueryText).
+ *
+ * Those stopwords used to be scored, and on a query like "the man" they were what put
+ * "The Man in the High Castle" above "Spider-Man 2" and "Burning Man": without them the
+ * term clauses see only "man". The phrase-prefix clause on the full query still matches,
+ * but its BM25 is small next to the exact-token clause, so this constant restores the
+ * verbatim phrase's lead. Queries without stopwords are scored exactly as before.
+ */
+export const NAME_PHRASE_BOOST = 50.0
+
+/**
  * Maximum number of terms the trailing token can expand to in
  * `match_phrase_prefix` queries. This matches OpenSearch's default, but
  * keeping it explicit makes the clause budget auditable.
@@ -381,9 +393,13 @@ function truncateToTokens(query: string, maxTokens: number): string {
 }
 
 /**
- * Lucene's English stopword list, used only to count a query's content words for the coverage
- * bonus, plus the modal verbs. Claims are mostly "X should Y", so a counted "should" let any
+ * Lucene's English stopword list plus the modal verbs: the words that are not a query's
+ * content. Claims are mostly "X should Y", so a counted "should" let any
  * "... should ... regulated" name cover "AI should be regulated" without containing "AI".
+ *
+ * Used for the coverage bonus and to pick the text of the per-term clauses (see
+ * buildTermQueryText). The index analyzers keep stopwords, so the phrase and exact-name
+ * clauses still see them.
  */
 const COVERAGE_STOPWORDS = new Set(
 	"a an and are as at be but by for if in into is it no not of on or such that the their then there these they this to was will with should would could must can may might shall".split(
@@ -398,11 +414,39 @@ const COVERAGE_STOPWORDS = new Set(
  * stopword check ignores surrounding punctuation.
  */
 function buildCoverageQuery(query: string): string | null {
-	const content = query.split(/\s+/).filter((t) => {
+	const content = contentWords(query)
+	return content.length >= NAME_COVERAGE_MIN_TOKENS ? content.join(" ") : null
+}
+
+/** The query's whitespace-separated words that are not COVERAGE_STOPWORDS, unchanged. */
+function contentWords(query: string): string[] {
+	return query.split(/\s+/).filter((t) => {
 		const bare = t.toLowerCase().replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, "")
 		return bare.length > 0 && !COVERAGE_STOPWORDS.has(bare)
 	})
-	return content.length >= NAME_COVERAGE_MIN_TOKENS ? content.join(" ") : null
+}
+
+/**
+ * The text for the per-term clauses: the query's content words, or the query unchanged when
+ * it has no stopword to drop or nothing but stopwords.
+ *
+ * Those clauses (exact token, bool_prefix, fuzzy, stemmed) sum BM25 over each query term
+ * separately, and the index keeps stopwords, so "should" and "be" scored on nearly every
+ * claim name. For "AI should be regulated" that made "should be regulated" worth ~900 and
+ * "AI" ~300, and "Financial prediction markets should be regulated as gambling" ranked
+ * second while "AI regulation is necessary to protect democratic institutions" was not in
+ * the top 12 (2026-10-02). Scored on "AI regulated" instead, the word that matters decides.
+ *
+ * The phrase-prefix and exact-name clauses keep the full query, so a name containing the
+ * query verbatim still wins, and a query of only stopwords ("the", "to be or not to be")
+ * keeps today's behaviour.
+ */
+function buildTermQueryText(query: string): string {
+	const content = contentWords(query)
+	if (content.length === 0 || content.length === query.split(/\s+/).filter((t) => t.length > 0).length) {
+		return query
+	}
+	return content.join(" ")
 }
 
 // System IDs from the SDK are already dashless — use directly for OpenSearch queries
@@ -1275,6 +1319,12 @@ export class OpenSearchClient implements SearchClient {
 		// keep the full query so a full-name match still wins when available.
 		const cappedQuery = truncateToTokens(queryText, MAX_TEXT_TOKENS)
 		const nameMatchQuery = truncateToTokens(queryText, MAX_NAME_MATCH_TEXT_TOKENS)
+		// The per-term clauses score the content words only (buildTermQueryText); the
+		// phrase-prefix and name_raw clauses keep the full query. Stopwords are dropped
+		// before the caps, so a wordy query keeps more of its content words under them.
+		const termText = buildTermQueryText(queryText)
+		const cappedTerms = truncateToTokens(termText, MAX_TEXT_TOKENS)
+		const nameMatchTerms = truncateToTokens(termText, MAX_NAME_MATCH_TEXT_TOKENS)
 		// Fuzzy `multi_match` AUTO is the highest-fan-out clause (each term
 		// expands into edit-distance variants × 2 fields). Drop it entirely
 		// for queries with more than FUZZY_MAX_TOKENS analyzer-aligned tokens
@@ -1349,7 +1399,7 @@ export class OpenSearchClient implements SearchClient {
 						// "geojson_preview_tool" (token "geojson" ≠ "geo").
 						match: {
 							name: {
-								query: nameMatchQuery,
+								query: nameMatchTerms,
 								boost: this.b("name_exact_token_boost", NAME_EXACT_TOKEN_BOOST),
 							},
 						},
@@ -1360,7 +1410,7 @@ export class OpenSearchClient implements SearchClient {
 						// token across 6 fields (name/description × original/_2gram/_3gram),
 						// so per-token cost is the highest among the 8 sub-queries.
 						multi_match: {
-							query: cappedQuery,
+							query: cappedTerms,
 							type: "bool_prefix",
 							fields: [
 								`name^${this.b("name_field_boost", NAME_FIELD_BOOST)}`,
@@ -1384,7 +1434,7 @@ export class OpenSearchClient implements SearchClient {
 						? [
 								{
 									multi_match: {
-										query: cappedQuery,
+										query: cappedTerms,
 										fields: ["name", "description"],
 										fuzziness: fuzzyAuto(
 											Math.floor(this.b("fuzzy_min_term_length", FUZZY_MIN_TERM_LENGTH)),
@@ -1418,14 +1468,14 @@ export class OpenSearchClient implements SearchClient {
 												should: [
 													{
 														multi_match: {
-															query: cappedQuery,
+															query: cappedTerms,
 															type: "bool_prefix",
 															fields: ["name", "description"],
 														},
 													},
 													{
 														multi_match: {
-															query: cappedQuery,
+															query: cappedTerms,
 															fields: ["name_stemmed", "description_stemmed"],
 														},
 													},
@@ -1455,6 +1505,27 @@ export class OpenSearchClient implements SearchClient {
 								},
 							]
 						: []),
+					...(termText !== queryText && this.b("name_phrase_boost", NAME_PHRASE_BOOST) > 0
+						? [
+								{
+									// The verbatim phrase bonus (NAME_PHRASE_BOOST): only when the
+									// per-term clauses dropped stopwords, to keep "The Man ..." above
+									// names that merely contain "man". Costs what the name
+									// phrase-prefix clause below costs, in filter context.
+									constant_score: {
+										filter: {
+											match_phrase_prefix: {
+												name: {
+													query: cappedQuery,
+													max_expansions: PHRASE_PREFIX_MAX_EXPANSIONS,
+												},
+											},
+										},
+										boost: this.b("name_phrase_boost", NAME_PHRASE_BOOST),
+									},
+								},
+							]
+						: []),
 					{
 						// Plural- and possessive-stemmed token match on the name (GEO-3047).
 						// `name_stemmed` is filled by copy_to from `name` and analyzed with
@@ -1468,7 +1539,7 @@ export class OpenSearchClient implements SearchClient {
 						// ahead of the reindex.
 						match: {
 							name_stemmed: {
-								query: nameMatchQuery,
+								query: nameMatchTerms,
 								boost: this.b("name_stemmed_boost", NAME_STEMMED_BOOST),
 							},
 						},
@@ -1478,7 +1549,7 @@ export class OpenSearchClient implements SearchClient {
 						// other description clauses.
 						match: {
 							description_stemmed: {
-								query: cappedQuery,
+								query: cappedTerms,
 								boost: this.b("description_stemmed_boost", DESCRIPTION_STEMMED_BOOST),
 							},
 						},

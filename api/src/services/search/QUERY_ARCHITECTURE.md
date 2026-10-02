@@ -99,7 +99,13 @@ If the query matches a UUID pattern, it bypasses text search entirely and perfor
 
 ## 2. Base Text Query
 
-Up to eleven parallel matching strategies run inside a `bool.should` clause with `minimum_should_match: 1`:
+Up to twelve parallel matching strategies run inside a `bool.should` clause with `minimum_should_match: 1`.
+
+The per-term clauses (Exact Name Token, Autocomplete, Fuzzy, Real-match floor, Stemmed Name, Stemmed Desc)
+score the query's **content words** only: the Lucene English stopwords and the modal verbs
+(`COVERAGE_STOPWORDS`) are dropped from their text, because the index keeps stopwords and BM25 over
+"should" and "be" outweighed the one word that mattered ("AI should be regulated", 2026-10-02). The
+raw-name and phrase-prefix clauses keep the full query. A query of only stopwords is left unchanged.
 
 ### Strategy Breakdown
 
@@ -111,7 +117,8 @@ Up to eleven parallel matching strategies run inside a `bool.should` clause with
 | **Autocomplete** | `multi_match` (bool_prefix) | `name^1.5`, `name._2gram^1.5`, `name._3gram^1.5`, `description`, `description._2gram`, `description._3gram` | 1.5× on name fields | N-gram autocomplete matching |
 | **Fuzzy** | `multi_match` | `name`, `description` | **0.6×** (reduced) | Typo tolerance with `AUTO:4,6` fuzziness; only for queries of up to 3 tokens |
 | **Real-match floor** | `constant_score` over `bool_prefix` on `name`/`description` + `match` on the stemmed fields | — | **+100** flat | Only with the fuzzy clause. Every non-fuzzy match gets it, so fuzzy-only matches rank below all of them whatever their entity score (GEO-3048) |
-| **Name coverage** | `constant_score` over `match` on `name_stemmed`, `minimum_should_match: 80%` of the content words | `name_stemmed` | **+50** flat | Only for queries with 3+ non-stopwords. Rewards names containing most of the query over short names matching fewer words (GEO-2640) |
+| **Name coverage** | `constant_score` over `match` on `name_stemmed`, `minimum_should_match: 2<80%` of the content words | `name_stemmed` | **+50** flat | Only for queries with 2+ non-stopwords. Rewards names containing most of the query over short names matching fewer words (GEO-2640) |
+| **Name phrase** | `constant_score` over `match_phrase_prefix` on the full query | `name` | **+50** flat | Only when stopwords were dropped from the per-term clauses. Keeps "The Man in the High Castle" above "Spider-Man 2" for "the man" |
 | **Stemmed Name** | `match` | `name_stemmed` | **10.0×** | Plurals and possessives: `mans` / `man's` reach `man` (GEO-3047) |
 | **Stemmed Desc** | `match` | `description_stemmed` | **3.0×** | The same for descriptions |
 | **Name Prefix** | `match_phrase_prefix` | `name` | **5.0×** | Strong boost for "starts with" on name |
@@ -186,11 +193,12 @@ From highest to lowest impact:
 | `FUZZY_MIN_TERM_LENGTH` | 4 | Shortest term the fuzzy clause may edit |
 | `FUZZY_PREFIX_LENGTH` | 0 | Leading characters a fuzzy edit may not touch |
 | `REAL_MATCH_BOOST` | 100.0 | Flat bonus for any non-fuzzy match when the fuzzy clause is present; must exceed the entity-score spread (`SCORE_BOOST`) |
-| `NAME_COVERAGE_BOOST` | 50.0 | Flat bonus for a name containing 80% of 3+ content words |
+| `NAME_COVERAGE_BOOST` | 50.0 | Flat bonus for a name containing 80% of 2+ content words (both of two) |
+| `NAME_PHRASE_BOOST` | 50.0 | Flat bonus for a name containing the full query as a phrase prefix, when the query has stopwords |
 
 All of these, like the boosts above, can be overridden per request with the query parameter of
 the same name in lowercase (`fuzzy_min_term_length`, `fuzzy_prefix_length`, `real_match_boost`,
-`name_coverage_boost`); 0 turns a bonus off.
+`name_coverage_boost`, `name_phrase_boost`); 0 turns a bonus off.
 
 ---
 
