@@ -378,18 +378,28 @@ describe("OpenSearchClient", () => {
 		it("rewards names that contain most of a multi-word query's content words", () => {
 			const cov = coverage(shouldOf("AI should be better regulated"))
 			expect(cov?.constant_score.boost).toBe(NAME_COVERAGE_BOOST)
-			// "be" is a stopword and does not count towards coverage.
+			// "should" and "be" are stopwords and do not count towards coverage.
 			expect(cov?.constant_score.filter.match.name_stemmed).toEqual({
-				query: "AI should better regulated",
-				minimum_should_match: "80%",
+				query: "AI better regulated",
+				minimum_should_match: "2<80%",
 			})
 		})
 
-		it("skips coverage when fewer than three content words remain", () => {
-			expect(coverage(shouldOf("crypto is a scam"))).toBeUndefined()
-			expect(coverage(shouldOf("man role"))).toBeUndefined()
+		it("requires both words of a two-content-word query, so one shared word earns nothing", () => {
+			// The 2026-10-02 report: "should be regulated" names outranked AI-regulation claims.
+			const cov = coverage(shouldOf("AI should be regulated"))
+			expect(cov?.constant_score.filter.match.name_stemmed).toEqual({
+				query: "AI regulated",
+				minimum_should_match: "2<80%",
+			})
+		})
+
+		it("skips coverage when fewer than two content words remain", () => {
+			expect(coverage(shouldOf("crypto is a scam"))).toEqual(expect.anything())
+			expect(coverage(shouldOf("is a scam"))).toBeUndefined()
+			expect(coverage(shouldOf("it should be"))).toBeUndefined()
 			// Surrounding punctuation does not hide a stopword.
-			expect(coverage(shouldOf("crypto, is (a) scam"))).toBeUndefined()
+			expect(coverage(shouldOf("(is) a, scam"))).toBeUndefined()
 		})
 
 		it("honours the fuzzy and bonus overrides", async () => {
