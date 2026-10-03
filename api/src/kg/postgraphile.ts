@@ -28,6 +28,7 @@ import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import EntityVotedByFilterPlugin from "./entityVotedByFilterPlugin"
 import {createErrorEpisodeTracker} from "./errorEpisodeTracker"
 import {shouldUnmaskError} from "./errorMasking"
+import HidePrivateTablesPlugin from "./hidePrivateTablesPlugin"
 import HideProceduresPlugin from "./hideProceduresPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import PaginationCapPlugin, {NoFirstAndLastRule} from "./paginationCapPlugin"
@@ -302,6 +303,7 @@ const postgraphileOptions = {
 		EntityOrderByRankingScorePlugin,
 		PaginationCapPlugin,
 		HideProceduresPlugin,
+		HidePrivateTablesPlugin,
 		UserVoteLegacyAccessorPlugin,
 	],
 	disableDefaultMutations: true,

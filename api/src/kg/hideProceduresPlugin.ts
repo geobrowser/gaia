@@ -25,6 +25,13 @@ export default makeJSONPgSmartTagsPlugin({
 			"public.entity_participation_score": {tags: {omit: true}},
 			"public.entity_ranking_score": {tags: {omit: true}},
 			"public.refresh_entity_ranking_scores": {tags: {omit: true}},
+
+			// Write paths run by ranking-indexer CronJobs over SQL. Volatile functions become
+			// public mutations, so without these any caller can trigger the hourly topic
+			// suggestion rebuild or write feed-composition samples.
+			"public.refresh_space_topic_suggestions": {tags: {omit: true}},
+			"public.sample_feed_composition": {tags: {omit: true}},
+			"public.record_feed_composition_sample": {tags: {omit: true}},
 		},
 	},
 })
