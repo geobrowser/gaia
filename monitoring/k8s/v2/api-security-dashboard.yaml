@@ -167,7 +167,7 @@ data:
         {
           "type": "stat",
           "title": "Schema introspection (24h)",
-          "description": "Successful __schema / __type queries. Normal for GraphiQL and codegen; a scanner's first step. Context, not an alert.",
+          "description": "Requests whose executing operation selects __schema / __type (what was asked for; @skip/@include not evaluated). Normal for GraphiQL and codegen; a scanner's first step. Context, not an alert.",
           "id": 4,
           "gridPos": {
             "h": 5,

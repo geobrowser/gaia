@@ -36,6 +36,7 @@ import {
 	renderSecuritySignalMetrics,
 	type SchemaLike,
 	type SignalKind,
+	selectedOperationTargetsMissingRoot,
 	targetsMissingRootType,
 } from "./securitySignals"
 import {createSourceTracker, type SourceTracker} from "./sourceTracker"
@@ -205,15 +206,22 @@ export function useSecuritySignals(options: SecuritySignalsPluginOptions = {}): 
 		onValidate({params, context}) {
 			const schema = params.schema as unknown as SchemaLike
 			const document = params.documentAST as DocumentNode
-			// Rejected documents, and the ones graphql-js lets through only to fail at execution.
-			const handleRejection = (errorCount: number, firstError: string | undefined): void => {
+			const operationName = (context as YogaContext | undefined)?.params?.operationName
+
+			/**
+			 * Report what a document named. `rejected` says whether the request actually fails — only then
+			 * is it counted as a rejection. Hidden names are reported either way, because naming one shows
+			 * intent even in an operation that never runs.
+			 */
+			const report = (rejected: boolean, errorCount: number, firstError: string | undefined): void => {
 				const analysis = analyze(schema, document)
 				const namedUnknown = analysis.unknownFields.length > 0 || analysis.unknownTypes.length > 0
-				countRejection(namedUnknown ? "unknown_field" : "other_validation")
+				if (rejected) countRejection(namedUnknown ? "unknown_field" : "other_validation")
 				for (const target of analysis.hiddenSurfaceHits) countHiddenSurfaceProbe(target)
 
-				const facts = requestFacts(context, document)
 				const isProbe = analysis.hiddenSurfaceHits.length > 0
+				if (!rejected && !isProbe) return
+				const facts = requestFacts(context, document)
 				const details = {
 					unknownFields: analysis.unknownFields,
 					unknownTypes: analysis.unknownTypes,
@@ -234,14 +242,17 @@ export function useSecuritySignals(options: SecuritySignalsPluginOptions = {}): 
 				guarded("validate", () => {
 					if (!valid) {
 						const errors = result as readonly GraphQLError[]
-						handleRejection(errors.length, errors[0]?.message)
+						report(true, errors.length, errors[0]?.message)
 						return
 					}
+					// graphql-js 16 validates operations on a root type the schema lacks; they fail only when
+					// executed. Probe-check the whole document, but count a rejection only if the operation
+					// that runs is one of them.
 					if (targetsMissingRootType(schema, document)) {
-						handleRejection(0, "operation type not in schema")
-						return
+						const rejected = selectedOperationTargetsMissingRoot(schema, document, operationName)
+						report(rejected, 0, rejected ? "operation type not in schema" : undefined)
+						if (rejected) return
 					}
-					const operationName = (context as YogaContext | undefined)?.params?.operationName
 					const kinds: IntrospectionKind[] = detectIntrospection(document, operationName)
 					if (kinds.length === 0) return
 					for (const kind of kinds) countIntrospection(kind)

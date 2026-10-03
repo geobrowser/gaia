@@ -11,6 +11,7 @@ import {
 	countSuppressedLogLine,
 	detectIntrospection,
 	renderSecuritySignalMetrics,
+	selectedOperationTargetsMissingRoot,
 	targetsMissingRootType,
 } from "./securitySignals"
 
@@ -146,6 +147,12 @@ describe("analyzeRejectedDocument", () => {
 		expect(analyze(`query Ok($n: Int, $id: ID!) { space(id: $id) { id } }`).unknownTypes).toEqual([])
 	})
 
+	it("walks an invalid selection set under __typename for hidden type conditions", () => {
+		expect(analyze(`{ __typename { ... on AppWebhook { secret } } }`).hiddenSurfaceHits).toEqual([
+			"type:AppWebhook",
+		])
+	})
+
 	it("walks subscriptions, reporting fields on an absent root as unknown", () => {
 		expect(analyze(`subscription { doesNotExist }`).unknownFields).toEqual(["Subscription.doesNotExist"])
 		const probe = analyze(`subscription { node(nodeId: "x") { ... on AppWebhook { secret } } }`)
@@ -188,6 +195,23 @@ describe("targetsMissingRootType", () => {
 
 	it("is false for queries", () => {
 		expect(targetsMissingRootType(schema, parse(`{ spaces { id } }`))).toBe(false)
+	})
+})
+
+describe("selectedOperationTargetsMissingRoot", () => {
+	const doc = parse(`query Read { spaces { id } } mutation Unused { bogus }`)
+
+	it("is false when the operation that runs is a query, even beside an unused mutation", () => {
+		expect(selectedOperationTargetsMissingRoot(schema, doc, "Read")).toBe(false)
+	})
+
+	it("is true when the operation that runs is the mutation", () => {
+		expect(selectedOperationTargetsMissingRoot(schema, doc, "Unused")).toBe(true)
+		expect(selectedOperationTargetsMissingRoot(schema, parse(`mutation { x }`))).toBe(true)
+	})
+
+	it("is false when execution cannot pick an operation at all", () => {
+		expect(selectedOperationTargetsMissingRoot(schema, doc)).toBe(false)
 	})
 })
 

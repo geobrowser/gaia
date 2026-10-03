@@ -129,6 +129,42 @@ describe("security signals (e2e)", () => {
 		expect(signals()[0]).toMatchObject({signal: "introspection", introspection: ["schema"]})
 	})
 
+	it("does not count a rejection when the operation that runs succeeds beside an unused mutation", async () => {
+		const rejectedBefore = metric("gaia_api_graphql_rejected_total", '{reason="unknown_field"}')
+		const introBefore = metric("gaia_api_graphql_introspection_total", '{kind="schema"}')
+		const res = await post(
+			JSON.stringify({
+				query: "query Read { __schema { queryType { name } } } mutation Unused { bogus }",
+				operationName: "Read",
+			}),
+			"203.0.113.23",
+		)
+		expect(res.body).toContain('"queryType"')
+		expect(metric("gaia_api_graphql_rejected_total", '{reason="unknown_field"}')).toBe(rejectedBefore)
+		expect(metric("gaia_api_graphql_introspection_total", '{kind="schema"}')).toBe(introBefore + 1)
+		expect(signals().map((s) => s.signal)).toEqual(["introspection"])
+	})
+
+	it("still trips on a hidden mutation in an operation that never runs, without counting a rejection", async () => {
+		const rejectedBefore = metric("gaia_api_graphql_rejected_total", '{reason="unknown_field"}')
+		const probesBefore = metric(
+			"gaia_api_graphql_hidden_surface_probe_total",
+			'{target="Mutation.sampleFeedComposition"}',
+		)
+		await post(
+			JSON.stringify({
+				query: "query Read { spaces(first: 1) { id } } mutation Unused { sampleFeedComposition(input: {}) { clientMutationId } }",
+				operationName: "Read",
+			}),
+			"203.0.113.24",
+		)
+		expect(metric("gaia_api_graphql_rejected_total", '{reason="unknown_field"}')).toBe(rejectedBefore)
+		expect(metric("gaia_api_graphql_hidden_surface_probe_total", '{target="Mutation.sampleFeedComposition"}')).toBe(
+			probesBefore + 1,
+		)
+		expect(signals()[0]).toMatchObject({signal: "hidden_surface_probe", clientIp: "203.0.113.24"})
+	})
+
 	it("stays silent for valid, non-introspection traffic", async () => {
 		await query(`{ spaces(first: 1) { id } }`, "203.0.113.19")
 		expect(signals()).toHaveLength(0)

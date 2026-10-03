@@ -9,8 +9,9 @@
  * - `hidden_surface_probe` — a rejected request that names something we deliberately removed from
  *   the schema (see HIDDEN_SURFACE). No client of ours can send one, because none of them have ever
  *   used these names, so this is the high-signal tripwire.
- * - `introspection` — a successful `__schema` / `__type` query. Legitimate for GraphiQL and codegen,
- *   and also the first thing a scanner does.
+ * - `introspection` — the operation that executes selects `__schema` / `__type`. Legitimate for
+ *   GraphiQL and codegen, and also the first thing a scanner does. This records what was ASKED for:
+ *   `@skip` / `@include` are not evaluated, because for security the request is the signal.
  *
  * Every analysis here runs on the failure path, except introspection detection, which inspects only
  * the top level of each operation. A valid, non-introspection request pays for one shallow loop.
@@ -192,7 +193,12 @@ export function analyzeRejectedDocument(schema: SchemaLike, document: DocumentNo
 				// Only the real meta-fields are exempt. Anything else with a `__` prefix is an unknown field
 				// like any other — skipping the prefix would let `{ __anything }` pass as an ordinary
 				// validation failure, which the surge alert does not count.
-				if (name === "__typename") continue
+				if (name === "__typename") {
+					// The field is fine; a selection set under it is not, and can still hide a type condition
+					// (`{ __typename { ... on AppWebhook { secret } } }`). Walk it with no parent type.
+					if (sel.selectionSet) queue.push({selectionSet: sel.selectionSet, parent: null, root: null})
+					continue
+				}
 				if (root === "Query" && (name === "__schema" || name === "__type")) {
 					if (sel.selectionSet) {
 						const metaType = schema.getType(name === "__schema" ? "__Schema" : "__Type") ?? null
@@ -259,6 +265,24 @@ export function targetsMissingRootType(schema: SchemaLike, document: DocumentNod
 		if (def.operation === "mutation" && !schema.getMutationType()) return true
 		if (def.operation === "subscription" && !schema.getSubscriptionType?.()) return true
 	}
+	return false
+}
+
+/**
+ * True when the operation that will actually execute targets a root type the schema lacks, i.e. the
+ * request fails. `targetsMissingRootType` asks the same of the whole document, which is right for
+ * probe detection (naming a hidden mutation anywhere shows intent) but wrong for counting rejections:
+ * an unused mutation beside a query that runs fine is not a rejected request.
+ */
+export function selectedOperationTargetsMissingRoot(
+	schema: SchemaLike,
+	document: DocumentNode,
+	operationName?: string | null,
+): boolean {
+	const operation = selectedOperation(document, operationName)
+	if (!operation) return false
+	if (operation.operation === "mutation") return !schema.getMutationType()
+	if (operation.operation === "subscription") return !schema.getSubscriptionType?.()
 	return false
 }
 
@@ -389,7 +413,7 @@ export function renderSecuritySignalMetrics(tracker: SourceTrackerStats): string
 	family(
 		"gaia_api_graphql_introspection_total",
 		"counter",
-		"Successful GraphQL introspection requests, by root field.",
+		"GraphQL requests whose executing operation selects introspection, by root field. Counts what was asked for; @skip/@include are not evaluated.",
 	)
 	for (const kind of ["schema", "type"] as const) {
 		lines.push(`gaia_api_graphql_introspection_total{kind="${kind}"} ${introspectionByKind.get(kind) ?? 0}`)

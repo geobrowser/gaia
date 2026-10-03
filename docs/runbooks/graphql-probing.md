@@ -11,7 +11,7 @@ The signals come from `api/src/kg/securitySignalsPlugin.ts`. Alerts are in [`mon
 | `parse_failed` | the body is not GraphQL | rare; our clients are generated, so they never send these |
 | `validation_failed` | valid GraphQL the schema rejects | some, from stale or buggy clients. `unknown_field` is the scanner-shaped subset |
 | `hidden_surface_probe` | names something in `HIDDEN_SURFACE` (`securitySignals.ts`), i.e. schema we removed on purpose | **never** from a first-party client |
-| `introspection` | a successful `__schema` / `__type` query | yes: GraphiQL and codegen. Context, not an alert |
+| `introspection` | the operation that runs selects `__schema` / `__type` (counts the request; `@skip`/`@include` aren't evaluated) | yes: GraphiQL and codegen. Context, not an alert |
 
 Each signal is handled three ways, each with its own budget:
 
