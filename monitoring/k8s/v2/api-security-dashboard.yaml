@@ -680,7 +680,7 @@ data:
           },
           "options": {
             "mode": "markdown",
-            "content": "**Who is it?** `kubectl -n gaia logs -l app=api --since=30m --prefix | grep '\"GraphQL security signal\"'`: each line has `signal`, `clientIp`, `userAgent`, `origin`, `unknownFields`, `hiddenSurface`, and `suppressedSinceLastEmit` for what a flood's budget withheld.\n\n**Hidden-surface probes** also raise the Sentry issue *Hidden GraphQL surface probed* (at most once per address per hour).\n\n**Runbook:** `docs/runbooks/graphql-probing.md` in geobrowser/gaia."
+            "content": "**Who is it?** `kubectl -n gaia logs -l app=api --tail=-1 --max-log-requests=20 --since=30m --prefix | grep '\"GraphQL security signal\"'`: each line has `signal`, `clientIp`, `userAgent`, `origin`, `unknownFields`, `hiddenSurface`, and `suppressedSinceLastEmit` for what a flood's budget withheld.\n\n**Hidden-surface probes** also raise the Sentry issue *Hidden GraphQL surface probed* (at most once per address per hour).\n\n**Runbook:** `docs/runbooks/graphql-probing.md` in geobrowser/gaia."
           }
         }
       ]

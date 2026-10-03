@@ -165,6 +165,16 @@ describe("security signals (e2e)", () => {
 		expect(signals()[0]).toMatchObject({signal: "hidden_surface_probe", clientIp: "203.0.113.24"})
 	})
 
+	it("sees probes and introspection through PostGraphile's nested query field", async () => {
+		const introBefore = metric("gaia_api_graphql_introspection_total", '{kind="schema"}')
+		const res = await query(`{ query { __schema { queryType { name } } } }`, "203.0.113.25")
+		expect(res.body).toContain('"queryType"')
+		expect(metric("gaia_api_graphql_introspection_total", '{kind="schema"}')).toBe(introBefore + 1)
+
+		await query(`{ query { appWebhooks { id } } }`, "203.0.113.26")
+		expect(signals().at(-1)).toMatchObject({signal: "hidden_surface_probe", hiddenSurface: ["Query.appWebhook"]})
+	})
+
 	it("stays silent for valid, non-introspection traffic", async () => {
 		await query(`{ spaces(first: 1) { id } }`, "203.0.113.19")
 		expect(signals()).toHaveLength(0)

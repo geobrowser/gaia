@@ -16,7 +16,14 @@
  * Every analysis here runs on the failure path, except introspection detection, which inspects only
  * the top level of each operation. A valid, non-introspection request pays for one shallow loop.
  */
-import {type DocumentNode, Kind, type OperationDefinitionNode, type SelectionSetNode, type TypeNode} from "graphql"
+import {
+	type DocumentNode,
+	type FragmentDefinitionNode,
+	Kind,
+	type OperationDefinitionNode,
+	type SelectionSetNode,
+	type TypeNode,
+} from "graphql"
 
 /**
  * Names that were once public and were removed on purpose — gaia#1010 hid the notification
@@ -223,10 +230,14 @@ export function analyzeRejectedDocument(schema: SchemaLike, document: DocumentNo
 					if (hit) hits.add(hit)
 				}
 				if (sel.selectionSet) {
+					const child = field ? namedTypeOf(field.type) : null
 					queue.push({
 						selectionSet: sel.selectionSet,
-						parent: field ? namedTypeOf(field.type) : null,
-						root: null,
+						parent: child,
+						// PostGraphile gives every type a `query: Query!` field, so `{ query { appWebhooks } }` is a
+						// root-level probe one level down. Whether selections are "on a root" depends on the type
+						// they are made on, not on how deep they sit.
+						root: child ? rootLabelFor(child.name) : null,
 					})
 				}
 			} else if (sel.kind === Kind.INLINE_FRAGMENT) {
@@ -301,33 +312,49 @@ function selectedOperation(document: DocumentNode, operationName?: string | null
 }
 
 /**
- * Which introspection root fields the operation that will actually execute selects at its top level.
- * Other operations in the document never run, so they are not counted. Root-level fragment spreads
- * and inline fragments are followed transitively (each fragment once); field sub-selections are not,
- * because `__schema` is only introspection at the root. `__typename` is ignored.
+ * Which introspection fields the operation that will actually execute selects. Other operations in
+ * the document never run, so they are not counted.
+ *
+ * graphql-js resolves `__schema` / `__type` on the Query type wherever it appears, and PostGraphile
+ * gives every type a `query: Query!` field, so `{ query { __schema { … } } }` is introspection too.
+ * With a schema, the walk therefore follows any field whose type is Query, as well as fragments
+ * (each once) on it; it never descends into other fields, so a normal query costs one field lookup
+ * per top-level selection. Without a schema only the top level is checked. `__typename` is ignored.
  */
-export function detectIntrospection(document: DocumentNode, operationName?: string | null): IntrospectionKind[] {
+export function detectIntrospection(
+	document: DocumentNode,
+	operationName?: string | null,
+	schema?: SchemaLike,
+): IntrospectionKind[] {
 	const operation = selectedOperation(document, operationName)
-	if (!operation) return []
+	if (!operation || operation.operation !== "query") return []
+	const queryType = schema?.getQueryType() ?? null
+	const queryName = queryType?.name ?? "Query"
+	const queryFields = fieldsOf(queryType)
 	const found = new Set<IntrospectionKind>()
-	const fragments = new Map<string, SelectionSetNode>()
+	const fragments = new Map<string, FragmentDefinitionNode>()
 	for (const def of document.definitions) {
-		if (def.kind === Kind.FRAGMENT_DEFINITION) fragments.set(def.name.value, def.selectionSet)
+		if (def.kind === Kind.FRAGMENT_DEFINITION) fragments.set(def.name.value, def)
 	}
 
+	// Every selection set queued here is made on the Query type.
 	const visited = new Set<string>()
 	const pending: SelectionSetNode[] = [operation.selectionSet]
-	for (let selectionSet = pending.pop(); selectionSet; selectionSet = pending.pop()) {
-		for (const sel of selectionSet.selections) {
+	for (let i = 0; i < pending.length; i++) {
+		for (const sel of (pending[i] as SelectionSetNode).selections) {
 			if (sel.kind === Kind.FIELD) {
-				if (sel.name.value === "__schema") found.add("schema")
-				else if (sel.name.value === "__type") found.add("type")
+				const name = sel.name.value
+				if (name === "__schema") found.add("schema")
+				else if (name === "__type") found.add("type")
+				else if (sel.selectionSet && namedTypeOf(queryFields?.[name]?.type)?.name === queryName) {
+					pending.push(sel.selectionSet)
+				}
 			} else if (sel.kind === Kind.INLINE_FRAGMENT) {
-				pending.push(sel.selectionSet)
+				if (!sel.typeCondition || sel.typeCondition.name.value === queryName) pending.push(sel.selectionSet)
 			} else if (sel.kind === Kind.FRAGMENT_SPREAD && !visited.has(sel.name.value)) {
 				visited.add(sel.name.value)
 				const frag = fragments.get(sel.name.value)
-				if (frag) pending.push(frag)
+				if (frag && frag.typeCondition.name.value === queryName) pending.push(frag.selectionSet)
 			}
 		}
 	}

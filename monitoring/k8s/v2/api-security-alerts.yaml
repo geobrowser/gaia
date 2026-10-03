@@ -14,7 +14,9 @@
 #       stopped being scraped), which would silence everything above rather than fire it.
 #
 # The counters are registered at zero on startup — every hidden target included — so increase()
-# sees the first event after a deploy rather than treating it as a series' first sample.
+# sees the first event after a deploy once Prometheus has scraped the zero. An event before that first
+# scrape still gives a series born nonzero, so the two single-occurrence rules also count a brand-new
+# series' current value (see ApiHiddenSurfaceProbed).
 #
 # Apply after the api is running an image that serves these counters, or ApiSecuritySignalsMissing
 # fires in between:
@@ -34,8 +36,17 @@ spec:
         # target so the Slack message names what was asked for; the caller's address is deliberately
         # not a label (unbounded), it is in the log line and the Sentry issue instead.
         - alert: ApiHiddenSurfaceProbed
+          # A pod's series can be born nonzero: a probe that lands before Prometheus's first scrape of a
+          # new pod gives samples 1, 1, 1, and increase() reads that as no change. That happens: three of
+          # the six api pods started on 2026-10-03 had already served requests at their first scrape.
+          # So a series with no sample 15 minutes ago contributes its current value (everything on it
+          # happened since it was born), and every other series its increase. The new series must be the
+          # LEFT side of `or`: increase() returns 0, not nothing, for 1, 1, 1, so with increase() on the
+          # left its 0 would shadow the new series. `* 1` drops the metric name so both sides match on labels alone.
           expr: |
             sum by (namespace, target) (
+              (gaia_api_graphql_hidden_surface_probe_total{namespace="gaia", job="api"} unless gaia_api_graphql_hidden_surface_probe_total{namespace="gaia", job="api"} offset 15m) * 1
+              or
               increase(gaia_api_graphql_hidden_surface_probe_total{namespace="gaia", job="api"}[15m])
             ) > 0
           labels:
@@ -47,7 +58,7 @@ spec:
               {{ $value | humanize }} request(s) in the last 15 minutes asked for {{ $labels.target }},
               which was removed from the public schema on purpose. No first-party client sends this.
               Who asked: the Sentry issue "Hidden GraphQL surface probed", or
-              kubectl -n gaia logs -l app=api --since=30m --prefix | grep hidden_surface_probe.
+              kubectl -n gaia logs -l app=api --tail=-1 --max-log-requests=20 --since=30m --prefix | grep hidden_surface_probe.
               Runbook: docs/runbooks/graphql-probing.md
 
         # First-party clients are generated against the schema, so they almost never send documents
@@ -68,13 +79,17 @@ spec:
             description: >-
               {{ $value | humanize }} requests/s for 10 minutes are failing to parse or naming fields
               the schema does not have. Check the top sources and what they ask for with
-              kubectl -n gaia logs -l app=api --since=15m --prefix | grep '"GraphQL security signal"'.
+              kubectl -n gaia logs -l app=api --tail=-1 --max-log-requests=20 --since=15m --prefix | grep '"GraphQL security signal"'.
               A single address is a scanner; many addresses with a browser user agent and our origin
               is a client of ours broken by a schema change. Runbook: docs/runbooks/graphql-probing.md
 
         - alert: ApiSecuritySignalsDegraded
+          # Same born-nonzero handling as ApiHiddenSurfaceProbed: a detector failure on a pod's very first
+          # requests must still fire.
           expr: |
             sum by (namespace) (
+              (gaia_api_security_signal_internal_errors_total{namespace="gaia", job="api"} unless gaia_api_security_signal_internal_errors_total{namespace="gaia", job="api"} offset 15m) * 1
+              or
               increase(gaia_api_security_signal_internal_errors_total{namespace="gaia", job="api"}[15m])
             ) > 0
           labels:
@@ -86,7 +101,7 @@ spec:
               Security signal detection threw {{ $value | humanize }} time(s) in the last 15 minutes.
               Requests are unaffected (every hook is guarded), but ApiHiddenSurfaceProbed and
               ApiGraphqlRejectionSurge may be blind. The cause is in
-              kubectl -n gaia logs -l app=api --since=1h | grep 'Security signal detection failed'.
+              kubectl -n gaia logs -l app=api --tail=-1 --max-log-requests=20 --since=1h | grep 'Security signal detection failed'.
               Runbook: docs/runbooks/graphql-probing.md
 
         # Without this, an api that stops exporting the counters silences every rule above, because

@@ -21,6 +21,7 @@ const schema = buildSchema(`
 	interface Node { nodeId: ID! }
 	type Space implements Node { nodeId: ID! id: ID! name: String }
 	type Query {
+		query: Query!
 		node(nodeId: ID!): Node
 		spaces(first: Int): [Space!]
 		space(id: ID!): Space
@@ -147,6 +148,15 @@ describe("analyzeRejectedDocument", () => {
 		expect(analyze(`query Ok($n: Int, $id: ID!) { space(id: $id) { id } }`).unknownTypes).toEqual([])
 	})
 
+	it("treats selections on a nested Query (PostGraphile's query: Query!) as root selections", () => {
+		expect(analyze(`{ query { appWebhooks { id } } }`).hiddenSurfaceHits).toEqual(["Query.appWebhook"])
+		expect(analyze(`{ query { query { notificationOutboxes { id } } } }`).hiddenSurfaceHits).toEqual([
+			"Query.notificationOutbox",
+		])
+		// And the meta-fields stay exempt there, as graphql-js resolves them on Query at any depth.
+		expect(analyze(`{ query { __schema { bogus } } }`).unknownFields).toEqual(["__Schema.bogus"])
+	})
+
 	it("walks an invalid selection set under __typename for hidden type conditions", () => {
 		expect(analyze(`{ __typename { ... on AppWebhook { secret } } }`).hiddenSurfaceHits).toEqual([
 			"type:AppWebhook",
@@ -237,6 +247,23 @@ describe("detectIntrospection", () => {
 			`query { ...A } fragment A on Query { ...B } fragment B on Query { ...A __type(name: "X") { name } }`,
 		)
 		expect(detectIntrospection(cycle)).toEqual(["type"])
+	})
+
+	it("finds introspection on a nested Query when given the schema", () => {
+		expect(detectIntrospection(parse(`{ query { __schema { queryType { name } } } }`), null, schema)).toEqual([
+			"schema",
+		])
+		expect(
+			detectIntrospection(
+				parse(`{ query { ...Q } } fragment Q on Query { query { __type(name: "Space") { name } } }`),
+				null,
+				schema,
+			),
+		).toEqual(["type"])
+		// Never descends into fields of other types.
+		expect(detectIntrospection(parse(`{ spaces { __typename } }`), null, schema)).toEqual([])
+		// Without a schema, only the top level is checked.
+		expect(detectIntrospection(parse(`{ query { __schema { queryType { name } } } }`))).toEqual([])
 	})
 
 	it("counts only the operation that will execute", () => {

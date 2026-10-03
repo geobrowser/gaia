@@ -25,7 +25,7 @@ The caller is the rightmost `X-Forwarded-For` entry, the one the Cilium Gateway 
 
 1. **Who and what.** Every pod's signal lines, newest last:
    ```bash
-   kubectl -n gaia logs -l app=api --since=30m --prefix --max-log-requests=20 \
+   kubectl -n gaia logs -l app=api --tail=-1 --max-log-requests=20 --since=30m --prefix \
      | grep '"GraphQL security signal"' | sed 's/^[^{]*//' \
      | jq -c '{signal, clientIp, userAgent, origin, unknownFields, hiddenSurface, episodeEvents, suppressedSinceLastEmit}'
    ```
@@ -33,6 +33,8 @@ The caller is the rightmost `X-Forwarded-For` entry, the one the Cilium Gateway 
    ```bash
    … | jq -r .clientIp | sort | uniq -c | sort -rn | head
    ```
+   `--tail=-1` matters: with a label selector `kubectl logs` keeps only the last 10 lines per pod, even
+   with `--since`, and refuses more than 5 pods without `--max-log-requests` (the api runs 6 to 16).
    Pod logs do not survive a pod restart or a deploy. Read them before you roll anything.
 2. **Sentry:** issue *Hidden GraphQL surface probed* in `gaia-api`. Its events carry the same fields, and they outlive pods.
 3. **Shape:** on the dashboard, *Rejected requests by reason* and *Hidden-surface probes by target* show whether this is one burst, a steady crawl, or a ramp.
@@ -53,5 +55,5 @@ The caller is the rightmost `X-Forwarded-For` entry, the one the Cilium Gateway 
 ## When the alerts themselves look wrong
 
 - **`ApiSecuritySignalsMissing`:** the counters are gone. Check `up{job="api"}` and the `gaia-api-metrics` ServiceMonitor, then whether the running image still registers `useSecuritySignals` in `postgraphile.ts`.
-- **`ApiSecuritySignalsDegraded`:** detection threw. Requests are unaffected, because every hook is guarded, but counts are low until it's fixed. `kubectl -n gaia logs -l app=api --since=1h | grep 'Security signal detection failed'` has the stage and error. The first version of the analyzer failed this way, on a schema object from a second copy of graphql-js; `SchemaLike` in `securitySignals.ts` explains why it is duck-typed now.
+- **`ApiSecuritySignalsDegraded`:** detection threw. Requests are unaffected, because every hook is guarded, but counts are low until it's fixed. `kubectl -n gaia logs -l app=api --tail=-1 --max-log-requests=20 --since=1h | grep 'Security signal detection failed'` has the stage and error. The first version of the analyzer failed this way, on a schema object from a second copy of graphql-js; `SchemaLike` in `securitySignals.ts` explains why it is duck-typed now.
 - **`ApiGraphqlRejectionSurge` fires on ordinary traffic:** recalibrate the threshold in `api-security-alerts.yaml` against the dashboard's baseline. It was set at 1/s before any production data existed.

@@ -253,7 +253,7 @@ export function useSecuritySignals(options: SecuritySignalsPluginOptions = {}): 
 						report(rejected, 0, rejected ? "operation type not in schema" : undefined)
 						if (rejected) return
 					}
-					const kinds: IntrospectionKind[] = detectIntrospection(document, operationName)
+					const kinds: IntrospectionKind[] = detectIntrospection(document, operationName, schema)
 					if (kinds.length === 0) return
 					for (const kind of kinds) countIntrospection(kind)
 					emit("introspection", requestFacts(context, document), {introspection: kinds})
