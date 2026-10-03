@@ -1,0 +1,108 @@
+# API security signals (securitySignalsPlugin.ts).
+#
+# On 2026-10-03 a scanner read the notification tables through the public GraphQL api, and we only
+# found out because one of its requests happened to throw a new Sentry error. These rules make the
+# next one page instead of relying on luck. Runbook: docs/runbooks/graphql-probing.md.
+#
+# Coverage split:
+#   ApiHiddenSurfaceProbed (here)        — someone asked for schema we deliberately hid. No client of
+#       ours can send that request, so a single occurrence is worth a look.
+#   ApiGraphqlRejectionSurge (here)      — a sustained flood of unparseable or unknown-field requests:
+#       a scan in progress, or one of our own clients shipped against a schema that changed under it.
+#   ApiSecuritySignalsDegraded (here)    — detection itself is failing; the two above may be blind.
+#   ApiSecuritySignalsMissing (here)     — the counters are gone entirely (plugin removed, or the api
+#       stopped being scraped), which would silence everything above rather than fire it.
+#
+# The counters are registered at zero on startup — every hidden target included — so increase()
+# sees the first event after a deploy rather than treating it as a series' first sample.
+#
+# Apply after the api is running an image that serves these counters, or ApiSecuritySignalsMissing
+# fires in between:
+#   kubectl apply -f monitoring/k8s/v2/api-security-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: api-security-signals
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: api.security
+      rules:
+        # No `for`: the counter only moves when it happens, and it should never happen. Grouped by
+        # target so the Slack message names what was asked for; the caller's address is deliberately
+        # not a label (unbounded), it is in the log line and the Sentry issue instead.
+        - alert: ApiHiddenSurfaceProbed
+          expr: |
+            sum by (namespace, target) (
+              increase(gaia_api_graphql_hidden_surface_probe_total{namespace="gaia", job="api"}[15m])
+            ) > 0
+          labels:
+            severity: warning
+            service: api
+          annotations:
+            summary: Someone is probing hidden GraphQL schema
+            description: >-
+              {{ $value | humanize }} request(s) in the last 15 minutes asked for {{ $labels.target }},
+              which was removed from the public schema on purpose. No first-party client sends this.
+              Who asked: the Sentry issue "Hidden GraphQL surface probed", or
+              kubectl -n gaia logs -l app=api --since=30m --prefix | grep hidden_surface_probe.
+              Runbook: docs/runbooks/graphql-probing.md
+
+        # First-party clients are generated against the schema, so they almost never send documents
+        # that fail to parse or name unknown fields. A sustained rate above 1/s is either a scanner or
+        # a client of ours broken by a schema change; both need someone to look. Ordinary validation
+        # mistakes (bad arguments, bad variables) are excluded: those are client bugs, not probing.
+        - alert: ApiGraphqlRejectionSurge
+          expr: |
+            sum by (namespace) (
+              rate(gaia_api_graphql_rejected_total{namespace="gaia", job="api", reason=~"parse|unknown_field"}[5m])
+            ) > 1
+          for: 10m
+          labels:
+            severity: warning
+            service: api
+          annotations:
+            summary: Sustained flood of unparseable or unknown-field GraphQL requests
+            description: >-
+              {{ $value | humanize }} requests/s for 10 minutes are failing to parse or naming fields
+              the schema does not have. Check the top sources and what they ask for with
+              kubectl -n gaia logs -l app=api --since=15m --prefix | grep '"GraphQL security signal"'.
+              A single address is a scanner; many addresses with a browser user agent and our origin
+              is a client of ours broken by a schema change. Runbook: docs/runbooks/graphql-probing.md
+
+        - alert: ApiSecuritySignalsDegraded
+          expr: |
+            sum by (namespace) (
+              increase(gaia_api_security_signal_internal_errors_total{namespace="gaia", job="api"}[15m])
+            ) > 0
+          labels:
+            severity: warning
+            service: api
+          annotations:
+            summary: Security signal detection is failing
+            description: >-
+              Security signal detection threw {{ $value | humanize }} time(s) in the last 15 minutes.
+              Requests are unaffected (every hook is guarded), but ApiHiddenSurfaceProbed and
+              ApiGraphqlRejectionSurge may be blind. The cause is in
+              kubectl -n gaia logs -l app=api --since=1h | grep 'Security signal detection failed'.
+              Runbook: docs/runbooks/graphql-probing.md
+
+        # Without this, an api that stops exporting the counters silences every rule above, because
+        # their series vanish instead of firing.
+        - alert: ApiSecuritySignalsMissing
+          expr: |
+            absent(gaia_api_graphql_rejected_total{namespace="gaia", job="api"})
+          for: 15m
+          labels:
+            severity: warning
+            service: api
+            namespace: gaia
+          annotations:
+            summary: API security signal counters are missing
+            description: >-
+              No api pod has exported gaia_api_graphql_rejected_total for 15 minutes, so probe and
+              rejection alerts cannot fire. Either the api stopped being scraped (check the
+              gaia-api-metrics ServiceMonitor and up{job="api"}) or a deploy removed the security
+              signals plugin. Runbook: docs/runbooks/graphql-probing.md

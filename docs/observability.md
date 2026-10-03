@@ -61,6 +61,7 @@ The observability stack consists of:
 | Gaia Overview | API (Gateway), pools, resources, pods, GraphQL, indexers | ConfigMap sidecar | [`monitoring/k8s/gaia-overview-dashboard.yaml`](monitoring/k8s/gaia-overview-dashboard.yaml) |
 | Hermes Lag | chain tip vs processed block | ConfigMap sidecar | [`monitoring/k8s/hermes-lag-dashboard.yaml`](monitoring/k8s/hermes-lag-dashboard.yaml) |
 | Kafka Consumer Lag | per-group lag | ConfigMap sidecar | [`monitoring/k8s/kafka-consumer-lag-dashboard.yaml`](monitoring/k8s/kafka-consumer-lag-dashboard.yaml) |
+| Gaia API Security Signals | probes, rejections, introspection, detector health | ConfigMap sidecar | [`monitoring/k8s/v2/api-security-dashboard.yaml`](monitoring/k8s/v2/api-security-dashboard.yaml) |
 | Atlas Overview (Production) | 6 panels | ConfigMap sidecar | [`hermes/k8s/production/atlas-monitoring.yaml`](hermes/k8s/production/atlas-monitoring.yaml) |
 | Atlas Overview (Staging) | 6 panels | ConfigMap sidecar | [`hermes/k8s/staging/atlas-monitoring.yaml`](hermes/k8s/staging/atlas-monitoring.yaml) |
 
@@ -98,6 +99,17 @@ The observability stack consists of:
 | `Api5xxRateHigh` | warning | 5xx ratio > 2% for 10m | Check API Ingress dashboard failure-class panel |
 
 **Config:** [`monitoring/k8s/api-capacity-alerts.yaml`](monitoring/k8s/api-capacity-alerts.yaml)
+
+### API Security Alerts
+
+| Alert | Severity | Condition | First Check |
+|-------|----------|-----------|-------------|
+| `ApiHiddenSurfaceProbed` | warning | any request for deliberately hidden schema (15m) | Sentry *Hidden GraphQL surface probed*; [runbook](docs/runbooks/graphql-probing.md) |
+| `ApiGraphqlRejectionSurge` | warning | unparseable + unknown-field requests > 1/s for 10m | top sources in the api's `"GraphQL security signal"` log lines |
+| `ApiSecuritySignalsDegraded` | warning | detection threw (15m); requests unaffected | `grep 'Security signal detection failed'` in api logs |
+| `ApiSecuritySignalsMissing` | warning | counters absent for 15m | `up{job="api"}`, then the running image |
+
+**Config:** [`monitoring/k8s/v2/api-security-alerts.yaml`](monitoring/k8s/v2/api-security-alerts.yaml). **Runbook:** [`docs/runbooks/graphql-probing.md`](docs/runbooks/graphql-probing.md)
 
 ### Atlas Alerts (Production)
 

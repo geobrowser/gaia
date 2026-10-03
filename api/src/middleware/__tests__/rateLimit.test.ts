@@ -49,7 +49,7 @@ function setupApp(client: RateLimitClient, options?: {windowMs?: number; maxRequ
 
 // biome-ignore lint/suspicious/noExplicitAny: test helper accepts any Hono app env
 function requestFrom(app: Hono<any>, path: string, ip: string) {
-	return app.request(path, {headers: {"x-real-ip": ip}})
+	return app.request(path, {headers: {"x-forwarded-for": ip}})
 }
 
 describe("createRateLimitMiddleware", () => {
@@ -108,7 +108,7 @@ describe("createRateLimitMiddleware", () => {
 		const client = createFakeClient()
 		const app = setupApp(client, {maxRequests: 1, windowMs: 60_000})
 
-		// No x-real-ip / x-forwarded-for header at all.
+		// No x-forwarded-for header at all.
 		const first = await app.request("/test")
 		const second = await app.request("/test")
 		expect(first.status).toBe(200)

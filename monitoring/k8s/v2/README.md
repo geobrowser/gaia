@@ -58,6 +58,7 @@ kubectl --context $CTX apply -f monitoring/k8s/v2/
 | `chain-tip-exporter.yaml` | this cluster had no exporter at all, so `HermesBehindChainTip` could never fire |
 | `kg-indexer-alerts.yaml` | new: `KgIndexerBlockDropped` (GEO-2884's silent loss) and `KgIndexerMetricsMissing` |
 | `indexer-alerts.yaml` | new: `IndexerMetricsMissing`, `IndexerHalted`, `IndexerDroppedData` and `IndexerRestartingRepeatedly` for the indexers below |
+| `api-security-alerts.yaml`, `api-security-dashboard.yaml` | new: probe, rejection-surge and detector-health alerts plus their dashboard, for the api's security signals (runbook: `docs/runbooks/graphql-probing.md`) |
 
 ## Deliberately not ported
 

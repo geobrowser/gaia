@@ -35,6 +35,7 @@ import PaginationCapPlugin, {NoFirstAndLastRule} from "./paginationCapPlugin"
 import {useResponseBudget} from "./responseBudgetPlugin"
 import {hasCacheableData} from "./responseCachePolicy"
 import {useSearchInvocationLogger} from "./searchInvocationLogger"
+import {useSecuritySignals} from "./securitySignalsPlugin"
 import {createShedEpisodeTracker} from "./shedEpisodeTracker"
 import UserVoteLegacyAccessorPlugin from "./userVoteLegacyAccessorPlugin"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
@@ -545,6 +546,10 @@ const customValidationRules: Plugin = {
 const sharedPlugins = [
 	...(responseCachePlugin ? [responseCachePlugin] : []),
 	customValidationRules,
+	// Reads the parse and validation results, so it sees every rejected request. Rejections are
+	// never cached, so the response cache in front of it does not hide them. See
+	// securitySignalsPlugin.ts.
+	useSecuritySignals(),
 	useCostLogger(),
 	// Must follow useCostLogger — it reads the score that plugin stashes on the
 	// request context. Must precede usePgClient so a refused operation never

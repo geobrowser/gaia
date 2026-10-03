@@ -1,0 +1,185 @@
+import {buildSchema, parse} from "graphql"
+import {beforeEach, describe, expect, it} from "vitest"
+import {
+	__resetSecuritySignalMetricsForTests,
+	analyzeRejectedDocument,
+	countHiddenSurfaceProbe,
+	countInternalError,
+	countIntrospection,
+	countRejection,
+	countSuppressedLogLine,
+	detectIntrospection,
+	renderSecuritySignalMetrics,
+	targetsMissingRootType,
+} from "./securitySignals"
+
+// Shaped like the live schema where it matters: a Query root, Node interface, and — since gaia#1010
+// — no Mutation type at all.
+const schema = buildSchema(`
+	interface Node { nodeId: ID! }
+	type Space implements Node { nodeId: ID! id: ID! name: String }
+	type Query {
+		node(nodeId: ID!): Node
+		spaces(first: Int): [Space!]
+		space(id: ID!): Space
+	}
+`)
+
+const analyze = (source: string) => analyzeRejectedDocument(schema, parse(source))
+
+describe("analyzeRejectedDocument", () => {
+	it("names unknown fields with their parent type", () => {
+		const a = analyze(`{ spaces { id secretSauce } usersConnection { totalCount } }`)
+		expect(a.unknownFields).toEqual(["Space.secretSauce", "Query.usersConnection"])
+		expect(a.hiddenSurfaceHits).toEqual([])
+	})
+
+	it("flags every inflection of a hidden table as one canonical target", () => {
+		const a = analyze(`{
+			appWebhooksConnection { totalCount }
+			appWebhookByAppName(appName: "x") { secret }
+			notificationOutboxes { payload }
+			notificationDeliveriesConnection { totalCount }
+			notificationPollCursorByNodeId(nodeId: "x") { id }
+		}`)
+		expect(a.hiddenSurfaceHits).toEqual([
+			"Query.appWebhook",
+			"Query.notificationOutbox",
+			"Query.notificationDeliver",
+			"Query.notificationPollCursor",
+		])
+	})
+
+	it("flags hidden mutations even though the schema has no Mutation type", () => {
+		const a = analyze(`mutation { refreshSpaceTopicSuggestions(input: {}) { clientMutationId } }`)
+		expect(a.unknownFields).toEqual(["Mutation.refreshSpaceTopicSuggestions"])
+		expect(a.hiddenSurfaceHits).toEqual(["Mutation.refreshSpaceTopicSuggestions"])
+	})
+
+	it("reports unknown mutations without calling them hidden", () => {
+		const a = analyze(`mutation { deleteEverything { ok } }`)
+		expect(a.unknownFields).toEqual(["Mutation.deleteEverything"])
+		expect(a.hiddenSurfaceHits).toEqual([])
+	})
+
+	it("flags a fragment on a hidden type, the shape of a node(nodeId) probe", () => {
+		const a = analyze(`{ node(nodeId: "x") { ... on AppWebhook { secret url } } }`)
+		expect(a.unknownTypes).toEqual(["AppWebhook"])
+		expect(a.hiddenSurfaceHits).toEqual(["type:AppWebhook"])
+	})
+
+	it("flags named fragments on hidden types", () => {
+		const a = analyze(`query { node(nodeId: "x") { ...W } } fragment W on NotificationOutbox { payload }`)
+		expect(a.hiddenSurfaceHits).toEqual(["type:NotificationOutbox"])
+	})
+
+	it("still matches hidden root fields inside a fragment on the root type", () => {
+		const a = analyze(`{ ... on Query { appWebhooks { secret } } }`)
+		expect(a.hiddenSurfaceHits).toEqual(["Query.appWebhook"])
+		const b = analyze(`query { ...Root } fragment Root on Query { notificationOutboxes { payload } }`)
+		expect(b.hiddenSurfaceHits).toEqual(["Query.notificationOutbox"])
+	})
+
+	it("survives a fragment cycle without looping", () => {
+		const a = analyze(`query { ...A } fragment A on Query { ...B } fragment B on Query { ...A appWebhooks { id } }`)
+		expect(a.hiddenSurfaceHits).toEqual(["Query.appWebhook"])
+	})
+
+	it("does not count a field named like a hidden table when it is nested, not a root field", () => {
+		const a = analyze(`{ spaces { appWebhooks { id } } }`)
+		expect(a.unknownFields).toEqual(["Space.appWebhooks"])
+		expect(a.hiddenSurfaceHits).toEqual([])
+	})
+
+	it("caps what it reports, so a hostile document cannot bloat a log line", () => {
+		const fields = Array.from({length: 500}, (_, i) => `f${i}`).join(" ")
+		const a = analyze(`{ ${fields} }`)
+		expect(a.unknownFields).toHaveLength(10)
+	})
+
+	it("truncates absurdly long names", () => {
+		const a = analyze(`{ ${"x".repeat(5000)} }`)
+		expect(a.unknownFields[0]?.length ?? 0).toBeLessThan(80)
+	})
+
+	it("finds nothing in a document that only fails for other reasons", () => {
+		const a = analyze(`{ spaces(first: "not an int") { id } }`)
+		expect(a).toEqual({unknownFields: [], unknownTypes: [], hiddenSurfaceHits: []})
+	})
+})
+
+describe("targetsMissingRootType", () => {
+	it("is true for any mutation when the schema has no Mutation type", () => {
+		expect(targetsMissingRootType(schema, parse(`mutation { anything }`))).toBe(true)
+		expect(targetsMissingRootType(schema, parse(`subscription { anything }`))).toBe(true)
+	})
+
+	it("is false for queries", () => {
+		expect(targetsMissingRootType(schema, parse(`{ spaces { id } }`))).toBe(false)
+	})
+})
+
+describe("detectIntrospection", () => {
+	it("detects __schema and __type at the top level", () => {
+		expect(detectIntrospection(parse(`{ __schema { types { name } } }`))).toEqual(["schema"])
+		expect(detectIntrospection(parse(`{ __type(name: "Space") { name } }`))).toEqual(["type"])
+	})
+
+	it("follows a top-level fragment spread, as GraphiQL's introspection query does", () => {
+		const doc = parse(
+			`query IntrospectionQuery { ...Root } fragment Root on Query { __schema { queryType { name } } }`,
+		)
+		expect(detectIntrospection(doc)).toEqual(["schema"])
+	})
+
+	it("ignores __typename and ordinary queries", () => {
+		expect(detectIntrospection(parse(`{ spaces { __typename id } }`))).toEqual([])
+		expect(detectIntrospection(parse(`{ __typename }`))).toEqual([])
+	})
+})
+
+describe("renderSecuritySignalMetrics", () => {
+	beforeEach(__resetSecuritySignalMetricsForTests)
+
+	it("always exposes every reason and kind, so absent series never break a rate()", () => {
+		const out = renderSecuritySignalMetrics({sources: 0, evictions: 0})
+		expect(out).toContain('gaia_api_graphql_rejected_total{reason="parse"} 0')
+		expect(out).toContain('gaia_api_graphql_rejected_total{reason="unknown_field"} 0')
+		expect(out).toContain('gaia_api_graphql_rejected_total{reason="other_validation"} 0')
+		expect(out).toContain('gaia_api_graphql_introspection_total{kind="schema"} 0')
+		expect(out).toContain("# TYPE gaia_api_graphql_hidden_surface_probe_total counter")
+		// Hidden targets exist from the start too — the first probe after a deploy must be an increase.
+		expect(out).toContain('gaia_api_graphql_hidden_surface_probe_total{target="Query.appWebhook"} 0')
+		expect(out).toContain('gaia_api_graphql_hidden_surface_probe_total{target="Mutation.sampleFeedComposition"} 0')
+		expect(out).toContain('gaia_api_graphql_hidden_surface_probe_total{target="type:AppWebhook"} 0')
+	})
+
+	it("refuses label values outside the fixed set", () => {
+		countHiddenSurfaceProbe('Query.evil"} 1\nfake_metric{a="')
+		const out = renderSecuritySignalMetrics({sources: 0, evictions: 0})
+		expect(out).not.toContain("evil")
+		expect(out).not.toContain("fake_metric")
+	})
+
+	it("renders counts in Prometheus text format", () => {
+		countRejection("parse")
+		countRejection("unknown_field")
+		countRejection("unknown_field")
+		countHiddenSurfaceProbe("Query.appWebhook")
+		countIntrospection("schema")
+		countSuppressedLogLine()
+		countInternalError()
+		const out = renderSecuritySignalMetrics({sources: 7, evictions: 2})
+		expect(out).toContain("gaia_api_security_signal_internal_errors_total 1")
+		expect(out).toContain('gaia_api_graphql_rejected_total{reason="unknown_field"} 2')
+		expect(out).toContain('gaia_api_graphql_hidden_surface_probe_total{target="Query.appWebhook"} 1')
+		expect(out).toContain('gaia_api_graphql_introspection_total{kind="schema"} 1')
+		expect(out).toContain("gaia_api_security_signal_log_suppressed_total 1")
+		expect(out).toContain("gaia_api_security_signal_sources 7")
+		expect(out).toContain("gaia_api_security_signal_source_evictions_total 2")
+		// Every sample line is `name{labels} value` or `name value`.
+		for (const line of out.trim().split("\n")) {
+			if (!line.startsWith("#")) expect(line).toMatch(/^[a-z_]+(\{[a-z]+="[^"]*"\})? \d+$/)
+		}
+	})
+})

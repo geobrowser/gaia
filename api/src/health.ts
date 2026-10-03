@@ -5,6 +5,7 @@ import {renderResponseSizeHistogram} from "./kg/instrumentationPlugin"
 import {renderPaginationDefaultMetrics} from "./kg/paginationCapPlugin"
 import {getGraphqlPoolPressure, getGraphqlPoolStats} from "./kg/postgraphile"
 import {renderResponseByteMetrics} from "./kg/responseBudgetPlugin"
+import {renderSecuritySignalsPrometheus} from "./kg/securitySignalsPlugin"
 import {db, getPoolStats} from "./services/storage/storage"
 import {log} from "./services/telemetry"
 
@@ -129,6 +130,8 @@ function renderPrometheusMetrics(): string {
 		// How often a collection was given a default `first`, by nesting depth —
 		// see DEFAULT_PAGINATION_LIMITS_BY_DEPTH in paginationCapPlugin.ts.
 		renderPaginationDefaultMetrics(),
+		// Rejected, probing and introspection requests — see securitySignalsPlugin.ts.
+		renderSecuritySignalsPrometheus(),
 	].join("\n")
 }
 
