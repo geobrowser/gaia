@@ -241,7 +241,8 @@ export function useSecuritySignals(options: SecuritySignalsPluginOptions = {}): 
 						handleRejection(0, "operation type not in schema")
 						return
 					}
-					const kinds: IntrospectionKind[] = detectIntrospection(document)
+					const operationName = (context as YogaContext | undefined)?.params?.operationName
+					const kinds: IntrospectionKind[] = detectIntrospection(document, operationName)
 					if (kinds.length === 0) return
 					for (const kind of kinds) countIntrospection(kind)
 					emit("introspection", requestFacts(context, document), {introspection: kinds})

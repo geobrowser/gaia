@@ -15,7 +15,7 @@
  * Every analysis here runs on the failure path, except introspection detection, which inspects only
  * the top level of each operation. A valid, non-introspection request pays for one shallow loop.
  */
-import {type DocumentNode, type FragmentDefinitionNode, Kind, type SelectionSetNode} from "graphql"
+import {type DocumentNode, Kind, type OperationDefinitionNode, type SelectionSetNode, type TypeNode} from "graphql"
 
 /**
  * Names that were once public and were removed on purpose — gaia#1010 hid the notification
@@ -113,9 +113,19 @@ function fieldsOf(type: NamedTypeLike | null): Record<string, {type: unknown}> |
  * Work out what a rejected document asked for that the schema does not have.
  *
  * Walks the document against the schema rather than reading validation error messages, so it does
- * not depend on graphql-js wording and sees every unknown field even when validation stops reporting
- * after the first few. Bounded: each fragment is expanded at most once, and recursion depth is capped
- * well beyond anything a real query nests.
+ * not depend on graphql-js wording and sees every unknown name even when validation stops reporting
+ * after the first few.
+ *
+ * Shaped to resist evasion, because gaia is public and anyone can read this function:
+ * - Every operation and every fragment DEFINITION is walked exactly once, in its own type context —
+ *   including unused fragments and duplicate names (which fail validation, but still say what the
+ *   caller wanted). Spreads are never followed, so there is no cycle to guard and no way to make one
+ *   definition shadow another.
+ * - The walk is iterative with an explicit queue and no depth limit, so no amount of nesting reaches
+ *   a cutoff. Each selection is visited once: work is linear in the size of the document, which the
+ *   request body limit already bounds.
+ * - Inside `__schema` / `__type` the walk continues against `__Schema` / `__Type`, variable
+ *   declarations are checked for unknown types, and subscriptions are walked like any other root.
  */
 export function analyzeRejectedDocument(schema: SchemaLike, document: DocumentNode): RejectionAnalysis {
 	const unknownFields = new CappedSet()
@@ -123,16 +133,24 @@ export function analyzeRejectedDocument(schema: SchemaLike, document: DocumentNo
 	// Not capped: every hit is one of ALL_HIDDEN_TARGETS, so the fixed list already bounds it, and
 	// dropping one would lose that target's count and alert.
 	const hits = new Set<string>()
-	const queryType = schema.getQueryType() ?? null
-	const mutationType = schema.getMutationType() ?? null
 
-	const fragments = new Map<string, FragmentDefinitionNode>()
-	for (const def of document.definitions) {
-		if (def.kind === Kind.FRAGMENT_DEFINITION) fragments.set(def.name.value, def)
+	type Root = "Query" | "Mutation" | "Subscription"
+	const roots: Record<Root, NamedTypeLike | null> = {
+		Query: schema.getQueryType() ?? null,
+		Mutation: schema.getMutationType() ?? null,
+		Subscription: schema.getSubscriptionType?.() ?? null,
 	}
-	const expanded = new Set<string>()
+	// Decided by NAME, not by resolving the type: with no Mutation type in the schema,
+	// `... on Mutation { sampleFeedComposition }` resolves to nothing, but it is still a mutation-root
+	// selection and must still be matched as one.
+	const rootLabelFor = (typeName: string): Root | null => {
+		for (const root of ["Query", "Mutation", "Subscription"] as const) {
+			if (typeName === (roots[root]?.name ?? root)) return root
+		}
+		return null
+	}
 
-	const checkTypeCondition = (typeName: string): NamedTypeLike | null => {
+	const checkNamedType = (typeName: string): NamedTypeLike | null => {
 		const type = schema.getType(typeName) ?? null
 		if (!type) {
 			unknownTypes.add(typeName)
@@ -142,78 +160,83 @@ export function analyzeRejectedDocument(schema: SchemaLike, document: DocumentNo
 		return type
 	}
 
-	/**
-	 * `parent` is the type the selections are made on, or null when it is unknown — in which case the
-	 * names are still walked for type conditions, but nothing below can be called an unknown field.
-	 * `rootLabel` is set for an operation's top level, where hidden root fields are matched.
-	 */
-	// Decided by the type condition's NAME, not by resolving it: with no Mutation type in the schema,
-	// `... on Mutation { sampleFeedComposition }` resolves to nothing, but it is still a mutation-root
-	// selection and must still be matched as one.
-	const queryName = queryType?.name ?? "Query"
-	const mutationName = mutationType?.name ?? "Mutation"
-	const rootLabelFor = (typeName: string): "Query" | "Mutation" | null =>
-		typeName === queryName ? "Query" : typeName === mutationName ? "Mutation" : null
+	/** `parent` is null when unknown; `root` is set only for selections made directly on a root type. */
+	type Frame = {selectionSet: SelectionSetNode; parent: NamedTypeLike | null; root: Root | null}
+	// A FIFO queue read by index: linear, and names come out in document order, which reads better in
+	// a log line than the reverse order a stack would give.
+	const queue: Frame[] = []
 
-	const walk = (
-		selectionSet: SelectionSetNode,
-		parent: NamedTypeLike | null,
-		rootLabel: "Query" | "Mutation" | null,
-		depth: number,
-	): void => {
-		if (depth > 64) return
+	for (const def of document.definitions) {
+		if (def.kind === Kind.OPERATION_DEFINITION) {
+			for (const variable of def.variableDefinitions ?? []) {
+				let typeNode: TypeNode = variable.type
+				while (typeNode.kind !== Kind.NAMED_TYPE) typeNode = typeNode.type
+				checkNamedType(typeNode.name.value)
+			}
+			const root: Root =
+				def.operation === "query" ? "Query" : def.operation === "mutation" ? "Mutation" : "Subscription"
+			queue.push({selectionSet: def.selectionSet, parent: roots[root], root})
+		} else if (def.kind === Kind.FRAGMENT_DEFINITION) {
+			const typeName = def.typeCondition.name.value
+			queue.push({selectionSet: def.selectionSet, parent: checkNamedType(typeName), root: rootLabelFor(typeName)})
+		}
+	}
+
+	for (let i = 0; i < queue.length; i++) {
+		const frame = queue[i] as Frame
+		const {parent, root} = frame
 		const fields = fieldsOf(parent)
-		for (const sel of selectionSet.selections) {
+		for (const sel of frame.selectionSet.selections) {
 			if (sel.kind === Kind.FIELD) {
 				const name = sel.name.value
 				// Only the real meta-fields are exempt. Anything else with a `__` prefix is an unknown field
-				// like any other — skipping the whole prefix would let `{ __anything }` floods pass as
-				// ordinary validation failures, which the surge alert does not count.
+				// like any other — skipping the prefix would let `{ __anything }` pass as an ordinary
+				// validation failure, which the surge alert does not count.
 				if (name === "__typename") continue
-				if ((name === "__schema" || name === "__type") && rootLabel === "Query") continue
+				if (root === "Query" && (name === "__schema" || name === "__type")) {
+					if (sel.selectionSet) {
+						const metaType = schema.getType(name === "__schema" ? "__Schema" : "__Type") ?? null
+						queue.push({selectionSet: sel.selectionSet, parent: metaType, root: null})
+					}
+					continue
+				}
 				const field = fields?.[name]
 				if (parent && fields && !field) {
 					unknownFields.add(`${parent.name}.${name}`)
 					const hit =
-						rootLabel === "Query"
+						root === "Query"
 							? hiddenQueryFieldHit(name)
-							: rootLabel === "Mutation"
+							: root === "Mutation"
 								? hiddenMutationHit(name)
 								: null
 					if (hit) hits.add(hit)
-				} else if (!parent && rootLabel === "Mutation") {
-					// The schema has no Mutation type, so every mutation field is unknown.
-					unknownFields.add(`Mutation.${name}`)
-					const hit = hiddenMutationHit(name)
+				} else if (!parent && (root === "Mutation" || root === "Subscription")) {
+					// The schema has no such root type, so every field on it is unknown.
+					unknownFields.add(`${root}.${name}`)
+					const hit = root === "Mutation" ? hiddenMutationHit(name) : null
 					if (hit) hits.add(hit)
 				}
-				if (sel.selectionSet) walk(sel.selectionSet, field ? namedTypeOf(field.type) : null, null, depth + 1)
+				if (sel.selectionSet) {
+					queue.push({
+						selectionSet: sel.selectionSet,
+						parent: field ? namedTypeOf(field.type) : null,
+						root: null,
+					})
+				}
 			} else if (sel.kind === Kind.INLINE_FRAGMENT) {
-				const target = sel.typeCondition ? checkTypeCondition(sel.typeCondition.name.value) : parent
-				// `... on Query { appWebhooks }` is still a root selection, so keep matching it as one.
-				const label = sel.typeCondition ? rootLabelFor(sel.typeCondition.name.value) : rootLabel
-				walk(sel.selectionSet, target, label, depth + 1)
-			} else if (sel.kind === Kind.FRAGMENT_SPREAD) {
-				const frag = fragments.get(sel.name.value)
-				if (!frag || expanded.has(frag.name.value)) continue
-				expanded.add(frag.name.value)
-				const target = checkTypeCondition(frag.typeCondition.name.value)
-				walk(frag.selectionSet, target, rootLabelFor(frag.typeCondition.name.value), depth + 1)
+				if (sel.typeCondition) {
+					const typeName = sel.typeCondition.name.value
+					queue.push({
+						selectionSet: sel.selectionSet,
+						parent: checkNamedType(typeName),
+						root: rootLabelFor(typeName),
+					})
+				} else {
+					queue.push({selectionSet: sel.selectionSet, parent, root})
+				}
 			}
+			// FRAGMENT_SPREAD: nothing to do — every definition is walked on its own above.
 		}
-	}
-
-	for (const def of document.definitions) {
-		if (def.kind !== Kind.OPERATION_DEFINITION) continue
-		if (def.operation === "query") walk(def.selectionSet, queryType, "Query", 0)
-		else if (def.operation === "mutation") walk(def.selectionSet, mutationType, "Mutation", 0)
-	}
-	// Fragments never spread from an operation are still part of what the caller sent.
-	for (const frag of fragments.values()) {
-		if (expanded.has(frag.name.value)) continue
-		expanded.add(frag.name.value)
-		const target = checkTypeCondition(frag.typeCondition.name.value)
-		walk(frag.selectionSet, target, rootLabelFor(frag.typeCondition.name.value), 1)
 	}
 
 	return {
@@ -242,12 +265,26 @@ export function targetsMissingRootType(schema: SchemaLike, document: DocumentNod
 export type IntrospectionKind = "schema" | "type"
 
 /**
- * Which introspection root fields a document selects at the top level of any operation. Root-level
- * fragment spreads and inline fragments are followed transitively (each fragment once); field
- * sub-selections are not, because `__schema` is only introspection at the root. `__typename` is not
- * introspection in any useful sense and is ignored.
+ * The operation graphql-js will execute: the one named `operationName`, or the only one when no name
+ * is given. Null when execution would fail to pick one — then nothing in the document runs.
  */
-export function detectIntrospection(document: DocumentNode): IntrospectionKind[] {
+function selectedOperation(document: DocumentNode, operationName?: string | null): OperationDefinitionNode | null {
+	const operations = document.definitions.filter(
+		(def): def is OperationDefinitionNode => def.kind === Kind.OPERATION_DEFINITION,
+	)
+	if (operationName) return operations.find((op) => op.name?.value === operationName) ?? null
+	return operations.length === 1 ? (operations[0] ?? null) : null
+}
+
+/**
+ * Which introspection root fields the operation that will actually execute selects at its top level.
+ * Other operations in the document never run, so they are not counted. Root-level fragment spreads
+ * and inline fragments are followed transitively (each fragment once); field sub-selections are not,
+ * because `__schema` is only introspection at the root. `__typename` is ignored.
+ */
+export function detectIntrospection(document: DocumentNode, operationName?: string | null): IntrospectionKind[] {
+	const operation = selectedOperation(document, operationName)
+	if (!operation) return []
 	const found = new Set<IntrospectionKind>()
 	const fragments = new Map<string, SelectionSetNode>()
 	for (const def of document.definitions) {
@@ -255,23 +292,20 @@ export function detectIntrospection(document: DocumentNode): IntrospectionKind[]
 	}
 
 	const visited = new Set<string>()
-	const scan = (selectionSet: SelectionSetNode): void => {
+	const pending: SelectionSetNode[] = [operation.selectionSet]
+	for (let selectionSet = pending.pop(); selectionSet; selectionSet = pending.pop()) {
 		for (const sel of selectionSet.selections) {
 			if (sel.kind === Kind.FIELD) {
 				if (sel.name.value === "__schema") found.add("schema")
 				else if (sel.name.value === "__type") found.add("type")
 			} else if (sel.kind === Kind.INLINE_FRAGMENT) {
-				scan(sel.selectionSet)
+				pending.push(sel.selectionSet)
 			} else if (sel.kind === Kind.FRAGMENT_SPREAD && !visited.has(sel.name.value)) {
 				visited.add(sel.name.value)
 				const frag = fragments.get(sel.name.value)
-				if (frag) scan(frag)
+				if (frag) pending.push(frag)
 			}
 		}
-	}
-
-	for (const def of document.definitions) {
-		if (def.kind === Kind.OPERATION_DEFINITION) scan(def.selectionSet)
 	}
 	return [...found]
 }

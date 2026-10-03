@@ -31,7 +31,8 @@ const analyze = (source: string) => analyzeRejectedDocument(schema, parse(source
 describe("analyzeRejectedDocument", () => {
 	it("names unknown fields with their parent type", () => {
 		const a = analyze(`{ spaces { id secretSauce } usersConnection { totalCount } }`)
-		expect(a.unknownFields).toEqual(["Space.secretSauce", "Query.usersConnection"])
+		// Breadth-first: root-level names before nested ones.
+		expect(a.unknownFields).toEqual(["Query.usersConnection", "Space.secretSauce"])
 		expect(a.hiddenSurfaceHits).toEqual([])
 	})
 
@@ -112,6 +113,45 @@ describe("analyzeRejectedDocument", () => {
 		)
 	})
 
+	it("is not fooled by a duplicate fragment name shadowing a probe", () => {
+		const a = analyze(
+			`query { ...F } fragment F on Query { appWebhooks { id } } fragment F on Query { __typename }`,
+		)
+		expect(a.hiddenSurfaceHits).toEqual(["Query.appWebhook"])
+		const b = analyze(
+			`query { ...F } fragment F on Query { __typename } fragment F on Query { appWebhooks { id } }`,
+		)
+		expect(b.hiddenSurfaceHits).toEqual(["Query.appWebhook"])
+	})
+
+	it("has no depth cutoff to hide behind", () => {
+		const depth = 500
+		const doc = `{ ${"... on Query { ".repeat(depth)} appWebhooks { id } ${"} ".repeat(depth)}}`
+		expect(analyze(doc).hiddenSurfaceHits).toEqual(["Query.appWebhook"])
+		const fieldDepth = `{ node(nodeId: "x") { ${"... on Space { ".repeat(depth)} ... on AppWebhook { secret } ${"} ".repeat(depth)}} }`
+		expect(analyze(fieldDepth).hiddenSurfaceHits).toEqual(["type:AppWebhook"])
+	})
+
+	it("walks inside __schema and __type instead of skipping them", () => {
+		expect(analyze(`{ __schema { bogus } }`).unknownFields).toEqual(["__Schema.bogus"])
+		expect(analyze(`{ __schema { ... on AppWebhook { secret } } }`).hiddenSurfaceHits).toEqual(["type:AppWebhook"])
+		expect(analyze(`{ __type(name: "Space") { nope } }`).unknownFields).toEqual(["__Type.nope"])
+	})
+
+	it("checks variable declarations for hidden types, wrapped or not", () => {
+		expect(analyze(`query Probe($x: AppWebhook) { __typename }`).hiddenSurfaceHits).toEqual(["type:AppWebhook"])
+		expect(analyze(`query Probe($x: [NotificationOutbox!]!) { __typename }`).hiddenSurfaceHits).toEqual([
+			"type:NotificationOutbox",
+		])
+		expect(analyze(`query Ok($n: Int, $id: ID!) { space(id: $id) { id } }`).unknownTypes).toEqual([])
+	})
+
+	it("walks subscriptions, reporting fields on an absent root as unknown", () => {
+		expect(analyze(`subscription { doesNotExist }`).unknownFields).toEqual(["Subscription.doesNotExist"])
+		const probe = analyze(`subscription { node(nodeId: "x") { ... on AppWebhook { secret } } }`)
+		expect(probe.hiddenSurfaceHits).toEqual(["type:AppWebhook"])
+	})
+
 	it("survives a fragment cycle without looping", () => {
 		const a = analyze(`query { ...A } fragment A on Query { ...B } fragment B on Query { ...A appWebhooks { id } }`)
 		expect(a.hiddenSurfaceHits).toEqual(["Query.appWebhook"])
@@ -173,6 +213,15 @@ describe("detectIntrospection", () => {
 			`query { ...A } fragment A on Query { ...B } fragment B on Query { ...A __type(name: "X") { name } }`,
 		)
 		expect(detectIntrospection(cycle)).toEqual(["type"])
+	})
+
+	it("counts only the operation that will execute", () => {
+		const doc = parse(`query A { spaces { id } } query B { __schema { queryType { name } } }`)
+		expect(detectIntrospection(doc, "A")).toEqual([])
+		expect(detectIntrospection(doc, "B")).toEqual(["schema"])
+		// No operationName with two operations: execution refuses to pick one, so nothing ran.
+		expect(detectIntrospection(doc)).toEqual([])
+		expect(detectIntrospection(doc, "Missing")).toEqual([])
 	})
 
 	it("ignores __typename and ordinary queries", () => {
