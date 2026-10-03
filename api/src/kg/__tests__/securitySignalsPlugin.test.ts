@@ -167,4 +167,33 @@ describe("security signals (e2e)", () => {
 		expect(metric("gaia_api_security_signal_internal_errors_total")).toBe(before + 1)
 		expect((warn.mock.calls as Logged[]).some(([m]) => m.startsWith("Security signal detection failed"))).toBe(true)
 	})
+
+	it("never changes the response when the logger itself throws", async () => {
+		const broken = createYoga({
+			schema: postgraphileSchema,
+			plugins: [
+				useSecuritySignals({
+					analyze: () => {
+						throw {
+							toString: () => {
+								throw new Error("hostile toString")
+							},
+						}
+					},
+				}),
+			],
+		})
+		warn.mockImplementation(() => {
+			throw new Error("logger down")
+		})
+		const res = await broken.fetch(
+			new Request("http://localhost/graphql", {
+				method: "POST",
+				headers: {"Content-Type": "application/json", "X-Forwarded-For": "203.0.113.22"},
+				body: JSON.stringify({query: "{ appWebhooks { secret } }"}),
+			}),
+		)
+		expect(res.status).not.toBe(500)
+		expect(await res.text()).toContain("Cannot query field")
+	})
 })

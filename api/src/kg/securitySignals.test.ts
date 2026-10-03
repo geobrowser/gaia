@@ -2,6 +2,7 @@ import {buildSchema, parse} from "graphql"
 import {beforeEach, describe, expect, it} from "vitest"
 import {
 	__resetSecuritySignalMetricsForTests,
+	ALL_HIDDEN_TARGETS,
 	analyzeRejectedDocument,
 	countHiddenSurfaceProbe,
 	countInternalError,
@@ -80,6 +81,37 @@ describe("analyzeRejectedDocument", () => {
 		expect(b.hiddenSurfaceHits).toEqual(["Query.notificationOutbox"])
 	})
 
+	it("keeps mutation-root context in fragments on a Mutation type the schema lacks", () => {
+		const inline = analyze(`mutation { ... on Mutation { sampleFeedComposition(input: {}) { clientMutationId } } }`)
+		expect(inline.hiddenSurfaceHits).toEqual(["Mutation.sampleFeedComposition"])
+		const named = analyze(
+			`mutation { ...M } fragment M on Mutation { refreshSpaceTopicSuggestions { clientMutationId } }`,
+		)
+		expect(named.hiddenSurfaceHits).toEqual(["Mutation.refreshSpaceTopicSuggestions"])
+		const unused = analyze(
+			`{ spaces { id } } fragment M on Mutation { recordFeedCompositionSample { clientMutationId } }`,
+		)
+		expect(unused.hiddenSurfaceHits).toEqual(["Mutation.recordFeedCompositionSample"])
+	})
+
+	it("keeps every hidden target, even when a document names all of them", () => {
+		const doc = `
+			query { appWebhooks { id } notificationOutboxes { id } notificationDeliveries { id } notificationPollCursors { id }
+				node(nodeId: "x") { ... on AppWebhook { id } ... on NotificationOutbox { id } ... on NotificationDelivery { id } ... on NotificationPollCursor { id } } }
+			fragment M on Mutation { refreshSpaceTopicSuggestions sampleFeedComposition recordFeedCompositionSample }`
+		const a = analyze(doc)
+		expect(a.hiddenSurfaceHits).toHaveLength(ALL_HIDDEN_TARGETS.length)
+		expect([...a.hiddenSurfaceHits].sort()).toEqual([...ALL_HIDDEN_TARGETS].sort())
+	})
+
+	it("treats an invented __ field as unknown, and only real meta-fields as exempt", () => {
+		expect(analyze(`{ __notAField }`).unknownFields).toEqual(["Query.__notAField"])
+		expect(analyze(`{ spaces { __schema { types { name } } } }`).unknownFields).toEqual(["Space.__schema"])
+		expect(analyze(`{ __schema { types { name } } __typename spaces { __typename bogus } }`).unknownFields).toEqual(
+			["Space.bogus"],
+		)
+	})
+
 	it("survives a fragment cycle without looping", () => {
 		const a = analyze(`query { ...A } fragment A on Query { ...B } fragment B on Query { ...A appWebhooks { id } }`)
 		expect(a.hiddenSurfaceHits).toEqual(["Query.appWebhook"])
@@ -130,6 +162,17 @@ describe("detectIntrospection", () => {
 			`query IntrospectionQuery { ...Root } fragment Root on Query { __schema { queryType { name } } }`,
 		)
 		expect(detectIntrospection(doc)).toEqual(["schema"])
+	})
+
+	it("follows root-level fragment spreads transitively", () => {
+		const doc = parse(
+			`query { ...A } fragment A on Query { ...B } fragment B on Query { __schema { queryType { name } } }`,
+		)
+		expect(detectIntrospection(doc)).toEqual(["schema"])
+		const cycle = parse(
+			`query { ...A } fragment A on Query { ...B } fragment B on Query { ...A __type(name: "X") { name } }`,
+		)
+		expect(detectIntrospection(cycle)).toEqual(["type"])
 	})
 
 	it("ignores __typename and ordinary queries", () => {

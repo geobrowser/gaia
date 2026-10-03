@@ -126,25 +126,41 @@ function guarded(stage: string, fn: () => void): void {
 		fn()
 	} catch (err) {
 		countInternalError()
-		const episode = internalErrorEpisodes.record(stage)
-		if (episode.shouldLog) {
-			log.warn("Security signal detection failed; request unaffected", {
-				stage,
-				error: truncate(String(err), 300),
-				occurrencesInEpisode: episode.total,
-				suppressedSinceLastLog: episode.suppressed,
-			})
+		// Reporting the failure must not become a failure of its own. The logger may be what threw in
+		// the first place, and `String(err)` can throw for a hostile value (a throwing toString or
+		// Symbol.toPrimitive), so this path gets its own guard and gives up silently: the counter above
+		// has already recorded it.
+		try {
+			const episode = internalErrorEpisodes.record(stage)
+			if (episode.shouldLog) {
+				log.warn("Security signal detection failed; request unaffected", {
+					stage,
+					error: truncate(String(err), 300),
+					occurrencesInEpisode: episode.total,
+					suppressedSinceLastLog: episode.suppressed,
+				})
+			}
+		} catch {
+			// Deliberately empty: see above.
 		}
 	}
 }
 
 let activeStreamTracker: SourceTracker | null = null
 
-/** Prometheus exposition for the signal counters and the live tracker's health. */
+/**
+ * Prometheus exposition for the signal counters and the live tracker's health.
+ *
+ * Empty until `useSecuritySignals` has run. `/health/metrics` calls this whether or not the plugin is
+ * registered, and exporting zeros without it would make a removed plugin look healthy — the counters
+ * would still be present, so `ApiSecuritySignalsMissing` could never fire for the one failure it is
+ * there to catch.
+ */
 export function renderSecuritySignalsPrometheus(): string {
+	if (!activeStreamTracker) return ""
 	return renderSecuritySignalMetrics({
-		sources: activeStreamTracker?.size() ?? 0,
-		evictions: activeStreamTracker?.evictions() ?? 0,
+		sources: activeStreamTracker.size(),
+		evictions: activeStreamTracker.evictions(),
 	})
 }
 

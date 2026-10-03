@@ -120,7 +120,9 @@ function fieldsOf(type: NamedTypeLike | null): Record<string, {type: unknown}> |
 export function analyzeRejectedDocument(schema: SchemaLike, document: DocumentNode): RejectionAnalysis {
 	const unknownFields = new CappedSet()
 	const unknownTypes = new CappedSet()
-	const hits = new CappedSet()
+	// Not capped: every hit is one of ALL_HIDDEN_TARGETS, so the fixed list already bounds it, and
+	// dropping one would lose that target's count and alert.
+	const hits = new Set<string>()
 	const queryType = schema.getQueryType() ?? null
 	const mutationType = schema.getMutationType() ?? null
 
@@ -145,12 +147,13 @@ export function analyzeRejectedDocument(schema: SchemaLike, document: DocumentNo
 	 * names are still walked for type conditions, but nothing below can be called an unknown field.
 	 * `rootLabel` is set for an operation's top level, where hidden root fields are matched.
 	 */
-	const rootLabelFor = (type: NamedTypeLike | null): "Query" | "Mutation" | null =>
-		type && queryType && type.name === queryType.name
-			? "Query"
-			: type && mutationType && type.name === mutationType.name
-				? "Mutation"
-				: null
+	// Decided by the type condition's NAME, not by resolving it: with no Mutation type in the schema,
+	// `... on Mutation { sampleFeedComposition }` resolves to nothing, but it is still a mutation-root
+	// selection and must still be matched as one.
+	const queryName = queryType?.name ?? "Query"
+	const mutationName = mutationType?.name ?? "Mutation"
+	const rootLabelFor = (typeName: string): "Query" | "Mutation" | null =>
+		typeName === queryName ? "Query" : typeName === mutationName ? "Mutation" : null
 
 	const walk = (
 		selectionSet: SelectionSetNode,
@@ -163,7 +166,11 @@ export function analyzeRejectedDocument(schema: SchemaLike, document: DocumentNo
 		for (const sel of selectionSet.selections) {
 			if (sel.kind === Kind.FIELD) {
 				const name = sel.name.value
-				if (name.startsWith("__")) continue
+				// Only the real meta-fields are exempt. Anything else with a `__` prefix is an unknown field
+				// like any other — skipping the whole prefix would let `{ __anything }` floods pass as
+				// ordinary validation failures, which the surge alert does not count.
+				if (name === "__typename") continue
+				if ((name === "__schema" || name === "__type") && rootLabel === "Query") continue
 				const field = fields?.[name]
 				if (parent && fields && !field) {
 					unknownFields.add(`${parent.name}.${name}`)
@@ -184,14 +191,14 @@ export function analyzeRejectedDocument(schema: SchemaLike, document: DocumentNo
 			} else if (sel.kind === Kind.INLINE_FRAGMENT) {
 				const target = sel.typeCondition ? checkTypeCondition(sel.typeCondition.name.value) : parent
 				// `... on Query { appWebhooks }` is still a root selection, so keep matching it as one.
-				const label = sel.typeCondition ? rootLabelFor(target) : rootLabel
+				const label = sel.typeCondition ? rootLabelFor(sel.typeCondition.name.value) : rootLabel
 				walk(sel.selectionSet, target, label, depth + 1)
 			} else if (sel.kind === Kind.FRAGMENT_SPREAD) {
 				const frag = fragments.get(sel.name.value)
 				if (!frag || expanded.has(frag.name.value)) continue
 				expanded.add(frag.name.value)
 				const target = checkTypeCondition(frag.typeCondition.name.value)
-				walk(frag.selectionSet, target, rootLabelFor(target), depth + 1)
+				walk(frag.selectionSet, target, rootLabelFor(frag.typeCondition.name.value), depth + 1)
 			}
 		}
 	}
@@ -206,13 +213,13 @@ export function analyzeRejectedDocument(schema: SchemaLike, document: DocumentNo
 		if (expanded.has(frag.name.value)) continue
 		expanded.add(frag.name.value)
 		const target = checkTypeCondition(frag.typeCondition.name.value)
-		walk(frag.selectionSet, target, rootLabelFor(target), 1)
+		walk(frag.selectionSet, target, rootLabelFor(frag.typeCondition.name.value), 1)
 	}
 
 	return {
 		unknownFields: unknownFields.toArray(),
 		unknownTypes: unknownTypes.toArray(),
-		hiddenSurfaceHits: hits.toArray(),
+		hiddenSurfaceHits: [...hits],
 	}
 }
 
@@ -235,8 +242,10 @@ export function targetsMissingRootType(schema: SchemaLike, document: DocumentNod
 export type IntrospectionKind = "schema" | "type"
 
 /**
- * Which introspection root fields a document selects at the top level of any operation, following
- * fragment spreads one level. `__typename` is not introspection in any useful sense and is ignored.
+ * Which introspection root fields a document selects at the top level of any operation. Root-level
+ * fragment spreads and inline fragments are followed transitively (each fragment once); field
+ * sub-selections are not, because `__schema` is only introspection at the root. `__typename` is not
+ * introspection in any useful sense and is ignored.
  */
 export function detectIntrospection(document: DocumentNode): IntrospectionKind[] {
 	const found = new Set<IntrospectionKind>()
@@ -245,22 +254,24 @@ export function detectIntrospection(document: DocumentNode): IntrospectionKind[]
 		if (def.kind === Kind.FRAGMENT_DEFINITION) fragments.set(def.name.value, def.selectionSet)
 	}
 
-	const scan = (selectionSet: SelectionSetNode, followSpreads: boolean): void => {
+	const visited = new Set<string>()
+	const scan = (selectionSet: SelectionSetNode): void => {
 		for (const sel of selectionSet.selections) {
 			if (sel.kind === Kind.FIELD) {
 				if (sel.name.value === "__schema") found.add("schema")
 				else if (sel.name.value === "__type") found.add("type")
 			} else if (sel.kind === Kind.INLINE_FRAGMENT) {
-				scan(sel.selectionSet, followSpreads)
-			} else if (sel.kind === Kind.FRAGMENT_SPREAD && followSpreads) {
+				scan(sel.selectionSet)
+			} else if (sel.kind === Kind.FRAGMENT_SPREAD && !visited.has(sel.name.value)) {
+				visited.add(sel.name.value)
 				const frag = fragments.get(sel.name.value)
-				if (frag) scan(frag, false)
+				if (frag) scan(frag)
 			}
 		}
 	}
 
 	for (const def of document.definitions) {
-		if (def.kind === Kind.OPERATION_DEFINITION) scan(def.selectionSet, true)
+		if (def.kind === Kind.OPERATION_DEFINITION) scan(def.selectionSet)
 	}
 	return [...found]
 }
