@@ -1,32 +1,27 @@
 /**
  * Extract the real client IP from request headers.
  *
- * Prefers `X-Real-IP` because it's the unspoofable value in this cluster's
- * topology: DO LoadBalancer → ingress-nginx with `externalTrafficPolicy:
- * Local` and L4 TCP passthrough preserves the real client source IP to
- * nginx, and nginx sets `X-Real-IP = $remote_addr` — single-valued, and
- * overwrites any client-supplied header so it can't be forged over HTTP.
+ * Trusts exactly one thing: the RIGHTMOST `X-Forwarded-For` entry. Traffic reaches the api through
+ * the Cilium Gateway's Envoy, which appends the address it accepted the connection from to the right
+ * of whatever `X-Forwarded-For` the client sent. Everything to the left of that entry is
+ * client-controlled.
  *
- * `X-Forwarded-For` is a fallback: nginx appends its own observed
- * `$remote_addr` to the *right* of any client-supplied XFF via
- * `$proxy_add_x_forwarded_for`, so the **rightmost** entry is trustworthy
- * and everything to the left is client-controlled / spoofable. We never
- * read the leftmost XFF entry here.
+ * `X-Real-IP` is deliberately ignored. The old stack's ingress-nginx overwrote it with
+ * `$remote_addr`, which made it the best header to read; Envoy does not set it at all, so on this
+ * cluster it is whatever the caller chose to send. Verified 2026-10-03 against the live api: a
+ * request with `X-Real-IP: 203.0.113.77` was logged as 203.0.113.77, and one with a forged
+ * `X-Forwarded-For` was logged with the sender's true address. Reading `X-Real-IP` first let any
+ * caller pick their own identity — for the logs, and for the per-IP rate limiter.
  *
- * Returns `null` if neither header is present.
+ * Returns `null` when there is no `X-Forwarded-For`, which is the case for in-cluster callers that
+ * reach the Service directly without passing the Gateway.
  */
 export function extractClientIp(headers: Headers): string | null {
-	const xRealIp = headers.get("x-real-ip")?.trim()
-	if (xRealIp) return xRealIp
-
 	const xff = headers.get("x-forwarded-for")
-	if (xff) {
-		const parts = xff
-			.split(",")
-			.map((s) => s.trim())
-			.filter(Boolean)
-		const rightmost = parts[parts.length - 1]
-		if (rightmost) return rightmost
-	}
-	return null
+	if (!xff) return null
+	const parts = xff
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean)
+	return parts[parts.length - 1] ?? null
 }

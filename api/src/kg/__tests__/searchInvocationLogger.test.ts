@@ -142,17 +142,17 @@ describe("useSearchInvocationLogger (integration)", () => {
 		})
 	})
 
-	it("records X-Real-IP as clientIp", async () => {
-		await executeGraphQL(`{ search(query: "ip-probe") { id } }`, undefined, {"X-Real-IP": "203.0.113.5"})
+	it("records the rightmost X-Forwarded-For entry as clientIp", async () => {
+		await executeGraphQL(`{ search(query: "ip-probe") { id } }`, undefined, {"X-Forwarded-For": "203.0.113.5"})
 		const warnings = warningsMatching("search field invoked")
 		expect(warnings).toHaveLength(1)
 		const [, payload] = warnings[0] as [string, Record<string, unknown>]
 		expect(payload.clientIp).toBe("203.0.113.5")
 	})
 
-	it("ignores spoofed leftmost X-Forwarded-For entries when X-Real-IP is present", async () => {
+	it("ignores a client-supplied X-Real-IP", async () => {
 		await executeGraphQL(`{ search(query: "spoof-probe") { id } }`, undefined, {
-			"X-Real-IP": "203.0.113.5",
+			"X-Real-IP": "198.51.100.1",
 			"X-Forwarded-For": "1.2.3.4, 203.0.113.5",
 		})
 		const warnings = warningsMatching("search field invoked")
@@ -160,7 +160,7 @@ describe("useSearchInvocationLogger (integration)", () => {
 		expect(payload.clientIp).toBe("203.0.113.5")
 	})
 
-	it("falls back to rightmost X-Forwarded-For entry when X-Real-IP is absent", async () => {
+	it("uses only the rightmost X-Forwarded-For entry", async () => {
 		await executeGraphQL(`{ search(query: "xff-probe") { id } }`, undefined, {
 			"X-Forwarded-For": "1.2.3.4, 203.0.113.5",
 		})
@@ -171,7 +171,7 @@ describe("useSearchInvocationLogger (integration)", () => {
 
 	it("captures origin and user-agent when present", async () => {
 		await executeGraphQL(`{ search(query: "ua-probe") { id } }`, undefined, {
-			"X-Real-IP": "203.0.113.5",
+			"X-Forwarded-For": "203.0.113.5",
 			Origin: "https://app.geobrowser.io",
 			"User-Agent": "Mozilla/5.0 test-runner",
 		})

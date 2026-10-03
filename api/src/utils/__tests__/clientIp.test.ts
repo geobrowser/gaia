@@ -6,25 +6,20 @@ describe("extractClientIp", () => {
 		return new Headers(entries)
 	}
 
-	it("prefers X-Real-IP", () => {
-		expect(extractClientIp(h({"x-real-ip": "203.0.113.5"}))).toBe("203.0.113.5")
-	})
-
-	it("returns rightmost X-Forwarded-For entry when X-Real-IP is absent", () => {
-		// nginx appends its observation to the right of any client-supplied XFF,
-		// so the rightmost entry is trusted and the leftmost is spoofable.
+	it("returns the rightmost X-Forwarded-For entry, the one the Gateway appended", () => {
 		expect(extractClientIp(h({"x-forwarded-for": "1.2.3.4, 5.6.7.8, 203.0.113.5"}))).toBe("203.0.113.5")
 	})
 
-	it("ignores spoofed leftmost X-Forwarded-For entries when X-Real-IP is present", () => {
-		const headers = h({
-			"x-real-ip": "203.0.113.5",
-			"x-forwarded-for": "1.2.3.4, 203.0.113.5",
-		})
-		expect(extractClientIp(headers)).toBe("203.0.113.5")
+	it("ignores X-Real-IP, which the Gateway passes through unchanged", () => {
+		expect(extractClientIp(h({"x-real-ip": "198.51.100.1"}))).toBeNull()
+		expect(extractClientIp(h({"x-real-ip": "198.51.100.1", "x-forwarded-for": "203.0.113.5"}))).toBe("203.0.113.5")
 	})
 
-	it("returns null when neither header is present", () => {
+	it("ignores spoofed leftmost X-Forwarded-For entries", () => {
+		expect(extractClientIp(h({"x-forwarded-for": "198.51.100.1, 203.0.113.5"}))).toBe("203.0.113.5")
+	})
+
+	it("returns null when X-Forwarded-For is absent (in-cluster callers)", () => {
 		expect(extractClientIp(h({}))).toBeNull()
 	})
 
@@ -33,8 +28,8 @@ describe("extractClientIp", () => {
 		expect(extractClientIp(h({"x-forwarded-for": ",  ,"}))).toBeNull()
 	})
 
-	it("trims whitespace around X-Real-IP", () => {
-		expect(extractClientIp(h({"x-real-ip": "  203.0.113.5  "}))).toBe("203.0.113.5")
+	it("trims whitespace", () => {
+		expect(extractClientIp(h({"x-forwarded-for": "1.2.3.4,   203.0.113.5  "}))).toBe("203.0.113.5")
 	})
 
 	it("handles single-entry X-Forwarded-For", () => {
