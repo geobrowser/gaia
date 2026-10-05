@@ -63,6 +63,17 @@ impl Default for RetryConfig {
     }
 }
 
+/// Why a URI is being fetched, which decides what a miss costs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UriKind {
+    /// EDITS_PUBLISHED content: the edit itself. A miss loses data.
+    Edit,
+    /// Proposal content, read only to give the proposal a human-readable name.
+    /// hermes-ipfs-cache does not fetch these (it consumes `map_edits_published`),
+    /// so they are often absent; a miss loses only the name.
+    ProposalName,
+}
+
 /// A request to fetch an IPFS URI from the cache.
 #[derive(Debug, Clone)]
 struct FetchRequest {
@@ -70,6 +81,7 @@ struct FetchRequest {
     uri: String,
     /// The space ID for context
     space_id: Vec<u8>,
+    kind: UriKind,
 }
 
 /// Result of prefetching all IPFS URIs for a block.
@@ -82,6 +94,8 @@ pub struct PrefetchResult {
     pub cache: HashMap<String, CachedEdit>,
     /// Number of cache misses (after all retries exhausted).
     pub cache_misses: u64,
+    /// The subset of `cache_misses` that are edit content rather than proposal names.
+    pub edit_misses: u64,
     /// Number of errored entries (cache marked them as failed).
     pub errored_entries: u64,
     /// Number of fetch failures (database errors, etc.).
@@ -106,6 +120,7 @@ fn collect_uris(actions: &[Action]) -> Vec<FetchRequest> {
             requests.push(FetchRequest {
                 uri: ipfs_uri,
                 space_id: action.from_id.clone(),
+                kind: UriKind::Edit,
             });
         }
 
@@ -122,6 +137,7 @@ fn collect_uris(actions: &[Action]) -> Vec<FetchRequest> {
                     requests.push(FetchRequest {
                         uri: args.content_uri,
                         space_id: action.to_id.clone(), // space owning the proposal
+                        kind: UriKind::ProposalName,
                     });
                 }
 
@@ -135,17 +151,35 @@ fn collect_uris(actions: &[Action]) -> Vec<FetchRequest> {
                     requests.push(FetchRequest {
                         uri: args.content_uri,
                         space_id: action.to_id.clone(), // space owning the proposal
+                        kind: UriKind::ProposalName,
                     });
                 }
             }
         }
     }
 
-    // Deduplicate by URI (same URI might appear multiple times)
-    let mut seen = std::collections::HashSet::new();
-    requests.retain(|req| seen.insert(req.uri.clone()));
+    dedupe_requests(requests)
+}
 
-    requests
+/// One request per URI. A URI wanted both as an edit and as a proposal name is
+/// kept as an edit, so a miss on it is never downgraded to "only a name".
+fn dedupe_requests(requests: Vec<FetchRequest>) -> Vec<FetchRequest> {
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut deduped: Vec<FetchRequest> = Vec::with_capacity(requests.len());
+    for request in requests {
+        match index.get(&request.uri) {
+            Some(&i) => {
+                if request.kind == UriKind::Edit {
+                    deduped[i].kind = UriKind::Edit;
+                }
+            }
+            None => {
+                index.insert(request.uri.clone(), deduped.len());
+                deduped.push(request);
+            }
+        }
+    }
+    deduped
 }
 
 /// Prefetch all IPFS URIs needed for a block.
@@ -163,8 +197,15 @@ pub async fn prefetch_block(
     config: &RetryConfig,
     block_number: u64,
 ) -> PrefetchResult {
-    let requests = collect_uris(actions);
+    prefetch_requests(collect_uris(actions), cache, config, block_number).await
+}
 
+async fn prefetch_requests(
+    requests: Vec<FetchRequest>,
+    cache: &Arc<dyn IpfsCache>,
+    config: &RetryConfig,
+    block_number: u64,
+) -> PrefetchResult {
     if requests.is_empty() {
         return PrefetchResult::default();
     }
@@ -184,6 +225,11 @@ pub async fn prefetch_block(
     // then we wait instead of dropping. Waiting is bounded by the warmer's own
     // progress, not by a timeout, so this cannot stall on content that the
     // warmer has already ruled on.
+    // Measured in wall time. This used to count only the sleeps between passes
+    // (WARMER_POLL_INTERVAL * passes), ignoring the ~10-25s each `fetch_once` spends
+    // retrying, which stretched the "10 minute" backstop to ~100 minutes. tokio's
+    // clock, so tests can pause it.
+    let started = tokio::time::Instant::now();
     let mut waits: u32 = 0;
     loop {
         let result = fetch_once(&requests, cache, config).await;
@@ -195,19 +241,30 @@ pub async fn prefetch_block(
         match cache.warmer_block().await {
             // Warmer is past this block: the misses are real verdicts.
             Some(warmer) if warmer >= block_number => {
-                tracing::error!(
-                    block_number,
-                    warmer_block = warmer,
-                    count = result.cache_misses,
-                    "Cache misses persist though the IPFS warmer is past this block; \
-                     treating as unfetchable"
-                );
+                if result.edit_misses > 0 {
+                    tracing::error!(
+                        block_number,
+                        warmer_block = warmer,
+                        count = result.edit_misses,
+                        "Edit content still missing though the IPFS warmer is past this block; \
+                         treating as unfetchable"
+                    );
+                } else {
+                    // Expected until hermes-ipfs-cache caches proposal content: it only
+                    // consumes map_edits_published, so these rows are never written.
+                    tracing::warn!(
+                        block_number,
+                        warmer_block = warmer,
+                        count = result.cache_misses,
+                        "Proposal content not in the IPFS cache; emitting without proposal names"
+                    );
+                }
                 return result;
             }
             // Warmer is behind (or unknown): these URIs are simply not fetched
             // yet. Hold the block — do NOT let the cursor advance past it.
             other => {
-                let waited = WARMER_POLL_INTERVAL * waits;
+                let waited = started.elapsed();
                 if waited >= config.warmer_wait_max {
                     tracing::error!(
                         block_number,
@@ -226,7 +283,7 @@ pub async fn prefetch_block(
                         block_number,
                         warmer_block = ?other,
                         outstanding = result.cache_misses,
-                        waited_secs = waits * WARMER_POLL_INTERVAL.as_secs() as u32,
+                        waited_secs = waited.as_secs(),
                         "Waiting for the IPFS warmer to reach this block before emitting; \
                          edits would otherwise be dropped"
                     );
@@ -247,19 +304,15 @@ async fn fetch_once(
     let fetch_futures = requests.iter().map(|request| {
         let cache = Arc::clone(cache);
         let config = config.clone();
-        let uri = request.uri.clone();
-        let space_id = request.space_id.clone();
+        let request = request.clone();
 
         async move {
-            let space_id_hex = hex::encode(&space_id);
-            let request = FetchRequest {
-                uri: uri.clone(),
-                space_id: space_id.clone(),
-            };
-            let fetch_result = debug_span!("prefetch.fetch", uri = %uri, space_id = %space_id_hex)
-                .in_scope(|| fetch_with_retry(&request, &cache, &config))
-                .await;
-            (uri, fetch_result)
+            let space_id_hex = hex::encode(&request.space_id);
+            let fetch_result =
+                debug_span!("prefetch.fetch", uri = %request.uri, space_id = %space_id_hex)
+                    .in_scope(|| fetch_with_retry(&request, &cache, &config))
+                    .await;
+            (request.uri, request.kind, fetch_result)
         }
     });
 
@@ -267,15 +320,18 @@ async fn fetch_once(
 
     // Collect results
     let mut result = PrefetchResult::default();
-    for (uri, fetch_result) in fetch_results {
+    for (uri, kind, fetch_result) in fetch_results {
         match fetch_result {
             FetchResult::Success(cached_edit) => {
                 tracing::debug!(uri = %uri, "Prefetch success");
                 result.cache.insert(uri, cached_edit);
             }
             FetchResult::CacheMiss => {
-                tracing::warn!(uri = %uri, "Prefetch cache miss after retries");
+                tracing::warn!(uri = %uri, kind = ?kind, "Prefetch cache miss after retries");
                 result.cache_misses += 1;
+                if kind == UriKind::Edit {
+                    result.edit_misses += 1;
+                }
             }
             FetchResult::Errored(cached_edit) => {
                 tracing::warn!(uri = %uri, "Prefetch found errored entry in cache");
@@ -375,30 +431,22 @@ mod tests {
     use super::*;
     use crate::cache::MockIpfsCache;
 
+    fn request(uri: &str, kind: UriKind) -> FetchRequest {
+        FetchRequest {
+            uri: uri.to_string(),
+            space_id: vec![1; 16],
+            kind,
+        }
+    }
+
     #[test]
     fn test_collect_uris_deduplicates() {
         // Same URI appearing in multiple places should only be fetched once
-        let requests = vec![
-            FetchRequest {
-                uri: "ipfs://Qm123".to_string(),
-                space_id: vec![1; 16],
-            },
-            FetchRequest {
-                uri: "ipfs://Qm123".to_string(),
-                space_id: vec![2; 16],
-            },
-            FetchRequest {
-                uri: "ipfs://Qm456".to_string(),
-                space_id: vec![1; 16],
-            },
-        ];
-
-        let mut seen = std::collections::HashSet::new();
-        let deduped: Vec<_> = requests
-            .into_iter()
-            .filter(|req| seen.insert(req.uri.clone()))
-            .collect();
-
+        let deduped = dedupe_requests(vec![
+            request("ipfs://Qm123", UriKind::Edit),
+            request("ipfs://Qm123", UriKind::Edit),
+            request("ipfs://Qm456", UriKind::Edit),
+        ]);
         assert_eq!(deduped.len(), 2);
     }
 
@@ -524,6 +572,124 @@ mod tests {
             warmer, pipeline,
             "map_ipfs_uris must yield every URI the pipeline will wait for"
         );
+    }
+
+    #[test]
+    fn dedupe_keeps_a_uri_wanted_as_both_an_edit_and_a_name_as_an_edit() {
+        let deduped = dedupe_requests(vec![
+            request("ipfs://Qm123", UriKind::ProposalName),
+            request("ipfs://Qm123", UriKind::Edit),
+        ]);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].kind, UriKind::Edit);
+    }
+
+    /// Cache that never has the hash, reports a fixed warmer position, and makes
+    /// every lookup take `lookup` of (tokio) time — the cost a real `fetch_once`
+    /// pays in retries, which the old wait accounting ignored.
+    struct SlowMissingCache {
+        warmer: Option<u64>,
+        lookup: Duration,
+        lookups: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl IpfsCache for SlowMissingCache {
+        async fn warmer_block(&self) -> Option<u64> {
+            self.warmer
+        }
+
+        async fn get(&self, ipfs_hash: &str, _space_id: &[u8]) -> Result<CachedEdit, CacheError> {
+            self.lookups.fetch_add(1, Ordering::Relaxed);
+            tokio::time::sleep(self.lookup).await;
+            Err(CacheError::NotFound(ipfs_hash.to_string()))
+        }
+    }
+
+    // 2026-10-05: proposal content is never cached by hermes-ipfs-cache, and the
+    // pipeline could not see the warmer, so one edit proposal held the indexer ~2h.
+    // With the warmer past the block, a missing proposal name must not hold it at all.
+    #[tokio::test(start_paused = true)]
+    async fn a_missing_proposal_name_does_not_hold_the_block_once_the_warmer_has_passed() {
+        let slow = Arc::new(SlowMissingCache {
+            warmer: Some(72_441),
+            lookup: Duration::from_secs(1),
+            lookups: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let cache: Arc<dyn IpfsCache> = slow.clone();
+        let mut config = fast_retry_config();
+        config.warmer_wait_max = Duration::from_secs(600);
+
+        let result = prefetch_requests(
+            vec![request("ipfs://QmProposalContent", UriKind::ProposalName)],
+            &cache,
+            &config,
+            72_338,
+        )
+        .await;
+
+        assert_eq!(result.cache_misses, 1);
+        assert_eq!(result.edit_misses, 0, "a proposal name is not edit content");
+        assert_eq!(
+            slow.lookups.load(Ordering::Relaxed),
+            config.max_retries + 1,
+            "exactly one pass, then a verdict"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_missing_edit_counts_as_an_edit_miss() {
+        let cache: Arc<dyn IpfsCache> = Arc::new(SlowMissingCache {
+            warmer: Some(100),
+            lookup: Duration::ZERO,
+            lookups: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let result = prefetch_requests(
+            vec![
+                request("ipfs://QmEdit", UriKind::Edit),
+                request("ipfs://QmName", UriKind::ProposalName),
+            ],
+            &cache,
+            &fast_retry_config(),
+            100,
+        )
+        .await;
+        assert_eq!(result.cache_misses, 2);
+        assert_eq!(result.edit_misses, 1);
+    }
+
+    // The backstop is wall time. With each pass costing 3s of lookups and a 4s
+    // limit, the wait must end after the second pass (3s + 2s sleep + 3s = 8s >= 4s).
+    // The old accounting counted only sleeps (2s per pass) and needed a third pass —
+    // and in production, ~100 minutes for a "10 minute" limit.
+    #[tokio::test(start_paused = true)]
+    async fn the_warmer_wait_backstop_is_measured_in_wall_time() {
+        let slow = Arc::new(SlowMissingCache {
+            warmer: None,
+            lookup: Duration::from_secs(3),
+            lookups: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let cache: Arc<dyn IpfsCache> = slow.clone();
+        let mut config = fast_retry_config();
+        config.max_retries = 0;
+        config.warmer_wait_max = Duration::from_secs(4);
+
+        let started = tokio::time::Instant::now();
+        let result = prefetch_requests(
+            vec![request("ipfs://QmEdit", UriKind::Edit)],
+            &cache,
+            &config,
+            100,
+        )
+        .await;
+
+        assert_eq!(result.edit_misses, 1);
+        assert_eq!(
+            slow.lookups.load(Ordering::Relaxed),
+            2,
+            "two passes, not three"
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     /// Fast retry config so cache-miss tests don't sit on the default 10-retry

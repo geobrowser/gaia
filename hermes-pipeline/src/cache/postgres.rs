@@ -49,6 +49,11 @@ impl PostgresCache {
     }
 }
 
+/// `meta.block_number` is stored as text by every indexer that writes `meta`.
+fn parse_block_number(text: &str) -> Option<u64> {
+    text.trim().parse().ok()
+}
+
 /// `meta.id` under which hermes-ipfs-cache persists its cursor. Must match the
 /// indexer id the warmer writes (see hermes-ipfs-cache's cursor store).
 const IPFS_CACHE_INDEXER_ID: &str = "hermes_ipfs_cache";
@@ -59,14 +64,37 @@ impl IpfsCache for PostgresCache {
     /// error this returns `None` — "unknown", which callers treat as "not yet
     /// processed" so a transient DB blip can never be mistaken for a verdict
     /// that content is unfetchable.
+    ///
+    /// `meta.block_number` is TEXT. This used to decode it as `i64`; the type
+    /// mismatch was swallowed by `.ok()`, so from #845 until 2026-10-05 this always
+    /// returned `None` and every unfetchable URI held the pipeline for the full
+    /// `warmer_wait_max` backstop (a ~2h indexer stall that day). Failures are now
+    /// logged, so a wrong answer here can never again look like a slow warmer.
     async fn warmer_block(&self) -> Option<u64> {
-        sqlx::query_scalar::<_, i64>("SELECT block_number FROM meta WHERE id = $1")
+        let row = sqlx::query_scalar::<_, String>("SELECT block_number FROM meta WHERE id = $1")
             .bind(IPFS_CACHE_INDEXER_ID)
             .fetch_optional(&self.pool)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|b| u64::try_from(b).ok())
+            .await;
+        match row {
+            Ok(Some(text)) => {
+                let parsed = parse_block_number(&text);
+                if parsed.is_none() {
+                    tracing::warn!(value = %text, "IPFS warmer cursor block_number is not a block number");
+                }
+                parsed
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    id = IPFS_CACHE_INDEXER_ID,
+                    "IPFS warmer has no cursor row in meta"
+                );
+                None
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "Could not read the IPFS warmer cursor");
+                None
+            }
+        }
     }
 
     async fn get(&self, ipfs_hash: &str, _space_id: &[u8]) -> Result<CachedEdit, CacheError> {
@@ -107,5 +135,40 @@ impl IpfsCache for PostgresCache {
             }
             None => Err(CacheError::NotFound(ipfs_hash.to_string())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_the_text_block_numbers_meta_stores() {
+        assert_eq!(parse_block_number("72441"), Some(72441));
+        assert_eq!(parse_block_number(" 72441\n"), Some(72441));
+        assert_eq!(parse_block_number(""), None);
+        assert_eq!(parse_block_number("-1"), None);
+        assert_eq!(parse_block_number("abc"), None);
+    }
+
+    /// The 2026-10-05 regression, against a real Postgres: `meta.block_number` is
+    /// TEXT, and reading it must yield the warmer's block. Ignored by default because
+    /// it needs a database:
+    ///   DATABASE_URL=postgres://… cargo test -p hermes-pipeline -- --ignored warmer_block_reads
+    #[tokio::test]
+    #[ignore = "needs DATABASE_URL pointing at a scratch Postgres"]
+    async fn warmer_block_reads_the_text_cursor_meta_stores() {
+        let url = std::env::var("DATABASE_URL").expect("DATABASE_URL");
+        let cache = PostgresCache::new(&url).await.expect("connect");
+        sqlx::query("CREATE TABLE IF NOT EXISTS meta (id text PRIMARY KEY, cursor text NOT NULL, block_number text NOT NULL)")
+            .execute(&cache.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO meta (id, cursor, block_number) VALUES ($1, 'c', '72441') ON CONFLICT (id) DO UPDATE SET block_number = '72441'")
+            .bind(IPFS_CACHE_INDEXER_ID)
+            .execute(&cache.pool)
+            .await
+            .unwrap();
+        assert_eq!(cache.warmer_block().await, Some(72441));
     }
 }
