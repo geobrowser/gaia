@@ -45,5 +45,6 @@ COPY --from=builder /app/ranking-indexer/target/release/account_weights_refresh 
 COPY --from=builder /app/ranking-indexer/target/release/topic_ranking_reconcile /usr/local/bin/topic_ranking_reconcile
 COPY --from=builder /app/ranking-indexer/target/release/topic_interest /usr/local/bin/topic_interest
 COPY --from=builder /app/ranking-indexer/target/release/account_exclusions_sync /usr/local/bin/account_exclusions_sync
+COPY --from=builder /app/ranking-indexer/target/release/primer_claims_refresh /usr/local/bin/primer_claims_refresh
 
 CMD ["ranking-indexer"]

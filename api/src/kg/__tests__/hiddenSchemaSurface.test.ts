@@ -41,4 +41,17 @@ describe("hidden schema surface", () => {
 		expect(queryFields.filter((f) => net.test(f))).toEqual([])
 		expect(mutationFields.filter((f) => net.test(f))).toEqual([])
 	})
+
+	// GEO-3143: the primer and anchor reads are public, and return entities, never the scores or
+	// account weights they were chosen from.
+	it("exposes the primer and anchor reads as entity lists", () => {
+		const fields = postgraphileSchema.getQueryType()?.getFields() ?? {}
+		for (const name of ["nextPrimerClaim", "anchorClaims"]) {
+			expect(queryFields).toContain(name)
+			expect(String(fields[name]?.type)).toMatch(/Entit/)
+		}
+		expect(fields.nextPrimerClaim?.args.map((a) => a.name)).toEqual(
+			expect.arrayContaining(["userId", "spaceIds", "answeredClaimIds", "skippedClaimIds"]),
+		)
+	})
 })

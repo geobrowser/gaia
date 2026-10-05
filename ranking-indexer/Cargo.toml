@@ -44,6 +44,11 @@ path = "src/bin/topic_interest.rs"
 name = "account_exclusions_sync"
 path = "src/bin/account_exclusions_sync.rs"
 
+# Onboarding primer statistics hourly, anchor claims monthly (GEO-3143, migration 0103).
+[[bin]]
+name = "primer_claims_refresh"
+path = "src/bin/primer_claims_refresh.rs"
+
 [dependencies]
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
