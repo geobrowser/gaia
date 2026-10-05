@@ -31,4 +31,14 @@ describe("hidden schema surface", () => {
 	it.each([...HIDDEN_SURFACE.mutations])("does not expose the %s mutation", (name) => {
 		expect(mutationFields).not.toContain(name)
 	})
+
+	// GEO-3088: what a user engages with, and the topic interests learned from it, are private.
+	// They live in the `personalization` schema, which is safe only while PostGraphile is pointed at
+	// `public` alone; this fails if the schema list grows or a table or function moves into `public`.
+	it("does not expose per-user interest data", () => {
+		const net = /interest|cooccurrence|personali[sz]ation/i
+		expect(typeNames.filter((t) => net.test(t))).toEqual([])
+		expect(queryFields.filter((f) => net.test(f))).toEqual([])
+		expect(mutationFields.filter((f) => net.test(f))).toEqual([])
+	})
 })

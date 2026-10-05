@@ -10,6 +10,7 @@ import {
 	countRejection,
 	countSuppressedLogLine,
 	detectIntrospection,
+	HIDDEN_SURFACE,
 	renderSecuritySignalMetrics,
 	selectedOperationTargetsMissingRoot,
 	targetsMissingRootType,
@@ -98,10 +99,12 @@ describe("analyzeRejectedDocument", () => {
 	})
 
 	it("keeps every hidden target, even when a document names all of them", () => {
+		// Built from HIDDEN_SURFACE rather than written out, so it keeps naming every target as the
+		// list grows: one root field per prefix, one inline fragment per type, one mutation each.
 		const doc = `
-			query { appWebhooks { id } notificationOutboxes { id } notificationDeliveries { id } notificationPollCursors { id }
-				node(nodeId: "x") { ... on AppWebhook { id } ... on NotificationOutbox { id } ... on NotificationDelivery { id } ... on NotificationPollCursor { id } } }
-			fragment M on Mutation { refreshSpaceTopicSuggestions sampleFeedComposition recordFeedCompositionSample }`
+			query { ${HIDDEN_SURFACE.queryFieldPrefixes.map((p) => `${p}s { id }`).join(" ")}
+				node(nodeId: "x") { ${HIDDEN_SURFACE.types.map((t) => `... on ${t} { id }`).join(" ")} } }
+			fragment M on Mutation { ${HIDDEN_SURFACE.mutations.join(" ")} }`
 		const a = analyze(doc)
 		expect(a.hiddenSurfaceHits).toHaveLength(ALL_HIDDEN_TARGETS.length)
 		expect([...a.hiddenSurfaceHits].sort()).toEqual([...ALL_HIDDEN_TARGETS].sort())

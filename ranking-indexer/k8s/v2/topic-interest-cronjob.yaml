@@ -1,0 +1,190 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ranking-indexer-topic-interest-sweep
+  namespace: gaia
+  labels:
+    app: ranking-indexer-topic-interest-sweep
+    environment: testnet
+spec:
+  # GEO-3088: learn each user's topic interests from their votes, comments, debates and follows
+  # (migration 0100, `personalization` schema). Recomputes every user with activity since the last
+  # run, so a new vote reaches that user's weights within minutes. Its own CronJob, never part of
+  # the vote-indexer: since GEO-3101 a failed write halts vote indexing, and nothing here may.
+  #
+  # A failed run leaves the cursor where it was; the next one, two minutes later, repeats it.
+  # Skips (and logs it) while the nightly refit holds the lock.
+  schedule: "*/2 * * * *"
+  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 60
+  jobTemplate:
+    spec:
+      # restartPolicy Never + a small backoffLimit keeps the failed pod, and so its error, around
+      # (OnFailure restarts in place and the logs of the failing attempt go with it).
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            environment: testnet
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            fsGroup: 1001
+          imagePullSecrets:
+            - name: geo
+          volumes:
+            - name: ssl-certs
+              emptyDir: {}
+          initContainers:
+            - name: setup-certs
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command:
+                - sh
+                - -c
+                - |
+                  echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+              env:
+                - name: DATABASE_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_SSL_CA
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+          containers:
+            - name: ranking-indexer-topic-interest-sweep
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command: ["topic_interest", "sweep"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+                  readOnly: true
+              env:
+                - name: PGSSLROOTCERT
+                  value: /ssl/ca.crt
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_URL
+                - name: RUST_LOG
+                  value: "topic_interest=info,ranking_indexer=info"
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "128Mi"
+                  cpu: "200m"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ranking-indexer-topic-interest-refit
+  namespace: gaia
+  labels:
+    app: ranking-indexer-topic-interest-refit
+    environment: testnet
+spec:
+  # GEO-3088: nightly, rebuild topic co-occurrence (for spreading interest to related topics),
+  # recompute every user's interests from scratch, and record how far the incremental state had
+  # drifted in personalization.interest_refit_runs (warned in the log when non-zero). 03:37 UTC is
+  # clear of every hourly ranking job (:00, :17, :30, :41, :51).
+  schedule: "37 3 * * *"
+  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      # restartPolicy Never + a small backoffLimit keeps the failed pod, and so its error, around
+      # (OnFailure restarts in place and the logs of the failing attempt go with it).
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            environment: testnet
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            fsGroup: 1001
+          imagePullSecrets:
+            - name: geo
+          volumes:
+            - name: ssl-certs
+              emptyDir: {}
+          initContainers:
+            - name: setup-certs
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command:
+                - sh
+                - -c
+                - |
+                  echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+              env:
+                - name: DATABASE_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_SSL_CA
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+          containers:
+            - name: ranking-indexer-topic-interest-refit
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command: ["topic_interest", "refit"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+                  readOnly: true
+              env:
+                - name: PGSSLROOTCERT
+                  value: /ssl/ca.crt
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_URL
+                - name: RUST_LOG
+                  value: "topic_interest=info,ranking_indexer=info"
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "200m"

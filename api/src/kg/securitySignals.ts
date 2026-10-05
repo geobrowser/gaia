@@ -27,7 +27,8 @@ import {
 
 /**
  * Names that were once public and were removed on purpose — gaia#1010 hid the notification
- * service's tables and three cron write paths after a scanner probed them on 2026-10-03.
+ * service's tables and three cron write paths after a scanner probed them on 2026-10-03 — and
+ * names of private data that must never become public (GEO-3088's per-user interest data).
  *
  * This is the single source of truth: the tripwire matches against it, and
  * `__tests__/hiddenSchemaSurface.test.ts` asserts none of it is in the schema. To hide something
@@ -35,11 +36,54 @@ import {
  */
 export const HIDDEN_SURFACE = {
 	/** GraphQL type names of the omitted tables. */
-	types: ["AppWebhook", "NotificationOutbox", "NotificationDelivery", "NotificationPollCursor"],
+	types: [
+		"AppWebhook",
+		"NotificationOutbox",
+		"NotificationDelivery",
+		"NotificationPollCursor",
+		// GEO-3088's per-user interest data (migration 0100). These were never public: they live in
+		// the `personalization` schema, which PostGraphile does not introspect. Listed so the test
+		// fails if they are ever moved into `public`, and so a request naming them is a probe.
+		"UserTopicSignal",
+		"TopicCooccurrence",
+		"ExternalInterestSignal",
+		"InterestConfig",
+		"InterestSignalWeight",
+		"InterestSweepState",
+		"InterestRefitRun",
+	],
 	/** Root query fields are matched by prefix, which covers every inflection PostGraphile generated. */
-	queryFieldPrefixes: ["appWebhook", "notificationOutbox", "notificationDeliver", "notificationPollCursor"],
+	queryFieldPrefixes: [
+		"appWebhook",
+		"notificationOutbox",
+		"notificationDeliver",
+		"notificationPollCursor",
+		// GEO-3088 tables, and its read functions (STABLE, so they would be query fields).
+		"userTopicSignal",
+		"topicCooccurrence",
+		"externalInterestSignal",
+		"interestConfig",
+		"interestSignalWeight",
+		"interestSweepState",
+		"interestRefitRun",
+		"userTopicWeights",
+		"userTopicContributions",
+		"userTopicInterest",
+		"userInterestEvents",
+		"computeUserTopicSignals",
+		"dirtyInterestUsers",
+	],
 	/** The omitted volatile functions, by their mutation names. */
-	mutations: ["refreshSpaceTopicSuggestions", "sampleFeedComposition", "recordFeedCompositionSample"],
+	mutations: [
+		"refreshSpaceTopicSuggestions",
+		"sampleFeedComposition",
+		"recordFeedCompositionSample",
+		// GEO-3088's write paths, run by ranking-indexer's topic_interest CronJobs.
+		"sweepUserTopicInterest",
+		"refitUserTopicInterest",
+		"recomputeUserTopicInterest",
+		"refreshTopicCooccurrence",
+	],
 } as const
 
 export type SignalKind = "parse_failed" | "validation_failed" | "hidden_surface_probe" | "introspection"

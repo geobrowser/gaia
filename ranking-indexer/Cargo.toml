@@ -30,6 +30,11 @@ path = "src/bin/topic_suggestions_refresh.rs"
 name = "topic_ranking_reconcile"
 path = "src/bin/topic_ranking_reconcile.rs"
 
+# Per-user topic interest (GEO-3088, migration 0100): `sweep` every 2 minutes, `refit` nightly.
+[[bin]]
+name = "topic_interest"
+path = "src/bin/topic_interest.rs"
+
 [dependencies]
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
