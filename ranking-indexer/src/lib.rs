@@ -15,3 +15,4 @@ pub mod publish;
 pub mod recompute;
 pub mod scoring;
 pub mod storage;
+pub mod topic_interest;
