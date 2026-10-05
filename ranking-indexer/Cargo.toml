@@ -39,6 +39,11 @@ path = "src/bin/topic_ranking_reconcile.rs"
 name = "topic_interest"
 path = "src/bin/topic_interest.rs"
 
+# Nightly analytics -> gaia test-account exclusion sync (GEO-3141, migration 0101).
+[[bin]]
+name = "account_exclusions_sync"
+path = "src/bin/account_exclusions_sync.rs"
+
 [dependencies]
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
