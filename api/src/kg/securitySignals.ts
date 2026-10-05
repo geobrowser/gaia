@@ -59,6 +59,13 @@ export const HIDDEN_SURFACE = {
 		"FeedConfigRevision",
 		"FeedExperiment",
 		"FeedExperimentMember",
+		// GEO-3143 primer and anchor selection state (migration 0103). Built from account weights,
+		// so private; the public reads are `nextPrimerClaim` and `anchorClaims`, which return
+		// entities only.
+		"PrimerClaimStat",
+		"AnchorClaimSet",
+		"AnchorClaimMember",
+		"ClaimOverlapSample",
 	],
 	/** Root query fields are matched by prefix, which covers every inflection PostGraphile generated. */
 	queryFieldPrefixes: [
@@ -87,6 +94,12 @@ export const HIDDEN_SURFACE = {
 		"forYouCandidates",
 		"feedConfigRevision",
 		"feedExperiment",
+		"primerClaimStat",
+		"primerCandidate",
+		"anchorClaimSet",
+		"anchorClaimMember",
+		"claimOverlap",
+		"binaryEntropyBits",
 	],
 	/** The omitted volatile functions, by their mutation names. */
 	mutations: [
@@ -100,6 +113,10 @@ export const HIDDEN_SURFACE = {
 		"refreshTopicCooccurrence",
 		"refreshAccountWeights",
 		"replaceAccountExclusions",
+		// GEO-3143's write paths, run by ranking-indexer's primer-claims CronJob.
+		"refreshPrimerClaimStats",
+		"refreshAnchorClaims",
+		"recordClaimOverlapSample",
 	],
 } as const
 
