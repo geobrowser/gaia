@@ -1,0 +1,117 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ranking-indexer-account-exclusions-sync
+  namespace: gaia
+  labels:
+    app: ranking-indexer-account-exclusions-sync
+    environment: testnet
+spec:
+  # GEO-3141: nightly sync of the test-account exclusion list from analytics
+  # (`analytics.gaia_account_exclusions`, ClickHouse) into `account_exclusions`, matched to personal
+  # spaces by wallet hash. The hourly account-weights job (:53) then gives those voters weight 0.
+  #
+  # SUSPENDED until the ClickHouse reader exists: create the `account-exclusions-sync` Secret, run
+  # the dry run (account-exclusions-sync-dryrun-job.yaml) and check it against the 2 Oct audit, then
+  # set `suspend: false` here. deploy-v2 re-applies this file, so flip it in git, not with kubectl.
+  #
+  # 02:47 UTC, so the weights refresh six minutes later applies it; clear of the other ranking
+  # jobs. Refuses to write (and fails the Job) when analytics returns nothing, when nothing matches a
+  # personal space, or when more than EXCLUSION_SYNC_MAX_EXCLUDED spaces would be excluded.
+  suspend: true
+  schedule: "47 2 * * *"
+  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      # Never + backoffLimit 1: a failed attempt's pod, and so its error, stays around.
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400 # clear finished runs after a day, so a stale failure stops firing KubeJobFailed
+      template:
+        metadata:
+          labels:
+            environment: testnet
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            fsGroup: 1001
+          imagePullSecrets:
+            - name: geo
+          volumes:
+            - name: ssl-certs
+              emptyDir: {}
+          initContainers:
+            - name: setup-certs
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command:
+                - sh
+                - -c
+                - |
+                  echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+              env:
+                - name: DATABASE_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_SSL_CA
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+          containers:
+            - name: ranking-indexer-account-exclusions-sync
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command: ["account_exclusions_sync"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+                  readOnly: true
+              env:
+                - name: PGSSLROOTCERT
+                  value: /ssl/ca.crt
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_URL
+                - name: CLICKHOUSE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: account-exclusions-sync
+                      key: CLICKHOUSE_URL
+                - name: CLICKHOUSE_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: account-exclusions-sync
+                      key: CLICKHOUSE_USER
+                - name: CLICKHOUSE_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: account-exclusions-sync
+                      key: CLICKHOUSE_PASSWORD
+                # More than this many excluded spaces is treated as a broken read, not a list.
+                - name: EXCLUSION_SYNC_MAX_EXCLUDED
+                  value: "500"
+                - name: RUST_LOG
+                  value: "account_exclusions_sync=info,ranking_indexer=info"
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "200m"

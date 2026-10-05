@@ -1,0 +1,109 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ranking-indexer-account-exclusions-dryrun
+  namespace: gaia
+  labels:
+    app: ranking-indexer-account-exclusions-sync
+    environment: testnet
+# GEO-3141 acceptance check, run by hand (NOT in deploy-v2's manifest list):
+#
+#   kubectl -n gaia delete job ranking-indexer-account-exclusions-dryrun --ignore-not-found
+#   kubectl -n gaia apply -f ranking-indexer/k8s/v2/account-exclusions-sync-dryrun-job.yaml
+#   kubectl -n gaia logs -f job/ranking-indexer-account-exclusions-dryrun
+#
+# Prints the voters the sync would exclude and keep, counted as of 2 Oct 2026 the way the spec's
+# audit counted them (expected: 159 -> 128, "Preston 9x", John Doe, Bruce Wayne, Codex E2E out;
+# Preston, Arturas, Dovile, Adam, Yaniv, Hugues, Mika kept). Writes nothing.
+spec:
+  # One attempt; the pod and its output stay for a day.
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400 # clear finished runs after a day, so a stale failure stops firing KubeJobFailed
+  template:
+    metadata:
+      labels:
+        environment: testnet
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      volumes:
+        - name: ssl-certs
+          emptyDir: {}
+      initContainers:
+        - name: setup-certs
+          image: registry.digitalocean.com/geo/ranking-indexer:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - |
+              echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+          env:
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: ranking-indexer-account-exclusions-sync
+          image: registry.digitalocean.com/geo/ranking-indexer:latest
+          imagePullPolicy: Always
+          command: ["account_exclusions_sync"]
+          args: ["--dry-run", "--as-of", "2026-10-02", "--list-kept"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
+          env:
+            - name: PGSSLROOTCERT
+              value: /ssl/ca.crt
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: CLICKHOUSE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: account-exclusions-sync
+                  key: CLICKHOUSE_URL
+            - name: CLICKHOUSE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: account-exclusions-sync
+                  key: CLICKHOUSE_USER
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: account-exclusions-sync
+                  key: CLICKHOUSE_PASSWORD
+            # More than this many excluded spaces is treated as a broken read, not a list.
+            - name: EXCLUSION_SYNC_MAX_EXCLUDED
+              value: "500"
+            - name: RUST_LOG
+              value: "account_exclusions_sync=info,ranking_indexer=info"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
