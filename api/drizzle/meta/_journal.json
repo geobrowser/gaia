@@ -708,6 +708,13 @@
       "when": 1791235190300,
       "tag": "0100_user_topic_interest",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1791238334741,
+      "tag": "0101_account_weights",
+      "breakpoints": true
     }
   ]
 }
