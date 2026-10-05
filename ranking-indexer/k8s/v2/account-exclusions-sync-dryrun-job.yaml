@@ -12,9 +12,9 @@ metadata:
 #   kubectl -n gaia apply -f ranking-indexer/k8s/v2/account-exclusions-sync-dryrun-job.yaml
 #   kubectl -n gaia logs -f job/ranking-indexer-account-exclusions-dryrun
 #
-# Prints the voters the sync would exclude and keep, counted as of 2 Oct 2026 the way the spec's
-# audit counted them (expected: 159 -> 128, "Preston 9x", John Doe, Bruce Wayne, Codex E2E out;
-# Preston, Arturas, Dovile, Adam, Yaniv, Hugues, Mika kept). Writes nothing.
+# Prints the voters the sync would exclude and keep (by public Geo name), counted as of 2 Oct 2026
+# the way the spec's audit counted them, to compare with GEO-3141's acceptance criteria
+# (159 -> 128 voters, the named test accounts out, the team kept). Writes nothing.
 spec:
   # One attempt; the pod and its output stay for a day.
   backoffLimit: 0
