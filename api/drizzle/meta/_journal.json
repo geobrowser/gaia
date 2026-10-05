@@ -715,6 +715,13 @@
       "when": 1791238334741,
       "tag": "0101_account_weights",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1791240000000,
+      "tag": "0102_for_you_serving",
+      "breakpoints": true
     }
   ]
 }

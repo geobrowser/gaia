@@ -290,6 +290,14 @@ spec:
                 secretKeyRef:
                   name: api-cache-secrets
                   key: VALKEY_URL
+            # GEO-3140: shared secret for the private /internal/for-you route, called only by the
+            # web app's server. Optional: without it the route is not mounted (404).
+            - name: GAIA_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: api-internal
+                  key: GAIA_INTERNAL_TOKEN
+                  optional: true
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:

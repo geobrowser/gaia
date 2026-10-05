@@ -54,6 +54,11 @@ export const HIDDEN_SURFACE = {
 		// GEO-3141 account weights (migration 0101).
 		"AccountExclusion",
 		"AccountWeight",
+		// GEO-3140 / GEO-3144 For you serving and feed experiments (migration 0102), private schema.
+		"ForYouConfig",
+		"FeedConfigRevision",
+		"FeedExperiment",
+		"FeedExperimentMember",
 	],
 	/** Root query fields are matched by prefix, which covers every inflection PostGraphile generated. */
 	queryFieldPrefixes: [
@@ -78,6 +83,10 @@ export const HIDDEN_SURFACE = {
 		"accountExclusion",
 		"accountWeight",
 		"accountVoteWeight",
+		"forYouConfig",
+		"forYouCandidates",
+		"feedConfigRevision",
+		"feedExperiment",
 	],
 	/** The omitted volatile functions, by their mutation names. */
 	mutations: [
