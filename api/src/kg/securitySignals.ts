@@ -51,6 +51,9 @@ export const HIDDEN_SURFACE = {
 		"InterestSignalWeight",
 		"InterestSweepState",
 		"InterestRefitRun",
+		// GEO-3141 account weights (migration 0101).
+		"AccountExclusion",
+		"AccountWeight",
 	],
 	/** Root query fields are matched by prefix, which covers every inflection PostGraphile generated. */
 	queryFieldPrefixes: [
@@ -72,6 +75,9 @@ export const HIDDEN_SURFACE = {
 		"userInterestEvents",
 		"computeUserTopicSignals",
 		"dirtyInterestUsers",
+		"accountExclusion",
+		"accountWeight",
+		"accountVoteWeight",
 	],
 	/** The omitted volatile functions, by their mutation names. */
 	mutations: [
@@ -83,6 +89,8 @@ export const HIDDEN_SURFACE = {
 		"refitUserTopicInterest",
 		"recomputeUserTopicInterest",
 		"refreshTopicCooccurrence",
+		"refreshAccountWeights",
+		"replaceAccountExclusions",
 	],
 } as const
 

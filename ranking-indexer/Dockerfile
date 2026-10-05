@@ -41,6 +41,7 @@ COPY --from=builder /app/ranking-indexer/target/release/backfill_blocks /usr/loc
 COPY --from=builder /app/ranking-indexer/target/release/rolling_sweep /usr/local/bin/rolling_sweep
 COPY --from=builder /app/ranking-indexer/target/release/feed_composition_sample /usr/local/bin/feed_composition_sample
 COPY --from=builder /app/ranking-indexer/target/release/topic_suggestions_refresh /usr/local/bin/topic_suggestions_refresh
+COPY --from=builder /app/ranking-indexer/target/release/account_weights_refresh /usr/local/bin/account_weights_refresh
 COPY --from=builder /app/ranking-indexer/target/release/topic_ranking_reconcile /usr/local/bin/topic_ranking_reconcile
 COPY --from=builder /app/ranking-indexer/target/release/topic_interest /usr/local/bin/topic_interest
 
