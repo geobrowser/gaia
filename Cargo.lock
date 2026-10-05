@@ -2920,6 +2920,7 @@ dependencies = [
  "hermes-kafka",
  "hermes-relay",
  "hermes-schema",
+ "hermes-substream",
  "hex",
  "opentelemetry 0.31.0",
  "opentelemetry_sdk 0.31.0",

@@ -36,6 +36,8 @@ serde_json = "1"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+# Pins collect_uris to the substream module the IPFS warmer consumes (see prefetch.rs tests).
+hermes-substream = { path = "../hermes-substream" }
 
 [[bench]]
 name = "decode_bench"

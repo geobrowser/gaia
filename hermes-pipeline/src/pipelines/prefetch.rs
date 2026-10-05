@@ -402,6 +402,130 @@ mod tests {
         assert_eq!(deduped.len(), 2);
     }
 
+    // ---------------------------------------------------------------------
+    // The pipeline and the IPFS warmer must agree on which URIs a block needs.
+    //
+    // The warmer (hermes-ipfs-cache) caches whatever `map_ipfs_uris` in
+    // hermes-substream yields; this pipeline waits for whatever `collect_uris`
+    // asks for. Any URI the pipeline wants that the substream does not yield is
+    // never cached, and holds the pipeline at that block. On 2026-10-05 that was
+    // PROPOSAL_UPDATED, which only the pipeline handled: four edited proposals
+    // stalled the indexer for ~80 minutes. Change one side without the other and
+    // this fails.
+    // ---------------------------------------------------------------------
+
+    const CID_EDIT: &str = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdA";
+    const CID_LEGACY_PUBLISH: &str = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdB";
+    const CID_CREATED_PING: &str = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdC";
+    const CID_UPDATED_PING: &str = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdD";
+
+    /// v2 `ping(EDITS_PUBLISHED, 0, abi.encode(bytes contentUri, bytes metadata))`.
+    fn ping_edits_published(cid: &str) -> Vec<u8> {
+        use alloy::primitives::Bytes as B;
+        use alloy::sol_types::SolType;
+        type Edits = alloy::sol! { (bytes, bytes) };
+        type Ping = alloy::sol! { (bytes32, bytes32, bytes) };
+        let payload =
+            Edits::abi_encode_params(&(B::from(format!("ipfs://{cid}").into_bytes()), B::new()));
+        let args =
+            Ping::abi_encode_params(&(actions::EDITS_PUBLISHED, [0u8; 32], B::from(payload)));
+        [crate::decode::selectors::PING.as_slice(), &args].concat()
+    }
+
+    /// Legacy `publish(bytes32 topic, bytes contentUri, bytes metadata)`, encoded as
+    /// real calldata: selector + parameters, no outer tuple offset.
+    fn legacy_publish(cid: &str) -> Vec<u8> {
+        use alloy::primitives::Bytes as B;
+        use alloy::sol_types::SolType;
+        type Publish = alloy::sol! { (bytes32, bytes, bytes) };
+        let args = Publish::abi_encode_params(&(
+            [0u8; 32],
+            B::from(format!("ipfs://{cid}").into_bytes()),
+            B::new(),
+        ));
+        [crate::decode::selectors::PUBLISH.as_slice(), &args].concat()
+    }
+
+    /// PROPOSAL_CREATED / PROPOSAL_UPDATED payload: `abi.encode(bytes16 proposalId,
+    /// uint8 votingMode, (address to, bytes16 toSpaceId, uint256 value, bytes data)[])`.
+    fn proposal_payload(inner: Vec<Vec<u8>>) -> Vec<u8> {
+        use ethabi::{Token, ethereum_types::U256};
+        let actions = inner
+            .into_iter()
+            .map(|data| {
+                Token::Tuple(vec![
+                    Token::Address(Default::default()),
+                    Token::FixedBytes(vec![0u8; 16]),
+                    Token::Uint(U256::zero()),
+                    Token::Bytes(data),
+                ])
+            })
+            .collect();
+        ethabi::encode(&[
+            Token::FixedBytes(vec![0xEE; 16]),
+            Token::Uint(U256::from(1u8)),
+            Token::Array(actions),
+        ])
+    }
+
+    fn action(kind: &[u8; 32], data: Vec<u8>) -> Action {
+        Action {
+            from_id: vec![0x01; 16],
+            to_id: vec![0x02; 16],
+            action: kind.to_vec(),
+            topic: vec![0; 32],
+            data,
+        }
+    }
+
+    #[test]
+    fn pipeline_and_warmer_agree_on_every_uri_a_block_needs() {
+        let block = vec![
+            action(
+                &actions::EDITS_PUBLISHED,
+                format!("ipfs://{CID_EDIT}").into_bytes(),
+            ),
+            action(
+                &actions::PROPOSAL_CREATED,
+                proposal_payload(vec![legacy_publish(CID_LEGACY_PUBLISH)]),
+            ),
+            action(
+                &actions::PROPOSAL_CREATED,
+                proposal_payload(vec![ping_edits_published(CID_CREATED_PING)]),
+            ),
+            action(
+                &actions::PROPOSAL_UPDATED,
+                proposal_payload(vec![ping_edits_published(CID_UPDATED_PING)]),
+            ),
+        ];
+
+        let pipeline: std::collections::BTreeSet<String> =
+            collect_uris(&block).into_iter().map(|r| r.uri).collect();
+        let warmer: std::collections::BTreeSet<String> = block
+            .iter()
+            .flat_map(|a| hermes_substream::ipfs_uris_for_action(&a.action, &a.data, &a.from_id))
+            .map(|u| u.uri)
+            .collect();
+
+        let expected: std::collections::BTreeSet<String> = [
+            CID_EDIT,
+            CID_LEGACY_PUBLISH,
+            CID_CREATED_PING,
+            CID_UPDATED_PING,
+        ]
+        .iter()
+        .map(|cid| format!("ipfs://{cid}"))
+        .collect();
+        assert_eq!(
+            pipeline, expected,
+            "fixtures must exercise every URI kind the pipeline prefetches"
+        );
+        assert_eq!(
+            warmer, pipeline,
+            "map_ipfs_uris must yield every URI the pipeline will wait for"
+        );
+    }
+
     /// Fast retry config so cache-miss tests don't sit on the default 10-retry
     /// exponential backoff.
     fn fast_retry_config() -> RetryConfig {

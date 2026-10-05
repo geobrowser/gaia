@@ -1,6 +1,7 @@
 //! Hermes IPFS Cache binary
 //!
-//! Pre-fetches IPFS content for EditsPublished events from hermes-substream.
+//! Pre-fetches the IPFS content hermes-pipeline will need, from hermes-substream's `map_ipfs_uris`
+//! (published edits, and the content of created and updated proposals).
 //!
 //! ## Configuration
 //!

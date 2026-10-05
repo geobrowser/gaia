@@ -591,41 +591,51 @@ fn map_edits_published(
 // Combined IPFS URI Extraction
 // =============================================================================
 
-/// Extract IPFS URIs from both EDITS_PUBLISHED and PROPOSAL_CREATED events.
+/// Extract IPFS URIs from EDITS_PUBLISHED, PROPOSAL_CREATED and PROPOSAL_UPDATED events.
 ///
-/// This module is used by hermes-ipfs-cache to pre-fetch all IPFS content
-/// that will be needed for proposal diff computation.
+/// This module is used by hermes-ipfs-cache to pre-fetch all IPFS content that
+/// hermes-pipeline will look up. It must yield every URI hermes-pipeline's
+/// `collect_uris` asks for, or the pipeline holds the block waiting for content
+/// the warmer will never fetch — hermes-pipeline has a test pinning the two
+/// together.
 #[substreams::handlers::map]
 fn map_ipfs_uris(block: eth::v2::Block) -> Result<IpfsUriList, substreams::errors::Error> {
-    let mut uris = Vec::new();
-
-    for action in block.logs().filter_map(parse_action) {
-        match action.action.as_slice() {
-            // Extract from EDITS_PUBLISHED
-            x if x == ACTION_EDITS_PUBLISHED => {
-                if let Some(uri) = helpers::extract_ipfs_uri(&action.data) {
-                    uris.push(IpfsUri {
-                        uri,
-                        space_id: action.from_id,
-                        source: "edit".to_string(),
-                    });
-                }
-            }
-            // Extract from PROPOSAL_CREATED (Publish actions)
-            x if x == ACTION_PROPOSAL_CREATED => {
-                for uri in helpers::extract_proposal_publish_uris(&action.data) {
-                    uris.push(IpfsUri {
-                        uri,
-                        space_id: action.from_id.clone(),
-                        source: "proposal".to_string(),
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-
+    let uris = block
+        .logs()
+        .filter_map(parse_action)
+        .flat_map(|action| ipfs_uris_for_action(&action.action, &action.data, &action.from_id))
+        .collect();
     Ok(IpfsUriList { uris })
+}
+
+/// The IPFS URIs a single action references, as `map_ipfs_uris` reports them.
+///
+/// PROPOSAL_UPDATED carries the same payload as PROPOSAL_CREATED (a new version
+/// of the proposal's actions). Before 2026-10-05 it was not handled here, so an
+/// edited proposal's content was never cached and held hermes-pipeline at that
+/// block for the full warmer-wait backstop.
+pub fn ipfs_uris_for_action(action_type: &[u8], data: &[u8], from_id: &[u8]) -> Vec<IpfsUri> {
+    match action_type {
+        x if x == ACTION_EDITS_PUBLISHED => helpers::extract_ipfs_uri(data)
+            .map(|uri| IpfsUri {
+                uri,
+                space_id: from_id.to_vec(),
+                source: "edit".to_string(),
+            })
+            .into_iter()
+            .collect(),
+        x if x == ACTION_PROPOSAL_CREATED || x == ACTION_PROPOSAL_UPDATED => {
+            helpers::extract_proposal_publish_uris(data)
+                .into_iter()
+                .map(|uri| IpfsUri {
+                    uri,
+                    space_id: from_id.to_vec(),
+                    source: "proposal".to_string(),
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    }
 }
 
 #[substreams::handlers::map]

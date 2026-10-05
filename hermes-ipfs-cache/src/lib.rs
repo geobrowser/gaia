@@ -4,7 +4,7 @@
 //! doesn't block on network I/O.
 //!
 //! This service:
-//! 1. Connects to hermes-substream `map_edits_published` (parallelized, runs ahead)
+//! 1. Connects to hermes-substream `map_ipfs_uris` (parallelized, runs ahead)
 //! 2. For each edit event, fetches the IPFS content by CID
 //! 3. Stores resolved content in the cache
 //!
@@ -133,7 +133,7 @@ impl PendingFetches {
 
 /// IPFS cache sink that implements the hermes-relay Sink trait.
 ///
-/// Subscribes to `EditsPublished` events and pre-fetches IPFS content
+/// Subscribes to `map_ipfs_uris` (edits plus created/updated proposal content) and pre-fetches IPFS content
 /// to populate the cache for downstream consumers.
 pub struct IpfsCacheSink {
     cache: Arc<Mutex<Cache>>,
