@@ -743,6 +743,13 @@
       "when": 1791250000000,
       "tag": "0105_not_interested_signals",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1791253600000,
+      "tag": "0106_interested_vote_kind",
+      "breakpoints": true
     }
   ]
 }

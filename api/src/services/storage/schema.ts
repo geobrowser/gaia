@@ -905,7 +905,7 @@ export const votes = pgTable(
 		objectType: smallint("object_type").notNull(),
 		spaceId: uuid("space_id").notNull(),
 		vote: smallint("vote").notNull(),
-		/** 0 = curation, 1 = stance, 2 = veracity. See VOTE_KIND. */
+		/** 0 = curation, 1 = stance, 2 = veracity, 3 = interested. See VOTE_KIND. */
 		voteKind: smallint("vote_kind").notNull().default(0),
 		blockNumber: bigint("block_number", {mode: "number"}).notNull(),
 		blockTimestamp: timestamp("block_timestamp", {
@@ -944,6 +944,8 @@ export const VOTE_KIND = {
 	STANCE: 1,
 	/** Verify / dispute — "is this true". */
 	VERACITY: 2,
+	/** Interested / clear (GEO-3158). No negative. On a topic, Interested is the topic follow. */
+	INTERESTED: 3,
 } as const
 
 export type VoteKind = (typeof VOTE_KIND)[keyof typeof VOTE_KIND]
@@ -969,7 +971,7 @@ export const userVotes = pgTable(
 		spaceId: uuid("space_id").notNull(),
 		/** Direction only: 0 = positive, 1 = negative. The kind is `vote_kind`. */
 		voteType: smallint("vote_type").notNull(),
-		/** 0 = curation, 1 = stance, 2 = veracity. See VOTE_KIND. */
+		/** 0 = curation, 1 = stance, 2 = veracity, 3 = interested. See VOTE_KIND. */
 		voteKind: smallint("vote_kind").notNull().default(0),
 		votedAt: timestamp("voted_at", {
 			withTimezone: true,
@@ -1018,7 +1020,7 @@ export const votesCount = pgTable(
 		objectId: uuid("object_id").notNull(),
 		objectType: smallint("object_type").notNull(),
 		spaceId: uuid("space_id").notNull(),
-		/** 0 = curation, 1 = stance, 2 = veracity. See VOTE_KIND. */
+		/** 0 = curation, 1 = stance, 2 = veracity, 3 = interested. See VOTE_KIND. */
 		voteKind: smallint("vote_kind").notNull().default(0),
 		/** Positive tally on this row's axis: upvotes / agrees / verifications. */
 		positive: bigint("positive", {mode: "number"}).notNull().default(0),

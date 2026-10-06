@@ -30,10 +30,10 @@ impl From<i16> for VoteValue {
 
 /// Which response axis a vote belongs to.
 ///
-/// The three axes are independent — a user may hold one response of each on the
-/// same object, and casting one never touches another. This is the decoded form
-/// of the on-chain action hash: topic and data encoding are identical across all
-/// nine actions, so the hash is the only discriminator.
+/// The axes are independent — a user may hold one response of each on the same
+/// object, and casting one never touches another. This is the decoded form of
+/// the on-chain action hash: topic and data encoding are identical across all
+/// eleven actions, so the hash is the only discriminator.
 ///
 /// `Curation` is 0 so rows written before this column existed read back as
 /// curation, which is what they are.
@@ -46,6 +46,10 @@ pub enum ResponseKind {
     Stance,
     /// Verify / dispute.
     Veracity,
+    /// Interested / clear (GEO-3158). Positive only — there is no negative
+    /// action, so an Interested row's `negative` tally is always 0. On a topic
+    /// this is the topic follow.
+    Interested,
     /// A kind this build does not know about, carrying its raw discriminant.
     ///
     /// Reachable during a rolling deploy where a newer producer emits a kind
@@ -64,6 +68,7 @@ impl From<ResponseKind> for i16 {
             ResponseKind::Curation => 0,
             ResponseKind::Stance => 1,
             ResponseKind::Veracity => 2,
+            ResponseKind::Interested => 3,
             ResponseKind::Unknown(v) => v,
         }
     }
@@ -75,6 +80,7 @@ impl From<i16> for ResponseKind {
             0 => ResponseKind::Curation,
             1 => ResponseKind::Stance,
             2 => ResponseKind::Veracity,
+            3 => ResponseKind::Interested,
             other => ResponseKind::Unknown(other),
         }
     }
@@ -156,7 +162,7 @@ pub struct VotesCountItem {
     pub space_id: Uuid,
     /// Which response axis these tallies are on
     pub kind: ResponseKind,
-    /// Positive tally on this axis (upvotes / agrees / verifications)
+    /// Positive tally on this axis (upvotes / agrees / verifications / interested)
     pub positive: i64,
     /// Negative tally on this axis (downvotes / disagrees / disputes)
     pub negative: i64,

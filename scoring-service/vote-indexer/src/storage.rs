@@ -594,8 +594,10 @@ impl Storage {
 /// simply stale, and stale is indistinguishable from correct without recomputing.
 ///
 /// Kinds that feed the score (0078): curation -> quality term, stance ->
-/// participation term. Veracity feeds neither, so including it would rewrite rows
-/// to identical values and make `updated_at` misleading.
+/// participation term. Veracity and Interested (kind 3, GEO-3158) feed neither,
+/// so including them would rewrite rows to identical values and make
+/// `updated_at` misleading. If Best starts ranking topics by Interested
+/// (GEO-3150), this filter and the score function change together.
 pub fn ranking_recompute_entity_ids(counts: &[VotesCountItem]) -> Vec<Uuid> {
     let mut entity_ids: Vec<Uuid> = counts
         .iter()
@@ -684,6 +686,17 @@ mod tests {
     }
 
     #[test]
+    fn interested_does_not_trigger_a_recompute() {
+        // Kind 3 (GEO-3158) is the topic follow; it feeds no ranking term today.
+        let ids = ranking_recompute_entity_ids(&[count(
+            Uuid::new_v4(),
+            ResponseKind::Interested,
+            VoteObjectType::Entity,
+        )]);
+        assert!(ids.is_empty());
+    }
+
+    #[test]
     fn relation_votes_are_ignored_whatever_the_kind() {
         // entity_ranking_scores is keyed by entity; a relation id would be scored
         // as if it were an entity.
@@ -691,6 +704,7 @@ mod tests {
             ResponseKind::Curation,
             ResponseKind::Stance,
             ResponseKind::Veracity,
+            ResponseKind::Interested,
         ] {
             let ids = ranking_recompute_entity_ids(&[count(
                 Uuid::new_v4(),

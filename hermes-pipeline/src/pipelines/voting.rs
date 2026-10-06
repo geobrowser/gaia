@@ -1,11 +1,12 @@
-//! Pipeline: the nine permissionless response actions → curation.votes
+//! Pipeline: the eleven permissionless response actions → curation.votes
 //!
 //! Converts permissionless response actions to typed Hermes events with decoded
 //! data. Three kinds — curation (upvote/downvote), stance (agree/disagree) and
 //! veracity (verify/dispute) — each with a positive, a negative and a clear
-//! action. Topic and data encoding are identical across all nine; the action
-//! hash is the only thing that distinguishes them, so this module is where a
-//! hash becomes a `(kind, direction)` pair.
+//! action, plus Interested, which has only a positive and a clear (GEO-3158).
+//! Topic and data encoding are identical across all eleven; the action hash is
+//! the only thing that distinguishes them, so this module is where a hash
+//! becomes a `(kind, direction)` pair.
 
 use anyhow::Result;
 use hermes_instrumentation::{debug_span, warn};
@@ -20,7 +21,8 @@ use super::BlockMetadata;
 /// Result of transforming response actions.
 ///
 /// Counted on both axes: `positive`/`negative`/`clear` are direction totals
-/// across every kind, and `curation`/`stance`/`veracity` are per-kind totals.
+/// across every kind, and `curation`/`stance`/`veracity`/`interested` are
+/// per-kind totals.
 /// The per-kind counters are what tell an operator that the first stance or
 /// veracity events have actually started arriving after registration.
 #[derive(Debug, Default)]
@@ -32,6 +34,7 @@ pub struct TransformResult {
     pub curation: u64,
     pub stance: u64,
     pub veracity: u64,
+    pub interested: u64,
 }
 
 impl TransformResult {
@@ -42,12 +45,12 @@ impl TransformResult {
 
 /// Resolve a 32-byte action hash to the response it represents.
 ///
-/// Returns `None` for any action that is not one of the nine — the pipeline
+/// Returns `None` for any action that is not one of the eleven — the pipeline
 /// hands every action in the block to every transform, so non-response actions
 /// falling through here is the normal case, not an error.
 ///
 /// The clear actions are deliberately per-kind (`UNVOTED` / `UNAGREED` /
-/// `UNVERIFIED`) rather than one shared clear. Because a user may hold a
+/// `UNVERIFIED` / `UNINTERESTED`) rather than one shared clear. Because a user may hold a
 /// response of each kind at once, a shared clear would be ambiguous — the
 /// indexer could not tell which of their rows to remove.
 fn resolve_response(action_type: &[u8]) -> Option<(VoteKind, VoteDirection)> {
@@ -72,6 +75,11 @@ fn resolve_response(action_type: &[u8]) -> Option<(VoteKind, VoteDirection)> {
         Some((VoteKind::Veracity, VoteDirection::Down))
     } else if actions::matches(action_type, &actions::UNVERIFIED) {
         Some((VoteKind::Veracity, VoteDirection::None))
+    // Interested: no negative action exists, so Down is never produced.
+    } else if actions::matches(action_type, &actions::INTERESTED) {
+        Some((VoteKind::Interested, VoteDirection::Up))
+    } else if actions::matches(action_type, &actions::UNINTERESTED) {
+        Some((VoteKind::Interested, VoteDirection::None))
     } else {
         None
     }
@@ -79,8 +87,8 @@ fn resolve_response(action_type: &[u8]) -> Option<(VoteKind, VoteDirection)> {
 
 /// Static span name for a `(kind, direction)` pair.
 ///
-/// `debug_span!` requires a literal name, so this maps to one of nine consts
-/// rather than formatting a string.
+/// `debug_span!` requires a literal name, so this maps to a const rather than
+/// formatting a string.
 fn span_name(kind: VoteKind, direction: VoteDirection) -> &'static str {
     match (kind, direction) {
         (VoteKind::Curation, VoteDirection::Up) => "convert.voting.upvoted",
@@ -92,6 +100,11 @@ fn span_name(kind: VoteKind, direction: VoteDirection) -> &'static str {
         (VoteKind::Veracity, VoteDirection::Up) => "convert.voting.verified",
         (VoteKind::Veracity, VoteDirection::Down) => "convert.voting.disputed",
         (VoteKind::Veracity, VoteDirection::None) => "convert.voting.unverified",
+        (VoteKind::Interested, VoteDirection::Up) => "convert.voting.interested",
+        (VoteKind::Interested, VoteDirection::None) => "convert.voting.uninterested",
+        // `resolve_response` never produces this pair; named so the match stays
+        // exhaustive without a panic path.
+        (VoteKind::Interested, VoteDirection::Down) => "convert.voting.interested_down",
     }
 }
 
@@ -135,15 +148,16 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             VoteKind::Curation => result.curation += 1,
             VoteKind::Stance => result.stance += 1,
             VoteKind::Veracity => result.veracity += 1,
+            VoteKind::Interested => result.interested += 1,
         }
     }
 
     Ok(result)
 }
 
-/// Convert any of the nine response actions to a HermesVoteCast proto.
+/// Convert any of the eleven response actions to a HermesVoteCast proto.
 ///
-/// The action structure is identical for all nine — only the hash differs, and
+/// The action structure is identical for all eleven — only the hash differs, and
 /// the caller has already resolved that into `kind` + `direction`:
 /// - from_id: voter_id (16 bytes) - voter's space ID
 /// - topic: bytes32(bytes4(objectType) << 224) | (bytes16(objectId) << 96)
@@ -359,6 +373,7 @@ mod tests {
         assert_eq!(result.curation, 4);
         assert_eq!(result.stance, 0);
         assert_eq!(result.veracity, 0);
+        assert_eq!(result.interested, 0);
     }
 
     #[test]
@@ -381,13 +396,13 @@ mod tests {
     // vote_kind: the six new response actions
     // ========================================================================
 
-    /// Every one of the nine hashes resolves to the intended (kind, direction).
+    /// Every one of the eleven hashes resolves to the intended (kind, direction).
     ///
     /// This is the table that decides what gets written to the database, so it
     /// is asserted exhaustively rather than by sampling.
     #[test]
-    fn resolve_response_maps_all_nine_actions() {
-        let cases: [(&[u8; 32], VoteKind, VoteDirection); 9] = [
+    fn resolve_response_maps_all_eleven_actions() {
+        let cases: [(&[u8; 32], VoteKind, VoteDirection); 11] = [
             (&actions::UPVOTED, VoteKind::Curation, VoteDirection::Up),
             (&actions::DOWNVOTED, VoteKind::Curation, VoteDirection::Down),
             (&actions::UNVOTED, VoteKind::Curation, VoteDirection::None),
@@ -399,6 +414,16 @@ mod tests {
             (
                 &actions::UNVERIFIED,
                 VoteKind::Veracity,
+                VoteDirection::None,
+            ),
+            (
+                &actions::INTERESTED,
+                VoteKind::Interested,
+                VoteDirection::Up,
+            ),
+            (
+                &actions::UNINTERESTED,
+                VoteKind::Interested,
                 VoteDirection::None,
             ),
         ];
@@ -497,6 +522,7 @@ mod tests {
             (actions::UNVOTED, VoteKind::Curation),
             (actions::UNAGREED, VoteKind::Stance),
             (actions::UNVERIFIED, VoteKind::Veracity),
+            (actions::UNINTERESTED, VoteKind::Interested),
         ];
 
         for (hash, want_kind) in clears {
@@ -531,5 +557,60 @@ mod tests {
         let result = transform(&[action], &test_meta()).unwrap();
         assert_eq!(result.total(), 1);
         assert_eq!(result.votes[0].object_id, vec![0u8; 16]);
+    }
+
+    // ========================================================================
+    // vote_kind 3: Interested (GEO-3158)
+    // ========================================================================
+
+    /// The two Interested hashes resolve by their keccak, not just by the
+    /// constant — this is the value that has to match the on-chain registration.
+    #[test]
+    fn interested_hashes_resolve_from_keccak() {
+        use alloy::primitives::keccak256;
+        assert_eq!(
+            resolve_response(&keccak256("PERMISSIONLESS.INTERESTED").0),
+            Some((VoteKind::Interested, VoteDirection::Up))
+        );
+        assert_eq!(
+            resolve_response(&keccak256("PERMISSIONLESS.UNINTERESTED").0),
+            Some((VoteKind::Interested, VoteDirection::None))
+        );
+        // A plausible-looking negative that was never defined must not resolve.
+        assert_eq!(
+            resolve_response(&keccak256("PERMISSIONLESS.DISINTERESTED").0),
+            None
+        );
+    }
+
+    /// Interested is counted on its own kind and never as curation, stance or
+    /// veracity, and never produces a negative.
+    #[test]
+    fn transform_counts_interested_on_its_own_kind() {
+        let object_type = [0x00, 0x00, 0x00, 0x00];
+        let make = |hash: [u8; 32], n: u8| Action {
+            from_id: vec![n; 16],
+            to_id: vec![],
+            action: hash.to_vec(),
+            topic: make_vote_topic(object_type, [n; 16]),
+            data: vec![],
+        };
+        let acts = vec![
+            make(actions::INTERESTED, 1),
+            make(actions::INTERESTED, 2),
+            make(actions::UNINTERESTED, 3),
+            make(actions::UPVOTED, 4),
+        ];
+        let result = transform(&acts, &test_meta()).unwrap();
+        assert_eq!(result.total(), 4);
+        assert_eq!(result.interested, 3);
+        assert_eq!(result.curation, 1);
+        assert_eq!(result.stance, 0);
+        assert_eq!(result.veracity, 0);
+        assert_eq!(result.positive, 3);
+        assert_eq!(result.negative, 0);
+        assert_eq!(result.clear, 1);
+        assert_eq!(result.votes[0].kind, VoteKind::Interested as i32);
+        assert_eq!(result.votes[2].direction, VoteDirection::None as i32);
     }
 }
