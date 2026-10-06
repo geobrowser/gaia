@@ -34,6 +34,7 @@ async function cleanup() {
 	await pool.query("DELETE FROM entity_ranking_scores WHERE entity_id = ANY($1::uuid[])", [ALL])
 	await pool.query("DELETE FROM user_votes WHERE user_id = ANY($1::uuid[])", [ALL])
 	await pool.query("DELETE FROM personalization.user_topic_signals WHERE user_id = ANY($1::uuid[])", [ALL])
+	await pool.query("DELETE FROM personalization.external_interest_signals WHERE user_id = ANY($1::uuid[])", [ALL])
 	await pool.query("DELETE FROM personalization.feed_experiments WHERE id = 'it-for-you'")
 	await pool.query("DELETE FROM entities WHERE id = ANY($1::uuid[])", [ALL])
 }
@@ -117,6 +118,24 @@ describe.skipIf(!process.env.DATABASE_URL)("/internal/for-you", () => {
 		expect(c3.score.boost).toBeCloseTo(4 * 0.864, 3)
 		expect(c3.score.total).toBeCloseTo(c3.score.best + c3.score.boost, 9)
 		expect(body.items.find((i: any) => i.entityId === dashless(C[0])).reason).toBeNull()
+	})
+
+	it("leaves out a claim the user marked Not interested (0105)", async () => {
+		await pool.query(
+			`INSERT INTO personalization.external_interest_signals (user_id, object_id, kind, occurred_at)
+			 VALUES ($1, $2, 'not_interested', now())`,
+			[USER, C[4]],
+		)
+		try {
+			const body = (await (await post({userId: USER, candidateIds: C})).json()) as any
+			expect(body.excluded).toEqual([
+				{entityId: dashless(C[1]), reason: "voted"},
+				{entityId: dashless(C[4]), reason: "not_interested"},
+			])
+			expect(body.items.map((i: any) => i.entityId)).toEqual([C[2], C[0], C[3]].map(dashless))
+		} finally {
+			await pool.query("DELETE FROM personalization.external_interest_signals WHERE user_id = $1", [USER])
+		}
 	})
 
 	it("gives a user with no interests Best unchanged and unpersonalized", async () => {

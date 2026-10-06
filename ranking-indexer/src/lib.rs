@@ -11,6 +11,7 @@ pub mod error;
 pub mod membership;
 pub mod metrics;
 pub mod models;
+pub mod not_interested;
 pub mod publish;
 pub mod recompute;
 pub mod scoring;

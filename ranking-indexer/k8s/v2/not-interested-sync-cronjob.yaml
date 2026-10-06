@@ -1,0 +1,108 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ranking-indexer-not-interested-sync
+  namespace: gaia
+  labels:
+    app: ranking-indexer-not-interested-sync
+    environment: testnet
+spec:
+  # GEO-3088 / GEO-2862: carry "Not interested" on claims from geo-chat (`claim_not_interested`,
+  # off-chain and private) into the topic-interest model (migration 0105). Each run reads geo-chat's
+  # whole set through a read-only role, replaces gaia's not_interested rows with it, and recomputes
+  # each user whose set changed, so a mark or an undo reaches their weights within one run. Its own
+  # CronJob: a geo-chat outage fails this Job and touches nothing else.
+  #
+  # SUSPENDED until the `not-interested-sync` Secret (GEO_CHAT_DATABASE_URL: a read-only geo-chat
+  # role, sslmode=require) exists and the dry run (not-interested-sync-dryrun-job.yaml) looks
+  # right. deploy-v2 re-applies this file, so flip suspend in git, not with kubectl.
+  #
+  # Refuses to write (and fails the Job) when geo-chat returns rows but none lands on a gaia
+  # personal space while gaia holds some: a broken identity mapping must not erase everyone's Not
+  # interested. An empty read is honoured (everyone cleared their marks).
+  suspend: true
+  schedule: "*/2 * * * *"
+  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 60
+  jobTemplate:
+    spec:
+      # Never + backoffLimit 0: a failed attempt's pod, and so its error, stays around; the next
+      # run two minutes later is the retry.
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            environment: testnet
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            fsGroup: 1001
+          imagePullSecrets:
+            - name: geo
+          volumes:
+            - name: ssl-certs
+              emptyDir: {}
+          initContainers:
+            - name: setup-certs
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command:
+                - sh
+                - -c
+                - |
+                  echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+              env:
+                - name: DATABASE_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_SSL_CA
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+          containers:
+            - name: ranking-indexer-not-interested-sync
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command: ["not_interested_sync"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+                  readOnly: true
+              env:
+                - name: PGSSLROOTCERT
+                  value: /ssl/ca.crt
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_URL
+                - name: GEO_CHAT_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: not-interested-sync
+                      key: GEO_CHAT_DATABASE_URL
+                - name: RUST_LOG
+                  value: "not_interested_sync=info,ranking_indexer=info"
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "128Mi"
+                  cpu: "200m"
