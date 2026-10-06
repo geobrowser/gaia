@@ -100,6 +100,8 @@ export const HIDDEN_SURFACE = {
 		"anchorClaimMember",
 		"claimOverlap",
 		"binaryEntropyBits",
+		// GEO-3150's topic-debate term inputs (migration 0107): reads account weights.
+		"topicDebateScore",
 	],
 	/** The omitted volatile functions, by their mutation names. */
 	mutations: [
@@ -119,6 +121,8 @@ export const HIDDEN_SURFACE = {
 		"refreshPrimerClaimStats",
 		"refreshAnchorClaims",
 		"recordClaimOverlapSample",
+		// GEO-3150's hourly topic-debate re-score, run by ranking-indexer's topic_ranking_reconcile.
+		"refreshTopicDebateScores",
 	],
 } as const
 

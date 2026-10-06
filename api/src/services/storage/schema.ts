@@ -1436,6 +1436,15 @@ export const entityRankingConfig = pgTable("entity_ranking_config", {
 	participationWeight: decimal("participation_weight").notNull(),
 	/** Ceiling on the participation term, in score units. A brigading guardrail, not a tuning knob. */
 	participationCap: decimal("participation_cap").notNull(),
+	/**
+	 * Topic debates only (0107, GEO-3150): multiplier on `ln(1 + interested)`, the account-weighted
+	 * count of people with a current Interested (vote kind 3) on the debated topic.
+	 */
+	topicInterestedWeight: decimal("topic_interested_weight").notNull(),
+	/** Topic debates only (0107): multiplier on `ln(1 + debates already held on the topic)`. */
+	topicDebateWeight: decimal("topic_debate_weight").notNull(),
+	/** Ceiling on the topic-debate term, in score units (0107). */
+	topicCap: decimal("topic_cap").notNull(),
 	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
 })
 
@@ -1500,6 +1509,11 @@ export const entityRankingScores = pgTable(
 		/** Disagrees (`vote_kind = 1`). */
 		stanceNegative: bigint("stance_negative", {mode: "number"}).notNull(),
 		typeWeight: decimal("type_weight").notNull(),
+		/**
+		 * The topic-debate term (0107, GEO-3150), already included in rankingScore. 0 for everything
+		 * that is not a topic debate (a Debate with a Topics relation and no Claims relation).
+		 */
+		topicScore: decimal("topic_score").notNull(),
 		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
 	},
 	(table) => [

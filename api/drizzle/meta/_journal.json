@@ -750,6 +750,13 @@
       "when": 1791253600000,
       "tag": "0106_interested_vote_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1791308689903,
+      "tag": "0107_topic_debates",
+      "breakpoints": true
     }
   ]
 }
