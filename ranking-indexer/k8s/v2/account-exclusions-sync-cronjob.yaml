@@ -11,14 +11,14 @@ spec:
   # (`analytics.gaia_account_exclusions`, ClickHouse) into `account_exclusions`, matched to personal
   # spaces by wallet hash. The hourly account-weights job (:53) then gives those voters weight 0.
   #
-  # SUSPENDED until the ClickHouse reader exists: create the `account-exclusions-sync` Secret, run
-  # the dry run (account-exclusions-sync-dryrun-job.yaml) and check it against the 2 Oct audit, then
-  # set `suspend: false` here. deploy-v2 re-applies this file, so flip it in git, not with kubectl.
+  # Enabled once the ClickHouse reader and the `account-exclusions-sync` Secret existed and the dry
+  # run (account-exclusions-sync-dryrun-job.yaml) matched the 2 Oct audit: 159 voters -> 128.
+  # deploy-v2 re-applies this file, so suspend it in git, not with kubectl.
   #
   # 02:47 UTC, so the weights refresh six minutes later applies it; clear of the other ranking
   # jobs. Refuses to write (and fails the Job) when analytics returns nothing, when nothing matches a
   # personal space, or when more than EXCLUSION_SYNC_MAX_EXCLUDED spaces would be excluded.
-  suspend: true
+  suspend: false
   schedule: "47 2 * * *"
   failedJobsHistoryLimit: 3
   successfulJobsHistoryLimit: 1
