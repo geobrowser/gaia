@@ -827,6 +827,7 @@ impl Pipeline {
                 voting_curation = voting.curation,
                 voting_stance = voting.stance,
                 voting_veracity = voting.veracity,
+                voting_interested = voting.interested,
                 edits = edit_count,
                 oversized_edits = total_oversized_edits,
                 cache_misses = total_cache_misses,

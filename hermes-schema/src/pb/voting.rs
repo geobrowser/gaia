@@ -66,11 +66,11 @@ impl VoteDirection {
 }
 /// Response kind — the axis a response applies to.
 ///
-/// The three axes are independent: a user can simultaneously hold a curation
-/// vote, a stance and a veracity response on the same object, and casting one
-/// never touches another. The on-chain action hash is the only discriminator
+/// The axes are independent: a user can simultaneously hold a curation vote, a
+/// stance, a veracity response and an Interested on the same object, and casting
+/// one never touches another. The on-chain action hash is the only discriminator
 /// (topic and data encoding are identical across kinds), so this field is the
-/// decoded form of "which of the nine action hashes produced this event".
+/// decoded form of "which of the eleven action hashes produced this event".
 ///
 /// CURATION is 0 so that events produced before this field existed — and rows
 /// written by the pre-vote_kind indexer — decode as curation, which is what
@@ -84,6 +84,10 @@ pub enum VoteKind {
     Stance = 1,
     /// verify / dispute / unverify
     Veracity = 2,
+    /// interested / uninterested. Up and None only: there is no "not interested"
+    /// action, so an Interested event never carries Down. On a topic, Interested is
+    /// the topic follow (GEO-3158).
+    Interested = 3,
 }
 impl VoteKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -95,6 +99,7 @@ impl VoteKind {
             Self::Curation => "VOTE_KIND_CURATION",
             Self::Stance => "VOTE_KIND_STANCE",
             Self::Veracity => "VOTE_KIND_VERACITY",
+            Self::Interested => "VOTE_KIND_INTERESTED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -103,6 +108,7 @@ impl VoteKind {
             "VOTE_KIND_CURATION" => Some(Self::Curation),
             "VOTE_KIND_STANCE" => Some(Self::Stance),
             "VOTE_KIND_VERACITY" => Some(Self::Veracity),
+            "VOTE_KIND_INTERESTED" => Some(Self::Interested),
             _ => None,
         }
     }

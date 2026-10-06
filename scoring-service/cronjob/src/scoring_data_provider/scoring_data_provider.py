@@ -315,6 +315,10 @@ class ScoringDataProvider:
     def _fetch_votes(self, conn: psycopg.Connection) -> list[Vote]:
         """Fetch all votes from the database.
 
+        Interested (vote_kind 3, GEO-3158) is left out: it is a topic follow,
+        not an up or down vote, and every Interested is vote_type 0, so reading
+        it here would count each follow as an upvote.
+
         Args:
             conn: Database connection.
 
@@ -327,6 +331,7 @@ class ScoringDataProvider:
                 SELECT user_id, object_id, space_id, vote_type, voted_at
                 FROM user_votes
                 WHERE object_type = 0
+                  AND vote_kind <> 3
                 """
             )
             rows = cur.fetchall()

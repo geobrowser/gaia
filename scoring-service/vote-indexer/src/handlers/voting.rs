@@ -59,8 +59,17 @@ pub fn handle_vote_cast(vote: &HermesVoteCast) -> Result<VoteItem, HandlerError>
         Ok(VoteKind::Curation) => ResponseKind::Curation,
         Ok(VoteKind::Stance) => ResponseKind::Stance,
         Ok(VoteKind::Veracity) => ResponseKind::Veracity,
+        Ok(VoteKind::Interested) => ResponseKind::Interested,
         Err(_) => ResponseKind::Unknown(vote.kind as i16),
     };
+
+    // Interested has a positive and a clear action and nothing else. The
+    // pipeline never produces Down for it, so one arriving means a bad producer;
+    // reject it (skipped and counted as `invalid`) rather than store a negative
+    // Interested that no client can render or clear.
+    if kind == ResponseKind::Interested && vote_value == VoteValue::Down {
+        return Err(HandlerError::InvalidVoteDirection(vote.direction));
+    }
 
     Ok(VoteItem {
         voter_id,
@@ -959,6 +968,7 @@ mod tests {
             (VoteKind::Curation, ResponseKind::Curation),
             (VoteKind::Stance, ResponseKind::Stance),
             (VoteKind::Veracity, ResponseKind::Veracity),
+            (VoteKind::Interested, ResponseKind::Interested),
         ] {
             let vote = HermesVoteCast {
                 voter_id: make_test_uuid(),
@@ -1291,5 +1301,115 @@ mod tests {
 
         assert_eq!(rows.len(), 1, "only the curation row may mirror a score");
         assert_eq!(rows[0].integer, 2);
+    }
+
+    // ========================================================================
+    // vote_kind 3: Interested (GEO-3158)
+    // ========================================================================
+
+    fn interested_vote(direction: VoteDirection) -> HermesVoteCast {
+        HermesVoteCast {
+            voter_id: make_test_uuid(),
+            object_type: OBJECT_TYPE_ENTITY.to_vec(),
+            object_id: make_test_uuid(),
+            direction: direction as i32,
+            version: 1,
+            group_id: make_test_uuid(),
+            space_pov: make_test_uuid(),
+            meta: Some(make_test_meta()),
+            kind: VoteKind::Interested as i32,
+        }
+    }
+
+    #[test]
+    fn interested_kind_round_trips_as_3() {
+        assert_eq!(i16::from(ResponseKind::Interested), 3);
+        assert_eq!(ResponseKind::from(3i16), ResponseKind::Interested);
+    }
+
+    #[test]
+    fn interested_up_and_clear_decode() {
+        let up = handle_vote_cast(&interested_vote(VoteDirection::Up)).unwrap();
+        assert_eq!(up.kind, ResponseKind::Interested);
+        assert_eq!(up.vote, VoteValue::Up);
+        let clear = handle_vote_cast(&interested_vote(VoteDirection::None)).unwrap();
+        assert_eq!(clear.kind, ResponseKind::Interested);
+        assert_eq!(clear.vote, VoteValue::Remove);
+    }
+
+    /// There is no "not interested" action; a Down on kind 3 is a bad producer.
+    #[test]
+    fn interested_down_is_rejected() {
+        assert!(matches!(
+            handle_vote_cast(&interested_vote(VoteDirection::Down)),
+            Err(HandlerError::InvalidVoteDirection(_))
+        ));
+    }
+
+    /// Interested, curation and stance by one user on one object are three rows,
+    /// and clearing Interested moves only the Interested tally.
+    #[test]
+    fn interested_is_independent_of_other_kinds() {
+        let voter = Uuid::from_bytes([1u8; 16]);
+        let object = Uuid::from_bytes([2u8; 16]);
+        let space = Uuid::from_bytes([3u8; 16]);
+        let mk =
+            |v, k, t| make_kinded_vote_item(voter, object, space, VoteObjectType::Entity, v, k, t);
+
+        let votes = vec![
+            mk(VoteValue::Up, ResponseKind::Curation, 1000),
+            mk(VoteValue::Up, ResponseKind::Stance, 1000),
+            mk(VoteValue::Up, ResponseKind::Interested, 1000),
+        ];
+        let latest = get_latest_user_votes(&votes);
+        assert_eq!(latest.len(), 3);
+
+        let counts = calculate_vote_counts(&latest, &HashMap::new(), &HashMap::new());
+        let interested = counts
+            .iter()
+            .find(|c| c.kind == ResponseKind::Interested)
+            .expect("interested tally");
+        assert_eq!((interested.positive, interested.negative), (1, 0));
+
+        // Clear Interested with the previous state in hand: only kind 3 moves.
+        let prev: HashMap<UserVoteCriteria, UserVoteItem> = latest
+            .iter()
+            .map(|v| {
+                (
+                    (v.voter_id, v.object_id, v.space_id, v.object_type, v.kind),
+                    v.clone(),
+                )
+            })
+            .collect();
+        let prev_counts: HashMap<VoteCountCriteria, VotesCountItem> = counts
+            .iter()
+            .map(|c| ((c.object_id, c.space_id, c.object_type, c.kind), c.clone()))
+            .collect();
+        let clear = get_latest_user_votes(&[mk(VoteValue::Remove, ResponseKind::Interested, 2000)]);
+        let after = calculate_vote_counts(&clear, &prev, &prev_counts);
+        for c in &after {
+            let want = if c.kind == ResponseKind::Interested {
+                (0, 0)
+            } else {
+                (1, 0)
+            };
+            assert_eq!((c.positive, c.negative), want, "kind {:?}", c.kind);
+        }
+        assert!(after.iter().any(|c| c.kind == ResponseKind::Interested));
+    }
+
+    /// Interested must not write a score row: the `values` score mirrors
+    /// curation only.
+    #[test]
+    fn interested_writes_no_score_value() {
+        let counts = vec![VotesCountItem {
+            object_id: Uuid::from_bytes([2u8; 16]),
+            object_type: VoteObjectType::Entity,
+            space_id: Uuid::from_bytes([3u8; 16]),
+            kind: ResponseKind::Interested,
+            positive: 5,
+            negative: 0,
+        }];
+        assert!(build_score_values(&counts).is_empty());
     }
 }

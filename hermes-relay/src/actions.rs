@@ -84,6 +84,11 @@ pub use hermes_substream::ACTION_DISPUTED as DISPUTED;
 pub use hermes_substream::ACTION_UNVERIFIED as UNVERIFIED;
 pub use hermes_substream::ACTION_VERIFIED as VERIFIED;
 
+// Interested kind (vote_kind 3) — positive and clear only; on a topic it is the
+// topic follow.
+pub use hermes_substream::ACTION_INTERESTED as INTERESTED;
+pub use hermes_substream::ACTION_UNINTERESTED as UNINTERESTED;
+
 // =============================================================================
 // Space Type Constants
 // =============================================================================
@@ -140,7 +145,7 @@ mod tests {
         );
     }
 
-    /// The nine response actions, asserted against a live keccak.
+    /// The eleven response actions, asserted against a live keccak.
     ///
     /// These constants are the shared source of truth for three parties that
     /// must agree byte for byte: the `setPermissionlessAction` registration
@@ -163,9 +168,25 @@ mod tests {
         assert_eq!(super::VERIFIED, keccak256("PERMISSIONLESS.VERIFIED").0);
         assert_eq!(super::DISPUTED, keccak256("PERMISSIONLESS.DISPUTED").0);
         assert_eq!(super::UNVERIFIED, keccak256("PERMISSIONLESS.UNVERIFIED").0);
+
+        // Interested (GEO-3158). Pinned to literal bytes as well as a live
+        // keccak, so the value Patrick registers on chain is in the repo.
+        assert_eq!(super::INTERESTED, keccak256("PERMISSIONLESS.INTERESTED").0);
+        assert_eq!(
+            super::UNINTERESTED,
+            keccak256("PERMISSIONLESS.UNINTERESTED").0
+        );
+        assert_eq!(
+            alloy::primitives::hex::encode(super::INTERESTED),
+            "18e7bf94be2682e4578e3ba940e4fcc2efcb9767062e812cfa4656d7d35377d9"
+        );
+        assert_eq!(
+            alloy::primitives::hex::encode(super::UNINTERESTED),
+            "7b8a4ef62d6765393827e9528a2d965c4ec8898864b8d0f6649c652c022b3864"
+        );
     }
 
-    /// All nine hashes must be distinct, or one kind's events would be decoded
+    /// All eleven hashes must be distinct, or one kind's events would be decoded
     /// as another's.
     #[test]
     fn response_action_hashes_are_pairwise_distinct() {
@@ -179,6 +200,8 @@ mod tests {
             super::VERIFIED,
             super::DISPUTED,
             super::UNVERIFIED,
+            super::INTERESTED,
+            super::UNINTERESTED,
         ];
         let unique: std::collections::HashSet<_> = all.iter().collect();
         assert_eq!(unique.len(), all.len(), "duplicate response action hash");

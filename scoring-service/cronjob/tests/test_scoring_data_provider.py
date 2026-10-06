@@ -145,6 +145,8 @@ class TestScoringDataProvider:
             executed_sql = mock_cursor.execute.call_args[0][0]
             assert "FROM user_votes" in executed_sql
             assert "WHERE object_type = 0" in executed_sql
+            # Interested (GEO-3158) is a follow, not an upvote.
+            assert "vote_kind <> 3" in executed_sql
 
     def test_fetch_perspectives_creates_unique_pairs(self) -> None:
         """Test that perspectives are created from unique entity_id, space_id pairs."""
