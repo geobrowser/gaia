@@ -86,7 +86,9 @@ describe("entitiesInBestOrder", () => {
 	})
 
 	it("exposes each entity's Best score alongside the order", async () => {
-		const result = await query(`{ entitiesInBestOrder(entityIds: ["${IDS.HIGH}", "${IDS.U1}"]) { id rankingScore } }`)
+		const result = await query(
+			`{ entitiesInBestOrder(entityIds: ["${IDS.HIGH}", "${IDS.U1}"]) { id rankingScore } }`,
+		)
 		const [high, unscored] = result.data?.entitiesInBestOrder ?? []
 		expect(Number(high?.rankingScore)).toBeCloseTo(0.9)
 		expect(unscored?.rankingScore ?? null).toBeNull()
@@ -94,7 +96,9 @@ describe("entitiesInBestOrder", () => {
 
 	it("refuses more than 1000 ids", async () => {
 		const ids = Array.from({length: 1001}, (_, i) => `31500000-0000-4000-8000-${String(i).padStart(12, "0")}`)
-		const result = await query(`{ entitiesInBestOrder(entityIds: [${ids.map((id) => `"${id}"`).join(", ")}]) { id } }`)
+		const result = await query(
+			`{ entitiesInBestOrder(entityIds: [${ids.map((id) => `"${id}"`).join(", ")}]) { id } }`,
+		)
 		expect(result.errors?.[0]?.message ?? "").toMatch(/at most 1000 ids|1000/)
 	})
 })
