@@ -13,14 +13,14 @@ spec:
   # each user whose set changed, so a mark or an undo reaches their weights within one run. Its own
   # CronJob: a geo-chat outage fails this Job and touches nothing else.
   #
-  # SUSPENDED until the `not-interested-sync` Secret (GEO_CHAT_DATABASE_URL: a read-only geo-chat
-  # role, sslmode=require) exists and the dry run (not-interested-sync-dryrun-job.yaml) looks
-  # right. deploy-v2 re-applies this file, so flip suspend in git, not with kubectl.
+  # Enabled once the `not-interested-sync` Secret (GEO_CHAT_DATABASE_URL: a read-only geo-chat
+  # role, sslmode=require) existed and the dry run (not-interested-sync-dryrun-job.yaml) read
+  # geo-chat cleanly. deploy-v2 re-applies this file, so suspend it in git, not with kubectl.
   #
   # Refuses to write (and fails the Job) when geo-chat returns rows but none lands on a gaia
   # personal space while gaia holds some: a broken identity mapping must not erase everyone's Not
   # interested. An empty read is honoured (everyone cleared their marks).
-  suspend: true
+  suspend: false
   schedule: "*/2 * * * *"
   failedJobsHistoryLimit: 3
   successfulJobsHistoryLimit: 1
