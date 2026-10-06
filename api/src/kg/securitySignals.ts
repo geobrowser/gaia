@@ -113,6 +113,8 @@ export const HIDDEN_SURFACE = {
 		"refreshTopicCooccurrence",
 		"refreshAccountWeights",
 		"replaceAccountExclusions",
+		// GEO-3088's Not interested sync (migration 0105), run by ranking-indexer's not_interested_sync.
+		"replaceExternalInterestSignals",
 		// GEO-3143's write paths, run by ranking-indexer's primer-claims CronJob.
 		"refreshPrimerClaimStats",
 		"refreshAnchorClaims",

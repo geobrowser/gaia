@@ -86,12 +86,18 @@ describe("rankForYou", () => {
 	})
 
 	it("drops already-answered candidates and says why", () => {
-		const c = candidates([{score: 10, excluded: "voted"}, {score: 9}, {score: 8, excluded: "interested"}])
+		const c = candidates([
+			{score: 10, excluded: "voted"},
+			{score: 9},
+			{score: 8, excluded: "interested"},
+			{score: 7, excluded: "not_interested"},
+		])
 		const r = rank(c, [weight(1, 1)])
 		expect(order(r)).toEqual([id(2)])
 		expect(r.excluded).toEqual([
 			{entityId: id(1), reason: "voted"},
 			{entityId: id(3), reason: "interested"},
+			{entityId: id(4), reason: "not_interested"},
 		])
 	})
 

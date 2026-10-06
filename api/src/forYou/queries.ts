@@ -6,7 +6,7 @@
 
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
-import type {CandidateRow, ForYouConfig, TopicWeight} from "./rank"
+import {type CandidateRow, type ForYouConfig, isExclusionReason, type TopicWeight} from "./rank"
 
 export type Database = Pick<NodePgDatabase<Record<string, unknown>>, "execute">
 
@@ -117,7 +117,7 @@ export async function readCandidates(db: Database, userId: string, candidateIds:
 		entityId: String(row.entity_id),
 		rankingScore: num(row.ranking_score),
 		topicIds: parseUuidArray(row.topic_ids),
-		excluded: row.excluded === "voted" || row.excluded === "interested" ? row.excluded : null,
+		excluded: isExclusionReason(row.excluded) ? row.excluded : null,
 	}))
 }
 

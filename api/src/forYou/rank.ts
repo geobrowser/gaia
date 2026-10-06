@@ -42,12 +42,23 @@ export type TopicWeight = {
 	relatedViaTopicId: string | null
 }
 
+/**
+ * Why a candidate is left out of a user's For you: a position they still hold on it, Interested on
+ * a question, or Not interested (GEO-2862, synced from geo-chat; migration 0105).
+ */
+export const EXCLUSION_REASONS = ["voted", "interested", "not_interested"] as const
+export type ExclusionReason = (typeof EXCLUSION_REASONS)[number]
+
+export function isExclusionReason(value: unknown): value is ExclusionReason {
+	return typeof value === "string" && (EXCLUSION_REASONS as readonly string[]).includes(value)
+}
+
 /** One row of `personalization.for_you_candidates`. */
 export type CandidateRow = {
 	entityId: string
 	rankingScore: number | null
 	topicIds: string[]
-	excluded: "voted" | "interested" | null
+	excluded: ExclusionReason | null
 }
 
 export type ForYouReason = {
@@ -83,7 +94,7 @@ export type ForYouItem = {
 
 export type ForYouRanking = {
 	items: ForYouItem[]
-	excluded: {entityId: string; reason: "voted" | "interested"}[]
+	excluded: {entityId: string; reason: ExclusionReason}[]
 	exploration: {share: number; slots: number; poolSize: number; picked: number}
 }
 
