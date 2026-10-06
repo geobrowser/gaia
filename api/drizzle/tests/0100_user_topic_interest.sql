@@ -156,12 +156,13 @@ FROM (VALUES ('NARROW'),('BROAD')) v(t), (VALUES ('01'),('02'),('03'),('04')) e(
 INSERT INTO entity_topic_ranking (topic_id, type_id, entity_id, ranking_score)
 SELECT pg_temp.i('BROAD'), pg_temp.i('CLAIM'), gen_random_uuid(), 1 FROM generate_series(1, 12);
 
--- Follows, in the follower's own space. A and B have the same follows.
-SELECT pg_temp.rel(pg_temp.i('A'), 'f374b8f2-d331-48a3-a220-ba3648992e93'::uuid, pg_temp.i('FOLLOWED'), pg_temp.i('A'), 50);
-SELECT pg_temp.rel(pg_temp.i('B'), 'f374b8f2-d331-48a3-a220-ba3648992e93'::uuid, pg_temp.i('FOLLOWED'), pg_temp.i('B'), 50);
--- A follow of a non-topic (a claim) is not a topic interest.
+-- Follows. Since 0106 (GEO-3158) a topic follow is a current Interested (vote_kind 3) on the topic;
+-- A and B have the same follows.
+SELECT pg_temp.vote('A', 'FOLLOWED', 0::smallint, 3::smallint, 50);
+SELECT pg_temp.vote('B', 'FOLLOWED', 0::smallint, 3::smallint, 50);
+-- Following relations no longer count for anything: B's to a claim, and one in the DAO space
+-- claiming RM follows OTHER. (0106's own suite covers a Following relation to a topic.)
 SELECT pg_temp.rel(pg_temp.i('B'), 'f374b8f2-d331-48a3-a220-ba3648992e93'::uuid, pg_temp.i('k5'), pg_temp.i('B'), 50);
--- A relation in the DAO space claiming RM follows OTHER is not RM's statement.
 SELECT pg_temp.rel(pg_temp.i('RM'), 'f374b8f2-d331-48a3-a220-ba3648992e93'::uuid, pg_temp.i('OTHER'), pg_temp.i('DAO'), 1);
 
 -- A: four votes on NARROW claims, both directions, both kinds, two days ago.

@@ -3,9 +3,9 @@
 -- Run per drizzle/tests/README.md; also runs in CI via rankingSqlSuites.test.ts.
 --
 --   1. Interested on a topic is a follow: the follow weight (3.0), not decaying.
---   2. A Following relation and an Interested on the same topic are ONE follow, not two.
---   3. An existing Following relation alone still reads as a follow.
---   4. Clearing Interested drops the follow, unless a Following relation still holds it.
+--   2. Interested is counted once, even with a (now ignored) Following relation beside it.
+--   3. A Following relation alone gives no follow credit: old topic follows are dropped.
+--   4. Clearing Interested drops the follow, whatever relation remains.
 --   5. Interested on a topic is not ALSO a vote: it credits nothing through the topic's own
 --      Topics relations.
 --   6. Interested on something that is not a topic stays an engagement at the vote weight.
@@ -38,7 +38,7 @@ UPDATE personalization.interest_config
 -- Fixtures. "Now" is 2026-10-01 00:00 UTC.
 --   I     Interested on T1, 40 days ago (a follow does not fade, so its age must not matter).
 --   BOTH  a Following relation AND Interested on T1.
---   REL   a Following relation to T1 only (today's follows).
+--   REL   a Following relation to T1 only (a pre-GEO-3158 follow, which no longer counts).
 --   CLR   Interested on T1, then cleared.
 --   CLRF  a Following relation to T1, and an Interested on T1 that was cleared.
 --   NT    Interested on a claim k1 (not a topic) tagged T2.
@@ -132,18 +132,20 @@ BEGIN
   PERFORM assert(r.kind = 'follow' AND r.event_count = 1, format('1: ...stored as kind follow (%s, %s)', r.kind, r.event_count));
 
   -- 2.
-  PERFORM assert(pg_temp.w('BOTH', 'T1') = 3, format('2: a Following relation plus Interested is one follow, 3.0 not 6.0 (%s)', pg_temp.w('BOTH', 'T1')));
+  PERFORM assert(pg_temp.w('BOTH', 'T1') = 3, format('2: Interested beside a Following relation is one follow, 3.0 not 6.0 (%s)', pg_temp.w('BOTH', 'T1')));
   SELECT count(*) INTO n FROM personalization.user_interest_events(ARRAY[pg_temp.i('BOTH')]) e WHERE e.kind = 'follow';
   PERFORM assert(n = 1, format('2: ...and one follow event (%s)', n));
 
   -- 3.
-  PERFORM assert(pg_temp.w('REL', 'T1') = 3, '3: a Following relation alone still reads as a follow');
+  PERFORM assert(pg_temp.w('REL', 'T1') = 0, '3: a Following relation alone gives no follow credit');
+  SELECT count(*) INTO n FROM personalization.user_topic_signals WHERE user_id = pg_temp.i('REL');
+  PERFORM assert(n = 0, '3: ...and stores nothing');
 
   -- 4.
   PERFORM assert(pg_temp.w('CLR', 'T1') = 0, '4: a cleared Interested is not a follow');
   SELECT count(*) INTO n FROM personalization.user_topic_signals WHERE user_id = pg_temp.i('CLR');
   PERFORM assert(n = 0, '4: ...and leaves nothing stored');
-  PERFORM assert(pg_temp.w('CLRF', 'T1') = 3, '4: clearing Interested leaves a Following relation''s follow standing');
+  PERFORM assert(pg_temp.w('CLRF', 'T1') = 0, '4: clearing Interested unfollows even with a Following relation left');
 
   -- 5. T1 is tagged PARENT. A follow names its topic directly; it is not a vote on T1.
   PERFORM assert(pg_temp.w('I', 'PARENT') = 0 AND pg_temp.w('BOTH', 'PARENT') = 0,

@@ -18,12 +18,15 @@
 --   * user_interest_events read "any kind, either direction" as a 'vote' at weight 1.0, decaying.
 --   * scoring-service/cronjob read every user_votes row as an up/down vote (outside this file).
 --
--- THE INTEREST MODEL. Interested on a Topic is a follow: kind 'follow', the follow weight (3.0),
--- non-decaying, exactly as a `Following` relation. A topic is followed if the user has a Following
--- relation to it (in their own space) OR a current Interested on it. Both are emitted with the
--- topic as the source, and they are collapsed to one event per (user, topic) here, so holding both
--- is one follow, not two. Clearing Interested (vote_type 2) removes that half; a Following relation
--- still standing keeps the topic followed.
+-- THE INTEREST MODEL. Interested on a Topic IS the follow (Preston, 6 Oct): kind 'follow', the
+-- follow weight (3.0), non-decaying, one event per (user, topic). The `Following` relation is no
+-- longer a follow source at all: old topic follows are dropped, not migrated. A topic is followed
+-- exactly when the user holds a current Interested on it; clearing it (vote_type 2) unfollows.
+--
+-- DROPPING OLD FOLLOWS takes effect user by user as each is recomputed: on their next sweep if they
+-- do anything, and for everyone at the first nightly refit after deploy, which will report those
+-- rows as disagreement (expected, once). dirty_interest_users still marks a user whose Following
+-- relation changes; that recompute is now a no-op for follows and is left alone here.
 --
 -- Interested on something that is not a Topic stays what it was before this migration: an
 -- engagement with that entity, credited to its topics at the vote weight. Only topics carry the
@@ -86,31 +89,14 @@ LANGUAGE sql STABLE AS $$
     WHERE v.user_id = ANY(user_ids) AND v.object_type = 0 AND v.vote_type IN (0, 1)
       AND EXISTS (SELECT 1 FROM users u WHERE u.id = v.user_id)
   ),
-  -- Follows of a Topic, by either route, one row per (user, topic) however many routes hold it.
+  -- Follows: a current Interested on a Topic (GEO-3158), and nothing else. Interested only ever
+  -- holds vote_type 0, so `held` (which drops removals) is exactly the current Interesteds. One row
+  -- per (user, topic), however many spaces the Interested was cast in.
   follows AS (
-    SELECT fs.user_id, fs.topic_id, max(fs.occurred_at) AS occurred_at
-    FROM (
-      -- A Following relation stated by the user in their own space. A relation in someone else's
-      -- space saying this user follows something is not the user's statement.
-      SELECT f.from_entity_id AS user_id, f.to_entity_id AS topic_id,
-             personalization.epoch_text_ts(re.created_at) AS occurred_at
-      FROM public.relations f
-      JOIN users u ON u.id = f.from_entity_id
-      LEFT JOIN public.entities re ON re.id = f.id
-      WHERE f.type_id = 'f374b8f2-d331-48a3-a220-ba3648992e93'::uuid
-        AND f.space_id = f.from_entity_id
-        AND EXISTS (SELECT 1 FROM public.relations ty
-                    WHERE ty.from_entity_id = f.to_entity_id
-                      AND ty.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid
-                      AND ty.to_entity_id = '5ef5a586-0f27-4d8e-8f6c-59ae5b3e89e2'::uuid)
-      UNION ALL
-      -- Interested on a Topic (GEO-3158). Interested only ever holds vote_type 0, so `held`
-      -- (which drops removals) is exactly the current Interesteds.
-      SELECT h.user_id, h.object_id, h.voted_at
-      FROM held h
-      WHERE h.interested_in_topic
-    ) fs
-    GROUP BY fs.user_id, fs.topic_id
+    SELECT h.user_id, h.object_id AS topic_id, max(h.voted_at) AS occurred_at
+    FROM held h
+    WHERE h.interested_in_topic
+    GROUP BY h.user_id, h.object_id
   )
   -- Votes: any kind, either direction, on an entity -- except an Interested on a Topic, which is
   -- a follow (below), not a vote.
@@ -154,8 +140,8 @@ $$;
 --> statement-breakpoint
 
 UPDATE personalization.interest_signal_weights
-   SET note = 'Follows the topic: a Following relation in the user''s own space, or Interested '
-              '(vote_kind 3) on the topic (GEO-3158); both together are one follow. Fixed: does not decay.'
+   SET note = 'Follows the topic: a current Interested (vote_kind 3) on it (GEO-3158). The Following '
+              'relation no longer counts. Fixed: does not decay.'
  WHERE kind = 'follow';
 --> statement-breakpoint
 
