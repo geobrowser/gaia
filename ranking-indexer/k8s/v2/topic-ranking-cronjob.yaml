@@ -11,6 +11,10 @@ spec:
   # 0096). Adds tags, names and types that arrived without a score change, drops ones that went,
   # and fixes drifted scores. About 20s on the live DB with nothing to change.
   #
+  # GEO-3150: first re-scores every topic debate (`refresh_topic_debate_scores()`, migration 0107),
+  # whose score counts Interested votes and debates held on its topic. Needs the api (migration)
+  # deployed first, or the run fails on the missing function.
+  #
   # Hourly, matching how quickly new entities get a score (vote-indexer's new_entity_sweep at
   # :30), so a new tag reaches For you on the same clock. At :51 to stay clear of the rolling
   # sweep (:00), the canary (:17), the new-entity sweep (:30) and topic suggestions (:41).

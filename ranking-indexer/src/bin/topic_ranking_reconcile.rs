@@ -10,6 +10,11 @@
 //! Measured on the live DB 2026-09-29: 24s as the backfill (424,527 rows), 20s with nothing to
 //! change.
 //!
+//! It first re-scores every topic debate (GEO-3150, migration 0107): a topic debate's Best score
+//! counts the Interested votes and the debates already held on its topic, and neither changes the
+//! debate itself, so nothing else would re-score it when they move. There are few topic debates,
+//! so this is cheap, and running it first means the reconcile below sees the new scores.
+//!
 //! Usage: `DATABASE_URL=... cargo run --bin topic_ranking_reconcile`
 
 use std::env;
@@ -43,11 +48,15 @@ async fn main() -> Result<(), IndexerError> {
     sqlx::query("SET LOCAL statement_timeout = '10min'")
         .execute(&mut *tx)
         .await?;
+    let topic_debates: i32 = sqlx::query_scalar("SELECT public.refresh_topic_debate_scores()")
+        .fetch_one(&mut *tx)
+        .await?;
     let changed: i32 = sqlx::query_scalar("SELECT public.reconcile_entity_topic_ranking()")
         .fetch_one(&mut *tx)
         .await?;
     tx.commit().await?;
     info!(
+        topic_debates,
         changed,
         elapsed_ms = started.elapsed().as_millis() as u64,
         "topic ranking reconciled"
