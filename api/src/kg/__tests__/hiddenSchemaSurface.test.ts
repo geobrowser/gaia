@@ -42,6 +42,14 @@ describe("hidden schema surface", () => {
 		expect(mutationFields.filter((f) => net.test(f))).toEqual([])
 	})
 
+	// GEO-3224: pair fit compares two people's positions, so it is served only by the private
+	// /internal/pair-fit route; nothing about pair fit or matchmaking may be a GraphQL field.
+	it("does not expose debate pair fit", () => {
+		const net = /pairFit|matchmak/i
+		expect(typeNames.filter((t) => net.test(t))).toEqual([])
+		expect(queryFields.filter((f) => net.test(f))).toEqual([])
+	})
+
 	// GEO-3143: the primer and anchor reads are public, and return entities, never the scores or
 	// account weights they were chosen from.
 	it("exposes the primer and anchor reads as entity lists", () => {

@@ -102,6 +102,9 @@ export const HIDDEN_SURFACE = {
 		"binaryEntropyBits",
 		// GEO-3150's topic-debate term inputs (migration 0107): reads account weights.
 		"topicDebateScore",
+		// GEO-3224 debate pair fit is served only by /internal/pair-fit; a GraphQL field by this name
+		// would be per-user positions leaking into the public API.
+		"pairFit",
 	],
 	/** The omitted volatile functions, by their mutation names. */
 	mutations: [

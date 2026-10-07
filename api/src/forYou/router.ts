@@ -19,6 +19,8 @@
 
 import {createHash, timingSafeEqual} from "node:crypto"
 import {Hono} from "hono"
+import {canonicalRequestLogging} from "../middleware/requestLogging"
+import {pairFitHandler} from "../pairFit/router"
 import {log} from "../services/telemetry"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {type Database, type ForYouInputs, readForYouInputs} from "./queries"
@@ -164,5 +166,26 @@ export function createInternalRouter(db: Database, token: string) {
 		}
 	})
 
+	// GEO-3224: debate pair fit, on the same private router and behind the same token.
+	router.post("/pair-fit", pairFitHandler(db))
+
 	return router
+}
+
+/**
+ * Mounts `/internal/*` on `app` only when `token` is set and long enough; otherwise those paths do
+ * not exist and answer 404. Returns what it did, for the startup log.
+ */
+export function mountInternalRoutes(
+	// biome-ignore lint/suspicious/noExplicitAny: mounts on any app, whatever its env
+	app: Hono<any>,
+	db: Database,
+	token: string | undefined | null,
+): "enabled" | "too_short" | "unset" {
+	const trimmed = token?.trim()
+	if (!trimmed) return "unset"
+	if (trimmed.length < MIN_INTERNAL_TOKEN_LENGTH) return "too_short"
+	app.use("/internal/*", canonicalRequestLogging())
+	app.route("/internal", createInternalRouter(db, trimmed))
+	return "enabled"
 }

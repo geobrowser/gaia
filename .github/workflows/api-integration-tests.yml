@@ -72,6 +72,7 @@ jobs:
           src/services/__tests__/
           src/utils/__tests__/
           src/forYou/__tests__/
+          src/pairFit/__tests__/
         env:
           DATABASE_URL: "postgresql://test:test@localhost:5432/test"
           IPFS_KEY: "test-key"

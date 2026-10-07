@@ -2,7 +2,7 @@ import {swaggerUI} from "@hono/swagger-ui"
 import {Hono} from "hono"
 import {cors} from "hono/cors"
 import {openAPISpecs} from "hono-openapi"
-import {createInternalRouter, MIN_INTERNAL_TOKEN_LENGTH} from "./src/forYou/router"
+import {MIN_INTERNAL_TOKEN_LENGTH, mountInternalRoutes} from "./src/forYou/router"
 import {health} from "./src/health"
 import {createIpfsRouter} from "./src/ipfs"
 import {getGraphqlPoolPressure, graphqlServer} from "./src/kg/postgraphile"
@@ -141,15 +141,13 @@ log.info("Profile routes enabled")
 app.route("/proposals", createProposalsRouter(db, runtime))
 log.info("Proposals routes enabled")
 
-// Private server-to-server routes (GEO-3140 For you). Mounted only when GAIA_INTERNAL_TOKEN is set,
-// so without it /internal/* does not exist (404). Every request must carry the token; see
-// src/forYou/router.ts. A short token is refused rather than mounted.
-const internalToken = process.env.GAIA_INTERNAL_TOKEN?.trim()
-if (internalToken && internalToken.length >= MIN_INTERNAL_TOKEN_LENGTH) {
-	app.use("/internal/*", canonicalRequestLogging())
-	app.route("/internal", createInternalRouter(db, internalToken))
+// Private server-to-server routes (GEO-3140 For you, GEO-3224 pair fit). Mounted only when
+// GAIA_INTERNAL_TOKEN is set, so without it /internal/* does not exist (404). Every request must
+// carry the token; see src/forYou/router.ts. A short token is refused rather than mounted.
+const internalRoutes = mountInternalRoutes(app, db, process.env.GAIA_INTERNAL_TOKEN)
+if (internalRoutes === "enabled") {
 	log.info("Internal routes enabled")
-} else if (internalToken) {
+} else if (internalRoutes === "too_short") {
 	log.error("GAIA_INTERNAL_TOKEN is shorter than the minimum; internal routes disabled", {
 		minimumLength: MIN_INTERNAL_TOKEN_LENGTH,
 	})
