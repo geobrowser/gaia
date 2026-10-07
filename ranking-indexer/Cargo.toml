@@ -54,6 +54,11 @@ path = "src/bin/primer_claims_refresh.rs"
 name = "not_interested_sync"
 path = "src/bin/not_interested_sync.rs"
 
+# Stance map fitted and evaluated in shadow, daily; stores metrics only (GEO-3146, migration 0108).
+[[bin]]
+name = "stance_map_shadow"
+path = "src/bin/stance_map_shadow.rs"
+
 [dependencies]
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }

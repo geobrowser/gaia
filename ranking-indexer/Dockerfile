@@ -47,5 +47,6 @@ COPY --from=builder /app/ranking-indexer/target/release/topic_interest /usr/loca
 COPY --from=builder /app/ranking-indexer/target/release/account_exclusions_sync /usr/local/bin/account_exclusions_sync
 COPY --from=builder /app/ranking-indexer/target/release/primer_claims_refresh /usr/local/bin/primer_claims_refresh
 COPY --from=builder /app/ranking-indexer/target/release/not_interested_sync /usr/local/bin/not_interested_sync
+COPY --from=builder /app/ranking-indexer/target/release/stance_map_shadow /usr/local/bin/stance_map_shadow
 
 CMD ["ranking-indexer"]

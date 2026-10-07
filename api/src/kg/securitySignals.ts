@@ -66,6 +66,9 @@ export const HIDDEN_SURFACE = {
 		"AnchorClaimSet",
 		"AnchorClaimMember",
 		"ClaimOverlapSample",
+		// GEO-3146 stance map, in shadow (migration 0108), private schema: run metrics and config.
+		"StanceMapConfig",
+		"StanceMapRun",
 	],
 	/** Root query fields are matched by prefix, which covers every inflection PostGraphile generated. */
 	queryFieldPrefixes: [
@@ -105,6 +108,8 @@ export const HIDDEN_SURFACE = {
 		// GEO-3224 debate pair fit is served only by /internal/pair-fit; a GraphQL field by this name
 		// would be per-user positions leaking into the public API.
 		"pairFit",
+		// GEO-3146: the stance map's inputs (per-user stances) and its run history.
+		"stanceMap",
 	],
 	/** The omitted volatile functions, by their mutation names. */
 	mutations: [
@@ -126,6 +131,8 @@ export const HIDDEN_SURFACE = {
 		"recordClaimOverlapSample",
 		// GEO-3150's hourly topic-debate re-score, run by ranking-indexer's topic_ranking_reconcile.
 		"refreshTopicDebateScores",
+		// GEO-3146's shadow run recorder, run by ranking-indexer's stance_map_shadow CronJob.
+		"recordStanceMapRun",
 	],
 } as const
 
