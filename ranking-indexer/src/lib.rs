@@ -15,5 +15,6 @@ pub mod not_interested;
 pub mod publish;
 pub mod recompute;
 pub mod scoring;
+pub mod stance_map;
 pub mod storage;
 pub mod topic_interest;

@@ -50,6 +50,15 @@ describe("hidden schema surface", () => {
 		expect(queryFields.filter((f) => net.test(f))).toEqual([])
 	})
 
+	// GEO-3146: the stance map's inputs are per-user stances, and a position on it is an inferred
+	// political opinion. Nothing about it may be public, under any inflection.
+	it("does not expose the stance map", () => {
+		const net = /stance_?map/i
+		expect(typeNames.filter((t) => net.test(t))).toEqual([])
+		expect(queryFields.filter((f) => net.test(f))).toEqual([])
+		expect(mutationFields.filter((f) => net.test(f))).toEqual([])
+	})
+
 	// GEO-3143: the primer and anchor reads are public, and return entities, never the scores or
 	// account weights they were chosen from.
 	it("exposes the primer and anchor reads as entity lists", () => {
