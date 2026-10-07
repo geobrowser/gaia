@@ -3,11 +3,13 @@
 //! space membership), and projects aggregated `RANK_POSITION` relations back
 //! into the public graph.
 
+pub mod clickhouse;
 pub mod consumer;
 pub mod dedup;
 pub mod detect;
 pub mod eligibility;
 pub mod error;
+pub mod feed_signals;
 pub mod membership;
 pub mod metrics;
 pub mod models;

@@ -59,6 +59,15 @@ describe("hidden schema surface", () => {
 		expect(mutationFields.filter((f) => net.test(f))).toEqual([])
 	})
 
+	// GEO-3235: what each signed-in user was shown, and per-item behaviour from analytics, are
+	// private. Same reason and same net as above, for the feed-signal names.
+	it("does not expose feed signals or seen sets", () => {
+		const net = /feedItemSignal|feedUserSeen|feedSignal|walletAddressHash/i
+		expect(typeNames.filter((t) => net.test(t))).toEqual([])
+		expect(queryFields.filter((f) => net.test(f))).toEqual([])
+		expect(mutationFields.filter((f) => net.test(f))).toEqual([])
+	})
+
 	// GEO-3143: the primer and anchor reads are public, and return entities, never the scores or
 	// account weights they were chosen from.
 	it("exposes the primer and anchor reads as entity lists", () => {

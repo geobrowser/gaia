@@ -44,18 +44,13 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
+use ranking_indexer::clickhouse::{self, KNOWN_ADDRESS, KNOWN_HASH};
 use ranking_indexer::error::IndexerError;
 
 const VIEW_QUERY: &str =
     "SELECT wallet_address_hash, reason FROM analytics.gaia_account_exclusions FORMAT JSONEachRow";
 const DEFAULT_MAX_EXCLUDED: usize = 500;
 const SOURCE: &str = "analytics";
-
-/// identity_hash('wallet', '0x929e5195f039E0becB79B039339077FA17183064') as analytics computes it
-/// (crates/analytics-ingest/src/identity.rs). Checked against Postgres at startup, so a change to
-/// either side's hashing fails loudly instead of silently matching nobody.
-const KNOWN_ADDRESS: &str = "0x929e5195f039E0becB79B039339077FA17183064";
-const KNOWN_HASH: &str = "sha256:645c48b3494f9f1fba91b84d2c1fa55d23cfa134be3e1e488803286c13bff73b";
 
 /// gaia's side of the hash. Must stay identical to analytics' identity_hash("wallet", address).
 const SPACE_ADDRESS_HASH_SQL: &str =
@@ -103,50 +98,9 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, IndexerErro
     Ok(options)
 }
 
-/// Parses the view's JSONEachRow output. Blank lines are skipped; a malformed line is an error,
-/// never a silently shorter list.
+/// Parses the view's JSONEachRow output; a malformed line is an error, never a shorter list.
 fn parse_rows(body: &str) -> Result<Vec<Candidate>, IndexerError> {
-    body.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| {
-            serde_json::from_str::<Candidate>(line).map_err(|e| {
-                IndexerError::Config(format!("unreadable exclusion row {line:?}: {e}"))
-            })
-        })
-        .collect()
-}
-
-async fn fetch_from_clickhouse() -> Result<String, IndexerError> {
-    let url = env::var("CLICKHOUSE_URL")
-        .map_err(|_| IndexerError::Config("CLICKHOUSE_URL not set (or pass --input)".into()))?;
-    let user = env::var("CLICKHOUSE_USER")
-        .map_err(|_| IndexerError::Config("CLICKHOUSE_USER not set".into()))?;
-    let password = env::var("CLICKHOUSE_PASSWORD")
-        .map_err(|_| IndexerError::Config("CLICKHOUSE_PASSWORD not set".into()))?;
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
-        .build()
-        .map_err(|e| IndexerError::Config(format!("http client: {e}")))?
-        .post(url.trim_end_matches('/').to_string() + "/")
-        .header("X-ClickHouse-User", user)
-        .header("X-ClickHouse-Key", password)
-        .body(VIEW_QUERY)
-        .send()
-        .await
-        .map_err(|e| IndexerError::Config(format!("ClickHouse request failed: {e}")))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| IndexerError::Config(format!("ClickHouse response unreadable: {e}")))?;
-    if !status.is_success() {
-        return Err(IndexerError::Config(format!(
-            "ClickHouse returned {status}: {}",
-            body.chars().take(500).collect::<String>()
-        )));
-    }
-    Ok(body)
+    clickhouse::parse_json_each_row(body, "exclusion")
 }
 
 /// The personal spaces the candidates place, with every reason that applies, by space id.
@@ -247,7 +201,7 @@ async fn main() -> Result<(), IndexerError> {
     let body = match &options.input {
         Some(path) => std::fs::read_to_string(path)
             .map_err(|e| IndexerError::Config(format!("cannot read {path}: {e}")))?,
-        None => fetch_from_clickhouse().await?,
+        None => clickhouse::query(VIEW_QUERY, Duration::from_secs(60)).await?,
     };
     let candidates = parse_rows(&body)?;
     if candidates.is_empty() {
