@@ -59,6 +59,12 @@ path = "src/bin/not_interested_sync.rs"
 name = "stance_map_shadow"
 path = "src/bin/stance_map_shadow.rs"
 
+# Hourly analytics -> gaia feed signals (Explore impressions, watch time, seen sets) and the
+# freshness check (GEO-3235, migration 0109).
+[[bin]]
+name = "feed_signals_sync"
+path = "src/bin/feed_signals_sync.rs"
+
 [dependencies]
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }

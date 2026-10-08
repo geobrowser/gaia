@@ -69,6 +69,12 @@ export const HIDDEN_SURFACE = {
 		// GEO-3146 stance map, in shadow (migration 0108), private schema: run metrics and config.
 		"StanceMapConfig",
 		"StanceMapRun",
+		// GEO-3235 feed signals from analytics (migration 0109), private schema: per-item behaviour,
+		// per-user seen sets, the run log and config.
+		"FeedItemSignalsHourly",
+		"FeedUserSeenDaily",
+		"FeedSignalRun",
+		"FeedSignalConfig",
 	],
 	/** Root query fields are matched by prefix, which covers every inflection PostGraphile generated. */
 	queryFieldPrefixes: [
@@ -110,6 +116,11 @@ export const HIDDEN_SURFACE = {
 		"pairFit",
 		// GEO-3146: the stance map's inputs (per-user stances) and its run history.
 		"stanceMap",
+		// GEO-3235's tables and read functions (migration 0109).
+		"feedItemSignal",
+		"feedUserSeen",
+		"feedSignal",
+		"walletAddressHash",
 	],
 	/** The omitted volatile functions, by their mutation names. */
 	mutations: [
@@ -133,6 +144,9 @@ export const HIDDEN_SURFACE = {
 		"refreshTopicDebateScores",
 		// GEO-3146's shadow run recorder, run by ranking-indexer's stance_map_shadow CronJob.
 		"recordStanceMapRun",
+		// GEO-3235's write paths, run by ranking-indexer's feed_signals_sync.
+		"replaceFeedSignals",
+		"recordFeedSignalRun",
 	],
 } as const
 
