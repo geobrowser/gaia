@@ -7,7 +7,7 @@
  * verified Privy session; the browser never calls this. It is REST, not GraphQL, so it never passes
  * through the GraphQL response cache, and its answers are marked `private, no-store`.
  *
- * Request:  {userId, candidateIds, asOf?, pool?}
+ * Request:  {userId, candidateIds, asOf?, pool?, seen?}
  *   userId        the user's personal space id
  *   candidateIds  Best's candidate window, in Best's order (at most MAX_CANDIDATES)
  *   asOf          optional ISO time to read interests at, so every page of one scroll agrees
@@ -15,6 +15,12 @@
  *                 depth?}. When present, the user's own topic candidates are walked with Explore's
  *                 filters and ranked together with Best's window, so For you can serve what Best's
  *                 window does not hold. Items then carry ids the caller did not send.
+ *   seen          optional (GEO-3299 step 3): {minViews, days, recent?, engagedIds?}. Leaves out a
+ *                 candidate shown to the user on Explore at least minViews times in the last days
+ *                 days, on any device, from the hourly feed signals sync (0109). `recent` is the
+ *                 browser's own views ({entityId, at} in epoch seconds); those after the sync's
+ *                 watermark are added, since the sync has not read them yet. `engagedIds` are never
+ *                 hidden. Hidden candidates are listed in `excluded` with the reason `seen`.
  *
  * Response: the ranking's name and version, the re-ordered items with their score parts, reason
  * and exploration marks, what was excluded and why, and the user's feed experiment (if any).
@@ -28,7 +34,16 @@ import {pairFitHandler} from "../pairFit/router"
 import {log} from "../services/telemetry"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {type Database, type ForYouInputs, type ForYouPool, readForYouInputs} from "./queries"
-import {FOR_YOU_CODE_VERSION, FOR_YOU_POOL_CODE_VERSION, type ForYouRanking, rankForYou} from "./rank"
+import {
+	FOR_YOU_CODE_VERSION,
+	FOR_YOU_POOL_CODE_VERSION,
+	type ForYouRanking,
+	type RecentView,
+	rankForYou,
+	SEEN_HIDING_VERSION,
+	type SeenHiding,
+	seenCounts,
+} from "./rank"
 
 export const INTERNAL_TOKEN_HEADER = "x-internal-token"
 /** Best's window is 66; room for a deeper one without letting a caller ask for thousands. */
@@ -41,6 +56,12 @@ export const MAX_POOL_DEPTH = 500
 const MAX_POOL_TYPES = 20
 /** Explore sends every space the reader can see. */
 const MAX_POOL_SPACES = 2000
+/** The browser keeps at most 10 views for each of 2000 cards; only the newest are useful. */
+export const MAX_RECENT_VIEWS = 1000
+const MAX_ENGAGED_IDS = 2000
+/** Inclusive. `days` stops at the sync's longest retention (0109's user_retention_days). */
+export const SEEN_BOUNDS = {minViews: {min: 1, max: 10}, days: {min: 1, max: 30}} as const
+const DAY_MS = 86_400_000
 
 export function internalTokenMatches(expected: string, provided: string | null | undefined): boolean {
 	if (!provided) return false
@@ -50,11 +71,14 @@ export function internalTokenMatches(expected: string, provided: string | null |
 	return timingSafeEqual(a, b)
 }
 
-export function forYouVersion(revision: number, pooled = false): string {
-	return `for-you-${pooled ? FOR_YOU_POOL_CODE_VERSION : FOR_YOU_CODE_VERSION}.${revision}`
+export function forYouVersion(revision: number, pooled = false, seen = false): string {
+	const base = `for-you-${pooled ? FOR_YOU_POOL_CODE_VERSION : FOR_YOU_CODE_VERSION}.${revision}`
+	return seen ? `${base}+seen.${SEEN_HIDING_VERSION}` : base
 }
 
-type Body = {userId: string; candidateIds: string[]; asOf: Date; pool: ForYouPool | null}
+export type SeenRequest = SeenHiding & {recent: RecentView[]; engagedIds: string[]}
+
+type Body = {userId: string; candidateIds: string[]; asOf: Date; pool: ForYouPool | null; seen: SeenRequest | null}
 
 function parseUuidList(value: unknown, max: number, name: string): string[] | string {
 	if (!Array.isArray(value)) return `${name} must be an array`
@@ -105,9 +129,50 @@ export function parsePool(raw: unknown): ForYouPool | null | string {
 	}
 }
 
+function boundedInteger(value: unknown, bounds: {min: number; max: number}): number | null {
+	return typeof value === "number" && Number.isInteger(value) && value >= bounds.min && value <= bounds.max
+		? value
+		: null
+}
+
+/** Ids come back dashless, the form the ranking compares in. */
+export function parseSeen(raw: unknown): SeenRequest | null | string {
+	if (raw === undefined || raw === null) return null
+	if (typeof raw !== "object" || Array.isArray(raw)) return "seen must be an object"
+	const {minViews, days, recent, engagedIds} = raw as Record<string, unknown>
+	const n = boundedInteger(minViews, SEEN_BOUNDS.minViews)
+	if (n === null)
+		return `seen.minViews must be an integer from ${SEEN_BOUNDS.minViews.min} to ${SEEN_BOUNDS.minViews.max}`
+	const d = boundedInteger(days, SEEN_BOUNDS.days)
+	if (d === null) return `seen.days must be an integer from ${SEEN_BOUNDS.days.min} to ${SEEN_BOUNDS.days.max}`
+	const views: RecentView[] = []
+	if (recent !== undefined && recent !== null) {
+		if (!Array.isArray(recent)) return "seen.recent must be an array"
+		if (recent.length > MAX_RECENT_VIEWS) return `at most ${MAX_RECENT_VIEWS} seen.recent views`
+		for (const view of recent) {
+			const {entityId, at} = (view ?? {}) as Record<string, unknown>
+			if (
+				typeof entityId !== "string" ||
+				!isValidUuid(entityId) ||
+				typeof at !== "number" ||
+				!Number.isFinite(at)
+			)
+				return "every seen.recent view must be {entityId: UUID, at: epoch seconds}"
+			views.push({entityId: normalizeUuid(entityId), at})
+		}
+	}
+	let engaged: string[] = []
+	if (engagedIds !== undefined && engagedIds !== null) {
+		const parsed = parseUuidList(engagedIds, MAX_ENGAGED_IDS, "seen.engagedIds")
+		if (typeof parsed === "string") return parsed
+		engaged = parsed.map(normalizeUuid)
+	}
+	return {minViews: n, days: d, recent: views, engagedIds: engaged}
+}
+
 function parseBody(raw: unknown): Body | string {
 	if (!raw || typeof raw !== "object") return "body must be a JSON object"
-	const {userId, candidateIds, asOf, pool: rawPool} = raw as Record<string, unknown>
+	const {userId, candidateIds, asOf, pool: rawPool, seen: rawSeen} = raw as Record<string, unknown>
 	if (typeof userId !== "string" || !isValidUuid(userId)) return "userId must be a UUID"
 	if (!Array.isArray(candidateIds)) return "candidateIds must be an array"
 	if (candidateIds.length > MAX_CANDIDATES) return `at most ${MAX_CANDIDATES} candidateIds`
@@ -130,14 +195,34 @@ function parseBody(raw: unknown): Body | string {
 	}
 	const pool = parsePool(rawPool)
 	if (typeof pool === "string") return pool
-	return {userId: normalizeUuid(userId), candidateIds: ids, asOf: when, pool}
+	const seenRequest = parseSeen(rawSeen)
+	if (typeof seenRequest === "string") return seenRequest
+	return {userId: normalizeUuid(userId), candidateIds: ids, asOf: when, pool, seen: seenRequest}
 }
 
 const dashless = (id: string) => (isValidUuid(id) ? normalizeUuid(id) : id)
 
+/** The start of the seen window: `days` before the request's pinned time. */
+export const seenSince = (body: Pick<Body, "asOf">, seen: SeenHiding) =>
+	new Date(body.asOf.getTime() - seen.days * DAY_MS)
+
 export function buildResponse(body: Body, inputs: ForYouInputs) {
 	const pooled = body.pool !== null
-	const version = forYouVersion(inputs.settings.revision, pooled)
+	const version = forYouVersion(inputs.settings.revision, pooled, body.seen !== null)
+	let seen: {counts: Map<string, number>; minViews: number; recentCounted: number} | null = null
+	if (body.seen && inputs.seen) {
+		const synced = new Map([...inputs.seen.counts].map(([id, views]) => [dashless(id), views]))
+		const counts = seenCounts({
+			synced,
+			watermarkSec: inputs.seen.watermark ? inputs.seen.watermark.getTime() / 1000 : null,
+			recent: body.seen.recent,
+			sinceSec: seenSince(body, body.seen).getTime() / 1000,
+			engaged: new Set(body.seen.engagedIds),
+		})
+		let recentCounted = 0
+		for (const [id, views] of counts) recentCounted += views - (synced.get(id) ?? 0)
+		seen = {counts, minViews: body.seen.minViews, recentCounted}
+	}
 	const experiment = inputs.experiment
 		? {
 				id: inputs.experiment.id,
@@ -165,6 +250,7 @@ export function buildResponse(body: Body, inputs: ForYouInputs) {
 			config: inputs.settings.config,
 			tauSeconds: inputs.settings.tauSeconds,
 			seed: `${body.userId}:${body.candidateIds.join(",")}`,
+			seen,
 		})
 	}
 	return {
@@ -183,6 +269,18 @@ export function buildResponse(body: Body, inputs: ForYouInputs) {
 		exploration: ranking?.exploration ?? null,
 		/** GEO-3299: how the pool was made; null on an unpooled request. */
 		pool: inputs.pool,
+		/** GEO-3299 step 3: what seen hiding read and did; null when not asked for. */
+		seen:
+			body.seen && inputs.seen
+				? {
+						minViews: body.seen.minViews,
+						days: body.seen.days,
+						watermark: inputs.seen.watermark?.toISOString() ?? null,
+						syncedItems: inputs.seen.counts.size,
+						recentViews: seen?.recentCounted ?? 0,
+						hidden: ranking?.excluded.filter((e) => e.reason === "seen").length ?? 0,
+					}
+				: null,
 		experiment,
 	}
 }
@@ -214,6 +312,7 @@ export function createInternalRouter(db: Database, token: string) {
 				candidateIds: body.candidateIds.map(toDashedUuid),
 				asOf: body.asOf,
 				pool: body.pool,
+				seenSince: body.seen ? seenSince(body, body.seen) : null,
 			})
 			const response = buildResponse(body, inputs)
 			log.info("for-you ranked", {
@@ -222,6 +321,7 @@ export function createInternalRouter(db: Database, token: string) {
 				excluded: response.excluded.length,
 				explored: response.exploration?.picked ?? 0,
 				poolTopics: response.pool?.topics ?? null,
+				seenHidden: response.seen?.hidden ?? null,
 				version: response.ranking.version,
 				durationMs: Math.round(performance.now() - started),
 			})

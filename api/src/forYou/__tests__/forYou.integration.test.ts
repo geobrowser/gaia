@@ -43,6 +43,8 @@ async function cleanup() {
 	await pool.query("DELETE FROM personalization.user_topic_signals WHERE user_id = ANY($1::uuid[])", [ALL])
 	await pool.query("DELETE FROM personalization.external_interest_signals WHERE user_id = ANY($1::uuid[])", [ALL])
 	await pool.query("DELETE FROM personalization.feed_experiments WHERE id = 'it-for-you'")
+	await pool.query("DELETE FROM personalization.feed_user_seen_daily WHERE user_id = ANY($1::uuid[])", [ALL])
+	await pool.query("DELETE FROM personalization.feed_signal_runs WHERE generation = 'it-for-you'")
 	await pool.query("DELETE FROM entities WHERE id = ANY($1::uuid[])", [ALL])
 }
 
@@ -242,6 +244,72 @@ describe.skipIf(!process.env.DATABASE_URL)("/internal/for-you", () => {
 		expect(body.pool).toEqual({depth: 200, best: 5, topics: 0, overlap: 0})
 	})
 
+	it("hides what the user has seen on any device, plus this browser's views since the sync (GEO-3299)", async () => {
+		const nowSec = Math.floor(Date.now() / 1000)
+		// The sync read through an hour ago. Synced: c3 twice, c5 and c1 once, c4 five times.
+		await pool.query(
+			`INSERT INTO personalization.feed_signal_runs (finished_at, status, generation, data_through)
+			 VALUES (now() - interval '1 hour', 'succeeded', 'it-for-you', now() - interval '1 hour')`,
+		)
+		await pool.query(
+			`INSERT INTO personalization.feed_user_seen_daily (user_id, day, item_id, impressions, last_seen_at)
+			 SELECT $1, (now() - interval '2 hours')::date, i, n, now() - interval '2 hours'
+			 FROM unnest($2::uuid[], $3::int[]) AS t(i, n)`,
+			[USER, [C[2], C[4], C[0], C[3]], [2, 1, 1, 5]],
+		)
+		const res = await post({
+			userId: USER,
+			candidateIds: C,
+			seen: {
+				minViews: 2,
+				days: 3,
+				// c5 after the watermark counts; c1 before it is already in the sync's count.
+				recent: [
+					{entityId: C[4], at: nowSec - 60},
+					{entityId: C[0], at: nowSec - 5400},
+				],
+				// Engaged with c4, so never hidden however often it was shown.
+				engagedIds: [C[3]],
+			},
+		})
+		expect(res.status).toBe(200)
+		const body = (await res.json()) as any
+		expect(body.ranking.version).toMatch(/^for-you-1\.\d+\+seen\.1$/)
+		expect(body.items.map((i: any) => i.entityId)).toEqual([C[0], C[3]].map(dashless))
+		expect(body.excluded).toEqual([
+			{entityId: dashless(C[1]), reason: "voted"},
+			{entityId: dashless(C[2]), reason: "seen", views: 2},
+			{entityId: dashless(C[4]), reason: "seen", views: 2},
+		])
+		expect(body.seen).toMatchObject({minViews: 2, days: 3, syncedItems: 4, recentViews: 1, hidden: 2})
+		expect(body.seen.watermark).not.toBeNull()
+
+		// A higher threshold hides nothing; no seen request changes nothing.
+		const lenient = (await (
+			await post({userId: USER, candidateIds: C, seen: {minViews: 6, days: 3}})
+		).json()) as any
+		expect(lenient.items.map((i: any) => i.entityId)).toEqual([C[2], C[4], C[0], C[3]].map(dashless))
+		expect(lenient.seen.hidden).toBe(0)
+		const plain = (await (await post({userId: USER, candidateIds: C})).json()) as any
+		expect(plain.seen).toBeNull()
+		expect(plain.items).toHaveLength(4)
+	})
+
+	it("hides seen topic candidates in a pooled request too", async () => {
+		await pool.query(
+			`INSERT INTO personalization.feed_user_seen_daily (user_id, day, item_id, impressions, last_seen_at)
+			 VALUES ($1, (now() - interval '2 hours')::date, $2, 3, now() - interval '2 hours')
+			 ON CONFLICT DO NOTHING`,
+			[USER, D1],
+		)
+		const body = (await (
+			await post({userId: USER, candidateIds: C, pool: {typeIds: [CLAIM]}, seen: {minViews: 3, days: 3}})
+		).json()) as any
+		expect(body.ranking.version).toMatch(/^for-you-2\.\d+\+seen\.1$/)
+		expect(body.items.map((i: any) => i.entityId)).not.toContain(dashless(D1))
+		expect(body.excluded).toContainEqual({entityId: dashless(D1), reason: "seen", views: 3})
+	})
+
 	it("rejects malformed bodies", async () => {
 		expect((await post({userId: "nope", candidateIds: C})).status).toBe(400)
 		expect((await post({userId: USER, candidateIds: ["nope"]})).status).toBe(400)
@@ -251,5 +319,6 @@ describe.skipIf(!process.env.DATABASE_URL)("/internal/for-you", () => {
 		expect((await post({userId: USER, candidateIds: C, pool: {typeIds: []}})).status).toBe(400)
 		expect((await post({userId: USER, candidateIds: C, pool: {typeIds: [CLAIM], depth: 501}})).status).toBe(400)
 		expect((await post({userId: USER, candidateIds: C, pool: {typeIds: [CLAIM], spaceIds: []}})).status).toBe(400)
+		expect((await post({userId: USER, candidateIds: C, seen: {minViews: 0, days: 3}})).status).toBe(400)
 	})
 })

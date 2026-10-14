@@ -1,6 +1,14 @@
 import {describe, expect, it} from "vitest"
-import {type CandidateRow, type ForYouConfig, interestBoost, rankForYou, reasonText, type TopicWeight} from "./rank"
-import {parsePool} from "./router"
+import {
+	type CandidateRow,
+	type ForYouConfig,
+	interestBoost,
+	rankForYou,
+	reasonText,
+	seenCounts,
+	type TopicWeight,
+} from "./rank"
+import {forYouVersion, parsePool, parseSeen} from "./router"
 
 // The migration's defaults (0102_for_you_serving.sql) and the live tau.
 const CONFIG: ForYouConfig = {maxBoostDays: 6, interestHalfSaturation: 2, explorationShare: 0.1, maxTopics: 50}
@@ -34,7 +42,13 @@ function weight(t: number, w: number, kind = "vote", count: number | null = Math
 	}
 }
 
-const rank = (c: CandidateRow[], w: TopicWeight[], config: Partial<ForYouConfig> = {}, seed = "s") =>
+const rank = (
+	c: CandidateRow[],
+	w: TopicWeight[],
+	config: Partial<ForYouConfig> = {},
+	seed = "s",
+	seen: Parameters<typeof rankForYou>[0]["seen"] = null,
+) =>
 	rankForYou({
 		candidates: c,
 		weights: w,
@@ -42,6 +56,7 @@ const rank = (c: CandidateRow[], w: TopicWeight[], config: Partial<ForYouConfig>
 		config: {...CONFIG, explorationShare: 0, ...config},
 		tauSeconds: TAU,
 		seed,
+		seen,
 	})
 
 const order = (r: ReturnType<typeof rank>) => r.items.map((i) => i.entityId)
@@ -244,5 +259,126 @@ describe("parsePool", () => {
 		expect(parsePool({typeIds: [T], depth: 0})).toBeTypeOf("string")
 		expect(parsePool({typeIds: [T], depth: 1.5})).toBeTypeOf("string")
 		expect(parsePool({typeIds: [T], debateTaggedClaims: "yes"})).toBeTypeOf("string")
+	})
+})
+
+describe("seen hiding (GEO-3299 step 3)", () => {
+	it("hides a card shown minViews times, and lists it with its views", () => {
+		const c = candidates([{score: 10}, {score: 9}, {score: 8}])
+		const counts = new Map([
+			[id(1), 2],
+			[id(2), 1],
+		])
+		const r = rank(c, [weight(1, 5)], {}, "s", {counts, minViews: 2})
+		expect(order(r)).toEqual([id(2), id(3)])
+		expect(r.excluded).toEqual([{entityId: id(1), reason: "seen", views: 2}])
+	})
+
+	it("keeps an answered card's own reason", () => {
+		const c = candidates([{score: 10, excluded: "voted"}, {score: 9}])
+		const r = rank(c, [weight(1, 5)], {}, "s", {counts: new Map([[id(1), 5]]), minViews: 1})
+		expect(r.excluded).toEqual([{entityId: id(1), reason: "voted"}])
+	})
+
+	it("never gives a hidden card an exploration slot", () => {
+		const c = candidates(Array.from({length: 20}, (_, i) => ({score: 100 - i})))
+		const counts = new Map(Array.from({length: 19}, (_, i) => [id(i + 1), 3] as [string, number]))
+		const r = rank(c, [weight(1, 5)], {explorationShare: 0.5}, "s", {counts, minViews: 3})
+		expect(order(r)).toEqual([id(20)])
+		expect(r.exploration.poolSize).toBe(1)
+	})
+
+	it("hides nothing without a seen request", () => {
+		const c = candidates([{score: 10}, {score: 9}])
+		expect(order(rank(c, [weight(1, 5)]))).toEqual([id(1), id(2)])
+	})
+})
+
+describe("seenCounts", () => {
+	const base = {sinceSec: 1000, watermarkSec: 5000, engaged: new Set<string>()}
+
+	it("adds only the browser's views after the watermark, so none counts twice", () => {
+		const counts = seenCounts({
+			...base,
+			synced: new Map([["a", 2]]),
+			recent: [
+				{entityId: "a", at: 4000},
+				{entityId: "a", at: 6000},
+				{entityId: "b", at: 6000},
+			],
+		})
+		expect(counts).toEqual(
+			new Map([
+				["a", 3],
+				["b", 1],
+			]),
+		)
+	})
+
+	it("counts every recent view in the window before the first sync", () => {
+		const counts = seenCounts({
+			...base,
+			watermarkSec: null,
+			synced: new Map(),
+			recent: [
+				{entityId: "a", at: 900},
+				{entityId: "a", at: 1200},
+				{entityId: "a", at: 1300},
+			],
+		})
+		expect(counts.get("a")).toBe(2)
+	})
+
+	it("counts a repeated view once, and never an engaged card", () => {
+		const counts = seenCounts({
+			...base,
+			engaged: new Set(["b"]),
+			synced: new Map([["b", 4]]),
+			recent: [
+				{entityId: "a", at: 6000},
+				{entityId: "a", at: 6000},
+				{entityId: "b", at: 6000},
+			],
+		})
+		expect(counts).toEqual(new Map([["a", 1]]))
+	})
+})
+
+describe("parseSeen", () => {
+	const A = "0f0f0000-0000-4000-8000-0000000000a1"
+
+	it("is null when absent", () => {
+		expect(parseSeen(undefined)).toBeNull()
+		expect(parseSeen(null)).toBeNull()
+	})
+
+	it("normalizes ids and defaults the lists", () => {
+		expect(parseSeen({minViews: 2, days: 3})).toEqual({minViews: 2, days: 3, recent: [], engagedIds: []})
+		expect(parseSeen({minViews: 1, days: 30, recent: [{entityId: A, at: 1.5}], engagedIds: [A]})).toEqual({
+			minViews: 1,
+			days: 30,
+			recent: [{entityId: A.replaceAll("-", ""), at: 1.5}],
+			engagedIds: [A.replaceAll("-", "")],
+		})
+	})
+
+	it("refuses what it cannot count", () => {
+		for (const bad of [
+			[],
+			{minViews: 0, days: 3},
+			{minViews: 11, days: 3},
+			{minViews: 2, days: 31},
+			{minViews: 2.5, days: 3},
+			{minViews: 2, days: 3, recent: [{entityId: "nope", at: 1}]},
+			{minViews: 2, days: 3, recent: [{entityId: A, at: "1"}]},
+			{minViews: 2, days: 3, recent: Array.from({length: 1001}, () => ({entityId: A, at: 1}))},
+			{minViews: 2, days: 3, engagedIds: ["nope"]},
+		])
+			expect(typeof parseSeen(bad)).toBe("string")
+	})
+
+	it("marks the served version", () => {
+		expect(forYouVersion(7, true, true)).toBe("for-you-2.7+seen.1")
+		expect(forYouVersion(7)).toBe("for-you-1.7")
 	})
 })
