@@ -21,6 +21,11 @@
 
 /** Bump on any change to this file's logic. The served version is `for-you-<this>.<config revision>`. */
 export const FOR_YOU_CODE_VERSION = 1
+/**
+ * The code version of a pooled request (GEO-3299): Best's candidates plus the user's own topic
+ * candidates. The ranking is the same; the pool is not, so it is credited separately.
+ */
+export const FOR_YOU_POOL_CODE_VERSION = 2
 
 export type ForYouConfig = {
 	maxBoostDays: number
@@ -53,12 +58,17 @@ export function isExclusionReason(value: unknown): value is ExclusionReason {
 	return typeof value === "string" && (EXCLUSION_REASONS as readonly string[]).includes(value)
 }
 
+/** Where a candidate came from: Best's window, the user's topic walk, or both (GEO-3299). */
+export type CandidateSource = "best" | "topics" | "both"
+
 /** One row of `personalization.for_you_candidates`. */
 export type CandidateRow = {
 	entityId: string
 	rankingScore: number | null
 	topicIds: string[]
 	excluded: ExclusionReason | null
+	/** Absent on an unpooled request, where every candidate is Best's. */
+	source?: CandidateSource
 }
 
 export type ForYouReason = {
@@ -74,8 +84,9 @@ export type ForYouReason = {
 
 export type ForYouItem = {
 	entityId: string
-	/** Index in Best's order, as passed in. */
+	/** Index in the candidate order: Best's window as passed in, then topic candidates after it. */
 	bestPosition: number
+	source: CandidateSource
 	score: {
 		/** Best's ranking_score; null when the entity has none stored (ranked as Best's lowest). */
 		best: number | null
@@ -99,6 +110,17 @@ export type ForYouRanking = {
 }
 
 const SECONDS_PER_DAY = 86400
+
+/**
+ * What an interest weight adds to a candidate's ranking score: up to `maxBoostDays` of recency,
+ * saturating in the weight. Shared by the ranking and the topic walk that fills the pool, so the
+ * walk's per-topic cap selects exactly by the total the ranking sorts on.
+ */
+export function interestBoost(interest: number, config: ForYouConfig, tauSeconds: number): number {
+	if (!(interest > 0)) return 0
+	const maxBoost = config.maxBoostDays * (SECONDS_PER_DAY / tauSeconds)
+	return (maxBoost * interest) / (interest + config.interestHalfSaturation)
+}
 
 function plural(n: number, one: string, many: string): string {
 	return `${n} ${n === 1 ? one : many}`
@@ -162,8 +184,6 @@ export function rankForYou(args: {
 }): ForYouRanking {
 	const {config} = args
 	const weightOf = new Map(args.weights.map((w) => [w.topicId, w]))
-	const unitsPerDay = SECONDS_PER_DAY / args.tauSeconds
-	const maxBoost = config.maxBoostDays * unitsPerDay
 
 	const excluded: ForYouRanking["excluded"] = []
 	const kept: (CandidateRow & {bestPosition: number})[] = []
@@ -189,7 +209,7 @@ export function rankForYou(args: {
 				top = w
 		}
 		const interest = top?.weight ?? 0
-		const boost = interest > 0 ? (maxBoost * interest) / (interest + config.interestHalfSaturation) : 0
+		const boost = interestBoost(interest, config, args.tauSeconds)
 		const best = c.rankingScore !== null && Number.isFinite(c.rankingScore) ? c.rankingScore : null
 		const reason: ForYouReason | null = top
 			? {
@@ -210,6 +230,7 @@ export function rankForYou(args: {
 		return {
 			entityId: c.entityId,
 			bestPosition: c.bestPosition,
+			source: c.source ?? "best",
 			score: {best, interest, boost, total: (best ?? floor) + boost},
 			reason,
 			exploration: false,

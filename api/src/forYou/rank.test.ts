@@ -1,5 +1,6 @@
 import {describe, expect, it} from "vitest"
-import {type CandidateRow, type ForYouConfig, rankForYou, reasonText, type TopicWeight} from "./rank"
+import {type CandidateRow, type ForYouConfig, interestBoost, rankForYou, reasonText, type TopicWeight} from "./rank"
+import {parsePool} from "./router"
 
 // The migration's defaults (0102_for_you_serving.sql) and the live tau.
 const CONFIG: ForYouConfig = {maxBoostDays: 6, interestHalfSaturation: 2, explorationShare: 0.1, maxTopics: 50}
@@ -190,5 +191,58 @@ describe("reasonText", () => {
 		expect(reasonText("interested", 1, "Energy", null)).toBe("Interested in 1 question on Energy")
 		expect(reasonText("related", null, "Grid storage", "Energy")).toBe("Grid storage, related to Energy")
 		expect(reasonText("vote", 2, null, null)).toBe("2 votes on a topic you engage with")
+	})
+})
+
+describe("interestBoost (GEO-3299: shared by the ranking and the pool walk)", () => {
+	it("is the boost the ranking adds", () => {
+		const items = rank(candidates([{score: 100, topics: [1]}]), [weight(1, 3)]).items
+		expect(items[0]!.score.boost).toBe(interestBoost(3, CONFIG, TAU))
+		expect(interestBoost(2, CONFIG, TAU)).toBeCloseTo(3 * DAY, 12)
+	})
+
+	it("is zero for no interest", () => {
+		expect(interestBoost(0, CONFIG, TAU)).toBe(0)
+		expect(interestBoost(-1, CONFIG, TAU)).toBe(0)
+	})
+
+	it("marks each item with where it came from", () => {
+		const c = candidates([{score: 100}, {score: 99, topics: [1]}])
+		c[1]!.source = "topics"
+		expect(rank(c, [weight(1, 3)]).items.map((i) => i.source)).toEqual(["topics", "best"])
+	})
+})
+
+describe("parsePool", () => {
+	const T = "00000000-0000-4000-8000-0000000000e1"
+	it("is null when absent", () => {
+		expect(parsePool(undefined)).toBeNull()
+		expect(parsePool(null)).toBeNull()
+	})
+
+	it("fills defaults and dashes ids", () => {
+		expect(parsePool({typeIds: [T.replaceAll("-", "")]})).toEqual({
+			typeIds: [T],
+			debateTaggedClaims: false,
+			spaceIds: null,
+			createdAfter: null,
+			depth: 200,
+		})
+		expect(parsePool({typeIds: [T], createdAfter: 1790000000, depth: 50, debateTaggedClaims: true})).toMatchObject({
+			createdAfter: "1790000000",
+			depth: 50,
+			debateTaggedClaims: true,
+		})
+	})
+
+	it("refuses what it cannot walk", () => {
+		expect(parsePool([])).toBeTypeOf("string")
+		expect(parsePool({typeIds: []})).toBeTypeOf("string")
+		expect(parsePool({typeIds: ["x"]})).toBeTypeOf("string")
+		expect(parsePool({typeIds: [T], spaceIds: []})).toBeTypeOf("string")
+		expect(parsePool({typeIds: [T], createdAfter: "yesterday"})).toBeTypeOf("string")
+		expect(parsePool({typeIds: [T], depth: 0})).toBeTypeOf("string")
+		expect(parsePool({typeIds: [T], depth: 1.5})).toBeTypeOf("string")
+		expect(parsePool({typeIds: [T], debateTaggedClaims: "yes"})).toBeTypeOf("string")
 	})
 })
