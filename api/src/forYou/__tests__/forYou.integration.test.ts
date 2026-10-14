@@ -23,7 +23,13 @@ const T_AI = u(0xa1)
 const T_ENERGY = u(0xa2)
 // Best's window, in Best's order: c1 (Energy), c2 (AI, voted on), c3 (AI), c4 (untagged), c5 (AI).
 const C = [u(0xc1), u(0xc2), u(0xc3), u(0xc4), u(0xc5)] as const
-const ALL = [USER, NEWCOMER, SPACE, T_AI, T_ENERGY, ...C]
+// GEO-3299: outside Best's window, both on AI safety. D1 is fresh enough that its boost carries it
+// past c5 and c1; the user voted on D2.
+const D1 = u(0xd1)
+const D2 = u(0xd2)
+const CLAIM = u(0xe1)
+const OTHER_SPACE = u(0x99)
+const ALL = [USER, NEWCOMER, SPACE, T_AI, T_ENERGY, ...C, D1, D2]
 
 let pool: Pool
 let app: Hono
@@ -32,6 +38,7 @@ async function cleanup() {
 	await pool.query("DELETE FROM relations WHERE from_entity_id = ANY($1::uuid[])", [ALL])
 	await pool.query("DELETE FROM values WHERE entity_id = ANY($1::uuid[])", [ALL])
 	await pool.query("DELETE FROM entity_ranking_scores WHERE entity_id = ANY($1::uuid[])", [ALL])
+	await pool.query("DELETE FROM entity_topic_ranking WHERE entity_id = ANY($1::uuid[])", [ALL])
 	await pool.query("DELETE FROM user_votes WHERE user_id = ANY($1::uuid[])", [ALL])
 	await pool.query("DELETE FROM personalization.user_topic_signals WHERE user_id = ANY($1::uuid[])", [ALL])
 	await pool.query("DELETE FROM personalization.external_interest_signals WHERE user_id = ANY($1::uuid[])", [ALL])
@@ -77,9 +84,37 @@ describe.skipIf(!process.env.DATABASE_URL)("/internal/for-you", () => {
 			[TOPICS, SPACE, C[0], T_ENERGY, C[1], T_AI, C[2], C[4]],
 		)
 		await pool.query(
+			`INSERT INTO entity_ranking_scores (entity_id, quality_score, intrinsic_score, participation_score,
+			   ranking_score, positive, negative, stance_positive, stance_negative, type_weight, updated_at)
+			 VALUES ($1, 0.5, 0, 0, 17897.8, 0, 0, 0, 0, 1, now()), ($2, 0.5, 0, 0, 17905, 0, 0, 0, 0, 1, now())`,
+			[D1, D2],
+		)
+		await pool.query(
+			`INSERT INTO relations (id, entity_id, type_id, from_entity_id, to_entity_id, space_id, is_system)
+			 SELECT gen_random_uuid(), gen_random_uuid(), $1, f, $2, $3, false FROM unnest($4::uuid[]) f`,
+			[TOPICS, T_AI, SPACE, [D1, D2]],
+		)
+		await pool.query(
+			`INSERT INTO values (id, property_id, entity_id, space_id, text) VALUES
+			 ('it-fy-3', $1, $2, $4, 'Fresh AI claim'), ('it-fy-4', $1, $3, $4, 'Voted AI claim')`,
+			[NAME, D1, D2, SPACE],
+		)
+		// What the reconcile would have stored for AI safety's claims, scores copied as it copies them.
+		await pool.query(
+			`INSERT INTO entity_topic_ranking (topic_id, type_id, entity_id, ranking_score)
+			 SELECT $1, $2, ers.entity_id, ers.ranking_score FROM entity_ranking_scores ers
+			 WHERE ers.entity_id = ANY($3::uuid[])`,
+			[T_AI, CLAIM, [C[1], C[2], C[4], D1, D2]],
+		)
+		await pool.query(
 			`INSERT INTO user_votes (user_id, object_id, object_type, space_id, vote_type, vote_kind, voted_at)
 			 VALUES ($1, $2, 0, $3, 0, 1, now())`,
 			[USER, C[1], SPACE],
+		)
+		await pool.query(
+			`INSERT INTO user_votes (user_id, object_id, object_type, space_id, vote_type, vote_kind, voted_at)
+			 VALUES ($1, $2, 0, $3, 0, 1, now())`,
+			[USER, D2, SPACE],
 		)
 		// What the sweep would have stored: four fresh votes on AI safety.
 		await pool.query(
@@ -166,11 +201,55 @@ describe.skipIf(!process.env.DATABASE_URL)("/internal/for-you", () => {
 		})
 	})
 
+	it("pools the user's topic candidates with Best's window (GEO-3299)", async () => {
+		const res = await post({userId: USER, candidateIds: C, pool: {typeIds: [CLAIM]}})
+		expect(res.status).toBe(200)
+		const body = (await res.json()) as any
+		expect(body.ranking.version).toMatch(/^for-you-2\.\d+$/)
+		// D1 (17897.8 + 3.456) passes c5 and c1 although Best's window never held it; D2 is answered.
+		expect(body.items.map((i: any) => i.entityId)).toEqual([C[2], D1, C[4], C[0], C[3]].map(dashless))
+		expect(body.items.map((i: any) => i.source)).toEqual(["both", "topics", "both", "best", "best"])
+		expect(body.excluded).toEqual([
+			{entityId: dashless(C[1]), reason: "voted"},
+			{entityId: dashless(D2), reason: "voted"},
+		])
+		expect(body.items[1].reason).toMatchObject({topicName: "AI safety", text: "4 votes on AI safety"})
+		expect(body.pool).toEqual({depth: 200, best: 5, topics: 5, overlap: 3})
+	})
+
+	it("walks the pool with Explore's filters", async () => {
+		const narrowed = (await (
+			await post({userId: USER, candidateIds: C, pool: {typeIds: [CLAIM], spaceIds: [OTHER_SPACE]}})
+		).json()) as any
+		expect(narrowed.pool.topics).toBe(0)
+		expect(narrowed.items.map((i: any) => i.source)).toEqual(["best", "best", "best", "best"])
+
+		const otherType = (await (
+			await post({userId: USER, candidateIds: C, pool: {typeIds: [u(0xe2)]}})
+		).json()) as any
+		expect(otherType.pool.topics).toBe(0)
+
+		const inSpace = (await (
+			await post({userId: USER, candidateIds: C, pool: {typeIds: [CLAIM], spaceIds: [SPACE]}})
+		).json()) as any
+		expect(inSpace.items.map((i: any) => i.entityId)).toContain(dashless(D1))
+	})
+
+	it("pools nothing for a user with no interests", async () => {
+		const body = (await (await post({userId: NEWCOMER, candidateIds: C, pool: {typeIds: [CLAIM]}})).json()) as any
+		expect(body.personalized).toBe(false)
+		expect(body.items).toEqual([])
+		expect(body.pool).toEqual({depth: 200, best: 5, topics: 0, overlap: 0})
+	})
+
 	it("rejects malformed bodies", async () => {
 		expect((await post({userId: "nope", candidateIds: C})).status).toBe(400)
 		expect((await post({userId: USER, candidateIds: ["nope"]})).status).toBe(400)
 		expect((await post({userId: USER, candidateIds: Array.from({length: 501}, (_, i) => u(i + 100))})).status).toBe(
 			400,
 		)
+		expect((await post({userId: USER, candidateIds: C, pool: {typeIds: []}})).status).toBe(400)
+		expect((await post({userId: USER, candidateIds: C, pool: {typeIds: [CLAIM], depth: 501}})).status).toBe(400)
+		expect((await post({userId: USER, candidateIds: C, pool: {typeIds: [CLAIM], spaceIds: []}})).status).toBe(400)
 	})
 })

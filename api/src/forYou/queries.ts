@@ -6,7 +6,14 @@
 
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
-import {type CandidateRow, type ForYouConfig, isExclusionReason, type TopicWeight} from "./rank"
+import {
+	type CandidateRow,
+	type CandidateSource,
+	type ForYouConfig,
+	interestBoost,
+	isExclusionReason,
+	type TopicWeight,
+} from "./rank"
 
 export type Database = Pick<NodePgDatabase<Record<string, unknown>>, "execute">
 
@@ -21,12 +28,30 @@ export type FeedExperiment = {
 	assignment: "member" | "hash"
 }
 
+/**
+ * GEO-3299: what to walk the user's topics for, so For you is not limited to Best's window. The
+ * filters are Explore's, applied the way `entities_ranked_for_topics` applies them for topic pages.
+ */
+export type ForYouPool = {
+	typeIds: string[]
+	debateTaggedClaims: boolean
+	/** The spaces the reader may see; null for no narrowing. */
+	spaceIds: string[] | null
+	/** Epoch seconds as text, like the GraphQL `createdAfter`; null for all time. */
+	createdAfter: string | null
+	/** How many topic candidates to take, by score plus boost, before exclusions. */
+	depth: number
+}
+
+export type PoolSummary = {depth: number; best: number; topics: number; overlap: number}
+
 export type ForYouInputs = {
 	settings: ForYouSettings
 	weights: TopicWeight[]
 	topicNames: Map<string, string>
 	candidates: CandidateRow[]
 	experiment: FeedExperiment | null
+	pool: PoolSummary | null
 }
 
 const num = (value: unknown): number | null => {
@@ -121,6 +146,80 @@ export async function readCandidates(db: Database, userId: string, candidateIds:
 	}))
 }
 
+const isSource = (value: unknown): value is CandidateSource =>
+	value === "best" || value === "topics" || value === "both"
+
+const uuidArray = (ids: readonly string[]) => `{${ids.join(",")}}`
+
+/**
+ * Best's window plus the user's topic candidates, in that order, as `for_you_candidates` rows.
+ *
+ * The topic walk is `entities_ranked_for_topics` with each topic weighted by the boost the ranking
+ * will give it, so its cap keeps the `depth` candidates with the highest best + boost: exactly the
+ * ones the ranking would put first. One statement, so the walk costs no extra round trip.
+ */
+export async function readPooledCandidates(
+	db: Database,
+	args: {
+		userId: string
+		bestIds: string[]
+		pool: ForYouPool
+		weights: readonly TopicWeight[]
+		settings: ForYouSettings
+	},
+): Promise<{candidates: CandidateRow[]; summary: PoolSummary}> {
+	const topics = args.weights.filter((w) => w.weight > 0)
+	const boosts = topics.map((w) => interestBoost(w.weight, args.settings.config, args.settings.tauSeconds))
+	const {pool} = args
+	const result = await db.execute(sql`
+		WITH topic AS (
+		  SELECT t.id, t.ordinality AS ord
+		  FROM public.entities_ranked_for_topics(
+		         topic_ids            => ${uuidArray(topics.map((w) => w.topicId))}::uuid[],
+		         topic_weights        => ${`{${boosts.join(",")}}`}::double precision[],
+		         type_ids             => ${uuidArray(pool.typeIds)}::uuid[],
+		         created_after        => ${pool.createdAfter}::text,
+		         space_ids            => ${pool.spaceIds ? uuidArray(pool.spaceIds) : null}::uuid[],
+		         max_per_topic        => ${pool.depth}::integer,
+		         debate_tagged_claims => ${pool.debateTaggedClaims}::boolean
+		       ) WITH ORDINALITY AS t
+		  WHERE ${topics.length} > 0
+		),
+		best AS (
+		  SELECT b.id, b.ord FROM unnest(${uuidArray(args.bestIds)}::uuid[]) WITH ORDINALITY AS b(id, ord)
+		),
+		pooled AS (
+		  SELECT id, ord FROM best
+		  UNION ALL
+		  SELECT t.id, (SELECT count(*) FROM best) + t.ord FROM topic t
+		  WHERE NOT EXISTS (SELECT 1 FROM best b WHERE b.id = t.id)
+		)
+		SELECT c.entity_id, c.ranking_score, c.topic_ids, c.excluded,
+		       CASE WHEN NOT EXISTS (SELECT 1 FROM topic t WHERE t.id = c.entity_id) THEN 'best'
+		            WHEN EXISTS (SELECT 1 FROM best b WHERE b.id = c.entity_id) THEN 'both'
+		            ELSE 'topics' END AS source
+		FROM personalization.for_you_candidates(
+		       ${args.userId}::uuid, ARRAY(SELECT id FROM pooled ORDER BY ord)) AS c
+	`)
+	const candidates: CandidateRow[] = rowsOf(result).map((row) => ({
+		entityId: String(row.entity_id),
+		rankingScore: num(row.ranking_score),
+		topicIds: parseUuidArray(row.topic_ids),
+		excluded: isExclusionReason(row.excluded) ? row.excluded : null,
+		source: isSource(row.source) ? row.source : "best",
+	}))
+	const count = (source: CandidateSource) => candidates.filter((c) => c.source === source).length
+	return {
+		candidates,
+		summary: {
+			depth: pool.depth,
+			best: args.bestIds.length,
+			topics: count("topics") + count("both"),
+			overlap: count("both"),
+		},
+	}
+}
+
 export async function readExperiment(db: Database, userId: string): Promise<FeedExperiment | null> {
 	const result = await db.execute(sql`
 		SELECT experiment_id, arm_a, arm_b, interleaved, assignment
@@ -148,13 +247,41 @@ export function parseUuidArray(value: unknown): string[] {
 
 export async function readForYouInputs(
 	db: Database,
-	args: {userId: string; candidateIds: string[]; asOf: Date},
+	args: {userId: string; candidateIds: string[]; asOf: Date; pool?: ForYouPool | null},
 ): Promise<ForYouInputs> {
-	const [settings, {weights, topicNames}, candidates, experiment] = await Promise.all([
+	const {pool} = args
+	if (!pool) {
+		const [settings, {weights, topicNames}, candidates, experiment] = await Promise.all([
+			readSettings(db),
+			readWeights(db, args.userId, args.asOf),
+			readCandidates(db, args.userId, args.candidateIds),
+			readExperiment(db, args.userId),
+		])
+		return {settings, weights, topicNames, candidates, experiment, pool: null}
+	}
+	// Pooled: the topic walk needs the weights and the boost settings, so it runs second. A user
+	// with no weights is served Best by the caller, so there is nothing to walk or rank.
+	const [settings, {weights, topicNames}, experiment] = await Promise.all([
 		readSettings(db),
 		readWeights(db, args.userId, args.asOf),
-		readCandidates(db, args.userId, args.candidateIds),
 		readExperiment(db, args.userId),
 	])
-	return {settings, weights, topicNames, candidates, experiment}
+	if (weights.length === 0) {
+		return {
+			settings,
+			weights,
+			topicNames,
+			candidates: [],
+			experiment,
+			pool: {depth: pool.depth, best: args.candidateIds.length, topics: 0, overlap: 0},
+		}
+	}
+	const {candidates, summary} = await readPooledCandidates(db, {
+		userId: args.userId,
+		bestIds: args.candidateIds,
+		pool,
+		weights,
+		settings,
+	})
+	return {settings, weights, topicNames, candidates, experiment, pool: summary}
 }
