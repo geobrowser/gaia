@@ -12,15 +12,15 @@ spec:
   # personalization.feed_item_signals_hourly and feed_user_seen_daily, deleting per-user rows past
   # 30 days, in one transaction (migration 0109). Logs every run in feed_signal_runs.
   #
-  # Shipped suspended: it needs the ClickHouse reader and the `feed-signals-sync` Secret first, then
-  # a clean dry run (feed-signals-sync-dryrun-job.yaml). deploy-v2 re-applies this file, so flip
-  # suspend in git, not with kubectl. Fails the Job (and writes nothing) when analytics is
-  # unreachable, a row is malformed, or the SQL refuses an empty or unplaceable read.
+  # Enabled 2026-10-14 after analytics migration 107, the `gaia_feed_signals` ClickHouse reader, the
+  # `feed-signals-sync` Secret and a clean dry run (feed-signals-sync-dryrun-job.yaml). deploy-v2
+  # re-applies this file, so set suspend in git, not with kubectl. Fails the Job (and writes
+  # nothing) when analytics is unreachable, a row is malformed, or the SQL refuses an empty or unplaceable read.
   #
   # :27, clear of the other hourly ranking jobs (:00, :17, :41, :51, :53, :57). The dashboard
   # refresh publishes a new analytics generation every ~30 minutes; an hour with nothing new is
   # logged as `unchanged`.
-  suspend: true
+  suspend: false
   schedule: "27 * * * *"
   failedJobsHistoryLimit: 3
   successfulJobsHistoryLimit: 1
@@ -130,8 +130,9 @@ spec:
   # newest analytics data read is over 6 hours old (personalization.feed_signal_config), so
   # KubeJobFailed fires, like analytics' geo-analytics-input-generation-freshness. Reads only gaia.
   #
-  # Suspended with the sync; unsuspend both together, after the first successful run.
-  suspend: true
+  # Enabled with the sync. A cluster where the sync has never succeeded fails this check, so suspend
+  # both on a new cluster until the first run succeeds.
+  suspend: false
   schedule: "*/15 * * * *"
   failedJobsHistoryLimit: 3
   successfulJobsHistoryLimit: 1
