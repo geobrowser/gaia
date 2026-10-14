@@ -1,5 +1,5 @@
 /**
- * The reads behind `/internal/for-you`. Four independent statements, run in parallel, so the
+ * The reads behind `/internal/for-you`. Up to five independent statements, run in parallel, so the
  * route costs one round trip of wall time. All of them read the private `personalization` schema
  * (migrations 0100 and 0102), which the public GraphQL API cannot reach.
  */
@@ -45,6 +45,17 @@ export type ForYouPool = {
 
 export type PoolSummary = {depth: number; best: number; topics: number; overlap: number}
 
+/**
+ * GEO-3299 step 3: what this user was shown on Explore since `since`, from the hourly feed signals
+ * sync (0109), and how far that sync has read.
+ */
+export type SyncedSeen = {
+	/** Views per item id (dashed), counted in whole UTC days as `feed_user_seen` counts them. */
+	counts: Map<string, number>
+	/** The last successful sync's watermark; null before the first one. */
+	watermark: Date | null
+}
+
 export type ForYouInputs = {
 	settings: ForYouSettings
 	weights: TopicWeight[]
@@ -52,6 +63,8 @@ export type ForYouInputs = {
 	candidates: CandidateRow[]
 	experiment: FeedExperiment | null
 	pool: PoolSummary | null
+	/** Null when the request did not ask for seen hiding. */
+	seen: SyncedSeen | null
 }
 
 const num = (value: unknown): number | null => {
@@ -235,6 +248,32 @@ export async function readExperiment(db: Database, userId: string): Promise<Feed
 	}
 }
 
+/**
+ * One statement: the user's seen items since `since` (one range scan of the primary key), and the
+ * watermark as a column of every row. The left join keeps a row when nothing was seen, so the
+ * watermark always comes back.
+ */
+export async function readSeen(db: Database, userId: string, since: Date): Promise<SyncedSeen> {
+	const result = await db.execute(sql`
+		SELECT s.item_id, s.seen_count,
+		       (SELECT max(r.data_through) FROM personalization.feed_signal_runs r
+		        WHERE r.status = 'succeeded') AS watermark
+		FROM (SELECT 1) one
+		LEFT JOIN personalization.feed_user_seen(${userId}::uuid, ${since.toISOString()}::timestamptz) s ON true
+	`)
+	const counts = new Map<string, number>()
+	let watermark: Date | null = null
+	for (const row of rowsOf(result)) {
+		if (row.watermark !== null && row.watermark !== undefined) {
+			const at = new Date(row.watermark as string | Date)
+			if (!Number.isNaN(at.getTime())) watermark = at
+		}
+		const views = num(row.seen_count)
+		if (row.item_id && views !== null && views > 0) counts.set(String(row.item_id), views)
+	}
+	return {counts, watermark}
+}
+
 /** node-postgres returns uuid[] as a JS array, or as `{a,b}` text when the type parser is absent. */
 export function parseUuidArray(value: unknown): string[] {
 	if (Array.isArray(value)) return value.map(String)
@@ -247,24 +286,28 @@ export function parseUuidArray(value: unknown): string[] {
 
 export async function readForYouInputs(
 	db: Database,
-	args: {userId: string; candidateIds: string[]; asOf: Date; pool?: ForYouPool | null},
+	args: {userId: string; candidateIds: string[]; asOf: Date; pool?: ForYouPool | null; seenSince?: Date | null},
 ): Promise<ForYouInputs> {
-	const {pool} = args
+	const {pool, seenSince} = args
+	// Independent of everything else, so it runs alongside the first round of reads.
+	const seenRead = seenSince ? readSeen(db, args.userId, seenSince) : Promise.resolve(null)
 	if (!pool) {
-		const [settings, {weights, topicNames}, candidates, experiment] = await Promise.all([
+		const [settings, {weights, topicNames}, candidates, experiment, seen] = await Promise.all([
 			readSettings(db),
 			readWeights(db, args.userId, args.asOf),
 			readCandidates(db, args.userId, args.candidateIds),
 			readExperiment(db, args.userId),
+			seenRead,
 		])
-		return {settings, weights, topicNames, candidates, experiment, pool: null}
+		return {settings, weights, topicNames, candidates, experiment, pool: null, seen}
 	}
 	// Pooled: the topic walk needs the weights and the boost settings, so it runs second. A user
 	// with no weights is served Best by the caller, so there is nothing to walk or rank.
-	const [settings, {weights, topicNames}, experiment] = await Promise.all([
+	const [settings, {weights, topicNames}, experiment, seen] = await Promise.all([
 		readSettings(db),
 		readWeights(db, args.userId, args.asOf),
 		readExperiment(db, args.userId),
+		seenRead,
 	])
 	if (weights.length === 0) {
 		return {
@@ -274,6 +317,7 @@ export async function readForYouInputs(
 			candidates: [],
 			experiment,
 			pool: {depth: pool.depth, best: args.candidateIds.length, topics: 0, overlap: 0},
+			seen,
 		}
 	}
 	const {candidates, summary} = await readPooledCandidates(db, {
@@ -283,5 +327,5 @@ export async function readForYouInputs(
 		weights,
 		settings,
 	})
-	return {settings, weights, topicNames, candidates, experiment, pool: summary}
+	return {settings, weights, topicNames, candidates, experiment, pool: summary, seen}
 }

@@ -58,6 +58,47 @@ export function isExclusionReason(value: unknown): value is ExclusionReason {
 	return typeof value === "string" && (EXCLUSION_REASONS as readonly string[]).includes(value)
 }
 
+/**
+ * Seen hiding (GEO-3299 step 3): a candidate shown to this user on Explore at least `minViews` times
+ * in the last `days` days, on any device, is left out with the reason `seen`. Bump on any change to
+ * how seen counts are made or applied; a request with seen hiding is served as
+ * `<version>+seen.<this>`.
+ */
+export const SEEN_HIDING_VERSION = 1
+
+export type SeenHiding = {minViews: number; days: number}
+
+/** One view the caller's browser recorded, in epoch seconds. */
+export type RecentView = {entityId: string; at: number}
+
+/**
+ * Each item's views in the window: what the hourly sync has stored (`synced`, through `watermark`),
+ * plus the caller's own views after the watermark, which the sync has not read yet. Splitting at
+ * the watermark is what keeps a view from counting twice. With no successful sync yet (`watermark`
+ * null) every recent view counts. Items the caller engaged with are never seen, as on the web.
+ * Every id is expected in one form (dashless).
+ */
+export function seenCounts(args: {
+	synced: ReadonlyMap<string, number>
+	watermarkSec: number | null
+	recent: readonly RecentView[]
+	sinceSec: number
+	engaged: ReadonlySet<string>
+}): Map<string, number> {
+	const counts = new Map(args.synced)
+	const counted = new Set<string>()
+	for (const view of args.recent) {
+		if (view.at < args.sinceSec) continue
+		if (args.watermarkSec !== null && view.at <= args.watermarkSec) continue
+		const key = `${view.entityId}@${view.at}`
+		if (counted.has(key)) continue
+		counted.add(key)
+		counts.set(view.entityId, (counts.get(view.entityId) ?? 0) + 1)
+	}
+	for (const id of args.engaged) counts.delete(id)
+	return counts
+}
+
 /** Where a candidate came from: Best's window, the user's topic walk, or both (GEO-3299). */
 export type CandidateSource = "best" | "topics" | "both"
 
@@ -103,9 +144,14 @@ export type ForYouItem = {
 	explorationProbability: number | null
 }
 
+export type ForYouExcluded =
+	| {entityId: string; reason: ExclusionReason}
+	/** `views`: how many times it was shown in the window. */
+	| {entityId: string; reason: "seen"; views: number}
+
 export type ForYouRanking = {
 	items: ForYouItem[]
-	excluded: {entityId: string; reason: ExclusionReason}[]
+	excluded: ForYouExcluded[]
 	exploration: {share: number; slots: number; poolSize: number; picked: number}
 }
 
@@ -181,6 +227,8 @@ export function rankForYou(args: {
 	config: ForYouConfig
 	tauSeconds: number
 	seed: string
+	/** GEO-3299: views per item (see {@link seenCounts}) and the threshold; null or absent hides nothing. */
+	seen?: {counts: ReadonlyMap<string, number>; minViews: number} | null
 }): ForYouRanking {
 	const {config} = args
 	const weightOf = new Map(args.weights.map((w) => [w.topicId, w]))
@@ -188,7 +236,10 @@ export function rankForYou(args: {
 	const excluded: ForYouRanking["excluded"] = []
 	const kept: (CandidateRow & {bestPosition: number})[] = []
 	for (const [bestPosition, c] of args.candidates.entries()) {
+		// Before exploration and the sort, so a hidden card never takes a slot or a page position.
+		const views = args.seen?.counts.get(c.entityId) ?? 0
 		if (c.excluded) excluded.push({entityId: c.entityId, reason: c.excluded})
+		else if (args.seen && views >= args.seen.minViews) excluded.push({entityId: c.entityId, reason: "seen", views})
 		else kept.push({...c, bestPosition})
 	}
 
