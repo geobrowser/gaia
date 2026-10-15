@@ -382,7 +382,7 @@ spec:
   selector:
     app: api
 ---
-# HTTP routing via the shared Cilium Gateway (`geo-chat-api` in the geo-chat
+# HTTP routing via the shared Envoy Gateway (`geo-api-envoy` in the geo-chat
 # namespace — one LB / IP for the whole cluster, per-service HTTPRoutes).
 # Companion Gateway-side change (geo-chat repo): listeners for
 # testnet-api-v2.geobrowser.io and api-testnet.geobrowser.io (HTTP + HTTPS
@@ -403,14 +403,8 @@ metadata:
   namespace: gaia
 spec:
   parentRefs:
-    - name: geo-chat-api
-      namespace: geo-chat
-      sectionName: gaia-api-https
-    - name: geo-chat-api
-      namespace: geo-chat
-      sectionName: gaia-api-alias-https
-    # Envoy Gateway beside the Cilium one, serving the same hosts over HTTP/2 (geo-chat
-    # infra/k8s/overlays/testnet/platform/envoy-gateway.yaml). DNS points at this one.
+    # Envoy Gateway, serving these hosts over HTTP/2 (geo-chat
+    # infra/k8s/overlays/testnet/platform/envoy-gateway.yaml).
     - name: geo-api-envoy
       namespace: geo-chat
       sectionName: gaia-api-https
