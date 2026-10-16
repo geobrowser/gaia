@@ -80,7 +80,7 @@ const MAX_TYPE_IDS = 10
  */
 const COMMENT_TYPE = "82f6123a03234c6ca811701c5bc026e9"
 
-const DEFAULT_EXCLUDED_TYPE_IDS: string[] = [
+export const DEFAULT_EXCLUDED_TYPE_IDS: string[] = [
 	SystemIds.TEXT_BLOCK,
 	SystemIds.IMAGE_BLOCK,
 	SystemIds.DATA_BLOCK,
