@@ -67,7 +67,10 @@ function createGraphqlOverloadResponse(requestId: string) {
 // Request ID middleware (cheap, needed everywhere for correlation)
 app.use("*", requestId())
 
-app.use("*", cors())
+// Let browsers reuse a preflight instead of repeating it before every GraphQL POST (GEO-3281).
+// Without a max-age Chrome caches it for 5s, so each card query on /explore paid a fresh ~0.4s
+// OPTIONS round trip. Browsers clamp this to their own ceiling (Chrome 2h, Firefox 24h).
+app.use("*", cors({origin: "*", maxAge: 86400}))
 log.info("HTTP compression disabled in API (managed by ingress)")
 
 // Per-IP rate limiting (skips /health internally). No-op if VALKEY_URL is
