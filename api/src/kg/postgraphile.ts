@@ -28,6 +28,7 @@ import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import EntityVotedByFilterPlugin from "./entityVotedByFilterPlugin"
 import {createErrorEpisodeTracker} from "./errorEpisodeTracker"
 import {shouldUnmaskError} from "./errorMasking"
+import {useGraphqlSearchOpenSearch} from "./graphqlSearchOpenSearchPlugin"
 import HidePrivateTablesPlugin from "./hidePrivateTablesPlugin"
 import HideProceduresPlugin from "./hideProceduresPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
@@ -564,6 +565,9 @@ const sharedPlugins = [
 	useResponseBudget(),
 	useGraphQLInstrumentation(),
 	useSearchInvocationLogger(),
+	// After admission control, which scores the operation as the client wrote it, and before the
+	// executor: it hands `ids` from OpenSearch to public.search. See graphqlSearchOpenSearchPlugin.ts.
+	useGraphqlSearchOpenSearch(),
 	usePgClient(pgPool),
 	useExecutionCancellation(),
 ]

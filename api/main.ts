@@ -5,6 +5,7 @@ import {openAPISpecs} from "hono-openapi"
 import {MIN_INTERNAL_TOKEN_LENGTH, mountInternalRoutes} from "./src/forYou/router"
 import {health} from "./src/health"
 import {createIpfsRouter} from "./src/ipfs"
+import {setGraphqlSearchClient} from "./src/kg/graphqlSearchOpenSearchPlugin"
 import {getGraphqlPoolPressure, graphqlServer} from "./src/kg/postgraphile"
 import {createRateLimiter} from "./src/middleware/rateLimit"
 import {canonicalRequestLogging, isClientAbortError, requestId} from "./src/middleware/requestLogging"
@@ -118,6 +119,7 @@ if (opensearchUrl) {
 
 	const searchClient = new OpenSearchClient(opensearchUrl, indexName)
 	await searchClient.init()
+	setGraphqlSearchClient(searchClient)
 	app.route("/search", createSearchRouter(searchClient, runtime))
 	log.info("Search routes enabled", {
 		url: redactUrlCredentials(opensearchUrl),

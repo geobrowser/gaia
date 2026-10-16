@@ -369,7 +369,11 @@ describe("computeQueryCost — operation selection, directives, and SQL-risk sig
 	})
 
 	it("adds field/argument weights for known expensive GraphQL fields and orderings", () => {
-		expect(cost(`{ search(query: "geo", first: 10) { id } }`)).toBeGreaterThan(20)
+		// Search is cheap now that the OpenSearch plugin hands it ids (see costLoggerPlugin), but it
+		// still costs more than a plain root collection because of the SQL fallback.
+		expect(cost(`{ search(query: "geo", first: 10) { id } }`)).toBeGreaterThan(
+			cost(`{ entities(first: 10) { id } }`),
+		)
 		expect(
 			cost(`{ entitiesOrderedByProperty(propertyId: "00000000000000000000000000000000", first: 10) { id } }`),
 		).toBeGreaterThan(25)

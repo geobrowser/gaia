@@ -488,7 +488,9 @@ function sqlRiskFactor(
 ): bigint {
 	let factor = 1n
 
-	if (SEARCH_FIELD_NAMES.has(fieldName)) factor *= 20n
+	// Was 20n while search was a trigram scan. The OpenSearch plugin now hands it ids, which makes it
+	// a primary-key lookup; 4n keeps headroom for the SQL fallback when OpenSearch is down or off.
+	if (SEARCH_FIELD_NAMES.has(fieldName)) factor *= 4n
 	if (ENTITIES_ORDERED_BY_PROPERTY_FIELD_NAMES.has(fieldName)) factor *= 50n
 	if (SCORE_ORDERED_FIELD_NAMES.has(fieldName) && usesScoreOrderBy(args.orderBy)) factor *= 20n
 	if (isBroadRootCollection(fieldName, argNames, depth, limit)) factor *= 3n
