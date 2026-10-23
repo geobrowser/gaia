@@ -1445,6 +1445,20 @@ export const entityRankingConfig = pgTable("entity_ranking_config", {
 	topicDebateWeight: decimal("topic_debate_weight").notNull(),
 	/** Ceiling on the topic-debate term, in score units (0107). */
 	topicCap: decimal("topic_cap").notNull(),
+	/** Debates only (0111, GEO-3461): days of feed signals the watch term reads. */
+	watchWindowDays: integer("watch_window_days").notNull(),
+	/** Pseudo-impressions smoothing watch-per-impression toward the reference (0111). */
+	watchPriorImpressions: decimal("watch_prior_impressions").notNull(),
+	/** Explore watch seconds per impression that scores 0 (0111). */
+	watchReferenceSeconds: decimal("watch_reference_seconds").notNull(),
+	/** Multiplier on `ln(smoothed watch per impression / reference)` (0111). */
+	watchRatioWeight: decimal("watch_ratio_weight").notNull(),
+	/** Multiplier on `ln(1 + plays that covered at least 90%)` (0111). */
+	watchCompletedWeight: decimal("watch_completed_weight").notNull(),
+	/** Multiplier on `ln(1 + plays)` (0111). */
+	watchPlaysWeight: decimal("watch_plays_weight").notNull(),
+	/** The watch term is clamped to plus or minus this, in score units (0111). */
+	watchCap: decimal("watch_cap").notNull(),
 	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
 })
 
@@ -1514,6 +1528,12 @@ export const entityRankingScores = pgTable(
 		 * that is not a topic debate (a Debate with a Topics relation and no Claims relation).
 		 */
 		topicScore: decimal("topic_score").notNull(),
+		/**
+		 * The watch term (0111, GEO-3461), already included in rankingScore: watch per Explore
+		 * impression, completed plays and plays over the last 30 days. 0 for everything that is not
+		 * a debate, and for a debate with no signals.
+		 */
+		watchScore: decimal("watch_score").notNull(),
 		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
 	},
 	(table) => [
