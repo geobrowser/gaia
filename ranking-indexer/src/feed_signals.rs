@@ -101,6 +101,9 @@ pub struct ApplyReport {
     pub user_rows: i32,
     pub item_rows_expired: i32,
     pub user_rows_expired: i32,
+    /// Debates re-scored for their watch term (0111, GEO-3461), in the same transaction.
+    #[sqlx(default)]
+    pub debates_rescored: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
@@ -202,7 +205,7 @@ pub async fn apply(
     let users = serde_json::to_value(users).map_err(|e| IndexerError::Config(e.to_string()))?;
     let mut tx = pool.begin().await?;
     sqlx::query(APPLY_TIMEOUT).execute(&mut *tx).await?;
-    let report = sqlx::query_as::<_, ApplyReport>(
+    let mut report = sqlx::query_as::<_, ApplyReport>(
         "SELECT run_id, item_rows, user_rows_in, user_rows_placed, user_rows, item_rows_expired, user_rows_expired \
          FROM personalization.replace_feed_signals($1, $2, $3, $4::jsonb, $5::jsonb, $6)",
     )
@@ -214,6 +217,11 @@ pub async fn apply(
     .bind(allow_empty)
     .fetch_one(&mut *tx)
     .await?;
+    // The watch term reads the rows just replaced, so it moves with them, and a dry run rolls
+    // both back.
+    report.debates_rescored = sqlx::query_scalar("SELECT public.refresh_debate_watch_scores()")
+        .fetch_one(&mut *tx)
+        .await?;
     if dry_run {
         tx.rollback().await?;
     } else {

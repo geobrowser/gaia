@@ -118,13 +118,14 @@ async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), I
         user_rows = r.user_rows,
         item_rows_expired = r.item_rows_expired,
         user_rows_expired = r.user_rows_expired,
+        debates_rescored = r.debates_rescored,
         dry_run = options.dry_run,
         elapsed_ms = started.elapsed().as_millis() as u64,
         "feed signals replaced"
     );
     if options.dry_run {
         println!(
-            "Dry run, rolled back: generation {} through {}, window from {}: {} item-hours, {} of {} per-user rows on a personal space ({} user-days written), {} item and {} per-user rows past retention",
+            "Dry run, rolled back: generation {} through {}, window from {}: {} item-hours, {} of {} per-user rows on a personal space ({} user-days written), {} item and {} per-user rows past retention, {} debates re-scored",
             cutoff.generation,
             window.window_end,
             window.window_start,
@@ -133,7 +134,8 @@ async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), I
             r.user_rows_in,
             r.user_rows,
             r.item_rows_expired,
-            r.user_rows_expired
+            r.user_rows_expired,
+            r.debates_rescored
         );
     }
     Ok(())
