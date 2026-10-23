@@ -1457,6 +1457,8 @@ export const entityRankingConfig = pgTable("entity_ranking_config", {
 	watchCompletedWeight: decimal("watch_completed_weight").notNull(),
 	/** Multiplier on `ln(1 + plays)` (0111). */
 	watchPlaysWeight: decimal("watch_plays_weight").notNull(),
+	/** Multiplier on `ln(1 + claim votes cast in the debate's own UI)` (0112). */
+	watchClaimVotesWeight: decimal("watch_claim_votes_weight").notNull(),
 	/** The watch term is clamped to plus or minus this, in score units (0111). */
 	watchCap: decimal("watch_cap").notNull(),
 	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),

@@ -72,6 +72,9 @@ pub struct ItemRow {
     pub plays_with_duration: u32,
     pub watch_fraction_sum: f64,
     pub completed_plays: u32,
+    /// Claim votes cast in this debate's own UI (analytics 116). Absent before 116: 0.
+    #[serde(default)]
+    pub debate_claim_votes: u32,
 }
 
 /// One row of `analytics.feed_signal_user_items`. Only a wallet hash identifies the user.
@@ -289,14 +292,20 @@ mod tests {
 
     #[test]
     fn item_and_user_rows_round_trip_as_analytics_prints_them() {
-        let line = "{\"item_id\":\"00000001000040008000000000000000\",\"hour\":\"2026-10-06T10:00:00Z\",\"impressions\":5,\"impressions_top3\":1,\"impressions_4_10\":1,\"impressions_11_30\":1,\"impressions_31_plus\":1,\"opens\":1,\"votes\":1,\"plays\":2,\"explore_plays\":1,\"watch_ms\":180000,\"explore_watch_ms\":80000,\"plays_with_duration\":2,\"watch_fraction_sum\":1.6,\"completed_plays\":1}";
+        let line = "{\"item_id\":\"00000001000040008000000000000000\",\"hour\":\"2026-10-06T10:00:00Z\",\"impressions\":5,\"impressions_top3\":1,\"impressions_4_10\":1,\"impressions_11_30\":1,\"impressions_31_plus\":1,\"opens\":1,\"votes\":1,\"plays\":2,\"explore_plays\":1,\"watch_ms\":180000,\"explore_watch_ms\":80000,\"plays_with_duration\":2,\"watch_fraction_sum\":1.6,\"completed_plays\":1,\"debate_claim_votes\":3}";
         let rows: Vec<ItemRow> = clickhouse::parse_json_each_row(line, "item").unwrap();
         assert_eq!(rows[0].watch_ms, 180000);
+        assert_eq!(rows[0].debate_claim_votes, 3);
         let back = serde_json::to_value(&rows[0]).unwrap();
         assert_eq!(
             back,
             serde_json::from_str::<serde_json::Value>(line).unwrap()
         );
+
+        // A row from a view without the column (before analytics 116) reads as 0 claim votes.
+        let old = line.replace(",\"debate_claim_votes\":3", "");
+        let rows: Vec<ItemRow> = clickhouse::parse_json_each_row(&old, "item").unwrap();
+        assert_eq!(rows[0].debate_claim_votes, 0);
 
         let user = "{\"wallet_address_hash\":\"sha256:ab\",\"item_id\":\"00000001000040008000000000000000\",\"day\":\"2026-10-06\",\"impressions\":5,\"last_seen_at\":\"2026-10-06T10:05:00Z\"}";
         let rows: Vec<UserRow> = clickhouse::parse_json_each_row(user, "user").unwrap();
