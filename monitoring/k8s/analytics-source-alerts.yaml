@@ -1,0 +1,44 @@
+# Alert rules for the geo-analytics source imports (CronJobs in the
+# geo-analytics namespace, manifests in the analytics repo).
+#
+# A failed import Job already raises the stock KubeJobFailed, but Alertmanager
+# groups that by namespace + alertname, so it lands in the same repeating
+# geo-analytics/KubeJobFailed message as every other failing Job there. On
+# 2026-10-23 the Meta import failed for ~38h (Meta had blocked the developer
+# account) and nobody noticed until the paid figures went stale. Each import
+# gets its own alertname so it shows up as its own message.
+#
+# Staleness, not failure: the Meta import re-fetches the last 7 days on every
+# run, so one failed run heals itself on the next. Alert once two scheduled
+# runs (every 6h) in a row have failed.
+#
+# Apply:
+#   kubectl apply -f monitoring/k8s/analytics-source-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: analytics-source-imports
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: analytics.source.imports
+      rules:
+        - alert: MetaAdsImportStale
+          expr: |
+            time() - kube_cronjob_status_last_successful_time{
+              namespace="geo-analytics", cronjob="geo-analytics-meta-ads-insights"
+            } > 13 * 3600
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Meta ads import has not succeeded for {{ $value | humanizeDuration }}
+            description: |
+              CronJob geo-analytics/geo-analytics-meta-ads-insights has missed two
+              runs, so meta_ads_insights_daily (Meta spend on the analytics
+              dashboard) is going stale. Check the newest Job's pod logs; "API
+              access blocked" means Meta locked the developer account, which has
+              to be confirmed at developers.facebook.com. Once it succeeds, the
+              next run back-fills the last 7 days.
