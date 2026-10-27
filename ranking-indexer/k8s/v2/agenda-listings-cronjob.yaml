@@ -1,0 +1,94 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ranking-indexer-agenda-listings
+  namespace: gaia
+  labels:
+    app: ranking-indexer-agenda-listings
+    environment: testnet
+spec:
+  # GEO-3488: Best lifts the claims on each space's Debate agenda, then the debates recorded on
+  # them (migration 0113). Each run rebuilds trending.agenda_listings from the graph and re-scores
+  # the claims whose listings changed, those listed in the last 11 days, their debates, and anything
+  # still carrying a trending term. The boost halves per New York day, so a run within the hour
+  # after midnight New York moves every score to the new day.
+  #
+  # Hourly at :05, clear of the rolling sweep (:00), the feed-composition canary (:17), the feed
+  # signals sync (:27), topic suggestions (:41), the topic ranking (:51), the account weights (:53)
+  # and the primer claims (:57).
+  schedule: "5 * * * *"
+  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 86400 # clear finished runs after a day, so a stale failure stops firing KubeJobFailed
+      template:
+        metadata:
+          labels:
+            environment: testnet
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            fsGroup: 1001
+          imagePullSecrets:
+            - name: geo
+          volumes:
+            - name: ssl-certs
+              emptyDir: {}
+          initContainers:
+            - name: setup-certs
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command:
+                - sh
+                - -c
+                - |
+                  echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+              env:
+                - name: DATABASE_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_SSL_CA
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+          containers:
+            - name: ranking-indexer-agenda-listings
+              image: registry.digitalocean.com/geo/ranking-indexer:latest
+              imagePullPolicy: Always
+              command: ["agenda_listings_refresh"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+                  readOnly: true
+              env:
+                - name: PGSSLROOTCERT
+                  value: /ssl/ca.crt
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: api-secrets
+                      key: DATABASE_URL
+                - name: RUST_LOG
+                  value: "agenda_listings_refresh=info,ranking_indexer=info"
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "256Mi"
+                  cpu: "200m"
