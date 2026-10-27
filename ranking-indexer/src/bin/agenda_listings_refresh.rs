@@ -1,14 +1,15 @@
-//! Rebuilds the Debate agenda listings and re-scores what they move (GEO-3488, migration 0113).
+//! Rebuilds what Debate agendas name and re-scores what that moves (GEO-3488, migration 0113).
 //!
-//! Best lifts the claims on each space's daily Debate agenda, then the debates recorded on them.
-//! The relations table has no timestamps and nothing re-scores an entity when a relation changes,
+//! Best lifts the claims on each space's daily Debate agenda and the debates recorded on them, and,
+//! more lightly, the claims and debates on the topics the agenda names. The relations table has no timestamps and nothing re-scores an entity when a relation changes,
 //! and the boost decays by the day, so this job is what brings both to the score: one call to
 //! `trending.refresh_agenda_listings()`, run hourly by the `ranking-indexer-agenda-listings` CronJob.
 //!
-//! The call rebuilds `trending.agenda_listings` from the graph and re-scores the claims whose
-//! listings changed, the claims listed inside the horizon, the debates on all of them, and anything
-//! still carrying a trending term. It is one function call and so one transaction: readers keep the
-//! previous listings and scores until it commits.
+//! The call rebuilds `trending.agenda_listings` and `trending.agenda_topics` from the graph and
+//! re-scores the claims and topics whose rows changed or are inside the horizon, the debates on those
+//! claims, the claims and debates tagged with those topics, and anything still carrying a trending
+//! term. It is one function call and so one transaction: readers keep the previous rows and scores
+//! until it commits.
 //!
 //! Usage: `DATABASE_URL=... cargo run --bin agenda_listings_refresh`
 
@@ -39,11 +40,12 @@ async fn main() -> Result<(), IndexerError> {
     let scored: i32 = sqlx::query_scalar("SELECT trending.refresh_agenda_listings()")
         .fetch_one(&pool)
         .await?;
-    let (listings, claims, agendas, boosted): (i64, i64, i64, i64) = sqlx::query_as(
+    let (listings, claims, topics, boosted, topic_boosted): (i64, i64, i64, i64, i64) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM trending.agenda_listings), \
                 (SELECT count(DISTINCT claim_id) FROM trending.agenda_listings), \
-                (SELECT count(DISTINCT agenda_id) FROM trending.agenda_listings), \
-                (SELECT count(*) FROM public.entity_ranking_scores WHERE trending_score <> 0)",
+                (SELECT count(DISTINCT topic_id) FROM trending.agenda_topics), \
+                (SELECT count(*) FROM public.entity_ranking_scores WHERE trending_score <> 0), \
+                (SELECT count(*) FROM public.entity_ranking_scores WHERE trending_source = 'topic')",
     )
     .fetch_one(&pool)
     .await?;
@@ -51,8 +53,9 @@ async fn main() -> Result<(), IndexerError> {
         scored,
         listings,
         claims,
-        agendas,
+        topics,
         boosted,
+        topic_boosted,
         elapsed_ms = started.elapsed().as_millis() as u64,
         "agenda listings refreshed"
     );

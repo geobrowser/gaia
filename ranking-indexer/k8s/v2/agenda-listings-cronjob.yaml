@@ -7,11 +7,12 @@ metadata:
     app: ranking-indexer-agenda-listings
     environment: testnet
 spec:
-  # GEO-3488: Best lifts the claims on each space's Debate agenda, then the debates recorded on
-  # them (migration 0113). Each run rebuilds trending.agenda_listings from the graph and re-scores
-  # the claims whose listings changed, those listed in the last 11 days, their debates, and anything
-  # still carrying a trending term. The boost halves per New York day, so a run within the hour
-  # after midnight New York moves every score to the new day.
+  # GEO-3488: Best lifts the claims on each space's Debate agenda and the debates recorded on them,
+  # and more lightly everything on the topics the agenda names (migration 0113). Each run rebuilds
+  # trending.agenda_listings and trending.agenda_topics from the graph and re-scores the claims and
+  # topics whose rows changed or were named in the last 11 days, the debates and tagged entities
+  # behind them, and anything still carrying a trending term. The boosts decay per New York day, so
+  # a run within the hour after midnight New York moves every score to the new day.
   #
   # Hourly at :05, clear of the rolling sweep (:00), the feed-composition canary (:17), the feed
   # signals sync (:27), topic suggestions (:41), the topic ranking (:51), the account weights (:53)

@@ -82,13 +82,21 @@ describe("hidden schema surface", () => {
 	})
 
 	// GEO-3488: the agenda boost's inputs are public on Entity, so an ordering can be explained;
-	// the listings table and its rebuild live in the private `trending` schema and are not.
+	// the listings and topics tables and their rebuild live in the private `trending` schema and are not.
 	it("exposes the agenda boost inputs on Entity, not the listings table", () => {
 		const entity = postgraphileSchema.getType("Entity") as {getFields: () => Record<string, unknown>}
 		expect(Object.keys(entity.getFields())).toEqual(
-			expect.arrayContaining(["trendingScore", "trendingAgeCredit", "lastListedOn", "listedOnAgendaId"]),
+			expect.arrayContaining([
+				"trendingScore",
+				"trendingAgeCredit",
+				"trendingSource",
+				"trendingTopicId",
+				"trendingTopicListedOn",
+				"lastListedOn",
+				"listedOnAgendaId",
+			]),
 		)
-		const net = /agendaListing/i
+		const net = /agendaListing|agendaTopic/i
 		expect(typeNames.filter((t) => net.test(t))).toEqual([])
 		expect(queryFields.filter((f) => net.test(f))).toEqual([])
 		expect(mutationFields.filter((f) => /agenda|trending/i.test(f))).toEqual([])
