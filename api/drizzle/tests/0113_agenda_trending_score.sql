@@ -3,8 +3,9 @@
 -- Run per drizzle/tests/README.md; also runs in CI via rankingSqlSuites.test.ts. Expected values are
 -- written against entity_ranking_config, so retuning the defaults does not need a new suite.
 --
---   1. Listings: block items and the agenda's own Claims relation, written in the agenda's own space,
---      claims only; a future-dated agenda is stored but does not count until its Date.
+--   1. Listings: block items, the agenda's own Claims relation and its own Topics relation, written in
+--      the agenda's own space, each row with its source; claims only for claim listings; a topic
+--      listing is never a claim listing; a future-dated agenda is stored but does not count until its Date.
 --   2. A claim listed today: age credit to today's midnight plus the full boost; a year-old listed
 --      claim outranks a brand-new unlisted one.
 --   3. Listed today with no votes beats an unlisted same-day claim with a few votes, not one with
@@ -19,7 +20,7 @@
 --      in another space do nothing; decay and horizon.
 --   9. A vote's re-score keeps the age credit, the listing boost and the topic boost.
 --  10. refresh_agenda_listings: picks up new agenda rows, clears removed ones (including a debate's
---      credit), re-scores only what can have moved.
+--      credit), keeps written_at on unchanged rows, re-scores only what can have moved.
 --  11. Config changes clear stored terms; each boost at 0 turns it off; the API fields read the inputs.
 
 \set ON_ERROR_STOP on
@@ -33,8 +34,8 @@ END $$;
 
 TRUNCATE entities, values, relations, votes_count, user_votes, spaces, entity_ranking_scores,
          entity_type_weights, entity_type_exclusions, entity_type_ranking, entity_topic_ranking,
-         entity_feed_blocklist, personalization.feed_item_signals_hourly, trending.agenda_listings,
-         trending.agenda_topics CASCADE;
+         entity_feed_blocklist, personalization.feed_item_signals_hourly, trending.agenda_listings
+         CASCADE;
 
 -- The migration's defaults, set explicitly so the suite runs the same after any retune by hand.
 UPDATE entity_ranking_config
@@ -70,6 +71,8 @@ CREATE OR REPLACE FUNCTION pg_temp.h() RETURNS integer LANGUAGE sql AS $$
 --   ORG1-10 debates on an unlisted claim UNL, created 0..9 days ago: the organic debate feed.
 --   CDIR    listed only through agenda A0's own Claims relation.
 --   CDIRX   named by A0's Claims relation written in S2, not A0's space.
+--   OLD is also in A0's own Claims relation, so it has a block_item and an agenda_claims row.
+--   CTOP    a claim A0 names in its Topics relation: a topic listing, not a claim listing.
 --   FUT     listed only on tomorrow's agenda.   OTHER  Collection item written in S2.
 --   PAGE    a non-claim item.   STORY  a news story with a Claims relation to DEB.
 -- Topics, named in an agenda's own Topics relation:
@@ -82,7 +85,7 @@ CREATE OR REPLACE FUNCTION pg_temp.h() RETURNS integer LANGUAGE sql AS $$
 CREATE TEMP TABLE ids AS
 SELECT k, ('b1130000-0000-4000-8000-' || lpad(to_hex(n), 12, '0'))::uuid AS id
 FROM unnest(ARRAY['OLD','NEW','FEW','HEAVY','TWO','HZN','PASTHZN','MULTI','DEB','SPAN','LATE','CDEB',
-                  'UNL','CDIR','CDIRX','FUT','OTHER','PAGE','STORY','TC','T2','TPAST','TX','TBK','TF','BOTHL','BOTHT',
+                  'UNL','CDIR','CDIRX','CTOP','FUT','OTHER','PAGE','STORY','TC','T2','TPAST','TX','TBK','TF','BOTHL','BOTHT',
                   'D1','D2','D3','DS','DL','DE','DOLD','TD',
                   'ORG1','ORG2','ORG3','ORG4','ORG5','ORG6','ORG7','ORG8','ORG9','ORG10',
                   'A0','A1','A1S2','A2','A3','A5','AHZN','APAST','AFUT','AOLD',
@@ -172,10 +175,10 @@ SELECT pg_temp.ent(k, CASE WHEN k = 'OLD' THEN extract(epoch FROM now())::bigint
                            WHEN k = 'CDEB' THEN pg_temp.noon(60)
                            ELSE pg_temp.noon(40) END)
 FROM ids WHERE k IN ('OLD','NEW','FEW','HEAVY','TWO','HZN','PASTHZN','MULTI','DEB','SPAN','LATE','CDEB',
-                     'UNL','CDIR','CDIRX','FUT','OTHER','PAGE','STORY','TC','T2','TPAST','TX','TBK','TF','BOTHL','BOTHT');
+                     'UNL','CDIR','CDIRX','CTOP','FUT','OTHER','PAGE','STORY','TC','T2','TPAST','TX','TBK','TF','BOTHL','BOTHT');
 SELECT pg_temp.typed(k, 'CLAIM') FROM ids
 WHERE k IN ('OLD','NEW','FEW','HEAVY','TWO','HZN','PASTHZN','MULTI','DEB','SPAN','LATE','CDEB',
-            'UNL','CDIR','CDIRX','FUT','OTHER','TC','T2','TPAST','TX','TBK','TF','BOTHL','BOTHT');
+            'UNL','CDIR','CDIRX','CTOP','FUT','OTHER','TC','T2','TPAST','TX','TBK','TF','BOTHL','BOTHT');
 SELECT pg_temp.typed('PAGE', 'PAGET');
 SELECT pg_temp.votes('FEW', (SELECT v FROM few)), pg_temp.votes('HEAVY', 200);
 
@@ -192,6 +195,10 @@ SELECT pg_temp.agenda('AFUT', 'S1', -1, ARRAY['FUT']);
 -- The agenda's own Claims and Topics relations.
 SELECT pg_temp.rel('A0', 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, 'CDIR', 'S1');
 SELECT pg_temp.rel('A0', 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, 'CDIRX', 'S2');
+SELECT pg_temp.rel('A0', 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, 'OLD', 'S1');
+SELECT pg_temp.tag('A0', 'CTOP', 'S1');
+-- FEW carries a Topics tag pointing at a listed claim: a claim listing is not a named topic.
+SELECT pg_temp.tag('FEW', 'OLD', 'S1');
 SELECT pg_temp.tag('A0', 'TOP1', 'S1'), pg_temp.tag('A2', 'TOP2', 'S1'), pg_temp.tag('APAST', 'TOPPAST', 'S1');
 SELECT pg_temp.tag('A0', 'TOPX', 'S2'), pg_temp.tag('AFUT', 'TOPF', 'S1');
 
@@ -210,23 +217,38 @@ SELECT pg_temp.tag('TC', 'TOP1', 'S2'), pg_temp.tag('TD', 'TOP1', 'S1'), pg_temp
 CREATE TEMP TABLE first_run AS SELECT trending.refresh_agenda_listings() AS n;
 -- The sweep scores only what agendas name; score the rest the way a vote would.
 SELECT public.refresh_entity_ranking_scores(ARRAY(SELECT id FROM ids WHERE k IN
-  ('NEW','FEW','HEAVY','PAGE','STORY','OTHER','UNL','CDIRX','TX','TBK',
+  ('NEW','FEW','HEAVY','PAGE','STORY','OTHER','UNL','CDIRX','CTOP','TX','TBK',
    'ORG1','ORG2','ORG3','ORG4','ORG5','ORG6','ORG7','ORG8','ORG9','ORG10')));
 
 -- ---------------------------------------------------------------------------
 -- 1. Listings.
 -- ---------------------------------------------------------------------------
-SELECT assert((SELECT count(*) FROM trending.agenda_listings WHERE claim_id = pg_temp.i('OLD')
-               AND agenda_id = pg_temp.i('A0') AND space_id = pg_temp.i('S1') AND listed_on = pg_temp.today()) = 1,
-              '1: a claim on today''s agenda is listed today');
-SELECT assert(EXISTS (SELECT 1 FROM trending.agenda_listings WHERE claim_id = pg_temp.i('CDIR')
-                      AND agenda_id = pg_temp.i('A0')),
-              '1: so is a claim in the agenda''s own Claims relation');
-SELECT assert(NOT EXISTS (SELECT 1 FROM trending.agenda_listings WHERE claim_id IN (pg_temp.i('OTHER'), pg_temp.i('CDIRX'))),
+SELECT assert((SELECT array_agg(source ORDER BY source) FROM trending.agenda_listings WHERE entity_id = pg_temp.i('OLD')
+               AND agenda_id = pg_temp.i('A0') AND space_id = pg_temp.i('S1') AND listed_on = pg_temp.today())
+              = ARRAY['agenda_claims', 'block_item'],
+              '1: a claim on today''s agenda is listed today, one row per way the agenda names it');
+SELECT assert((SELECT array_agg(source) FROM trending.agenda_listings WHERE entity_id = pg_temp.i('CDIR'))
+              = ARRAY['agenda_claims'] AND
+              (SELECT array_agg(source) FROM trending.agenda_listings WHERE entity_id = pg_temp.i('TWO'))
+              = ARRAY['block_item'],
+              '1: the source says block item or the agenda''s own Claims relation');
+SELECT assert((SELECT array_agg(source) FROM trending.agenda_listings WHERE entity_id = pg_temp.i('TOP1')
+               AND agenda_id = pg_temp.i('A0') AND space_id = pg_temp.i('S1') AND listed_on = pg_temp.today())
+              = ARRAY['agenda_topics'],
+              '1: a topic in the agenda''s own Topics relation is a topic listing');
+SELECT assert(NOT EXISTS (SELECT 1 FROM trending.agenda_listings WHERE entity_id IN (pg_temp.i('TOPX'), pg_temp.i('TOPB'))),
+              '1: Topics written outside the agenda''s space or on a block are not listed');
+SELECT assert(pg_temp.credit('CTOP') = 0 AND COALESCE(pg_temp.trend('CTOP'), 0) = 0
+              AND public.entities_last_listed_on(e) IS NULL AND public.entities_listed_on_agenda_id(e) IS NULL,
+              '1: a claim named only in the agenda''s Topics is not a claim listing')
+FROM entities e WHERE e.id = pg_temp.i('CTOP');
+SELECT assert((SELECT bool_and(written_at > now() - interval '1 hour') FROM trending.agenda_listings),
+              '1: written_at is when the rebuild first wrote the row');
+SELECT assert(NOT EXISTS (SELECT 1 FROM trending.agenda_listings WHERE entity_id IN (pg_temp.i('OTHER'), pg_temp.i('CDIRX'))),
               '1: a Collection item or Claims relation written outside the agenda''s space is not a listing');
-SELECT assert(NOT EXISTS (SELECT 1 FROM trending.agenda_listings WHERE claim_id = pg_temp.i('PAGE')),
+SELECT assert(NOT EXISTS (SELECT 1 FROM trending.agenda_listings WHERE entity_id = pg_temp.i('PAGE')),
               '1: a non-claim item is not a listing');
-SELECT assert(EXISTS (SELECT 1 FROM trending.agenda_listings WHERE claim_id = pg_temp.i('FUT')
+SELECT assert(EXISTS (SELECT 1 FROM trending.agenda_listings WHERE entity_id = pg_temp.i('FUT')
                       AND listed_on = pg_temp.today() + 1),
               '1: a future-dated agenda is stored');
 SELECT assert(pg_temp.credit('FUT') = 0 AND pg_temp.trend('FUT') = 0,
@@ -347,7 +369,12 @@ DELETE FROM relations WHERE from_entity_id IN (pg_temp.i('A2'), pg_temp.i('AOLD'
   AND type_id = 'beaba5cb-a677-41a8-b353-77030613fc70'::uuid;
 DELETE FROM relations WHERE from_entity_id = pg_temp.i('A2')
   AND type_id = '806d52bc-27e9-4c91-93c0-57978b093351'::uuid;
+UPDATE trending.agenda_listings SET written_at = '2026-01-01T00:00:00Z';
 CREATE TEMP TABLE second_run AS SELECT trending.refresh_agenda_listings() AS n;
+SELECT assert((SELECT written_at FROM trending.agenda_listings WHERE entity_id = pg_temp.i('NEW')) > now() - interval '1 hour'
+              AND (SELECT bool_and(written_at = '2026-01-01T00:00:00Z') FROM trending.agenda_listings
+                   WHERE entity_id <> pg_temp.i('NEW')),
+              '10: a new row is stamped now; unchanged rows keep their written_at');
 SELECT assert(pg_temp.trend('NEW') = pg_temp.b(), '10: a claim added to an agenda picks up the boost on the next run');
 SELECT assert(pg_temp.credit('TWO') = 0 AND pg_temp.trend('TWO') = 0 AND pg_temp.trend('DL') = 0,
               '10: a removed listing clears the claim''s terms and its debates''');
@@ -375,8 +402,11 @@ SELECT assert(public.entities_trending_source(e) = 'topic' AND public.entities_t
               AND public.entities_trending_topic_listed_on(e) = pg_temp.today(),
               '11: trendingTopicId and trendingTopicListedOn name the topic behind a topic boost')
 FROM entities e WHERE e.id = pg_temp.i('TC');
+SELECT assert(public.entities_last_listed_on(e) IS NULL AND public.entities_listed_on_agenda_id(e) IS NULL,
+              '11: lastListedOn and listedOnAgendaId ignore topic listings')
+FROM entities e WHERE e.id = pg_temp.i('TC');
 SELECT assert(public.entities_last_listed_on(e) IS NULL AND public.entities_trending_source(e) IS NULL,
-              '11: nothing for an unlisted, untagged claim')
+              '11: nothing for an unlisted claim whose only tag is a listed claim, not a named topic')
 FROM entities e WHERE e.id = pg_temp.i('FEW');
 
 -- HZN is unchanged and now outside the horizon; only its stored term brings it back to be cleared.
@@ -404,5 +434,5 @@ UPDATE entity_ranking_config
        trending_debate_window_days = 7, trending_horizon_days = 16, trending_time_zone = 'America/New_York'
  WHERE id;
 TRUNCATE entities, values, relations, votes_count, entity_ranking_scores, entity_type_ranking,
-         entity_topic_ranking, trending.agenda_listings, trending.agenda_topics CASCADE;
+         entity_topic_ranking, trending.agenda_listings CASCADE;
 DROP TABLE ids, few, first_run, second_run, before_vote;

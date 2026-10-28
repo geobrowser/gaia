@@ -19,9 +19,16 @@
 -- counts, including an earlier one for the same space and Date; the newer one is only the freshest.
 -- An agenda counts once its Date arrives in New York, so tomorrow's agenda published tonight does
 -- nothing until midnight. The relations table has no timestamps and nothing re-scores an entity when
--- a relation changes, so what agendas name is rebuilt in full every hour into the private tables
--- trending.agenda_listings and trending.agenda_topics (an edited or deleted agenda is handled by the
--- rebuild for free).
+-- a relation changes, so what agendas name is rebuilt every hour into the private table
+-- trending.agenda_listings (an edited or deleted agenda is handled by the rebuild for free).
+--
+-- THE LISTINGS TABLE is also read outside ranking, so each row says how the agenda named it:
+-- source 'block_item' (what the app shows as the agenda's contents), 'agenda_claims' (the agenda's
+-- own Claims relation) or 'agenda_topics' (a topic listing, which lifts tagged entities but is not a
+-- claim listing: the Trending tag, lastListedOn and "debates on an agenda claim" ignore it). Its shape
+-- is kept flat for the warehouse export: agenda_id, space_id (the agenda's), entity_id (the claim,
+-- or the topic for a topic listing), listed_on (the agenda's Date), source, written_at (when the
+-- hourly rebuild first saw the row, so up to an hour after publishing; unchanged rows keep it).
 --
 -- THE TERMS, both already included in ranking_score, in score units (one unit is tau, 100000 s,
 -- about 28 hours of recency):
@@ -69,14 +76,14 @@
 --
 -- FRESHNESS. The terms live in refresh_entity_ranking_scores, so every re-score applies them.
 -- trending.refresh_agenda_listings(), run hourly by ranking-indexer's agenda_listings_refresh,
--- rebuilds both tables and re-scores, in the same transaction: claims and topics whose agenda rows
--- changed (added, removed, re-dated) or whose newest row is inside the horizon, the debates on those
+-- updates the listings table and re-scores, in the same transaction: claims and topics whose
+-- listings changed (added, removed, re-dated) or are inside the horizon, the debates on those
 -- claims, the claims and debates tagged with those topics, and anything still storing a non-zero
 -- trending term (config changes, removed agendas).
 --
 -- API. Entity gets computed fields: trendingScore, trendingAgeCredit, trendingSource ('listing' or
 -- 'topic') and trendingTopicId are what the stored score used; lastListedOn, listedOnAgendaId and
--- trendingTopicListedOn are live (for a debate, its claim's listing). The tables live in the private
+-- trendingTopicListedOn are live (for a debate, its claim's listing). The table lives in the private
 -- `trending` schema because PostGraphile publishes every public table.
 
 CREATE SCHEMA IF NOT EXISTS "trending";
@@ -133,28 +140,22 @@ ALTER TABLE "entity_ranking_scores"
   ADD COLUMN IF NOT EXISTS "trending_topic_id" uuid;
 --> statement-breakpoint
 
--- Every claim an agenda names, future-dated agendas included (readers skip those until their Date
--- arrives). Rebuilt in full by trending.refresh_agenda_listings().
+-- Every claim and topic an agenda names, one row per way it names it, future-dated agendas included
+-- (readers skip those until their Date arrives). Kept in step with the graph by
+-- trending.refresh_agenda_listings(); see THE LISTINGS TABLE above.
 CREATE TABLE IF NOT EXISTS "trending"."agenda_listings" (
-  "claim_id" uuid NOT NULL,
   "agenda_id" uuid NOT NULL,
   "space_id" uuid NOT NULL,
+  "entity_id" uuid NOT NULL,
   "listed_on" date NOT NULL,
-  PRIMARY KEY ("claim_id", "agenda_id", "space_id")
+  "source" text NOT NULL CHECK ("source" IN ('block_item', 'agenda_claims', 'agenda_topics')),
+  "written_at" timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY ("agenda_id", "space_id", "entity_id", "source")
 );
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "agenda_listings_entity_idx" ON "trending"."agenda_listings" ("entity_id");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "agenda_listings_listed_on_idx" ON "trending"."agenda_listings" ("listed_on");
---> statement-breakpoint
--- Every topic an agenda names in its own Topics relation, the same way.
-CREATE TABLE IF NOT EXISTS "trending"."agenda_topics" (
-  "topic_id" uuid NOT NULL,
-  "agenda_id" uuid NOT NULL,
-  "space_id" uuid NOT NULL,
-  "listed_on" date NOT NULL,
-  PRIMARY KEY ("topic_id", "agenda_id", "space_id")
-);
---> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "agenda_topics_listed_on_idx" ON "trending"."agenda_topics" ("listed_on");
 --> statement-breakpoint
 
 -- A Date value's instant. datetime_utc is what the indexer writes; the text column is the fallback,
@@ -196,13 +197,14 @@ LANGUAGE sql STABLE AS $$
 $$;
 --> statement-breakpoint
 
--- The claims agendas name now: block items and the agenda's own Claims relation, in its own space.
+-- What agendas name now, in their own space: block items and the agenda's own Claims relation (both
+-- typed Claim), and the agenda's own Topics relation.
 CREATE OR REPLACE FUNCTION trending.current_agenda_listings()
-RETURNS TABLE (claim_id uuid, agenda_id uuid, space_id uuid, listed_on date)
+RETURNS TABLE (agenda_id uuid, space_id uuid, entity_id uuid, listed_on date, source text)
 LANGUAGE sql STABLE AS $$
   WITH agendas AS (SELECT * FROM trending.current_agendas()),
-  named AS (
-    SELECT item.to_entity_id AS claim_id, a.agenda_id, a.space_id, a.listed_on
+  claims AS (
+    SELECT a.agenda_id, a.space_id, item.to_entity_id AS entity_id, a.listed_on, 'block_item' AS source
     FROM agendas a
     JOIN public.relations blk
       ON blk.from_entity_id = a.agenda_id AND blk.space_id = a.space_id
@@ -211,43 +213,38 @@ LANGUAGE sql STABLE AS $$
       ON item.from_entity_id = blk.to_entity_id AND item.space_id = a.space_id
      AND item.type_id = 'a99f9ce1-2ffa-4dac-8c61-f6310d46064a'::uuid                -- Collection item
     UNION
-    SELECT cl.to_entity_id, a.agenda_id, a.space_id, a.listed_on
+    SELECT a.agenda_id, a.space_id, cl.to_entity_id, a.listed_on, 'agenda_claims'
     FROM agendas a
     JOIN public.relations cl
       ON cl.from_entity_id = a.agenda_id AND cl.space_id = a.space_id
      AND cl.type_id = 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid                  -- Claims
   )
-  SELECT n.claim_id, n.agenda_id, n.space_id, n.listed_on
-  FROM named n
+  SELECT c.agenda_id, c.space_id, c.entity_id, c.listed_on, c.source
+  FROM claims c
   WHERE EXISTS (SELECT 1 FROM public.relations ct
-                WHERE ct.from_entity_id = n.claim_id
+                WHERE ct.from_entity_id = c.entity_id
                   AND ct.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid      -- Types
                   AND ct.to_entity_id = '96f859ef-a1ca-4b22-9372-c86ad58b694b'::uuid) -- Claim
-$$;
---> statement-breakpoint
-
--- The topics agendas name now, in their own Topics relation in their own space.
-CREATE OR REPLACE FUNCTION trending.current_agenda_topics()
-RETURNS TABLE (topic_id uuid, agenda_id uuid, space_id uuid, listed_on date)
-LANGUAGE sql STABLE AS $$
-  SELECT DISTINCT tp.to_entity_id, a.agenda_id, a.space_id, a.listed_on
-  FROM trending.current_agendas() a
+  UNION
+  SELECT a.agenda_id, a.space_id, tp.to_entity_id, a.listed_on, 'agenda_topics'
+  FROM agendas a
   JOIN public.relations tp
     ON tp.from_entity_id = a.agenda_id AND tp.space_id = a.space_id
    AND tp.type_id = '806d52bc-27e9-4c91-93c0-57978b093351'::uuid                    -- Topics
 $$;
 --> statement-breakpoint
 
--- Per claim, its newest arrived listing and on which agenda and space.
+-- Per claim, its newest arrived claim listing (topic listings never count) and on which agenda and
+-- space.
 CREATE OR REPLACE FUNCTION trending.claim_listings(claim_ids uuid[])
 RETURNS TABLE (claim_id uuid, last_listed_on date, agenda_id uuid, space_id uuid)
 LANGUAGE sql STABLE AS $$
-  SELECT DISTINCT ON (l.claim_id) l.claim_id, l.listed_on, l.agenda_id, l.space_id
+  SELECT DISTINCT ON (l.entity_id) l.entity_id, l.listed_on, l.agenda_id, l.space_id
   FROM trending.agenda_listings l
   CROSS JOIN public.entity_ranking_config c
-  WHERE c.id AND l.claim_id = ANY(claim_ids)
+  WHERE c.id AND l.entity_id = ANY(claim_ids) AND l.source <> 'agenda_topics'
     AND l.listed_on <= (now() AT TIME ZONE c.trending_time_zone)::date
-  ORDER BY l.claim_id, l.listed_on DESC, l.agenda_id
+  ORDER BY l.entity_id, l.listed_on DESC, l.agenda_id
 $$;
 --> statement-breakpoint
 
@@ -318,14 +315,15 @@ LANGUAGE sql STABLE AS $$
   ),
   -- Per claim or debate, its own topic (any space) named by the newest arrived agenda.
   topic AS (
-    SELECT DISTINCT ON (t.id) t.id, at.topic_id, at.listed_on, (cfg.today - at.listed_on) AS days
+    SELECT DISTINCT ON (t.id) t.id, at.entity_id AS topic_id, at.listed_on, (cfg.today - at.listed_on) AS days
     FROM target t
     CROSS JOIN cfg
     JOIN public.relations tr
       ON tr.from_entity_id = t.id AND tr.type_id = '806d52bc-27e9-4c91-93c0-57978b093351'::uuid -- Topics
-    JOIN trending.agenda_topics at ON at.topic_id = tr.to_entity_id AND at.listed_on <= cfg.today
+    JOIN trending.agenda_listings at
+      ON at.entity_id = tr.to_entity_id AND at.source = 'agenda_topics' AND at.listed_on <= cfg.today
     WHERE t.is_claim OR t.is_debate
-    ORDER BY t.id, at.listed_on DESC, at.topic_id
+    ORDER BY t.id, at.listed_on DESC, at.entity_id
   ),
   terms AS (
     SELECT t.id, lt.age_credit, lt.last_listed_on, lt.agenda_id, lt.debates,
@@ -558,10 +556,10 @@ $$;
 --> statement-breakpoint
 
 
--- Rebuilds trending.agenda_listings and trending.agenda_topics from the graph and re-scores every
--- entity whose terms can have moved. One call is one transaction: readers keep the previous rows and
--- scores until it commits. Run hourly by ranking-indexer's agenda_listings_refresh. Returns the
--- entities re-scored.
+-- Brings trending.agenda_listings in step with the graph and re-scores every entity whose terms can
+-- have moved. Rows that did not change are left alone, so they keep their written_at; a re-dated row
+-- is a new row. One call is one transaction: readers keep the previous rows and scores until it
+-- commits. Run hourly by ranking-indexer's agenda_listings_refresh. Returns the entities re-scored.
 CREATE OR REPLACE FUNCTION trending.refresh_agenda_listings()
 RETURNS integer
 LANGUAGE plpgsql AS $$
@@ -579,47 +577,43 @@ BEGIN
   FROM public.entity_ranking_config c WHERE c.id;
 
   CREATE TEMP TABLE IF NOT EXISTS incoming_agenda_listings (
-    claim_id uuid, agenda_id uuid, space_id uuid, listed_on date
+    agenda_id uuid, space_id uuid, entity_id uuid, listed_on date, source text
   ) ON COMMIT DROP;
   TRUNCATE incoming_agenda_listings;
   INSERT INTO incoming_agenda_listings SELECT * FROM trending.current_agenda_listings();
 
-  CREATE TEMP TABLE IF NOT EXISTS incoming_agenda_topics (
-    topic_id uuid, agenda_id uuid, space_id uuid, listed_on date
+  CREATE TEMP TABLE IF NOT EXISTS changed_agenda_listings (
+    agenda_id uuid, space_id uuid, entity_id uuid, listed_on date, source text, incoming boolean
   ) ON COMMIT DROP;
-  TRUNCATE incoming_agenda_topics;
-  INSERT INTO incoming_agenda_topics SELECT * FROM trending.current_agenda_topics();
+  TRUNCATE changed_agenda_listings;
+  INSERT INTO changed_agenda_listings
+  SELECT x.*, false FROM (
+    SELECT l.agenda_id, l.space_id, l.entity_id, l.listed_on, l.source FROM trending.agenda_listings l
+    EXCEPT SELECT * FROM incoming_agenda_listings) x
+  UNION ALL
+  SELECT x.*, true FROM (
+    SELECT * FROM incoming_agenda_listings
+    EXCEPT SELECT l.agenda_id, l.space_id, l.entity_id, l.listed_on, l.source FROM trending.agenda_listings l) x;
 
   -- Claims and topics whose rows changed (added, removed or re-dated), and those inside the horizon.
-  SELECT coalesce(array_agg(DISTINCT x.claim_id), '{}') INTO claim_ids
+  SELECT coalesce(array_agg(DISTINCT x.entity_id) FILTER (WHERE x.source <> 'agenda_topics'), '{}'),
+         coalesce(array_agg(DISTINCT x.entity_id) FILTER (WHERE x.source = 'agenda_topics'), '{}')
+    INTO claim_ids, topic_ids
   FROM (
-    (SELECT l.claim_id, l.agenda_id, l.space_id, l.listed_on FROM trending.agenda_listings l
-     EXCEPT SELECT * FROM incoming_agenda_listings)
+    SELECT c.entity_id, c.source FROM changed_agenda_listings c
     UNION ALL
-    (SELECT * FROM incoming_agenda_listings
-     EXCEPT SELECT l.claim_id, l.agenda_id, l.space_id, l.listed_on FROM trending.agenda_listings l)
-    UNION ALL
-    SELECT i.* FROM incoming_agenda_listings i
-    WHERE i.listed_on BETWEEN today - horizon AND today
-  ) x;
-  SELECT coalesce(array_agg(DISTINCT x.topic_id), '{}') INTO topic_ids
-  FROM (
-    (SELECT t.topic_id, t.agenda_id, t.space_id, t.listed_on FROM trending.agenda_topics t
-     EXCEPT SELECT * FROM incoming_agenda_topics)
-    UNION ALL
-    (SELECT * FROM incoming_agenda_topics
-     EXCEPT SELECT t.topic_id, t.agenda_id, t.space_id, t.listed_on FROM trending.agenda_topics t)
-    UNION ALL
-    SELECT i.* FROM incoming_agenda_topics i
+    SELECT i.entity_id, i.source FROM incoming_agenda_listings i
     WHERE i.listed_on BETWEEN today - horizon AND today
   ) x;
 
-  DELETE FROM trending.agenda_listings;
-  INSERT INTO trending.agenda_listings (claim_id, agenda_id, space_id, listed_on)
-  SELECT * FROM incoming_agenda_listings;
-  DELETE FROM trending.agenda_topics;
-  INSERT INTO trending.agenda_topics (topic_id, agenda_id, space_id, listed_on)
-  SELECT * FROM incoming_agenda_topics;
+  DELETE FROM trending.agenda_listings l
+  USING changed_agenda_listings c
+  WHERE NOT c.incoming
+    AND (l.agenda_id, l.space_id, l.entity_id, l.listed_on, l.source)
+      = (c.agenda_id, c.space_id, c.entity_id, c.listed_on, c.source);
+  INSERT INTO trending.agenda_listings (agenda_id, space_id, entity_id, listed_on, source)
+  SELECT c.agenda_id, c.space_id, c.entity_id, c.listed_on, c.source
+  FROM changed_agenda_listings c WHERE c.incoming;
 
   -- Those claims and the debates on them; claims and debates tagged with those topics; and anything
   -- still carrying a trending term.
