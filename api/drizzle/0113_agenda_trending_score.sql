@@ -17,6 +17,8 @@
 --
 -- Every relation and the Date must be written in S, the agenda's own space, and S must be a DAO
 -- space: a personal space costs nothing to make, so anyone could list their own claims from one.
+-- Any DAO (debate) space may publish an agenda, with no list of approved spaces (decided 28 Oct), so
+-- a new debate space's agendas count from its first one.
 -- The same rule holds for what an agenda lifts beyond its own claims: a debate counts only through a
 -- Claims relation written in a DAO space where it is also typed Debate, and a topic tag only when
 -- written in a DAO space. Every agenda, debate and tag on testnet already is. Every published agenda
@@ -83,6 +85,9 @@
 -- All the numbers are configuration in entity_ranking_config. A boost of 0 turns that boost off; the
 -- age credit has no switch of its own because it only moves an entity to the date we listed it. The
 -- calendar is fixed to New York (trending.time_zone()): a bad zone in config would fail every re-score.
+-- New York, not UTC (decided 28 Oct): an agenda's Date and the app's "today" are New York days, and a
+-- UTC day would start tomorrow's agenda and step every boost's decay at 8pm New York (7pm in winter),
+-- in the middle of the US evening. Analytics reading the listings uses the New York day too.
 --
 -- FRESHNESS. The terms live in refresh_entity_ranking_scores, so every re-score applies them.
 -- trending.refresh_agenda_listings(), run hourly by ranking-indexer's agenda_listings_refresh,
@@ -192,7 +197,7 @@ CREATE TABLE IF NOT EXISTS "trending"."refresh_state" (
 INSERT INTO "trending"."refresh_state" ("id") VALUES (true) ON CONFLICT DO NOTHING;
 --> statement-breakpoint
 
--- New York: agenda Dates, "today" and day counts are all read in this calendar.
+-- New York: agenda Dates, "today" and day counts are all read in this calendar (not UTC; see NUMBERS).
 CREATE OR REPLACE FUNCTION trending.time_zone()
 RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT 'America/New_York' $$;
 --> statement-breakpoint
