@@ -33,6 +33,9 @@
 -- is kept flat for the warehouse export: agenda_id, space_id (the agenda's), entity_id (the claim,
 -- or the topic for a topic listing), listed_on (the agenda's Date), source, written_at (when the
 -- hourly sweep first saw the row, so up to an hour after publishing; unchanged rows keep it).
+-- listed_on is a New York calendar date and written_at a UTC instant. A reader matching listings to
+-- events by day must take the event's day in New York too: a UTC day (ClickHouse toDate(created_at))
+-- puts debates created between about 8pm and midnight New York on the next day's agenda.
 --
 -- THE TERMS, both already included in ranking_score, in score units (one unit is tau, 100000 s,
 -- about 28 hours of recency):
@@ -169,7 +172,7 @@ CREATE TABLE IF NOT EXISTS "trending"."agenda_listings" (
   "agenda_id" uuid NOT NULL,
   "space_id" uuid NOT NULL,
   "entity_id" uuid NOT NULL,
-  "listed_on" date NOT NULL,
+  "listed_on" date NOT NULL,                                           -- New York calendar date
   "source" text NOT NULL CHECK ("source" IN ('block_item', 'agenda_claims', 'agenda_topics')),
   "written_at" timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY ("agenda_id", "space_id", "entity_id", "source")
