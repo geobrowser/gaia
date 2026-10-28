@@ -1479,8 +1479,6 @@ export const entityRankingConfig = pgTable("entity_ranking_config", {
 	trendingDebateWindowDays: integer("trending_debate_window_days").notNull(),
 	/** The boost is 0 once this many days have passed since the newest listing (0113). */
 	trendingHorizonDays: integer("trending_horizon_days").notNull(),
-	/** The calendar agenda Dates and day counts are read in (0113). */
-	trendingTimeZone: text("trending_time_zone").notNull(),
 	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
 })
 

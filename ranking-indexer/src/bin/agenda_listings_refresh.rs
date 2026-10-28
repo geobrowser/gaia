@@ -36,21 +36,32 @@ async fn main() -> Result<(), IndexerError> {
         .await?;
 
     let started = Instant::now();
+    // The app role's statement_timeout is 30s and a sweep over busy topics can pass it, so it gets
+    // its own limit, as topic_ranking_reconcile does. SET LOCAL inside one transaction rather than a
+    // session SET: the connection goes through a transaction-mode pooler.
     // A failure returns Err, so the process exits non-zero and the Job is marked failed.
-    let scored: i32 = sqlx::query_scalar("SELECT trending.refresh_agenda_listings()")
-        .fetch_one(&pool)
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout = '10min'")
+        .execute(&mut *tx)
         .await?;
-    let (listings, claims, topics, boosted, topic_boosted): (i64, i64, i64, i64, i64) = sqlx::query_as(
-        "SELECT (SELECT count(*) FROM trending.agenda_listings), \
+    let scored: i32 = sqlx::query_scalar("SELECT trending.refresh_agenda_listings()")
+        .fetch_one(&mut *tx)
+        .await?;
+    // The two score counts read entity_ranking_scores_trending_idx, not the whole table.
+    let (listings, claims, topics, boosted, topic_boosted): (i64, i64, i64, i64, i64) =
+        sqlx::query_as(
+            "SELECT (SELECT count(*) FROM trending.agenda_listings), \
                 (SELECT count(DISTINCT entity_id) FROM trending.agenda_listings \
                  WHERE source <> 'agenda_topics'), \
                 (SELECT count(DISTINCT entity_id) FROM trending.agenda_listings \
                  WHERE source = 'agenda_topics'), \
                 (SELECT count(*) FROM public.entity_ranking_scores WHERE trending_score <> 0), \
-                (SELECT count(*) FROM public.entity_ranking_scores WHERE trending_source = 'topic')",
-    )
-    .fetch_one(&pool)
-    .await?;
+                (SELECT count(*) FROM public.entity_ranking_scores \
+                 WHERE trending_score <> 0 AND trending_source = 'topic')",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
     info!(
         scored,
         listings,
