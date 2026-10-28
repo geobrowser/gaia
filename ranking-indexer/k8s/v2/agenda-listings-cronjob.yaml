@@ -9,11 +9,11 @@ metadata:
 spec:
   # GEO-3488: Best lifts the claims on each space's Debate agenda and the debates recorded on them,
   # and more lightly everything on the topics the agenda names (migration 0113). Each run brings
-  # trending.agenda_listings in step with the graph and re-scores the claims listed or changed in the
-  # last 16 days (trending_horizon_days) and their debates, the claims and debates on topics named in
-  # that window, and anything still carrying a trending term. The boosts decay per New York day, so
-  # the run within the hour after midnight New York moves every score to the new day; that run is
-  # also the full pass, re-scoring every listed claim and stored age credit. Needs the api
+  # trending.agenda_listings in step with the graph and re-scores what changed: claims added, removed
+  # or re-dated on an agenda and their debates, and the claims and debates on topics that were. The
+  # boosts decay per New York day, so the first run of each New York day is a full pass that moves
+  # every score to the new day: every listed claim and its debates, everything on a topic named in
+  # the last 16 days (trending_horizon_days), and anything still storing a term. Needs the api
   # (migration) deployed first, or the run fails on the missing function.
   #
   # Hourly at :05, clear of the rolling sweep (:00), the feed-composition canary (:17), the feed

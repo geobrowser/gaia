@@ -20,9 +20,9 @@
 --      in another space do nothing; decay and horizon.
 --   9. A vote's re-score keeps the age credit, the listing boost and the topic boost.
 --  10. refresh_agenda_listings: picks up new and re-dated agenda rows, clears removed ones (including
---      a debate's credit), clears a removed tag, keeps written_at on unchanged rows; hourly it
---      re-scores only what changed or is inside the horizon, and the daily full pass follows a
---      debate's Claims link to a claim past the horizon.
+--      a debate's credit), keeps written_at on unchanged rows; hourly it re-scores only what changed,
+--      and the first run of each day is a full pass that clears a removed tag and follows a debate's
+--      Claims link to a claim past the horizon.
 --  11. Config changes clear stored terms; a listing/topic tie is the listing; each boost at 0 turns
 --      it off; the API fields read the inputs.
 --  12. Only DAO spaces count: an agenda, a debate's Claims link or a topic tag written in a personal
@@ -407,7 +407,7 @@ SELECT assert(pg_temp.credit('DOLD') = (SELECT dold_credit FROM before_vote), '9
 SELECT assert(pg_temp.trend('TC') = pg_temp.tb(), '9: and the topic boost');
 
 -- ---------------------------------------------------------------------------
--- 10. The hourly sweep.
+-- 10. The sweep: hourly and the daily full pass.
 -- ---------------------------------------------------------------------------
 -- The first run finds every row new. Listed claims: OLD DEB BOTHL CDEB CDIR SPAN MULTI TWO LATE BOTHT
 -- HZN PASTHZN FUT TXT RED ZC DC (17); their debates D1 D2 D3 DS DL DE DOLD DPH (8; not DSP or DX);
@@ -433,28 +433,34 @@ SELECT assert((SELECT listed_on FROM trending.agenda_listings WHERE entity_id = 
               AND (SELECT written_at FROM trending.agenda_listings WHERE entity_id = pg_temp.i('RED')) > now() - interval '1 hour'
               AND pg_temp.near(pg_temp.trend('RED'), pg_temp.b() * pg_temp.f(1)),
               '10: a re-dated agenda is a new listing on its new Date');
-SELECT assert(pg_temp.trend('TD') = 0 AND pg_temp.src('TD') IS NULL, '10: a removed topic tag clears its boost');
 SELECT assert(pg_temp.trend('NEW') = pg_temp.b(), '10: a claim added to an agenda picks up the boost on the next run');
 SELECT assert(pg_temp.credit('TWO') = 0 AND pg_temp.trend('TWO') = 0 AND pg_temp.trend('DL') = 0,
               '10: a removed listing clears the claim''s terms and its debates''');
 SELECT assert(pg_temp.credit('DOLD') = 0 AND pg_temp.trend('DOLD') = 0,
               '10: removing the agenda clears an old debate''s age credit');
 SELECT assert(pg_temp.trend('T2') = 0 AND pg_temp.src('T2') IS NULL, '10: a removed topic clears its boost');
--- Claims whose rows changed (NEW added; TWO LATE CDEB removed; RED re-dated) or listed inside the
--- horizon (OLD DEB BOTHL CDIR SPAN MULTI BOTHT HZN TXT ZC DC): 16. Their debates: D1 D2 D3 DS DL DE
--- DOLD (7). Topics changed or inside the horizon, TOP1 TOP2: TC T2 (BOTHL BOTHT counted). Still
--- carrying a trending term: TD (untagged). Not PASTHZN, FUT, or the debates on PASTHZN (past the
--- horizon or not arrived, and no trending term), TPAST, TF, TX.
-SELECT assert((SELECT n FROM second_run) = 26,
-              '10: an hourly run re-scores what changed or is inside the horizon, nothing else');
-SELECT assert(pg_temp.credit('DPH') > 0 AND COALESCE(pg_temp.credit('DB2'), 0) = 0,
-              '10: so a Claims link to a claim past the horizon waits for the daily full pass');
+-- Claims whose rows changed: NEW added, TWO LATE CDEB removed, RED re-dated (5). Their debates: DL DE
+-- DOLD (3). Topics whose rows changed: TOP2 removed, so T2 (1).
+SELECT assert((SELECT n FROM second_run) = 9, '10: an hourly run re-scores only what changed');
+SELECT assert(pg_temp.trend('TD') > 0 AND pg_temp.credit('DPH') > 0 AND COALESCE(pg_temp.credit('DB2'), 0) = 0,
+              '10: so a removed tag and a Claims link changed on an unchanged claim wait for the full pass');
 CREATE TEMP TABLE full_run AS SELECT trending.refresh_agenda_listings(true) AS n;
+SELECT assert(pg_temp.trend('TD') = 0 AND pg_temp.src('TD') IS NULL, '10: a removed topic tag clears its boost');
 SELECT assert(pg_temp.credit('DPH') = 0, '10: a debate unlinked from a claim past the horizon loses its age credit');
 SELECT assert(pg_temp.credit('DB2') > 0, '10: a debate linked later to a claim past the horizon gets its age credit');
 -- Every listed claim: OLD DEB BOTHL CDIR NEW SPAN MULTI BOTHT HZN PASTHZN FUT TXT RED ZC DC (15). Their
--- debates: D1 D2 D3 DS DB2 (5). Topic TOP1: TC (1). Still storing an age credit: DPH (1).
-SELECT assert((SELECT n FROM full_run) = 22, '10: the full pass re-scores every listed claim and stored age credit');
+-- debates: D1 D2 D3 DS DB2 (5). Topic TOP1, inside the horizon: TC (BOTHL BOTHT counted). Still
+-- storing a term: TD (trending) and DPH (age credit). Not TPAST (topic past the horizon), TF (not
+-- arrived), TSP (personal-space tag).
+SELECT assert((SELECT n FROM full_run) = 23, '10: the full pass re-scores every listed claim, live topic and stored term');
+SELECT assert((SELECT last_full_pass_on FROM trending.refresh_state WHERE id) = pg_temp.today(),
+              '10: and records the day');
+SELECT assert(trending.refresh_agenda_listings() = 0,
+              '10: so a later run that day is hourly (nothing changed, nothing re-scored)');
+UPDATE trending.refresh_state SET last_full_pass_on = pg_temp.today() - 1 WHERE id;
+-- As the full pass above, less TD and DPH, which it cleared.
+SELECT assert(trending.refresh_agenda_listings() = 21, '10: the first run of a new day is the full pass, whatever the hour');
+SELECT assert((SELECT last_full_pass_on FROM trending.refresh_state WHERE id) = pg_temp.today(), '10: and records the day');
 
 -- ---------------------------------------------------------------------------
 -- 11. Config changes, off switches and API fields.
@@ -492,26 +498,26 @@ SELECT assert(pg_temp.near(pg_temp.trend('DEB'), pg_temp.b() * pg_temp.df() * pg
               '12: and neither takes debate_factor off the claim (DSP and DX are both from today)');
 SELECT assert(COALESCE(pg_temp.trend('TSP'), 0) = 0, '12: a topic tag written in a personal space boosts nothing');
 
--- A shorter horizon clears a stored term on the next sweep.
+-- A config change applies at the next full pass.
 UPDATE entity_ranking_config SET trending_horizon_days = 5 WHERE id;
-SELECT trending.refresh_agenda_listings(false);
+SELECT trending.refresh_agenda_listings(true);
 SELECT assert(pg_temp.trend('HZN') = 0, '11: a config change clears a stored term the sweep would otherwise miss');
 UPDATE entity_ranking_config SET trending_horizon_days = 16 WHERE id;
 
 -- BOTHL is listed today and tagged with a topic named today: with equal boosts the listing applies.
 UPDATE entity_ranking_config SET trending_topic_boost = trending_boost WHERE id;
-SELECT trending.refresh_agenda_listings(false);
+SELECT trending.refresh_agenda_listings(true);
 SELECT assert(pg_temp.src('BOTHL') = 'listing', '11: a tie between listing and topic is the listing');
 
 UPDATE entity_ranking_config SET trending_topic_boost = 0 WHERE id;
-SELECT trending.refresh_agenda_listings(false);
+SELECT trending.refresh_agenda_listings(true);
 SELECT assert(NOT EXISTS (SELECT 1 FROM entity_ranking_scores WHERE trending_source = 'topic'
                           OR (entity_id IN (pg_temp.i('TC'), pg_temp.i('TD')) AND trending_score <> 0)),
               '11: topic boost 0: no topic term anywhere');
 SELECT assert(pg_temp.trend('OLD') = pg_temp.b(), '11: listings untouched');
 
 UPDATE entity_ranking_config SET trending_boost = 0 WHERE id;
-SELECT trending.refresh_agenda_listings(false);
+SELECT trending.refresh_agenda_listings(true);
 SELECT assert(NOT EXISTS (SELECT 1 FROM entity_ranking_scores WHERE trending_score <> 0),
               '11: both boosts 0: no trending term anywhere');
 SELECT assert(pg_temp.credit('OLD') > 0 AND pg_temp.credit('D3') > 0, '11: the age credit stays');
@@ -521,6 +527,7 @@ UPDATE entity_ranking_config
    SET trending_boost = 8, trending_topic_boost = 2.5, trending_day_factor = 0.65, trending_debate_factor = 0.75,
        trending_debate_window_days = 7, trending_horizon_days = 16
  WHERE id;
-TRUNCATE entities, values, relations, votes_count, entity_ranking_scores, entity_type_ranking,
+UPDATE trending.refresh_state SET last_full_pass_on = NULL WHERE id;
+TRUNCATE entities, values, relations, votes_count, spaces, entity_ranking_scores, entity_type_ranking,
          entity_topic_ranking, trending.agenda_listings CASCADE;
 DROP TABLE ids, few, first_run, second_run, full_run, before_vote;

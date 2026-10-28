@@ -75,8 +75,9 @@ export const HIDDEN_SURFACE = {
 		"FeedUserSeenDaily",
 		"FeedSignalRun",
 		"FeedSignalConfig",
-		// GEO-3488 Debate agenda listings (migration 0113), private `trending` schema.
+		// GEO-3488 Debate agenda listings and the sweep's state (migration 0113), private `trending` schema.
 		"AgendaListing",
+		"RefreshState",
 	],
 	/** Root query fields are matched by prefix, which covers every inflection PostGraphile generated. */
 	queryFieldPrefixes: [
@@ -126,6 +127,7 @@ export const HIDDEN_SURFACE = {
 		// GEO-3488's listings and their read functions (migration 0113); the boost's inputs are
 		// public only as Entity fields.
 		"agendaListing",
+		"refreshState",
 		"currentAgenda",
 		"claimListing",
 		"claimsAndDebate",

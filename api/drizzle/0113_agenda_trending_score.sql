@@ -64,9 +64,8 @@
 -- The age credit is permanent: it is read from the listings table on every re-score, including the
 -- one each vote triggers, so it survives everything except the agenda being removed. The boost decays
 -- with no product cutoff. For bookkeeping it is exactly 0 once `days` passes trending_horizon_days
--- (16), where 8 × 0.65^16 = 0.008, so the hourly sweep stays bounded: it re-scores only what changed
--- or is inside the horizon. The age credit has no horizon, so once a day a full pass re-scores every
--- listed claim and everything still carrying a credit (see FRESHNESS).
+-- (16), where 8 × 0.65^16 = 0.008, so the daily pass's set of boosted entities stays bounded (see
+-- FRESHNESS).
 --
 -- NUMBERS (decided 28 Oct from the calibration against the live Best feed). The top 117 claims Best
 -- serves span only 5.2 points, so a boost of 8 fills every visible claim slot with today's agenda
@@ -83,14 +82,17 @@
 --
 -- FRESHNESS. The terms live in refresh_entity_ranking_scores, so every re-score applies them.
 -- trending.refresh_agenda_listings(), run hourly by ranking-indexer's agenda_listings_refresh,
--- updates the listings table and re-scores, in the same transaction: claims whose listings changed
--- or are inside the horizon and the debates on them, the claims and debates tagged with topics whose
--- listings changed or are inside the horizon, and anything still storing a non-zero trending term (a
--- removed tag or Claims link, a config change), found through a partial index. The run in the hour
--- after midnight New York is a full pass: every claim with a claim listing, its debates and anything
--- still storing an age credit, which catches the rest (a debate linked to or unlinked from a claim
--- listed before the horizon, a change to tau) within a day. A vote racing the sweep can write terms
--- from before the sweep; the next hourly run corrects them.
+-- updates the listings table and re-scores, in the same transaction, what that moved: claims whose
+-- listings were added, removed or re-dated and the debates on them, and the claims and debates
+-- tagged with topics whose listings were. The terms otherwise change only with the New York day, so
+-- the first run of each day (trending.refresh_state) is a full pass: every claim with a claim
+-- listing and its debates, everything tagged with a topic named inside the horizon, and anything
+-- still storing a term, found through a partial index. Re-scoring the busiest topics' entities every
+-- hour would mean 100k+ rows an hour; once a day it is the same work at 1/24 the cost. What waits
+-- for the next full pass, or the entity's own next re-score (a vote, a comment): a tag added to or
+-- removed from a named topic, a debate's Claims link added to a listed claim or removed from one
+-- (a new debate is scored when created), a config change, and a vote that raced the sweep and wrote
+-- terms from before it.
 --
 -- API. Entity gets computed fields: trendingScore, trendingAgeCredit, trendingSource ('listing' or
 -- 'topic') and trendingTopicId are what the stored score used; lastListedOn, listedOnAgendaId and
@@ -172,6 +174,15 @@ CREATE TABLE IF NOT EXISTS "trending"."agenda_listings" (
 CREATE INDEX IF NOT EXISTS "agenda_listings_entity_idx" ON "trending"."agenda_listings" ("entity_id");
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "agenda_listings_listed_on_idx" ON "trending"."agenda_listings" ("listed_on");
+--> statement-breakpoint
+-- One row: the New York day of the last full pass, so the first run of each day is one, even when
+-- the run just after midnight failed.
+CREATE TABLE IF NOT EXISTS "trending"."refresh_state" (
+  "id" boolean PRIMARY KEY DEFAULT true CHECK ("id"),
+  "last_full_pass_on" date
+);
+--> statement-breakpoint
+INSERT INTO "trending"."refresh_state" ("id") VALUES (true) ON CONFLICT DO NOTHING;
 --> statement-breakpoint
 
 -- New York: agenda Dates, "today" and day counts are all read in this calendar.
@@ -619,9 +630,8 @@ $$;
 -- Brings trending.agenda_listings in step with the graph and re-scores every entity whose terms can
 -- have moved. Rows that did not change are left alone, so they keep their written_at; a re-dated row
 -- is a new row. One call is one transaction: readers keep the previous rows and scores until it
--- commits. Run hourly by ranking-indexer's agenda_listings_refresh. `full_pass` (default: in the hour
--- after midnight New York) also re-scores every listed claim and every stored age credit; see
--- FRESHNESS. Returns the entities re-scored.
+-- commits. Run hourly by ranking-indexer's agenda_listings_refresh. `full_pass` defaults to true on
+-- the first run of the New York day; see FRESHNESS. Returns the entities re-scored.
 CREATE OR REPLACE FUNCTION trending.refresh_agenda_listings(full_pass boolean DEFAULT NULL)
 RETURNS integer
 LANGUAGE plpgsql AS $$
@@ -636,7 +646,11 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtext('trending.agenda_listings'));
   SELECT c.trending_horizon_days, trending.today() INTO horizon, today
   FROM public.entity_ranking_config c WHERE c.id;
-  full_pass := COALESCE(full_pass, extract(hour FROM now() AT TIME ZONE trending.time_zone()) = 0);
+  full_pass := COALESCE(full_pass, (SELECT st.last_full_pass_on IS DISTINCT FROM today
+                                    FROM trending.refresh_state st WHERE st.id));
+  IF full_pass THEN
+    UPDATE trending.refresh_state SET last_full_pass_on = today WHERE id;
+  END IF;
 
   CREATE TEMP TABLE IF NOT EXISTS incoming_agenda_listings (
     agenda_id uuid, space_id uuid, entity_id uuid, listed_on date, source text
@@ -657,12 +671,12 @@ BEGIN
     SELECT * FROM incoming_agenda_listings
     EXCEPT SELECT l.agenda_id, l.space_id, l.entity_id, l.listed_on, l.source FROM trending.agenda_listings l) x;
 
-  -- Claims and topics whose rows changed (added, removed or re-dated) and those inside the horizon:
-  -- past it neither boosts. A full pass takes every listed claim, for the age credit.
+  -- Claims and topics whose rows changed (added, removed or re-dated). A full pass adds every listed
+  -- claim, for the age credit, and topics inside the horizon: past it a topic lifts nothing.
   SELECT coalesce(array_agg(DISTINCT x.entity_id) FILTER (WHERE x.source <> 'agenda_topics'
-                                                            AND (full_pass OR x.changed OR x.listed_on BETWEEN today - horizon AND today)), '{}'),
+                                                            AND (x.changed OR full_pass)), '{}'),
          coalesce(array_agg(DISTINCT x.entity_id) FILTER (WHERE x.source = 'agenda_topics'
-                                                            AND (x.changed OR x.listed_on BETWEEN today - horizon AND today)), '{}')
+                                                            AND (x.changed OR (full_pass AND x.listed_on BETWEEN today - horizon AND today))), '{}')
     INTO claim_ids, topic_ids
   FROM (
     SELECT c.entity_id, c.source, c.listed_on, true AS changed FROM changed_agenda_listings c
@@ -679,9 +693,9 @@ BEGIN
   SELECT c.agenda_id, c.space_id, c.entity_id, c.listed_on, c.source
   FROM changed_agenda_listings c WHERE c.incoming;
 
-  -- Those claims and the debates on them; claims and debates tagged with those topics; and anything
-  -- still carrying a trending term (a removed tag or Claims link, a config change), or on a full pass
-  -- any term, by the partial index.
+  -- Those claims and the debates on them; claims and debates tagged with those topics; and on a full
+  -- pass anything still storing a term (a removed tag or Claims link, a config change), by the
+  -- partial index.
   SELECT coalesce(array_agg(DISTINCT x.id), '{}') INTO ids
   FROM (
     SELECT unnest(claim_ids) AS id
@@ -694,8 +708,6 @@ BEGIN
       JOIN public.spaces sp ON sp.id = tg.space_id AND sp.type = 'DAO'
       WHERE tg.to_entity_id = ANY(topic_ids)
         AND tg.type_id = '806d52bc-27e9-4c91-93c0-57978b093351'::uuid)) k                -- Topics
-    UNION ALL
-    SELECT s.entity_id FROM public.entity_ranking_scores s WHERE s.trending_score <> 0
     UNION ALL
     SELECT s.entity_id FROM public.entity_ranking_scores s
     WHERE full_pass AND (s.trending_score <> 0 OR s.age_credit <> 0)
