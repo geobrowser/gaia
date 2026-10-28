@@ -1463,12 +1463,12 @@ export const entityRankingConfig = pgTable("entity_ranking_config", {
 	watchCap: decimal("watch_cap").notNull(),
 	/**
 	 * Agenda claims and their debates (0113, GEO-3488): the boost a listing carries on its day, in
-	 * score units (6, about 7 days of recency). 0 turns the boost off; the age credit stays.
+	 * score units (8, about 9 days of recency). 0 turns the boost off; the age credit stays.
 	 */
 	trendingBoost: decimal("trending_boost").notNull(),
 	/**
 	 * Claims and debates tagged with a topic an agenda names in its own Topics relation (0113): the
-	 * boost on the agenda's day (2). The larger of this and a listing boost applies. 0 turns it off.
+	 * boost on the agenda's day (2.5). The larger of this and a listing boost applies. 0 turns it off.
 	 */
 	trendingTopicBoost: decimal("trending_topic_boost").notNull(),
 	/** Both boosts are multiplied by this for each day since the newest agenda naming them (0113). */

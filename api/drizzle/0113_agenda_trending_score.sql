@@ -53,15 +53,16 @@
 -- The age credit is permanent: it is read from the listings table on every re-score, including the
 -- one each vote triggers, so it survives everything except the agenda being removed. The boost decays
 -- with no product cutoff. For bookkeeping it is exactly 0 once `days` passes trending_horizon_days
--- (11), where 6 × 0.6^11 = 0.02, so the hourly sweep set stays bounded by construction.
+-- (16), where 8 × 0.65^16 = 0.008, so the hourly sweep set stays bounded by construction.
 --
--- NUMBERS (calibrated against the live Best feed on 27 Oct). The top 117 claims Best serves span only
--- 5.2 points, so a boost of 6 lifts a listed claim with no votes past today's #1 claim while votes
--- still order agenda claims among themselves. Debate engagement per impression falls about a third a
--- day, hence 0.6. A topic boost of 2 lifts a median topic item into view and keeps it under the
--- agenda. Each debate in the past week takes a quarter off a claim's boost, less than one day of
--- decay. Two debate counts, on purpose: this discount counts debates in the past 7 days, while the
--- app's debate count counts debates since the last listing, from geo-chat.
+-- NUMBERS (decided 28 Oct from the calibration against the live Best feed). The top 117 claims Best
+-- serves span only 5.2 points, so a boost of 8 fills every visible claim slot with today's agenda
+-- even with no votes, while votes still order agenda claims among themselves. Debate engagement per
+-- impression falls about a third a day; 0.65 keeps the boost a little longer, since over-boosting is
+-- preferred to under-boosting. A topic boost of 2.5 lifts a median topic item into view and keeps it
+-- under the agenda. Each debate in the past week takes a quarter off a claim's boost, less than one
+-- day of decay. Two debate counts, on purpose: this discount counts debates in the past 7 days,
+-- while the app's debate count counts debates since the last listing, from geo-chat.
 --
 -- All of it is configuration in entity_ranking_config. A boost of 0 turns that boost off; the age
 -- credit has no switch of its own because it only moves an entity to the date we listed it.
@@ -82,13 +83,13 @@ CREATE SCHEMA IF NOT EXISTS "trending";
 --> statement-breakpoint
 
 ALTER TABLE "entity_ranking_config"
-  ADD COLUMN IF NOT EXISTS "trending_boost" numeric NOT NULL DEFAULT 6;
+  ADD COLUMN IF NOT EXISTS "trending_boost" numeric NOT NULL DEFAULT 8;
 --> statement-breakpoint
 ALTER TABLE "entity_ranking_config"
-  ADD COLUMN IF NOT EXISTS "trending_topic_boost" numeric NOT NULL DEFAULT 2;
+  ADD COLUMN IF NOT EXISTS "trending_topic_boost" numeric NOT NULL DEFAULT 2.5;
 --> statement-breakpoint
 ALTER TABLE "entity_ranking_config"
-  ADD COLUMN IF NOT EXISTS "trending_day_factor" numeric NOT NULL DEFAULT 0.6;
+  ADD COLUMN IF NOT EXISTS "trending_day_factor" numeric NOT NULL DEFAULT 0.65;
 --> statement-breakpoint
 ALTER TABLE "entity_ranking_config"
   ADD COLUMN IF NOT EXISTS "trending_debate_factor" numeric NOT NULL DEFAULT 0.75;
@@ -97,7 +98,7 @@ ALTER TABLE "entity_ranking_config"
   ADD COLUMN IF NOT EXISTS "trending_debate_window_days" integer NOT NULL DEFAULT 7;
 --> statement-breakpoint
 ALTER TABLE "entity_ranking_config"
-  ADD COLUMN IF NOT EXISTS "trending_horizon_days" integer NOT NULL DEFAULT 11;
+  ADD COLUMN IF NOT EXISTS "trending_horizon_days" integer NOT NULL DEFAULT 16;
 --> statement-breakpoint
 ALTER TABLE "entity_ranking_config"
   ADD COLUMN IF NOT EXISTS "trending_time_zone" text NOT NULL DEFAULT 'America/New_York';

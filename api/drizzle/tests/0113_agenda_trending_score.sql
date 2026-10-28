@@ -39,8 +39,8 @@ TRUNCATE entities, values, relations, votes_count, user_votes, spaces, entity_ra
 -- The migration's defaults, set explicitly so the suite runs the same after any retune by hand.
 UPDATE entity_ranking_config
    SET participation_weight = 4, participation_cap = 19, comment_weight = 0, comment_cap = 30,
-       tau_seconds = 100000, trending_boost = 6, trending_topic_boost = 2, trending_day_factor = 0.6,
-       trending_debate_factor = 0.75, trending_debate_window_days = 7, trending_horizon_days = 11,
+       tau_seconds = 100000, trending_boost = 8, trending_topic_boost = 2.5, trending_day_factor = 0.65,
+       trending_debate_factor = 0.75, trending_debate_window_days = 7, trending_horizon_days = 16,
        trending_time_zone = 'America/New_York'
  WHERE id;
 
@@ -54,12 +54,14 @@ CREATE OR REPLACE FUNCTION pg_temp.df() RETURNS numeric LANGUAGE sql AS $$
   SELECT trending_debate_factor FROM entity_ranking_config WHERE id $$;
 CREATE OR REPLACE FUNCTION pg_temp.tau() RETURNS numeric LANGUAGE sql AS $$
   SELECT tau_seconds FROM entity_ranking_config WHERE id $$;
+CREATE OR REPLACE FUNCTION pg_temp.h() RETURNS integer LANGUAGE sql AS $$
+  SELECT trending_horizon_days FROM entity_ranking_config WHERE id $$;
 
 -- ---------------------------------------------------------------------------
 -- Fixtures. Days are New York calendar days relative to today.
 --   OLD     claim created a year ago, listed today.
 --   NEW     unlisted claim created now.  FEW: NEW with a few votes (below).  HEAVY: NEW with 200.
---   TWO     listed 2 days ago.   ELEVEN  listed 11 days ago.   TWELVE  listed 12 days ago.
+--   TWO     listed 2 days ago.   HZN  listed horizon days ago.   PASTHZN  one day past it.
 --   MULTI   listed 3 days ago in S1 and 1 day ago in S2.
 --   DEB     listed today; debates D1 (today), D2 (2 days ago), D3 (8 days ago).
 --   SPAN    listed 5 days ago and again 1 day ago; debate DS created 3 days ago.
@@ -71,20 +73,20 @@ CREATE OR REPLACE FUNCTION pg_temp.tau() RETURNS numeric LANGUAGE sql AS $$
 --   FUT     listed only on tomorrow's agenda.   OTHER  Collection item written in S2.
 --   PAGE    a non-claim item.   STORY  a news story with a Claims relation to DEB.
 -- Topics, named in an agenda's own Topics relation:
---   TOP1  by A0 (today).   TOP2  by A2 (2 days ago).   TOP12  by A12 (12 days ago).
+--   TOP1  by A0 (today).   TOP2  by A2 (2 days ago).   TOPPAST  by APAST (one day past the horizon).
 --   TOPX  by A0, but the Topics relation is written in S2.   TOPB  on A0's block only.
 --   TC claim and TD debate (on UNL) tagged TOP1 (TC's tag written in S2); T2 tagged TOP2;
---   T12 tagged TOP12; TX tagged TOPX; TBK tagged TOPB; TF tagged TOPF, named by tomorrow's agenda.
+--   TPAST tagged TOPPAST; TX tagged TOPX; TBK tagged TOPB; TF tagged TOPF, named by tomorrow's agenda.
 --   BOTHL listed today and tagged TOP1.   BOTHT listed 5 days ago and tagged TOP1.
 -- ---------------------------------------------------------------------------
 CREATE TEMP TABLE ids AS
 SELECT k, ('b1130000-0000-4000-8000-' || lpad(to_hex(n), 12, '0'))::uuid AS id
-FROM unnest(ARRAY['OLD','NEW','FEW','HEAVY','TWO','ELEVEN','TWELVE','MULTI','DEB','SPAN','LATE','CDEB',
-                  'UNL','CDIR','CDIRX','FUT','OTHER','PAGE','STORY','TC','T2','T12','TX','TBK','TF','BOTHL','BOTHT',
+FROM unnest(ARRAY['OLD','NEW','FEW','HEAVY','TWO','HZN','PASTHZN','MULTI','DEB','SPAN','LATE','CDEB',
+                  'UNL','CDIR','CDIRX','FUT','OTHER','PAGE','STORY','TC','T2','TPAST','TX','TBK','TF','BOTHL','BOTHT',
                   'D1','D2','D3','DS','DL','DE','DOLD','TD',
                   'ORG1','ORG2','ORG3','ORG4','ORG5','ORG6','ORG7','ORG8','ORG9','ORG10',
-                  'A0','A1','A1S2','A2','A3','A5','A11','A12','AFUT','AOLD',
-                  'TOP1','TOP2','TOP12','TOPX','TOPB','TOPF','S1','S2']) WITH ORDINALITY AS u(k, n)
+                  'A0','A1','A1S2','A2','A3','A5','AHZN','APAST','AFUT','AOLD',
+                  'TOP1','TOP2','TOPPAST','TOPX','TOPB','TOPF','S1','S2']) WITH ORDINALITY AS u(k, n)
 UNION ALL SELECT * FROM (VALUES
   ('DEBATE', 'fd51f935-2063-4617-be39-7b672b23364c'::uuid),
   ('CLAIM',  '96f859ef-a1ca-4b22-9372-c86ad58b694b'::uuid),
@@ -169,11 +171,11 @@ SELECT pg_temp.ent(k, CASE WHEN k = 'OLD' THEN extract(epoch FROM now())::bigint
                            WHEN k IN ('NEW','FEW','HEAVY') THEN extract(epoch FROM now())::bigint
                            WHEN k = 'CDEB' THEN pg_temp.noon(60)
                            ELSE pg_temp.noon(40) END)
-FROM ids WHERE k IN ('OLD','NEW','FEW','HEAVY','TWO','ELEVEN','TWELVE','MULTI','DEB','SPAN','LATE','CDEB',
-                     'UNL','CDIR','CDIRX','FUT','OTHER','PAGE','STORY','TC','T2','T12','TX','TBK','TF','BOTHL','BOTHT');
+FROM ids WHERE k IN ('OLD','NEW','FEW','HEAVY','TWO','HZN','PASTHZN','MULTI','DEB','SPAN','LATE','CDEB',
+                     'UNL','CDIR','CDIRX','FUT','OTHER','PAGE','STORY','TC','T2','TPAST','TX','TBK','TF','BOTHL','BOTHT');
 SELECT pg_temp.typed(k, 'CLAIM') FROM ids
-WHERE k IN ('OLD','NEW','FEW','HEAVY','TWO','ELEVEN','TWELVE','MULTI','DEB','SPAN','LATE','CDEB',
-            'UNL','CDIR','CDIRX','FUT','OTHER','TC','T2','T12','TX','TBK','TF','BOTHL','BOTHT');
+WHERE k IN ('OLD','NEW','FEW','HEAVY','TWO','HZN','PASTHZN','MULTI','DEB','SPAN','LATE','CDEB',
+            'UNL','CDIR','CDIRX','FUT','OTHER','TC','T2','TPAST','TX','TBK','TF','BOTHL','BOTHT');
 SELECT pg_temp.typed('PAGE', 'PAGET');
 SELECT pg_temp.votes('FEW', (SELECT v FROM few)), pg_temp.votes('HEAVY', 200);
 
@@ -184,13 +186,13 @@ SELECT pg_temp.agenda('A1S2', 'S2', 1, ARRAY['MULTI']);
 SELECT pg_temp.agenda('A2', 'S1', 2, ARRAY['TWO','LATE']);
 SELECT pg_temp.agenda('A3', 'S1', 3, ARRAY['MULTI']);
 SELECT pg_temp.agenda('A5', 'S1', 5, ARRAY['SPAN','BOTHT']);
-SELECT pg_temp.agenda('A11', 'S1', 11, ARRAY['ELEVEN']);
-SELECT pg_temp.agenda('A12', 'S1', 12, ARRAY['TWELVE']);
+SELECT pg_temp.agenda('AHZN', 'S1', pg_temp.h(), ARRAY['HZN']);
+SELECT pg_temp.agenda('APAST', 'S1', pg_temp.h() + 1, ARRAY['PASTHZN']);
 SELECT pg_temp.agenda('AFUT', 'S1', -1, ARRAY['FUT']);
 -- The agenda's own Claims and Topics relations.
 SELECT pg_temp.rel('A0', 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, 'CDIR', 'S1');
 SELECT pg_temp.rel('A0', 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, 'CDIRX', 'S2');
-SELECT pg_temp.tag('A0', 'TOP1', 'S1'), pg_temp.tag('A2', 'TOP2', 'S1'), pg_temp.tag('A12', 'TOP12', 'S1');
+SELECT pg_temp.tag('A0', 'TOP1', 'S1'), pg_temp.tag('A2', 'TOP2', 'S1'), pg_temp.tag('APAST', 'TOPPAST', 'S1');
 SELECT pg_temp.tag('A0', 'TOPX', 'S2'), pg_temp.tag('AFUT', 'TOPF', 'S1');
 
 SELECT pg_temp.debate('D1', 'DEB', 0), pg_temp.debate('D2', 'DEB', 2), pg_temp.debate('D3', 'DEB', 8);
@@ -202,7 +204,7 @@ SELECT pg_temp.debate('ORG' || n, 'UNL', n - 1) FROM generate_series(1, 10) n;
 SELECT pg_temp.rel('STORY', 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, 'DEB', 'S1');
 
 SELECT pg_temp.tag('TC', 'TOP1', 'S2'), pg_temp.tag('TD', 'TOP1', 'S1'), pg_temp.tag('T2', 'TOP2', 'S1'),
-       pg_temp.tag('T12', 'TOP12', 'S1'), pg_temp.tag('TX', 'TOPX', 'S1'), pg_temp.tag('TBK', 'TOPB', 'S1'),
+       pg_temp.tag('TPAST', 'TOPPAST', 'S1'), pg_temp.tag('TX', 'TOPX', 'S1'), pg_temp.tag('TBK', 'TOPB', 'S1'),
        pg_temp.tag('BOTHL', 'TOP1', 'S1'), pg_temp.tag('BOTHT', 'TOP1', 'S1'), pg_temp.tag('TF', 'TOPF', 'S1');
 
 CREATE TEMP TABLE first_run AS SELECT trending.refresh_agenda_listings() AS n;
@@ -261,9 +263,9 @@ SELECT assert(pg_temp.score('HEAVY') > pg_temp.score('OLD'),
 -- 4. Decay.
 -- ---------------------------------------------------------------------------
 SELECT assert(pg_temp.near(pg_temp.trend('TWO'), pg_temp.b() * pg_temp.f(2)), '4: decays by day_factor per day');
-SELECT assert(pg_temp.near(pg_temp.trend('ELEVEN'), pg_temp.b() * pg_temp.f(11)), '4: still decaying at the horizon');
-SELECT assert(pg_temp.trend('TWELVE') = 0, '4: and exactly 0 past it');
-SELECT assert(pg_temp.credit('TWELVE') > 0, '4: the age credit has no horizon');
+SELECT assert(pg_temp.near(pg_temp.trend('HZN'), pg_temp.b() * pg_temp.f(pg_temp.h())), '4: still decaying at the horizon');
+SELECT assert(pg_temp.trend('PASTHZN') = 0, '4: and exactly 0 past it');
+SELECT assert(pg_temp.credit('PASTHZN') > 0, '4: the age credit has no horizon');
 SELECT assert(pg_temp.near(pg_temp.trend('MULTI'), pg_temp.b() * pg_temp.f(1)),
               '4: on agendas in two spaces, the newest listing counts');
 SELECT assert(pg_temp.near(pg_temp.credit('MULTI'), (pg_temp.midnight(1) - pg_temp.noon(40)) / pg_temp.tau()),
@@ -309,7 +311,7 @@ SELECT assert(pg_temp.trend('TC') = pg_temp.tb() AND pg_temp.credit('TC') = 0 AN
 SELECT assert(pg_temp.trend('TD') = pg_temp.tb() AND pg_temp.credit('TD') = 0 AND pg_temp.src('TD') = 'topic',
               '8: so does a debate');
 SELECT assert(pg_temp.near(pg_temp.trend('T2'), pg_temp.tb() * pg_temp.f(2)), '8: the topic boost decays');
-SELECT assert(pg_temp.trend('T12') = 0, '8: and stops past the horizon');
+SELECT assert(pg_temp.trend('TPAST') = 0, '8: and stops past the horizon');
 SELECT assert(pg_temp.trend('TF') = 0 AND pg_temp.src('TF') IS NULL,
               '8: a topic on a future-dated agenda counts for nothing until its Date');
 SELECT assert(COALESCE(pg_temp.trend('TX'), 0) = 0, '8: an agenda Topics relation written in another space is ignored');
@@ -336,8 +338,8 @@ SELECT assert(pg_temp.trend('TC') = pg_temp.tb(), '9: and the topic boost');
 -- 10. The hourly rebuild.
 -- ---------------------------------------------------------------------------
 -- The first run finds every row new. Listed claims: OLD DEB BOTHL CDEB CDIR SPAN MULTI TWO LATE BOTHT
--- ELEVEN TWELVE FUT (13); their debates D1 D2 D3 DS DL DE DOLD (7); tagged with TOP1 TOP2 TOP12:
--- TC TD T2 T12 TF, BOTHL and BOTHT already counted (5). Never a row: TOPX (A0 is not an agenda in
+-- HZN PASTHZN FUT (13); their debates D1 D2 D3 DS DL DE DOLD (7); tagged with TOP1 TOP2 TOPPAST:
+-- TC TD T2 TPAST TF, BOTHL and BOTHT already counted (5). Never a row: TOPX (A0 is not an agenda in
 -- S2) and TOPB (on a block).
 SELECT assert((SELECT n FROM first_run) = 25, '10: the first run re-scores everything agendas name');
 SELECT pg_temp.rel('A0', 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, 'NEW', 'S1');
@@ -353,8 +355,8 @@ SELECT assert(pg_temp.credit('DOLD') = 0 AND pg_temp.trend('DOLD') = 0,
               '10: removing the agenda clears an old debate''s age credit');
 SELECT assert(pg_temp.trend('T2') = 0 AND pg_temp.src('T2') IS NULL, '10: a removed topic clears its boost');
 -- Changed: NEW (added), TWO LATE CDEB (removed), TOP2 (removed). Inside the horizon: OLD DEB BOTHL
--- CDIR SPAN MULTI BOTHT ELEVEN, TOP1. Debates: D1 D2 D3 DS DL DE DOLD. Tagged: TC TD T2 (BOTHL BOTHT
--- counted). Not TWELVE or T12 (unchanged, past the horizon), FUT or TF (not arrived), TX (other space).
+-- CDIR SPAN MULTI BOTHT HZN, TOP1. Debates: D1 D2 D3 DS DL DE DOLD. Tagged: TC TD T2 (BOTHL BOTHT
+-- counted). Not PASTHZN or TPAST (unchanged, past the horizon), FUT or TF (not arrived), TX (other space).
 SELECT assert((SELECT n FROM second_run) = 22,
               '10: later runs re-score only what changed or is inside the horizon');
 
@@ -377,11 +379,11 @@ SELECT assert(public.entities_last_listed_on(e) IS NULL AND public.entities_tren
               '11: nothing for an unlisted, untagged claim')
 FROM entities e WHERE e.id = pg_temp.i('FEW');
 
--- ELEVEN is unchanged and now outside the horizon; only its stored term brings it back to be cleared.
+-- HZN is unchanged and now outside the horizon; only its stored term brings it back to be cleared.
 UPDATE entity_ranking_config SET trending_horizon_days = 5 WHERE id;
 SELECT trending.refresh_agenda_listings();
-SELECT assert(pg_temp.trend('ELEVEN') = 0, '11: a config change clears a stored term the sweep would otherwise miss');
-UPDATE entity_ranking_config SET trending_horizon_days = 11 WHERE id;
+SELECT assert(pg_temp.trend('HZN') = 0, '11: a config change clears a stored term the sweep would otherwise miss');
+UPDATE entity_ranking_config SET trending_horizon_days = 16 WHERE id;
 
 UPDATE entity_ranking_config SET trending_topic_boost = 0 WHERE id;
 SELECT trending.refresh_agenda_listings();
@@ -398,8 +400,8 @@ SELECT assert(pg_temp.credit('OLD') > 0 AND pg_temp.credit('D3') > 0, '11: the a
 
 -- Cleanup for running by hand.
 UPDATE entity_ranking_config
-   SET trending_boost = 6, trending_topic_boost = 2, trending_day_factor = 0.6, trending_debate_factor = 0.75,
-       trending_debate_window_days = 7, trending_horizon_days = 11, trending_time_zone = 'America/New_York'
+   SET trending_boost = 8, trending_topic_boost = 2.5, trending_day_factor = 0.65, trending_debate_factor = 0.75,
+       trending_debate_window_days = 7, trending_horizon_days = 16, trending_time_zone = 'America/New_York'
  WHERE id;
 TRUNCATE entities, values, relations, votes_count, entity_ranking_scores, entity_type_ranking,
          entity_topic_ranking, trending.agenda_listings, trending.agenda_topics CASCADE;
