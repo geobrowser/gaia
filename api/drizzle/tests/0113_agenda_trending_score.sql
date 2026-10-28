@@ -20,11 +20,14 @@
 --      in another space do nothing; decay and horizon.
 --   9. A vote's re-score keeps the age credit, the listing boost and the topic boost.
 --  10. refresh_agenda_listings: picks up new and re-dated agenda rows, clears removed ones (including
---      a debate's credit), follows a debate's Claims link and a removed tag past the horizon, keeps
---      written_at on unchanged rows, re-scores only what can have moved.
+--      a debate's credit), clears a removed tag, keeps written_at on unchanged rows; hourly it
+--      re-scores only what changed or is inside the horizon, and the daily full pass follows a
+--      debate's Claims link to a claim past the horizon.
 --  11. Config changes clear stored terms; a listing/topic tie is the listing; each boost at 0 turns
 --      it off; the API fields read the inputs.
---   A Date written as text with no offset is read in New York (section 1).
+--  12. Only DAO spaces count: an agenda, a debate's Claims link or a topic tag written in a personal
+--      space does nothing, and a debate counts only where it is typed Debate.
+--   A Date is the calendar day written: text with no offset, midnight UTC and a DATE value (section 1).
 
 \set ON_ERROR_STOP on
 
@@ -79,8 +82,15 @@ CREATE OR REPLACE FUNCTION pg_temp.h() RETURNS integer LANGUAGE sql AS $$
 --   RED     listed 3 days ago on ARED, which is re-dated to yesterday before the second sweep.
 --   DPH     debate on PASTHZN, 30 days old; its Claims link is removed before the second sweep.
 --   DB2     debate, 30 days old, with no Claims link until one to PASTHZN is added before it.
+--   ZC      listed today on AZ, whose Date is written as midnight UTC.
+--   DC      listed today on ADATE, whose Date is a DATE value, not a DATETIME.
 --   FUT     listed only on tomorrow's agenda.   OTHER  Collection item written in S2.
 --   PAGE    a non-claim item.   STORY  a news story with a Claims relation to DEB.
+-- Spaces: S1 and S2 are DAO spaces, SP a personal space.
+--   CP      listed only on AP, an agenda in SP.
+--   DSP     a debate on DEB created today, typed Debate and linked to DEB in SP.
+--   DX      a debate on DEB created today, typed Debate in S1 but linked to DEB in S2.
+--   TSP     a claim tagged TOP1 in SP.
 -- Topics, named in an agenda's own Topics relation:
 --   TOP1  by A0 (today).   TOP2  by A2 (2 days ago).   TOPPAST  by APAST (one day past the horizon).
 --   TOPX  by A0, but the Topics relation is written in S2.   TOPB  on A0's block only.
@@ -95,7 +105,8 @@ FROM unnest(ARRAY['OLD','NEW','FEW','HEAVY','TWO','HZN','PASTHZN','MULTI','DEB',
                   'D1','D2','D3','DS','DL','DE','DOLD','TD','DPH','DB2',
                   'ORG1','ORG2','ORG3','ORG4','ORG5','ORG6','ORG7','ORG8','ORG9','ORG10',
                   'A0','A1','A1S2','A2','A3','A5','AHZN','APAST','AFUT','AOLD','ATXT','ARED',
-                  'TOP1','TOP2','TOPPAST','TOPX','TOPB','TOPF','S1','S2']) WITH ORDINALITY AS u(k, n)
+                  'TOP1','TOP2','TOPPAST','TOPX','TOPB','TOPF','S1','S2',
+                  'ZC','DC','CP','DSP','DX','TSP','AZ','ADATE','AP','SP']) WITH ORDINALITY AS u(k, n)
 UNION ALL SELECT * FROM (VALUES
   ('DEBATE', 'fd51f935-2063-4617-be39-7b672b23364c'::uuid),
   ('CLAIM',  '96f859ef-a1ca-4b22-9372-c86ad58b694b'::uuid),
@@ -148,11 +159,15 @@ BEGIN
             pg_temp.i(CASE WHEN c = 'OTHER' THEN 'S2' ELSE space_k END), false);
   END LOOP;
 END $$;
-CREATE OR REPLACE FUNCTION pg_temp.debate(k text, claim_k text, d integer) RETURNS void LANGUAGE sql AS $$
+-- A debate typed in `type_space_k` with its Claims relation in `link_space_k`.
+CREATE OR REPLACE FUNCTION pg_temp.debate_in(k text, claim_k text, d integer, type_space_k text, link_space_k text)
+RETURNS void LANGUAGE sql AS $$
   SELECT pg_temp.ent(k, pg_temp.noon(d));
-  SELECT pg_temp.typed(k, 'DEBATE');
-  SELECT pg_temp.rel(k, 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, claim_k, 'S1');
+  SELECT pg_temp.rel(k, '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, 'DEBATE', type_space_k);
+  SELECT pg_temp.rel(k, 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, claim_k, link_space_k);
 $$;
+CREATE OR REPLACE FUNCTION pg_temp.debate(k text, claim_k text, d integer) RETURNS void LANGUAGE sql AS $$
+  SELECT pg_temp.debate_in(k, claim_k, d, 'S1', 'S1') $$;
 CREATE OR REPLACE FUNCTION pg_temp.votes(k text, n integer) RETURNS void LANGUAGE sql AS $$
   INSERT INTO votes_count (object_id, object_type, space_id, vote_kind, positive, negative)
   VALUES (pg_temp.i(k), 0, pg_temp.i('S1'), 1, n, 0) $$;
@@ -176,15 +191,21 @@ CREATE OR REPLACE FUNCTION pg_temp.near(a numeric, b numeric) RETURNS boolean LA
 CREATE TEMP TABLE few AS
 SELECT floor(exp((pg_temp.b() - 86400 / pg_temp.tau()) / 4) - 1)::integer AS v;
 
+INSERT INTO spaces (id, type, address)
+SELECT id, CASE WHEN k = 'SP' THEN 'Personal' ELSE 'DAO' END::"spaceTypes", 'addr-' || k
+FROM ids WHERE k IN ('S1','S2','SP');
+
 SELECT pg_temp.ent(k, CASE WHEN k = 'OLD' THEN extract(epoch FROM now())::bigint - 365 * 86400
                            WHEN k IN ('NEW','FEW','HEAVY') THEN extract(epoch FROM now())::bigint
                            WHEN k = 'CDEB' THEN pg_temp.noon(60)
                            ELSE pg_temp.noon(40) END)
 FROM ids WHERE k IN ('OLD','NEW','FEW','HEAVY','TWO','HZN','PASTHZN','MULTI','DEB','SPAN','LATE','CDEB',
-                     'UNL','CDIR','CDIRX','CTOP','TXT','RED','FUT','OTHER','PAGE','STORY','TC','T2','TPAST','TX','TBK','TF','BOTHL','BOTHT');
+                     'UNL','CDIR','CDIRX','CTOP','TXT','RED','FUT','OTHER','PAGE','STORY','TC','T2','TPAST','TX','TBK','TF','BOTHL','BOTHT',
+                     'ZC','DC','CP','TSP');
 SELECT pg_temp.typed(k, 'CLAIM') FROM ids
 WHERE k IN ('OLD','NEW','FEW','HEAVY','TWO','HZN','PASTHZN','MULTI','DEB','SPAN','LATE','CDEB',
-            'UNL','CDIR','CDIRX','CTOP','TXT','RED','FUT','OTHER','TC','T2','TPAST','TX','TBK','TF','BOTHL','BOTHT');
+            'UNL','CDIR','CDIRX','CTOP','TXT','RED','FUT','OTHER','TC','T2','TPAST','TX','TBK','TF','BOTHL','BOTHT',
+            'ZC','DC','CP','TSP');
 SELECT pg_temp.typed('PAGE', 'PAGET');
 SELECT pg_temp.votes('FEW', (SELECT v FROM few)), pg_temp.votes('HEAVY', 200);
 
@@ -201,6 +222,14 @@ SELECT pg_temp.agenda('AFUT', 'S1', -1, ARRAY['FUT']);
 SELECT pg_temp.agenda('ATXT', 'S1', 0, ARRAY['TXT']);
 UPDATE values SET datetime_utc = NULL, datetime = pg_temp.today()::text WHERE entity_id = pg_temp.i('ATXT');
 SELECT pg_temp.agenda('ARED', 'S1', 3, ARRAY['RED']);
+SELECT pg_temp.agenda('AZ', 'S1', 0, ARRAY['ZC']);
+UPDATE values SET datetime = pg_temp.today()::text || 'T00:00:00Z',
+                  datetime_utc = (pg_temp.today()::text || 'T00:00:00Z')::timestamptz
+WHERE entity_id = pg_temp.i('AZ');
+SELECT pg_temp.agenda('ADATE', 'S1', 0, ARRAY['DC']);
+UPDATE values SET datetime = NULL, datetime_utc = NULL, date = pg_temp.today()::text || 'Z'
+WHERE entity_id = pg_temp.i('ADATE');
+SELECT pg_temp.agenda('AP', 'SP', 0, ARRAY['CP']);
 -- The agenda's own Claims and Topics relations.
 SELECT pg_temp.rel('A0', 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, 'CDIR', 'S1');
 SELECT pg_temp.rel('A0', 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, 'CDIRX', 'S2');
@@ -220,15 +249,18 @@ SELECT pg_temp.debate('DPH', 'PASTHZN', 30), pg_temp.debate('DB2', 'PASTHZN', 30
 DELETE FROM relations WHERE from_entity_id = pg_temp.i('DB2') AND type_id = 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid;
 SELECT pg_temp.debate('ORG' || n, 'UNL', n - 1) FROM generate_series(1, 10) n;
 SELECT pg_temp.rel('STORY', 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, 'DEB', 'S1');
+SELECT pg_temp.debate_in('DSP', 'DEB', 0, 'SP', 'SP'), pg_temp.debate_in('DX', 'DEB', 0, 'S1', 'S2');
 
 SELECT pg_temp.tag('TC', 'TOP1', 'S2'), pg_temp.tag('TD', 'TOP1', 'S1'), pg_temp.tag('T2', 'TOP2', 'S1'),
        pg_temp.tag('TPAST', 'TOPPAST', 'S1'), pg_temp.tag('TX', 'TOPX', 'S1'), pg_temp.tag('TBK', 'TOPB', 'S1'),
-       pg_temp.tag('BOTHL', 'TOP1', 'S1'), pg_temp.tag('BOTHT', 'TOP1', 'S1'), pg_temp.tag('TF', 'TOPF', 'S1');
+       pg_temp.tag('BOTHL', 'TOP1', 'S1'), pg_temp.tag('BOTHT', 'TOP1', 'S1'), pg_temp.tag('TF', 'TOPF', 'S1'),
+       pg_temp.tag('TSP', 'TOP1', 'SP');
 
-CREATE TEMP TABLE first_run AS SELECT trending.refresh_agenda_listings() AS n;
+-- Every refresh says which pass it is, so the suite does not depend on the hour it runs.
+CREATE TEMP TABLE first_run AS SELECT trending.refresh_agenda_listings(false) AS n;
 -- The sweep scores only what agendas name; score the rest the way a vote would.
 SELECT public.refresh_entity_ranking_scores(ARRAY(SELECT id FROM ids WHERE k IN
-  ('NEW','FEW','HEAVY','PAGE','STORY','OTHER','UNL','CDIRX','CTOP','TX','TBK',
+  ('NEW','FEW','HEAVY','PAGE','STORY','OTHER','UNL','CDIRX','CTOP','TX','TBK','CP','DSP','DX','TSP',
    'ORG1','ORG2','ORG3','ORG4','ORG5','ORG6','ORG7','ORG8','ORG9','ORG10')));
 
 -- ---------------------------------------------------------------------------
@@ -264,6 +296,11 @@ SELECT assert(EXISTS (SELECT 1 FROM trending.agenda_listings WHERE entity_id = p
               '1: a future-dated agenda is stored');
 SELECT assert((SELECT listed_on FROM trending.agenda_listings WHERE entity_id = pg_temp.i('TXT')) = pg_temp.today(),
               '1: a Date written as text with no offset is a New York date');
+SELECT assert((SELECT listed_on FROM trending.agenda_listings WHERE entity_id = pg_temp.i('ZC')) = pg_temp.today()
+              AND pg_temp.trend('ZC') = pg_temp.b(),
+              '1: a Date written as midnight UTC is the day written, not the New York day before');
+SELECT assert((SELECT listed_on FROM trending.agenda_listings WHERE entity_id = pg_temp.i('DC')) = pg_temp.today(),
+              '1: a Date stored as a DATE value counts');
 SELECT assert(pg_temp.credit('FUT') = 0 AND pg_temp.trend('FUT') = 0,
               '1: but counts for nothing until its Date');
 
@@ -373,10 +410,10 @@ SELECT assert(pg_temp.trend('TC') = pg_temp.tb(), '9: and the topic boost');
 -- 10. The hourly sweep.
 -- ---------------------------------------------------------------------------
 -- The first run finds every row new. Listed claims: OLD DEB BOTHL CDEB CDIR SPAN MULTI TWO LATE BOTHT
--- HZN PASTHZN FUT TXT RED (15); their debates D1 D2 D3 DS DL DE DOLD DPH (8); tagged with TOP1 TOP2
--- TOPPAST: TC TD T2 TPAST TF, BOTHL and BOTHT already counted (5). Never a row: TOPX (A0 is not an
--- agenda in S2) and TOPB (on a block).
-SELECT assert((SELECT n FROM first_run) = 28, '10: the first run re-scores everything agendas name');
+-- HZN PASTHZN FUT TXT RED ZC DC (17); their debates D1 D2 D3 DS DL DE DOLD DPH (8; not DSP or DX);
+-- tagged with TOP1 TOP2 TOPPAST: TC TD T2 TPAST TF, BOTHL and BOTHT already counted (5; not TSP).
+-- Never a row: TOPX (A0 is not an agenda in S2), TOPB (on a block), CP (AP is in a personal space).
+SELECT assert((SELECT n FROM first_run) = 30, '10: the first run re-scores everything agendas name');
 SELECT pg_temp.rel('A0', 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, 'NEW', 'S1');
 DELETE FROM relations WHERE from_entity_id IN (pg_temp.i('A2'), pg_temp.i('AOLD'))
   AND type_id = 'beaba5cb-a677-41a8-b353-77030613fc70'::uuid;
@@ -387,7 +424,7 @@ UPDATE values SET datetime_utc = to_timestamp(pg_temp.midnight(1)) WHERE entity_
 DELETE FROM relations WHERE from_entity_id = pg_temp.i('DPH') AND type_id = 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid;
 SELECT pg_temp.rel('DB2', 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, 'PASTHZN', 'S1');
 DELETE FROM relations WHERE from_entity_id = pg_temp.i('TD') AND type_id = '806d52bc-27e9-4c91-93c0-57978b093351'::uuid;
-CREATE TEMP TABLE second_run AS SELECT trending.refresh_agenda_listings() AS n;
+CREATE TEMP TABLE second_run AS SELECT trending.refresh_agenda_listings(false) AS n;
 SELECT assert((SELECT written_at FROM trending.agenda_listings WHERE entity_id = pg_temp.i('NEW')) > now() - interval '1 hour'
               AND (SELECT bool_and(written_at = '2026-01-01T00:00:00Z') FROM trending.agenda_listings
                    WHERE entity_id NOT IN (pg_temp.i('NEW'), pg_temp.i('RED'))),
@@ -396,8 +433,6 @@ SELECT assert((SELECT listed_on FROM trending.agenda_listings WHERE entity_id = 
               AND (SELECT written_at FROM trending.agenda_listings WHERE entity_id = pg_temp.i('RED')) > now() - interval '1 hour'
               AND pg_temp.near(pg_temp.trend('RED'), pg_temp.b() * pg_temp.f(1)),
               '10: a re-dated agenda is a new listing on its new Date');
-SELECT assert(pg_temp.credit('DPH') = 0, '10: a debate unlinked from a claim past the horizon loses its age credit');
-SELECT assert(pg_temp.credit('DB2') > 0, '10: a debate linked later to a claim past the horizon gets its age credit');
 SELECT assert(pg_temp.trend('TD') = 0 AND pg_temp.src('TD') IS NULL, '10: a removed topic tag clears its boost');
 SELECT assert(pg_temp.trend('NEW') = pg_temp.b(), '10: a claim added to an agenda picks up the boost on the next run');
 SELECT assert(pg_temp.credit('TWO') = 0 AND pg_temp.trend('TWO') = 0 AND pg_temp.trend('DL') = 0,
@@ -405,12 +440,21 @@ SELECT assert(pg_temp.credit('TWO') = 0 AND pg_temp.trend('TWO') = 0 AND pg_temp
 SELECT assert(pg_temp.credit('DOLD') = 0 AND pg_temp.trend('DOLD') = 0,
               '10: removing the agenda clears an old debate''s age credit');
 SELECT assert(pg_temp.trend('T2') = 0 AND pg_temp.src('T2') IS NULL, '10: a removed topic clears its boost');
--- Every claim with a claim listing, now or removed this run: OLD DEB BOTHL CDEB CDIR SPAN MULTI TWO
--- LATE BOTHT HZN PASTHZN FUT TXT RED NEW (16). Their debates: D1 D2 D3 DS DL DE DOLD DB2 (8). Topics
--- changed or inside the horizon, TOP1 TOP2: TC T2 (BOTHL BOTHT counted). Still carrying a term: DPH
--- (unlinked) and TD (untagged). Not TPAST (topic past the horizon), TF (not arrived), TX (other space).
-SELECT assert((SELECT n FROM second_run) = 28,
-              '10: later runs re-score listed claims, live topics and stored terms, nothing else');
+-- Claims whose rows changed (NEW added; TWO LATE CDEB removed; RED re-dated) or listed inside the
+-- horizon (OLD DEB BOTHL CDIR SPAN MULTI BOTHT HZN TXT ZC DC): 16. Their debates: D1 D2 D3 DS DL DE
+-- DOLD (7). Topics changed or inside the horizon, TOP1 TOP2: TC T2 (BOTHL BOTHT counted). Still
+-- carrying a trending term: TD (untagged). Not PASTHZN, FUT, or the debates on PASTHZN (past the
+-- horizon or not arrived, and no trending term), TPAST, TF, TX.
+SELECT assert((SELECT n FROM second_run) = 26,
+              '10: an hourly run re-scores what changed or is inside the horizon, nothing else');
+SELECT assert(pg_temp.credit('DPH') > 0 AND COALESCE(pg_temp.credit('DB2'), 0) = 0,
+              '10: so a Claims link to a claim past the horizon waits for the daily full pass');
+CREATE TEMP TABLE full_run AS SELECT trending.refresh_agenda_listings(true) AS n;
+SELECT assert(pg_temp.credit('DPH') = 0, '10: a debate unlinked from a claim past the horizon loses its age credit');
+SELECT assert(pg_temp.credit('DB2') > 0, '10: a debate linked later to a claim past the horizon gets its age credit');
+-- Every listed claim: OLD DEB BOTHL CDIR NEW SPAN MULTI BOTHT HZN PASTHZN FUT TXT RED ZC DC (15). Their
+-- debates: D1 D2 D3 DS DB2 (5). Topic TOP1: TC (1). Still storing an age credit: DPH (1).
+SELECT assert((SELECT n FROM full_run) = 22, '10: the full pass re-scores every listed claim and stored age credit');
 
 -- ---------------------------------------------------------------------------
 -- 11. Config changes, off switches and API fields.
@@ -434,26 +478,40 @@ SELECT assert(public.entities_last_listed_on(e) IS NULL AND public.entities_tren
               '11: nothing for an unlisted claim whose only tag is a listed claim, not a named topic')
 FROM entities e WHERE e.id = pg_temp.i('FEW');
 
+-- ---------------------------------------------------------------------------
+-- 12. Only DAO spaces count (checked before the config changes below).
+-- ---------------------------------------------------------------------------
+SELECT assert(NOT EXISTS (SELECT 1 FROM trending.agenda_listings WHERE agenda_id = pg_temp.i('AP'))
+              AND COALESCE(pg_temp.trend('CP'), 0) = 0 AND COALESCE(pg_temp.credit('CP'), 0) = 0,
+              '12: an agenda in a personal space lists nothing');
+SELECT assert(COALESCE(pg_temp.trend('DSP'), 0) = 0 AND COALESCE(pg_temp.credit('DSP'), 0) = 0,
+              '12: a debate linked to an agenda claim from a personal space gets no boost or credit');
+SELECT assert(COALESCE(pg_temp.trend('DX'), 0) = 0 AND COALESCE(pg_temp.credit('DX'), 0) = 0,
+              '12: nor one whose Claims relation is in a space where it is not typed Debate');
+SELECT assert(pg_temp.near(pg_temp.trend('DEB'), pg_temp.b() * pg_temp.df() * pg_temp.df()),
+              '12: and neither takes debate_factor off the claim (DSP and DX are both from today)');
+SELECT assert(COALESCE(pg_temp.trend('TSP'), 0) = 0, '12: a topic tag written in a personal space boosts nothing');
+
 -- A shorter horizon clears a stored term on the next sweep.
 UPDATE entity_ranking_config SET trending_horizon_days = 5 WHERE id;
-SELECT trending.refresh_agenda_listings();
+SELECT trending.refresh_agenda_listings(false);
 SELECT assert(pg_temp.trend('HZN') = 0, '11: a config change clears a stored term the sweep would otherwise miss');
 UPDATE entity_ranking_config SET trending_horizon_days = 16 WHERE id;
 
 -- BOTHL is listed today and tagged with a topic named today: with equal boosts the listing applies.
 UPDATE entity_ranking_config SET trending_topic_boost = trending_boost WHERE id;
-SELECT trending.refresh_agenda_listings();
+SELECT trending.refresh_agenda_listings(false);
 SELECT assert(pg_temp.src('BOTHL') = 'listing', '11: a tie between listing and topic is the listing');
 
 UPDATE entity_ranking_config SET trending_topic_boost = 0 WHERE id;
-SELECT trending.refresh_agenda_listings();
+SELECT trending.refresh_agenda_listings(false);
 SELECT assert(NOT EXISTS (SELECT 1 FROM entity_ranking_scores WHERE trending_source = 'topic'
                           OR (entity_id IN (pg_temp.i('TC'), pg_temp.i('TD')) AND trending_score <> 0)),
               '11: topic boost 0: no topic term anywhere');
 SELECT assert(pg_temp.trend('OLD') = pg_temp.b(), '11: listings untouched');
 
 UPDATE entity_ranking_config SET trending_boost = 0 WHERE id;
-SELECT trending.refresh_agenda_listings();
+SELECT trending.refresh_agenda_listings(false);
 SELECT assert(NOT EXISTS (SELECT 1 FROM entity_ranking_scores WHERE trending_score <> 0),
               '11: both boosts 0: no trending term anywhere');
 SELECT assert(pg_temp.credit('OLD') > 0 AND pg_temp.credit('D3') > 0, '11: the age credit stays');
@@ -465,4 +523,4 @@ UPDATE entity_ranking_config
  WHERE id;
 TRUNCATE entities, values, relations, votes_count, entity_ranking_scores, entity_type_ranking,
          entity_topic_ranking, trending.agenda_listings CASCADE;
-DROP TABLE ids, few, first_run, second_run, before_vote;
+DROP TABLE ids, few, first_run, second_run, full_run, before_vote;

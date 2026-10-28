@@ -7,7 +7,7 @@
 -- (GEO-3487) naming the claims and topics we want debated today.
 --
 -- WHAT AN AGENDA NAMES. A Debate agenda (type 79e3757b) in space S has a Date (52665f3e, a datetime
--- written as midnight New York) in S. It names:
+-- written as midnight New York; read as the calendar day written, whatever its offset) in S. It names:
 --
 --   claims  through Blocks (beaba5cb) → data block → Collection item (a99f9ce1) → claim, and through
 --           its own Claims relation (e614cce1) → claim. Both are listings and rank the same way; only
@@ -15,7 +15,11 @@
 --   topics  through its own Topics relation (806d52bc) → topic. A data block's Topics relation only
 --           labels the block and boosts nothing.
 --
--- Every relation and the Date must be written in S, the agenda's own space. Every published agenda
+-- Every relation and the Date must be written in S, the agenda's own space, and S must be a DAO
+-- space: a personal space costs nothing to make, so anyone could list their own claims from one.
+-- The same rule holds for what an agenda lifts beyond its own claims: a debate counts only through a
+-- Claims relation written in a DAO space where it is also typed Debate, and a topic tag only when
+-- written in a DAO space. Every agenda, debate and tag on testnet already is. Every published agenda
 -- counts, including an earlier one for the same space and Date; the newer one is only the freshest.
 -- An agenda counts once its Date arrives in New York, so tomorrow's agenda published tonight does
 -- nothing until midnight. The relations table has no timestamps and nothing re-scores an entity when
@@ -43,9 +47,9 @@
 --
 --   days               whole New York days since the newest arrived agenda that names the claim
 --                      (or, for a topic, the topic). With several claims or topics, the newest.
---   debates_in_window  debates on the claim (typed Debate, Claims relation) created in the last
---                      trending_debate_window_days (7). News stories carry Claims relations too and
---                      are not debates.
+--   debates_in_window  debates on the claim (as above: typed Debate, Claims relation, DAO space)
+--                      created in the last trending_debate_window_days (7). News stories carry Claims
+--                      relations too and are not debates.
 --
 -- An entity that qualifies for both a listing and a topic boost gets the larger, not both;
 -- trending_source and trending_topic_id record which one applied. The age credit comes only from a
@@ -60,7 +64,9 @@
 -- The age credit is permanent: it is read from the listings table on every re-score, including the
 -- one each vote triggers, so it survives everything except the agenda being removed. The boost decays
 -- with no product cutoff. For bookkeeping it is exactly 0 once `days` passes trending_horizon_days
--- (16), where 8 × 0.65^16 = 0.008, so the hourly sweep set stays bounded by construction.
+-- (16), where 8 × 0.65^16 = 0.008, so the hourly sweep stays bounded: it re-scores only what changed
+-- or is inside the horizon. The age credit has no horizon, so once a day a full pass re-scores every
+-- listed claim and everything still carrying a credit (see FRESHNESS).
 --
 -- NUMBERS (decided 28 Oct from the calibration against the live Best feed). The top 117 claims Best
 -- serves span only 5.2 points, so a boost of 8 fills every visible claim slot with today's agenda
@@ -77,11 +83,14 @@
 --
 -- FRESHNESS. The terms live in refresh_entity_ranking_scores, so every re-score applies them.
 -- trending.refresh_agenda_listings(), run hourly by ranking-indexer's agenda_listings_refresh,
--- updates the listings table and re-scores, in the same transaction: every claim with a claim
--- listing (listed or removed) and the debates on it, the claims and debates tagged with topics whose
--- listings changed or are inside the horizon, and anything still storing a non-zero term (a removed
--- tag or Claims link, a config change), found through a partial index. A vote racing the sweep can
--- write terms from before the sweep; the next hourly run corrects them.
+-- updates the listings table and re-scores, in the same transaction: claims whose listings changed
+-- or are inside the horizon and the debates on them, the claims and debates tagged with topics whose
+-- listings changed or are inside the horizon, and anything still storing a non-zero trending term (a
+-- removed tag or Claims link, a config change), found through a partial index. The run in the hour
+-- after midnight New York is a full pass: every claim with a claim listing, its debates and anything
+-- still storing an age credit, which catches the rest (a debate linked to or unlinked from a claim
+-- listed before the horizon, a change to tau) within a day. A vote racing the sweep can write terms
+-- from before the sweep; the next hourly run corrects them.
 --
 -- API. Entity gets computed fields: trendingScore, trendingAgeCredit, trendingSource ('listing' or
 -- 'topic') and trendingTopicId are what the stored score used; lastListedOn, listedOnAgendaId and
@@ -138,7 +147,7 @@ ALTER TABLE "entity_ranking_scores"
 ALTER TABLE "entity_ranking_scores"
   ADD COLUMN IF NOT EXISTS "trending_topic_id" uuid;
 --> statement-breakpoint
--- The hourly sweep re-scores everything still carrying a term, so that set must not be a full scan.
+-- The sweep re-scores everything still carrying a term, so that set must not be a full scan.
 -- Large envs: add the columns above and build this CONCURRENTLY first (then the IF NOT EXISTS below
 -- no-ops):
 --   SET lock_timeout=0; SET statement_timeout=0;
@@ -173,23 +182,21 @@ CREATE OR REPLACE FUNCTION trending.today()
 RETURNS date LANGUAGE sql STABLE AS $$ SELECT (now() AT TIME ZONE trending.time_zone())::date $$;
 --> statement-breakpoint
 
--- A Date value's instant. datetime_utc is what the indexer writes; the text column is the fallback,
--- parsed defensively so one malformed value cannot fail the hourly sweep. Text with no offset is New
--- York wall time, not the session's zone.
-CREATE OR REPLACE FUNCTION trending.value_instant(datetime_utc timestamptz, datetime text)
-RETURNS timestamptz
+-- A Date value's calendar day: the date the writer wrote, from the DATETIME text or else the DATE
+-- text, whatever offset follows it (midnight New York and midnight UTC are both that day). Only with
+-- no such text is datetime_utc read in New York. Parsed defensively so one malformed value cannot
+-- fail the hourly sweep.
+CREATE OR REPLACE FUNCTION trending.value_date(datetime_utc timestamptz, datetime text, date text)
+RETURNS date
 LANGUAGE plpgsql STABLE AS $$
 BEGIN
-  IF datetime_utc IS NOT NULL THEN
-    RETURN datetime_utc;
+  IF datetime ~ '^\d{4}-\d{2}-\d{2}' THEN
+    RETURN left(datetime, 10)::date;
   END IF;
-  IF datetime IS NULL OR datetime !~ '^\d{4}-\d{2}-\d{2}' THEN
-    RETURN NULL;
+  IF date ~ '^\d{4}-\d{2}-\d{2}' THEN
+    RETURN left(date, 10)::date;
   END IF;
-  IF datetime ~ '(Z|z|[+-]\d{2}(:?\d{2})?)$' AND datetime ~ 'T|\s' THEN
-    RETURN datetime::timestamptz;
-  END IF;
-  RETURN datetime::timestamp AT TIME ZONE trending.time_zone();
+  RETURN (datetime_utc AT TIME ZONE trending.time_zone())::date;
 EXCEPTION WHEN others THEN
   RETURN NULL;
 END;
@@ -212,39 +219,49 @@ LANGUAGE sql STABLE AS $$
 $$;
 --> statement-breakpoint
 
--- The debates recorded on `claim_ids`: entities typed Debate with a Claims relation to the claim, in
--- any space. News stories carry Claims relations too and are not debates.
-CREATE OR REPLACE FUNCTION trending.debates_on(claim_ids uuid[])
+-- Debate-to-claim links that count, for debates on `claim_ids` and claims of `debate_ids`: a Claims
+-- relation written in a DAO space where its source is also typed Debate. News stories carry Claims
+-- relations too and are not debates; a personal space costs nothing, so it cannot attach debates.
+CREATE OR REPLACE FUNCTION trending.debate_links(claim_ids uuid[], debate_ids uuid[])
 RETURNS TABLE (debate_id uuid, claim_id uuid)
 LANGUAGE sql STABLE AS $$
-  WITH linked AS (
-    SELECT DISTINCT cl.from_entity_id AS debate_id, cl.to_entity_id AS claim_id
-    FROM public.relations cl
-    WHERE cl.to_entity_id = ANY(claim_ids)
-      AND cl.type_id = 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid                    -- Claims
+  WITH cl AS (
+    SELECT r.from_entity_id, r.to_entity_id, r.space_id
+    FROM public.relations r
+    WHERE r.to_entity_id = ANY(claim_ids)
+      AND r.type_id = 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid                     -- Claims
+    UNION
+    SELECT r.from_entity_id, r.to_entity_id, r.space_id
+    FROM public.relations r
+    WHERE r.from_entity_id = ANY(debate_ids)
+      AND r.type_id = 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid                     -- Claims
   )
-  SELECT l.debate_id, l.claim_id
-  FROM linked l
-  JOIN trending.claims_and_debates(ARRAY(SELECT debate_id FROM linked)) k
-    ON k.entity_id = l.debate_id AND k.is_debate
+  SELECT DISTINCT cl.from_entity_id, cl.to_entity_id
+  FROM cl
+  JOIN public.spaces s ON s.id = cl.space_id AND s.type = 'DAO'
+  WHERE EXISTS (SELECT 1 FROM public.relations ty
+                WHERE ty.from_entity_id = cl.from_entity_id AND ty.space_id = cl.space_id
+                  AND ty.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid          -- Types
+                  AND ty.to_entity_id = 'fd51f935-2063-4617-be39-7b672b23364c'::uuid)    -- Debate
 $$;
 --> statement-breakpoint
 
--- Every agenda as the graph has it now: one row per agenda and space it is typed in, with its Date
--- there (if an edit ever leaves two, the later one).
+-- Every agenda as the graph has it now: one row per agenda and DAO space it is typed in, with its
+-- Date there (if an edit ever leaves two, the later one).
 CREATE OR REPLACE FUNCTION trending.current_agendas()
 RETURNS TABLE (agenda_id uuid, space_id uuid, listed_on date)
 LANGUAGE sql STABLE AS $$
   SELECT ty.from_entity_id, ty.space_id,
-         max((trending.value_instant(v.datetime_utc, v.datetime) AT TIME ZONE trending.time_zone())::date)
+         max(trending.value_date(v.datetime_utc, v.datetime, v.date))
   FROM public.relations ty
+  JOIN public.spaces s ON s.id = ty.space_id AND s.type = 'DAO'
   JOIN public.values v
     ON v.entity_id = ty.from_entity_id AND v.space_id = ty.space_id
    AND v.property_id = '52665f3e-fb7d-48d5-8b6b-abb21b0d36db'::uuid                 -- Date
   WHERE ty.to_entity_id = '79e3757b-2630-492c-9d3b-d73a78d45893'::uuid             -- Debate agenda
     AND ty.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid                  -- Types
   GROUP BY ty.from_entity_id, ty.space_id
-  HAVING max(trending.value_instant(v.datetime_utc, v.datetime)) IS NOT NULL
+  HAVING max(trending.value_date(v.datetime_utc, v.datetime, v.date)) IS NOT NULL
 $$;
 --> statement-breakpoint
 
@@ -305,11 +322,8 @@ LANGUAGE sql STABLE AS $$
   claim_of AS (
     SELECT k.entity_id, k.entity_id AS claim_id FROM k WHERE k.is_claim
     UNION
-    SELECT k.entity_id, cl.to_entity_id
-    FROM k
-    JOIN public.relations cl
-      ON cl.from_entity_id = k.entity_id AND cl.type_id = 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid -- Claims
-    WHERE k.is_debate AND NOT k.is_claim
+    SELECT dl.debate_id, dl.claim_id
+    FROM trending.debate_links('{}', ARRAY(SELECT k.entity_id FROM k WHERE k.is_debate AND NOT k.is_claim)) dl
   )
   SELECT DISTINCT ON (co.entity_id) co.entity_id, l.last_listed_on, l.agenda_id
   FROM claim_of co
@@ -319,7 +333,7 @@ $$;
 --> statement-breakpoint
 
 -- Per claim or debate in `entity_ids`, the newest arrived topic listing among its own Topics (in any
--- space).
+-- DAO space).
 CREATE OR REPLACE FUNCTION trending.entity_topic_listings(entity_ids uuid[])
 RETURNS TABLE (entity_id uuid, topic_id uuid, listed_on date)
 LANGUAGE sql STABLE AS $$
@@ -327,6 +341,7 @@ LANGUAGE sql STABLE AS $$
   FROM trending.claims_and_debates(entity_ids) k
   JOIN public.relations tr
     ON tr.from_entity_id = k.entity_id AND tr.type_id = '806d52bc-27e9-4c91-93c0-57978b093351'::uuid -- Topics
+  JOIN public.spaces s ON s.id = tr.space_id AND s.type = 'DAO'
   JOIN trending.agenda_listings tl
     ON tl.entity_id = tr.to_entity_id AND tl.source = 'agenda_topics' AND tl.listed_on <= trending.today()
   ORDER BY k.entity_id, tl.listed_on DESC, tl.entity_id
@@ -355,7 +370,7 @@ LANGUAGE sql STABLE AS $$
   -- Debates in the window on each listed claim, for the claim's discount.
   recent AS (
     SELECT d.claim_id, count(DISTINCT d.debate_id)::integer AS debates
-    FROM trending.debates_on(ARRAY(SELECT t.entity_id FROM target t JOIN li USING (entity_id) WHERE t.is_claim)) d
+    FROM trending.debate_links(ARRAY(SELECT t.entity_id FROM target t JOIN li USING (entity_id) WHERE t.is_claim), '{}') d
     JOIN public.entities de ON de.id = d.debate_id
     CROSS JOIN cfg
     WHERE de.created_at ~ '^[0-9]+$'
@@ -604,8 +619,10 @@ $$;
 -- Brings trending.agenda_listings in step with the graph and re-scores every entity whose terms can
 -- have moved. Rows that did not change are left alone, so they keep their written_at; a re-dated row
 -- is a new row. One call is one transaction: readers keep the previous rows and scores until it
--- commits. Run hourly by ranking-indexer's agenda_listings_refresh. Returns the entities re-scored.
-CREATE OR REPLACE FUNCTION trending.refresh_agenda_listings()
+-- commits. Run hourly by ranking-indexer's agenda_listings_refresh. `full_pass` (default: in the hour
+-- after midnight New York) also re-scores every listed claim and every stored age credit; see
+-- FRESHNESS. Returns the entities re-scored.
+CREATE OR REPLACE FUNCTION trending.refresh_agenda_listings(full_pass boolean DEFAULT NULL)
 RETURNS integer
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -619,6 +636,7 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtext('trending.agenda_listings'));
   SELECT c.trending_horizon_days, trending.today() INTO horizon, today
   FROM public.entity_ranking_config c WHERE c.id;
+  full_pass := COALESCE(full_pass, extract(hour FROM now() AT TIME ZONE trending.time_zone()) = 0);
 
   CREATE TEMP TABLE IF NOT EXISTS incoming_agenda_listings (
     agenda_id uuid, space_id uuid, entity_id uuid, listed_on date, source text
@@ -639,10 +657,10 @@ BEGIN
     SELECT * FROM incoming_agenda_listings
     EXCEPT SELECT l.agenda_id, l.space_id, l.entity_id, l.listed_on, l.source FROM trending.agenda_listings l) x;
 
-  -- Every claim with a claim listing, and every claim whose listing went: the age credit has no
-  -- horizon, and a debate can gain or lose its Claims link at any time. Topics whose rows changed
-  -- (added, removed or re-dated) and those inside the horizon: past it a topic lifts nothing.
-  SELECT coalesce(array_agg(DISTINCT x.entity_id) FILTER (WHERE x.source <> 'agenda_topics'), '{}'),
+  -- Claims and topics whose rows changed (added, removed or re-dated) and those inside the horizon:
+  -- past it neither boosts. A full pass takes every listed claim, for the age credit.
+  SELECT coalesce(array_agg(DISTINCT x.entity_id) FILTER (WHERE x.source <> 'agenda_topics'
+                                                            AND (full_pass OR x.changed OR x.listed_on BETWEEN today - horizon AND today)), '{}'),
          coalesce(array_agg(DISTINCT x.entity_id) FILTER (WHERE x.source = 'agenda_topics'
                                                             AND (x.changed OR x.listed_on BETWEEN today - horizon AND today)), '{}')
     INTO claim_ids, topic_ids
@@ -662,21 +680,25 @@ BEGIN
   FROM changed_agenda_listings c WHERE c.incoming;
 
   -- Those claims and the debates on them; claims and debates tagged with those topics; and anything
-  -- still carrying a term (a removed tag or Claims link, a config change), by the partial index.
+  -- still carrying a trending term (a removed tag or Claims link, a config change), or on a full pass
+  -- any term, by the partial index.
   SELECT coalesce(array_agg(DISTINCT x.id), '{}') INTO ids
   FROM (
     SELECT unnest(claim_ids) AS id
     UNION ALL
-    SELECT d.debate_id FROM trending.debates_on(claim_ids) d
+    SELECT d.debate_id FROM trending.debate_links(claim_ids, '{}') d
     UNION ALL
     SELECT k.entity_id
     FROM trending.claims_and_debates(ARRAY(
       SELECT tg.from_entity_id FROM public.relations tg
+      JOIN public.spaces sp ON sp.id = tg.space_id AND sp.type = 'DAO'
       WHERE tg.to_entity_id = ANY(topic_ids)
         AND tg.type_id = '806d52bc-27e9-4c91-93c0-57978b093351'::uuid)) k                -- Topics
     UNION ALL
+    SELECT s.entity_id FROM public.entity_ranking_scores s WHERE s.trending_score <> 0
+    UNION ALL
     SELECT s.entity_id FROM public.entity_ranking_scores s
-    WHERE s.trending_score <> 0 OR s.age_credit <> 0
+    WHERE full_pass AND (s.trending_score <> 0 OR s.age_credit <> 0)
   ) x;
   IF cardinality(ids) = 0 THEN
     RETURN 0;

@@ -129,7 +129,7 @@ export const HIDDEN_SURFACE = {
 		"currentAgenda",
 		"claimListing",
 		"claimsAndDebate",
-		"debatesOn",
+		"debateLink",
 		"entityListing",
 		"entityTopicListing",
 		"entityTrendingTerm",

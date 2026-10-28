@@ -8,8 +8,10 @@
 //!
 //! The call brings `trending.agenda_listings` in step with the graph and re-scores the claims and
 //! topics whose rows changed or are inside the horizon, the debates on those claims, the claims and
-//! debates tagged with those topics, and anything still carrying a trending term. It is one function
-//! call and so one transaction: readers keep the previous rows and scores until it commits.
+//! debates tagged with those topics, and anything still carrying a trending term. The run in the
+//! hour after midnight New York is a full pass that also re-scores every listed claim and stored age
+//! credit. It is one function call and so one transaction: readers keep the previous rows and scores
+//! until it commits.
 //!
 //! Usage: `DATABASE_URL=... cargo run --bin agenda_listings_refresh`
 
