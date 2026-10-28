@@ -62,8 +62,9 @@
 -- (the credit is 0).
 --
 -- The age credit is permanent: it is read from the listings table on every re-score, including the
--- one each vote triggers, so it survives everything except the agenda being removed. The boost decays
--- with no product cutoff. For bookkeeping it is exactly 0 once `days` passes trending_horizon_days
+-- one each vote triggers, so it lasts as long as the listing: it goes only when the claim leaves the
+-- agenda (or the agenda goes), the claim loses its Claim type, or a debate's Claims link goes. The
+-- boost decays with no product cutoff. For bookkeeping it is exactly 0 once `days` passes trending_horizon_days
 -- (16), where 8 × 0.65^16 = 0.008, so the daily pass's set of boosted entities stays bounded (see
 -- FRESHNESS).
 --
@@ -84,15 +85,18 @@
 -- trending.refresh_agenda_listings(), run hourly by ranking-indexer's agenda_listings_refresh,
 -- updates the listings table and re-scores, in the same transaction, what that moved: claims whose
 -- listings were added, removed or re-dated and the debates on them, and the claims and debates
--- tagged with topics whose listings were. The terms otherwise change only with the New York day, so
+-- tagged with topics whose listings were. It also re-scores, with their debates, claims listed
+-- inside the horizon that have a debate not yet carrying the boost (one created or linked since the
+-- claim was last re-scored): the debate needs its boost and the claim's discount moves, though no
+-- listing row changed. The terms otherwise change only with the New York day, so
 -- the first run of each day (trending.refresh_state) is a full pass: every claim with a claim
 -- listing and its debates, everything tagged with a topic named inside the horizon, and anything
 -- still storing a term, found through a partial index. Re-scoring the busiest topics' entities every
 -- hour would mean 100k+ rows an hour; once a day it is the same work at 1/24 the cost. What waits
 -- for the next full pass, or the entity's own next re-score (a vote, a comment): a tag added to or
--- removed from a named topic, a debate's Claims link added to a listed claim or removed from one
--- (a new debate is scored when created), a config change, and a vote that raced the sweep and wrote
--- terms from before it.
+-- removed from a named topic, a debate's Claims link removed, a Claims link added to a claim listed
+-- before the horizon, a debate leaving the 7-day discount window, a config change, and a vote that
+-- raced the sweep and wrote terms from before it.
 --
 -- API. Entity gets computed fields: trendingScore, trendingAgeCredit, trendingSource ('listing' or
 -- 'topic') and trendingTopicId are what the stored score used; lastListedOn, listedOnAgendaId and
@@ -325,7 +329,8 @@ $$;
 --> statement-breakpoint
 
 -- Per claim or debate in `entity_ids`, the newest arrived claim listing that counts for it: its own
--- if it is a claim, its Claims' if it is a debate.
+-- if it is a claim, its Claims' if it is a debate. An entity typed both takes the newer, so a Claim
+-- type added from any space cannot cut a debate off from its claim's listing.
 CREATE OR REPLACE FUNCTION trending.entity_listings(entity_ids uuid[])
 RETURNS TABLE (entity_id uuid, last_listed_on date, agenda_id uuid)
 LANGUAGE sql STABLE AS $$
@@ -334,7 +339,7 @@ LANGUAGE sql STABLE AS $$
     SELECT k.entity_id, k.entity_id AS claim_id FROM k WHERE k.is_claim
     UNION
     SELECT dl.debate_id, dl.claim_id
-    FROM trending.debate_links('{}', ARRAY(SELECT k.entity_id FROM k WHERE k.is_debate AND NOT k.is_claim)) dl
+    FROM trending.debate_links('{}', ARRAY(SELECT k.entity_id FROM k WHERE k.is_debate)) dl
   )
   SELECT DISTINCT ON (co.entity_id) co.entity_id, l.last_listed_on, l.agenda_id
   FROM claim_of co
@@ -640,11 +645,12 @@ DECLARE
   topic_ids uuid[];
   ids uuid[];
   horizon integer;
+  boost numeric;
   today date;
 BEGIN
   -- One writer at a time; the CronJob forbids overlap too.
   PERFORM pg_advisory_xact_lock(hashtext('trending.agenda_listings'));
-  SELECT c.trending_horizon_days, trending.today() INTO horizon, today
+  SELECT c.trending_horizon_days, c.trending_boost, trending.today() INTO horizon, boost, today
   FROM public.entity_ranking_config c WHERE c.id;
   full_pass := COALESCE(full_pass, (SELECT st.last_full_pass_on IS DISTINCT FROM today
                                     FROM trending.refresh_state st WHERE st.id));
@@ -683,6 +689,18 @@ BEGIN
     UNION ALL
     SELECT i.entity_id, i.source, i.listed_on, false FROM incoming_agenda_listings i
   ) x;
+
+  -- Claims listed inside the horizon with a debate that does not carry the boost yet (see FRESHNESS).
+  -- Only while the boost is on: at 0 every such debate would match every hour.
+  IF boost > 0 THEN
+    claim_ids := claim_ids || ARRAY(
+      SELECT DISTINCT dl.claim_id
+      FROM trending.debate_links(ARRAY(
+        SELECT i.entity_id FROM incoming_agenda_listings i
+        WHERE i.source <> 'agenda_topics' AND i.listed_on BETWEEN today - horizon AND today), '{}') dl
+      LEFT JOIN public.entity_ranking_scores s ON s.entity_id = dl.debate_id
+      WHERE COALESCE(s.trending_score, 0) = 0);
+  END IF;
 
   DELETE FROM trending.agenda_listings l
   USING changed_agenda_listings c
@@ -756,6 +774,14 @@ CREATE OR REPLACE FUNCTION public.entities_trending_topic_listed_on(e public.ent
 RETURNS date LANGUAGE sql STABLE AS $$
   SELECT t.listed_on FROM trending.entity_topic_listings(ARRAY[e.id]) t;
 $$;
+--> statement-breakpoint
+-- The live three compute per row, so they are readable but not filterable: a filter on one would
+-- compute it for every entity.
+COMMENT ON FUNCTION public.entities_last_listed_on(public.entities) IS E'@omit filter';
+--> statement-breakpoint
+COMMENT ON FUNCTION public.entities_listed_on_agenda_id(public.entities) IS E'@omit filter';
+--> statement-breakpoint
+COMMENT ON FUNCTION public.entities_trending_topic_listed_on(public.entities) IS E'@omit filter';
 --> statement-breakpoint
 
 DO $$

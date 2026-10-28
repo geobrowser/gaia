@@ -72,7 +72,8 @@ CREATE OR REPLACE FUNCTION pg_temp.h() RETURNS integer LANGUAGE sql AS $$
 --   DEB     listed today; debates D1 (today), D2 (2 days ago), D3 (8 days ago).
 --   SPAN    listed 5 days ago and again 1 day ago; debate DS created 3 days ago.
 --   LATE    listed 2 days ago; debate DL created yesterday (after), DE 4 days ago (before).
---   CDEB    claim created 60 days ago, debated 30 days ago (DOLD), first listed today on AOLD.
+--   CDEB    claim created 60 days ago, debated 30 days ago (DOLD), first listed today on AOLD. DOLD
+--           is also typed Claim, from the personal space SP.
 --   ORG1-10 debates on an unlisted claim UNL, created 0..9 days ago: the organic debate feed.
 --   CDIR    listed only through agenda A0's own Claims relation.
 --   CDIRX   named by A0's Claims relation written in S2, not A0's space.
@@ -106,7 +107,7 @@ FROM unnest(ARRAY['OLD','NEW','FEW','HEAVY','TWO','HZN','PASTHZN','MULTI','DEB',
                   'ORG1','ORG2','ORG3','ORG4','ORG5','ORG6','ORG7','ORG8','ORG9','ORG10',
                   'A0','A1','A1S2','A2','A3','A5','AHZN','APAST','AFUT','AOLD','ATXT','ARED',
                   'TOP1','TOP2','TOPPAST','TOPX','TOPB','TOPF','S1','S2',
-                  'ZC','DC','CP','DSP','DX','TSP','AZ','ADATE','AP','SP']) WITH ORDINALITY AS u(k, n)
+                  'ZC','DC','CP','DSP','DX','TSP','AZ','ADATE','AP','SP','DNEW']) WITH ORDINALITY AS u(k, n)
 UNION ALL SELECT * FROM (VALUES
   ('DEBATE', 'fd51f935-2063-4617-be39-7b672b23364c'::uuid),
   ('CLAIM',  '96f859ef-a1ca-4b22-9372-c86ad58b694b'::uuid),
@@ -244,6 +245,7 @@ SELECT pg_temp.debate('D1', 'DEB', 0), pg_temp.debate('D2', 'DEB', 2), pg_temp.d
 SELECT pg_temp.debate('DS', 'SPAN', 3);
 SELECT pg_temp.debate('DL', 'LATE', 1), pg_temp.debate('DE', 'LATE', 4);
 SELECT pg_temp.debate('DOLD', 'CDEB', 30);
+SELECT pg_temp.rel('DOLD', '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid, 'CLAIM', 'SP');
 SELECT pg_temp.debate('TD', 'UNL', 3);
 SELECT pg_temp.debate('DPH', 'PASTHZN', 30), pg_temp.debate('DB2', 'PASTHZN', 30);
 DELETE FROM relations WHERE from_entity_id = pg_temp.i('DB2') AND type_id = 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid;
@@ -366,6 +368,8 @@ SELECT assert(COALESCE(pg_temp.trend('STORY'), 0) = 0, '6: a news story with a C
 -- ---------------------------------------------------------------------------
 SELECT assert(pg_temp.near(pg_temp.credit('DOLD'), (pg_temp.midnight(0) - pg_temp.noon(30)) / pg_temp.tau()),
               '7: a 30-day-old debate on a claim first listed today ranks as if published today');
+SELECT assert(pg_temp.trend('DOLD') = pg_temp.b(),
+              '7: and keeps its boost though a personal space also typed it Claim');
 SELECT assert(pg_temp.score('DOLD') > (SELECT max(pg_temp.score('ORG' || n)) FROM generate_series(1, 10) n),
               '7: which puts it above every organic debate, including today''s');
 SELECT assert(pg_temp.score('DOLD') - pg_temp.credit('DOLD') < (SELECT min(pg_temp.score('ORG' || n)) FROM generate_series(1, 10) n),
@@ -457,9 +461,17 @@ SELECT assert((SELECT last_full_pass_on FROM trending.refresh_state WHERE id) = 
               '10: and records the day');
 SELECT assert(trending.refresh_agenda_listings() = 0,
               '10: so a later run that day is hourly (nothing changed, nothing re-scored)');
+-- DNEW, a debate on CDIR (listed today, no debates yet), recorded during the day.
+SELECT pg_temp.ent('DNEW', extract(epoch FROM now())::bigint), pg_temp.typed('DNEW', 'DEBATE');
+SELECT pg_temp.rel('DNEW', 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid, 'CDIR', 'S1');
+SELECT assert(trending.refresh_agenda_listings(false) = 2,
+              '10: an hourly run re-scores a listed claim that gained a debate, and the debate');
+SELECT assert(pg_temp.near(pg_temp.trend('CDIR'), pg_temp.b() * pg_temp.df()) AND pg_temp.trend('DNEW') = pg_temp.b(),
+              '10: so the claim takes the debate discount the same day and the debate gets its boost');
+SELECT assert(trending.refresh_agenda_listings(false) = 0, '10: once, not every hour');
 UPDATE trending.refresh_state SET last_full_pass_on = pg_temp.today() - 1 WHERE id;
--- As the full pass above, less TD and DPH, which it cleared.
-SELECT assert(trending.refresh_agenda_listings() = 21, '10: the first run of a new day is the full pass, whatever the hour');
+-- As the full pass above, less TD and DPH, which it cleared, plus DNEW.
+SELECT assert(trending.refresh_agenda_listings() = 22, '10: the first run of a new day is the full pass, whatever the hour');
 SELECT assert((SELECT last_full_pass_on FROM trending.refresh_state WHERE id) = pg_temp.today(), '10: and records the day');
 
 -- ---------------------------------------------------------------------------

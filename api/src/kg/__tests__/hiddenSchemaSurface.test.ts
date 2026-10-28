@@ -97,4 +97,14 @@ describe("hidden schema surface", () => {
 			]),
 		)
 	})
+
+	// The live three compute per row, so a filter on one would compute it for every entity.
+	it("does not make the live agenda fields filterable", () => {
+		const filter = postgraphileSchema.getType("EntityFilter") as {getFields: () => Record<string, unknown>}
+		const fields = Object.keys(filter.getFields())
+		expect(fields).toContain("trendingScore")
+		expect(fields.filter((f) => ["lastListedOn", "listedOnAgendaId", "trendingTopicListedOn"].includes(f))).toEqual(
+			[],
+		)
+	})
 })
