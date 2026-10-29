@@ -75,6 +75,9 @@ export const HIDDEN_SURFACE = {
 		"FeedUserSeenDaily",
 		"FeedSignalRun",
 		"FeedSignalConfig",
+		// GEO-3488 Debate agenda listings and the sweep's state (migration 0113), private `trending` schema.
+		"AgendaListing",
+		"RefreshState",
 	],
 	/** Root query fields are matched by prefix, which covers every inflection PostGraphile generated. */
 	queryFieldPrefixes: [
@@ -121,6 +124,17 @@ export const HIDDEN_SURFACE = {
 		"feedUserSeen",
 		"feedSignal",
 		"walletAddressHash",
+		// GEO-3488's listings and their read functions (migration 0113); the boost's inputs are
+		// public only as Entity fields.
+		"agendaListing",
+		"refreshState",
+		"currentAgenda",
+		"claimListing",
+		"claimsAndDebate",
+		"debateLink",
+		"entityListing",
+		"entityTopicListing",
+		"entityTrendingTerm",
 	],
 	/** The omitted volatile functions, by their mutation names. */
 	mutations: [
@@ -147,6 +161,8 @@ export const HIDDEN_SURFACE = {
 		// GEO-3235's write paths, run by ranking-indexer's feed_signals_sync.
 		"replaceFeedSignals",
 		"recordFeedSignalRun",
+		// GEO-3488's hourly sweep, run by ranking-indexer's agenda_listings_refresh.
+		"refreshAgendaListings",
 	],
 } as const
 

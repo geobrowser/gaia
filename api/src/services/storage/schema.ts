@@ -1461,6 +1461,24 @@ export const entityRankingConfig = pgTable("entity_ranking_config", {
 	watchClaimVotesWeight: decimal("watch_claim_votes_weight").notNull(),
 	/** The watch term is clamped to plus or minus this, in score units (0111). */
 	watchCap: decimal("watch_cap").notNull(),
+	/**
+	 * Agenda claims and their debates (0113, GEO-3488): the boost a listing carries on its day, in
+	 * score units (8, about 9 days of recency). 0 turns the boost off; the age credit stays.
+	 */
+	trendingBoost: decimal("trending_boost").notNull(),
+	/**
+	 * Claims and debates tagged with a topic an agenda names in its own Topics relation (0113): the
+	 * boost on the agenda's day (2.5). The larger of this and a listing boost applies. 0 turns it off.
+	 */
+	trendingTopicBoost: decimal("trending_topic_boost").notNull(),
+	/** Both boosts are multiplied by this for each day since the newest agenda naming them (0113). */
+	trendingDayFactor: decimal("trending_day_factor").notNull(),
+	/** A listed claim's boost is multiplied by this for each debate on it in the window (0113). */
+	trendingDebateFactor: decimal("trending_debate_factor").notNull(),
+	/** Days of debates that discount a listed claim's boost (0113). */
+	trendingDebateWindowDays: integer("trending_debate_window_days").notNull(),
+	/** The boost is 0 once this many days have passed since the newest listing (0113). */
+	trendingHorizonDays: integer("trending_horizon_days").notNull(),
 	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
 })
 
@@ -1536,6 +1554,22 @@ export const entityRankingScores = pgTable(
 		 * a debate, and for a debate with no signals.
 		 */
 		watchScore: decimal("watch_score").notNull(),
+		/**
+		 * Listed claims and the debates on them (0113, GEO-3488), already included in rankingScore:
+		 * moves the entity's recency to midnight of the claim's newest agenda listing, when that is
+		 * later than its own. Permanent while the agenda exists. 0 otherwise.
+		 */
+		ageCredit: decimal("age_credit").notNull(),
+		/**
+		 * The agenda boost (0113), already included in rankingScore: the larger of the listing boost
+		 * (listed claims and every debate on them) and the topic boost (claims and debates tagged with
+		 * an agenda-named topic). Decays per day; 0 past the horizon.
+		 */
+		trendingScore: decimal("trending_score").notNull(),
+		/** Which boost trendingScore is: "listing" or "topic". Null when neither is above 0 (0113). */
+		trendingSource: text("trending_source"),
+		/** The agenda-named topic behind a "topic" trendingScore (0113). */
+		trendingTopicId: uuid("trending_topic_id"),
 		updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull(),
 	},
 	(table) => [

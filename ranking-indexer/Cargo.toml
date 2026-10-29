@@ -65,6 +65,12 @@ path = "src/bin/stance_map_shadow.rs"
 name = "feed_signals_sync"
 path = "src/bin/feed_signals_sync.rs"
 
+# Hourly Debate agenda listings rebuild and re-score of agenda claims and their debates
+# (GEO-3488, migration 0113).
+[[bin]]
+name = "agenda_listings_refresh"
+path = "src/bin/agenda_listings_refresh.rs"
+
 [dependencies]
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }

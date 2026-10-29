@@ -80,4 +80,31 @@ describe("hidden schema surface", () => {
 			expect.arrayContaining(["userId", "spaceIds", "answeredClaimIds", "skippedClaimIds"]),
 		)
 	})
+
+	// GEO-3488: the agenda boost's inputs are public on Entity, so an ordering can be explained. The
+	// listings table and its sweep are private; HIDDEN_SURFACE covers them.
+	it("exposes the agenda boost inputs on Entity", () => {
+		const entity = postgraphileSchema.getType("Entity") as {getFields: () => Record<string, unknown>}
+		expect(Object.keys(entity.getFields())).toEqual(
+			expect.arrayContaining([
+				"trendingScore",
+				"trendingAgeCredit",
+				"trendingSource",
+				"trendingTopicId",
+				"trendingTopicListedOn",
+				"lastListedOn",
+				"listedOnAgendaId",
+			]),
+		)
+	})
+
+	// The live three compute per row, so a filter on one would compute it for every entity.
+	it("does not make the live agenda fields filterable", () => {
+		const filter = postgraphileSchema.getType("EntityFilter") as {getFields: () => Record<string, unknown>}
+		const fields = Object.keys(filter.getFields())
+		expect(fields).toContain("trendingScore")
+		expect(fields.filter((f) => ["lastListedOn", "listedOnAgendaId", "trendingTopicListedOn"].includes(f))).toEqual(
+			[],
+		)
+	})
 })
