@@ -119,4 +119,29 @@ describe("currentDebateAgendas", () => {
 		expect(result.errors).toBeUndefined()
 		expect(result.data?.currentDebateAgendas?.map((r) => r.entityId)).toEqual(CLAIMS.slice(0, 100).map(undash))
 	})
+
+	// This API's connections carry edges and totalCount, not pageInfo.
+	type Page = {totalCount: number; edges: Array<{cursor: string; node: {entityId: string}}>}
+	const page = async (args: string) => {
+		const result = (await query(
+			`{ currentDebateAgendasConnection(spaceIds: ["${SPACE}"], ${args}) { totalCount edges { cursor node { entityId } } } }`,
+		)) as {errors?: Array<{message: string}>; data?: {currentDebateAgendasConnection?: Page}}
+		expect(result.errors).toBeUndefined()
+		return result.data?.currentDebateAgendasConnection as Page
+	}
+
+	it("pages through the connection by cursor and by offset in the same order", async () => {
+		const byCursor: string[] = []
+		let after = ""
+		for (let round = 0; round < 10; round++) {
+			const p = await page(`first: 50${after ? `, after: "${after}"` : ""}`)
+			byCursor.push(...p.edges.map((e) => e.node.entityId))
+			if (byCursor.length >= p.totalCount || p.edges.length === 0) break
+			after = p.edges[p.edges.length - 1]?.cursor ?? ""
+		}
+		expect(byCursor).toEqual(CLAIMS.map(undash))
+
+		const byOffset = [...(await page("first: 70")).edges, ...(await page("first: 70, offset: 70")).edges]
+		expect(byOffset.map((e) => e.node.entityId)).toEqual(CLAIMS.map(undash))
+	})
 })

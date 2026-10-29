@@ -107,4 +107,13 @@ describe("hidden schema surface", () => {
 			[],
 		)
 	})
+
+	// GEO-3503: the one agendas read, as a list and a connection; its helpers stay private.
+	it("exposes currentDebateAgendas with its arguments", () => {
+		const fields = postgraphileSchema.getQueryType()?.getFields() ?? {}
+		for (const name of ["currentDebateAgendas", "currentDebateAgendasConnection"]) {
+			expect(queryFields).toContain(name)
+			expect(fields[name]?.args.map((a) => a.name)).toEqual(expect.arrayContaining(["spaceIds", "earlierDays"]))
+		}
+	})
 })
