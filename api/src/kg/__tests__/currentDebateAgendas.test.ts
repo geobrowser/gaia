@@ -5,7 +5,7 @@ import {graphqlServer} from "../postgraphile"
 /**
  * GEO-3503: `currentDebateAgendas(spaceIds, earlierDays)` through the real GraphQL server, so
  * PostGraphile's handling of the function's row order and the default page size are part of what
- * is tested. The rules themselves are covered by drizzle/tests/0114_current_debate_agendas.sql.
+ * is tested. The rules themselves are covered by drizzle/tests/0115_current_debate_agendas.sql.
  */
 
 type Row = {

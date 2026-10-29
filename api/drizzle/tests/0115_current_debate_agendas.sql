@@ -1,4 +1,4 @@
--- Assertions for 0114: one API query for the current Debate agendas in a set of spaces (GEO-3503).
+-- Assertions for 0115: one API query for the current Debate agendas in a set of spaces (GEO-3503).
 --
 -- Run per drizzle/tests/README.md; also runs in CI via rankingSqlSuites.test.ts.
 --

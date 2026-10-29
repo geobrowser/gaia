@@ -804,7 +804,14 @@
       "idx": 114,
       "version": "7",
       "when": 1792175100000,
-      "tag": "0114_current_debate_agendas",
+      "tag": "0114_debate_fresh_boost",
+      "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1792175200000,
+      "tag": "0115_current_debate_agendas",
       "breakpoints": true
     }
   ]

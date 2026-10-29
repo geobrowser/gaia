@@ -135,7 +135,7 @@ export const HIDDEN_SURFACE = {
 		"entityListing",
 		"entityTopicListing",
 		"entityTrendingTerm",
-		// GEO-3503's positioned agenda contents (migration 0114); public only as currentDebateAgendas.
+		// GEO-3503's positioned agenda contents (migration 0115); public only as currentDebateAgendas.
 		"agendaContent",
 	],
 	/** The omitted volatile functions, by their mutation names. */
