@@ -21,8 +21,9 @@
 --                             returned so a surface can use them, never as agenda items.
 --   Earlier listings (only with earlierDays > 0, at most 31): block items of the same spaces' other
 --   agendas dated in the last earlierDays days, for "Earlier this week". A claim on its own space's
---   current agenda is left out (as the web hook does), and each claim appears once, at its newest
---   listing.
+--   current agenda is left out (as the web hook does), and each claim appears once per space, at its
+--   newest listing there. Nothing crosses spaces, so a space's rows are the same whichever others are
+--   asked; a surface showing several spaces in one list dedupes across them itself.
 --
 --   listedOn is the agenda's Date as a New York day and listedAt its midnight New York, the instant
 --   a debate starts counting as "since the listing". Every claim row carries lastListedOn: the
@@ -58,8 +59,9 @@ $$;
 -- What the agendas in `space_ids` dated `since` or later name now (NULL: every space, every date),
 -- in their own space, with where it sits: one row per block item (section = the block, in block
 -- order, each claim once per block), per Claims target and per Topics target. Block items and Claims
--- targets are claims only. trending.current_agenda_listings (0113) is every agenda's rows without
--- their positions.
+-- targets are claims only, and positions count only what is returned (1, 2, 3 …): a non-claim or a
+-- block with no claim takes no number. trending.current_agenda_listings (0113) is every agenda's
+-- rows without their positions.
 CREATE OR REPLACE FUNCTION trending.agenda_contents(space_ids uuid[] DEFAULT NULL, since date DEFAULT NULL)
 RETURNS TABLE (agenda_id uuid, space_id uuid, listed_on date, source text, section_id uuid,
                section_position integer, entity_id uuid, item_position integer)
@@ -84,47 +86,47 @@ LANGUAGE sql STABLE AS $$
     ORDER BY a.agenda_id, a.space_id, r.type_id, r.to_entity_id,
              trending.position_order(r.position) NULLS LAST, r.id
   ),
-  blocks AS (
-    SELECT l.agenda_id, l.space_id, l.listed_on, l.to_entity_id AS section_id,
-           row_number() OVER (PARTITION BY l.agenda_id, l.space_id
-                              ORDER BY l.link_order NULLS LAST, l.link_rel)::integer AS section_position
-    FROM links l
-    WHERE l.type_id = 'beaba5cb-a677-41a8-b353-77030613fc70'::uuid                   -- Blocks
-  ),
-  -- A claim dropped into one block twice is one item, at its first position.
+  -- Each block's items, a claim dropped into one block twice once, at its first position.
   block_items AS (
-    SELECT DISTINCT ON (b.agenda_id, b.space_id, b.section_id, item.to_entity_id)
-           b.*, item.to_entity_id AS entity_id, trending.position_order(item.position) AS item_order, item.id AS item_rel
-    FROM blocks b
+    SELECT DISTINCT ON (l.agenda_id, l.space_id, l.to_entity_id, item.to_entity_id)
+           l.agenda_id, l.space_id, l.listed_on, l.to_entity_id AS section_id,
+           l.link_order AS section_order, l.link_rel AS section_rel, item.to_entity_id AS entity_id,
+           trending.position_order(item.position) AS item_order, item.id AS item_rel
+    FROM links l
     JOIN public.relations item
-      ON item.from_entity_id = b.section_id AND item.space_id = b.space_id
+      ON item.from_entity_id = l.to_entity_id AND item.space_id = l.space_id
      AND item.type_id = 'a99f9ce1-2ffa-4dac-8c61-f6310d46064a'::uuid                -- Collection item
-    ORDER BY b.agenda_id, b.space_id, b.section_id, item.to_entity_id,
+    WHERE l.type_id = 'beaba5cb-a677-41a8-b353-77030613fc70'::uuid                   -- Blocks
+    ORDER BY l.agenda_id, l.space_id, l.to_entity_id, item.to_entity_id,
              trending.position_order(item.position) NULLS LAST, item.id
   ),
-  items AS (
-    SELECT bi.agenda_id, bi.space_id, bi.listed_on, 'block_item'::text AS source, bi.section_id,
-           bi.section_position, bi.entity_id,
-           row_number() OVER (PARTITION BY bi.agenda_id, bi.space_id, bi.section_id
-                              ORDER BY bi.item_order NULLS LAST, bi.item_rel)::integer AS item_position
-    FROM block_items bi
-    UNION ALL
-    SELECT l.agenda_id, l.space_id, l.listed_on,
-           CASE l.type_id WHEN 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid THEN 'agenda_claims'
-                          ELSE 'agenda_topics' END,
-           NULL::uuid, NULL::integer, l.to_entity_id,
-           row_number() OVER (PARTITION BY l.agenda_id, l.space_id, l.type_id
-                              ORDER BY l.link_order NULLS LAST, l.link_rel)::integer
-    FROM links l
-    WHERE l.type_id <> 'beaba5cb-a677-41a8-b353-77030613fc70'::uuid                  -- not Blocks
+  -- Block items and Claims targets that are typed Claim: everything else drops out before numbering.
+  claims AS (
+    SELECT k.entity_id FROM trending.claims_and_debates(ARRAY(
+      SELECT bi.entity_id FROM block_items bi
+      UNION
+      SELECT l.to_entity_id FROM links l WHERE l.type_id = 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid)) k
+    WHERE k.is_claim
   )
-  SELECT i.agenda_id, i.space_id, i.listed_on, i.source, i.section_id, i.section_position,
-         i.entity_id, i.item_position
-  FROM items i
-  LEFT JOIN trending.claims_and_debates(ARRAY(SELECT DISTINCT entity_id FROM items
-                                              WHERE source <> 'agenda_topics')) k
-    ON k.entity_id = i.entity_id
-  WHERE i.source = 'agenda_topics' OR k.is_claim
+  SELECT bi.agenda_id, bi.space_id, bi.listed_on, 'block_item'::text, bi.section_id,
+         dense_rank() OVER (PARTITION BY bi.agenda_id, bi.space_id
+                            ORDER BY bi.section_order NULLS LAST, bi.section_rel)::integer,
+         bi.entity_id,
+         row_number() OVER (PARTITION BY bi.agenda_id, bi.space_id, bi.section_id
+                            ORDER BY bi.item_order NULLS LAST, bi.item_rel)::integer
+  FROM block_items bi
+  JOIN claims c ON c.entity_id = bi.entity_id
+  UNION ALL
+  SELECT l.agenda_id, l.space_id, l.listed_on,
+         CASE l.type_id WHEN 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid THEN 'agenda_claims'
+                        ELSE 'agenda_topics' END,
+         NULL::uuid, NULL::integer, l.to_entity_id,
+         row_number() OVER (PARTITION BY l.agenda_id, l.space_id, l.type_id
+                            ORDER BY l.link_order NULLS LAST, l.link_rel)::integer
+  FROM links l
+  WHERE l.type_id = '806d52bc-27e9-4c91-93c0-57978b093351'::uuid                     -- Topics
+     OR (l.type_id = 'e614cce1-c4ce-4586-8304-fd1237119eb2'::uuid                    -- Claims
+         AND EXISTS (SELECT 1 FROM claims c WHERE c.entity_id = l.to_entity_id))
 $$;
 --> statement-breakpoint
 
@@ -153,7 +155,9 @@ LANGUAGE sql STABLE AS $$
   ranked AS (
     SELECT a.agenda_id, a.space_id, a.listed_on,
            row_number() OVER (PARTITION BY a.space_id
-                              ORDER BY a.listed_on DESC, e.created_at DESC NULLS LAST, a.agenda_id DESC) AS recency
+                              ORDER BY a.listed_on DESC,
+                                       CASE WHEN e.created_at ~ '^[0-9]+$' THEN e.created_at::bigint END DESC NULLS LAST,
+                                       a.agenda_id DESC) AS recency
     FROM trending.current_agendas() a
     JOIN public.entities e ON e.id = a.agenda_id
     CROSS JOIN params p
@@ -193,13 +197,13 @@ LANGUAGE sql STABLE AS $$
     FROM contents c
     JOIN current_agendas ca ON ca.agenda_id = c.agenda_id AND ca.space_id = c.space_id
   ),
-  -- Earlier block items: once per claim, at its newest listing; none that is on its own space's
-  -- current agenda (as the web hook), so a space's rows do not depend on which others are asked.
+  -- Earlier block items: once per claim in each space, at its newest listing there; none that is on
+  -- its own space's current agenda. Nothing crosses spaces, so a space's rows do not depend on which
+  -- others are asked; a caller showing several spaces together dedupes across them itself.
   earlier_rows AS (
-    SELECT DISTINCT ON (c.entity_id) c.*, false AS is_current, a.recency
+    SELECT DISTINCT ON (c.space_id, c.entity_id) c.*, false AS is_current, a.recency
     FROM contents c
     JOIN agendas a ON a.agenda_id = c.agenda_id AND a.space_id = c.space_id
-    JOIN space_order so ON so.space_id = c.space_id
     CROSS JOIN params p
     WHERE p.earlier > 0
       AND c.source = 'block_item'
@@ -207,7 +211,7 @@ LANGUAGE sql STABLE AS $$
       AND NOT EXISTS (SELECT 1 FROM current_agendas ca WHERE ca.agenda_id = c.agenda_id AND ca.space_id = c.space_id)
       AND NOT EXISTS (SELECT 1 FROM current_rows cr
                       WHERE cr.entity_id = c.entity_id AND cr.space_id = c.space_id AND cr.source = 'block_item')
-    ORDER BY c.entity_id, c.listed_on DESC, so.n, a.recency, c.section_position, c.item_position
+    ORDER BY c.space_id, c.entity_id, c.listed_on DESC, a.recency, c.section_position, c.item_position
   ),
   picked AS (
     SELECT * FROM current_rows
@@ -246,7 +250,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 --> statement-breakpoint
 COMMENT ON FUNCTION public.current_debate_agendas(uuid[], integer) IS
-  E'The current Debate agendas (GEO-3503), one row per item, in order. Pass spaces in the order to show them (member spaces first), or none for every space with an agenda this week. Per space: its freshest agenda dated in the last week whose Date has arrived (the newer on a tie), with source block_item rows as its contents (sections and claims in the order Geo shows them) and agenda_claims / agenda_topics rows for the claims and topics it names as ranking levers, which are not agenda items. With earlierDays (up to 31), also the block items of these spaces'' other agendas in that many past days (isCurrent false), once per claim at its newest listing and none that is on its own space''s current agenda. listedAt is the agenda Date''s midnight in New York. lastListedOn is the claim''s newest listing in any space, kept hourly. Like every list, it returns 100 rows unless first asks for more (up to 1000).';
+  E'The current Debate agendas (GEO-3503), one row per item, in order. Pass spaces in the order to show them (member spaces first), or none for every space with an agenda this week. Per space: its freshest agenda dated in the last week whose Date has arrived (the newer on a tie), with source block_item rows as its contents (sections and claims in the order Geo shows them) and agenda_claims / agenda_topics rows for the claims and topics it names as ranking levers, which are not agenda items. With earlierDays (up to 31), also the block items of these spaces'' other agendas in that many past days (isCurrent false), once per claim per space at its newest listing there and none that is on its own space''s current agenda; a space''s rows do not depend on which others are asked. Positions number only the rows returned. listedAt is the agenda Date''s midnight in New York. lastListedOn is the claim''s newest listing in any space, kept hourly. Like every list, it returns 100 rows unless first asks for more (up to 1000).';
 --> statement-breakpoint
 
 DO $$
