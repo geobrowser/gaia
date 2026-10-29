@@ -19,6 +19,8 @@
 --   6. listedAt, and lastListedOn: the claim's newest listing in any space, including a block item
 --      added since the hourly sweep, the same on every row of a claim; null for topics.
 --   7. 0113's listings are unchanged: read from the same contents, a claim in two blocks is one row.
+--   8. The position key orders as Geo does even when its input carries a locale collation (the
+--      database's default can be en_US), including case-only ties.
 
 \set ON_ERROR_STOP on
 
@@ -296,8 +298,32 @@ SELECT assert((SELECT array_agg(source ORDER BY source) FROM trending.current_ag
               = ARRAY['agenda_claims','agenda_topics','block_item','block_item','block_item','block_item','block_item','block_item','block_item'],
               '7: block items (C1 C3 C4 C5 C10 C13 C18, not PAGE or C12), its Claims and its Topics');
 
+-- ---------------------------------------------------------------------------
+-- 8. The position key under a locale collation.
+-- ---------------------------------------------------------------------------
+-- node: ['aA','aa','Zz','a0','b0','a','a0b','a0V'].sort((x, y) => x.localeCompare(y)), nulls last.
+CREATE OR REPLACE FUNCTION pg_temp.ordered_in(coll text) RETURNS text[] LANGUAGE plpgsql AS $$
+DECLARE out text[];
+BEGIN
+  EXECUTE format('SELECT array_agg(coalesce(p, ''<null>'') ORDER BY trending.position_order(p COLLATE %I) NULLS LAST)
+                  FROM (VALUES (''aA''),(''aa''),(''Zz''),(NULL),(''a0''),(''b0''),(''a''),(''a0b''),(''a0V'')) k(p)', coll)
+    INTO out;
+  RETURN out;
+END $$;
+CREATE TEMP TABLE locale_coll AS
+SELECT collname FROM pg_collation
+WHERE collname IN ('en-US-x-icu', 'und-x-icu', 'en_US.utf8', 'en_US.UTF-8')
+ORDER BY array_position(ARRAY['en-US-x-icu', 'und-x-icu', 'en_US.utf8', 'en_US.UTF-8'], collname::text)
+LIMIT 1;
+SELECT assert(EXISTS (SELECT 1 FROM locale_coll), '8: this server has a locale collation to test against');
+SELECT assert(pg_temp.ordered_in(collname) = ARRAY['a','a0','a0b','a0V','aa','aA','b0','Zz','<null>'],
+              '8: under ' || collname || ', positions still sort as localeCompare (aa before aA, nulls last)')
+FROM locale_coll;
+SELECT assert(pg_temp.ordered_in('C') = ARRAY['a','a0','a0b','a0V','aa','aA','b0','Zz','<null>'],
+              '8: and under C');
+
 -- Cleanup for running by hand.
 TRUNCATE entities, values, relations, spaces, entity_ranking_scores, entity_type_ranking,
          entity_topic_ranking, trending.agenda_listings CASCADE;
 UPDATE trending.refresh_state SET last_full_pass_on = NULL WHERE id;
-DROP TABLE ids, got;
+DROP TABLE ids, got, locale_coll;

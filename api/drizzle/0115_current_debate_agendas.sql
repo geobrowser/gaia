@@ -45,14 +45,17 @@
 
 -- A relation position's sort key, in the order Geo shows relations: geo-sdk's Position.compare is
 -- localeCompare, which for fractional-index keys (0-9A-Za-z) compares case-insensitively first and
--- puts lowercase first on a tie. This key does the same byte by byte (COLLATE "C"), so it does not
--- depend on the database's collation or on ICU. Null positions sort last.
+-- puts lowercase first on a tie. This key does the same byte by byte. It is bytea, not text: a
+-- text result takes the caller's collation (a COLLATE inside the function does not reach the
+-- caller's ORDER BY), so on a database with a locale collation such as en_US, `aa` and `aA` would
+-- sort the other way round from Geo. Bytes always compare bytewise, whatever the collation, and need
+-- no ICU. Null positions sort last. STABLE because convert_to is.
 CREATE OR REPLACE FUNCTION trending.position_order(pos text)
-RETURNS text
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT (lower(pos) || ' '
-          || translate(pos, 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ',
-                                 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz')) COLLATE "C"
+RETURNS bytea
+LANGUAGE sql STABLE PARALLEL SAFE AS $$
+  SELECT convert_to(lower(pos) || ' '
+                    || translate(pos, 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ',
+                                      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'), 'UTF8')
 $$;
 --> statement-breakpoint
 
