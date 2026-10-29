@@ -1462,6 +1462,13 @@ export const entityRankingConfig = pgTable("entity_ranking_config", {
 	/** The watch term is clamped to plus or minus this, in score units (0111). */
 	watchCap: decimal("watch_cap").notNull(),
 	/**
+	 * A debate created within the watch window starts this much higher, outside the clamp, fading
+	 * linearly to 0 over its first `watchFreshImpressions` impressions (0114). 0 turns it off.
+	 */
+	watchFreshBoost: decimal("watch_fresh_boost").notNull(),
+	/** Impressions over which the fresh boost fades to 0 (0114). */
+	watchFreshImpressions: decimal("watch_fresh_impressions").notNull(),
+	/**
 	 * Agenda claims and their debates (0113, GEO-3488): the boost a listing carries on its day, in
 	 * score units (8, about 9 days of recency). 0 turns the boost off; the age credit stays.
 	 */
