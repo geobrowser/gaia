@@ -250,6 +250,10 @@ SELECT assert((SELECT array_agg(pg_temp.k(r.entity_id) ORDER BY r.n) FROM (
                  SELECT row_number() OVER () AS n, x.* FROM public.current_debate_agendas(ARRAY[pg_temp.i('S1')], 6) x) r
                WHERE NOT r.is_current) = ARRAY['C2','C14','C7','C11'],
               '5: a space''s earlier rows are the same asked alone (C7 is on S2''s current agenda, C11 earlier in S2 too)');
+SELECT assert((SELECT array_agg(pg_temp.k(agenda_id) || ':' || section_position || '.' || item_position || ':' || pg_temp.k(entity_id) ORDER BY n)
+               FROM got WHERE NOT is_current AND space_id = pg_temp.i('S1'))
+              = ARRAY['AOLD:1.1:C2','AY:1.1:C14','AY:1.2:C7','AY:1.3:C11'],
+              '5: earlier rows are numbered over what is returned (AY''s C2 and C3 dropped, so C14 is 1, not 3)');
 SELECT assert((SELECT count(*) FROM got WHERE entity_id = pg_temp.i('C2')) = 1
               AND (SELECT listed_on FROM got WHERE entity_id = pg_temp.i('C2')) = pg_temp.today(),
               '5: once per claim, at its newest listing');

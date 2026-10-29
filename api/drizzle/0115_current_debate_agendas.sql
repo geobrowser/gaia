@@ -186,32 +186,45 @@ LANGUAGE sql STABLE AS $$
     LEFT JOIN (SELECT u.id, min(u.n) AS n FROM unnest(space_ids) WITH ORDINALITY AS u(id, n) GROUP BY u.id) asked
       ON asked.id = s.space_id
   ),
-  contents AS (
-    SELECT c.*
+  -- Read once, each row carrying its agenda's recency. The planner guesses a handful of rows for a
+  -- set-returning function, so left inline it re-read this in nested loops: seconds at 40 spaces
+  -- with a 31-day window, against a quarter of a second materialised.
+  contents AS MATERIALIZED (
+    SELECT c.*, ag.recency
     FROM params p
     CROSS JOIN LATERAL trending.agenda_contents(
       ARRAY(SELECT DISTINCT a.space_id FROM agendas a), p.today - GREATEST(p.current_days, p.earlier)) c
+    JOIN agendas ag ON ag.agenda_id = c.agenda_id AND ag.space_id = c.space_id
   ),
   current_rows AS (
-    SELECT c.*, true AS is_current, 1::bigint AS recency
+    SELECT c.*, true AS is_current
     FROM contents c
     JOIN current_agendas ca ON ca.agenda_id = c.agenda_id AND ca.space_id = c.space_id
   ),
   -- Earlier block items: once per claim in each space, at its newest listing there; none that is on
   -- its own space's current agenda. Nothing crosses spaces, so a space's rows do not depend on which
-  -- others are asked; a caller showing several spaces together dedupes across them itself.
-  earlier_rows AS (
-    SELECT DISTINCT ON (c.space_id, c.entity_id) c.*, false AS is_current, a.recency
+  -- others are asked; a caller showing several spaces together dedupes across them itself. Leaving
+  -- out the space's current claims also leaves out its current agenda. The NOT IN list is small and
+  -- runs as a hashed lookup.
+  earlier_first AS (
+    SELECT DISTINCT ON (c.space_id, c.entity_id) c.*
     FROM contents c
-    JOIN agendas a ON a.agenda_id = c.agenda_id AND a.space_id = c.space_id
     CROSS JOIN params p
     WHERE p.earlier > 0
       AND c.source = 'block_item'
       AND c.listed_on >= p.today - p.earlier
-      AND NOT EXISTS (SELECT 1 FROM current_agendas ca WHERE ca.agenda_id = c.agenda_id AND ca.space_id = c.space_id)
-      AND NOT EXISTS (SELECT 1 FROM current_rows cr
-                      WHERE cr.entity_id = c.entity_id AND cr.space_id = c.space_id AND cr.source = 'block_item')
-    ORDER BY c.space_id, c.entity_id, c.listed_on DESC, a.recency, c.section_position, c.item_position
+      AND (c.space_id, c.entity_id) NOT IN (SELECT cr.space_id, cr.entity_id FROM current_rows cr
+                                            WHERE cr.source = 'block_item')
+    ORDER BY c.space_id, c.entity_id, c.listed_on DESC, c.recency, c.section_position, c.item_position
+  ),
+  -- Renumbered over what is returned, as the current agenda's rows are.
+  earlier_rows AS (
+    SELECT e.agenda_id, e.space_id, e.listed_on, e.source, e.section_id,
+           dense_rank() OVER (PARTITION BY e.space_id, e.agenda_id ORDER BY e.section_position)::integer,
+           e.entity_id,
+           row_number() OVER (PARTITION BY e.space_id, e.agenda_id, e.section_id ORDER BY e.item_position)::integer,
+           e.recency, false
+    FROM earlier_first e
   ),
   picked AS (
     SELECT * FROM current_rows
