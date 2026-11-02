@@ -1,0 +1,72 @@
+# DRAFT alerts for the opt-in geo-db entity-card route (GEODB_ENTITY_CARDS, api/src/geodb/).
+# Not applied anywhere. The series exist only on api pods running with the flag on or shadow;
+# every rule here is silent where the route is off.
+#
+#   ApiGeoDbCardFallbackRateHigh — mode on: more than 5% of card reads fell back to Postgres for
+#       10m (geo-db slow, down, or the key/binding/space map wrong). Reads still succeed; this is
+#       the "geo-db is not actually serving" signal that a successful response hides.
+#   ApiGeoDbCardShadowDiffs      — mode shadow: more than 1% of comparisons differ for 30m. Expect a
+#       small steady rate from known mapping gaps (see the PR); alert on a change, not on zero.
+#   ApiGeoDbCardShadowFailing    — mode shadow: geo-db could not be asked at all.
+#
+#   kubectl apply -f monitoring/k8s/v2/geodb-card-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: api-geodb-cards
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: api.geodb-cards
+      rules:
+        - alert: ApiGeoDbCardFallbackRateHigh
+          expr: |
+            sum(rate(gaia_api_geodb_card_fallback_total{namespace="gaia", job="api"}[10m]))
+              / (
+                sum(rate(gaia_api_geodb_card_served_total{namespace="gaia", job="api", source="geodb"}[10m]))
+                + sum(rate(gaia_api_geodb_card_fallback_total{namespace="gaia", job="api"}[10m]))
+              ) > 0.05
+            and
+            sum(rate(gaia_api_geodb_card_fallback_total{namespace="gaia", job="api"}[10m])) > 0.1
+          for: 10m
+          labels:
+            severity: warning
+            service: api
+            namespace: gaia
+          annotations:
+            summary: More than 5% of geo-db card reads are falling back to Postgres
+            description: >-
+              Mode on is answering from Postgres instead of geo-db. Break it down by reason with
+              sum by (reason) (rate(gaia_api_geodb_card_fallback_total[10m])): timeout means geo-db is slow,
+              client_failed means it is down or refusing (check geodb-client, key, binding), unmapped_space
+              means the space map is missing a Space. The p99 of gaia_api_geodb_read_seconds shows which.
+
+        - alert: ApiGeoDbCardShadowDiffs
+          expr: |
+            sum(rate(gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result=~"only_postgres|only_geodb|both"}[30m]))
+              / sum(rate(gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result!="failed"}[30m])) > 0.01
+          for: 30m
+          labels:
+            severity: warning
+            service: api
+            namespace: gaia
+          annotations:
+            summary: More than 1% of shadow geo-db card reads differ from Postgres
+            description: >-
+              Look at the "geodb card diff" warning logs: each carries the entity, Space and the first
+              five statements on each side.
+
+        - alert: ApiGeoDbCardShadowFailing
+          expr: |
+            sum(rate(gaia_api_geodb_card_shadow_total{namespace="gaia", job="api", result="failed"}[10m]))
+              / sum(rate(gaia_api_geodb_card_shadow_total{namespace="gaia", job="api"}[10m])) > 0.2
+          for: 15m
+          labels:
+            severity: warning
+            service: api
+            namespace: gaia
+          annotations:
+            summary: Shadow geo-db reads are failing
+            description: geo-db could not be asked for more than 20% of shadow comparisons; the comparison is blind.

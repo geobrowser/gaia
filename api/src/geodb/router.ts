@@ -14,6 +14,7 @@ import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import type {GeoDbCardClient} from "./client"
 import {createPipeGeoDbClient, createSpaceMap} from "./client"
 import type {GeoDbCardConfig} from "./config"
+import {activateGeoDbMetrics} from "./metrics"
 import {getCardRows} from "./queries"
 import type {CardDeps} from "./service"
 import {resolveCard} from "./service"
@@ -33,6 +34,7 @@ export function createGeoDbRouter(
 		log: overrides.log ?? log,
 	}
 	const router = new Hono()
+	activateGeoDbMetrics()
 
 	router.get(
 		"/entities/:entityId/card",

@@ -11,6 +11,7 @@ import {conformingId, diffCards, isEmptyDiff, statementsFromPostgres} from "./ca
 import type {GeoDbCardClient} from "./client"
 import {GeoDbError} from "./client"
 import type {GeoDbCardMode} from "./config"
+import {observeGeoDbRead, recordFallback, recordServed, recordShadow, type ShadowResult} from "./metrics"
 
 export type CardStatementView = {property: string; value: string}
 
@@ -47,7 +48,15 @@ const view = (s: CardStatement): CardStatementView => ({property: s.prop, value:
 async function askGeoDb(deps: CardDeps, entityId: string, spaceId: string) {
 	const geoSpaceId = await deps.geoSpaceOf(spaceId)
 	if (!geoSpaceId) throw new GeoDbError("unmapped_space", `space ${spaceId} is not loaded in geo-db`)
-	return deps.geoDb.readCard({geoSpaceId, entityId})
+	const started = performance.now()
+	try {
+		const rows = await deps.geoDb.readCard({geoSpaceId, entityId})
+		observeGeoDbRead((performance.now() - started) / 1000, "ok")
+		return rows
+	} catch (error) {
+		observeGeoDbRead((performance.now() - started) / 1000, "error")
+		throw error
+	}
 }
 
 /** Compare the Postgres answer with geo-db's and log what differs. Never throws. */
@@ -62,6 +71,14 @@ export async function shadowCompare(
 	try {
 		const rows = await askGeoDb(deps, conformedEntityId, spaceId)
 		const diff = diffCards(postgres, rows)
+		const result: ShadowResult = isEmptyDiff(diff)
+			? "match"
+			: diff.onlyPostgres.length > 0 && diff.onlyGeoDb.length > 0
+				? "both"
+				: diff.onlyPostgres.length > 0
+					? "only_postgres"
+					: "only_geodb"
+		recordShadow(result)
 		if (!isEmptyDiff(diff)) {
 			deps.log.warn("geodb card diff", {
 				entityId,
@@ -75,6 +92,7 @@ export async function shadowCompare(
 			})
 		}
 	} catch (error) {
+		recordShadow("failed")
 		deps.log.warn("geodb card shadow read failed", {
 			entityId,
 			spaceId,
@@ -102,9 +120,12 @@ export async function resolveCard(
 		try {
 			const rows = await askGeoDb(deps, geoEntityId, spaceId)
 			const statements = rows.map((r) => ({property: r.prop, value: r.raw}))
+			recordServed("geodb")
 			return {card: {entityId, spaceId, source: "geodb", statements}}
 		} catch (error) {
 			const reason = error instanceof GeoDbError ? error.reason : "error"
+			recordFallback(reason)
+			recordServed("postgres")
 			deps.log.warn("geodb card read failed, falling back to postgres", {
 				entityId,
 				spaceId,
@@ -124,6 +145,7 @@ export async function resolveCard(
 		}
 	}
 	const postgres = await postgresStatements(deps, entityId, spaceId)
+	recordServed("postgres")
 	const card: EntityCard = {entityId, spaceId, source: "postgres", statements: postgres.statements.map(view)}
 	return deps.mode === "shadow"
 		? {card, shadow: shadowCompare(deps, entityId, spaceId, postgres, geoEntityId)}

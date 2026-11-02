@@ -42,14 +42,34 @@ export function cardDocument(entityId: string): string {
 	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${entityId}" } } } }`
 }
 
-/** gaia space id (compact) -> geo-db space id, from the shadow loader's state file. */
+/**
+ * Parse a space map file: `{"<gaia space id>": {"geo": "<geo-db space id>"}}`. Every key and `geo`
+ * must be 32 hex digits (a dashed uuid is accepted and compacted); any other entry makes the whole
+ * file refused, so a damaged map falls back to Postgres rather than naming a wrong Space.
+ */
+export function parseSpaceMap(text: string): Map<string, string> {
+	const raw: unknown = JSON.parse(text)
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error("space map is not an object")
+	const map = new Map<string, string>()
+	for (const [key, entry] of Object.entries(raw)) {
+		const gaia = key.replaceAll("-", "").toLowerCase()
+		const geo = String((entry as {geo?: unknown} | null)?.geo ?? "")
+			.replaceAll("-", "")
+			.toLowerCase()
+		if (!HEX32.test(gaia) || !HEX32.test(geo)) throw new Error(`space map entry ${key} is not a pair of space ids`)
+		map.set(gaia, geo)
+	}
+	return map
+}
+
+/** gaia space id (compact) -> geo-db space id, read once from the file `GEODB_SPACE_MAP_PATH` names. */
 export function createSpaceMap(path: string): (gaiaSpaceId: string) => Promise<string | null> {
-	let loaded: Promise<Record<string, {geo?: string}>> | null = null
+	let loaded: Promise<Map<string, string>> | null = null
 	return async (gaiaSpaceId) => {
 		if (!path) return null
-		loaded ??= readFile(path, "utf8").then((text) => JSON.parse(text) as Record<string, {geo?: string}>)
+		loaded ??= readFile(path, "utf8").then(parseSpaceMap)
 		try {
-			return (await loaded)[gaiaSpaceId]?.geo ?? null
+			return (await loaded).get(gaiaSpaceId) ?? null
 		} catch (error) {
 			loaded = null // retry the read on the next request
 			throw new GeoDbError("client_failed", `space map unreadable: ${String(error)}`)

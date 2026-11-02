@@ -196,10 +196,17 @@ describe("createSpaceMap", () => {
 	it("reads the shadow loader's state file", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "geodb-map-"))
 		const path = join(dir, "spaces.json")
-		writeFileSync(path, JSON.stringify({[SPACE]: {geo: ENTITY, nonce: "n"}}))
+		writeFileSync(path, JSON.stringify({[SPACE]: {geo: ENTITY}}))
 		const lookup = createSpaceMap(path)
 		expect(await lookup(SPACE)).toBe(ENTITY)
 		expect(await lookup(ENTITY)).toBeNull()
+	})
+
+	it("refuses a file with a malformed entry", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "geodb-map-"))
+		const path = join(dir, "spaces.json")
+		writeFileSync(path, JSON.stringify({[SPACE]: {geo: ENTITY}, nope: {geo: "x"}}))
+		await expect(createSpaceMap(path)(SPACE)).rejects.toMatchObject({reason: "client_failed"})
 	})
 
 	it("fails loudly when the file is unreadable", async () => {
