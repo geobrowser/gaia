@@ -12,7 +12,7 @@ import {describeRoute} from "hono-openapi"
 import {log} from "../services/telemetry"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import type {GeoDbCardClient} from "./client"
-import {createCliGeoDbClient, createSpaceMap} from "./client"
+import {createPipeGeoDbClient, createSpaceMap} from "./client"
 import type {GeoDbCardConfig} from "./config"
 import {getCardRows} from "./queries"
 import type {CardDeps} from "./service"
@@ -27,7 +27,7 @@ export function createGeoDbRouter(
 ) {
 	const deps: CardDeps = {
 		mode: config.mode,
-		geoDb: overrides.geoDb ?? createCliGeoDbClient(config),
+		geoDb: overrides.geoDb ?? createPipeGeoDbClient(config),
 		geoSpaceOf: overrides.geoSpaceOf ?? createSpaceMap(config.spaceMapPath),
 		readPostgres: (entityId, spaceId) => getCardRows(db, entityId, spaceId),
 		log: overrides.log ?? log,

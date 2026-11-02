@@ -136,6 +136,7 @@ describe("GET /geodb/entities/:entityId/card", () => {
 		bindingPath: "",
 		spaceMapPath: "",
 		timeoutMs: 500,
+		poolSize: 4,
 	}
 
 	function setup() {
