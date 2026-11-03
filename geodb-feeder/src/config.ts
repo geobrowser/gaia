@@ -4,7 +4,7 @@ export type Config = {
 	kafka: {broker: string; username: string; password: string; caPem: string; topic: string; groupId: string}
 	dataDir: string
 	runDir: string
-	ctlDir: string
+	sealerFile: string
 	clientBin: string
 	keyPath: string
 	bindingPath: string
@@ -38,7 +38,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		},
 		dataDir,
 		runDir: env.RUN_DIR ?? `${dataDir}/run`,
-		ctlDir: env.CTL_DIR ?? `${dataDir}/ctl`,
+		sealerFile: env.GEODB_SEALER_FILE ?? "/etc/geodb/space-map/sealer-id",
 		clientBin: env.GEODB_CLIENT_BIN ?? "geodb-client",
 		keyPath: required(env, "GEODB_KEY_PATH"),
 		bindingPath: required(env, "GEODB_BINDING_PATH"),

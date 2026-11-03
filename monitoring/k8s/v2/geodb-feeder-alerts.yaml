@@ -1,5 +1,5 @@
 # Alerts for the geo-db read replica's feeder (geodb/, geodb-feeder/). Series come from the feeder
-# container through the hermes-metrics ServiceMonitor (job "geodb"). Runbook: geodb/RUNBOOK.md.
+# Deployment through the hermes-metrics ServiceMonitor (job "geodb-feeder"). Runbook: geodb/RUNBOOK.md.
 #
 #   GeoDbFeederDown        no feeder series, or serve/consumer reported down, for 10m
 #   GeoDbFeederStalled     messages are waiting but none has been applied for 15m
@@ -21,45 +21,46 @@ spec:
       rules:
         - alert: GeoDbFeederDown
           expr: |
-            absent(geodb_feeder_serve_up{namespace="gaia", job="geodb"})
-            or min(geodb_feeder_serve_up{namespace="gaia", job="geodb"}) == 0
-            or min(geodb_feeder_consumer_running{namespace="gaia", job="geodb"}) == 0
+            absent(geodb_feeder_serve_up{namespace="gaia", job="geodb-feeder"})
+            or min(geodb_feeder_serve_up{namespace="gaia", job="geodb-feeder"}) == 0
+            or min(geodb_feeder_consumer_running{namespace="gaia", job="geodb-feeder"}) == 0
           for: 10m
           labels:
             severity: warning
-            service: geodb
+            service: geodb-feeder
             namespace: gaia
           annotations:
             summary: The geo-db feeder or geodb-serve is down
             description: >-
               Cards read from geo-db are going stale (mode on falls back to Postgres only when geo-db
-              errors, not when it is merely behind). Check kubectl -n gaia get pod geodb-0,
-              logs -c feeder and -c serve. serve_up 0 means serve is restarting or refusing; consumer_running 0
+              errors, not when it is merely behind). Check kubectl -n gaia get pod geodb-0 and
+              the feeder pod (app=geodb-feeder), and their logs. serve_up 0 means serve is down or refusing; consumer_running 0
               means Kafka (credentials, ACL on the group geodb-feeder-v1-testnet).
 
         - alert: GeoDbFeederStalled
           expr: |
-            sum(geodb_feeder_consumer_lag{namespace="gaia", job="geodb"}) > 0
+            sum(geodb_feeder_consumer_lag{namespace="gaia", job="geodb-feeder"}) > 0
             and
-            (time() - max(geodb_feeder_last_applied_timestamp_seconds{namespace="gaia", job="geodb"})) > 900
+            (time() - max(geodb_feeder_last_applied_timestamp_seconds{namespace="gaia", job="geodb-feeder"})) > 900
           for: 5m
           labels:
             severity: warning
-            service: geodb
+            service: geodb-feeder
             namespace: gaia
           annotations:
             summary: The geo-db feeder has work waiting and is applying nothing
             description: >-
               No message applied for 15m while the topic is ahead. The feeder retries a failing apply
               forever instead of skipping it, so look at the feeder log for the repeating error
-              (kind transient = serve unreachable, exhausted = serve restarting).
+              (kind transient = serve unreachable; exhausted = serve is out of a per-process resource and needs
+              kubectl -n gaia rollout restart statefulset/geodb, which drains it cleanly).
 
         - alert: GeoDbFeederLagHigh
-          expr: sum(geodb_feeder_consumer_lag{namespace="gaia", job="geodb"}) > 5000
+          expr: sum(geodb_feeder_consumer_lag{namespace="gaia", job="geodb-feeder"}) > 5000
           for: 30m
           labels:
             severity: warning
-            service: geodb
+            service: geodb-feeder
             namespace: gaia
           annotations:
             summary: The geo-db feeder is more than 5000 messages behind
@@ -69,15 +70,15 @@ spec:
               trip this once.
 
         - alert: GeoDbFeederDeadLetters
-          expr: increase(geodb_feeder_dead_letters_total{namespace="gaia", job="geodb"}[30m]) > 0
+          expr: increase(geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder"}[30m]) > 0
           labels:
             severity: warning
-            service: geodb
+            service: geodb-feeder
             namespace: gaia
           annotations:
             summary: The geo-db feeder skipped an edit or an intent
             description: >-
               A message could not be decoded or geo-db refused an intent for good; it is written to
               /data/feeder/errors.jsonl and skipped. Read it with
-              kubectl -n gaia exec geodb-0 -c feeder -- tail /data/feeder/errors.jsonl. Each skipped item
+              kubectl -n gaia exec deploy/geodb-feeder -- tail /data/feeder/errors.jsonl. Each skipped item
               is a card that can differ in shadow mode.

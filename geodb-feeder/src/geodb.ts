@@ -1,10 +1,9 @@
 /**
- * The feeder's hands on geo-db: `geodb-client` for applies and reads, and the control files the
- * supervisor next to `geodb-serve` watches (see geodb/supervisor.sh) to restart it. A restart is how a
- * Space is founded, because `geodb-serve` accepts one `--found` nonce per start.
+ * The feeder's hands on geo-db: `geodb-client` for founding Spaces (`found`), applies and reads, over TCP.
+ * Every call is its own connection, so a call after a founding already holds grants over the new Space.
  */
 import {spawn} from "node:child_process"
-import {existsSync, mkdirSync, unlinkSync, writeFileSync} from "node:fs"
+import {mkdirSync, unlinkSync, writeFileSync} from "node:fs"
 
 export type RunResult = {rc: number | null; out: string; err: string}
 export type Runner = (args: string[], opts?: {timeoutMs?: number}) => Promise<RunResult>
@@ -36,7 +35,7 @@ export function spawnRunner(opts: {clientBin: string; keyPath: string; bindingPa
 export type Failure = "exhausted" | "transient" | "permanent"
 
 /**
- * Sorts a failed apply. `exhausted` is geo-db out of a per-process resource (a restart frees it), `transient`
+ * Sorts a failed apply. `exhausted` is geo-db out of a per-process resource (only a serve restart frees it), `transient`
  * is geo-db not reachable right now, and everything else is a verdict on the edit itself.
  */
 export function classify(message: string): Failure {
@@ -57,12 +56,11 @@ export class GeoDb {
 	private seq = 0
 
 	constructor(
-		private readonly opts: {runDir: string; ctlDir: string},
+		private readonly opts: {runDir: string},
 		private readonly run: Runner,
 		private readonly sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
 	) {
 		mkdirSync(opts.runDir, {recursive: true})
-		mkdirSync(opts.ctlDir, {recursive: true})
 	}
 
 	/** The Space ids geo-db serves, or null while it does not answer. */
@@ -81,19 +79,16 @@ export class GeoDb {
 		}
 	}
 
-	/** Ask the supervisor to restart geodb-serve, founding `nonce` on the way up, and wait until it answers. */
-	async restart(nonce: string | null, timeoutMs = 300_000): Promise<string[]> {
-		const pending = `${this.opts.ctlDir}/pending-found`
-		if (nonce) writeFileSync(pending, `${nonce}\n`)
-		else if (existsSync(pending)) unlinkSync(pending)
-		const flag = `${this.opts.ctlDir}/restart`
-		writeFileSync(flag, `${Date.now()}\n`)
-		const deadline = Date.now() + timeoutMs
-		while (existsSync(flag)) {
-			if (Date.now() > deadline) throw new Error("supervisor did not take the restart request")
-			await this.sleep(250)
-		}
-		return this.waitReady(timeoutMs)
+	/**
+	 * Found the Space `nonce` names under the node's sealer, online (wire FoundSpace through `geodb-client found`).
+	 * Idempotent: an already-founded Space answers the same id. Needs the writer principal's `publish` policy to
+	 * cover the id (the binding gives it `publish=*`).
+	 */
+	async found(sealer: string, nonce: string): Promise<string> {
+		const r = await this.run(["found", "--sealer", sealer, nonce], {timeoutMs: 60_000})
+		const id = /^founded: ([0-9a-f]{32})\s*$/m.exec(r.out)?.[1]
+		if (r.rc !== 0 || !id) throw new Error(`found ${nonce}: rc=${r.rc} ${(r.err + r.out).slice(-300)}`)
+		return id
 	}
 
 	async apply(zon: string): Promise<RunResult> {

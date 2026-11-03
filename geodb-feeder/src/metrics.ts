@@ -61,7 +61,6 @@ export function createMetrics() {
 		intents: counter("geodb_feeder_intents_total", "Intents applied to geo-db."),
 		chunks: counter("geodb_feeder_chunks_total", "geodb-client apply calls, by result (ok, retry, dead_letter)."),
 		deadLetters: counter("geodb_feeder_dead_letters_total", "Messages or intents written to errors.jsonl and skipped."),
-		serveRestarts: counter("geodb_feeder_serve_restarts_total", "geodb-serve restarts requested, by reason (found, exhausted)."),
 		opsDetail: counter("geodb_feeder_translate_total", "Translator counters (skips, drops, predates-window)."),
 		spaceMapPublish: counter("geodb_feeder_space_map_publish_total", "Space map ConfigMap publishes, by result."),
 		offsetGaps: counter("geodb_feeder_offset_gaps_total", "Offsets skipped by the broker (retention or compaction)."),

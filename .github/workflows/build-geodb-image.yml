@@ -19,7 +19,7 @@ on:
         description: "geo-db commit to build (full or abbreviated SHA on the `final` branch)"
         required: true
         type: string
-        default: 47b7666dd1
+        default: 289618ffbf
 
 concurrency:
   group: build-geodb-image
@@ -104,4 +104,4 @@ jobs:
           docker push "$REGISTRY/geodb:$GEODB_TAG"
           echo "## geodb image" >> "$GITHUB_STEP_SUMMARY"
           echo "Tag: \`$GEODB_TAG\` (geo-db \`$GEODB_SHA\`)" >> "$GITHUB_STEP_SUMMARY"
-          echo "The manifests pin \`geodb:47b7666dd1\`; a different tag needs geodb/k8s/v2/geodb.yaml and api/k8s/v2/api.yaml changed to match." >> "$GITHUB_STEP_SUMMARY"
+          echo "The manifests pin \`geodb:289618ffbf\`; a different tag needs geodb/k8s/v2/geodb.yaml and api/k8s/v2/api.yaml changed to match." >> "$GITHUB_STEP_SUMMARY"

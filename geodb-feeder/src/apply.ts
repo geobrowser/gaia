@@ -5,7 +5,7 @@ import type {SpaceRecord, Store} from "./state.js"
 import {zonDoc} from "./translate.js"
 
 export type ApplyDeps = {
-	db: Pick<GeoDb, "apply" | "waitReady" | "restart">
+	db: Pick<GeoDb, "apply" | "waitReady">
 	store: Store
 	metrics: Metrics
 	/** Keeps the Kafka session alive while geo-db is slow or down. */
@@ -22,7 +22,7 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
  * Apply `intents[from..]` of one message in chunks of at most `chunk`, calling `progress(n)` after each
  * range that is done (applied, or dead-lettered because geo-db refused it on its merits).
  *
- * - Transient failures (geo-db down, restarting, out of a resource) retry forever with backoff; the feeder
+ * - Transient failures (geo-db down, out of a resource) retry forever with backoff; the feeder
  *   never skips an edit because geo-db was unavailable.
  * - A refused range is bisected until the refused intent is alone, which is written to errors.jsonl and skipped.
  */
@@ -90,14 +90,11 @@ async function tryApply(
 		if (kind === "permanent") return {error: message}
 		deps.metrics.chunks.inc({result: "retry"})
 		log("warn", "apply failed, retrying", {kind, error: message.slice(0, 300), delayMs: delay})
-		if (kind === "exhausted") {
-			deps.metrics.serveRestarts.inc({reason: "exhausted"})
-			await deps.db.restart(null)
-		} else {
-			await sleep(delay)
-			delay = Math.min(delay * 2, 30_000)
-			await deps.db.waitReady()
-		}
+		// `exhausted` is serve out of a per-process resource. The feeder cannot restart serve (a different pod);
+		// it backs off like any outage and the GeoDbFeederStalled alert tells a human to roll serve.
+		await sleep(delay)
+		delay = Math.min(delay * 2, 30_000)
+		await deps.db.waitReady()
 		await deps.beat()
 	}
 }

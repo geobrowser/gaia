@@ -11,7 +11,6 @@ import {writeFileDurable} from "./state.js"
 
 const SA = "/var/run/secrets/kubernetes.io/serviceaccount"
 const KEY = "space-map.json"
-const NODE_KEY = "node-id"
 
 export type ConfigMapData = Record<string, string>
 
@@ -64,7 +63,6 @@ export function kubeConfigMapPut(name: string): ((data: ConfigMapData) => Promis
 
 export class SpaceMapPublisher {
 	private latest: string | null = null
-	private nodeId: string | null = null
 	private dirty = false
 	private inflight = false
 	private timer: ReturnType<typeof setInterval> | null = null
@@ -83,14 +81,6 @@ export class SpaceMapPublisher {
 		void this.flush()
 	}
 
-	/** The serve node key id the api pins in its binding; goes out with the map. */
-	setNodeId(id: string): void {
-		if (id === this.nodeId) return
-		this.nodeId = id
-		this.dirty = true
-		void this.flush()
-	}
-
 	start(retryMs = 30_000): void {
 		this.timer = setInterval(() => void this.flush(), retryMs)
 		this.timer.unref()
@@ -103,13 +93,11 @@ export class SpaceMapPublisher {
 	async flush(): Promise<void> {
 		if (!this.put || !this.dirty || this.inflight || this.latest === null) return
 		const text = this.latest
-		const nodeId = this.nodeId
 		const data: ConfigMapData = {[KEY]: text}
-		if (nodeId) data[NODE_KEY] = nodeId
 		this.inflight = true
 		try {
 			await this.put(data)
-			if (this.latest === text && this.nodeId === nodeId) this.dirty = false
+			if (this.latest === text) this.dirty = false
 			this.metrics.spaceMapPublish.inc({result: "ok"})
 		} catch (e) {
 			this.metrics.spaceMapPublish.inc({result: "error"})

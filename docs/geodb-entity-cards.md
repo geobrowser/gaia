@@ -32,10 +32,11 @@ changed, so a Space the feeder founds becomes readable without restarting the ap
 previous map stays in use; only a map that has never loaded makes requests fall back.
 
 In the cluster the file is produced by the feeder (`geodb-feeder/`): it founds each gaia Space in geo-db
-on first sight under a deterministic nonce, records the pair, and publishes the whole map to the
+online over the wire (`geodb-client found`) on first sight under a deterministic nonce, records the pair, and publishes the whole map to the
 ConfigMap `geodb-space-map` (key `space-map.json`), which the api pods mount. The ids are stable for a
 fixed store secret, so a different store secret founds different ids and needs its own map. The same
-ConfigMap carries `node-id`, serve's node key id, which the api's binding pins (see `geodb/RUNBOOK.md`).
+ConfigMap carries `node-id` (serve's node key id, which the api's binding pins) and `sealer-id` (the
+key id Spaces are founded under), both published by serve's supervisor (see `geodb/RUNBOOK.md`).
 Outside the cluster, with the geo-shadow harness: `remote/ingest_loop.py` loads the corpus and writes
 `corpus/spaces-loaded.json` (slug to geo-db id), then `node emit/space-map.mjs` joins that with the
 manifest's `source.legacySpaceId` and writes `corpus/space-map.json`.

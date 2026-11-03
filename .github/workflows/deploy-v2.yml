@@ -85,9 +85,9 @@ jobs:
             kg-indexer)        manifests="kg-indexer/k8s/v2/kg-indexer.yaml";               rollout="deployment/kg-indexer" ;;
             atlas)             manifests="hermes/k8s/v2/atlas.yaml";                        rollout="deployment/atlas" ;;
             api)               manifests="api/k8s/v2/api.yaml api/k8s/v2/hpa.yaml";         rollout="deployment/api" ;;
-            # The geo-db read replica: one StatefulSet, two containers (geodb-serve from the pinned
-            # geodb image, the feeder from this tag). geodb/RUNBOOK.md has the order and the secrets.
-            geodb-feeder)      manifests="geodb/k8s/v2/geodb.yaml";                         rollout="statefulset/geodb" ;;
+            # The geo-db read replica: StatefulSet geodb (geodb-serve, pinned geodb image) and Deployment
+            # geodb-feeder (the feeder, from this tag); the rollout waits on the feeder, check serve by hand. geodb/RUNBOOK.md has the order and the secrets.
+            geodb-feeder)      manifests="geodb/k8s/v2/geodb.yaml";                         rollout="deployment/geodb-feeder" ;;
             valkey)            manifests="api/k8s/v2/valkey.yaml";                          rollout="deployment/api-cache" ;;
             search-indexer)    manifests="search-indexer-deploy/k8s/v2/search-indexer.yaml"; rollout="statefulset/search-indexer" ;;
             # search-admin is a CLI; the only thing deployed from it on a schedule is the

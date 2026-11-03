@@ -3,7 +3,11 @@
 # Local build: copy geodb-serve and geodb-client into this directory first.
 FROM debian:bookworm-slim
 
-# The supervisor needs sh, sed, tail, sleep, head, cut and getent; all are in the base image.
+# The supervisor needs sh, sed, tail, sleep and head (in the base image) and curl, to publish serve's
+# node and sealer ids to the geodb-space-map ConfigMap. The api's init container needs getent and cut.
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY geodb-serve geodb-client /usr/local/bin/
 COPY supervisor.sh /usr/local/bin/geodb-supervisor
 RUN chmod 0755 /usr/local/bin/geodb-serve /usr/local/bin/geodb-client /usr/local/bin/geodb-supervisor

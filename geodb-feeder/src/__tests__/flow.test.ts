@@ -15,6 +15,7 @@ const GEO = "daf0bc83ca744e1a9ee0377967846846"
 const id = (n: number) => new Uint8Array(Array.from({length: 16}, (_, i) => (i === 0 ? n : i === 6 ? 0x40 : i === 8 ? 0x80 : i)))
 const hex = (n: number) => Buffer.from(id(n)).toString("hex")
 
+const SEALER = "5".repeat(64)
 const tmp = () => mkdtempSync(join(tmpdir(), "feeder-"))
 
 type Result = {rc: number | null; out: string; err: string}
@@ -22,12 +23,12 @@ const ok: Result = {rc: 0, out: "", err: ""}
 
 function fakeDb(script: (zon: string, call: number) => Result | Promise<Result>) {
 	const applied: string[] = []
-	const restarts: (string | null)[] = []
+	const founds: {sealer: string; nonce: string}[] = []
 	let calls = 0
 	const spaces = new Set<string>()
 	return {
 		applied,
-		restarts,
+		founds,
 		get calls() {
 			return calls
 		},
@@ -38,10 +39,10 @@ function fakeDb(script: (zon: string, call: number) => Result | Promise<Result>)
 				return r
 			},
 			waitReady: async () => [...spaces],
-			restart: async (nonce: string | null) => {
-				restarts.push(nonce)
-				if (nonce) spaces.add(GEO)
-				return [...spaces]
+			found: async (sealer: string, nonce: string) => {
+				founds.push({sealer, nonce})
+				spaces.add(GEO)
+				return GEO
 			},
 		},
 	}
@@ -49,6 +50,7 @@ function fakeDb(script: (zon: string, call: number) => Result | Promise<Result>)
 
 const base = (store: Store, fake: ReturnType<typeof fakeDb>) => ({
 	db: fake.db,
+	sealer: async () => SEALER,
 	store,
 	metrics: createMetrics(),
 	beat: async () => {},
@@ -93,14 +95,13 @@ describe("applyIntents", () => {
 		expect(fake.applied[0]).not.toContain('"e3"')
 	})
 
-	it("retries an outage forever instead of skipping, and restarts serve when it is exhausted", async () => {
+	it("retries an outage and an exhausted serve forever instead of skipping", async () => {
 		const store = new Store(tmp())
 		const fake = fakeDb((_, call) =>
 			call === 0 ? {rc: 1, out: "", err: "ConnectionRefused"} : call === 1 ? {rc: 1, out: "", err: "ResourceExhausted"} : ok,
 		)
 		const r = await applyIntents(base(store, fake), {...space, keyed: true}, {space: GAIA, partition: 0, offset: "1"}, intents(2), 10, 0, () => {})
 		expect(r.applied).toBe(2)
-		expect(fake.restarts).toEqual([null])
 	})
 
 	it("bisects a refused chunk down to the one bad intent and dead-letters only that", async () => {
@@ -124,7 +125,8 @@ describe("ensureSpace", () => {
 		const b = await ensureSpace(deps, GAIA)
 		expect(a.geo).toBe(GEO)
 		expect(b).toBe(a)
-		expect(fake.restarts).toHaveLength(1)
+		expect(fake.founds).toHaveLength(1)
+		expect(fake.founds[0]?.sealer).toBe(SEALER)
 		expect(JSON.parse(published[0] ?? "")).toEqual({[GAIA]: {geo: GEO}})
 	})
 
@@ -140,11 +142,22 @@ describe("ensureSpace", () => {
 		expect(rec.nonce).toBe("pending")
 	})
 
-	it("refuses to guess when more than one unknown Space appears", async () => {
+	it("does not found again for a Space it already holds", async () => {
+		const store = new Store(tmp())
+		store.spaces[GAIA] = {geo: GEO, nonce: "n", keyed: true}
+		const fake = fakeDb(() => ok)
+		await ensureSpace(base(store, fake), GAIA)
+		expect(fake.founds).toEqual([])
+	})
+
+	it("surfaces a refused founding and keeps the record for the retry", async () => {
 		const store = new Store(tmp())
 		const fake = fakeDb(() => ok)
-		fake.db.restart = async () => [GEO, "1".repeat(32)]
-		await expect(ensureSpace(base(store, fake), GAIA)).rejects.toThrow(/expected 1/)
+		fake.db.found = async () => {
+			throw new Error("found: refused: NotFoundOrRestricted")
+		}
+		await expect(ensureSpace(base(store, fake), GAIA)).rejects.toThrow(/NotFoundOrRestricted/)
+		expect(store.spaces[GAIA]?.geo).toBeNull()
 	})
 })
 
@@ -238,7 +251,7 @@ describe("handleMessage", () => {
 })
 
 describe("SpaceMapPublisher", () => {
-	it("sends the map and node id together, and re-sends until the put lands", async () => {
+	it("sends the map and re-sends until the put lands", async () => {
 		const {SpaceMapPublisher} = await import("../publish.js")
 		const dir = mkdtempSync(join(tmpdir(), "pub-"))
 		const sent: Record<string, string>[] = []
@@ -249,12 +262,11 @@ describe("SpaceMapPublisher", () => {
 		}
 		const pub = new SpaceMapPublisher(join(dir, "m.json"), put, createMetrics())
 		pub.publish("{}")
-		pub.setNodeId("a".repeat(64))
 		await pub.flush()
 		expect(sent).toEqual([])
 		fail = false
 		await pub.flush()
-		expect(sent.at(-1)).toEqual({"space-map.json": "{}", "node-id": "a".repeat(64)})
+		expect(sent.at(-1)).toEqual({"space-map.json": "{}"})
 		const n = sent.length
 		await pub.flush()
 		expect(sent.length).toBe(n)

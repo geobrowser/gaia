@@ -1,6 +1,6 @@
 # geo-db entity cards, stage 1: runbook (testnet)
 
-What this stands up: a geo-db replica (`geodb-0`: `serve` + `feeder` containers) fed from
+What this stands up: a geo-db replica (StatefulSet `geodb-0` running `serve`, plus a separate `geodb-feeder` Deployment) fed from
 `testnet.knowledge.edits`, and the api reading entity cards from it behind `GEODB_ENTITY_CARDS`.
 Postgres stays the system of record and the fallback. The flag ships `off`; nothing changes for
 users until you flip it. Context is `geo-testnet-k8s`, namespace `gaia`.
@@ -37,7 +37,7 @@ $K create secret generic geodb-store-secret --from-file=secret.hex=./secret.hex
 
 # the feeder's write key and the api's read-only key
 for who in writer reader; do
-  docker run --rm -v "$PWD:/k" -w /k registry.digitalocean.com/geo/geodb:47b7666dd1 \
+  docker run --rm -v "$PWD:/k" -w /k registry.digitalocean.com/geo/geodb:289618ffbf \
     geodb-client --key $who.key keygen > $who.keyid
   $K create secret generic geodb-$who-key --from-file=key=./$who.key --from-file=keyid=./$who.keyid
 done
@@ -46,47 +46,49 @@ shred -u secret.hex writer.key reader.key 2>/dev/null || rm -P secret.hex writer
 
    `keyid` must be the bare 64-hex id with no trailing text. Check it with `cat writer.keyid` before the
    `create secret` lines, and re-run `keygen` if it prints anything else.
-4. Nothing to create for `geodb-space-map`: the feeder makes that ConfigMap itself.
+4. Nothing to create for `geodb-space-map`: serve's supervisor creates it and publishes `node-id` and
+   `sealer-id`; the feeder adds `space-map.json`.
 
 ## 1. Deploy order
 
 Each step is a manual dispatch from `main` after the PR is merged. Wait for green before the next.
 
 ```bash
-# a. geodb image (serve + client), pinned at geo-db final 47b7666dd1. ~1 h of compile.
-gh workflow run build-geodb-image.yml --ref main -f geodb_ref=47b7666dd1
+# a. geodb image (serve + client), pinned at geo-db final 289618ffbf. ~1 h of compile.
+gh workflow run build-geodb-image.yml --ref main -f geodb_ref=289618ffbf
 # b. feeder image
 gh workflow run build-v2-images.yml --ref main -f service=geodb-feeder
-# c. the replica: StatefulSet, Service, RBAC, serve config. TAG = the 8-char sha of the run in (b).
+# c. the replica: StatefulSet geodb, Deployment geodb-feeder, Services, RBAC, serve config. TAG = the 8-char sha of the run in (b).
 gh workflow run deploy-v2.yml --ref main -f service=geodb-feeder -f tag=<TAG> -f cluster=geo-testnet-k8s
-$K rollout status statefulset/geodb
+$K rollout status statefulset/geodb && $K rollout status deployment/geodb-feeder
 # d. alerts
 kubectl --context do-nyc2-geo-testnet-k8s apply -f monitoring/k8s/v2/geodb-feeder-alerts.yaml \
   -f monitoring/k8s/v2/hermes-metrics-servicemonitor.yaml
-# e. api, last: it carries the init container that reads the node id, and it needs geodb:47b7666dd1 to
+# e. api, last: it carries the init container that reads the node id, and it needs geodb:289618ffbf to
 #    exist in the registry (step a) or its pods stay in ImagePullBackOff and the rollout stalls.
 gh workflow run build-v2-images.yml --ref main -f service=api
 gh workflow run deploy-v2.yml --ref main -f service=api -f tag=<API TAG> -f cluster=geo-testnet-k8s
 ```
 
 Why (e) comes after (c): the api's init container writes its binding from `node-id` in ConfigMap
-`geodb-space-map`, which the feeder publishes on its first start. If the api rolled out first it
+`geodb-space-map`, which serve's supervisor publishes on its first start. If the api rolled out first it
 would start without a binding and answer every card from Postgres. Harmless, but fix it by
 `$K rollout restart deployment/api` once the ConfigMap has `node-id`.
 
 Check the replica is up and filling:
 
 ```bash
-$K get pod geodb-0                        # 2/2 Running
-$K get cm geodb-space-map -o jsonpath='{.data.node-id}{"\n"}'   # 64 hex
-$K logs geodb-0 -c feeder --tail=20       # JSON lines: "founded space", "applied"
-$K exec geodb-0 -c feeder -- wget -qO- localhost:9090/health/readiness
-$K port-forward pod/geodb-0 9090 &  curl -s localhost:9090/metrics | grep -E 'consumer_lag|spaces|dead_letters'
+$K get pod geodb-0                        # 1/1 Running (serve)
+$K get pod -l app=geodb-feeder            # 1/1 Running (feeder)
+$K get cm geodb-space-map -o jsonpath='{.data.node-id}{"\n"}{.data.sealer-id}{"\n"}'   # 64 hex each
+$K logs deploy/geodb-feeder --tail=20     # JSON lines: "founded space", "applied"
+$K logs geodb-0 --tail=20                 # serve and supervisor
+$K port-forward svc/geodb-feeder 9090 &  curl -s localhost:9090/metrics | grep -E 'consumer_lag|spaces|dead_letters'
 ```
 
-The first start founds one geo-db Space per gaia Space and each founding restarts serve (about 1 s on
-the dedicated volume), so a long topic with many Spaces takes a while before the lag falls. That is
-normal; `geodb_feeder_spaces` rises, then `geodb_feeder_consumer_lag` falls.
+The first start founds one geo-db Space per gaia Space, online over the wire (`geodb-client found`);
+serve is never restarted for it, but a long topic with many Spaces still takes a while before the lag
+falls. That is normal; `geodb_feeder_spaces` rises, then `geodb_feeder_consumer_lag` falls.
 
 ## 2. Turn on shadow mode
 
@@ -121,7 +123,7 @@ Do not turn serve mode on until all of these hold over 7 days of shadow:
   mapping gaps (PR #1054). Find specific cards from the api's shadow log lines.
 - The replica keeps up: `geodb_feeder_consumer_lag` returns to near 0 after bursts, and
   `geodb_feeder_dead_letters_total` is flat or every dead letter is explained
-  (`$K exec geodb-0 -c feeder -- cat /data/feeder/errors.jsonl`).
+  (`$K exec deploy/geodb-feeder -- cat /data/feeder/errors.jsonl`).
 - p99 `gaia_api_geodb_read_seconds` is well under the 500 ms budget (`GEODB_TIMEOUT_MS`).
 - No `GeoDbFeederDown`, `GeoDbFeederStalled`, `ApiGeoDbCardShadowFailing` alert in the window.
 
@@ -154,14 +156,14 @@ $K rollout status deployment/api
 With the flag off the route is not mounted and the api never spawns `geodb-client`. The replica can keep
 running (it only costs one pod and a volume), or be stopped with `$K scale statefulset/geodb --replicas=0`.
 The PVC is kept; scaling back up resumes from the stored offset. To remove it entirely, delete the
-StatefulSet, the PVC `data-geodb-0`, and the four Secrets and the `geodb-space-map` ConfigMap.
+StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-feeder-state`, and the four Secrets and the `geodb-space-map` ConfigMap.
 
 ## 6. Alerts (monitoring/k8s/v2/geodb-feeder-alerts.yaml)
 
 | alert | means | first look |
 | --- | --- | --- |
-| `GeoDbFeederDown` | no feeder series, serve down, or consumer down for 10m | `$K get pod geodb-0`; `logs -c feeder`, `logs -c serve`; Kafka credentials and ACL |
-| `GeoDbFeederStalled` | lag above 0 and nothing applied for 15m | the repeating error in the feeder log (`transient` = serve unreachable, `exhausted` = serve restarting) |
+| `GeoDbFeederDown` | no feeder series, serve down, or consumer down for 10m | `$K get pod geodb-0` and `-l app=geodb-feeder`; `logs deploy/geodb-feeder`, `logs geodb-0`; Kafka credentials and ACL |
+| `GeoDbFeederStalled` | lag above 0 and nothing applied for 15m | the repeating error in the feeder log (`transient` = serve unreachable, `exhausted` = serve is out of capacity: `$K rollout restart statefulset/geodb`) |
 | `GeoDbFeederLagHigh` | more than 5000 behind for 30m | expected once on first catch-up; otherwise throughput or a stall |
 | `GeoDbFeederDeadLetters` | an edit or intent was skipped | `errors.jsonl` on the volume (see above) |
 
@@ -170,11 +172,11 @@ StatefulSet, the PVC `data-geodb-0`, and the four Secrets and the `geodb-space-m
 - Crash recovery: the feeder resumes from its stored offset (`/data/feeder/offsets.json`), and an
   interrupted message is replayed from the intent it stopped at. Applies are idempotent, so a replay is
   safe. Kafka's own group offset is only used to report lag.
-- Replaying from scratch: scale to 0, delete `data-geodb-0`, scale to 1. Space ids come out the same
+- Replaying from scratch: scale both workloads to 0, delete PVCs `data-geodb-0` and `geodb-feeder-state`, scale both to 1. Space ids come out the same
   because the store secret and the founding nonces are deterministic.
 - New Spaces become readable to the api within the grant lifetime (`GEODB_GRANT_TTL_S`, 300 s) and the
   space-map refresh (10 s).
-- A serve restart for founding drops the feeder's connection for about a second; the feeder retries.
+- Founding is online: no serve restart. If serve is restarted by hand, the feeder retries its connection.
 - Capacity: `spaces = 256` in `geodb-serve-config` is geo-db's Space capacity. The shadow droplet holds 79
   gaia Spaces on testnet (2026-11-03), so there is headroom. If the feeder log shows founding refused
   for capacity, `GeoDbFeederStalled` fires; raise `spaces`, redeploy, and the feeder resumes.

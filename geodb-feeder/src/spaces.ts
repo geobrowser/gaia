@@ -5,7 +5,9 @@ import type {Metrics} from "./metrics.js"
 import {type Store, type SpaceRecord, renderSpaceMap} from "./state.js"
 
 export type SpaceDeps = {
-	db: Pick<GeoDb, "waitReady" | "restart">
+	db: Pick<GeoDb, "waitReady" | "found">
+	/** serve's sealer key id (public), published by the supervisor; resolves once it is known. */
+	sealer: () => Promise<string>
 	store: Store
 	metrics: Metrics
 	/** Called with the new map text after every change; failures are the publisher's to retry. */
@@ -13,11 +15,11 @@ export type SpaceDeps = {
 }
 
 /**
- * The geo-db Space for a gaia Space, founding it (a geodb-serve restart) when it is new.
+ * The geo-db Space for a gaia Space, founding it online when it is new: wire FoundSpace under a deterministic
+ * nonce, with serve still running. Calls after it are new connections, so they hold grants over the Space.
  *
- * Crash-safe: the nonce is deterministic, and the record is saved with `geo: null` before the restart.
- * If the feeder dies mid-founding, the retry restarts with the same nonce, which founds the same Space id,
- * and the Space it did not know before is the one that was founded.
+ * Crash-safe: the nonce is deterministic and founding is idempotent, so a retry after a crash founds nothing
+ * new and answers the same id.
  */
 export async function ensureSpace(deps: SpaceDeps, gaiaSpace: string): Promise<SpaceRecord & {geo: string}> {
 	const {store} = deps
@@ -29,14 +31,7 @@ export async function ensureSpace(deps: SpaceDeps, gaiaSpace: string): Promise<S
 	store.saveSpaces()
 
 	await deps.db.waitReady()
-	const known = new Set(Object.values(store.spaces).flatMap((s) => (s.geo ? [s.geo] : [])))
-	const after = await deps.db.restart(record.nonce)
-	deps.metrics.serveRestarts.inc({reason: "found"})
-	const fresh = after.filter((id) => !known.has(id))
-	if (fresh.length !== 1 || !fresh[0]) {
-		throw new Error(`founding ${gaiaSpace}: expected 1 Space geo-db did not already hold, saw ${fresh.length}`)
-	}
-	record.geo = fresh[0]
+	record.geo = await deps.db.found(await deps.sealer(), record.nonce)
 	store.saveSpaces()
 	deps.metrics.spaces.set({}, Object.values(store.spaces).filter((s) => s.geo).length)
 	deps.publish(renderSpaceMap(store.spaces))

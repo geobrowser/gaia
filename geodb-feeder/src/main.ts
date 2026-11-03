@@ -2,8 +2,7 @@
  * geodb-feeder: topic `<env>.knowledge.edits` -> HermesEdit -> GRC-20 ops -> geodb-client apply -> geodb-serve.
  *
  * Delivery is at-least-once with a resumable apply: see state.ts for what is stored and why a replayed
- * message is safe. The feeder runs next to geodb-serve (same pod, same volume) because founding a Space
- * restarts it.
+ * message is safe. The feeder is its own Deployment and reaches geodb-serve over TCP; it founds Spaces online.
  */
 import {existsSync, readFileSync} from "node:fs"
 import * as zstd from "@bokuweb/zstd-wasm"
@@ -38,7 +37,7 @@ async function main(config: Config): Promise<void> {
 
 	const store = new Store(`${config.dataDir}/feeder`)
 	const db = new GeoDb(
-		{runDir: config.runDir, ctlDir: config.ctlDir},
+		{runDir: config.runDir},
 		spawnRunner({clientBin: config.clientBin, keyPath: config.keyPath, bindingPath: config.bindingPath, cwd: config.runDir}),
 	)
 	const publisher = new SpaceMapPublisher(config.spaceMapPath, kubeConfigMapPut(config.spaceMapConfigMap), metrics)
@@ -56,7 +55,6 @@ async function main(config: Config): Promise<void> {
 	log("info", "waiting for geodb-serve")
 	await db.waitReady()
 	serveUp = true
-	publisher.setNodeId(await readNodeId(`${config.ctlDir}/node-id`))
 	metrics.spaces.set({}, Object.values(store.spaces).filter((s) => s.geo).length)
 
 	const kafka = new Kafka({
@@ -78,9 +76,9 @@ async function main(config: Config): Promise<void> {
 		}
 	}
 
-	const spaceDeps = {db, store, metrics, publish: (t: string) => publisher.publish(t)}
+	const spaceDeps = {db, store, metrics, sealer: () => readSealer(config.sealerFile), publish: (t: string) => publisher.publish(t)}
 	if (config.spacesListPath && existsSync(config.spacesListPath)) {
-		// Each founding is a geodb-serve restart, so found the Spaces already known up front, on a quiet store.
+		// Found the Spaces already known up front, so the first messages do not wait on a founding.
 		for (const g of readFileSync(config.spacesListPath, "utf8").split("\n").map((l) => l.trim()).filter(Boolean)) {
 			await ensureSpace(spaceDeps, g)
 		}
@@ -180,17 +178,16 @@ main(loadConfig()).catch((e) => {
 	process.exit(1)
 })
 
-/** The supervisor writes serve's node key id here once serve has printed it; wait for it briefly. */
-async function readNodeId(path: string): Promise<string> {
-	for (let i = 0; i < 60; i++) {
+/** serve's sealer key id (public). The supervisor publishes it to the geodb-space-map ConfigMap, mounted here. */
+async function readSealer(path: string): Promise<string> {
+	for (;;) {
 		try {
 			const id = readFileSync(path, "utf8").trim()
 			if (/^[0-9a-f]{64}$/.test(id)) return id
 		} catch {
-			// not written yet
+			// not published yet
 		}
-		await new Promise((r) => setTimeout(r, 500))
+		log("warn", "waiting for serve's sealer id", {path})
+		await sleep(5000)
 	}
-	log("warn", "no node id from the supervisor; the api binding will not be written until it appears")
-	return ""
 }
