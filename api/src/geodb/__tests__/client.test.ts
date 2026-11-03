@@ -202,6 +202,23 @@ describe("createSpaceMap", () => {
 		expect(await lookup(ENTITY)).toBeNull()
 	})
 
+	it("picks up a Space the feeder adds, and keeps the old map if the file turns bad", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "geodb-map-"))
+		const path = join(dir, "spaces.json")
+		writeFileSync(path, JSON.stringify({[SPACE]: {geo: ENTITY}}))
+		let clock = 0
+		const lookup = createSpaceMap(path, {refreshMs: 1000, now: () => clock})
+		expect(await lookup(SPACE)).toBe(ENTITY)
+		expect(await lookup(ENTITY)).toBeNull()
+		writeFileSync(path, JSON.stringify({[SPACE]: {geo: ENTITY}, [ENTITY]: {geo: SPACE}}))
+		expect(await lookup(ENTITY)).toBeNull() // inside the refresh window
+		clock = 1500
+		expect(await lookup(ENTITY)).toBe(SPACE)
+		writeFileSync(path, "{not json at all, longer than before")
+		clock = 3000
+		expect(await lookup(SPACE)).toBe(ENTITY)
+	})
+
 	it("refuses a file with a malformed entry", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "geodb-map-"))
 		const path = join(dir, "spaces.json")

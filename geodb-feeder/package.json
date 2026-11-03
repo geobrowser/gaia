@@ -1,0 +1,26 @@
+{
+	"name": "geodb-feeder",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Feeds the geo-db read replica from the knowledge.edits Kafka topic",
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"check": "tsc --noEmit",
+		"test": "vitest run",
+		"start": "node dist/main.js"
+	},
+	"engines": {
+		"node": ">=22"
+	},
+	"dependencies": {
+		"@bokuweb/zstd-wasm": "^0.0.27",
+		"@geoprotocol/grc-20": "^0.4.1",
+		"kafkajs": "^2.2.4"
+	},
+	"devDependencies": {
+		"@types/node": "^22.10.0",
+		"typescript": "^5.7.0",
+		"vitest": "^3.0.0"
+	}
+}

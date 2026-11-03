@@ -37,6 +37,10 @@ spec:
           - ranking-indexer
           - notification-indexer
           - delivery-worker
+          # geodb-feeder: the geo-db replica's feeder (its own Deployment; geodb-serve exports
+          # nothing). Port 9090 also serves /metrics; series are geodb_feeder_*. See
+          # monitoring/k8s/v2/geodb-feeder-alerts.yaml and geodb/RUNBOOK.md.
+          - geodb-feeder
   endpoints:
     - port: metrics
       path: /metrics

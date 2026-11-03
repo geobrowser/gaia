@@ -1,0 +1,107 @@
+name: Build geodb image (manual)
+
+# Builds geodb-serve and geodb-client from geo-db at a pinned commit and pushes
+# registry.digitalocean.com/geo/geodb:<first 10 hex of the commit>. The geodb StatefulSet
+# (geodb/k8s/v2/geodb.yaml) and the api's init container pin that exact tag; change them together.
+#
+# geo-db is a private repository, and so are its sibling packages, so this needs a secret that
+# gaia does not have yet:
+#   GEO_DB_READ_TOKEN  a fine-grained personal access token (or a deploy-key-backed equivalent) with
+#                      read-only "Contents" on geobrowser/geo-db, atom-swap, zblake3, envelope, auth,
+#                      tidy, zrapidhash and grc-20-new. Create it in the gaia repository's Actions secrets.
+#
+# Build-and-push only, like build-v2-images. Deploying is separate (deploy-v2, service geodb-feeder).
+
+on:
+  workflow_dispatch:
+    inputs:
+      geodb_ref:
+        description: "geo-db commit to build (full or abbreviated SHA on the `final` branch)"
+        required: true
+        type: string
+        default: 289618ffbf
+
+concurrency:
+  group: build-geodb-image
+  cancel-in-progress: false
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout gaia (Dockerfile and supervisor)
+        uses: actions/checkout@v7
+
+      - name: Checkout geo-db
+        env:
+          TOKEN: ${{ secrets.GEO_DB_READ_TOKEN }}
+          REF: ${{ inputs.geodb_ref }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Secret GEO_DB_READ_TOKEN is not set; see the comment at the top of this workflow."
+            exit 1
+          fi
+          # Every later git fetch of a geobrowser repository (siblings.sh clones the pinned siblings)
+          # carries the token.
+          git config --global url."https://x-access-token:${TOKEN}@github.com/geobrowser/".insteadOf "https://github.com/geobrowser/"
+          git clone --filter=blob:none https://github.com/geobrowser/geo-db.git "$RUNNER_TEMP/geo-db"
+          git -C "$RUNNER_TEMP/geo-db" checkout --detach "$REF"
+          full="$(git -C "$RUNNER_TEMP/geo-db" rev-parse HEAD)"
+          # The commit must be on final: this image serves real edits.
+          git -C "$RUNNER_TEMP/geo-db" fetch -q origin final
+          git -C "$RUNNER_TEMP/geo-db" merge-base --is-ancestor "$full" FETCH_HEAD \
+            || { echo "::error::$full is not on geo-db final"; exit 1; }
+          echo "GEODB_SHA=$full" >> "$GITHUB_ENV"
+          echo "GEODB_TAG=${full:0:10}" >> "$GITHUB_ENV"
+
+      - name: Bootstrap checksum-pinned Zig
+        working-directory: ${{ runner.temp }}/geo-db
+        run: |
+          compiler="$(sh zig/download.sh)"
+          dirname "$compiler" >> "$GITHUB_PATH"
+
+      - name: Fetch the pinned sibling packages
+        working-directory: ${{ runner.temp }}/geo-db
+        run: sh zig/siblings.sh
+
+      - name: Build geodb-serve and geodb-client
+        working-directory: ${{ runner.temp }}/geo-db
+        # x86_64_v2: runs on any DigitalOcean node. The `serve` and `client` build steps run the
+        # binaries once with no arguments, which exits 1 (MissingSubcommand): the build is fine,
+        # so the result is judged by the binaries existing, below.
+        run: |
+          zig build serve client -Doptimize=ReleaseSafe -Dcpu=x86_64_v2 -Dbuild-hash="$GEODB_SHA" || true
+          for bin in geodb-serve geodb-client; do
+            path="$(find .zig-cache/o -name "$bin" -type f -perm -u+x -print0 | xargs -0 ls -t | head -n 1)"
+            [ -n "$path" ] || { echo "::error::$bin was not built"; exit 1; }
+            cp "$path" "$GITHUB_WORKSPACE/geodb/$bin"
+          done
+          file "$GITHUB_WORKSPACE/geodb/geodb-serve" "$GITHUB_WORKSPACE/geodb/geodb-client"
+
+      - name: Smoke test the binaries
+        working-directory: geodb
+        run: |
+          # No arguments prints usage and exits non-zero; the check is that they load and run.
+          ./geodb-client 2>&1 | head -n 3
+          timeout 5 ./geodb-serve 2>&1 | head -n 3 || true
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@3cb3953159719656269e044e0e24ca16dd2a690f # v2.5.2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push
+        working-directory: geodb
+        run: |
+          docker build -t "$REGISTRY/geodb:$GEODB_TAG" -f Dockerfile .
+          docker push "$REGISTRY/geodb:$GEODB_TAG"
+          echo "## geodb image" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tag: \`$GEODB_TAG\` (geo-db \`$GEODB_SHA\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "The manifests pin \`geodb:289618ffbf\`; a different tag needs geodb/k8s/v2/geodb.yaml and api/k8s/v2/api.yaml changed to match." >> "$GITHUB_STEP_SUMMARY"

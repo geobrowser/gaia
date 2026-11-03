@@ -17,7 +17,7 @@ geo-db, behind `GEODB_ENTITY_CARDS` (`off` default, `on`, `shadow`). Code: `api/
 ## The space map
 
 geo-db Space ids are not gaia's. A gaia Space id maps to the id geo-db founded it under, and the route
-reads that mapping from a file, once, at the first request (a restart re-reads it):
+reads that mapping from a file:
 
 ```json
 {"a19c345ab9866679b001d7d2138d88a1": {"geo": "daf0bc83ca744e1a9ee0377967846846"}}
@@ -27,13 +27,19 @@ Keys and `geo` are 32 hex digits (dashes are accepted). Extra fields are ignored
 malformed entry is refused as a whole, so every request falls back to Postgres rather than reading
 the wrong Space. A Space absent from the file falls back with reason `unmapped_space`.
 
-The map is not recomputed at load time and does not change between loads. geo-db derives a Space id
-from its founding nonce under the store secret, so a fixed secret and nonce scheme give the same ids on
-every load. Produce the file from the loader's output after a load, and keep it with the geo-db
-store it describes (a different store secret founds different ids and needs its own map). With the
-geo-shadow harness: `remote/ingest_loop.py` loads the corpus and writes `corpus/spaces-loaded.json`
-(slug to geo-db id), then `node emit/space-map.mjs` joins that with the manifest's
-`source.legacySpaceId` and writes `corpus/space-map.json`.
+The file is checked for a change (mtime and size) at most every 10 seconds and reloaded when it
+changed, so a Space the feeder founds becomes readable without restarting the api. If a reload fails the
+previous map stays in use; only a map that has never loaded makes requests fall back.
+
+In the cluster the file is produced by the feeder (`geodb-feeder/`): it founds each gaia Space in geo-db
+online over the wire (`geodb-client found`) on first sight under a deterministic nonce, records the pair, and publishes the whole map to the
+ConfigMap `geodb-space-map` (key `space-map.json`), which the api pods mount. The ids are stable for a
+fixed store secret, so a different store secret founds different ids and needs its own map. The same
+ConfigMap carries `node-id` (serve's node key id, which the api's binding pins) and `sealer-id` (the
+key id Spaces are founded under), both published by serve's supervisor (see `geodb/RUNBOOK.md`).
+Outside the cluster, with the geo-shadow harness: `remote/ingest_loop.py` loads the corpus and writes
+`corpus/spaces-loaded.json` (slug to geo-db id), then `node emit/space-map.mjs` joins that with the
+manifest's `source.legacySpaceId` and writes `corpus/space-map.json`.
 
 ## Metrics and alerts
 
@@ -45,4 +51,4 @@ geo-shadow harness: `remote/ingest_loop.py` loads the corpus and writes `corpus/
 - `gaia_api_geodb_card_shadow_total{result}` — `match`, `only_postgres`, `only_geodb`, `both`, `failed`.
 - `gaia_api_geodb_read_seconds{outcome}` — histogram of one geo-db read, queue wait included.
 
-Draft alerts on these: `monitoring/k8s/v2/geodb-card-alerts.yaml` (not applied).
+Draft alerts on these: `monitoring/k8s/v2/geodb-card-alerts.yaml` (not applied). The feeder's own alerts are in `monitoring/k8s/v2/geodb-feeder-alerts.yaml`; deploy, rollout and rollback are in `geodb/RUNBOOK.md`.
