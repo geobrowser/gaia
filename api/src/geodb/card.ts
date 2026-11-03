@@ -1,0 +1,165 @@
+/**
+ * Entity-card statements and the diff between the Postgres and geo-db answers.
+ *
+ * A card is the multiset of one entity's statements in one space: each value (property, value) and
+ * each relation (relation type, target). Both stores are reduced to the same canonical key so the two
+ * answers compare without caring how either stores them. The mapping and the multiset match are ported
+ * from the geo-shadow harness (diff/common.mjs), which diffed 715/715 snapshot cards and 44/44 live
+ * cards clean; keep the two in step.
+ */
+
+import {createHash} from "node:crypto"
+
+/** `text` carries a string compared as written; `num` a number compared by value. */
+export type StatementKind = "text" | "num"
+
+export type CardStatement = {
+	/** Property (value) or relation type id, 32 undashed hex digits, conformed for geo-db. */
+	prop: string
+	kind: StatementKind
+	/** The value, or the relation target id, in canonical text form. */
+	norm: string
+}
+
+export type ValueRow = {
+	property_id: string
+	text: string | null
+	integer: string | number | null
+	float: string | number | null
+	decimal: string | number | null
+	boolean: boolean | null
+	datetime: string | null
+	date: string | null
+}
+
+export type RelationRow = {
+	type_id: string
+	to_entity_id: string
+	to_space_id: string | null
+}
+
+export type CardDiff = {
+	onlyPostgres: CardStatement[]
+	onlyGeoDb: {prop: string; raw: string}[]
+	/** Statements Postgres holds that geo-db's mapping cannot represent (not a mismatch). */
+	skipped: number
+}
+
+const UUID_V4 = /^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$/i
+
+const compact = (id: string) => id.replaceAll("-", "").toLowerCase()
+
+/**
+ * The id geo-db holds for a gaia id. Conforming UUIDv4s pass through; any other legacy id is remapped
+ * deterministically, exactly as the shadow loader remaps it (emit/lib.mjs conformingId).
+ */
+export function conformingId(kind: "entity" | "space", legacyId: string): string {
+	const id = compact(legacyId)
+	if (UUID_V4.test(id)) return id
+	const bytes = Buffer.from(
+		createHash("sha256").update(`geo:legacy-${kind}:v1\0${id}`).digest("hex").slice(0, 32),
+		"hex",
+	)
+	bytes.writeUInt8((bytes.readUInt8(6) & 0x0f) | 0x40, 6)
+	bytes.writeUInt8((bytes.readUInt8(8) & 0x3f) | 0x80, 8)
+	return bytes.toString("hex")
+}
+
+function normNumber(value: string | number): string {
+	const n = Number(value)
+	return Number.isFinite(n) ? String(n) : String(value)
+}
+
+function instantNorm(iso: string): string {
+	const ms = Date.parse(iso)
+	const sec = Math.floor(ms / 1000)
+	const nanos = (ms - sec * 1000) * 1_000_000
+	return `instant:${sec}.${String(nanos).padStart(9, "0")}`
+}
+
+/**
+ * A Postgres value row as a canonical statement key, or null when geo-db's mapping cannot carry it (a
+ * row of bytes, time, schedule, point, rect or embedding only, or with more than one column set).
+ */
+export function valueKey(v: ValueRow): {kind: StatementKind; norm: string} | null {
+	const candidates: {kind: StatementKind; norm: string}[] = []
+	if (v.text != null) candidates.push({kind: "text", norm: String(v.text)})
+	if (v.integer != null) candidates.push({kind: "num", norm: normNumber(v.integer)})
+	if (v.boolean != null) candidates.push({kind: "text", norm: v.boolean ? "true" : "false"})
+	if (v.datetime != null) candidates.push({kind: "text", norm: instantNorm(v.datetime)})
+	if (v.date != null) {
+		const m = String(v.date).match(/^(-?\d+)-(\d{2})-(\d{2})Z?$/)
+		candidates.push({kind: "text", norm: m ? `date:${Number(m[1])}-${m[2]}-${m[3]}` : String(v.date)})
+	}
+	if (v.decimal != null) candidates.push({kind: "num", norm: normNumber(v.decimal)})
+	else if (v.float != null) candidates.push({kind: "num", norm: normNumber(v.float)})
+	return candidates.length === 1 ? (candidates[0] ?? null) : null
+}
+
+/** Postgres rows (values, relations) -> canonical statements, plus how many rows could not be mapped. */
+export function statementsFromPostgres(
+	values: ValueRow[],
+	relations: RelationRow[],
+): {statements: CardStatement[]; skipped: number} {
+	const statements: CardStatement[] = []
+	let skipped = 0
+	for (const v of values) {
+		const key = valueKey(v)
+		if (!key) {
+			skipped++
+			continue
+		}
+		statements.push({prop: conformingId("entity", v.property_id), ...key})
+	}
+	for (const r of relations) {
+		// geo-db's live translator conforms every relation target as an entity id and drops toSpaceId.
+		statements.push({
+			prop: conformingId("entity", r.type_id),
+			kind: "text",
+			norm: conformingId("entity", r.to_entity_id),
+		})
+	}
+	return {statements, skipped}
+}
+
+/** `\t`, `\n` and `\` are escaped in geodb-client's text cells. */
+export function unescapeText(s: string): string {
+	return s.replace(/\\(t|n|\\)/g, (_, c: string) => (c === "t" ? "\t" : c === "n" ? "\n" : "\\"))
+}
+
+/**
+ * geodb-client `query` output for an entity card: one row a line, cells tab-separated, columns
+ * (property, value, statement id, entity, weight). Keeps only the rows of the entity asked for
+ * (a card query also returns the entities its backlinks name).
+ */
+export function rowsFromGeoDbOutput(output: string, entityId: string): {prop: string; raw: string}[] {
+	return output
+		.split("\n")
+		.filter((line) => line !== "")
+		.map((line) => line.split("\t"))
+		.filter((cells) => cells[3] === entityId)
+		.map((cells) => ({prop: cells[0] ?? "", raw: unescapeText(cells[1] ?? "")}))
+}
+
+/** Match Postgres statements against geo-db rows as multisets and return what is unmatched on each side. */
+export function diffCards(
+	postgres: {statements: CardStatement[]; skipped: number},
+	geo: {prop: string; raw: string}[],
+): CardDiff {
+	const pool = geo.map((row) => ({...row, used: false}))
+	const onlyPostgres: CardStatement[] = []
+	for (const s of postgres.statements) {
+		const hit = pool.find(
+			(r) => !r.used && r.prop === s.prop && (s.kind === "num" ? normNumber(r.raw) === s.norm : r.raw === s.norm),
+		)
+		if (hit) hit.used = true
+		else onlyPostgres.push(s)
+	}
+	return {
+		onlyPostgres,
+		onlyGeoDb: pool.filter((r) => !r.used).map(({prop, raw}) => ({prop, raw})),
+		skipped: postgres.skipped,
+	}
+}
+
+export const isEmptyDiff = (d: CardDiff) => d.onlyPostgres.length === 0 && d.onlyGeoDb.length === 0

@@ -1,5 +1,6 @@
 import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
+import {renderGeoDbCardMetrics} from "./geodb/metrics"
 import {renderQueryCostHistogram} from "./kg/costLoggerPlugin"
 import {renderResponseSizeHistogram} from "./kg/instrumentationPlugin"
 import {renderPaginationDefaultMetrics} from "./kg/paginationCapPlugin"
@@ -132,6 +133,8 @@ function renderPrometheusMetrics(): string {
 		renderPaginationDefaultMetrics(),
 		// Rejected, probing and introspection requests — see securitySignalsPlugin.ts.
 		renderSecuritySignalsPrometheus(),
+		// geo-db entity-card route: served/fallback/shadow counters and read latency — see geodb/metrics.ts.
+		renderGeoDbCardMetrics(),
 	].join("\n")
 }
 

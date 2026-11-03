@@ -3,6 +3,8 @@ import {Hono} from "hono"
 import {cors} from "hono/cors"
 import {openAPISpecs} from "hono-openapi"
 import {MIN_INTERNAL_TOKEN_LENGTH, mountInternalRoutes} from "./src/forYou/router"
+import {readGeoDbCardConfig} from "./src/geodb/config"
+import {createGeoDbRouter} from "./src/geodb/router"
 import {health} from "./src/health"
 import {createIpfsRouter} from "./src/ipfs"
 import {setGraphqlSearchClient} from "./src/kg/graphqlSearchOpenSearchPlugin"
@@ -137,6 +139,13 @@ log.info("Versioned entity routes enabled")
 // Mount v2 versioned entities router (additive enrichments over v1)
 app.route("/v2/versioned", createVersionedV2Router(db, runtime))
 log.info("Versioned v2 entity routes enabled")
+
+// Mount the opt-in geo-db entity-card route (GEODB_ENTITY_CARDS=on|shadow; off by default)
+const geoDbCardConfig = readGeoDbCardConfig(process.env)
+if (geoDbCardConfig.mode !== "off") {
+	app.route("/geodb", createGeoDbRouter(db, geoDbCardConfig))
+	log.info("GeoDB entity card route enabled", {mode: geoDbCardConfig.mode, timeoutMs: geoDbCardConfig.timeoutMs})
+}
 
 // Mount profile router
 app.route("/profile", createProfileRouter(db, runtime))
