@@ -81,7 +81,59 @@ spec:
       volumes:
         - name: ssl-certs
           emptyDir: {}
+        # geo-db entity cards (docs/geodb-entity-cards.md, geodb/RUNBOOK.md). Dormant while
+        # GEODB_ENTITY_CARDS is "off": nothing below is read, and every reference is optional or
+        # fails soft, so an absent geodb never blocks an api rollout.
+        - name: geodb-bin
+          emptyDir: {}
+        - name: geodb-space-map
+          configMap:
+            # Written by the geodb-feeder (space-map.json + node-id). Not shipped in these manifests.
+            name: geodb-space-map
+            optional: true
+        - name: geodb-key
+          secret:
+            secretName: geodb-reader-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: reader.key
       initContainers:
+        - name: geodb-setup
+          # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to the api tag.
+          image: registry.digitalocean.com/geo/geodb:47b7666dd1
+          imagePullPolicy: IfNotPresent
+          # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
+          # binding and the api reads the flag as unusable and answers from Postgres.
+          command:
+            - sh
+            - -c
+            - |
+              cp /usr/local/bin/geodb-client /geodb/geodb-client || exit 0
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -n "$node" ] && [ -n "$ip" ]; then
+                printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+              else
+                echo "geodb-setup: no node id or no geodb Service; geo-db entity cards stay on Postgres"
+              fi
+              exit 0
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
         - name: setup-certs
           image: registry.digitalocean.com/geo/api:latest
           imagePullPolicy: Always
@@ -141,7 +193,28 @@ spec:
             - name: ssl-certs
               mountPath: /ssl
               readOnly: true
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+            - name: geodb-key
+              mountPath: /etc/geodb/key
+              readOnly: true
           env:
+            # geo-db entity cards. OFF: the route is not mounted and none of the GEODB_* values
+            # below is read. Turn on in two steps (geodb/RUNBOOK.md): "shadow", then "on".
+            - name: GEODB_ENTITY_CARDS
+              value: "off"
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/key/reader.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
+            - name: GEODB_SPACE_MAP_PATH
+              value: /etc/geodb/space-map/space-map.json
             - name: NODE_EXTRA_CA_CERTS
               value: /ssl/ca.crt
             - name: DATABASE_URL

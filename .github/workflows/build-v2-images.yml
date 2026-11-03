@@ -35,6 +35,7 @@ on:
           - ranking-indexer
           - membership-acceptor
           - chain-keepalive
+          - geodb-feeder
 
 concurrency:
   group: build-v2-images-${{ inputs.service }}
@@ -70,7 +71,8 @@ jobs:
             {"image":"delivery-worker","dockerfile":"notification-service/delivery-worker/Dockerfile","context":"."},
             {"image":"ranking-indexer","dockerfile":"ranking-indexer/Dockerfile","context":"."},
             {"image":"membership-acceptor","dockerfile":"membership-acceptor/Dockerfile","context":"membership-acceptor"},
-            {"image":"chain-keepalive","dockerfile":"chain-keepalive/Dockerfile","context":"chain-keepalive"}
+            {"image":"chain-keepalive","dockerfile":"chain-keepalive/Dockerfile","context":"chain-keepalive"},
+            {"image":"geodb-feeder","dockerfile":"geodb-feeder/Dockerfile","context":"geodb-feeder"}
           ]'
           if [ "$SERVICE" = "all" ]; then
             MATRIX="$(echo "$ALL" | jq -c '{include: .}')"

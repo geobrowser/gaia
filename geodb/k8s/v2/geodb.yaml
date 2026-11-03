@@ -1,0 +1,289 @@
+# geo-db read replica for entity cards (stage 1, testnet). See geodb/RUNBOOK.md.
+#
+# One pod, two containers sharing the /data volume:
+#   serve   geodb-serve under geodb/supervisor.sh (restarts itself when the feeder founds a Space)
+#   feeder  geodb-feeder: reads <env>.knowledge.edits, applies each edit to serve, publishes the
+#           gaia-Space -> geo-db-Space map + serve's node id to ConfigMap geodb-space-map
+#
+# Secrets (created by hand, never in git; see the runbook for the commands):
+#   geodb-feeder-kafka   KAFKA_BROKER, KAFKA_USERNAME, KAFKA_PASSWORD, KAFKA_SSL_CA_PEM  (dedicated user)
+#   geodb-store-secret   secret.hex: 64 hex digits, the store secret (fixes Space ids; never rotate)
+#   geodb-writer-key     key: the feeder's Ed25519 seed; keyid: its key id
+#   geodb-reader-key     key: the api's read-only seed; keyid: its key id
+#
+# The geodb image is pinned (deploy-v2 rewrites every :latest in a manifest to the gaia tag, which
+# would point serve at a tag the geodb repository does not have). Only the feeder image is :latest.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: geodb
+  namespace: gaia
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: geodb-feeder
+  namespace: gaia
+rules:
+  # The feeder writes ConfigMap geodb-space-map. create cannot be limited by name.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["geodb-space-map"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: geodb-feeder
+  namespace: gaia
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: geodb-feeder
+subjects:
+  - kind: ServiceAccount
+    name: geodb
+    namespace: gaia
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: geodb-serve-config
+  namespace: gaia
+data:
+  serve.cfg: |
+    version = 1
+    server_rooms_carving = 67108864
+    session_requests_in_flight = 8
+    request_deadline_ms = 30000
+    spaces = 256
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: geodb
+  namespace: gaia
+  labels:
+    app: geodb
+spec:
+  type: ClusterIP
+  selector:
+    app: geodb
+  ports:
+    - name: geodb
+      port: 7447
+      targetPort: geodb
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: geodb
+  namespace: gaia
+  labels:
+    app: geodb
+spec:
+  replicas: 1
+  serviceName: geodb
+  selector:
+    matchLabels:
+      app: geodb
+  # One writer on one volume: never two pods at once.
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: geodb
+    spec:
+      serviceAccountName: geodb
+      # serve drains on SIGINT and writes a final checkpoint; a kill mid-write costs a slower reopen.
+      terminationGracePeriodSeconds: 300
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      volumes:
+        - name: tools
+          emptyDir: {}
+        - name: serve-config
+          configMap:
+            name: geodb-serve-config
+        - name: store-secret
+          secret:
+            secretName: geodb-store-secret
+            defaultMode: 0440
+        - name: writer-key
+          secret:
+            secretName: geodb-writer-key
+            defaultMode: 0440
+            items:
+              - key: key
+                path: writer.key
+      initContainers:
+        - name: tools
+          image: registry.digitalocean.com/geo/geodb:47b7666dd1
+          imagePullPolicy: IfNotPresent
+          command: ["cp", "/usr/local/bin/geodb-client", "/tools/geodb-client"]
+          volumeMounts:
+            - name: tools
+              mountPath: /tools
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: serve
+          image: registry.digitalocean.com/geo/geodb:47b7666dd1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: geodb
+              containerPort: 7447
+              protocol: TCP
+          env:
+            - name: DATA_DIR
+              value: /data
+            - name: GEODB_CONFIG
+              value: /etc/geodb/serve.cfg
+            - name: GEODB_PROFILE
+              value: medium
+            - name: GEODB_STORE_SECRET_FILE
+              value: /etc/geodb/store-secret/secret.hex
+            - name: GEODB_WRITER_KEYID
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-writer-key
+                  key: keyid
+            - name: GEODB_READER_KEYID
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-reader-key
+                  key: keyid
+            - name: GEODB_GRANT_TTL_S
+              value: "300"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: serve-config
+              mountPath: /etc/geodb/serve.cfg
+              subPath: serve.cfg
+              readOnly: true
+            - name: store-secret
+              mountPath: /etc/geodb/store-secret
+              readOnly: true
+          # Ready = serve has printed its node id (the supervisor writes ctl/serving) and accepts a
+          # connection. A TCP check alone would pass while serve is still reopening the store.
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "test -e /data/ctl/serving"]
+            periodSeconds: 5
+            failureThreshold: 6
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "test -e /data/ctl/serving"]
+            periodSeconds: 5
+            failureThreshold: 120
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+        - name: feeder
+          image: registry.digitalocean.com/geo/geodb-feeder:latest
+          imagePullPolicy: Always
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: ENVIRONMENT
+              value: testnet
+            - name: KAFKA_GROUP_ID
+              value: geodb-feeder-v1-testnet
+            - name: DATA_DIR
+              value: /data
+            - name: GEODB_CLIENT_BIN
+              value: /tools/geodb-client
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/writer-key/writer.key
+            - name: GEODB_BINDING_PATH
+              value: /data/run/binding.txt
+            - name: METRICS_PORT
+              value: "9090"
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_SSL_CA_PEM
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tools
+              mountPath: /tools
+              readOnly: true
+            - name: writer-key
+              mountPath: /etc/geodb/writer-key
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/liveness
+              port: metrics
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          # No readinessProbe on purpose: pod readiness (and so the Service) follows serve alone, so a
+          # Kafka outage stalls the feed but never takes cards away from the api.
+          # /health/readiness is there for humans and for the alert on the feeder's own series.
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: do-block-storage
+        resources:
+          requests:
+            storage: 50Gi
