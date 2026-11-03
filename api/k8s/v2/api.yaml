@@ -206,7 +206,7 @@ spec:
             # geo-db entity cards. OFF: the route is not mounted and none of the GEODB_* values
             # below is read. Turn on in two steps (geodb/RUNBOOK.md): "shadow", then "on".
             - name: GEODB_ENTITY_CARDS
-              value: "off"
+              value: "shadow"
             - name: GEODB_CLIENT_BIN
               value: /geodb/geodb-client
             - name: GEODB_KEY_PATH
