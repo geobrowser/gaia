@@ -122,6 +122,9 @@ spec:
         app: geodb
     spec:
       serviceAccountName: geodb
+      # The Service `geodb` would inject GEODB_PORT=tcp://<ip>:7447, which the supervisor reads as its
+      # listen port, so serve refuses its binding. Off for every geodb pod.
+      enableServiceLinks: false
       # serve drains on SIGINT and writes a final checkpoint; a kill mid-write costs a slower reopen.
       terminationGracePeriodSeconds: 300
       securityContext:
@@ -244,6 +247,7 @@ spec:
         app: geodb-feeder
     spec:
       serviceAccountName: geodb
+      enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
