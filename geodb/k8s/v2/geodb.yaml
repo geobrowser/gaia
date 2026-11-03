@@ -200,11 +200,13 @@ spec:
             periodSeconds: 5
             failureThreshold: 120
           resources:
+            # The medium profile alone holds ~4 GiB resident (it sat at the old 4Gi limit with no data
+            # growth); 6Gi leaves room for the backfill.
             requests:
-              memory: "2Gi"
+              memory: "4Gi"
               cpu: "500m"
             limits:
-              memory: "4Gi"
+              memory: "6Gi"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
