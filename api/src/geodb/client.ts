@@ -15,7 +15,7 @@
  */
 
 import {type ChildProcess, spawn as nodeSpawn} from "node:child_process"
-import {readFile} from "node:fs/promises"
+import {readFile, stat} from "node:fs/promises"
 import type {Readable, Writable} from "node:stream"
 import {rowsFromGeoDbOutput} from "./card"
 import type {GeoDbCardConfig} from "./config"
@@ -62,18 +62,54 @@ export function parseSpaceMap(text: string): Map<string, string> {
 	return map
 }
 
-/** gaia space id (compact) -> geo-db space id, read once from the file `GEODB_SPACE_MAP_PATH` names. */
-export function createSpaceMap(path: string): (gaiaSpaceId: string) => Promise<string | null> {
-	let loaded: Promise<Map<string, string>> | null = null
+/** How often the space map file is checked for a newer version. */
+const SPACE_MAP_REFRESH_MS = 10_000
+
+/**
+ * gaia space id (compact) -> geo-db space id, from the file `GEODB_SPACE_MAP_PATH` names. The file is
+ * re-checked (one `stat`) at most every `refreshMs` and re-read when its mtime or size changed, because
+ * the geodb-feeder adds a Space to it whenever gaia founds one. A failed reload keeps the map already
+ * held, so a briefly unreadable file never blinds a running pod; only a pod that has never read a good
+ * map answers `client_failed`.
+ */
+export function createSpaceMap(
+	path: string,
+	options: {refreshMs?: number; now?: () => number} = {},
+): (gaiaSpaceId: string) => Promise<string | null> {
+	const refreshMs = options.refreshMs ?? SPACE_MAP_REFRESH_MS
+	const now = options.now ?? Date.now
+	let held: {map: Map<string, string>; stamp: string} | null = null
+	let checkedAt = Number.NEGATIVE_INFINITY
+	let inflight: Promise<void> | null = null
+
+	const refresh = async () => {
+		const info = await stat(path)
+		const stamp = `${info.mtimeMs}:${info.size}`
+		if (held?.stamp === stamp) return
+		held = {map: parseSpaceMap(await readFile(path, "utf8")), stamp}
+	}
+
 	return async (gaiaSpaceId) => {
 		if (!path) return null
-		loaded ??= readFile(path, "utf8").then(parseSpaceMap)
+		if (now() - checkedAt >= refreshMs) {
+			checkedAt = now()
+			inflight ??= refresh()
+				.catch((error) => {
+					if (held === null) {
+						checkedAt = Number.NEGATIVE_INFINITY // retry on the next request
+						throw error
+					}
+				})
+				.finally(() => {
+					inflight = null
+				})
+		}
 		try {
-			return (await loaded).get(gaiaSpaceId) ?? null
+			if (inflight) await inflight
 		} catch (error) {
-			loaded = null // retry the read on the next request
 			throw new GeoDbError("client_failed", `space map unreadable: ${String(error)}`)
 		}
+		return held?.map.get(gaiaSpaceId) ?? null
 	}
 }
 
