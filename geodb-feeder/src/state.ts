@@ -8,14 +8,42 @@
  *   resumes at `intentsDone`.
  * - `spaces.json`: gaia Space -> geo-db Space (`geo` is null while a founding is in flight).
  */
-import {appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync} from "node:fs"
+import {appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, renameSync, writeSync} from "node:fs"
 import type {TranslateContext} from "./translate.js"
 
 export type SpaceRecord = {geo: string | null; nonce: string; keyed: boolean}
 export type Inflight = {offset: number; intentsDone: number}
 type OffsetsFile = {done: Record<string, number>; inflight: Record<string, Inflight>}
 
-const lines = (path: string): string[] => (existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean) : [])
+/**
+ * Call `each` for every non-empty line of `path`, reading 1 MiB at a time. The journals reach hundreds of
+ * MB after a backfill; reading one as a single string and splitting it would hold the text twice over.
+ */
+export function eachLine(path: string, each: (line: string) => void): void {
+	if (!existsSync(path)) return
+	const fd = openSync(path, "r")
+	try {
+		const buf = Buffer.alloc(1 << 20)
+		let rest = ""
+		for (;;) {
+			const n = readSync(fd, buf, 0, buf.length, null)
+			if (n === 0) break
+			const text = rest + buf.toString("utf8", 0, n)
+			const parts = text.split("\n")
+			rest = parts.pop() ?? ""
+			for (const l of parts) if (l) each(l)
+		}
+		if (rest) each(rest)
+	} finally {
+		closeSync(fd)
+	}
+}
+
+function loadSet(path: string): Set<string> {
+	const set = new Set<string>()
+	eachLine(path, (l) => set.add(l))
+	return set
+}
 
 function writeFileDurable(path: string, text: string): void {
 	const tmp = `${path}.tmp`
@@ -58,8 +86,8 @@ export class Store {
 		this.offsets = this.hadOffsets
 			? {done: {}, inflight: {}, ...JSON.parse(readFileSync(offsetsPath, "utf8"))}
 			: {done: {}, inflight: {}}
-		this.entities = new Set(lines(`${dir}/known-entities.log`))
-		this.statements = new Set(lines(`${dir}/known-statements.log`))
+		this.entities = loadSet(`${dir}/known-entities.log`)
+		this.statements = loadSet(`${dir}/known-statements.log`)
 	}
 
 	saveSpaces(): void {
@@ -81,6 +109,16 @@ export class Store {
 		appendDurable(`${this.dir}/known-statements.log`, statements.map((s) => `${s}\n`).join(""))
 		for (const e of entities) this.entities.add(e)
 		for (const s of statements) this.statements.add(s)
+	}
+
+	/** Every partition's last fully applied offset. */
+	get done(): Record<string, number> {
+		return {...this.offsets.done}
+	}
+
+	/** Partitions with a message part-way applied (the feeder stopped inside it). */
+	get inflight(): Record<string, Inflight> {
+		return {...this.offsets.inflight}
 	}
 
 	lastDone(partition: number): number | null {

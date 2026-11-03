@@ -16,10 +16,12 @@
 	"dependencies": {
 		"@bokuweb/zstd-wasm": "^0.0.27",
 		"@geoprotocol/grc-20": "^0.4.1",
-		"kafkajs": "^2.2.4"
+		"kafkajs": "^2.2.4",
+		"pg": "^8.23.1"
 	},
 	"devDependencies": {
 		"@types/node": "^22.10.0",
+		"@types/pg": "^8.23.1",
 		"typescript": "^5.7.0",
 		"vitest": "^3.0.0"
 	}

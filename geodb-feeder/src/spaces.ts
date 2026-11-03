@@ -1,3 +1,4 @@
+import {readFileSync} from "node:fs"
 import {log} from "./log.js"
 import {nonceOf} from "./ids.js"
 import type {GeoDb} from "./geodb.js"
@@ -37,4 +38,18 @@ export async function ensureSpace(deps: SpaceDeps, gaiaSpace: string): Promise<S
 	deps.publish(renderSpaceMap(store.spaces))
 	log("info", "founded space", {gaiaSpace, geoSpace: record.geo})
 	return record as SpaceRecord & {geo: string}
+}
+
+/** serve's sealer key id (public). The supervisor publishes it to the geodb-space-map ConfigMap, mounted at `path`. */
+export async function readSealer(path: string, sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))): Promise<string> {
+	for (;;) {
+		try {
+			const id = readFileSync(path, "utf8").trim()
+			if (/^[0-9a-f]{64}$/.test(id)) return id
+		} catch {
+			// not published yet
+		}
+		log("warn", "waiting for serve's sealer id", {path})
+		await sleep(5000)
+	}
 }
