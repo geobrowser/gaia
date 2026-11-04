@@ -15,6 +15,7 @@ export type Config = {
 	spacesListPath: string
 	lagPollMs: number
 	membership: MembershipConfig
+	proposals: {enabled: boolean; topic: string; groupId: string}
 }
 
 export type MembershipConfig = {
@@ -70,6 +71,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			groupId: env.KAFKA_MEMBERSHIP_GROUP_ID ?? `geodb-feeder-membership-v1-${environment}`,
 			compareIntervalMs: Number(env.GEODB_MEMBERSHIP_COMPARE_INTERVAL_MS ?? 300_000),
 			readerKeyPath: env.GEODB_READER_KEY_PATH ?? required(env, "GEODB_KEY_PATH"),
+		},
+		proposals: {
+			/** GEODB_PROPOSAL_ENTITIES: consume `space.governance` and write proposal system entities. Default off. */
+			enabled: flag(env.GEODB_PROPOSAL_ENTITIES),
+			topic: env.KAFKA_PROPOSALS_TOPIC ?? `${environment}.space.governance`,
+			groupId: env.KAFKA_PROPOSALS_GROUP_ID ?? `geodb-feeder-proposals-v1-${environment}`,
 		},
 	}
 }

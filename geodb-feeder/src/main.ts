@@ -16,6 +16,8 @@ import {errorFields, log} from "./log.js"
 import {compareMembership} from "./membershipShadow.js"
 import {MembershipState} from "./membership.js"
 import {startMembershipConsumer} from "./membershipConsumer.js"
+import {ProposalOffsets} from "./proposals.js"
+import {startProposalConsumer} from "./proposalsConsumer.js"
 import {createMetrics} from "./metrics.js"
 import {PipeReader} from "./geodbPipe.js"
 import {ReadOnlyPg, pgConfig, readMembershipIds} from "./pgSource.js"
@@ -207,12 +209,33 @@ async function main(config: Config): Promise<void> {
 		}
 	}
 
+	let proposals: Awaited<ReturnType<typeof startProposalConsumer>> | null = null
+	if (config.proposals.enabled) {
+		try {
+			proposals = await startProposalConsumer({
+				kafka,
+				config,
+				abort,
+				offsets: new ProposalOffsets(`${config.dataDir}/feeder/proposals`),
+				deps: {...spaceDeps, lock, beat: async () => {}},
+			})
+		} catch (e) {
+			log("error", "proposals consumer failed to start (edits consumer unaffected)", errorFields(e))
+		}
+	}
+
 	const pollTimer = setInterval(() => void poll(), config.lagPollMs)
 	await poll()
 	if (membership) {
 		const m = membership
 		setInterval(() => void m.poll(), config.lagPollMs).unref()
 		await m.poll()
+	}
+
+	if (proposals) {
+		const p = proposals
+		setInterval(() => void p.poll(), config.lagPollMs).unref()
+		await p.poll()
 	}
 
 	const stop = async () => {
@@ -223,6 +246,7 @@ async function main(config: Config): Promise<void> {
 		reader?.reset()
 		await pg?.close()
 		await membership?.stop()
+		await proposals?.stop()
 		publisher.stop()
 		await consumer.disconnect().catch(() => {})
 		await admin.disconnect().catch(() => {})
