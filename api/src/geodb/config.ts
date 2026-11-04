@@ -36,6 +36,12 @@ export type GeoDbCardConfig = {
 	 */
 	everySpaceReads?: boolean
 	/**
+	 * Also give the `entities` shadow the every-Space read (needs `everySpaceReads`): an `entities(filter: {id: {in}})`
+	 * that selects no lists and no `spaceIds` (`EntityNames`) is compared on one sampled entity read across every
+	 * Space. Off by default. GEODB_EVERY_SPACE_ENTITIES=on.
+	 */
+	everySpaceEntities?: boolean
+	/**
 	 * Lifetime of the capability token a worker's handshake gets, in seconds: geo-db's `grant_ttl_s`
 	 * (GEODB_GRANT_TTL_S on the serve, 300 by default). A worker is replaced before its token expires, so no
 	 * read finds the token dead. Absent means the default.
@@ -66,6 +72,7 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : DEFAULT_TIMEOUT_MS,
 		multiSpaceReads: env.GEODB_MULTI_SPACE_READS?.trim().toLowerCase() === "on",
 		everySpaceReads: env.GEODB_EVERY_SPACE_READS?.trim().toLowerCase() === "on",
+		everySpaceEntities: env.GEODB_EVERY_SPACE_ENTITIES?.trim().toLowerCase() === "on",
 		poolSize: Number.isFinite(pool) && pool > 0 ? Math.min(pool, MAX_POOL_SIZE) : DEFAULT_POOL_SIZE,
 		grantTtlS: Number.isFinite(grantTtl) && grantTtl > 0 ? grantTtl : DEFAULT_GRANT_TTL_S,
 	}

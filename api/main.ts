@@ -241,6 +241,9 @@ const graphqlHandler = createGateway({
 							log,
 							budget: wideReadBudget,
 							multiSpace: geoDbCardConfig.multiSpaceReads === true,
+							...(geoDbCardConfig.everySpaceReads === true && geoDbCardConfig.everySpaceEntities === true
+								? {allGeoSpaces: sharedGeoDb.geoSpaceOf.all, everySpaceBudget}
+								: {}),
 						},
 						POINT_READ_FIELDS.filter((field) => gatewayShadowFields.has(field)),
 					),

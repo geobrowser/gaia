@@ -70,6 +70,8 @@ import {recordGatewayUnsupportedShape, type UncomparedReason, type UnsupportedRe
 
 /** Most returned entities one `entities` operation compares; the rest are `sampled_rows`. */
 export const MAX_SAMPLED_ENTITIES = 3
+/** Most returned entities one every-Space `entities` operation compares: each reads the whole space map. */
+export const MAX_EVERY_SPACE_SAMPLED = 1
 
 const refuse = (reason: UnsupportedReason): never => {
 	throw new Unsupported(reason)
@@ -196,6 +198,11 @@ export type LightEntitiesPlan = LightPlan & {
 	ids: string[] | null
 	/** `entities(spaceId:)` or `entities(spaceIds: {in})`: the entity must hold a statement in one of these spaces. */
 	spaceIds: string[] | null
+	/**
+	 * No lists, no `spaceIds`, no Space argument (`EntityNames`: `entities(filter: {id: {in}}) { id name }`): each
+	 * sampled entity is read across every loaded Space, as an `entity` plan's `everySpace`.
+	 */
+	everySpace: boolean
 }
 
 export type LightAnalysis<P> = {ok: true; plan: P} | {ok: false; reason: UnsupportedReason}
@@ -432,7 +439,9 @@ export function analyzeLightEntities(
 		const uncompared = new Set<UncomparedReason>()
 		const {claims, ids} = readFilter(args.filter, uncompared)
 		const spaceIds = readRootArgs(args, claims, uncompared)
-		const {card, lists} = planLightEntity(root.selectionSet, fragments, resolved, uncompared)
+		const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
+			everySpace: spaceIds === null,
+		})
 		if (!card.idKey) return {ok: false, reason: "selection"}
 		uncompared.add("sampled_rows")
 		return {
@@ -445,6 +454,7 @@ export function analyzeLightEntities(
 				claims,
 				ids,
 				spaceIds,
+				everySpace,
 				uncompared: [...uncompared],
 			},
 		}
@@ -624,7 +634,9 @@ export async function checkLight(
 
 	// An `entities` filter's promises, on this entity's own cards.
 	const unmet: FilterClaim[] = []
-	for (const claim of options.claims ?? []) {
+	// Read across every Space and found in none: nothing is known about the entity, so its claims are not judged.
+	const unknown = options.everySpace === true && read.scope.populated.length === 0
+	for (const claim of unknown ? [] : (options.claims ?? [])) {
 		const wanted = claim.kind === "type" ? TYPES_PROPERTY : conformingId("entity", claim.typeId)
 		const targets = new Set(
 			claim.kind === "type"
@@ -660,11 +672,11 @@ export async function checkLight(
 }
 
 /** Entities of an `entities` answer to compare: an even spread over the answer, at most the sample size. */
-export function sampleNodes(nodes: unknown[]): unknown[] {
-	if (nodes.length <= MAX_SAMPLED_ENTITIES) return nodes
+export function sampleNodes(nodes: unknown[], most: number = MAX_SAMPLED_ENTITIES): unknown[] {
+	if (nodes.length <= most) return nodes
+	if (most <= 1) return nodes.slice(0, most)
 	const picks = new Set<number>()
-	for (let i = 0; i < MAX_SAMPLED_ENTITIES; i++)
-		picks.add(Math.floor((i * (nodes.length - 1)) / (MAX_SAMPLED_ENTITIES - 1)))
+	for (let i = 0; i < most; i++) picks.add(Math.floor((i * (nodes.length - 1)) / (most - 1)))
 	return [...picks].map((at) => nodes[at])
 }
 
@@ -728,7 +740,7 @@ export async function runLight(
 			const stray = ids.filter((id) => !asked.has(id))
 			if (stray.length > 0) filterBreach = {strayIds: stray.slice(0, 3)}
 		}
-		for (const node of sampleNodes(answer)) {
+		for (const node of sampleNodes(answer, plan.everySpace ? MAX_EVERY_SPACE_SAMPLED : MAX_SAMPLED_ENTITIES)) {
 			const id = asRecord(node)?.[idKey]
 			entities.push({id: normalizeUuid(String(id)), node})
 		}
@@ -738,7 +750,9 @@ export async function runLight(
 		const light = lightCardFromEntity(node, plan)
 		if (!light) return {result: "skip"}
 		const options =
-			plan.kind === "entities" ? {claims: plan.claims, spaceIds: plan.spaceIds} : {everySpace: plan.everySpace}
+			plan.kind === "entities"
+				? {claims: plan.claims, spaceIds: plan.spaceIds, everySpace: plan.everySpace}
+				: {everySpace: plan.everySpace}
 		checks.push({id, check: await checkLight(deps, plan, light, id, label, options)})
 	}
 	const mismatched = checks.filter((c) => c.check.result === "mismatch")

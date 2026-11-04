@@ -14,6 +14,8 @@ geo-db, behind `GEODB_ENTITY_CARDS` (`off` default, `on`, `shadow`). Code: `api/
 | `GEODB_TIMEOUT_MS` | per-request budget, default 500 |
 | `GEODB_POOL_SIZE` | long-lived `geodb-client pipe` workers, default 4 |
 | `GEODB_MULTI_SPACE_READS` | `on`: the gateway shadow reads an entity's card across several Spaces in one `pipe` line (`<space>,<space>\t<geoql>`) instead of one read per Space. Needs a `geodb-client` from geo-db 353ab26313 or later; an older one refuses the line and loses its worker, so leave it off until the image is bumped. Default off |
+| `GEODB_EVERY_SPACE_READS` | `on` (needs `GEODB_MULTI_SPACE_READS`): an `entity` answer that does not say which Spaces the entity lives in (`EntityTypes`, `EntityExists`) is compared against a read of every Space in the space map, in one `pipe` line, under its own budget (0.5 reads/s). Default off |
+| `GEODB_EVERY_SPACE_ENTITIES` | `on` (needs `GEODB_EVERY_SPACE_READS`): the same read for an `entities` answer with no lists, no `spaceIds` and no Space argument (`EntityNames`, `{ id }` under a Type or relation filter), on one sampled entity per operation. Default off |
 
 ## The space map
 

@@ -1,0 +1,28 @@
+{
+	"_note": "geogenesis's EntityNames (apps/web/core/io/queries.ts getEntityNames), captured read-only from the testnet gaia API on 2026-11-04: a News story Type and a claim.",
+	"request": {
+		"query": "\n  query EntityNames($filter: EntityFilter, $first: Int) {\n    entities(filter: $filter, first: $first) {\n      id\n      name\n    }\n  }\n",
+		"variables": {
+			"filter": {
+				"id": {
+					"in": ["fd54c69a-99b5-4144-9931-8afb9689fa1a", "e550fe51-7e90-4b2c-8fff-df13408f5634"]
+				}
+			},
+			"first": 2
+		}
+	},
+	"response": {
+		"data": {
+			"entities": [
+				{
+					"id": "e550fe517e904b2c8fffdf13408f5634",
+					"name": "News story"
+				},
+				{
+					"id": "fd54c69a99b5414499318afb9689fa1a",
+					"name": "Peer's trade process releases escrowed USDC to a buyer's wallet upon verification of direct Alipay yuan transfer or returns funds after a 6-hour order window expires."
+				}
+			]
+		}
+	}
+}
