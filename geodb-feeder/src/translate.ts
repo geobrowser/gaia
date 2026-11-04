@@ -68,6 +68,21 @@ export function floatToDecimal(x: number): [bigint, number] | null {
 /** `tag` is a text's BCP 47 primary subtag; `lang` marks a language that has no tag, whose text goes in untagged. */
 type Zon = {zon: string; tag?: string; lang?: boolean} | {skip: string}
 
+/**
+ * One point component in geo-db's canonical text: rounded to `digits` fractional digits (geo-db keeps
+ * nanodegrees and micrometres and refuses a longer fraction), no trailing zeros, no "-0".
+ */
+function fixed(n: unknown, digits: number): string {
+	const t = Number(n).toFixed(digits)
+	const trimmed = t.includes(".") ? t.replace(/0+$/, "").replace(/\.$/, "") : t
+	return trimmed === "-0" ? "0" : trimmed
+}
+
+/** `lon, lat[, alt]` as geo-db's `cast.parsePoint` reads it: 9 fractional digits for degrees, 6 for metres. */
+export function pointText(lon: unknown, lat: unknown, alt?: unknown): string {
+	return `${fixed(lon, 9)}, ${fixed(lat, 9)}${alt != null ? `, ${fixed(alt, 6)}` : ""}`
+}
+
 /** One GRC-20 value -> its ZON value form, or a skip reason. */
 export function valueZon(v: GrcValue): Zon {
 	switch (v.type) {
@@ -103,7 +118,7 @@ export function valueZon(v: GrcValue): Zon {
 			return {zon: `.{ .date = "${precision},${Number(m[1])},${Number(m[2] ?? 0)},${Number(m[3] ?? 0)}" }`}
 		}
 		case "point":
-			return {zon: `.{ .point = "${v.lon}, ${v.lat}${v.alt != null ? `, ${v.alt}` : ""}" }`}
+			return {zon: `.{ .point = "${pointText(v.lon, v.lat, v.alt)}" }`}
 		default:
 			return {skip: `value-${v.type}`}
 	}

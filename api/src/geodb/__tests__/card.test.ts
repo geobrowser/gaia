@@ -155,6 +155,11 @@ describe("diffCards derived properties", () => {
 		expect(diff.skipped).toBe(1)
 	})
 
+	it("does not report a derived row only geo-db holds", () => {
+		const geo = [{prop: "103701ddcabe4a8e835b10345327b647", raw: "1.22"}]
+		expect(isEmptyDiff(diffCards({statements: [], skipped: 0}, geo))).toBe(true)
+	})
+
 	it("adds derived statements to the rows already skipped as unmappable", () => {
 		const pg = statementsFromPostgres([value({}), value({property_id: SCORE, integer: "1"})], [])
 		expect(diffCards(pg, []).skipped).toBe(2)

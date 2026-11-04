@@ -59,6 +59,11 @@ describe("valueZon", () => {
 		expect(valueZon({type: "decimal", mantissa: {type: "big", value: 1n}, exponent: 0})).toEqual({skip: "decimal-bigmantissa"})
 		expect(valueZon({type: "point", lon: 1, lat: 2})).toEqual({zon: '.{ .point = "1, 2" }'})
 		expect(valueZon({type: "point", lon: 1, lat: 2, alt: 3})).toEqual({zon: '.{ .point = "1, 2, 3" }'})
+		// geo-db keeps 9 fractional digits of a degree and 6 of a metre; the kg-indexer text carries 12
+		expect(valueZon({type: "point", lon: 23.808333333333, lat: 52.402833333333})).toEqual({zon: '.{ .point = "23.808333333, 52.402833333" }'})
+		expect(valueZon({type: "point", lon: -75.525277777778, lat: 10.423611111111})).toEqual({zon: '.{ .point = "-75.525277778, 10.423611111" }'})
+		expect(valueZon({type: "point", lon: 30.316666666667, lat: 59.95})).toEqual({zon: '.{ .point = "30.316666667, 59.95" }'})
+		expect(valueZon({type: "point", lon: 1e-12, lat: -1e-12, alt: 1.23456789})).toEqual({zon: '.{ .point = "0, 0, 1.234568" }'})
 		expect(valueZon({type: "boolean", value: false})).toEqual({zon: ".{ .boolean = false }"})
 		expect(valueZon({type: "integer", value: 42})).toEqual({zon: ".{ .number = 42 }"})
 		expect(valueZon({type: "bytes", value: ""})).toEqual({skip: "value-bytes"})
