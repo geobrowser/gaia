@@ -156,7 +156,7 @@ describe("diffCards derived properties", () => {
 	})
 
 	it("does not report a derived row only geo-db holds", () => {
-		const geo = [{prop: [...DERIVED_PROPERTIES][0], raw: "1.22"}]
+		const geo = [{prop: "103701ddcabe4a8e835b10345327b647", raw: "1.22"}]
 		expect(isEmptyDiff(diffCards({statements: [], skipped: 0}, geo))).toBe(true)
 	})
 
