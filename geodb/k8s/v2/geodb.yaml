@@ -357,7 +357,7 @@ spec:
             - name: GEODB_MEMBERSHIP_DUAL_WRITE
               value: "1"
             - name: GEODB_MEMBERSHIP_SHADOW_COMPARE
-              value: "off"
+              value: "1"
             # Read only; used by the membership comparison, ignored while it is off.
             - name: DATABASE_URL
               valueFrom:
