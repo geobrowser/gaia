@@ -141,14 +141,33 @@ export function rowsFromGeoDbOutput(output: string, entityId: string): {prop: st
 		.map((cells) => ({prop: cells[0] ?? "", raw: unescapeText(cells[1] ?? "")}))
 }
 
+/**
+ * Properties other indexers write straight into Postgres and no edit carries, so the geo-db backfill
+ * excludes them by design (vote Score, ranking rank position, vote ordinal and weighted). The comparison
+ * does not count them as replica gaps. Keep in step with DERIVED_PROPERTIES in geodb-feeder/src/pgAdapter.ts
+ * (a test asserts the two are equal); moving derived data into geo-db is Stage 4 work.
+ */
+const DERIVED_PROPERTY_IDS = [
+	"85a4668a-42fa-4f48-8969-c0a9de0c294b", // vote-indexer Score
+	"e1ffac9f-beb4-4654-8a50-00e1d6c662fb", // ranking-indexer rank position (value)
+	"890deffb-3843-49fa-8269-74000e3dcef6", // ranking-indexer rank position (relation type)
+	"49ee1b89-1820-4e75-a1ae-38a2dcaad4a5", // vote ordinal
+	"103701dd-cabe-4a8e-835b-10345327b647", // vote weighted
+]
+
+export const DERIVED_PROPERTIES: ReadonlySet<string> = new Set(DERIVED_PROPERTY_IDS.map(compact))
+
 /** Match Postgres statements against geo-db rows as multisets and return what is unmatched on each side. */
 export function diffCards(
 	postgres: {statements: CardStatement[]; skipped: number},
 	geo: {prop: string; raw: string}[],
 ): CardDiff {
+	// Derived statements are skipped, not compared: geo-db never holds them.
+	const comparable = postgres.statements.filter((s) => !DERIVED_PROPERTIES.has(s.prop))
+	const derived = postgres.statements.length - comparable.length
 	const pool = geo.map((row) => ({...row, used: false}))
 	const onlyPostgres: CardStatement[] = []
-	for (const s of postgres.statements) {
+	for (const s of comparable) {
 		const hit = pool.find(
 			(r) => !r.used && r.prop === s.prop && (s.kind === "num" ? normNumber(r.raw) === s.norm : r.raw === s.norm),
 		)
@@ -158,7 +177,7 @@ export function diffCards(
 	return {
 		onlyPostgres,
 		onlyGeoDb: pool.filter((r) => !r.used).map(({prop, raw}) => ({prop, raw})),
-		skipped: postgres.skipped,
+		skipped: postgres.skipped + derived,
 	}
 }
 

@@ -93,6 +93,29 @@ describe("resolveCard mode shadow", () => {
 		expect(log.warn).not.toHaveBeenCalled()
 	})
 
+	it("treats a derived-only Postgres card as a match against an empty geo-db, and still serves the derived row", async () => {
+		const SCORE = "85a4668a42fa4f488969c0a9de0c294b"
+		const scoreRow = {
+			property_id: SCORE,
+			text: null,
+			integer: "83",
+			float: null,
+			decimal: null,
+			boolean: null,
+			datetime: null,
+			date: null,
+		}
+		const {deps, log} = makeDeps({
+			mode: "shadow",
+			readCard: async () => [],
+			readPostgres: async () => ({values: [scoreRow], relations: []}),
+		})
+		const {card, shadow} = await resolveCard(deps, ENTITY, SPACE)
+		await shadow
+		expect(card.statements).toEqual([{property: SCORE, value: "83"}])
+		expect(log.warn).not.toHaveBeenCalled()
+	})
+
 	it("logs a structured diff when the stores differ, and still answers from Postgres", async () => {
 		const {deps, log} = makeDeps({mode: "shadow", readCard: async () => [{prop: PROP, raw: "Noam S."}]})
 		const {card, shadow} = await resolveCard(deps, ENTITY, SPACE)
