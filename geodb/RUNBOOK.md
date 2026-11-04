@@ -241,6 +241,26 @@ $K delete job geodb-membership-backfill
 The comparison checks the full id sets per Space and role; a mismatch logs the differing ids (5 per side, 10
 Spaces per run) and sets `geodb_feeder_membership_shadow_diff_ids{role,side}`.
 
+### 2d. Raising the Space cap
+
+`spaces` in `geodb-serve-config` caps the Spaces the store can hold; at the cap, founding refuses and the
+feeder dead-letters the Space's edits as `space_cap` (§7). The cap cannot be raised in one jump on a store that
+has been running: an open refuses with a bare `ResourceExhausted` when the last close kept more resident
+versions than the new cap can load, and a larger cap loads fewer. Raise it in steps of 64, each a clean open and
+close, with the StatefulSet scaled to 0 (a failed open does not change the store; this is a geo-db bug, fixed
+upstream later):
+
+```bash
+$K scale sts/geodb --replicas=0 && $K wait --for=delete pod/geodb-0 --timeout=300s
+$K apply -f geodb/k8s/v2/geodb-cap-raise-pod.yaml      # FROM/TARGET in its env
+$K logs -f pod/geodb-cap-raise                         # ends "raised to <TARGET>", or "STOPPED at <cap>"
+$K delete pod geodb-cap-raise
+# set spaces = <TARGET> in geodb.yaml (merged, so a later deploy keeps it), apply the ConfigMap, then
+$K scale sts/geodb --replicas=1
+```
+
+Never lower the cap below a founded ordinal: that open fails.
+
 ## 3. The exit check: a week of traffic
 
 Do not turn serve mode on until all of these hold over 7 days of shadow:

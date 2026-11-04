@@ -1,0 +1,66 @@
+# Raises geodb's Space cap on the store in steps (RUNBOOK §2d). Run with the StatefulSet scaled
+# to 0: it opens the store at each cap in turn and closes it cleanly, so every close leaves a
+# version window the next, larger cap can load. Set TARGET and the PVC with sed:
+#   sed -e "s|data-geodb-0|$PVC|" geodb/k8s/v2/geodb-cap-raise-pod.yaml | $K apply -f -
+# Its log ends "raised to <TARGET>" or "STOPPED at <cap>"; the pod then sleeps until deleted.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: geodb-cap-raise
+  namespace: gaia
+  labels: {app: geodb-cap-raise}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  terminationGracePeriodSeconds: 300
+  securityContext: {runAsNonRoot: true, runAsUser: 1001, runAsGroup: 1001, fsGroup: 1001}
+  imagePullSecrets: [{name: geo}]
+  volumes:
+    - name: data
+      persistentVolumeClaim: {claimName: data-geodb-0}
+    - name: store-secret
+      secret: {secretName: geodb-store-secret, defaultMode: 0440}
+  containers:
+    - name: raise
+      image: registry.digitalocean.com/geo/geodb:7d32584825
+      env:
+        - {name: FROM, value: "256"}
+        - {name: TARGET, value: "1024"}
+        - {name: STEP, value: "64"}
+        - name: GEODB_WRITER_KEYID
+          valueFrom: {secretKeyRef: {name: geodb-writer-key, key: keyid}}
+      command:
+        - sh
+        - -c
+        - |
+          set -u
+          printf 'version = 1\nlisten = tcp:127.0.0.1:7447\nprincipal = %s read=* write=* publish=*\ngrant_ttl_s = 300\n' \
+            "$GEODB_WRITER_KEYID" > /tmp/bind.txt
+          cap=$FROM
+          while [ "$cap" -lt "$TARGET" ]; do
+            cap=$((cap + STEP)); [ "$cap" -gt "$TARGET" ] && cap=$TARGET
+            printf 'version = 1\nserver_rooms_carving = 67108864\nsession_requests_in_flight = 8\nrequest_deadline_ms = 30000\nspaces = %s\n' \
+              "$cap" > /tmp/serve.cfg
+            geodb-serve --binding /tmp/bind.txt --root /data/store --config /tmp/serve.cfg --profile medium \
+              --secret-file /etc/geodb/store-secret/secret.hex > /tmp/serve.log 2>&1 &
+            pid=$!
+            while kill -0 $pid 2>/dev/null && ! grep -q '^sealer: ' /tmp/serve.log; do sleep 1; done
+            if ! kill -0 $pid 2>/dev/null; then echo "STOPPED at $cap: open refused"; cat /tmp/serve.log; break; fi
+            kill -INT $pid; wait $pid; rc=$?
+            if [ $rc -ne 0 ] || ! grep -q 'final checkpoint written' /tmp/serve.log; then
+              echo "STOPPED at $cap: close rc=$rc"; cat /tmp/serve.log; break
+            fi
+            echo "opened and closed at $cap"
+            [ "$cap" -eq "$TARGET" ] && echo "raised to $TARGET"
+          done
+          exec sleep infinity
+      volumeMounts:
+        - {name: data, mountPath: /data}
+        - {name: store-secret, mountPath: /etc/geodb/store-secret, readOnly: true}
+      # The StatefulSet's: the budget reads the cgroup's memory.max, so the steps must run under
+      # the limit serve will.
+      resources:
+        requests: {memory: "4Gi", cpu: "500m"}
+        limits: {memory: "6Gi"}
+      securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
