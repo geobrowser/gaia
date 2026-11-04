@@ -19,6 +19,9 @@ export const UNSUPPORTED_REASONS = [
 	"variables",
 	"filter",
 	"batch_size",
+	"many_spaces",
+	"unmapped_space",
+	"throttled",
 ] as const
 
 /**
@@ -35,6 +38,11 @@ export const UNCOMPARED_REASONS = [
 	"truncated",
 	"root_relations",
 	"relation_edge",
+	"created_at",
+	"relation_count",
+	"partial_values",
+	"filter_completeness",
+	"sampled_rows",
 ] as const
 
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]

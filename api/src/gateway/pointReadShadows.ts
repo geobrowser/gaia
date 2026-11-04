@@ -39,6 +39,7 @@ import {
 	type CardCheck,
 	cardFromEntity,
 	checkCard,
+	countLight,
 	type EntityCardPlan,
 	type EntityShadowDeps,
 	parseOperation,
@@ -46,6 +47,7 @@ import {
 	Unsupported,
 } from "./entityShadow"
 import type {FieldShadow} from "./gateway"
+import {analyzeLightEntities, runLight} from "./lightShadow"
 import {
 	activateGatewayMetrics,
 	recordGatewayShadow,
@@ -301,17 +303,19 @@ function itemsOfRelation(raw: unknown, plan: RelationPlan): {items: Item[]; trun
 }
 
 type Judged = {
-	result: "match" | "mismatch" | "failed"
+	result: "match" | "mismatch" | "failed" | "unsupported"
 	uncompared: UncomparedReason[]
 	detail?: Record<string, unknown>
+	/** Why geo-db was not asked, for `unsupported`. */
+	reason?: UnsupportedReason
 }
 
 async function judge(deps: EntityShadowDeps, item: Item, label: string): Promise<Judged> {
 	if (item.kind === "card") {
 		const check: CardCheck = await checkCard(deps, item.plan, item.card, item.entityId, label)
-		return check.result === "failed"
-			? {result: "failed", uncompared: []}
-			: {result: check.result, uncompared: check.uncompared, detail: check.detail}
+		if (check.result === "failed") return {result: "failed", uncompared: []}
+		if (check.result === "unsupported") return {result: "unsupported", uncompared: [], reason: check.reason}
+		return {result: check.result, uncompared: check.uncompared, detail: check.detail}
 	}
 	// A derived relation type (ranking position) is written straight to Postgres and never held by geo-db.
 	if (DERIVED_PROPERTIES.has(conformingId("entity", item.typeId)))
@@ -400,6 +404,23 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 		try {
 			const analysis = analyzePointRead(field, document, classification.operationName, params.variables)
 			if (!analysis.ok) {
+				// A card-shaped selection is not what was asked: `entities` also has a light form (lightShadow.ts).
+				const light =
+					field === ENTITIES_FIELD
+						? analyzeLightEntities(document, classification.operationName, params.variables)
+						: null
+				if (light?.ok) {
+					let lightBody: unknown
+					try {
+						lightBody = await response.json()
+					} catch {
+						return
+					}
+					countLight(deps, field, await runLight(deps, light.plan, lightBody, label), {
+						operationName: classification.operationName,
+					})
+					return
+				}
 				recordGatewayShadow(field, "unsupported_selection")
 				recordGatewayUnsupported(field, analysis.reason)
 				return
@@ -428,6 +449,13 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 				plan.field === RELATION_FIELD || plan.field === RELATIONS_FIELD
 					? plan.relation.uncompared
 					: plan.uncompared
+			const unsupported = judged.find((j) => j.result === "unsupported")
+			if (mismatched.length === 0 && unsupported?.reason) {
+				// Part of the operation was never compared (the entity's spaces, the budget): not a match.
+				recordGatewayShadow(field, "unsupported_selection")
+				recordGatewayUnsupported(field, unsupported.reason)
+				return
+			}
 			const result =
 				mismatched.length > 0 ? "mismatch" : judged.some((j) => j.result === "failed") ? "failed" : "match"
 			if (result !== "failed")

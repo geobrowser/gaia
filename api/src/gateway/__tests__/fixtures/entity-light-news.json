@@ -1,0 +1,274 @@
+{
+	"request": {
+		"query": "{\n  entity(id: \"a94cb3410aea47378dda3b6489cbacef\") {\n    id\n    name\n    description\n    spaceIds\n    values(first: 50) {\n      nodes {\n        property {\n          id\n          name\n        }\n        text\n        datetime\n      }\n    }\n    lightRels: relations(\n      first: 200\n      filter: {typeId: {in: [\"806d52bc27e94c9193c057978b093351\", \"458fbc070dbf4c928f5716f3fdde7c32\", \"e1371bcda7044396adb7ea7ecc8fe3d4\", \"dfa6aebe1ca94bf29faccc4cc7afb24c\", \"5df8e4329cc54f038f854ac82e157ada\", \"6e3503fab974460ea3dbab8af9a41427\", \"ff5c1866e5ea41ebbbd93b30536ec020\", \"6384a9b0b9be42fab705d7223aa37ac2\", \"257090341ba5406f94e4d4af90042fba\"]}}\n    ) {\n      nodes {\n        spaceId\n        type {\n          id\n          name\n        }\n        toEntity {\n          id\n          name\n        }\n      }\n    }\n    heavyRels: relations(\n      first: 200\n      filter: {typeId: {in: [\"49c5d5e1679a4dbdbfd33f618f227c94\", \"9678296fca604e17a997a5dbbc227d18\", \"34f535072e6b42c5a84443981a77cfa2\"]}}\n    ) {\n      nodes {\n        spaceId\n        type {\n          id\n          name\n        }\n        toEntity {\n          id\n          name\n          values(first: 5) {\n            nodes {\n              property {\n                id\n              }\n              text\n            }\n          }\n          relations(first: 5) {\n            nodes {\n              entityId\n              type {\n                id\n              }\n              toEntity {\n                id\n                name\n              }\n            }\n          }\n        }\n      }\n    }\n  }\n}",
+		"operationName": null,
+		"variables": {}
+	},
+	"response": {
+		"data": {
+			"entity": {
+				"id": "a94cb3410aea47378dda3b6489cbacef",
+				"name": "Alipay denies supporting crypto trading after Peer platform lists it as payment method",
+				"description": "Chinese payments giant Alipay has publicly denied supporting cryptocurrency trading through third-party platforms after peer-to-peer marketplace Peer announced a beta service allowing users to buy and sell USDC using Alipay. Peer's website continues to display Alipay as a payment option despite the company stating there is no official partnership.",
+				"spaceIds": ["c9f267dcb0d270718c2a3c45a64afd32"],
+				"values": {
+					"nodes": [
+						{
+							"property": {
+								"id": "94e43fe8faf241009eb887ab4f999723",
+								"name": "Publish datetime"
+							},
+							"text": null,
+							"datetime": "2026-10-29T01:12:12Z"
+						},
+						{
+							"property": {
+								"id": "9b1f76ff9711404c861e59dc3fa7d037",
+								"name": "Description"
+							},
+							"text": "Chinese payments giant Alipay has publicly denied supporting cryptocurrency trading through third-party platforms after peer-to-peer marketplace Peer announced a beta service allowing users to buy and",
+							"datetime": null
+						},
+						{
+							"property": {
+								"id": "aa5da9278af44294a8a9b79421762c3a",
+								"name": "Summary"
+							},
+							"text": "On October 28, 2026, Chinese payments giant Alipay publicly denied authorizing cryptocurrency trading through third-party services after peer-to-peer marketplace Peer announced a beta integration for ",
+							"datetime": null
+						},
+						{
+							"property": {
+								"id": "a126ca530c8e48d5b88882c734c38935",
+								"name": "Name"
+							},
+							"text": "Alipay denies supporting crypto trading after Peer platform lists it as payment method",
+							"datetime": null
+						}
+					]
+				},
+				"lightRels": {
+					"nodes": [
+						{
+							"spaceId": "c9f267dcb0d270718c2a3c45a64afd32",
+							"type": {
+								"id": "e1371bcda7044396adb7ea7ecc8fe3d4",
+								"name": "Notable claims"
+							},
+							"toEntity": {
+								"id": "fd54c69a99b5414499318afb9689fa1a",
+								"name": "Peer's trade process releases escrowed USDC to a buyer's wallet upon verification of direct Alipay yuan transfer or returns funds after a 6-hour order window expires."
+							}
+						},
+						{
+							"spaceId": "c9f267dcb0d270718c2a3c45a64afd32",
+							"type": {
+								"id": "e1371bcda7044396adb7ea7ecc8fe3d4",
+								"name": "Notable claims"
+							},
+							"toEntity": {
+								"id": "5c45e1210c744cf29952f0996ddecbb9",
+								"name": "Alipay operates internal monitoring procedures designed to detect, track, and suspend accounts involved in over-the-counter or peer-to-peer cryptocurrency transactions."
+							}
+						},
+						{
+							"spaceId": "c9f267dcb0d270718c2a3c45a64afd32",
+							"type": {
+								"id": "806d52bc27e94c9193c057978b093351",
+								"name": "Topics"
+							},
+							"toEntity": {
+								"id": "399651b99e7655ceb5e1c9e060d4612f",
+								"name": "Payments"
+							}
+						},
+						{
+							"spaceId": "c9f267dcb0d270718c2a3c45a64afd32",
+							"type": {
+								"id": "e1371bcda7044396adb7ea7ecc8fe3d4",
+								"name": "Notable claims"
+							},
+							"toEntity": {
+								"id": "f0d3d731c07d4d1a853f7619564b6ac3",
+								"name": "Under Peer's trading mechanism, USDC sellers deposit tokens into an onchain smart contract escrow on the Base network prior to transaction completion."
+							}
+						},
+						{
+							"spaceId": "c9f267dcb0d270718c2a3c45a64afd32",
+							"type": {
+								"id": "e1371bcda7044396adb7ea7ecc8fe3d4",
+								"name": "Notable claims"
+							},
+							"toEntity": {
+								"id": "0cf4308ecb6741b99856ff7829b4737d",
+								"name": "Using payment channels like Alipay for cryptocurrency transactions in China carries risks of account suspension and loss of funds."
+							}
+						},
+						{
+							"spaceId": "c9f267dcb0d270718c2a3c45a64afd32",
+							"type": {
+								"id": "e1371bcda7044396adb7ea7ecc8fe3d4",
+								"name": "Notable claims"
+							},
+							"toEntity": {
+								"id": "d635eaaae7204046b43a55f453b7428b",
+								"name": "Alipay has previously issued public denials and rejected third-party associations with cryptocurrency transactions in 2019 and 2024."
+							}
+						}
+					]
+				},
+				"heavyRels": {
+					"nodes": [
+						{
+							"spaceId": "c9f267dcb0d270718c2a3c45a64afd32",
+							"type": {
+								"id": "34f535072e6b42c5a84443981a77cfa2",
+								"name": "Cover"
+							},
+							"toEntity": {
+								"id": "70e1c2326f9348f9863fdfa40cdce5ee",
+								"name": "Alipay denies supporting crypto trading after Peer platform lists it as payment method cover",
+								"values": {
+									"nodes": [
+										{
+											"property": {
+												"id": "a126ca530c8e48d5b88882c734c38935"
+											},
+											"text": "Alipay denies supporting crypto trading after Peer platform lists it as payment method cover"
+										},
+										{
+											"property": {
+												"id": "f7b33e08b76d4190aadacadaa9f561e1"
+											},
+											"text": null
+										},
+										{
+											"property": {
+												"id": "7f6ad0433e214257a6d48bdad36b1d84"
+											},
+											"text": null
+										},
+										{
+											"property": {
+												"id": "8a743832c0944a62b6650c3cc2f9c7bc"
+											},
+											"text": "ipfs://QmRoWgo6EpMbwCbWU8eAtvHpp93B7ono3xD7vUBqNVWFAU"
+										}
+									]
+								},
+								"relations": {
+									"nodes": [
+										{
+											"entityId": "e8068d8045b84ba99baea039d3fc287d",
+											"type": {
+												"id": "8f151ba4de204e3c9cb499ddf96f48f1"
+											},
+											"toEntity": {
+												"id": "ba4e41460010499da0a3caaa7f579d0e",
+												"name": "Image"
+											}
+										}
+									]
+								}
+							}
+						},
+						{
+							"spaceId": "c9f267dcb0d270718c2a3c45a64afd32",
+							"type": {
+								"id": "49c5d5e1679a4dbdbfd33f618f227c94",
+								"name": "Sources"
+							},
+							"toEntity": {
+								"id": "863a0a84deb943c685d8b019a2de9305",
+								"name": "Alipay Denies Supporting Crypto Trading After Peer's Beta Launch",
+								"values": {
+									"nodes": [
+										{
+											"property": {
+												"id": "412ff593e9154012a43d4c27ec5c68b6"
+											},
+											"text": "https://thedefiant.io/news/defi/alipay-denies-supporting-crypto-trading-after-peer-s-beta-launch"
+										},
+										{
+											"property": {
+												"id": "a126ca530c8e48d5b88882c734c38935"
+											},
+											"text": "Alipay Denies Supporting Crypto Trading After Peer's Beta Launch"
+										},
+										{
+											"property": {
+												"id": "94e43fe8faf241009eb887ab4f999723"
+											},
+											"text": null
+										}
+									]
+								},
+								"relations": {
+									"nodes": [
+										{
+											"entityId": "cc7cb997ab9c45ba9d37921cc1e3498f",
+											"type": {
+												"id": "8f151ba4de204e3c9cb499ddf96f48f1"
+											},
+											"toEntity": {
+												"id": "a2a5ed0cacef46b1835de457956ce915",
+												"name": "Article"
+											}
+										}
+									]
+								}
+							}
+						},
+						{
+							"spaceId": "c9f267dcb0d270718c2a3c45a64afd32",
+							"type": {
+								"id": "49c5d5e1679a4dbdbfd33f618f227c94",
+								"name": "Sources"
+							},
+							"toEntity": {
+								"id": "7d6f9c412dbe44babce495313a01b6b9",
+								"name": "Chinese payments giant Alipay denies supporting crypto trading via Peer",
+								"values": {
+									"nodes": [
+										{
+											"property": {
+												"id": "94e43fe8faf241009eb887ab4f999723"
+											},
+											"text": null
+										},
+										{
+											"property": {
+												"id": "412ff593e9154012a43d4c27ec5c68b6"
+											},
+											"text": "https://crypto.news/alipay-denies-crypto-trading-peer-usdc-payments/"
+										},
+										{
+											"property": {
+												"id": "a126ca530c8e48d5b88882c734c38935"
+											},
+											"text": "Chinese payments giant Alipay denies supporting crypto trading via Peer"
+										}
+									]
+								},
+								"relations": {
+									"nodes": [
+										{
+											"entityId": "5b958be7fb6245c7bc7e38bf18de0ff4",
+											"type": {
+												"id": "8f151ba4de204e3c9cb499ddf96f48f1"
+											},
+											"toEntity": {
+												"id": "a2a5ed0cacef46b1835de457956ce915",
+												"name": "Article"
+											}
+										}
+									]
+								}
+							}
+						}
+					]
+				}
+			}
+		}
+	}
+}
