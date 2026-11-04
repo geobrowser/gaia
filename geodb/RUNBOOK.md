@@ -64,7 +64,7 @@ $K rollout status statefulset/geodb && $K rollout status deployment/geodb-feeder
 # d. alerts
 kubectl --context do-nyc2-geo-testnet-k8s apply -f monitoring/k8s/v2/geodb-feeder-alerts.yaml \
   -f monitoring/k8s/v2/hermes-metrics-servicemonitor.yaml
-# e. api, last: it carries the init container that reads the node id, and it needs geodb:7d32584825 to
+# e. api, last: it carries the init container that reads the node id, and it needs the pinned geodb image to
 #    exist in the registry (step a) or its pods stay in ImagePullBackOff and the rollout stalls.
 gh workflow run build-v2-images.yml --ref main -f service=api
 gh workflow run deploy-v2.yml --ref main -f service=api -f tag=<API TAG> -f cluster=geo-testnet-k8s
