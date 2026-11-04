@@ -9,9 +9,13 @@
  *   search(query: "..", spaceId: <uuid>, first: N) { id .. }
  *   searchConnection(query: "..", spaceId: <uuid>, first: N) { nodes { id .. } }
  *
+ * Without `spaceId` gaia ranks every Space; geo-db's search takes several Spaces in one request and ranks across
+ * them (docs/api/09 §1, a union scope scored against the summed statistics), so the shadow asks it ONE search
+ * over every Space in the space map. A Space the map does not hold is not searched: the comparison measures
+ * that gap too. A scoped search whose Space geo-db has not loaded counts `failed`.
+ *
  * What cannot be mapped is counted `unsupported_selection` with a reason (metrics.ts), never guessed:
- *   - no_space: geo-db's search names the Spaces it reads, and gaia's search without `spaceId` ranks every Space.
- *     (A Space geo-db has not loaded counts `failed`.)
+ *   - no_space: the space map names no Space (nothing to search over).
  *   - filter: a connection `filter` changes PostGraphile's set; geo-db's search takes only a type filter.
  *   - args: anything beside query, spaceId and first (offset, cursors, similarityThreshold), or a query the
  *     lexical search cannot take (under two characters, over 250, starting with `-`).
@@ -46,6 +50,8 @@ const MAX_FRAGMENT_DEPTH = 8
 const SAMPLE = 5
 
 export type SearchShadowDeps = Pick<EntityShadowDeps, "geoSpaceOf" | "log"> & {
+	/** Every geo-db Space id (32 hex digits) in the space map, for a search without `spaceId`. */
+	allGeoSpaces: () => Promise<string[]>
 	search: GeoDbSearchClient
 	mode?: GeoDbSearchMode
 }
@@ -55,8 +61,8 @@ export type SearchPlan = {
 	/** Response key of the field in `data`. */
 	key: string
 	query: string
-	/** gaia space id, normalized. */
-	spaceId: string
+	/** gaia space id, normalized; null when the search names none and ranks every Space. */
+	spaceId: string | null
 }
 
 export type SearchAnalysis = {ok: true; plan: SearchPlan} | {ok: false; reason: Unsupported["reason"]}
@@ -110,9 +116,9 @@ export function analyzeSearchOperation(
 			refuse("args")
 		const text = typeof args.query === "string" ? args.query.trim() : ""
 		if (text.length < MIN_QUERY_LENGTH || text.length > MAX_QUERY_LENGTH || text.startsWith("-")) refuse("args")
-		if (args.spaceId === undefined || args.spaceId === null) refuse("no_space")
-		if (typeof args.spaceId !== "string" || !isValidUuid(args.spaceId)) refuse("args")
-		const spaceId = normalizeUuid(args.spaceId as string)
+		const unscoped = args.spaceId === undefined || args.spaceId === null
+		if (!unscoped && (typeof args.spaceId !== "string" || !isValidUuid(args.spaceId))) refuse("args")
+		const spaceId = unscoped ? null : normalizeUuid(args.spaceId as string)
 		const key = root.alias?.value ?? field
 		let idKey: string
 		let nodesKey: string | undefined
@@ -175,11 +181,25 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 			}
 			const started = performance.now()
 			let geodb: string[]
+			let spaces = 1
 			try {
-				const geoSpaceId = await deps.geoSpaceOf(plan.spaceId.replaceAll("-", ""))
-				if (!geoSpaceId) throw new GeoDbError("unmapped_space", `space ${plan.spaceId} is not loaded in geo-db`)
+				let geoSpaceIds: string[]
+				if (plan.spaceId === null) {
+					geoSpaceIds = await deps.allGeoSpaces()
+					spaces = geoSpaceIds.length
+					if (geoSpaceIds.length === 0) {
+						recordGatewayShadow(field, "unsupported_selection")
+						recordGatewayUnsupported(field, "no_space")
+						return
+					}
+				} else {
+					const geoSpaceId = await deps.geoSpaceOf(plan.spaceId.replaceAll("-", ""))
+					if (!geoSpaceId)
+						throw new GeoDbError("unmapped_space", `space ${plan.spaceId} is not loaded in geo-db`)
+					geoSpaceIds = [geoSpaceId]
+				}
 				geodb = await deps.search.searchLexical({
-					geoSpaceId,
+					geoSpaceIds,
 					text: plan.query,
 					mode: deps.mode ?? "typeahead",
 					limit: GEODB_LIMIT,
@@ -197,6 +217,7 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 			deps.log.info(`${label} compared`, {
 				operationName: classification.operationName,
 				spaceId: plan.spaceId,
+				spaces,
 				outcome: verdict.outcome,
 				top10Overlap: verdict.top10Overlap,
 				recallInGeoDb: verdict.recallInGeoDb,

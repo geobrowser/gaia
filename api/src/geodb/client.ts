@@ -79,10 +79,12 @@ const SPACE_MAP_REFRESH_MS = 10_000
  * held, so a briefly unreadable file never blinds a running pod; only a pod that has never read a good
  * map answers `client_failed`.
  */
-export function createSpaceMap(
-	path: string,
-	options: {refreshMs?: number; now?: () => number} = {},
-): (gaiaSpaceId: string) => Promise<string | null> {
+export type SpaceMap = ((gaiaSpaceId: string) => Promise<string | null>) & {
+	/** Every geo-db space id (32 hex digits) in the map, distinct; empty without a path. */
+	all(): Promise<string[]>
+}
+
+export function createSpaceMap(path: string, options: {refreshMs?: number; now?: () => number} = {}): SpaceMap {
 	const refreshMs = options.refreshMs ?? SPACE_MAP_REFRESH_MS
 	const now = options.now ?? Date.now
 	let held: {map: Map<string, string>; stamp: string} | null = null
@@ -96,7 +98,7 @@ export function createSpaceMap(
 		held = {map: parseSpaceMap(await readFile(path, "utf8")), stamp}
 	}
 
-	return async (gaiaSpaceId) => {
+	const current = async () => {
 		if (!path) return null
 		if (now() - checkedAt >= refreshMs) {
 			checkedAt = now()
@@ -116,8 +118,11 @@ export function createSpaceMap(
 		} catch (error) {
 			throw new GeoDbError("client_failed", `space map unreadable: ${String(error)}`)
 		}
-		return held?.map.get(gaiaSpaceId) ?? null
+		return held?.map ?? null
 	}
+
+	const lookup = async (gaiaSpaceId: string) => (await current())?.get(gaiaSpaceId) ?? null
+	return Object.assign(lookup, {all: async () => [...new Set((await current())?.values() ?? [])]})
 }
 
 /** The part of a child process the pool uses; tests substitute their own. */

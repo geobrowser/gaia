@@ -17,13 +17,18 @@ import type {GeoDbCardConfig} from "./config"
 const HEX32 = /^[0-9a-f]{32}$/
 const DEFAULT_TIMEOUT_MS = 3000
 const DEFAULT_MAX_CONCURRENT = 2
+/** geo-db's bound on the Spaces of one scope (`source.MAX_SOURCES`). */
+const MAX_SPACES = 1024
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 
 export type GeoDbSearchMode = "typeahead" | "bm25"
 
 export type GeoDbSearchClient = {
-	/** Entity ids (geo-db's id space, 32 hex digits) best first, each once, in `geoSpaceId`. */
-	searchLexical(args: {geoSpaceId: string; text: string; mode: GeoDbSearchMode; limit: number}): Promise<string[]>
+	/**
+	 * Entity ids (geo-db's id space, 32 hex digits) best first, each once, across `geoSpaceIds`: one request, one
+	 * ranking (geo-db scores a several-Space search against the Spaces' summed statistics, docs/api/09 §1).
+	 */
+	searchLexical(args: {geoSpaceIds: string[]; text: string; mode: GeoDbSearchMode; limit: number}): Promise<string[]>
 }
 
 /** Runs the client tool with these arguments after its global flags; resolves to its standard output. */
@@ -67,8 +72,11 @@ export function createCliGeoDbSearchClient(
 	const maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT
 	let inFlight = 0
 	return {
-		async searchLexical({geoSpaceId, text, mode, limit}) {
-			if (!HEX32.test(geoSpaceId)) throw new GeoDbError("bad_request", "space id must be 32 hex digits")
+		async searchLexical({geoSpaceIds, text, mode, limit}) {
+			if (geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_SPACES)
+				throw new GeoDbError("bad_request", `a search takes 1 to ${MAX_SPACES} spaces`)
+			if (!geoSpaceIds.every((id) => HEX32.test(id)))
+				throw new GeoDbError("bad_request", "space id must be 32 hex digits")
 			// The tool reads any later argument that looks like a flag as a flag, so text cannot start with `-`.
 			if (text.length === 0 || text.startsWith("-")) throw new GeoDbError("bad_request", "unusable query text")
 			if (inFlight >= maxConcurrent) throw new GeoDbError("overloaded", `${inFlight} geo-db searches running`)
@@ -77,7 +85,11 @@ export function createCliGeoDbSearchClient(
 				const n = String(Math.max(1, Math.min(Math.floor(limit), 100)))
 				const output = await run(
 					config,
-					["search", "--space", geoSpaceId, "--mode", mode, "--limit", n, "--first", n, "--pages", "1", text],
+					[
+						"search",
+						...[...new Set(geoSpaceIds)].flatMap((id) => ["--space", id]),
+						...["--mode", mode, "--limit", n, "--first", n, "--pages", "1", text],
+					],
 					timeoutMs,
 				)
 				return parseSearchOutput(output)

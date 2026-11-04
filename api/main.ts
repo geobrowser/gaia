@@ -215,6 +215,7 @@ const graphqlHandler = createGateway({
 					...createSearchShadows(
 						{
 							geoSpaceOf: sharedGeoDb.geoSpaceOf,
+							allGeoSpaces: sharedGeoDb.geoSpaceOf.all,
 							log,
 							search: createCliGeoDbSearchClient(geoDbCardConfig),
 							mode: process.env.GEODB_SEARCH_MODE === "bm25" ? "bm25" : "typeahead",
