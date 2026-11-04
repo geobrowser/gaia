@@ -68,6 +68,10 @@ jobs:
         working-directory: ${{ runner.temp }}/geo-db
         run: sh zig/siblings.sh
 
+      - name: Fetch the packages the siblings pin in turn
+        working-directory: ${{ runner.temp }}/geo-db
+        run: sh "$GITHUB_WORKSPACE/geodb/fetch-nested-pins.sh"
+
       - name: Build geodb-serve and geodb-client
         working-directory: ${{ runner.temp }}/geo-db
         # x86_64_v2: runs on any DigitalOcean node. The `serve` and `client` build steps run the
