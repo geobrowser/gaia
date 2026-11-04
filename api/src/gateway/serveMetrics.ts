@@ -29,6 +29,8 @@ export const SERVE_FALLBACK_REASONS = [
 	"unmapped_space",
 	"legacy_id",
 	"empty",
+	// The reverse id map (geodb/idMap.ts) could not be read.
+	"id_map",
 	// geo-db could not answer in time, or at all.
 	"timeout",
 	"overloaded",
