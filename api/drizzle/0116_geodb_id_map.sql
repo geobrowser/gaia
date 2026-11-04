@@ -12,12 +12,13 @@
 -- index is partial (non-v4 ids only), so v4 rows, the other ~96%, pay one cheap predicate per write.
 -- The api reads it in api/src/geodb/idMap.ts. The schema is not `public`, so PostGraphile does not expose it.
 --
--- Large envs: build the index CONCURRENTLY first, so it does not block writes to entities while it builds
--- (then the IF NOT EXISTS below no-ops). The functions have to exist for it, so run this whole block:
---   CREATE SCHEMA IF NOT EXISTS geodb;
---   <the three CREATE OR REPLACE FUNCTION statements below>
+-- THE INDEX ON A LARGE TABLE IS NOT BUILT HERE. A plain CREATE INDEX would block writes to entities while it
+-- builds, and drizzle runs migrations in a transaction, where CONCURRENTLY is not allowed. So the statement below
+-- builds it only when entities is small (fresh and test databases). On testnet (48.9M entities, ~2M legacy;
+-- a 10% sample hashed in ~3 s) build it by hand once this migration has run:
 --   CREATE INDEX CONCURRENTLY IF NOT EXISTS "entities_geodb_conform_idx" ON "entities" (geodb.conform('entity', "id")) WHERE NOT geodb.is_v4("id");
--- On testnet (48.9M entities, ~2M of them legacy) a 10% sample hashed in ~3 s, so expect the build in minutes.
+-- Until it exists the api's map reads refuse (idMap.ts checks for it), so the entity resolver declines with
+-- id_map rather than scanning the table.
 
 CREATE SCHEMA IF NOT EXISTS geodb;
 --> statement-breakpoint
@@ -47,7 +48,13 @@ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
 $$;
 --> statement-breakpoint
 
-CREATE INDEX IF NOT EXISTS "entities_geodb_conform_idx" ON "entities" (geodb.conform('entity', "id")) WHERE NOT geodb.is_v4("id");
+DO $$
+BEGIN
+  IF (SELECT reltuples FROM pg_class WHERE oid = 'public.entities'::regclass) < 1000000 THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS "entities_geodb_conform_idx" ON "entities" (geodb.conform(''entity'', "id")) WHERE NOT geodb.is_v4("id")';
+  END IF;
+END
+$$;
 --> statement-breakpoint
 
 DO $$

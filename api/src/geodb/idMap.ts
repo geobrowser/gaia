@@ -24,12 +24,28 @@ const HEX32 = /^[0-9a-f]{32}$/
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
+/** How long a read waits before checking again for an index it found missing. */
+const INDEX_RECHECK_MS = 60_000
+
 /**
  * One round trip for any number of ids. The ids go in as one array literal; each is checked to be 32 hex first,
  * so the literal cannot carry anything else.
+ *
+ * Without migration 0116's index (built by hand on a large database) the lookup would hash the whole table, so
+ * the reads refuse until it exists: checked on first use, and again at most once a minute while it is missing.
  */
-export function idMapQuery(db: Database): IdMapQuery {
+export function idMapQuery(db: Database, now: () => number = Date.now): IdMapQuery {
+	let indexed = false
+	let checkedAt = Number.NEGATIVE_INFINITY
 	return async (geoIds) => {
+		if (!indexed && now() - checkedAt >= INDEX_RECHECK_MS) {
+			checkedAt = now()
+			const found = await db.execute<{ok: boolean}>(
+				sql`SELECT to_regclass('public.entities_geodb_conform_idx') IS NOT NULL AS ok`,
+			)
+			indexed = found.rows[0]?.ok === true
+		}
+		if (!indexed) throw new Error("entities_geodb_conform_idx does not exist (migration 0116: build it by hand)")
 		const ids = geoIds.filter((id) => HEX32.test(id))
 		if (ids.length === 0) return []
 		const array = `{${ids.join(",")}}`

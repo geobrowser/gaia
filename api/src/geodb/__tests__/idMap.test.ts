@@ -2,7 +2,7 @@ import {readFileSync} from "node:fs"
 import path from "node:path"
 import {afterEach, describe, expect, it, vi} from "vitest"
 import {conformingId} from "../card"
-import {__resetIdMapMetricsForTests, createGaiaIdMap, type IdMapRow, renderIdMapMetrics} from "../idMap"
+import {__resetIdMapMetricsForTests, createGaiaIdMap, type IdMapRow, idMapQuery, renderIdMapMetrics} from "../idMap"
 
 const LEGACY = "990a4147a92855e88e630e542faf1c72"
 const NATIVE = "6b9f649e38b24b9a8e3c1b6a0b3c3c3a"
@@ -77,5 +77,34 @@ describe("createGaiaIdMap", () => {
 
 	it("exports nothing until a map exists", () => {
 		expect(renderIdMapMetrics()).toBe("")
+	})
+})
+
+describe("idMapQuery", () => {
+	// Answers each execute in turn: the index check's row, then the lookup's rows.
+	const fakeDb = (...answers: unknown[][]) => ({
+		execute: vi.fn(async (_query: unknown) => ({rows: answers.shift() ?? []})),
+	})
+
+	it("refuses until the index exists, rechecking at most once a minute", async () => {
+		let clock = 0
+		const db = fakeDb([{ok: false}], [{ok: true}], [], [])
+		const read = idMapQuery(db as never, () => clock)
+		await expect(read([NATIVE])).rejects.toThrow(/entities_geodb_conform_idx/)
+		clock = 59_000
+		await expect(read([NATIVE])).rejects.toThrow(/entities_geodb_conform_idx/)
+		expect(db.execute).toHaveBeenCalledTimes(1)
+		clock = 60_000
+		await expect(read([NATIVE])).resolves.toEqual([])
+		expect(db.execute).toHaveBeenCalledTimes(3)
+		await read([NATIVE])
+		expect(db.execute).toHaveBeenCalledTimes(4)
+	})
+
+	it("asks nothing for ids that are not 32 hex", async () => {
+		const db = fakeDb([{ok: true}])
+		const read = idMapQuery(db as never)
+		expect(await read(["x'); drop table entities; --"])).toEqual([])
+		expect(db.execute).toHaveBeenCalledTimes(1)
 	})
 })
