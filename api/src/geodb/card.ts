@@ -214,7 +214,9 @@ export function diffCards(postgres: {statements: CardStatement[]; skipped: numbe
 	const comparable = postgres.statements.filter((s) => !DERIVED_PROPERTIES.has(s.prop))
 	const derived = postgres.statements.length - comparable.length
 	// Nor are the rows only geo-db holds: derived ones an edit carried (skipped above on the Postgres side) and membership.
-	const pool = geo.filter((row) => !DERIVED_PROPERTIES.has(row.prop) && !MEMBERSHIP_PROPERTIES.has(row.prop)).map((row) => ({...row, used: false}))
+	const pool = geo
+		.filter((row) => !DERIVED_PROPERTIES.has(row.prop) && !MEMBERSHIP_PROPERTIES.has(row.prop))
+		.map((row) => ({...row, used: false}))
 	const onlyPostgres: CardStatement[] = []
 	for (const s of comparable) {
 		const hit = pool.find(
