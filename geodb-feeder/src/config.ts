@@ -16,6 +16,7 @@ export type Config = {
 	lagPollMs: number
 	membership: MembershipConfig
 	proposals: {enabled: boolean; topic: string; groupId: string}
+	spaceEntities: {enabled: boolean; topic: string; groupId: string}
 }
 
 export type MembershipConfig = {
@@ -77,6 +78,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			enabled: flag(env.GEODB_PROPOSAL_ENTITIES),
 			topic: env.KAFKA_PROPOSALS_TOPIC ?? `${environment}.space.governance`,
 			groupId: env.KAFKA_PROPOSALS_GROUP_ID ?? `geodb-feeder-proposals-v1-${environment}`,
+		},
+		spaceEntities: {
+			/** GEODB_SPACE_ENTITIES: consume `space.creations` and write Space system entities. Default off. */
+			enabled: flag(env.GEODB_SPACE_ENTITIES),
+			topic: env.KAFKA_SPACE_CREATIONS_TOPIC ?? `${environment}.space.creations`,
+			groupId: env.KAFKA_SPACE_CREATIONS_GROUP_ID ?? `geodb-feeder-space-creations-v1-${environment}`,
 		},
 	}
 }

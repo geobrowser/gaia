@@ -92,9 +92,14 @@ export function createMetrics() {
 		proposalEvents: counter("geodb_feeder_proposal_events_total", "space.governance messages handled, by outcome (applied, noop, ignored, unmapped, dead_letter)."),
 		proposalsLag: gauge("geodb_feeder_proposals_consumer_lag", "space.governance messages between the topic head and the last applied offset, by partition."),
 		proposalsUp: gauge("geodb_feeder_proposals_consumer_running", "1 while the space.governance consumer is running."),
+		spaceEntityEvents: counter("geodb_feeder_space_entity_events_total", "space.creations messages handled, by outcome (applied, noop, ignored, pending, dead_letter). pending = Space not founded yet; retried once it is."),
+		spaceEntitiesLag: gauge("geodb_feeder_space_entities_consumer_lag", "space.creations messages between the topic head and the last applied offset, by partition."),
+		spaceEntitiesUp: gauge("geodb_feeder_space_entities_consumer_running", "1 while the space.creations consumer is running."),
+		spaceEntitiesPending: gauge("geodb_feeder_space_entities_pending", "Registered Spaces whose system entity waits for the Space to be founded in geo-db."),
 		apply: new Histogram("geodb_feeder_apply_seconds", "Wall time of one geodb-client apply."),
 		freshness: new Histogram("geodb_feeder_edit_freshness_seconds", "Kafka message timestamp to applied in geo-db, edits consumer. Includes backlog catch-up.", FRESHNESS_BUCKETS),
 		proposalFreshness: new Histogram("geodb_feeder_proposal_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.governance consumer.", FRESHNESS_BUCKETS),
+		spaceEntityFreshness: new Histogram("geodb_feeder_space_entity_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.creations consumer.", FRESHNESS_BUCKETS),
 		membershipFreshness: new Histogram("geodb_feeder_membership_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.membership consumer.", FRESHNESS_BUCKETS),
 
 	}

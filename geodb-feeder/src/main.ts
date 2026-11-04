@@ -18,6 +18,8 @@ import {MembershipState} from "./membership.js"
 import {startMembershipConsumer} from "./membershipConsumer.js"
 import {ProposalOffsets} from "./proposals.js"
 import {startProposalConsumer} from "./proposalsConsumer.js"
+import {PendingSpaces} from "./spaceEntities.js"
+import {startSpaceEntityConsumer} from "./spaceEntitiesConsumer.js"
 import {createMetrics, observeFreshness} from "./metrics.js"
 import {PipeReader} from "./geodbPipe.js"
 import {ReadOnlyPg, pgConfig, readMembershipIds} from "./pgSource.js"
@@ -225,6 +227,22 @@ async function main(config: Config): Promise<void> {
 		}
 	}
 
+	let spaceEntities: Awaited<ReturnType<typeof startSpaceEntityConsumer>> | null = null
+	if (config.spaceEntities.enabled) {
+		try {
+			const dir = `${config.dataDir}/feeder/space-entities`
+			spaceEntities = await startSpaceEntityConsumer({
+				kafka,
+				config,
+				abort,
+				offsets: new ProposalOffsets(dir),
+				deps: {...spaceDeps, lock, beat: async () => {}, pending: new PendingSpaces(dir)},
+			})
+		} catch (e) {
+			log("error", "space entities consumer failed to start (edits consumer unaffected)", errorFields(e))
+		}
+	}
+
 	const pollTimer = setInterval(() => void poll(), config.lagPollMs)
 	await poll()
 	if (membership) {
@@ -239,6 +257,12 @@ async function main(config: Config): Promise<void> {
 		await p.poll()
 	}
 
+	if (spaceEntities) {
+		const s = spaceEntities
+		setInterval(() => void s.poll(), config.lagPollMs).unref()
+		await s.poll()
+	}
+
 	const stop = async () => {
 		log("info", "shutting down")
 		abort.abort()
@@ -248,6 +272,7 @@ async function main(config: Config): Promise<void> {
 		await pg?.close()
 		await membership?.stop()
 		await proposals?.stop()
+		await spaceEntities?.stop()
 		publisher.stop()
 		await consumer.disconnect().catch(() => {})
 		await admin.disconnect().catch(() => {})

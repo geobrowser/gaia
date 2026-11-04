@@ -363,6 +363,11 @@ spec:
             # consume on that topic) and writes them into Spaces geo-db already holds.
             - name: GEODB_PROPOSAL_ENTITIES
               value: "1"
+            # Space system entities: the kg-indexer writes one per registered Space straight to Postgres, no
+            # edit carries it. The feeder consumes space.creations (its own group, needs consume on that topic)
+            # and writes them into Spaces geo-db holds; one for a Space not founded yet waits until it is.
+            - name: GEODB_SPACE_ENTITIES
+              value: "1"
             # Read only; used by the membership comparison, ignored while it is off.
             - name: DATABASE_URL
               valueFrom:
