@@ -9,9 +9,14 @@
  *
  * Failure handling is per request. A request that times out kills its worker (its connection cannot
  * be trusted with a reply still owed) and is rejected `timeout`; a worker that exits, or answers a
- * refusal, rejects its request `client_failed` and is started afresh for the next one; a worker that
- * cannot start (geo-db down) backs the whole client off for a second, so an outage answers every
- * request at once from Postgres instead of starting a process per request.
+ * refusal, is replaced by a fresh one. A worker that dies because its connection or token did (the
+ * server closes a connection idle for a minute and `pipe` never pings, so `TransportClosed`; a token
+ * whose epoch or expiry passed, so `CapabilityTokenExpired`; or the process simply exiting while it
+ * owed a reply) says nothing about the request, so that request is retried once on the fresh worker.
+ * Any other refusal is real and rejects its request `client_failed` without a retry. Replacing dead
+ * workers is rate-capped (`MAX_RETRIES_PER_WINDOW`), past which requests fail rather than retry. A
+ * worker that cannot start (geo-db down) backs the whole client off for a second, so an outage answers
+ * every request at once from Postgres instead of starting a process per request.
  */
 
 import {type ChildProcess, spawn as nodeSpawn} from "node:child_process"
@@ -132,6 +137,11 @@ const defaultSpawn: SpawnPipe = (config) =>
 /** How long the client refuses work after a worker failed to start. */
 const START_BACKOFF_MS = 1000
 const STDERR_TAIL = 300
+/** Retries on a fresh worker allowed per window; past it a dead worker's request just fails. */
+const MAX_RETRIES_PER_WINDOW = 8
+const RETRY_WINDOW_MS = 10_000
+/** A refusal naming a dead connection or token, not a verdict on the request. */
+const DEAD_SESSION = /\b(TransportClosed|TransportFailed|CapabilityTokenExpired)\b/
 const FRAME = /^([+-])(\d{1,9})$/
 
 type Request = {
@@ -139,6 +149,7 @@ type Request = {
 	entityId: string
 	resolve: (rows: {prop: string; raw: string}[]) => void
 	reject: (error: GeoDbError) => void
+	retried: boolean
 	timer: ReturnType<typeof setTimeout>
 	slot: Slot | null
 }
@@ -172,9 +183,23 @@ export function createPipeGeoDbClient(
 	const queue: Request[] = []
 	const maxQueue = slots.length * 64
 	let backoffUntil = 0
+	let retryTimes: number[] = []
 
-	/** Drop the slot's worker, rejecting the request it owed a reply. */
-	function reset(slot: Slot, failure: GeoDbError | null) {
+	/** Whether another retry fits the rate cap; counts it when it does. */
+	function retryBudget(): boolean {
+		const t = now()
+		retryTimes = retryTimes.filter((at) => t - at < RETRY_WINDOW_MS)
+		if (retryTimes.length >= MAX_RETRIES_PER_WINDOW) return false
+		retryTimes.push(t)
+		return true
+	}
+
+	/**
+	 * Drop the slot's worker, rejecting the request it owed a reply, or with `retry` (the worker's
+	 * connection or token died, not the request) putting it back at the head of the queue for a fresh
+	 * worker, once.
+	 */
+	function reset(slot: Slot, failure: GeoDbError | null, retry = false) {
 		const child = slot.child
 		const request = slot.request
 		const neverReady = !slot.ready
@@ -186,7 +211,13 @@ export function createPipeGeoDbClient(
 			child.kill("SIGKILL")
 		}
 		if (neverReady && child) backoffUntil = now() + START_BACKOFF_MS
-		if (request && failure) settle(request, failure)
+		if (request && failure) {
+			if (retry && !neverReady && !request.retried && retryBudget()) {
+				request.retried = true
+				request.slot = null
+				queue.unshift(request)
+			} else settle(request, failure)
+		}
 		pump()
 	}
 
@@ -223,7 +254,8 @@ export function createPipeGeoDbClient(
 		const gone = (what: string) => {
 			if (!owns()) return
 			const detail = slot.stderr.trim() || what
-			reset(slot, new GeoDbError("client_failed", `geodb-client ${what}: ${detail}`.slice(0, 400)))
+			// Exiting with a reply owed, on a worker that had started, is a dead connection.
+			reset(slot, new GeoDbError("client_failed", `geodb-client ${what}: ${detail}`.slice(0, 400)), true)
 		}
 		child.on("exit", (code, signal) => gone(`exited (${String(signal ?? code)})`))
 		child.on("error", (error) => gone(`failed: ${String(error)}`))
@@ -259,8 +291,9 @@ export function createPipeGeoDbClient(
 			const payload = slot.buffer.subarray(end + 1, end + 1 + size).toString("utf8")
 			slot.buffer = slot.buffer.subarray(end + 1 + size)
 			if (header[1] === "-") {
-				// A refusal ends the worker's session; the next request starts a fresh one.
-				reset(slot, new GeoDbError("client_failed", payload.slice(0, 300)))
+				// A refusal ends the worker's session; the next request starts a fresh one. Only a refusal
+				// that names a dead connection or token is retried; the rest are the request's own.
+				reset(slot, new GeoDbError("client_failed", payload.slice(0, 300)), DEAD_SESSION.test(payload))
 				return
 			}
 			slot.request = null
@@ -313,6 +346,7 @@ export function createPipeGeoDbClient(
 					entityId,
 					resolve,
 					reject,
+					retried: false,
 					timer: setTimeout(() => onTimeout(request), config.timeoutMs),
 					slot: null,
 				}
