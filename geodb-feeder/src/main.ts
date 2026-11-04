@@ -18,7 +18,7 @@ import {MembershipState} from "./membership.js"
 import {startMembershipConsumer} from "./membershipConsumer.js"
 import {ProposalOffsets} from "./proposals.js"
 import {startProposalConsumer} from "./proposalsConsumer.js"
-import {createMetrics} from "./metrics.js"
+import {createMetrics, observeFreshness} from "./metrics.js"
 import {PipeReader} from "./geodbPipe.js"
 import {ReadOnlyPg, pgConfig, readMembershipIds} from "./pgSource.js"
 import {SpaceMapPublisher, kubeConfigMapPut} from "./publish.js"
@@ -139,6 +139,7 @@ async function main(config: Config): Promise<void> {
 				}
 				store.markDone(batch.partition, offset)
 				metrics.edits.inc({outcome})
+				observeFreshness(metrics.freshness, m.timestamp)
 				metrics.lastApplied.set({}, Date.now() / 1000)
 				metrics.lastOffset.set({partition: String(batch.partition)}, offset)
 				resolveOffset(m.offset)

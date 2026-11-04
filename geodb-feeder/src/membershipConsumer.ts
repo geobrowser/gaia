@@ -6,6 +6,7 @@
 import type kafkajs from "kafkajs"
 import type {Config} from "./config.js"
 import {errorFields, log} from "./log.js"
+import {observeFreshness} from "./metrics.js"
 import {handleMembershipMessage, type MembershipDeps} from "./membership.js"
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -61,6 +62,7 @@ export async function startMembershipConsumer(opts: {
 				}
 				deps.state.markDone(batch.partition, offset)
 				deps.metrics.membershipEvents.inc({outcome})
+				observeFreshness(deps.metrics.membershipFreshness, m.timestamp)
 				resolveOffset(m.offset)
 				await heartbeat()
 				if (Date.now() - lastCommit > 5000) {

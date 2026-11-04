@@ -6,6 +6,7 @@
 import type kafkajs from "kafkajs"
 import type {Config} from "./config.js"
 import {errorFields, log} from "./log.js"
+import {observeFreshness} from "./metrics.js"
 import {handleProposalMessage, ProposalOffsets, type ProposalDeps} from "./proposals.js"
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -62,6 +63,7 @@ export async function startProposalConsumer(opts: {
 				}
 				offsets.markDone(batch.partition, offset)
 				deps.metrics.proposalEvents.inc({outcome})
+				observeFreshness(deps.metrics.proposalFreshness, m.timestamp)
 				resolveOffset(m.offset)
 				await heartbeat()
 				if (Date.now() - lastCommit > 5000) {

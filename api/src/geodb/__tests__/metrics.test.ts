@@ -54,6 +54,22 @@ describe("geo-db card metrics", () => {
 		expect(line(text, 'gaia_api_geodb_card_fallback_total{reason="timeout"}')).toBe("0")
 		expect(line(text, 'gaia_api_geodb_card_shadow_total{result="match"}')).toBe("0")
 		expect(line(text, 'gaia_api_geodb_read_seconds_bucket{outcome="ok",le="+Inf"}')).toBe("0")
+		expect(line(text, 'gaia_api_postgres_card_read_seconds_bucket{outcome="ok",le="+Inf"}')).toBe("0")
+	})
+
+	it("times the Postgres card read in shadow mode only, not the mode-on fallback", async () => {
+		activateGeoDbMetrics()
+		await resolveCard(deps("shadow", async () => [{prop: PROP, raw: "Noam"}]), ENTITY, SPACE)
+		await resolveCard(
+			deps("on", async () => {
+				throw new GeoDbError("timeout", "slow")
+			}),
+			ENTITY,
+			SPACE,
+		)
+		const text = renderGeoDbCardMetrics()
+		expect(line(text, 'gaia_api_postgres_card_read_seconds_count{outcome="ok"}')).toBe("1")
+		expect(line(text, 'gaia_api_postgres_card_read_seconds_count{outcome="error"}')).toBe("0")
 	})
 
 	it("counts geo-db answers, fallbacks by reason, and the read latency", async () => {

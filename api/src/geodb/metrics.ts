@@ -32,6 +32,8 @@ const fallbacks = new Map<string, number>()
 const shadow = new Map<string, number>()
 const buckets = new Map<string, number[]>()
 const sums = new Map<string, number>()
+const pgBuckets = new Map<string, number[]>()
+const pgSums = new Map<string, number>()
 
 const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(key) ?? 0) + 1)
 
@@ -47,13 +49,35 @@ export function recordFallback(reason: string): void {
 
 export const recordShadow = (result: ShadowResult) => bump(shadow, result)
 
-export function observeGeoDbRead(seconds: number, outcome: Outcome): void {
-	const counts = buckets.get(outcome) ?? new Array<number>(LATENCY_BUCKETS_SECONDS.length + 1).fill(0)
+function observe(bucketMap: Map<string, number[]>, sumMap: Map<string, number>, seconds: number, outcome: Outcome) {
+	const counts = bucketMap.get(outcome) ?? new Array<number>(LATENCY_BUCKETS_SECONDS.length + 1).fill(0)
 	const index = LATENCY_BUCKETS_SECONDS.findIndex((edge) => seconds <= edge)
 	const slot = index === -1 ? LATENCY_BUCKETS_SECONDS.length : index
 	counts[slot] = (counts[slot] ?? 0) + 1
-	buckets.set(outcome, counts)
-	sums.set(outcome, (sums.get(outcome) ?? 0) + seconds)
+	bucketMap.set(outcome, counts)
+	sumMap.set(outcome, (sumMap.get(outcome) ?? 0) + seconds)
+}
+
+export const observeGeoDbRead = (seconds: number, outcome: Outcome) => observe(buckets, sums, seconds, outcome)
+
+/** The Postgres read of the same card in shadow mode, on the same buckets, so the two histograms compare. */
+export const observePostgresCardRead = (seconds: number, outcome: Outcome) => observe(pgBuckets, pgSums, seconds, outcome)
+
+function histogram(name: string, help: string, bucketMap: Map<string, number[]>, sumMap: Map<string, number>) {
+	const lines = [`# HELP ${name} ${help}`, `# TYPE ${name} histogram`]
+	for (const outcome of ["ok", "error"] as const) {
+		const counts = bucketMap.get(outcome) ?? new Array<number>(LATENCY_BUCKETS_SECONDS.length + 1).fill(0)
+		let cumulative = 0
+		LATENCY_BUCKETS_SECONDS.forEach((edge, i) => {
+			cumulative += counts[i] ?? 0
+			lines.push(`${name}_bucket{outcome="${outcome}",le="${edge}"} ${cumulative}`)
+		})
+		cumulative += counts[LATENCY_BUCKETS_SECONDS.length] ?? 0
+		lines.push(`${name}_bucket{outcome="${outcome}",le="+Inf"} ${cumulative}`)
+		lines.push(`${name}_sum{outcome="${outcome}"} ${sumMap.get(outcome) ?? 0}`)
+		lines.push(`${name}_count{outcome="${outcome}"} ${cumulative}`)
+	}
+	return lines
 }
 
 function counter(name: string, help: string, label: string, keys: readonly string[], map: Map<string, number>) {
@@ -86,26 +110,24 @@ export function renderGeoDbCardMetrics(): string {
 			SHADOW_RESULTS,
 			shadow,
 		),
-		"# HELP gaia_api_geodb_read_seconds Latency of one geo-db card read through the pipe pool, queue wait included.",
-		"# TYPE gaia_api_geodb_read_seconds histogram",
+		...histogram(
+			"gaia_api_geodb_read_seconds",
+			"Latency of one geo-db card read through the pipe pool, queue wait included.",
+			buckets,
+			sums,
+		),
+		...histogram(
+			"gaia_api_postgres_card_read_seconds",
+			"Latency of the Postgres read of one entity card in shadow mode, the counterpart of gaia_api_geodb_read_seconds.",
+			pgBuckets,
+			pgSums,
+		),
 	]
-	for (const outcome of ["ok", "error"] as const) {
-		const counts = buckets.get(outcome) ?? new Array<number>(LATENCY_BUCKETS_SECONDS.length + 1).fill(0)
-		let cumulative = 0
-		LATENCY_BUCKETS_SECONDS.forEach((edge, i) => {
-			cumulative += counts[i] ?? 0
-			lines.push(`gaia_api_geodb_read_seconds_bucket{outcome="${outcome}",le="${edge}"} ${cumulative}`)
-		})
-		cumulative += counts[LATENCY_BUCKETS_SECONDS.length] ?? 0
-		lines.push(`gaia_api_geodb_read_seconds_bucket{outcome="${outcome}",le="+Inf"} ${cumulative}`)
-		lines.push(`gaia_api_geodb_read_seconds_sum{outcome="${outcome}"} ${sums.get(outcome) ?? 0}`)
-		lines.push(`gaia_api_geodb_read_seconds_count{outcome="${outcome}"} ${cumulative}`)
-	}
 	return `${lines.join("\n")}\n`
 }
 
 /** Reset accumulated state. Tests only. */
 export function __resetGeoDbMetricsForTests(): void {
 	active = false
-	for (const m of [served, fallbacks, shadow, buckets, sums] as Map<string, unknown>[]) m.clear()
+	for (const m of [served, fallbacks, shadow, buckets, sums, pgBuckets, pgSums] as Map<string, unknown>[]) m.clear()
 }
