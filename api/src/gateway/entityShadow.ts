@@ -62,6 +62,7 @@ import {GeoDbError} from "../geodb/client"
 import {askGeoDb, type CardDeps, type CardLogger} from "../geodb/service"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import type {FieldShadow} from "./gateway"
+import {analyzeLightEntity, type LightOutcome, runLight} from "./lightShadow"
 import {
 	activateGatewayMetrics,
 	recordGatewayShadow,
@@ -70,6 +71,7 @@ import {
 	type UncomparedReason,
 	type UnsupportedReason,
 } from "./metrics"
+import type {ReadBudget} from "./readBudget"
 
 export const ENTITY_FIELD = "entity"
 /** Root fields tolerated beside `entity` (EntityPage asks for the relations that name the entity). */
@@ -80,23 +82,31 @@ const PAGE_CAP = 1000
 const SAMPLE = 5
 const MAX_FRAGMENT_DEPTH = 8
 
-const NAME_PROPERTY = conformingId("entity", "a126ca53-0c8e-48d5-b888-82c734c38935")
-const DESCRIPTION_PROPERTY = conformingId("entity", "9b1f76ff-9711-404c-861e-59dc3fa7d037")
-const TYPES_PROPERTY = conformingId("entity", "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1")
+export const NAME_PROPERTY = conformingId("entity", "a126ca53-0c8e-48d5-b888-82c734c38935")
+export const DESCRIPTION_PROPERTY = conformingId("entity", "9b1f76ff-9711-404c-861e-59dc3fa7d037")
+export const TYPES_PROPERTY = conformingId("entity", "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1")
 
-const VALUE_COLUMNS = ["text", "integer", "float", "boolean", "datetime", "date", "decimal"] as const
+export const VALUE_COLUMNS = ["text", "integer", "float", "boolean", "datetime", "date", "decimal"] as const
 /** Columns of a value row the card mapping does not compare; selecting them is allowed. */
-const VALUE_IGNORED = ["spaceId", "language", "unit", "point", "time", "schedule"] as const
-const RELATION_IGNORED = ["id", "spaceId", "entityId", "fromEntityId", "position", "verified", "toSpaceId"] as const
+export const VALUE_IGNORED = ["spaceId", "language", "unit", "point", "time", "schedule"] as const
+export const RELATION_IGNORED = [
+	"id",
+	"spaceId",
+	"entityId",
+	"fromEntityId",
+	"position",
+	"verified",
+	"toSpaceId",
+] as const
 
 /** A nested object in a row: which compared column its `id` carries, and what its other fields are worth. */
-type ObjectSpec = {idColumn: string | null; fields: Record<string, UncomparedReason | "name" | null>}
+export type ObjectSpec = {idColumn: string | null; fields: Record<string, UncomparedReason | "name" | null>}
 
 /** The nested objects whose `name` the shadow compares (geo-db answers them as the card's names cells). */
 const NAMED_OBJECTS = ["property", "type", "toEntity", "fromEntity"] as const
 type NamedObject = (typeof NAMED_OBJECTS)[number]
 
-const PROPERTY_OBJECT: ObjectSpec = {
+export const PROPERTY_OBJECT: ObjectSpec = {
 	idColumn: "propertyId",
 	fields: {
 		id: null,
@@ -110,7 +120,7 @@ const PROPERTY_OBJECT: ObjectSpec = {
 		__typename: null,
 	},
 }
-const RELATION_OBJECTS: Record<string, ObjectSpec> = {
+export const RELATION_OBJECTS: Record<string, ObjectSpec> = {
 	type: {idColumn: "typeId", fields: {id: null, name: "name", __typename: null}},
 	toEntity: {
 		idColumn: "toEntityId",
@@ -121,6 +131,8 @@ const RELATION_OBJECTS: Record<string, ObjectSpec> = {
 			types: "nested_entity",
 			valuesList: "nested_entity",
 			relationsList: "nested_entity",
+			values: "nested_entity",
+			relations: "nested_entity",
 			spaceIds: "nested_entity",
 			__typename: null,
 		},
@@ -129,7 +141,7 @@ const RELATION_OBJECTS: Record<string, ObjectSpec> = {
 	entity: {idColumn: null, fields: {id: null, name: "nested_names", __typename: null}},
 }
 
-type ListPlan = {
+export type ListPlan = {
 	/** Response key of the list (or of the connection) in the entity object. */
 	key: string
 	first: number
@@ -148,7 +160,8 @@ type ListPlan = {
 export type EntityCardPlan = {
 	/** Response key of `id`, when selected. */
 	idKey: string | null
-	spaceId: string
+	/** The space the lists are filtered to, or null for every space (the entity's own spaces are read). */
+	spaceId: string | null
 	/** Response keys of the derived scalar fields, when selected. */
 	name: string | null
 	description: string | null
@@ -182,7 +195,7 @@ const refuse = (reason: UnsupportedReason): never => {
 }
 
 /** The fields of a selection set with fragments inlined, in order. Directives anywhere are unsupported. */
-function fieldsOf(
+export function fieldsOf(
 	set: SelectionSetNode,
 	fragments: Map<string, SelectionSetNode>,
 	depth = 0,
@@ -202,22 +215,25 @@ function fieldsOf(
 	return out
 }
 
-const responseKeyOf = (field: FieldNode) => field.alias?.value ?? field.name.value
+export const responseKeyOf = (field: FieldNode) => field.alias?.value ?? field.name.value
 
 /** A field's arguments, resolved against the request's variables. */
-function argsOf(field: FieldNode, variables: Record<string, unknown>): Record<string, unknown> {
+export function argsOf(field: FieldNode, variables: Record<string, unknown>): Record<string, unknown> {
 	const args: Record<string, unknown> = {}
 	for (const arg of field.arguments ?? []) args[arg.name.value] = valueFromASTUntyped(arg.value, variables)
 	return args
 }
 
-function uuidArg(value: unknown): string {
+export function uuidArg(value: unknown): string {
 	return typeof value === "string" && isValidUuid(value) ? normalizeUuid(value) : refuse("args")
 }
 
-/** `{spaceId: {is: <uuid>}}` and nothing else. */
-function spaceFromFilter(filter: unknown): string {
-	if (filter === undefined || filter === null) return refuse("no_space")
+/**
+ * `{spaceId: {is: <uuid>}}` and nothing else. A null `is` (or no filter) is every space: PostGraphile's
+ * connection filter allows null input, so the list is unfiltered.
+ */
+function spaceFromFilter(filter: unknown): string | null {
+	if (filter === undefined || filter === null) return null
 	if (typeof filter !== "object" || Array.isArray(filter)) return refuse("args")
 	const keys = Object.keys(filter)
 	if (keys.length !== 1 || keys[0] !== "spaceId") return refuse("args")
@@ -226,15 +242,28 @@ function spaceFromFilter(filter: unknown): string {
 	const clauseKeys = Object.keys(clause)
 	if (clauseKeys.length !== 1 || clauseKeys[0] !== "is") return refuse("args")
 	const is = (clause as {is: unknown}).is
-	return is === undefined || is === null ? refuse("no_space") : uuidArg(is)
+	return is === undefined || is === null ? null : uuidArg(is)
 }
 
-const isPlainField = (field: FieldNode) => !field.arguments?.length && !field.selectionSet
+export const isPlainField = (field: FieldNode) => !field.arguments?.length && !field.selectionSet
+
+const LIST_FIELDS = ["values", "valuesList", "relations", "relationsList"]
+const NO_LIST: ListPlan = {key: "", first: 0, columns: {}, nested: {}, names: {}, nodesKey: null, hasNext: null}
+
+/** A connection field whose selection is `totalCount` alone (and `__typename`). */
+export const isCountOnly = (field: FieldNode): boolean =>
+	(field.name.value === "relations" || field.name.value === "values") &&
+	field.selectionSet !== undefined &&
+	field.selectionSet.selections.length > 0 &&
+	field.selectionSet.selections.every(
+		(sel) =>
+			sel.kind === Kind.FIELD && !sel.arguments?.length && ["totalCount", "__typename"].includes(sel.name.value),
+	)
 
 /** The columns (and nested `{id}` objects) of a list's rows, with fragments inlined. */
-type PlannedColumns = {columns: Record<string, string>; nested: Record<string, string>; names: ListPlan["names"]}
+export type PlannedColumns = {columns: Record<string, string>; nested: Record<string, string>; names: ListPlan["names"]}
 
-function planColumns(
+export function planColumns(
 	set: SelectionSetNode,
 	fragments: Map<string, SelectionSetNode>,
 	spec: {columns: readonly string[]; objects: Record<string, ObjectSpec>; ignored: readonly string[]},
@@ -279,7 +308,7 @@ function planColumns(
 	return {columns, nested, names}
 }
 
-type PlannedList = {list: ListPlan; spaceId: string}
+type PlannedList = {list: ListPlan; spaceId: string | null}
 
 /** A space-filtered `valuesList`/`relationsList`, or (`connection`) `relations(first, after, filter) { nodes }`. */
 function planList(
@@ -405,6 +434,8 @@ export function planEntitySelection(
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
+	/** Light mode (lightShadow.ts): every list field goes to this callback instead of the card lists. */
+	light?: (field: FieldNode) => void,
 ): EntityCardPlan {
 	let values: PlannedList | null = null
 	let relations: PlannedList | null = null
@@ -432,7 +463,9 @@ export function planEntitySelection(
 		seen.add(key)
 		const fieldName = field.name.value
 		const filtered = argsOf(field, resolved).filter !== undefined
-		if (fieldName === "id" || fieldName === "__typename") {
+		if (light && LIST_FIELDS.includes(fieldName) && !isCountOnly(field)) {
+			light(field)
+		} else if (fieldName === "id" || fieldName === "__typename") {
 			if (field.arguments?.length) return refuse("args")
 			if (field.selectionSet) return refuse("selection")
 			if (fieldName === "id") idKey ??= key
@@ -442,8 +475,13 @@ export function planEntitySelection(
 			description = key
 		} else if (fieldName === "spaceIds" && !spaceIds && isPlainField(field)) {
 			spaceIds = key
-		} else if (fieldName === "updatedAt" && isPlainField(field)) {
+		} else if ((fieldName === "updatedAt" || fieldName === "updatedAtBlock") && isPlainField(field)) {
 			uncompared.add("updated_at")
+		} else if ((fieldName === "createdAt" || fieldName === "createdAtBlock") && isPlainField(field)) {
+			uncompared.add("created_at")
+		} else if (isCountOnly(field)) {
+			// `relations { totalCount }`: a count of rows geo-db cannot be asked for without the list.
+			uncompared.add("relation_count")
 		} else if (fieldName === "types" && !types && !field.arguments?.length && field.selectionSet) {
 			let typeIdKey: string | null = null
 			let nameKey: string | null = null
@@ -475,9 +513,25 @@ export function planEntitySelection(
 			uncompared.add("membership_only")
 		} else return refuse("selection")
 	}
+	if (light) {
+		return {
+			idKey,
+			spaceId: null,
+			name,
+			description,
+			spaceIds,
+			types,
+			allValues: null,
+			allRelations: null,
+			values: NO_LIST,
+			relations: NO_LIST,
+		}
+	}
 	// A card does not say which rows are values and which relations, so it can settle both lists or neither.
 	if (!values || !relations) return refuse(values || relations ? "selection" : "no_space")
 	if (values.spaceId !== relations.spaceId) return refuse("args")
+	// Every space: the spaces to read come from the entity's own `spaceIds` (or its unfiltered lists).
+	if (values.spaceId === null && !spaceIds && !(allValues && allRelations)) return refuse("no_space")
 	for (const column of ["propertyId", ...VALUE_COLUMNS]) {
 		if (!values.list.columns[column] && !values.list.nested[column]) return refuse("selection")
 	}
@@ -531,7 +585,7 @@ export function analyzeEntityOperation(
 export const asRecord = (v: unknown): Record<string, unknown> | null =>
 	v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null
 
-function read(node: Record<string, unknown>, list: ListPlan, column: string): unknown {
+export function read(node: Record<string, unknown>, list: ListPlan, column: string): unknown {
 	const direct = list.columns[column]
 	if (direct !== undefined) return node[direct]
 	const [object, id] = (list.nested[column] ?? "").split("\t")
@@ -539,14 +593,14 @@ function read(node: Record<string, unknown>, list: ListPlan, column: string): un
 }
 
 /** A nested `name` out of a row: its string, else null (an entity PostGraphile found no Name for). */
-function readName(node: Record<string, unknown>, path: string | undefined): string | null | undefined {
+export function readName(node: Record<string, unknown>, path: string | undefined): string | null | undefined {
 	if (path === undefined) return undefined
 	const [object, name] = path.split("\t")
 	const v = object && name ? asRecord(node[object])?.[name] : undefined
 	return typeof v === "string" ? v : null
 }
 
-const orNull = <T>(v: unknown): T | null => (v === undefined || v === null ? null : (v as T))
+export const orNull = <T>(v: unknown): T | null => (v === undefined || v === null ? null : (v as T))
 
 /** An entity a row names, as PostGraphile spelled its id, and the name PostGraphile gave it. */
 export type NamedRef = {id: string; name: string | null}
@@ -732,7 +786,11 @@ export type DerivedChecks = {
 
 type GeoRow = GeoCardRow
 
-const sameSpace = (a: string | null | undefined, b: string) => a !== null && a !== undefined && normalizeUuid(a) === b
+/** The spaces a comparison read: what geo-db was asked for, and which of them answered with any row. */
+export type ReadScope = {spaces: string[]; populated: string[]}
+
+const inSpaces = (a: string | null | undefined, spaces: Set<string>) =>
+	a !== null && a !== undefined && spaces.has(normalizeUuid(a))
 
 /**
  * Checks the derived fields against the card's rows (see the file comment for what each check means).
@@ -742,10 +800,13 @@ export function compareDerived(
 	plan: Pick<EntityCardPlan, "spaceId" | "allValues">,
 	card: NonNullable<PostgresCard>,
 	geo: GeoRow[],
+	scope?: ReadScope,
 ): DerivedChecks {
 	const checks: DerivedChecks["checks"] = {}
 	const uncompared = new Set<UncomparedReason>()
-	const space = plan.spaceId
+	// One space (the plan's), or the several the entity lives in (every space): `geo` is the union of their cards.
+	const spaces = new Set(scope?.spaces ?? (plan.spaceId ? [plan.spaceId] : []))
+	const populated = scope?.populated ?? (geo.length > 0 ? [...spaces] : [])
 
 	// The spaces PostGraphile attributes the entity to, when the answer says: `spaceIds`, else every row's space.
 	let known: Set<string> | null = null
@@ -754,7 +815,7 @@ export function compareDerived(
 		const spaces = [...card.allValues.rows, ...card.allRelations.rows].map((r) => r.spaceId)
 		if (spaces.every((s) => s !== null)) known = new Set((spaces as string[]).map((s) => normalizeUuid(s)))
 	}
-	const onlyThisSpace = known !== null && [...known].every((s) => s === space)
+	const onlyThisSpace = known !== null && [...known].every((s) => spaces.has(s))
 
 	/**
 	 * One name or description PostGraphile gave, against the values geo-db holds for the same thing. PostGraphile
@@ -806,9 +867,10 @@ export function compareDerived(
 		const targetNames = new Map<string, string | null>()
 		const typeTargetNames = new Map<string, string | null>()
 		for (const row of geo) {
-			if (!propNames.has(row.prop)) propNames.set(row.prop, row.propName ?? null)
-			if (!targetNames.has(row.raw)) targetNames.set(row.raw, row.targetName ?? null)
-			if (row.prop === TYPES_PROPERTY && !typeTargetNames.has(row.raw))
+			// Several spaces may each name the same thing: any name beats none.
+			if (!propNames.get(row.prop)) propNames.set(row.prop, row.propName ?? null)
+			if (!targetNames.get(row.raw)) targetNames.set(row.raw, row.targetName ?? null)
+			if (row.prop === TYPES_PROPERTY && !typeTargetNames.get(row.raw))
 				typeTargetNames.set(row.raw, row.targetName ?? null)
 		}
 		const against = (refs: NamedRef[], known: Map<string, string | null>): CheckResult[] =>
@@ -845,8 +907,9 @@ export function compareDerived(
 
 	if (card.spaceIds !== undefined) {
 		// The space has statements in geo-db, so PostGraphile must list it. Other spaces are not checkable.
-		checks.spaceIds = geo.length > 0 && !card.spaceIds.some((s) => s === space) ? "mismatch" : "ok"
-		if (card.spaceIds.some((s) => s !== space)) uncompared.add("cross_space")
+		const listed = card.spaceIds
+		checks.spaceIds = populated.some((s) => !listed.includes(s)) ? "mismatch" : "ok"
+		if (listed.some((s) => !spaces.has(s))) uncompared.add("cross_space")
 	}
 
 	if (card.allValues) {
@@ -859,7 +922,7 @@ export function compareDerived(
 			const pool = geo.map((row) => row.prop)
 			let missing = false
 			for (const row of rows) {
-				if (!sameSpace(row.spaceId, space)) continue
+				if (!inSpaces(row.spaceId, spaces)) continue
 				if (row.propertyId === null) continue
 				const prop = conformingId("entity", row.propertyId)
 				if (DERIVED_PROPERTIES.has(prop)) continue
@@ -868,28 +931,108 @@ export function compareDerived(
 				else pool.splice(at, 1)
 			}
 			checks.allValuesList = missing ? "mismatch" : "ok"
-			if (rows.some((row) => !sameSpace(row.spaceId, space))) uncompared.add("cross_space")
+			if (rows.some((row) => !inSpaces(row.spaceId, spaces))) uncompared.add("cross_space")
 		}
 	}
 	if (card.allRelations?.truncated) uncompared.add("truncated")
 	if (
 		card.allRelations &&
 		!card.allRelations.truncated &&
-		card.allRelations.rows.some((r) => !sameSpace(r.spaceId, space))
+		card.allRelations.rows.some((r) => !inSpaces(r.spaceId, spaces))
 	)
 		uncompared.add("cross_space")
 	return {checks, uncompared: [...uncompared]}
 }
 
-export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {log: CardLogger}
+export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
+	log: CardLogger
+	/** Caps the geo-db reads of the wide (several-space) comparisons; absent means no cap. */
+	budget?: ReadBudget
+}
 
 export type CardCheck =
 	| {result: "failed"}
+	| {result: "unsupported"; reason: UnsupportedReason}
 	| {result: "match" | "mismatch"; uncompared: UncomparedReason[]; detail: Record<string, unknown>}
+
+/** Most spaces one wide comparison reads; an entity in more is not compared (`many_spaces`). */
+export const MAX_READ_SPACES = 3
+
+/**
+ * The spaces a comparison must read: the plan's space, or (every space) the entity's own spaces as PostGraphile
+ * lists them. Null when the answer does not say which spaces the entity lives in.
+ */
+export function spacesToRead(
+	plan: Pick<EntityCardPlan, "spaceId">,
+	postgres: Pick<NonNullable<PostgresCard>, "spaceIds" | "allValues" | "allRelations">,
+): string[] | null {
+	if (plan.spaceId) return [plan.spaceId]
+	if (postgres.spaceIds) return [...new Set(postgres.spaceIds)]
+	const {allValues, allRelations} = postgres
+	if (allValues && allRelations && !allValues.truncated && !allRelations.truncated) {
+		const spaces = [...allValues.rows, ...allRelations.rows].map((r) => r.spaceId)
+		if (spaces.every((s) => s !== null)) return [...new Set((spaces as string[]).map((s) => normalizeUuid(s)))]
+	}
+	return null
+}
+
+/** What one wide read of an entity's cards found. */
+export type WideRead =
+	| {ok: true; rows: GeoRow[]; bySpace: Map<string, GeoRow[]>; scope: ReadScope; ms: number}
+	| {ok: false; result: "failed"}
+	| {ok: false; result: "unsupported"; reason: UnsupportedReason}
+
+/**
+ * Reads the card of `entityId` in each of `spaces` (concurrently, within the read budget) and concatenates the
+ * rows. A space geo-db has not loaded, too many spaces, or an exhausted budget make the entity unsupported
+ * rather than failed: geo-db was not asked a question it should have answered. Never throws.
+ */
+export async function readWide(
+	deps: EntityShadowDeps,
+	entityId: string,
+	spaces: string[],
+	label: string,
+): Promise<WideRead> {
+	if (spaces.length === 0) return {ok: false, result: "unsupported", reason: "no_space"}
+	if (spaces.length > MAX_READ_SPACES) return {ok: false, result: "unsupported", reason: "many_spaces"}
+	if (deps.budget && !deps.budget.tryAcquire(spaces.length))
+		return {ok: false, result: "unsupported", reason: "throttled"}
+	const started = performance.now()
+	const answers = await Promise.all(
+		spaces.map(async (spaceId) => {
+			try {
+				return {spaceId, rows: await askGeoDb(deps, conformingId("entity", entityId), spaceId, {names: true})}
+			} catch (error) {
+				return {spaceId, error}
+			}
+		}),
+	)
+	const rows: GeoRow[] = []
+	const bySpace = new Map<string, GeoRow[]>()
+	const populated: string[] = []
+	for (const answer of answers) {
+		if ("error" in answer) {
+			const reason = answer.error instanceof GeoDbError ? answer.error.reason : "error"
+			if (reason === "unmapped_space") return {ok: false, result: "unsupported", reason: "unmapped_space"}
+			deps.log.warn(`${label} read failed`, {
+				entityId,
+				spaceId: answer.spaceId,
+				reason,
+				message: String(answer.error),
+			})
+			return {ok: false, result: "failed"}
+		}
+		if (answer.rows.length > 0) populated.push(answer.spaceId)
+		bySpace.set(answer.spaceId, answer.rows)
+		rows.push(...answer.rows)
+	}
+	return {ok: true, rows, bySpace, scope: {spaces, populated}, ms: Math.round(performance.now() - started)}
+}
 
 /**
  * Asks geo-db for one entity's card (with names) and judges PostGraphile's card against it: the statement diff
- * plus the derived checks. Never throws; a failed read is logged and reported as `failed`. The caller counts.
+ * plus the derived checks. When the plan has no space the entity's own spaces are all read and their cards are
+ * compared as one. Never throws; a failed read is logged and reported as `failed`. The caller counts.
  */
 export async function checkCard(
 	deps: EntityShadowDeps,
@@ -898,21 +1041,35 @@ export async function checkCard(
 	entityId: string,
 	label: string,
 ): Promise<CardCheck> {
-	const started = performance.now()
-	let rows: Awaited<ReturnType<typeof askGeoDb>>
-	try {
-		rows = await askGeoDb(deps, conformingId("entity", entityId), plan.spaceId, {names: true})
-	} catch (error) {
-		deps.log.warn(`${label} read failed`, {
-			entityId,
-			spaceId: plan.spaceId,
-			reason: error instanceof GeoDbError ? error.reason : "error",
-			message: String(error),
-		})
-		return {result: "failed"}
-	}
+	const spaces = spacesToRead(plan, postgres)
+	if (!spaces) return {result: "unsupported", reason: "no_space"}
+	let read: WideRead
+	if (plan.spaceId) {
+		// One space, as before: not metered, and a space geo-db lacks is a failed read.
+		const started = performance.now()
+		try {
+			const rows = await askGeoDb(deps, conformingId("entity", entityId), plan.spaceId, {names: true})
+			read = {
+				ok: true,
+				rows,
+				bySpace: new Map([[plan.spaceId, rows]]),
+				scope: {spaces, populated: rows.length > 0 ? spaces : []},
+				ms: Math.round(performance.now() - started),
+			}
+		} catch (error) {
+			deps.log.warn(`${label} read failed`, {
+				entityId,
+				spaceId: plan.spaceId,
+				reason: error instanceof GeoDbError ? error.reason : "error",
+				message: String(error),
+			})
+			return {result: "failed"}
+		}
+	} else read = await readWide(deps, entityId, spaces, label)
+	if (!read.ok) return read.result === "failed" ? {result: "failed"} : {result: "unsupported", reason: read.reason}
+	const rows = read.rows
 	const diff = diffCards(statementsFromPostgres(postgres.values, postgres.relations), rows)
-	const derived = compareDerived(plan, postgres, rows)
+	const derived = compareDerived(plan, postgres, rows, read.scope)
 	const wrong = Object.entries(derived.checks)
 		.filter(([, result]) => result === "mismatch")
 		.map(([field]) => field)
@@ -922,15 +1079,39 @@ export async function checkCard(
 		detail: {
 			entityId,
 			spaceId: plan.spaceId,
+			spaces: spaces.length,
 			onlyPostgres: diff.onlyPostgres.length,
 			onlyGeoDb: diff.onlyGeoDb.length,
 			skipped: diff.skipped,
 			derivedMismatches: wrong,
 			samplePostgres: diff.onlyPostgres.slice(0, SAMPLE),
 			sampleGeoDb: diff.onlyGeoDb.slice(0, SAMPLE),
-			geoDbMs: Math.round(performance.now() - started),
+			geoDbMs: read.ms,
 		},
 	}
+}
+
+/** Counts a light outcome under `field`, and logs a mismatch. */
+export function countLight(
+	deps: Pick<EntityShadowDeps, "log">,
+	field: string,
+	outcome: LightOutcome,
+	context: Record<string, unknown>,
+): void {
+	if (outcome.result === "skip") return
+	if (outcome.result === "failed") {
+		recordGatewayShadow(field, "failed")
+		return
+	}
+	if (outcome.result === "unsupported") {
+		recordGatewayShadow(field, "unsupported_selection")
+		recordGatewayUnsupported(field, outcome.reason)
+		return
+	}
+	for (const reason of new Set(outcome.uncompared)) recordGatewayUncompared(field, reason)
+	recordGatewayShadow(field, outcome.result)
+	if (outcome.result === "mismatch")
+		deps.log.warn(`gateway ${field} shadow mismatch (light)`, {...context, ...outcome.detail})
 }
 
 /** The `entity` shadow for the gateway. Registers its metric series; never throws. */
@@ -940,6 +1121,25 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 		try {
 			const analysis = analyzeEntityOperation(document, classification.operationName, params.variables)
 			if (!analysis.ok) {
+				// The card shadow cannot settle it: try the light selection (every space, partial lists).
+				const light = analyzeLightEntity(document, classification.operationName, params.variables)
+				if (light.ok) {
+					let lightBody: unknown
+					try {
+						lightBody = await response.json()
+					} catch {
+						return
+					}
+					await countLight(
+						deps,
+						ENTITY_FIELD,
+						await runLight(deps, light.plan, lightBody, "gateway entity shadow"),
+						{
+							operationName: classification.operationName,
+						},
+					)
+					return
+				}
 				recordGatewayShadow(ENTITY_FIELD, "unsupported_selection")
 				recordGatewayUnsupported(ENTITY_FIELD, analysis.reason)
 				return
@@ -966,6 +1166,11 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 			const check = await checkCard(deps, plan, postgres, plan.entityId, "gateway entity shadow")
 			if (check.result === "failed") {
 				recordGatewayShadow(ENTITY_FIELD, "failed")
+				return
+			}
+			if (check.result === "unsupported") {
+				recordGatewayShadow(ENTITY_FIELD, "unsupported_selection")
+				recordGatewayUnsupported(ENTITY_FIELD, check.reason)
 				return
 			}
 			for (const reason of new Set([...plan.uncompared, ...check.uncompared]))

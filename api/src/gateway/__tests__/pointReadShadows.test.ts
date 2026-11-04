@@ -233,7 +233,13 @@ describe("entities shadow", () => {
 
 	it("counts unsupported_selection with a reason and never asks geo-db", async () => {
 		const {shadows, readCard} = setup()
-		await run(shadows, "entities", ENTITIES.replace("first: 10", "first: 1"), body([]), vars)
+		await run(
+			shadows,
+			"entities",
+			ENTITIES.replace("first: 10", "first: 10, orderBy: ID_ASC"),
+			body([cardOf(A, "Ada")]),
+			vars,
+		)
 		expect(totals("entities")).toEqual({unsupported_selection: 1})
 		expect(totals("entities", "gaia_api_gateway_shadow_unsupported_total")).toEqual({args: 1})
 		expect(readCard).not.toHaveBeenCalled()

@@ -7,6 +7,7 @@ import {readGatewayConfig} from "./src/gateway/config"
 import {createEntityShadow, ENTITY_FIELD} from "./src/gateway/entityShadow"
 import {createGateway, fieldModeOf} from "./src/gateway/gateway"
 import {createPointReadShadows, POINT_READ_FIELDS} from "./src/gateway/pointReadShadows"
+import {createReadBudget} from "./src/gateway/readBudget"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
 import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
@@ -200,16 +201,18 @@ app.get("/", swaggerUI({url: "/openapi"}))
 // Opt-in GraphQL gateway in front of PostGraphile (GRAPHQL_GATEWAY=on; off by default). It serves nothing from
 // geo-db yet, so on or off every operation is answered by PostGraphile; with entity=shadow (or entities, relation,
 // relations, search, searchConnection) a sample of those operations is also compared against geo-db in the background.
+// Wide reads (an entity read in every one of its spaces) share one budget of about one geo-db card read a second.
+const wideReadBudget = createReadBudget({perSecond: 1, burst: 5})
 const graphqlHandler = createGateway({
 	config: gatewayConfig,
 	shadows:
 		gatewayShadowsAny && sharedGeoDb
 			? new Map([
 					...(gatewayShadowFields.has(ENTITY_FIELD)
-						? [[ENTITY_FIELD, createEntityShadow({...sharedGeoDb, log})] as const]
+						? [[ENTITY_FIELD, createEntityShadow({...sharedGeoDb, log, budget: wideReadBudget})] as const]
 						: []),
 					...createPointReadShadows(
-						{...sharedGeoDb, log},
+						{...sharedGeoDb, log, budget: wideReadBudget},
 						POINT_READ_FIELDS.filter((field) => gatewayShadowFields.has(field)),
 					),
 					...createSearchShadows(
