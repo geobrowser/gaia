@@ -200,10 +200,11 @@ export const DERIVED_PROPERTIES: ReadonlySet<string> = new Set(DERIVED_PROPERTY_
 
 /** Match Postgres statements against geo-db rows as multisets and return what is unmatched on each side. */
 export function diffCards(postgres: {statements: CardStatement[]; skipped: number}, geo: GeoCardRow[]): CardDiff {
-	// Derived statements are skipped, not compared: geo-db never holds them.
+	// Derived statements are skipped, not compared: the backfill never writes them.
 	const comparable = postgres.statements.filter((s) => !DERIVED_PROPERTIES.has(s.prop))
 	const derived = postgres.statements.length - comparable.length
-	const pool = geo.map((row) => ({...row, used: false}))
+	// Nor are geo-db's own derived rows: the live feeder writes one when an edit carries it, Postgres side is skipped above.
+	const pool = geo.filter((row) => !DERIVED_PROPERTIES.has(row.prop)).map((row) => ({...row, used: false}))
 	const onlyPostgres: CardStatement[] = []
 	for (const s of comparable) {
 		const hit = pool.find(
