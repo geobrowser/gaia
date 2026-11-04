@@ -1,4 +1,4 @@
-import {mkdtempSync, readFileSync} from "node:fs"
+import {mkdirSync, mkdtempSync, readFileSync, writeFileSync} from "node:fs"
 import {tmpdir} from "node:os"
 import {join} from "node:path"
 import {describe, expect, it} from "vitest"
@@ -7,7 +7,7 @@ import {classify} from "../geodb.js"
 import {type Decode, handleMessage} from "../handle.js"
 import {createMetrics} from "../metrics.js"
 import {ensureSpace} from "../spaces.js"
-import {Overlay, Store, renderSpaceMap} from "../state.js"
+import {Overlay, Store, backfilledSpaces, renderSpaceMap} from "../state.js"
 import type {GrcOp} from "../translate.js"
 
 const GAIA = "a19c345ab9866679b001d7d2138d88a1"
@@ -195,6 +195,23 @@ describe("state", () => {
 	it("renders only founded Spaces, in the shape the api parses", () => {
 		const text = renderSpaceMap({[GAIA]: {geo: GEO, nonce: "n", keyed: true}, [GEO]: {geo: null, nonce: "m", keyed: false}})
 		expect(JSON.parse(text)).toEqual({[GAIA]: {geo: GEO}})
+	})
+
+	it("marks founded Spaces the backfill has not loaded `loaded: false`, and leaves the rest alone", () => {
+		const spaces = {[GAIA]: {geo: GEO, nonce: "n", keyed: true}, [GEO]: {geo: GAIA, nonce: "m", keyed: true}}
+		expect(JSON.parse(renderSpaceMap(spaces, new Set([GAIA])))).toEqual({[GAIA]: {geo: GEO}, [GEO]: {geo: GAIA, loaded: false}})
+		expect(JSON.parse(renderSpaceMap(spaces, null))).toEqual({[GAIA]: {geo: GEO}, [GEO]: {geo: GAIA}})
+	})
+
+	it("reads the loaded Spaces off the backfill cursor: a finished entity list only; null when it never ran", () => {
+		const dir = mkdtempSync(join(tmpdir(), "feeder-loaded-"))
+		expect(backfilledSpaces(dir)).toBeNull()
+		mkdirSync(`${dir}/backfill`)
+		writeFileSync(`${dir}/backfill/entities-a.txt`, "e1\ne2\n")
+		writeFileSync(`${dir}/backfill/entities-b.txt`, "e1\ne2\n")
+		writeFileSync(`${dir}/backfill/entities-c.txt`, "")
+		writeFileSync(`${dir}/backfill/cursor.json`, JSON.stringify({done: {a: 2, b: 1}, inflight: null}))
+		expect([...(backfilledSpaces(dir) ?? [])].sort()).toEqual(["a", "c"])
 	})
 })
 

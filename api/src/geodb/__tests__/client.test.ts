@@ -291,13 +291,43 @@ lines((line) => {
 	const [, doc] = line.split("\\t")
 	const entity = /id = "([0-9a-f]{32})"/.exec(doc)[1]
 	const names = doc.includes(".names = true")
-	frame("+", ["${PROP}", "v", "stmt", entity, ...(names ? ["Prop", "none"] : []), "1"].join("\\t") + "\\n")
+	frame("+", ["${PROP}", "v", "stmt", entity, ...(names ? ["Prop", "-"] : []), "1"].join("\\t") + "\\n")
 })
 `)
 		expect(await client.readCard({geoSpaceId: SPACE, entityId: ENTITY})).toEqual([{prop: PROP, raw: "v"}])
 		expect(await client.readCard({geoSpaceId: SPACE, entityId: ENTITY, names: true})).toEqual([
 			{prop: PROP, raw: "v", propName: "Prop", targetName: null},
 		])
+	})
+})
+
+describe("createPipeGeoDbClient, several spaces a line", () => {
+	const OTHER = "33333333333343338333333333333333"
+
+	it("sends `<space>,<space>\\t<doc>` and reads the `<space>:<statement>` cells into each row's space", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [spaces, doc] = line.split("\\t")
+	const entity = /id = "([0-9a-f]{32})"/.exec(doc)[1]
+	frame("+", spaces.split(",").map((s) => ["${PROP}", "v" + s.slice(0, 2), s + ":stmt", entity, "1"].join("\\t")).join("\\n") + "\\n")
+})
+`)
+		const rows = await client.readCardSpaces?.({geoSpaceIds: [SPACE, OTHER], entityId: ENTITY})
+		expect(rows).toEqual([
+			{prop: PROP, raw: "v22", space: SPACE},
+			{prop: PROP, raw: "v33", space: OTHER},
+		])
+		client.close()
+	})
+
+	it("refuses a repeated, malformed or empty list before it reaches the worker", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		for (const geoSpaceIds of [[], [SPACE, SPACE], [SPACE, "nope"]])
+			await expect(client.readCardSpaces?.({geoSpaceIds, entityId: ENTITY})).rejects.toMatchObject({
+				reason: "bad_request",
+			})
+		expect(starts()).toBe(0)
 	})
 })
 
@@ -338,6 +368,24 @@ describe("createSpaceMap", () => {
 		writeFileSync(path, "{not json at all, longer than before")
 		clock = 3000
 		expect(await lookup(SPACE)).toBe(ENTITY)
+	})
+
+	it("treats a Space marked `loaded: false` as not loaded, and one without the field as loaded", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "geodb-map-"))
+		const path = join(dir, "spaces.json")
+		writeFileSync(
+			path,
+			JSON.stringify({
+				[SPACE]: {geo: ENTITY, loaded: false},
+				[ENTITY]: {geo: SPACE},
+				[PROP]: {geo: PROP, loaded: true},
+			}),
+		)
+		const lookup = createSpaceMap(path)
+		expect(await lookup(SPACE)).toBeNull()
+		expect(await lookup(ENTITY)).toBe(SPACE)
+		expect(await lookup(PROP)).toBe(PROP)
+		expect((await lookup.all()).sort()).toEqual([PROP, SPACE].sort())
 	})
 
 	it("refuses a file with a malformed entry", async () => {

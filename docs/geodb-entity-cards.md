@@ -13,6 +13,7 @@ geo-db, behind `GEODB_ENTITY_CARDS` (`off` default, `on`, `shadow`). Code: `api/
 | `GEODB_SPACE_MAP_PATH` | the space map, below |
 | `GEODB_TIMEOUT_MS` | per-request budget, default 500 |
 | `GEODB_POOL_SIZE` | long-lived `geodb-client pipe` workers, default 4 |
+| `GEODB_MULTI_SPACE_READS` | `on`: the gateway shadow reads an entity's card across several Spaces in one `pipe` line (`<space>,<space>\t<geoql>`) instead of one read per Space. Needs a `geodb-client` from geo-db 353ab26313 or later; an older one refuses the line and loses its worker, so leave it off until the image is bumped. Default off |
 
 ## The space map
 
@@ -23,7 +24,10 @@ reads that mapping from a file:
 {"a19c345ab9866679b001d7d2138d88a1": {"geo": "daf0bc83ca744e1a9ee0377967846846"}}
 ```
 
-Keys and `geo` are 32 hex digits (dashes are accepted). Extra fields are ignored. A file with any
+Keys and `geo` are 32 hex digits (dashes are accepted). `"loaded": false` marks a founded Space whose
+history has not been backfilled: the api treats it as not loaded (`unmapped_space`, and the shadows count
+it unsupported rather than as a gap), and the feeder writes it for a Space outside the backfill's finished
+set. Other extra fields are ignored. A file with any
 malformed entry is refused as a whole, so every request falls back to Postgres rather than reading
 the wrong Space. A Space absent from the file falls back with reason `unmapped_space`.
 

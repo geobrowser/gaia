@@ -81,15 +81,15 @@ describe("rowsFromGeoDbOutput with names", () => {
 		])
 	})
 
-	it("reads `none` as no name", () => {
-		const out = `${PROP}\tv\ts1\t${ENTITY}\tnone\tnone\t1\n`
+	it("reads `-` as no name", () => {
+		const out = `${PROP}\tv\ts1\t${ENTITY}\t-\t-\t1\n`
 		expect(rowsFromGeoDbOutput(out, ENTITY, {names: true})).toEqual([
 			{prop: PROP, raw: "v", propName: null, targetName: null},
 		])
 	})
 
 	it("skips the two claim columns when claims were asked", () => {
-		const out = `${PROP}\tv\ts1\t${ENTITY}\t${PROP}\tclaim\tP\tT\t1\n${PROP}\tw\ts2\t${ENTITY}\tnone\tnone\tnone\tT2\t1\n`
+		const out = `${PROP}\tv\ts1\t${ENTITY}\t${PROP}\tclaim\tP\tT\t1\n${PROP}\tw\ts2\t${ENTITY}\t-\t-\t-\tT2\t1\n`
 		expect(rowsFromGeoDbOutput(out, ENTITY, {names: true, claims: true})).toEqual([
 			{prop: PROP, raw: "v", propName: "P", targetName: "T"},
 			{prop: PROP, raw: "w", propName: null, targetName: "T2"},

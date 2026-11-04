@@ -209,10 +209,25 @@ const graphqlHandler = createGateway({
 		gatewayShadowsAny && sharedGeoDb
 			? new Map([
 					...(gatewayShadowFields.has(ENTITY_FIELD)
-						? [[ENTITY_FIELD, createEntityShadow({...sharedGeoDb, log, budget: wideReadBudget})] as const]
+						? [
+								[
+									ENTITY_FIELD,
+									createEntityShadow({
+										...sharedGeoDb,
+										log,
+										budget: wideReadBudget,
+										multiSpace: geoDbCardConfig.multiSpaceReads === true,
+									}),
+								] as const,
+							]
 						: []),
 					...createPointReadShadows(
-						{...sharedGeoDb, log, budget: wideReadBudget},
+						{
+							...sharedGeoDb,
+							log,
+							budget: wideReadBudget,
+							multiSpace: geoDbCardConfig.multiSpaceReads === true,
+						},
 						POINT_READ_FIELDS.filter((field) => gatewayShadowFields.has(field)),
 					),
 					...createSearchShadows(

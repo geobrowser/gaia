@@ -21,7 +21,7 @@ import {ReadOnlyPg, pgConfig, readMembershipRows} from "./pgSource.js"
 import {SpaceMapPublisher, kubeConfigMapPut} from "./publish.js"
 import {startServer} from "./server.js"
 import {readSealer} from "./spaces.js"
-import {Store, renderSpaceMap} from "./state.js"
+import {Store, backfilledSpaces, renderSpaceMap} from "./state.js"
 
 const {Kafka, logLevel} = kafkajs
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -103,7 +103,7 @@ async function main(): Promise<void> {
 		failure = e
 	}
 	// The space map must reach the ConfigMap before exit, or the api cannot map a Space just founded.
-	publisher.publish(renderSpaceMap(store.spaces))
+	publisher.publish(renderSpaceMap(store.spaces, backfilledSpaces(store.dir)))
 	for (let i = 0; i < 300 && publisher.pending; i++) await sleep(1000)
 	if (publisher.pending) log("error", "space map not yet published; the feeder republishes it on start")
 	publisher.stop()

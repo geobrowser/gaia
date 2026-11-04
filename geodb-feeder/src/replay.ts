@@ -40,12 +40,15 @@ export function parseRate(raw: string | undefined): number {
 	return r
 }
 
-/** Space ids the api can map (the `space-map.json` the feeder publishes). */
+/**
+ * Space ids the api can map (the `space-map.json` the feeder publishes): founded and not marked
+ * `loaded: false`, which the api reads as "not loaded", so a card there would only be a skipped read.
+ */
 export function mappedSpaces(spaceMapText: string): Set<string> {
-	const m = JSON.parse(spaceMapText) as Record<string, {geo?: string}>
+	const m = JSON.parse(spaceMapText) as Record<string, {geo?: string; loaded?: boolean}>
 	return new Set(
 		Object.entries(m)
-			.filter(([, v]) => typeof v?.geo === "string")
+			.filter(([, v]) => typeof v?.geo === "string" && v.loaded !== false)
 			.map(([k]) => compactId(k)),
 	)
 }

@@ -151,6 +151,17 @@ describe("resolveCard mode shadow", () => {
 	})
 })
 
+describe("resolveCard mode shadow, a Space geo-db has not loaded", () => {
+	it("compares nothing and logs no failed read", async () => {
+		const {deps, log, readCard} = makeDeps({mode: "shadow", geoSpaceOf: async () => null})
+		const {card, shadow} = await resolveCard(deps, ENTITY, SPACE)
+		await expect(shadow).resolves.toBeUndefined()
+		expect(card.source).toBe("postgres")
+		expect(readCard).not.toHaveBeenCalled()
+		expect(log.warn).not.toHaveBeenCalled()
+	})
+})
+
 describe("GET /geodb/entities/:entityId/card", () => {
 	const config: GeoDbCardConfig = {
 		mode: "on",

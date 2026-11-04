@@ -6,7 +6,7 @@
  *   is logged when the two differ. The shadow read never delays or fails the response.
  */
 
-import type {CardStatement, RelationRow, ValueRow} from "./card"
+import type {CardStatement, GeoCardRow, RelationRow, ValueRow} from "./card"
 import {conformingId, diffCards, isEmptyDiff, statementsFromPostgres} from "./card"
 import type {GeoDbCardClient} from "./client"
 import {GeoDbError} from "./client"
@@ -70,6 +70,48 @@ export async function askGeoDb(
 	}
 }
 
+/**
+ * One geo-db read of an entity's card across `spaceIds` (gaia ids, two or more), as one pipe line. Every Space
+ * is mapped first, and one geo-db has not loaded throws `unmapped_space` before anything is sent: a Space the
+ * node does not hold would refuse the whole line and cost the worker its connection. Returns the rows by gaia
+ * space, each requested Space present (empty when geo-db holds nothing for the entity there). Needs a client
+ * with `readCardSpaces`.
+ */
+export async function askGeoDbSpaces(
+	deps: Pick<CardDeps, "geoDb" | "geoSpaceOf">,
+	entityId: string,
+	spaceIds: string[],
+	options: {names?: boolean} = {},
+): Promise<Map<string, GeoCardRow[]>> {
+	const readCardSpaces = deps.geoDb.readCardSpaces?.bind(deps.geoDb)
+	if (!readCardSpaces) throw new GeoDbError("bad_request", "the geo-db client cannot read several spaces at once")
+	const geoOf = new Map<string, string>()
+	for (const spaceId of spaceIds) {
+		const geoSpaceId = await deps.geoSpaceOf(spaceId)
+		if (!geoSpaceId) throw new GeoDbError("unmapped_space", `space ${spaceId} is not loaded in geo-db`)
+		geoOf.set(spaceId, geoSpaceId)
+	}
+	const started = performance.now()
+	let rows: GeoCardRow[]
+	try {
+		rows = await readCardSpaces({geoSpaceIds: [...geoOf.values()], entityId, names: options.names})
+		observeGeoDbRead((performance.now() - started) / 1000, "ok")
+	} catch (error) {
+		observeGeoDbRead((performance.now() - started) / 1000, "error")
+		throw error
+	}
+	const bySpace = new Map<string, GeoCardRow[]>(spaceIds.map((spaceId) => [spaceId, []]))
+	const gaiaOf = new Map([...geoOf].map(([gaia, geo]) => [geo, gaia]))
+	for (const row of rows) {
+		const gaia = row.space ? gaiaOf.get(row.space) : undefined
+		if (!gaia)
+			throw new GeoDbError("client_failed", `geo-db answered a row from an unrequested space: ${row.space}`)
+		const {space: _space, ...rest} = row
+		bySpace.get(gaia)?.push(rest)
+	}
+	return bySpace
+}
+
 /** Compare the Postgres answer with geo-db's and log what differs. Never throws. */
 export async function shadowCompare(
 	deps: CardDeps,
@@ -103,6 +145,8 @@ export async function shadowCompare(
 			})
 		}
 	} catch (error) {
+		// A Space geo-db has not loaded is not a question it failed: there is nothing to compare, so nothing to count.
+		if (error instanceof GeoDbError && error.reason === "unmapped_space") return
 		recordShadow("failed")
 		deps.log.warn("geodb card shadow read failed", {
 			entityId,
