@@ -64,15 +64,16 @@ metadata:
   name: geodb-serve-config
   namespace: gaia
 data:
+  # serve.cfg takes no comments (a "#" line fails the open as malformed_line), so they live here.
+  # The Space cap. Raising it on an existing store must be done in steps, each a clean
+  # open and close (256 -> 384 -> 512 -> 640 -> 768 -> 896 -> 1024): an open refuses with
+  # ResourceExhausted when the last close kept more resident versions than the new cap
+  # can load. Lowering it below a founded ordinal fails the open. See RUNBOOK §2d.
   serve.cfg: |
     version = 1
     server_rooms_carving = 67108864
     session_requests_in_flight = 8
     request_deadline_ms = 30000
-    # The Space cap. Raising it on an existing store must be done in steps, each a clean
-    # open and close (256 -> 384 -> 512 -> 640 -> 768 -> 896 -> 1024): an open refuses with
-    # ResourceExhausted when the last close kept more resident versions than the new cap
-    # can load. Lowering it below a founded ordinal fails the open. See RUNBOOK §2d.
     spaces = 1024
 ---
 apiVersion: v1
