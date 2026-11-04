@@ -1,0 +1,26 @@
+{
+	"source": "PostGraphile answers captured read-only from the testnet gaia API on 2026-11-04 for geogenesis's EntityTypes and EntityExists queries (apps/web/core/io/query-fragments.tsx); the entity is the one in entity-light-news.json, the absent id is random",
+	"entityTypes": {
+		"request": {
+			"query": "query EntityTypes($id: UUID!, $spaceId: UUID) {\n  entity(id: $id) {\n    types(filter: { spaceIds: { anyEqualTo: $spaceId } }) {\n      id\n      name\n    }\n  }\n}",
+			"variables": { "id": "a94cb3410aea47378dda3b6489cbacef", "spaceId": null }
+		},
+		"response": {
+			"data": { "entity": { "types": [{ "id": "e550fe517e904b2c8fffdf13408f5634", "name": "News story" }] } }
+		}
+	},
+	"entityExists": {
+		"request": {
+			"query": "query EntityExists($id: UUID!) {\n  entity(id: $id) {\n    id\n  }\n}",
+			"variables": { "id": "a94cb3410aea47378dda3b6489cbacef" }
+		},
+		"response": { "data": { "entity": { "id": "a94cb3410aea47378dda3b6489cbacef" } } }
+	},
+	"entityAbsent": {
+		"request": {
+			"query": "query EntityExists($id: UUID!) {\n  entity(id: $id) {\n    id\n  }\n}",
+			"variables": { "id": "0f3c2a51-7d4e-4b1a-9c2e-5a6b7c8d9e0f" }
+		},
+		"response": { "data": { "entity": null } }
+	}
+}

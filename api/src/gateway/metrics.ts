@@ -43,6 +43,8 @@ export const UNCOMPARED_REASONS = [
 	"partial_values",
 	"filter_completeness",
 	"sampled_rows",
+	/** PostGraphile has the entity's row but geo-db holds no statement about it in any loaded Space. */
+	"no_statements",
 ] as const
 
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]

@@ -56,6 +56,7 @@ import {
 	RELATION_IGNORED,
 	RELATION_OBJECTS,
 	read,
+	readEverySpace,
 	readName,
 	readWide,
 	responseKeyOf,
@@ -181,7 +182,12 @@ export type LightPlan = {
 	uncompared: UncomparedReason[]
 }
 
-export type LightEntityPlan = LightPlan & {kind: "entity"; key: string; entityId: string}
+/**
+ * `everySpace`: the answer will not say which Spaces the entity lives in (no `spaceIds`, no row spaces), so the
+ * comparison reads every Space geo-db has loaded (`readEverySpace`). Such a plan's lists are empty, and a null
+ * answer is compared too: geo-db must hold nothing about the entity.
+ */
+export type LightEntityPlan = LightPlan & {kind: "entity"; key: string; entityId: string; everySpace: boolean}
 export type LightEntitiesPlan = LightPlan & {
 	kind: "entities"
 	key: string
@@ -264,17 +270,24 @@ function planLightEntity(
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
-): {card: EntityCardPlan; lists: LightList[]} {
+	options: {everySpace?: boolean} = {},
+): {card: EntityCardPlan; lists: LightList[]; everySpace: boolean} {
 	const lists: LightList[] = []
 	const card = planEntitySelection(set, fragments, resolved, uncompared, (field) => {
 		lists.push(planLightList(field, fragments, resolved, uncompared))
 	})
+	// No lists and nothing to say where the entity lives: an `entity(id)` is read in every loaded Space, which
+	// settles whether it exists (`{ id }`) and its name, description and types from all its Spaces.
+	if (options.everySpace && lists.length === 0 && !card.spaceIds) {
+		if (card.name || card.description || card.types) uncompared.add("partial_values")
+		return {card, lists, everySpace: true}
+	}
 	// No lists: the derived fields (name, description, types) of the entity's own spaces are all that is judged.
 	if (lists.length === 0 && !(card.spaceIds && (card.name || card.description || card.types))) refuse("selection")
 	// Rows with no space and no `spaceIds` leave nothing to say which cards to read.
 	if (!card.spaceIds && !lists.some((list) => list.spaceKey)) refuse("no_space")
 	uncompared.add("partial_values")
-	return {card, lists}
+	return {card, lists, everySpace: false}
 }
 
 /** `entity(id)` with the light selection. Same roots as the card shadow (`relations` is tolerated). */
@@ -299,10 +312,20 @@ export function analyzeLightEntity(
 		if (Object.keys(args).length !== 1 || !("id" in args)) return {ok: false, reason: "args"}
 		const entityId = uuidArg(args.id)
 		if (!root.selectionSet) return {ok: false, reason: "selection"}
-		const {card, lists} = planLightEntity(root.selectionSet, fragments, resolved, uncompared)
+		const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
+			everySpace: true,
+		})
 		return {
 			ok: true,
-			plan: {kind: "entity", key: responseKeyOf(root), entityId, card, lists, uncompared: [...uncompared]},
+			plan: {
+				kind: "entity",
+				key: responseKeyOf(root),
+				entityId,
+				card,
+				lists,
+				everySpace,
+				uncompared: [...uncompared],
+			},
 		}
 	} catch (error) {
 		return {ok: false, reason: error instanceof Unsupported ? error.reason : "selection"}
@@ -557,11 +580,11 @@ export async function checkLight(
 	light: LightCard,
 	entityId: string,
 	label: string,
-	options: {claims?: FilterClaim[]; spaceIds?: string[] | null} = {},
+	options: {claims?: FilterClaim[]; spaceIds?: string[] | null; everySpace?: boolean} = {},
 ): Promise<LightCheck> {
-	const spaces = lightSpaces(light, options.spaceIds ?? null)
-	if (!spaces) return {result: "unsupported", reason: "no_space"}
-	const read = await readWide(deps, entityId, spaces, label)
+	const spaces = options.everySpace ? null : lightSpaces(light, options.spaceIds ?? null)
+	if (!spaces && !options.everySpace) return {result: "unsupported", reason: "no_space"}
+	const read = spaces ? await readWide(deps, entityId, spaces, label) : await readEverySpace(deps, entityId, label)
 	if (!read.ok) return read.result === "failed" ? {result: "failed"} : {result: "unsupported", reason: read.reason}
 
 	// Containment, in the row's own space when it names one, else against every space read.
@@ -614,12 +637,17 @@ export async function checkLight(
 		? !options.spaceIds.some((space) => (read.bySpace.get(space)?.length ?? 0) > 0)
 		: false
 	const bad = missing.length > 0 || wrong.length > 0 || unmet.length > 0 || outsideSpace
+	// PostGraphile keeps an entity's row whatever its statements (a topic, or every statement since removed), so an
+	// entity it has that geo-db holds nothing about in any loaded Space is not a difference geo-db can settle.
+	const uncompared = [...derived.uncompared]
+	if (options.everySpace && read.scope.populated.length === 0) uncompared.push("no_statements")
 	return {
 		result: bad ? "mismatch" : "match",
-		uncompared: derived.uncompared,
+		uncompared,
 		detail: {
 			entityId,
-			spaces: spaces.length,
+			spaces: read.scope.spaces.length,
+			holders: options.everySpace ? read.scope.populated.length : undefined,
 			missingInGeoDb: missing.length,
 			sampleMissing: missing.slice(0, 5),
 			skipped,
@@ -647,6 +675,28 @@ export type LightOutcome =
 	| {result: "unsupported"; reason: UnsupportedReason}
 	| {result: "match" | "mismatch"; uncompared: UncomparedReason[]; detail: Record<string, unknown>}
 
+/**
+ * PostGraphile has no entity of this id: geo-db must hold no statement about it in any loaded Space. A Space geo-db
+ * has not loaded cannot hold what PostGraphile lacks, so the loaded ones settle it.
+ */
+async function checkAbsent(deps: EntityShadowDeps, plan: LightEntityPlan, label: string): Promise<LightOutcome> {
+	const read = await readEverySpace(deps, plan.entityId, label)
+	if (!read.ok) return read.result === "failed" ? {result: "failed"} : {result: "unsupported", reason: read.reason}
+	const holders = read.scope.populated
+	return {
+		result: holders.length > 0 ? "mismatch" : "match",
+		uncompared: plan.uncompared,
+		detail: {
+			entityId: plan.entityId,
+			absentInPostgres: true,
+			spaces: read.scope.spaces.length,
+			holders: holders.length,
+			sampleHolders: holders.slice(0, 3),
+			geoDbMs: read.ms,
+		},
+	}
+}
+
 /** Runs the comparison of a light plan over PostGraphile's parsed answer. Never throws. */
 export async function runLight(
 	deps: EntityShadowDeps,
@@ -661,7 +711,7 @@ export async function runLight(
 	const entities: {id: string; node: unknown}[] = []
 	let filterBreach: Record<string, unknown> | null = null
 	if (plan.kind === "entity") {
-		if (answer === null) return {result: "skip"}
+		if (answer === null) return plan.everySpace ? checkAbsent(deps, plan, label) : {result: "skip"}
 		entities.push({id: plan.entityId, node: answer})
 	} else {
 		if (!Array.isArray(answer) || answer.length === 0) return {result: "skip"}
@@ -687,7 +737,8 @@ export async function runLight(
 	for (const {id, node} of entities) {
 		const light = lightCardFromEntity(node, plan)
 		if (!light) return {result: "skip"}
-		const options = plan.kind === "entities" ? {claims: plan.claims, spaceIds: plan.spaceIds} : {}
+		const options =
+			plan.kind === "entities" ? {claims: plan.claims, spaceIds: plan.spaceIds} : {everySpace: plan.everySpace}
 		checks.push({id, check: await checkLight(deps, plan, light, id, label, options)})
 	}
 	const mismatched = checks.filter((c) => c.check.result === "mismatch")

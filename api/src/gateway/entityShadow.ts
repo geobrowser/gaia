@@ -59,6 +59,7 @@ import {
 	type ValueRow,
 } from "../geodb/card"
 import {GeoDbError} from "../geodb/client"
+import {observeGeoDbRead} from "../geodb/metrics"
 import {askGeoDb, askGeoDbSpaces, type CardDeps, type CardLogger} from "../geodb/service"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import type {FieldShadow} from "./gateway"
@@ -226,6 +227,23 @@ export function argsOf(field: FieldNode, variables: Record<string, unknown>): Re
 
 export function uuidArg(value: unknown): string {
 	return typeof value === "string" && isValidUuid(value) ? normalizeUuid(value) : refuse("args")
+}
+
+/**
+ * True when a filter operand filters nothing: absent, null, or an object whose every field is such an operand.
+ * PostGraphile drops null and empty-object filter input (`connectionFilterAllowNullInput`,
+ * `connectionFilterAllowEmptyObjectInput`), so `{spaceIds: {anyEqualTo: null}}` is no filter at all.
+ */
+export function isEmptyFilter(value: unknown): boolean {
+	if (value === undefined || value === null) return true
+	if (typeof value !== "object" || Array.isArray(value)) return false
+	return Object.values(value as Record<string, unknown>).every(isEmptyFilter)
+}
+
+/** A field with no arguments, or only a `filter` that filters nothing (`isEmptyFilter`). */
+function isUnfiltered(field: FieldNode, resolved: Record<string, unknown>): boolean {
+	const args = argsOf(field, resolved)
+	return Object.entries(args).every(([name, value]) => name === "filter" && isEmptyFilter(value))
 }
 
 /**
@@ -482,7 +500,7 @@ export function planEntitySelection(
 		} else if (isCountOnly(field)) {
 			// `relations { totalCount }`: a count of rows geo-db cannot be asked for without the list.
 			uncompared.add("relation_count")
-		} else if (fieldName === "types" && !types && !field.arguments?.length && field.selectionSet) {
+		} else if (fieldName === "types" && !types && isUnfiltered(field, resolved) && field.selectionSet) {
 			let typeIdKey: string | null = null
 			let nameKey: string | null = null
 			for (const inner of fieldsOf(field.selectionSet, fragments)) {
@@ -953,6 +971,14 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	 * instead of one read a Space. Needs a geodb-client from geo-db 353ab26313 or later (`GEODB_MULTI_SPACE_READS`).
 	 */
 	multiSpace?: boolean
+	/**
+	 * Every geo-db Space id the space map holds. With it, an `entity` answer that does not say which Spaces the
+	 * entity lives in (`EntityExists`, `EntityTypes`) is read across all of them in one pipe line
+	 * (`readEverySpace`). Absent (GEODB_EVERY_SPACE_READS off) leaves those operations `no_space`.
+	 */
+	allGeoSpaces?: () => Promise<string[]>
+	/** Caps the every-Space reads (one unit each); absent means no cap. */
+	everySpaceBudget?: ReadBudget
 }
 
 export type CardCheck =
@@ -1046,6 +1072,71 @@ export async function readWide(
 		rows.push(...answer.rows)
 	}
 	return {ok: true, rows, bySpace, scope: {spaces, populated}, ms: Math.round(performance.now() - started)}
+}
+
+/** Most Spaces one every-Space read names: geo-db's `MAX_SOURCES`, past which it refuses the request. */
+export const MAX_EVERY_SPACES = 1024
+
+/**
+ * Reads the card of `entityId` across every Space geo-db has loaded, in one pipe line, for an answer that does
+ * not say where the entity lives. geo-db prunes the union by its `presence` index, so only the Spaces holding the
+ * entity are read. The scope and `bySpace` are in geo-db Space ids; `populated` is the Spaces that hold it.
+ * Needs `allGeoSpaces` and the multi-Space line; without them the read is `no_space`. Never throws.
+ */
+export async function readEverySpace(deps: EntityShadowDeps, entityId: string, label: string): Promise<WideRead> {
+	const readCardSpaces = deps.geoDb.readCardSpaces?.bind(deps.geoDb)
+	if (!deps.allGeoSpaces || deps.multiSpace !== true || !readCardSpaces)
+		return {ok: false, result: "unsupported", reason: "no_space"}
+	let spaces: string[]
+	try {
+		spaces = await deps.allGeoSpaces()
+	} catch (error) {
+		deps.log.warn(`${label} space map unreadable`, {entityId, message: String(error)})
+		return {ok: false, result: "failed"}
+	}
+	if (spaces.length === 0) return {ok: false, result: "unsupported", reason: "no_space"}
+	if (spaces.length > MAX_EVERY_SPACES) return {ok: false, result: "unsupported", reason: "many_spaces"}
+	if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(1))
+		return {ok: false, result: "unsupported", reason: "throttled"}
+	const started = performance.now()
+	let rows: GeoCardRow[]
+	try {
+		rows = await readCardSpaces({geoSpaceIds: spaces, entityId: conformingId("entity", entityId), names: true})
+		observeGeoDbRead((performance.now() - started) / 1000, "ok")
+	} catch (error) {
+		observeGeoDbRead((performance.now() - started) / 1000, "error")
+		const reason = error instanceof GeoDbError ? error.reason : "error"
+		deps.log.warn(`${label} every-space read failed`, {
+			entityId,
+			spaces: spaces.length,
+			reason,
+			message: String(error),
+		})
+		return {ok: false, result: "failed"}
+	}
+	const asked = new Set(spaces)
+	const bySpace = new Map<string, GeoRow[]>()
+	const plain: GeoRow[] = []
+	for (const row of rows) {
+		const {space: printed, ...rest} = row
+		// A one-Space line prints bare statement ids, so its rows name no Space.
+		const space = printed ?? (spaces.length === 1 ? spaces[0] : undefined)
+		if (!space || !asked.has(space)) {
+			deps.log.warn(`${label} every-space read answered an unrequested space`, {entityId, space})
+			return {ok: false, result: "failed"}
+		}
+		const list = bySpace.get(space) ?? []
+		list.push(rest)
+		bySpace.set(space, list)
+		plain.push(rest)
+	}
+	return {
+		ok: true,
+		rows: plain,
+		bySpace,
+		scope: {spaces, populated: [...bySpace.keys()]},
+		ms: Math.round(performance.now() - started),
+	}
 }
 
 /**

@@ -2,7 +2,7 @@ import {readFileSync} from "node:fs"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {conformingId, rowsFromGeoDbOutput, valueKey} from "../../geodb/card"
-import {createEntityShadow} from "../entityShadow"
+import {createEntityShadow, isEmptyFilter} from "../entityShadow"
 import {analyzeLightEntities, analyzeLightEntity} from "../lightShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
 import {createPointReadShadows} from "../pointReadShadows"
@@ -504,5 +504,148 @@ describe("entities with the light selection", () => {
 			{data: {entities: []}},
 		)
 		expect(results()).toEqual({})
+	})
+})
+
+// geogenesis's EntityTypes (every entity page) and EntityExists (the post-publish poll) say nothing about where
+// the entity lives, so the shadow reads the card across every Space in the space map, in one pipe line.
+describe("entity answers with no Space (every-Space reads)", () => {
+	type Captured = {request: {query: string; variables: Record<string, unknown>}; response: {data: {entity: unknown}}}
+	const EVERY: Record<"entityTypes" | "entityExists" | "entityAbsent", Captured> = JSON.parse(
+		readFileSync(new URL("./fixtures/entity-every-space.json", import.meta.url), "utf8"),
+	)
+	const NEWS_STORY = "e550fe517e904b2c8fffdf13408f5634"
+	const ABSENT = conformingId("entity", "0f3c2a51-7d4e-4b1a-9c2e-5a6b7c8d9e0f")
+	const ALL = [geoSpace(SPACE_A), geoSpace(SPACE_B), geoSpace(SPACE_C)]
+	/** A Types relation row as geodb-client prints it with names. */
+	const typeRow = (entity: string, type: string, name: string, n = 90) =>
+		`${TYPES}\t${conformingId("entity", type)}\ts${n}\t${entity}\tTypes\t${name}\t1\n`
+
+	function everySetup(
+		outputs: Record<string, string>,
+		options: {flag?: boolean; budget?: ReturnType<typeof createReadBudget>} = {},
+	) {
+		const log = {info: vi.fn(), warn: vi.fn()}
+		const readCard = askOf(outputs)
+		const readCardSpaces = askSpacesOf(outputs)
+		const allGeoSpaces = vi.fn(async () => ALL)
+		const deps = {
+			multiSpace: true,
+			geoDb: {readCard, readCardSpaces},
+			geoSpaceOf: async (space: string) => geoSpace(space),
+			log,
+			...(options.flag === false ? {} : {allGeoSpaces, everySpaceBudget: options.budget}),
+		}
+		return {log, readCard, readCardSpaces, allGeoSpaces, entity: createEntityShadow(deps)}
+	}
+	const run = (s: ReturnType<typeof everySetup>, captured: Captured, body: unknown = captured.response) =>
+		call(s.entity as never, captured.request.query, captured.request.variables, body)
+
+	it("treats a null filter operand as no filter (PostGraphile drops null and empty input)", () => {
+		expect(isEmptyFilter(undefined)).toBe(true)
+		expect(isEmptyFilter(null)).toBe(true)
+		expect(isEmptyFilter({spaceIds: {anyEqualTo: null}})).toBe(true)
+		expect(isEmptyFilter({spaceIds: {}})).toBe(true)
+		expect(isEmptyFilter({spaceIds: {anyEqualTo: SPACE_A}})).toBe(false)
+		expect(isEmptyFilter({id: {in: []}})).toBe(false)
+	})
+
+	it("plans EntityTypes with a null space and EntityExists as every-Space reads", () => {
+		for (const captured of [EVERY.entityTypes, EVERY.entityExists]) {
+			const analysis = analyzeLightEntity(parse(captured.request.query), null, captured.request.variables)
+			expect(analysis.ok && analysis.plan.everySpace).toBe(true)
+		}
+		// A real space filter on the types narrows them to types held in that Space, which a card cannot say.
+		const scoped = analyzeLightEntity(parse(EVERY.entityTypes.request.query), null, {
+			...EVERY.entityTypes.request.variables,
+			spaceId: SPACE_A,
+		})
+		expect(scoped).toEqual({ok: false, reason: "selection"})
+	})
+
+	it("matches EntityTypes against the Types statements of every Space, in one read", async () => {
+		const s = everySetup({[geoSpace(SPACE_A)]: geoOutput(ENTITY) + typeRow(HEX, NEWS_STORY, "News story")})
+		await run(s, EVERY.entityTypes)
+		expect(results()).toEqual({match: 1})
+		expect(s.readCard).not.toHaveBeenCalled()
+		expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
+		expect(s.readCardSpaces.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: ALL, names: true})
+	})
+
+	it("flags a type geo-db holds that PostGraphile does not list; a differing type name is inconclusive", async () => {
+		const other = "0123456789ab4bcd8ef0123456789abd"
+		const extra = everySetup({
+			[geoSpace(SPACE_A)]: geoOutput(ENTITY) + typeRow(HEX, NEWS_STORY, "News story"),
+			[geoSpace(SPACE_C)]: typeRow(HEX, other, "Person", 91),
+		})
+		await run(extra, EVERY.entityTypes)
+		expect(results()).toEqual({mismatch: 1})
+		const renamed = everySetup({[geoSpace(SPACE_A)]: typeRow(HEX, NEWS_STORY, "Op-ed")})
+		await run(renamed, EVERY.entityTypes)
+		// geo-db names the type in the Space it read; PostGraphile may have taken the name from another.
+		expect(results()).toEqual({match: 1, mismatch: 1})
+		expect(uncompared()).toMatchObject({cross_space: 1})
+	})
+
+	it("leaves a type PostGraphile has from a Space geo-db did not answer for inconclusive, not wrong", async () => {
+		const s = everySetup({[geoSpace(SPACE_A)]: geoOutput(ENTITY)})
+		await run(s, EVERY.entityTypes)
+		expect(results()).toEqual({match: 1})
+		expect(uncompared()).toMatchObject({cross_space: 1})
+	})
+
+	it("matches EntityExists when geo-db holds the entity somewhere", async () => {
+		const s = everySetup({[geoSpace(SPACE_B)]: geoOutput(ENTITY)})
+		await run(s, EVERY.entityExists)
+		expect(results()).toEqual({match: 1})
+		expect(uncompared().no_statements).toBeUndefined()
+	})
+
+	it("counts an entity PostGraphile has but geo-db holds no statement about as uncompared, not a mismatch", async () => {
+		const s = everySetup({})
+		await run(s, EVERY.entityExists)
+		expect(results()).toEqual({match: 1})
+		expect(uncompared()).toMatchObject({no_statements: 1})
+	})
+
+	it("checks an absent entity: geo-db must hold nothing about it in any Space", async () => {
+		const none = everySetup({[geoSpace(SPACE_A)]: geoOutput(ENTITY)})
+		await run(none, EVERY.entityAbsent)
+		expect(results()).toEqual({match: 1})
+		expect(none.readCardSpaces.mock.calls[0]?.[0].entityId).toBe(ABSENT)
+		const held = everySetup({[geoSpace(SPACE_B)]: `${NAME}\tGhost\tsn\t${ABSENT}\t-\t-\t1\n`})
+		await run(held, EVERY.entityAbsent)
+		expect(results()).toEqual({match: 1, mismatch: 1})
+		expect(held.log.warn).toHaveBeenCalledWith(
+			expect.stringContaining("mismatch"),
+			expect.objectContaining({absentInPostgres: true, holders: 1}),
+		)
+	})
+
+	it("stays no_space and reads nothing with the switch off", async () => {
+		const s = everySetup({[geoSpace(SPACE_A)]: geoOutput(ENTITY)}, {flag: false})
+		await run(s, EVERY.entityExists)
+		await run(s, EVERY.entityAbsent)
+		await run(s, EVERY.entityTypes)
+		expect(unsupported()).toEqual({no_space: 3})
+		expect(s.readCard).not.toHaveBeenCalled()
+		expect(s.readCardSpaces).not.toHaveBeenCalled()
+	})
+
+	it("spends one unit of its own budget a read, and counts an empty budget as throttled", async () => {
+		const budget = createReadBudget({perSecond: 1, burst: 1, now: () => 0})
+		const s = everySetup({[geoSpace(SPACE_A)]: geoOutput(ENTITY)}, {budget})
+		await run(s, EVERY.entityExists)
+		await run(s, EVERY.entityExists)
+		expect(results()).toEqual({match: 1, unsupported_selection: 1})
+		expect(unsupported()).toEqual({throttled: 1})
+		expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
+	})
+
+	it("counts a failed every-Space read as failed", async () => {
+		const s = everySetup({})
+		s.readCardSpaces.mockRejectedValueOnce(new Error("pipe closed"))
+		await run(s, EVERY.entityExists)
+		expect(results()).toEqual({failed: 1})
 	})
 })
