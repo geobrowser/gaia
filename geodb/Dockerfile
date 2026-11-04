@@ -1,6 +1,6 @@
-# geodb-serve + geodb-client, built from geo-db `final` at a pinned commit by
-# .github/workflows/build-geodb-image.yml, which puts the two static binaries next to this file.
-# Local build: copy geodb-serve and geodb-client into this directory first.
+# geodb-serve + geodb-client + geodb-migrate (the store migrator), built from geo-db `final` at a pinned commit by
+# .github/workflows/build-geodb-image.yml, which puts the three static binaries next to this file.
+# Local build: copy geodb-serve, geodb-client and geodb-migrate into this directory first.
 FROM debian:bookworm-slim
 
 # The supervisor needs sh, sed, tail, sleep and head (in the base image) and curl, to publish serve's
