@@ -372,6 +372,11 @@ spec:
             # and writes them into Spaces geo-db holds; one for a Space not founded yet waits until it is.
             - name: GEODB_SPACE_ENTITIES
               value: "1"
+            # Relation positions (`.position` on a relation's add). Off until the geodb image carries a
+            # geodb-client with ISS-587-318: an older client refuses the key, and every edit with a positioned
+            # relation would fail. Turn on with the image bump that brings it.
+            - name: GEODB_RELATION_POSITIONS
+              value: "0"
             # Read only; used by the membership comparison, ignored while it is off.
             - name: DATABASE_URL
               valueFrom:

@@ -24,7 +24,7 @@ export type PgValueRow = {
 	point: string | null
 }
 
-export type PgRelationRow = {id: string; from_entity_id: string; to_entity_id: string; type_id: string}
+export type PgRelationRow = {id: string; from_entity_id: string; to_entity_id: string; type_id: string; position?: string | null}
 
 const I64_MIN = -(2n ** 63n)
 const I64_MAX = 2n ** 63n - 1n
@@ -116,6 +116,7 @@ export function entityOps(
 			from: compactId(r.from_entity_id),
 			to: compactId(r.to_entity_id),
 			relationType: compactId(r.type_id),
+			...(r.position != null ? {position: r.position} : {}),
 		})
 		out.relations++
 	}

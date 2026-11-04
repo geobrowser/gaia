@@ -120,6 +120,30 @@ describe("translateOps", () => {
 		{type: "somethingNew"},
 	]
 
+	it("writes a relation's position only when asked, and drops one geo-db would refuse", () => {
+		const rel = (n: number, position?: unknown): GrcOp => ({type: "createRelation", id: id(n), from: id(1), to: id(7), relationType: id(8), position})
+		const add = (n: number, position = "") =>
+			`.{ .add = .{ .id = "${conformingId("statement", hex(n))}", .entity = "${hex(1)}", .property = "${hex(8)}", .value = .{ .reference = "${hex(7)}" }${position} } }`
+		const ops = [rel(20, "a0V"), rel(21), rel(22, ""), rel(23, "a".repeat(65)), rel(24, "a\u00e9"), rel(25, 'q"\\')]
+
+		const on = translateOps(ops, context().ctx, {positions: true})
+		expect(on.intents.slice(1)).toEqual([
+			add(20, ', .position = "a0V"'),
+			add(21),
+			add(22),
+			add(23),
+			add(24),
+			add(25, ', .position = "q\\"\\\\"'),
+		])
+		expect(on.stats["relation-position-kept"]).toBe(2)
+		expect(on.stats["relation-position-dropped"]).toBe(3)
+
+		const off = translateOps(ops, context().ctx)
+		expect(off.intents.slice(1)).toEqual([add(20), add(21), add(22), add(23), add(24), add(25)])
+		expect(off.stats["relation-position-kept"]).toBeUndefined()
+		expect(off.stats["relation-position-dropped"]).toBe(5)
+	})
+
 	it("sets a text with a known language with its tag, and one with an unknown language without", () => {
 		const {ctx} = context()
 		const {intents, stats} = translateOps(

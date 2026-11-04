@@ -17,6 +17,11 @@ export type Config = {
 	membership: MembershipConfig
 	proposals: {enabled: boolean; topic: string; groupId: string}
 	spaceEntities: {enabled: boolean; topic: string; groupId: string}
+	/**
+	 * GEODB_RELATION_POSITIONS: write a relation's position into geo-db (`.position` on its `add`). Default off: a
+	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it.
+	 */
+	relationPositions: boolean
 }
 
 export type MembershipConfig = {
@@ -65,6 +70,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		spaceMapConfigMap: env.SPACE_MAP_CONFIGMAP ?? "geodb-space-map",
 		spacesListPath: env.SPACES_LIST_PATH ?? "",
 		lagPollMs: Number(env.LAG_POLL_MS ?? 15_000),
+		relationPositions: flag(env.GEODB_RELATION_POSITIONS),
 		membership: {
 			dualWrite: flag(env.GEODB_MEMBERSHIP_DUAL_WRITE),
 			shadowCompare: flag(env.GEODB_MEMBERSHIP_SHADOW_COMPARE),

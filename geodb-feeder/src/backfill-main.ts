@@ -52,6 +52,7 @@ async function main(): Promise<void> {
 		chunk: config.chunk,
 		pauseMs: intEnv(env, "BACKFILL_PAUSE_MS", 100, 0),
 		exclude: excludeFrom(env.BACKFILL_EXCLUDE_PROPERTIES),
+		positions: config.relationPositions,
 		maxEntities: intEnv(env, "BACKFILL_MAX_ENTITIES", 0, 0),
 	}
 	const indexerGroup = env.INDEXER_GROUP_ID ?? `kg-indexer-v8-${environment}`

@@ -30,6 +30,14 @@ export type TranslateContext = {
 
 export type Translation = {intents: string[]; touched: string[]; stats: Record<string, number>}
 
+export type TranslateOptions = {
+	/** Write a relation's position (geodb-client's `.position`, ISS-587-318). Off, positions are dropped and counted. */
+	positions?: boolean
+}
+
+/** A position geo-db accepts (01 §5): 1 to 64 bytes of printable ASCII. gaia's fractional indexes are. */
+const POSITION = /^[\x20-\x7e]{1,64}$/
+
 export function zigString(s: string): string {
 	let out = '"'
 	const clean = String(s).replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "�")
@@ -124,7 +132,7 @@ export function valueZon(v: GrcValue): Zon {
 	}
 }
 
-export function translateOps(ops: GrcOp[], ctx: TranslateContext): Translation {
+export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: TranslateOptions = {}): Translation {
 	const intents: string[] = []
 	const touched: string[] = []
 	const stats: Record<string, number> = {}
@@ -210,10 +218,16 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext): Translation {
 				}
 				ctx.markStmt(sid)
 				const prop = cid("entity", op.relationType as string | Uint8Array)
+				let position = ""
+				if (op.position != null) {
+					if (opts.positions && typeof op.position === "string" && POSITION.test(op.position)) {
+						position = `, .position = ${zigString(op.position)}`
+						bump("relation-position-kept")
+					} else bump("relation-position-dropped")
+				}
 				intents.push(
-					`.{ .add = .{ .id = "${sid}", .entity = "${from}", .property = "${prop}", .value = .{ .reference = "${to}" } } }`,
+					`.{ .add = .{ .id = "${sid}", .entity = "${from}", .property = "${prop}", .value = .{ .reference = "${to}" }${position} } }`,
 				)
-				if (op.position != null) bump("relation-position-dropped")
 				if (op.entity != null) bump("relation-entity-dropped")
 				touched.push(from)
 				bump("createRelation")

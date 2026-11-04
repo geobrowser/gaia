@@ -74,6 +74,13 @@ describe("pgAdapter", () => {
 		expect(r.relations).toBe(1)
 	})
 
+	it("a relation's position rides along when Postgres has one", () => {
+		const row = (n: number, position: string | null): PgRelationRow => ({id: rel(n), from_entity_id: ent(1), to_entity_id: ent(2), type_id: RTYPE, position})
+		const positioned = [row(1, "a0"), row(2, null)]
+		const r = entityOps(ent(1), rows, positioned, null, new Set())
+		expect(r.ops.filter((o) => o.type === "createRelation").map((o) => o.position)).toEqual(["a0", undefined])
+	})
+
 	it("a known entity gets only what geo-db lacks", () => {
 		const held = {props: new Set([cid("entity", PROP.replaceAll("-", ""))]), statements: new Set([cid("statement", rel(1).replaceAll("-", ""))])}
 		const r = entityOps(ent(1), rows, rels, held, new Set())
