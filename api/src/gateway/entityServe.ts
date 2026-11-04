@@ -1,5 +1,6 @@
 import type {FieldNode} from "graphql"
 import {conformingId, DERIVED_PROPERTIES, MEMBERSHIP_PROPERTIES} from "../geodb/card"
+import type {GaiaIdsOf} from "../geodb/idMap"
 import {askGeoDb, type CardDeps} from "../geodb/service"
 import {argsOf, ENTITY_FIELD, fieldsOf, parseOperation, responseKeyOf, Unsupported, uuidArg} from "./entityShadow"
 import type {FieldResolver, ResolveResult} from "./gateway"
@@ -16,16 +17,17 @@ import type {FieldResolver, ResolveResult} from "./gateway"
  * next. Values are not served: a geo-db card does not say whether a value was text, a number or a boolean.
  *
  * Every id geo-db returns is in its own (conformed) id space, where a legacy gaia id is a one-way hash, so the
- * answer can be served only through `gaiaIdOf`, a reverse map from a conformed id to the gaia id it came from.
- * No such map exists yet; without one the resolver declines with `legacy_id` before asking geo-db anything, so
- * turning the field on costs geo-db no reads. Known remaining gaps for an exact answer even with a map: a
- * 32-hex text value reads as a reference, the feeder collapses duplicate relations (same type and target), and
+ * answer is served only through `gaiaIdsOf`, the reverse map (geodb/idMap.ts: Postgres, migration 0116). It
+ * maps every id in the answer, the entity's own included, in one read after the card read; an id it cannot place
+ * (Postgres does not hold it yet) declines with `legacy_id`, and a failed map read with `id_map`. Without the map
+ * the resolver declines with `legacy_id` before asking geo-db anything. Known remaining gaps for an exact answer:
+ * a 32-hex text value reads as a reference, the feeder collapses duplicate relations (same type and target), and
  * derived relations (rank position) live only in Postgres; see the PR and the postgres-dependency inventory.
  */
 
 export type EntityServeDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
-	/** Conformed geo-db id -> the gaia id it came from (compact), or null when unknown. Absent: never serve. */
-	gaiaIdOf?: (conformedId: string) => string | null
+	/** The reverse id map (geo-db id -> gaia id, compact); an id it leaves out is unknown. Absent: never serve. */
+	gaiaIdsOf?: GaiaIdsOf
 }
 
 /** PostGraphile's page cap: a list longer than this is not what PostGraphile would return. */
@@ -107,28 +109,36 @@ export function createEntityResolver(deps: EntityServeDeps): FieldResolver {
 			if (error instanceof Unsupported) return decline(error.reason)
 			throw error
 		}
-		const gaiaIdOf = deps.gaiaIdOf
-		if (!gaiaIdOf) return decline("legacy_id")
+		const gaiaIdsOf = deps.gaiaIdsOf
+		if (!gaiaIdsOf) return decline("legacy_id")
 		const relations = plan.relations
 		if (!relations) return decline("no_space")
-		const rows = await askGeoDb(deps, conformingId("entity", plan.entityId), relations.spaceId)
+		const geoEntity = conformingId("entity", plan.entityId)
+		const rows = await askGeoDb(deps, geoEntity, relations.spaceId)
 		if (signal.aborted) return decline("timeout")
 		// An empty card cannot tell "no such entity" (PostGraphile: null) from "nothing in this space" (an empty list).
 		if (rows.length === 0) return decline("empty")
-		const items: Record<string, unknown>[] = []
+		const references: {prop: string; raw: string}[] = []
 		for (const row of rows) {
 			if (MEMBERSHIP_PROPERTIES.has(row.prop)) continue
 			if (DERIVED_PROPERTIES.has(row.prop)) return decline("selection")
-			if (!REFERENCE.test(row.raw)) continue
-			const typeId = gaiaIdOf(row.prop)
-			const toEntityId = gaiaIdOf(row.raw)
+			if (REFERENCE.test(row.raw)) references.push(row)
+		}
+		if (references.length > PAGE_CAP) return decline("truncated")
+		const gaia = await gaiaIdsOf([geoEntity, ...references.flatMap((r) => [r.prop, r.raw])])
+		if (signal.aborted) return decline("timeout")
+		// The asked id must come back as itself: a v4 id that is some legacy entity's conformed id is not that entity.
+		if (gaia.get(geoEntity) !== plan.entityId) return decline("legacy_id")
+		const items: Record<string, unknown>[] = []
+		for (const row of references) {
+			const typeId = gaia.get(row.prop)
+			const toEntityId = gaia.get(row.raw)
 			if (!typeId || !toEntityId) return decline("legacy_id")
 			const item: Record<string, unknown> = {}
 			for (const f of relations.fields)
 				item[f.key] = f.name === "__typename" ? "Relation" : f.name === "typeId" ? typeId : toEntityId
 			items.push(item)
 		}
-		if (items.length > PAGE_CAP) return decline("truncated")
 		const entity: Record<string, unknown> = {}
 		for (const f of plan.entityFields)
 			entity[f.key] = f.name === "id" ? plan.entityId : f.name === "__typename" ? "Entity" : items

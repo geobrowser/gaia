@@ -1,6 +1,6 @@
 import {parse} from "graphql"
 import {describe, expect, it, vi} from "vitest"
-import type {GeoCardRow} from "../../geodb/card"
+import {conformingId, type GeoCardRow} from "../../geodb/card"
 import {createEntityResolver, type EntityServeDeps, planEntityServe} from "../entityServe"
 import type {ResolveContext} from "../gateway"
 
@@ -22,11 +22,14 @@ const context = (query: string, variables: Record<string, unknown> = {}): Resolv
 	}
 }
 
+/** A map in which every id is a v4 id Postgres holds. */
+const identity = async (ids: readonly string[]) => new Map(ids.map((id) => [id, id]))
+
 const deps = (rows: GeoCardRow[], overrides: Partial<EntityServeDeps> = {}) => {
 	const readCard = vi.fn(async () => rows)
 	return {
 		readCard,
-		deps: {geoDb: {readCard}, geoSpaceOf: async (s: string) => s, gaiaIdOf: (id: string) => id, ...overrides},
+		deps: {geoDb: {readCard}, geoSpaceOf: async (s: string) => s, gaiaIdsOf: identity, ...overrides},
 	}
 }
 
@@ -76,7 +79,7 @@ describe("createEntityResolver", () => {
 	const query = `{ entity(id: "${ENTITY}") { __typename id rels: ${RELATIONS} } }`
 
 	it("declines with legacy_id, without reading geo-db, while there is no reverse id map", async () => {
-		const {deps: d, readCard} = deps([{prop: TYPE, raw: TARGET}], {gaiaIdOf: undefined})
+		const {deps: d, readCard} = deps([{prop: TYPE, raw: TARGET}], {gaiaIdsOf: undefined})
 		expect(await createEntityResolver(d)(context(query))).toEqual({ok: false, reason: "legacy_id"})
 		expect(readCard).not.toHaveBeenCalled()
 	})
@@ -112,7 +115,9 @@ describe("createEntityResolver", () => {
 
 	it("declines an empty card, an unmapped id and a derived property", async () => {
 		expect(await createEntityResolver(deps([]).deps)(context(query))).toEqual({ok: false, reason: "empty"})
-		const unmapped = deps([{prop: TYPE, raw: TARGET}], {gaiaIdOf: (id) => (id === TARGET ? null : id)}).deps
+		const unmapped = deps([{prop: TYPE, raw: TARGET}], {
+			gaiaIdsOf: async (ids) => new Map(ids.filter((id) => id !== TARGET).map((id) => [id, id])),
+		}).deps
 		expect(await createEntityResolver(unmapped)(context(query))).toEqual({ok: false, reason: "legacy_id"})
 		const derived = deps([{prop: "890deffb384349fa826974000e3dcef6", raw: TARGET}]).deps
 		expect(await createEntityResolver(derived)(context(query))).toEqual({ok: false, reason: "selection"})
@@ -124,5 +129,53 @@ describe("createEntityResolver", () => {
 		}
 		const d = {...deps([]).deps, ...failing}
 		await expect(createEntityResolver(d)(context(query))).rejects.toMatchObject({reason: "timeout"})
+	})
+
+	it("maps legacy ids back: the asked entity, relation types and targets", async () => {
+		const legacyEntity = "990a4147a92855e88e630e542faf1c72"
+		const legacyTarget = "01a1a8c0000070008000000000000001"
+		const back = new Map([
+			[conformingId("entity", legacyEntity), legacyEntity],
+			[conformingId("entity", legacyTarget), legacyTarget],
+			[TYPE, TYPE],
+		])
+		const gaiaIdsOf = vi.fn(
+			async (ids: readonly string[]) =>
+				new Map(ids.flatMap((id) => (back.has(id) ? [[id, back.get(id) as string] as const] : []))),
+		)
+		const {deps: d, readCard} = deps([{prop: TYPE, raw: conformingId("entity", legacyTarget)}], {gaiaIdsOf})
+		const q = `{ entity(id: "${legacyEntity}") { id rels: ${RELATIONS} } }`
+		expect(await createEntityResolver(d)(context(q))).toEqual({
+			ok: true,
+			data: {
+				entity: {id: legacyEntity, rels: [{typeId: TYPE, toEntityId: legacyTarget, __typename: "Relation"}]},
+			},
+		})
+		expect(readCard).toHaveBeenCalledWith(expect.objectContaining({entityId: conformingId("entity", legacyEntity)}))
+		expect(gaiaIdsOf).toHaveBeenCalledTimes(1)
+	})
+
+	it("declines when the asked id does not come back as itself", async () => {
+		// A v4 id that is a legacy entity's conformed id names that entity in geo-db, but not in PostGraphile.
+		const conformed = conformingId("entity", "990a4147a92855e88e630e542faf1c72")
+		const {deps: d} = deps([{prop: TYPE, raw: TARGET}], {
+			gaiaIdsOf: async (ids) =>
+				new Map(ids.map((id) => [id, id === conformed ? "990a4147a92855e88e630e542faf1c72" : id])),
+		})
+		expect(await createEntityResolver(d)(context(`{ entity(id: "${conformed}") { ${RELATIONS} } }`))).toEqual({
+			ok: false,
+			reason: "legacy_id",
+		})
+		const {deps: absent} = deps([{prop: TYPE, raw: TARGET}], {
+			gaiaIdsOf: async (ids) => new Map(ids.filter((id) => id !== ENTITY).map((id) => [id, id])),
+		})
+		expect(await createEntityResolver(absent)(context(query))).toEqual({ok: false, reason: "legacy_id"})
+	})
+
+	it("lets a failed map read through for the gateway to count", async () => {
+		const {deps: d} = deps([{prop: TYPE, raw: TARGET}], {
+			gaiaIdsOf: async () => Promise.reject(Object.assign(new Error("x"), {reason: "id_map"})),
+		})
+		await expect(createEntityResolver(d)(context(query))).rejects.toMatchObject({reason: "id_map"})
 	})
 })

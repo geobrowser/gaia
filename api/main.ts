@@ -12,6 +12,7 @@ import {createReadBudget} from "./src/gateway/readBudget"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
 import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
+import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createCliGeoDbSearchClient} from "./src/geodb/search"
 import {health} from "./src/health"
@@ -158,8 +159,8 @@ const gatewayShadowFields = new Set(
 )
 const gatewayShadowsAny = gatewayShadowFields.size > 0
 // Fields served from geo-db (mode "on"). Only `entity` has a resolver; it answers one exact shape and falls back to
-// PostGraphile for everything else (gaia_api_gateway_serve_fallback_total). Without a reverse id map it declines
-// every operation before reading geo-db.
+// PostGraphile for everything else (gaia_api_gateway_serve_fallback_total). geo-db's ids are turned back into gaia
+// ids through the reverse id map in Postgres (geodb/idMap.ts, migration 0116; gaia_api_geodb_id_map_*).
 const gatewayServeEntity = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, ENTITY_FIELD) === "on"
 
 // Mount the opt-in geo-db entity-card route (GEODB_ENTITY_CARDS=on|shadow; off by default)
@@ -214,7 +215,9 @@ const graphqlHandler = createGateway({
 	config: gatewayConfig,
 	resolvers:
 		gatewayServeEntity && sharedGeoDb
-			? new Map([[ENTITY_FIELD, createEntityResolver({...sharedGeoDb})]])
+			? new Map([
+					[ENTITY_FIELD, createEntityResolver({...sharedGeoDb, gaiaIdsOf: createGaiaIdMap(idMapQuery(db))})],
+				])
 			: undefined,
 	shadows:
 		gatewayShadowsAny && sharedGeoDb

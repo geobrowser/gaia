@@ -2,6 +2,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 import {renderGatewayMetrics} from "./gateway/metrics"
 import {renderServeMetrics} from "./gateway/serveMetrics"
+import {renderIdMapMetrics} from "./geodb/idMap"
 import {renderGeoDbCardMetrics} from "./geodb/metrics"
 import {renderQueryCostHistogram} from "./kg/costLoggerPlugin"
 import {renderResponseSizeHistogram} from "./kg/instrumentationPlugin"
@@ -141,6 +142,8 @@ function renderPrometheusMetrics(): string {
 		renderGatewayMetrics(),
 		// GraphQL root fields served from geo-db (mode on): served/fallback by field and reason — see gateway/serveMetrics.ts.
 		renderServeMetrics(),
+		// The reverse id map the served fields read: ids by result (miss = not served) and Postgres reads — see geodb/idMap.ts.
+		renderIdMapMetrics(),
 	].join("\n")
 }
 
