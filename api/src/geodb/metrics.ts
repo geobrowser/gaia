@@ -16,10 +16,19 @@ export const FALLBACK_REASONS = [
 ] as const
 export const SHADOW_RESULTS = ["match", "only_postgres", "only_geodb", "both", "failed"] as const
 export const SERVED_SOURCES = ["geodb", "postgres"] as const
+/** Why a `geodb-client pipe` worker started: a read found no worker, or the pool replaced one ahead of need. */
+export const WORKER_START_REASONS = ["demand", "ahead"] as const
+/**
+ * Why a worker ended: its connection or token died under a read, a real refusal, it exited, a read timed out,
+ * it broke the protocol, or the pool retired it before its token expired.
+ */
+export const WORKER_END_REASONS = ["dead_session", "refusal", "exit", "timeout", "broken", "recycled"] as const
 
 export type FallbackReason = (typeof FALLBACK_REASONS)[number]
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]
 export type ServedSource = (typeof SERVED_SOURCES)[number]
+export type WorkerStartReason = (typeof WORKER_START_REASONS)[number]
+export type WorkerEndReason = (typeof WORKER_END_REASONS)[number]
 
 /**
  * Upper bounds in seconds; the default read budget is 0.5 s. Dense between 1 and 5 ms, where the warm card
@@ -39,6 +48,8 @@ const buckets = new Map<string, number[]>()
 const sums = new Map<string, number>()
 const pgBuckets = new Map<string, number[]>()
 const pgSums = new Map<string, number>()
+const workerStarts = new Map<string, number>()
+const workerEnds = new Map<string, number>()
 
 const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(key) ?? 0) + 1)
 
@@ -53,6 +64,8 @@ export function recordFallback(reason: string): void {
 }
 
 export const recordShadow = (result: ShadowResult) => bump(shadow, result)
+export const recordWorkerStart = (reason: WorkerStartReason) => bump(workerStarts, reason)
+export const recordWorkerEnd = (reason: WorkerEndReason) => bump(workerEnds, reason)
 
 function observe(bucketMap: Map<string, number[]>, sumMap: Map<string, number>, seconds: number, outcome: Outcome) {
 	const counts = bucketMap.get(outcome) ?? new Array<number>(LATENCY_BUCKETS_SECONDS.length + 1).fill(0)
@@ -116,6 +129,20 @@ export function renderGeoDbCardMetrics(): string {
 			SHADOW_RESULTS,
 			shadow,
 		),
+		...counter(
+			"gaia_api_geodb_worker_starts_total",
+			"geodb-client pipe workers started: demand (a read found none) or ahead (replaced before a read needed it).",
+			"reason",
+			WORKER_START_REASONS,
+			workerStarts,
+		),
+		...counter(
+			"gaia_api_geodb_worker_ends_total",
+			"geodb-client pipe workers ended, by reason.",
+			"reason",
+			WORKER_END_REASONS,
+			workerEnds,
+		),
 		...histogram(
 			"gaia_api_geodb_read_seconds",
 			"Latency of one geo-db card read through the pipe pool, queue wait included.",
@@ -135,5 +162,9 @@ export function renderGeoDbCardMetrics(): string {
 /** Reset accumulated state. Tests only. */
 export function __resetGeoDbMetricsForTests(): void {
 	active = false
-	for (const m of [served, fallbacks, shadow, buckets, sums, pgBuckets, pgSums] as Map<string, unknown>[]) m.clear()
+	for (const m of [served, fallbacks, shadow, buckets, sums, pgBuckets, pgSums, workerStarts, workerEnds] as Map<
+		string,
+		unknown
+	>[])
+		m.clear()
 }

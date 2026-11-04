@@ -29,11 +29,18 @@ export type GeoDbCardConfig = {
 	 * worker, so this is off until the image is bumped. GEODB_MULTI_SPACE_READS=on.
 	 */
 	multiSpaceReads?: boolean
+	/**
+	 * Lifetime of the capability token a worker's handshake gets, in seconds: geo-db's `grant_ttl_s`
+	 * (GEODB_GRANT_TTL_S on the serve, 300 by default). A worker is replaced before its token expires, so no
+	 * read finds the token dead. Absent means the default.
+	 */
+	grantTtlS?: number
 }
 
 const DEFAULT_TIMEOUT_MS = 500
 const DEFAULT_POOL_SIZE = 4
 const MAX_POOL_SIZE = 64
+const DEFAULT_GRANT_TTL_S = 300
 
 export function parseMode(raw: string | undefined): GeoDbCardMode {
 	const value = raw?.trim().toLowerCase()
@@ -43,6 +50,7 @@ export function parseMode(raw: string | undefined): GeoDbCardMode {
 export function readGeoDbCardConfig(env: Record<string, string | undefined>): GeoDbCardConfig {
 	const timeout = Number(env.GEODB_TIMEOUT_MS)
 	const pool = Math.floor(Number(env.GEODB_POOL_SIZE))
+	const grantTtl = Number(env.GEODB_GRANT_TTL_S)
 	return {
 		mode: parseMode(env.GEODB_ENTITY_CARDS),
 		clientBin: env.GEODB_CLIENT_BIN ?? "geodb-client",
@@ -52,5 +60,6 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : DEFAULT_TIMEOUT_MS,
 		multiSpaceReads: env.GEODB_MULTI_SPACE_READS?.trim().toLowerCase() === "on",
 		poolSize: Number.isFinite(pool) && pool > 0 ? Math.min(pool, MAX_POOL_SIZE) : DEFAULT_POOL_SIZE,
+		grantTtlS: Number.isFinite(grantTtl) && grantTtl > 0 ? grantTtl : DEFAULT_GRANT_TTL_S,
 	}
 }

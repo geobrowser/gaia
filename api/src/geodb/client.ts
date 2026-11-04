@@ -18,10 +18,15 @@
  * worker that cannot start (geo-db down) backs the whole client off for a second, so an outage answers
  * every request at once from Postgres instead of starting a process per request.
  *
- * The server closes a connection idle for a minute, and a pod that sees a card read every few minutes
- * would pay for that on every read (a read on the dead connection, then a fresh process and handshake:
- * 25 to 100 ms against 2 ms warm). So the first ready worker is kept warm: once it has been idle
- * `keepWarmMs`, one read of a card no entity has (an empty answer) goes down its connection.
+ * A read that lands on a dead worker pays for a fresh process and handshake (25 to 100 ms against 2 ms
+ * warm), and a worker dies three ways while idle: the server closes a connection idle for a minute, the
+ * token its handshake got expires (`grantTtlMs`, geo-db's `grant_ttl_s`), and any refusal ends it. So once
+ * the pool has served a read, a background pass keeps every worker ready ahead of need:
+ * - an idle worker is sent one read of a card no entity has (an empty answer) once it has been idle
+ *   `keepWarmMs`, so its connection never idles out;
+ * - an idle worker is replaced before its token expires, so no read finds the token dead;
+ * - a slot whose worker died is given a fresh one, so the next burst finds every slot ready.
+ * Requests go to a ready idle worker first, then one still starting, then an empty slot.
  */
 
 import {type ChildProcess, spawn as nodeSpawn} from "node:child_process"
@@ -29,6 +34,7 @@ import {readFile, stat} from "node:fs/promises"
 import type {Readable, Writable} from "node:stream"
 import {type GeoCardRow, rowsFromGeoDbOutput} from "./card"
 import type {GeoDbCardConfig} from "./config"
+import {recordWorkerEnd, recordWorkerStart, type WorkerEndReason} from "./metrics"
 
 const HEX32 = /^[0-9a-f]{32}$/
 
@@ -167,8 +173,12 @@ const STDERR_TAIL = 300
 /** Retries on a fresh worker allowed per window; past it a dead worker's request just fails. */
 const MAX_RETRIES_PER_WINDOW = 8
 const RETRY_WINDOW_MS = 10_000
-/** Idle time after which the first worker is sent a keep-warm read (the server's idle bound is a minute). */
+/** Idle time after which a worker is sent a keep-warm read (the server's idle bound is a minute). */
 const KEEP_WARM_MS = 25_000
+/** geo-db's default `grant_ttl_s`, in ms: a worker's token expires this long after its handshake. */
+const GRANT_TTL_MS = 300_000
+/** How long before its token expires an idle worker is replaced. */
+const RECYCLE_MARGIN_MS = 60_000
 /**
  * An entity id nobody has, so the keep-warm read's card is empty. Not the all-zero id, which geo-db treats as
  * an unset field and may refuse, and a refusal ends the worker's session. A conforming id (version 4, variant 8).
@@ -201,6 +211,8 @@ type Slot = {
 	stderr: string
 	/** When the slot last finished a request (or became ready). */
 	activeAt: number
+	/** When the slot's worker became ready: its token expires `grantTtlMs` later. */
+	readyAt: number
 	/** The Space of the slot's last read, which the keep-warm read names. */
 	lastSpace: string | null
 }
@@ -212,10 +224,13 @@ export type PipeGeoDbClient = GeoDbCardClient & {
 
 export function createPipeGeoDbClient(
 	config: GeoDbCardConfig,
-	options: {spawn?: SpawnPipe; now?: () => number; keepWarmMs?: number} = {},
+	options: {spawn?: SpawnPipe; now?: () => number; keepWarmMs?: number; grantTtlMs?: number} = {},
 ): PipeGeoDbClient {
 	const spawn = options.spawn ?? defaultSpawn
 	const keepWarmMs = options.keepWarmMs ?? KEEP_WARM_MS
+	const grantTtlMs = options.grantTtlMs ?? (config.grantTtlS ? config.grantTtlS * 1000 : GRANT_TTL_MS)
+	// Replace an idle worker this old; a short lifetime (tests) keeps at least half of it.
+	const recycleAtMs = Math.max(grantTtlMs - RECYCLE_MARGIN_MS, grantTtlMs / 2)
 	const now = options.now ?? Date.now
 	const slots: Slot[] = Array.from({length: Math.max(1, config.poolSize)}, () => ({
 		child: null,
@@ -224,12 +239,15 @@ export function createPipeGeoDbClient(
 		request: null,
 		stderr: "",
 		activeAt: 0,
+		readyAt: 0,
 		lastSpace: null,
 	}))
 	const queue: Request[] = []
 	const maxQueue = slots.length * 64
 	let backoffUntil = 0
 	let retryTimes: number[] = []
+	/** The Space of the pool's last read, which a worker that has read nothing yet warms with. */
+	let lastSpace: string | null = null
 
 	/** Whether another retry fits the rate cap; counts it when it does. */
 	function retryBudget(): boolean {
@@ -245,7 +263,7 @@ export function createPipeGeoDbClient(
 	 * connection or token died, not the request) putting it back at the head of the queue for a fresh
 	 * worker, once.
 	 */
-	function reset(slot: Slot, failure: GeoDbError | null, retry = false) {
+	function reset(slot: Slot, failure: GeoDbError | null, retry = false, why: WorkerEndReason | null = null) {
 		const child = slot.child
 		const request = slot.request
 		const neverReady = !slot.ready
@@ -255,6 +273,7 @@ export function createPipeGeoDbClient(
 		slot.request = null
 		if (child) {
 			child.kill("SIGKILL")
+			if (why) recordWorkerEnd(why)
 		}
 		if (neverReady && child) backoffUntil = now() + START_BACKOFF_MS
 		if (request && failure) {
@@ -274,8 +293,9 @@ export function createPipeGeoDbClient(
 		else request.resolve(outcome)
 	}
 
-	function start(slot: Slot) {
+	function start(slot: Slot, why: "demand" | "ahead") {
 		let child: PipeChild
+		recordWorkerStart(why)
 		try {
 			child = spawn(config)
 		} catch (error) {
@@ -301,7 +321,7 @@ export function createPipeGeoDbClient(
 			if (!owns()) return
 			const detail = slot.stderr.trim() || what
 			// Exiting with a reply owed, on a worker that had started, is a dead connection.
-			reset(slot, new GeoDbError("client_failed", `geodb-client ${what}: ${detail}`.slice(0, 400)), true)
+			reset(slot, new GeoDbError("client_failed", `geodb-client ${what}: ${detail}`.slice(0, 400)), true, "exit")
 		}
 		child.on("exit", (code, signal) => gone(`exited (${String(signal ?? code)})`))
 		child.on("error", (error) => gone(`failed: ${String(error)}`))
@@ -315,11 +335,12 @@ export function createPipeGeoDbClient(
 			const first = slot.buffer.subarray(0, end).toString("utf8")
 			if (first !== "ready") {
 				const rest = slot.buffer.toString("utf8").slice(0, 300)
-				reset(slot, new GeoDbError("client_failed", `geodb-client did not start: ${rest}`))
+				reset(slot, new GeoDbError("client_failed", `geodb-client did not start: ${rest}`), false, "broken")
 				return
 			}
 			slot.ready = true
 			slot.activeAt = now()
+			slot.readyAt = slot.activeAt
 			slot.buffer = slot.buffer.subarray(end + 1)
 			if (slot.request) slot.child?.stdin.write(slot.request.line)
 		}
@@ -330,7 +351,7 @@ export function createPipeGeoDbClient(
 			const header = FRAME.exec(slot.buffer.subarray(0, end).toString("utf8"))
 			const request = slot.request
 			if (!header || !request) {
-				reset(slot, new GeoDbError("client_failed", "geodb-client broke its framing"))
+				reset(slot, new GeoDbError("client_failed", "geodb-client broke its framing"), false, "broken")
 				return
 			}
 			const size = Number(header[2])
@@ -340,7 +361,13 @@ export function createPipeGeoDbClient(
 			if (header[1] === "-") {
 				// A refusal ends the worker's session; the next request starts a fresh one. Only a refusal
 				// that names a dead connection or token is retried; the rest are the request's own.
-				reset(slot, new GeoDbError("client_failed", payload.slice(0, 300)), DEAD_SESSION.test(payload))
+				const dead = DEAD_SESSION.test(payload)
+				reset(
+					slot,
+					new GeoDbError("client_failed", payload.slice(0, 300)),
+					dead,
+					dead ? "dead_session" : "refusal",
+				)
 				return
 			}
 			slot.request = null
@@ -357,10 +384,23 @@ export function createPipeGeoDbClient(
 		}
 	}
 
+	/** The idle slot a request should take: a ready worker, else one still starting, else an empty slot. */
+	function idleSlot(): Slot | undefined {
+		let starting: Slot | undefined
+		let empty: Slot | undefined
+		for (const s of slots) {
+			if (s.request !== null) continue
+			if (s.child && s.ready) return s
+			if (s.child) starting ??= s
+			else empty ??= s
+		}
+		return starting ?? empty
+	}
+
 	/** Hand queued requests to idle slots. */
 	function pump() {
 		while (queue.length > 0) {
-			const slot = slots.find((s) => s.request === null)
+			const slot = idleSlot()
 			if (!slot) return
 			const request = queue.shift() as Request
 			assign(slot, request)
@@ -369,9 +409,12 @@ export function createPipeGeoDbClient(
 
 	function assign(slot: Slot, request: Request) {
 		slot.request = request
-		if (!request.keepWarm) slot.lastSpace = request.line.slice(0, request.line.indexOf("\t")).split(",")[0] ?? null
+		if (!request.keepWarm) {
+			slot.lastSpace = request.line.slice(0, request.line.indexOf("\t")).split(",")[0] ?? null
+			lastSpace = slot.lastSpace
+		}
 		request.slot = slot
-		if (!slot.child) start(slot)
+		if (!slot.child) start(slot, "demand")
 		else if (slot.ready) slot.child.stdin.write(request.line)
 	}
 
@@ -380,7 +423,7 @@ export function createPipeGeoDbClient(
 		if (queued >= 0) queue.splice(queued, 1)
 		const slot = request.slot
 		const failure = new GeoDbError("timeout", `geo-db read exceeded ${config.timeoutMs} ms`)
-		if (slot && slot.request === request) reset(slot, failure)
+		if (slot && slot.request === request) reset(slot, failure, false, "timeout")
 		else settle(request, failure)
 	}
 
@@ -400,7 +443,7 @@ export function createPipeGeoDbClient(
 				timer: setTimeout(() => onTimeout(request), config.timeoutMs),
 				slot: null,
 			}
-			const idle = slots.find((s) => s.request === null)
+			const idle = idleSlot()
 			if (idle) assign(idle, request)
 			else if (queue.length >= maxQueue) {
 				clearTimeout(request.timer)
@@ -409,26 +452,52 @@ export function createPipeGeoDbClient(
 		})
 	}
 
-	/** Keep the first ready worker's connection from idling out: one empty read once it has been idle long enough. */
-	function keepWarm() {
-		const slot = slots.find((s) => s.child !== null && s.ready)
-		if (!slot || slot.request !== null || slot.lastSpace === null || now() < backoffUntil) return
-		if (now() - slot.activeAt < keepWarmMs) return
+	/**
+	 * Keep every worker ready ahead of need, once the pool has served a read: warm an idle connection, replace
+	 * an idle worker before its token expires, and start a worker in a slot whose worker died. One start per
+	 * pass, so a pool whose workers keep dying grows back slowly rather than in a burst.
+	 */
+	function maintain() {
+		if (lastSpace === null || now() < backoffUntil) return
+		let started = false
+		for (const slot of slots) {
+			if (slot.request !== null) continue
+			if (slot.child === null) {
+				if (started) continue
+				started = true
+				start(slot, "ahead")
+				continue
+			}
+			if (!slot.ready) continue
+			if (now() - slot.readyAt >= recycleAtMs) {
+				if (started) continue
+				started = true
+				reset(slot, null, false, "recycled")
+				start(slot, "ahead")
+				continue
+			}
+			if (now() - slot.activeAt >= keepWarmMs) warm(slot, slot.lastSpace ?? lastSpace)
+		}
+	}
+
+	/** One read of a card no entity has down the slot's connection, so it does not idle out. */
+	function warm(slot: Slot, space: string) {
 		const request: Request = {
-			line: `${slot.lastSpace}\t${cardDocument(NO_ENTITY)}\n`,
+			line: `${space}\t${cardDocument(NO_ENTITY)}\n`,
 			entityId: NO_ENTITY,
 			names: false,
 			spaces: false,
 			resolve: () => {},
 			reject: () => {},
-			retried: false,
+			// No caller waits on it, so a dead worker under it is not worth a retry.
+			retried: true,
 			keepWarm: true,
 			timer: setTimeout(() => onTimeout(request), config.timeoutMs),
 			slot: null,
 		}
 		assign(slot, request)
 	}
-	const warmTimer = setInterval(keepWarm, Math.max(1, Math.floor(keepWarmMs / 5)))
+	const warmTimer = setInterval(maintain, Math.max(1, Math.floor(keepWarmMs / 5)))
 	warmTimer.unref()
 
 	return {
