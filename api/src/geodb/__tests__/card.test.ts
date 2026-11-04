@@ -70,6 +70,43 @@ describe("rowsFromGeoDbOutput", () => {
 	})
 })
 
+describe("rowsFromGeoDbOutput with names", () => {
+	const OTHER = "ffffffffffffffffffffffffffffffff"
+	// Columns: property, value, statement, entity; [claim property, claim value]; property name, target name; weight.
+	const plain = `${PROP}\tv\ts1\t${ENTITY}\tProp\\tName\tTarget\\nName\t1\n`
+
+	it("reads the two names cells before the weight, unescaped", () => {
+		expect(rowsFromGeoDbOutput(plain, ENTITY, {names: true})).toEqual([
+			{prop: PROP, raw: "v", propName: "Prop\tName", targetName: "Target\nName"},
+		])
+	})
+
+	it("reads `none` as no name", () => {
+		const out = `${PROP}\tv\ts1\t${ENTITY}\tnone\tnone\t1\n`
+		expect(rowsFromGeoDbOutput(out, ENTITY, {names: true})).toEqual([
+			{prop: PROP, raw: "v", propName: null, targetName: null},
+		])
+	})
+
+	it("skips the two claim columns when claims were asked", () => {
+		const out = `${PROP}\tv\ts1\t${ENTITY}\t${PROP}\tclaim\tP\tT\t1\n${PROP}\tw\ts2\t${ENTITY}\tnone\tnone\tnone\tT2\t1\n`
+		expect(rowsFromGeoDbOutput(out, ENTITY, {names: true, claims: true})).toEqual([
+			{prop: PROP, raw: "v", propName: "P", targetName: "T"},
+			{prop: PROP, raw: "w", propName: null, targetName: "T2"},
+		])
+	})
+
+	it("keeps only the entity's rows, and leaves the names absent from a row too short to hold them", () => {
+		const out = `${PROP}\tv\ts1\t${OTHER}\tP\tT\t1\n${PROP}\tshort\ts2\t${ENTITY}\t1\n`
+		expect(rowsFromGeoDbOutput(out, ENTITY, {names: true})).toEqual([{prop: PROP, raw: "short"}])
+	})
+
+	it("without the option, ignores the cells after the entity exactly as before", () => {
+		expect(rowsFromGeoDbOutput(plain, ENTITY)).toEqual([{prop: PROP, raw: "v"}])
+		expect(rowsFromGeoDbOutput(plain, ENTITY, {})).toEqual([{prop: PROP, raw: "v"}])
+	})
+})
+
 describe("diffCards", () => {
 	const pg = statementsFromPostgres([value({text: "x"}), value({integer: "7"})], [])
 

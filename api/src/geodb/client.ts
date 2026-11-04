@@ -22,14 +22,15 @@
 import {type ChildProcess, spawn as nodeSpawn} from "node:child_process"
 import {readFile, stat} from "node:fs/promises"
 import type {Readable, Writable} from "node:stream"
-import {rowsFromGeoDbOutput} from "./card"
+import {type GeoCardRow, rowsFromGeoDbOutput} from "./card"
 import type {GeoDbCardConfig} from "./config"
 
 const HEX32 = /^[0-9a-f]{32}$/
 
 /** Rows of one entity's card as geo-db answered them, in geo-db's id space. */
 export type GeoDbCardClient = {
-	readCard(args: {geoSpaceId: string; entityId: string}): Promise<{prop: string; raw: string}[]>
+	/** `names` also asks for the display names of each row's property and target (rows then carry them). */
+	readCard(args: {geoSpaceId: string; entityId: string; names?: boolean}): Promise<GeoCardRow[]>
 }
 
 export class GeoDbError extends Error {
@@ -43,8 +44,9 @@ export class GeoDbError extends Error {
 }
 
 /** The geoql document for one entity's card. Ids are 32 hex digits, so nothing needs escaping. */
-export function cardDocument(entityId: string): string {
-	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${entityId}" } } } }`
+export function cardDocument(entityId: string, options: {names?: boolean} = {}): string {
+	const names = options.names ? ", .names = true" : ""
+	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${entityId}"${names} } } } }`
 }
 
 /**
@@ -147,7 +149,8 @@ const FRAME = /^([+-])(\d{1,9})$/
 type Request = {
 	line: string
 	entityId: string
-	resolve: (rows: {prop: string; raw: string}[]) => void
+	names: boolean
+	resolve: (rows: GeoCardRow[]) => void
 	reject: (error: GeoDbError) => void
 	retried: boolean
 	timer: ReturnType<typeof setTimeout>
@@ -221,7 +224,7 @@ export function createPipeGeoDbClient(
 		pump()
 	}
 
-	function settle(request: Request, outcome: GeoDbError | {prop: string; raw: string}[]) {
+	function settle(request: Request, outcome: GeoDbError | GeoCardRow[]) {
 		clearTimeout(request.timer)
 		request.slot = null
 		if (outcome instanceof GeoDbError) request.reject(outcome)
@@ -298,7 +301,7 @@ export function createPipeGeoDbClient(
 			}
 			slot.request = null
 			try {
-				settle(request, rowsFromGeoDbOutput(payload, request.entityId))
+				settle(request, rowsFromGeoDbOutput(payload, request.entityId, {names: request.names}))
 			} catch (error) {
 				settle(request, new GeoDbError("client_failed", String(error)))
 			}
@@ -333,7 +336,7 @@ export function createPipeGeoDbClient(
 	}
 
 	return {
-		readCard({geoSpaceId, entityId}) {
+		readCard({geoSpaceId, entityId, names = false}) {
 			if (!HEX32.test(geoSpaceId) || !HEX32.test(entityId)) {
 				return Promise.reject(new GeoDbError("bad_request", "ids must be 32 hex digits"))
 			}
@@ -342,8 +345,9 @@ export function createPipeGeoDbClient(
 			}
 			return new Promise((resolve, reject) => {
 				const request: Request = {
-					line: `${geoSpaceId}\t${cardDocument(entityId)}\n`,
+					line: `${geoSpaceId}\t${cardDocument(entityId, {names})}\n`,
 					entityId,
+					names,
 					resolve,
 					reject,
 					retried: false,

@@ -127,18 +127,50 @@ export function unescapeText(s: string): string {
 	return s.replace(/\\(t|n|\\)/g, (_, c: string) => (c === "t" ? "\t" : c === "n" ? "\n" : "\\"))
 }
 
+/** A card row as geo-db answered it. The two names are present only when the read asked for them. */
+export type GeoCardRow = {
+	prop: string
+	raw: string
+	/** The property's display name; null where geo-db printed `none`; absent when names were not asked for. */
+	propName?: string | null
+	/** The value's target's display name (a reference value only); null for `none`; absent as `propName`. */
+	targetName?: string | null
+}
+
+export type CardOutputOptions = {
+	/** The read asked `.args.names = true`: two more cells follow the row's columns, before the weight. */
+	names?: boolean
+	/** The read asked `.args.claims = true`: two claim columns come before the names. */
+	claims?: boolean
+}
+
+/** A names cell: `none` is no name (or a target outside the Space), anything else the name as written. */
+const nameCell = (cell: string): string | null => (cell === "none" ? null : unescapeText(cell))
+
 /**
  * geodb-client `query` output for an entity card: one row a line, cells tab-separated, columns
- * (property, value, statement id, entity, weight). Keeps only the rows of the entity asked for
- * (a card query also returns the entities its backlinks name).
+ * (property, value, statement id, entity), then with `claims` the claim property and value, then with
+ * `names` the property's name and the target's name, and last the weight the client appends. Keeps only
+ * the rows of the entity asked for (a card query also returns the entities its backlinks name).
+ *
+ * Without options the answer is `{prop, raw}` rows exactly as before. A row too short to hold the names
+ * the options promise leaves both names absent, so a caller can tell "not answered" from "none".
  */
-export function rowsFromGeoDbOutput(output: string, entityId: string): {prop: string; raw: string}[] {
+export function rowsFromGeoDbOutput(output: string, entityId: string, options: CardOutputOptions = {}): GeoCardRow[] {
+	const nameAt = 4 + (options.claims ? 2 : 0)
 	return output
 		.split("\n")
 		.filter((line) => line !== "")
 		.map((line) => line.split("\t"))
 		.filter((cells) => cells[3] === entityId)
-		.map((cells) => ({prop: cells[0] ?? "", raw: unescapeText(cells[1] ?? "")}))
+		.map((cells) => {
+			const row: GeoCardRow = {prop: cells[0] ?? "", raw: unescapeText(cells[1] ?? "")}
+			if (options.names && cells.length >= nameAt + 3) {
+				row.propName = nameCell(cells[nameAt] ?? "none")
+				row.targetName = nameCell(cells[nameAt + 1] ?? "none")
+			}
+			return row
+		})
 }
 
 /**
@@ -158,10 +190,7 @@ const DERIVED_PROPERTY_IDS = [
 export const DERIVED_PROPERTIES: ReadonlySet<string> = new Set(DERIVED_PROPERTY_IDS.map(compact))
 
 /** Match Postgres statements against geo-db rows as multisets and return what is unmatched on each side. */
-export function diffCards(
-	postgres: {statements: CardStatement[]; skipped: number},
-	geo: {prop: string; raw: string}[],
-): CardDiff {
+export function diffCards(postgres: {statements: CardStatement[]; skipped: number}, geo: GeoCardRow[]): CardDiff {
 	// Derived statements are skipped, not compared: geo-db never holds them.
 	const comparable = postgres.statements.filter((s) => !DERIVED_PROPERTIES.has(s.prop))
 	const derived = postgres.statements.length - comparable.length

@@ -27,9 +27,16 @@
  *   - spaceIds: S must be listed when the card has any statement; the other spaces are not checkable.
  *   - the unfiltered allValuesList propertyIds in S must be found among the card's rows.
  *
- * What a card cannot settle stays uncompared, by reason (metrics.ts): other spaces' rows, updatedAt, names of
- * nested entities and types, property metadata, nested entity data, the unfiltered allRelationsList, the
- * co-root `relations` field. A `match` covers the compared parts only.
+ * The shadow asks geo-db for the card with `names` (geodb/card.ts), which adds the display names of each row's
+ * property and of a reference value's target, resolved in the request's Space. They settle `property { name }`,
+ * `type { name }`, `toEntity { name }`, `types { name }` and `fromEntity { name }` (the card entity's own name,
+ * judged as `name` is). PostGraphile took each of those names from any space and the spaces of a nested entity
+ * are not known, so a name PostGraphile lacks that geo-db has is a mismatch, and a different or missing geo-db
+ * name is inconclusive (cross_space).
+ *
+ * What a card cannot settle stays uncompared, by reason (metrics.ts): other spaces' rows, updatedAt, the name
+ * of a relation's own entity (`entity { name }`), property metadata beyond the name, nested entity data, the
+ * unfiltered allRelationsList, the co-root `relations` field. A `match` covers the compared parts only.
  */
 
 import {
@@ -45,6 +52,7 @@ import {
 	conformingId,
 	DERIVED_PROPERTIES,
 	diffCards,
+	type GeoCardRow,
 	isEmptyDiff,
 	type RelationRow,
 	statementsFromPostgres,
@@ -82,13 +90,17 @@ const VALUE_IGNORED = ["spaceId", "language", "unit", "point", "time", "schedule
 const RELATION_IGNORED = ["id", "spaceId", "entityId", "fromEntityId", "position", "verified", "toSpaceId"] as const
 
 /** A nested object in a row: which compared column its `id` carries, and what its other fields are worth. */
-type ObjectSpec = {idColumn: string | null; fields: Record<string, UncomparedReason | null>}
+type ObjectSpec = {idColumn: string | null; fields: Record<string, UncomparedReason | "name" | null>}
+
+/** The nested objects whose `name` the shadow compares (geo-db answers them as the card's names cells). */
+const NAMED_OBJECTS = ["property", "type", "toEntity", "fromEntity"] as const
+type NamedObject = (typeof NAMED_OBJECTS)[number]
 
 const PROPERTY_OBJECT: ObjectSpec = {
 	idColumn: "propertyId",
 	fields: {
 		id: null,
-		name: "property_info",
+		name: "name",
 		dataTypeId: "property_info",
 		dataTypeName: "property_info",
 		renderableTypeId: "property_info",
@@ -99,12 +111,12 @@ const PROPERTY_OBJECT: ObjectSpec = {
 	},
 }
 const RELATION_OBJECTS: Record<string, ObjectSpec> = {
-	type: {idColumn: "typeId", fields: {id: null, name: "nested_names", __typename: null}},
+	type: {idColumn: "typeId", fields: {id: null, name: "name", __typename: null}},
 	toEntity: {
 		idColumn: "toEntityId",
 		fields: {
 			id: null,
-			name: "nested_names",
+			name: "name",
 			description: "nested_entity",
 			types: "nested_entity",
 			valuesList: "nested_entity",
@@ -113,7 +125,7 @@ const RELATION_OBJECTS: Record<string, ObjectSpec> = {
 			__typename: null,
 		},
 	},
-	fromEntity: {idColumn: null, fields: {id: null, name: "nested_names", __typename: null}},
+	fromEntity: {idColumn: null, fields: {id: null, name: "name", __typename: null}},
 	entity: {idColumn: null, fields: {id: null, name: "nested_names", __typename: null}},
 }
 
@@ -125,6 +137,8 @@ type ListPlan = {
 	columns: Record<string, string>
 	/** Response key of `{id}` for a column selected as a nested object (`property { id }`), by column. */
 	nested: Record<string, string>
+	/** Response key path (`object\tname`) of each compared nested `name`, by object (property, type, toEntity, fromEntity). */
+	names: Partial<Record<NamedObject, string>>
 	/** For a connection: the response key of its `nodes`, and of `pageInfo` and its `hasNextPage`. */
 	nodesKey: string | null
 	hasNext: {pageInfo: string; field: string} | null
@@ -139,7 +153,7 @@ export type EntityPlan = {
 	name: string | null
 	description: string | null
 	spaceIds: string | null
-	types: {key: string; idKey: string | null} | null
+	types: {key: string; idKey: string | null; nameKey: string | null} | null
 	/** The unfiltered lists (every space): their response keys, and of the columns read. */
 	allValues: {key: string; first: number; spaceKey: string | null; propertyKey: string | null} | null
 	allRelations: {key: string; first: number; spaceKey: string | null} | null
@@ -212,14 +226,17 @@ function spaceFromFilter(filter: unknown): string {
 const isPlainField = (field: FieldNode) => !field.arguments?.length && !field.selectionSet
 
 /** The columns (and nested `{id}` objects) of a list's rows, with fragments inlined. */
+type PlannedColumns = {columns: Record<string, string>; nested: Record<string, string>; names: ListPlan["names"]}
+
 function planColumns(
 	set: SelectionSetNode,
 	fragments: Map<string, SelectionSetNode>,
 	spec: {columns: readonly string[]; objects: Record<string, ObjectSpec>; ignored: readonly string[]},
 	uncompared: Set<UncomparedReason>,
-): {columns: Record<string, string>; nested: Record<string, string>} {
+): PlannedColumns {
 	const columns: Record<string, string> = {}
 	const nested: Record<string, string> = {}
+	const names: PlannedColumns["names"] = {}
 	const seen = new Set<string>()
 	for (const child of fieldsOf(set, fragments)) {
 		const name = child.name.value
@@ -235,7 +252,13 @@ function planColumns(
 			for (const inner of fieldsOf(child.selectionSet, fragments)) {
 				if (!(inner.name.value in object.fields)) refuse("selection")
 				const reason = object.fields[inner.name.value]
-				if (reason) uncompared.add(reason)
+				if (reason === "name") {
+					// Compared where geo-db answers names (the card read asks for them); a plain field only.
+					if (!isPlainField(inner)) refuse("selection")
+					if ((NAMED_OBJECTS as readonly string[]).includes(name))
+						names[name as NamedObject] ??= `${key}\t${responseKeyOf(inner)}`
+					else uncompared.add("nested_names")
+				} else if (reason) uncompared.add(reason)
 				else if (inner.name.value === "id" && object.idColumn) {
 					if (!isPlainField(inner)) refuse("selection")
 					nested[object.idColumn] ??= `${key}\t${responseKeyOf(inner)}`
@@ -247,7 +270,7 @@ function planColumns(
 		if (spec.columns.includes(name)) columns[name] ??= key
 		else if (!spec.ignored.includes(name)) refuse("selection")
 	}
-	return {columns, nested}
+	return {columns, nested, names}
 }
 
 type PlannedList = {list: ListPlan; spaceId: string}
@@ -271,12 +294,17 @@ function planList(
 	if (!field.selectionSet) refuse("selection")
 	const listKey = responseKeyOf(field)
 	if (!connection) {
-		const {columns, nested} = planColumns(field.selectionSet as SelectionSetNode, fragments, spec, uncompared)
-		return {list: {key: listKey, first, columns, nested, nodesKey: null, hasNext: null}, spaceId}
+		const {columns, nested, names} = planColumns(
+			field.selectionSet as SelectionSetNode,
+			fragments,
+			spec,
+			uncompared,
+		)
+		return {list: {key: listKey, first, columns, nested, names, nodesKey: null, hasNext: null}, spaceId}
 	}
 	let nodesKey: string | null = null
 	let hasNext: ListPlan["hasNext"] = null
-	let rows: {columns: Record<string, string>; nested: Record<string, string>} | null = null
+	let rows: PlannedColumns | null = null
 	for (const child of fieldsOf(field.selectionSet as SelectionSetNode, fragments)) {
 		const name = child.name.value
 		if (name === "__typename") continue
@@ -294,7 +322,10 @@ function planList(
 		} else refuse("selection")
 	}
 	if (!nodesKey || !rows) return refuse("selection")
-	return {list: {key: listKey, first, columns: rows.columns, nested: rows.nested, nodesKey, hasNext}, spaceId}
+	return {
+		list: {key: listKey, first, columns: rows.columns, nested: rows.nested, names: rows.names, nodesKey, hasNext},
+		spaceId,
+	}
 }
 
 /** The unfiltered `valuesList`/`relationsList`: only `spaceId` (and for values `propertyId`) are read. */
@@ -404,14 +435,15 @@ export function analyzeEntityOperation(
 				uncompared.add("updated_at")
 			} else if (fieldName === "types" && !types && !field.arguments?.length && field.selectionSet) {
 				let idKey: string | null = null
+				let nameKey: string | null = null
 				for (const inner of fieldsOf(field.selectionSet, fragments)) {
 					if (!isPlainField(inner)) return {ok: false, reason: "selection"}
 					if (inner.name.value === "id") idKey ??= responseKeyOf(inner)
-					else if (inner.name.value === "name") uncompared.add("nested_names")
+					else if (inner.name.value === "name") nameKey ??= responseKeyOf(inner)
 					else if (inner.name.value !== "__typename") return {ok: false, reason: "selection"}
 				}
 				if (!idKey) return {ok: false, reason: "selection"}
-				types = {key, idKey}
+				types = {key, idKey, nameKey}
 			} else if (fieldName === "valuesList" && filtered && !values) {
 				values = planList(field, fragments, resolved, valueSpec, uncompared, false)
 			} else if (fieldName === "valuesList" && !filtered && !allValues) {
@@ -475,7 +507,18 @@ function read(node: Record<string, unknown>, list: ListPlan, column: string): un
 	return object && id ? asRecord(node[object])?.[id] : undefined
 }
 
+/** A nested `name` out of a row: its string, else null (an entity PostGraphile found no Name for). */
+function readName(node: Record<string, unknown>, path: string | undefined): string | null | undefined {
+	if (path === undefined) return undefined
+	const [object, name] = path.split("\t")
+	const v = object && name ? asRecord(node[object])?.[name] : undefined
+	return typeof v === "string" ? v : null
+}
+
 const orNull = <T>(v: unknown): T | null => (v === undefined || v === null ? null : (v as T))
+
+/** An entity a row names, as PostGraphile spelled its id, and the name PostGraphile gave it. */
+export type NamedRef = {id: string; name: string | null}
 
 export type PostgresCard = {
 	values: ValueRow[]
@@ -487,6 +530,10 @@ export type PostgresCard = {
 	description?: string | null
 	spaceIds?: string[]
 	types?: string[]
+	/** The names of `types`, in order, when `types { name }` was selected. */
+	typeNames?: (string | null)[]
+	/** The nested names the rows carried, by object, for the objects whose `name` was selected. */
+	nested?: {property?: NamedRef[]; type?: NamedRef[]; toEntity?: NamedRef[]; fromEntity?: (string | null)[]}
 	/** The unfiltered lists' rows, `null` when the list is absent, `truncated` when it filled its page. */
 	allValues?: {rows: {spaceId: string | null; propertyId: string | null}[]; truncated: boolean}
 	allRelations?: {rows: {spaceId: string | null}[]; truncated: boolean}
@@ -530,6 +577,11 @@ export function extractPostgresCard(body: unknown, plan: EntityPlan): PostgresCa
 	const valueList = listOf(plan.values)
 	const relationList = listOf(plan.relations)
 	if (!valueList || !relationList) return null
+	const nested: NonNullable<NonNullable<PostgresCard>["nested"]> = {}
+	if (plan.values.names.property) nested.property = []
+	if (plan.relations.names.type) nested.type = []
+	if (plan.relations.names.toEntity) nested.toEntity = []
+	if (plan.relations.names.fromEntity) nested.fromEntity = []
 	const values: ValueRow[] = []
 	for (const raw of valueList.nodes) {
 		const node = asRecord(raw)
@@ -546,6 +598,7 @@ export function extractPostgresCard(body: unknown, plan: EntityPlan): PostgresCa
 			datetime: orNull(read(node, plan.values, "datetime")),
 			date: orNull(read(node, plan.values, "date")),
 		})
+		nested.property?.push({id: propertyId, name: readName(node, plan.values.names.property) ?? null})
 	}
 	const relations: RelationRow[] = []
 	for (const raw of relationList.nodes) {
@@ -555,6 +608,9 @@ export function extractPostgresCard(body: unknown, plan: EntityPlan): PostgresCa
 		const toEntityId = read(node, plan.relations, "toEntityId")
 		if (typeof typeId !== "string" || typeof toEntityId !== "string") return null
 		relations.push({type_id: typeId, to_entity_id: toEntityId, to_space_id: null})
+		nested.type?.push({id: typeId, name: readName(node, plan.relations.names.type) ?? null})
+		nested.toEntity?.push({id: toEntityId, name: readName(node, plan.relations.names.toEntity) ?? null})
+		nested.fromEntity?.push(readName(node, plan.relations.names.fromEntity) ?? null)
 	}
 	const card: NonNullable<PostgresCard> = {
 		values,
@@ -578,13 +634,18 @@ export function extractPostgresCard(body: unknown, plan: EntityPlan): PostgresCa
 		const nodes = entityObject[plan.types.key]
 		if (!Array.isArray(nodes)) return null
 		const ids: string[] = []
+		const typeNames: (string | null)[] = []
 		for (const node of nodes) {
 			const id = plan.types.idKey ? asRecord(node)?.[plan.types.idKey] : undefined
 			if (typeof id !== "string") return null
 			ids.push(id)
+			const typeName = plan.types.nameKey ? asRecord(node)?.[plan.types.nameKey] : undefined
+			typeNames.push(typeof typeName === "string" ? typeName : null)
 		}
 		card.types = ids
+		if (plan.types.nameKey) card.typeNames = typeNames
 	}
+	if (Object.keys(nested).length > 0) card.nested = nested
 	if (plan.allValues) {
 		const nodes = entityObject[plan.allValues.key]
 		if (!Array.isArray(nodes)) return null
@@ -612,12 +673,26 @@ export function extractPostgresCard(body: unknown, plan: EntityPlan): PostgresCa
 export type CheckResult = "ok" | "mismatch" | "inconclusive"
 export type DerivedChecks = {
 	/** Per derived field: did geo-db's card agree? Only fields the query selected appear. */
-	checks: Partial<Record<"name" | "description" | "types" | "spaceIds" | "allValuesList", CheckResult>>
+	checks: Partial<
+		Record<
+			| "name"
+			| "description"
+			| "types"
+			| "spaceIds"
+			| "allValuesList"
+			| "propertyNames"
+			| "typeNames"
+			| "toEntityNames"
+			| "typesNames"
+			| "fromEntityNames",
+			CheckResult
+		>
+	>
 	/** Reasons found while comparing (beyond the ones the query alone implies). */
 	uncompared: UncomparedReason[]
 }
 
-type GeoRow = {prop: string; raw: string}
+type GeoRow = GeoCardRow
 
 const sameSpace = (a: string | null | undefined, b: string) => a !== null && a !== undefined && normalizeUuid(a) === b
 
@@ -639,18 +714,27 @@ export function compareDerived(plan: EntityPlan, card: NonNullable<PostgresCard>
 	}
 	const onlyThisSpace = known !== null && [...known].every((s) => s === space)
 
+	/**
+	 * One name or description PostGraphile gave, against the values geo-db holds for the same thing. PostGraphile
+	 * may have taken it from any space, so a value geo-db lacks is a mismatch only where the thing lives in this
+	 * space alone (`single`); a name PostGraphile has none for is a mismatch whenever geo-db holds one.
+	 */
+	const judge = (value: string | null, geoValues: string[], single: boolean): CheckResult => {
+		if (value === null) return geoValues.length === 0 ? "ok" : "mismatch"
+		if (geoValues.includes(value)) return "ok"
+		if (single) return "mismatch"
+		// Not this space's value, and other spaces could have supplied it: not decidable from the card.
+		uncompared.add("cross_space")
+		return "inconclusive"
+	}
 	const textField = (field: "name" | "description", property: string) => {
 		const value = card[field]
 		if (value === undefined) return
-		const geoValues = geo.filter((row) => row.prop === property).map((row) => row.raw)
-		if (value === null) checks[field] = geoValues.length === 0 ? "ok" : "mismatch"
-		else if (geoValues.includes(value)) checks[field] = "ok"
-		else if (onlyThisSpace) checks[field] = "mismatch"
-		else {
-			// Not this space's value, and other spaces could have supplied it: not decidable from the card.
-			checks[field] = "inconclusive"
-			uncompared.add("cross_space")
-		}
+		checks[field] = judge(
+			value,
+			geo.filter((row) => row.prop === property).map((row) => row.raw),
+			onlyThisSpace,
+		)
 	}
 	textField("name", NAME_PROPERTY)
 	textField("description", DESCRIPTION_PROPERTY)
@@ -665,6 +749,56 @@ export function compareDerived(plan: EntityPlan, card: NonNullable<PostgresCard>
 			checks.types = "inconclusive"
 			uncompared.add("cross_space")
 		} else checks.types = "ok"
+	}
+
+	// Nested names. geo-db prints, with each row, the property's name and the target's name (null for `none`),
+	// resolved in the request's Space; PostGraphile gave each entity a name from any space, so these are judged
+	// like `name` above except that a nested entity's spaces are not known (`single` is false): a name
+	// PostGraphile lacks that geo-db has is a mismatch, a different or missing one is inconclusive.
+	const nestedAsked = card.nested !== undefined || card.typeNames !== undefined
+	if (nestedAsked && geo.some((row) => row.propName === undefined)) {
+		// The reader was not asked for names (or an older geo-db did not send them): nothing to compare.
+		uncompared.add("nested_names")
+	} else if (nestedAsked) {
+		const propNames = new Map<string, string | null>()
+		const targetNames = new Map<string, string | null>()
+		const typeTargetNames = new Map<string, string | null>()
+		for (const row of geo) {
+			if (!propNames.has(row.prop)) propNames.set(row.prop, row.propName ?? null)
+			if (!targetNames.has(row.raw)) targetNames.set(row.raw, row.targetName ?? null)
+			if (row.prop === TYPES_PROPERTY && !typeTargetNames.has(row.raw))
+				typeTargetNames.set(row.raw, row.targetName ?? null)
+		}
+		const against = (refs: NamedRef[], known: Map<string, string | null>): CheckResult[] =>
+			refs.flatMap((ref) => {
+				const id = conformingId("entity", ref.id)
+				// An id geo-db has no row for is a statement difference, which the card diff already reports.
+				if (!known.has(id)) return []
+				const name = known.get(id) ?? null
+				return [judge(ref.name, name === null ? [] : [name], false)]
+			})
+		const combine = (results: CheckResult[]): CheckResult | undefined =>
+			results.length === 0
+				? undefined
+				: results.includes("mismatch")
+					? "mismatch"
+					: results.includes("inconclusive")
+						? "inconclusive"
+						: "ok"
+		const set = (key: keyof DerivedChecks["checks"], result: CheckResult | undefined) => {
+			if (result !== undefined) checks[key] = result
+		}
+		if (card.nested?.property) set("propertyNames", combine(against(card.nested.property, propNames)))
+		if (card.nested?.type) set("typeNames", combine(against(card.nested.type, propNames)))
+		if (card.nested?.toEntity) set("toEntityNames", combine(against(card.nested.toEntity, targetNames)))
+		if (card.types && card.typeNames) {
+			const refs = card.types.map((id, at) => ({id, name: card.typeNames?.[at] ?? null}))
+			set("typesNames", combine(against(refs, typeTargetNames)))
+		}
+		if (card.nested?.fromEntity) {
+			const own = geo.filter((row) => row.prop === NAME_PROPERTY).map((row) => row.raw)
+			set("fromEntityNames", combine(card.nested.fromEntity.map((name) => judge(name, own, onlyThisSpace))))
+		}
 	}
 
 	if (card.spaceIds !== undefined) {
@@ -740,7 +874,7 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 			const started = performance.now()
 			let rows: Awaited<ReturnType<typeof askGeoDb>>
 			try {
-				rows = await askGeoDb(deps, conformingId("entity", plan.entityId), plan.spaceId)
+				rows = await askGeoDb(deps, conformingId("entity", plan.entityId), plan.spaceId, {names: true})
 			} catch (error) {
 				recordGatewayShadow(ENTITY_FIELD, "failed")
 				deps.log.warn("gateway entity shadow read failed", {

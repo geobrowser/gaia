@@ -246,7 +246,7 @@ describe("entity shadow", () => {
 		const {shadow, readCard, log} = setup()
 		await run(shadow)
 		expect(counts()).toEqual({match: 1})
-		expect(readCard).toHaveBeenCalledWith({geoSpaceId: GEO_SPACE, entityId: ENTITY_HEX})
+		expect(readCard).toHaveBeenCalledWith({geoSpaceId: GEO_SPACE, entityId: ENTITY_HEX, names: true})
 		expect(log.warn).not.toHaveBeenCalled()
 	})
 
