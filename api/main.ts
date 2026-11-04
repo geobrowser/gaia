@@ -4,6 +4,7 @@ import {cors} from "hono/cors"
 import {openAPISpecs} from "hono-openapi"
 import {MIN_INTERNAL_TOKEN_LENGTH, mountInternalRoutes} from "./src/forYou/router"
 import {readGatewayConfig} from "./src/gateway/config"
+import {createEntityResolver} from "./src/gateway/entityServe"
 import {createEntityShadow, ENTITY_FIELD} from "./src/gateway/entityShadow"
 import {createGateway, fieldModeOf} from "./src/gateway/gateway"
 import {createPointReadShadows, POINT_READ_FIELDS} from "./src/gateway/pointReadShadows"
@@ -156,13 +157,17 @@ const gatewayShadowFields = new Set(
 	),
 )
 const gatewayShadowsAny = gatewayShadowFields.size > 0
+// Fields served from geo-db (mode "on"). Only `entity` has a resolver; it answers one exact shape and falls back to
+// PostGraphile for everything else (gaia_api_gateway_serve_fallback_total). Without a reverse id map it declines
+// every operation before reading geo-db.
+const gatewayServeEntity = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, ENTITY_FIELD) === "on"
 
 // Mount the opt-in geo-db entity-card route (GEODB_ENTITY_CARDS=on|shadow; off by default)
 const geoDbCardConfig = readGeoDbCardConfig(process.env)
 // One geodb-client pipe pool and space map serve the card route and the gateway's entity shadow, so the
 // pool's worker count, queue bound and timeout cap the two together.
 const sharedGeoDb =
-	geoDbCardConfig.mode !== "off" || gatewayShadowsAny
+	geoDbCardConfig.mode !== "off" || gatewayShadowsAny || gatewayServeEntity
 		? {geoDb: createPipeGeoDbClient(geoDbCardConfig), geoSpaceOf: createSpaceMap(geoDbCardConfig.spaceMapPath)}
 		: null
 if (geoDbCardConfig.mode !== "off") {
@@ -198,13 +203,17 @@ log.info("IPFS routes enabled")
 
 app.get("/", swaggerUI({url: "/openapi"}))
 
-// Opt-in GraphQL gateway in front of PostGraphile (GRAPHQL_GATEWAY=on; off by default). It serves nothing from
-// geo-db yet, so on or off every operation is answered by PostGraphile; with entity=shadow (or entities, relation,
+// Opt-in GraphQL gateway in front of PostGraphile (GRAPHQL_GATEWAY=on; off by default). A field in mode "on" is
+// offered to its geo-db resolver first (see gateway/entityServe.ts); everything else is answered by PostGraphile; with entity=shadow (or entities, relation,
 // relations, search, searchConnection) a sample of those operations is also compared against geo-db in the background.
 // Wide reads (an entity read in every one of its spaces) share one budget of about one geo-db card read a second.
 const wideReadBudget = createReadBudget({perSecond: 1, burst: 5})
 const graphqlHandler = createGateway({
 	config: gatewayConfig,
+	resolvers:
+		gatewayServeEntity && sharedGeoDb
+			? new Map([[ENTITY_FIELD, createEntityResolver({...sharedGeoDb})]])
+			: undefined,
 	shadows:
 		gatewayShadowsAny && sharedGeoDb
 			? new Map([

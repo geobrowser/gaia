@@ -1,8 +1,9 @@
 import {parse} from "graphql"
-import {describe, expect, it, vi} from "vitest"
+import {beforeEach, describe, expect, it, vi} from "vitest"
 import {classifyDocument, classifyRequest} from "../classify"
-import {parseFieldModes, parseGatewayMode, readGatewayConfig} from "../config"
-import {createGateway, routeOperation} from "../gateway"
+import {parseFieldModes, parseGatewayMode, parseServeTimeoutMs, readGatewayConfig} from "../config"
+import {createGateway, type FieldResolver, routeOperation} from "../gateway"
+import {__resetServeMetricsForTests, renderServeMetrics} from "../serveMetrics"
 
 const json = (body: unknown) =>
 	new Request("http://api/graphql", {
@@ -154,5 +155,116 @@ describe("createGateway", () => {
 		const delegate = vi.fn(async () => new Response("pg", {status: 400}))
 		const gateway = createGateway({config: readGatewayConfig({GRAPHQL_GATEWAY: "on"}), delegate})
 		expect((await gateway(json({query: "{ nope ("}), {})).status).toBe(400)
+	})
+})
+
+describe("serving a field from geo-db", () => {
+	const query = {query: "query Q { entity(id: 1) { id } }", operationName: "Q"}
+	const served = {entity: {id: "e1"}}
+	const config = (fields: string, timeout?: string) =>
+		readGatewayConfig({
+			GRAPHQL_GATEWAY: "on",
+			GRAPHQL_GATEWAY_FIELDS: fields,
+			GRAPHQL_GATEWAY_SERVE_TIMEOUT_MS: timeout,
+		})
+	const metric = (name: string, labels: string) =>
+		Number(
+			renderServeMetrics()
+				.split("\n")
+				.find((line) => line.startsWith(`${name}{${labels}}`))
+				?.split(" ")[1],
+		)
+
+	beforeEach(() => __resetServeMetricsForTests())
+
+	it("reads the serve timeout, defaulting out-of-range values", () => {
+		expect(parseServeTimeoutMs(undefined)).toBe(250)
+		expect(parseServeTimeoutMs("80")).toBe(80)
+		for (const bad of ["0", "-5", "1.5", "nope", "60000"]) expect(parseServeTimeoutMs(bad)).toBe(250)
+	})
+
+	it("routes a lone root field in mode on with a resolver, and nothing else", () => {
+		const resolvers = new Set(["entity", "relations"])
+		const q = {operationName: "Q", operationType: "query" as const, rootFields: ["entity"]}
+		expect(routeOperation(config("entity=on"), resolvers, q)).toEqual({
+			kind: "serve",
+			field: "entity",
+			reason: "field_on",
+		})
+		expect(routeOperation(config("entity=shadow"), resolvers, q).kind).toBe("delegate")
+		expect(
+			routeOperation(config("entity=on,relations=on"), resolvers, {...q, rootFields: ["entity", "relations"]}),
+		).toEqual({kind: "delegate", reason: "not_served"})
+	})
+
+	it("answers from the resolver without calling PostGraphile", async () => {
+		const delegate = vi.fn(async () => new Response("pg"))
+		const resolver = vi.fn(async () => ({ok: true as const, data: served}))
+		const gateway = createGateway({
+			config: config("entity=on"),
+			delegate,
+			resolvers: new Map([["entity", resolver]]),
+		})
+		const response = await gateway(json(query), {})
+		expect(delegate).not.toHaveBeenCalled()
+		expect(response.headers.get("x-gaia-source")).toBe("geodb")
+		expect(response.headers.get("content-type")).toContain("application/json")
+		expect(await response.json()).toEqual({data: served})
+		expect(metric("gaia_api_gateway_served_total", 'field="entity",source="geodb"')).toBe(1)
+		expect(metric("gaia_api_gateway_serve_seconds_count", 'field="entity",outcome="served"')).toBe(1)
+	})
+
+	it("falls back to PostGraphile on a decline, a throw and a timeout, counting each reason", async () => {
+		const delegate = vi.fn(async () => new Response("pg"))
+		const run = async (resolver: FieldResolver, timeout?: string) =>
+			createGateway({config: config("entity=on", timeout), delegate, resolvers: new Map([["entity", resolver]])})(
+				json(query),
+				{},
+			)
+		expect(await (await run(async () => ({ok: false, reason: "selection"}))).text()).toBe("pg")
+		expect(
+			await (
+				await run(async () => {
+					throw Object.assign(new Error("x"), {reason: "overloaded"})
+				})
+			).text(),
+		).toBe("pg")
+		expect(
+			await (
+				await run(async () => {
+					throw new Error("boom")
+				})
+			).text(),
+		).toBe("pg")
+		let aborted = false
+		const slow: FieldResolver = ({signal}) =>
+			new Promise((resolve) => {
+				signal.addEventListener("abort", () => {
+					aborted = true
+				})
+				setTimeout(() => resolve({ok: true, data: served}), 200)
+			})
+		expect(await (await run(slow, "5")).text()).toBe("pg")
+		expect(aborted).toBe(true)
+		expect(await (await run(async () => ({ok: false, reason: "not_a_reason"}))).text()).toBe("pg")
+		expect(delegate).toHaveBeenCalledTimes(5)
+		expect(metric("gaia_api_gateway_serve_fallback_total", 'field="entity",reason="selection"')).toBe(1)
+		expect(metric("gaia_api_gateway_serve_fallback_total", 'field="entity",reason="overloaded"')).toBe(1)
+		expect(metric("gaia_api_gateway_serve_fallback_total", 'field="entity",reason="timeout"')).toBe(1)
+		expect(metric("gaia_api_gateway_serve_fallback_total", 'field="entity",reason="error"')).toBe(2)
+		expect(metric("gaia_api_gateway_served_total", 'field="entity",source="postgres"')).toBe(5)
+	})
+
+	it("exports nothing and never calls a resolver while no field is on", async () => {
+		const delegate = vi.fn(async () => new Response("pg"))
+		const resolver = vi.fn(async () => ({ok: true as const, data: served}))
+		const gateway = createGateway({
+			config: config("entity=shadow"),
+			delegate,
+			resolvers: new Map([["entity", resolver]]),
+		})
+		expect(await (await gateway(json(query), {})).text()).toBe("pg")
+		expect(resolver).not.toHaveBeenCalled()
+		expect(renderServeMetrics()).toBe("")
 	})
 })
