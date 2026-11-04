@@ -147,6 +147,93 @@ lines(() => {
 		client.close()
 	})
 
+	it.each([
+		["TransportClosed", "error: TransportClosed\\n"],
+		["CapabilityTokenExpired", "refused: DefiniteRefusal CapabilityTokenExpired"],
+	])("replaces a worker that answers %s and retries the request once on a fresh one", async (_name, text) => {
+		const {client, starts} = fakePipe(
+			`
+process.stdout.write("ready\\n")
+lines((line) => {
+	if (process.argv[2] === "1") {
+		frame("-", "${text}")
+		process.exit(1)
+	}
+	const entity = /id = "([0-9a-f]{32})"/.exec(line)[1]
+	frame("+", ["${PROP}", "fresh", "stmt", entity, "1"].join("\t") + "\\n")
+})
+`,
+			{poolSize: 1},
+		)
+		expect(await client.readCard({geoSpaceId: SPACE, entityId: ENTITY})).toEqual([{prop: PROP, raw: "fresh"}])
+		expect(starts()).toBe(2)
+		expect(await client.readCard({geoSpaceId: SPACE, entityId: ENTITY})).toEqual([{prop: PROP, raw: "fresh"}])
+		expect(starts()).toBe(2)
+		client.close()
+	})
+
+	it("retries a request whose started worker exits without answering", async () => {
+		const {client, starts} = fakePipe(
+			`
+process.stdout.write("ready\\n")
+lines((line) => {
+	if (process.argv[2] === "1") process.exit(1)
+	const entity = /id = "([0-9a-f]{32})"/.exec(line)[1]
+	frame("+", ["${PROP}", "fresh", "stmt", entity, "1"].join("\t") + "\\n")
+})
+`,
+			{poolSize: 1},
+		)
+		expect(await client.readCard({geoSpaceId: SPACE, entityId: ENTITY})).toEqual([{prop: PROP, raw: "fresh"}])
+		expect(starts()).toBe(2)
+		client.close()
+	})
+
+	it("does not retry a real refusal", async () => {
+		const {client, starts} = fakePipe(
+			`
+process.stdout.write("ready\\n")
+lines(() => {
+	frame("-", "refused: DefiniteRefusal NotFoundOrRestricted")
+	process.exit(1)
+})
+`,
+			{poolSize: 1},
+		)
+		await expect(client.readCard({geoSpaceId: SPACE, entityId: ENTITY})).rejects.toMatchObject({
+			reason: "client_failed",
+			message: expect.stringContaining("NotFoundOrRestricted"),
+		})
+		expect(starts()).toBe(1)
+		client.close()
+	})
+
+	it("retries a request only once, and caps retries when every worker keeps dying", async () => {
+		const {client, starts} = fakePipe(
+			`
+process.stdout.write("ready\\n")
+lines(() => {
+	frame("-", "error: TransportClosed")
+	process.exit(1)
+})
+`,
+			{poolSize: 1},
+		)
+		await expect(client.readCard({geoSpaceId: SPACE, entityId: ENTITY})).rejects.toMatchObject({
+			reason: "client_failed",
+			message: expect.stringContaining("TransportClosed"),
+		})
+		expect(starts()).toBe(2) // the original worker and one retry, not a loop
+		for (let i = 0; i < 29; i++) {
+			await expect(client.readCard({geoSpaceId: SPACE, entityId: ENTITY})).rejects.toMatchObject({
+				reason: "client_failed",
+			})
+		}
+		// 30 requests: one worker each, plus at most 8 retries in the window (uncapped would be 60).
+		expect(starts()).toBeLessThanOrEqual(30 + 8)
+		client.close()
+	})
+
 	it("rejects the request a worker dies holding", async () => {
 		const {client} = fakePipe(`
 process.stdout.write("ready\\n")
