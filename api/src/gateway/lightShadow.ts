@@ -83,8 +83,56 @@ type LightList = {
 	spaceKey: string | null
 }
 
+const noted = new Set<string>()
+const MAX_NOTED = 200
+
+/**
+ * Logs, once per process for each (field, reason, operation name), the shape of an operation that could not be
+ * shadowed: its root arguments and the top-level fields it selects. No values, so nothing private is logged. It
+ * is how the real query mix behind `gaia_api_gateway_shadow_unsupported_total` is ranked. At most MAX_NOTED lines.
+ */
+export function noteUnsupported(
+	deps: Pick<EntityShadowDeps, "log">,
+	field: string,
+	reason: string,
+	document: DocumentNode,
+	operationName: string | null,
+): void {
+	try {
+		const key = `${field}\t${reason}\t${operationName ?? ""}`
+		if (noted.has(key) || noted.size >= MAX_NOTED) return
+		noted.add(key)
+		const operation = document.definitions.find(
+			(d) => d.kind === "OperationDefinition" && (!operationName || d.name?.value === operationName),
+		)
+		if (!operation || operation.kind !== "OperationDefinition") return
+		const roots = operation.selectionSet.selections.flatMap((selection) =>
+			selection.kind === "Field"
+				? [
+						{
+							field: selection.name.value,
+							args: (selection.arguments ?? []).map((a) => a.name.value),
+							filterKeys: (selection.arguments ?? []).flatMap((a) =>
+								a.name.value === "filter" && a.value.kind === "ObjectValue"
+									? a.value.fields.map((f) => f.name.value)
+									: [],
+							),
+							selects: (selection.selectionSet?.selections ?? []).flatMap((c) =>
+								c.kind === "Field" ? [c.name.value] : [],
+							),
+						},
+					]
+				: [],
+		)
+		deps.log.info("gateway shadow unsupported", {field, reason, operationName, roots})
+	} catch {
+		// Observability only.
+	}
+}
+
 /** Soundness of an `entities` filter, for the forms geo-db can check on one entity's card. */
-export type FilterClaim = {kind: "type"; typeId: string} | {kind: "edge"; typeId: string; toEntityId: string}
+/** `type`: the entity holds a Type statement for at least one of `typeIds`. */
+export type FilterClaim = {kind: "type"; typeIds: string[]} | {kind: "edge"; typeId: string; toEntityId: string}
 
 export type LightPlan = {
 	card: EntityCardPlan
@@ -99,8 +147,8 @@ export type LightEntitiesPlan = LightPlan & {
 	claims: FilterClaim[]
 	/** The ids the filter asked for (`id: {in}`), if that was the filter. */
 	ids: string[] | null
-	/** `entities(spaceId:)`: the entity must hold a statement in that space. */
-	spaceId: string | null
+	/** `entities(spaceId:)` or `entities(spaceIds: {in})`: the entity must hold a statement in one of these spaces. */
+	spaceIds: string[] | null
 }
 
 export type LightAnalysis<P> = {ok: true; plan: P} | {ok: false; reason: UnsupportedReason}
@@ -180,7 +228,8 @@ function planLightEntity(
 	const card = planEntitySelection(set, fragments, resolved, uncompared, (field) => {
 		lists.push(planLightList(field, fragments, resolved, uncompared))
 	})
-	if (lists.length === 0) refuse("selection")
+	// No lists: the derived fields (name, description, types) of the entity's own spaces are all that is judged.
+	if (lists.length === 0 && !(card.spaceIds && (card.name || card.description || card.types))) refuse("selection")
 	// Rows with no space and no `spaceIds` leave nothing to say which cards to read.
 	if (!card.spaceIds && !lists.some((list) => list.spaceKey)) refuse("no_space")
 	uncompared.add("partial_values")
@@ -229,7 +278,7 @@ function readFilter(filter: unknown, uncompared: Set<UncomparedReason>): Pick<Li
 	for (const [key, clause] of Object.entries(object)) {
 		const c = asRecord(clause)
 		if (key === "typeIds" && c && typeof c.anyEqualTo === "string" && isValidUuid(c.anyEqualTo)) {
-			claims.push({kind: "type", typeId: normalizeUuid(c.anyEqualTo)})
+			claims.push({kind: "type", typeIds: [normalizeUuid(c.anyEqualTo)]})
 		} else if (
 			key === "id" &&
 			c &&
@@ -256,7 +305,52 @@ function readFilter(filter: unknown, uncompared: Set<UncomparedReason>): Pick<Li
 	return {claims, ids}
 }
 
-/** `entities(filter, first, offset, spaceId)` with the light selection, compared on a sample of what it returns. */
+const ENTITIES_ARGS = [
+	"filter",
+	"first",
+	"offset",
+	"spaceId",
+	"spaceIds",
+	"typeId",
+	"typeIds",
+	"systemTypeId",
+	"systemTypeIds",
+]
+
+/** `{in: [<uuid> ..]}` and nothing else (the shape of the `spaceIds`/`typeIds` arguments); the ids, distinct. */
+function inList(value: unknown): string[] {
+	const clause = asRecord(value)
+	if (!clause || Object.keys(clause).length !== 1 || !Array.isArray(clause.in) || clause.in.length === 0)
+		return refuse("args")
+	return [...new Set(clause.in.map((id) => uuidArg(id)))]
+}
+
+/**
+ * The root arguments that narrow `entities` by Space or Type (gaia's entitySpaceFilterPlugin): `spaceId`,
+ * `spaceIds: {in}` (the entity lives in one of them), `typeId`, `typeIds: {in}` (it has one of them as a Type).
+ * Space narrowing is returned, type narrowing becomes a claim; the system-type forms are only uncompared.
+ * Null arguments are absent.
+ */
+function readRootArgs(
+	args: Record<string, unknown>,
+	claims: FilterClaim[],
+	uncompared: Set<UncomparedReason>,
+): string[] | null {
+	const given = (name: string) => args[name] !== undefined && args[name] !== null
+	let spaces: string[] | null = null
+	if (given("spaceId")) spaces = [uuidArg(args.spaceId)]
+	if (given("spaceIds")) {
+		const listed = inList(args.spaceIds)
+		spaces = spaces ? spaces.filter((id) => listed.includes(id)) : listed
+		if (spaces.length === 0) return refuse("args")
+	}
+	if (given("typeId")) claims.push({kind: "type", typeIds: [uuidArg(args.typeId)]})
+	if (given("typeIds")) claims.push({kind: "type", typeIds: inList(args.typeIds)})
+	if (given("systemTypeId") || given("systemTypeIds")) uncompared.add("filter_completeness")
+	return spaces
+}
+
+/** `entities(filter, first, offset, spaceId, spaceIds, typeId, typeIds)` with the light selection, compared on a sample of what it returns. */
 export function analyzeLightEntities(
 	document: DocumentNode,
 	operationName: string | null,
@@ -268,12 +362,12 @@ export function analyzeLightEntities(
 		if (roots.length !== 1 || !root || root.name.value !== "entities") return {ok: false, reason: "not_single_root"}
 		if (!root.selectionSet) return {ok: false, reason: "selection"}
 		const args = argsOf(root, resolved)
-		for (const arg of Object.keys(args)) if (!["filter", "first", "offset", "spaceId"].includes(arg)) refuse("args")
+		for (const arg of Object.keys(args)) if (!ENTITIES_ARGS.includes(arg)) refuse("args")
 		for (const arg of ["first", "offset"])
 			if (args[arg] !== undefined && args[arg] !== null && !Number.isInteger(args[arg])) refuse("args")
 		const uncompared = new Set<UncomparedReason>()
 		const {claims, ids} = readFilter(args.filter, uncompared)
-		const spaceId = args.spaceId === undefined || args.spaceId === null ? null : uuidArg(args.spaceId)
+		const spaceIds = readRootArgs(args, claims, uncompared)
 		const {card, lists} = planLightEntity(root.selectionSet, fragments, resolved, uncompared)
 		if (!card.idKey) return {ok: false, reason: "selection"}
 		uncompared.add("sampled_rows")
@@ -286,7 +380,7 @@ export function analyzeLightEntities(
 				lists,
 				claims,
 				ids,
-				spaceId,
+				spaceIds,
 				uncompared: [...uncompared],
 			},
 		}
@@ -403,10 +497,10 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 }
 
 /** The spaces to read: the entity's own, else the spaces its rows name. */
-function lightSpaces(light: LightCard, extra: string | null): string[] | null {
+function lightSpaces(light: LightCard, extra: string[] | null): string[] | null {
 	const spaces = new Set<string>(light.card.spaceIds ?? [])
 	if (!light.card.spaceIds) for (const s of [...light.valueSpaces, ...light.relationSpaces]) if (s) spaces.add(s)
-	if (extra) spaces.add(extra)
+	for (const s of extra ?? []) spaces.add(s)
 	return spaces.size > 0 ? [...spaces] : null
 }
 
@@ -422,9 +516,9 @@ export async function checkLight(
 	light: LightCard,
 	entityId: string,
 	label: string,
-	options: {claims?: FilterClaim[]; spaceId?: string | null} = {},
+	options: {claims?: FilterClaim[]; spaceIds?: string[] | null} = {},
 ): Promise<LightCheck> {
-	const spaces = lightSpaces(light, options.spaceId ?? null)
+	const spaces = lightSpaces(light, options.spaceIds ?? null)
 	if (!spaces) return {result: "unsupported", reason: "no_space"}
 	const read = await readWide(deps, entityId, spaces, label)
 	if (!read.ok) return read.result === "failed" ? {result: "failed"} : {result: "unsupported", reason: read.reason}
@@ -467,12 +561,17 @@ export async function checkLight(
 	// An `entities` filter's promises, on this entity's own cards.
 	const unmet: FilterClaim[] = []
 	for (const claim of options.claims ?? []) {
-		const type = conformingId("entity", claim.typeId)
-		const wanted = claim.kind === "type" ? TYPES_PROPERTY : type
-		const target = conformingId("entity", claim.kind === "type" ? claim.typeId : claim.toEntityId)
-		if (!read.rows.some((row) => row.prop === wanted && row.raw === target)) unmet.push(claim)
+		const wanted = claim.kind === "type" ? TYPES_PROPERTY : conformingId("entity", claim.typeId)
+		const targets = new Set(
+			claim.kind === "type"
+				? claim.typeIds.map((id) => conformingId("entity", id))
+				: [conformingId("entity", claim.toEntityId)],
+		)
+		if (!read.rows.some((row) => row.prop === wanted && targets.has(row.raw))) unmet.push(claim)
 	}
-	const outsideSpace = options.spaceId ? !(read.bySpace.get(options.spaceId)?.length ?? 0) : false
+	const outsideSpace = options.spaceIds?.length
+		? !options.spaceIds.some((space) => (read.bySpace.get(space)?.length ?? 0) > 0)
+		: false
 	const bad = missing.length > 0 || wrong.length > 0 || unmet.length > 0 || outsideSpace
 	return {
 		result: bad ? "mismatch" : "match",
@@ -547,7 +646,7 @@ export async function runLight(
 	for (const {id, node} of entities) {
 		const light = lightCardFromEntity(node, plan)
 		if (!light) return {result: "skip"}
-		const options = plan.kind === "entities" ? {claims: plan.claims, spaceId: plan.spaceId} : {}
+		const options = plan.kind === "entities" ? {claims: plan.claims, spaceIds: plan.spaceIds} : {}
 		checks.push({id, check: await checkLight(deps, plan, light, id, label, options)})
 	}
 	const mismatched = checks.filter((c) => c.check.result === "mismatch")

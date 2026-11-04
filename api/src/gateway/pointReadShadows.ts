@@ -47,7 +47,7 @@ import {
 	Unsupported,
 } from "./entityShadow"
 import type {FieldShadow} from "./gateway"
-import {analyzeLightEntities, runLight} from "./lightShadow"
+import {analyzeLightEntities, noteUnsupported, runLight} from "./lightShadow"
 import {
 	activateGatewayMetrics,
 	recordGatewayShadow,
@@ -101,8 +101,8 @@ function rootArgs(field: FieldNode, variables: Args): Args {
 	return out
 }
 
-/** `{id: {in: [<uuid> ..]}}` and nothing else; the ids, normalized and distinct. */
-function idsFromFilter(filter: unknown): string[] {
+/** `{id: {in: [<uuid> ..]}}` and nothing else; the ids, normalized and distinct. `limit`: most ids accepted. */
+function idsFromFilter(filter: unknown, limit = MAX_BATCH_IDS): string[] {
 	const object = asRecord(filter)
 	if (!object || Object.keys(object).length !== 1 || !("id" in object)) return refuse("filter")
 	const clause = asRecord(object.id)
@@ -110,8 +110,16 @@ function idsFromFilter(filter: unknown): string[] {
 	const ids = clause.in.map((id) => (typeof id === "string" && isValidUuid(id) ? normalizeUuid(id) : refuse("args")))
 	const distinct = [...new Set(ids)]
 	if (distinct.length === 0) return refuse("filter")
-	if (distinct.length > MAX_BATCH_IDS) return refuse("batch_size")
+	if (distinct.length > limit) return refuse("batch_size")
 	return distinct
+}
+
+/** `count` of `items`, evenly spread from first to last. */
+export function spread<T>(items: T[], count: number): T[] {
+	if (items.length <= count) return items
+	const picks = new Set<number>()
+	for (let i = 0; i < count; i++) picks.add(Math.floor((i * (items.length - 1)) / (count - 1)))
+	return [...picks].map((at) => items[at] as T)
 }
 
 /** `first` alone beside `filter`; it must not cut the id list short. */
@@ -238,7 +246,9 @@ export function analyzePointRead(
 			const relation = finishRelationPlan(planRelation(root.selectionSet, fragments, card))
 			return {ok: true, plan: {field, key: keyOf(root), id, relation}}
 		}
-		const ids = idsFromFilter(args.filter)
+		// A longer `entities` id list is compared on an even spread of MAX_BATCH_IDS of its ids; the other fields
+		// (relations) keep the cap, as a longer answer is not read at all.
+		const ids = idsFromFilter(args.filter, field === ENTITIES_FIELD ? Number.POSITIVE_INFINITY : MAX_BATCH_IDS)
 		checkListArgs(args, ids)
 		if (field === RELATIONS_FIELD) {
 			const relation = finishRelationPlan(planRelation(root.selectionSet, fragments, card))
@@ -248,7 +258,9 @@ export function analyzePointRead(
 		const cardPlan = planEntitySelection(root.selectionSet, fragments, resolved, uncompared)
 		// Each answer is matched to its requested id by the id the node carries.
 		if (!cardPlan.idKey) return {ok: false, reason: "selection"}
-		return {ok: true, plan: {field, key: keyOf(root), ids, card: cardPlan, uncompared: [...uncompared]}}
+		const compared = ids.length > MAX_BATCH_IDS ? spread(ids, MAX_BATCH_IDS) : ids
+		if (compared !== ids) uncompared.add("sampled_rows")
+		return {ok: true, plan: {field, key: keyOf(root), ids: compared, card: cardPlan, uncompared: [...uncompared]}}
 	} catch (error) {
 		if (error instanceof Unsupported) return {ok: false, reason: error.reason}
 		return {ok: false, reason: "selection"}
@@ -421,8 +433,12 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 					})
 					return
 				}
+				// The card analysis' args/filter/batch_size only say "not an id list"; the light form's reason is the news.
+				const generic = ["args", "filter", "batch_size"].includes(analysis.reason)
+				const reason = generic && light && !light.ok ? light.reason : analysis.reason
 				recordGatewayShadow(field, "unsupported_selection")
-				recordGatewayUnsupported(field, analysis.reason)
+				recordGatewayUnsupported(field, reason)
+				noteUnsupported(deps, field, reason, document, classification.operationName)
 				return
 			}
 			const {plan} = analysis
