@@ -6,6 +6,7 @@ import {
 	diffCards,
 	isEmptyDiff,
 	MEMBERSHIP_PROPERTIES,
+	pointNorm,
 	rowsFromGeoDbOutput,
 	statementsFromPostgres,
 	type ValueRow,
@@ -47,7 +48,7 @@ describe("statementsFromPostgres", () => {
 				value({boolean: true}),
 				value({datetime: "2024-05-01T10:00:00.5Z"}),
 				value({date: "1996-02-14Z"}),
-				value({}), // nothing set (a point or bytes row): unmappable
+				value({}), // nothing set (a bytes row): unmappable
 				value({text: "a", integer: "1"}), // ambiguous: unmappable
 			],
 			[{type_id: PROP, to_entity_id: ENTITY, to_space_id: null}],
@@ -177,6 +178,22 @@ describe("diffCards derived properties", () => {
 		const ids = [...block.matchAll(/"([0-9a-f-]{36})"/g)].map((m) => (m[1] as string).replaceAll("-", ""))
 		expect(ids.length).toBeGreaterThan(0)
 		expect(new Set(ids)).toEqual(new Set(DERIVED_PROPERTIES))
+	})
+})
+
+describe("points", () => {
+	it("maps the kg-indexer lat,lon form to geo-db's lon, lat form", () => {
+		expect(pointNorm("52.402833333333,23.808333333333")).toBe("23.808333333, 52.402833333")
+		expect(pointNorm("-33.5,151.25,12.5")).toBe("151.25, -33.5, 12.5")
+		expect(pointNorm("1e-12,0")).toBe("0, 0")
+		expect(pointNorm("nope")).toBeNull()
+	})
+
+	it("matches a Postgres point against the geo-db text row", () => {
+		const {statements, skipped} = statementsFromPostgres([value({point: "52.402833333333,23.808333333333"})], [])
+		const diff = diffCards({statements, skipped}, [{prop: PROP, raw: "23.808333333, 52.402833333"}])
+		expect(diff.onlyPostgres).toEqual([])
+		expect(diff.onlyGeoDb).toEqual([])
 	})
 })
 
