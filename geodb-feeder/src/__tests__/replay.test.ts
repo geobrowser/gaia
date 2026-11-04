@@ -31,6 +31,7 @@ describe("replay guards", () => {
 
 	it("reads the mapped spaces from the published map", () => {
 		expect(mappedSpaces(JSON.stringify({[S1]: {geo: "g"}, [S2]: {}}))).toEqual(new Set([S1]))
+		expect(mappedSpaces(JSON.stringify({[S1]: {geo: "g", loaded: false}, [S2]: {geo: "h"}}))).toEqual(new Set([S2]))
 	})
 })
 

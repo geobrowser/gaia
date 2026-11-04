@@ -8,7 +8,7 @@
  *   resumes at `intentsDone`.
  * - `spaces.json`: gaia Space -> geo-db Space (`geo` is null while a founding is in flight).
  */
-import {appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, renameSync, writeSync} from "node:fs"
+import {appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, writeSync} from "node:fs"
 import type {TranslateContext} from "./translate.js"
 
 export type SpaceRecord = {geo: string | null; nonce: string; keyed: boolean}
@@ -174,11 +174,38 @@ export class Overlay implements TranslateContext {
 	}
 }
 
-/** The file `GEODB_SPACE_MAP_PATH` names in the api: `{"<gaia space>": {"geo": "<geo-db space>"}}`. */
-export function renderSpaceMap(spaces: Record<string, SpaceRecord>): string {
-	const out: Record<string, {geo: string}> = {}
+/**
+ * The Spaces whose history the backfill has loaded in full: each has its entity list on the backfill volume and
+ * a cursor at (or past) its end. Null when the backfill has never run here, which means "no Space is known to be
+ * unloaded" (a feeder that only follows live edits has nothing to say). A Space the backfill never planned, such
+ * as one the membership backfill founded empty, is not in the set until a backfill covers it.
+ */
+export function backfilledSpaces(dir: string): Set<string> | null {
+	const cursorPath = `${dir}/backfill/cursor.json`
+	if (!existsSync(cursorPath)) return null
+	const cursor = JSON.parse(readFileSync(cursorPath, "utf8")) as {done?: Record<string, number>}
+	const done = cursor.done ?? {}
+	const loaded = new Set<string>()
+	for (const name of readdirSync(`${dir}/backfill`)) {
+		const match = /^entities-(.+)\.txt$/.exec(name)
+		if (!match?.[1]) continue
+		let count = 0
+		eachLine(`${dir}/backfill/${name}`, () => void count++)
+		if ((done[match[1]] ?? 0) >= count) loaded.add(match[1])
+	}
+	return loaded
+}
+
+/**
+ * The file `GEODB_SPACE_MAP_PATH` names in the api: `{"<gaia space>": {"geo": "<geo-db space>"}}`. With `loaded`
+ * (see `backfilledSpaces`) a founded Space outside it is written `"loaded": false`, which the api reads as "geo-db
+ * has nothing to compare there" rather than as a gap; without it every Space is loaded, as before.
+ */
+export function renderSpaceMap(spaces: Record<string, SpaceRecord>, loaded: ReadonlySet<string> | null = null): string {
+	const out: Record<string, {geo: string; loaded?: false}> = {}
 	for (const [gaia, rec] of Object.entries(spaces).sort(([a], [b]) => a.localeCompare(b))) {
-		if (rec.geo) out[gaia] = {geo: rec.geo}
+		if (!rec.geo) continue
+		out[gaia] = loaded && !loaded.has(gaia) ? {geo: rec.geo, loaded: false} : {geo: rec.geo}
 	}
 	return `${JSON.stringify(out, null, 1)}\n`
 }

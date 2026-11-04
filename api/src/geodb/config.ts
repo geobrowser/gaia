@@ -23,6 +23,12 @@ export type GeoDbCardConfig = {
 	timeoutMs: number
 	/** Long-lived `geodb-client pipe` workers, each one connection and one request at a time. */
 	poolSize: number
+	/**
+	 * Read an entity's card across several Spaces in one `geodb-client pipe` line (`<space>,<space>\t<geoql>`).
+	 * Needs a geodb-client built from geo-db 353ab26313 or later; an older one refuses the line and loses its
+	 * worker, so this is off until the image is bumped. GEODB_MULTI_SPACE_READS=on.
+	 */
+	multiSpaceReads?: boolean
 }
 
 const DEFAULT_TIMEOUT_MS = 500
@@ -44,6 +50,7 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		bindingPath: env.GEODB_BINDING_PATH ?? "",
 		spaceMapPath: env.GEODB_SPACE_MAP_PATH ?? "",
 		timeoutMs: Number.isFinite(timeout) && timeout > 0 ? timeout : DEFAULT_TIMEOUT_MS,
+		multiSpaceReads: env.GEODB_MULTI_SPACE_READS?.trim().toLowerCase() === "on",
 		poolSize: Number.isFinite(pool) && pool > 0 ? Math.min(pool, MAX_POOL_SIZE) : DEFAULT_POOL_SIZE,
 	}
 }

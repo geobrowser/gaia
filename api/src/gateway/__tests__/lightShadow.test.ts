@@ -36,15 +36,15 @@ const DESCRIPTION = conformingId("entity", "9b1f76ff-9711-404c-861e-59dc3fa7d037
 const TYPES = conformingId("entity", "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1")
 
 const cell = (v: string) => v.replaceAll("\\", "\\\\").replaceAll("\t", "\\t").replaceAll("\n", "\\n")
-const nameOf = (n: string | null | undefined) => (typeof n === "string" ? cell(n) : "none")
+const nameOf = (n: string | null | undefined) => (typeof n === "string" ? cell(n) : "-")
 
 /** The rows of `entity` (in the given relation spaces) as geodb-client prints a card with names. */
 function geoOutput(entity: Entity, options: {relSpace?: (rel: Rel) => boolean; values?: boolean} = {}): string {
 	const rows: string[] = []
 	let n = 0
 	if (options.values !== false) {
-		rows.push(`${NAME}\t${cell(entity.name)}\tsn\t${HEX}\tnone\tnone\t1`)
-		rows.push(`${DESCRIPTION}\t${cell(entity.description)}\tsd\t${HEX}\tnone\tnone\t1`)
+		rows.push(`${NAME}\t${cell(entity.name)}\tsn\t${HEX}\t-\t-\t1`)
+		rows.push(`${DESCRIPTION}\t${cell(entity.description)}\tsd\t${HEX}\t-\t-\t1`)
 	}
 	if (options.values !== false)
 		for (const v of entity.values.nodes) {
@@ -60,7 +60,7 @@ function geoOutput(entity: Entity, options: {relSpace?: (rel: Rel) => boolean; v
 			})
 			if (!key) throw new Error("not mappable")
 			rows.push(
-				`${conformingId("entity", v.property.id)}\t${cell(key.norm)}\ts${n++}\t${HEX}\t${nameOf(v.property.name)}\tnone\t1`,
+				`${conformingId("entity", v.property.id)}\t${cell(key.norm)}\ts${n++}\t${HEX}\t${nameOf(v.property.name)}\t-\t1`,
 			)
 		}
 	for (const r of [...entity.lightRels.nodes, ...entity.heavyRels.nodes]) {
@@ -78,16 +78,37 @@ const askOf = (outputs: Record<string, string>) =>
 		rowsFromGeoDbOutput(outputs[geoSpaceId] ?? "", entityId, {names}),
 	)
 
-function setup(outputs: Record<string, string>, budget?: ReturnType<typeof createReadBudget>) {
+/** One multi-space pipe line's answer: each Space's rows with the statement cell prefixed `<space>:`. */
+const askSpacesOf = (outputs: Record<string, string>) =>
+	vi.fn(async ({geoSpaceIds, entityId, names}: {geoSpaceIds: string[]; entityId: string; names?: boolean}) => {
+		const text = geoSpaceIds
+			.flatMap((geo) =>
+				(outputs[geo] ?? "")
+					.split("\n")
+					.filter(Boolean)
+					.map((line) =>
+						line
+							.split("\t")
+							.map((c, i) => (i === 2 ? `${geo}:${c}` : c))
+							.join("\t"),
+					),
+			)
+			.join("\n")
+		return rowsFromGeoDbOutput(`${text}\n`, entityId, {names, spaces: true})
+	})
+
+function setup(outputs: Record<string, string>, budget?: ReturnType<typeof createReadBudget>, multiSpace = false) {
 	const log = {info: vi.fn(), warn: vi.fn()}
 	const readCard = askOf(outputs)
+	const readCardSpaces = askSpacesOf(outputs)
 	const deps = {
-		geoDb: {readCard},
+		multiSpace,
+		geoDb: {readCard, readCardSpaces},
 		geoSpaceOf: async (space: string) => (space === SPACE_D ? null : geoSpace(space)),
 		log,
 		budget,
 	}
-	return {log, readCard, entity: createEntityShadow(deps), points: createPointReadShadows(deps)}
+	return {log, readCard, readCardSpaces, entity: createEntityShadow(deps), points: createPointReadShadows(deps)}
 }
 
 const call = (shadow: (c: never) => Promise<void>, query: string, variables: Record<string, unknown>, body: unknown) =>
@@ -137,7 +158,7 @@ describe("the light entity selection (news app)", () => {
 	})
 
 	it("does not count rows only geo-db holds (the lists are filtered and cut)", async () => {
-		const extra = `${conformingId("entity", "7ed45f2b-c48b-419e-8e46-64d5ff680b0d")}\tabc\tsx\t${HEX}\tnone\tnone\t1\n`
+		const extra = `${conformingId("entity", "7ed45f2b-c48b-419e-8e46-64d5ff680b0d")}\tabc\tsx\t${HEX}\t-\t-\t1\n`
 		await runEntity(ENTITY, {[geoSpace(SPACE_A)]: geoOutput(ENTITY) + extra})
 		expect(results()).toEqual({match: 1})
 	})
@@ -192,6 +213,43 @@ describe("the light entity selection (news app)", () => {
 		})
 		expect(results()).toEqual({match: 1})
 		expect(s.readCard).toHaveBeenCalledTimes(2)
+	})
+
+	it("reads a wide card in one line when multi-space reads are on: one read, one budget unit, same verdict", async () => {
+		const two = clone(ENTITY)
+		two.spaceIds = [SPACE_A, SPACE_B]
+		const moved = two.lightRels.nodes[0] as Rel
+		moved.spaceId = SPACE_B
+		const outputs = {
+			[geoSpace(SPACE_A)]: geoOutput(two, {relSpace: (r) => r !== moved}),
+			[geoSpace(SPACE_B)]: geoOutput(two, {relSpace: (r) => r === moved, values: false}),
+		}
+		let now = 0
+		const budget = createReadBudget({perSecond: 1, burst: 1, now: () => now})
+		const s = setup(outputs, budget, true)
+		await call(s.entity as never, FIXTURE.request.query, {}, {data: {entity: two}})
+		expect(results()).toEqual({match: 1})
+		expect(s.readCard).not.toHaveBeenCalled()
+		expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
+		expect(s.readCardSpaces.mock.calls[0]?.[0].geoSpaceIds).toEqual([geoSpace(SPACE_A), geoSpace(SPACE_B)])
+		// The whole burst was one unit, so a second wide read is throttled, not a third.
+		await call(s.entity as never, FIXTURE.request.query, {}, {data: {entity: two}})
+		expect(unsupported()).toEqual({throttled: 1})
+		// A wrong row is still caught: B's card lacks the relation.
+		now += 1000
+		const lacking = setup({...outputs, [geoSpace(SPACE_B)]: ""}, budget, true)
+		await call(lacking.entity as never, FIXTURE.request.query, {}, {data: {entity: two}})
+		expect(results()).toEqual({match: 1, mismatch: 1, unsupported_selection: 1})
+	})
+
+	it("sends nothing when one of the spaces is not loaded, even in one-line mode", async () => {
+		const unloaded = clone(ENTITY)
+		unloaded.spaceIds = [SPACE_A, SPACE_D]
+		const s = setup({[geoSpace(SPACE_A)]: geoOutput(ENTITY)}, undefined, true)
+		await call(s.entity as never, FIXTURE.request.query, {}, {data: {entity: unloaded}})
+		expect(unsupported()).toEqual({unmapped_space: 1})
+		expect(s.readCardSpaces).not.toHaveBeenCalled()
+		expect(s.readCard).not.toHaveBeenCalled()
 	})
 
 	it("counts an entity in too many spaces, an unloaded space and an empty budget as unsupported", async () => {
@@ -258,8 +316,8 @@ describe("the card selection with no space filter", () => {
 	it("is planned (every space) when the space variable is null, and reads the entity's spaces", async () => {
 		const s = setup({
 			[geoSpace(SPACE_A)]:
-				`${NAME}\tN\ts1\t${HEX}\tnone\tnone\t1\n${TYPES}\t${conformingId("entity", "7ed45f2bc48b419e8e4664d5ff680b0d")}\ts2\t${HEX}\tnone\tnone\t1\n`,
-			[geoSpace(SPACE_B)]: `${DESCRIPTION}\tD\ts3\t${HEX}\tnone\tnone\t1\n`,
+				`${NAME}\tN\ts1\t${HEX}\t-\t-\t1\n${TYPES}\t${conformingId("entity", "7ed45f2bc48b419e8e4664d5ff680b0d")}\ts2\t${HEX}\t-\t-\t1\n`,
+			[geoSpace(SPACE_B)]: `${DESCRIPTION}\tD\ts3\t${HEX}\t-\t-\t1\n`,
 		})
 		const body = {
 			data: {
@@ -340,8 +398,7 @@ describe("entities with the light selection", () => {
 		const claimed = `{typeIds: {anyEqualTo: "${typeId}"}}`
 		const withType = (e: Entity) =>
 			// geo-db holds the Types statement; PostGraphile's `types` is not selected in this query.
-			geoOutput(e).replaceAll(HEX, e.id) +
-			`${TYPES}\t${conformingId("entity", typeId)}\tt\t${e.id}\tnone\tnone\t1\n`
+			geoOutput(e).replaceAll(HEX, e.id) + `${TYPES}\t${conformingId("entity", typeId)}\tt\t${e.id}\t-\t-\t1\n`
 		const s = setup({[geoSpace(SPACE_A)]: entities.map(withType).join("")})
 		await call(s.points.get("entities") as never, filtered(claimed), {}, {data: {entities}})
 		expect(results()).toEqual({match: 1})

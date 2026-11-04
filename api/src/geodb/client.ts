@@ -31,7 +31,16 @@ const HEX32 = /^[0-9a-f]{32}$/
 export type GeoDbCardClient = {
 	/** `names` also asks for the display names of each row's property and target (rows then carry them). */
 	readCard(args: {geoSpaceId: string; entityId: string; names?: boolean}): Promise<GeoCardRow[]>
+	/**
+	 * The card across several Spaces in one read (`pipe` line `<space>,<space>\t<geoql>`): the rows of every
+	 * Space, each carrying its `space`. A Space the node does not hold refuses the whole read, so the caller
+	 * names only Spaces it knows geo-db holds. Absent on a client that cannot do it.
+	 */
+	readCardSpaces?(args: {geoSpaceIds: string[]; entityId: string; names?: boolean}): Promise<GeoCardRow[]>
 }
+
+/** Most Spaces one multi-Space line may name (geo-db's vector bound). */
+export const MAX_LINE_SPACES = 1024
 
 export class GeoDbError extends Error {
 	constructor(
@@ -50,9 +59,14 @@ export function cardDocument(entityId: string, options: {names?: boolean} = {}):
 }
 
 /**
- * Parse a space map file: `{"<gaia space id>": {"geo": "<geo-db space id>"}}`. Every key and `geo`
- * must be 32 hex digits (a dashed uuid is accepted and compacted); any other entry makes the whole
- * file refused, so a damaged map falls back to Postgres rather than naming a wrong Space.
+ * Parse a space map file: `{"<gaia space id>": {"geo": "<geo-db space id>", "loaded"?: false}}`. Every key
+ * and `geo` must be 32 hex digits (a dashed uuid is accepted and compacted); any other entry makes the
+ * whole file refused, so a damaged map falls back to Postgres rather than naming a wrong Space.
+ *
+ * `loaded: false` marks a Space geo-db has founded but whose history has not been backfilled: it holds
+ * nothing (or only live edits), so reading it would only report a gap. Such an entry is left out of the
+ * map, which makes the Space "not loaded" everywhere (`geoSpaceOf` answers null). An absent field means
+ * loaded, so a map from an older feeder behaves as before.
  */
 export function parseSpaceMap(text: string): Map<string, string> {
 	const raw: unknown = JSON.parse(text)
@@ -64,6 +78,7 @@ export function parseSpaceMap(text: string): Map<string, string> {
 			.replaceAll("-", "")
 			.toLowerCase()
 		if (!HEX32.test(gaia) || !HEX32.test(geo)) throw new Error(`space map entry ${key} is not a pair of space ids`)
+		if ((entry as {loaded?: unknown} | null)?.loaded === false) continue
 		map.set(gaia, geo)
 	}
 	return map
@@ -155,6 +170,8 @@ type Request = {
 	line: string
 	entityId: string
 	names: boolean
+	/** The line named several Spaces, so each row's statement cell carries its Space. */
+	spaces: boolean
 	resolve: (rows: GeoCardRow[]) => void
 	reject: (error: GeoDbError) => void
 	retried: boolean
@@ -306,7 +323,10 @@ export function createPipeGeoDbClient(
 			}
 			slot.request = null
 			try {
-				settle(request, rowsFromGeoDbOutput(payload, request.entityId, {names: request.names}))
+				settle(
+					request,
+					rowsFromGeoDbOutput(payload, request.entityId, {names: request.names, spaces: request.spaces}),
+				)
 			} catch (error) {
 				settle(request, new GeoDbError("client_failed", String(error)))
 			}
@@ -340,32 +360,47 @@ export function createPipeGeoDbClient(
 		else settle(request, failure)
 	}
 
+	function submit(line: string, entityId: string, names: boolean, spaces: boolean): Promise<GeoCardRow[]> {
+		if (now() < backoffUntil) {
+			return Promise.reject(new GeoDbError("client_failed", "geodb-client is not starting; backing off"))
+		}
+		return new Promise((resolve, reject) => {
+			const request: Request = {
+				line,
+				entityId,
+				names,
+				spaces,
+				resolve,
+				reject,
+				retried: false,
+				timer: setTimeout(() => onTimeout(request), config.timeoutMs),
+				slot: null,
+			}
+			const idle = slots.find((s) => s.request === null)
+			if (idle) assign(idle, request)
+			else if (queue.length >= maxQueue) {
+				clearTimeout(request.timer)
+				reject(new GeoDbError("overloaded", `${queue.length} geo-db reads already waiting`))
+			} else queue.push(request)
+		})
+	}
+
 	return {
 		readCard({geoSpaceId, entityId, names = false}) {
 			if (!HEX32.test(geoSpaceId) || !HEX32.test(entityId)) {
 				return Promise.reject(new GeoDbError("bad_request", "ids must be 32 hex digits"))
 			}
-			if (now() < backoffUntil) {
-				return Promise.reject(new GeoDbError("client_failed", "geodb-client is not starting; backing off"))
-			}
-			return new Promise((resolve, reject) => {
-				const request: Request = {
-					line: `${geoSpaceId}\t${cardDocument(entityId, {names})}\n`,
-					entityId,
-					names,
-					resolve,
-					reject,
-					retried: false,
-					timer: setTimeout(() => onTimeout(request), config.timeoutMs),
-					slot: null,
-				}
-				const idle = slots.find((s) => s.request === null)
-				if (idle) assign(idle, request)
-				else if (queue.length >= maxQueue) {
-					clearTimeout(request.timer)
-					reject(new GeoDbError("overloaded", `${queue.length} geo-db reads already waiting`))
-				} else queue.push(request)
-			})
+			return submit(`${geoSpaceId}\t${cardDocument(entityId, {names})}\n`, entityId, names, false)
+		},
+		readCardSpaces({geoSpaceIds, entityId, names = false}) {
+			if (!HEX32.test(entityId) || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
+				return Promise.reject(new GeoDbError("bad_request", "one entity id and 1 to 1024 space ids"))
+			if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
+				return Promise.reject(new GeoDbError("bad_request", "space ids must be distinct 32 hex digits"))
+			// One Space prints a bare statement id, several print `<space>:<statement>`: only a list of two or
+			// more is the multi-Space form.
+			const spaces = geoSpaceIds.length > 1
+			return submit(`${geoSpaceIds.join(",")}\t${cardDocument(entityId, {names})}\n`, entityId, names, spaces)
 		},
 		close() {
 			for (const slot of slots) reset(slot, new GeoDbError("client_failed", "client closed"))

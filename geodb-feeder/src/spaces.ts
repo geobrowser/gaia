@@ -3,7 +3,7 @@ import {log} from "./log.js"
 import {nonceOf} from "./ids.js"
 import {classify, type GeoDb} from "./geodb.js"
 import type {Metrics} from "./metrics.js"
-import {type Store, type SpaceRecord, renderSpaceMap} from "./state.js"
+import {type Store, type SpaceRecord, backfilledSpaces, renderSpaceMap} from "./state.js"
 
 export type SpaceDeps = {
 	db: Pick<GeoDb, "waitReady" | "found">
@@ -73,7 +73,7 @@ export async function ensureSpace(deps: SpaceDeps, gaiaSpace: string): Promise<S
 	}
 	store.saveSpaces()
 	deps.metrics.spaces.set({}, Object.values(store.spaces).filter((s) => s.geo).length)
-	deps.publish(renderSpaceMap(store.spaces))
+	deps.publish(renderSpaceMap(store.spaces, backfilledSpaces(store.dir)))
 	log("info", "founded space", {gaiaSpace, geoSpace: record.geo})
 	return record as SpaceRecord & {geo: string}
 }

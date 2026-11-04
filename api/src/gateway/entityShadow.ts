@@ -59,7 +59,7 @@ import {
 	type ValueRow,
 } from "../geodb/card"
 import {GeoDbError} from "../geodb/client"
-import {askGeoDb, type CardDeps, type CardLogger} from "../geodb/service"
+import {askGeoDb, askGeoDbSpaces, type CardDeps, type CardLogger} from "../geodb/service"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import type {FieldShadow} from "./gateway"
 import {analyzeLightEntity, type LightOutcome, runLight} from "./lightShadow"
@@ -948,6 +948,11 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	log: CardLogger
 	/** Caps the geo-db reads of the wide (several-space) comparisons; absent means no cap. */
 	budget?: ReadBudget
+	/**
+	 * Read the cards of a wide comparison in one pipe line across all its Spaces (one read, one budget unit)
+	 * instead of one read a Space. Needs a geodb-client from geo-db 353ab26313 or later (`GEODB_MULTI_SPACE_READS`).
+	 */
+	multiSpace?: boolean
 }
 
 export type CardCheck =
@@ -995,9 +1000,23 @@ export async function readWide(
 ): Promise<WideRead> {
 	if (spaces.length === 0) return {ok: false, result: "unsupported", reason: "no_space"}
 	if (spaces.length > MAX_READ_SPACES) return {ok: false, result: "unsupported", reason: "many_spaces"}
-	if (deps.budget && !deps.budget.tryAcquire(spaces.length))
+	const oneLine = deps.multiSpace === true && spaces.length > 1 && deps.geoDb.readCardSpaces !== undefined
+	if (deps.budget && !deps.budget.tryAcquire(oneLine ? 1 : spaces.length))
 		return {ok: false, result: "unsupported", reason: "throttled"}
 	const started = performance.now()
+	if (oneLine) {
+		try {
+			const bySpace = await askGeoDbSpaces(deps, conformingId("entity", entityId), spaces, {names: true})
+			const rows = spaces.flatMap((spaceId) => bySpace.get(spaceId) ?? [])
+			const populated = spaces.filter((spaceId) => (bySpace.get(spaceId)?.length ?? 0) > 0)
+			return {ok: true, rows, bySpace, scope: {spaces, populated}, ms: Math.round(performance.now() - started)}
+		} catch (error) {
+			const reason = error instanceof GeoDbError ? error.reason : "error"
+			if (reason === "unmapped_space") return {ok: false, result: "unsupported", reason: "unmapped_space"}
+			deps.log.warn(`${label} read failed`, {entityId, spaces, reason, message: String(error)})
+			return {ok: false, result: "failed"}
+		}
+	}
 	const answers = await Promise.all(
 		spaces.map(async (spaceId) => {
 			try {

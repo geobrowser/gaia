@@ -22,7 +22,7 @@ import {ReadOnlyPg, pgConfig, readMembershipIds} from "./pgSource.js"
 import {SpaceMapPublisher, kubeConfigMapPut} from "./publish.js"
 import {startServer} from "./server.js"
 import {ensureSpace, readSealer, SpaceCapError} from "./spaces.js"
-import {Store, renderSpaceMap} from "./state.js"
+import {Store, backfilledSpaces, renderSpaceMap} from "./state.js"
 
 const {Kafka, logLevel, CompressionTypes, CompressionCodecs} = kafkajs
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -48,7 +48,7 @@ async function main(config: Config): Promise<void> {
 	)
 	const publisher = new SpaceMapPublisher(config.spaceMapPath, kubeConfigMapPut(config.spaceMapConfigMap), metrics)
 	publisher.start()
-	publisher.publish(renderSpaceMap(store.spaces))
+	publisher.publish(renderSpaceMap(store.spaces, backfilledSpaces(store.dir)))
 	log("info", "state loaded", {
 		spaces: Object.keys(store.spaces).length,
 		entities: store.entityCount,

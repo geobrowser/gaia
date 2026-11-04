@@ -131,10 +131,12 @@ export function unescapeText(s: string): string {
 export type GeoCardRow = {
 	prop: string
 	raw: string
-	/** The property's display name; null where geo-db printed `none`; absent when names were not asked for. */
+	/** The property's display name; null where geo-db printed `-`; absent when names were not asked for. */
 	propName?: string | null
-	/** The value's target's display name (a reference value only); null for `none`; absent as `propName`. */
+	/** The value's target's display name (a reference value only); null for `-`; absent as `propName`. */
 	targetName?: string | null
+	/** The geo-db Space holding the statement; present only on a multi-Space read (`spaces: true`). */
+	space?: string
 }
 
 export type CardOutputOptions = {
@@ -142,10 +144,12 @@ export type CardOutputOptions = {
 	names?: boolean
 	/** The read asked `.args.claims = true`: two claim columns come before the names. */
 	claims?: boolean
+	/** The read named several Spaces: the statement cell is `<space>:<statement>`, and each row carries its `space`. */
+	spaces?: boolean
 }
 
-/** A names cell: `none` is no name (or a target outside the Space), anything else the name as written. */
-const nameCell = (cell: string): string | null => (cell === "none" ? null : unescapeText(cell))
+/** A names cell: `-` (what geodb-client prints for none) is no name (or a target outside the Space), anything else the name as written. */
+const nameCell = (cell: string): string | null => (cell === "-" ? null : unescapeText(cell))
 
 /**
  * geodb-client `query` output for an entity card: one row a line, cells tab-separated, columns
@@ -165,9 +169,14 @@ export function rowsFromGeoDbOutput(output: string, entityId: string, options: C
 		.filter((cells) => cells[3] === entityId)
 		.map((cells) => {
 			const row: GeoCardRow = {prop: cells[0] ?? "", raw: unescapeText(cells[1] ?? "")}
+			if (options.spaces) {
+				const space = /^([0-9a-f]{32}):/.exec(cells[2] ?? "")?.[1]
+				if (!space) throw new Error(`a multi-space row has no space prefix: ${(cells[2] ?? "").slice(0, 40)}`)
+				row.space = space
+			}
 			if (options.names && cells.length >= nameAt + 3) {
-				row.propName = nameCell(cells[nameAt] ?? "none")
-				row.targetName = nameCell(cells[nameAt + 1] ?? "none")
+				row.propName = nameCell(cells[nameAt] ?? "-")
+				row.targetName = nameCell(cells[nameAt + 1] ?? "-")
 			}
 			return row
 		})

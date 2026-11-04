@@ -40,8 +40,8 @@ const PERSON = "7ed45f2bc48b419e8e4664d5ff680b0d"
 
 const cell = (v: string) => v.replaceAll("\\", "\\\\").replaceAll("\t", "\\t").replaceAll("\n", "\\n")
 
-/** A names cell as geo-db prints it: the name with `\t`, `\n`, `\` escaped, or `none`. */
-const nameOf = (name: string | null | undefined) => (typeof name === "string" ? cell(name) : "none")
+/** A names cell as geo-db prints it: the name with `\t`, `\n`, `\` escaped, or `-`. */
+const nameOf = (name: string | null | undefined) => (typeof name === "string" ? cell(name) : "-")
 
 /**
  * geodb-client's output for the rows of one space of a fixture, as the card query would print them: the four
@@ -51,7 +51,7 @@ const nameOf = (name: string | null | undefined) => (typeof name === "string" ? 
 function geoOutput(fixture: Fixture, options: {names?: boolean; claims?: boolean} = {}): string {
 	const {names = true, claims = false} = options
 	const tail = (propName: string | null | undefined, targetName: string | null | undefined) =>
-		`${claims ? "\tnone\tnone" : ""}${names ? `\t${nameOf(propName)}\t${nameOf(targetName)}` : ""}\t1`
+		`${claims ? "\t-\t-" : ""}${names ? `\t${nameOf(propName)}\t${nameOf(targetName)}` : ""}\t1`
 	const entity = fixture.response.data.entity
 	const rows: string[] = []
 	let n = 0
