@@ -5,6 +5,7 @@ import {
 	DERIVED_PROPERTIES,
 	diffCards,
 	isEmptyDiff,
+	MEMBERSHIP_PROPERTIES,
 	rowsFromGeoDbOutput,
 	statementsFromPostgres,
 	type ValueRow,
@@ -157,6 +158,11 @@ describe("diffCards derived properties", () => {
 
 	it("does not report a derived row only geo-db holds", () => {
 		const geo = [{prop: "103701ddcabe4a8e835b10345327b647", raw: "1.22"}]
+		expect(isEmptyDiff(diffCards({statements: [], skipped: 0}, geo))).toBe(true)
+	})
+
+	it("does not report the membership rows only geo-db holds", () => {
+		const geo = [...MEMBERSHIP_PROPERTIES].map((prop) => ({prop, raw: "2a1072ceefd74738a9bd6dac2adbf30d"}))
 		expect(isEmptyDiff(diffCards({statements: [], skipped: 0}, geo))).toBe(true)
 	})
 

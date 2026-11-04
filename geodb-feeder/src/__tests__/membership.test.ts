@@ -338,3 +338,12 @@ describe("createLock", () => {
 		expect(f.applied.filter((z) => z.includes(".key"))).toHaveLength(1)
 	})
 })
+
+describe("membership property ids", () => {
+	it("match the list the api card compare ignores (api/src/geodb/card.ts MEMBERSHIP_PROPERTIES)", () => {
+		expect(ROLE_PROPERTY).toEqual({
+			member: "dbe3bdf637a5458d9206d737fb104793",
+			editor: "79c3a498486641bc930f3b973de4b4d3",
+		})
+	})
+})
