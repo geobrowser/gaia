@@ -40,8 +40,18 @@ const PERSON = "7ed45f2bc48b419e8e4664d5ff680b0d"
 
 const cell = (v: string) => v.replaceAll("\\", "\\\\").replaceAll("\t", "\\t").replaceAll("\n", "\\n")
 
-/** geodb-client's output for the rows of one space of a fixture, as the card query would print them. */
-function geoOutput(fixture: Fixture): string {
+/** A names cell as geo-db prints it: the name with `\t`, `\n`, `\` escaped, or `none`. */
+const nameOf = (name: string | null | undefined) => (typeof name === "string" ? cell(name) : "none")
+
+/**
+ * geodb-client's output for the rows of one space of a fixture, as the card query would print them: the four
+ * columns, then (`claims`) the two claim columns, then (`names`, the default) the property's and the target's
+ * names, then the weight. Names are the fixture's own, so geo-db and PostGraphile agree on every one.
+ */
+function geoOutput(fixture: Fixture, options: {names?: boolean; claims?: boolean} = {}): string {
+	const {names = true, claims = false} = options
+	const tail = (propName: string | null | undefined, targetName: string | null | undefined) =>
+		`${claims ? "\tnone\tnone" : ""}${names ? `\t${nameOf(propName)}\t${nameOf(targetName)}` : ""}\t1`
 	const entity = fixture.response.data.entity
 	const rows: string[] = []
 	let n = 0
@@ -58,11 +68,15 @@ function geoOutput(fixture: Fixture): string {
 		}
 		const key = valueKey(row)
 		if (!key) throw new Error(`fixture value not mappable: ${v.property.id}`)
-		rows.push(`${conformingId("entity", v.property.id)}\t${cell(key.norm)}\ts${n++}\t${ENTITY_HEX}\t1`)
+		rows.push(
+			`${conformingId("entity", v.property.id)}\t${cell(key.norm)}\ts${n++}\t${ENTITY_HEX}${tail(v.property.name, null)}`,
+		)
 	}
 	for (const r of entity.relations?.nodes ?? entity.relationsList) {
 		const type = conformingId("entity", r.type.id)
-		rows.push(`${type}\t${conformingId("entity", r.toEntity.id)}\ts${n++}\t${ENTITY_HEX}\t1`)
+		rows.push(
+			`${type}\t${conformingId("entity", r.toEntity.id)}\ts${n++}\t${ENTITY_HEX}${tail(r.type.name, r.toEntity.name)}`,
+		)
 	}
 	return `${rows.join("\n")}\n`
 }
@@ -84,8 +98,8 @@ const card = (fixture: Fixture): NonNullable<PostgresCard> => {
 
 function setup(output: string) {
 	const log = {info: vi.fn(), warn: vi.fn()}
-	const readCard = vi.fn(async ({entityId}: {geoSpaceId: string; entityId: string}) =>
-		rowsFromGeoDbOutput(output, entityId),
+	const readCard = vi.fn(async ({entityId, names}: {geoSpaceId: string; entityId: string; names?: boolean}) =>
+		rowsFromGeoDbOutput(output, entityId, {names}),
 	)
 	const shadow = createEntityShadow({
 		geoDb: {readCard},
@@ -122,7 +136,7 @@ const series = (prefix: string) =>
 const results = () => series("gaia_api_gateway_shadow_total")
 const uncompared = () => series("gaia_api_gateway_shadow_uncompared_total")
 
-const geoRows = (fixture: Fixture) => rowsFromGeoDbOutput(geoOutput(fixture), ENTITY_HEX)
+const geoRows = (fixture: Fixture) => rowsFromGeoDbOutput(geoOutput(fixture), ENTITY_HEX, {names: true})
 const withCard = (fixture: Fixture, patch: Partial<NonNullable<PostgresCard>>) => ({...card(fixture), ...patch})
 
 beforeEach(() => __resetGatewayMetricsForTests())
@@ -140,24 +154,23 @@ describe("the real Entity and EntityPage queries", () => {
 		expect(entity.relations.nodesKey).toBe("nodes")
 		expect(entity.relations.hasNext).toEqual({pageInfo: "pageInfo", field: "hasNextPage"})
 		expect(new Set(entity.uncompared)).toEqual(
-			new Set(["updated_at", "nested_names", "nested_entity", "property_info", "membership_only"]),
+			new Set(["updated_at", "nested_entity", "property_info", "membership_only"]),
 		)
 		const page = plan(PAGE_A)
 		expect(page.relations.nodesKey).toBeNull()
 		expect(new Set(page.uncompared)).toEqual(
-			new Set(["nested_names", "nested_entity", "property_info", "membership_only", "root_relations"]),
+			new Set(["nested_entity", "property_info", "membership_only", "root_relations"]),
 		)
 	})
 
-	it("Entity, space A: match; updatedAt, nested names, property info are counted uncompared", async () => {
+	it("Entity, space A: match; updatedAt and property info are counted uncompared, the nested names are compared", async () => {
 		const {shadow, readCard, log} = setup(geoOutput(ENTITY_A))
 		await run(shadow, ENTITY_A)
 		expect(results()).toEqual({match: 1})
 		expect(log.warn).not.toHaveBeenCalled()
-		expect(readCard).toHaveBeenCalledWith({geoSpaceId: GEO_SPACE_A, entityId: ENTITY_HEX})
+		expect(readCard).toHaveBeenCalledWith({geoSpaceId: GEO_SPACE_A, entityId: ENTITY_HEX, names: true})
 		expect(uncompared()).toEqual({
 			updated_at: 1,
-			nested_names: 1,
 			nested_entity: 1,
 			property_info: 1,
 			membership_only: 1,
@@ -322,6 +335,128 @@ describe("derived field checks", () => {
 			types: "ok",
 			spaceIds: "ok",
 		})
+	})
+})
+
+describe("nested names", () => {
+	const geoNamed = (fixture: Fixture) => geoRows(fixture)
+	const nestedOf = (fixture: Fixture) => {
+		const nested = card(fixture).nested
+		if (!nested) throw new Error("no nested names")
+		return nested
+	}
+
+	it("plans the five compared names and leaves only the relation's own entity name uncompared", () => {
+		const entity = plan(ENTITY_A)
+		expect(entity.values.names).toEqual({property: "property\tname"})
+		expect(Object.keys(entity.relations.names).sort()).toEqual(["fromEntity", "toEntity", "type"])
+		expect(entity.types?.nameKey).toBe("name")
+		expect(entity.uncompared).not.toContain("nested_names")
+		const own = parse(
+			"query Q($id: UUID!, $s: UUID!) { entity(id: $id) { id valuesList(first: 5, filter: {spaceId: {is: $s}}) { propertyId text integer float boolean datetime date decimal } relationsList(first: 5, filter: {spaceId: {is: $s}}) { typeId toEntityId entity { name } } } }",
+		)
+		const result = analyzeEntityOperation(own, "Q", {id: ENTITY_A.request.variables.id, s: SPACE_A})
+		if (!result.ok) throw new Error(result.reason)
+		expect(result.plan.uncompared).toContain("nested_names")
+	})
+
+	it("reads each nested name out of PostGraphile's answer", () => {
+		const nested = nestedOf(ENTITY_A)
+		expect(nested.property?.length).toBe(8)
+		expect(nested.property?.map((p) => p.name)).toContain("Citation count")
+		expect(nested.toEntity?.map((t) => t.name)).toEqual([
+			"Person",
+			"Attention Is All You Need",
+			"### Key Contribution",
+			null,
+			expect.any(String),
+		])
+		expect(nested.fromEntity).toEqual(Array(5).fill("Noam Shazeer"))
+		expect(card(ENTITY_A).typeNames).toEqual(["Person"])
+	})
+
+	it("agrees, on every compared name, with the geo-db names built from the same fixture", () => {
+		const {checks, uncompared} = compareDerived(plan(ENTITY_A), card(ENTITY_A), geoNamed(ENTITY_A))
+		expect(checks).toMatchObject({
+			propertyNames: "ok",
+			typeNames: "ok",
+			toEntityNames: "ok",
+			typesNames: "ok",
+			fromEntityNames: "ok",
+		})
+		expect(uncompared).not.toContain("nested_names")
+	})
+
+	it("fromEntity names are exact when the entity lives in this space alone", () => {
+		const alone = {...card(ENTITY_A), spaceIds: [SPACE_A]}
+		expect(compareDerived(plan(ENTITY_A), alone, geoNamed(ENTITY_A)).checks.fromEntityNames).toBe("ok")
+		const wrong = {
+			...alone,
+			nested: {...alone.nested, fromEntity: ["Somebody Else", ...Array(4).fill("Noam Shazeer")]},
+		}
+		expect(compareDerived(plan(ENTITY_A), wrong, geoNamed(ENTITY_A)).checks.fromEntityNames).toBe("mismatch")
+	})
+
+	it("a name PostGraphile lacks that geo-db holds is a mismatch", () => {
+		const base = card(ENTITY_A)
+		const nested = nestedOf(ENTITY_A)
+		const patched = withCard(ENTITY_A, {
+			nested: {...nested, toEntity: (nested.toEntity ?? []).map((t, i) => (i === 1 ? {...t, name: null} : t))},
+		})
+		expect(base.nested).toBeDefined()
+		expect(compareDerived(plan(ENTITY_A), patched, geoNamed(ENTITY_A)).checks.toEntityNames).toBe("mismatch")
+		const types = withCard(ENTITY_A, {typeNames: [null]})
+		expect(compareDerived(plan(ENTITY_A), types, geoNamed(ENTITY_A)).checks.typesNames).toBe("mismatch")
+	})
+
+	it("a different PostGraphile name, or a `none` from geo-db, is inconclusive (another space may have named it)", () => {
+		const nested = nestedOf(ENTITY_A)
+		const other = withCard(ENTITY_A, {
+			nested: {
+				...nested,
+				property: (nested.property ?? []).map((p, i) => (i === 0 ? {...p, name: "Elsewhere"} : p)),
+			},
+		})
+		const differing = compareDerived(plan(ENTITY_A), other, geoNamed(ENTITY_A))
+		expect(differing.checks.propertyNames).toBe("inconclusive")
+		expect(differing.uncompared).toContain("cross_space")
+		// geo-db prints `none` for a target outside the Space: blank every target name on its side.
+		const blank = geoNamed(ENTITY_A).map((row) => ({...row, targetName: null}))
+		expect(compareDerived(plan(ENTITY_A), card(ENTITY_A), blank).checks.toEntityNames).toBe("inconclusive")
+	})
+
+	it("without names on the geo-db side the names are uncompared, not mismatched", () => {
+		const bare = rowsFromGeoDbOutput(geoOutput(ENTITY_A, {names: false}), ENTITY_HEX)
+		const {checks, uncompared} = compareDerived(plan(ENTITY_A), card(ENTITY_A), bare)
+		expect(uncompared).toContain("nested_names")
+		for (const key of ["propertyNames", "typeNames", "toEntityNames", "typesNames", "fromEntityNames"] as const)
+			expect(checks[key]).toBeUndefined()
+	})
+
+	it("the shadow counts a name mismatch with its field named, and still matches when the names agree", async () => {
+		const body = structuredClone(ENTITY_A.response)
+		body.data.entity.relations.nodes[1].toEntity.name = null
+		const {shadow, log} = setup(geoOutput(ENTITY_A))
+		await run(shadow, ENTITY_A, ["entity"], body)
+		expect(results()).toEqual({mismatch: 1})
+		expect(log.warn).toHaveBeenCalledWith(
+			"gateway entity shadow mismatch",
+			expect.objectContaining({derivedMismatches: ["toEntityNames"]}),
+		)
+	})
+
+	it("parses the same names whether or not the read also asked for claims", () => {
+		const without = rowsFromGeoDbOutput(geoOutput(ENTITY_A), ENTITY_HEX, {names: true})
+		const withClaims = rowsFromGeoDbOutput(geoOutput(ENTITY_A, {claims: true}), ENTITY_HEX, {
+			names: true,
+			claims: true,
+		})
+		expect(withClaims).toEqual(without)
+		expect(without.some((row) => typeof row.propName === "string")).toBe(true)
+		// A reader told the wrong layout reads the claim cells as names, which is why the option exists.
+		expect(
+			rowsFromGeoDbOutput(geoOutput(ENTITY_A, {claims: true}), ENTITY_HEX, {names: true})[0]?.propName,
+		).toBeNull()
 	})
 })
 

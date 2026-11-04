@@ -273,6 +273,32 @@ process.exit(1)
 	it("builds the entity card document", () => {
 		expect(cardDocument(ENTITY)).toContain(`.id = "${ENTITY}"`)
 	})
+
+	it("keeps the default card document byte-identical, and asks for names only on request", () => {
+		const plain = `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${ENTITY}" } } } }`
+		expect(cardDocument(ENTITY)).toBe(plain)
+		expect(cardDocument(ENTITY, {})).toBe(plain)
+		expect(cardDocument(ENTITY, {names: false})).toBe(plain)
+		expect(cardDocument(ENTITY, {names: true})).toBe(
+			`.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${ENTITY}", .names = true } } } }`,
+		)
+	})
+
+	it("sends `.names = true` and parses the names cells only when the read asks for names", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [, doc] = line.split("\\t")
+	const entity = /id = "([0-9a-f]{32})"/.exec(doc)[1]
+	const names = doc.includes(".names = true")
+	frame("+", ["${PROP}", "v", "stmt", entity, ...(names ? ["Prop", "none"] : []), "1"].join("\\t") + "\\n")
+})
+`)
+		expect(await client.readCard({geoSpaceId: SPACE, entityId: ENTITY})).toEqual([{prop: PROP, raw: "v"}])
+		expect(await client.readCard({geoSpaceId: SPACE, entityId: ENTITY, names: true})).toEqual([
+			{prop: PROP, raw: "v", propName: "Prop", targetName: null},
+		])
+	})
 })
 
 describe("createSpaceMap", () => {
