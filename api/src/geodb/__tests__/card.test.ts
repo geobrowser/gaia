@@ -3,9 +3,9 @@ import {describe, expect, it} from "vitest"
 import {
 	conformingId,
 	DERIVED_PROPERTIES,
-	MEMBERSHIP_PROPERTIES,
 	diffCards,
 	isEmptyDiff,
+	MEMBERSHIP_PROPERTIES,
 	rowsFromGeoDbOutput,
 	statementsFromPostgres,
 	type ValueRow,
