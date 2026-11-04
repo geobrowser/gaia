@@ -10,6 +10,7 @@ import {observeFreshness} from "./metrics.js"
 import {createLock} from "./apply.js"
 import type {ProposalOffsets} from "./proposals.js"
 import {handleSpaceCreationMessage, sweepPending, type SpaceEntityDeps} from "./spaceEntities.js"
+import {createGroupCommitter} from "./groupCommit.js"
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -40,7 +41,9 @@ export async function startSpaceEntityConsumer(opts: {
 		deps.metrics.spaceEntitiesUp.set({}, 0)
 		log("error", "space entities consumer crashed (edits consumer unaffected)", {error: String(e.payload?.error).slice(0, 300)})
 	})
-	let lastCommit = 0
+	const commits = createGroupCommitter((partition, offset) =>
+		consumer.commitOffsets([{topic, partition, offset}]).catch((e) => log("warn", "space entities group commit failed", errorFields(e))),
+	)
 	await consumer.run({
 		autoCommit: false,
 		partitionsConsumedConcurrently: 1,
@@ -51,6 +54,7 @@ export async function startSpaceEntityConsumer(opts: {
 				const last = offsets.lastDone(batch.partition)
 				if (last !== null && offset <= last) {
 					resolveOffset(m.offset)
+					await commits.done(batch.partition, offset)
 					continue
 				}
 				let outcome: string
@@ -70,13 +74,9 @@ export async function startSpaceEntityConsumer(opts: {
 				observeFreshness(deps.metrics.spaceEntityFreshness, m.timestamp)
 				resolveOffset(m.offset)
 				await heartbeat()
-				if (Date.now() - lastCommit > 5000) {
-					lastCommit = Date.now()
-					await consumer
-						.commitOffsets([{topic, partition: batch.partition, offset: String(offset + 1)}])
-						.catch((e) => log("warn", "space entities group commit failed", errorFields(e)))
-				}
+				await commits.done(batch.partition, offset)
 			}
+			await commits.flush()
 		},
 	})
 	deps.metrics.spaceEntitiesUp.set({}, 1)
