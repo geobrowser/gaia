@@ -355,7 +355,7 @@ spec:
             #   3. once its lag is ~0, set GEODB_MEMBERSHIP_SHADOW_COMPARE to "1": it compares the member and
             #      editor id sets per Space against Postgres (geodb_feeder_membership_shadow_* metrics).
             - name: GEODB_MEMBERSHIP_DUAL_WRITE
-              value: "off"
+              value: "1"
             - name: GEODB_MEMBERSHIP_SHADOW_COMPARE
               value: "off"
             # Read only; used by the membership comparison, ignored while it is off.
