@@ -32,7 +32,7 @@ import {log} from "./log.js"
 import type {Metrics} from "./metrics.js"
 import {DERIVED_PROPERTIES, compactId, entityOps, type Held, type PgRelationRow, type PgValueRow} from "./pgAdapter.js"
 import type {BackfillSource} from "./pgSource.js"
-import {ensureSpace, type SpaceDeps} from "./spaces.js"
+import {ensureSpace, SpaceCapError, type SpaceDeps} from "./spaces.js"
 import {Overlay, type SpaceRecord, type Store, writeFileDurable} from "./state.js"
 import {type GrcOp, translateOps} from "./translate.js"
 
@@ -199,7 +199,13 @@ export async function runBackfill(deps: BackfillDeps, opts: BackfillOptions): Pr
 				log("warn", "space not founded: at the space cap", {space, entities: ids.length, cap: opts.spaceCap})
 				continue
 			}
-			record = await ensureSpace(spaceDeps, space)
+			try {
+				record = await ensureSpace(spaceDeps, space)
+			} catch (e) {
+				if (!(e instanceof SpaceCapError)) throw e
+				stats.spacesSkippedCap.push(space)
+				continue
+			}
 			// A pipe opened before the founding holds no grant over the new Space.
 			deps.reader.reset()
 			stats.spacesFounded++

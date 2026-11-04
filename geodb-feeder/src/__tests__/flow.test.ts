@@ -244,6 +244,34 @@ describe("handleMessage", () => {
 		expect(readFileSync(`${dir}/errors.jsonl`, "utf8")).toContain("bad payload")
 	})
 
+	it("dead-letters an edit for a Space geo-db cannot found as space_cap, and skips the founding after", async () => {
+		const dir = tmp()
+		const store = new Store(dir)
+		const fake = fakeDb(() => ok)
+		let asks = 0
+		fake.db.found = async () => {
+			asks++
+			throw new Error("found n: rc=1 Refused: ResourceExhausted")
+		}
+		const d = deps(store, fake)
+		expect(await handleMessage(d, 0, message("7"))).toBe("dead_letter")
+		expect(await handleMessage(d, 0, message("8"))).toBe("dead_letter")
+		expect(asks).toBe(1)
+		expect(fake.calls).toBe(0)
+		const lines = readFileSync(`${dir}/errors.jsonl`, "utf8").trim().split("\n").map((l) => JSON.parse(l))
+		expect(lines).toHaveLength(2)
+		expect(lines[1]).toMatchObject({kind: "space_cap", space: GAIA, offset: "8"})
+	})
+
+	it("a transient founding failure still throws, so the offset is retried", async () => {
+		const store = new Store(tmp())
+		const fake = fakeDb(() => ok)
+		fake.db.found = async () => {
+			throw new Error("found n: rc=1 ConnectionRefused")
+		}
+		await expect(handleMessage(deps(store, fake), 0, message("9"))).rejects.toThrow(/ConnectionRefused/)
+	})
+
 	it("treats a tombstone as empty", async () => {
 		const store = new Store(tmp())
 		expect(await handleMessage(deps(store, fakeDb(() => ok)), 0, {offset: "1", value: null})).toBe("empty")

@@ -21,7 +21,7 @@ import {PipeReader} from "./geodbPipe.js"
 import {ReadOnlyPg, pgConfig, readMembershipIds} from "./pgSource.js"
 import {SpaceMapPublisher, kubeConfigMapPut} from "./publish.js"
 import {startServer} from "./server.js"
-import {ensureSpace, readSealer} from "./spaces.js"
+import {ensureSpace, readSealer, SpaceCapError} from "./spaces.js"
 import {Store, renderSpaceMap} from "./state.js"
 
 const {Kafka, logLevel, CompressionTypes, CompressionCodecs} = kafkajs
@@ -87,7 +87,11 @@ async function main(config: Config): Promise<void> {
 	if (config.spacesListPath && existsSync(config.spacesListPath)) {
 		// Found the Spaces already known up front, so the first messages do not wait on a founding.
 		for (const g of readFileSync(config.spacesListPath, "utf8").split("\n").map((l) => l.trim()).filter(Boolean)) {
-			await ensureSpace(spaceDeps, g)
+			try {
+				await ensureSpace(spaceDeps, g)
+			} catch (e) {
+				if (!(e instanceof SpaceCapError)) throw e // logged; its edits dead-letter as space_cap
+			}
 		}
 	}
 

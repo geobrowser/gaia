@@ -142,6 +142,38 @@ describe("applyRoleEvent", () => {
 	})
 })
 
+describe("space cap", () => {
+	const exhausted = async () => {
+		throw new Error("found n: rc=1 Refused: ResourceExhausted")
+	}
+	it("dead-letters an event whose Space geo-db cannot found, and asks geo-db once", async () => {
+		const f = fixture()
+		let asks = 0
+		f.deps.db.found = async () => {
+			asks++
+			return exhausted()
+		}
+		expect(await applyRoleEvent(f.deps, grant(ALICE), {partition: 0, offset: "3"})).toBe("dead_letter")
+		expect(await applyRoleEvent(f.deps, grant(BOB), {partition: 0, offset: "4"})).toBe("dead_letter")
+		expect(asks).toBe(1)
+		expect(f.applied).toEqual([])
+		expect(f.state.statement(statementId(SPACE, ALICE, "member"))).toBeUndefined()
+		const lines = readFileSync(`${f.store.dir}/errors.jsonl`, "utf8").trim().split("\n").map((l) => JSON.parse(l))
+		expect(lines).toHaveLength(2)
+		expect(lines[0]).toMatchObject({kind: "space_cap", space: SPACE, offset: "3", topic: "membership"})
+	})
+
+	it("a transient founding failure still throws, and is retried on the next call", async () => {
+		const f = fixture()
+		f.deps.db.found = async () => {
+			throw new Error("found n: rc=1 ConnectionRefused")
+		}
+		await expect(applyRoleEvent(f.deps, grant(ALICE), {partition: 0, offset: "3"})).rejects.toThrow(/ConnectionRefused/)
+		f.deps.db.found = async () => GEO
+		expect(await applyRoleEvent(f.deps, grant(ALICE), {partition: 0, offset: "3"})).toBe("applied")
+	})
+})
+
 describe("handleMembershipMessage", () => {
 	it("routes on the event-type header", async () => {
 		const f = fixture()
