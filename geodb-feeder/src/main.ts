@@ -8,11 +8,17 @@ import {existsSync, readFileSync} from "node:fs"
 import * as zstd from "@bokuweb/zstd-wasm"
 import * as grc from "@geoprotocol/grc-20"
 import kafkajs from "kafkajs"
+import {createLock} from "./apply.js"
 import {type Config, loadConfig} from "./config.js"
 import {GeoDb, spawnRunner} from "./geodb.js"
 import {type Decode, handleMessage} from "./handle.js"
 import {errorFields, log} from "./log.js"
+import {compareMembership} from "./membershipShadow.js"
+import {MembershipState} from "./membership.js"
+import {startMembershipConsumer} from "./membershipConsumer.js"
 import {createMetrics} from "./metrics.js"
+import {PipeReader} from "./geodbPipe.js"
+import {ReadOnlyPg, pgConfig, readMembershipCounts} from "./pgSource.js"
 import {SpaceMapPublisher, kubeConfigMapPut} from "./publish.js"
 import {startServer} from "./server.js"
 import {ensureSpace, readSealer} from "./spaces.js"
@@ -76,6 +82,7 @@ async function main(config: Config): Promise<void> {
 		}
 	}
 
+	const lock = createLock()
 	const spaceDeps = {db, store, metrics, sealer: () => readSealer(config.sealerFile), publish: (t: string) => publisher.publish(t)}
 	if (config.spacesListPath && existsSync(config.spacesListPath)) {
 		// Found the Spaces already known up front, so the first messages do not wait on a founding.
@@ -111,7 +118,7 @@ async function main(config: Config): Promise<void> {
 					continue
 				}
 				if (last !== null && offset > last + 1) metrics.offsetGaps.inc({}, offset - last - 1)
-				const deps = {...spaceDeps, beat: heartbeat, signal: abort.signal, decode, chunk: config.chunk}
+				const deps = {...spaceDeps, lock, beat: heartbeat, signal: abort.signal, decode, chunk: config.chunk}
 				let outcome: string
 				for (;;) {
 					try {
@@ -156,13 +163,62 @@ async function main(config: Config): Promise<void> {
 			log("warn", "lag poll failed", errorFields(e))
 		}
 	}
+	// Membership dual write and shadow comparison: both off unless their flag is set (see membership.ts).
+	let membership: Awaited<ReturnType<typeof startMembershipConsumer>> | null = null
+	let compareTimer: NodeJS.Timeout | null = null
+	let pg: ReadOnlyPg | null = null
+	let reader: PipeReader | null = null
+	let state: MembershipState | null = null
+	if (config.membership.dualWrite || config.membership.shadowCompare) {
+		state = new MembershipState(`${config.dataDir}/feeder/membership`)
+	}
+	if (config.membership.dualWrite && state) {
+		try {
+			membership = await startMembershipConsumer({
+				kafka,
+				config,
+				abort,
+				deps: {...spaceDeps, lock, beat: async () => {}, state},
+			})
+		} catch (e) {
+			log("error", "membership consumer failed to start (edits consumer unaffected)", errorFields(e))
+		}
+	}
+	if (config.membership.shadowCompare && state) {
+		const url = process.env.DATABASE_URL
+		if (!url) log("error", "GEODB_MEMBERSHIP_SHADOW_COMPARE is set without DATABASE_URL; comparison disabled")
+		else {
+			const membershipState = state
+			pg = new ReadOnlyPg(pgConfig(url, process.env.DATABASE_SSL_CA))
+			reader = new PipeReader({clientBin: config.clientBin, keyPath: config.membership.readerKeyPath, bindingPath: config.bindingPath})
+			const run = () =>
+				compareMembership({
+					pgCounts: () => readMembershipCounts(pg as ReadOnlyPg),
+					reader: reader as PipeReader,
+					spaces: () => store.spaces,
+					journalSpaces: () => membershipState.spaces(),
+					metrics,
+				}).catch((e) => log("warn", "membership shadow comparison failed", errorFields(e)))
+			compareTimer = setInterval(() => void run(), config.membership.compareIntervalMs)
+		}
+	}
+
 	const pollTimer = setInterval(() => void poll(), config.lagPollMs)
 	await poll()
+	if (membership) {
+		const m = membership
+		setInterval(() => void m.poll(), config.lagPollMs).unref()
+		await m.poll()
+	}
 
 	const stop = async () => {
 		log("info", "shutting down")
 		abort.abort()
 		clearInterval(pollTimer)
+		if (compareTimer) clearInterval(compareTimer)
+		reader?.reset()
+		await pg?.close()
+		await membership?.stop()
 		publisher.stop()
 		await consumer.disconnect().catch(() => {})
 		await admin.disconnect().catch(() => {})

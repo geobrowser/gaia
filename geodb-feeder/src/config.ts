@@ -14,7 +14,22 @@ export type Config = {
 	spaceMapConfigMap: string
 	spacesListPath: string
 	lagPollMs: number
+	membership: MembershipConfig
 }
+
+export type MembershipConfig = {
+	/** GEODB_MEMBERSHIP_DUAL_WRITE: consume `space.membership` and write members/editors into geo-db. Default off. */
+	dualWrite: boolean
+	/** GEODB_MEMBERSHIP_SHADOW_COMPARE: compare member/editor counts per Space, Postgres vs geo-db. Default off. */
+	shadowCompare: boolean
+	topic: string
+	groupId: string
+	compareIntervalMs: number
+	/** Key the comparison reads geo-db with. */
+	readerKeyPath: string
+}
+
+export const flag = (v: string | undefined): boolean => v === "1" || v?.toLowerCase() === "true"
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
 	const v = env[name]
@@ -48,6 +63,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		spaceMapConfigMap: env.SPACE_MAP_CONFIGMAP ?? "geodb-space-map",
 		spacesListPath: env.SPACES_LIST_PATH ?? "",
 		lagPollMs: Number(env.LAG_POLL_MS ?? 15_000),
+		membership: {
+			dualWrite: flag(env.GEODB_MEMBERSHIP_DUAL_WRITE),
+			shadowCompare: flag(env.GEODB_MEMBERSHIP_SHADOW_COMPARE),
+			topic: env.KAFKA_MEMBERSHIP_TOPIC ?? `${environment}.space.membership`,
+			groupId: env.KAFKA_MEMBERSHIP_GROUP_ID ?? `geodb-feeder-membership-v1-${environment}`,
+			compareIntervalMs: Number(env.GEODB_MEMBERSHIP_COMPARE_INTERVAL_MS ?? 300_000),
+			readerKeyPath: env.GEODB_READER_KEY_PATH ?? required(env, "GEODB_KEY_PATH"),
+		},
 	}
 }
 
