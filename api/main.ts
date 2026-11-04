@@ -4,7 +4,9 @@ import {cors} from "hono/cors"
 import {openAPISpecs} from "hono-openapi"
 import {MIN_INTERNAL_TOKEN_LENGTH, mountInternalRoutes} from "./src/forYou/router"
 import {readGatewayConfig} from "./src/gateway/config"
-import {createGateway} from "./src/gateway/gateway"
+import {createEntityShadow, ENTITY_FIELD} from "./src/gateway/entityShadow"
+import {createGateway, fieldModeOf} from "./src/gateway/gateway"
+import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {health} from "./src/health"
@@ -142,10 +144,20 @@ log.info("Versioned entity routes enabled")
 app.route("/v2/versioned", createVersionedV2Router(db, runtime))
 log.info("Versioned v2 entity routes enabled")
 
+// Opt-in GraphQL gateway config; the gateway itself is built below, where /graphql is mounted.
+const gatewayConfig = readGatewayConfig(process.env)
+const gatewayShadowsEntity = gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, ENTITY_FIELD) === "shadow"
+
 // Mount the opt-in geo-db entity-card route (GEODB_ENTITY_CARDS=on|shadow; off by default)
 const geoDbCardConfig = readGeoDbCardConfig(process.env)
+// One geodb-client pipe pool and space map serve the card route and the gateway's entity shadow, so the
+// pool's worker count, queue bound and timeout cap the two together.
+const sharedGeoDb =
+	geoDbCardConfig.mode !== "off" || gatewayShadowsEntity
+		? {geoDb: createPipeGeoDbClient(geoDbCardConfig), geoSpaceOf: createSpaceMap(geoDbCardConfig.spaceMapPath)}
+		: null
 if (geoDbCardConfig.mode !== "off") {
-	app.route("/geodb", createGeoDbRouter(db, geoDbCardConfig))
+	app.route("/geodb", createGeoDbRouter(db, geoDbCardConfig, sharedGeoDb ?? {}))
 	log.info("GeoDB entity card route enabled", {mode: geoDbCardConfig.mode, timeoutMs: geoDbCardConfig.timeoutMs})
 }
 
@@ -178,10 +190,14 @@ log.info("IPFS routes enabled")
 app.get("/", swaggerUI({url: "/openapi"}))
 
 // Opt-in GraphQL gateway in front of PostGraphile (GRAPHQL_GATEWAY=on; off by default). It serves nothing from
-// geo-db yet, so on or off every operation is answered by PostGraphile.
-const gatewayConfig = readGatewayConfig(process.env)
+// geo-db yet, so on or off every operation is answered by PostGraphile; with entity=shadow a sample of
+// `entity(id)` operations is also compared against geo-db in the background.
 const graphqlHandler = createGateway({
 	config: gatewayConfig,
+	shadows:
+		gatewayShadowsEntity && sharedGeoDb
+			? new Map([[ENTITY_FIELD, createEntityShadow({...sharedGeoDb, log})]])
+			: undefined,
 	delegate: (request, context: GraphQLServerContext) => graphqlServer.fetch(request, context),
 	onClassified: (classification, route) =>
 		log.debug("GraphQL gateway routed operation", {...classification, route: route.kind, reason: route.reason}),

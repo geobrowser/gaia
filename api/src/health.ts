@@ -1,5 +1,6 @@
 import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
+import {renderGatewayMetrics} from "./gateway/metrics"
 import {renderGeoDbCardMetrics} from "./geodb/metrics"
 import {renderQueryCostHistogram} from "./kg/costLoggerPlugin"
 import {renderResponseSizeHistogram} from "./kg/instrumentationPlugin"
@@ -135,6 +136,8 @@ function renderPrometheusMetrics(): string {
 		renderSecuritySignalsPrometheus(),
 		// geo-db entity-card route: served/fallback/shadow counters and read latency — see geodb/metrics.ts.
 		renderGeoDbCardMetrics(),
+		// GraphQL gateway shadow comparisons (entity) — see gateway/metrics.ts.
+		renderGatewayMetrics(),
 	].join("\n")
 }
 

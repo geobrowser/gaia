@@ -9,6 +9,10 @@
  * GRAPHQL_GATEWAY_FIELDS sets a per-root-field mode, `entity=shadow,entities=on`, for the day a field has a
  * geo-db resolver. Modes are "off" (default), "shadow" and "on". A field without a registered resolver is
  * delegated whatever its mode says.
+ *
+ * Mode "shadow" needs no resolver: PostGraphile answers, and for GRAPHQL_GATEWAY_SHADOW_SAMPLE (a fraction from
+ * 0 to 1, default 0.01) of the qualifying operations geo-db is asked the same question in the background and
+ * the two answers are compared. The shadow never delays or fails the response.
  */
 
 export type GatewayMode = "off" | "on"
@@ -17,6 +21,17 @@ export type FieldMode = "off" | "shadow" | "on"
 export type GatewayConfig = {
 	mode: GatewayMode
 	fieldModes: ReadonlyMap<string, FieldMode>
+	/** Fraction of qualifying operations a shadow field compares, 0 to 1. */
+	shadowSampleRate: number
+}
+
+export const DEFAULT_SHADOW_SAMPLE_RATE = 0.01
+
+/** A fraction in [0, 1]; anything else (unset, empty, NaN, out of range) is the default. */
+export function parseSampleRate(raw: string | undefined): number {
+	if (raw === undefined || raw.trim() === "") return DEFAULT_SHADOW_SAMPLE_RATE
+	const value = Number(raw)
+	return Number.isFinite(value) && value >= 0 && value <= 1 ? value : DEFAULT_SHADOW_SAMPLE_RATE
 }
 
 export function parseGatewayMode(raw: string | undefined): GatewayMode {
@@ -45,5 +60,6 @@ export function readGatewayConfig(env: Record<string, string | undefined>): Gate
 	return {
 		mode: parseGatewayMode(env.GRAPHQL_GATEWAY),
 		fieldModes: parseFieldModes(env.GRAPHQL_GATEWAY_FIELDS),
+		shadowSampleRate: parseSampleRate(env.GRAPHQL_GATEWAY_SHADOW_SAMPLE),
 	}
 }
