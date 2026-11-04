@@ -11,7 +11,14 @@ import {conformingId, diffCards, isEmptyDiff, statementsFromPostgres} from "./ca
 import type {GeoDbCardClient} from "./client"
 import {GeoDbError} from "./client"
 import type {GeoDbCardMode} from "./config"
-import {observeGeoDbRead, recordFallback, recordServed, recordShadow, type ShadowResult} from "./metrics"
+import {
+	observeGeoDbRead,
+	observePostgresCardRead,
+	recordFallback,
+	recordServed,
+	recordShadow,
+	type ShadowResult,
+} from "./metrics"
 
 export type CardStatementView = {property: string; value: string}
 
@@ -157,9 +164,16 @@ export async function shadowCompare(
 	}
 }
 
-async function postgresStatements(deps: CardDeps, entityId: string, spaceId: string) {
-	const {values, relations} = await deps.readPostgres(entityId, spaceId)
-	return statementsFromPostgres(values, relations)
+async function postgresStatements(deps: CardDeps, entityId: string, spaceId: string, timed = false) {
+	const started = performance.now()
+	try {
+		const {values, relations} = await deps.readPostgres(entityId, spaceId)
+		if (timed) observePostgresCardRead((performance.now() - started) / 1000, "ok")
+		return statementsFromPostgres(values, relations)
+	} catch (error) {
+		if (timed) observePostgresCardRead((performance.now() - started) / 1000, "error")
+		throw error
+	}
 }
 
 /**
@@ -199,7 +213,8 @@ export async function resolveCard(
 			}
 		}
 	}
-	const postgres = await postgresStatements(deps, entityId, spaceId)
+	// Only the primary read is timed; the fallback above runs after a geo-db failure and would skew the comparison.
+	const postgres = await postgresStatements(deps, entityId, spaceId, deps.mode === "shadow")
 	recordServed("postgres")
 	const card: EntityCard = {entityId, spaceId, source: "postgres", statements: postgres.statements.map(view)}
 	return deps.mode === "shadow"

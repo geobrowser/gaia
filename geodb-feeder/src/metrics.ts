@@ -29,28 +29,40 @@ export class Series {
 }
 
 const BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30]
+/** Kafka message timestamp to applied: 10 ms to a minute, past the 30 s a stalled consumer shows up at. */
+const FRESHNESS_BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60]
 
 export class Histogram {
-	private counts = BUCKETS.map(() => 0)
+	private counts: number[]
 	private sum = 0
 	private count = 0
 	constructor(
 		readonly name: string,
 		readonly help: string,
-	) {}
+		private readonly buckets: readonly number[] = BUCKETS,
+	) {
+		this.counts = buckets.map(() => 0)
+	}
 	observe(seconds: number): void {
 		this.sum += seconds
 		this.count += 1
-		BUCKETS.forEach((b, i) => {
+		this.buckets.forEach((b, i) => {
 			if (seconds <= b) this.counts[i] = (this.counts[i] ?? 0) + 1
 		})
 	}
 	render(): string {
 		const lines = [`# HELP ${this.name} ${this.help}`, `# TYPE ${this.name} histogram`]
-		BUCKETS.forEach((b, i) => lines.push(`${this.name}_bucket{le="${b}"} ${this.counts[i]}`))
+		this.buckets.forEach((b, i) => lines.push(`${this.name}_bucket{le="${b}"} ${this.counts[i]}`))
 		lines.push(`${this.name}_bucket{le="+Inf"} ${this.count}`, `${this.name}_sum ${this.sum}`, `${this.name}_count ${this.count}`)
 		return lines.join("\n")
 	}
+}
+
+/** Observe now minus a Kafka message timestamp (epoch ms, as kafkajs hands it over). A missing or future stamp is skipped. */
+export function observeFreshness(h: Histogram, kafkaTimestampMs: string | undefined, nowMs = Date.now()): void {
+	const sent = Number(kafkaTimestampMs)
+	if (!Number.isFinite(sent) || sent <= 0) return
+	h.observe(Math.max(0, nowMs - sent) / 1000)
 }
 
 export function createMetrics() {
@@ -81,6 +93,10 @@ export function createMetrics() {
 		proposalsLag: gauge("geodb_feeder_proposals_consumer_lag", "space.governance messages between the topic head and the last applied offset, by partition."),
 		proposalsUp: gauge("geodb_feeder_proposals_consumer_running", "1 while the space.governance consumer is running."),
 		apply: new Histogram("geodb_feeder_apply_seconds", "Wall time of one geodb-client apply."),
+		freshness: new Histogram("geodb_feeder_edit_freshness_seconds", "Kafka message timestamp to applied in geo-db, edits consumer. Includes backlog catch-up.", FRESHNESS_BUCKETS),
+		proposalFreshness: new Histogram("geodb_feeder_proposal_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.governance consumer.", FRESHNESS_BUCKETS),
+		membershipFreshness: new Histogram("geodb_feeder_membership_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.membership consumer.", FRESHNESS_BUCKETS),
+
 	}
 	const render = () =>
 		`${[...Object.values(m)].map((s) => s.render()).join("\n")}\n`
