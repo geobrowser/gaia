@@ -55,6 +55,41 @@ const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(ke
 
 export function activateGeoDbMetrics(): void {
 	active = true
+	startLoopLag()
+}
+
+/**
+ * The stages of one pipe read, by shape (`one` or `several` Spaces on the line, with or without `names`):
+ * `wait` from submit until the line is written (queue and worker start), `answer` from the write until the
+ * whole frame is in (the connection, the serve, and any delay in the event loop delivering the reply), and
+ * `parse` turning the frame into rows.
+ */
+export const READ_STAGES = ["wait", "answer", "parse"] as const
+export const READ_SHAPES = ["one", "one_names", "several", "several_names"] as const
+export type ReadStage = (typeof READ_STAGES)[number]
+export type ReadShape = (typeof READ_SHAPES)[number]
+const stageBuckets = new Map<string, number[]>()
+const stageSums = new Map<string, number>()
+
+export function observeReadStage(stage: ReadStage, shape: ReadShape, seconds: number): void {
+	observe(stageBuckets, stageSums, seconds, `stage="${stage}",shape="${shape}"`)
+}
+
+/** Event-loop lag: how late a 100 ms timer fires. A late loop delays every reply the pipe delivers. */
+const LOOP_LAG_INTERVAL_MS = 100
+const lagBuckets = new Map<string, number[]>()
+const lagSums = new Map<string, number>()
+let lagTimer: ReturnType<typeof setInterval> | null = null
+
+function startLoopLag() {
+	if (lagTimer) return
+	let expected = performance.now() + LOOP_LAG_INTERVAL_MS
+	lagTimer = setInterval(() => {
+		const t = performance.now()
+		observe(lagBuckets, lagSums, Math.max(0, t - expected) / 1000, "")
+		expected = t + LOOP_LAG_INTERVAL_MS
+	}, LOOP_LAG_INTERVAL_MS)
+	lagTimer.unref?.()
 }
 
 export const recordServed = (source: ServedSource) => bump(served, source)
@@ -67,7 +102,7 @@ export const recordShadow = (result: ShadowResult) => bump(shadow, result)
 export const recordWorkerStart = (reason: WorkerStartReason) => bump(workerStarts, reason)
 export const recordWorkerEnd = (reason: WorkerEndReason) => bump(workerEnds, reason)
 
-function observe(bucketMap: Map<string, number[]>, sumMap: Map<string, number>, seconds: number, outcome: Outcome) {
+function observe(bucketMap: Map<string, number[]>, sumMap: Map<string, number>, seconds: number, outcome: string) {
 	const counts = bucketMap.get(outcome) ?? new Array<number>(LATENCY_BUCKETS_SECONDS.length + 1).fill(0)
 	const index = LATENCY_BUCKETS_SECONDS.findIndex((edge) => seconds <= edge)
 	const slot = index === -1 ? LATENCY_BUCKETS_SECONDS.length : index
@@ -95,6 +130,31 @@ function histogram(name: string, help: string, bucketMap: Map<string, number[]>,
 		lines.push(`${name}_bucket{outcome="${outcome}",le="+Inf"} ${cumulative}`)
 		lines.push(`${name}_sum{outcome="${outcome}"} ${sumMap.get(outcome) ?? 0}`)
 		lines.push(`${name}_count{outcome="${outcome}"} ${cumulative}`)
+	}
+	return lines
+}
+
+/** A histogram whose series are keyed by a ready-made label list (`a="x",b="y"`, or empty for none). */
+function keyedHistogram(
+	name: string,
+	help: string,
+	keys: string[],
+	bucketMap: Map<string, number[]>,
+	sumMap: Map<string, number>,
+) {
+	const lines = [`# HELP ${name} ${help}`, `# TYPE ${name} histogram`]
+	for (const key of keys) {
+		const counts = bucketMap.get(key) ?? new Array<number>(LATENCY_BUCKETS_SECONDS.length + 1).fill(0)
+		const sep = key ? "," : ""
+		let cumulative = 0
+		LATENCY_BUCKETS_SECONDS.forEach((edge, i) => {
+			cumulative += counts[i] ?? 0
+			lines.push(`${name}_bucket{${key}${sep}le="${edge}"} ${cumulative}`)
+		})
+		cumulative += counts[LATENCY_BUCKETS_SECONDS.length] ?? 0
+		lines.push(`${name}_bucket{${key}${sep}le="+Inf"} ${cumulative}`)
+		lines.push(`${name}_sum${key ? `{${key}}` : ""} ${sumMap.get(key) ?? 0}`)
+		lines.push(`${name}_count${key ? `{${key}}` : ""} ${cumulative}`)
 	}
 	return lines
 }
@@ -149,6 +209,20 @@ export function renderGeoDbCardMetrics(): string {
 			buckets,
 			sums,
 		),
+		...keyedHistogram(
+			"gaia_api_geodb_read_stage_seconds",
+			"One geo-db pipe read by stage (wait: queue and worker start; answer: write to whole reply; parse) and shape.",
+			READ_STAGES.flatMap((stage) => READ_SHAPES.map((shape) => `stage="${stage}",shape="${shape}"`)),
+			stageBuckets,
+			stageSums,
+		),
+		...keyedHistogram(
+			"gaia_api_event_loop_lag_seconds",
+			"How late a 100 ms timer fires on the api's event loop.",
+			[""],
+			lagBuckets,
+			lagSums,
+		),
 		...histogram(
 			"gaia_api_postgres_card_read_seconds",
 			"Latency of the Postgres read of one entity card in shadow mode, the counterpart of gaia_api_geodb_read_seconds.",
@@ -162,9 +236,22 @@ export function renderGeoDbCardMetrics(): string {
 /** Reset accumulated state. Tests only. */
 export function __resetGeoDbMetricsForTests(): void {
 	active = false
-	for (const m of [served, fallbacks, shadow, buckets, sums, pgBuckets, pgSums, workerStarts, workerEnds] as Map<
-		string,
-		unknown
-	>[])
+	if (lagTimer) clearInterval(lagTimer)
+	lagTimer = null
+	for (const m of [
+		served,
+		fallbacks,
+		shadow,
+		buckets,
+		sums,
+		pgBuckets,
+		pgSums,
+		workerStarts,
+		workerEnds,
+		stageBuckets,
+		stageSums,
+		lagBuckets,
+		lagSums,
+	] as Map<string, unknown>[])
 		m.clear()
 }

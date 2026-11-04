@@ -34,7 +34,7 @@ import {readFile, stat} from "node:fs/promises"
 import type {Readable, Writable} from "node:stream"
 import {type GeoCardRow, rowsFromGeoDbOutput} from "./card"
 import type {GeoDbCardConfig} from "./config"
-import {recordWorkerEnd, recordWorkerStart, type WorkerEndReason} from "./metrics"
+import {observeReadStage, type ReadShape, recordWorkerEnd, recordWorkerStart, type WorkerEndReason} from "./metrics"
 
 const HEX32 = /^[0-9a-f]{32}$/
 
@@ -188,6 +188,9 @@ const NO_ENTITY = "0123456789ab4def8123456789abcdef"
 const DEAD_SESSION = /\b(TransportClosed|TransportFailed|CapabilityTokenExpired)\b/
 const FRAME = /^([+-])(\d{1,9})$/
 
+const shapeOf = (request: {spaces: boolean; names: boolean}): ReadShape =>
+	request.spaces ? (request.names ? "several_names" : "several") : request.names ? "one_names" : "one"
+
 type Request = {
 	line: string
 	entityId: string
@@ -201,6 +204,9 @@ type Request = {
 	keepWarm?: boolean
 	timer: ReturnType<typeof setTimeout>
 	slot: Slot | null
+	/** When it was submitted, and when its line was written to a worker (null until then). */
+	submittedAt: number
+	sentAt: number | null
 }
 
 type Slot = {
@@ -342,7 +348,7 @@ export function createPipeGeoDbClient(
 			slot.activeAt = now()
 			slot.readyAt = slot.activeAt
 			slot.buffer = slot.buffer.subarray(end + 1)
-			if (slot.request) slot.child?.stdin.write(slot.request.line)
+			if (slot.request) send(slot, slot.request)
 		}
 		// Frames: `+<n>\n<n bytes>` or `-<n>\n<n bytes>`, one per request sent.
 		for (;;) {
@@ -372,16 +378,27 @@ export function createPipeGeoDbClient(
 			}
 			slot.request = null
 			slot.activeAt = now()
+			const answered = performance.now()
+			let outcome: GeoCardRow[] | GeoDbError
 			try {
-				settle(
-					request,
-					rowsFromGeoDbOutput(payload, request.entityId, {names: request.names, spaces: request.spaces}),
-				)
+				outcome = rowsFromGeoDbOutput(payload, request.entityId, {names: request.names, spaces: request.spaces})
 			} catch (error) {
-				settle(request, new GeoDbError("client_failed", String(error)))
+				outcome = new GeoDbError("client_failed", String(error))
 			}
+			if (!request.keepWarm && request.sentAt !== null) {
+				const shape = shapeOf(request)
+				observeReadStage("wait", shape, (request.sentAt - request.submittedAt) / 1000)
+				observeReadStage("answer", shape, (answered - request.sentAt) / 1000)
+				observeReadStage("parse", shape, (performance.now() - answered) / 1000)
+			}
+			settle(request, outcome)
 			pump()
 		}
+	}
+
+	function send(slot: Slot, request: Request) {
+		request.sentAt = performance.now()
+		slot.child?.stdin.write(request.line)
 	}
 
 	/** The idle slot a request should take: a ready worker, else one still starting, else an empty slot. */
@@ -415,7 +432,7 @@ export function createPipeGeoDbClient(
 		}
 		request.slot = slot
 		if (!slot.child) start(slot, "demand")
-		else if (slot.ready) slot.child.stdin.write(request.line)
+		else if (slot.ready) send(slot, request)
 	}
 
 	function onTimeout(request: Request) {
@@ -442,6 +459,8 @@ export function createPipeGeoDbClient(
 				retried: false,
 				timer: setTimeout(() => onTimeout(request), config.timeoutMs),
 				slot: null,
+				submittedAt: performance.now(),
+				sentAt: null,
 			}
 			const idle = idleSlot()
 			if (idle) assign(idle, request)
@@ -494,6 +513,8 @@ export function createPipeGeoDbClient(
 			keepWarm: true,
 			timer: setTimeout(() => onTimeout(request), config.timeoutMs),
 			slot: null,
+			submittedAt: performance.now(),
+			sentAt: null,
 		}
 		assign(slot, request)
 	}
