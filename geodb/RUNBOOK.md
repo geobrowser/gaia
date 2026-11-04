@@ -229,6 +229,21 @@ Metrics: `geodb_feeder_proposal_events_total{outcome}` (`unmapped` = Space not f
 `geodb_feeder_proposals_consumer_running`. The Kafka user needs consume on `space.governance`. Proposals created
 before the consumer first ran, or in a Space founded later, are loaded by the backfill (`BACKFILL_SPACES=<ids>`).
 
+### 2b-ter. Space system entities
+
+The kg-indexer writes a system entity per registered Space (id = the Space id, four values, System/Space/EoaSpace-or-DaoSpace
+relations) straight to Postgres on `space.creations`; no edit carries it. With `GEODB_SPACE_ENTITIES=1` the feeder
+consumes `<env>.space.creations` in its own group (`geodb-feeder-space-creations-v1-<env>`, own offsets under
+`feeder/space-entities`, from the earliest offset when it has none) and writes the same rows into the Space they describe.
+It never founds a Space: an entity for a Space geo-db does not hold yet is parked in `feeder/space-entities/pending.json`
+and applied by a sweep (every lag poll) once an edit has founded the Space. Metrics:
+`geodb_feeder_space_entity_events_total{outcome}`, `geodb_feeder_space_entities_pending`,
+`geodb_feeder_space_entities_consumer_lag`, `geodb_feeder_space_entities_consumer_running`. The Kafka user needs consume on
+`space.creations`. The topic keeps only a short window (testnet 2026-11-04: about two dozen messages), so the consumer
+replays only that; it is not a backfill. Spaces the backfill loaded already hold the entity (its rows carry the Space's own
+`space_id`), so those are no-ops. A Space founded later by an edit whose creation message has expired gets its entity from a
+backfill of that Space (`BACKFILL_SPACES=<id>`, §2b), not from this consumer.
+
 ### 2c. Membership backfill (before GEODB_MEMBERSHIP_DUAL_WRITE)
 
 Space members and editors reach geo-db only through the `space.membership` consumer, which is off

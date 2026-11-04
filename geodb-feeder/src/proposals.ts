@@ -25,17 +25,17 @@ export type ProposalCreated = {space: string; proposal: string; votingMode: 0 | 
 
 // sdk/src/core/ids.rs
 const GEO_SYSTEM_NAMESPACE = "ae1e004d-b125-57d8-b3bf-e85a2484f129"
-const SYSTEM_TYPES_RELATION_TYPE_ID = "88b3d6ad-288c-529c-a212-0e1c24819185"
-const SYSTEM_TYPE_ID = "2ff7ea09-8b9e-50bc-9be7-8a0cafa268d0"
+export const SYSTEM_TYPES_RELATION_TYPE_ID = "88b3d6ad-288c-529c-a212-0e1c24819185"
+export const SYSTEM_TYPE_ID = "2ff7ea09-8b9e-50bc-9be7-8a0cafa268d0"
 const PROPOSAL_TYPE_ID = "1cb9d5ba-c730-52a7-bc73-1f2c3ff5a330"
-const NAME_PROPERTY_ID = "a126ca53-0c8e-48d5-b888-82c734c38935"
-const DESCRIPTION_PROPERTY_ID = "9b1f76ff-9711-404c-861e-59dc3fa7d037"
+export const NAME_PROPERTY_ID = "a126ca53-0c8e-48d5-b888-82c734c38935"
+export const DESCRIPTION_PROPERTY_ID = "9b1f76ff-9711-404c-861e-59dc3fa7d037"
 const VOTING_MODE_PROPERTY_ID = "af26ed41-de0f-5b4f-a093-e9d3f683db07"
 const SPACE_ID_PROPERTY_ID = "712adc1f-e950-5d14-bbd8-bf2166fe59c1"
-const CREATED_AT_BLOCK_PROPERTY_ID = "da2952fb-17d6-53f3-b521-52e254106e0b"
+export const CREATED_AT_BLOCK_PROPERTY_ID = "da2952fb-17d6-53f3-b521-52e254106e0b"
 
-const hex = (v: Uint8Array) => Buffer.from(v).toString("hex")
-const hyphenated = (compact: string) =>
+export const hex = (v: Uint8Array) => Buffer.from(v).toString("hex")
+export const hyphenated = (compact: string) =>
 	`${compact.slice(0, 8)}-${compact.slice(8, 12)}-${compact.slice(12, 16)}-${compact.slice(16, 20)}-${compact.slice(20)}`
 
 /** RFC 4122 version 5 UUID, as Rust's `Uuid::new_v5`. */
