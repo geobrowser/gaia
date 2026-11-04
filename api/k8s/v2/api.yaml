@@ -102,7 +102,7 @@ spec:
       initContainers:
         - name: geodb-setup
           # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to the api tag.
-          image: registry.digitalocean.com/geo/geodb:7d32584825
+          image: registry.digitalocean.com/geo/geodb:c0a7038aa9
           imagePullPolicy: IfNotPresent
           # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
           # binding and the api reads the flag as unusable and answers from Postgres.
@@ -222,6 +222,10 @@ spec:
               value: /geodb/binding.txt
             - name: GEODB_SPACE_MAP_PATH
               value: /etc/geodb/space-map/space-map.json
+            # Wide gateway reads in one `geodb-client pipe` line (needs the geodb image above, geo-db
+            # 353ab26313 or later; an older client refuses the line). Read by api at or past gaia#1083.
+            - name: GEODB_MULTI_SPACE_READS
+              value: "on"
             - name: NODE_EXTRA_CA_CERTS
               value: /ssl/ca.crt
             - name: DATABASE_URL
