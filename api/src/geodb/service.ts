@@ -45,7 +45,11 @@ const SAMPLE = 5
 
 const view = (s: CardStatement): CardStatementView => ({property: s.prop, value: s.norm})
 
-async function askGeoDb(deps: CardDeps, entityId: string, spaceId: string) {
+/**
+ * One geo-db card read: maps the gaia space, reads through the pipe pool and times the read. Shared by the
+ * card route and the GraphQL gateway's entity shadow, so both use the same space map, pool and read metric.
+ */
+export async function askGeoDb(deps: Pick<CardDeps, "geoDb" | "geoSpaceOf">, entityId: string, spaceId: string) {
 	const geoSpaceId = await deps.geoSpaceOf(spaceId)
 	if (!geoSpaceId) throw new GeoDbError("unmapped_space", `space ${spaceId} is not loaded in geo-db`)
 	const started = performance.now()

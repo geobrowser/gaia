@@ -9,12 +9,28 @@ export type Classification = {
 
 const UNPARSED: Classification = {operationName: null, operationType: null, rootFields: []}
 
-type GraphqlParams = {query?: unknown; operationName?: unknown}
+type GraphqlParams = {query?: unknown; operationName?: unknown; variables?: unknown}
+
+export type GraphqlRequestParams = {
+	query: string
+	operationName: string | null
+	/** The request's variables when they are a JSON object, otherwise empty. */
+	variables: Record<string, unknown>
+}
+
+const asVariables = (raw: unknown): Record<string, unknown> => {
+	if (typeof raw === "string") {
+		try {
+			return asVariables(JSON.parse(raw))
+		} catch {
+			return {}
+		}
+	}
+	return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
+}
 
 /** Reads the query and operation name from a GraphQL-over-HTTP request without consuming the request. */
-export async function readGraphqlParams(
-	request: Request,
-): Promise<{query: string; operationName: string | null} | null> {
+export async function readGraphqlParams(request: Request): Promise<GraphqlRequestParams | null> {
 	let params: GraphqlParams | undefined
 	try {
 		if (request.method === "GET") {
@@ -22,6 +38,7 @@ export async function readGraphqlParams(
 			params = {
 				query: url.searchParams.get("query") ?? undefined,
 				operationName: url.searchParams.get("operationName"),
+				variables: url.searchParams.get("variables") ?? undefined,
 			}
 		} else if (request.method === "POST") {
 			const body: unknown = await request.clone().json()
@@ -32,7 +49,11 @@ export async function readGraphqlParams(
 		return null
 	}
 	if (typeof params?.query !== "string") return null
-	return {query: params.query, operationName: typeof params.operationName === "string" ? params.operationName : null}
+	return {
+		query: params.query,
+		operationName: typeof params.operationName === "string" ? params.operationName : null,
+		variables: asVariables(params.variables),
+	}
 }
 
 function collectRootFields(
@@ -80,12 +101,24 @@ export function classifyDocument(document: DocumentNode, operationName: string |
 	return {operationName: operation.name?.value ?? null, operationType: operation.operation, rootFields}
 }
 
-export async function classifyRequest(request: Request): Promise<Classification> {
+/** A classified request with what it was classified from, so a caller that needs the document parses nothing twice. */
+export type ClassifiedRequest = {
+	classification: Classification
+	params: GraphqlRequestParams | null
+	document: DocumentNode | null
+}
+
+export async function classifyRequestWithDocument(request: Request): Promise<ClassifiedRequest> {
 	const params = await readGraphqlParams(request)
-	if (!params) return UNPARSED
+	if (!params) return {classification: UNPARSED, params: null, document: null}
 	try {
-		return classifyDocument(parse(params.query, {noLocation: true}), params.operationName)
+		const document = parse(params.query, {noLocation: true})
+		return {classification: classifyDocument(document, params.operationName), params, document}
 	} catch {
-		return UNPARSED
+		return {classification: UNPARSED, params, document: null}
 	}
+}
+
+export async function classifyRequest(request: Request): Promise<Classification> {
+	return (await classifyRequestWithDocument(request)).classification
 }
