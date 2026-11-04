@@ -17,6 +17,11 @@
  * workers is rate-capped (`MAX_RETRIES_PER_WINDOW`), past which requests fail rather than retry. A
  * worker that cannot start (geo-db down) backs the whole client off for a second, so an outage answers
  * every request at once from Postgres instead of starting a process per request.
+ *
+ * The server closes a connection idle for a minute, and a pod that sees a card read every few minutes
+ * would pay for that on every read (a read on the dead connection, then a fresh process and handshake:
+ * 25 to 100 ms against 2 ms warm). So the first ready worker is kept warm: once it has been idle
+ * `keepWarmMs`, one read of a card no entity has (an empty answer) goes down its connection.
  */
 
 import {type ChildProcess, spawn as nodeSpawn} from "node:child_process"
@@ -162,6 +167,10 @@ const STDERR_TAIL = 300
 /** Retries on a fresh worker allowed per window; past it a dead worker's request just fails. */
 const MAX_RETRIES_PER_WINDOW = 8
 const RETRY_WINDOW_MS = 10_000
+/** Idle time after which the first worker is sent a keep-warm read (the server's idle bound is a minute). */
+const KEEP_WARM_MS = 25_000
+/** An entity id nobody has: the keep-warm read's card is empty. */
+const NO_ENTITY = "0".repeat(32)
 /** A refusal naming a dead connection or token, not a verdict on the request. */
 const DEAD_SESSION = /\b(TransportClosed|TransportFailed|CapabilityTokenExpired)\b/
 const FRAME = /^([+-])(\d{1,9})$/
@@ -175,6 +184,8 @@ type Request = {
 	resolve: (rows: GeoCardRow[]) => void
 	reject: (error: GeoDbError) => void
 	retried: boolean
+	/** A keep-warm read: no caller waits on it, and it does not name the slot's Space. */
+	keepWarm?: boolean
 	timer: ReturnType<typeof setTimeout>
 	slot: Slot | null
 }
@@ -185,6 +196,10 @@ type Slot = {
 	buffer: Buffer
 	request: Request | null
 	stderr: string
+	/** When the slot last finished a request (or became ready). */
+	activeAt: number
+	/** The Space of the slot's last read, which the keep-warm read names. */
+	lastSpace: string | null
 }
 
 export type PipeGeoDbClient = GeoDbCardClient & {
@@ -194,9 +209,10 @@ export type PipeGeoDbClient = GeoDbCardClient & {
 
 export function createPipeGeoDbClient(
 	config: GeoDbCardConfig,
-	options: {spawn?: SpawnPipe; now?: () => number} = {},
+	options: {spawn?: SpawnPipe; now?: () => number; keepWarmMs?: number} = {},
 ): PipeGeoDbClient {
 	const spawn = options.spawn ?? defaultSpawn
+	const keepWarmMs = options.keepWarmMs ?? KEEP_WARM_MS
 	const now = options.now ?? Date.now
 	const slots: Slot[] = Array.from({length: Math.max(1, config.poolSize)}, () => ({
 		child: null,
@@ -204,6 +220,8 @@ export function createPipeGeoDbClient(
 		buffer: Buffer.alloc(0),
 		request: null,
 		stderr: "",
+		activeAt: 0,
+		lastSpace: null,
 	}))
 	const queue: Request[] = []
 	const maxQueue = slots.length * 64
@@ -298,6 +316,7 @@ export function createPipeGeoDbClient(
 				return
 			}
 			slot.ready = true
+			slot.activeAt = now()
 			slot.buffer = slot.buffer.subarray(end + 1)
 			if (slot.request) slot.child?.stdin.write(slot.request.line)
 		}
@@ -322,6 +341,7 @@ export function createPipeGeoDbClient(
 				return
 			}
 			slot.request = null
+			slot.activeAt = now()
 			try {
 				settle(
 					request,
@@ -346,6 +366,7 @@ export function createPipeGeoDbClient(
 
 	function assign(slot: Slot, request: Request) {
 		slot.request = request
+		if (!request.keepWarm) slot.lastSpace = request.line.slice(0, request.line.indexOf("\t")).split(",")[0] ?? null
 		request.slot = slot
 		if (!slot.child) start(slot)
 		else if (slot.ready) slot.child.stdin.write(request.line)
@@ -385,6 +406,28 @@ export function createPipeGeoDbClient(
 		})
 	}
 
+	/** Keep the first ready worker's connection from idling out: one empty read once it has been idle long enough. */
+	function keepWarm() {
+		const slot = slots.find((s) => s.child !== null && s.ready)
+		if (!slot || slot.request !== null || slot.lastSpace === null || now() < backoffUntil) return
+		if (now() - slot.activeAt < keepWarmMs) return
+		const request: Request = {
+			line: `${slot.lastSpace}\t${cardDocument(NO_ENTITY)}\n`,
+			entityId: NO_ENTITY,
+			names: false,
+			spaces: false,
+			resolve: () => {},
+			reject: () => {},
+			retried: false,
+			keepWarm: true,
+			timer: setTimeout(() => onTimeout(request), config.timeoutMs),
+			slot: null,
+		}
+		assign(slot, request)
+	}
+	const warmTimer = setInterval(keepWarm, Math.max(1, Math.floor(keepWarmMs / 5)))
+	warmTimer.unref()
+
 	return {
 		readCard({geoSpaceId, entityId, names = false}) {
 			if (!HEX32.test(geoSpaceId) || !HEX32.test(entityId)) {
@@ -403,6 +446,7 @@ export function createPipeGeoDbClient(
 			return submit(`${geoSpaceIds.join(",")}\t${cardDocument(entityId, {names})}\n`, entityId, names, spaces)
 		},
 		close() {
+			clearInterval(warmTimer)
 			for (const slot of slots) reset(slot, new GeoDbError("client_failed", "client closed"))
 			for (const request of queue.splice(0)) settle(request, new GeoDbError("client_failed", "client closed"))
 		},
