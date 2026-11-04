@@ -121,3 +121,36 @@ export function pgBackfillSource(db: ReadOnlyPg): BackfillSource {
 		},
 	}
 }
+
+export type MembershipRole = "member" | "editor"
+export type MembershipRow = {space_id: string; member_space_id: string; role: MembershipRole}
+
+/** Every current member and editor row (the kg-indexer's `members` and `editors`), for the membership backfill. */
+export async function readMembershipRows(db: ReadOnlyPg): Promise<MembershipRow[]> {
+	return db.read<MembershipRow>(
+		`SELECT space_id::text AS space_id, member_space_id::text AS member_space_id, 'member' AS role FROM members
+		 UNION ALL
+		 SELECT space_id::text, member_space_id::text, 'editor' FROM editors`,
+		[],
+		300_000,
+	)
+}
+
+/** Member and editor counts per Space (dashes stripped), for the shadow comparison. */
+export async function readMembershipCounts(db: ReadOnlyPg): Promise<Map<string, Record<MembershipRole, number>>> {
+	const rows = await db.read<{space_id: string; role: MembershipRole; n: string}>(
+		`SELECT space_id::text AS space_id, 'member' AS role, count(*)::text AS n FROM members GROUP BY space_id
+		 UNION ALL
+		 SELECT space_id::text, 'editor', count(*)::text FROM editors GROUP BY space_id`,
+		[],
+		120_000,
+	)
+	const out = new Map<string, Record<MembershipRole, number>>()
+	for (const r of rows) {
+		const key = r.space_id.replaceAll("-", "").toLowerCase()
+		const rec = out.get(key) ?? {member: 0, editor: 0}
+		rec[r.role] = Number(r.n)
+		out.set(key, rec)
+	}
+	return out
+}

@@ -70,6 +70,12 @@ export function createMetrics() {
 		spaces: gauge("geodb_feeder_spaces", "Spaces founded in geo-db."),
 		serveUp: gauge("geodb_feeder_serve_up", "1 while geodb-serve answered the last probe."),
 		consumerUp: gauge("geodb_feeder_consumer_running", "1 while the Kafka consumer is running."),
+		membershipEvents: counter("geodb_feeder_membership_events_total", "space.membership messages handled, by outcome (applied, noop, ignored, dead_letter)."),
+		membershipLag: gauge("geodb_feeder_membership_consumer_lag", "space.membership messages between the topic head and the last applied offset, by partition."),
+		membershipUp: gauge("geodb_feeder_membership_consumer_running", "1 while the space.membership consumer is running."),
+		membershipShadowCompares: counter("geodb_feeder_membership_shadow_compares_total", "Per-Space member/editor count comparisons, Postgres vs geo-db, by role and result (match, mismatch, unmapped, error)."),
+		membershipShadowSpaces: gauge("geodb_feeder_membership_shadow_spaces", "Spaces in the last comparison run, by role and result."),
+		membershipShadowLastRun: gauge("geodb_feeder_membership_shadow_last_run_timestamp_seconds", "Unix time the last membership comparison run finished."),
 		apply: new Histogram("geodb_feeder_apply_seconds", "Wall time of one geodb-client apply."),
 	}
 	const render = () =>

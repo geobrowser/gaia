@@ -12,6 +12,22 @@ export type ApplyDeps = {
 	beat: () => Promise<void>
 	sleep?: (ms: number) => Promise<void>
 	signal?: AbortSignal
+	/**
+	 * Serializes the zon build, the apply and the `keyed` update across consumers that write to the same Space
+	 * (the edits consumer and the membership consumer): a Space's founding edit carries its key, and two
+	 * concurrent first applies would both send it.
+	 */
+	lock?: <T>(fn: () => Promise<T>) => Promise<T>
+}
+
+/** A FIFO async mutex. */
+export function createLock(): <T>(fn: () => Promise<T>) => Promise<T> {
+	let tail: Promise<unknown> = Promise.resolve()
+	return (fn) => {
+		const run = tail.then(fn, fn)
+		tail = run.catch(() => {})
+		return run
+	}
 }
 
 export type Meta = {edit?: string; space: string; partition: number; offset: string}
@@ -74,15 +90,19 @@ async function tryApply(
 	for (;;) {
 		if (deps.signal?.aborted) throw new Error("shutting down")
 		const t0 = Date.now()
-		const r = await deps.db.apply(zonDoc(space.geo, space.keyed ? null : space.nonce, slice))
+		const attempt = async () => {
+			const res = await deps.db.apply(zonDoc(space.geo, space.keyed ? null : space.nonce, slice))
+			if (res.rc === 0 && !space.keyed) {
+				space.keyed = true
+				deps.store.saveSpaces()
+			}
+			return res
+		}
+		const r = await (deps.lock ? deps.lock(attempt) : attempt())
 		if (r.rc === 0) {
 			deps.metrics.apply.observe((Date.now() - t0) / 1000)
 			deps.metrics.chunks.inc({result: "ok"})
 			deps.metrics.intents.inc({}, slice.length)
-			if (!space.keyed) {
-				space.keyed = true
-				deps.store.saveSpaces()
-			}
 			return "ok"
 		}
 		const message = (r.err + r.out).slice(-600)
