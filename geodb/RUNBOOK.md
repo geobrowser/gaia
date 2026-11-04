@@ -37,7 +37,7 @@ $K create secret generic geodb-store-secret --from-file=secret.hex=./secret.hex
 
 # the feeder's write key and the api's read-only key
 for who in writer reader; do
-  docker run --rm -v "$PWD:/k" -w /k registry.digitalocean.com/geo/geodb:4d3b31dff4 \
+  docker run --rm -v "$PWD:/k" -w /k registry.digitalocean.com/geo/geodb:7d32584825 \
     geodb-client --key $who.key keygen > $who.keyid
   $K create secret generic geodb-$who-key --from-file=key=./$who.key --from-file=keyid=./$who.keyid
 done
@@ -64,7 +64,7 @@ $K rollout status statefulset/geodb && $K rollout status deployment/geodb-feeder
 # d. alerts
 kubectl --context do-nyc2-geo-testnet-k8s apply -f monitoring/k8s/v2/geodb-feeder-alerts.yaml \
   -f monitoring/k8s/v2/hermes-metrics-servicemonitor.yaml
-# e. api, last: it carries the init container that reads the node id, and it needs geodb:4d3b31dff4 to
+# e. api, last: it carries the init container that reads the node id, and it needs geodb:7d32584825 to
 #    exist in the registry (step a) or its pods stay in ImagePullBackOff and the rollout stalls.
 gh workflow run build-v2-images.yml --ref main -f service=api
 gh workflow run deploy-v2.yml --ref main -f service=api -f tag=<API TAG> -f cluster=geo-testnet-k8s
