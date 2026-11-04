@@ -144,10 +144,10 @@ type ListPlan = {
 	hasNext: {pageInfo: string; field: string} | null
 }
 
-export type EntityPlan = {
-	/** Response key of the entity in `data`. */
-	key: string
-	entityId: string
+/** What a card comparison needs of an entity selection: where its answers sit in an entity object. */
+export type EntityCardPlan = {
+	/** Response key of `id`, when selected. */
+	idKey: string | null
 	spaceId: string
 	/** Response keys of the derived scalar fields, when selected. */
 	name: string | null
@@ -159,13 +159,19 @@ export type EntityPlan = {
 	allRelations: {key: string; first: number; spaceKey: string | null} | null
 	values: ListPlan
 	relations: ListPlan
+}
+
+export type EntityPlan = EntityCardPlan & {
+	/** Response key of the entity in `data`. */
+	key: string
+	entityId: string
 	/** Parts of the selection no card can settle, known from the query alone. */
 	uncompared: UncomparedReason[]
 }
 
 export type Analysis = {ok: true; plan: EntityPlan} | {ok: false; reason: UnsupportedReason}
 
-class Unsupported extends Error {
+export class Unsupported extends Error {
 	constructor(readonly reason: UnsupportedReason) {
 		super(reason)
 	}
@@ -350,6 +356,148 @@ function planAllList(
 	return {key: responseKeyOf(field), first, columns}
 }
 
+/** The operation's selection with fragments and variables resolved. Throws `Unsupported` for anything else. */
+export type ParsedOperation = {
+	fragments: Map<string, SelectionSetNode>
+	/** The request's variables, plus the declared defaults of those it left out. */
+	variables: Record<string, unknown>
+	/** Root fields, `__typename` aside, with fragments inlined. */
+	roots: FieldNode[]
+}
+
+export function parseOperation(
+	document: DocumentNode,
+	operationName: string | null,
+	variables: Record<string, unknown>,
+): ParsedOperation {
+	const fragments = new Map<string, SelectionSetNode>()
+	const operations: OperationDefinitionNode[] = []
+	for (const definition of document.definitions) {
+		if (definition.kind === Kind.FRAGMENT_DEFINITION) fragments.set(definition.name.value, definition.selectionSet)
+		else if (definition.kind === Kind.OPERATION_DEFINITION) operations.push(definition)
+	}
+	const operation = operationName
+		? operations.find((op) => op.name?.value === operationName)
+		: operations.length === 1
+			? operations[0]
+			: undefined
+	if (!operation || operation.operation !== "query") return refuse("not_single_root")
+	if (operation.directives?.length) return refuse("directives")
+
+	// A variable the request left out takes its declared default.
+	const resolved = {...variables}
+	for (const definition of operation.variableDefinitions ?? []) {
+		const name = definition.variable.name.value
+		if (resolved[name] === undefined && definition.defaultValue) {
+			resolved[name] = valueFromASTUntyped(definition.defaultValue)
+		}
+	}
+	const roots = fieldsOf(operation.selectionSet, fragments).filter((f) => f.name.value !== "__typename")
+	return {fragments, variables: resolved, roots}
+}
+
+/**
+ * Plans the selection of one entity: its derived fields and the two space-filtered lists a card can settle.
+ * Throws `Unsupported` when the selection is anything else.
+ */
+export function planEntitySelection(
+	selectionSet: SelectionSetNode,
+	fragments: Map<string, SelectionSetNode>,
+	resolved: Record<string, unknown>,
+	uncompared: Set<UncomparedReason>,
+): EntityCardPlan {
+	let values: PlannedList | null = null
+	let relations: PlannedList | null = null
+	let idKey: string | null = null
+	let name: string | null = null
+	let description: string | null = null
+	let spaceIds: string | null = null
+	let types: EntityPlan["types"] = null
+	let allValues: EntityPlan["allValues"] = null
+	let allRelations: EntityPlan["allRelations"] = null
+	const seen = new Set<string>()
+	const valueSpec = {
+		columns: ["propertyId", ...VALUE_COLUMNS],
+		objects: {property: PROPERTY_OBJECT},
+		ignored: VALUE_IGNORED,
+	}
+	const relationSpec = {
+		columns: ["typeId", "toEntityId"],
+		objects: RELATION_OBJECTS,
+		ignored: RELATION_IGNORED,
+	}
+	for (const field of fieldsOf(selectionSet, fragments)) {
+		const key = responseKeyOf(field)
+		if (seen.has(key)) return refuse("selection")
+		seen.add(key)
+		const fieldName = field.name.value
+		const filtered = argsOf(field, resolved).filter !== undefined
+		if (fieldName === "id" || fieldName === "__typename") {
+			if (field.arguments?.length) return refuse("args")
+			if (field.selectionSet) return refuse("selection")
+			if (fieldName === "id") idKey ??= key
+		} else if (fieldName === "name" && !name && isPlainField(field)) {
+			name = key
+		} else if (fieldName === "description" && !description && isPlainField(field)) {
+			description = key
+		} else if (fieldName === "spaceIds" && !spaceIds && isPlainField(field)) {
+			spaceIds = key
+		} else if (fieldName === "updatedAt" && isPlainField(field)) {
+			uncompared.add("updated_at")
+		} else if (fieldName === "types" && !types && !field.arguments?.length && field.selectionSet) {
+			let typeIdKey: string | null = null
+			let nameKey: string | null = null
+			for (const inner of fieldsOf(field.selectionSet, fragments)) {
+				if (!isPlainField(inner)) return refuse("selection")
+				if (inner.name.value === "id") typeIdKey ??= responseKeyOf(inner)
+				else if (inner.name.value === "name") nameKey ??= responseKeyOf(inner)
+				else if (inner.name.value !== "__typename") return refuse("selection")
+			}
+			if (!typeIdKey) return refuse("selection")
+			types = {key, idKey: typeIdKey, nameKey}
+		} else if (fieldName === "valuesList" && filtered && !values) {
+			values = planList(field, fragments, resolved, valueSpec, uncompared, false)
+		} else if (fieldName === "valuesList" && !filtered && !allValues) {
+			const all = planAllList(field, fragments, resolved, ["spaceId", "propertyId"])
+			allValues = {
+				key: all.key,
+				first: all.first,
+				spaceKey: all.columns.spaceId ?? null,
+				propertyKey: all.columns.propertyId ?? null,
+			}
+		} else if (fieldName === "relationsList" && filtered && !relations) {
+			relations = planList(field, fragments, resolved, relationSpec, uncompared, false)
+		} else if (fieldName === "relations" && !relations) {
+			relations = planList(field, fragments, resolved, relationSpec, uncompared, true)
+		} else if (fieldName === "relationsList" && !filtered && !allRelations) {
+			const all = planAllList(field, fragments, resolved, ["spaceId"])
+			allRelations = {key: all.key, first: all.first, spaceKey: all.columns.spaceId ?? null}
+			uncompared.add("membership_only")
+		} else return refuse("selection")
+	}
+	// A card does not say which rows are values and which relations, so it can settle both lists or neither.
+	if (!values || !relations) return refuse(values || relations ? "selection" : "no_space")
+	if (values.spaceId !== relations.spaceId) return refuse("args")
+	for (const column of ["propertyId", ...VALUE_COLUMNS]) {
+		if (!values.list.columns[column] && !values.list.nested[column]) return refuse("selection")
+	}
+	for (const column of ["typeId", "toEntityId"]) {
+		if (!relations.list.columns[column] && !relations.list.nested[column]) return refuse("selection")
+	}
+	return {
+		idKey,
+		spaceId: values.spaceId,
+		name,
+		description,
+		spaceIds,
+		types,
+		allValues,
+		allRelations,
+		values: values.list,
+		relations: relations.list,
+	}
+}
+
 /** Decides whether an `entity(id)` operation is one a card can settle, and where its answers sit in the response. */
 export function analyzeEntityOperation(
 	document: DocumentNode,
@@ -357,32 +505,8 @@ export function analyzeEntityOperation(
 	variables: Record<string, unknown>,
 ): Analysis {
 	try {
-		const fragments = new Map<string, SelectionSetNode>()
-		const operations: OperationDefinitionNode[] = []
-		for (const definition of document.definitions) {
-			if (definition.kind === Kind.FRAGMENT_DEFINITION)
-				fragments.set(definition.name.value, definition.selectionSet)
-			else if (definition.kind === Kind.OPERATION_DEFINITION) operations.push(definition)
-		}
-		const operation = operationName
-			? operations.find((op) => op.name?.value === operationName)
-			: operations.length === 1
-				? operations[0]
-				: undefined
-		if (!operation || operation.operation !== "query") return {ok: false, reason: "not_single_root"}
-		if (operation.directives?.length) return {ok: false, reason: "directives"}
-
-		// A variable the request left out takes its declared default.
-		const resolved = {...variables}
-		for (const definition of operation.variableDefinitions ?? []) {
-			const name = definition.variable.name.value
-			if (resolved[name] === undefined && definition.defaultValue) {
-				resolved[name] = valueFromASTUntyped(definition.defaultValue)
-			}
-		}
-
+		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
 		const uncompared = new Set<UncomparedReason>()
-		const roots = fieldsOf(operation.selectionSet, fragments).filter((f) => f.name.value !== "__typename")
 		const entityRoots = roots.filter((f) => f.name.value === ENTITY_FIELD)
 		const root = entityRoots[0]
 		if (entityRoots.length !== 1 || !root) return {ok: false, reason: "not_single_root"}
@@ -396,108 +520,15 @@ export function analyzeEntityOperation(
 		if (Object.keys(rootArgs).length !== 1 || !("id" in rootArgs)) return {ok: false, reason: "args"}
 		const entityId = uuidArg(rootArgs.id)
 		if (!root.selectionSet) return {ok: false, reason: "selection"}
-
-		let values: PlannedList | null = null
-		let relations: PlannedList | null = null
-		let name: string | null = null
-		let description: string | null = null
-		let spaceIds: string | null = null
-		let types: EntityPlan["types"] = null
-		let allValues: EntityPlan["allValues"] = null
-		let allRelations: EntityPlan["allRelations"] = null
-		const seen = new Set<string>()
-		const valueSpec = {
-			columns: ["propertyId", ...VALUE_COLUMNS],
-			objects: {property: PROPERTY_OBJECT},
-			ignored: VALUE_IGNORED,
-		}
-		const relationSpec = {
-			columns: ["typeId", "toEntityId"],
-			objects: RELATION_OBJECTS,
-			ignored: RELATION_IGNORED,
-		}
-		for (const field of fieldsOf(root.selectionSet, fragments)) {
-			const key = responseKeyOf(field)
-			if (seen.has(key)) return {ok: false, reason: "selection"}
-			seen.add(key)
-			const fieldName = field.name.value
-			const filtered = argsOf(field, resolved).filter !== undefined
-			if (fieldName === "id" || fieldName === "__typename") {
-				if (field.arguments?.length) return {ok: false, reason: "args"}
-				if (field.selectionSet) return {ok: false, reason: "selection"}
-			} else if (fieldName === "name" && !name && isPlainField(field)) {
-				name = key
-			} else if (fieldName === "description" && !description && isPlainField(field)) {
-				description = key
-			} else if (fieldName === "spaceIds" && !spaceIds && isPlainField(field)) {
-				spaceIds = key
-			} else if (fieldName === "updatedAt" && isPlainField(field)) {
-				uncompared.add("updated_at")
-			} else if (fieldName === "types" && !types && !field.arguments?.length && field.selectionSet) {
-				let idKey: string | null = null
-				let nameKey: string | null = null
-				for (const inner of fieldsOf(field.selectionSet, fragments)) {
-					if (!isPlainField(inner)) return {ok: false, reason: "selection"}
-					if (inner.name.value === "id") idKey ??= responseKeyOf(inner)
-					else if (inner.name.value === "name") nameKey ??= responseKeyOf(inner)
-					else if (inner.name.value !== "__typename") return {ok: false, reason: "selection"}
-				}
-				if (!idKey) return {ok: false, reason: "selection"}
-				types = {key, idKey, nameKey}
-			} else if (fieldName === "valuesList" && filtered && !values) {
-				values = planList(field, fragments, resolved, valueSpec, uncompared, false)
-			} else if (fieldName === "valuesList" && !filtered && !allValues) {
-				const all = planAllList(field, fragments, resolved, ["spaceId", "propertyId"])
-				allValues = {
-					key: all.key,
-					first: all.first,
-					spaceKey: all.columns.spaceId ?? null,
-					propertyKey: all.columns.propertyId ?? null,
-				}
-			} else if (fieldName === "relationsList" && filtered && !relations) {
-				relations = planList(field, fragments, resolved, relationSpec, uncompared, false)
-			} else if (fieldName === "relations" && !relations) {
-				relations = planList(field, fragments, resolved, relationSpec, uncompared, true)
-			} else if (fieldName === "relationsList" && !filtered && !allRelations) {
-				const all = planAllList(field, fragments, resolved, ["spaceId"])
-				allRelations = {key: all.key, first: all.first, spaceKey: all.columns.spaceId ?? null}
-				uncompared.add("membership_only")
-			} else return {ok: false, reason: "selection"}
-		}
-		// A card does not say which rows are values and which relations, so it can settle both lists or neither.
-		if (!values || !relations) return {ok: false, reason: values || relations ? "selection" : "no_space"}
-		if (values.spaceId !== relations.spaceId) return {ok: false, reason: "args"}
-		for (const column of ["propertyId", ...VALUE_COLUMNS]) {
-			if (!values.list.columns[column] && !values.list.nested[column]) return {ok: false, reason: "selection"}
-		}
-		for (const column of ["typeId", "toEntityId"]) {
-			if (!relations.list.columns[column] && !relations.list.nested[column])
-				return {ok: false, reason: "selection"}
-		}
-		return {
-			ok: true,
-			plan: {
-				key: responseKeyOf(root),
-				entityId,
-				spaceId: values.spaceId,
-				name,
-				description,
-				spaceIds,
-				types,
-				allValues,
-				allRelations,
-				values: values.list,
-				relations: relations.list,
-				uncompared: [...uncompared],
-			},
-		}
+		const card = planEntitySelection(root.selectionSet, fragments, resolved, uncompared)
+		return {ok: true, plan: {...card, key: responseKeyOf(root), entityId, uncompared: [...uncompared]}}
 	} catch (error) {
 		if (error instanceof Unsupported) return {ok: false, reason: error.reason}
 		return {ok: false, reason: "selection"}
 	}
 }
 
-const asRecord = (v: unknown): Record<string, unknown> | null =>
+export const asRecord = (v: unknown): Record<string, unknown> | null =>
 	v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null
 
 function read(node: Record<string, unknown>, list: ListPlan, column: string): unknown {
@@ -550,7 +581,14 @@ export function extractPostgresCard(body: unknown, plan: EntityPlan): PostgresCa
 	if (!root || root.errors !== undefined) return null
 	const data = asRecord(root.data)
 	if (!data || !(plan.key in data)) return null
-	const entity = data[plan.key]
+	return cardFromEntity(data[plan.key], plan)
+}
+
+/**
+ * The card out of one entity object of PostGraphile's answer (null: an entity PostGraphile does not have),
+ * wherever it sits in the response. Null when the object is not a plain answer for this plan.
+ */
+export function cardFromEntity(entity: unknown, plan: EntityCardPlan): PostgresCard {
 	// An entity PostGraphile does not have holds no statements and no derived data.
 	if (entity === null) {
 		return {
@@ -700,7 +738,11 @@ const sameSpace = (a: string | null | undefined, b: string) => a !== null && a !
  * Checks the derived fields against the card's rows (see the file comment for what each check means).
  * `card.truncated` must be false.
  */
-export function compareDerived(plan: EntityPlan, card: NonNullable<PostgresCard>, geo: GeoRow[]): DerivedChecks {
+export function compareDerived(
+	plan: Pick<EntityCardPlan, "spaceId" | "allValues">,
+	card: NonNullable<PostgresCard>,
+	geo: GeoRow[],
+): DerivedChecks {
 	const checks: DerivedChecks["checks"] = {}
 	const uncompared = new Set<UncomparedReason>()
 	const space = plan.spaceId
@@ -841,6 +883,56 @@ export function compareDerived(plan: EntityPlan, card: NonNullable<PostgresCard>
 
 export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {log: CardLogger}
 
+export type CardCheck =
+	| {result: "failed"}
+	| {result: "match" | "mismatch"; uncompared: UncomparedReason[]; detail: Record<string, unknown>}
+
+/**
+ * Asks geo-db for one entity's card (with names) and judges PostGraphile's card against it: the statement diff
+ * plus the derived checks. Never throws; a failed read is logged and reported as `failed`. The caller counts.
+ */
+export async function checkCard(
+	deps: EntityShadowDeps,
+	plan: Pick<EntityCardPlan, "spaceId" | "allValues">,
+	postgres: NonNullable<PostgresCard>,
+	entityId: string,
+	label: string,
+): Promise<CardCheck> {
+	const started = performance.now()
+	let rows: Awaited<ReturnType<typeof askGeoDb>>
+	try {
+		rows = await askGeoDb(deps, conformingId("entity", entityId), plan.spaceId, {names: true})
+	} catch (error) {
+		deps.log.warn(`${label} read failed`, {
+			entityId,
+			spaceId: plan.spaceId,
+			reason: error instanceof GeoDbError ? error.reason : "error",
+			message: String(error),
+		})
+		return {result: "failed"}
+	}
+	const diff = diffCards(statementsFromPostgres(postgres.values, postgres.relations), rows)
+	const derived = compareDerived(plan, postgres, rows)
+	const wrong = Object.entries(derived.checks)
+		.filter(([, result]) => result === "mismatch")
+		.map(([field]) => field)
+	return {
+		result: isEmptyDiff(diff) && wrong.length === 0 ? "match" : "mismatch",
+		uncompared: derived.uncompared,
+		detail: {
+			entityId,
+			spaceId: plan.spaceId,
+			onlyPostgres: diff.onlyPostgres.length,
+			onlyGeoDb: diff.onlyGeoDb.length,
+			skipped: diff.skipped,
+			derivedMismatches: wrong,
+			samplePostgres: diff.onlyPostgres.slice(0, SAMPLE),
+			sampleGeoDb: diff.onlyGeoDb.slice(0, SAMPLE),
+			geoDbMs: Math.round(performance.now() - started),
+		},
+	}
+}
+
 /** The `entity` shadow for the gateway. Registers its metric series; never throws. */
 export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 	activateGatewayMetrics(ENTITY_FIELD)
@@ -871,44 +963,19 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 				recordGatewayUnsupported(ENTITY_FIELD, "truncated")
 				return
 			}
-			const started = performance.now()
-			let rows: Awaited<ReturnType<typeof askGeoDb>>
-			try {
-				rows = await askGeoDb(deps, conformingId("entity", plan.entityId), plan.spaceId, {names: true})
-			} catch (error) {
+			const check = await checkCard(deps, plan, postgres, plan.entityId, "gateway entity shadow")
+			if (check.result === "failed") {
 				recordGatewayShadow(ENTITY_FIELD, "failed")
-				deps.log.warn("gateway entity shadow read failed", {
-					entityId: plan.entityId,
-					spaceId: plan.spaceId,
-					reason: error instanceof GeoDbError ? error.reason : "error",
-					message: String(error),
-				})
 				return
 			}
-			const diff = diffCards(statementsFromPostgres(postgres.values, postgres.relations), rows)
-			const derived = compareDerived(plan, postgres, rows)
-			for (const reason of new Set([...plan.uncompared, ...derived.uncompared]))
+			for (const reason of new Set([...plan.uncompared, ...check.uncompared]))
 				recordGatewayUncompared(ENTITY_FIELD, reason)
-			const wrong = Object.entries(derived.checks)
-				.filter(([, result]) => result === "mismatch")
-				.map(([field]) => field)
-			if (isEmptyDiff(diff) && wrong.length === 0) {
-				recordGatewayShadow(ENTITY_FIELD, "match")
-				return
-			}
-			recordGatewayShadow(ENTITY_FIELD, "mismatch")
-			deps.log.warn("gateway entity shadow mismatch", {
-				entityId: plan.entityId,
-				spaceId: plan.spaceId,
-				operationName: classification.operationName,
-				onlyPostgres: diff.onlyPostgres.length,
-				onlyGeoDb: diff.onlyGeoDb.length,
-				skipped: diff.skipped,
-				derivedMismatches: wrong,
-				samplePostgres: diff.onlyPostgres.slice(0, SAMPLE),
-				sampleGeoDb: diff.onlyGeoDb.slice(0, SAMPLE),
-				geoDbMs: Math.round(performance.now() - started),
-			})
+			recordGatewayShadow(ENTITY_FIELD, check.result)
+			if (check.result === "mismatch")
+				deps.log.warn("gateway entity shadow mismatch", {
+					operationName: classification.operationName,
+					...check.detail,
+				})
 		} catch (error) {
 			// Whatever went wrong, the user's response is already gone; count it and move on.
 			try {
