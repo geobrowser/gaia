@@ -4,7 +4,13 @@ import {rowsFromGeoDbOutput} from "../../geodb/card"
 import {GeoDbError} from "../../geodb/client"
 import {readGatewayConfig} from "../config"
 import {createGateway} from "../gateway"
-import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
+import {
+	__resetGatewayMetricsForTests,
+	activateGatewayMetrics,
+	MAX_UNSUPPORTED_SHAPES,
+	recordGatewayUnsupportedShape,
+	renderGatewayMetrics,
+} from "../metrics"
 import {analyzePointRead, createPointReadShadows, MAX_BATCH_IDS} from "../pointReadShadows"
 
 const SPACE = "11111111-1111-4111-8111-111111111111"
@@ -120,7 +126,8 @@ describe("analyzePointRead: entities", () => {
 			{length: MAX_BATCH_IDS + 1},
 			(_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
 		)
-		expect(analyze("relations", RELATIONS, {ids: many})).toEqual({ok: false, reason: "batch_size"})
+		// A relations id list of any length is read, its answer compared on an even spread.
+		expect(analyze("relations", RELATIONS, {ids: many}).ok).toBe(true)
 	})
 
 	it("compares a longer entities id list on an even spread of it", () => {
@@ -188,8 +195,51 @@ describe("analyzePointRead: relation and relations", () => {
 			ok: false,
 			reason: "args",
 		})
-		const byEntity = `query Q($id: UUID!) { relations(filter: {entityId: {is: $id}, spaceId: {is: "${SPACE}"}}) { id spaceId fromEntityId typeId toEntityId } }`
-		expect(analyze("relations", byEntity, {id: A})).toEqual({ok: false, reason: "filter"})
+		const rel = (args: string) =>
+			`query Q($id: UUID) { relations(${args}) { id spaceId fromEntityId typeId toEntityId } }`
+		expect(analyze("relations", rel("filter: {entityId: {startsWith: $id}}"), {id: A})).toEqual({
+			ok: false,
+			reason: "filter",
+		})
+		expect(analyze("relations", rel("filter: {position: {is: $id}}"), {id: A})).toEqual({
+			ok: false,
+			reason: "filter",
+		})
+		expect(analyze("relations", rel("filter: {entityId: {is: $id}}"), {id: null})).toEqual({
+			ok: false,
+			reason: "filter",
+		})
+		expect(analyze("relations", rel('filter: {entityId: {is: $id}}, after: "x"'), {id: A})).toEqual({
+			ok: false,
+			reason: "args",
+		})
+		expect(analyze("relations", rel("filter: {entityId: {is: $id}}, first: -1"), {id: A})).toEqual({
+			ok: false,
+			reason: "args",
+		})
+	})
+
+	it("plans a relations filter: a card slice, or row checks without completeness", () => {
+		const byEntity = `query Q($id: UUID!) { relations(filter: {entityId: {is: $id}, spaceId: {is: "${SPACE}"}}) { id fromEntityId typeId toEntityId } }`
+		const a = analyze("relations", byEntity, {id: A})
+		expect(a.ok).toBe(true)
+		if (a.ok && a.plan.field === "relations") {
+			expect(a.plan.list).toEqual({filter: {entityId: [hex(A)], spaceId: [hex(SPACE)]}, limit: 100, slice: null})
+			// The space is pinned by the filter, so the edge is checkable without selecting it.
+			expect(a.plan.relation.fixed).toEqual({spaceId: hex(SPACE)})
+			expect(a.plan.relation.uncompared).toEqual(["filter_completeness"])
+		}
+		const byFrom = `query Q($f: UUID!, $t: [UUID!]) { relations(filter: {fromEntityId: {is: $f}, typeId: {in: $t}, spaceId: {is: "${SPACE}"}, toEntityId: {is: null}}, first: 50, orderBy: POSITION_ASC) { typeId toEntityId } }`
+		const b = analyze("relations", byFrom, {f: A, t: [REL_TYPE, TYPES]})
+		expect(b.ok).toBe(true)
+		if (b.ok && b.plan.field === "relations") {
+			expect(b.plan.list?.slice).toEqual({fromEntityId: hex(A), spaceId: hex(SPACE), typeIds: [REL_TYPE, TYPES]})
+			expect(b.plan.list?.limit).toBe(50)
+			expect(b.plan.relation.uncompared).toEqual([])
+		}
+		// An offset page is not the whole slice.
+		const c = analyze("relations", byFrom.replace("first: 50", "first: 50, offset: 50"), {f: A, t: [REL_TYPE]})
+		expect(c.ok && c.plan.field === "relations" && c.plan.list?.slice).toBe(null)
 	})
 
 	it("refuses directives and unknown relation fields", () => {
@@ -367,7 +417,8 @@ describe("relations shadow", () => {
 		})
 		await run(shadows, "relations", RELATIONS, {data: {relations: [node(A, C, "Ada"), node(B, C, "Bob")]}}, vars)
 		expect(totals("relations")).toEqual({match: 1})
-		expect(readCard).toHaveBeenCalledTimes(4)
+		// C's card is read once for both edges.
+		expect(readCard).toHaveBeenCalledTimes(3)
 	})
 
 	it("is a mismatch when one edge is missing", async () => {
@@ -376,11 +427,119 @@ describe("relations shadow", () => {
 		expect(totals("relations")).toEqual({mismatch: 1})
 	})
 
-	it("counts the by-entity filter as unsupported (filter)", async () => {
+	it("counts a filter it cannot read as unsupported (filter)", async () => {
 		const {shadows} = setup()
-		const query = `query Q($id: UUID!) { relations(filter: {entityId: {is: $id}}) { id spaceId fromEntityId typeId toEntityId } }`
+		const query = `query Q($id: UUID!) { relations(filter: {entityId: {startsWith: $id}}) { id spaceId fromEntityId typeId toEntityId } }`
 		await run(shadows, "relations", query, {data: {relations: []}}, {id: A})
 		expect(totals("relations", "gaia_api_gateway_shadow_unsupported_total")).toEqual({filter: 1})
+		expect(renderGatewayMetrics()).toContain(
+			'gaia_api_gateway_shadow_unsupported_shape_total{field="relations",reason="filter",shape="args=filter;filter=entityId(startsWith)"} 1',
+		)
+	})
+
+	describe("by from entity, type and space (a card slice)", () => {
+		const BY_FROM = `query RelationsByFromEntityId($fromEntityId: UUID!, $typeId: UUID!, $spaceId: UUID!) {
+  relations(filter: {fromEntityId: {is: $fromEntityId}, typeId: {is: $typeId}, spaceId: {is: $spaceId}}) {
+    id position toEntity { id name } entity { id name }
+  }
+}`
+		const vars = {fromEntityId: C, typeId: REL_TYPE, spaceId: SPACE}
+		const row = (to: string) => ({id: A, position: "a", toEntity: {id: to, name: "x"}, entity: {id: B, name: null}})
+		const geo = (...targets: string[]) => ({
+			[hex(C)]: [
+				`${NAME}\tCee\ts1\t${hex(C)}\t1`,
+				`${TYPES}\t${PERSON}\ts2\t${hex(C)}\t1`,
+				...targets.map((t, i) => `${REL_TYPE}\t${hex(t)}\ts${i + 3}\t${hex(C)}\t1`),
+			],
+		})
+
+		it("matches when the answer is exactly geo-db's relations of that type, reading the card once", async () => {
+			const {shadows, readCard} = setup(geo(PERSON, A))
+			await run(shadows, "relations", BY_FROM, {data: {relations: [row(A), row(PERSON)]}}, vars)
+			expect(totals("relations")).toEqual({match: 1})
+			expect(totals("relations", "gaia_api_gateway_shadow_uncompared_total")).toEqual({nested_names: 1})
+			expect(readCard).toHaveBeenCalledTimes(1)
+		})
+
+		it("is a mismatch when geo-db holds a relation Postgres did not return", async () => {
+			const {shadows, log} = setup(geo(PERSON, A))
+			await run(shadows, "relations", BY_FROM, {data: {relations: [row(PERSON)]}}, vars)
+			expect(totals("relations")).toEqual({mismatch: 1})
+			expect(log.warn).toHaveBeenCalledWith(
+				"gateway relations shadow mismatch",
+				expect.objectContaining({
+					first: expect.objectContaining({onlyGeoDb: [{prop: REL_TYPE, raw: hex(A)}]}),
+				}),
+			)
+		})
+
+		it("is a mismatch when Postgres returns a relation geo-db lacks, or none where geo-db has some", async () => {
+			const {shadows} = setup(geo(PERSON))
+			await run(shadows, "relations", BY_FROM, {data: {relations: [row(PERSON), row(A)]}}, vars)
+			await run(shadows, "relations", BY_FROM, {data: {relations: []}}, vars)
+			expect(totals("relations")).toEqual({mismatch: 2})
+		})
+
+		it("matches an empty answer when geo-db has none of that type", async () => {
+			const {shadows} = setup(geo())
+			await run(shadows, "relations", BY_FROM, {data: {relations: []}}, vars)
+			expect(totals("relations")).toEqual({match: 1})
+		})
+
+		it("checks only the rows of a full page, which may have been cut short", async () => {
+			const {shadows} = setup(geo(PERSON, A, B))
+			const paged = BY_FROM.replace("spaceId: {is: $spaceId}}", "spaceId: {is: $spaceId}}, first: 2")
+			await run(shadows, "relations", paged, {data: {relations: [row(A), row(PERSON)]}}, vars)
+			expect(totals("relations")).toEqual({match: 1})
+			expect(totals("relations", "gaia_api_gateway_shadow_uncompared_total")).toEqual({
+				filter_completeness: 1,
+				nested_names: 1,
+			})
+		})
+
+		it("does not read geo-db for a derived relation type", async () => {
+			const {shadows, readCard} = setup(geo(PERSON))
+			await run(shadows, "relations", BY_FROM, {data: {relations: [row(A)]}}, {...vars, typeId: RANK_TYPE})
+			expect(totals("relations")).toEqual({match: 1})
+			expect(readCard).not.toHaveBeenCalled()
+		})
+	})
+
+	it("checks each row of a filter it cannot complete, on a spread of a long answer", async () => {
+		const query = `query RelationEntityRelations($id: UUID!, $spaceId: UUID) {
+  relations(filter: {entityId: {is: $id}, spaceId: {is: $spaceId}}) {
+    id spaceId fromEntity { id } type { id } toEntity { id } entity { id name }
+  }
+}`
+		const targets = Array.from({length: 30}, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`)
+		const {shadows, readCard} = setup({[hex(C)]: targets.map((t) => `${REL_TYPE}\t${hex(t)}\ts\t${hex(C)}\t1`)})
+		const answer = targets.map((t) => ({
+			id: A,
+			spaceId: SPACE,
+			fromEntity: {id: C},
+			type: {id: REL_TYPE},
+			toEntity: {id: t},
+			entity: {id: A, name: "n"},
+		}))
+		await run(shadows, "relations", query, {data: {relations: answer}}, {id: A, spaceId: SPACE})
+		expect(totals("relations")).toEqual({match: 1})
+		expect(totals("relations", "gaia_api_gateway_shadow_uncompared_total")).toEqual({
+			filter_completeness: 1,
+			nested_names: 1,
+			sampled_rows: 1,
+		})
+		expect(readCard).toHaveBeenCalledTimes(1)
+		// A row geo-db lacks is a mismatch.
+		const missing = setup({[hex(C)]: []})
+		await run(missing.shadows, "relations", query, {data: {relations: answer.slice(0, 1)}}, {id: A, spaceId: SPACE})
+		expect(totals("relations")).toEqual({match: 1, mismatch: 1})
+	})
+
+	it("refuses a filtered selection with no edge and no card (selection)", async () => {
+		const {shadows} = setup()
+		const query = `query U($p: UUID!, $t: [UUID!]) { relations(filter: {toEntityId: {is: $p}, typeId: {in: $t}}, first: 1) { id } }`
+		await run(shadows, "relations", query, {data: {relations: []}}, {p: A, t: [REL_TYPE]})
+		expect(totals("relations", "gaia_api_gateway_shadow_unsupported_total")).toEqual({selection: 1})
 	})
 })
 
@@ -448,5 +607,29 @@ describe("point-read shadows through the gateway", () => {
 		const metrics = renderGatewayMetrics()
 		expect(metrics).toContain('field="relation"')
 		expect(metrics).not.toContain('field="entities"')
+	})
+})
+
+describe("unsupported shape metric", () => {
+	beforeEach(() => __resetGatewayMetricsForTests())
+
+	it("labels a shape only when it is safe, and bounds the series", () => {
+		activateGatewayMetrics("relations")
+		recordGatewayUnsupportedShape("relations", "filter", "args=filter;filter=entityId(startsWith)")
+		recordGatewayUnsupportedShape("relations", "filter", 'bad"label')
+		for (let i = 0; i < MAX_UNSUPPORTED_SHAPES + 5; i++) recordGatewayUnsupportedShape("entities", "args", `s${i}`)
+		const lines = renderGatewayMetrics()
+			.split("\n")
+			.filter((l) => l.startsWith("gaia_api_gateway_shadow_unsupported_shape_total{"))
+		expect(lines).toContain(
+			'gaia_api_gateway_shadow_unsupported_shape_total{field="relations",reason="filter",shape="args=filter;filter=entityId(startsWith)"} 1',
+		)
+		expect(lines).toContain(
+			'gaia_api_gateway_shadow_unsupported_shape_total{field="relations",reason="filter",shape="other"} 1',
+		)
+		expect(lines.length).toBeLessThanOrEqual(MAX_UNSUPPORTED_SHAPES + 1)
+		expect(lines).toContain(
+			'gaia_api_gateway_shadow_unsupported_shape_total{field="entities",reason="args",shape="other"} 7',
+		)
 	})
 })

@@ -65,7 +65,7 @@ import {
 	VALUE_COLUMNS,
 	VALUE_IGNORED,
 } from "./entityShadow"
-import type {UncomparedReason, UnsupportedReason} from "./metrics"
+import {recordGatewayUnsupportedShape, type UncomparedReason, type UnsupportedReason} from "./metrics"
 
 /** Most returned entities one `entities` operation compares; the rest are `sampled_rows`. */
 export const MAX_SAMPLED_ENTITIES = 3
@@ -86,19 +86,64 @@ type LightList = {
 const noted = new Set<string>()
 const MAX_NOTED = 200
 
+/** A value's shape: an object's keys (sorted), each with its own shape; a list's distinct element shapes. No values. */
+function describeShape(value: unknown, depth: number): string {
+	if (depth > 3) return "..."
+	if (Array.isArray(value)) {
+		const parts = [...new Set(value.map((v) => describeShape(v, depth + 1)).filter(Boolean))].sort()
+		return parts.length ? `[${parts.join("|")}]` : ""
+	}
+	if (value === null || typeof value !== "object") return ""
+	return Object.keys(value)
+		.sort()
+		.map((key) => {
+			const inner = describeShape((value as Record<string, unknown>)[key], depth + 1)
+			return inner ? `${key}(${inner})` : key
+		})
+		.join(",")
+}
+
 /**
- * Logs, once per process for each (field, reason, operation name), the shape of an operation that could not be
- * shadowed: its root arguments and the top-level fields it selects. No values, so nothing private is logged. It
- * is how the real query mix behind `gaia_api_gateway_shadow_unsupported_total` is ranked. At most MAX_NOTED lines.
+ * The argument shape of an operation's `field` root: its argument names (sorted) and, for `filter`, the filter's
+ * keys and operators, e.g. `args=filter,first;filter=fromEntityId(is),spaceId(is),typeId(is)`. Never a value.
+ */
+export function shapeOfRoot(
+	document: DocumentNode,
+	operationName: string | null,
+	variables: Record<string, unknown>,
+	field: string,
+): string {
+	try {
+		const {variables: resolved, roots} = parseOperation(document, operationName, variables)
+		const root = roots.find((r) => r.name.value === field)
+		if (!root) return `roots=${[...new Set(roots.map((r) => r.name.value))].sort().join(",")}`
+		const args = argsOf(root, resolved)
+		const names = Object.keys(args).sort()
+		const filter = describeShape(args.filter, 0)
+		const shape = `args=${names.join(",")}${filter ? `;filter=${filter}` : ""}`
+		return shape.length > 200 ? "long" : shape
+	} catch {
+		return "unparsed"
+	}
+}
+
+/**
+ * Counts the argument shape of an operation that could not be shadowed (`gaia_api_gateway_shadow_unsupported_shape_total`)
+ * and logs, once per process for each (field, reason, operation name), its root arguments and the top-level fields
+ * it selects. No values, so nothing private is logged. It is how the real query mix behind
+ * `gaia_api_gateway_shadow_unsupported_total` is ranked. At most MAX_NOTED lines.
  */
 export function noteUnsupported(
 	deps: Pick<EntityShadowDeps, "log">,
 	field: string,
-	reason: string,
+	reason: UnsupportedReason,
 	document: DocumentNode,
 	operationName: string | null,
+	variables: Record<string, unknown> = {},
 ): void {
 	try {
+		const shape = shapeOfRoot(document, operationName, variables, field)
+		recordGatewayUnsupportedShape(field, reason, shape)
 		const key = `${field}\t${reason}\t${operationName ?? ""}`
 		if (noted.has(key) || noted.size >= MAX_NOTED) return
 		noted.add(key)
@@ -112,11 +157,6 @@ export function noteUnsupported(
 						{
 							field: selection.name.value,
 							args: (selection.arguments ?? []).map((a) => a.name.value),
-							filterKeys: (selection.arguments ?? []).flatMap((a) =>
-								a.name.value === "filter" && a.value.kind === "ObjectValue"
-									? a.value.fields.map((f) => f.name.value)
-									: [],
-							),
 							selects: (selection.selectionSet?.selections ?? []).flatMap((c) =>
 								c.kind === "Field" ? [c.name.value] : [],
 							),
@@ -124,7 +164,8 @@ export function noteUnsupported(
 					]
 				: [],
 		)
-		deps.log.info("gateway shadow unsupported", {field, reason, operationName, roots})
+		// warn: the api runs at warn, and this is capped at MAX_NOTED lines per process.
+		deps.log.warn("gateway shadow unsupported", {field, reason, operationName, shape, roots})
 	} catch {
 		// Observability only.
 	}

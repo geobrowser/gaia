@@ -1161,7 +1161,14 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 				}
 				recordGatewayShadow(ENTITY_FIELD, "unsupported_selection")
 				recordGatewayUnsupported(ENTITY_FIELD, analysis.reason)
-				noteUnsupported(deps, ENTITY_FIELD, analysis.reason, document, classification.operationName)
+				noteUnsupported(
+					deps,
+					ENTITY_FIELD,
+					analysis.reason,
+					document,
+					classification.operationName,
+					params.variables,
+				)
 				return
 			}
 			const {plan} = analysis

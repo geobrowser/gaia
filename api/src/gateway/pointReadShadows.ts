@@ -13,7 +13,6 @@
  *     MAX_BATCH_IDS ids, a filter other than `id in`, or any other argument is unsupported.
  *
  *   relation(id: <uuid>) { id spaceId fromEntityId typeId toEntityId .. entity { <entity card selection> } }
- *   relations(filter: {id: {in: [..]}}, first: N) { same }
  *     The relation's edge is checked against geo-db's card of its from-entity in the relation's space: a
  *     (type, target) statement must exist. That needs the space, from entity, type and target in the answer
  *     (a column or a nested `{id}`); without them the edge is uncompared (`relation_edge`). `entity { .. }` is
@@ -21,8 +20,15 @@
  *     is uncompared. A selection with neither check is unsupported. The relation's own `type`, `toEntity` and
  *     `fromEntity` objects are read for their ids only; their other fields are uncompared.
  *
- * `relations(filter: {entityId, spaceId})` (the entity page's co-root) is unsupported here (`filter`): the
- * `entity` shadow already tolerates it as `root_relations`.
+ *   relations(filter: {<id|entityId|fromEntityId|toEntityId|typeId|spaceId>: {is | equalTo | in}, ..},
+ *             first, offset, orderBy) { same }
+ *     A column the filter pins to one value need not be selected for the edge check. One from entity's relations
+ *     of some types in one space (no offset, a page short of `first`) are a slice of its card and compared whole,
+ *     both ways. Any other filter checks the answer's rows (an even spread of MAX_BATCH_IDS, `sampled_rows`)
+ *     and leaves what Postgres left out uncompared (`filter_completeness`). An id list is read the same way.
+ *
+ * The entity page's `relations(filter: {entityId, spaceId})` co-root beside `entity` is the `entity` shadow's
+ * (`root_relations`).
  *
  * One result is counted per operation: `mismatch` if any compared item differs, else `failed` if any read
  * failed, else `match`.
@@ -30,9 +36,17 @@
 
 import {type FieldNode, Kind, type SelectionSetNode, valueFromASTUntyped} from "graphql"
 
-import {conformingId, DERIVED_PROPERTIES} from "../geodb/card"
+import {
+	conformingId,
+	DERIVED_PROPERTIES,
+	diffCards,
+	type GeoCardRow,
+	isEmptyDiff,
+	statementsFromPostgres,
+} from "../geodb/card"
 import {GeoDbError} from "../geodb/client"
 import {askGeoDb} from "../geodb/service"
+import {defaultLimitForDepth} from "../kg/paginationCapPlugin"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import {
 	asRecord,
@@ -133,7 +147,29 @@ function checkListArgs(args: Args, ids: string[]): void {
 /** Where a relation's id column sits in a node: a plain column, or the `id` of a nested object. */
 type IdPath = {object: string | null; key: string}
 
+const EDGE_COLUMNS = ["spaceId", "fromEntityId", "typeId", "toEntityId"] as const
+type EdgeColumn = (typeof EDGE_COLUMNS)[number]
+
+/** A `relations` filter: the uuid columns it constrains, each to one value (`is`, `equalTo`) or a list (`in`). */
+export type RelationFilter = Partial<Record<(typeof RELATION_COLUMNS)[number], string[]>>
+
+/**
+ * A `relations(filter: ..)` that is not an id list. Every answer row is checked as an edge (an even spread of
+ * MAX_BATCH_IDS rows when there are more), and geo-db cannot say what Postgres left out (`filter_completeness`),
+ * except when the filter is one from entity's relations of some types in one space: that is a slice of its card,
+ * compared whole unless the page may have cut it short.
+ */
+export type RelationListPlan = {
+	filter: RelationFilter
+	/** Rows PostGraphile returns at most (`first`, else its default page). */
+	limit: number
+	/** One from entity, one space, the types: the answer is compared as that slice of the card. */
+	slice: {fromEntityId: string; spaceId: string; typeIds: string[]} | null
+}
+
 export type RelationPlan = {
+	/** Edge columns the filter pins to one value: a row need not select them. */
+	fixed: Partial<Record<EdgeColumn, string>>
 	idKey: string | null
 	spaceId: string | null
 	fromEntityId: IdPath | null
@@ -196,6 +232,7 @@ function planRelation(
 		return key ? {object: null, key} : (paths[column] ?? null)
 	}
 	return {
+		fixed: {},
 		idKey: columns.id ?? null,
 		spaceId: columns.spaceId ?? null,
 		fromEntityId: direct("fromEntityId"),
@@ -208,7 +245,73 @@ function planRelation(
 }
 
 const edgeCheckable = (plan: RelationPlan) =>
-	plan.spaceId !== null && plan.fromEntityId !== null && plan.typeId !== null && plan.toEntityId !== null
+	(plan.spaceId !== null || plan.fixed.spaceId !== undefined) &&
+	(plan.fromEntityId !== null || plan.fixed.fromEntityId !== undefined) &&
+	(plan.typeId !== null || plan.fixed.typeId !== undefined) &&
+	(plan.toEntityId !== null || plan.fixed.toEntityId !== undefined)
+
+const uuidOrRefuse = (v: unknown): string =>
+	typeof v === "string" && isValidUuid(v) ? normalizeUuid(v) : refuse("filter")
+
+/**
+ * `{<column>: {is | equalTo: <uuid>} | {in: [<uuid> ..]}, ..}` over the relation's uuid columns. `{is: null}` is no
+ * constraint (connection-filter ignores it). Anything else, or no constraint at all, is unsupported (`filter`).
+ */
+export function relationFilter(filter: unknown): RelationFilter {
+	const object = asRecord(filter)
+	if (!object) return refuse("filter")
+	const out: RelationFilter = {}
+	for (const [column, raw] of Object.entries(object)) {
+		if (!(RELATION_COLUMNS as readonly string[]).includes(column)) return refuse("filter")
+		const clause = asRecord(raw)
+		if (!clause || Object.keys(clause).length !== 1) return refuse("filter")
+		const [op, value] = Object.entries(clause)[0] as [string, unknown]
+		let values: string[]
+		if (op === "is" || op === "equalTo") {
+			if (value === null) continue
+			values = [uuidOrRefuse(value)]
+		} else if (op === "in" && Array.isArray(value) && value.length > 0)
+			values = [...new Set(value.map(uuidOrRefuse))]
+		else return refuse("filter")
+		out[column as (typeof RELATION_COLUMNS)[number]] = values
+	}
+	if (Object.keys(out).length === 0) return refuse("filter")
+	return out
+}
+
+const LIST_ARGS = new Set(["filter", "first", "offset", "orderBy"])
+
+/** `relations(filter, first, offset, orderBy)` with a filter other than an id list. */
+function planRelationList(args: Args, filter: RelationFilter): RelationListPlan {
+	for (const name of Object.keys(args)) if (!LIST_ARGS.has(name)) refuse("args")
+	const count = (v: unknown) =>
+		v === undefined || v === null
+			? null
+			: typeof v === "number" && Number.isInteger(v) && v >= 0
+				? v
+				: refuse("args")
+	const first = count(args.first)
+	const offset = count(args.offset) ?? 0
+	const limit = first ?? defaultLimitForDepth(0)
+	const one = (column: (typeof RELATION_COLUMNS)[number]) => {
+		const values = filter[column]
+		return values?.length === 1 ? (values[0] as string) : null
+	}
+	const fromEntityId = one("fromEntityId")
+	const spaceId = one("spaceId")
+	const typeIds = filter.typeId ?? []
+	const slice =
+		fromEntityId &&
+		spaceId &&
+		typeIds.length > 0 &&
+		offset === 0 &&
+		!filter.id &&
+		!filter.entityId &&
+		!filter.toEntityId
+			? {fromEntityId, spaceId, typeIds}
+			: null
+	return {filter, limit, slice}
+}
 
 /** A relation selection must be checkable in at least one way, else it has nothing geo-db can settle. */
 function finishRelationPlan(plan: RelationPlan): RelationPlan {
@@ -221,7 +324,7 @@ function finishRelationPlan(plan: RelationPlan): RelationPlan {
 export type PointPlan =
 	| {field: typeof ENTITIES_FIELD; key: string; ids: string[]; card: EntityCardPlan; uncompared: UncomparedReason[]}
 	| {field: typeof RELATION_FIELD; key: string; id: string; relation: RelationPlan}
-	| {field: typeof RELATIONS_FIELD; key: string; ids: string[]; relation: RelationPlan}
+	| {field: typeof RELATIONS_FIELD; key: string; ids: string[]; list: RelationListPlan | null; relation: RelationPlan}
 
 export type PointAnalysis = {ok: true; plan: PointPlan} | {ok: false; reason: UnsupportedReason}
 
@@ -246,14 +349,26 @@ export function analyzePointRead(
 			const relation = finishRelationPlan(planRelation(root.selectionSet, fragments, card))
 			return {ok: true, plan: {field, key: keyOf(root), id, relation}}
 		}
-		// A longer `entities` id list is compared on an even spread of MAX_BATCH_IDS of its ids; the other fields
-		// (relations) keep the cap, as a longer answer is not read at all.
-		const ids = idsFromFilter(args.filter, field === ENTITIES_FIELD ? Number.POSITIVE_INFINITY : MAX_BATCH_IDS)
-		checkListArgs(args, ids)
 		if (field === RELATIONS_FIELD) {
-			const relation = finishRelationPlan(planRelation(root.selectionSet, fragments, card))
-			return {ok: true, plan: {field, key: keyOf(root), ids, relation}}
+			const filter = relationFilter(args.filter)
+			const onlyIds = Object.keys(filter).length === 1 && filter.id !== undefined
+			const list = onlyIds ? null : planRelationList(args, filter)
+			if (!list) checkListArgs(args, filter.id ?? [])
+			const planned = planRelation(root.selectionSet, fragments, card)
+			const fixed: RelationPlan["fixed"] = {}
+			for (const column of EDGE_COLUMNS) {
+				const values = filter[column]
+				if (values?.length === 1) fixed[column] = values[0]
+			}
+			const relation = finishRelationPlan({...planned, fixed})
+			// The answer of a filtered list is checked row by row: geo-db cannot say what Postgres left out.
+			if (list && !list.slice)
+				relation.uncompared = [...new Set([...relation.uncompared, "filter_completeness" as const])]
+			return {ok: true, plan: {field, key: keyOf(root), ids: filter.id ?? [], list, relation}}
 		}
+		// A longer `entities` id list is compared on an even spread of MAX_BATCH_IDS of its ids.
+		const ids = idsFromFilter(args.filter, Number.POSITIVE_INFINITY)
+		checkListArgs(args, ids)
 		const uncompared = new Set<UncomparedReason>()
 		const cardPlan = planEntitySelection(root.selectionSet, fragments, resolved, uncompared)
 		// Each answer is matched to its requested id by the id the node carries.
@@ -274,6 +389,14 @@ export function analyzePointRead(
 type Item =
 	| {kind: "card"; entityId: string; plan: EntityCardPlan; card: NonNullable<ReturnType<typeof cardFromEntity>>}
 	| {kind: "edge"; fromEntityId: string; spaceId: string; typeId: string; toEntityId: string}
+	/** Every relation of `typeIds` from one entity in one space, as Postgres answered them. */
+	| {
+			kind: "slice"
+			fromEntityId: string
+			spaceId: string
+			typeIds: string[]
+			edges: {typeId: string; toEntityId: string}[]
+	  }
 
 const pathValue = (node: Record<string, unknown>, path: IdPath | null): string | null => {
 	if (!path) return null
@@ -291,12 +414,17 @@ function itemsOfRelation(raw: unknown, plan: RelationPlan): {items: Item[]; trun
 	const items: Item[] = []
 	let truncated = false
 	if (edgeCheckable(plan)) {
-		const spaceId = typeof node[plan.spaceId ?? ""] === "string" ? String(node[plan.spaceId ?? ""]) : null
-		const fromEntityId = pathValue(node, plan.fromEntityId)
-		const typeId = pathValue(node, plan.typeId)
-		const toEntityId = pathValue(node, plan.toEntityId)
-		if (!spaceId || !isValidUuid(spaceId) || !fromEntityId || !typeId || !toEntityId) return null
-		items.push({kind: "edge", fromEntityId, spaceId: normalizeUuid(spaceId), typeId, toEntityId})
+		// A selected column wins over the filter's value; they agree on any row the filter returned.
+		const column = (c: EdgeColumn) =>
+			pathValue(node, c === "spaceId" ? (plan.spaceId ? {object: null, key: plan.spaceId} : null) : plan[c]) ??
+			plan.fixed[c] ??
+			null
+		const spaceId = column("spaceId")
+		const fromEntityId = column("fromEntityId")
+		const typeId = column("typeId")
+		const toEntityId = column("toEntityId")
+		if (!spaceId || !fromEntityId || !typeId || !toEntityId) return null
+		items.push({kind: "edge", fromEntityId, spaceId, typeId, toEntityId})
 	}
 	if (plan.entity) {
 		const entity = node[plan.entity.key]
@@ -322,18 +450,74 @@ type Judged = {
 	reason?: UnsupportedReason
 }
 
-async function judge(deps: EntityShadowDeps, item: Item, label: string): Promise<Judged> {
+/** One operation's card reads, by entity and space: many rows of one answer share a from entity. */
+type CardReads = Map<string, Promise<GeoCardRow[]>>
+
+function readOnce(deps: EntityShadowDeps, reads: CardReads, entityId: string, spaceId: string) {
+	const key = `${entityId}\t${spaceId}`
+	let read = reads.get(key)
+	if (!read) {
+		read = askGeoDb(deps, conformingId("entity", entityId), spaceId)
+		reads.set(key, read)
+	}
+	return read
+}
+
+async function judgeSlice(
+	deps: EntityShadowDeps,
+	item: Extract<Item, {kind: "slice"}>,
+	reads: CardReads,
+): Promise<Judged> {
+	const types = new Set(item.typeIds.map((id) => conformingId("entity", id)))
+	// A derived relation type (ranking position) is written straight to Postgres and never held by geo-db.
+	if ([...types].every((type) => DERIVED_PROPERTIES.has(type)))
+		return {result: "match", uncompared: ["relation_edge"]}
+	const rows = await readOnce(deps, reads, item.fromEntityId, item.spaceId)
+	const diff = diffCards(
+		statementsFromPostgres(
+			[],
+			item.edges.map((e) => ({type_id: e.typeId, to_entity_id: e.toEntityId, to_space_id: null})),
+		),
+		rows.filter((row) => types.has(row.prop)),
+	)
+	if (isEmptyDiff(diff)) return {result: "match", uncompared: []}
+	return {
+		result: "mismatch",
+		uncompared: [],
+		detail: {
+			slice: {fromEntityId: item.fromEntityId, spaceId: item.spaceId, typeIds: item.typeIds},
+			postgresRows: item.edges.length,
+			onlyPostgres: diff.onlyPostgres.slice(0, 5),
+			onlyGeoDb: diff.onlyGeoDb.slice(0, 5),
+		},
+	}
+}
+
+async function judge(deps: EntityShadowDeps, item: Item, label: string, reads: CardReads = new Map()): Promise<Judged> {
 	if (item.kind === "card") {
 		const check: CardCheck = await checkCard(deps, item.plan, item.card, item.entityId, label)
 		if (check.result === "failed") return {result: "failed", uncompared: []}
 		if (check.result === "unsupported") return {result: "unsupported", uncompared: [], reason: check.reason}
 		return {result: check.result, uncompared: check.uncompared, detail: check.detail}
 	}
+	if (item.kind === "slice") {
+		try {
+			return await judgeSlice(deps, item, reads)
+		} catch (error) {
+			deps.log.warn(`${label} read failed`, {
+				entityId: item.fromEntityId,
+				spaceId: item.spaceId,
+				reason: error instanceof GeoDbError ? error.reason : "error",
+				message: String(error),
+			})
+			return {result: "failed", uncompared: []}
+		}
+	}
 	// A derived relation type (ranking position) is written straight to Postgres and never held by geo-db.
 	if (DERIVED_PROPERTIES.has(conformingId("entity", item.typeId)))
 		return {result: "match", uncompared: ["relation_edge"]}
 	try {
-		const rows = await askGeoDb(deps, conformingId("entity", item.fromEntityId), item.spaceId)
+		const rows = await readOnce(deps, reads, item.fromEntityId, item.spaceId)
 		const type = conformingId("entity", item.typeId)
 		const to = conformingId("entity", item.toEntityId)
 		const found = rows.some((row) => row.prop === type && row.raw === to)
@@ -364,7 +548,10 @@ async function judge(deps: EntityShadowDeps, item: Item, label: string): Promise
 }
 
 /** The items to compare for an operation, from PostGraphile's body. Null when the body is not comparable. */
-function collectItems(plan: PointPlan, body: unknown): {items: Item[]; truncated: boolean} | null {
+function collectItems(
+	plan: PointPlan,
+	body: unknown,
+): {items: Item[]; truncated: boolean; uncompared?: UncomparedReason[]} | null {
 	const root = asRecord(body)
 	if (!root || root.errors !== undefined) return null
 	const data = asRecord(root.data)
@@ -376,16 +563,33 @@ function collectItems(plan: PointPlan, body: unknown): {items: Item[]; truncated
 	}
 	if (!Array.isArray(answer)) return null
 	if (plan.field === RELATIONS_FIELD) {
-		if (answer.length > MAX_BATCH_IDS) return null
-		const all: Item[] = []
+		const rows: Item[][] = []
 		let truncated = false
 		for (const node of answer) {
 			const one = itemsOfRelation(node, plan.relation)
 			if (!one) return null
-			all.push(...one.items)
+			rows.push(one.items)
 			truncated ||= one.truncated
 		}
-		return {items: all, truncated}
+		const slice = plan.list?.slice
+		// A full page may have been cut short: only what it holds is checked.
+		if (slice && edgeCheckable(plan.relation) && answer.length < (plan.list?.limit ?? 0)) {
+			const edges: {typeId: string; toEntityId: string}[] = []
+			const cards: Item[] = []
+			for (const item of rows.flat()) {
+				if (item.kind === "edge") edges.push({typeId: item.typeId, toEntityId: item.toEntityId})
+				else cards.push(item)
+			}
+			// Each row must have been read as an edge, else the slice is not what Postgres holds.
+			if (edges.length !== answer.length) return null
+			const sliceItem: Item = {kind: "slice", ...slice, edges}
+			return {items: [sliceItem, ...spread(cards, MAX_BATCH_IDS)], truncated, uncompared: []}
+		}
+		const sampled = spread(rows, MAX_BATCH_IDS)
+		const uncompared: UncomparedReason[] = []
+		if (sampled.length < rows.length) uncompared.push("sampled_rows")
+		if (slice) uncompared.push("filter_completeness")
+		return {items: sampled.flat(), truncated, uncompared}
 	}
 	const idKey = plan.card.idKey ?? ""
 	const byId = new Map<string, unknown>()
@@ -438,7 +642,7 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 				const reason = generic && light && !light.ok ? light.reason : analysis.reason
 				recordGatewayShadow(field, "unsupported_selection")
 				recordGatewayUnsupported(field, reason)
-				noteUnsupported(deps, field, reason, document, classification.operationName)
+				noteUnsupported(deps, field, reason, document, classification.operationName, params.variables)
 				return
 			}
 			const {plan} = analysis
@@ -459,7 +663,8 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 				return
 			}
 			if (collected.items.length === 0) return
-			const judged = await Promise.all(collected.items.map((item) => judge(deps, item, label)))
+			const reads: CardReads = new Map()
+			const judged = await Promise.all(collected.items.map((item) => judge(deps, item, label, reads)))
 			const mismatched = judged.filter((j) => j.result === "mismatch")
 			const planned =
 				plan.field === RELATION_FIELD || plan.field === RELATIONS_FIELD
@@ -475,7 +680,11 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 			const result =
 				mismatched.length > 0 ? "mismatch" : judged.some((j) => j.result === "failed") ? "failed" : "match"
 			if (result !== "failed")
-				for (const reason of new Set([...planned, ...judged.flatMap((j) => j.uncompared)]))
+				for (const reason of new Set([
+					...planned,
+					...(collected.uncompared ?? []),
+					...judged.flatMap((j) => j.uncompared),
+				]))
 					recordGatewayUncompared(field, reason)
 			recordGatewayShadow(field, result)
 			if (result === "mismatch")
