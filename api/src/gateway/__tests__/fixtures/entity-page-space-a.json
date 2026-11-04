@@ -1,0 +1,487 @@
+{
+	"note": "Captured from the testnet gaia API (read-only); relation nodes trimmed.",
+	"request": {
+		"query": "query EntityPage($id: UUID!, $spaceId: UUID) {\n  entity(id: $id) {\n    id\n    name\n    description\n    spaceIds\n    types { id name }\n    allValuesList: valuesList(first: 1000) { spaceId propertyId }\n    allRelationsList: relationsList(first: 1000) { spaceId }\n    valuesList(first: 1000, filter: { spaceId: { is: $spaceId } }) { ...EntityValueFields }\n    relationsList(first: 1000, filter: { spaceId: { is: $spaceId } }) { ...RelationFields }\n  }\n  relations(filter: { entityId: { is: $id }, spaceId: { is: $spaceId } }) { ...FullRelation }\n}\nfragment RelationToEntity on Entity {\n  id\n  name\n  types { id }\n  valuesList(first: 1000) { spaceId propertyId text }\n}\nfragment PropertyFragment on PropertyInfo {\n  id name dataTypeId dataTypeName renderableTypeId renderableTypeName format isType\n}\nfragment EntityValueFields on Value {\n  spaceId\n  property { ...PropertyFragment }\n  text integer float point boolean time language unit datetime date decimal schedule\n}\nfragment RelationFields on Relation {\n  id spaceId position verified entityId\n  fromEntity { id name }\n  toEntity { ...RelationToEntity }\n  toSpaceId\n  type { id name }\n}\nfragment FullRelation on Relation {\n  ...RelationFields\n  entity { id name }\n}\n",
+		"operationName": "EntityPage",
+		"variables": {
+			"id": "073ff16b-e7fe-4591-a984-c325d629d92d",
+			"spaceId": "41e85161-0e13-a194-41c4-d980f2f2ce6b"
+		}
+	},
+	"response": {
+		"data": {
+			"entity": {
+				"id": "073ff16be7fe4591a984c325d629d92d",
+				"name": "Noam Shazeer",
+				"description": "Co-inventor of the transformer architecture, Character.AI co-founder, now co-leading Google's Gemini project.",
+				"spaceIds": ["41e851610e13a19441c4d980f2f2ce6b", "5093b6ab1b48f1111dd31275b5413ddb"],
+				"types": [
+					{
+						"id": "7ed45f2bc48b419e8e4664d5ff680b0d",
+						"name": "Person"
+					}
+				],
+				"allValuesList": [
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "47ee87d8fac606d73e69d4c212804ffb"
+					},
+					{
+						"spaceId": "5093b6ab1b48f1111dd31275b5413ddb",
+						"propertyId": "0d6259784b3c4b57a86fde45c997c73c"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "cdf139bce610446cac42d57cd7967478"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "0d6259784b3c4b57a86fde45c997c73c"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "eed38e74e67946bf8a42ea3e4f8fb5fb"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "d3998d5338be4371a354472a196e77bd"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "9b1f76ff9711404c861e59dc3fa7d037"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "44163101ec9a4faf83c42629a0d27b37"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "a126ca530c8e48d5b88882c734c38935"
+					}
+				],
+				"allRelationsList": [
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b"
+					}
+				],
+				"valuesList": [
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"property": {
+							"id": "47ee87d8fac606d73e69d4c212804ffb",
+							"name": "Citation count",
+							"dataTypeId": "149fd752d9d04f80820d1d942eea7841",
+							"dataTypeName": "Integer",
+							"renderableTypeId": null,
+							"renderableTypeName": null,
+							"format": "0,0",
+							"isType": null
+						},
+						"text": null,
+						"integer": "366741",
+						"float": null,
+						"point": null,
+						"boolean": null,
+						"time": null,
+						"language": null,
+						"unit": null,
+						"datetime": null,
+						"date": null,
+						"decimal": null,
+						"schedule": null
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"property": {
+							"id": "cdf139bce610446cac42d57cd7967478",
+							"name": "LinkedIn",
+							"dataTypeId": "9edb6fcce4544aa5861139d7f024c010",
+							"dataTypeName": "Text",
+							"renderableTypeId": "283127c96142468492ed90b0ebc7f29a",
+							"renderableTypeName": "URL",
+							"format": "https://linkedin.com/in/{}",
+							"isType": null
+						},
+						"text": "noam-shazeer-3b27288",
+						"integer": null,
+						"float": null,
+						"point": null,
+						"boolean": null,
+						"time": null,
+						"language": "090adac0-fca4-822e-8e71-9263e67620ec",
+						"unit": null,
+						"datetime": null,
+						"date": null,
+						"decimal": null,
+						"schedule": null
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"property": {
+							"id": "0d6259784b3c4b57a86fde45c997c73c",
+							"name": "X",
+							"dataTypeId": "9edb6fcce4544aa5861139d7f024c010",
+							"dataTypeName": "Text",
+							"renderableTypeId": "283127c96142468492ed90b0ebc7f29a",
+							"renderableTypeName": "URL",
+							"format": "https://x.com/{value}",
+							"isType": null
+						},
+						"text": "NoamShazeer",
+						"integer": null,
+						"float": null,
+						"point": null,
+						"boolean": null,
+						"time": null,
+						"language": "090adac0-fca4-822e-8e71-9263e67620ec",
+						"unit": null,
+						"datetime": null,
+						"date": null,
+						"decimal": null,
+						"schedule": null
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"property": {
+							"id": "eed38e74e67946bf8a42ea3e4f8fb5fb",
+							"name": "Website",
+							"dataTypeId": "9edb6fcce4544aa5861139d7f024c010",
+							"dataTypeName": "Text",
+							"renderableTypeId": "283127c96142468492ed90b0ebc7f29a",
+							"renderableTypeName": "URL",
+							"format": null,
+							"isType": null
+						},
+						"text": "https://www.noamshazeer.com/",
+						"integer": null,
+						"float": null,
+						"point": null,
+						"boolean": null,
+						"time": null,
+						"language": "090adac0-fca4-822e-8e71-9263e67620ec",
+						"unit": null,
+						"datetime": null,
+						"date": null,
+						"decimal": null,
+						"schedule": null
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"property": {
+							"id": "d3998d5338be4371a354472a196e77bd",
+							"name": "Link Image",
+							"dataTypeId": "4b6d9fc1fbfe474c861c83398e1b50d9",
+							"dataTypeName": "Relation",
+							"renderableTypeId": "f3f790c4c74e4d23a0a91e8ef84e30d9",
+							"renderableTypeName": "Image",
+							"format": null,
+							"isType": null
+						},
+						"text": "",
+						"integer": null,
+						"float": null,
+						"point": null,
+						"boolean": null,
+						"time": null,
+						"language": "090adac0-fca4-822e-8e71-9263e67620ec",
+						"unit": null,
+						"datetime": null,
+						"date": null,
+						"decimal": null,
+						"schedule": null
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"property": {
+							"id": "9b1f76ff9711404c861e59dc3fa7d037",
+							"name": "Description",
+							"dataTypeId": "9edb6fcce4544aa5861139d7f024c010",
+							"dataTypeName": "Text",
+							"renderableTypeId": null,
+							"renderableTypeName": null,
+							"format": null,
+							"isType": null
+						},
+						"text": "Co-inventor of the transformer architecture, Character.AI co-founder, now co-leading Google's Gemini project.",
+						"integer": null,
+						"float": null,
+						"point": null,
+						"boolean": null,
+						"time": null,
+						"language": "090adac0-fca4-822e-8e71-9263e67620ec",
+						"unit": null,
+						"datetime": null,
+						"date": null,
+						"decimal": null,
+						"schedule": null
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"property": {
+							"id": "44163101ec9a4faf83c42629a0d27b37",
+							"name": "Website",
+							"dataTypeId": "9edb6fcce4544aa5861139d7f024c010",
+							"dataTypeName": "Text",
+							"renderableTypeId": null,
+							"renderableTypeName": null,
+							"format": null,
+							"isType": null
+						},
+						"text": "https://www.noamshazeer.com/",
+						"integer": null,
+						"float": null,
+						"point": null,
+						"boolean": null,
+						"time": null,
+						"language": "090adac0-fca4-822e-8e71-9263e67620ec",
+						"unit": null,
+						"datetime": null,
+						"date": null,
+						"decimal": null,
+						"schedule": null
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"property": {
+							"id": "a126ca530c8e48d5b88882c734c38935",
+							"name": "Name",
+							"dataTypeId": "9edb6fcce4544aa5861139d7f024c010",
+							"dataTypeName": "Text",
+							"renderableTypeId": null,
+							"renderableTypeName": null,
+							"format": null,
+							"isType": null
+						},
+						"text": "Noam Shazeer",
+						"integer": null,
+						"float": null,
+						"point": null,
+						"boolean": null,
+						"time": null,
+						"language": "090adac0-fca4-822e-8e71-9263e67620ec",
+						"unit": null,
+						"datetime": null,
+						"date": null,
+						"decimal": null,
+						"schedule": null
+					}
+				],
+				"relationsList": [
+					{
+						"id": "7da1dd30c9434ce89a7cd6548174c134",
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"position": "a03fS",
+						"verified": null,
+						"entityId": "de6d91a05c2b45e3b3e825987f88b435",
+						"fromEntity": {
+							"id": "073ff16be7fe4591a984c325d629d92d",
+							"name": "Noam Shazeer"
+						},
+						"toEntity": {
+							"id": "7ed45f2bc48b419e8e4664d5ff680b0d",
+							"name": "Person",
+							"types": [
+								{
+									"id": "4bc3786b2d094e42aaa3917b35c8abfe"
+								},
+								{
+									"id": "e7d737c536764c609fa16aa64a8c90ad"
+								},
+								{
+									"id": "e7d737c536764c609fa16aa64a8c90ad"
+								},
+								{
+									"id": "e7d737c536764c609fa16aa64a8c90ad"
+								},
+								{
+									"id": "e7d737c536764c609fa16aa64a8c90ad"
+								}
+							],
+							"valuesList": [
+								{
+									"spaceId": "7570a0ba7552e6806e0751c2ad105754",
+									"propertyId": "9b1f76ff9711404c861e59dc3fa7d037",
+									"text": "A person in baseball history \u2014 player, manager, coach, umpire, or official scorer."
+								},
+								{
+									"spaceId": "a19c345ab9866679b001d7d2138d88a1",
+									"propertyId": "85a4668a42fa4f488969c0a9de0c294b",
+									"text": null
+								}
+							]
+						},
+						"toSpaceId": "a19c345ab9866679b001d7d2138d88a1",
+						"type": {
+							"id": "8f151ba4de204e3c9cb499ddf96f48f1",
+							"name": "Types"
+						}
+					},
+					{
+						"id": "03a44bbdd42f4a7c9ec4f2945c4d86e7",
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"position": "0",
+						"verified": null,
+						"entityId": "916a454a8dfd4f92a879df93de5e78d7",
+						"fromEntity": {
+							"id": "073ff16be7fe4591a984c325d629d92d",
+							"name": "Noam Shazeer"
+						},
+						"toEntity": {
+							"id": "f640484b102f495d997c0d7dd55854c9",
+							"name": "Attention Is All You Need",
+							"types": [
+								{
+									"id": "5e24fb52856c4189a9716af4387b1b89"
+								}
+							],
+							"valuesList": [
+								{
+									"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+									"propertyId": "a126ca530c8e48d5b88882c734c38935",
+									"text": "Attention Is All You Need"
+								},
+								{
+									"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+									"propertyId": "044660dd8984d7b46e11dfefa29eb8d4",
+									"text": "https://www.semanticscholar.org/paper/204e3073870fae3d05bcbc2f6a8e263d9b72e776"
+								}
+							]
+						},
+						"toSpaceId": null,
+						"type": {
+							"id": "d84a815c061f41429cf357531345d059",
+							"name": "Published"
+						}
+					},
+					{
+						"id": "03d7b375ed33450d9362a2d242e13dcf",
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"position": "a1507",
+						"verified": null,
+						"entityId": "4857c873e8f44d4297983053697a9684",
+						"fromEntity": {
+							"id": "073ff16be7fe4591a984c325d629d92d",
+							"name": "Noam Shazeer"
+						},
+						"toEntity": {
+							"id": "c59908a826674adb888ad56fc756ebcb",
+							"name": "### Key Contribution",
+							"types": [
+								{
+									"id": "76474f2f00894e77a0410b39fb17d0bf"
+								}
+							],
+							"valuesList": [
+								{
+									"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+									"propertyId": "a126ca530c8e48d5b88882c734c38935",
+									"text": "### Key Contribution"
+								},
+								{
+									"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+									"propertyId": "e3e363d1dd294ccb8e6ff3b76d99bc33",
+									"text": "### Key Contributions"
+								}
+							]
+						},
+						"toSpaceId": null,
+						"type": {
+							"id": "beaba5cba67741a8b35377030613fc70",
+							"name": "Blocks"
+						}
+					},
+					{
+						"id": "09ef508982f04b6dbe6f46aaf35641e6",
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"position": "a01WB",
+						"verified": null,
+						"entityId": "9de3f4938f5e4612a10689b614f5fb4e",
+						"fromEntity": {
+							"id": "073ff16be7fe4591a984c325d629d92d",
+							"name": "Noam Shazeer"
+						},
+						"toEntity": {
+							"id": "a8cb2e655a7143ac8a521879ebea8189",
+							"name": null,
+							"types": [
+								{
+									"id": "ba4e41460010499da0a3caaa7f579d0e"
+								}
+							],
+							"valuesList": [
+								{
+									"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+									"propertyId": "f7b33e08b76d4190aadacadaa9f561e1",
+									"text": "400"
+								},
+								{
+									"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+									"propertyId": "7f6ad0433e214257a6d48bdad36b1d84",
+									"text": "400"
+								}
+							]
+						},
+						"toSpaceId": null,
+						"type": {
+							"id": "1155befffad549b7a2e0da4777b8792c",
+							"name": "Avatar"
+						}
+					},
+					{
+						"id": "0ab19f686c374180aa5bca141ed4d30d",
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"position": "aA1ZW",
+						"verified": null,
+						"entityId": "3ee41042bf234e99b639c9076614405a",
+						"fromEntity": {
+							"id": "073ff16be7fe4591a984c325d629d92d",
+							"name": "Noam Shazeer"
+						},
+						"toEntity": {
+							"id": "3cf482d6f71c4583b42dc4c106433486",
+							"name": "Core architecture re",
+							"types": [
+								{
+									"id": "76474f2f00894e77a0410b39fb17d0bf"
+								}
+							],
+							"valuesList": [
+								{
+									"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+									"propertyId": "e3e363d1dd294ccb8e6ff3b76d99bc33",
+									"text": "Core architecture research for the Gemini model family"
+								},
+								{
+									"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+									"propertyId": "a126ca530c8e48d5b88882c734c38935",
+									"text": "Core architecture re"
+								}
+							]
+						},
+						"toSpaceId": null,
+						"type": {
+							"id": "beaba5cba67741a8b35377030613fc70",
+							"name": "Blocks"
+						}
+					}
+				]
+			},
+			"relations": []
+		}
+	}
+}

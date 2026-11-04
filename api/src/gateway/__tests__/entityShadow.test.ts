@@ -133,17 +133,27 @@ describe("analyzeEntityOperation: unsupported selections", () => {
 		`{ entity(id: "${ENTITY}") { id ${extra} valuesList(${args}) { propertyId text integer float boolean datetime date decimal } relationsList(${args}) { typeId toEntityId } } }`
 
 	it.each([
-		["name", lists("name"), "selection"],
-		["description", lists("description"), "selection"],
-		["types", lists("types { id }"), "selection"],
-		["spaceIds", lists("spaceIds"), "selection"],
-		["the relations connection", lists("relations(first: 5) { nodes { id } }"), "selection"],
+		["a field no card can settle", lists("backlinks { id }"), "selection"],
+		[
+			"a connection beside relationsList",
+			lists(`relations(first: 5, filter: {spaceId: {is: "${SPACE}"}}) { nodes { typeId toEntityId } }`),
+			"selection",
+		],
+		[
+			"a connection after a cursor",
+			lists(
+				`relations(first: 5, after: "abc", filter: {spaceId: {is: "${SPACE}"}}) { nodes { typeId toEntityId } }`,
+			),
+			"args",
+		],
+		["types with a field the card lacks", lists("types { id color }"), "selection"],
+		["an unfiltered list that reads a column", lists("allValues: valuesList(first: 5) { text }"), "selection"],
 		[
 			"a second values list",
 			lists(`other: valuesList(first: 1, filter: {spaceId: {is: "${SPACE}"}}) { text }`),
 			"selection",
 		],
-		["an unfiltered list", lists("", "first: 10"), "no_space"],
+		["only unfiltered lists", lists("", "first: 10"), "selection"],
 		["a list without first", lists("", `filter: {spaceId: {is: "${SPACE}"}}`), "args"],
 		["a list ordered", lists("", `first: 10, orderBy: TEXT_ASC, filter: {spaceId: {is: "${SPACE}"}}`), "args"],
 		[
@@ -265,7 +275,7 @@ describe("entity shadow", () => {
 
 	it("counts unsupported_selection, with a reason, without asking geo-db", async () => {
 		const {shadow, readCard} = setup()
-		await run(shadow, "query Card($id: UUID!) { entity(id: $id) { id name } }")
+		await run(shadow, "query Card($id: UUID!) { entity(id: $id) { id backlinks { id } } }")
 		expect(counts()).toEqual({unsupported_selection: 1})
 		expect(renderGatewayMetrics()).toContain(
 			'gaia_api_gateway_shadow_unsupported_total{field="entity",reason="selection"} 1',
