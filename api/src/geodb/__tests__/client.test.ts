@@ -1,5 +1,5 @@
 import {spawn as nodeSpawn} from "node:child_process"
-import {mkdtempSync, writeFileSync} from "node:fs"
+import {mkdtempSync, readFileSync, writeFileSync} from "node:fs"
 import {tmpdir} from "node:os"
 import {join} from "node:path"
 import {describe, expect, it} from "vitest"
@@ -11,7 +11,7 @@ const SPACE = "22222222222242228222222222222222"
 const PROP = "98012398829d48b083738f2589675894"
 
 /** A fake `geodb-client pipe`: a node script speaking the frame protocol, run through the client's spawn seam. */
-function fakePipe(body: string, options: {timeoutMs?: number; poolSize?: number} = {}) {
+function fakePipe(body: string, options: {timeoutMs?: number; poolSize?: number; keepWarmMs?: number} = {}) {
 	const dir = mkdtempSync(join(tmpdir(), "geodb-pipe-"))
 	const script = join(dir, "fake.mjs")
 	writeFileSync(
@@ -48,6 +48,7 @@ ${body}
 			starts++
 			return nodeSpawn(process.execPath, [script, String(starts)], {stdio: ["pipe", "pipe", "pipe"]}) as never
 		},
+		...(options.keepWarmMs ? {keepWarmMs: options.keepWarmMs} : {}),
 	})
 	return {client, starts: () => starts}
 }
@@ -69,6 +70,38 @@ lines((line) => {
 		}
 		expect(starts()).toBe(1)
 		client.close()
+	})
+
+	it("keeps the first worker warm with an empty read once it has idled, and never before a first read", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "geodb-warm-"))
+		const log = join(dir, "lines.log")
+		const {client, starts} = fakePipe(
+			`
+import {appendFileSync} from "node:fs"
+process.stdout.write("ready\\n")
+lines((line) => {
+	appendFileSync(${JSON.stringify(log)}, line + "\\n")
+	frame("+", "")
+})
+`,
+			{keepWarmMs: 60},
+		)
+		await new Promise((r) => setTimeout(r, 200))
+		expect(starts()).toBe(0)
+		await client.readCard({geoSpaceId: SPACE, entityId: ENTITY})
+		await new Promise((r) => setTimeout(r, 500))
+		const lines = readFileSync(log, "utf8").trim().split("\n")
+		expect(lines.length).toBeGreaterThan(2)
+		expect(lines[0]).toContain(ENTITY)
+		for (const line of lines.slice(1)) {
+			expect(line.startsWith(`${SPACE}\t`)).toBe(true)
+			expect(line).toContain("0".repeat(32))
+		}
+		expect(starts()).toBe(1)
+		client.close()
+		const after = readFileSync(log, "utf8").length
+		await new Promise((r) => setTimeout(r, 200))
+		expect(readFileSync(log, "utf8").length).toBe(after)
 	})
 
 	it("answers many concurrent requests over the pool, each with its own rows", async () => {
