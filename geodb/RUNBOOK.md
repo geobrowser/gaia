@@ -427,13 +427,19 @@ spec:
             - {name: serve-config, mountPath: /etc/geodb/serve.cfg, subPath: serve.cfg, readOnly: true}
             - {name: store-secret, mountPath: /etc/geodb/store-secret, readOnly: true}
           resources:
-            requests: {memory: 1Gi, cpu: "1"}
-            limits: {memory: 2Gi}
+            requests: {memory: 4Gi, cpu: "500m"}   # the serve's own figures; a smaller limit is refused, see below
+            limits: {memory: 6Gi}
           securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
 EOF
 $K wait --for=condition=complete job/geodb-migrate --timeout=45m     # ~18 min here; progress: $K exec job/geodb-migrate -- wc -l /data/migrate.log
 $K logs job/geodb-migrate                                              # DONE migrate spaces=<n> versions=<m>, then "swapped"
 ```
+
+The Job's memory limit must be the serve's (request 4Gi, limit 6Gi), not the migrator's 606 MiB. `geodb-migrate` opens the
+new root at the `medium` profile, like the serve, and that open reads the container's memory limit (cgroup `memory.max`)
+and refuses a limit below the profile's floor. With a 2Gi limit the Job ended within seconds, `migrate.log` held only
+`error: DefiniteRefusal`, and no `store-rev4` was created (the old store is untouched, since the script only swaps after
+success). The memory is not used: the migrator peaked at 606 MiB under a 6Gi limit.
 
 6. Check the Job log: `spaces` equals the number of Spaces before (100 on 2026-11-04) and no line says a seal differs.
 7. Bring both back on the new image. `deploy-v2` applies `geodb.yaml`, whose StatefulSet and feeder
