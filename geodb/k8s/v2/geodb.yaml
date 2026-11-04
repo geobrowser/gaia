@@ -150,7 +150,7 @@ spec:
             defaultMode: 0440
       containers:
         - name: serve
-          image: registry.digitalocean.com/geo/geodb:289618ffbf
+          image: registry.digitalocean.com/geo/geodb:4d3b31dff4
           imagePullPolicy: IfNotPresent
           ports:
             - name: geodb
@@ -287,7 +287,7 @@ spec:
         # (the Service's ClusterIP, which the binding grammar needs as an address) pinned to serve's node id.
         # Exits 1 until serve has published its ids, so the pod retries rather than starting blind.
         - name: geodb-setup
-          image: registry.digitalocean.com/geo/geodb:289618ffbf
+          image: registry.digitalocean.com/geo/geodb:4d3b31dff4
           imagePullPolicy: IfNotPresent
           command:
             - sh
