@@ -53,6 +53,11 @@ const fields = new Set<string>()
 const results = new Map<string, number>()
 const unsupported = new Map<string, number>()
 const uncompared = new Map<string, number>()
+const shapes = new Map<string, number>()
+
+/** Most distinct (field, reason, shape) series one process exports; later shapes count as `other`. */
+export const MAX_UNSUPPORTED_SHAPES = 100
+const SHAPE_PATTERN = /^[A-Za-z0-9_.,;:=()[\]|+-]{1,200}$/
 
 const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(key) ?? 0) + 1)
 
@@ -70,6 +75,17 @@ export function recordGatewayUnsupported(field: string, reason: UnsupportedReaso
 
 export function recordGatewayUncompared(field: string, reason: UncomparedReason): void {
 	bump(uncompared, `${field}\t${reason}`)
+}
+
+/**
+ * The argument shape (names and filter keys, never values) of an operation counted under `reason`. Bounded: a
+ * shape is GraphQL names only (else `other`), and once MAX_UNSUPPORTED_SHAPES series exist a new shape is `other`.
+ */
+export function recordGatewayUnsupportedShape(field: string, reason: UnsupportedReason, shape: string): void {
+	const safe = SHAPE_PATTERN.test(shape) ? shape : "other"
+	let key = `${field}\t${reason}\t${safe}`
+	if (!shapes.has(key) && shapes.size >= MAX_UNSUPPORTED_SHAPES) key = `${field}\t${reason}\tother`
+	bump(shapes, key)
 }
 
 export function renderGatewayMetrics(): string {
@@ -101,6 +117,16 @@ export function renderGatewayMetrics(): string {
 			lines.push(
 				`gaia_api_gateway_shadow_uncompared_total{field="${field}",reason="${reason}"} ${uncompared.get(`${field}\t${reason}`) ?? 0}`,
 			)
+	lines.push(
+		"# HELP gaia_api_gateway_shadow_unsupported_shape_total Unsupported shadowed operations by root field, reason and argument shape (argument names and filter keys with their operators, no values).",
+		"# TYPE gaia_api_gateway_shadow_unsupported_shape_total counter",
+	)
+	for (const [key, count] of shapes) {
+		const [field, reason, shape] = key.split("\t")
+		lines.push(
+			`gaia_api_gateway_shadow_unsupported_shape_total{field="${field}",reason="${reason}",shape="${shape}"} ${count}`,
+		)
+	}
 	return `${lines.join("\n")}\n${renderSearchMetrics()}`
 }
 
@@ -110,5 +136,6 @@ export function __resetGatewayMetricsForTests(): void {
 	results.clear()
 	unsupported.clear()
 	uncompared.clear()
+	shapes.clear()
 	__resetSearchMetricsForTests()
 }
