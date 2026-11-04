@@ -17,7 +17,7 @@ import {appendFileSync, existsSync, mkdirSync, readFileSync} from "node:fs"
 import {type ApplyDeps, applyIntents} from "./apply.js"
 import {conformingId, cid} from "./ids.js"
 import {parseFields} from "./hermes.js"
-import {ensureSpace, type SpaceDeps} from "./spaces.js"
+import {deadLetterSpaceCap, ensureSpace, SpaceCapError, type SpaceDeps} from "./spaces.js"
 import {eachLine, writeFileDurable} from "./state.js"
 
 export type Role = "member" | "editor"
@@ -161,7 +161,14 @@ export async function applyRoleEvent(
 ): Promise<MembershipOutcome> {
 	const plan = planRoleEvent(ev, deps.state)
 	if (plan.intents.length === 0) return "noop"
-	const space = await ensureSpace(deps, ev.space)
+	let space: Awaited<ReturnType<typeof ensureSpace>>
+	try {
+		space = await ensureSpace(deps, ev.space)
+	} catch (e) {
+		if (!(e instanceof SpaceCapError)) throw e
+		deadLetterSpaceCap(deps, {...meta, topic: "membership"}, e)
+		return "dead_letter"
+	}
 	const r = await applyIntents(deps, space, {...meta, space: ev.space}, plan.intents, plan.intents.length, 0, () => {})
 	// A refused intent was dead-lettered (errors.jsonl) by applyIntents. The journal is then left as it was, so
 	// the journal never claims a statement geo-db refused; a later event for the same role plans it again.

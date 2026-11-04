@@ -1,6 +1,6 @@
 import {type ApplyDeps, applyIntents} from "./apply.js"
 import {parseHermesEdit} from "./hermes.js"
-import {ensureSpace, type SpaceDeps} from "./spaces.js"
+import {deadLetterSpaceCap, ensureSpace, SpaceCapError, type SpaceDeps} from "./spaces.js"
 import {Overlay} from "./state.js"
 import {type GrcOp, translateOps} from "./translate.js"
 
@@ -37,7 +37,14 @@ export async function handleMessage(
 		return "dead_letter"
 	}
 
-	const space = await ensureSpace(deps, spaceId)
+	let space: Awaited<ReturnType<typeof ensureSpace>>
+	try {
+		space = await ensureSpace(deps, spaceId)
+	} catch (e) {
+		if (!(e instanceof SpaceCapError)) throw e
+		deadLetterSpaceCap(deps, {...meta, edit: editId}, e)
+		return "dead_letter"
+	}
 	const overlay = new Overlay(deps.store, spaceId)
 	const {intents, stats} = translateOps(ops, overlay)
 	const from = Math.min(deps.store.progress(partition, offset), intents.length)

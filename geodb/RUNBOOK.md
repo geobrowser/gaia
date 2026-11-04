@@ -325,6 +325,12 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
   (2026-11-03); a backfill with `all` founds more, up to `BACKFILL_SPACE_CAP` (192).
   Serve's memory is at its 4Gi limit at the medium profile before any backfill: watch it through §2b. If the feeder log shows founding refused
   for capacity, `GeoDbFeederStalled` fires; raise `spaces`, redeploy, and the feeder resumes.
+  A founding refused as `ResourceExhausted` does not stall the feeder: the edit or membership event is dead-lettered
+  to `errors.jsonl` with `"kind":"space_cap"` (and counted in `geodb_feeder_dead_letters_total{kind="space_cap"}`),
+  the gaia Space is logged once ("space not founded: geo-db is at its space cap"), and the partition moves on. Such a
+  Space is not retried until the feeder restarts. A `space_cap` line means geo-db never saw that edit or role event,
+  so the Space is missing data until the cap is raised and it is replayed. Raising the cap is a geo-db store
+  configuration question (`spaces` in `geodb-serve-config`, and serve's memory), not a feeder setting.
   The space-map ConfigMap (1 MiB limit) holds roughly 15,000 Spaces, so it is not the constraint.
 - Upgrading geo-db: build a new image tag, change the pinned tag in `geodb/k8s/v2/geodb.yaml` and
   `api/k8s/v2/api.yaml` together, and redeploy. Read the geo-db release notes for store-format changes first. A change of the store's persistent revision needs §8 first.
