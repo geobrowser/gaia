@@ -21,8 +21,13 @@ export type FallbackReason = (typeof FALLBACK_REASONS)[number]
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]
 export type ServedSource = (typeof SERVED_SOURCES)[number]
 
-/** Upper bounds in seconds; the default read budget is 0.5 s. */
-export const LATENCY_BUCKETS_SECONDS = [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1] as const
+/**
+ * Upper bounds in seconds; the default read budget is 0.5 s. Dense between 1 and 5 ms, where the warm card
+ * reads of both stores sit, so a p50 is not interpolated inside one bucket. Both histograms share it.
+ */
+export const LATENCY_BUCKETS_SECONDS = [
+	0.001, 0.0015, 0.002, 0.003, 0.004, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1,
+] as const
 
 type Outcome = "ok" | "error"
 

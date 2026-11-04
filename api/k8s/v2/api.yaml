@@ -72,6 +72,23 @@ spec:
           labelSelector:
             matchLabels:
               app: api
+      # Prefer the node that runs geodb-0. A card read over the geodb-client pipe is
+      # 1.43 ms p50 from a pod on that node and 2.41 ms from another node
+      # (geo-db plan 10.09). PREFERRED, never required: a full node must not block
+      # a scale-out (same reasoning as the spread constraint above), and geodb-0 is
+      # a single pod, so a hard rule would pin every api replica to one node.
+      # Weight 100 so it outweighs the spread score; replicas that do not fit on
+      # that node spill to others as before. Applies at scheduling time only, so
+      # existing pods move on their next roll.
+      affinity:
+        podAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app: geodb
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001
