@@ -207,6 +207,13 @@ spec:
             # below is read. Turn on in two steps (geodb/RUNBOOK.md): "shadow", then "on".
             - name: GEODB_ENTITY_CARDS
               value: "shadow"
+            # GraphQL gateway. "on" sends /graphql through the field classifier; every field
+            # below stays in shadow, so responses still come from Postgres and a sample
+            # (GRAPHQL_GATEWAY_SHADOW_SAMPLE, default 1%) is compared against geo-db.
+            - name: GRAPHQL_GATEWAY
+              value: "on"
+            - name: GRAPHQL_GATEWAY_FIELDS
+              value: "entity=shadow,entities=shadow,relation=shadow,relations=shadow,search=shadow,searchConnection=shadow"
             - name: GEODB_CLIENT_BIN
               value: /geodb/geodb-client
             - name: GEODB_KEY_PATH
