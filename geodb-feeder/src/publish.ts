@@ -81,6 +81,11 @@ export class SpaceMapPublisher {
 		void this.flush()
 	}
 
+	/** True while the newest map has not reached the ConfigMap yet (always false outside a cluster). */
+	get pending(): boolean {
+		return this.put !== null && this.dirty
+	}
+
 	start(retryMs = 30_000): void {
 		this.timer = setInterval(() => void this.flush(), retryMs)
 		this.timer.unref()

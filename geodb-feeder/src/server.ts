@@ -1,10 +1,9 @@
 import {createServer, type Server} from "node:http"
-import type {Metrics} from "./metrics.js"
 
 export type Health = {ready: () => boolean}
 
 /** /health/liveness, /health/readiness and /health/metrics, the paths the other gaia services use; metrics are also served at /metrics, which the shared ServiceMonitor scrapes. */
-export function startServer(port: number, metrics: Metrics, health: Health): Server {
+export function startServer(port: number, metrics: {render(): string}, health: Health): Server {
 	const server = createServer((req, res) => {
 		const url = req.url ?? ""
 		if (url.startsWith("/health/liveness")) {

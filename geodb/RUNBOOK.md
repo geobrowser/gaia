@@ -112,6 +112,113 @@ histogram_quantile(0.99, sum by (le) (rate(gaia_api_geodb_read_seconds_bucket[10
 Results: `match`, `only_postgres`, `only_geodb`, `both`, `failed`. `failed` means geo-db could not be asked
 (binding, key, space map, or serve down).
 
+### 2a. Replay traffic
+
+Testnet has too few people opening cards for a week of shadow to mean much. Deployment `geodb-card-replay`
+(`geodb/k8s/v2/geodb-card-replay.yaml`, same image as the feeder) calls the card route in cluster, through
+Service `api` (`http://api:3000/geodb/entities/<id>/card?spaceId=<space>`), at `REPLAY_RATE` requests per
+second: 0.5 by default, and the driver refuses more than 1 or any host other than Service `api`. It never
+uses the public endpoint.
+
+Pairs are drawn from gaia Postgres (read only) and refreshed every 15 minutes, only for Spaces in the
+published space map: 50% from each Space's top `local_scores` entities (Zipf by rank, the proxy for what
+people open), 30% recently edited entities, 20% a uniform sample. A Space mapped out since the last refresh
+is skipped and counted (`result="skipped_unmapped"`), never requested.
+
+It ships with the feeder (`deploy-v2 -f service=geodb-feeder` applies both files). If the feeder was deployed
+before this file existed, deploy it again with the same tag, or apply only the replay:
+
+```bash
+sed "s|geodb-feeder:latest|geodb-feeder:<TAG>|" geodb/k8s/v2/geodb-card-replay.yaml | $K apply -f -
+$K rollout status deployment/geodb-card-replay
+$K logs deploy/geodb-card-replay --tail=5     # "replay pools refreshed" with top/recent/random counts
+```
+
+Its own series (scraped through the shared ServiceMonitor, app `geodb-card-replay`):
+
+```
+sum by (result) (rate(geodb_card_replay_requests_total[10m]))   # ok, http_error, error, skipped_unmapped
+geodb_card_replay_pairs                                           # pool sizes, by pool
+time() - geodb_card_replay_last_refresh_seconds                   # pool age; > 1800 means refreshes are failing
+```
+
+Stop it with `$K scale deployment/geodb-card-replay --replicas=0`; change the rate with
+`$K set env deployment/geodb-card-replay REPLAY_RATE=0.2`.
+
+### 2b. Backfill (once, before the week starts)
+
+The feeder only knows what passed through the topic since its group started, so most cards begin
+`only_postgres` (2026-11-03: 55 of 61 sampled pairs, 90%). Job `geodb-backfill`
+(`geodb/k8s/v2/geodb-backfill-job.yaml`, same image, `node dist/backfill-main.js`) loads the current state of
+every entity geo-db does not know yet, from gaia Postgres (read only), through the feeder's own translator
+and apply path, onto the feeder's own volume and journals.
+
+Why it is safe to run against a live replica (full argument in `geodb-feeder/src/backfill.ts`):
+
+- **Ordering.** It runs only while the feeder is scaled to 0, and checks before it starts that the
+  feeder's consumer group has no members, that no feeder message is half applied, and that the kg-indexer
+  (which writes Postgres) has committed past every offset the feeder has applied, on every partition. So
+  Postgres already holds everything geo-db does, and nothing newer arrives in geo-db while it runs. It
+  never overwrites a cell geo-db holds: an entity the journal does not know gets all its values and
+  relations; one it knows is read back from geo-db first, and only properties with no row and relations
+  whose statement id is absent are written. Everything written is recorded in the same journal. When the
+  feeder resumes, it replays every edit since its stored offset in topic order on top, so the newest value
+  wins (a `set` replaces the backfilled cell; an `unset` or delete applies, because the journal now knows the
+  entity or statement). It re-checks the group every minute and stops if the feeder comes back.
+- **Idempotence.** A cursor on the volume (`/data/feeder/backfill/`) records the finished batches. A rerun
+  after a crash resumes from the last finished batch; the batch that was in flight is marked, and its
+  entities are all read back from geo-db first, so nothing they already got is written twice.
+- **Spaces.** A gaia Space with no geo-db Space is founded exactly as the feeder founds it
+  (`geodb-client found`, same sealer), up to `BACKFILL_SPACE_CAP` (192, under serve's `spaces = 256`), and
+  the space map (`geodb-space-map`) is republished before the Job exits.
+- **Load.** 100 entities per batch, chunks of 200 intents, 100 ms pause after each apply; one connection
+  to Postgres, one batch query at a time, each in a `READ ONLY` transaction with a statement timeout.
+
+Size (testnet, 2026-11-03): mapped Spaces hold ~1.18M entities, ~2.9M values and ~4.8M relations, about 7.6M
+intents; at the paced rate that is roughly 1.5 to 2 hours. `all` (1,574 Spaces, ~11.5M rows) is larger and
+founds Spaces up to the cap.
+
+**Serve memory is the risk.** geodb-0 already sits at its 4Gi limit (`kubectl top`, 2026-11-03) with a
+fraction of this data. Stage the run and watch it; if serve logs `exhausted` or restarts, stop and raise
+serve's memory or profile before going on.
+
+```bash
+TAG=<the feeder tag deployed now>
+# 0. silence GeoDbFeederDown and GeoDbFeederLagHigh for ~3h: the feeder is down on purpose, and catches up after.
+# 1. stop the feeder and wait for its group to be empty (it leaves on SIGTERM).
+$K scale deployment/geodb-feeder --replicas=0
+$K wait --for=delete pod -l app=geodb-feeder --timeout=120s
+# 2. stage 1: just the Space the exit check samples, to see it work end to end.
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__SPACES__|41e851610e13a19441c4d980f2f2ce6b|" \
+  geodb/k8s/v2/geodb-backfill-job.yaml | $K apply -f -
+$K logs -f job/geodb-backfill          # "ordering precondition" ok:true, then "backfill batch", "backfill done"
+$K top pod geodb-0 --containers        # serve memory, while it runs
+$K delete job geodb-backfill
+# 3. stage 2: the mapped Spaces, capped first (BACKFILL_MAX_ENTITIES), then without the cap. Same command with
+#    __SPACES__ -> mapped, and (first) -e 's|value: "0"|value: "50000"|' for the cap. Delete the Job between runs.
+# 4. optional: __SPACES__ -> all, which also founds Spaces geo-db does not have yet (largest first).
+# 5. start the feeder again; it replays every edit since its stored offset, then the lag falls to ~0.
+$K scale deployment/geodb-feeder --replicas=1
+$K rollout status deployment/geodb-feeder
+```
+
+If the Job fails, read why (`$K logs job/geodb-backfill`), delete it, and apply it again: it resumes. If you
+must give up, just scale the feeder back to 1; whatever was written is in the journal and correct.
+
+Check it worked:
+
+```bash
+# the exit check's sample card: shadow result for it should be match (no "geodb card diff" line for it)
+$K get --raw "/api/v1/namespaces/gaia/services/api:3000/proxy/geodb/entities/073ff16be7fe4591a984c325d629d92d/card?spaceId=41e851610e13a19441c4d980f2f2ce6b"
+$K logs deploy/api --since=2m | grep 073ff16be7fe4591a984c325d629d92d
+# the only_postgres share over the replay's sample, before vs after (compare a window before step 0 with one after step 5)
+sum(increase(gaia_api_geodb_card_shadow_total{result="only_postgres"}[1h])) / sum(increase(gaia_api_geodb_card_shadow_total[1h]))
+```
+
+`only_postgres` does not go to 0: properties gaia derives itself and no edit carries
+(`BACKFILL_EXCLUDE_PROPERTIES`, default the list in `geodb-feeder/src/pgAdapter.ts`) are left out on
+purpose, so the replica holds only what the stream would give it.
+
 ## 3. The exit check: a week of traffic
 
 Do not turn serve mode on until all of these hold over 7 days of shadow:
@@ -127,10 +234,25 @@ Do not turn serve mode on until all of these hold over 7 days of shadow:
 - p99 `gaia_api_geodb_read_seconds` is well under the 500 ms budget (`GEODB_TIMEOUT_MS`).
 - No `GeoDbFeederDown`, `GeoDbFeederStalled`, `ApiGeoDbCardShadowFailing` alert in the window.
 
-The topic may not hold full history. If retention is shorter than the age of the data, the replica only
-knows entities touched within it, and cards for older entities answer `only_postgres`. That is a coverage
-limit, not a bug, and it is why `only_postgres` has a floor above zero. Decide whether that floor is
-acceptable before serve mode; backfilling older state is outside stage 1.
+The topic does not hold full history; §2b's backfill fills in the older state once. Run it before the week
+starts, so the week measures the replica as it would serve, not its coverage gap.
+
+Reading the week. With the replay (§2a) running, most samples are its own, so the totals are steady and
+comparable day to day:
+
+```
+# share of each result over the week (the replay's ~300k requests plus real users)
+sum by (result) (increase(gaia_api_geodb_card_shadow_total[7d])) / ignoring(result) group_left sum(increase(gaia_api_geodb_card_shadow_total[7d]))
+# day by day, to see a trend or a bump
+sum by (result) (increase(gaia_api_geodb_card_shadow_total[1d]))
+# the replay itself was healthy all week: ok dominates, error/http_error near 0
+sum by (result) (increase(geodb_card_replay_requests_total[7d]))
+```
+
+A gap in `geodb_card_replay_requests_total{result="ok"}` is a gap in the sample, not a replica problem;
+`http_error` or `error` from the replay means the api route itself failed. `skipped_unmapped` is a Space
+that left the map. The diffs worth reading are in the api's `geodb card diff` log lines (entity, space, and
+a sample of the differing statements).
 
 ## 4. Turn on serve mode
 
@@ -177,8 +299,9 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 - New Spaces become readable to the api within the grant lifetime (`GEODB_GRANT_TTL_S`, 300 s) and the
   space-map refresh (10 s).
 - Founding is online: no serve restart. If serve is restarted by hand, the feeder retries its connection.
-- Capacity: `spaces = 256` in `geodb-serve-config` is geo-db's Space capacity. The shadow droplet holds 79
-  gaia Spaces on testnet (2026-11-03), so there is headroom. If the feeder log shows founding refused
+- Capacity: `spaces = 256` in `geodb-serve-config` is geo-db's Space capacity. Testnet maps 99 gaia Spaces
+  (2026-11-03); a backfill with `all` founds more, up to `BACKFILL_SPACE_CAP` (192).
+  Serve's memory is at its 4Gi limit at the medium profile before any backfill: watch it through §2b. If the feeder log shows founding refused
   for capacity, `GeoDbFeederStalled` fires; raise `spaces`, redeploy, and the feeder resumes.
   The space-map ConfigMap (1 MiB limit) holds roughly 15,000 Spaces, so it is not the constraint.
 - Upgrading geo-db: build a new image tag, change the pinned tag in `geodb/k8s/v2/geodb.yaml` and

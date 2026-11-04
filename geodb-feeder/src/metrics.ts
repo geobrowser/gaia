@@ -6,7 +6,7 @@ const key = (l: Labels) =>
 		.map(([k, v]) => `${k}="${v.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`)
 		.join(",")
 
-class Series {
+export class Series {
 	readonly values = new Map<string, number>()
 	constructor(
 		readonly name: string,

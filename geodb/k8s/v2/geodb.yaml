@@ -8,6 +8,12 @@
 #                              with `geodb-client found`; publishes the gaia-Space -> geo-db-Space map
 #                              (key space-map.json) to the same ConfigMap. State on its own PVC.
 #
+# Alongside, in their own files:
+#   geodb-backfill-job.yaml    one-shot Job (by hand, feeder scaled to 0; not in deploy-v2): loads the state of
+#                              entities the replica is missing from gaia Postgres. RUNBOOK §2b.
+#   geodb-card-replay.yaml     Deployment: ~0.5 rps of card requests to Service api so the shadow compare has
+#                              samples. Deployed with this file by deploy-v2.
+#
 # Secrets (created by hand, never in git; see the runbook for the commands):
 #   geodb-feeder-kafka   KAFKA_BROKER, KAFKA_USERNAME, KAFKA_PASSWORD, KAFKA_SSL_CA_PEM  (dedicated user)
 #   geodb-store-secret   secret.hex: 64 hex digits, the store secret (fixes Space ids; never rotate)
@@ -194,11 +200,13 @@ spec:
             periodSeconds: 5
             failureThreshold: 120
           resources:
+            # The medium profile alone holds ~4 GiB resident (it sat at the old 4Gi limit with no data
+            # growth); 6Gi leaves room for the backfill.
             requests:
-              memory: "2Gi"
+              memory: "4Gi"
               cpu: "500m"
             limits:
-              memory: "4Gi"
+              memory: "6Gi"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -334,6 +342,10 @@ spec:
               value: /etc/geodb/space-map/sealer-id
             - name: METRICS_PORT
               value: "9090"
+            # The journals of what geo-db holds (known-entities/statements) are kept in memory and grow ~10x
+            # after a backfill (RUNBOOK §2b): give the heap room below the limit.
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=1536"
             - name: KAFKA_BROKER
               valueFrom:
                 secretKeyRef:
@@ -380,7 +392,7 @@ spec:
               memory: "256Mi"
               cpu: "100m"
             limits:
-              memory: "1Gi"
+              memory: "2Gi"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

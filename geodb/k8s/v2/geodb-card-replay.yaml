@@ -1,0 +1,111 @@
+# geodb-card-replay: steady, small traffic on the api's entity-card route, so the card shadow compare
+# (gaia_api_geodb_card_shadow_total) has a week of samples even when nobody opens cards. See
+# geodb-feeder/src/replay.ts and geodb/RUNBOOK.md §2/§3.
+#
+# In cluster only, through Service api (http://api:3000): the driver refuses any other host, and REPLAY_RATE
+# above 1 request per second. Pairs come from gaia Postgres (read only) and only for Spaces in the published
+# space map; a Space mapped out later is skipped. Same image as the feeder; deployed with it by deploy-v2.
+apiVersion: v1
+kind: Service
+metadata:
+  name: geodb-card-replay
+  namespace: gaia
+  labels:
+    app: geodb-card-replay
+spec:
+  type: ClusterIP
+  selector:
+    app: geodb-card-replay
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: geodb-card-replay
+  namespace: gaia
+  labels:
+    app: geodb-card-replay
+spec:
+  replicas: 1
+  # One driver: two would double the rate.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: geodb-card-replay
+  template:
+    metadata:
+      labels:
+        app: geodb-card-replay
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      volumes:
+        - name: space-map
+          configMap:
+            name: geodb-space-map
+            optional: true
+      containers:
+        - name: replay
+          image: registry.digitalocean.com/geo/geodb-feeder:latest
+          imagePullPolicy: Always
+          command: ["node", "dist/replay-main.js"]
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            # Requests per second; at most 1 (the driver refuses more).
+            - name: REPLAY_RATE
+              value: "0.5"
+            - name: REPLAY_API_URL
+              value: http://api:3000
+            - name: REPLAY_REFRESH_MS
+              value: "900000"
+            - name: GEODB_SPACE_MAP_PATH
+              value: /etc/geodb/space-map/space-map.json
+            - name: METRICS_PORT
+              value: "9090"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          volumeMounts:
+            - name: space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/liveness
+              port: metrics
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "10m"
+            limits:
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL

@@ -15,7 +15,7 @@ import {errorFields, log} from "./log.js"
 import {createMetrics} from "./metrics.js"
 import {SpaceMapPublisher, kubeConfigMapPut} from "./publish.js"
 import {startServer} from "./server.js"
-import {ensureSpace} from "./spaces.js"
+import {ensureSpace, readSealer} from "./spaces.js"
 import {Store, renderSpaceMap} from "./state.js"
 
 const {Kafka, logLevel, CompressionTypes, CompressionCodecs} = kafkajs
@@ -178,16 +178,3 @@ main(loadConfig()).catch((e) => {
 	process.exit(1)
 })
 
-/** serve's sealer key id (public). The supervisor publishes it to the geodb-space-map ConfigMap, mounted here. */
-async function readSealer(path: string): Promise<string> {
-	for (;;) {
-		try {
-			const id = readFileSync(path, "utf8").trim()
-			if (/^[0-9a-f]{64}$/.test(id)) return id
-		} catch {
-			// not published yet
-		}
-		log("warn", "waiting for serve's sealer id", {path})
-		await sleep(5000)
-	}
-}
