@@ -61,7 +61,8 @@ function observe(bucketMap: Map<string, number[]>, sumMap: Map<string, number>, 
 export const observeGeoDbRead = (seconds: number, outcome: Outcome) => observe(buckets, sums, seconds, outcome)
 
 /** The Postgres read of the same card in shadow mode, on the same buckets, so the two histograms compare. */
-export const observePostgresCardRead = (seconds: number, outcome: Outcome) => observe(pgBuckets, pgSums, seconds, outcome)
+export const observePostgresCardRead = (seconds: number, outcome: Outcome) =>
+	observe(pgBuckets, pgSums, seconds, outcome)
 
 function histogram(name: string, help: string, bucketMap: Map<string, number[]>, sumMap: Map<string, number>) {
 	const lines = [`# HELP ${name} ${help}`, `# TYPE ${name} histogram`]

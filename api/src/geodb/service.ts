@@ -11,7 +11,14 @@ import {conformingId, diffCards, isEmptyDiff, statementsFromPostgres} from "./ca
 import type {GeoDbCardClient} from "./client"
 import {GeoDbError} from "./client"
 import type {GeoDbCardMode} from "./config"
-import {observeGeoDbRead, observePostgresCardRead, recordFallback, recordServed, recordShadow, type ShadowResult} from "./metrics"
+import {
+	observeGeoDbRead,
+	observePostgresCardRead,
+	recordFallback,
+	recordServed,
+	recordShadow,
+	type ShadowResult,
+} from "./metrics"
 
 export type CardStatementView = {property: string; value: string}
 

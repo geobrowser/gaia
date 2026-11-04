@@ -59,7 +59,11 @@ describe("geo-db card metrics", () => {
 
 	it("times the Postgres card read in shadow mode only, not the mode-on fallback", async () => {
 		activateGeoDbMetrics()
-		await resolveCard(deps("shadow", async () => [{prop: PROP, raw: "Noam"}]), ENTITY, SPACE)
+		await resolveCard(
+			deps("shadow", async () => [{prop: PROP, raw: "Noam"}]),
+			ENTITY,
+			SPACE,
+		)
 		await resolveCard(
 			deps("on", async () => {
 				throw new GeoDbError("timeout", "slow")
