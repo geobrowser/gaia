@@ -5,13 +5,17 @@ import {join} from "node:path"
 import {describe, expect, it} from "vitest"
 import {cardDocument, createPipeGeoDbClient, createSpaceMap, GeoDbError} from "../client"
 import type {GeoDbCardConfig} from "../config"
+import {activateGeoDbMetrics, renderGeoDbCardMetrics} from "../metrics"
 
 const ENTITY = "073ff16be7fe4591a984c325d629d92d"
 const SPACE = "22222222222242228222222222222222"
 const PROP = "98012398829d48b083738f2589675894"
 
 /** A fake `geodb-client pipe`: a node script speaking the frame protocol, run through the client's spawn seam. */
-function fakePipe(body: string, options: {timeoutMs?: number; poolSize?: number; keepWarmMs?: number} = {}) {
+function fakePipe(
+	body: string,
+	options: {timeoutMs?: number; poolSize?: number; keepWarmMs?: number; grantTtlMs?: number} = {},
+) {
 	const dir = mkdtempSync(join(tmpdir(), "geodb-pipe-"))
 	const script = join(dir, "fake.mjs")
 	writeFileSync(
@@ -49,6 +53,7 @@ ${body}
 			return nodeSpawn(process.execPath, [script, String(starts)], {stdio: ["pipe", "pipe", "pipe"]}) as never
 		},
 		...(options.keepWarmMs ? {keepWarmMs: options.keepWarmMs} : {}),
+		...(options.grantTtlMs ? {grantTtlMs: options.grantTtlMs} : {}),
 	})
 	return {client, starts: () => starts}
 }
@@ -72,7 +77,7 @@ lines((line) => {
 		client.close()
 	})
 
-	it("keeps the first worker warm with an empty read once it has idled, and never before a first read", async () => {
+	it("keeps a worker warm with an empty read once it has idled, and never before a first read", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "geodb-warm-"))
 		const log = join(dir, "lines.log")
 		const {client, starts} = fakePipe(
@@ -84,7 +89,7 @@ lines((line) => {
 	frame("+", "")
 })
 `,
-			{keepWarmMs: 60},
+			{keepWarmMs: 60, poolSize: 1},
 		)
 		await new Promise((r) => setTimeout(r, 200))
 		expect(starts()).toBe(0)
@@ -102,6 +107,90 @@ lines((line) => {
 		const after = readFileSync(log, "utf8").length
 		await new Promise((r) => setTimeout(r, 200))
 		expect(readFileSync(log, "utf8").length).toBe(after)
+	})
+
+	it("once it has read, starts every slot's worker ahead of need and warms each", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "geodb-ahead-"))
+		const log = join(dir, "lines.log")
+		const {client, starts} = fakePipe(
+			`
+import {appendFileSync} from "node:fs"
+process.stdout.write("ready\\n")
+lines((line) => {
+	appendFileSync(${JSON.stringify(log)}, process.argv[2] + " " + line + "\\n")
+	frame("+", "")
+})
+`,
+			{keepWarmMs: 60, poolSize: 3},
+		)
+		await client.readCard({geoSpaceId: SPACE, entityId: ENTITY})
+		await new Promise((r) => setTimeout(r, 600))
+		expect(starts()).toBe(3)
+		const lines = readFileSync(log, "utf8").trim().split("\n")
+		// Every worker, including the two that have answered no read, is sent a keep-warm read in the last Space.
+		for (const worker of ["1", "2", "3"]) {
+			expect(
+				lines.some(
+					(l) => l.startsWith(`${worker} ${SPACE}\t`) && l.includes("0123456789ab4def8123456789abcdef"),
+				),
+			).toBe(true)
+		}
+		// A burst as wide as the pool now finds every worker ready: no worker is started for it.
+		await Promise.all([1, 2, 3].map(() => client.readCard({geoSpaceId: SPACE, entityId: ENTITY})))
+		expect(starts()).toBe(3)
+		client.close()
+	})
+
+	it("replaces an idle worker before its token expires, so no read finds the token dead", async () => {
+		const {client, starts} = fakePipe(
+			`
+const born = Date.now()
+process.stdout.write("ready\\n")
+lines((line) => {
+	if (Date.now() - born > 400) frame("-", "error: CapabilityTokenExpired")
+	else frame("+", "")
+})
+`,
+			{keepWarmMs: 250, poolSize: 1, grantTtlMs: 400},
+		)
+		activateGeoDbMetrics()
+		const ends = (reason: string) =>
+			Number(
+				new RegExp(`gaia_api_geodb_worker_ends_total\\{reason="${reason}"\\} (\\d+)`).exec(
+					renderGeoDbCardMetrics(),
+				)?.[1],
+			)
+		const recycledBefore = ends("recycled")
+		const deadBefore = ends("dead_session")
+		await client.readCard({geoSpaceId: SPACE, entityId: ENTITY})
+		await new Promise((r) => setTimeout(r, 900))
+		await client.readCard({geoSpaceId: SPACE, entityId: ENTITY})
+		// Retired at half its 400 ms lifetime, twice or more in 900 ms; the read never met an expired token.
+		expect(starts()).toBeGreaterThanOrEqual(3)
+		expect(ends("recycled") - recycledBefore).toBeGreaterThanOrEqual(2)
+		expect(ends("dead_session") - deadBefore).toBe(0)
+		client.close()
+	})
+
+	it("gives a slot whose worker died a fresh one before the next read needs it", async () => {
+		const {client, starts} = fakePipe(
+			`
+process.stdout.write("ready\\n")
+lines((line) => {
+	if (process.argv[2] === "1") frame("-", "error: NotFound")
+	else frame("+", "")
+})
+`,
+			{keepWarmMs: 60, poolSize: 1},
+		)
+		await expect(client.readCard({geoSpaceId: SPACE, entityId: ENTITY})).rejects.toMatchObject({
+			reason: "client_failed",
+		})
+		await new Promise((r) => setTimeout(r, 200))
+		expect(starts()).toBe(2)
+		await client.readCard({geoSpaceId: SPACE, entityId: ENTITY})
+		expect(starts()).toBe(2)
+		client.close()
 	})
 
 	it("answers many concurrent requests over the pool, each with its own rows", async () => {
