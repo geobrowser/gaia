@@ -42,6 +42,12 @@ export type GeoDbCardConfig = {
 	 */
 	everySpaceEntities?: boolean
 	/**
+	 * Let the gateway's entity shadow compare an entity's `backlinksList` against geo-db's card backlinks
+	 * (`EntityBacklinksPage`): one read of the filter's Space, or, with `everySpaceReads`, of every Space when
+	 * the filter names none. Off by default until its cost is measured on the live store. GEODB_BACKLINK_READS=on.
+	 */
+	backlinkReads?: boolean
+	/**
 	 * Lifetime of the capability token a worker's handshake gets, in seconds: geo-db's `grant_ttl_s`
 	 * (GEODB_GRANT_TTL_S on the serve, 300 by default). A worker is replaced before its token expires, so no
 	 * read finds the token dead. Absent means the default.
@@ -73,6 +79,7 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		multiSpaceReads: env.GEODB_MULTI_SPACE_READS?.trim().toLowerCase() === "on",
 		everySpaceReads: env.GEODB_EVERY_SPACE_READS?.trim().toLowerCase() === "on",
 		everySpaceEntities: env.GEODB_EVERY_SPACE_ENTITIES?.trim().toLowerCase() === "on",
+		backlinkReads: env.GEODB_BACKLINK_READS?.trim().toLowerCase() === "on",
 		poolSize: Number.isFinite(pool) && pool > 0 ? Math.min(pool, MAX_POOL_SIZE) : DEFAULT_POOL_SIZE,
 		grantTtlS: Number.isFinite(grantTtl) && grantTtl > 0 ? grantTtl : DEFAULT_GRANT_TTL_S,
 	}

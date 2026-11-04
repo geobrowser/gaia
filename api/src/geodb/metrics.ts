@@ -59,13 +59,14 @@ export function activateGeoDbMetrics(): void {
 }
 
 /**
- * The stages of one pipe read, by shape (`one` or `several` Spaces on the line, with or without `names`):
+ * The stages of one pipe read, by shape (`one` or `several` Spaces on the line, with or without `names`, or a
+ * `backlinks` read of an entity's inward references):
  * `wait` from submit until the line is written (queue and worker start), `answer` from the write until the
  * whole frame is in (the connection, the serve, and any delay in the event loop delivering the reply), and
  * `parse` turning the frame into rows.
  */
 export const READ_STAGES = ["wait", "answer", "parse"] as const
-export const READ_SHAPES = ["one", "one_names", "several", "several_names"] as const
+export const READ_SHAPES = ["one", "one_names", "several", "several_names", "backlinks"] as const
 export type ReadStage = (typeof READ_STAGES)[number]
 export type ReadShape = (typeof READ_SHAPES)[number]
 const stageBuckets = new Map<string, number[]>()

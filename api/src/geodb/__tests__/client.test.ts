@@ -489,6 +489,54 @@ lines((line) => {
 	})
 })
 
+describe("createPipeGeoDbClient, backlinks", () => {
+	const OTHER = "33333333333343338333333333333333"
+	const FROM = "44444444444444448444444444444444"
+
+	it("asks for `.backlinks = n` and leaves the other documents untouched", () => {
+		expect(cardDocument(ENTITY, {backlinks: 1024})).toBe(
+			`.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${ENTITY}", .backlinks = 1024 } } } }`,
+		)
+		expect(cardDocument(ENTITY, {backlinks: 0})).toBe(cardDocument(ENTITY))
+	})
+
+	it("reads the referring entity of each row whose value is the entity, in each Space of the line", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [spaces, doc] = line.split("\\t")
+	const entity = /id = "([0-9a-f]{32})"/.exec(doc)[1]
+	if (!doc.includes(".backlinks = 7")) return frame("-", "no backlinks arg")
+	const own = spaces.split(",").map((s) => ["${PROP}", "own", s + ":a", entity, "1"].join("\\t"))
+	const refs = spaces.split(",").map((s) => ["${PROP}", entity, s + ":b", "${FROM}", "1"].join("\\t"))
+	frame("+", [...own, ...refs].join("\\n") + "\\n")
+})
+`)
+		expect(await client.readBacklinks?.({geoSpaceIds: [SPACE], entityId: ENTITY, limit: 7})).toEqual([
+			{prop: PROP, raw: ENTITY, from: FROM},
+		])
+		expect(await client.readBacklinks?.({geoSpaceIds: [SPACE, OTHER], entityId: ENTITY, limit: 7})).toEqual([
+			{prop: PROP, raw: ENTITY, from: FROM, space: SPACE},
+			{prop: PROP, raw: ENTITY, from: FROM, space: OTHER},
+		])
+		client.close()
+	})
+
+	it("refuses a bad limit or Space list before it reaches the worker", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		for (const [geoSpaceIds, limit] of [
+			[[SPACE], 0],
+			[[SPACE], 4097],
+			[[], 10],
+			[[SPACE, SPACE], 10],
+		] as const)
+			await expect(
+				client.readBacklinks?.({geoSpaceIds: [...geoSpaceIds], entityId: ENTITY, limit}),
+			).rejects.toMatchObject({reason: "bad_request"})
+		expect(starts()).toBe(0)
+	})
+})
+
 describe("createSpaceMap", () => {
 	it("is empty without a path", async () => {
 		expect(await createSpaceMap("")(SPACE)).toBeNull()

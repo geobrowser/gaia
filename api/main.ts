@@ -231,6 +231,7 @@ const graphqlHandler = createGateway({
 										log,
 										budget: wideReadBudget,
 										multiSpace: geoDbCardConfig.multiSpaceReads === true,
+										backlinks: geoDbCardConfig.backlinkReads === true,
 										...(geoDbCardConfig.everySpaceReads === true
 											? {allGeoSpaces: sharedGeoDb.geoSpaceOf.all, everySpaceBudget}
 											: {}),

@@ -1,0 +1,48 @@
+{
+	"_note": "EntityBacklinksPage (geogenesis apps/web/core/gql) and PostGraphile's answer, captured read-only from the testnet gaia API on 2026-11-04.",
+	"request": {
+		"query": "\n  query EntityBacklinksPage($id: UUID!, $spaceId: UUID) {\n    entity(id: $id) {\n      backlinksList(filter: { spaceId: { is: $spaceId } }) {\n        spaceId\n        fromEntity {\n          id\n          name\n          spaceIds\n          types {\n            id\n            name\n            spaceIds\n          }\n        }\n      }\n    }\n  }\n",
+		"variables": {
+			"id": "fd54c69a-99b5-4144-9931-8afb9689fa1a",
+			"spaceId": null
+		}
+	},
+	"response": {
+		"data": {
+			"entity": {
+				"backlinksList": [
+					{
+						"spaceId": "c9f267dcb0d270718c2a3c45a64afd32",
+						"fromEntity": {
+							"id": "a94cb3410aea47378dda3b6489cbacef",
+							"name": "Alipay denies supporting crypto trading after Peer platform lists it as payment method",
+							"spaceIds": ["c9f267dcb0d270718c2a3c45a64afd32"],
+							"types": [
+								{
+									"id": "e550fe517e904b2c8fffdf13408f5634",
+									"name": "News story",
+									"spaceIds": ["941964642f4d3e70ef48f54a3915277d", "a19c345ab9866679b001d7d2138d88a1"]
+								}
+							]
+						}
+					},
+					{
+						"spaceId": "c9f267dcb0d270718c2a3c45a64afd32",
+						"fromEntity": {
+							"id": "4a5e01de87364cbba91a44f643531e00",
+							"name": "Peer's trading mechanism",
+							"spaceIds": ["c9f267dcb0d270718c2a3c45a64afd32"],
+							"types": [
+								{
+									"id": "b8803a8665de412bbb357e0c84adf473",
+									"name": "Data block",
+									"spaceIds": ["a19c345ab9866679b001d7d2138d88a1"]
+								}
+							]
+						}
+					}
+				]
+			}
+		}
+	}
+}

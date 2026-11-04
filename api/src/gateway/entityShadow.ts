@@ -62,6 +62,7 @@ import {GeoDbError} from "../geodb/client"
 import {observeGeoDbRead} from "../geodb/metrics"
 import {askGeoDb, askGeoDbSpaces, type CardDeps, type CardLogger} from "../geodb/service"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
+import {analyzeBacklinks, runBacklinks} from "./backlinksShadow"
 import type {FieldShadow} from "./gateway"
 import {analyzeLightEntity, type LightOutcome, noteUnsupported, runLight} from "./lightShadow"
 import {
@@ -979,6 +980,11 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	allGeoSpaces?: () => Promise<string[]>
 	/** Caps the every-Space reads (one unit each); absent means no cap. */
 	everySpaceBudget?: ReadBudget
+	/**
+	 * Compare `backlinksList` (`EntityBacklinksPage`) against geo-db's card backlinks (`GEODB_BACKLINK_READS`):
+	 * a filtered list reads its Space under `budget`, an unfiltered one every Space under `everySpaceBudget`.
+	 */
+	backlinks?: boolean
 }
 
 export type CardCheck =
@@ -1247,6 +1253,24 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 						{
 							operationName: classification.operationName,
 						},
+					)
+					return
+				}
+				const backlinks = deps.backlinks
+					? analyzeBacklinks(document, classification.operationName, params.variables)
+					: null
+				if (backlinks?.ok) {
+					let backlinksBody: unknown
+					try {
+						backlinksBody = await response.json()
+					} catch {
+						return
+					}
+					countLight(
+						deps,
+						ENTITY_FIELD,
+						await runBacklinks(deps, backlinks.plan, backlinksBody, "gateway entity shadow"),
+						{operationName: classification.operationName},
 					)
 					return
 				}

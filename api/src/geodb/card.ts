@@ -206,6 +206,35 @@ export function rowsFromGeoDbOutput(output: string, entityId: string, options: C
 		})
 }
 
+/** A statement referring to an entity, from its card's backlinks: `from` holds `prop` with the entity as value. */
+export type GeoBacklinkRow = GeoCardRow & {from: string}
+
+/**
+ * geodb-client `query` output for an entity card read with `.args.backlinks` (no names, no claims): the rows
+ * whose value is a reference to `entityId`, each with the referring entity (the row's entity cell). The card's
+ * own rows are dropped, except one referring to the entity itself, which is a backlink too.
+ */
+export function backlinkRowsFromGeoDbOutput(
+	output: string,
+	entityId: string,
+	options: Pick<CardOutputOptions, "spaces"> = {},
+): GeoBacklinkRow[] {
+	return output
+		.split("\n")
+		.filter((line) => line !== "")
+		.map((line) => line.split("\t"))
+		.filter((cells) => cells[1] === entityId && /^[0-9a-f]{32}$/.test(cells[3] ?? ""))
+		.map((cells) => {
+			const row: GeoBacklinkRow = {prop: cells[0] ?? "", raw: entityId, from: cells[3] as string}
+			if (options.spaces) {
+				const space = /^([0-9a-f]{32}):/.exec(cells[2] ?? "")?.[1]
+				if (!space) throw new Error(`a multi-space row has no space prefix: ${(cells[2] ?? "").slice(0, 40)}`)
+				row.space = space
+			}
+			return row
+		})
+}
+
 /**
  * Properties other indexers write straight into Postgres and no edit carries, so the geo-db backfill
  * excludes them by design (vote Score, ranking rank position, vote ordinal and weighted). The comparison
