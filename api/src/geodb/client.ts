@@ -169,8 +169,11 @@ const MAX_RETRIES_PER_WINDOW = 8
 const RETRY_WINDOW_MS = 10_000
 /** Idle time after which the first worker is sent a keep-warm read (the server's idle bound is a minute). */
 const KEEP_WARM_MS = 25_000
-/** An entity id nobody has: the keep-warm read's card is empty. */
-const NO_ENTITY = "0".repeat(32)
+/**
+ * An entity id nobody has, so the keep-warm read's card is empty. Not the all-zero id, which geo-db treats as
+ * an unset field and may refuse, and a refusal ends the worker's session. A conforming id (version 4, variant 8).
+ */
+const NO_ENTITY = "0123456789ab4def8123456789abcdef"
 /** A refusal naming a dead connection or token, not a verdict on the request. */
 const DEAD_SESSION = /\b(TransportClosed|TransportFailed|CapabilityTokenExpired)\b/
 const FRAME = /^([+-])(\d{1,9})$/

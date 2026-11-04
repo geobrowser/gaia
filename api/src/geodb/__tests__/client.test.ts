@@ -95,7 +95,7 @@ lines((line) => {
 		expect(lines[0]).toContain(ENTITY)
 		for (const line of lines.slice(1)) {
 			expect(line.startsWith(`${SPACE}\t`)).toBe(true)
-			expect(line).toContain("0".repeat(32))
+			expect(line).toContain("0123456789ab4def8123456789abcdef")
 		}
 		expect(starts()).toBe(1)
 		client.close()
