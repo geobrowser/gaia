@@ -113,7 +113,7 @@ export function pgBackfillSource(db: ReadOnlyPg): BackfillSource {
 			)
 			const relations = await db.read<PgRelationRow>(
 				`SELECT id::text AS id, from_entity_id::text AS from_entity_id, to_entity_id::text AS to_entity_id,
-				        type_id::text AS type_id
+				        type_id::text AS type_id, position
 				 FROM relations WHERE space_id = $1::uuid AND from_entity_id = ANY($2::uuid[])`,
 				[dashed(space), ids],
 			)

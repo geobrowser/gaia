@@ -75,6 +75,8 @@ export type BackfillOptions = {
 	/** Pause after every apply call, so serve keeps time for reads and for the feeder once it is back. */
 	pauseMs: number
 	exclude: ReadonlySet<string>
+	/** Write relation positions (GEODB_RELATION_POSITIONS). */
+	positions?: boolean
 	/** Stop after this many entities this run (0: no limit). For a measured first run. */
 	maxEntities: number
 }
@@ -255,7 +257,7 @@ export async function runBackfill(deps: BackfillDeps, opts: BackfillOptions): Pr
 				stats.excludedRows += r.excluded
 				ops.push(...r.ops)
 			}
-			const {intents, stats: tstats} = translateOps(ops, overlay)
+			const {intents, stats: tstats} = translateOps(ops, overlay, {positions: opts.positions})
 			const result = await applyIntents(
 				applyDeps,
 				geoSpace,
