@@ -30,6 +30,8 @@ export type ValueRow = {
 	boolean: boolean | null
 	datetime: string | null
 	date: string | null
+	/** kg-indexer text form `lat,lon[,alt]`. Absent where the caller cannot read it (the gateway shadow). */
+	point?: string | null
 }
 
 export type RelationRow = {
@@ -77,9 +79,27 @@ function instantNorm(iso: string): string {
 	return `instant:${sec}.${String(nanos).padStart(9, "0")}`
 }
 
+/** One point component as geo-db renders it: `digits` fractional digits, no trailing zeros, no "-0". */
+function pointPart(n: number, digits: number): string {
+	const t = n.toFixed(digits)
+	const trimmed = t.includes(".") ? t.replace(/0+$/, "").replace(/\.$/, "") : t
+	return trimmed === "-0" ? "0" : trimmed
+}
+
+/** The kg-indexer's `lat,lon[,alt]` as geo-db's `lon, lat[, alt]` (9 fractional digits of a degree, 6 of a metre), null if malformed. */
+export function pointNorm(text: string): string | null {
+	const parts = text.split(",").map((p) => Number(p.trim()))
+	if (parts.length < 2 || parts.length > 3 || parts.some((n) => !Number.isFinite(n))) return null
+	const [lat, lon, alt] = parts as [number, number, number | undefined]
+	return `${pointPart(lon, 9)}, ${pointPart(lat, 9)}${alt === undefined ? "" : `, ${pointPart(alt, 6)}`}`
+}
+
+/** What geo-db renders a point as: `lon, lat` or `lon, lat, alt`. */
+const POINT_SHAPED = /^-?\d+(\.\d+)?, -?\d+(\.\d+)?(, -?\d+(\.\d+)?)?$/
+
 /**
  * A Postgres value row as a canonical statement key, or null when geo-db's mapping cannot carry it (a
- * row of bytes, time, schedule, point, rect or embedding only, or with more than one column set).
+ * row of bytes, time, schedule, rect or embedding only, or with more than one column set).
  */
 export function valueKey(v: ValueRow): {kind: StatementKind; norm: string} | null {
 	const candidates: {kind: StatementKind; norm: string}[] = []
@@ -90,6 +110,10 @@ export function valueKey(v: ValueRow): {kind: StatementKind; norm: string} | nul
 	if (v.date != null) {
 		const m = String(v.date).match(/^(-?\d+)-(\d{2})-(\d{2})Z?$/)
 		candidates.push({kind: "text", norm: m ? `date:${Number(m[1])}-${m[2]}-${m[3]}` : String(v.date)})
+	}
+	if (v.point != null) {
+		const norm = pointNorm(v.point)
+		if (norm !== null) candidates.push({kind: "text", norm})
 	}
 	if (v.decimal != null) candidates.push({kind: "num", norm: normNumber(v.decimal)})
 	else if (v.float != null) candidates.push({kind: "num", norm: normNumber(v.float)})
@@ -225,9 +249,12 @@ export function diffCards(postgres: {statements: CardStatement[]; skipped: numbe
 		if (hit) hit.used = true
 		else onlyPostgres.push(s)
 	}
+	// A Postgres row that could not be mapped may be a point the caller could not read (the gateway shadow), so a
+	// point-shaped geo-db row left over is not a gap while one was skipped.
+	const unmatched = pool.filter((r) => !r.used && !(postgres.skipped > 0 && POINT_SHAPED.test(r.raw)))
 	return {
 		onlyPostgres,
-		onlyGeoDb: pool.filter((r) => !r.used).map(({prop, raw}) => ({prop, raw})),
+		onlyGeoDb: unmatched.map(({prop, raw}) => ({prop, raw})),
 		skipped: postgres.skipped + derived,
 	}
 }

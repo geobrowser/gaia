@@ -17,7 +17,7 @@ export async function getCardRows(
 	const [values, relations] = await Promise.all([
 		db.execute<ValueRow>(sql`
 			SELECT property_id::text AS property_id, text, integer::text AS integer, float::text AS float,
-			       decimal::text AS decimal, boolean, datetime, date
+			       decimal::text AS decimal, boolean, datetime, date, point
 			FROM "values"
 			WHERE entity_id = ${entityId}::uuid AND space_id = ${spaceId}::uuid
 		`),
