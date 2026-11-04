@@ -3,12 +3,14 @@ import {Hono} from "hono"
 import {cors} from "hono/cors"
 import {openAPISpecs} from "hono-openapi"
 import {MIN_INTERNAL_TOKEN_LENGTH, mountInternalRoutes} from "./src/forYou/router"
+import {readGatewayConfig} from "./src/gateway/config"
+import {createGateway} from "./src/gateway/gateway"
 import {readGeoDbCardConfig} from "./src/geodb/config"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {health} from "./src/health"
 import {createIpfsRouter} from "./src/ipfs"
 import {setGraphqlSearchClient} from "./src/kg/graphqlSearchOpenSearchPlugin"
-import {getGraphqlPoolPressure, graphqlServer} from "./src/kg/postgraphile"
+import {type GraphQLServerContext, getGraphqlPoolPressure, graphqlServer} from "./src/kg/postgraphile"
 import {createRateLimiter} from "./src/middleware/rateLimit"
 import {canonicalRequestLogging, isClientAbortError, requestId} from "./src/middleware/requestLogging"
 import {createProfileRouter} from "./src/profile"
@@ -175,13 +177,25 @@ log.info("IPFS routes enabled")
 
 app.get("/", swaggerUI({url: "/openapi"}))
 
+// Opt-in GraphQL gateway in front of PostGraphile (GRAPHQL_GATEWAY=on; off by default). It serves nothing from
+// geo-db yet, so on or off every operation is answered by PostGraphile.
+const gatewayConfig = readGatewayConfig(process.env)
+const graphqlHandler = createGateway({
+	config: gatewayConfig,
+	delegate: (request, context: GraphQLServerContext) => graphqlServer.fetch(request, context),
+	onClassified: (classification, route) =>
+		log.debug("GraphQL gateway routed operation", {...classification, route: route.kind, reason: route.reason}),
+})
+if (gatewayConfig.mode === "on")
+	log.info("GraphQL gateway enabled", {fields: Object.fromEntries(gatewayConfig.fieldModes)})
+
 app.use("/graphql", async (c) => {
 	const requestId = c.get("requestId") || "unknown"
 
 	// Pool pressure shedding is handled inside usePgClient (only on cache misses).
 	// This allows cached responses to be served even when the DB pool is saturated.
 	try {
-		return await graphqlServer.fetch(c.req.raw, {
+		return await graphqlHandler(c.req.raw, {
 			traceContext: c.get("traceContext"),
 			requestId,
 			setGraphqlOperationName: (operationName: string) => {
