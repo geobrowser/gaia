@@ -57,6 +57,25 @@ describe("geo-db card metrics", () => {
 		expect(line(text, 'gaia_api_postgres_card_read_seconds_bucket{outcome="ok",le="+Inf"}')).toBe("0")
 	})
 
+	it("gives both card-read histograms the same buckets, dense between 1 and 5 ms", () => {
+		activateGeoDbMetrics()
+		const text = renderGeoDbCardMetrics()
+		const edges = (name: string) =>
+			text
+				.split("\n")
+				.filter((l) => l.startsWith(`${name}_bucket{outcome="ok",`))
+				.map((l) => l.match(/le="([^"]+)"/)?.[1])
+		expect(edges("gaia_api_geodb_read_seconds")).toEqual(edges("gaia_api_postgres_card_read_seconds"))
+		expect(edges("gaia_api_geodb_read_seconds").slice(0, 6)).toEqual([
+			"0.001",
+			"0.0015",
+			"0.002",
+			"0.003",
+			"0.004",
+			"0.005",
+		])
+	})
+
 	it("times the Postgres card read in shadow mode only, not the mode-on fallback", async () => {
 		activateGeoDbMetrics()
 		await resolveCard(

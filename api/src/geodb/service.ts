@@ -168,8 +168,11 @@ async function postgresStatements(deps: CardDeps, entityId: string, spaceId: str
 	const started = performance.now()
 	try {
 		const {values, relations} = await deps.readPostgres(entityId, spaceId)
+		// The conversion is inside the bracket: geo-db's timer includes turning the pipe's text into rows, so
+		// both stores are timed from the request to usable statements.
+		const statements = statementsFromPostgres(values, relations)
 		if (timed) observePostgresCardRead((performance.now() - started) / 1000, "ok")
-		return statementsFromPostgres(values, relations)
+		return statements
 	} catch (error) {
 		if (timed) observePostgresCardRead((performance.now() - started) / 1000, "error")
 		throw error
