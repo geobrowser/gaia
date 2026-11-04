@@ -305,4 +305,189 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
   for capacity, `GeoDbFeederStalled` fires; raise `spaces`, redeploy, and the feeder resumes.
   The space-map ConfigMap (1 MiB limit) holds roughly 15,000 Spaces, so it is not the constraint.
 - Upgrading geo-db: build a new image tag, change the pinned tag in `geodb/k8s/v2/geodb.yaml` and
-  `api/k8s/v2/api.yaml` together, and redeploy. Read the geo-db release notes for store-format changes first.
+  `api/k8s/v2/api.yaml` together, and redeploy. Read the geo-db release notes for store-format changes first. A change of the store's persistent revision needs §8 first.
+
+## 8. Migrating the store across a persistent cut
+
+geo-db's store carries a persistent revision (`/data/store/FORMAT`, line `persistent <n> <fingerprint>`). A serve built at
+a different revision refuses to open the store; it does not touch it. The store is moved to the new revision by
+`geodb-migrate`, which replays each Space's op log into a fresh root and checks every version's seal against the
+recorded one. This applies to any geodb image at or past geo-db `b8211a3fe5` (the apostrophe fold, DR-167-318, revision
+3 to 4), so also to gaia#1063, which needs an image at or past `7d32584825`. Images `289618ffbf` to `4d3b31dff4` are
+revision 3 and do not need it.
+
+The image carries the migrator since `build-geodb-image.yml` installs it as `/usr/local/bin/geodb-migrate`. Older
+tags (`289618ffbf`, `4d3b31dff4`) have only serve and client. Rehearsed 2026-11-04 on a copy of the live store with the
+image `geodb:7d32584825` (built from the branch that added the migrator).
+
+Measured (2026-11-04, testnet store of 4.7 GiB: 100 Spaces, 57,857 versions, after the full backfill):
+
+| step | result |
+| --- | --- |
+| volume snapshot of `data-geodb-0` (50 Gi, live) to ready | under 20 s |
+| restore into a new PVC and a pod running | 14 s |
+| old serve opens the crash-consistent copy, then SIGTERM | opens in 5 s, `closed: the final checkpoint written` |
+| `geodb-migrate`, revision 3 to 4 (single thread, no CPU limit) | **1094 s (18 min 14 s)**, exit 0, `DONE migrate spaces=100 versions=57857`, every seal equal |
+| migrator peak memory | 606 MiB (`VmHWM` 620,860 kB) |
+| new store size | 4.7 GiB (same as the old) |
+| new serve opens the migrated store | 2 s, 551 MiB resident at start; same `node` and `sealer` ids as the live serve, so the api's binding stays valid |
+| new serve on an unmigrated store | `DefiniteRefusal: the store is at persistent revision 3 ... migrate it`, exit 1, store unchanged |
+| 20 `entity` reads (`geodb-client pipe`, the api's reader key and card query) | the migrated copy answered byte-for-byte what live geodb-0 answered (20 of 20 frames, 13,731 bytes) |
+
+Time scales with versions, about 53 a second here. Expect downtime of the migration plus about 5 minutes (scale-down,
+Job start, image pull, serve start): roughly 25 minutes on this store, with the feeder paused the whole time (Kafka keeps
+the edits; the feeder replays from its stored offset). The api sees geo-db down: in `shadow` that is `failed` results
+only, in `on` every card falls back to Postgres.
+
+A snapshot of a running serve is crash-consistent, and `geodb-migrate` refuses a store whose segment "ends in an
+unsealed frame". To migrate (or rehearse on) a copy taken while serve was running, open the copy once with the old
+serve under `geodb-supervisor` and stop it with SIGTERM (it writes its final checkpoint), then migrate. The procedure
+below quiesces serve first, so it does not need that.
+
+### 8a. Procedure
+
+Order against deploy-v2: the pin PR can merge any time (merging deploys nothing). Do steps 1 to 6 before the
+`deploy-v2` dispatch in step 7. Deploying the new tag first is not harmful but is an outage: geodb-0 crash-loops on
+the refusal above, readiness stays false, and the store is unchanged; scale it to 0 and carry on from step 3.
+
+```bash
+K="kubectl --context do-nyc2-geo-testnet-k8s -n gaia"
+NEW=<10-char geodb tag, at or past 7d32584825>
+# 0. image with serve, client and migrate; the tag must exist and carry the migrator.
+gh workflow run build-geodb-image.yml --ref main -f geodb_ref=$NEW        # ~8 min
+doctl registry repository list-tags geodb --registry geo | grep $NEW
+# 1. PR: change the pin to $NEW in geodb/k8s/v2/geodb.yaml (both places: serve and the feeder's geodb-setup init
+#    container) and api/k8s/v2/api.yaml. Merge it; nothing deploys.
+# 2. before-picture: 20 entity reads from live (a throwaway pod, §8c), saved as before.out. Silence GeoDbFeederDown,
+#    GeoDbFeederStalled, GeoDbFeederLagHigh and ApiGeoDbCardShadowFailing for 1 h.
+# 3. quiesce: feeder first, then serve (SIGTERM, the supervisor forwards SIGINT, serve writes its final checkpoint).
+$K scale deployment/geodb-feeder --replicas=0 && $K wait --for=delete pod -l app=geodb-feeder --timeout=120s
+$K logs -f geodb-0 > /tmp/geodb-0-shutdown.log 2>&1 &
+$K scale statefulset/geodb --replicas=0 && $K wait --for=delete pod/geodb-0 --timeout=330s
+grep 'closed: the final checkpoint written' /tmp/geodb-0-shutdown.log      # must print; if not, stop and look
+# 4. rollback point: snapshots of both volumes while nothing writes. Keep them until step 9.
+for pvc in data-geodb-0 geodb-feeder-state; do
+  cat <<EOF | $K apply -f -
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata: {name: premigrate-rev3-$pvc, namespace: gaia}
+spec: {volumeSnapshotClassName: do-block-storage, source: {persistentVolumeClaimName: $pvc}}
+EOF
+done
+$K get volumesnapshot            # both READYTOUSE true before going on
+```
+
+5. Migrate in a Job on `data-geodb-0`. It checks the store is at revision 3, writes `store-rev4` next to `store`, checks
+   the migrator's `DONE` line and that the new FORMAT says revision 4, and only then swaps the directories. The old
+   store stays on the volume as `store-rev3` (4.7 GiB of the 50 Gi). Nothing is deleted. A failed run leaves `store`
+   untouched; delete the Job and apply it again (it clears `store-rev4` first).
+
+```bash
+cat <<EOF | $K apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata: {name: geodb-migrate, namespace: gaia}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext: {runAsNonRoot: true, runAsUser: 1001, runAsGroup: 1001, fsGroup: 1001}
+      imagePullSecrets: [{name: geo}]
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: data-geodb-0}}
+        - {name: serve-config, configMap: {name: geodb-serve-config}}
+        - {name: store-secret, secret: {secretName: geodb-store-secret, defaultMode: 0440}}
+      containers:
+        - name: migrate
+          image: registry.digitalocean.com/geo/geodb:$NEW
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              cd /data
+              [ ! -e store-rev3 ] || { echo "store-rev3 exists: an earlier migration was not cleaned up"; exit 1; }
+              grep -q '^persistent 3 ' store/FORMAT
+              rm -rf store-rev4
+              geodb-migrate --from /data/store --to /data/store-rev4 \
+                --secret-file /etc/geodb/store-secret/secret.hex --config /etc/geodb/serve.cfg > migrate.log 2>&1 \
+                || { tail -n 5 migrate.log; exit 1; }
+              tail -n 2 migrate.log
+              n=\$(ls store/ops | wc -l)
+              grep -q "^DONE migrate spaces=\$((n)) " migrate.log
+              grep -q '^persistent 4 ' store-rev4/FORMAT
+              mv store store-rev3 && mv store-rev4 store
+              echo swapped
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: serve-config, mountPath: /etc/geodb/serve.cfg, subPath: serve.cfg, readOnly: true}
+            - {name: store-secret, mountPath: /etc/geodb/store-secret, readOnly: true}
+          resources:
+            requests: {memory: 1Gi, cpu: "1"}
+            limits: {memory: 2Gi}
+          securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+EOF
+$K wait --for=condition=complete job/geodb-migrate --timeout=45m     # ~18 min here; progress: $K exec job/geodb-migrate -- wc -l /data/migrate.log
+$K logs job/geodb-migrate                                              # DONE migrate spaces=<n> versions=<m>, then "swapped"
+```
+
+6. Check the Job log: `spaces` equals the number of Spaces before (100 on 2026-11-04) and no line says a seal differs.
+7. Bring both back on the new image. `deploy-v2` applies `geodb.yaml`, whose StatefulSet and feeder
+   Deployment are `replicas: 1`, so this also scales them back up; geodb-0 opens the migrated store.
+
+```bash
+gh workflow run deploy-v2.yml --ref main -f service=geodb-feeder -f tag=<FEEDER TAG> -f cluster=geo-testnet-k8s
+$K rollout status statefulset/geodb && $K rollout status deployment/geodb-feeder
+$K get cm geodb-space-map -o jsonpath='{.data.node-id}{"\n"}{.data.sealer-id}{"\n"}'   # unchanged from before step 3
+$K logs geodb-0 | head -5                                                              # listen / node / sealer / serving
+# api last, as in §1 (e), so its init container pulls the same client: gaia api deploy.
+```
+
+8. Verify: the same 20 reads as step 2 (§8c) give `after.out`; `cmp before.out after.out` (an entity the feeder
+   edited since differs legitimately, so use entities that are quiet). Then watch `geodb_feeder_consumer_lag` fall
+   and the shadow `match` share return to its earlier level (§2).
+9. After a day on the new revision, delete the rollback points: `$K delete volumesnapshot premigrate-rev3-data-geodb-0
+   premigrate-rev3-geodb-feeder-state` and remove `store-rev3` from the volume with a Job like step 5 whose script is
+   `rm -rf /data/store-rev3 /data/migrate.log`, with serve scaled to 0 for it (the volume is ReadWriteOnce). Resume the alerts.
+
+### 8b. Rollback
+
+Keep the snapshots from step 4 and the `store-rev3` directory until step 9.
+
+- Before the feeder has run on the migrated store (steps 5 to 7 done, nothing applied since): scale both to 0 as in
+  step 3, swap back in a one-shot Job or pod on `data-geodb-0` (`mv store store-rev4-discarded && mv store-rev3 store`),
+  revert the pin PR (or `deploy-v2` from the previous commit), and bring the feeder up. The old serve opens the
+  untouched revision 3 store.
+- After the feeder has applied edits on the migrated store: `store-rev3` is behind the feeder's stored offset, so restore
+  both volumes together. Scale both to 0; delete PVCs `data-geodb-0` and `geodb-feeder-state`; create each again with the
+  same name, size and class and `dataSource: {apiGroup: snapshot.storage.k8s.io, kind: VolumeSnapshot, name:
+  premigrate-rev3-<pvc>}`; revert the pin; `deploy-v2`. The feeder resumes at its snapshotted offset, so the topic's
+  retention must still cover it (check the offset in `/data/feeder/offsets.json` against the topic before deleting
+  anything). The api binding needs no change: node and sealer ids do not move.
+
+### 8c. The read check
+
+A throwaway pod that reads with the api's own key and query, so nothing writes. Use the old image for live geodb-0
+(revision 3) and `$NEW` against the migrated one; the wire grammars are the same (`geodb-client check` prints `same`).
+
+```bash
+# 20 (gaia space, entity) pairs spread over the feeder's journal, mapped to geo-db Spaces by the space map
+$K exec deploy/geodb-feeder -c feeder -- sh -c 'n=$(wc -l < /data/feeder/known-entities.log); \
+  awk -v n=$n "BEGIN{s=int(n/20)} NR%s==1 && c<20 {print; c++}" /data/feeder/known-entities.log' > sample.txt
+$K get cm geodb-space-map -o jsonpath='{.data.space-map\.json}' > spacemap.json
+python3 - <<'EOF' > reads.tsv
+import json
+m = json.load(open("spacemap.json"))
+for line in open("sample.txt"):
+    g, e = line.strip().split("|")
+    print(f'{m[g]["geo"]}\t.{{ .version = 1, .select = .{{ .c = .{{ .field = "entity", .args = .{{ .id = "{e}" }} }} }} }}')
+EOF
+# a pod with the reader key (fsGroup so the 0440 key file is readable) and the image under test; then
+#   printf 'version = 1\nlisten = tcp:<geodb Service ClusterIP>:7447\nnode = <node-id from the ConfigMap>\n' > /tmp/binding.txt
+#   geodb-client --key /etc/geodb/reader-key/key --binding /tmp/binding.txt pipe < reads.tsv > out
+# every request answers `+<n>` and its rows; `-<n>` is a refusal.
+```
