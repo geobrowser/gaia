@@ -37,7 +37,7 @@ $K create secret generic geodb-store-secret --from-file=secret.hex=./secret.hex
 
 # the feeder's write key and the api's read-only key
 for who in writer reader; do
-  docker run --rm -v "$PWD:/k" -w /k registry.digitalocean.com/geo/geodb:beedb70fd4 \
+  docker run --rm -v "$PWD:/k" -w /k registry.digitalocean.com/geo/geodb:4d3b31dff4 \
     geodb-client --key $who.key keygen > $who.keyid
   $K create secret generic geodb-$who-key --from-file=key=./$who.key --from-file=keyid=./$who.keyid
 done
@@ -54,8 +54,8 @@ shred -u secret.hex writer.key reader.key 2>/dev/null || rm -P secret.hex writer
 Each step is a manual dispatch from `main` after the PR is merged. Wait for green before the next.
 
 ```bash
-# a. geodb image (serve + client), pinned at geo-db final beedb70fd4. ~1 h of compile.
-gh workflow run build-geodb-image.yml --ref main -f geodb_ref=beedb70fd4
+# a. geodb image (serve + client), pinned at geo-db final 4d3b31dff4. ~1 h of compile.
+gh workflow run build-geodb-image.yml --ref main -f geodb_ref=4d3b31dff4
 # b. feeder image
 gh workflow run build-v2-images.yml --ref main -f service=geodb-feeder
 # c. the replica: StatefulSet geodb, Deployment geodb-feeder, Services, RBAC, serve config. TAG = the 8-char sha of the run in (b).
@@ -64,7 +64,7 @@ $K rollout status statefulset/geodb && $K rollout status deployment/geodb-feeder
 # d. alerts
 kubectl --context do-nyc2-geo-testnet-k8s apply -f monitoring/k8s/v2/geodb-feeder-alerts.yaml \
   -f monitoring/k8s/v2/hermes-metrics-servicemonitor.yaml
-# e. api, last: it carries the init container that reads the node id, and it needs geodb:beedb70fd4 to
+# e. api, last: it carries the init container that reads the node id, and it needs geodb:4d3b31dff4 to
 #    exist in the registry (step a) or its pods stay in ImagePullBackOff and the rollout stalls.
 gh workflow run build-v2-images.yml --ref main -f service=api
 gh workflow run deploy-v2.yml --ref main -f service=api -f tag=<API TAG> -f cluster=geo-testnet-k8s
