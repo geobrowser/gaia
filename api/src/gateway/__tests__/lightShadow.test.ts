@@ -421,7 +421,12 @@ describe("entities with the light selection", () => {
 		expect(analyzeLightEntities(parse(q("id name description spaceIds")), null, {}).ok).toBe(true)
 		// Nothing to judge, or no Space to read.
 		expect(analyzeLightEntities(parse(q("id spaceIds")), null, {})).toEqual({ok: false, reason: "selection"})
-		expect(analyzeLightEntities(parse(q("id name")), null, {})).toEqual({ok: false, reason: "selection"})
+		// No Space to read: every Space is (see "entities answers with no Space" below).
+		const names = analyzeLightEntities(parse(q("id name")), null, {})
+		expect(names.ok && names.plan.everySpace).toBe(true)
+		// A Space argument narrows to that Space, which says nothing about a name from another.
+		const scoped = `query { entities(spaceId: "${SPACE_A}", first: 5) { id name } }`
+		expect(analyzeLightEntities(parse(scoped), null, {})).toEqual({ok: false, reason: "selection"})
 	})
 
 	it("refuses a malformed Space or Type argument", () => {
@@ -647,5 +652,135 @@ describe("entity answers with no Space (every-Space reads)", () => {
 		s.readCardSpaces.mockRejectedValueOnce(new Error("pipe closed"))
 		await run(s, EVERY.entityExists)
 		expect(results()).toEqual({failed: 1})
+	})
+})
+
+// geogenesis's EntityNames (topic menus, relation pickers) asks `entities(filter: {id: {in}}, first) { id name }`: no
+// Space anywhere, so one sampled entity is read across every Space in the space map.
+describe("entities answers with no Space (every-Space reads)", () => {
+	type Captured = {
+		request: {query: string; variables: Record<string, unknown>}
+		response: {data: {entities: {id: string; name: string}[]}}
+	}
+	const NAMES: Captured = JSON.parse(readFileSync(new URL("./fixtures/entity-names.json", import.meta.url), "utf8"))
+	const [FIRST] = NAMES.response.data.entities
+	if (!FIRST) throw new Error("fixture has no entities")
+	const ALL = [geoSpace(SPACE_A), geoSpace(SPACE_B), geoSpace(SPACE_C)]
+	const nameRow = (entity: string, name: string) => `${NAME}\t${cell(name)}\tsn\t${entity}\t-\t-\t1\n`
+
+	function namesSetup(
+		outputs: Record<string, string>,
+		options: {flag?: boolean; budget?: ReturnType<typeof createReadBudget>} = {},
+	) {
+		const log = {info: vi.fn(), warn: vi.fn()}
+		const readCard = askOf(outputs)
+		const readCardSpaces = askSpacesOf(outputs)
+		const deps = {
+			multiSpace: true,
+			geoDb: {readCard, readCardSpaces},
+			geoSpaceOf: async (space: string) => geoSpace(space),
+			log,
+			...(options.flag === false ? {} : {allGeoSpaces: async () => ALL, everySpaceBudget: options.budget}),
+		}
+		return {log, readCard, readCardSpaces, points: createPointReadShadows(deps)}
+	}
+	const run = (s: ReturnType<typeof namesSetup>, body: unknown = NAMES.response) =>
+		call(s.points.get("entities") as never, NAMES.request.query, NAMES.request.variables, body)
+
+	it("plans EntityNames as an every-Space read of the ids it asks for", () => {
+		const analysis = analyzeLightEntities(parse(NAMES.request.query), "EntityNames", NAMES.request.variables)
+		expect(analysis.ok).toBe(true)
+		if (analysis.ok) {
+			expect(analysis.plan.everySpace).toBe(true)
+			expect(analysis.plan.ids).toHaveLength(2)
+			expect(analysis.plan.uncompared).toEqual(expect.arrayContaining(["partial_values", "sampled_rows"]))
+		}
+	})
+
+	it("matches the name geo-db holds in any Space, reading one sampled entity in one line", async () => {
+		const s = namesSetup({[geoSpace(SPACE_C)]: nameRow(FIRST.id, FIRST.name)})
+		await run(s)
+		expect(results()).toEqual({match: 1})
+		expect(s.readCard).not.toHaveBeenCalled()
+		expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
+		expect(s.readCardSpaces.mock.calls[0]?.[0]).toMatchObject({
+			geoSpaceIds: ALL,
+			entityId: conformingId("entity", FIRST.id),
+			names: true,
+		})
+	})
+
+	it("leaves a differing name inconclusive: PostGraphile may have taken it from a Space geo-db did not load", async () => {
+		const s = namesSetup({[geoSpace(SPACE_A)]: nameRow(FIRST.id, "Op-ed")})
+		await run(s)
+		expect(results()).toEqual({match: 1})
+		expect(uncompared()).toMatchObject({cross_space: 1})
+	})
+
+	it("flags an entity PostGraphile has no name for that geo-db names", async () => {
+		const s = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, FIRST.name)})
+		const unnamed = clone(NAMES.response)
+		const [first] = unnamed.data.entities
+		if (first) (first as {name: string | null}).name = null
+		await run(s, unnamed)
+		expect(results()).toEqual({mismatch: 1})
+	})
+
+	it("counts an entity geo-db holds nothing about as uncompared, not a mismatch", async () => {
+		const s = namesSetup({})
+		await run(s)
+		expect(results()).toEqual({match: 1})
+		expect(uncompared()).toMatchObject({no_statements: 1})
+	})
+
+	it("flags an id PostGraphile returned that the filter did not ask for", async () => {
+		const s = namesSetup({[geoSpace(SPACE_A)]: nameRow(FIRST.id, FIRST.name)})
+		const stray = clone(NAMES.response)
+		stray.data.entities.push({id: "0123456789ab4bcd8ef0123456789abc", name: "Stray"})
+		await run(s, stray)
+		expect(results()).toEqual({mismatch: 1})
+	})
+
+	it("stays no_space and reads nothing with the switch off", async () => {
+		const s = namesSetup({[geoSpace(SPACE_A)]: nameRow(FIRST.id, FIRST.name)}, {flag: false})
+		await run(s)
+		expect(unsupported()).toEqual({no_space: 1})
+		expect(s.readCard).not.toHaveBeenCalled()
+		expect(s.readCardSpaces).not.toHaveBeenCalled()
+	})
+
+	it("spends the every-Space budget, and counts an empty one as throttled", async () => {
+		const budget = createReadBudget({perSecond: 1, burst: 1, now: () => 0})
+		const s = namesSetup({[geoSpace(SPACE_A)]: nameRow(FIRST.id, FIRST.name)}, {budget})
+		await run(s)
+		await run(s)
+		expect(results()).toEqual({match: 1, unsupported_selection: 1})
+		expect(unsupported()).toEqual({throttled: 1})
+		expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
+	})
+
+	it("checks the claims of an { id } selection's filter in every Space", async () => {
+		const typeId = "e550fe517e904b2c8fffdf13408f5634"
+		const query = `query { entities(filter: {typeIds: {anyEqualTo: "${typeId}"}}) { id } }`
+		const typed = `${TYPES}\t${conformingId("entity", typeId)}\ts1\t${FIRST.id}\t-\t-\t1\n`
+		const body = {data: {entities: [{id: FIRST.id}]}}
+		const held = namesSetup({[geoSpace(SPACE_B)]: typed})
+		await call(held.points.get("entities") as never, query, {}, body)
+		expect(results()).toEqual({match: 1})
+		const other = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, FIRST.name)})
+		await call(other.points.get("entities") as never, query, {}, body)
+		expect(results()).toEqual({match: 1, mismatch: 1})
+		// Nothing held anywhere: not judged.
+		const none = namesSetup({})
+		await call(none.points.get("entities") as never, query, {}, body)
+		expect(results()).toEqual({match: 2, mismatch: 1})
+		expect(uncompared()).toMatchObject({no_statements: 1})
+	})
+
+	it("skips an empty answer", async () => {
+		const s = namesSetup({})
+		await run(s, {data: {entities: []}})
+		expect(results()).toEqual({})
+		expect(s.readCardSpaces).not.toHaveBeenCalled()
 	})
 })
