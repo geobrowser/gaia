@@ -1,5 +1,14 @@
+import {readFileSync} from "node:fs"
 import {describe, expect, it} from "vitest"
-import {conformingId, diffCards, isEmptyDiff, rowsFromGeoDbOutput, statementsFromPostgres, type ValueRow} from "../card"
+import {
+	conformingId,
+	DERIVED_PROPERTIES,
+	diffCards,
+	isEmptyDiff,
+	rowsFromGeoDbOutput,
+	statementsFromPostgres,
+	type ValueRow,
+} from "../card"
 import {parseMode, readGeoDbCardConfig} from "../config"
 
 const PROP = "98012398829d48b083738f2589675894"
@@ -84,6 +93,42 @@ describe("diffCards", () => {
 	it("does not let one geo-db row satisfy two equal statements", () => {
 		const twice = statementsFromPostgres([value({text: "x"}), value({text: "x"})], [])
 		expect(diffCards(twice, [{prop: PROP, raw: "x"}]).onlyPostgres).toHaveLength(1)
+	})
+})
+
+describe("diffCards derived properties", () => {
+	const SCORE = "85a4668a42fa4f488969c0a9de0c294b"
+	const RANK_RELATION = "890deffb384349fa826974000e3dcef6"
+
+	it("counts a derived-only Postgres card against an empty geo-db as a match, all skipped", () => {
+		const pg = statementsFromPostgres(
+			[value({property_id: SCORE, integer: "83"}), value({property_id: SCORE, integer: "5"})],
+			[{type_id: RANK_RELATION, to_entity_id: ENTITY, to_space_id: null}],
+		)
+		const diff = diffCards(pg, [])
+		expect(isEmptyDiff(diff)).toBe(true)
+		expect(diff.skipped).toBe(3)
+	})
+
+	it("still reports a real statement missing from geo-db, and never samples the derived one", () => {
+		const pg = statementsFromPostgres([value({property_id: SCORE, integer: "83"}), value({text: "x"})], [])
+		const diff = diffCards(pg, [])
+		expect(diff.onlyPostgres).toEqual([{prop: PROP, kind: "text", norm: "x"}])
+		expect(diff.onlyPostgres.some((s) => DERIVED_PROPERTIES.has(s.prop))).toBe(false)
+		expect(diff.skipped).toBe(1)
+	})
+
+	it("adds derived statements to the rows already skipped as unmappable", () => {
+		const pg = statementsFromPostgres([value({}), value({property_id: SCORE, integer: "1"})], [])
+		expect(diffCards(pg, []).skipped).toBe(2)
+	})
+
+	it("stays equal to the geodb-feeder DERIVED_PROPERTIES list", () => {
+		const src = readFileSync(new URL("../../../../geodb-feeder/src/pgAdapter.ts", import.meta.url), "utf8")
+		const block = src.match(/export const DERIVED_PROPERTIES = \[([\s\S]*?)\]/)?.[1] ?? ""
+		const ids = [...block.matchAll(/"([0-9a-f-]{36})"/g)].map((m) => (m[1] as string).replaceAll("-", ""))
+		expect(ids.length).toBeGreaterThan(0)
+		expect(new Set(ids)).toEqual(new Set(DERIVED_PROPERTIES))
 	})
 })
 
