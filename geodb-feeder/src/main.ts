@@ -18,7 +18,7 @@ import {MembershipState} from "./membership.js"
 import {startMembershipConsumer} from "./membershipConsumer.js"
 import {createMetrics} from "./metrics.js"
 import {PipeReader} from "./geodbPipe.js"
-import {ReadOnlyPg, pgConfig, readMembershipCounts} from "./pgSource.js"
+import {ReadOnlyPg, pgConfig, readMembershipIds} from "./pgSource.js"
 import {SpaceMapPublisher, kubeConfigMapPut} from "./publish.js"
 import {startServer} from "./server.js"
 import {ensureSpace, readSealer} from "./spaces.js"
@@ -193,7 +193,7 @@ async function main(config: Config): Promise<void> {
 			reader = new PipeReader({clientBin: config.clientBin, keyPath: config.membership.readerKeyPath, bindingPath: config.bindingPath})
 			const run = () =>
 				compareMembership({
-					pgCounts: () => readMembershipCounts(pg as ReadOnlyPg),
+					pgMembers: () => readMembershipIds(pg as ReadOnlyPg),
 					reader: reader as PipeReader,
 					spaces: () => store.spaces,
 					journalSpaces: () => membershipState.spaces(),
