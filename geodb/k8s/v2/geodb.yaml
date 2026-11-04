@@ -157,6 +157,10 @@ spec:
         - name: serve
           image: registry.digitalocean.com/geo/geodb:6cf4360979
           imagePullPolicy: IfNotPresent
+          # A panic's stack trace goes to stderr, and the kubelet keeps only the previous
+          # container's log. This also copies the log's tail into the pod's
+          # lastState.terminated.message, so `kubectl get pod` shows why serve died.
+          terminationMessagePolicy: FallbackToLogsOnError
           ports:
             - name: geodb
               containerPort: 7447
