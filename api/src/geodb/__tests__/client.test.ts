@@ -304,6 +304,14 @@ lines((line) => {
 describe("createSpaceMap", () => {
 	it("is empty without a path", async () => {
 		expect(await createSpaceMap("")(SPACE)).toBeNull()
+		expect(await createSpaceMap("").all()).toEqual([])
+	})
+
+	it("lists every distinct geo-db Space it holds", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "geodb-map-"))
+		const path = join(dir, "spaces.json")
+		writeFileSync(path, JSON.stringify({[SPACE]: {geo: ENTITY}, [PROP]: {geo: ENTITY}, [ENTITY]: {geo: PROP}}))
+		expect((await createSpaceMap(path).all()).sort()).toEqual([PROP, ENTITY].sort())
 	})
 
 	it("reads the shadow loader's state file", async () => {

@@ -3,6 +3,7 @@ import {beforeEach, describe, expect, it, vi} from "vitest"
 import {conformingId} from "../../geodb/card"
 import {GeoDbError} from "../../geodb/client"
 import {createCliGeoDbSearchClient, parseSearchOutput} from "../../geodb/search"
+import {normalizeUuid} from "../../utils/uuid"
 import {readGatewayConfig} from "../config"
 import {createGateway} from "../gateway"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
@@ -11,6 +12,7 @@ import {analyzeSearchOperation, createSearchShadows, extractRankedIds} from "../
 
 const SPACE = "11111111-1111-4111-8111-111111111111"
 const GEO_SPACE = "22222222222242228222222222222222"
+const GEO_SPACE_2 = "33333333333343338333333333333333"
 const ids = (n: number) =>
 	Array.from({length: n}, (_, i) => `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`)
 const geo = (id: string) => conformingId("entity", id)
@@ -21,7 +23,7 @@ const CONNECTION = `query C($q: String!, $spaceId: UUID) { searchConnection(quer
 const analyze = (field: "search" | "searchConnection", query: string, vars: Record<string, unknown> = {}) =>
 	analyzeSearchOperation(field, parse(query), null, {q: "ada", spaceId: SPACE, ...vars})
 
-function setup(hits: string[] | Error, mapped = true) {
+function setup(hits: string[] | Error, mapped = true, all: string[] = [GEO_SPACE, GEO_SPACE_2]) {
 	const log = {info: vi.fn(), warn: vi.fn()}
 	const searchLexical = vi.fn(async () => {
 		if (hits instanceof Error) throw hits
@@ -29,6 +31,7 @@ function setup(hits: string[] | Error, mapped = true) {
 	})
 	const shadows = createSearchShadows({
 		search: {searchLexical},
+		allGeoSpaces: async () => all,
 		geoSpaceOf: async (space) => (mapped && space === SPACE.replaceAll("-", "") ? GEO_SPACE : null),
 		log,
 	})
@@ -68,8 +71,14 @@ describe("analyzeSearchOperation", () => {
 		expect(analyze("searchConnection", CONNECTION).ok).toBe(true)
 	})
 
+	it("accepts a search without a space, as unscoped", () => {
+		const noSpace = SEARCH.replace("spaceId: $spaceId, ", "")
+		expect(analyze("search", noSpace)).toMatchObject({ok: true, plan: {spaceId: null}})
+		expect(analyze("search", SEARCH, {spaceId: null})).toMatchObject({ok: true, plan: {spaceId: null}})
+		expect(analyze("search", SEARCH)).toMatchObject({ok: true, plan: {spaceId: normalizeUuid(SPACE)}})
+	})
+
 	it.each([
-		["no spaceId (geo-db searches named Spaces)", SEARCH.replace("spaceId: $spaceId, ", ""), "no_space"],
 		["a filter", SEARCH.replace("first: 10", "first: 10, filter: {typeIds: {in: []}}"), "filter"],
 		["an offset", SEARCH.replace("first: 10", "first: 10, offset: 3"), "args"],
 		["a similarity threshold", SEARCH.replace("first: 10", "first: 10, similarityThreshold: 0.3"), "args"],
@@ -141,7 +150,12 @@ describe("search shadow", () => {
 		const pg = ids(10)
 		const {shadows, searchLexical} = setup([...pg.slice(0, 7), ...ids(30).slice(20, 23)].map(geo))
 		await run(shadows, "search", SEARCH, {data: {search: pg.map((id) => ({id, name: "x"}))}})
-		expect(searchLexical).toHaveBeenCalledWith({geoSpaceId: GEO_SPACE, text: "ada", mode: "typeahead", limit: 20})
+		expect(searchLexical).toHaveBeenCalledWith({
+			geoSpaceIds: [GEO_SPACE],
+			text: "ada",
+			mode: "typeahead",
+			limit: 20,
+		})
 		expect(metric("gaia_api_gateway_shadow_search_total")).toEqual({
 			"field=search,outcome=compared": 1,
 		})
@@ -173,9 +187,29 @@ describe("search shadow", () => {
 		expect(metric("gaia_api_gateway_shadow_search_overlap_total")).toEqual({})
 	})
 
-	it("counts unsupported with its reason and never asks geo-db", async () => {
-		const {shadows, searchLexical} = setup([])
-		await run(shadows, "search", SEARCH.replace("spaceId: $spaceId, ", ""), {data: {search: []}})
+	it("asks geo-db once over every mapped Space for a search without a space", async () => {
+		const pg = ids(4)
+		const {shadows, searchLexical, log} = setup(pg.map(geo))
+		const query = SEARCH.replace("spaceId: $spaceId, ", "")
+		await run(shadows, "search", query, {data: {search: pg.map((id) => ({id}))}}, {q: "ada"})
+		expect(searchLexical).toHaveBeenCalledTimes(1)
+		expect(searchLexical).toHaveBeenCalledWith({
+			geoSpaceIds: [GEO_SPACE, GEO_SPACE_2],
+			text: "ada",
+			mode: "typeahead",
+			limit: 20,
+		})
+		expect(metric("gaia_api_gateway_shadow_search_total")).toEqual({"field=search,outcome=compared": 1})
+		expect(metric("gaia_api_gateway_shadow_total")).toEqual({})
+		expect(log.info).toHaveBeenCalledWith(
+			expect.stringContaining("compared"),
+			expect.objectContaining({spaceId: null, spaces: 2}),
+		)
+	})
+
+	it("counts an unscoped search unsupported (no_space) when the space map is empty", async () => {
+		const {shadows, searchLexical} = setup([], true, [])
+		await run(shadows, "search", SEARCH.replace("spaceId: $spaceId, ", ""), {data: {search: []}}, {q: "ada"})
 		expect(searchLexical).not.toHaveBeenCalled()
 		expect(metric("gaia_api_gateway_shadow_total")).toEqual({"field=search,result=unsupported_selection": 1})
 		expect(metric("gaia_api_gateway_shadow_unsupported_total")).toEqual({"field=search,reason=no_space": 1})
@@ -244,7 +278,7 @@ describe("geo-db search client", () => {
 	it("runs one search verb with the space, mode and limit, and refuses unusable input", async () => {
 		const run = vi.fn(async () => `${e(5)}\t1\ts\tAda\t1\n`)
 		const client = createCliGeoDbSearchClient(config, {run})
-		expect(await client.searchLexical({geoSpaceId: GEO_SPACE, text: "ada", mode: "bm25", limit: 20})).toEqual([
+		expect(await client.searchLexical({geoSpaceIds: [GEO_SPACE], text: "ada", mode: "bm25", limit: 20})).toEqual([
 			e(5),
 		])
 		expect(run).toHaveBeenCalledWith(
@@ -253,10 +287,48 @@ describe("geo-db search client", () => {
 			3000,
 		)
 		await expect(
-			client.searchLexical({geoSpaceId: GEO_SPACE, text: "-x", mode: "bm25", limit: 1}),
+			client.searchLexical({geoSpaceIds: [GEO_SPACE], text: "-x", mode: "bm25", limit: 1}),
 		).rejects.toMatchObject({reason: "bad_request"})
 		await expect(
-			client.searchLexical({geoSpaceId: "nope", text: "x", mode: "bm25", limit: 1}),
+			client.searchLexical({geoSpaceIds: ["nope"], text: "x", mode: "bm25", limit: 1}),
+		).rejects.toMatchObject({reason: "bad_request"})
+	})
+
+	it("sends one search with a --space per Space, each once, and bounds the list", async () => {
+		const run = vi.fn(async () => "")
+		const client = createCliGeoDbSearchClient(config, {run})
+		await client.searchLexical({
+			geoSpaceIds: [GEO_SPACE, GEO_SPACE_2, GEO_SPACE],
+			text: "ada",
+			mode: "typeahead",
+			limit: 20,
+		})
+		expect(run).toHaveBeenCalledTimes(1)
+		expect(run).toHaveBeenCalledWith(
+			config,
+			[
+				"search",
+				"--space",
+				GEO_SPACE,
+				"--space",
+				GEO_SPACE_2,
+				"--mode",
+				"typeahead",
+				"--limit",
+				"20",
+				"--first",
+				"20",
+				"--pages",
+				"1",
+				"ada",
+			],
+			3000,
+		)
+		await expect(client.searchLexical({geoSpaceIds: [], text: "x", mode: "bm25", limit: 1})).rejects.toMatchObject({
+			reason: "bad_request",
+		})
+		await expect(
+			client.searchLexical({geoSpaceIds: Array(1025).fill(GEO_SPACE), text: "x", mode: "bm25", limit: 1}),
 		).rejects.toMatchObject({reason: "bad_request"})
 	})
 
@@ -269,9 +341,9 @@ describe("geo-db search client", () => {
 				}),
 		)
 		const client = createCliGeoDbSearchClient(config, {run, maxConcurrent: 1})
-		const first = client.searchLexical({geoSpaceId: GEO_SPACE, text: "ada", mode: "typeahead", limit: 5})
+		const first = client.searchLexical({geoSpaceIds: [GEO_SPACE], text: "ada", mode: "typeahead", limit: 5})
 		await expect(
-			client.searchLexical({geoSpaceId: GEO_SPACE, text: "bob", mode: "typeahead", limit: 5}),
+			client.searchLexical({geoSpaceIds: [GEO_SPACE], text: "bob", mode: "typeahead", limit: 5}),
 		).rejects.toMatchObject({reason: "overloaded"})
 		releases[0]?.("")
 		expect(await first).toEqual([])
