@@ -208,6 +208,8 @@ app.get("/", swaggerUI({url: "/openapi"}))
 // relations, search, searchConnection) a sample of those operations is also compared against geo-db in the background.
 // Wide reads (an entity read in every one of its spaces) share one budget of about one geo-db card read a second.
 const wideReadBudget = createReadBudget({perSecond: 1, burst: 5})
+// Every-Space reads (GEODB_EVERY_SPACE_READS) name the whole space map in one line: a budget of their own, smaller.
+const everySpaceBudget = createReadBudget({perSecond: 0.5, burst: 3})
 const graphqlHandler = createGateway({
 	config: gatewayConfig,
 	resolvers:
@@ -226,6 +228,9 @@ const graphqlHandler = createGateway({
 										log,
 										budget: wideReadBudget,
 										multiSpace: geoDbCardConfig.multiSpaceReads === true,
+										...(geoDbCardConfig.everySpaceReads === true
+											? {allGeoSpaces: sharedGeoDb.geoSpaceOf.all, everySpaceBudget}
+											: {}),
 									}),
 								] as const,
 							]
