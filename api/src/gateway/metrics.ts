@@ -17,12 +17,29 @@ export const UNSUPPORTED_REASONS = [
 	"variables",
 ] as const
 
+/**
+ * Parts of a shadowed operation that were answered by PostGraphile but not checked against geo-db, by reason.
+ * Counted once per operation and reason, whatever the result: a `match` covers the compared fields only.
+ */
+export const UNCOMPARED_REASONS = [
+	"cross_space",
+	"updated_at",
+	"nested_names",
+	"nested_entity",
+	"property_info",
+	"membership_only",
+	"truncated",
+	"root_relations",
+] as const
+
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]
 export type UnsupportedReason = (typeof UNSUPPORTED_REASONS)[number]
+export type UncomparedReason = (typeof UNCOMPARED_REASONS)[number]
 
 const fields = new Set<string>()
 const results = new Map<string, number>()
 const unsupported = new Map<string, number>()
+const uncompared = new Map<string, number>()
 
 const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(key) ?? 0) + 1)
 
@@ -36,6 +53,10 @@ export function recordGatewayShadow(field: string, result: ShadowResult): void {
 
 export function recordGatewayUnsupported(field: string, reason: UnsupportedReason): void {
 	bump(unsupported, `${field}\t${reason}`)
+}
+
+export function recordGatewayUncompared(field: string, reason: UncomparedReason): void {
+	bump(uncompared, `${field}\t${reason}`)
 }
 
 export function renderGatewayMetrics(): string {
@@ -58,6 +79,15 @@ export function renderGatewayMetrics(): string {
 			lines.push(
 				`gaia_api_gateway_shadow_unsupported_total{field="${field}",reason="${reason}"} ${unsupported.get(`${field}\t${reason}`) ?? 0}`,
 			)
+	lines.push(
+		"# HELP gaia_api_gateway_shadow_uncompared_total Selected parts of a shadowed operation that were not checked against geo-db, by root field and reason. A match or mismatch covers only the checked parts.",
+		"# TYPE gaia_api_gateway_shadow_uncompared_total counter",
+	)
+	for (const field of fields)
+		for (const reason of UNCOMPARED_REASONS)
+			lines.push(
+				`gaia_api_gateway_shadow_uncompared_total{field="${field}",reason="${reason}"} ${uncompared.get(`${field}\t${reason}`) ?? 0}`,
+			)
 	return `${lines.join("\n")}\n`
 }
 
@@ -66,4 +96,5 @@ export function __resetGatewayMetricsForTests(): void {
 	fields.clear()
 	results.clear()
 	unsupported.clear()
+	uncompared.clear()
 }

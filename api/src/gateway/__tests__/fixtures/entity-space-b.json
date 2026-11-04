@@ -1,0 +1,105 @@
+{
+	"note": "Captured from the testnet gaia API (read-only); relation nodes trimmed.",
+	"request": {
+		"query": "query Entity($id: UUID!, $spaceId: UUID, $cursor: Cursor) {\n  entity(id: $id) {\n    id\n    name\n    description\n    spaceIds\n    updatedAt\n    types { id name }\n    allValuesList: valuesList(first: 1000) { spaceId propertyId }\n    allRelationsList: relationsList(first: 1000) { spaceId }\n    valuesList(first: 1000, filter: { spaceId: { is: $spaceId } }) { ...EntityValueFields }\n    relations(first: 500, after: $cursor, filter: { spaceId: { is: $spaceId } }) {\n      pageInfo { hasNextPage endCursor }\n      nodes { ...RelationFields }\n    }\n  }\n}\nfragment RelationToEntity on Entity {\n  id\n  name\n  types { id }\n  valuesList(first: 1000) { spaceId propertyId text }\n}\nfragment PropertyFragment on PropertyInfo {\n  id name dataTypeId dataTypeName renderableTypeId renderableTypeName format isType\n}\nfragment EntityValueFields on Value {\n  spaceId\n  property { ...PropertyFragment }\n  text integer float point boolean time language unit datetime date decimal schedule\n}\nfragment RelationFields on Relation {\n  id spaceId position verified entityId\n  fromEntity { id name }\n  toEntity { ...RelationToEntity }\n  toSpaceId\n  type { id name }\n}\n",
+		"operationName": "Entity",
+		"variables": {
+			"id": "073ff16b-e7fe-4591-a984-c325d629d92d",
+			"spaceId": "5093b6ab-1b48-f111-1dd3-1275b5413ddb"
+		}
+	},
+	"response": {
+		"data": {
+			"entity": {
+				"id": "073ff16be7fe4591a984c325d629d92d",
+				"name": "Noam Shazeer",
+				"description": "Co-inventor of the transformer architecture, Character.AI co-founder, now co-leading Google's Gemini project.",
+				"spaceIds": ["41e851610e13a19441c4d980f2f2ce6b", "5093b6ab1b48f1111dd31275b5413ddb"],
+				"updatedAt": "1793337008",
+				"types": [
+					{
+						"id": "7ed45f2bc48b419e8e4664d5ff680b0d",
+						"name": "Person"
+					}
+				],
+				"allValuesList": [
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "47ee87d8fac606d73e69d4c212804ffb"
+					},
+					{
+						"spaceId": "5093b6ab1b48f1111dd31275b5413ddb",
+						"propertyId": "0d6259784b3c4b57a86fde45c997c73c"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "cdf139bce610446cac42d57cd7967478"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "0d6259784b3c4b57a86fde45c997c73c"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "eed38e74e67946bf8a42ea3e4f8fb5fb"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "d3998d5338be4371a354472a196e77bd"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "9b1f76ff9711404c861e59dc3fa7d037"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "44163101ec9a4faf83c42629a0d27b37"
+					},
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b",
+						"propertyId": "a126ca530c8e48d5b88882c734c38935"
+					}
+				],
+				"allRelationsList": [
+					{
+						"spaceId": "41e851610e13a19441c4d980f2f2ce6b"
+					}
+				],
+				"valuesList": [
+					{
+						"spaceId": "5093b6ab1b48f1111dd31275b5413ddb",
+						"property": {
+							"id": "0d6259784b3c4b57a86fde45c997c73c",
+							"name": "X",
+							"dataTypeId": "9edb6fcce4544aa5861139d7f024c010",
+							"dataTypeName": "Text",
+							"renderableTypeId": "283127c96142468492ed90b0ebc7f29a",
+							"renderableTypeName": "URL",
+							"format": "https://x.com/{value}",
+							"isType": null
+						},
+						"text": "NoamShazeer",
+						"integer": null,
+						"float": null,
+						"point": null,
+						"boolean": null,
+						"time": null,
+						"language": "090adac0-fca4-822e-8e71-9263e67620ec",
+						"unit": null,
+						"datetime": null,
+						"date": null,
+						"decimal": null,
+						"schedule": null
+					}
+				],
+				"relations": {
+					"pageInfo": {
+						"hasNextPage": false,
+						"endCursor": null
+					},
+					"nodes": []
+				}
+			}
+		}
+	}
+}
