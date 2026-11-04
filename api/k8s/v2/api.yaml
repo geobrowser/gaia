@@ -72,18 +72,28 @@ spec:
           labelSelector:
             matchLabels:
               app: api
+        # Backstop: hard cap so no node ever holds more than 3 more api pods than
+        # the emptiest node, whatever the soft scores say. Loose enough (3) that it
+        # cannot block a scale-out while other nodes have room.
+        - maxSkew: 3
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: api
       # Prefer the node that runs geodb-0. A card read over the geodb-client pipe is
       # 1.43 ms p50 from a pod on that node and 2.41 ms from another node
       # (geo-db plan 10.09). PREFERRED, never required: a full node must not block
       # a scale-out (same reasoning as the spread constraint above), and geodb-0 is
       # a single pod, so a hard rule would pin every api replica to one node.
-      # Weight 100 so it outweighs the spread score; replicas that do not fit on
-      # that node spill to others as before. Applies at scheduling time only, so
-      # existing pods move on their next roll.
+      # Weight 20: at 100 it outweighed the spread constraint and put 9 of 12 pods
+      # on geodb-0's node (2026-11-04), so one node loss took geodb and most of the
+      # api. Low enough that the maxSkew-1 spread above still wins most placements.
+      # Applies at scheduling time only, so existing pods move on their next roll.
       affinity:
         podAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
+            - weight: 20
               podAffinityTerm:
                 topologyKey: kubernetes.io/hostname
                 labelSelector:
