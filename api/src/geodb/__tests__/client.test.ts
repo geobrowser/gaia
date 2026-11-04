@@ -10,6 +10,7 @@ import {activateGeoDbMetrics, renderGeoDbCardMetrics} from "../metrics"
 const ENTITY = "073ff16be7fe4591a984c325d629d92d"
 const SPACE = "22222222222242228222222222222222"
 const PROP = "98012398829d48b083738f2589675894"
+const OTHER_SPACE = "33333333333343338333333333333333"
 
 /** A fake `geodb-client pipe`: a node script speaking the frame protocol, run through the client's spawn seam. */
 function fakePipe(
@@ -190,6 +191,41 @@ lines((line) => {
 		expect(starts()).toBe(2)
 		await client.readCard({geoSpaceId: SPACE, entityId: ENTITY})
 		expect(starts()).toBe(2)
+		client.close()
+	})
+
+	it("times each read's wait, answer and parse stages by shape, and not the keep-warm reads", async () => {
+		const {client} = fakePipe(
+			`
+process.stdout.write("ready\\n")
+lines(() => setTimeout(() => frame("+", ""), 30))
+`,
+			{poolSize: 1, keepWarmMs: 60},
+		)
+		activateGeoDbMetrics()
+		const count = (stage: string, shape: string) =>
+			Number(
+				new RegExp(
+					`gaia_api_geodb_read_stage_seconds_count\\{stage="${stage}",shape="${shape}"\\} (\\d+)`,
+				).exec(renderGeoDbCardMetrics())?.[1],
+			)
+		const sum = (stage: string, shape: string) =>
+			Number(
+				new RegExp(
+					`gaia_api_geodb_read_stage_seconds_sum\\{stage="${stage}",shape="${shape}"\\} ([0-9.e-]+)`,
+				).exec(renderGeoDbCardMetrics())?.[1],
+			)
+		const before = count("answer", "one_names")
+		const answeredBefore = sum("answer", "one_names")
+		const severalBefore = count("answer", "several")
+		await client.readCard({geoSpaceId: SPACE, entityId: ENTITY, names: true})
+		await client.readCardSpaces?.({geoSpaceIds: [SPACE, OTHER_SPACE], entityId: ENTITY})
+		await new Promise((r) => setTimeout(r, 300))
+		expect(count("answer", "one_names") - before).toBe(1)
+		expect(count("wait", "one_names") - before).toBe(1)
+		expect(count("answer", "several") - severalBefore).toBe(1)
+		expect(sum("answer", "one_names") - answeredBefore).toBeGreaterThanOrEqual(0.025)
+		expect(renderGeoDbCardMetrics()).toContain("gaia_api_event_loop_lag_seconds_count ")
 		client.close()
 	})
 
