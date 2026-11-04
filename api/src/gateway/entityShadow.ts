@@ -62,7 +62,7 @@ import {GeoDbError} from "../geodb/client"
 import {askGeoDb, askGeoDbSpaces, type CardDeps, type CardLogger} from "../geodb/service"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import type {FieldShadow} from "./gateway"
-import {analyzeLightEntity, type LightOutcome, runLight} from "./lightShadow"
+import {analyzeLightEntity, type LightOutcome, noteUnsupported, runLight} from "./lightShadow"
 import {
 	activateGatewayMetrics,
 	recordGatewayShadow,
@@ -1161,6 +1161,7 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 				}
 				recordGatewayShadow(ENTITY_FIELD, "unsupported_selection")
 				recordGatewayUnsupported(ENTITY_FIELD, analysis.reason)
+				noteUnsupported(deps, ENTITY_FIELD, analysis.reason, document, classification.operationName)
 				return
 			}
 			const {plan} = analysis

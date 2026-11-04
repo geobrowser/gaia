@@ -393,6 +393,71 @@ describe("entities with the light selection", () => {
 		}
 	})
 
+	const withArgs = (args: string) => FIXTURE.request.query.replace('entity(id: "' + HEX + '")', `entities(${args})`)
+	const SPACE_B = "1b5c5f5c-2d5f-4f6a-9f0d-6d1c0c4f9a11"
+
+	it("plans the Space and Type root arguments", () => {
+		const a = analyzeLightEntities(
+			parse(
+				withArgs(
+					`spaceIds: {in: ["${SPACE_A}", "${SPACE_B}"]}, typeIds: {in: ["${typeId}", "${HEX}"]}, first: 5`,
+				),
+			),
+			null,
+			{},
+		)
+		expect(a.ok).toBe(true)
+		if (a.ok) {
+			expect(a.plan.spaceIds).toHaveLength(2)
+			expect(a.plan.claims).toEqual([{kind: "type", typeIds: [expect.any(String), expect.any(String)]}])
+		}
+		const single = analyzeLightEntities(parse(withArgs(`typeId: "${typeId}", spaceId: "${SPACE_A}"`)), null, {})
+		expect(single.ok && single.plan.claims.map((c) => c.kind)).toEqual(["type"])
+		expect(single.ok && single.plan.spaceIds?.length).toBe(1)
+	})
+
+	it("plans a selection with no lists when the derived fields and spaceIds are asked for", () => {
+		const q = (selection: string) => `query { entities(typeId: "${typeId}", first: 5) { ${selection} } }`
+		expect(analyzeLightEntities(parse(q("id name description spaceIds")), null, {}).ok).toBe(true)
+		// Nothing to judge, or no Space to read.
+		expect(analyzeLightEntities(parse(q("id spaceIds")), null, {})).toEqual({ok: false, reason: "selection"})
+		expect(analyzeLightEntities(parse(q("id name")), null, {})).toEqual({ok: false, reason: "selection"})
+	})
+
+	it("refuses a malformed Space or Type argument", () => {
+		for (const args of [
+			`spaceIds: ["${SPACE_A}"]`,
+			`typeIds: {in: []}`,
+			`typeIds: {overlaps: ["${typeId}"]}`,
+			`typeId: "nope"`,
+		])
+			expect(analyzeLightEntities(parse(withArgs(args)), null, {})).toEqual({ok: false, reason: "args"})
+	})
+
+	it("flags an entity outside every Space the spaceIds argument names", async () => {
+		const entities = list(1)
+		const s = setup(outputsFor(entities))
+		await call(
+			s.points.get("entities") as never,
+			withArgs(`spaceIds: {in: ["${SPACE_B}"]}`),
+			{},
+			{data: {entities}},
+		)
+		expect(results()).toEqual({mismatch: 1})
+	})
+
+	it("accepts an entity in one of the Spaces the spaceIds argument names", async () => {
+		const entities = list(1)
+		const s = setup(outputsFor(entities))
+		await call(
+			s.points.get("entities") as never,
+			withArgs(`spaceIds: {in: ["${SPACE_B}", "${SPACE_A}"]}`),
+			{},
+			{data: {entities}},
+		)
+		expect(results()).toEqual({match: 1})
+	})
+
 	it("compares a sample of the returned entities and checks the filter's promise on each", async () => {
 		const entities = list(7)
 		const claimed = `{typeIds: {anyEqualTo: "${typeId}"}}`

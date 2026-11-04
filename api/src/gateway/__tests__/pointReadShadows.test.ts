@@ -120,7 +120,21 @@ describe("analyzePointRead: entities", () => {
 			{length: MAX_BATCH_IDS + 1},
 			(_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
 		)
-		expect(analyze("entities", ENTITIES, {ids: many})).toEqual({ok: false, reason: "batch_size"})
+		expect(analyze("relations", RELATIONS, {ids: many})).toEqual({ok: false, reason: "batch_size"})
+	})
+
+	it("compares a longer entities id list on an even spread of it", () => {
+		const many = Array.from({length: 61}, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`)
+		const a = analyze("entities", ENTITIES.replace("first: 10", "first: 100"), {ids: many})
+		expect(a.ok).toBe(true)
+		if (a.ok && a.plan.field === "entities") {
+			expect(a.plan.ids).toHaveLength(MAX_BATCH_IDS)
+			expect(a.plan.ids[0]).toBe(many[0]?.replaceAll("-", ""))
+			expect(a.plan.ids.at(-1)).toBe(many.at(-1)?.replaceAll("-", ""))
+			expect(a.plan.uncompared).toContain("sampled_rows")
+		}
+		// `first` below the list would cut it short: still refused.
+		expect(analyze("entities", ENTITIES, {ids: many})).toEqual({ok: false, reason: "args"})
 	})
 
 	it("refuses extra root fields and the wrong root", () => {
