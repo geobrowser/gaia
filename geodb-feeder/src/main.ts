@@ -27,6 +27,7 @@ import {SpaceMapPublisher, kubeConfigMapPut} from "./publish.js"
 import {startServer} from "./server.js"
 import {ensureSpace, readSealer, SpaceCapError} from "./spaces.js"
 import {Store, backfilledSpaces, renderSpaceMap} from "./state.js"
+import {createGroupCommitter} from "./groupCommit.js"
 
 const {Kafka, logLevel, CompressionTypes, CompressionCodecs} = kafkajs
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -112,7 +113,9 @@ async function main(config: Config): Promise<void> {
 		process.exit(1)
 	})
 
-	let lastCommit = 0
+	const commits = createGroupCommitter((partition, offset) =>
+		consumer.commitOffsets([{topic: config.kafka.topic, partition, offset}]).catch((e) => log("warn", "group commit failed", errorFields(e))),
+	)
 	await consumer.run({
 		autoCommit: false,
 		partitionsConsumedConcurrently: 1,
@@ -123,6 +126,7 @@ async function main(config: Config): Promise<void> {
 				const last = store.lastDone(batch.partition)
 				if (last !== null && offset <= last) {
 					resolveOffset(m.offset)
+					await commits.done(batch.partition, offset)
 					continue
 				}
 				if (last !== null && offset > last + 1) metrics.offsetGaps.inc({}, offset - last - 1)
@@ -146,13 +150,9 @@ async function main(config: Config): Promise<void> {
 				metrics.lastOffset.set({partition: String(batch.partition)}, offset)
 				resolveOffset(m.offset)
 				await heartbeat()
-				if (Date.now() - lastCommit > 5000) {
-					lastCommit = Date.now()
-					await consumer
-						.commitOffsets([{topic: config.kafka.topic, partition: batch.partition, offset: String(offset + 1)}])
-						.catch((e) => log("warn", "group commit failed", errorFields(e)))
-				}
+				await commits.done(batch.partition, offset)
 			}
+			await commits.flush()
 		},
 	})
 	consumerRunning = true

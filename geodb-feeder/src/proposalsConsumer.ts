@@ -8,6 +8,7 @@ import type {Config} from "./config.js"
 import {errorFields, log} from "./log.js"
 import {observeFreshness} from "./metrics.js"
 import {handleProposalMessage, ProposalOffsets, type ProposalDeps} from "./proposals.js"
+import {createGroupCommitter} from "./groupCommit.js"
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -36,7 +37,9 @@ export async function startProposalConsumer(opts: {
 		deps.metrics.proposalsUp.set({}, 0)
 		log("error", "proposals consumer crashed (edits consumer unaffected)", {error: String(e.payload?.error).slice(0, 300)})
 	})
-	let lastCommit = 0
+	const commits = createGroupCommitter((partition, offset) =>
+		consumer.commitOffsets([{topic, partition, offset}]).catch((e) => log("warn", "proposals group commit failed", errorFields(e))),
+	)
 	await consumer.run({
 		autoCommit: false,
 		partitionsConsumedConcurrently: 1,
@@ -47,6 +50,7 @@ export async function startProposalConsumer(opts: {
 				const last = offsets.lastDone(batch.partition)
 				if (last !== null && offset <= last) {
 					resolveOffset(m.offset)
+					await commits.done(batch.partition, offset)
 					continue
 				}
 				let outcome: string
@@ -66,13 +70,9 @@ export async function startProposalConsumer(opts: {
 				observeFreshness(deps.metrics.proposalFreshness, m.timestamp)
 				resolveOffset(m.offset)
 				await heartbeat()
-				if (Date.now() - lastCommit > 5000) {
-					lastCommit = Date.now()
-					await consumer
-						.commitOffsets([{topic, partition: batch.partition, offset: String(offset + 1)}])
-						.catch((e) => log("warn", "proposals group commit failed", errorFields(e)))
-				}
+				await commits.done(batch.partition, offset)
 			}
+			await commits.flush()
 		},
 	})
 	deps.metrics.proposalsUp.set({}, 1)

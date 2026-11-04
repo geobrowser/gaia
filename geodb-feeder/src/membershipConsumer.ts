@@ -8,6 +8,7 @@ import type {Config} from "./config.js"
 import {errorFields, log} from "./log.js"
 import {observeFreshness} from "./metrics.js"
 import {handleMembershipMessage, type MembershipDeps} from "./membership.js"
+import {createGroupCommitter} from "./groupCommit.js"
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -35,7 +36,9 @@ export async function startMembershipConsumer(opts: {
 		deps.metrics.membershipUp.set({}, 0)
 		log("error", "membership consumer crashed (edits consumer unaffected)", {error: String(e.payload?.error).slice(0, 300)})
 	})
-	let lastCommit = 0
+	const commits = createGroupCommitter((partition, offset) =>
+		consumer.commitOffsets([{topic, partition, offset}]).catch((e) => log("warn", "membership group commit failed", errorFields(e))),
+	)
 	await consumer.run({
 		autoCommit: false,
 		partitionsConsumedConcurrently: 1,
@@ -46,6 +49,7 @@ export async function startMembershipConsumer(opts: {
 				const last = deps.state.lastDone(batch.partition)
 				if (last !== null && offset <= last) {
 					resolveOffset(m.offset)
+					await commits.done(batch.partition, offset)
 					continue
 				}
 				let outcome: string
@@ -65,13 +69,9 @@ export async function startMembershipConsumer(opts: {
 				observeFreshness(deps.metrics.membershipFreshness, m.timestamp)
 				resolveOffset(m.offset)
 				await heartbeat()
-				if (Date.now() - lastCommit > 5000) {
-					lastCommit = Date.now()
-					await consumer
-						.commitOffsets([{topic, partition: batch.partition, offset: String(offset + 1)}])
-						.catch((e) => log("warn", "membership group commit failed", errorFields(e)))
-				}
+				await commits.done(batch.partition, offset)
 			}
+			await commits.flush()
 		},
 	})
 	deps.metrics.membershipUp.set({}, 1)
