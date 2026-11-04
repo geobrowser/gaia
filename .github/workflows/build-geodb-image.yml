@@ -72,19 +72,24 @@ jobs:
         working-directory: ${{ runner.temp }}/geo-db
         run: sh "$GITHUB_WORKSPACE/geodb/fetch-nested-pins.sh"
 
-      - name: Build geodb-serve and geodb-client
+      - name: Build geodb-serve, geodb-client and the migrator
         working-directory: ${{ runner.temp }}/geo-db
-        # x86_64_v2: runs on any DigitalOcean node. The `serve` and `client` build steps run the
-        # binaries once with no arguments, which exits 1 (MissingSubcommand): the build is fine,
-        # so the result is judged by the binaries existing, below.
+        # x86_64_v2: runs on any DigitalOcean node. The `serve`, `client` and `migrate` build steps run the
+        # binaries once with no arguments, which exits non-zero (usage): the build is fine,
+        # so the result is judged by the binaries existing, below. `migrate` (ReleaseFast, built by its own
+        # step) is the store migrator for a persistent cut (RUNBOOK §8); it is installed as geodb-migrate.
         run: |
           zig build serve client -Doptimize=ReleaseSafe -Dcpu=x86_64_v2 -Dbuild-hash="$GEODB_SHA" || true
+          zig build migrate -Dcpu=x86_64_v2 -Dbuild-hash="$GEODB_SHA" || true
           for bin in geodb-serve geodb-client; do
             path="$(find .zig-cache/o -name "$bin" -type f -perm -u+x -print0 | xargs -0 ls -t | head -n 1)"
             [ -n "$path" ] || { echo "::error::$bin was not built"; exit 1; }
             cp "$path" "$GITHUB_WORKSPACE/geodb/$bin"
           done
-          file "$GITHUB_WORKSPACE/geodb/geodb-serve" "$GITHUB_WORKSPACE/geodb/geodb-client"
+          path="$(find .zig-cache/o -name migrate -type f -perm -u+x -print0 | xargs -0 ls -t | head -n 1)"
+          [ -n "$path" ] || { echo "::error::migrate was not built"; exit 1; }
+          cp "$path" "$GITHUB_WORKSPACE/geodb/geodb-migrate"
+          file "$GITHUB_WORKSPACE/geodb/geodb-serve" "$GITHUB_WORKSPACE/geodb/geodb-client" "$GITHUB_WORKSPACE/geodb/geodb-migrate"
 
       - name: Smoke test the binaries
         working-directory: geodb

@@ -8,9 +8,9 @@ FROM debian:bookworm-slim
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-COPY geodb-serve geodb-client /usr/local/bin/
+COPY geodb-serve geodb-client geodb-migrate /usr/local/bin/
 COPY supervisor.sh /usr/local/bin/geodb-supervisor
-RUN chmod 0755 /usr/local/bin/geodb-serve /usr/local/bin/geodb-client /usr/local/bin/geodb-supervisor
+RUN chmod 0755 /usr/local/bin/geodb-serve /usr/local/bin/geodb-client /usr/local/bin/geodb-migrate /usr/local/bin/geodb-supervisor
 
 USER 1001
 CMD ["/usr/local/bin/geodb-supervisor"]
