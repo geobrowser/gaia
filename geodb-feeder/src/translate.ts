@@ -3,6 +3,7 @@
  * `conformingId`, and "what geo-db already holds" comes in through the context.
  */
 import {cid, hexId} from "./ids.js"
+import {languageTag} from "./languages.js"
 
 export type GrcValue = {type: string; language?: string | Uint8Array | null; [k: string]: unknown}
 export type GrcPropertyValue = {property: string | Uint8Array; value?: GrcValue}
@@ -64,13 +65,18 @@ export function floatToDecimal(x: number): [bigint, number] | null {
 	return normDecimal(BigInt(`${m[1]}${m[2]}${frac}`), Number(m[4] ?? 0) - frac.length)
 }
 
-type Zon = {zon: string; lang?: boolean} | {skip: string}
+/** `tag` is a text's BCP 47 primary subtag; `lang` marks a language that has no tag, whose text goes in untagged. */
+type Zon = {zon: string; tag?: string; lang?: boolean} | {skip: string}
 
 /** One GRC-20 value -> its ZON value form, or a skip reason. */
 export function valueZon(v: GrcValue): Zon {
 	switch (v.type) {
-		case "text":
-			return {zon: `.{ .text = ${zigString(String(v.value))} }`, lang: v.language != null}
+		case "text": {
+			const zon = `.{ .text = ${zigString(String(v.value))} }`
+			if (v.language == null) return {zon}
+			const tag = languageTag(v.language)
+			return tag ? {zon, tag} : {zon, lang: true}
+		}
 		case "integer":
 			return {zon: `.{ .number = ${String(v.value)} }`}
 		case "boolean":
@@ -141,7 +147,9 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext): Translation {
 			if (seen.has(p)) bump("multi-value-collapsed")
 			seen.add(p)
 			if (r.lang) bump("text-language-dropped")
-			intents.push(`.{ .set = .{ .entity = "${e}", .property = "${p}", .value = ${r.zon} } }`)
+			const language = r.tag ? `, .language = "${r.tag}"` : ""
+			intents.push(`.{ .set = .{ .entity = "${e}", .property = "${p}", .value = ${r.zon}${language} } }`)
+			if (r.tag) bump("text-language-kept")
 			bump("values-set")
 		}
 	}

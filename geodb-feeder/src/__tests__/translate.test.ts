@@ -1,5 +1,6 @@
 import {describe, expect, it} from "vitest"
 import {conformingId, nonceOf} from "../ids.js"
+import {genesisLanguageId as languageIdOf} from "../languages.js"
 import {
 	type GrcOp,
 	type TranslateContext,
@@ -36,9 +37,17 @@ describe("valueZon", () => {
 		expect(valueZon({type: "date", value: "last week"})).toEqual({skip: "date-unparsable"})
 	})
 
-	it("flags language-tagged text, which geo-db has no cell for", () => {
-		expect(valueZon({type: "text", value: "plain"})).toEqual({zon: '.{ .text = "plain" }', lang: false})
-		expect(valueZon({type: "text", value: "bonjour", language: id(9)})).toEqual({zon: '.{ .text = "bonjour" }', lang: true})
+	const english = "090adac0-fca4-822e-8e71-9263e67620ec"
+	const french = languageIdOf("fr")
+
+	it("passes a text's known language as its tag, and flags a language with no tag", () => {
+		expect(valueZon({type: "text", value: "plain"})).toEqual({zon: '.{ .text = "plain" }'})
+		expect(valueZon({type: "text", value: "hello", language: english})).toEqual({zon: '.{ .text = "hello" }', tag: "en"})
+		expect(valueZon({type: "text", value: "bonjour", language: Uint8Array.from(Buffer.from(french, "hex"))})).toEqual({
+			zon: '.{ .text = "bonjour" }',
+			tag: "fr",
+		})
+		expect(valueZon({type: "text", value: "?", language: id(9)})).toEqual({zon: '.{ .text = "?" }', lang: true})
 	})
 
 	it("translates the scalar kinds", () => {
@@ -105,6 +114,31 @@ describe("translateOps", () => {
 		{type: "deleteEntity", id: id(11)},
 		{type: "somethingNew"},
 	]
+
+	it("sets a text with a known language with its tag, and one with an unknown language without", () => {
+		const {ctx} = context()
+		const {intents, stats} = translateOps(
+			[
+				{
+					type: "createEntity",
+					id: id(1),
+					values: [
+						{property: id(2), value: {type: "text", value: "hello", language: "090adac0fca4822e8e719263e67620ec"}},
+						{property: id(3), value: {type: "text", value: "huh", language: id(9)}},
+						{property: id(4), value: {type: "text", value: "plain"}},
+					],
+				},
+			],
+			ctx,
+		)
+		expect(intents).toEqual([
+			`.{ .create_entity = "${hex(1)}" }`,
+			`.{ .set = .{ .entity = "${hex(1)}", .property = "${hex(2)}", .value = .{ .text = "hello" }, .language = "en" } }`,
+			`.{ .set = .{ .entity = "${hex(1)}", .property = "${hex(3)}", .value = .{ .text = "huh" } } }`,
+			`.{ .set = .{ .entity = "${hex(1)}", .property = "${hex(4)}", .value = .{ .text = "plain" } } }`,
+		])
+		expect(stats).toMatchObject({"text-language-kept": 1, "text-language-dropped": 1, "values-set": 3})
+	})
 
 	it("emits hex op ids, last-value-wins per language cell, and date precision", () => {
 		const {ctx} = context()
