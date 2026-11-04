@@ -219,6 +219,16 @@ sum(increase(gaia_api_geodb_card_shadow_total{result="only_postgres"}[1h])) / su
 (`BACKFILL_EXCLUDE_PROPERTIES`, default the list in `geodb-feeder/src/pgAdapter.ts`) are left out on
 purpose, so the replica holds only what the stream would give it.
 
+### 2b-bis. Proposal system entities
+
+The kg-indexer writes a system entity per proposal (type Proposal, five values, two System/Proposal type
+relations) straight to Postgres on PROPOSAL_CREATED; no edit carries it. With `GEODB_PROPOSAL_ENTITIES=1` the
+feeder consumes `<env>.space.governance` in its own group (`geodb-feeder-proposals-v1-<env>`, own offsets under
+`feeder/proposals`) and writes the same rows, only into Spaces geo-db already holds (it never founds one).
+Metrics: `geodb_feeder_proposal_events_total{outcome}` (`unmapped` = Space not founded), `geodb_feeder_proposals_consumer_lag`,
+`geodb_feeder_proposals_consumer_running`. The Kafka user needs consume on `space.governance`. Proposals created
+before the consumer first ran, or in a Space founded later, are loaded by the backfill (`BACKFILL_SPACES=<ids>`).
+
 ### 2c. Membership backfill (before GEODB_MEMBERSHIP_DUAL_WRITE)
 
 Space members and editors reach geo-db only through the `space.membership` consumer, which is off

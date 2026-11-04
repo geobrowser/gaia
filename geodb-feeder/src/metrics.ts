@@ -77,6 +77,9 @@ export function createMetrics() {
 		membershipShadowSpaces: gauge("geodb_feeder_membership_shadow_spaces", "Spaces in the last comparison run, by role and result."),
 		membershipShadowIds: gauge("geodb_feeder_membership_shadow_diff_ids", "Ids that differ in the last comparison run, summed over Spaces, by role and side (missing_in_geo: Postgres has it, geo-db does not; extra_in_geo: the reverse)."),
 		membershipShadowLastRun: gauge("geodb_feeder_membership_shadow_last_run_timestamp_seconds", "Unix time the last membership comparison run finished."),
+		proposalEvents: counter("geodb_feeder_proposal_events_total", "space.governance messages handled, by outcome (applied, noop, ignored, unmapped, dead_letter)."),
+		proposalsLag: gauge("geodb_feeder_proposals_consumer_lag", "space.governance messages between the topic head and the last applied offset, by partition."),
+		proposalsUp: gauge("geodb_feeder_proposals_consumer_running", "1 while the space.governance consumer is running."),
 		apply: new Histogram("geodb_feeder_apply_seconds", "Wall time of one geodb-client apply."),
 	}
 	const render = () =>
