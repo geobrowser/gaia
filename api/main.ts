@@ -7,9 +7,11 @@ import {readGatewayConfig} from "./src/gateway/config"
 import {createEntityShadow, ENTITY_FIELD} from "./src/gateway/entityShadow"
 import {createGateway, fieldModeOf} from "./src/gateway/gateway"
 import {createPointReadShadows, POINT_READ_FIELDS} from "./src/gateway/pointReadShadows"
+import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
 import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
 import {createGeoDbRouter} from "./src/geodb/router"
+import {createCliGeoDbSearchClient} from "./src/geodb/search"
 import {health} from "./src/health"
 import {createIpfsRouter} from "./src/ipfs"
 import {setGraphqlSearchClient} from "./src/kg/graphqlSearchOpenSearchPlugin"
@@ -148,7 +150,7 @@ log.info("Versioned v2 entity routes enabled")
 // Opt-in GraphQL gateway config; the gateway itself is built below, where /graphql is mounted.
 const gatewayConfig = readGatewayConfig(process.env)
 const gatewayShadowFields = new Set(
-	[ENTITY_FIELD, ...POINT_READ_FIELDS].filter(
+	[ENTITY_FIELD, ...POINT_READ_FIELDS, ...SEARCH_FIELDS].filter(
 		(field) => gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, field) === "shadow",
 	),
 )
@@ -197,7 +199,7 @@ app.get("/", swaggerUI({url: "/openapi"}))
 
 // Opt-in GraphQL gateway in front of PostGraphile (GRAPHQL_GATEWAY=on; off by default). It serves nothing from
 // geo-db yet, so on or off every operation is answered by PostGraphile; with entity=shadow (or entities, relation,
-// relations) a sample of those operations is also compared against geo-db in the background.
+// relations, search, searchConnection) a sample of those operations is also compared against geo-db in the background.
 const graphqlHandler = createGateway({
 	config: gatewayConfig,
 	shadows:
@@ -209,6 +211,15 @@ const graphqlHandler = createGateway({
 					...createPointReadShadows(
 						{...sharedGeoDb, log},
 						POINT_READ_FIELDS.filter((field) => gatewayShadowFields.has(field)),
+					),
+					...createSearchShadows(
+						{
+							geoSpaceOf: sharedGeoDb.geoSpaceOf,
+							log,
+							search: createCliGeoDbSearchClient(geoDbCardConfig),
+							mode: process.env.GEODB_SEARCH_MODE === "bm25" ? "bm25" : "typeahead",
+						},
+						SEARCH_FIELDS.filter((field) => gatewayShadowFields.has(field)),
 					),
 				])
 			: undefined,
