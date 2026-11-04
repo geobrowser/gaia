@@ -17,7 +17,7 @@ import {
 	type MembershipDeps,
 	type RoleEvent,
 } from "../membership.js"
-import {compareMembership} from "../membershipShadow.js"
+import {DIFF_CAP, compareMembership} from "../membershipShadow.js"
 import {createMetrics} from "../metrics.js"
 import {Store} from "../state.js"
 
@@ -164,33 +164,60 @@ describe("backfillMembership", () => {
 			{space_id: dashed(SPACE), member_space_id: dashed(ALICE), role: "editor" as const},
 			{space_id: dashed(SPACE), member_space_id: dashed(BOB), role: "member" as const},
 		]
-		expect(await backfillMembership(f.deps, rows)).toEqual({rows: 3, applied: 3, noop: 0})
-		expect(await backfillMembership(f.deps, rows)).toEqual({rows: 3, applied: 0, noop: 3})
+		expect(await backfillMembership(f.deps, rows)).toEqual({rows: 3, applied: 3, noop: 0, deadLetter: 0})
+		expect(await backfillMembership(f.deps, rows)).toEqual({rows: 3, applied: 0, noop: 3, deadLetter: 0})
 		expect(f.applied).toHaveLength(3)
+	})
+
+	it("a rerun in a new process (journal reloaded from disk) is all no-ops", async () => {
+		const f = fixture()
+		const rows = [
+			{space_id: SPACE, member_space_id: ALICE, role: "member" as const},
+			{space_id: SPACE, member_space_id: BOB, role: "editor" as const},
+		]
+		await backfillMembership(f.deps, rows)
+		const again = {...f.deps, state: new MembershipState(f.state.dir)}
+		expect(await backfillMembership(again, rows)).toEqual({rows: 2, applied: 0, noop: 2, deadLetter: 0})
+		expect(f.applied).toHaveLength(2)
+	})
+
+	it("re-activates a role retracted since, and counts a refused row as a dead letter, not applied", async () => {
+		const f = fixture()
+		const rows = [{space_id: SPACE, member_space_id: ALICE, role: "member" as const}]
+		await backfillMembership(f.deps, rows)
+		await applyRoleEvent(f.deps, revoke(ALICE), {partition: 0, offset: "1"})
+		expect(await backfillMembership(f.deps, rows)).toMatchObject({applied: 1, noop: 0})
+		expect(f.applied.at(-1)).toContain(".active = true")
+
+		const g = fixture()
+		g.deps.db.apply = async () => ({rc: 1, out: "", err: "refused"})
+		const r = await backfillMembership(g.deps, rows)
+		expect(r).toMatchObject({rows: 1, applied: 0, deadLetter: 1})
+		expect(g.state.statementCount).toBe(0)
 	})
 })
 
 describe("compareMembership", () => {
-	const statementsFor = (n: number, prop: string) =>
-		Array.from({length: n}, (_, i) => ({prop, value: "v", statement: `${prop}-${i}`, entity: subjectEntity(SPACE)}))
+	const sid = (member: string, role: "member" | "editor" = "member", space = SPACE) => statementId(space, member, role)
+	const geoRows = (ids: string[], prop: string) => ids.map((statement) => ({prop, value: "v", statement, entity: subjectEntity(SPACE)}))
 
 	it("counts match, mismatch, unmapped and error per role and sets the metrics", async () => {
 		const metrics = createMetrics()
 		const OTHER = "e49c345ab9866679b001d7d2138d88a4"
 		const reader = {
 			reset: () => {},
-			entityRows: async (geo: string, entity: string) => {
+			entityRows: async (_geo: string, entity: string) => {
 				if (entity === subjectEntity(OTHER)) throw new Error("boom")
-				return [...statementsFor(2, ROLE_PROPERTY.member), ...statementsFor(1, ROLE_PROPERTY.editor)]
+				return [...geoRows([sid(ALICE), sid(BOB)], ROLE_PROPERTY.member), ...geoRows([sid(ALICE, "editor")], ROLE_PROPERTY.editor)]
 			},
 		}
 		const GONE = "f59c345ab9866679b001d7d2138d88a5"
 		const s = await compareMembership({
-			pgCounts: async () =>
+			pgMembers: async () =>
 				new Map([
-					[SPACE, {member: 2, editor: 2}], // editors differ
-					[OTHER, {member: 1, editor: 0}], // read fails
-					[GONE, {member: 1, editor: 0}], // no geo Space
+					[SPACE, {member: [ALICE, BOB], editor: [ALICE, BOB]}], // editor BOB missing in geo
+					[OTHER, {member: [ALICE], editor: []}], // read fails
+					[GONE, {member: [ALICE], editor: []}], // no geo Space
 				]),
 			reader,
 			spaces: () => ({
@@ -201,24 +228,53 @@ describe("compareMembership", () => {
 			metrics,
 			sleep: async () => {},
 		})
-		expect(s.mismatched).toEqual([{space: SPACE, role: "editor", pg: 2, geo: 1}])
+		expect(s.mismatched).toEqual([{space: SPACE, role: "editor", pg: 2, geo: 1, missing: [BOB], extra: []}])
 		expect(s).toMatchObject({compared: 2, unmapped: 1, errors: 1})
 		const text = metrics.render()
 		expect(text).toContain('geodb_feeder_membership_shadow_compares_total{result="match",role="member"} 1')
 		expect(text).toContain('geodb_feeder_membership_shadow_compares_total{result="mismatch",role="editor"} 1')
 		expect(text).toContain('geodb_feeder_membership_shadow_spaces{result="mismatch",role="editor"} 1')
 		expect(text).toContain('geodb_feeder_membership_shadow_spaces{result="unmapped",role="member"} 1')
+		expect(text).toContain('geodb_feeder_membership_shadow_diff_ids{role="editor",side="missing_in_geo"} 1')
+		expect(text).toContain('geodb_feeder_membership_shadow_diff_ids{role="member",side="extra_in_geo"} 0')
 	})
 
-	it("compares a Space Postgres no longer has rows for against zero", async () => {
+	it("equal counts with different members is a mismatch, naming both sides' ids", async () => {
+		const metrics = createMetrics()
 		const s = await compareMembership({
-			pgCounts: async () => new Map(),
-			reader: {reset: () => {}, entityRows: async () => statementsFor(1, ROLE_PROPERTY.member)},
+			pgMembers: async () => new Map([[SPACE, {member: [ALICE], editor: []}]]),
+			reader: {reset: () => {}, entityRows: async () => geoRows([sid(BOB)], ROLE_PROPERTY.member)},
+			spaces: () => ({[SPACE]: {geo: GEO, nonce: "n", keyed: true}}),
+			journalSpaces: () => [],
+			metrics,
+		})
+		expect(s.mismatched).toEqual([{space: SPACE, role: "member", pg: 1, geo: 1, missing: [ALICE], extra: [sid(BOB)]}])
+		expect(metrics.render()).toContain('geodb_feeder_membership_shadow_diff_ids{role="member",side="extra_in_geo"} 1')
+	})
+
+	it("caps the ids named per mismatch but counts them all in the metric", async () => {
+		const metrics = createMetrics()
+		const many = Array.from({length: 12}, (_, i) => `${String(i).padStart(2, "0")}9c345ab9866679b001d7d2138d88a1`)
+		const s = await compareMembership({
+			pgMembers: async () => new Map([[SPACE, {member: many, editor: []}]]),
+			reader: {reset: () => {}, entityRows: async () => []},
+			spaces: () => ({[SPACE]: {geo: GEO, nonce: "n", keyed: true}}),
+			journalSpaces: () => [],
+			metrics,
+		})
+		expect(s.mismatched[0]?.missing).toHaveLength(DIFF_CAP)
+		expect(metrics.render()).toContain('geodb_feeder_membership_shadow_diff_ids{role="member",side="missing_in_geo"} 12')
+	})
+
+	it("compares a Space Postgres no longer has rows for against the empty set", async () => {
+		const s = await compareMembership({
+			pgMembers: async () => new Map(),
+			reader: {reset: () => {}, entityRows: async () => geoRows([sid(ALICE)], ROLE_PROPERTY.member)},
 			spaces: () => ({[SPACE]: {geo: GEO, nonce: "n", keyed: true}}),
 			journalSpaces: () => [SPACE],
 			metrics: createMetrics(),
 		})
-		expect(s.mismatched).toEqual([{space: SPACE, role: "member", pg: 0, geo: 1}])
+		expect(s.mismatched).toEqual([{space: SPACE, role: "member", pg: 0, geo: 1, missing: [], extra: [sid(ALICE)]}])
 	})
 })
 

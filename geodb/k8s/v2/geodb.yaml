@@ -342,6 +342,28 @@ spec:
               value: /etc/geodb/space-map/sealer-id
             - name: METRICS_PORT
               value: "9090"
+            # Membership (space members and editors) into geo-db. Both are off: the feeder reads only "1" or
+            # "true" as on (anything else, including "off", is off). To turn them on, in this order:
+            #   1. run the membership backfill Job (geodb-membership-backfill-job.yaml, RUNBOOK §2c) with the
+            #      feeder scaled to 0;
+            #   2. set GEODB_MEMBERSHIP_DUAL_WRITE to "1" and roll the feeder: it consumes space.membership;
+            #   3. once its lag is ~0, set GEODB_MEMBERSHIP_SHADOW_COMPARE to "1": it compares the member and
+            #      editor id sets per Space against Postgres (geodb_feeder_membership_shadow_* metrics).
+            - name: GEODB_MEMBERSHIP_DUAL_WRITE
+              value: "off"
+            - name: GEODB_MEMBERSHIP_SHADOW_COMPARE
+              value: "off"
+            # Read only; used by the membership comparison, ignored while it is off.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
             # The journals of what geo-db holds (known-entities/statements) are kept in memory and grow ~10x
             # after a backfill (RUNBOOK §2b): give the heap room below the limit.
             - name: NODE_OPTIONS

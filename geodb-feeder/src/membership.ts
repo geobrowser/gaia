@@ -190,7 +190,7 @@ export async function handleMembershipMessage(
 	return applyRoleEvent(deps, ev, {partition, offset: message.offset})
 }
 
-export type BackfillResult = {rows: number; applied: number; noop: number}
+export type BackfillResult = {rows: number; applied: number; noop: number; deadLetter: number}
 
 /**
  * Bring geo-db up to a Postgres snapshot of members and editors: every row is a grant, applied through the same
@@ -201,8 +201,9 @@ export type BackfillResult = {rows: number; applied: number; noop: number}
 export async function backfillMembership(
 	deps: MembershipDeps,
 	rows: Iterable<{space_id: string; member_space_id: string; role: Role}>,
+	progress: (done: number) => void = () => {},
 ): Promise<BackfillResult> {
-	const out: BackfillResult = {rows: 0, applied: 0, noop: 0}
+	const out: BackfillResult = {rows: 0, applied: 0, noop: 0, deadLetter: 0}
 	for (const r of rows) {
 		out.rows++
 		const ev: RoleEvent = {
@@ -213,7 +214,10 @@ export async function backfillMembership(
 		}
 		const o = await applyRoleEvent(deps, ev, {partition: -1, offset: "backfill"})
 		if (o === "noop") out.noop++
+		else if (o === "dead_letter") out.deadLetter++
 		else out.applied++
+		progress(out.rows)
+		if (deps.signal?.aborted) throw new Error("membership backfill aborted")
 	}
 	return out
 }

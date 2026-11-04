@@ -1,0 +1,168 @@
+# geo-db membership backfill: a one-shot Job that writes every current space member and editor from gaia
+# Postgres (read only) into geo-db, through the feeder's membership dual-write path. See geodb/RUNBOOK.md §2c and
+# geodb-feeder/src/membership-backfill-main.ts. Run it before GEODB_MEMBERSHIP_DUAL_WRITE is turned on.
+#
+# NOT in deploy-v2: it runs by hand, with Deployment geodb-feeder scaled to 0 (it mounts the feeder's RWO
+# state volume and refuses to start while the feeder's or the membership consumer group has members):
+#   sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" geodb-membership-backfill-job.yaml | kubectl apply -f -
+#
+# Reruns are safe (the membership journal on the state volume says what geo-db holds; those rows are no-ops).
+# Delete the Job before applying it again: a Job's pod template is immutable.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: geodb-membership-backfill
+  namespace: gaia
+  labels:
+    app: geodb-membership-backfill
+spec:
+  # A failure stops here and is read from the logs; a rerun is a deliberate, fresh apply.
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app: geodb-membership-backfill
+    spec:
+      serviceAccountName: geodb
+      enableServiceLinks: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: geodb-feeder-state
+        - name: geodb-bin
+          emptyDir: {}
+        - name: space-map
+          configMap:
+            name: geodb-space-map
+            optional: true
+        - name: writer-key
+          secret:
+            secretName: geodb-writer-key
+            defaultMode: 0440
+            items:
+              - key: key
+                path: writer.key
+      initContainers:
+        # Same as the feeder's: the pinned geodb-client and a binding to serve's node id.
+        - name: geodb-setup
+          image: registry.digitalocean.com/geo/geodb:7d32584825
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              cp /usr/local/bin/geodb-client /geodb/geodb-client
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -z "$node" ] || [ -z "$ip" ]; then
+                echo "geodb-setup: serve has not published node-id yet, or no geodb Service"
+                exit 1
+              fi
+              printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: membership-backfill
+          image: registry.digitalocean.com/geo/geodb-feeder:latest
+          imagePullPolicy: Always
+          command: ["node", "dist/membership-backfill-main.js"]
+          ports:
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            # The membership journal is kept in memory.
+            - name: NODE_OPTIONS
+              value: "--max-old-space-size=1536"
+            - name: ENVIRONMENT
+              value: testnet
+            - name: KAFKA_GROUP_ID
+              value: geodb-feeder-v1-testnet
+            - name: DATA_DIR
+              value: /data
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/writer-key/writer.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
+            - name: GEODB_SEALER_FILE
+              value: /etc/geodb/space-map/sealer-id
+            - name: METRICS_PORT
+              value: "9090"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-feeder-kafka
+                  key: KAFKA_SSL_CA_PEM
+          volumeMounts:
+            - name: state
+              mountPath: /data
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+            - name: writer-key
+              mountPath: /etc/geodb/writer-key
+              readOnly: true
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "200m"
+            limits:
+              memory: "2Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL

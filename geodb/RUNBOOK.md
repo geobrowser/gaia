@@ -219,6 +219,28 @@ sum(increase(gaia_api_geodb_card_shadow_total{result="only_postgres"}[1h])) / su
 (`BACKFILL_EXCLUDE_PROPERTIES`, default the list in `geodb-feeder/src/pgAdapter.ts`) are left out on
 purpose, so the replica holds only what the stream would give it.
 
+### 2c. Membership backfill (before GEODB_MEMBERSHIP_DUAL_WRITE)
+
+Space members and editors reach geo-db only through the `space.membership` consumer, which is off
+(`GEODB_MEMBERSHIP_DUAL_WRITE`, `GEODB_MEMBERSHIP_SHADOW_COMPARE`; the feeder reads `1` or `true` as on, anything else as off).
+The topic does not hold full history, so load the current state first. Job `geodb-membership-backfill`
+(`geodb/k8s/v2/geodb-membership-backfill-job.yaml`, `node dist/membership-backfill-main.js`) reads every row of
+`members` and `editors` (read only) and applies each as a grant through the dual-write path, recording it in the
+membership journal. Rows the journal holds are no-ops, so a rerun resumes. It never retracts. Like §2b it runs
+with the feeder scaled to 0 and refuses to start while the feeder's or the membership consumer group has members.
+
+```bash
+$K scale deployment/geodb-feeder --replicas=0
+$K wait --for=delete pod -l app=geodb-feeder --timeout=120s
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" geodb/k8s/v2/geodb-membership-backfill-job.yaml | $K apply -f -
+$K logs -f job/geodb-membership-backfill   # "membership backfill done", deadLetter 0
+$K delete job geodb-membership-backfill
+# then GEODB_MEMBERSHIP_DUAL_WRITE "1" in the feeder manifest, scale to 1; once lag is ~0, SHADOW_COMPARE "1".
+```
+
+The comparison checks the full id sets per Space and role; a mismatch logs the differing ids (5 per side, 10
+Spaces per run) and sets `geodb_feeder_membership_shadow_diff_ids{role,side}`.
+
 ## 3. The exit check: a week of traffic
 
 Do not turn serve mode on until all of these hold over 7 days of shadow:
