@@ -5,6 +5,8 @@
  * active, every series for a registered field is created at zero so `increase()` sees the first event.
  */
 
+import {__resetSearchMetricsForTests, renderSearchMetrics} from "./searchMetrics"
+
 export const SHADOW_RESULTS = ["match", "mismatch", "unsupported_selection", "failed"] as const
 /** Why a selection cannot be answered from geo-db. A closed set, so it is safe as a label. */
 export const UNSUPPORTED_REASONS = [
@@ -63,7 +65,7 @@ export function recordGatewayUncompared(field: string, reason: UncomparedReason)
 }
 
 export function renderGatewayMetrics(): string {
-	if (fields.size === 0) return ""
+	if (fields.size === 0) return renderSearchMetrics()
 	const lines = [
 		"# HELP gaia_api_gateway_shadow_total Gateway shadow comparisons by root field and result: match, mismatch, unsupported_selection (geo-db cannot answer the selection) or failed (geo-db read failed).",
 		"# TYPE gaia_api_gateway_shadow_total counter",
@@ -91,7 +93,7 @@ export function renderGatewayMetrics(): string {
 			lines.push(
 				`gaia_api_gateway_shadow_uncompared_total{field="${field}",reason="${reason}"} ${uncompared.get(`${field}\t${reason}`) ?? 0}`,
 			)
-	return `${lines.join("\n")}\n`
+	return `${lines.join("\n")}\n${renderSearchMetrics()}`
 }
 
 /** Reset accumulated state. Tests only. */
@@ -100,4 +102,5 @@ export function __resetGatewayMetricsForTests(): void {
 	results.clear()
 	unsupported.clear()
 	uncompared.clear()
+	__resetSearchMetricsForTests()
 }
