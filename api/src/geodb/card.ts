@@ -186,7 +186,7 @@ export function rowsFromGeoDbOutput(output: string, entityId: string, options: C
  * Properties other indexers write straight into Postgres and no edit carries, so the geo-db backfill
  * excludes them by design (vote Score, ranking rank position, vote ordinal and weighted). The comparison
  * does not count them as replica gaps. Keep in step with DERIVED_PROPERTIES in geodb-feeder/src/pgAdapter.ts
- * (a test asserts the two are equal); moving derived data into geo-db is Stage 4 work.
+ * (a test in the feeder pins the two ids); moving derived data into geo-db is Stage 4 work.
  */
 const DERIVED_PROPERTY_IDS = [
 	"85a4668a-42fa-4f48-8969-c0a9de0c294b", // vote-indexer Score
@@ -198,13 +198,23 @@ const DERIVED_PROPERTY_IDS = [
 
 export const DERIVED_PROPERTIES: ReadonlySet<string> = new Set(DERIVED_PROPERTY_IDS.map(compact))
 
+/**
+ * Properties only geo-db holds: the feeder's membership dual write puts a `member` and an `editor` reference on each
+ * Space's own entity (feeder-minted ids, deterministic; Postgres keeps membership in its own tables, which no card
+ * reads). Keep in step with ROLE_PROPERTY in geodb-feeder/src/membership.ts (a feeder test pins the two ids).
+ */
+export const MEMBERSHIP_PROPERTIES: ReadonlySet<string> = new Set([
+	"dbe3bdf637a5458d9206d737fb104793", // member
+	"79c3a498486641bc930f3b973de4b4d3", // editor
+])
+
 /** Match Postgres statements against geo-db rows as multisets and return what is unmatched on each side. */
 export function diffCards(postgres: {statements: CardStatement[]; skipped: number}, geo: GeoCardRow[]): CardDiff {
 	// Derived statements are skipped, not compared: the backfill never writes them.
 	const comparable = postgres.statements.filter((s) => !DERIVED_PROPERTIES.has(s.prop))
 	const derived = postgres.statements.length - comparable.length
-	// Nor are geo-db's own derived rows: the live feeder writes one when an edit carries it, Postgres side is skipped above.
-	const pool = geo.filter((row) => !DERIVED_PROPERTIES.has(row.prop)).map((row) => ({...row, used: false}))
+	// Nor are the rows only geo-db holds: derived ones an edit carried (skipped above on the Postgres side) and membership.
+	const pool = geo.filter((row) => !DERIVED_PROPERTIES.has(row.prop) && !MEMBERSHIP_PROPERTIES.has(row.prop)).map((row) => ({...row, used: false}))
 	const onlyPostgres: CardStatement[] = []
 	for (const s of comparable) {
 		const hit = pool.find(
