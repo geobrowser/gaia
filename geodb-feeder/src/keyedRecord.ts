@@ -29,7 +29,8 @@ export async function applyKeyedRecord(
 	intents: string[],
 	meta: {partition: number; offset: string; space: string},
 ): Promise<KeyedOutcome> {
-	const space = await ensureSystemSpace(deps, family)
+	// Founding is inside the lock, as the applies are: two callers (the consumer and a backfill page) must not race it.
+	const space = await (deps.lock ?? ((f) => f()))(() => ensureSystemSpace(deps, family))
 	const applyDeps: ApplyDeps = {...deps, saveSpace: () => deps.systemSpaces.save()}
 	const r = await applyIntents(applyDeps, space, meta, intents, intents.length, 0, () => {})
 	return r.deadLettered > 0 ? "dead_letter" : "applied"

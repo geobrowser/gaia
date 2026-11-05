@@ -230,6 +230,16 @@ describe("parseProposalVoted (kg-indexer's handle_proposal_voted)", () => {
 		expect(() => parseProposalVoted(voted({voter: "abcd"}))).toThrow(/voter_id/)
 		expect(() => parseProposalVoted(voted({space: null}))).toThrow(/space_id/)
 	})
+
+	it("refuses a wrong wire type for the vote or the metadata instead of reading a default", () => {
+		const varint = (n: number) => Buffer.from([n])
+		const lenField = (n: number, b: Buffer) => Buffer.concat([varint((n << 3) | 2), varint(b.length), b])
+		const base = voted({vote: 0n, meta: null})
+		expect(() => parseProposalVoted(Buffer.concat([base, lenField(4, Buffer.from([1]))]))).toThrow(/vote wire type/)
+		expect(() => parseProposalVoted(Buffer.concat([base, Buffer.from([(5 << 3) | 0, 7])]))).toThrow(/metadata wire type/)
+		expect(() => parseProposalVoted(Buffer.concat([base, lenField(5, lenField(1, Buffer.from([1])))]))).toThrow(/metadata field 1/)
+		expect(() => parseProposalVoted(Buffer.concat([base, lenField(5, lenField(3, Buffer.from([1])))]))).toThrow(/metadata field 3/)
+	})
 })
 
 describe("handleProposalVoteMessage", () => {
@@ -264,6 +274,38 @@ describe("handleProposalVoteMessage", () => {
 		expect(await handleProposalVoteMessage(f.deps, 0, msg(voted({space: "ab"}), 7))).toBe("dead_letter")
 		expect(f.applied).toEqual([])
 		expect(deadLetters(f.store)).toHaveLength(1)
+	})
+
+	it("dead-letters a wrong wire type for the vote, writing nothing", async () => {
+		const f = pfixture()
+		const bad = Buffer.concat([voted({vote: 0n}), Buffer.from([(4 << 3) | 2, 1, 1])])
+		expect(await handleProposalVoteMessage(f.deps, 0, msg(bad, 3))).toBe("dead_letter")
+		expect(f.applied).toEqual([])
+	})
+})
+
+describe("founding the family Space", () => {
+	it("runs inside the apply lock", async () => {
+		const f = pfixture()
+		let inLock = 0
+		let foundsInLock = -1
+		const lock = async <T>(fn: () => Promise<T>): Promise<T> => {
+			inLock++
+			try {
+				if (foundsInLock < 0) {
+					const before = f.founds.length
+					const r = await fn()
+					if (f.founds.length > before) foundsInLock = f.founds.length - before
+					return r
+				}
+				return await fn()
+			} finally {
+				inLock--
+			}
+		}
+		expect(await handleProposalVoteMessage({...f.deps, lock}, 0, msg(voted(), 0))).toBe("applied")
+		expect(foundsInLock).toBe(1)
+		expect(inLock).toBe(0)
 	})
 })
 

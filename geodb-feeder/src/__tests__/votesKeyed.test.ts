@@ -22,6 +22,8 @@ import {
 	votesOffsetsDir,
 } from "../votesKeyed.js"
 
+const vfixture = (o: Parameters<typeof fixture>[0] = {}) => fixture({...o, offsetsDir: votesOffsetsDir})
+
 const KIND = RECORD_KINDS.userVote.id
 const COL = RECORD_COLUMNS.userVote
 const USER = "b29c345ab9866679b001d7d2138d88a2"
@@ -167,7 +169,7 @@ describe("userVoteIntents", () => {
 describe("replace on change (put)", () => {
 	const run = async (votes: UserVote[]) => {
 		const model = new ModelStore()
-		const f = fixture({model})
+		const f = vfixture({model})
 		for (const [i, v] of votes.entries()) await handleVoteMessage(f.deps, 0, msg(voteCast(castOf(v)), i))
 		return {model, f}
 	}
@@ -210,7 +212,7 @@ describe("replace on change (put)", () => {
 		const stream = [vote({direction: 0}), vote({direction: 1, votedAtSeconds: 5n}), vote({user: USER2, direction: 2})]
 		const once = await run(stream)
 		const model = new ModelStore()
-		const f = fixture({model})
+		const f = vfixture({model})
 		for (const round of [stream, stream, stream.slice(-1)]) {
 			for (const [i, v] of round.entries()) await handleVoteMessage(f.deps, 0, msg(voteCast(castOf(v)), i))
 		}
@@ -266,7 +268,7 @@ describe("parseVoteCast (vote-indexer's rules)", () => {
 
 describe("handleVoteMessage", () => {
 	it("founds the votes Space once with the votes nonce and writes every vote there", async () => {
-		const f = fixture()
+		const f = vfixture()
 		expect(await handleVoteMessage(f.deps, 0, msg(voteCast(), 0))).toBe("applied")
 		expect(await handleVoteMessage(f.deps, 1, msg(voteCast({voter: USER2}), 1))).toBe("applied")
 		expect(f.founds).toEqual([systemSpaceNonce("votes")])
@@ -277,14 +279,14 @@ describe("handleVoteMessage", () => {
 	})
 
 	it("dead-letters what vote-indexer rejects, writing nothing", async () => {
-		const f = fixture()
+		const f = vfixture()
 		expect(await handleVoteMessage(f.deps, 0, msg(voteCast({kind: 3, direction: 1}), 7))).toBe("dead_letter")
 		expect(f.applied).toEqual([])
 		expect(deadLetters(f.store)).toHaveLength(1)
 	})
 
 	it("ignores an empty value, and decodes regardless of event-type as vote-indexer does", async () => {
-		const f = fixture()
+		const f = vfixture()
 		expect(await handleVoteMessage(f.deps, 0, {offset: "0", value: null})).toBe("ignored")
 		expect(await handleVoteMessage(f.deps, 0, msg(voteCast(), 1, "SOMETHING_ELSE"))).toBe("applied")
 		expect(await handleVoteMessage(f.deps, 0, msg(voteCast({voter: USER2}), 2, null))).toBe("applied")
@@ -293,7 +295,7 @@ describe("handleVoteMessage", () => {
 
 describe("stall, never skip", () => {
 	it("a ResourceExhausted founding throws (the consumer retries in place) and dead-letters nothing", async () => {
-		const f = fixture({foundFailsOnce: "error: ResourceExhausted (space cap)"})
+		const f = vfixture({foundFailsOnce: "error: ResourceExhausted (space cap)"})
 		await expect(handleVoteMessage(f.deps, 0, msg(voteCast(), 0))).rejects.toBeInstanceOf(SystemSpaceCapError)
 		expect(f.applied).toEqual([])
 		expect(deadLetters(f.store)).toEqual([])
@@ -301,21 +303,21 @@ describe("stall, never skip", () => {
 	})
 
 	it("a ResourceExhausted apply is retried until it lands, not dead-lettered", async () => {
-		const f = fixture({applyFailures: ["error: ResourceExhausted", "error: ResourceExhausted"]})
+		const f = vfixture({applyFailures: ["error: ResourceExhausted", "error: ResourceExhausted"]})
 		expect(await handleVoteMessage(f.deps, 0, msg(voteCast(), 0))).toBe("applied")
 		expect(f.applied).toHaveLength(1)
 		expect(deadLetters(f.store)).toEqual([])
 	})
 
 	it("the backfill aborts on the first cap error, writing nothing", async () => {
-		const f = fixture({foundFails: "error: ResourceExhausted (space cap)"})
+		const f = vfixture({foundFails: "error: ResourceExhausted (space cap)"})
 		const rows = [userVoteRowOf(vote())]
 		await expect(backfillUserVotes(f.deps, rows)).rejects.toBeInstanceOf(SystemSpaceCapError)
 		expect(f.applied).toEqual([])
 	})
 
 	it("refuses to send put while not allowed", async () => {
-		const f = fixture()
+		const f = vfixture()
 		await expect(handleVoteMessage({...f.deps, allowPut: false}, 0, msg(voteCast(), 0))).rejects.toThrow(/GEODB_RECORD_KEYS is off/)
 	})
 })
@@ -333,7 +335,7 @@ const userVoteRowOf = (v: UserVote): UserVoteRow => ({
 describe("backfillUserVotes", () => {
 	it("writes each row as its record, from an async page source", async () => {
 		const model = new ModelStore()
-		const f = fixture({model})
+		const f = vfixture({model})
 		async function* rows() {
 			yield userVoteRowOf(vote())
 			yield userVoteRowOf(vote({kind: 1, direction: 1}))
@@ -343,13 +345,13 @@ describe("backfillUserVotes", () => {
 	})
 
 	it("dead-letters a row no event could have written, and counts it", async () => {
-		const f = fixture()
+		const f = vfixture()
 		const bad = {...userVoteRowOf(vote()), vote_type: 5}
 		expect(await backfillUserVotes(f.deps, [bad, userVoteRowOf(vote())])).toEqual({rows: 2, applied: 1, deadLetter: 1})
 	})
 
 	it("stops when aborted", async () => {
-		const f = fixture()
+		const f = vfixture()
 		const abort = new AbortController()
 		abort.abort()
 		await expect(backfillUserVotes({...f.deps, signal: abort.signal}, [userVoteRowOf(vote())])).rejects.toThrow(/aborted|shutting down/)

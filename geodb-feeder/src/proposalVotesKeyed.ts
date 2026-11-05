@@ -27,9 +27,19 @@
  *
  * Accepted and rejected exactly where kg-indexer's handle_proposal_voted accepts and rejects: an id that is not 16
  * bytes is dead-lettered; none (0) or an unknown option is written as abstain; missing metadata is written as time 0,
- * block 0. Not mirrored: kg-indexer drops a whole block when any write in it fails permanently (an FK violation, for
- * one: `proposal_votes_version_fk` needs the proposal version's row), and this writer has no such dependency, so
- * geo-db can hold a vote Postgres lacks. The backfill cannot see those; the stream replays them while retained.
+ * block 0. A wire type that protobuf would not decode for the vote (field 4) or the metadata (field 5) is a decode
+ * failure here (thrown, then dead-lettered like a bad id), never read as a default.
+ *
+ * Not mirrored, in either direction: kg-indexer drops the WHOLE block when any write in it fails permanently, on any
+ * topic, not only this vote's (an FK violation, for one: `proposal_votes_version_fk` needs the proposal version's row;
+ * so can any other row in the same block). This writer has no such dependency and writes each vote on its own, so
+ * geo-db can hold a vote Postgres lacks, or a newer value for a key than Postgres holds (a later event replaces an
+ * earlier one that Postgres dropped). The backfill cannot see those; the stream replays them while retained. Treat
+ * any difference between `proposal_votes` and these records as expected and investigate it, never as a bug in either.
+ *
+ * Assumption: the event's `space_id` is the proposal's Space (`proposals.space_id`). It is written once, as a key
+ * column, and kg-indexer never updates it on conflict. If an event ever carried another Space the record would hold two
+ * active space references, so the diff against Postgres asserts exactly one per record.
  *
  * Tallies (`proposals.yes_count` and the rest) are derived by kg-indexer's tally worker and are not written here.
  */
@@ -96,15 +106,20 @@ export function parseProposalVoted(b: Uint8Array): ProposalVote {
 	let createdAt = 0n
 	let block = 0n
 	const meta = f.get(5)
-	if (meta instanceof Uint8Array) {
+	if (meta !== undefined && !(meta instanceof Uint8Array)) throw new Error("proposal vote: invalid metadata wire type")
+	if (meta !== undefined) {
 		for (const [n, v] of parseFields(meta)) {
-			if (n === 1 && typeof v === "bigint") createdAt = v
-			else if (n === 3 && typeof v === "bigint") block = v
+			if (n === 1 || n === 3) {
+				if (typeof v !== "bigint") throw new Error(`proposal vote: invalid metadata field ${n} wire type`)
+				if (n === 1) createdAt = v
+				else block = v
+			}
 		}
 	}
 	const raw = f.get(4) ?? 0n
+	if (typeof raw !== "bigint") throw new Error("proposal vote: invalid vote wire type")
 	// proto3 enum: prost keeps an unknown value, and try_from(None | unknown) is Abstain.
-	const opt = typeof raw === "bigint" ? BigInt.asIntN(32, raw) : 0n
+	const opt = BigInt.asIntN(32, raw)
 	const vote: ProposalVoteOption = opt === 1n ? 1 : opt === 2n ? 2 : 3
 	const ver = f.get(6) ?? 0n
 	if (typeof ver !== "bigint") throw new Error("proposal vote: invalid proposal_version")
