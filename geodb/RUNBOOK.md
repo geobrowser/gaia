@@ -461,6 +461,14 @@ Activation order, each step only after the one before it is live (steps 1 and 3 
 5. `GEODB_RECORD_KEYS: "1"` and `GEODB_PROPOSAL_VOTES: "1"` in the feeder manifest, then scale it back to 1.
 6. The gate above, before any reader depends on the records.
 
+   The gate is `geodb-feeder/src/votesGate.ts` (`bun src/votesGate.ts proposal|user <postgres.tsv> <dump dir>`;
+   `user` is the §2c-ter gate). Read only on both sides: `\copy` the Postgres rows from a read-only session, then dump
+   each record column from the votes Space with one GQL query per column (`MATCH (r)-[:`<kind's first key column>`]->(k)
+   RETURN r, r.`<column>``; ids in backticks; one column per query, a two-column dump of every record exceeds the
+   gRPC message limit). Take the Postgres read first and the geo-db dumps after it: both sides keep moving, and a vote
+   that lands between the two reads shows up as a geo-db-only record or a one-column difference that the next read
+   closes. Exit status is 1 for a Postgres-only key, a value difference or a record without exactly one reference.
+
 A failing message of any kind, a ResourceExhausted founding the votes Space included, is retried every 5 s without
 committing: the partition stalls and `GeoDbFeederProposalVotesStalled` fires after 30 min. Metrics:
 `geodb_feeder_proposal_vote_events_total{outcome}`, `geodb_feeder_proposal_votes_consumer_lag`,
