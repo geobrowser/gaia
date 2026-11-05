@@ -8,21 +8,36 @@ import type {Config} from "./config.js"
 import {errorFields, log} from "./log.js"
 import {observeFreshness} from "./metrics.js"
 import {handleMembershipMessage, type MembershipDeps} from "./membership.js"
+import {handleKeyedMembershipMessage, type KeyedMembershipDeps} from "./membershipKeyed.js"
 import {createGroupCommitter} from "./groupCommit.js"
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
-export async function startMembershipConsumer(opts: {
-	kafka: InstanceType<typeof kafkajs.Kafka>
-	config: Config
-	deps: MembershipDeps
-	abort: AbortController
-}): Promise<{stop: () => Promise<void>; poll: () => Promise<void>}> {
-	const {kafka, config, deps, abort} = opts
-	const {topic, groupId} = config.membership
+/**
+ * `deps`: the legacy journal-planned dual write (membership.ts), group KAFKA_MEMBERSHIP_GROUP_ID. `keyed`: the
+ * natural-key records (membershipKeyed.ts, GEODB_RECORD_KEYS), on a group of its own so it replays the topic from
+ * the start into the governance system Space without moving the legacy group's offsets. main.ts starts one or the
+ * other, never both.
+ */
+export async function startMembershipConsumer(
+	opts: {
+		kafka: InstanceType<typeof kafkajs.Kafka>
+		config: Config
+		abort: AbortController
+	} & ({deps: MembershipDeps; keyed?: undefined} | {keyed: KeyedMembershipDeps; deps?: undefined}),
+): Promise<{stop: () => Promise<void>; poll: () => Promise<void>}> {
+	const {kafka, config, abort} = opts
+	const deps = opts.keyed ?? opts.deps
+	const offsets = opts.keyed ? opts.keyed.offsets : opts.deps.state
+	const handle = (partition: number, m: kafkajs.KafkaMessage, beat: () => Promise<void>) =>
+		opts.keyed
+			? handleKeyedMembershipMessage({...opts.keyed, beat, signal: abort.signal}, partition, m)
+			: handleMembershipMessage({...opts.deps, beat, signal: abort.signal}, partition, m)
+	const {topic} = config.membership
+	const groupId = opts.keyed ? config.membership.keyedGroupId : config.membership.groupId
 	const admin = kafka.admin()
 	await admin.connect()
-	if (!deps.state.hadOffsets) {
+	if (!offsets.hadOffsets) {
 		try {
 			await admin.resetOffsets({groupId, topic, earliest: true})
 		} catch (e) {
@@ -46,7 +61,7 @@ export async function startMembershipConsumer(opts: {
 			for (const m of batch.messages) {
 				if (abort.signal.aborted) return
 				const offset = Number(m.offset)
-				const last = deps.state.lastDone(batch.partition)
+				const last = offsets.lastDone(batch.partition)
 				if (last !== null && offset <= last) {
 					resolveOffset(m.offset)
 					await commits.done(batch.partition, offset)
@@ -55,7 +70,7 @@ export async function startMembershipConsumer(opts: {
 				let outcome: string
 				for (;;) {
 					try {
-						outcome = await handleMembershipMessage({...deps, beat: heartbeat, signal: abort.signal}, batch.partition, m)
+						outcome = await handle(batch.partition, m, heartbeat)
 						break
 					} catch (e) {
 						if (abort.signal.aborted) return
@@ -64,7 +79,7 @@ export async function startMembershipConsumer(opts: {
 						await heartbeat()
 					}
 				}
-				deps.state.markDone(batch.partition, offset)
+				offsets.markDone(batch.partition, offset)
 				deps.metrics.membershipEvents.inc({outcome})
 				observeFreshness(deps.metrics.membershipFreshness, m.timestamp)
 				resolveOffset(m.offset)
@@ -75,11 +90,15 @@ export async function startMembershipConsumer(opts: {
 		},
 	})
 	deps.metrics.membershipUp.set({}, 1)
-	log("info", "membership consumer running", {topic, groupId, statements: deps.state.statementCount})
+	log("info", "membership consumer running", {
+		topic,
+		groupId,
+		...(opts.keyed ? {keyed: true} : {statements: opts.deps.state.statementCount}),
+	})
 	const poll = async () => {
 		try {
 			for (const p of await admin.fetchTopicOffsets(topic)) {
-				const last = deps.state.lastDone(p.partition)
+				const last = offsets.lastDone(p.partition)
 				const next = last === null ? Number(p.low) : last + 1
 				deps.metrics.membershipLag.set({partition: String(p.partition)}, Math.max(0, Number(p.high) - next))
 			}

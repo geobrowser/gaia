@@ -297,3 +297,20 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 export function zonDoc(space: string, key: string | null, intents: string[]): string {
 	return `.{ .space = "${space}"${key ? `, .key = "${key}"` : ""}, .intents = .{\n${intents.map((i) => ` ${i},`).join("\n")}\n} }\n`
 }
+
+const HEX32 = /^[0-9a-f]{32}$/
+
+/**
+ * `put` (IntentTag 0x0A, geo-db plan 10.12 K3): write a record column under a caller-chosen statement id (a keyed
+ * column id, `recordStatementId(kind, [record, property, ...])`), replacing the value held under that id. Unlike
+ * `set` its id is required; geo-db's client refuses a put without one, and so does this. `value` is a ZON value
+ * (`valueZon(...).zon` or a literal). `applyIntents` sends a put only when `allowPut` is set (GEODB_RECORD_KEYS).
+ */
+export function putIntent(p: {id: string; entity: string; property: string; value: string; language?: string}): string {
+	for (const k of ["id", "entity", "property"] as const) {
+		if (!HEX32.test(p[k] ?? "")) throw new Error(`put: .${k} must be a 32-hex id, got ${JSON.stringify(p[k])}`)
+	}
+	if (!p.value?.startsWith(".{")) throw new Error("put: .value must be a ZON value")
+	const language = p.language ? `, .language = "${p.language}"` : ""
+	return `.{ .put = .{ .id = "${p.id}", .entity = "${p.entity}", .property = "${p.property}", .value = ${p.value}${language} } }`
+}
