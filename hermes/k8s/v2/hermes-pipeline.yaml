@@ -128,11 +128,11 @@ spec:
               mountPath: /etc/geodb/key
               readOnly: true
           env:
-            # Mirror the substreams `meta` cursor into geo-db (geodb-cursor). OFF: none of the GEODB_*
-            # values below is read. Turn on only after serve registers the cursor key (RUNBOOK section 10)
-            # (a serve roll), then deploy this service with "1".
+            # Mirror the substreams `meta` cursor into geo-db (geodb-cursor), best-effort, after the Postgres
+            # cursor write: each put is bounded by 2 s, a failure is logged and counted and never fails the
+            # block, then a cool-down. ON since serve registered the cursor key (RUNBOOK section 10); "0" turns it off.
             - name: GEODB_CURSOR_MIRROR
-              value: "off"
+              value: "1"
             - name: GEODB_CLIENT_BIN
               value: /geodb/geodb-client
             - name: GEODB_KEY_PATH
