@@ -459,8 +459,8 @@ const ENTITIES_ORDER_BY = /^(CREATED_AT|UPDATED_AT|RANKING_SCORE|QUALITY_SCORE|I
 function readOrderBy(value: unknown, uncompared: Set<UncomparedReason>): void {
 	if (value === undefined || value === null) return
 	const names = Array.isArray(value) ? value : [value]
-	if (names.length === 0 || names.length > 4) return refuse("args")
-	for (const name of names) if (typeof name !== "string" || !ENTITIES_ORDER_BY.test(name)) return refuse("args")
+	if (names.length === 0 || names.length > 4) refuse("args")
+	for (const name of names) if (typeof name !== "string" || !ENTITIES_ORDER_BY.test(name)) refuse("args")
 	uncompared.add("order_completeness")
 }
 
