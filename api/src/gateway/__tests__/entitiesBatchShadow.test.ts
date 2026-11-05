@@ -282,6 +282,70 @@ describe("the EntitiesBatch selection", () => {
 		expect(results()).toEqual({mismatch: 1})
 	})
 
+	// Postgres lists an entity in a Space when it has any value there, a vote Score included: the vote-indexer
+	// writes the Score into the voter's Space and no edit carries it, so geo-db never holds the entity there.
+	describe("asked for a Space where PostGraphile holds the entity only through a derived property", () => {
+		const SCORE = "85a4668a42fa4f488969c0a9de0c294b"
+		const inB = (
+			propertyId: string,
+			options: {projectedInB?: boolean} = {},
+		): {data: {entities: Record<string, unknown>[]}} => {
+			const base = answer().data.entities[0]
+			if (!base) throw new Error("no entity")
+			const own = rowsA.filter((r) => r.kind === "value")
+			return {
+				data: {
+					entities: [
+						{
+							...base,
+							allValuesList: [
+								...own.map((r) => ({spaceId: r.space, propertyId: r.prop.replaceAll("-", "")})),
+								{spaceId: SPACE_B, propertyId},
+							],
+							allRelationsList: [
+								{spaceId: SPACE_A},
+								{spaceId: SPACE_A},
+								...(options.projectedInB ? [{spaceId: SPACE_B}] : []),
+							],
+							valuesList: [{...valueNode(SPACE_B, propertyId, ""), text: null, integer: -1}],
+							relationsList: [],
+						},
+					],
+				},
+			}
+		}
+		const askB = {...VARIABLES, spaceId: SPACE_B}
+
+		it("does not flag the Space as one geo-db lacks", async () => {
+			expect(DERIVED_PROPERTIES.has(SCORE)).toBe(true)
+			const s = setup(BOTH)
+			await run(s, inB(SCORE), askB)
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({derived_only: 1})
+			expect(s.log.warn).not.toHaveBeenCalled()
+		})
+
+		it("still flags it when the Space holds a property that is not derived", async () => {
+			const s = setup(BOTH)
+			await run(s, inB("7ed45f2bc48b419e8e4664d5ff680b0d"), askB)
+			expect(results()).toEqual({mismatch: 1})
+			expect(s.log.warn).toHaveBeenCalledWith(
+				"gateway entities shadow mismatch (light)",
+				expect.objectContaining({first: expect.objectContaining({notInSpace: true})}),
+			)
+		})
+
+		it("still flags it when a relation there is not accounted for by the typed list", async () => {
+			const s = setup(BOTH)
+			await run(s, inB(SCORE, {projectedInB: true}), askB)
+			expect(results()).toEqual({mismatch: 1})
+			expect(s.log.warn).toHaveBeenCalledWith(
+				"gateway entities shadow mismatch (light)",
+				expect.objectContaining({first: expect.objectContaining({notInSpace: true})}),
+			)
+		})
+	})
+
 	it("counts a failed geo-db read as failed (an every-Space refusal included)", async () => {
 		const s = setup(BOTH)
 		s.readCard.mockRejectedValue(new Error("refused: ResourceExhausted"))
