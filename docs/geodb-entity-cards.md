@@ -16,6 +16,7 @@ geo-db, behind `GEODB_ENTITY_CARDS` (`off` default, `on`, `shadow`). Code: `api/
 | `GEODB_MULTI_SPACE_READS` | `on`: the gateway shadow reads an entity's card across several Spaces in one `pipe` line (`<space>,<space>\t<geoql>`) instead of one read per Space. Needs a `geodb-client` from geo-db 353ab26313 or later; an older one refuses the line and loses its worker, so leave it off until the image is bumped. Default off |
 | `GEODB_EVERY_SPACE_READS` | `on` (needs `GEODB_MULTI_SPACE_READS`): an `entity` answer that does not say which Spaces the entity lives in (`EntityTypes`, `EntityExists`) is compared against a read of every Space in the space map, in one `pipe` line, under its own budget (0.5 reads/s). Default off |
 | `GEODB_EVERY_SPACE_ENTITIES` | `on` (needs `GEODB_EVERY_SPACE_READS`): the same read for an `entities` answer with no lists, no `spaceIds` and no Space argument (`EntityNames`, `{ id }` under a Type or relation filter), on one sampled entity per operation. Default off |
+| `GEODB_BACKLINK_READS` | `on`: the gateway's entity shadow also compares `EntityBacklinksPage` (`entity { backlinksList { spaceId fromEntity { id } } }`) with geo-db's card backlinks (`.args.backlinks`): one read of the filter's Space, or, with `GEODB_EVERY_SPACE_READS` and `GEODB_MULTI_SPACE_READS` on, one line over every Space. Results count under `field="entity"`; the geo-db read times under `shape="backlinks"`. Default off |
 
 ## The space map
 
