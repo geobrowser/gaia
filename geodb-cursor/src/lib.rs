@@ -183,10 +183,8 @@ impl CursorMirror {
         }
         let mut st = self.state.lock().await;
         if st.pipe.is_none() {
-            if let Some(t) = st.failed_at {
-                if t.elapsed() < self.cfg.cooldown {
-                    return Err(MirrorError::CoolingDown);
-                }
+            if st.failed_at.is_some_and(|t| t.elapsed() < self.cfg.cooldown) {
+                return Err(MirrorError::CoolingDown);
             }
             match tokio::time::timeout(self.cfg.timeout, self.spawn()).await {
                 Ok(Ok(p)) => {
