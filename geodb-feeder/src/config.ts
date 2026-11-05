@@ -34,7 +34,10 @@ export type Config = {
 	 * membership consumer (with GEODB_MEMBERSHIP_DUAL_WRITE) and the membership shadow compare to keyed ids.
 	 */
 	recordKeys: boolean
-	/** Where the system Spaces' ConfigMap value is kept on the volume before it is published. */
+	/**
+	 * The publisher's copy of the `system-spaces.json` ConfigMap value. Not the durable record: that is
+	 * `<DATA_DIR>/feeder/system-spaces.json` (systemSpaces.ts), which this is rendered from and can be rebuilt from.
+	 */
 	systemSpaceMapPath: string
 }
 
@@ -89,7 +92,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		relationPositions: flag(env.GEODB_RELATION_POSITIONS),
 		entityTimes: flag(env.GEODB_ENTITY_TIMES),
 		recordKeys: flag(env.GEODB_RECORD_KEYS),
-		systemSpaceMapPath: env.GEODB_SYSTEM_SPACE_MAP_PATH ?? `${dataDir}/feeder/system-space-map.json`,
+		systemSpaceMapPath: env.GEODB_SYSTEM_SPACE_MAP_PATH ?? `${dataDir}/feeder/system-spaces.published.json`,
 		membership: {
 			dualWrite: flag(env.GEODB_MEMBERSHIP_DUAL_WRITE),
 			shadowCompare: flag(env.GEODB_MEMBERSHIP_SHADOW_COMPARE),

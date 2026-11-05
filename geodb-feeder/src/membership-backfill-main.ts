@@ -11,6 +11,10 @@
  * - DATABASE_URL, DATABASE_SSL_CA: gaia Postgres, read only (every query runs in a READ ONLY transaction).
  * - GEODB_RECORD_KEYS=1 writes the keyed records instead (backfillMembershipKeyed, membershipKeyed.ts): every row
  *   into the `governance` system Space under its natural-key id, no journal. Needs serve at geo-db 9d97069a78 or later.
+ *   Required before GEODB_RECORD_KEYS goes on: the membership topic's retention is finite (7 days on testnet), so
+ *   the stream alone cannot rebuild older rows. Refuses once the keyed consumer has offsets (keyedBackfillGate).
+ * - BACKFILL_KEYED_RESET_CONSUMER=1 lets the keyed backfill run after the keyed consumer has: it deletes the keyed
+ *   offsets so the consumer replays the retained topic from earliest when it next starts.
  * - BACKFILL_SKIP_GROUP_CHECK=1 skips the check that the feeder's groups are empty. Only for a store no feeder will resume.
  */
 import kafkajs from "kafkajs"
@@ -18,7 +22,7 @@ import {loadConfig} from "./config.js"
 import {GeoDb, spawnRunner} from "./geodb.js"
 import {errorFields, log} from "./log.js"
 import {MembershipState, backfillMembership} from "./membership.js"
-import {backfillMembershipKeyed} from "./membershipKeyed.js"
+import {backfillMembershipKeyed, keyedBackfillGate, keyedOffsetsDir} from "./membershipKeyed.js"
 import {ProposalOffsets} from "./proposals.js"
 import {createMetrics} from "./metrics.js"
 import {ReadOnlyPg, pgConfig, readMembershipRows} from "./pgSource.js"
@@ -61,6 +65,11 @@ async function main(): Promise<void> {
 		}
 	}
 
+	if (config.recordKeys) {
+		const gate = keyedBackfillGate(keyedOffsetsDir(config.dataDir), env.BACKFILL_KEYED_RESET_CONSUMER === "1")
+		log(gate === "reset" ? "warn" : "info", "keyed backfill gate", {gate})
+	}
+
 	const pg = new ReadOnlyPg(pgConfig(databaseUrl, env.DATABASE_SSL_CA))
 	const db = new GeoDb(
 		{runDir: config.runDir},
@@ -101,8 +110,8 @@ async function main(): Promise<void> {
 						allowPut: true,
 						systemSpaces,
 						publishSystem: (t) => systemPublisher.publish(t),
-						// Offsets are the live keyed consumer's; the backfill never moves them.
-						offsets: new ProposalOffsets(`${config.dataDir}/feeder/membership-keyed`),
+						// Offsets are the live keyed consumer's; the backfill never moves them (only the gate may delete them).
+						offsets: new ProposalOffsets(keyedOffsetsDir(config.dataDir)),
 					},
 					rows,
 					progress,

@@ -105,10 +105,10 @@ export class SpaceMapPublisher {
 		try {
 			await this.put(data)
 			if (this.latest === text) this.dirty = false
-			this.metrics.spaceMapPublish.inc({result: "ok"})
+			this.metrics.spaceMapPublish.inc({key: this.key, result: "ok"})
 		} catch (e) {
-			this.metrics.spaceMapPublish.inc({result: "error"})
-			log("warn", "space map publish failed, will retry", errorFields(e))
+			this.metrics.spaceMapPublish.inc({key: this.key, result: "error"})
+			log("warn", "space map publish failed, will retry", {key: this.key, ...errorFields(e)})
 		} finally {
 			this.inflight = false
 		}

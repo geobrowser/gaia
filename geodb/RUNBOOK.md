@@ -278,9 +278,16 @@ allows the `put` intent. Activation order, each step only after the one before i
 1. geo-db serve and the geodb-client init container on 9d97069a78 or later (`put`, and a retract of an unseen id;
    §1). A serve before that refuses `put` as an invalid wire payload.
 2. A feeder image that carries this path (it is inert while the flag is off).
-3. Optional: the backfill Job of §2c with `GEODB_RECORD_KEYS: "1"` added to its env, which writes the Postgres
-   snapshot as keyed grants (rerunnable; it never retracts). The consumer below replays the topic from the start
-   anyway; the backfill covers grants older than the topic's retention.
+3. Required: the backfill Job of §2c with `GEODB_RECORD_KEYS: "1"` added to its env, which writes the Postgres
+   snapshot as keyed grants (rerunnable; it never retracts). `testnet.space.membership` keeps 7 days
+   (`retention_ms` 604800000, cleanup `delete`; `doctl databases topics get <cluster id> testnet.space.membership`),
+   so the consumer's replay from the start only covers that window, and every older grant comes from this snapshot.
+   Run it before step 4, while the keyed consumer has never run: the Job refuses once
+   `/data/feeder/membership-keyed/offsets.json` exists, because a grant-only snapshot taken after the consumer has
+   applied a revoke would grant that role again, and nothing would replay the revoke. To run it later anyway, add
+   `BACKFILL_KEYED_RESET_CONSUMER: "1"`: the Job deletes those offsets, and the keyed consumer resets its group to
+   earliest on its next start and replays the retained topic over the snapshot, so every key the window touched ends
+   at its last event. A ResourceExhausted while founding the governance Space fails the Job; nothing is skipped.
 4. `GEODB_RECORD_KEYS: "1"` beside `GEODB_MEMBERSHIP_DUAL_WRITE: "1"` in the feeder manifest. The keyed consumer
    runs instead of the legacy one, on its own group (`geodb-feeder-membership-keyed-v1-<env>`, offsets in
    `/data/feeder/membership-keyed`), and the shadow compare reads the keyed rows. The legacy rows stay in each
@@ -290,11 +297,20 @@ The first keyed write founds the `governance` Space (one Space against the cap o
 family: governance, votes, config). Its nonce is fixed by the family name
 (`recordEntityId(SYSTEM_SPACE_NONCE_KIND, ["gaia.system-space.governance"])`), its id is serve's
 `foundingSpaceId(sealer, nonce)`, and it is recorded in `/data/feeder/system-spaces.json` and published to the
-`geodb-space-map` ConfigMap under `system-spaces.json`, beside `space-map.json`:
+`geodb-space-map` ConfigMap under `system-spaces.json`, beside `space-map.json` (the publisher keeps its own copy of
+what it last sent in `/data/feeder/system-spaces.published.json`; the record is `system-spaces.json`):
 
 ```bash
 $K get configmap geodb-space-map -o jsonpath='{.data.system-spaces\.json}'
 ```
+
+Unlike a gaia Space (§7, `space_cap`), a system Space is never skipped: every row of its family lives there, so
+dead-lettering would drop the whole family. If founding answers ResourceExhausted (the cap of §2d, or a serve
+limit; the two look alike on the wire), the keyed consumer retries the message every 5 s without committing it,
+the partition stalls and `GeoDbFeederMembershipStalled` fires after 30 min (`GeoDbFeederStalled` watches the
+edits consumer only); it resumes by itself once founding succeeds. Raise the cap
+(§2d) if `founded` is at `spaces`. `geodb_feeder_space_map_publish_total{key="system-spaces.json"}` counts the
+system map's publishes apart from the gaia map's.
 
 Rollback: unset `GEODB_RECORD_KEYS`. The legacy consumer resumes from its own offsets; the keyed rows stay in
 the governance Space, unread.
@@ -447,6 +463,7 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 | `GeoDbFeederStalled` | lag above 0 and nothing applied for 15m | the repeating error in the feeder log (`transient` = serve unreachable, `exhausted` = serve is out of capacity: `$K rollout restart statefulset/geodb`) |
 | `GeoDbFeederLagHigh` | more than 5000 behind for 30m | expected once on first catch-up; otherwise throughput or a stall |
 | `GeoDbFeederDeadLetters` | an edit or intent was skipped | `errors.jsonl` on the volume (see above) |
+| `GeoDbFeederMembershipStalled` | `space.membership` lag above 0 for 30m | the repeating error in the feeder log; with `GEODB_RECORD_KEYS`, an `exhausted` founding of the governance Space (§2c-bis) |
 
 ## 7. Operating notes
 

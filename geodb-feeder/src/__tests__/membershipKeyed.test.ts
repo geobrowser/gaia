@@ -1,4 +1,4 @@
-import {mkdtempSync, readFileSync} from "node:fs"
+import {existsSync, mkdtempSync, readFileSync} from "node:fs"
 import {tmpdir} from "node:os"
 import {join} from "node:path"
 import {describe, expect, it} from "vitest"
@@ -9,7 +9,10 @@ import {ROLE_PROPERTY, type RoleEvent, statementId, subjectEntity} from "../memb
 import {
 	backfillMembershipKeyed,
 	handleKeyedMembershipMessage,
+	keyedBackfillGate,
 	keyedCompareTarget,
+	keyedMembershipEnabled,
+	keyedOffsetsDir,
 	type KeyedMembershipDeps,
 	keyedRoleIntents,
 	keyedStatementId,
@@ -78,7 +81,8 @@ class ModelStore {
 	}
 }
 
-function fixture(opts: {foundFails?: string; model?: ModelStore} = {}) {
+function fixture(opts: {foundFails?: string; foundFailsOnce?: string; model?: ModelStore} = {}) {
+	let failOnce = opts.foundFailsOnce
 	const store = new Store(tmp())
 	const systemSpaces = new SystemSpaces(store.dir)
 	const applied: string[] = []
@@ -95,6 +99,11 @@ function fixture(opts: {foundFails?: string; model?: ModelStore} = {}) {
 			found: async (_s: string, nonce: string) => {
 				founds.push(nonce)
 				if (opts.foundFails) throw new Error(opts.foundFails)
+				if (failOnce) {
+					const e = failOnce
+					failOnce = undefined
+					throw new Error(e)
+				}
 				return GOV
 			},
 		},
@@ -241,15 +250,40 @@ describe("replay", () => {
 })
 
 describe("system space founding", () => {
-	it("dead-letters a row and stops founding when geo-db is at its space cap", async () => {
+	it("a transient ResourceExhausted stalls the message instead of dead-lettering it, and every message applies once founding succeeds", async () => {
+		const f = fixture({foundFailsOnce: "error: ResourceExhausted (space cap)"})
+		const h = {"event-type": Buffer.from("ROLE_GRANTED")}
+		const msgs = [
+			{offset: "1", value: roleMessage(SPACE, ALICE, 1), headers: h},
+			{offset: "2", value: roleMessage(SPACE2, BOB, 0), headers: h},
+		]
+		// The consumer's loop retries a thrown message without marking it done.
+		await expect(handleKeyedMembershipMessage(f.deps, 0, msgs[0] as (typeof msgs)[0])).rejects.toBeInstanceOf(SystemSpaceCapError)
+		expect(f.applied).toEqual([])
+		for (const m of msgs) expect(await handleKeyedMembershipMessage(f.deps, 0, m)).toBe("applied")
+		expect(f.founds).toEqual([systemSpaceNonce("governance"), systemSpaceNonce("governance")])
+		expect(f.applied).toHaveLength(2)
+		expect(f.applied[1]).toContain(keyedStatementId(SPACE2, BOB, "editor"))
+		expect(existsSync(join(f.store.dir, "errors.jsonl"))).toBe(false)
+	})
+
+	it("never makes a cap refusal sticky: each attempt asks geo-db again", async () => {
 		const f = fixture({foundFails: "error: ResourceExhausted (space cap)"})
-		const msg = {offset: "1", value: roleMessage(SPACE, ALICE, 1), headers: {"event-type": Buffer.from("ROLE_GRANTED")}}
-		expect(await handleKeyedMembershipMessage(f.deps, 0, msg)).toBe("dead_letter")
-		expect(await handleKeyedMembershipMessage(f.deps, 0, msg)).toBe("dead_letter")
+		await expect(ensureSystemSpace(f.deps, "governance")).rejects.toBeInstanceOf(SystemSpaceCapError)
+		await expect(ensureSystemSpace(f.deps, "governance")).rejects.toBeInstanceOf(SystemSpaceCapError)
+		expect(f.founds).toHaveLength(2)
+	})
+
+	it("the backfill aborts on the first cap error, writing nothing", async () => {
+		const f = fixture({foundFails: "error: ResourceExhausted (space cap)"})
+		const rows = [
+			{space_id: SPACE, member_space_id: ALICE, role: "member" as const},
+			{space_id: SPACE2, member_space_id: BOB, role: "editor" as const},
+		]
+		await expect(backfillMembershipKeyed(f.deps, rows)).rejects.toBeInstanceOf(SystemSpaceCapError)
 		expect(f.founds).toHaveLength(1)
 		expect(f.applied).toEqual([])
-		expect(readFileSync(join(f.store.dir, "errors.jsonl"), "utf8")).toContain("space cap")
-		await expect(ensureSystemSpace(f.deps, "governance")).rejects.toBeInstanceOf(SystemSpaceCapError)
+		expect(existsSync(join(f.store.dir, "errors.jsonl"))).toBe(false)
 	})
 
 	it("rethrows any other founding failure, so the consumer retries the message", async () => {
@@ -331,13 +365,58 @@ describe("keyed shadow compare", () => {
 	})
 })
 
+describe("keyed backfill gate", () => {
+	it("runs on a store the keyed consumer has never touched", () => {
+		expect(keyedBackfillGate(join(tmp(), "membership-keyed"), false)).toBe("fresh")
+	})
+
+	it("refuses once the keyed consumer has offsets, unless told to reset them", () => {
+		const dir = join(tmp(), "membership-keyed")
+		new ProposalOffsets(dir).markDone(0, 41)
+		expect(() => keyedBackfillGate(dir, false)).toThrow(/BACKFILL_KEYED_RESET_CONSUMER/)
+		expect(existsSync(join(dir, "offsets.json"))).toBe(true)
+		expect(keyedBackfillGate(dir, true)).toBe("reset")
+		expect(existsSync(join(dir, "offsets.json"))).toBe(false)
+		// The consumer then starts without offsets, so it resets its group to earliest and replays.
+		expect(new ProposalOffsets(dir).hadOffsets).toBe(false)
+	})
+
+	it("is the directory the consumer keeps its offsets in", () => {
+		expect(keyedOffsetsDir("/data")).toBe("/data/feeder/membership-keyed")
+	})
+})
+
 describe("system space publishing", () => {
 	it("writes the ConfigMap under system-spaces.json only, leaving space-map.json alone", async () => {
 		const puts: Record<string, string>[] = []
-		const p = new SpaceMapPublisher(join(tmp(), "system-space-map.json"), async (d) => void puts.push(d), createMetrics(), SYSTEM_SPACE_MAP_KEY)
+		const metrics = createMetrics()
+		const p = new SpaceMapPublisher(join(tmp(), "system-spaces.published.json"), async (d) => void puts.push(d), metrics, SYSTEM_SPACE_MAP_KEY)
 		p.publish("{}\n")
 		await p.flush()
 		expect(puts).toEqual([{"system-spaces.json": "{}\n"}])
+		expect(metrics.render()).toContain('geodb_feeder_space_map_publish_total{key="system-spaces.json",result="ok"} 1')
+	})
+
+	it("labels publishes by ConfigMap key, so a failing system publisher is told apart from the gaia map", async () => {
+		const metrics = createMetrics()
+		const gaia = new SpaceMapPublisher(join(tmp(), "space-map.json"), async () => {}, metrics)
+		const system = new SpaceMapPublisher(
+			join(tmp(), "system-spaces.published.json"),
+			async () => {
+				throw new Error("forbidden")
+			},
+			metrics,
+			SYSTEM_SPACE_MAP_KEY,
+		)
+		gaia.publish("{}\n")
+		system.publish("{}\n")
+		await gaia.flush()
+		await system.flush().catch(() => {})
+		const out = metrics.render()
+		expect(out).toContain('geodb_feeder_space_map_publish_total{key="space-map.json",result="ok"} 1')
+		expect(out).toContain('geodb_feeder_space_map_publish_total{key="system-spaces.json",result="error"}')
+		system.stop()
+		gaia.stop()
 	})
 })
 
@@ -348,7 +427,14 @@ describe("config", () => {
 		expect(c.recordKeys).toBe(false)
 		expect(c.membership.keyedGroupId).toBe("geodb-feeder-membership-keyed-v1-testnet")
 		expect(c.membership.keyedGroupId).not.toBe(c.membership.groupId)
-		expect(c.systemSpaceMapPath).toBe("/data/feeder/system-space-map.json")
+		// The publisher's copy, named apart from the durable record system-spaces.json beside it.
+		expect(c.systemSpaceMapPath).toBe("/data/feeder/system-spaces.published.json")
 		expect(loadConfig({...base, GEODB_RECORD_KEYS: "1"}).recordKeys).toBe(true)
+	})
+
+	it("the keyed writer, and so the shadow compare's keyed target, needs the dual write on as well", () => {
+		expect(keyedMembershipEnabled(loadConfig({...base, GEODB_RECORD_KEYS: "1"}))).toBe(false)
+		expect(keyedMembershipEnabled(loadConfig({...base, GEODB_MEMBERSHIP_DUAL_WRITE: "1"}))).toBe(false)
+		expect(keyedMembershipEnabled(loadConfig({...base, GEODB_RECORD_KEYS: "1", GEODB_MEMBERSHIP_DUAL_WRITE: "1"}))).toBe(true)
 	})
 })

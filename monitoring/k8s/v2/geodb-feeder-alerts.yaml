@@ -6,6 +6,7 @@
 #   GeoDbFeederLagHigh     more than 5000 messages behind for 30m (a first catch-up from the start of
 #                          the topic trips this once; it should clear)
 #   GeoDbFeederDeadLetters the feeder skipped a message or intent (errors.jsonl on the volume)
+#   GeoDbFeederMembershipStalled  space.membership messages have waited unapplied for 30m
 #
 #   kubectl apply -f monitoring/k8s/v2/geodb-feeder-alerts.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -68,6 +69,21 @@ spec:
               The replica lags the topic. Shadow comparisons will show only_postgres rows for recent
               edits until it catches up. A first catch-up from the start of the topic is expected to
               trip this once.
+
+        - alert: GeoDbFeederMembershipStalled
+          expr: sum(geodb_feeder_membership_consumer_lag{namespace="gaia", job="geodb-feeder"}) > 0
+          for: 30m
+          labels:
+            severity: warning
+            service: geodb-feeder
+            namespace: gaia
+          annotations:
+            summary: The geo-db feeder's membership consumer has applied nothing for 30m
+            description: >-
+              space.membership messages are waiting. Membership retries a failing message forever: with
+              GEODB_RECORD_KEYS a ResourceExhausted founding the governance system Space holds the partition
+              rather than skipping the family (geodb/RUNBOOK.md 2c-bis). Read the feeder log for the repeating
+              error; if founded is at the serve config's spaces, raise the cap (RUNBOOK 2d).
 
         - alert: GeoDbFeederDeadLetters
           expr: increase(geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder"}[30m]) > 0

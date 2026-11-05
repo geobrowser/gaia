@@ -16,7 +16,7 @@ import {errorFields, log} from "./log.js"
 import {compareMembership} from "./membershipShadow.js"
 import {MembershipState} from "./membership.js"
 import {startMembershipConsumer} from "./membershipConsumer.js"
-import {keyedCompareTarget} from "./membershipKeyed.js"
+import {keyedCompareTarget, keyedMembershipEnabled, keyedOffsetsDir} from "./membershipKeyed.js"
 import {ProposalOffsets} from "./proposals.js"
 import {startProposalConsumer} from "./proposalsConsumer.js"
 import {PendingSpaces} from "./spaceEntities.js"
@@ -193,7 +193,9 @@ async function main(config: Config): Promise<void> {
 	if (config.membership.dualWrite || config.membership.shadowCompare) {
 		state = new MembershipState(`${config.dataDir}/feeder/membership`)
 	}
-	if (config.membership.dualWrite && config.recordKeys) {
+	// The keyed consumer runs only with the dual write on; the shadow compare follows whichever writer actually runs.
+	const keyedMembership = keyedMembershipEnabled(config)
+	if (keyedMembership) {
 		// Keyed records replace the journal-planned dual write: its own group and offsets, the governance Space.
 		try {
 			membership = await startMembershipConsumer({
@@ -207,7 +209,7 @@ async function main(config: Config): Promise<void> {
 					allowPut: true,
 					systemSpaces,
 					publishSystem: (t: string) => systemPublisher.publish(t),
-					offsets: new ProposalOffsets(`${config.dataDir}/feeder/membership-keyed`),
+					offsets: new ProposalOffsets(keyedOffsetsDir(config.dataDir)),
 				},
 			})
 		} catch (e) {
@@ -238,9 +240,9 @@ async function main(config: Config): Promise<void> {
 					reader: reader as PipeReader,
 					spaces: () => store.spaces,
 					// Keyed rows carry no journal: a Space Postgres has no rows for is not compared.
-					journalSpaces: () => (config.recordKeys ? [] : membershipState.spaces()),
+					journalSpaces: () => (keyedMembership ? [] : membershipState.spaces()),
 					metrics,
-					...(config.recordKeys ? {target: keyedCompareTarget(systemSpaces)} : {}),
+					...(keyedMembership ? {target: keyedCompareTarget(systemSpaces)} : {}),
 				}).catch((e) => log("warn", "membership shadow comparison failed", errorFields(e)))
 			compareTimer = setInterval(() => void run(), config.membership.compareIntervalMs)
 		}

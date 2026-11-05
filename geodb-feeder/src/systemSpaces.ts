@@ -12,7 +12,8 @@
  *   sealer key, so it is per store, exactly like a gaia Space's geo-db id;
  * - recorded in `<DATA_DIR>/feeder/system-spaces.json` (the durable copy, with the `keyed` bit the first apply sets)
  *   and published to the `geodb-space-map` ConfigMap under the key `system-spaces.json`, beside `space-map.json`, as
- *   `{"<family>": {"geo": "<32 hex>", "nonce": "<32 hex>"}}`. It is a separate key because the api's space-map
+ *   `{"<family>": {"geo": "<32 hex>", "nonce": "<32 hex>"}}` (the publisher keeps its copy of that value in
+ *   `system-spaces.published.json`; the record is this file). It is a separate key because the api's space-map
  *   parser accepts only gaia-to-geo-db id pairs, and these Spaces map no gaia Space.
  *
  * Founded lazily, on the first write of the family, so a family with no consumer turned on costs no Space.
@@ -23,17 +24,22 @@ import {log} from "./log.js"
 import type {Metrics} from "./metrics.js"
 import {recordEntityId, textPart} from "./recordKey.js"
 import {SYSTEM_SPACE_NONCE_KIND, type SystemFamily} from "./recordKinds.js"
-import {type SpaceRecord, type Store, writeFileDurable} from "./state.js"
+import {type SpaceRecord, writeFileDurable} from "./state.js"
 
 export const SYSTEM_SPACE_MAP_KEY = "system-spaces.json"
 
 export const systemSpaceNonce = (family: SystemFamily): string =>
 	recordEntityId(SYSTEM_SPACE_NONCE_KIND, [textPart(`gaia.system-space.${family}`)])
 
-/** geo-db refused to found a system Space: it holds as many Spaces as its serve config allows. */
+/**
+ * geo-db answered a system Space's founding with ResourceExhausted: the Space cap, or one of serve's other
+ * per-process limits (the two are not told apart on the wire). Never a reason to skip a row: every row of a
+ * family lives in its one Space, so callers let this propagate and the message is retried (the consumer holds
+ * its partition, the GeoDbFeederStalled alert fires) or the backfill Job fails.
+ */
 export class SystemSpaceCapError extends Error {
 	constructor(readonly family: SystemFamily) {
-		super(`system space ${family} not founded: geo-db is at its space cap`)
+		super(`system space ${family} not founded: geo-db answered ResourceExhausted (space cap or a serve limit)`)
 	}
 }
 
@@ -65,15 +71,11 @@ export class SystemSpaces {
 export type SystemSpaceDeps = {
 	db: Pick<GeoDb, "waitReady" | "found">
 	sealer: () => Promise<string>
-	store: Pick<Store, "deadLetter">
 	metrics: Metrics
 	systemSpaces: SystemSpaces
 	/** Called with the new `system-spaces.json` text after a founding. */
 	publishSystem: (text: string) => void
 }
-
-/** Families geo-db refused to found, for the life of the process (a restart retries them). */
-const capRefused = new WeakMap<SystemSpaces, Set<SystemFamily>>()
 
 /**
  * The geo-db Space for a record family, founding it online the first time. Crash-safe for the same reason
@@ -84,10 +86,6 @@ export async function ensureSystemSpace(deps: SystemSpaceDeps, family: SystemFam
 	const existing = systemSpaces.records[family]
 	if (existing?.geo) return existing as SpaceRecord & {geo: string}
 
-	let refused = capRefused.get(systemSpaces)
-	if (!refused) capRefused.set(systemSpaces, (refused = new Set()))
-	if (refused.has(family)) throw new SystemSpaceCapError(family)
-
 	const record: SpaceRecord = existing ?? {geo: null, nonce: systemSpaceNonce(family), keyed: false}
 	systemSpaces.records[family] = record
 	systemSpaces.save()
@@ -97,8 +95,7 @@ export async function ensureSystemSpace(deps: SystemSpaceDeps, family: SystemFam
 		record.geo = await deps.db.found(await deps.sealer(), record.nonce)
 	} catch (e) {
 		if (classify(e instanceof Error ? e.message : String(e)) !== "exhausted") throw e
-		refused.add(family)
-		log("warn", "system space not founded: geo-db is at its space cap", {family})
+		log("warn", "system space not founded: geo-db answered ResourceExhausted (space cap or a serve limit); retrying", {family})
 		throw new SystemSpaceCapError(family)
 	}
 	systemSpaces.save()
