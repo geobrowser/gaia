@@ -1,0 +1,67 @@
+# Alerts for the scheduled geo-db snapshots (CronJob geodb-snapshot, geodb/k8s/v2/geodb-snapshot.yaml).
+# Series come from kube-state-metrics. Runbook: geodb/RUNBOOK.md §9.
+#
+#   GeoDbSnapshotJobFailed  a geodb-snapshot Job failed (it stays a week, so this holds until the Job is deleted
+#                           or a later run is read and understood)
+#   GeoDbSnapshotStale      no successful run for 36h (a missed day, a suspended CronJob, a Job that never started)
+#   GeoDbSnapshotTooOld     no successful run for 5 days: one day short of the 6-day limit set by Kafka's 7-day
+#                           retention on testnet.knowledge.edits; past it a snapshot cannot be caught up from Kafka
+#
+#   kubectl apply -f monitoring/k8s/v2/geodb-snapshot-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: geodb-snapshot
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: geodb.snapshot
+      rules:
+        - alert: GeoDbSnapshotJobFailed
+          expr: |
+            kube_job_failed{namespace="gaia", job_name=~"geodb-snapshot-.*", condition="true"} > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: geodb-snapshot
+            namespace: gaia
+          annotations:
+            summary: A scheduled geo-db snapshot failed ({{ $labels.job_name }})
+            description: >-
+              kubectl -n gaia logs job/{{ $labels.job_name }}. The run removes its own partial snapshots and never
+              prunes, so the older pairs are intact. A readyToUse timeout is the usual cause: check
+              kubectl -n gaia get volumesnapshot and the DigitalOcean volume snapshot quota.
+
+        - alert: GeoDbSnapshotStale
+          expr: |
+            time() - kube_cronjob_status_last_successful_time{namespace="gaia", cronjob="geodb-snapshot"} > 36 * 3600
+            or
+            absent(kube_cronjob_status_last_successful_time{namespace="gaia", cronjob="geodb-snapshot"})
+          for: 10m
+          labels:
+            severity: warning
+            service: geodb-snapshot
+            namespace: gaia
+          annotations:
+            summary: No successful geo-db snapshot for over 36h
+            description: >-
+              The CronJob should succeed daily. Check kubectl -n gaia get cronjob,job -l app=geodb-snapshot
+              (suspended? never scheduled? absent means the CronJob was never applied). Snapshots are the only
+              geo-db recovery source; Kafka keeps 7 days.
+
+        - alert: GeoDbSnapshotTooOld
+          expr: |
+            time() - kube_cronjob_status_last_successful_time{namespace="gaia", cronjob="geodb-snapshot"} > 5 * 86400
+          for: 10m
+          labels:
+            severity: critical
+            service: geodb-snapshot
+            namespace: gaia
+          annotations:
+            summary: Newest scheduled geo-db snapshot is over 5 days old
+            description: >-
+              Kafka retention on testnet.knowledge.edits is 7 days; a snapshot older than that cannot be caught up
+              and a rebuild takes about 5 h and needs Postgres. Take a pair by hand now (RUNBOOK §9) and fix
+              the CronJob.
