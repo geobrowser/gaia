@@ -114,10 +114,10 @@ spec:
             - name: BACKFILL_MAX_ENTITIES
               value: "0"
             - name: BACKFILL_SPACE_CAP
-              value: "192"
+              value: "1700"
             # The journals of what geo-db holds are kept in memory; they grow with the backfill.
             - name: NODE_OPTIONS
-              value: "--max-old-space-size=1536"
+              value: "--max-old-space-size=2048"
             - name: ENVIRONMENT
               value: testnet
             - name: KAFKA_GROUP_ID
@@ -188,7 +188,7 @@ spec:
               memory: "512Mi"
               cpu: "200m"
             limits:
-              memory: "2Gi"
+              memory: "3Gi"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
