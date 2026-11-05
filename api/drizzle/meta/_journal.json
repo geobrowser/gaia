@@ -824,8 +824,15 @@
     {
       "idx": 117,
       "version": "7",
+      "when": 1792348000000,
+      "tag": "0117_stop_run_table_writes",
+      "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
       "when": 1792434400000,
-      "tag": "0117_agenda_debates",
+      "tag": "0118_agenda_debates",
       "breakpoints": true
     }
   ]

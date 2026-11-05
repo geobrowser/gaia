@@ -1,4 +1,4 @@
--- Assertions for 0117: an agenda's own Debates relation lifts just the debates it names (GEO-3592).
+-- Assertions for 0118: an agenda's own Debates relation lifts just the debates it names (GEO-3592).
 --
 -- Run per drizzle/tests/README.md; also runs in CI via rankingSqlSuites.test.ts. Expected values are
 -- written against entity_ranking_config, so retuning the defaults does not need a new suite.
@@ -64,7 +64,7 @@ CREATE OR REPLACE FUNCTION pg_temp.tau() RETURNS numeric LANGUAGE sql AS $$
 --   A0 names DN, DBOTH and BC at positions a0, a1, a2.
 -- ---------------------------------------------------------------------------
 CREATE TEMP TABLE ids AS
-SELECT k, ('b1170000-0000-4000-8000-' || lpad(to_hex(n), 12, '0'))::uuid AS id
+SELECT k, ('b1180000-0000-4000-8000-' || lpad(to_hex(n), 12, '0'))::uuid AS id
 FROM unnest(ARRAY['CL','LC','LC5','UNL','NOTD','BC',
                   'DN','DSIB','D2','DLC','DW','DBOTH','DX','DP','DF','DB1','DB2',
                   'ORG1','ORG2','ORG3','ORG4','ORG5',

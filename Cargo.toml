@@ -17,6 +17,7 @@ members = [
     "hermes-pipeline",
     "hermes-ipfs-cache",
     "hermes-instrumentation",
+    "geodb-cursor",
 
     "chain-tip-exporter",
 
