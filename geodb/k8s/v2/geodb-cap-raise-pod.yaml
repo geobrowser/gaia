@@ -23,7 +23,7 @@ spec:
       secret: {secretName: geodb-store-secret, defaultMode: 0440}
   containers:
     - name: raise
-      image: registry.digitalocean.com/geo/geodb:d82cfa3bc2
+      image: registry.digitalocean.com/geo/geodb:b2dda49ab6
       env:
         - {name: FROM, value: "256"}
         - {name: TARGET, value: "1024"}
