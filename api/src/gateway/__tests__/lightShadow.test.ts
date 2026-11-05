@@ -243,6 +243,32 @@ describe("the light entity selection (news app)", () => {
 		expect(results()).toEqual({match: 1, mismatch: 1, unsupported_selection: 1})
 	})
 
+	it("compares an entity in more than three spaces in one line when multi-space reads are on", async () => {
+		const wide = clone(ENTITY)
+		const extra = [
+			"aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa",
+			"bbbbbbbbbbbb4bbb8bbbbbbbbbbbbbbb",
+			"cccccccccccc4ccc8ccccccccccccccc",
+		]
+		wide.spaceIds = [SPACE_A, SPACE_B, SPACE_C, ...extra]
+		const moved = wide.lightRels.nodes[0] as Rel
+		moved.spaceId = SPACE_B
+		const outputs = {
+			[geoSpace(SPACE_A)]: geoOutput(wide, {relSpace: (r) => r !== moved}),
+			[geoSpace(SPACE_B)]: geoOutput(wide, {relSpace: (r) => r === moved, values: false}),
+		}
+		const s = setup(outputs, undefined, true)
+		await call(s.entity as never, FIXTURE.request.query, {}, {data: {entity: wide}})
+		expect(results()).toEqual({match: 1})
+		expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
+		expect(s.readCardSpaces.mock.calls[0]?.[0].geoSpaceIds).toHaveLength(6)
+		// Deliberate mismatch: geo-db lacks the relation PostGraphile returned from B.
+		const lacking = setup({...outputs, [geoSpace(SPACE_B)]: ""}, undefined, true)
+		await call(lacking.entity as never, FIXTURE.request.query, {}, {data: {entity: wide}})
+		expect(results()).toEqual({match: 1, mismatch: 1})
+		expect(unsupported()).toEqual({})
+	})
+
 	it("sends nothing when one of the spaces is not loaded, even in one-line mode", async () => {
 		const unloaded = clone(ENTITY)
 		unloaded.spaceIds = [SPACE_A, SPACE_D]
