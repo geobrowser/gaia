@@ -793,13 +793,19 @@ describe("entity answers with no Space (every-Space reads)", () => {
 
 	function everySetup(
 		outputs: Record<string, string>,
-		options: {flag?: boolean; budget?: ReturnType<typeof createReadBudget>} = {},
+		options: {
+			flag?: boolean
+			budget?: ReturnType<typeof createReadBudget>
+			spaces?: string[]
+			chunks?: boolean
+		} = {},
 	) {
 		const log = {info: vi.fn(), warn: vi.fn()}
 		const readCard = askOf(outputs)
 		const readCardSpaces = askSpacesOf(outputs)
-		const allGeoSpaces = vi.fn(async () => ALL)
+		const allGeoSpaces = vi.fn(async () => options.spaces ?? ALL)
 		const deps = {
+			everySpaceChunks: options.chunks,
 			multiSpace: true,
 			geoDb: {readCard, readCardSpaces},
 			geoSpaceOf: async (space: string) => geoSpace(space),
@@ -840,6 +846,28 @@ describe("entity answers with no Space (every-Space reads)", () => {
 		expect(s.readCard).not.toHaveBeenCalled()
 		expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
 		expect(s.readCardSpaces.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: ALL, names: true})
+	})
+
+	describe("more loaded Spaces than one line can name (GEODB_EVERY_SPACE_CHUNKS)", () => {
+		const filler = Array.from({length: 1100}, (_, i) => geoSpace(`${(i + 1).toString(16).padStart(32, "0")}`))
+		const many = [...ALL, ...filler]
+		const rows = () => ({[geoSpace(SPACE_C)]: geoOutput(ENTITY) + typeRow(HEX, NEWS_STORY, "News story")})
+
+		it("refuses the read as many_spaces while the flag is off", async () => {
+			const s = everySetup(rows(), {spaces: many})
+			await run(s, EVERY.entityTypes)
+			expect(unsupported()).toEqual({many_spaces: 1})
+			expect(s.readCardSpaces).not.toHaveBeenCalled()
+		})
+
+		it("reads them in lines of at most 1024 and compares the concatenated rows", async () => {
+			const s = everySetup(rows(), {spaces: many, chunks: true})
+			await run(s, EVERY.entityTypes)
+			expect(results()).toEqual({match: 1})
+			expect(s.readCardSpaces).toHaveBeenCalledTimes(2)
+			const sizes = s.readCardSpaces.mock.calls.map((c) => c[0].geoSpaceIds.length)
+			expect(sizes).toEqual([1024, many.length - 1024])
+		})
 	})
 
 	it("flags a type geo-db holds that PostGraphile does not list; a differing type name is inconclusive", async () => {

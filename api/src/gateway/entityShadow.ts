@@ -1065,6 +1065,8 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	entitiesBatch?: boolean
 	/** Accept the Postgres-computed vote scores (`upvotes` ..) in the light `entities` shadow, uncompared (`GEODB_DERIVED_FIELDS_SHADOW`). */
 	derivedFields?: boolean
+	/** Split an every-Space read over more than MAX_EVERY_SPACES loaded Spaces into several lines (`GEODB_EVERY_SPACE_CHUNKS`). */
+	everySpaceChunks?: boolean
 	/**
 	 * Read a single-key `CREATED_AT`/`UPDATED_AT` `orderBy` page of the light `entities` shadow from geo-db with the order's
 	 * `.pick` and `.ties` members and compare it (`GEODB_ORDER_PICK_SHADOW`). Needs a serve that reads those members, `multiSpace`
@@ -1191,13 +1193,25 @@ export async function readEverySpace(deps: EntityShadowDeps, entityId: string, l
 		return {ok: false, result: "failed"}
 	}
 	if (spaces.length === 0) return {ok: false, result: "unsupported", reason: "no_space"}
-	if (spaces.length > MAX_EVERY_SPACES) return {ok: false, result: "unsupported", reason: "many_spaces"}
-	if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(1))
+	if (spaces.length > MAX_EVERY_SPACES && deps.everySpaceChunks !== true)
+		return {ok: false, result: "unsupported", reason: "many_spaces"}
+	const lines: string[][] = []
+	for (let at = 0; at < spaces.length; at += MAX_EVERY_SPACES) lines.push(spaces.slice(at, at + MAX_EVERY_SPACES))
+	if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(lines.length))
 		return {ok: false, result: "unsupported", reason: "throttled"}
 	const started = performance.now()
-	let rows: GeoCardRow[]
+	const rows: GeoCardRow[] = []
 	try {
-		rows = await readCardSpaces({geoSpaceIds: spaces, entityId: conformingId("entity", entityId), names: true})
+		for (const line of lines) {
+			const got = await readCardSpaces({
+				geoSpaceIds: line,
+				entityId: conformingId("entity", entityId),
+				names: true,
+			})
+			// A one-Space line prints bare statement ids, so its rows name no Space.
+			const only = line.length === 1 ? line[0] : undefined
+			for (const row of got) rows.push(only && row.space === undefined ? {...row, space: only} : row)
+		}
 		observeGeoDbRead((performance.now() - started) / 1000, "ok")
 	} catch (error) {
 		observeGeoDbRead((performance.now() - started) / 1000, "error")
