@@ -23,7 +23,7 @@
  * have returned is not checkable from a card (`filter_completeness`).
  */
 
-import type {DocumentNode, FieldNode, SelectionSetNode} from "graphql"
+import {type DocumentNode, type FieldNode, Kind, print, type SelectionSetNode, visit} from "graphql"
 
 import {
 	conformingId,
@@ -138,6 +138,21 @@ export function shapeOfRoot(
 	}
 }
 
+const MAX_QUERY_LOGGED = 4000
+
+/**
+ * The operation's text with every literal value (strings, numbers, lists, objects) replaced by a placeholder, so
+ * the selection can be read off a log line and replayed offline without any value in it. Capped.
+ */
+export function redactedQuery(operation: DocumentNode["definitions"][number]): string {
+	const redacted = visit(operation, {
+		StringValue: () => ({kind: Kind.STRING, value: "_"}),
+		IntValue: (node) => (node.value.length <= 4 ? node : {kind: Kind.INT, value: "0"}),
+		ListValue: () => ({kind: Kind.LIST, values: []}),
+	})
+	return print(redacted).replace(/\s+/g, " ").slice(0, MAX_QUERY_LOGGED)
+}
+
 /**
  * Counts the argument shape of an operation that could not be shadowed (`gaia_api_gateway_shadow_unsupported_shape_total`)
  * and logs, once per process for each (field, reason, operation name), its root arguments and the top-level fields
@@ -155,7 +170,8 @@ export function noteUnsupported(
 	try {
 		const shape = shapeOfRoot(document, operationName, variables, field)
 		recordGatewayUnsupportedShape(field, reason, shape)
-		const key = `${field}\t${reason}\t${operationName ?? ""}`
+		// The shape is in the key so anonymous operations (no name) of different shapes are each logged once.
+		const key = `${field}\t${reason}\t${operationName ?? ""}\t${shape}`
 		if (noted.has(key) || noted.size >= MAX_NOTED) return
 		noted.add(key)
 		const operation = document.definitions.find(
@@ -176,7 +192,14 @@ export function noteUnsupported(
 				: [],
 		)
 		// warn: the api runs at warn, and this is capped at MAX_NOTED lines per process.
-		deps.log.warn("gateway shadow unsupported", {field, reason, operationName, shape, roots})
+		deps.log.warn("gateway shadow unsupported", {
+			field,
+			reason,
+			operationName,
+			shape,
+			roots,
+			query: redactedQuery(operation),
+		})
 	} catch {
 		// Observability only.
 	}
