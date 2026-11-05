@@ -137,7 +137,7 @@ export const HIDDEN_SURFACE = {
 		"entityTrendingTerm",
 		// GEO-3503's positioned agenda contents (migration 0115); public only as currentDebateAgendas.
 		"agendaContent",
-		// GEO-3592's listing helpers (migration 0118).
+		// GEO-3592's listing helpers (migration 0117).
 		"newestListing",
 		"claimSource",
 	],

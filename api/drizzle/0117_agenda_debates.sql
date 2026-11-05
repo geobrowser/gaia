@@ -31,7 +31,7 @@
 -- daily full pass re-scores every listed debate. A debate that loses its Debate type drops out of
 -- what the agenda names, so its row goes and the next hourly run clears its terms.
 --
--- WAREHOUSE. GEO-3556's export (0117, if merged) sends every source. Analytics' claim view keeps
+-- WAREHOUSE. GEO-3556's export (gaia#1131) sends every source. Analytics' claim view keeps
 -- only block_item and agenda_claims, so the new rows are exported and stay out of claim reports.
 
 ALTER TABLE "trending"."agenda_listings" DROP CONSTRAINT IF EXISTS "agenda_listings_source_check";
