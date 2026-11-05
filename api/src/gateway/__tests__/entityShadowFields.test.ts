@@ -153,9 +153,10 @@ describe("the real Entity and EntityPage queries", () => {
 		})
 		expect(entity.relations.nodesKey).toBe("nodes")
 		expect(entity.relations.hasNext).toEqual({pageInfo: "pageInfo", field: "hasNextPage"})
-		expect(new Set(entity.uncompared)).toEqual(
-			new Set(["updated_at", "nested_entity", "property_info", "membership_only"]),
-		)
+		// updatedAt is selected plain, so it is compared (entityTimesShadow.test.ts), not uncompared by the query alone.
+		expect(entity.updatedAt).toBe("updatedAt")
+		expect(entity.createdAt).toBeNull()
+		expect(new Set(entity.uncompared)).toEqual(new Set(["nested_entity", "property_info", "membership_only"]))
 		const page = plan(PAGE_A)
 		expect(page.relations.nodesKey).toBeNull()
 		expect(new Set(page.uncompared)).toEqual(

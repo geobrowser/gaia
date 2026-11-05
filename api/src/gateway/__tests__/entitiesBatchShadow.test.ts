@@ -176,8 +176,6 @@ describe("the EntitiesBatch selection", () => {
 					"membership_only",
 					"partial_values",
 					"relation_count",
-					"created_at",
-					"updated_at",
 					"nested_entity",
 					"property_info",
 					"filter_completeness",

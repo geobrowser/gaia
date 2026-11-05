@@ -286,6 +286,39 @@ $K scale sts/geodb --replicas=1
 
 Never lower the cap below a founded ordinal: that open fails.
 
+### 2e. Entity times (GEODB_ENTITY_TIMES) and the times backfill
+
+The feeder can write each entity's `createdAt` / `updatedAt` into geo-db as two reserved properties, from the edit's
+block time (contract: geo-db `docs/api/10-embedded-and-wire.md` §5.6). It is off by default: `GEODB_ENTITY_TIMES`
+(`1` or `true` is on). The gateway entity shadow already compares them (`updated_at` / `created_at` leave the
+uncompared reasons as soon as geo-db holds a time), so the api needs no switch, and an entity with no time row is
+simply still uncompared.
+
+Existing entities have no times until they are edited, so stamp them from Postgres `entities.created_at` /
+`updated_at`. Job `geodb-times-backfill` (`geodb/k8s/v2/geodb-times-backfill-job.yaml`,
+`node dist/times-backfill-main.js`) reads those two columns (read only), reads each entity back from geo-db, and
+writes only the cell that is missing, in every Space where the entity has rows. It never overwrites a live value and
+never creates an entity. A cursor on the state volume resumes a rerun. Like §2b it runs with the feeder scaled to 0
+and refuses to start while the feeder's consumer group has members.
+
+Order: deploy the feeder image with the flag off, run the Job, then set `GEODB_ENTITY_TIMES` to `1` and scale the
+feeder back up. (Flag on first also works, but an entity the feeder sees first gets a "first seen" createdAt that
+the backfill then cannot repair, because the cell is held.)
+
+```bash
+$K scale deployment/geodb-feeder --replicas=0
+$K wait --for=delete pod -l app=geodb-feeder --timeout=120s
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__SPACES__|mapped|" geodb/k8s/v2/geodb-times-backfill-job.yaml | $K apply -f -
+$K logs -f job/geodb-times-backfill   # "times backfill done", deadLettered 0
+$K delete job geodb-times-backfill
+# then GEODB_ENTITY_TIMES "1" in the feeder manifest, scale to 1.
+```
+
+Expected after both: shadow `updated_at` / `created_at` uncompared counts fall, with no `derivedMismatches` for them.
+geo-db's updatedAt can lag Postgres's (it stamps only entities an edit changes, Postgres also stamps ones it merely
+mentions), which the shadow counts as uncompared, not a mismatch; an updatedAt later than Postgres's, or a createdAt
+earlier, is a real mismatch.
+
 ## 3. The exit check: a week of traffic
 
 Do not turn serve mode on until all of these hold over 7 days of shadow:

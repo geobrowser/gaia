@@ -1,5 +1,5 @@
 import type {FieldNode} from "graphql"
-import {conformingId, DERIVED_PROPERTIES, MEMBERSHIP_PROPERTIES} from "../geodb/card"
+import {conformingId, DERIVED_PROPERTIES, ENTITY_TIME_PROPERTIES, MEMBERSHIP_PROPERTIES} from "../geodb/card"
 import type {GaiaIdsOf} from "../geodb/idMap"
 import {askGeoDb, type CardDeps} from "../geodb/service"
 import {argsOf, ENTITY_FIELD, fieldsOf, parseOperation, responseKeyOf, Unsupported, uuidArg} from "./entityShadow"
@@ -120,7 +120,7 @@ export function createEntityResolver(deps: EntityServeDeps): FieldResolver {
 		if (rows.length === 0) return decline("empty")
 		const references: {prop: string; raw: string}[] = []
 		for (const row of rows) {
-			if (MEMBERSHIP_PROPERTIES.has(row.prop)) continue
+			if (MEMBERSHIP_PROPERTIES.has(row.prop) || ENTITY_TIME_PROPERTIES.has(row.prop)) continue
 			if (DERIVED_PROPERTIES.has(row.prop)) return decline("selection")
 			if (REFERENCE.test(row.raw)) references.push(row)
 		}
