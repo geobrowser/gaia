@@ -29,6 +29,7 @@ const HEX = ENTITY.id
 const SPACE_A = ENTITY.spaceIds[0] as string
 const SPACE_B = "5093b6ab1b48f1111dd31275b5413ddb"
 const SPACE_C = "41e851610e13a19441c4d980f2f2ce6b"
+const SPACE_B_UUID = "1b5c5f5c-2d5f-4f6a-9f0d-6d1c0c4f9a11"
 const SPACE_D = "0123456789ab4bcd8ef0123456789abc"
 const geoSpace = (s: string) => `${s.slice(0, 12)}4${s.slice(13, 16)}8${s.slice(17)}`
 const NAME = conformingId("entity", "a126ca53-0c8e-48d5-b888-82c734c38935")
@@ -277,10 +278,22 @@ describe("the light entity selection (news app)", () => {
 		expect(results()).toEqual({failed: 1})
 	})
 
-	it("needs the entity's spaces: without spaceIds or a row space it is no_space", () => {
+	it("reads every space when there is no spaceIds and no row space (the rows need only be held by one)", () => {
 		const analysis = analyzeLightEntity(
 			parse(
 				`{ entity(id: "073ff16b-e7fe-4591-a984-c325d629d92d") { id values(first: 5) { nodes { property { id } text } } } }`,
+			),
+			null,
+			{},
+		)
+		expect(analysis.ok).toBe(true)
+		if (analysis.ok) expect(analysis.plan.everySpace).toBe(true)
+	})
+
+	it("still needs the entity's spaces when the root names Spaces but the answer does not", () => {
+		const analysis = analyzeLightEntities(
+			parse(
+				`{ entities(spaceIds: {in: ["${SPACE_B_UUID}"]}, first: 5) { id values(first: 5) { nodes { property { id } text } } } }`,
 			),
 			null,
 			{},
@@ -354,7 +367,7 @@ describe("the card selection with no space filter", () => {
 			s.entity as never,
 			q.replace("createdAt createdAtBlock relations { totalCount }", ""),
 			{id: "a94cb341-0aea-4737-8dda-3b6489cbacef", spaceId: null},
-			{data: {entity: {id: HEX, name: null}}},
+			{data: {entity: {id: HEX, name: null, valuesList: [], relationsList: []}}},
 		)
 		expect(unsupported()).toEqual({no_space: 1})
 	})
@@ -782,5 +795,93 @@ describe("entities answers with no Space (every-Space reads)", () => {
 		await run(s, {data: {entities: []}})
 		expect(results()).toEqual({})
 		expect(s.readCardSpaces).not.toHaveBeenCalled()
+	})
+
+	// The typeahead: `entities(typeId, first, filter: {values: {some: {propertyId, text: {includesInsensitive}}}})`.
+	describe("the typeahead and the selections it shares with id lists", () => {
+		const typeId = "e550fe517e904b2c8fffdf13408f5634"
+		const typeahead = (selection: string) =>
+			`query { entities(typeId: "${typeId}", first: 10, filter: {values: {some: {propertyId: {is: "a126ca53-0c8e-48d5-b888-82c734c38935"}, text: {includesInsensitive: "ada"}}}}) { ${selection} } }`
+		const typed = `${TYPES}\t${conformingId("entity", typeId)}\ts1\t${FIRST.id}\t-\t-\t1\n`
+		const callQuery = (s: ReturnType<typeof namesSetup>, query: string, body: unknown) =>
+			call(s.points.get("entities") as never, query, {}, body)
+
+		it("compares the filter's type and the name, leaving which entities matched the text uncompared", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + nameRow(FIRST.id, "Ada")})
+			await callQuery(s, typeahead("id name"), {data: {entities: [{id: FIRST.id, name: "Ada"}]}})
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({filter_completeness: 1})
+		})
+
+		it("flags a returned entity that geo-db does not hold with the promised type", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, "Ada")})
+			await callQuery(s, typeahead("id name"), {data: {entities: [{id: FIRST.id, name: "Ada"}]}})
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("leaves a differing name inconclusive: the name may come from a Space geo-db did not load", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + nameRow(FIRST.id, "Bob")})
+			await callQuery(s, typeahead("id name"), {data: {entities: [{id: FIRST.id, name: "Ada"}]}})
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("compares typeIds as the entity's Types statements", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + nameRow(FIRST.id, "Ada")})
+			const query = typeahead("id name description typeIds spaceIds updatedAt")
+			const row = {
+				id: FIRST.id,
+				name: "Ada",
+				description: null,
+				typeIds: [typeId],
+				spaceIds: [SPACE_B],
+				updatedAt: "2026-01-01T00:00:00Z",
+			}
+			await callQuery(s, query, {data: {entities: [row]}})
+			expect(results()).toEqual({match: 1})
+			// A type PostGraphile lists that geo-db never held for the entity is a difference.
+			const lacking = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, "Ada")})
+			await callQuery(lacking, query, {data: {entities: [row]}})
+			expect(results()).toMatchObject({mismatch: 1})
+		})
+
+		it("compares typeIds on an id list", async () => {
+			const query = `query { entities(filter: {id: {in: ["${FIRST.id}"]}}, first: 1) { id typeIds } }`
+			const s = namesSetup({[geoSpace(SPACE_C)]: typed})
+			await callQuery(s, query, {data: {entities: [{id: FIRST.id, typeIds: [typeId]}]}})
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("refuses typeIds that are not ids, and a typeIds field with a selection", () => {
+			const plain = analyzeLightEntities(parse(typeahead("id name typeIds")), null, {})
+			expect(plain.ok).toBe(true)
+			expect(analyzeLightEntities(parse(typeahead("id name typeIds { id }")), null, {})).toEqual({
+				ok: false,
+				reason: "selection",
+			})
+		})
+
+		it("reads every space for lists that name no space, instead of counting no_space", async () => {
+			const query = `query { entities(filter: {id: {in: ["${FIRST.id}"]}}, first: 1) { id relations(first: 10) { nodes { typeId toEntityId } } } }`
+			const target = "7ed45f2bc48b419e8e4664d5ff680b0d"
+			const rel = `${conformingId("entity", typeId)}\t${conformingId("entity", target)}\ts5\t${FIRST.id}\t-\t-\t1\n`
+			const body = {data: {entities: [{id: FIRST.id, relations: {nodes: [{typeId, toEntityId: target}]}}]}}
+			const held = namesSetup({[geoSpace(SPACE_B)]: rel})
+			await callQuery(held, query, body)
+			expect(results()).toEqual({match: 1})
+			// A relation geo-db holds in no Space is still a mismatch.
+			const missing = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, FIRST.name)})
+			await callQuery(missing, query, body)
+			expect(results()).toEqual({match: 1, mismatch: 1})
+		})
+
+		it("keeps an entities answer unsupported when every-space reads are off (never a mismatch)", async () => {
+			const query = `query { entities(filter: {id: {in: ["${FIRST.id}"]}}, first: 1) { id relations(first: 10) { nodes { typeId toEntityId } } } }`
+			const s = namesSetup({}, {flag: false})
+			await callQuery(s, query, {
+				data: {entities: [{id: FIRST.id, relations: {nodes: [{typeId, toEntityId: typeId}]}}]},
+			})
+			expect(results()).toEqual({unsupported_selection: 1})
+			expect(unsupported()).toEqual({no_space: 1})
+		})
 	})
 })

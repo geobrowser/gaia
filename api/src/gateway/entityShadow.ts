@@ -172,7 +172,7 @@ export type EntityCardPlan = {
 	/** Response keys of `updatedAt` and `createdAt` (unix seconds as text), when selected plain. Their `*Block` twins stay uncompared. */
 	updatedAt: string | null
 	createdAt: string | null
-	types: {key: string; idKey: string | null; nameKey: string | null} | null
+	types: {key: string; idKey: string | null; nameKey: string | null; plain?: boolean} | null
 	/** The unfiltered lists (every space): their response keys, and of the columns read. */
 	allValues: {key: string; first: number; spaceKey: string | null; propertyKey: string | null} | null
 	allRelations: {key: string; first: number; spaceKey: string | null} | null
@@ -523,6 +523,9 @@ export function planEntitySelection(
 			}
 			if (!typeIdKey) return refuse("selection")
 			types = {key, idKey: typeIdKey, nameKey}
+		} else if (light && fieldName === "typeIds" && !types && isPlainField(field)) {
+			// The light selection only: `typeIds` is the same Types statements as `types { id }`, as a list of ids.
+			types = {key, idKey: null, nameKey: null, plain: true}
 		} else if (fieldName === "valuesList" && filtered && !values) {
 			values = planList(field, fragments, resolved, valueSpec, uncompared, false)
 		} else if (fieldName === "valuesList" && !filtered && !allValues) {
