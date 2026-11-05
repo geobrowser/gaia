@@ -7,7 +7,7 @@
 //! (`geodb_cursor_mirror_errors_total`) and swallowed, each call is bounded by a timeout, and after
 //! a failure the child is not respawned until a cool-down passes.
 //!
-//! The row is `cursors` (collection 10, geo-db 6a770ba752), keyed by the writer id. Its value is the
+//! The row is `cursors` (collection 10, geo-db 27e919248f), keyed by the writer id. Its value is the
 //! bytes `<decimal block_number>:<opaque cursor>`, sent as `hex:` so the tab-separated line cannot be
 //! broken by the cursor's content. A value over [`VALUE_MAX`] (1024 bytes) is logged, counted
 //! (`geodb_cursor_mirror_skipped_total`) and skipped, never truncated. The 1024 limit is an estimate
@@ -25,7 +25,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-/// Default derived collection: `cursors = 10` (geo-db 6a770ba752).
+/// Default derived collection: `cursors = 10` (geo-db 27e919248f).
 pub const DEFAULT_COLLECTION: u32 = 10;
 
 /// `cursor_value_max` of the `cursors` collection: the most bytes of one value.
