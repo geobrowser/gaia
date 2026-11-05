@@ -480,7 +480,12 @@ describe("entities with the light selection", () => {
 
 	it("plans an orderBy as an uncompared order and refuses one it does not know", () => {
 		const base = `spaceId: "${SPACE_A}", typeId: "${typeId}", first: 5`
-		for (const order of ["CREATED_AT_DESC", "[CREATED_AT_DESC, ID_ASC]", "[RANKING_SCORE_DESC]", "UPDATED_AT_ASC"]) {
+		for (const order of [
+			"CREATED_AT_DESC",
+			"[CREATED_AT_DESC, ID_ASC]",
+			"[RANKING_SCORE_DESC]",
+			"UPDATED_AT_ASC",
+		]) {
 			const a = analyzeLightEntities(parse(withArgs(`${base}, orderBy: ${order}`)), null, {})
 			expect(a.ok).toBe(true)
 			if (a.ok) expect(a.plan.uncompared).toContain("order_completeness")
