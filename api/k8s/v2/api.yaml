@@ -129,7 +129,7 @@ spec:
       initContainers:
         - name: geodb-setup
           # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to the api tag.
-          image: registry.digitalocean.com/geo/geodb:d82cfa3bc2
+          image: registry.digitalocean.com/geo/geodb:b2dda49ab6
           imagePullPolicy: IfNotPresent
           # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
           # binding and the api reads the flag as unusable and answers from Postgres.
