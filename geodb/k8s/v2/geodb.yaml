@@ -378,11 +378,11 @@ spec:
             # and writes them into Spaces geo-db holds; one for a Space not founded yet waits until it is.
             - name: GEODB_SPACE_ENTITIES
               value: "1"
-            # Keyed user votes (curation.votes into the votes system Space). Off. Takes effect only with
-            # GEODB_RECORD_KEYS, and only after the votes backfill Job (geodb-votes-backfill-job.yaml) and the
-            # Kafka ACL for its topic and group: RUNBOOK §2c-ter.
+            # Keyed user votes (curation.votes into the votes system Space). Takes effect only with
+            # GEODB_RECORD_KEYS: RUNBOOK §2c-ter. On since 2026-11-05, after the votes backfill Job
+            # (geodb-votes-backfill-job.yaml) ran with the feeder at 0. Rollback: "0".
             - name: GEODB_VOTES
-              value: "0"
+              value: "1"
             # Keyed proposal votes (PROPOSAL_VOTED on space.governance, into the votes system Space). Off. Takes
             # effect only with GEODB_RECORD_KEYS, and only after the proposal-votes backfill Job
             # (geodb-proposal-votes-backfill-job.yaml) and the Kafka ACL for its group: RUNBOOK §2c-quater.
