@@ -985,6 +985,8 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	 * a filtered list reads its Space under `budget`, an unfiltered one every Space under `everySpaceBudget`.
 	 */
 	backlinks?: boolean
+	/** Accept the EntitiesBatch selection's membership-only `allRelationsList { spaceId }` in the light `entities` shadow (`GEODB_ENTITIES_BATCH_SHADOW`). */
+	entitiesBatch?: boolean
 }
 
 export type CardCheck =

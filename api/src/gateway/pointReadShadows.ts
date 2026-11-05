@@ -623,7 +623,9 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 				// A card-shaped selection is not what was asked: `entities` also has a light form (lightShadow.ts).
 				const light =
 					field === ENTITIES_FIELD
-						? analyzeLightEntities(document, classification.operationName, params.variables)
+						? analyzeLightEntities(document, classification.operationName, params.variables, {
+								entitiesBatch: deps.entitiesBatch === true,
+							})
 						: null
 				if (light?.ok) {
 					let lightBody: unknown
