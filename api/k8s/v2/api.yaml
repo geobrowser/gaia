@@ -240,7 +240,7 @@ spec:
             - name: GRAPHQL_GATEWAY
               value: "on"
             - name: GRAPHQL_GATEWAY_FIELDS
-              value: "entity=on,entities=shadow,relation=shadow,relations=shadow,search=shadow,searchConnection=shadow"
+              value: "entity=shadow,entities=shadow,relation=shadow,relations=shadow,search=shadow,searchConnection=shadow"
             - name: GEODB_CLIENT_BIN
               value: /geodb/geodb-client
             - name: GEODB_KEY_PATH
