@@ -382,7 +382,7 @@ BEGIN
   SELECT * INTO r FROM personalization.refit_user_topic_interest(timestamptz '2026-10-01 04:00:00+00');
   PERFORM assert(r.disagreeing_rows >= 3, format('5: the refit reports it as disagreement (%s rows)', r.disagreeing_rows));
   PERFORM assert(pg_temp.w('V', 'QT', timestamptz '2026-10-01 04:00:00+00') > 0, '5: ...and fixes it');
-  PERFORM assert((SELECT count(*) FROM personalization.interest_refit_runs) = 2, '5: each refit is recorded');
+  PERFORM assert((SELECT count(*) FROM personalization.interest_refit_runs) = 0, '5: refits are no longer recorded (0117)');
 END $$;
 
 -- 10. Nothing is written to the graph on anyone's behalf.

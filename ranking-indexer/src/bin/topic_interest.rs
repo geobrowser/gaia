@@ -3,8 +3,8 @@
 //! `topic_interest sweep` runs every two minutes: it recomputes every user with activity since the
 //! last run (votes, comments, debates, follows), so a new vote moves that user's weights within
 //! minutes. `topic_interest refit` runs nightly: it rebuilds topic co-occurrence, recomputes every
-//! user from scratch, and records how far the incremental state had drifted in
-//! `personalization.interest_refit_runs`.
+//! user from scratch, and logs how far the incremental state had drifted (no longer recorded in a
+//! table; migration 0117).
 //!
 //! Both are separate CronJobs from the vote-indexer, deliberately: since GEO-3101 the vote-indexer
 //! halts on a failed write, and nothing about interest learning may be able to stop vote indexing.

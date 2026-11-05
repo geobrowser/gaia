@@ -8,8 +8,8 @@ metadata:
     environment: testnet
 spec:
   # GEO-3146: fit and evaluate the stance map in SHADOW (`stance_map_shadow`, migration 0108).
-  # Records one row of aggregate metrics in personalization.stance_map_runs, including whether
-  # the spec's gate is met. Nothing reads the map, and no per-user position is stored or logged.
+  # Logs one line of aggregate metrics, including whether the spec's gate is met (no longer
+  # recorded in personalization.stance_map_runs, migration 0117). Nothing reads the map, and no per-user position is stored or logged.
   #
   # Daily at 04:13 UTC: after the hourly account weights (:53) it reads, clear of the nightly
   # interest refit (03:37). A run takes seconds at today's volume (~5k votes).
