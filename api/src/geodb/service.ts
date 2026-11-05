@@ -7,7 +7,7 @@
  */
 
 import type {CardStatement, GeoCardRow, RelationRow, ValueRow} from "./card"
-import {conformingId, diffCards, isEmptyDiff, statementsFromPostgres} from "./card"
+import {conformingId, diffCards, ENTITY_TIME_PROPERTIES, isEmptyDiff, statementsFromPostgres} from "./card"
 import type {GeoDbCardClient} from "./client"
 import {GeoDbError} from "./client"
 import type {GeoDbCardMode} from "./config"
@@ -191,7 +191,10 @@ export async function resolveCard(
 	if (deps.mode === "on") {
 		try {
 			const rows = await askGeoDb(deps, geoEntityId, spaceId)
-			const statements = rows.map((r) => ({property: r.prop, value: r.raw}))
+			// The reserved createdAt/updatedAt cells are not statements of the card: Postgres serves no such rows.
+			const statements = rows
+				.filter((r) => !ENTITY_TIME_PROPERTIES.has(r.prop))
+				.map((r) => ({property: r.prop, value: r.raw}))
 			recordServed("geodb")
 			return {card: {entityId, spaceId, source: "geodb", statements}}
 		} catch (error) {

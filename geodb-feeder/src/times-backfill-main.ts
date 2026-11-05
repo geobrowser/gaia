@@ -11,6 +11,8 @@
  * - GEODB_READER_KEY_PATH: the key the read-back uses (the api's reader key).
  * - TIMES_SPACES: comma list of gaia space ids; unset or "mapped" is every Space geo-db has.
  * - TIMES_BATCH (100 entities), TIMES_PAUSE_MS (100 after each apply), TIMES_MAX_ENTITIES (0: all).
+ * - TIMES_FRESH=1 discards the saved cursor and entity lists, re-listing from Postgres. The default resumes them, so a
+ *   second run on the same volume never sees new entities or a changed Space set without it.
  * - BACKFILL_SKIP_GROUP_CHECK=1 skips the check that the feeder's group is empty. Only for a store no feeder will resume.
  */
 import kafkajs from "kafkajs"
@@ -46,6 +48,7 @@ async function main(): Promise<void> {
 		chunk: config.chunk,
 		pauseMs: intEnv(env, "TIMES_PAUSE_MS", 100, 0),
 		maxEntities: intEnv(env, "TIMES_MAX_ENTITIES", 0, 0),
+		fresh: env.TIMES_FRESH === "1",
 	}
 
 	const metrics = createMetrics()

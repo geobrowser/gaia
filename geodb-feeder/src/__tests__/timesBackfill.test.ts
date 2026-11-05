@@ -1,4 +1,4 @@
-import {mkdtempSync} from "node:fs"
+import {existsSync, mkdtempSync, readFileSync} from "node:fs"
 import {tmpdir} from "node:os"
 import {join} from "node:path"
 import {describe, expect, it} from "vitest"
@@ -145,5 +145,35 @@ describe("runTimesBackfill", () => {
 		expect(limited.entities).toBe(2)
 		const none = await runTimesBackfill(setup(times, held).deps, {...OPTS, spaces: ["c39c345a-b986-6679-b001-d7d2138d88a3"]})
 		expect(none.spaces).toBe(0)
+	})
+
+	it("does not advance the cursor over a batch geo-db refused, and a rerun retries it", async () => {
+		const held: Record<string, GeoDbRow[]> = {}
+		const times: Times = {}
+		for (let i = 1; i <= 5; i++) {
+			held[`${GEO}|${cid("entity", hex(i))}`] = [name(i)]
+			times[ent(i)] = {created_at: "10", updated_at: "20"}
+		}
+		const w = setup(times, held)
+		let refuse = true
+		w.deps.db.apply = async (zon: string) => (refuse ? {rc: 1, out: "", err: "refused"} : {rc: 0, out: "", err: ""})
+		const first = await runTimesBackfill(w.deps, OPTS)
+		expect(first.deadLettered).toBeGreaterThan(0)
+		expect(first.entities).toBe(2) // stopped at the first batch (batch 2)
+		const cp = `${w.store.dir}/times-backfill/cursor.json`
+		const cursor = existsSync(cp) ? (JSON.parse(readFileSync(cp, "utf8")) as {done: Record<string, number>}) : {done: {}}
+		expect(cursor.done[SPACE] ?? 0).toBe(0)
+		refuse = false
+		const again = await runTimesBackfill(w.deps, OPTS)
+		expect(again.deadLettered).toBe(0)
+		expect(again.createdWritten).toBe(5)
+	})
+
+	it("fresh discards the cursor and the entity list; without it a rerun resumes them", async () => {
+		const e = cid("entity", hex(1))
+		const w = setup({[ent(1)]: {created_at: "10", updated_at: "20"}}, {[`${GEO}|${e}`]: [name(1)]}, {[SPACE]: [ent(1)]})
+		await runTimesBackfill(w.deps, OPTS)
+		expect((await runTimesBackfill(w.deps, OPTS)).entities).toBe(0)
+		expect((await runTimesBackfill(w.deps, {...OPTS, fresh: true})).entities).toBe(1)
 	})
 })

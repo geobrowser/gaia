@@ -662,6 +662,9 @@ export type PostgresCard = {
 } | null
 
 /** PostGraphile's `updatedAt` / `createdAt`: unix seconds as text (an ISO instant is read too), else null. */
+/** How far geo-db's time may cross Postgres's on the wrong side before it is a disagreement (an hour). */
+export const TIME_LAG_SECONDS = 3600
+
 export function secondsOrNull(v: unknown): number | null {
 	if (typeof v === "number") return Number.isFinite(v) ? Math.floor(v) : null
 	if (typeof v !== "string") return null
@@ -959,21 +962,32 @@ export function compareDerived(
 
 	// createdAt and updatedAt. geo-db's times are a subset of Postgres's (section 5.6: the feeder stamps an entity
 	// only where one of its own statements changed, Postgres also where an op merely names it), so geo-db's
-	// updatedAt can only be at or below Postgres's and its createdAt at or above. Equal is agreement, a bound
-	// crossed is a disagreement, and anything else (or a time geo-db does not hold yet) is not decidable.
+	// updatedAt should be at or below Postgres's and its createdAt at or above. Equal is agreement. A time geo-db
+	// does not hold, or one on the expected side, is not decidable. A bound crossed by more than TIME_LAG_SECONDS
+	// is a disagreement; a smaller crossing is not, because the feeder can run ahead of the kg-indexer, the
+	// indexer's own writes can land out of order, and Postgres stops advancing updated_at on a soft-deleted entity
+	// (its upsert has WHERE deleted_at IS NULL) while geo-db goes on stamping it.
 	// The bounds hold for a subset of the entity's Spaces too: a least over fewer Spaces is no smaller.
 	const times = entityTimesOf(geo)
 	if (card.updatedAt != null) {
 		if (times.updatedAt === null || times.updatedAt < card.updatedAt) {
 			checks.updatedAt = "inconclusive"
 			uncompared.add("updated_at")
-		} else checks.updatedAt = times.updatedAt === card.updatedAt ? "ok" : "mismatch"
+		} else if (times.updatedAt === card.updatedAt) checks.updatedAt = "ok"
+		else if (times.updatedAt - card.updatedAt <= TIME_LAG_SECONDS) {
+			checks.updatedAt = "inconclusive"
+			uncompared.add("updated_at")
+		} else checks.updatedAt = "mismatch"
 	}
 	if (card.createdAt != null) {
 		if (times.createdAt === null || times.createdAt > card.createdAt) {
 			checks.createdAt = "inconclusive"
 			uncompared.add("created_at")
-		} else checks.createdAt = times.createdAt === card.createdAt ? "ok" : "mismatch"
+		} else if (times.createdAt === card.createdAt) checks.createdAt = "ok"
+		else if (card.createdAt - times.createdAt <= TIME_LAG_SECONDS) {
+			checks.createdAt = "inconclusive"
+			uncompared.add("created_at")
+		} else checks.createdAt = "mismatch"
 	}
 
 	if (card.spaceIds !== undefined) {

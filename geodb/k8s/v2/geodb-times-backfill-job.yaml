@@ -112,6 +112,9 @@ spec:
             # 0 = no limit. Set it for a staged first run.
             - name: TIMES_MAX_ENTITIES
               value: "0"
+            # "1" discards the saved cursor and entity lists (a clean re-list). Default resumes them.
+            - name: TIMES_FRESH
+              value: "0"
             # The feeder journals are loaded into memory.
             - name: NODE_OPTIONS
               value: "--max-old-space-size=2048"

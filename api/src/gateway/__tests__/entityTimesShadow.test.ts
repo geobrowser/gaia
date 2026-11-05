@@ -22,6 +22,7 @@ import {
 	extractPostgresCard,
 	type PostgresCard,
 	secondsOrNull,
+	TIME_LAG_SECONDS,
 } from "../entityShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
 
@@ -195,9 +196,20 @@ describe("compareDerived on updatedAt and createdAt", () => {
 		expect(r.uncompared).toContain("updated_at")
 	})
 
-	it("geo-db ahead of Postgres on updatedAt is a mismatch", () => {
-		const r = check([time(UPDATED_AT_PROPERTY, PG_UPDATED + 1)], {updatedAt: PG_UPDATED, createdAt: null})
-		expect(r.checks.updatedAt).toBe("mismatch")
+	it("geo-db ahead of Postgres on updatedAt: inside the lag window it is inconclusive, beyond it a mismatch", () => {
+		const near = check([time(UPDATED_AT_PROPERTY, PG_UPDATED + 60)], {updatedAt: PG_UPDATED, createdAt: null})
+		expect(near.checks.updatedAt).toBe("inconclusive")
+		expect(near.uncompared).toContain("updated_at")
+		expect(
+			check([time(UPDATED_AT_PROPERTY, PG_UPDATED + TIME_LAG_SECONDS)], {updatedAt: PG_UPDATED, createdAt: null})
+				.checks.updatedAt,
+		).toBe("inconclusive")
+		expect(
+			check([time(UPDATED_AT_PROPERTY, PG_UPDATED + TIME_LAG_SECONDS + 1)], {
+				updatedAt: PG_UPDATED,
+				createdAt: null,
+			}).checks.updatedAt,
+		).toBe("mismatch")
 	})
 
 	it("createdAt: later in geo-db is inconclusive, earlier is a mismatch", () => {
@@ -206,8 +218,10 @@ describe("compareDerived on updatedAt and createdAt", () => {
 				.createdAt,
 		).toBe("inconclusive")
 		expect(
-			check([time(CREATED_AT_PROPERTY, PG_CREATED - 5)], {createdAt: PG_CREATED, updatedAt: null}).checks
-				.createdAt,
+			check([time(CREATED_AT_PROPERTY, PG_CREATED - TIME_LAG_SECONDS - 5)], {
+				createdAt: PG_CREATED,
+				updatedAt: null,
+			}).checks.createdAt,
 		).toBe("mismatch")
 	})
 
@@ -247,7 +261,7 @@ describe("the entity shadow end to end", () => {
 	})
 
 	it("updatedAt ahead of Postgres: a mismatch, logged under derivedMismatches", async () => {
-		const log = await run([time(UPDATED_AT_PROPERTY, PG_UPDATED + 60)])
+		const log = await run([time(UPDATED_AT_PROPERTY, PG_UPDATED + TIME_LAG_SECONDS + 60)])
 		expect(results()).toMatchObject({match: 0, mismatch: 1})
 		expect(log.warn).toHaveBeenCalledWith(
 			"gateway entity shadow mismatch",
@@ -263,7 +277,7 @@ describe("the entity shadow end to end", () => {
 
 	it("createdAt earlier in geo-db than in Postgres: a mismatch", async () => {
 		await run(
-			[time(UPDATED_AT_PROPERTY, PG_UPDATED), time(CREATED_AT_PROPERTY, PG_CREATED - 1)],
+			[time(UPDATED_AT_PROPERTY, PG_UPDATED), time(CREATED_AT_PROPERTY, PG_CREATED - TIME_LAG_SECONDS - 1)],
 			QUERY,
 			withCreated(),
 		)

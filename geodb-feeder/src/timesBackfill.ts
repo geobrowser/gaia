@@ -17,7 +17,7 @@
  * Known residual: an entity first seen by the feeder after GEODB_ENTITY_TIMES went on already holds a "first seen"
  * createdAt, which this never replaces. It is later than Postgres's, which the shadow reports as inconclusive.
  */
-import {existsSync, mkdirSync, readFileSync} from "node:fs"
+import {existsSync, mkdirSync, readFileSync, readdirSync, rmSync} from "node:fs"
 import {type ApplyDeps, applyIntents} from "./apply.js"
 import {CREATED_AT_PROPERTY, UPDATED_AT_PROPERTY, blockInstant, timeIntent} from "./entityTimes.js"
 import type {GeoDb} from "./geodb.js"
@@ -38,6 +38,8 @@ export type TimesOptions = {
 	pauseMs: number
 	/** Stop after this many entities this run (0: no limit). */
 	maxEntities: number
+	/** Discard the saved cursor and entity lists first, so the run re-lists every Space and starts from entity 0. */
+	fresh?: boolean
 }
 
 export type TimesDeps = {
@@ -79,6 +81,12 @@ export async function runTimesBackfill(deps: TimesDeps, opts: TimesOptions): Pro
 	const sleep = deps.sleep ?? defaultSleep
 	const dir = `${deps.store.dir}/times-backfill`
 	mkdirSync(dir, {recursive: true})
+	if (opts.fresh) {
+		// The lists and the cursor persist across runs on purpose (a resume must see the same list), so a run over a
+		// changed Postgres or a changed Space set has to ask for a clean start.
+		for (const f of readdirSync(dir)) if (f === "cursor.json" || /^entities-.*\.txt$/.test(f)) rmSync(`${dir}/${f}`)
+		log("info", "times backfill fresh start: cursor and entity lists discarded")
+	}
 	const cursorPath = `${dir}/cursor.json`
 	const cursor: Cursor = existsSync(cursorPath) ? {done: {}, ...JSON.parse(readFileSync(cursorPath, "utf8"))} : {done: {}}
 	const stats: TimesStats = {
@@ -174,6 +182,12 @@ export async function runTimesBackfill(deps: TimesDeps, opts: TimesOptions): Pro
 					() => {},
 				)
 				stats.deadLettered += r.deadLettered
+				// A refused batch is not done: leave the cursor where it was and stop, so a rerun after the cause is
+				// fixed retries it (it is idempotent: held cells are skipped) instead of skipping it for good.
+				if (r.deadLettered > 0) {
+					log("error", "times backfill stopped: a batch had refused intents, cursor not advanced", {space, from, to})
+					return stats
+				}
 			}
 			cursor.done[space] = to
 			writeFileDurable(cursorPath, JSON.stringify(cursor))

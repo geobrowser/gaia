@@ -1,7 +1,13 @@
 import {readFileSync} from "node:fs"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
-import {conformingId, DERIVED_PROPERTIES, rowsFromGeoDbOutput} from "../../geodb/card"
+import {
+	CREATED_AT_PROPERTY,
+	conformingId,
+	DERIVED_PROPERTIES,
+	rowsFromGeoDbOutput,
+	UPDATED_AT_PROPERTY,
+} from "../../geodb/card"
 import {analyzeLightEntities} from "../lightShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
 import {createPointReadShadows} from "../pointReadShadows"
@@ -205,8 +211,35 @@ describe("the EntitiesBatch selection", () => {
 		await run(s, answer())
 		expect(results()).toEqual({match: 1})
 		expect(uncompared()).toMatchObject({membership_only: 1, partial_values: 1, sampled_rows: 1})
+		// The answer selects createdAt and updatedAt and geo-db holds no time row: nothing was compared, and the
+		// metric says so instead of counting a clean match.
+		expect(uncompared()).toMatchObject({created_at: 1, updated_at: 1})
 		expect(s.readCard).toHaveBeenCalledTimes(2)
 		expect(s.log.warn).not.toHaveBeenCalled()
+	})
+
+	it("compares createdAt and updatedAt when geo-db holds them: equal is a match, far ahead is a mismatch", async () => {
+		const times = (created: number, updated: number) =>
+			`${CREATED_AT_PROPERTY}\tinstant:${created}.000000000\tsc\t${ENTITY}\t-\t-\t1\n${UPDATED_AT_PROPERTY}\tinstant:${updated}.000000000\tsu\t${ENTITY}\t-\t-\t1\n`
+		const good = setup({...BOTH, [geoSpace(SPACE_A)]: geoLines(rowsA) + times(1790812800, 1790899200)})
+		await run(good, answer())
+		expect(results()).toEqual({match: 1})
+		expect(uncompared().created_at ?? 0).toBe(0)
+		expect(uncompared().updated_at ?? 0).toBe(0)
+		__resetGatewayMetricsForTests()
+		const ahead = setup({...BOTH, [geoSpace(SPACE_A)]: geoLines(rowsA) + times(1790812800, 1790899200 + 86400)})
+		await run(ahead, answer())
+		expect(results()).toEqual({mismatch: 1})
+		expect(ahead.log.warn).toHaveBeenCalledWith(
+			"gateway entities shadow mismatch (light)",
+			expect.objectContaining({first: expect.objectContaining({derivedMismatches: ["updatedAt"]})}),
+		)
+		__resetGatewayMetricsForTests()
+		// Within the lag window the feeder may simply be ahead of the indexer: not a disagreement.
+		const lag = setup({...BOTH, [geoSpace(SPACE_A)]: geoLines(rowsA) + times(1790812800, 1790899200 + 60)})
+		await run(lag, answer())
+		expect(results()).toEqual({match: 1})
+		expect(uncompared().updated_at).toBe(1)
 	})
 
 	it("collapses a duplicate relation: geo-db holds one edge for the two PostGraphile lists", async () => {
