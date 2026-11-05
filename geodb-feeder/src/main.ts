@@ -19,6 +19,8 @@ import {startMembershipConsumer} from "./membershipConsumer.js"
 import {keyedCompareTarget, keyedMembershipEnabled, keyedOffsetsDir} from "./membershipKeyed.js"
 import {ProposalOffsets} from "./proposals.js"
 import {startProposalConsumer} from "./proposalsConsumer.js"
+import {startVotesConsumer} from "./votesConsumer.js"
+import {votesKeyedEnabled, votesOffsetsDir} from "./votesKeyed.js"
 import {PendingSpaces} from "./spaceEntities.js"
 import {startSpaceEntityConsumer} from "./spaceEntitiesConsumer.js"
 import {createMetrics, observeFreshness} from "./metrics.js"
@@ -263,6 +265,30 @@ async function main(config: Config): Promise<void> {
 		}
 	}
 
+	// Keyed user votes (votesKeyed.ts): GEODB_VOTES with GEODB_RECORD_KEYS, after the votes backfill.
+	let votes: Awaited<ReturnType<typeof startVotesConsumer>> | null = null
+	if (config.votes.enabled && !config.recordKeys) log("warn", "GEODB_VOTES is set without GEODB_RECORD_KEYS; votes consumer not started")
+	if (votesKeyedEnabled(config)) {
+		try {
+			votes = await startVotesConsumer({
+				kafka,
+				config,
+				abort,
+				deps: {
+					...spaceDeps,
+					lock,
+					beat: async () => {},
+					allowPut: true,
+					systemSpaces,
+					publishSystem: (t: string) => systemPublisher.publish(t),
+					offsets: new ProposalOffsets(votesOffsetsDir(config.dataDir)),
+				},
+			})
+		} catch (e) {
+			log("error", "votes consumer failed to start (edits consumer unaffected)", errorFields(e))
+		}
+	}
+
 	let spaceEntities: Awaited<ReturnType<typeof startSpaceEntityConsumer>> | null = null
 	if (config.spaceEntities.enabled) {
 		try {
@@ -293,6 +319,12 @@ async function main(config: Config): Promise<void> {
 		await p.poll()
 	}
 
+	if (votes) {
+		const v = votes
+		setInterval(() => void v.poll(), config.lagPollMs).unref()
+		await v.poll()
+	}
+
 	if (spaceEntities) {
 		const s = spaceEntities
 		setInterval(() => void s.poll(), config.lagPollMs).unref()
@@ -308,6 +340,7 @@ async function main(config: Config): Promise<void> {
 		await pg?.close()
 		await membership?.stop()
 		await proposals?.stop()
+		await votes?.stop()
 		await spaceEntities?.stop()
 		publisher.stop()
 		systemPublisher.stop()

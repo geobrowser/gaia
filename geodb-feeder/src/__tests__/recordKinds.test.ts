@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest"
-import {RECORD_KINDS, SYSTEM_FAMILIES, SYSTEM_SPACE_NONCE_KIND} from "../recordKinds.js"
+import {RECORD_COLUMNS, RECORD_KINDS, SYSTEM_FAMILIES, SYSTEM_SPACE_NONCE_KIND} from "../recordKinds.js"
 import {systemSpaceNonce} from "../systemSpaces.js"
 
 const V4 = /^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$/
@@ -22,6 +22,28 @@ describe("record kinds", () => {
 		for (const id of ids) expect(id).toMatch(V4)
 		expect(new Set(ids).size).toBe(ids.length)
 		for (const k of Object.values(RECORD_KINDS)) expect(SYSTEM_FAMILIES).toContain(k.family)
+	})
+})
+
+describe("record columns", () => {
+	it("are pinned: a changed column id moves every keyed row's statements", () => {
+		expect(RECORD_COLUMNS).toEqual({
+			userVote: {
+				user: "4bd6d3068a204ff6a62bb084263045bc",
+				object: "46e83cb03e0c46a4a874d7deeb5889dd",
+				objectType: "e2f5df668d07476ba3f1721c885bd53e",
+				space: "59217d4ba84c4fdcbdc3ff6fb3cb83fa",
+				kind: "4f65ca0db5874a519d8068671a0222c5",
+				direction: "8f3588d7a11c4e7eb86b61015670b491",
+				votedAt: "6e088d8604924b05b09e3ebeceebf5db",
+			},
+		})
+	})
+	it("are distinct v4s, distinct from every kind", () => {
+		const cols = Object.values(RECORD_COLUMNS).flatMap((c) => Object.values(c))
+		for (const id of cols) expect(id).toMatch(V4)
+		const all = [...cols, ...Object.values(RECORD_KINDS).map((k) => k.id), SYSTEM_SPACE_NONCE_KIND]
+		expect(new Set(all).size).toBe(all.length)
 	})
 })
 

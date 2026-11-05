@@ -7,6 +7,7 @@
 #                          the topic trips this once; it should clear)
 #   GeoDbFeederDeadLetters the feeder skipped a message or intent (errors.jsonl on the volume)
 #   GeoDbFeederMembershipStalled  space.membership messages have waited unapplied for 30m
+#   GeoDbFeederVotesStalled  curation.votes messages waiting and none applied for 30m
 #
 #   kubectl apply -f monitoring/k8s/v2/geodb-feeder-alerts.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -84,6 +85,24 @@ spec:
               GEODB_RECORD_KEYS a ResourceExhausted founding the governance system Space holds the partition
               rather than skipping the family (geodb/RUNBOOK.md 2c-bis). Read the feeder log for the repeating
               error; if founded is at the serve config's spaces, raise the cap (RUNBOOK 2d).
+
+        - alert: GeoDbFeederVotesStalled
+          # Waiting and not moving: curation.votes is busy enough that lag alone is often above 0 between polls.
+          expr: |
+            sum(geodb_feeder_votes_consumer_lag{namespace="gaia", job="geodb-feeder"}) > 0
+            unless sum(increase(geodb_feeder_vote_events_total{namespace="gaia", job="geodb-feeder"}[30m])) > 0
+          for: 30m
+          labels:
+            severity: warning
+            service: geodb-feeder
+            namespace: gaia
+          annotations:
+            summary: The geo-db feeder's votes consumer has applied nothing for 30m
+            description: >-
+              curation.votes messages are waiting. The votes consumer retries a failing message forever: a
+              ResourceExhausted founding the votes system Space holds the partition rather than skipping the
+              family (geodb/RUNBOOK.md 2c-ter). Read the feeder log for the repeating error; if founded is at the
+              serve config's spaces, raise the cap (RUNBOOK 2d).
 
         - alert: GeoDbFeederDeadLetters
           expr: increase(geodb_feeder_dead_letters_total{namespace="gaia", job="geodb-feeder"}[30m]) > 0

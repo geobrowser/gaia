@@ -7,6 +7,7 @@
  */
 import pg from "pg"
 import type {PgRelationRow, PgValueRow} from "./pgAdapter.js"
+import type {UserVoteRow} from "./votesKeyed.js"
 
 export type Queryable = {query<R>(text: string, params?: unknown[]): Promise<{rows: R[]}>}
 
@@ -147,6 +148,32 @@ export async function readMembershipIds(db: ReadOnlyPg): Promise<Map<string, Rec
 		out.set(key, rec)
 	}
 	return out
+}
+
+/**
+ * Every `user_votes` row, in primary-key order, a page at a time (keyset pagination on the primary key, so each page
+ * is an index range scan and no page is held open across geo-db writes). For the votes backfill.
+ */
+export async function* readUserVoteRows(db: ReadOnlyPg, pageSize = 5000): AsyncGenerator<UserVoteRow> {
+	let after: UserVoteRow | null = null
+	for (;;) {
+		const page: UserVoteRow[] = await db.read<UserVoteRow>(
+			`SELECT user_id::text AS user_id, object_id::text AS object_id, object_type::int AS object_type,
+			        space_id::text AS space_id, vote_kind::int AS vote_kind, vote_type::int AS vote_type,
+			        floor(extract(epoch FROM voted_at))::bigint::text AS voted_at_seconds
+			 FROM user_votes
+			 WHERE $1::boolean OR (user_id, object_id, object_type, space_id, vote_kind) > ($2::uuid, $3::uuid, $4::smallint, $5::uuid, $6::smallint)
+			 ORDER BY user_id, object_id, object_type, space_id, vote_kind
+			 LIMIT $7`,
+			after === null
+				? [true, null, null, null, null, null, pageSize]
+				: [false, after.user_id, after.object_id, after.object_type, after.space_id, after.vote_kind, pageSize],
+			300_000,
+		)
+		yield* page
+		if (page.length < pageSize) return
+		after = page[page.length - 1] as UserVoteRow
+	}
 }
 
 export type EntityTimesRow = {id: string; created_at: string | null; updated_at: string | null}
