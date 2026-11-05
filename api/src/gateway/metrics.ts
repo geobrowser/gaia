@@ -43,6 +43,8 @@ export const UNCOMPARED_REASONS = [
 	"backlink_count",
 	"partial_values",
 	"filter_completeness",
+	/** An `orderBy` page: which entities come first, and where ties fall, is not checkable from cards. */
+	"order_completeness",
 	"sampled_rows",
 	/** PostGraphile has the entity's row but geo-db holds no statement about it in any loaded Space. */
 	"no_statements",
