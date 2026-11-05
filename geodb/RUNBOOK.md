@@ -428,6 +428,15 @@ as a bug in either side. The backfill cannot see it; the stream replays it only 
 (`proposal_versions` yes/no/abstain counts) are derived by the tally worker and are not written. Assumption: the
 event's `space_id` is the proposal's Space; a record is written with that one Space reference.
 
+Tally gate (shadow only, nothing reads it): a geo-db serve that carries the view sink (geo-db c8c04842af or later) and
+runs with `derived_rows_max` above 0 keeps one derived row per (proposal, version) in collection 9
+(`proposal_vote_counts`: key proposal id then big-endian version, value yes/no/abstain as three u64, group the owning
+Space), updated in the same frame as each vote the write path carries. The feeder writes the same records and needs no
+change. It counts only votes written after the sink is live, so run it after the §2c-quater backfill is rewritten or
+re-run on such a serve. Diff it against `proposal_versions` with `geodb-feeder/src/proposalTallyGate.ts <postgres.tsv>
+<scan.tsv>`; the inputs and the findings it classifies are in that file's header. It exits non-zero on a count
+difference or a version geo-db lacks; geo-db-only versions are reported, as for the votes.
+
 Gate before anything reads these records (a shadow read, a diff job, a cutover): diff `proposal_votes` against the
 keyed records, by row count and by a checksum over (proposal, version, voter, vote), and assert that every record has
 exactly one active space reference. Report geo-db-only keys and geo-db-newer values as findings, and make the shadow

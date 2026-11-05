@@ -42,6 +42,8 @@
  * active space references, so the diff against Postgres asserts exactly one per record.
  *
  * Tallies (`proposals.yes_count` and the rest) are derived by kg-indexer's tally worker and are not written here.
+ * geo-db keeps its own tally of these records on its write path (derived collection 9, `proposal_vote_counts`); diff it
+ * with `proposalTallyGate.ts`.
  */
 import {parseFields} from "./hermes.js"
 import {cid} from "./ids.js"
