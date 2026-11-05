@@ -41,6 +41,10 @@ BINDING
 if [ -n "${GEODB_CURSOR_KEYID:-}" ]; then
 	sed -i "/^grant_ttl_s/i principal = $GEODB_CURSOR_KEYID read=- write=- publish=- derived=10" "$RUN/binding.txt"
 fi
+# The notification-indexer's outbox key: the work class (work=*) and nothing else (RUNBOOK section 11).
+if [ -n "${GEODB_OUTBOX_KEYID:-}" ]; then
+	sed -i "/^grant_ttl_s/i principal = $GEODB_OUTBOX_KEYID read=- write=- publish=- work=*" "$RUN/binding.txt"
+fi
 
 # Patch the two ids into the ConfigMap (create it if absent). Succeeds quietly where there is no cluster.
 publish_ids() {

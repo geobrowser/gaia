@@ -21,6 +21,8 @@
 #   geodb-reader-key     key: the api's read-only seed; keyid: its key id
 #   geodb-cursor-key     optional; made in-cluster by geodb-cursor-key-job.yaml (RUNBOOK §10): hermes's key,
 #                        derived collection 10 only
+#   geodb-outbox-key     optional; made in-cluster by geodb-outbox-key-job.yaml (RUNBOOK §11): the
+#                        notification-indexer's key, work class only
 #
 # The geodb image is pinned (deploy-v2 rewrites every :latest in a manifest to the gaia tag, which
 # would point serve at a tag the geodb repository does not have). Only the feeder image is :latest.
@@ -191,6 +193,13 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: geodb-cursor-key
+                  key: keyid
+                  optional: true
+            # Optional: the notification-indexer's outbox key (work class only; RUNBOOK §11). Absent = no such principal.
+            - name: GEODB_OUTBOX_KEYID
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-outbox-key
                   key: keyid
                   optional: true
             - name: GEODB_GRANT_TTL_S

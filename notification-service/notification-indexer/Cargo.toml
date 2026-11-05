@@ -10,6 +10,8 @@ hermes-instrumentation = { path = "../../hermes-instrumentation" }
 hermes-kafka = { path = "../../hermes-kafka" }
 # Canonical knowledge-graph system/content IDs.
 sdk = { path = "../../sdk" }
+# Best-effort shadow of the outbox into geo-db (off unless GEODB_OUTBOX_MIRROR=1).
+geodb-outbox = { path = "../../geodb-outbox" }
 grc-20 = "0.4.1"
 rdkafka = { version = "0.38.0", features = ["cmake-build", "ssl", "zstd"] }
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "net"] }

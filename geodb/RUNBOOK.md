@@ -953,3 +953,39 @@ $K -n gaia rollout restart deploy/hermes-pipeline deploy/hermes-ipfs-cache
 
 Rotate: delete Secret `geodb-cursor-key` and Job `geodb-cursor-key`, rerun step 1, then steps 2 and 3.
 Revoke: delete the Secret and restart serve; the principal disappears from the binding.
+
+## 11. The notification-indexer's outbox key (work class only)
+
+notification-indexer shadows every new `notification_outbox` row into geo-db's work class (plan 10.16;
+flag `GEODB_OUTBOX_MIRROR`, off by default). Postgres stays the source of truth and every reader stays on it;
+the shadow is put-if-absent on the outbox idempotency key, so a Kafka replay answers `duplicate` and
+writes nothing. It is fire-and-forget: after the Postgres commit the indexer only `try_send`s into a bounded
+queue (4096), a background task owns one held `geodb-client work pipe` child, and a failure is logged and
+counted, never raised. Metrics: `geodb_outbox_mirror_{entered,duplicates,errors,dropped,skipped}_total`,
+`geodb_outbox_mirror_queue`. A payload over 16 KiB is skipped, not truncated. The webhook ids shadowed are
+the ones matched at insert; a webhook deleted inside the 30 s cache window is shadowed but has no Postgres
+delivery row.
+
+It uses its own key, `geodb-outbox-key`: the binding gives it `work=*` and nothing else
+(`read=- write=- publish=- work=*`), so a leak can neither touch the graph nor read the outbox back. Needs a
+geodb image with the `work=` binding word and `work pipe` (geo-db commit on `final` after `3fd8883208`; the
+geodb-setup init container in `notification-indexer.yaml` is pinned to the older `27e919248f` and must be
+bumped to it), a supervisor with `GEODB_OUTBOX_KEYID` support, and `work_rows_max` set in `serve.cfg` (the
+class is off without it; size it to the outbox retention, then roll serve).
+
+```bash
+# 1. mint (idempotent: never overwrites an existing Secret)
+GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb/k8s/v2/geodb.yaml | sort -u)
+sed -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" geodb/k8s/v2/geodb-outbox-key-job.yaml | $K apply -f -
+$K -n gaia wait --for=condition=complete job/geodb-outbox-key --timeout=120s
+$K -n gaia logs job/geodb-outbox-key          # prints the public key id
+# 2. set work_rows_max in the geodb-serve-config ConfigMap (geodb.yaml), then restart serve so the
+#    supervisor adds the principal (brief reopen; reads shadow meanwhile)
+$K -n gaia rollout restart statefulset/geodb && $K -n gaia rollout status statefulset/geodb
+# 3. roll notification-indexer so its init container and key mount pick the Secret up
+$K -n gaia rollout restart deploy/notification-indexer
+# 4. only then set GEODB_OUTBOX_MIRROR to "1" in notification-indexer.yaml (a separate change)
+```
+
+Rotate: delete Secret `geodb-outbox-key` and Job `geodb-outbox-key`, rerun step 1, then steps 2 and 3.
+Revoke: delete the Secret and restart serve; the principal disappears from the binding.

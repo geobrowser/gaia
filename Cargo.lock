@@ -2293,6 +2293,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "geodb-outbox"
+version = "0.1.0"
+dependencies = [
+ "metrics",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3652,6 +3662,7 @@ dependencies = [
  "axum 0.7.9",
  "dotenv",
  "futures 0.3.34",
+ "geodb-outbox",
  "grc-20",
  "hermes-instrumentation",
  "hermes-kafka",
