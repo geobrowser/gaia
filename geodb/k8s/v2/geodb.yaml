@@ -74,7 +74,7 @@ data:
     server_rooms_carving = 67108864
     session_requests_in_flight = 8
     request_deadline_ms = 30000
-    spaces = 1024
+    spaces = 2048
 ---
 apiVersion: v1
 kind: Service
