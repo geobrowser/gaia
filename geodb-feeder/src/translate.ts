@@ -156,32 +156,34 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 		intents.push(`.{ .create_entity = "${e}" }`)
 		return true
 	}
-	const cellKey = (pv: GrcPropertyValue) =>
-		`${cid("entity", pv.property)}|${pv.value?.language != null ? hexId(pv.value.language) : ""}`
 	const setValues = (e: string, values: GrcPropertyValue[]) => {
-		// One op names a cell (entity, property, language) once: the later value wins, as in gaia. geo-db's `set`
-		// closes the cell as it stood at the transaction's base, so two sets of one cell in one edit would both
-		// stay active (two rows).
+		// gaia keeps one value per (entity, property, Space), whatever its language (kg-indexer's value id leaves the
+		// language out), so a set replaces the property's value in every language and, within one op, the later value
+		// of a property wins. geo-db's cell is (entity, property, language): its `set` closes only the rows of its own
+		// language, as they stood at the transaction's base. So the later value alone is sent, and a text, the one
+		// value that carries a language, is sent after an `unset` that closes the property's rows in every language;
+		// without it a rename in English kept the name an earlier edit wrote untagged (two active names).
 		const last = new Map<string, number>()
 		values.forEach((pv, i) => {
-			last.set(cellKey(pv), i)
+			last.set(cid("entity", pv.property), i)
 		})
-		const seen = new Set<string>()
 		for (const [i, pv] of values.entries()) {
-			if (last.get(cellKey(pv)) !== i) {
+			const p = cid("entity", pv.property)
+			if (last.get(p) !== i) {
 				bump("duplicate-value-superseded")
 				continue
 			}
-			const p = cid("entity", pv.property)
 			const r = valueZon(pv.value ?? {type: "missing"})
 			if ("skip" in r) {
 				bump(`skip:${r.skip}`)
 				continue
 			}
-			if (seen.has(p)) bump("multi-value-collapsed")
-			seen.add(p)
 			if (r.lang) bump("text-language-dropped")
 			const language = r.tag ? `, .language = "${r.tag}"` : ""
+			if (pv.value?.type === "text") {
+				intents.push(`.{ .unset = .{ .entity = "${e}", .property = "${p}" } }`)
+				bump("text-cell-cleared")
+			}
 			intents.push(`.{ .set = .{ .entity = "${e}", .property = "${p}", .value = ${r.zon}${language} } }`)
 			if (r.tag) bump("text-language-kept")
 			bump("values-set")

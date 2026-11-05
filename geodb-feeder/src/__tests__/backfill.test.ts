@@ -327,7 +327,7 @@ describe("runBackfill", () => {
 			expect(written.split(`.create_entity = "${hex(i)}"`).length - 1).toBe(1)
 			expect(reopened.hasEntity(SPACE, hex(i))).toBe(true)
 		}
-		const nameSets = written.split(`.property = "${cid("entity", PROP.replaceAll("-", ""))}"`).length - 1
+		const nameSets = written.split(`, .property = "${cid("entity", PROP.replaceAll("-", ""))}", .value`).length - 1
 		expect(nameSets).toBe(5)
 	})
 
