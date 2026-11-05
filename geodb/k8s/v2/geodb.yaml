@@ -362,6 +362,12 @@ spec:
               value: "1"
             - name: GEODB_MEMBERSHIP_SHADOW_COMPARE
               value: "1"
+            # Keyed membership records (RUNBOOK §2c-bis): the keyed consumer replaces the legacy one, on its own
+            # group, writing natural-key records into the governance system Space. On since 2026-11-05, after the
+            # keyed membership backfill Job ran with the feeder at 0. Rollback: "0" (the legacy consumer resumes
+            # from its own offsets).
+            - name: GEODB_RECORD_KEYS
+              value: "1"
             # Proposal system entities: the kg-indexer writes one per proposal straight to Postgres, no edit
             # carries it. The feeder consumes PROPOSAL_CREATED on space.governance (its own group, needs
             # consume on that topic) and writes them into Spaces geo-db already holds.
