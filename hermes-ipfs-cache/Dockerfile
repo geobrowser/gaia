@@ -13,6 +13,7 @@ WORKDIR /app
 
 # Copy only required crates (no workspace Cargo.toml - build standalone)
 COPY hermes-ipfs-cache ./hermes-ipfs-cache
+COPY geodb-cursor ./geodb-cursor
 COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-relay ./hermes-relay
 COPY hermes-substream ./hermes-substream
