@@ -247,6 +247,7 @@ const graphqlHandler = createGateway({
 							multiSpace: geoDbCardConfig.multiSpaceReads === true,
 							entitiesBatch: geoDbCardConfig.entitiesBatch === true,
 							orderPick: geoDbCardConfig.orderPick === true,
+							relationsTypeFilter: geoDbCardConfig.relationsTypeFilter === true,
 							...(geoDbCardConfig.everySpaceReads === true && geoDbCardConfig.everySpaceEntities === true
 								? {allGeoSpaces: sharedGeoDb.geoSpaceOf.all, everySpaceBudget}
 								: {}),

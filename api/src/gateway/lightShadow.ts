@@ -93,6 +93,11 @@ type LightList = {
 	 * (`membership_only`).
 	 */
 	projection?: boolean
+	/**
+	 * A relations list filtered by `typeId` (`is` or `in`) that selects no type: the filter's Types, one of which each
+	 * row has. Its rows are checked as "held under one of these Types" (`typeless`), not as exact statements.
+	 */
+	typeFilter?: string[]
 }
 
 const noted = new Set<string>()
@@ -263,12 +268,25 @@ const relationSpec = () => ({
 })
 
 /** One list field of the light selection: its row columns, where they sit, and what it cannot settle. */
+/** The Types a relations list's filter allows (`typeId: {is}` or `{in}`), or null when it names none that way. */
+function typeFilterOf(filter: unknown): string[] | null {
+	const clause = asRecord(asRecord(filter)?.typeId)
+	if (!clause) return null
+	const ids = typeof clause.is === "string" ? [clause.is] : Array.isArray(clause.in) ? clause.in : null
+	if (!ids || ids.length === 0 || ids.length > MAX_TYPE_FILTER) return null
+	if (!ids.every((id) => typeof id === "string" && isValidUuid(id))) return null
+	return [...new Set((ids as string[]).map((id) => normalizeUuid(id)))]
+}
+
+/** Most Types a typeless relations list's filter may name; a wider one is not planned. */
+const MAX_TYPE_FILTER = 20
+
 function planLightList(
 	field: FieldNode,
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
-	options: {projections?: boolean} = {},
+	options: {projections?: boolean; relationsTypeFilter?: boolean} = {},
 ): LightList {
 	const name = field.name.value
 	const kind = name === "values" || name === "valuesList" ? "values" : "relations"
@@ -306,6 +324,17 @@ function planLightList(
 	if (kind === "values") {
 		if (!has("propertyId")) refuse("selection")
 		if (!VALUE_COLUMNS.every(has)) uncompared.add("partial_values")
+	} else if (!has("typeId") && has("toEntityId") && options.relationsTypeFilter && typeFilterOf(filter)) {
+		// The filter says which Types the rows hold; the answer does not say which one each does.
+		uncompared.add("filter_completeness")
+		return {
+			kind,
+			key: responseKeyOf(field),
+			nodesKey,
+			rows: {key: responseKeyOf(field), first, ...rows, nodesKey, hasNext: null},
+			spaceKey: rows.columns.spaceId ?? null,
+			typeFilter: typeFilterOf(filter) as string[],
+		}
 	} else if (!has("typeId") || !has("toEntityId")) {
 		const unfiltered = filter === undefined || filter === null
 		if (
@@ -343,11 +372,16 @@ function planLightEntity(
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
-	options: {everySpace?: boolean; projections?: boolean} = {},
+	options: {everySpace?: boolean; projections?: boolean; relationsTypeFilter?: boolean} = {},
 ): {card: EntityCardPlan; lists: LightList[]; everySpace: boolean} {
 	const lists: LightList[] = []
 	const card = planEntitySelection(set, fragments, resolved, uncompared, (field) => {
-		lists.push(planLightList(field, fragments, resolved, uncompared, {projections: options.projections}))
+		lists.push(
+			planLightList(field, fragments, resolved, uncompared, {
+				projections: options.projections,
+				relationsTypeFilter: options.relationsTypeFilter,
+			}),
+		)
 	})
 	// No lists and nothing to say where the entity lives: an `entity(id)` is read in every loaded Space, which
 	// settles whether it exists (`{ id }`) and its name, description and types from all its Spaces.
@@ -531,7 +565,7 @@ export function analyzeLightEntities(
 	document: DocumentNode,
 	operationName: string | null,
 	variables: Record<string, unknown>,
-	options: {entitiesBatch?: boolean} = {},
+	options: {entitiesBatch?: boolean; relationsTypeFilter?: boolean} = {},
 ): LightAnalysis<LightEntitiesPlan> {
 	try {
 		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
@@ -549,6 +583,7 @@ export function analyzeLightEntities(
 		const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
 			everySpace: spaceIds === null,
 			projections: options.entitiesBatch === true,
+			relationsTypeFilter: options.relationsTypeFilter === true,
 		})
 		if (!card.idKey) return {ok: false, reason: "selection"}
 		uncompared.add("sampled_rows")
@@ -587,6 +622,8 @@ type LightCard = {
 	relationSpaces: (string | null)[]
 	/** The row spaces of the membership-only relation projections (`allRelationsList { spaceId }`). */
 	projectionSpaces: (string | null)[]
+	/** Rows of a `typeId`-filtered relations list that selects no type: the Types the filter allowed, the target, the row space. */
+	typeless: {types: string[]; to: string; space: string | null}[]
 }
 
 const push = (
@@ -613,6 +650,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 	const valueSpaces: (string | null)[] = []
 	const relationSpaces: (string | null)[] = []
 	const projectionSpaces: (string | null)[] = []
+	const typeless: LightCard["typeless"] = []
 	const nested: NonNullable<NonNullable<PostgresCard>["nested"]> = {}
 	for (const list of plan.lists) {
 		if (list.projection) {
@@ -648,9 +686,19 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 						name: readName(node, list.rows.names.property) ?? null,
 					})
 			} else {
-				const typeId = read(node, list.rows, "typeId")
+				const typeId = list.typeFilter ? null : read(node, list.rows, "typeId")
 				const toEntityId = read(node, list.rows, "toEntityId")
-				if (typeof typeId !== "string" || typeof toEntityId !== "string") return null
+				if (typeof toEntityId !== "string") return null
+				if (list.typeFilter) {
+					typeless.push({types: list.typeFilter, to: toEntityId, space})
+					if (list.rows.names.toEntity)
+						push(nested, "toEntity", {
+							id: toEntityId,
+							name: readName(node, list.rows.names.toEntity) ?? null,
+						})
+					continue
+				}
+				if (typeof typeId !== "string") return null
 				relations.push({type_id: typeId, to_entity_id: toEntityId, to_space_id: null})
 				relationSpaces.push(space)
 				if (list.rows.names.type)
@@ -694,7 +742,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 		if (plan.card.types.nameKey) card.typeNames = names
 	}
 	if (Object.keys(nested).length > 0) card.nested = nested
-	return {card, valueSpaces, relationSpaces, projectionSpaces}
+	return {card, valueSpaces, relationSpaces, projectionSpaces, typeless}
 }
 
 /** The spaces to read: the entity's own, else the spaces its rows name. */
@@ -783,6 +831,16 @@ export async function checkLight(
 		skipped += diff.skipped
 		for (const s of diff.onlyPostgres) missing.push({space, prop: s.prop, norm: s.norm})
 	}
+	// A typeless row (filtered by `typeId`, no type selected) is held when its target sits under one of the filter's Types.
+	const untyped = light.typeless.filter((row) => {
+		const pool: GeoCardRow[] = row.space ? (read.bySpace.get(row.space) ?? []) : read.rows
+		const types = new Set(row.types.map((id) => conformingId("entity", id)))
+		// geo-db never holds Postgres-derived relations, so a filter of derived Types only is not judged.
+		if ([...types].every((id) => DERIVED_PROPERTIES.has(id))) return false
+		const to = conformingId("entity", row.to)
+		return !pool.some((held) => types.has(held.prop) && held.raw === to)
+	})
+	for (const row of untyped) missing.push({space: row.space, prop: row.types.join("|"), norm: row.to})
 	const derived = compareDerived(plan.card, light.card, read.rows, read.scope)
 	const wrong = Object.entries(derived.checks)
 		.filter(([, result]) => result === "mismatch")

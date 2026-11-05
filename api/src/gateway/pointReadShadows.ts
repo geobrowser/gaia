@@ -625,6 +625,7 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 					field === ENTITIES_FIELD
 						? analyzeLightEntities(document, classification.operationName, params.variables, {
 								entitiesBatch: deps.entitiesBatch === true,
+								relationsTypeFilter: deps.relationsTypeFilter === true,
 							})
 						: null
 				if (light?.ok) {

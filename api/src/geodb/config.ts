@@ -61,6 +61,12 @@ export type GeoDbCardConfig = {
 	 */
 	orderPick?: boolean
 	/**
+	 * Let the light `entities` shadow compare a relations list that is filtered by `typeId` and does not select the type
+	 * (`relations(filter: {typeId: {in}}) { nodes { toEntity { id name } } }`): each row must be held under one of the
+	 * filter's Types. Off by default. GEODB_RELATIONS_TYPE_FILTER_SHADOW=on.
+	 */
+	relationsTypeFilter?: boolean
+	/**
 	 * Lifetime of the capability token a worker's handshake gets, in seconds: geo-db's `grant_ttl_s`
 	 * (GEODB_GRANT_TTL_S on the serve, 300 by default). A worker is replaced before its token expires, so no
 	 * read finds the token dead. Absent means the default.
@@ -95,6 +101,7 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		backlinkReads: env.GEODB_BACKLINK_READS?.trim().toLowerCase() === "on",
 		entitiesBatch: env.GEODB_ENTITIES_BATCH_SHADOW?.trim().toLowerCase() === "on",
 		orderPick: env.GEODB_ORDER_PICK_SHADOW?.trim().toLowerCase() === "on",
+		relationsTypeFilter: env.GEODB_RELATIONS_TYPE_FILTER_SHADOW?.trim().toLowerCase() === "on",
 		poolSize: Number.isFinite(pool) && pool > 0 ? Math.min(pool, MAX_POOL_SIZE) : DEFAULT_POOL_SIZE,
 		grantTtlS: Number.isFinite(grantTtl) && grantTtl > 0 ? grantTtl : DEFAULT_GRANT_TTL_S,
 	}
