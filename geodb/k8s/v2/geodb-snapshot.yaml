@@ -1,0 +1,170 @@
+# Scheduled VolumeSnapshots of the geo-db store (PVC data-geodb-0) and the feeder's state (PVC geodb-feeder-state).
+# Snapshots are the only recovery source for geo-db: Kafka keeps 7 days of edits, and the backfill Jobs write
+# straight into the store. See geodb/RUNBOOK.md §9 for why, how to take one by hand and how to restore.
+#
+# Order matters and is the whole consistency argument: the feeder-state snapshot is taken first and must be
+# readyToUse before the data snapshot is created. The state therefore never runs ahead of the data, and a restore
+# replays edits the data already holds (idempotent) rather than skipping ones it lacks.
+#
+# Retention: the newest KEEP pairs carrying the labels below. Snapshots without them (the hand-made pretimes-*,
+# posttimes-*, premigrate-* ...) are never selected, so never deleted.
+#
+# Shipped with deploy-v2 service geodb-feeder (it is listed with geodb.yaml). Applying this file creates the
+# CronJob; nothing runs until its first schedule, or until:
+#   kubectl -n gaia create job --from=cronjob/geodb-snapshot geodb-snapshot-first
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: geodb-snapshot
+  namespace: gaia
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: geodb-snapshot
+  namespace: gaia
+rules:
+  # Create, wait for and prune VolumeSnapshots. Nothing else: no scale on the feeder, no secrets, no pods.
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # Preflight: both PVCs exist and are Bound.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    resourceNames: ["data-geodb-0", "geodb-feeder-state"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: geodb-snapshot
+  namespace: gaia
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: geodb-snapshot
+subjects:
+  - kind: ServiceAccount
+    name: geodb-snapshot
+    namespace: gaia
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: geodb-snapshot
+  namespace: gaia
+  labels:
+    app: geodb-snapshot
+spec:
+  schedule: "17 9 * * *" # 09:17 UTC daily (01:17 PST), off the hour marks the other CronJobs use
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        app: geodb-snapshot
+    spec:
+      backoffLimit: 0 # a failed run is read from its logs; the next day's run is the retry
+      activeDeadlineSeconds: 1500 # the script's own waits total at most 2 x 600 s
+      ttlSecondsAfterFinished: 604800 # a failed Job stays a week so kube_job_failed keeps firing until looked at
+      template:
+        metadata:
+          labels:
+            app: geodb-snapshot
+        spec:
+          serviceAccountName: geodb-snapshot
+          restartPolicy: Never
+          enableServiceLinks: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: snapshot
+              # kubectl + bash. Docker Hub image, pinned to the cluster's server version (1.36.5, same minor).
+              image: alpine/k8s:1.36.5
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: KEEP
+                  value: "7" # pairs kept; the newest KEEP stamps survive a successful run
+                - name: READY_TIMEOUT
+                  value: "600s" # per snapshot (measured: 4 s each, so this is 150x headroom)
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+              command: ["bash", "-ceu"]
+              args:
+                - |
+                  set -o pipefail
+                  SEL="app=geodb-snapshot,snapshot-kind=scheduled"
+                  STAMP="$(date -u +%Y%m%dt%H%M%Sz)"
+                  STATE_PVC=geodb-feeder-state
+                  DATA_PVC=data-geodb-0
+
+                  snap() { # <pvc>: create the VolumeSnapshot, labelled so retention can find it and nothing else
+                    cat <<YAML | kubectl create -f -
+                  apiVersion: snapshot.storage.k8s.io/v1
+                  kind: VolumeSnapshot
+                  metadata:
+                    name: sched-${STAMP}-$1
+                    namespace: ${NAMESPACE}
+                    labels:
+                      app: geodb-snapshot
+                      snapshot-kind: scheduled
+                      snapshot-stamp: "${STAMP}"
+                      snapshot-pvc: $1
+                  spec:
+                    volumeSnapshotClassName: do-block-storage
+                    source:
+                      persistentVolumeClaimName: $1
+                  YAML
+                  }
+                  ready() { # <pvc>: block until readyToUse, or fail
+                    kubectl wait volumesnapshot/sched-${STAMP}-$1 --for=jsonpath='{.status.readyToUse}'=true --timeout="${READY_TIMEOUT}"
+                  }
+                  CLEAN=0
+                  cleanup_this_run() { # EXIT trap: any failure, timeout or SIGTERM before the pair is complete lands here
+                    [ "${CLEAN}" = 1 ] && return 0
+                    echo "FAILED: removing this run's snapshots (stamp ${STAMP}); older ones are untouched" >&2
+                    kubectl delete volumesnapshot -l "${SEL},snapshot-stamp=${STAMP}" --ignore-not-found --wait=false || true
+                  }
+                  trap cleanup_this_run EXIT
+
+                  for pvc in "${STATE_PVC}" "${DATA_PVC}"; do
+                    phase="$(kubectl get pvc "${pvc}" -o jsonpath='{.status.phase}')"
+                    [ "${phase}" = Bound ] || { echo "pvc ${pvc} is ${phase}, not Bound" >&2; false; }
+                  done
+
+                  # 1. feeder state first, and wait for it, so its offsets are older than anything in the data snapshot.
+                  snap "${STATE_PVC}"; ready "${STATE_PVC}"
+                  # 2. then the store.
+                  snap "${DATA_PVC}"; ready "${DATA_PVC}"
+                  CLEAN=1
+                  echo "OK: pair ${STAMP} ready"
+
+                  # 3. retention, only after the new pair is ready: keep the newest KEEP stamps, delete the rest.
+                  # A failed run never reaches here, so it never costs a good pair.
+                  stamps="$(kubectl get volumesnapshot -l "${SEL}" -o jsonpath='{range .items[*]}{.metadata.labels.snapshot-stamp}{"\n"}{end}' | sort -u)"
+                  old="$(printf '%s\n' "${stamps}" | grep -v '^$' | awk -v k="${KEEP}" '{a[NR]=$0} END{for(i=1;i<=NR-k;i++)print a[i]}')"
+                  for s in ${old}; do
+                    echo "pruning pair ${s}"
+                    kubectl delete volumesnapshot -l "${SEL},snapshot-stamp=${s}" --wait=false
+                  done
+                  kubectl get volumesnapshot -l "${SEL}" --sort-by=.metadata.creationTimestamp
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi

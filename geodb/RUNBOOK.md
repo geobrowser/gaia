@@ -629,3 +629,73 @@ EOF
 #   geodb-client --key /etc/geodb/reader-key/key --binding /tmp/binding.txt pipe < reads.tsv > out
 # every request answers `+<n>` and its rows; `-<n>` is a refusal.
 ```
+
+## 9. Snapshots: the only recovery source
+
+geo-db has no replica, and a rebuild is not a recovery path. `testnet.knowledge.edits` keeps 7 days
+(`retention.ms=604800000`), so a rebuild needs the Postgres backfills, takes about 5 h, and comes out with different
+statement ids (recovery timing study, 2026-11-05). A restore from a snapshot reached serving in about 20 s and caught
+up in under a minute. Two rules follow:
+
+1. A snapshot pair is never more than about 6 days old (inside Kafka's 7 days).
+2. **Take a pair after every backfill** (§2b, §2c, §2e, §2b-bis, §2b-ter) and after anything else that writes
+   without going through Kafka. Those writes live only in the store and in snapshots; a snapshot from before the
+   backfill restores without them (the 2026-11-05 `pretimes-*` clone lacked createdAt/updatedAt on every card).
+
+### 9a. The scheduled pair (geodb/k8s/v2/geodb-snapshot.yaml)
+
+CronJob `geodb-snapshot`, daily at 09:17 UTC. Each run makes one pair, `sched-<stamp>-geodb-feeder-state` then
+`sched-<stamp>-data-geodb-0`, labelled `app=geodb-snapshot,snapshot-kind=scheduled,snapshot-stamp=<stamp>`. It waits
+for each to be `readyToUse` (10 min timeout each) and exits non-zero otherwise, removing its own partial pair. After a
+good run it deletes all but the newest 7 stamps (7 days of history). Retention selects by those labels only: the
+hand-made `pre*`/`post*` snapshots are never touched.
+
+Order is the consistency rule. The feeder writes `offsets.json` only after serve has applied the message, so the
+state volume at time T1 is always behind the data at T1. Snapshotting the state first (and waiting for it) and the
+data after means the saved offsets are never ahead of the saved data. A restore then replays a few edits the data
+already holds, which the feeder treats as idempotent (§7), instead of skipping edits the data lacks. Do not reverse
+the order and do not restore one volume of a pair without the other.
+
+Alerts (monitoring/k8s/v2/geodb-snapshot-alerts.yaml): `GeoDbSnapshotJobFailed` (a run failed; the Job stays a
+week), `GeoDbSnapshotStale` (no success for 36 h, or the CronJob is absent), `GeoDbSnapshotTooOld` (5 days, critical).
+
+```bash
+K="kubectl --context do-nyc2-geo-testnet-k8s -n gaia"
+$K get cronjob geodb-snapshot
+$K get volumesnapshot -l app=geodb-snapshot,snapshot-kind=scheduled --sort-by=.metadata.creationTimestamp
+$K logs job/<failed job>
+```
+
+### 9b. A manual snapshot (before a risky change, and after every backfill)
+
+Same order as the CronJob: state, wait, data, wait. Name it yourself and leave off the `snapshot-kind=scheduled`
+label, so the CronJob's retention never deletes it. Delete it by hand when it has done its job.
+
+```bash
+N=postbackfill-$(date -u +%m%d%H%M)        # any prefix that is not sched-
+for pvc in geodb-feeder-state data-geodb-0; do
+  cat <<EOF | $K apply -f -
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata: {name: $N-$pvc, namespace: gaia}
+spec: {volumeSnapshotClassName: do-block-storage, source: {persistentVolumeClaimName: $pvc}}
+EOF
+  $K wait volumesnapshot/$N-$pvc --for=jsonpath='{.status.readyToUse}'=true --timeout=600s
+done
+```
+
+To run the scheduled kind now instead (it will be pruned like any other): `$K create job --from=cronjob/geodb-snapshot
+geodb-snapshot-$(date -u +%m%d%H%M)`.
+
+A backfill Job holds the feeder at 0 replicas, so the state volume is quiet and the pair is consistent without any
+other step. After step 5 of §2b (backfill finished, feeder still at 0) take the pair, then start the feeder.
+
+### 9c. Restoring
+
+Restore both volumes of one pair together, as in §8b ("After the feeder has applied edits"): scale the feeder and
+`statefulset/geodb` to 0, delete PVCs `data-geodb-0` and `geodb-feeder-state`, create each again with the same name,
+size (50Gi / 5Gi) and class and `dataSource: {apiGroup: snapshot.storage.k8s.io, kind: VolumeSnapshot, name:
+<pair>-<pvc>}`, scale both back up. The api binding needs no change (node and sealer ids are in the store). Before
+deleting anything, check the pair's age against Kafka: the feeder resumes at the saved offset, so it must still be
+inside the 7-day retention (compare the pair's `offsets.json` partition offsets with the topic's low watermark). A
+snapshot older than the last backfill restores without that backfill's writes; run it again (§2b).
