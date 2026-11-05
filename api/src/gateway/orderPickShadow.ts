@@ -79,24 +79,41 @@ export async function checkOrderedPage(
 		return {result: "failed"}
 	}
 	if (spaces.length === 0) return {result: "unsupported", reason: "no_space"}
-	if (spaces.length > MAX_EVERY_SPACES) return {result: "unsupported", reason: "many_spaces"}
-	if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(1))
-		return {result: "unsupported", reason: "throttled"}
 	const {order, first} = shape
 	const field = order.property === "createdAt" ? CREATED_AT_PROPERTY : UPDATED_AT_PROPERTY
 	const pick = order.property === "createdAt" ? "least" : "greatest"
+	const lines = chunksOf(spaces)
+	if (lines.length > 1) {
+		// More loaded Spaces than one line can name: read them in lines and merge, when the merge is exact.
+		if (deps.everySpaceChunks !== true || !mergeIsExact(order.direction, pick))
+			return {result: "unsupported", reason: "many_spaces"}
+	}
+	if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(lines.length))
+		return {result: "unsupported", reason: "throttled"}
 	const started = performance.now()
-	let rows: Awaited<ReturnType<typeof readEntitiesPage>>
+	let entries: [string, bigint | null][]
 	try {
-		// One more than the page, so the entity just past the cut shows whether the cut splits a tie.
-		rows = await readEntitiesPage({
-			geoSpaceIds: spaces,
-			typeId: conformingId("entity", shape.typeId),
-			field,
-			direction: order.direction,
-			pick,
-			first: first + 1,
-		})
+		const perLine: [string, bigint | null][][] = []
+		for (const line of lines)
+			perLine.push(
+				keysOf(
+					// One more than the page, so the entity just past the cut shows whether the cut splits a tie.
+					await readEntitiesPage({
+						geoSpaceIds: line,
+						typeId: conformingId("entity", shape.typeId),
+						field,
+						direction: order.direction,
+						pick,
+						first: first + 1,
+					}),
+					field,
+					pick,
+				),
+			)
+		entries =
+			perLine.length === 1
+				? (perLine[0] as [string, bigint | null][])
+				: mergePages(perLine, order.direction, pick)
 		observeGeoDbRead((performance.now() - started) / 1000, "ok")
 	} catch (error) {
 		observeGeoDbRead((performance.now() - started) / 1000, "error")
@@ -106,17 +123,6 @@ export async function checkOrderedPage(
 		})
 		return {result: "failed"}
 	}
-	// The page's entities in order, each with its key: the pick's extreme of its rows of the order's property.
-	const keys = new Map<string, bigint | null>()
-	for (const row of rows) {
-		if (!keys.has(row.entity)) keys.set(row.entity, null)
-		if (row.prop !== field) continue
-		const nanos = instantNanos(row.raw)
-		if (nanos === null) continue
-		const held = keys.get(row.entity) ?? null
-		keys.set(row.entity, held === null || (pick === "least" ? nanos < held : nanos > held) ? nanos : held)
-	}
-	const entries = [...keys]
 	const geoPage = entries.slice(0, first)
 	const geoIds = geoPage.map(([id]) => id)
 	const wanted = pgIds.map((id) => conformingId("entity", id))
@@ -149,6 +155,65 @@ export async function checkOrderedPage(
 			...(same ? {} : {first: firstDifference(wanted, geoIds, asSet)}),
 		},
 	}
+}
+
+/** The page's entities in the order geo-db sent them, each with its key: the pick's extreme of its rows of the order's property. */
+function keysOf(
+	rows: {entity: string; prop: string; raw: string}[],
+	field: string,
+	pick: "least" | "greatest",
+): [string, bigint | null][] {
+	const keys = new Map<string, bigint | null>()
+	for (const row of rows) {
+		if (!keys.has(row.entity)) keys.set(row.entity, null)
+		if (row.prop !== field) continue
+		const nanos = instantNanos(row.raw)
+		if (nanos === null) continue
+		const held = keys.get(row.entity) ?? null
+		keys.set(row.entity, held === null || (pick === "least" ? nanos < held : nanos > held) ? nanos : held)
+	}
+	return [...keys]
+}
+
+/** The Spaces split into lines geo-db accepts. */
+export function chunksOf(spaces: string[]): string[][] {
+	const lines: string[][] = []
+	for (let at = 0; at < spaces.length; at += MAX_EVERY_SPACES) lines.push(spaces.slice(at, at + MAX_EVERY_SPACES))
+	return lines
+}
+
+/**
+ * Whether the top of each line's page, merged by key, is the top of the whole page. An entity's key is the pick's
+ * extreme (`least` or `greatest`) over the lines; a line that holds it lowers (least) or raises (greatest) it.
+ * When the direction sorts that extreme first (asc + least, desc + greatest) an entity in the global top-k has its
+ * global key in some line, where nothing beats it that does not also beat it globally, so it is in that line's
+ * top-k and the merge is exact. The other two (desc + least, which is `createdAt DESC`, and asc + greatest) are
+ * not: an entity can top one line and be pulled far down by another, so entities outside every line's top-k can
+ * enter the page and the merge would be wrong. Those stay `many_spaces`.
+ */
+export function mergeIsExact(direction: "asc" | "desc", pick: "least" | "greatest"): boolean {
+	return (direction === "asc" && pick === "least") || (direction === "desc" && pick === "greatest")
+}
+
+/** Merges the lines' pages by key (nulls last, equal keys by id); the key is the pick's extreme over the lines. */
+export function mergePages(
+	pages: [string, bigint | null][][],
+	direction: "asc" | "desc",
+	pick: "least" | "greatest",
+): [string, bigint | null][] {
+	const merged = new Map<string, bigint | null>()
+	for (const page of pages)
+		for (const [id, key] of page) {
+			const held = merged.get(id)
+			if (held === undefined || held === null) merged.set(id, key)
+			else if (key !== null && (pick === "least" ? key < held : key > held)) merged.set(id, key)
+		}
+	const sign = direction === "asc" ? 1 : -1
+	return [...merged].sort(([ia, a], [ib, b]) => {
+		if (a === null || b === null) return a === b ? (ia < ib ? -1 : 1) : a === null ? 1 : -1
+		if (a !== b) return (a < b ? -1 : 1) * sign
+		return ia < ib ? -1 : 1
+	})
 }
 
 function firstDifference(wanted: string[], got: string[], asSet: boolean): Record<string, unknown> {

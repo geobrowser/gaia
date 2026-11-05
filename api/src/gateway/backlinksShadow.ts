@@ -227,8 +227,9 @@ export async function runBacklinks(
 			return {result: "failed"}
 		}
 		if (geoSpaces.length === 0) return {result: "unsupported", reason: "no_space"}
-		if (geoSpaces.length > MAX_LINE_SPACES) return {result: "unsupported", reason: "many_spaces"}
-		if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(1))
+		if (geoSpaces.length > MAX_LINE_SPACES && deps.everySpaceChunks !== true)
+			return {result: "unsupported", reason: "many_spaces"}
+		if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(Math.ceil(geoSpaces.length / MAX_LINE_SPACES)))
 			return {result: "unsupported", reason: "throttled"}
 	}
 
@@ -250,9 +251,18 @@ export async function runBacklinks(
 	// Without the rows' Spaces, the sets are compared by referrer alone.
 	const bySpace = oneSpace !== null || plan.spaceKey !== null
 
-	let geoRows: GeoBacklinkRow[]
+	let geoRows: GeoBacklinkRow[] = []
+	let geoTruncated = false
 	try {
-		geoRows = await readBacklinks(deps, plan.entityId, geoSpaces)
+		// More Spaces than one line names are read line by line; a backlink lives in one Space, so the union is exact.
+		for (let at = 0; at < geoSpaces.length; at += MAX_LINE_SPACES) {
+			const line = geoSpaces.slice(at, at + MAX_LINE_SPACES)
+			const got = await readBacklinks(deps, plan.entityId, line)
+			if (got.length >= BACKLINKS_LIMIT) geoTruncated = true
+			// A one-Space line prints bare rows, so a lone last Space names itself.
+			const only = line.length === 1 && geoSpaces.length > 1 ? line[0] : undefined
+			for (const row of got) geoRows.push(only && row.space === undefined ? {...row, space: only} : row)
+		}
 	} catch (error) {
 		const reason = error instanceof GeoDbError ? error.reason : "error"
 		if (reason === "unmapped_space") return {result: "unsupported", reason: "unmapped_space"}
@@ -264,7 +274,6 @@ export async function runBacklinks(
 		})
 		return {result: "failed"}
 	}
-	const geoTruncated = geoRows.length >= BACKLINKS_LIMIT
 	const geoPairs = new Set<string>()
 	const geoFrom = new Set<string>()
 	for (const row of geoRows) {
