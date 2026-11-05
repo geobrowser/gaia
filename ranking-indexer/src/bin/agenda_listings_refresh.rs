@@ -13,15 +13,21 @@
 //! the decaying boosts to the new day. It is one function call and so one transaction: readers keep
 //! the previous rows and scores until it commits.
 //!
-//! Usage: `DATABASE_URL=... cargo run --bin agenda_listings_refresh`
+//! Then, once the refresh has committed, the listings that changed go to the analytics warehouse
+//! (GEO-3556, `ranking_indexer::agenda_listings_export`), so it reads the set the refresh just wrote.
+//! A job without ClickHouse credentials refreshes and skips the send. A refused send fails the run
+//! after the refresh has committed; the next run sends it again.
+//!
+//! Usage: `DATABASE_URL=... [CLICKHOUSE_URL=... CLICKHOUSE_USER=... CLICKHOUSE_PASSWORD=...] cargo run --bin agenda_listings_refresh`
 
 use std::env;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sqlx::postgres::PgPoolOptions;
-use tracing::info;
+use tracing::{info, warn};
 
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::{agenda_listings_export, clickhouse};
 
 #[tokio::main]
 async fn main() -> Result<(), IndexerError> {
@@ -73,6 +79,19 @@ async fn main() -> Result<(), IndexerError> {
         topic_boosted,
         elapsed_ms = started.elapsed().as_millis() as u64,
         "agenda listings refreshed"
+    );
+
+    if !clickhouse::configured() {
+        warn!("no ClickHouse credentials: agenda listings not sent to the warehouse");
+        return Ok(());
+    }
+    let started = Instant::now();
+    let sent = agenda_listings_export::export(&pool, Duration::from_secs(60)).await?;
+    info!(
+        added = sent.added,
+        removed = sent.removed,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "agenda listings sent to the warehouse"
     );
     Ok(())
 }
