@@ -252,12 +252,16 @@ The topic does not hold full history, so load the current state first. Job `geod
 (`geodb/k8s/v2/geodb-membership-backfill-job.yaml`, `node dist/membership-backfill-main.js`) reads every row of
 `members` and `editors` (read only) and applies each as a grant through the dual-write path, recording it in the
 membership journal. Rows the journal holds are no-ops, so a rerun resumes. It never retracts. Like §2b it runs
-with the feeder scaled to 0 and refuses to start while the feeder's or the membership consumer group has members.
+with the feeder scaled to 0 and refuses to start while any feeder consumer group has members. Its init container
+takes the geodb image tag from `geodb.yaml` at apply time (the `GEODB_TAG` placeholder), so its geodb-client matches
+the running serve; with `GEODB_RECORD_KEYS` that serve must be 9d97069a78 or later (§2c-bis).
 
 ```bash
 $K scale deployment/geodb-feeder --replicas=0
 $K wait --for=delete pod -l app=geodb-feeder --timeout=120s
-sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" geodb/k8s/v2/geodb-membership-backfill-job.yaml | $K apply -f -
+GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb/k8s/v2/geodb.yaml | sort -u)
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" \
+  geodb/k8s/v2/geodb-membership-backfill-job.yaml | $K apply -f -
 $K logs -f job/geodb-membership-backfill   # "membership backfill done", deadLetter 0
 $K delete job geodb-membership-backfill
 # then GEODB_MEMBERSHIP_DUAL_WRITE "1" in the feeder manifest, scale to 1; once lag is ~0, SHADOW_COMPARE "1".
@@ -314,6 +318,84 @@ system map's publishes apart from the gaia map's.
 
 Rollback: unset `GEODB_RECORD_KEYS`. The legacy consumer resumes from its own offsets; the keyed rows stay in
 the governance Space, unread.
+
+### 2c-ter. Keyed user votes (GEODB_VOTES)
+
+`GEODB_VOTES` (default off; it takes effect only with `GEODB_RECORD_KEYS`) writes gaia's `user_votes` as natural-key
+records in the `votes` system Space (`geodb-feeder/src/votesKeyed.ts`). The feeder consumes `<env>.curation.votes`
+(HermesVoteCast) on its own group, `geodb-feeder-votes-keyed-v1-<env>`; vote-indexer's group is untouched, and it
+still writes Postgres, which the api still reads. One record per `user_votes` primary key:
+
+- record entity `recordEntityId(userVote kind, [user, object, object_type, space, vote_kind])`, over the raw gaia ids;
+  `vote_kind` is an i16 and is keyed as its u16 bit pattern, so a negative kind (vote-indexer stores `kind as i16`)
+  gets its own record like any other;
+- key columns (voter, object, Space as references; object type and kind as numbers), each `add` +
+  `set_active(true)` under `recordStatementId(userVote kind, [record, column, target])`. The object references
+  `cid("entity", id)` for an entity and `cid("statement", id)` for a relation (geo-db holds a relation as a statement).
+  UNCONFIRMED: neither hermes-pipeline nor vote-indexer says whether a relation vote's `object_id` is the relation's
+  own id (assumed) or its reified entity id, and no client sends relation votes yet; settle it before anything reads
+  that column (the record key uses the raw id either way);
+- mutable columns `direction` (0 up, 1 down, 2 removed) and `voted_at` (instant, whole seconds) as `put`, under
+  `recordStatementId(userVote kind, [record, column, value])`: a put closes the cell's other values, so a changed
+  vote replaces the old one, and a replay of the current value is a no-op. A removal keeps the record with
+  direction 2, as vote-indexer keeps the row. Column property ids are pinned in `recordKinds.ts` (`RECORD_COLUMNS`).
+
+The feeder rejects (dead-letters, never writes) exactly what vote-indexer rejects: no metadata, an id that is not
+16 bytes, an object type other than entity/relation, an unknown direction, Interested + Down. An unknown kind keeps
+its raw value (narrowed to i16) as its own key. Like vote-indexer it decodes every message on the topic, whatever its
+`event-type` header.
+
+A permanent refusal of a single intent inside a vote (geo-db refusing one statement for good) is dead-lettered on its
+own (`GeoDbFeederDeadLetters`) and the vote's other intents are written, so that record is left partial, for
+example missing a key column. Replaying the same event is refused again, so it does not repair itself: fix the
+cause, then rerun the votes backfill (step 4, with `BACKFILL_KEYED_RESET_CONSUMER: "1"` once the consumer has run).
+The same holds for keyed membership (§2c-bis).
+
+Activation order, each step only after the one before it is live:
+
+1. geo-db serve and the init container on 9d97069a78 or later (`put`; §1), as for §2c-bis. The backfill Job's init
+   container takes `geodb.yaml`'s tag at apply time, so it is only as new as that pin: today's `03f0917654` predates
+   `put`, and the Job would dead-letter every row.
+2. A feeder image that carries this path (inert while either flag is off).
+3. Kafka ACL (not yet checked; reading the user's ACLs means reading its credentials, so whoever holds them does it):
+   the feeder's Kafka user needs consume on `<env>.curation.votes` and on the group
+   `geodb-feeder-votes-keyed-v1-<env>`, and the backfill Job needs describe on every feeder group for its
+   empty-group check. Without them the votes consumer fails to start: the edits consumer is unaffected, the error is
+   logged, and `geodb_feeder_consumer_start_failed{consumer="votes"}` goes to 1 (`GeoDbFeederConsumerStartFailed`).
+4. Required: the votes backfill Job (`geodb/k8s/v2/geodb-votes-backfill-job.yaml`), with the feeder scaled to 0. It
+   reads `user_votes` READ ONLY, a page of 5000 at a time in primary-key order, and writes every row as its record
+   (rerunnable: the same ids again). `testnet.curation.votes` keeps 7 days (`retention_ms` 604800000, cleanup
+   `delete`), so every older vote comes from this snapshot. Run it while the votes consumer has never run: the Job
+   refuses once `/data/feeder/votes-keyed/offsets.json` exists, because a snapshot row read after the consumer has
+   applied a later vote would put the older value back with nothing to replay the newer one. To run it later anyway,
+   add `BACKFILL_KEYED_RESET_CONSUMER: "1"`: the Job deletes those offsets and the consumer replays the retained topic
+   from earliest over the snapshot, in order (the topic is keyed by object id, and every key includes it), so every
+   key the window touched ends at its last event. A row Postgres holds that no event could have written is
+   dead-lettered and fails the Job at the end; a ResourceExhausted founding the votes Space fails it at once.
+
+   ```bash
+   $K scale deploy/geodb-feeder --replicas=0
+   GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb/k8s/v2/geodb.yaml | sort -u)
+   sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" \
+     geodb/k8s/v2/geodb-votes-backfill-job.yaml | $K apply -f -
+   $K logs -f job/geodb-votes-backfill
+   ```
+
+5. `GEODB_RECORD_KEYS: "1"` and `GEODB_VOTES: "1"` in the feeder manifest, then scale it back to 1. The consumer
+   resets its new group to earliest and replays the retained week over the snapshot. Turning on `GEODB_RECORD_KEYS`
+   for membership alone does not start it.
+
+The first vote founds the `votes` Space (nonce `744a1a2a52d0432199372b395a4057b7`, published under
+`system-spaces.json` as for governance in §2c-bis). A ResourceExhausted founding it, or a failing message of any
+kind, is retried every 5 s without committing: the partition stalls and `GeoDbFeederVotesStalled` fires after 30
+min. Metrics: `geodb_feeder_vote_events_total{outcome}`, `geodb_feeder_votes_consumer_lag`,
+`geodb_feeder_votes_consumer_running`, `geodb_feeder_vote_freshness_seconds`.
+
+Not migrated by this path (gaps): the `votes` log (append-only history; geo-db's statement history of each record
+carries the changes from the switch on), `votes_count`, the curation score values and ranking scores (all derived
+from `user_votes`), and `proposal_votes` (kg-indexer, from `space.governance`; its `proposalVote` kind is pinned).
+
+Rollback: unset `GEODB_VOTES`. The records stay in the votes Space, unread; nothing reads them yet.
 
 ### 2d. Raising the Space cap
 
@@ -464,6 +546,8 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 | `GeoDbFeederLagHigh` | more than 5000 behind for 30m | expected once on first catch-up; otherwise throughput or a stall |
 | `GeoDbFeederDeadLetters` | an edit or intent was skipped | `errors.jsonl` on the volume (see above) |
 | `GeoDbFeederMembershipStalled` | `space.membership` lag above 0 for 30m | the repeating error in the feeder log; with `GEODB_RECORD_KEYS`, an `exhausted` founding of the governance Space (§2c-bis) |
+| `GeoDbFeederVotesStalled` | `curation.votes` lag above 0 and nothing applied for 30m | the repeating error in the feeder log; an `exhausted` founding of the votes Space (§2c-ter) |
+| `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
 
 ## 7. Operating notes
 

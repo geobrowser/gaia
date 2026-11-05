@@ -103,7 +103,7 @@ export const keyedMembershipEnabled = (c: {recordKeys: boolean; membership: {dua
 export const keyedOffsetsDir = (dataDir: string) => `${dataDir}/feeder/membership-keyed`
 
 /**
- * Gate for the keyed backfill. The snapshot writes grants only, so once the keyed consumer has applied events a
+ * Gate for a keyed backfill (membership here; votesKeyed.ts uses it for votes). The membership snapshot writes grants only, so once the keyed consumer has applied events a
  * snapshot taken now could re-grant a role the stream already revoked, and the consumer would never replay that
  * revoke. So: refuse while `offsets.json` exists, unless `resetConsumer`, which deletes it. With no offsets the
  * consumer resets its group to earliest and replays the retained topic in order, so every key the window touched
@@ -115,7 +115,7 @@ export function keyedBackfillGate(offsetsDir: string, resetConsumer: boolean): "
 	if (!existsSync(path)) return "fresh"
 	if (!resetConsumer) {
 		throw new Error(
-			`${path} exists: the keyed consumer has run, and a grant-only snapshot now could undo a revoke it applied. ` +
+			`${path} exists: the keyed consumer has run, and a snapshot now could undo a later event it applied (a revoke, a changed vote). ` +
 				"Set BACKFILL_KEYED_RESET_CONSUMER=1 to delete it so the consumer replays the retained topic after this backfill.",
 		)
 	}

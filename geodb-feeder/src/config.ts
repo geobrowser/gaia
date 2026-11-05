@@ -17,6 +17,8 @@ export type Config = {
 	membership: MembershipConfig
 	proposals: {enabled: boolean; topic: string; groupId: string}
 	spaceEntities: {enabled: boolean; topic: string; groupId: string}
+	/** GEODB_VOTES (with GEODB_RECORD_KEYS): keyed user votes from `curation.votes` (votesKeyed.ts). */
+	votes: {enabled: boolean; topic: string; groupId: string}
 	/**
 	 * GEODB_RELATION_POSITIONS: write a relation's position into geo-db (`.position` on its `add`). Default off: a
 	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it.
@@ -54,6 +56,19 @@ export type MembershipConfig = {
 	/** Key the comparison reads geo-db with. */
 	readerKeyPath: string
 }
+
+/**
+ * Every Kafka consumer group the feeder can run, whatever its flags. The backfill Jobs refuse while any has members:
+ * they share the feeder's state volume and system-space record. Add a new consumer's group here.
+ */
+export const feederGroupIds = (c: Config): string[] => [
+	c.kafka.groupId,
+	c.membership.groupId,
+	c.membership.keyedGroupId,
+	c.proposals.groupId,
+	c.spaceEntities.groupId,
+	c.votes.groupId,
+]
 
 export const flag = (v: string | undefined): boolean => v === "1" || v?.toLowerCase() === "true"
 
@@ -107,6 +122,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			enabled: flag(env.GEODB_PROPOSAL_ENTITIES),
 			topic: env.KAFKA_PROPOSALS_TOPIC ?? `${environment}.space.governance`,
 			groupId: env.KAFKA_PROPOSALS_GROUP_ID ?? `geodb-feeder-proposals-v1-${environment}`,
+		},
+		votes: {
+			/**
+			 * GEODB_VOTES: consume `curation.votes` and write keyed user-vote records (votesKeyed.ts) into the `votes`
+			 * system Space. Takes effect only with GEODB_RECORD_KEYS (votesKeyedEnabled), and only after the votes
+			 * backfill (RUNBOOK §2c-ter). Default off.
+			 */
+			enabled: flag(env.GEODB_VOTES),
+			topic: env.KAFKA_VOTES_TOPIC ?? `${environment}.curation.votes`,
+			groupId: env.KAFKA_VOTES_GROUP_ID ?? `geodb-feeder-votes-keyed-v1-${environment}`,
 		},
 		spaceEntities: {
 			/** GEODB_SPACE_ENTITIES: consume `space.creations` and write Space system entities. Default off. */

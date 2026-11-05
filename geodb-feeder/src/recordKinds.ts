@@ -41,3 +41,28 @@ export const RECORD_KINDS = {
  * systemSpaces.ts). Not a table; pinned the same way.
  */
 export const SYSTEM_SPACE_NONCE_KIND = "0b3f6634fbe84dbd8c0ecae3fce960b3"
+
+/**
+ * Column property ids of keyed records, per kind: the property of each statement a record row carries. Minted once
+ * as random UUID v4s (2026-11-05) and pinned like the kinds, append-only; `__tests__/recordKinds.test.ts` pins them.
+ * A key column is written once per record (`add` + `set_active`, its id fixed by the target); a mutable column is a
+ * `put` whose statement id includes the value, so a change closes the old value and a replay reopens the same id.
+ */
+export const RECORD_COLUMNS = {
+	userVote: {
+		/** Key: reference to the voter's entity, `cid("entity", user_id)`. */
+		user: "4bd6d3068a204ff6a62bb084263045bc",
+		/** Key: reference to the object; `cid("entity", id)` for an entity, `cid("statement", id)` for a relation. */
+		object: "46e83cb03e0c46a4a874d7deeb5889dd",
+		/** Key: number, `object_type` (0 entity, 1 relation). */
+		objectType: "e2f5df668d07476ba3f1721c885bd53e",
+		/** Key: reference to the Space-of-view's entity, `cid("entity", space_id)`. */
+		space: "59217d4ba84c4fdcbdc3ff6fb3cb83fa",
+		/** Key: number, `vote_kind` (0 curation, 1 stance, 2 veracity, 3 interested, or a newer raw value). */
+		kind: "4f65ca0db5874a519d8068671a0222c5",
+		/** Mutable: number, `vote_type` (0 up, 1 down, 2 removed). A removal keeps the row, as Postgres does. */
+		direction: "8f3588d7a11c4e7eb86b61015670b491",
+		/** Mutable: instant, `voted_at` (the event's block time, whole seconds). */
+		votedAt: "6e088d8604924b05b09e3ebeceebf5db",
+	},
+} as const satisfies Record<string, Record<string, string>>

@@ -18,6 +18,19 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # For pgSource.votes.test.ts: the votes backfill's keyset paging against a real Postgres (ICU collation).
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: ./geodb-feeder
@@ -41,6 +54,8 @@ jobs:
 
       - name: Run tests
         run: npm test
+        env:
+          GEODB_FEEDER_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
 
       - name: Build
         run: npm run build
