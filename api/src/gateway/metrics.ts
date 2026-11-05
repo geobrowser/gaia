@@ -45,6 +45,8 @@ export const UNCOMPARED_REASONS = [
 	"sampled_rows",
 	/** PostGraphile has the entity's row but geo-db holds no statement about it in any loaded Space. */
 	"no_statements",
+	/** PostGraphile lists the entity in the asked-for Space only through derived properties, which geo-db never holds. */
+	"derived_only",
 ] as const
 
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]

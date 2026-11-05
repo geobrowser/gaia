@@ -27,6 +27,7 @@ import type {DocumentNode, FieldNode, SelectionSetNode} from "graphql"
 
 import {
 	conformingId,
+	DERIVED_PROPERTIES,
 	diffCards,
 	type GeoCardRow,
 	type RelationRow,
@@ -505,6 +506,8 @@ type LightCard = {
 	/** The row spaces, parallel to `card.values` and `card.relations` (null: the row did not say). */
 	valueSpaces: (string | null)[]
 	relationSpaces: (string | null)[]
+	/** The row spaces of the membership-only relation projections (`allRelationsList { spaceId }`). */
+	projectionSpaces: (string | null)[]
 }
 
 const push = (
@@ -530,9 +533,15 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 	const relations: RelationRow[] = []
 	const valueSpaces: (string | null)[] = []
 	const relationSpaces: (string | null)[] = []
+	const projectionSpaces: (string | null)[] = []
 	const nested: NonNullable<NonNullable<PostgresCard>["nested"]> = {}
 	for (const list of plan.lists) {
-		if (list.projection) continue
+		if (list.projection) {
+			const nodes = object[list.key]
+			if (Array.isArray(nodes))
+				for (const raw of nodes) projectionSpaces.push(spaceOf(asRecord(raw) ?? {}, list.spaceKey))
+			continue
+		}
 		const holder = list.nodesKey ? asRecord(object[list.key]) : object
 		const nodes = list.nodesKey ? holder?.[list.nodesKey] : object[list.key]
 		if (!Array.isArray(nodes)) return null
@@ -602,7 +611,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 		if (plan.card.types.nameKey) card.typeNames = names
 	}
 	if (Object.keys(nested).length > 0) card.nested = nested
-	return {card, valueSpaces, relationSpaces}
+	return {card, valueSpaces, relationSpaces, projectionSpaces}
 }
 
 /** The spaces to read: the entity's own, else the spaces its rows name. */
@@ -614,6 +623,35 @@ function lightSpaces(light: LightCard, extra: string[] | null): string[] | null 
 }
 
 export type LightCheck = CardCheck
+
+/**
+ * Whether the answer shows the entity in `spaces` only through derived properties: at least one of its rows sits in
+ * them, and every such value property and relation type is derived. A membership-only relation row there counts as
+ * derived only when the typed relations in that Space account for it.
+ */
+function onlyDerivedIn(light: LightCard, spaces: string[]): boolean {
+	const wanted = new Set<string>(spaces.map((s) => normalizeUuid(s)))
+	const inWanted = (space: string | null) => space !== null && wanted.has(space)
+	let seen = 0
+	for (const [at, row] of light.card.values.entries()) {
+		if (!inWanted(light.valueSpaces[at] ?? null)) continue
+		if (!DERIVED_PROPERTIES.has(conformingId("entity", row.property_id))) return false
+		seen++
+	}
+	const typed = new Map<string, number>()
+	for (const [at, row] of light.card.relations.entries()) {
+		const space = light.relationSpaces[at] ?? null
+		if (!space || !inWanted(space)) continue
+		if (!DERIVED_PROPERTIES.has(conformingId("entity", row.type_id))) return false
+		typed.set(space, (typed.get(space) ?? 0) + 1)
+		seen++
+	}
+	const projected = new Map<string, number>()
+	for (const space of light.projectionSpaces)
+		if (space && inWanted(space)) projected.set(space, (projected.get(space) ?? 0) + 1)
+	for (const [space, count] of projected) if (count > (typed.get(space) ?? 0)) return false
+	return seen > 0
+}
 
 /**
  * Judges one entity's light answer against geo-db's cards of its spaces. `claims` are an `entities` filter's
@@ -680,13 +718,19 @@ export async function checkLight(
 		)
 		if (!read.rows.some((row) => row.prop === wanted && targets.has(row.raw))) unmet.push(claim)
 	}
-	const outsideSpace = options.spaceIds?.length
+	const notHeld = options.spaceIds?.length
 		? !options.spaceIds.some((space) => (read.bySpace.get(space)?.length ?? 0) > 0)
 		: false
+	// PostGraphile counts an entity as in a Space when it has any value or outgoing relation there, derived ones
+	// included; geo-db never holds those, so a Space the answer shows holding only derived rows (a vote Score in the
+	// voter's Space) is not a membership geo-db can settle.
+	const derivedOnly = notHeld && onlyDerivedIn(light, options.spaceIds ?? [])
+	const outsideSpace = notHeld && !derivedOnly
 	const bad = missing.length > 0 || wrong.length > 0 || unmet.length > 0 || outsideSpace
 	// PostGraphile keeps an entity's row whatever its statements (a topic, or every statement since removed), so an
 	// entity it has that geo-db holds nothing about in any loaded Space is not a difference geo-db can settle.
 	const uncompared = [...derived.uncompared]
+	if (derivedOnly) uncompared.push("derived_only")
 	if (options.everySpace && read.scope.populated.length === 0) uncompared.push("no_statements")
 	return {
 		result: bad ? "mismatch" : "match",
