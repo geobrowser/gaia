@@ -275,7 +275,7 @@ const NO_LIST: ListPlan = {key: "", first: 0, columns: {}, nested: {}, names: {}
 
 /** A connection field whose selection is `totalCount` alone (and `__typename`). */
 export const isCountOnly = (field: FieldNode): boolean =>
-	(field.name.value === "relations" || field.name.value === "values") &&
+	(field.name.value === "relations" || field.name.value === "values" || field.name.value === "backlinks") &&
 	field.selectionSet !== undefined &&
 	field.selectionSet.selections.length > 0 &&
 	field.selectionSet.selections.every(
@@ -510,8 +510,9 @@ export function planEntitySelection(
 		} else if ((fieldName === "createdAt" || fieldName === "createdAtBlock") && isPlainField(field)) {
 			uncompared.add("created_at")
 		} else if (isCountOnly(field)) {
-			// `relations { totalCount }`: a count of rows geo-db cannot be asked for without the list.
-			uncompared.add("relation_count")
+			// `relations { totalCount }`: a count of rows geo-db cannot be asked for without the list. Likewise
+			// `backlinks { totalCount }` (the tiebreaker queries): the count is not compared, the rest of the card is.
+			uncompared.add(fieldName === "backlinks" ? "backlink_count" : "relation_count")
 		} else if (fieldName === "types" && !types && isUnfiltered(field, resolved) && field.selectionSet) {
 			let typeIdKey: string | null = null
 			let nameKey: string | null = null
