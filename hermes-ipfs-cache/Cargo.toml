@@ -15,6 +15,7 @@ name = "reconcile_errored"
 path = "src/bin/reconcile_errored.rs"
 
 [dependencies]
+geodb-cursor = { path = "../geodb-cursor" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
 hermes-relay = { path = "../hermes-relay" }
 hermes-substream = { path = "../hermes-substream" }

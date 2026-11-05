@@ -111,6 +111,8 @@ pub struct Pipeline {
     emitter: Emitter,
     cache: Arc<dyn IpfsCache>,
     cursor_store: Arc<dyn CursorStore>,
+    /// Best-effort geo-db mirror of the cursor; `None` unless `GEODB_CURSOR_MIRROR` is on.
+    geodb_mirror: Option<geodb_cursor::CursorMirror>,
     /// Clock timestamp (Unix seconds) of the most recently processed block.
     /// Stashed by `process_block_impl` so `persist_cursor` can update lag
     /// gauges only after the cursor has been durably written. Zero means
@@ -129,6 +131,7 @@ impl Pipeline {
             emitter,
             cache,
             cursor_store,
+            geodb_mirror: geodb_cursor::CursorMirror::from_env(),
             last_block_timestamp: AtomicI64::new(0),
             retry_config: RetryConfig::default(),
         }
@@ -146,6 +149,7 @@ impl Pipeline {
             emitter,
             cache,
             cursor_store,
+            geodb_mirror: geodb_cursor::CursorMirror::from_env(),
             last_block_timestamp: AtomicI64::new(0),
             retry_config,
         }
@@ -898,6 +902,9 @@ impl Sink for Pipeline {
         );
         match self.cursor_store.persist(&cursor, block).await {
             Ok(()) => {
+                if let Some(m) = &self.geodb_mirror {
+                    m.mirror(cursor::INDEXER_ID, block).await;
+                }
                 // Cursor durably persisted — update lag gauges. We always
                 // update the block gauge (from the trait argument), but
                 // only update the timestamp gauge if a normal block has
