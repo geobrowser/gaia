@@ -1051,7 +1051,11 @@ describe("entities answers with no Space (every-Space reads)", () => {
 		it("still refuses a type filter it cannot read", async () => {
 			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge(edgeType)}, {typeFilter: true})
 			await callQuery(s, query.replace(`in: ["${edgeType}", "${otherType}"]`, "in: []"), {data: {entities: []}})
-			await callQuery(s, query.replace(`typeId: {in: ["${edgeType}", "${otherType}"]}`, `spaceId: {is: "${SPACE_B}"}`), body("Target"))
+			await callQuery(
+				s,
+				query.replace(`typeId: {in: ["${edgeType}", "${otherType}"]}`, `spaceId: {is: "${SPACE_B}"}`),
+				body("Target"),
+			)
 			expect(results()).toEqual({unsupported_selection: 2})
 		})
 	})
