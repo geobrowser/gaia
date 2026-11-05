@@ -820,6 +820,13 @@
       "when": 1792261600000,
       "tag": "0116_geodb_id_map",
       "breakpoints": true
+    },
+    {
+      "idx": 118,
+      "version": "7",
+      "when": 1792434400000,
+      "tag": "0118_agenda_debates",
+      "breakpoints": true
     }
   ]
 }
