@@ -1,7 +1,7 @@
 import {readFileSync} from "node:fs"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
-import {conformingId, rowsFromGeoDbOutput, valueKey} from "../../geodb/card"
+import {CREATED_AT_PROPERTY, conformingId, rowsFromGeoDbOutput, UPDATED_AT_PROPERTY, valueKey} from "../../geodb/card"
 import {createEntityShadow, isEmptyFilter} from "../entityShadow"
 import {analyzeLightEntities, analyzeLightEntity} from "../lightShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
@@ -540,6 +540,192 @@ describe("entities with the light selection", () => {
 		)
 		expect(results()).toEqual({match: 1})
 		expect(uncompared()).toMatchObject({order_completeness: 1, sampled_rows: 1})
+	})
+
+	describe("the ordered page read (GEODB_ORDER_PICK_SHADOW)", () => {
+		const PAGE_ALL = [geoSpace(SPACE_A), geoSpace(SPACE_B_UUID)]
+		const T = conformingId("entity", typeId)
+		const instant = (seconds: number) => `instant:${seconds}.000000000`
+		/** Geo rows of an entity page: one row of the order's property a (entity, seconds) pair, as geodb-client prints. */
+		const pageRows = (property: string, keys: [string, number][]) =>
+			keys.map(([id, seconds], at) => ({
+				entity: conformingId("entity", id),
+				prop: property,
+				raw: instant(seconds),
+				at,
+			}))
+		const pageSetup = (
+			entities: Entity[],
+			geoPage: {entity: string; prop: string; raw: string}[],
+			options: {flag?: boolean} = {},
+		) => {
+			const log = {info: vi.fn(), warn: vi.fn()}
+			const typed = entities.map((e) => `${TYPES}\t${T}\tt\t${e.id}\t-\t-\t1\n`).join("")
+			const outputs = {[geoSpace(SPACE_A)]: (outputsFor(entities)[geoSpace(SPACE_A)] ?? "") + typed}
+			const readEntitiesPage = vi.fn(async () => geoPage)
+			const deps = {
+				multiSpace: true,
+				orderPick: options.flag !== false,
+				geoDb: {readCard: askOf(outputs), readCardSpaces: askSpacesOf(outputs), readEntitiesPage},
+				geoSpaceOf: async (space: string) => geoSpace(space),
+				allGeoSpaces: async () => PAGE_ALL,
+				log,
+			}
+			return {log, readEntitiesPage, points: createPointReadShadows(deps)}
+		}
+		const query = (order: string, extra = `typeId: "${typeId}"`, first = 3) =>
+			withArgs(`${extra}, first: ${first}, orderBy: ${order}`)
+		const run = (s: ReturnType<typeof pageSetup>, entities: Entity[], q: string) =>
+			call(s.points.get("entities") as never, q, {}, {data: {entities}})
+		const created = (entities: Entity[], seconds: number[]) =>
+			pageRows(
+				CREATED_AT_PROPERTY,
+				entities.map((e, i) => [e.id, seconds[i] as number]),
+			)
+
+		it("plans a single CREATED_AT or UPDATED_AT key and nothing else", () => {
+			const plan = (order: string, extra?: string) => {
+				const a = analyzeLightEntities(parse(query(order, extra)), null, {})
+				return a.ok ? a.plan.order : "refused"
+			}
+			expect(plan("CREATED_AT_DESC")).toEqual({property: "createdAt", direction: "desc"})
+			expect(plan("[UPDATED_AT_ASC]")).toEqual({property: "updatedAt", direction: "asc"})
+			expect(plan("[CREATED_AT_DESC, ID_ASC]")).toBeNull()
+			expect(plan("RANKING_SCORE_DESC")).toBeNull()
+			expect(plan("ID_ASC")).toBeNull()
+		})
+
+		it("reads nothing with the switch off", async () => {
+			const entities = list(2)
+			const s = pageSetup(entities, created(entities, [30, 20, 10]), {flag: false})
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(s.readEntitiesPage).not.toHaveBeenCalled()
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({order_completeness: 1})
+		})
+
+		it("sends the pick and one row more than the page, and compares a strict order as a sequence", async () => {
+			const entities = list(3)
+			const keys = [
+				...created(entities, [30, 20, 10]),
+				...pageRows(CREATED_AT_PROPERTY, [[list(4)[3]?.id as string, 5]]),
+			]
+			const s = pageSetup(entities, keys)
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(s.readEntitiesPage).toHaveBeenCalledWith({
+				geoSpaceIds: PAGE_ALL,
+				typeId: T,
+				field: CREATED_AT_PROPERTY,
+				direction: "desc",
+				pick: "least",
+				first: 4,
+			})
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).not.toHaveProperty("order_completeness")
+			expect(uncompared()).not.toHaveProperty("filter_completeness")
+			expect(uncompared()).not.toHaveProperty("order_ties")
+		})
+
+		it("places an updatedAt page by its greatest value, ascending or not", async () => {
+			const entities = list(2)
+			const s = pageSetup(
+				entities,
+				pageRows(
+					UPDATED_AT_PROPERTY,
+					entities.map((e, i) => [e.id, 10 + i]),
+				),
+			)
+			await run(s, entities, query("UPDATED_AT_ASC", undefined, 2))
+			expect(s.readEntitiesPage).toHaveBeenCalledWith(
+				expect.objectContaining({field: UPDATED_AT_PROPERTY, direction: "asc", pick: "greatest", first: 3}),
+			)
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("flags a page whose order differs", async () => {
+			const entities = list(3)
+			const swapped = [entities[1], entities[0], entities[2]] as Entity[]
+			const s = pageSetup(entities, created(swapped, [30, 20, 10]))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(results()).toEqual({mismatch: 1})
+			expect(s.log.warn).toHaveBeenCalledWith(
+				expect.stringContaining("mismatch"),
+				expect.objectContaining({first: undefined}),
+			)
+		})
+
+		it("flags a page with an entity geo-db does not place there", async () => {
+			const entities = list(3)
+			const other = list(4)[3] as Entity
+			const s = pageSetup(entities, created([entities[0], entities[1], other] as Entity[], [30, 20, 10]))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("compares as a set when keys tie inside the page, and says so", async () => {
+			const entities = list(3)
+			const geoOrder = [entities[1], entities[0], entities[2]] as Entity[]
+			const s = pageSetup(entities, created(geoOrder, [30, 30, 10]).concat(created(list(4).slice(3), [5])))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({order_ties: 1})
+			expect(uncompared()).not.toHaveProperty("order_completeness")
+		})
+
+		it("still flags a different member of a page that ties inside", async () => {
+			const entities = list(3)
+			const other = list(4)[3] as Entity
+			const geoOrder = [entities[0], other, entities[2]] as Entity[]
+			const s = pageSetup(entities, created(geoOrder, [30, 30, 10]))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("compares nothing of the page when the cut splits a tie, and keeps the order uncompared", async () => {
+			const entities = list(3)
+			const next = list(4)[3] as Entity
+			const s = pageSetup(entities, created([...entities, next], [30, 20, 10, 10]))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({order_completeness: 1, filter_completeness: 1, order_ties: 1})
+		})
+
+		it("does not call a short page's missing next entity a tie", async () => {
+			const entities = list(2)
+			const s = pageSetup(entities, created(entities, [30, 20]))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).not.toHaveProperty("order_ties")
+		})
+
+		it("leaves other shapes uncompared and reads nothing: a Space scope, a second key, an offset, no first", async () => {
+			const entities = list(2)
+			for (const q of [
+				query("CREATED_AT_DESC", `typeId: "${typeId}", spaceId: "${SPACE_A}"`),
+				query("[CREATED_AT_DESC, ID_ASC]"),
+				withArgs(`typeId: "${typeId}", first: 3, offset: 3, orderBy: CREATED_AT_DESC`),
+				withArgs(`typeId: "${typeId}", orderBy: CREATED_AT_DESC`),
+				withArgs(`first: 3, orderBy: CREATED_AT_DESC`),
+			]) {
+				__resetGatewayMetricsForTests()
+				const s = pageSetup(entities, created(entities, [30, 20]))
+				await run(s, entities, q)
+				expect(s.readEntitiesPage).not.toHaveBeenCalled()
+				expect(uncompared()).toMatchObject({order_completeness: 1})
+			}
+		})
+
+		it("leaves the order uncompared when the page cannot be read", async () => {
+			const entities = list(2)
+			const s = pageSetup(entities, [])
+			s.readEntitiesPage.mockRejectedValueOnce(new Error("refused"))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(s.log.warn).toHaveBeenCalledWith(
+				expect.stringContaining("ordered page read failed"),
+				expect.anything(),
+			)
+			expect(uncompared()).toMatchObject({order_completeness: 1})
+		})
 	})
 
 	it("compares a sample of the returned entities and checks the filter's promise on each", async () => {
