@@ -935,12 +935,13 @@ describe("entities answers with no Space (every-Space reads)", () => {
 
 	function namesSetup(
 		outputs: Record<string, string>,
-		options: {flag?: boolean; budget?: ReturnType<typeof createReadBudget>} = {},
+		options: {flag?: boolean; budget?: ReturnType<typeof createReadBudget>; typeFilter?: boolean} = {},
 	) {
 		const log = {info: vi.fn(), warn: vi.fn()}
 		const readCard = askOf(outputs)
 		const readCardSpaces = askSpacesOf(outputs)
 		const deps = {
+			relationsTypeFilter: options.typeFilter === true,
 			multiSpace: true,
 			geoDb: {readCard, readCardSpaces},
 			geoSpaceOf: async (space: string) => geoSpace(space),
@@ -1004,6 +1005,59 @@ describe("entities answers with no Space (every-Space reads)", () => {
 		stray.data.entities.push({id: "0123456789ab4bcd8ef0123456789abc", name: "Stray"})
 		await run(s, stray)
 		expect(results()).toEqual({mismatch: 1})
+	})
+
+	// A type-wide listing: `entities(filter: {typeIds}) { id relations(first, filter: {typeId: {in}}) { nodes { toEntity { id name } } } }`.
+	describe("a typeId-filtered relations list that selects no type", () => {
+		const typeId = "e550fe517e904b2c8fffdf13408f5634"
+		const edgeType = "0a1b2c3d4e5f4a6b8c7d8e9f0a1b2c3d"
+		const otherType = "1a1b2c3d4e5f4a6b8c7d8e9f0a1b2c3e"
+		const target = "99999999999949998999999999999999"
+		const query = `query { entities(first: 10, filter: {typeIds: {anyEqualTo: "${typeId}"}}) { id relations(first: 50, filter: {typeId: {in: ["${edgeType}", "${otherType}"]}}) { nodes { toEntity { id name } } } } }`
+		const body = (name: string) => ({
+			data: {entities: [{id: FIRST.id, relations: {nodes: [{toEntity: {id: target, name}}]}}]},
+		})
+		const typed = `${TYPES}\t${conformingId("entity", typeId)}\ts1\t${FIRST.id}\t-\t-\t1\n`
+		const edge = (type: string) =>
+			`${conformingId("entity", type)}\t${conformingId("entity", target)}\ts2\t${FIRST.id}\t-\tTarget\t1\n`
+		const callQuery = (s: ReturnType<typeof namesSetup>, text: string, payload: unknown) =>
+			call(s.points.get("entities") as never, text, {}, payload)
+
+		it("stays unsupported while the switch is off", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge(edgeType)})
+			await callQuery(s, query, body("Target"))
+			expect(results()).toEqual({unsupported_selection: 1})
+			expect(unsupported()).toEqual({selection: 1})
+		})
+
+		it("matches a target held under one of the filter's Types", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge(otherType)}, {typeFilter: true})
+			await callQuery(s, query, body("Target"))
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("flags a target geo-db holds under none of the filter's Types", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge(typeId)}, {typeFilter: true})
+			await callQuery(s, query, body("Target"))
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("flags a target geo-db does not hold at all", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed}, {typeFilter: true})
+			await callQuery(s, query, body("Target"))
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("still refuses a type filter it cannot read", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge(edgeType)}, {typeFilter: true})
+			await callQuery(s, query.replace(`in: ["${edgeType}", "${otherType}"]`, "in: []"), {data: {entities: []}})
+			await callQuery(
+				s,
+				query.replace(`typeId: {in: ["${edgeType}", "${otherType}"]}`, `spaceId: {is: "${SPACE_B}"}`),
+				body("Target"),
+			)
+			expect(results()).toEqual({unsupported_selection: 2})
+		})
 	})
 
 	it("stays no_space and reads nothing with the switch off", async () => {

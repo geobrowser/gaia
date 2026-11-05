@@ -1063,6 +1063,8 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	 * and `allGeoSpaces`; off by default because an older serve refuses the document.
 	 */
 	orderPick?: boolean
+	/** Accept a `typeId`-filtered relations list that does not select the type in the light `entities` shadow (`GEODB_RELATIONS_TYPE_FILTER_SHADOW`). */
+	relationsTypeFilter?: boolean
 }
 
 export type CardCheck =
