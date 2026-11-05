@@ -1057,6 +1057,12 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	backlinks?: boolean
 	/** Accept the EntitiesBatch selection's membership-only `allRelationsList { spaceId }` in the light `entities` shadow (`GEODB_ENTITIES_BATCH_SHADOW`). */
 	entitiesBatch?: boolean
+	/**
+	 * Read a single-key `CREATED_AT`/`UPDATED_AT` `orderBy` page of the light `entities` shadow from geo-db with the order's
+	 * `.pick` and `.ties` members and compare it (`GEODB_ORDER_PICK_SHADOW`). Needs a serve that reads those members, `multiSpace`
+	 * and `allGeoSpaces`; off by default because an older serve refuses the document.
+	 */
+	orderPick?: boolean
 }
 
 export type CardCheck =

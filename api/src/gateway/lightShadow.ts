@@ -69,6 +69,7 @@ import {
 	VALUE_IGNORED,
 } from "./entityShadow"
 import {recordGatewayUnsupportedShape, type UncomparedReason, type UnsupportedReason} from "./metrics"
+import {checkOrderedPage} from "./orderPickShadow"
 
 /** Most returned entities one `entities` operation compares; the rest are `sampled_rows`. */
 export const MAX_SAMPLED_ENTITIES = 3
@@ -234,7 +235,18 @@ export type LightEntitiesPlan = LightPlan & {
 	 * sampled entity is read across every loaded Space, as an `entity` plan's `everySpace`.
 	 */
 	everySpace: boolean
+	/**
+	 * The page's order when it is a single key geo-db can place by (`orderBy: CREATED_AT_*` or `UPDATED_AT_*`, alone), else
+	 * null. `first` and `offset` are the root's, null when absent.
+	 */
+	order: EntitiesOrder | null
+	/** The filter and root arguments say nothing but the plan's `claims` (no clause or system-type argument was left out). */
+	exactFilter: boolean
+	first: number | null
+	offset: number | null
 }
+
+export type EntitiesOrder = {property: "createdAt" | "updatedAt"; direction: "asc" | "desc"}
 
 export type LightAnalysis<P> = {ok: true; plan: P} | {ok: false; reason: UnsupportedReason}
 
@@ -399,8 +411,13 @@ export function analyzeLightEntity(
 }
 
 /** The soundness claims of an `entities` filter, and the ids it lists. Anything else is only uncompared. */
-function readFilter(filter: unknown, uncompared: Set<UncomparedReason>): Pick<LightEntitiesPlan, "claims" | "ids"> {
+function readFilter(
+	filter: unknown,
+	uncompared: Set<UncomparedReason>,
+): Pick<LightEntitiesPlan, "claims" | "ids"> & {exact: boolean} {
 	const claims: FilterClaim[] = []
+	// Every clause was read into a claim or the id list, so the filter holds nothing the claims do not say.
+	let exact = true
 	let ids: string[] | null = null
 	const object = filter === undefined || filter === null ? {} : asRecord(filter)
 	if (!object) return refuse("filter")
@@ -429,10 +446,16 @@ function readFilter(filter: unknown, uncompared: Set<UncomparedReason>): Pick<Li
 				isValidUuid(to.is)
 			)
 				claims.push({kind: "edge", typeId: normalizeUuid(type.is), toEntityId: normalizeUuid(to.is)})
-			else uncompared.add("filter_completeness")
-		} else uncompared.add("filter_completeness")
+			else {
+				uncompared.add("filter_completeness")
+				exact = false
+			}
+		} else {
+			uncompared.add("filter_completeness")
+			exact = false
+		}
 	}
-	return {claims, ids}
+	return {claims, ids, exact}
 }
 
 const ENTITIES_ARGS = [
@@ -456,12 +479,18 @@ const ENTITIES_ORDER_BY = /^(CREATED_AT|UPDATED_AT|RANKING_SCORE|QUALITY_SCORE|I
  * what order, neither of which a card can settle, so a named ordering only adds `order_completeness`; each
  * returned entity is still judged on its own card. Anything but those enum names is refused.
  */
-function readOrderBy(value: unknown, uncompared: Set<UncomparedReason>): void {
-	if (value === undefined || value === null) return
+function readOrderBy(value: unknown, uncompared: Set<UncomparedReason>): EntitiesOrder | null {
+	if (value === undefined || value === null) return null
 	const names = Array.isArray(value) ? value : [value]
 	if (names.length === 0 || names.length > 4) refuse("args")
 	for (const name of names) if (typeof name !== "string" || !ENTITIES_ORDER_BY.test(name)) refuse("args")
 	uncompared.add("order_completeness")
+	const only = names.length === 1 ? /^(CREATED_AT|UPDATED_AT)_(ASC|DESC)$/.exec(names[0] as string) : null
+	if (!only) return null
+	return {
+		property: only[1] === "CREATED_AT" ? "createdAt" : "updatedAt",
+		direction: only[2] === "ASC" ? "asc" : "desc",
+	}
 }
 
 /** `{in: [<uuid> ..]}` and nothing else (the shape of the `spaceIds`/`typeIds` arguments); the ids, distinct. */
@@ -514,8 +543,8 @@ export function analyzeLightEntities(
 		for (const arg of ["first", "offset"])
 			if (args[arg] !== undefined && args[arg] !== null && !Number.isInteger(args[arg])) refuse("args")
 		const uncompared = new Set<UncomparedReason>()
-		const {claims, ids} = readFilter(args.filter, uncompared)
-		readOrderBy(args.orderBy, uncompared)
+		const {claims, ids, exact} = readFilter(args.filter, uncompared)
+		const order = readOrderBy(args.orderBy, uncompared)
 		const spaceIds = readRootArgs(args, claims, uncompared)
 		const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
 			everySpace: spaceIds === null,
@@ -534,6 +563,10 @@ export function analyzeLightEntities(
 				ids,
 				spaceIds,
 				everySpace,
+				order,
+				exactFilter: exact && args.systemTypeId == null && args.systemTypeIds == null,
+				first: typeof args.first === "number" ? args.first : null,
+				offset: typeof args.offset === "number" ? args.offset : null,
 				uncompared: [...uncompared],
 			},
 		}
@@ -851,6 +884,8 @@ export async function runLight(
 	const answer = data[plan.key]
 	const entities: {id: string; node: unknown}[] = []
 	let filterBreach: Record<string, unknown> | null = null
+	/** PostGraphile's page in the order it came, for the ordered-page read. */
+	const pageIds: string[] = []
 	if (plan.kind === "entity") {
 		if (answer === null) return plan.everySpace ? checkAbsent(deps, plan, label) : {result: "skip"}
 		entities.push({id: plan.entityId, node: answer})
@@ -863,6 +898,7 @@ export async function runLight(
 			if (typeof id !== "string" || !isValidUuid(id)) return {result: "skip"}
 			ids.push(normalizeUuid(id))
 		}
+		pageIds.push(...ids)
 		// An `id: {in}` filter is exact: PostGraphile may return only the ids it was asked for.
 		if (plan.ids) {
 			const asked = new Set(plan.ids)
@@ -874,6 +910,8 @@ export async function runLight(
 			entities.push({id: normalizeUuid(String(id)), node})
 		}
 	}
+	const page =
+		plan.kind === "entities" ? await checkOrderedPage(deps, plan, pageIds, label) : ({result: "skip"} as const)
 	const checks: {id: string; check: LightCheck}[] = []
 	for (const {id, node} of entities) {
 		const light = lightCardFromEntity(node, plan)
@@ -885,7 +923,7 @@ export async function runLight(
 		checks.push({id, check: await checkLight(deps, plan, light, id, label, options)})
 	}
 	const mismatched = checks.filter((c) => c.check.result === "mismatch")
-	if (mismatched.length > 0 || filterBreach) {
+	if (mismatched.length > 0 || filterBreach || page.result === "mismatch") {
 		return {
 			result: "mismatch",
 			uncompared: plan.uncompared,
@@ -893,6 +931,7 @@ export async function runLight(
 				entities: checks.length,
 				mismatches: mismatched.length,
 				filterBreach,
+				orderedPage: page.result === "mismatch" ? page.detail : undefined,
 				first: mismatched[0]?.check.result === "mismatch" ? mismatched[0].check.detail : undefined,
 			},
 		}
@@ -900,7 +939,16 @@ export async function runLight(
 	const unsupported = checks.find((c) => c.check.result === "unsupported")?.check
 	if (unsupported?.result === "unsupported") return {result: "unsupported", reason: unsupported.reason}
 	if (checks.some((c) => c.check.result === "failed")) return {result: "failed"}
+	// A page that could not be read leaves the order uncompared as it was: the cards stand on their own.
 	const uncompared = new Set<UncomparedReason>(plan.uncompared)
+	if (page.result === "match") {
+		for (const r of page.uncompared) uncompared.add(r)
+		// The page's members and order were compared, so which entities the filter and the order select is no longer open.
+		if (page.pageCompared) {
+			uncompared.delete("order_completeness")
+			uncompared.delete("filter_completeness")
+		}
+	}
 	for (const {check} of checks) if (check.result === "match") for (const r of check.uncompared) uncompared.add(r)
 	return {result: "match", uncompared: [...uncompared], detail: {entities: checks.length}}
 }

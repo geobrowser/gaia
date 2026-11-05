@@ -324,3 +324,31 @@ export function diffCards(postgres: {statements: CardStatement[]; skipped: numbe
 }
 
 export const isEmptyDiff = (d: CardDiff) => d.onlyPostgres.length === 0 && d.onlyGeoDb.length === 0
+
+/** One row of an ordered `entities` page: the entity (geo-db's id), and the property and value of the row. */
+export type GeoPageRow = {entity: string; prop: string; raw: string}
+
+/**
+ * geodb-client output for an `entities` page: rows a line like a card's (property, value, statement, entity, ..), the
+ * entity cell naming the page's object, the page's objects in order. Several Spaces print `<space>:<statement>`; the
+ * statement cell is not read. A line without a 32-digit entity cell is refused.
+ */
+export function pageRowsFromGeoDbOutput(output: string): GeoPageRow[] {
+	return output
+		.split("\n")
+		.filter((line) => line !== "")
+		.map((line) => {
+			const cells = line.split("\t")
+			const entity = cells[3] ?? ""
+			if (!/^[0-9a-f]{32}$/.test(entity)) throw new Error(`a page row has no entity cell: ${line.slice(0, 60)}`)
+			return {entity, prop: cells[0] ?? "", raw: unescapeText(cells[1] ?? "")}
+		})
+}
+
+/**
+ * An instant row's value as nanoseconds since the epoch (`instant:<seconds>.<nanos>`), or null for any other text.
+ */
+export function instantNanos(raw: string): bigint | null {
+	const m = INSTANT_RAW.exec(raw)
+	return m ? BigInt(m[1] as string) * 1_000_000_000n + BigInt(m[2] as string) : null
+}

@@ -45,6 +45,8 @@ export const UNCOMPARED_REASONS = [
 	"filter_completeness",
 	/** An `orderBy` page: which entities come first, and where ties fall, is not checkable from cards. */
 	"order_completeness",
+	/** A single-key `orderBy` page was read from geo-db with `.pick`/`.ties`, but equal keys make the order (or the cut) geo-db's own: membership only, or nothing, was compared. */
+	"order_ties",
 	"sampled_rows",
 	/** PostGraphile has the entity's row but geo-db holds no statement about it in any loaded Space. */
 	"no_statements",

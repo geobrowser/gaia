@@ -214,6 +214,12 @@ describe("config", () => {
 		expect(readGeoDbCardConfig({}).mode).toBe("off")
 	})
 
+	it("reads the ordered-page shadow only when explicitly on", () => {
+		expect(readGeoDbCardConfig({}).orderPick).toBe(false)
+		expect(readGeoDbCardConfig({GEODB_ORDER_PICK_SHADOW: "true"}).orderPick).toBe(false)
+		expect(readGeoDbCardConfig({GEODB_ORDER_PICK_SHADOW: " ON "}).orderPick).toBe(true)
+	})
+
 	it("defaults the timeout and rejects a bad one", () => {
 		expect(readGeoDbCardConfig({}).timeoutMs).toBe(500)
 		expect(readGeoDbCardConfig({GEODB_TIMEOUT_MS: "-5"}).timeoutMs).toBe(500)
