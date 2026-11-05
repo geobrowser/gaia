@@ -1,5 +1,6 @@
 import {Hono} from "hono"
 import {describe, expect, it, vi} from "vitest"
+import {CREATED_AT_PROPERTY, UPDATED_AT_PROPERTY} from "../card"
 import {GeoDbError} from "../client"
 import type {GeoDbCardConfig} from "../config"
 import {createGeoDbRouter} from "../router"
@@ -47,6 +48,19 @@ describe("resolveCard mode on", () => {
 		expect(card).toMatchObject({source: "geodb", statements: [{property: PROP, value: "Noam"}]})
 		expect(deps.readPostgres).not.toHaveBeenCalled()
 		expect(readCard).toHaveBeenCalledWith({geoSpaceId: GEO_SPACE, entityId: ENTITY})
+	})
+
+	it("does not serve the reserved createdAt/updatedAt cells as statements", async () => {
+		const {deps} = makeDeps({
+			readCard: async () => [
+				{prop: PROP, raw: "Noam"},
+				{prop: CREATED_AT_PROPERTY, raw: "instant:1700000000.000000000"},
+				{prop: UPDATED_AT_PROPERTY, raw: "instant:1793337008.000000000"},
+			],
+		})
+		const {card} = await resolveCard(deps, ENTITY, SPACE)
+		expect(card).toMatchObject({source: "geodb", statements: [{property: PROP, value: "Noam"}]})
+		expect(card.statements).toHaveLength(1)
 	})
 
 	it.each(["timeout", "client_failed"] as const)("falls back to Postgres on a geo-db %s", async (reason) => {

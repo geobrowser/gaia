@@ -52,6 +52,7 @@ import {
 	conformingId,
 	DERIVED_PROPERTIES,
 	diffCards,
+	entityTimesOf,
 	type GeoCardRow,
 	isEmptyDiff,
 	type RelationRow,
@@ -168,6 +169,9 @@ export type EntityCardPlan = {
 	name: string | null
 	description: string | null
 	spaceIds: string | null
+	/** Response keys of `updatedAt` and `createdAt` (unix seconds as text), when selected plain. Their `*Block` twins stay uncompared. */
+	updatedAt: string | null
+	createdAt: string | null
 	types: {key: string; idKey: string | null; nameKey: string | null} | null
 	/** The unfiltered lists (every space): their response keys, and of the columns read. */
 	allValues: {key: string; first: number; spaceKey: string | null; propertyKey: string | null} | null
@@ -462,6 +466,8 @@ export function planEntitySelection(
 	let name: string | null = null
 	let description: string | null = null
 	let spaceIds: string | null = null
+	let updatedAt: string | null = null
+	let createdAt: string | null = null
 	let types: EntityPlan["types"] = null
 	let allValues: EntityPlan["allValues"] = null
 	let allRelations: EntityPlan["allRelations"] = null
@@ -494,7 +500,12 @@ export function planEntitySelection(
 			description = key
 		} else if (fieldName === "spaceIds" && !spaceIds && isPlainField(field)) {
 			spaceIds = key
+		} else if (fieldName === "updatedAt" && !updatedAt && isPlainField(field)) {
+			updatedAt = key
+		} else if (fieldName === "createdAt" && !createdAt && isPlainField(field)) {
+			createdAt = key
 		} else if ((fieldName === "updatedAt" || fieldName === "updatedAtBlock") && isPlainField(field)) {
+			// The block number is not in geo-db (the feeder writes block time only), nor is a field selected twice.
 			uncompared.add("updated_at")
 		} else if ((fieldName === "createdAt" || fieldName === "createdAtBlock") && isPlainField(field)) {
 			uncompared.add("created_at")
@@ -539,6 +550,8 @@ export function planEntitySelection(
 			name,
 			description,
 			spaceIds,
+			updatedAt,
+			createdAt,
 			types,
 			allValues: null,
 			allRelations: null,
@@ -563,6 +576,8 @@ export function planEntitySelection(
 		name,
 		description,
 		spaceIds,
+		updatedAt,
+		createdAt,
 		types,
 		allValues,
 		allRelations,
@@ -633,6 +648,9 @@ export type PostgresCard = {
 	name?: string | null
 	description?: string | null
 	spaceIds?: string[]
+	/** unix seconds as PostGraphile spelled them: null for an entity it has none of, absent when not selected. */
+	updatedAt?: number | null
+	createdAt?: number | null
 	types?: string[]
 	/** The names of `types`, in order, when `types { name }` was selected. */
 	typeNames?: (string | null)[]
@@ -642,6 +660,18 @@ export type PostgresCard = {
 	allValues?: {rows: {spaceId: string | null; propertyId: string | null}[]; truncated: boolean}
 	allRelations?: {rows: {spaceId: string | null}[]; truncated: boolean}
 } | null
+
+/** PostGraphile's `updatedAt` / `createdAt`: unix seconds as text (an ISO instant is read too), else null. */
+/** How far geo-db's time may cross Postgres's on the wrong side before it is a disagreement (an hour). */
+export const TIME_LAG_SECONDS = 3600
+
+export function secondsOrNull(v: unknown): number | null {
+	if (typeof v === "number") return Number.isFinite(v) ? Math.floor(v) : null
+	if (typeof v !== "string") return null
+	if (/^\d+$/.test(v)) return Number(v)
+	const ms = Date.parse(v)
+	return Number.isNaN(ms) ? null : Math.floor(ms / 1000)
+}
 
 const isFull = (count: number, first: number) => count >= Math.min(first, PAGE_CAP)
 
@@ -671,6 +701,8 @@ export function cardFromEntity(entity: unknown, plan: EntityCardPlan): PostgresC
 			...(plan.name ? {name: null} : {}),
 			...(plan.description ? {description: null} : {}),
 			...(plan.spaceIds ? {spaceIds: []} : {}),
+			...(plan.updatedAt ? {updatedAt: null} : {}),
+			...(plan.createdAt ? {createdAt: null} : {}),
 			...(plan.types ? {types: []} : {}),
 			...(plan.allValues ? {allValues: {rows: [], truncated: false}} : {}),
 			...(plan.allRelations ? {allRelations: {rows: [], truncated: false}} : {}),
@@ -736,6 +768,8 @@ export function cardFromEntity(entity: unknown, plan: EntityCardPlan): PostgresC
 	}
 	if (plan.name) card.name = stringOrNull(plan.name)
 	if (plan.description) card.description = stringOrNull(plan.description)
+	if (plan.updatedAt) card.updatedAt = secondsOrNull(entityObject[plan.updatedAt])
+	if (plan.createdAt) card.createdAt = secondsOrNull(entityObject[plan.createdAt])
 	if (plan.spaceIds) {
 		const ids = entityObject[plan.spaceIds]
 		if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string")) return null
@@ -790,6 +824,8 @@ export type DerivedChecks = {
 			| "description"
 			| "types"
 			| "spaceIds"
+			| "updatedAt"
+			| "createdAt"
 			| "allValuesList"
 			| "propertyNames"
 			| "typeNames"
@@ -922,6 +958,36 @@ export function compareDerived(
 			const own = geo.filter((row) => row.prop === NAME_PROPERTY).map((row) => row.raw)
 			set("fromEntityNames", combine(card.nested.fromEntity.map((name) => judge(name, own, onlyThisSpace))))
 		}
+	}
+
+	// createdAt and updatedAt. geo-db's times are a subset of Postgres's (section 5.6: the feeder stamps an entity
+	// only where one of its own statements changed, Postgres also where an op merely names it), so geo-db's
+	// updatedAt should be at or below Postgres's and its createdAt at or above. Equal is agreement. A time geo-db
+	// does not hold, or one on the expected side, is not decidable. A bound crossed by more than TIME_LAG_SECONDS
+	// is a disagreement; a smaller crossing is not, because the feeder can run ahead of the kg-indexer, the
+	// indexer's own writes can land out of order, and Postgres stops advancing updated_at on a soft-deleted entity
+	// (its upsert has WHERE deleted_at IS NULL) while geo-db goes on stamping it.
+	// The bounds hold for a subset of the entity's Spaces too: a least over fewer Spaces is no smaller.
+	const times = entityTimesOf(geo)
+	if (card.updatedAt != null) {
+		if (times.updatedAt === null || times.updatedAt < card.updatedAt) {
+			checks.updatedAt = "inconclusive"
+			uncompared.add("updated_at")
+		} else if (times.updatedAt === card.updatedAt) checks.updatedAt = "ok"
+		else if (times.updatedAt - card.updatedAt <= TIME_LAG_SECONDS) {
+			checks.updatedAt = "inconclusive"
+			uncompared.add("updated_at")
+		} else checks.updatedAt = "mismatch"
+	}
+	if (card.createdAt != null) {
+		if (times.createdAt === null || times.createdAt > card.createdAt) {
+			checks.createdAt = "inconclusive"
+			uncompared.add("created_at")
+		} else if (times.createdAt === card.createdAt) checks.createdAt = "ok"
+		else if (card.createdAt - times.createdAt <= TIME_LAG_SECONDS) {
+			checks.createdAt = "inconclusive"
+			uncompared.add("created_at")
+		} else checks.createdAt = "mismatch"
 	}
 
 	if (card.spaceIds !== undefined) {

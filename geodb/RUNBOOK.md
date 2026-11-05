@@ -286,6 +286,65 @@ $K scale sts/geodb --replicas=1
 
 Never lower the cap below a founded ordinal: that open fails.
 
+### 2e. Entity times (GEODB_ENTITY_TIMES) and the times backfill
+
+The feeder can write each entity's `createdAt` / `updatedAt` into geo-db as two reserved properties, from the edit's
+block time (contract: geo-db `docs/api/10-embedded-and-wire.md` §5.6). It is off by default: `GEODB_ENTITY_TIMES`
+(`1` or `true` is on). The gateway entity shadow already compares them (`updated_at` / `created_at` leave the
+uncompared reasons as soon as geo-db holds a time), so the api needs no switch, and an entity with no time row is
+simply still uncompared.
+
+Existing entities have no times until they are edited, so stamp them from Postgres `entities.created_at` /
+`updated_at`. Job `geodb-times-backfill` (`geodb/k8s/v2/geodb-times-backfill-job.yaml`,
+`node dist/times-backfill-main.js`) reads those two columns (read only), reads each entity back from geo-db, and
+writes only the cell that is missing, in every Space where the entity has rows. It never overwrites a live value and
+never creates an entity. A cursor on the state volume resumes a rerun. Like §2b it runs with the feeder scaled to 0
+and refuses to start while the feeder's consumer group has members.
+
+Order: deploy the feeder image with the flag off, run the Job, then set `GEODB_ENTITY_TIMES` to `1` and scale the
+feeder back up.
+
+Two rules for the flag and the Job:
+
+- **Scale the feeder to 0 for the Job, always.** The Job's group check only sees members the broker currently
+  lists; a feeder that is between a crash and its restart, or whose session has not yet expired, passes it. Scaling
+  the Deployment to 0 and waiting for the pod to be gone (the commands below) is the real guard.
+- **Never change `GEODB_ENTITY_TIMES` while a message may be half applied.** The flag changes the intents an edit
+  translates to, and a resumed message continues at its saved intent index, so a flip across a crash between two
+  chunks of one message would resume at the wrong place (an intent skipped or applied twice). A shutdown also
+  aborts between chunks, so scaling to 0 alone is not enough. Flip it only when the feeder is idle: wait for
+  `geodb_feeder_consumer_lag` near 0 (no message in flight), scale to 0, edit the manifest, scale to 1. If the
+  feeder is crash-looping or was killed mid-message, let it restart under the SAME flag and catch up before
+  flipping.
+
+A rerun of the Job resumes its saved cursor and entity lists (`<data>/feeder/times-backfill/`), so it will not see
+entities added to Postgres since the first run, nor a different Space set. For a clean re-list set `TIMES_FRESH=1`
+in the Job (it discards the cursor and lists first; held cells are still skipped, so it only costs the read-back).
+A batch geo-db refuses stops the run with the cursor not advanced and exit non-zero: fix the cause (see
+`errors.jsonl`) and rerun, which retries that batch.
+
+What the feeder does not write, and the Job does: an entity first seen only as a relation target or type, one
+deleted and recreated, and one first seen while the flag was off carry no `createdAt` from the feeder (geo-db
+`10-embedded-and-wire.md` §5.6, "new to the journal"). A Job run, now or later, fills them in; until then the
+gateway answers those from Postgres and the shadow counts them uncompared. (Flag on first also works, but an entity the feeder sees first gets a "first seen" createdAt that
+the backfill then cannot repair, because the cell is held.)
+
+```bash
+$K scale deployment/geodb-feeder --replicas=0
+$K wait --for=delete pod -l app=geodb-feeder --timeout=120s
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__SPACES__|mapped|" geodb/k8s/v2/geodb-times-backfill-job.yaml | $K apply -f -
+$K logs -f job/geodb-times-backfill   # "times backfill done", deadLettered 0
+$K delete job geodb-times-backfill
+# then GEODB_ENTITY_TIMES "1" in the feeder manifest, scale to 1.
+```
+
+Expected after both: shadow `updated_at` / `created_at` uncompared counts fall, with no `derivedMismatches` for them.
+The shadow tolerates a geo-db updatedAt ahead of Postgres's by up to an hour (`TIME_LAG_SECONDS`: the feeder can run
+ahead of kg-indexer, which also skips soft-deleted entities and can write out of order); a gap beyond that is a mismatch.
+geo-db's updatedAt can lag Postgres's (it stamps only entities an edit changes, Postgres also stamps ones it merely
+mentions), which the shadow counts as uncompared, not a mismatch; an updatedAt later than Postgres's, or a createdAt
+earlier, is a real mismatch.
+
 ## 3. The exit check: a week of traffic
 
 Do not turn serve mode on until all of these hold over 7 days of shadow:

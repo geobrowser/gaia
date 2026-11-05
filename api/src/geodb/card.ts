@@ -261,14 +261,48 @@ export const MEMBERSHIP_PROPERTIES: ReadonlySet<string> = new Set([
 	"79c3a498486641bc930f3b973de4b4d3", // editor
 ])
 
+/**
+ * An entity's createdAt and updatedAt as geo-db holds them (geo-db docs/api/10-embedded-and-wire.md section 5.6): two
+ * reserved properties the feeder writes from block time, each an instant, per Space. Ids fixed by name; keep in step
+ * with CREATED_AT_PROPERTY / UPDATED_AT_PROPERTY in geodb-feeder/src/entityTimes.ts (a feeder test pins the two ids).
+ */
+export const CREATED_AT_PROPERTY = "74d9c34835444345969a3c9d70362ea5"
+export const UPDATED_AT_PROPERTY = "c5f5b46a774442acb138c3cba948acec"
+export const ENTITY_TIME_PROPERTIES: ReadonlySet<string> = new Set([CREATED_AT_PROPERTY, UPDATED_AT_PROPERTY])
+
+const INSTANT_RAW = /^instant:(-?\d+)\.(\d{9})$/
+
+/**
+ * The entity's time across the rows read (one or several Spaces): the least createdAt and the greatest updatedAt, in
+ * unix seconds, or null where no row holds one. A row that is not an instant is ignored.
+ */
+export function entityTimesOf(rows: GeoCardRow[]): {createdAt: number | null; updatedAt: number | null} {
+	let createdAt: number | null = null
+	let updatedAt: number | null = null
+	for (const row of rows) {
+		if (!ENTITY_TIME_PROPERTIES.has(row.prop)) continue
+		const m = INSTANT_RAW.exec(row.raw)
+		if (!m) continue
+		const seconds = Number(m[1])
+		if (row.prop === CREATED_AT_PROPERTY) createdAt = createdAt === null ? seconds : Math.min(createdAt, seconds)
+		else updatedAt = updatedAt === null ? seconds : Math.max(updatedAt, seconds)
+	}
+	return {createdAt, updatedAt}
+}
+
 /** Match Postgres statements against geo-db rows as multisets and return what is unmatched on each side. */
 export function diffCards(postgres: {statements: CardStatement[]; skipped: number}, geo: GeoCardRow[]): CardDiff {
 	// Derived statements are skipped, not compared: the backfill never writes them.
 	const comparable = postgres.statements.filter((s) => !DERIVED_PROPERTIES.has(s.prop))
 	const derived = postgres.statements.length - comparable.length
-	// Nor are the rows only geo-db holds: derived ones an edit carried (skipped above on the Postgres side) and membership.
+	// Nor are the rows only geo-db holds: derived ones an edit carried (skipped above on the Postgres side), membership, and the entity's times.
 	const pool = geo
-		.filter((row) => !DERIVED_PROPERTIES.has(row.prop) && !MEMBERSHIP_PROPERTIES.has(row.prop))
+		.filter(
+			(row) =>
+				!DERIVED_PROPERTIES.has(row.prop) &&
+				!MEMBERSHIP_PROPERTIES.has(row.prop) &&
+				!ENTITY_TIME_PROPERTIES.has(row.prop),
+		)
 		.map((row) => ({...row, used: false}))
 	const onlyPostgres: CardStatement[] = []
 	for (const s of comparable) {

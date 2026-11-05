@@ -5,7 +5,7 @@ import {Overlay} from "./state.js"
 import {type GrcOp, translateOps} from "./translate.js"
 
 export type Decode = (payload: Uint8Array) => Promise<{ops: GrcOp[]}>
-export type HandleDeps = ApplyDeps & SpaceDeps & {decode: Decode; chunk: number; positions?: boolean}
+export type HandleDeps = ApplyDeps & SpaceDeps & {decode: Decode; chunk: number; positions?: boolean; entityTimes?: boolean}
 export type Outcome = "applied" | "empty" | "dead_letter"
 
 /**
@@ -25,11 +25,13 @@ export async function handleMessage(
 	let spaceId: string
 	let ops: GrcOp[]
 	let editId: string | undefined
+	let blockSeconds: number | null = null
 	try {
 		const he = parseHermesEdit(message.value)
 		if (!he.payload || !he.spaceId) throw new Error("edit has no payload or space")
 		spaceId = he.spaceId
 		editId = he.id
+		blockSeconds = he.createdAt
 		ops = (await deps.decode(he.payload)).ops
 	} catch (e) {
 		deps.store.deadLetter({...meta, decode: String(e instanceof Error ? e.message : e)})
@@ -46,7 +48,10 @@ export async function handleMessage(
 		return "dead_letter"
 	}
 	const overlay = new Overlay(deps.store, spaceId)
-	const {intents, stats} = translateOps(ops, overlay, {positions: deps.positions})
+	const {intents, stats} = translateOps(ops, overlay, {
+		positions: deps.positions,
+		blockSeconds: deps.entityTimes ? blockSeconds : undefined,
+	})
 	const from = Math.min(deps.store.progress(partition, offset), intents.length)
 	await applyIntents(
 		deps,

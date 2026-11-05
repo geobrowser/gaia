@@ -2,6 +2,7 @@
  * GRC-20 edit ops -> geodb-client `apply` ZON documents. Pure functions: ids go through
  * `conformingId`, and "what geo-db already holds" comes in through the context.
  */
+import {blockInstant, CREATED_AT_PROPERTY, timeIntent, UPDATED_AT_PROPERTY} from "./entityTimes.js"
 import {cid, hexId} from "./ids.js"
 import {languageTag} from "./languages.js"
 
@@ -33,6 +34,12 @@ export type Translation = {intents: string[]; touched: string[]; stats: Record<s
 export type TranslateOptions = {
 	/** Write a relation's position (geodb-client's `.position`, ISS-587-318). Off, positions are dropped and counted. */
 	positions?: boolean
+	/**
+	 * The edit's block time in unix seconds. Given (not undefined), the edit also writes each changed entity's
+	 * reserved createdAt (once, for an entity new to the Space) and updatedAt; a `null` is an edit with no block
+	 * time, which writes none and is counted. Undefined is the feature off.
+	 */
+	blockSeconds?: number | null
 }
 
 /** A position geo-db accepts (01 §5): 1 to 64 bytes of printable ASCII. gaia's fractional indexes are. */
@@ -139,9 +146,13 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 	const bump = (k: string, n = 1) => {
 		stats[k] = (stats[k] ?? 0) + n
 	}
+	// Entities whose own statements this edit changed, in first-touch order, and those among them new to the Space.
+	const changed = new Set<string>()
+	const fresh = new Set<string>()
 	const ensure = (e: string) => {
 		if (ctx.knownEntity(e)) return false
 		ctx.markEntity(e)
+		fresh.add(e)
 		intents.push(`.{ .create_entity = "${e}" }`)
 		return true
 	}
@@ -183,9 +194,11 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 				if (ctx.knownEntity(e)) bump("create-of-known-entity")
 				else {
 					ctx.markEntity(e)
+					fresh.add(e)
 					intents.push(`.{ .create_entity = "${e}" }`)
 				}
 				setValues(e, op.values ?? [])
+				changed.add(e)
 				touched.push(e)
 				bump("createEntity")
 				break
@@ -203,6 +216,7 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 					intents.push(`.{ .unset = .{ .entity = "${e}", .property = "${cid("entity", prop)}" } }`)
 					bump("unset")
 				}
+				changed.add(e)
 				touched.push(e)
 				bump("updateEntity")
 				break
@@ -229,6 +243,7 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 					`.{ .add = .{ .id = "${sid}", .entity = "${from}", .property = "${prop}", .value = .{ .reference = "${to}" }${position} } }`,
 				)
 				if (op.entity != null) bump("relation-entity-dropped")
+				changed.add(from)
 				touched.push(from)
 				bump("createRelation")
 				break
@@ -250,11 +265,30 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 					break
 				}
 				intents.push(`.{ .delete_entity = "${e}" }`)
+				// The retraction removes the entity's cells, its times with them: it has none afterwards.
+				changed.delete(e)
+				fresh.delete(e)
 				bump("deleteEntity")
 				break
 			}
 			default:
 				bump(`skip:op-${op.type}`)
+		}
+	}
+	if (opts.blockSeconds !== undefined && changed.size > 0) {
+		const instant = blockInstant(opts.blockSeconds)
+		if (instant === null) bump("times-skipped-no-block-time", changed.size)
+		else {
+			let created = 0
+			for (const e of changed) {
+				if (fresh.has(e)) {
+					intents.push(timeIntent(e, CREATED_AT_PROPERTY, instant))
+					created++
+				}
+				intents.push(timeIntent(e, UPDATED_AT_PROPERTY, instant))
+			}
+			bump("times-created-at", created)
+			bump("times-updated-at", changed.size)
 		}
 	}
 	return {intents, touched, stats}

@@ -60,6 +60,7 @@ import {
 	readName,
 	readWide,
 	responseKeyOf,
+	secondsOrNull,
 	TYPES_PROPERTY,
 	Unsupported,
 	uuidArg,
@@ -577,6 +578,8 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 	const card: NonNullable<PostgresCard> = {values, relations, truncated: false}
 	const text = (key: string | null) => (key && typeof object[key] === "string" ? (object[key] as string) : null)
 	if (plan.card.name) card.name = text(plan.card.name)
+	if (plan.card.updatedAt) card.updatedAt = secondsOrNull(object[plan.card.updatedAt])
+	if (plan.card.createdAt) card.createdAt = secondsOrNull(object[plan.card.createdAt])
 	if (plan.card.description) card.description = text(plan.card.description)
 	if (plan.card.spaceIds) {
 		const ids = object[plan.card.spaceIds]

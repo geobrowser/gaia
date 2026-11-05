@@ -22,6 +22,11 @@ export type Config = {
 	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it.
 	 */
 	relationPositions: boolean
+	/**
+	 * GEODB_ENTITY_TIMES: write each changed entity's createdAt / updatedAt (two reserved properties, from the edit's
+	 * block time) into geo-db. Default off: it is one more `set` per touched entity per edit.
+	 */
+	entityTimes: boolean
 }
 
 export type MembershipConfig = {
@@ -71,6 +76,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		spacesListPath: env.SPACES_LIST_PATH ?? "",
 		lagPollMs: Number(env.LAG_POLL_MS ?? 15_000),
 		relationPositions: flag(env.GEODB_RELATION_POSITIONS),
+		entityTimes: flag(env.GEODB_ENTITY_TIMES),
 		membership: {
 			dualWrite: flag(env.GEODB_MEMBERSHIP_DUAL_WRITE),
 			shadowCompare: flag(env.GEODB_MEMBERSHIP_SHADOW_COMPARE),

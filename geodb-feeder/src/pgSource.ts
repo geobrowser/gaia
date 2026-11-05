@@ -148,3 +148,24 @@ export async function readMembershipIds(db: ReadOnlyPg): Promise<Map<string, Rec
 	}
 	return out
 }
+
+export type EntityTimesRow = {id: string; created_at: string | null; updated_at: string | null}
+
+/** `entities.created_at` / `updated_at` (text, unix seconds) for the given entities, for the times backfill. */
+export async function readEntityTimes(db: ReadOnlyPg, entities: string[]): Promise<EntityTimesRow[]> {
+	return db.read<EntityTimesRow>(
+		`SELECT id::text AS id, created_at::text AS created_at, updated_at::text AS updated_at
+		 FROM entities WHERE id = ANY($1::uuid[])`,
+		[entities.map(dashed)],
+	)
+}
+
+/** The times backfill's view of Postgres: the same entity listing the backfill uses, plus the times. */
+export type TimesSource = Pick<BackfillSource, "listEntities"> & {
+	readTimes(entities: string[]): Promise<EntityTimesRow[]>
+}
+
+export const pgTimesSource = (db: ReadOnlyPg): TimesSource => ({
+	listEntities: pgBackfillSource(db).listEntities,
+	readTimes: (entities) => readEntityTimes(db, entities),
+})
