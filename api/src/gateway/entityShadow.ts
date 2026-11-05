@@ -89,6 +89,9 @@ export const NAME_PROPERTY = conformingId("entity", "a126ca53-0c8e-48d5-b888-82c
 export const DESCRIPTION_PROPERTY = conformingId("entity", "9b1f76ff-9711-404c-861e-59dc3fa7d037")
 export const TYPES_PROPERTY = conformingId("entity", "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1")
 
+/** Entity fields PostGraphile computes from Postgres votes and comments; geo-db holds none of them. */
+export const DERIVED_FIELDS = ["upvotes", "downvotes", "agrees", "disagrees", "commenters", "commentScore"]
+
 export const VALUE_COLUMNS = ["text", "integer", "float", "boolean", "datetime", "date", "decimal"] as const
 /** Columns of a value row the card mapping does not compare; selecting them is allowed. */
 export const VALUE_IGNORED = ["spaceId", "language", "unit", "point", "time", "schedule"] as const
@@ -459,6 +462,7 @@ export function planEntitySelection(
 	uncompared: Set<UncomparedReason>,
 	/** Light mode (lightShadow.ts): every list field goes to this callback instead of the card lists. */
 	light?: (field: FieldNode) => void,
+	options: {derivedFields?: boolean} = {},
 ): EntityCardPlan {
 	let values: PlannedList | null = null
 	let relations: PlannedList | null = null
@@ -524,6 +528,8 @@ export function planEntitySelection(
 			}
 			if (!typeIdKey) return refuse("selection")
 			types = {key, idKey: typeIdKey, nameKey}
+		} else if (light && options.derivedFields && DERIVED_FIELDS.includes(fieldName) && isPlainField(field)) {
+			uncompared.add("derived_fields")
 		} else if (light && fieldName === "typeIds" && !types && isPlainField(field)) {
 			// The light selection only: `typeIds` is the same Types statements as `types { id }`, as a list of ids.
 			types = {key, idKey: null, nameKey: null, plain: true}
@@ -1057,6 +1063,8 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	backlinks?: boolean
 	/** Accept the EntitiesBatch selection's membership-only `allRelationsList { spaceId }` in the light `entities` shadow (`GEODB_ENTITIES_BATCH_SHADOW`). */
 	entitiesBatch?: boolean
+	/** Accept the Postgres-computed vote scores (`upvotes` ..) in the light `entities` shadow, uncompared (`GEODB_DERIVED_FIELDS_SHADOW`). */
+	derivedFields?: boolean
 	/**
 	 * Read a single-key `CREATED_AT`/`UPDATED_AT` `orderBy` page of the light `entities` shadow from geo-db with the order's
 	 * `.pick` and `.ties` members and compare it (`GEODB_ORDER_PICK_SHADOW`). Needs a serve that reads those members, `multiSpace`

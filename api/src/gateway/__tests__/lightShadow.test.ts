@@ -935,13 +935,19 @@ describe("entities answers with no Space (every-Space reads)", () => {
 
 	function namesSetup(
 		outputs: Record<string, string>,
-		options: {flag?: boolean; budget?: ReturnType<typeof createReadBudget>; typeFilter?: boolean} = {},
+		options: {
+			flag?: boolean
+			budget?: ReturnType<typeof createReadBudget>
+			typeFilter?: boolean
+			derivedFields?: boolean
+		} = {},
 	) {
 		const log = {info: vi.fn(), warn: vi.fn()}
 		const readCard = askOf(outputs)
 		const readCardSpaces = askSpacesOf(outputs)
 		const deps = {
 			relationsTypeFilter: options.typeFilter === true,
+			derivedFields: options.derivedFields,
 			multiSpace: true,
 			geoDb: {readCard, readCardSpaces},
 			geoSpaceOf: async (space: string) => geoSpace(space),
@@ -1104,6 +1110,48 @@ describe("entities answers with no Space (every-Space reads)", () => {
 	})
 
 	// The typeahead: `entities(typeId, first, filter: {values: {some: {propertyId, text: {includesInsensitive}}}})`.
+	describe("the vote scores PostGraphile computes (GEODB_DERIVED_FIELDS_SHADOW)", () => {
+		const scores = "id name spaceIds upvotes downvotes agrees disagrees commenters commentScore"
+		const query = `query Q($ids: [UUID!]) { entities(filter: {id: {in: $ids}}) { ${scores} } }`
+		const row = {
+			id: FIRST.id,
+			name: FIRST.name,
+			spaceIds: [SPACE_A],
+			upvotes: 1,
+			downvotes: 0,
+			agrees: 0,
+			disagrees: 0,
+			commenters: 0,
+			commentScore: 0,
+		}
+		const ask = (derivedFields: boolean) => {
+			const s = namesSetup({[geoSpace(SPACE_A)]: nameRow(FIRST.id, FIRST.name)}, {derivedFields})
+			return call(s.points.get("entities") as never, query, {ids: [FIRST.id]}, {data: {entities: [row]}})
+		}
+
+		it("refuses the selection while the flag is off", async () => {
+			await ask(false)
+			expect(results()).toEqual({unsupported_selection: 1})
+		})
+
+		it("compares the rest of the selection and counts the scores uncompared when the flag is on", async () => {
+			await ask(true)
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({derived_fields: 1})
+		})
+
+		it("still flags a wrong name beside the scores", async () => {
+			const s = namesSetup({[geoSpace(SPACE_A)]: nameRow(FIRST.id, "Other")}, {derivedFields: true})
+			await call(
+				s.points.get("entities") as never,
+				query,
+				{ids: [FIRST.id]},
+				{data: {entities: [{...row, name: "Ada"}]}},
+			)
+			expect(results()).toEqual({mismatch: 1})
+		})
+	})
+
 	describe("the typeahead and the selections it shares with id lists", () => {
 		const typeId = "e550fe517e904b2c8fffdf13408f5634"
 		const typeahead = (selection: string) =>

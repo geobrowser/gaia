@@ -372,17 +372,24 @@ function planLightEntity(
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
-	options: {everySpace?: boolean; projections?: boolean; relationsTypeFilter?: boolean} = {},
+	options: {everySpace?: boolean; projections?: boolean; relationsTypeFilter?: boolean; derivedFields?: boolean} = {},
 ): {card: EntityCardPlan; lists: LightList[]; everySpace: boolean} {
 	const lists: LightList[] = []
-	const card = planEntitySelection(set, fragments, resolved, uncompared, (field) => {
-		lists.push(
-			planLightList(field, fragments, resolved, uncompared, {
-				projections: options.projections,
-				relationsTypeFilter: options.relationsTypeFilter,
-			}),
-		)
-	})
+	const card = planEntitySelection(
+		set,
+		fragments,
+		resolved,
+		uncompared,
+		(field) => {
+			lists.push(
+				planLightList(field, fragments, resolved, uncompared, {
+					projections: options.projections,
+					relationsTypeFilter: options.relationsTypeFilter,
+				}),
+			)
+		},
+		{derivedFields: options.derivedFields},
+	)
 	// No lists and nothing to say where the entity lives: an `entity(id)` is read in every loaded Space, which
 	// settles whether it exists (`{ id }`) and its name, description and types from all its Spaces.
 	if (options.everySpace && lists.length === 0 && !card.spaceIds) {
@@ -565,7 +572,7 @@ export function analyzeLightEntities(
 	document: DocumentNode,
 	operationName: string | null,
 	variables: Record<string, unknown>,
-	options: {entitiesBatch?: boolean; relationsTypeFilter?: boolean} = {},
+	options: {entitiesBatch?: boolean; relationsTypeFilter?: boolean; derivedFields?: boolean} = {},
 ): LightAnalysis<LightEntitiesPlan> {
 	try {
 		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
@@ -584,6 +591,7 @@ export function analyzeLightEntities(
 			everySpace: spaceIds === null,
 			projections: options.entitiesBatch === true,
 			relationsTypeFilter: options.relationsTypeFilter === true,
+			derivedFields: options.derivedFields === true,
 		})
 		if (!card.idKey) return {ok: false, reason: "selection"}
 		uncompared.add("sampled_rows")
