@@ -7,6 +7,7 @@
  */
 import pg from "pg"
 import type {PgRelationRow, PgValueRow} from "./pgAdapter.js"
+import type {ProposalVoteRow} from "./proposalVotesKeyed.js"
 import type {UserVoteRow} from "./votesKeyed.js"
 
 export type Queryable = {query<R>(text: string, params?: unknown[]): Promise<{rows: R[]}>}
@@ -176,6 +177,29 @@ export async function* readUserVoteRows(db: ReadOnlyPg, pageSize = 5000): AsyncG
 		yield* page
 		if (page.length < pageSize) return
 		after = page[page.length - 1] as UserVoteRow
+	}
+}
+
+/** Every `proposal_votes` row, keyset-paged on its primary key (proposal_id, proposal_version, voter_id). */
+export async function* readProposalVoteRows(db: ReadOnlyPg, pageSize = 5000): AsyncGenerator<ProposalVoteRow> {
+	let after: ProposalVoteRow | null = null
+	for (;;) {
+		const page: ProposalVoteRow[] = await db.read<ProposalVoteRow>(
+			`SELECT proposal_id::text AS proposal_id, proposal_version::int AS proposal_version, voter_id::text AS voter_id,
+			        space_id::text AS space_id, vote::text AS vote, created_at::text AS created_at,
+			        created_at_block::text AS created_at_block
+			 FROM proposal_votes
+			 WHERE $1::boolean OR (proposal_votes.proposal_id, proposal_votes.proposal_version, proposal_votes.voter_id)
+			       > ($2::uuid, $3::int, $4::uuid)
+			 -- Qualified, as in readUserVoteRows: a bare name would bind to the ::text output alias.
+			 ORDER BY proposal_votes.proposal_id, proposal_votes.proposal_version, proposal_votes.voter_id
+			 LIMIT $5`,
+			after === null ? [true, null, null, null, pageSize] : [false, after.proposal_id, after.proposal_version, after.voter_id, pageSize],
+			300_000,
+		)
+		yield* page
+		if (page.length < pageSize) return
+		after = page[page.length - 1] as ProposalVoteRow
 	}
 }
 

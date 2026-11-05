@@ -30,7 +30,7 @@ export const RECORD_KINDS = {
 	proposalAction: {id: "22335b74e17a4c9e867d4ac2a32c3a4a", family: "governance", table: "proposal_actions"},
 	/** `space_voting_settings`: a record keyed (space), mutable columns written by `put`. */
 	spaceVotingSettings: {id: "7767f888a9a240b18275a7832363f4d9", family: "governance", table: "space_voting_settings"},
-	/** `proposal_votes`: a record keyed (proposal, voter). */
+	/** `proposal_votes`: a record keyed (proposal, proposal version, voter), its primary key. */
 	proposalVote: {id: "ca89a877762c4883a3640b5455a8f0e2", family: "votes", table: "proposal_votes"},
 	/** `user_votes`: a record keyed (user, object, object type, space, kind). */
 	userVote: {id: "1623234736184c0d9a0b69e2ffbc124d", family: "votes", table: "user_votes"},
@@ -64,5 +64,21 @@ export const RECORD_COLUMNS = {
 		direction: "8f3588d7a11c4e7eb86b61015670b491",
 		/** Mutable: instant, `voted_at` (the event's block time, whole seconds). */
 		votedAt: "6e088d8604924b05b09e3ebeceebf5db",
+	},
+	proposalVote: {
+		/** Key: reference to the proposal's entity, `cid("entity", proposal_id)`. */
+		proposal: "c020ebd69bbb4bec8c83db30765aa91b",
+		/** Key: number, `proposal_version` (1 when the event carried 0, as kg-indexer stores it). */
+		version: "da1d8b5c47ee499797e729ae90938086",
+		/** Key: reference to the voting Space's entity, `cid("entity", voter_id)` (the voter is a Space). */
+		voter: "e033f679eebb40aeaec8c66f9a1d6af9",
+		/** Written once: reference to the entity of the Space that owns the proposal, `cid("entity", space_id)`. */
+		space: "49a4ffb094684e10843bbc1e4c6a71f8",
+		/** Mutable: number, `vote` (1 yes, 2 no, 3 abstain; none or an unknown option is 3, as kg-indexer stores it). */
+		vote: "328dc69e2c964982a35fe4d3aa79e31a",
+		/** Mutable: instant, `created_at` (the event's block time, whole seconds). */
+		createdAt: "98603a29c209486b89a63ac207cf9e2f",
+		/** Mutable: number, `created_at_block`. */
+		createdAtBlock: "35243b2b183648059546576e381806c1",
 	},
 } as const satisfies Record<string, Record<string, string>>

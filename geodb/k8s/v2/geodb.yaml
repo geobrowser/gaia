@@ -377,6 +377,11 @@ spec:
             # Kafka ACL for its topic and group: RUNBOOK §2c-ter.
             - name: GEODB_VOTES
               value: "0"
+            # Keyed proposal votes (PROPOSAL_VOTED on space.governance, into the votes system Space). Off. Takes
+            # effect only with GEODB_RECORD_KEYS, and only after the proposal-votes backfill Job
+            # (geodb-proposal-votes-backfill-job.yaml) and the Kafka ACL for its group: RUNBOOK §2c-quater.
+            - name: GEODB_PROPOSAL_VOTES
+              value: "0"
             # Relation positions (`.position` on a relation's add). Off until the geodb image carries a
             # geodb-client with ISS-587-318: an older client refuses the key, and every edit with a positioned
             # relation would fail. Turn on with the image bump that brings it.
