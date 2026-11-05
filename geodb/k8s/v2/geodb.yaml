@@ -377,6 +377,10 @@ spec:
             # relation would fail. Turn on with the image bump that brings it.
             - name: GEODB_RELATION_POSITIONS
               value: "0"
+            # Entity createdAt / updatedAt (RUNBOOK §2e). On since 2026-11-05, after the times backfill Job
+            # stamped every existing entity (1579 Spaces, deadLettered 0). Flip only while the feeder is idle.
+            - name: GEODB_ENTITY_TIMES
+              value: "1"
             # Read only; used by the membership comparison, ignored while it is off.
             - name: DATABASE_URL
               valueFrom:
