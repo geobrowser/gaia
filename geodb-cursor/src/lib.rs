@@ -436,7 +436,7 @@ mod tests {
             1,
             "one line, tab and newline hex-escaped"
         );
-        assert!(sent.starts_with("put\t10\t0\t0\tw\thex:372778"));
+        assert!(sent.starts_with("put\t10\t0\t0\tw\thex:373a78"));
         // One byte over: refused before any I/O, nothing sent, child never needed.
         let over = format!("{cursor}b");
         let e = m.try_mirror("w", &over, 7).await.unwrap_err();
