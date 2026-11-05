@@ -140,6 +140,8 @@ pub struct IpfsCacheSink {
     ipfs: Arc<dyn IpfsFetcher>,
     semaphore: Arc<Semaphore>,
     pending: Arc<Mutex<PendingFetches>>,
+    /// Best-effort geo-db mirror of the cursor; `None` unless `GEODB_CURSOR_MIRROR` is on.
+    geodb_mirror: Option<Arc<geodb_cursor::CursorMirror>>,
 }
 
 impl IpfsCacheSink {
@@ -162,6 +164,7 @@ impl IpfsCacheSink {
             ipfs: Arc::from(ipfs_source.into_fetcher()),
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES)),
             pending: Arc::new(Mutex::new(PendingFetches::default())),
+            geodb_mirror: geodb_cursor::CursorMirror::from_env().map(Arc::new),
         }
     }
 
@@ -250,6 +253,7 @@ impl Sink for IpfsCacheSink {
             let cache = self.cache.clone();
             let ipfs = self.ipfs.clone();
             let pending = self.pending.clone();
+            let geodb_mirror = self.geodb_mirror.clone();
             let block_str = block_number.to_string();
             let block_num = block_number;
 
@@ -336,6 +340,9 @@ impl Sink for IpfsCacheSink {
                                 "Failed to persist cursor"
                             );
                         } else {
+                            if let Some(m) = &geodb_mirror {
+                                m.mirror(INDEXER_ID, &persist_cursor, persist_block).await;
+                            }
                             // Cursor durably persisted — update lag gauges.
                             hermes_instrumentation::metrics::set_latest_processed_block(
                                 persist_block,
