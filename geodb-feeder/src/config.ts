@@ -19,6 +19,8 @@ export type Config = {
 	spaceEntities: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_VOTES (with GEODB_RECORD_KEYS): keyed user votes from `curation.votes` (votesKeyed.ts). */
 	votes: {enabled: boolean; topic: string; groupId: string}
+	/** GEODB_PROPOSAL_VOTES (with GEODB_RECORD_KEYS): keyed proposal votes from `space.governance` (proposalVotesKeyed.ts). */
+	proposalVotes: {enabled: boolean; topic: string; groupId: string}
 	/**
 	 * GEODB_RELATION_POSITIONS: write a relation's position into geo-db (`.position` on its `add`). Default off: a
 	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it.
@@ -68,6 +70,7 @@ export const feederGroupIds = (c: Config): string[] => [
 	c.proposals.groupId,
 	c.spaceEntities.groupId,
 	c.votes.groupId,
+	c.proposalVotes.groupId,
 ]
 
 export const flag = (v: string | undefined): boolean => v === "1" || v?.toLowerCase() === "true"
@@ -132,6 +135,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			enabled: flag(env.GEODB_VOTES),
 			topic: env.KAFKA_VOTES_TOPIC ?? `${environment}.curation.votes`,
 			groupId: env.KAFKA_VOTES_GROUP_ID ?? `geodb-feeder-votes-keyed-v1-${environment}`,
+		},
+		proposalVotes: {
+			/**
+			 * GEODB_PROPOSAL_VOTES: consume the PROPOSAL_VOTED events of `space.governance` and write keyed
+			 * proposal-vote records (proposalVotesKeyed.ts) into the `votes` system Space. Takes effect only with
+			 * GEODB_RECORD_KEYS (proposalVotesKeyedEnabled), and only after the proposal-votes backfill (RUNBOOK
+			 * §2c-quater). Its own group: the proposals consumer's group on the same topic is untouched. Default off.
+			 */
+			enabled: flag(env.GEODB_PROPOSAL_VOTES),
+			topic: env.KAFKA_PROPOSAL_VOTES_TOPIC ?? `${environment}.space.governance`,
+			groupId: env.KAFKA_PROPOSAL_VOTES_GROUP_ID ?? `geodb-feeder-proposal-votes-keyed-v1-${environment}`,
 		},
 		spaceEntities: {
 			/** GEODB_SPACE_ENTITIES: consume `space.creations` and write Space system entities. Default off. */

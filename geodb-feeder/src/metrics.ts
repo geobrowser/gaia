@@ -99,13 +99,17 @@ export function createMetrics() {
 		voteEvents: counter("geodb_feeder_vote_events_total", "curation.votes messages handled, by outcome (applied, ignored, dead_letter)."),
 		votesLag: gauge("geodb_feeder_votes_consumer_lag", "curation.votes messages between the topic head and the last applied offset, by partition."),
 		votesUp: gauge("geodb_feeder_votes_consumer_running", "1 while the curation.votes consumer is running."),
-		consumerStartFailed: gauge("geodb_feeder_consumer_start_failed", "1 when an optional consumer failed to start at boot, by consumer (membership_keyed, votes); 0 once it started. No series while none is enabled."),
+		proposalVoteEvents: counter("geodb_feeder_proposal_vote_events_total", "space.governance messages handled by the proposal-votes consumer, by outcome (applied, ignored, dead_letter). ignored = not PROPOSAL_VOTED."),
+		proposalVotesLag: gauge("geodb_feeder_proposal_votes_consumer_lag", "space.governance messages between the topic head and the proposal-votes consumer's last applied offset, by partition."),
+		proposalVotesUp: gauge("geodb_feeder_proposal_votes_consumer_running", "1 while the space.governance proposal-votes consumer is running."),
+		consumerStartFailed: gauge("geodb_feeder_consumer_start_failed", "1 when an optional consumer failed to start at boot, by consumer (membership_keyed, votes, proposal_votes); 0 once it started. No series while none is enabled."),
 		apply: new Histogram("geodb_feeder_apply_seconds", "Wall time of one geodb-client apply."),
 		freshness: new Histogram("geodb_feeder_edit_freshness_seconds", "Kafka message timestamp to applied in geo-db, edits consumer. Includes backlog catch-up.", FRESHNESS_BUCKETS),
 		proposalFreshness: new Histogram("geodb_feeder_proposal_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.governance consumer.", FRESHNESS_BUCKETS),
 		spaceEntityFreshness: new Histogram("geodb_feeder_space_entity_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.creations consumer.", FRESHNESS_BUCKETS),
 		membershipFreshness: new Histogram("geodb_feeder_membership_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.membership consumer.", FRESHNESS_BUCKETS),
 		voteFreshness: new Histogram("geodb_feeder_vote_freshness_seconds", "Kafka message timestamp to applied in geo-db, curation.votes consumer.", FRESHNESS_BUCKETS),
+		proposalVoteFreshness: new Histogram("geodb_feeder_proposal_vote_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.governance proposal-votes consumer.", FRESHNESS_BUCKETS),
 
 	}
 	const render = () =>

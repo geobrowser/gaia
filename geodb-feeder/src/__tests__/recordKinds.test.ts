@@ -37,6 +37,15 @@ describe("record columns", () => {
 				direction: "8f3588d7a11c4e7eb86b61015670b491",
 				votedAt: "6e088d8604924b05b09e3ebeceebf5db",
 			},
+			proposalVote: {
+				proposal: "c020ebd69bbb4bec8c83db30765aa91b",
+				version: "da1d8b5c47ee499797e729ae90938086",
+				voter: "e033f679eebb40aeaec8c66f9a1d6af9",
+				space: "49a4ffb094684e10843bbc1e4c6a71f8",
+				vote: "328dc69e2c964982a35fe4d3aa79e31a",
+				createdAt: "98603a29c209486b89a63ac207cf9e2f",
+				createdAtBlock: "35243b2b183648059546576e381806c1",
+			},
 		})
 	})
 	it("are distinct v4s, distinct from every kind", () => {

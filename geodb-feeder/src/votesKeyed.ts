@@ -41,14 +41,20 @@
  * written, so the record is left partial (applyIntents bisects). Replaying the same event is refused again; fix the
  * cause, then rerun the backfill (RUNBOOK §2c-ter).
  */
-import {type ApplyDeps, applyIntents} from "./apply.js"
 import {parseFields} from "./hermes.js"
 import {cid} from "./ids.js"
+import {
+	applyKeyedRecord,
+	backfillKeyedRows,
+	deadLetterDecode,
+	type KeyedBackfillResult,
+	type KeyedOutcome,
+	type KeyedRecordDeps,
+	keyColumn,
+} from "./keyedRecord.js"
 import {putIntent} from "./translate.js"
-import type {KeyedOffsets} from "./membershipKeyed.js"
 import {idPart, intPart, recordEntityId, recordStatementId} from "./recordKey.js"
 import {RECORD_COLUMNS, RECORD_KINDS} from "./recordKinds.js"
-import {ensureSystemSpace, type SystemSpaceDeps} from "./systemSpaces.js"
 
 const KIND = RECORD_KINDS.userVote.id
 const FAMILY = RECORD_KINDS.userVote.family
@@ -69,7 +75,7 @@ export type UserVote = {
 	votedAtSeconds: bigint
 }
 
-export type VoteOutcome = "applied" | "ignored" | "dead_letter"
+export type VoteOutcome = KeyedOutcome
 
 const hex16 = (v: bigint | Uint8Array | undefined, what: string): string => {
 	if (!(v instanceof Uint8Array) || v.length !== 16) throw new Error(`${what}: not 16 bytes`)
@@ -127,11 +133,6 @@ const valueStatementId = (record: string, property: string, value: bigint | numb
 const refStatementId = (record: string, property: string, target: string) =>
 	recordStatementId(KIND, [idPart(record), idPart(property), idPart(target)])
 
-const keyColumn = (id: string, record: string, property: string, value: string): string[] => [
-	`.{ .add = .{ .id = "${id}", .entity = "${record}", .property = "${property}", .value = ${value} } }`,
-	`.{ .set_active = .{ .statement = "${id}", .active = true } }`,
-]
-
 /** The intents for one vote. Pure, and depends on the vote alone. */
 export function userVoteIntents(v: UserVote): string[] {
 	const record = userVoteRecordId(v)
@@ -164,21 +165,15 @@ export function userVoteIntents(v: UserVote): string[] {
 	]
 }
 
-export type KeyedVotesDeps = ApplyDeps & SystemSpaceDeps & {offsets: KeyedOffsets}
+export type KeyedVotesDeps = KeyedRecordDeps
 
 export async function applyUserVote(
 	deps: KeyedVotesDeps,
 	v: UserVote,
 	meta: {partition: number; offset: string},
 ): Promise<VoteOutcome> {
-	// Every vote lives in the one votes Space: a founding failure, ResourceExhausted included (SystemSpaceCapError),
-	// is thrown, never dead-lettered. The consumer retries the message without marking its offset; the backfill Job
-	// fails. Skipping would drop the whole family, not one vote.
-	const space = await ensureSystemSpace(deps, FAMILY)
-	const intents = userVoteIntents(v)
-	const applyDeps: ApplyDeps = {...deps, saveSpace: () => deps.systemSpaces.save()}
-	const r = await applyIntents(applyDeps, space, {...meta, space: v.space}, intents, intents.length, 0, () => {})
-	return r.deadLettered > 0 ? "dead_letter" : "applied"
+	// Every vote lives in the one votes Space; a founding failure is thrown, never dead-lettered (applyKeyedRecord).
+	return applyKeyedRecord(deps, FAMILY, userVoteIntents(v), {...meta, space: v.space})
 }
 
 export async function handleVoteMessage(
@@ -192,9 +187,7 @@ export async function handleVoteMessage(
 	try {
 		v = parseVoteCast(message.value)
 	} catch (e) {
-		deps.store.deadLetter({partition, offset: message.offset, topic: "votes", decode: String(e instanceof Error ? e.message : e)})
-		deps.metrics.deadLetters.inc({kind: "message"})
-		return "dead_letter"
+		return deadLetterDecode(deps, "votes", partition, message.offset, e)
 	}
 	return applyUserVote(deps, v, {partition, offset: message.offset})
 }
@@ -240,34 +233,15 @@ export function userVoteFromRow(r: UserVoteRow): UserVote {
 	}
 }
 
-export type VotesBackfillResult = {rows: number; applied: number; deadLetter: number}
+export type VotesBackfillResult = KeyedBackfillResult
 
 /**
  * Write a snapshot of `user_votes`. Rerunnable: a held row is written again to the same ids. A row Postgres holds
  * that no event could have written is dead-lettered (counted, the Job fails at the end) rather than invented.
  */
-export async function backfillUserVotes(
+export const backfillUserVotes = (
 	deps: KeyedVotesDeps,
 	rows: AsyncIterable<UserVoteRow> | Iterable<UserVoteRow>,
-	progress: (done: number) => void = () => {},
-): Promise<VotesBackfillResult> {
-	const out: VotesBackfillResult = {rows: 0, applied: 0, deadLetter: 0}
-	for await (const r of rows) {
-		out.rows++
-		let v: UserVote
-		try {
-			v = userVoteFromRow(r)
-		} catch (e) {
-			deps.store.deadLetter({partition: -1, offset: "backfill", topic: "votes", decode: String(e instanceof Error ? e.message : e)})
-			deps.metrics.deadLetters.inc({kind: "message"})
-			out.deadLetter++
-			continue
-		}
-		const o = await applyUserVote(deps, v, {partition: -1, offset: "backfill"})
-		if (o === "dead_letter") out.deadLetter++
-		else out.applied++
-		progress(out.rows)
-		if (deps.signal?.aborted) throw new Error("votes backfill aborted")
-	}
-	return out
-}
+	progress?: (done: number) => void,
+): Promise<VotesBackfillResult> =>
+	backfillKeyedRows(deps, rows, {topic: "votes", fromRow: userVoteFromRow, apply: (d, v) => applyUserVote(d, v, {partition: -1, offset: "backfill"})}, progress)

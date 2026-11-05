@@ -1,20 +1,15 @@
-import {mkdtempSync, readFileSync} from "node:fs"
-import {tmpdir} from "node:os"
-import {join} from "node:path"
 import {describe, expect, it} from "vitest"
 import {feederGroupIds, loadConfig} from "../config.js"
 import {cid} from "../ids.js"
 import {keyedBackfillGate} from "../membershipKeyed.js"
-import {createMetrics} from "../metrics.js"
 import {ProposalOffsets} from "../proposals.js"
 import {idPart, intPart, recordEntityId, recordStatementId} from "../recordKey.js"
 import {RECORD_COLUMNS, RECORD_KINDS} from "../recordKinds.js"
-import {Store} from "../state.js"
-import {SystemSpaceCapError, SystemSpaces, systemSpaceNonce} from "../systemSpaces.js"
+import {SystemSpaceCapError, systemSpaceNonce} from "../systemSpaces.js"
+import {deadLetters, fixture, ModelStore, tmp, VOTES_SPACE} from "./keyedHarness.js"
 import {
 	backfillUserVotes,
 	handleVoteMessage,
-	type KeyedVotesDeps,
 	parseVoteCast,
 	type UserVote,
 	type UserVoteRow,
@@ -27,15 +22,14 @@ import {
 	votesOffsetsDir,
 } from "../votesKeyed.js"
 
+const vfixture = (o: Parameters<typeof fixture>[0] = {}) => fixture({...o, offsetsDir: votesOffsetsDir})
+
 const KIND = RECORD_KINDS.userVote.id
 const COL = RECORD_COLUMNS.userVote
 const USER = "b29c345ab9866679b001d7d2138d88a2"
 const USER2 = "c39c345ab9866679b001d7d2138d88a3"
 const OBJECT = "0d9c345ab9866679b001d7d2138d88a4"
 const SPACE = "a19c345ab9866679b001d7d2138d88a1"
-const VOTES_SPACE = "f00dbc83ca744e1a9ee0377967846847"
-const SEALER = "5".repeat(64)
-const tmp = () => mkdtempSync(join(tmpdir(), "votes-keyed-"))
 
 const vote = (o: Partial<UserVote> = {}): UserVote => ({
 	user: USER,
@@ -92,103 +86,6 @@ const msg = (value: Uint8Array, offset = 0, eventType: string | null = "VOTE_CAS
 	value,
 	headers: eventType === null ? {} : {"event-type": Buffer.from(eventType)},
 })
-
-/**
- * A model of the engine's statement state for the intents the votes path sends. `add` of a held id keeps its active
- * bit; `set_active` of an unseen id is admitted (K1); `put` (geo-db 9d97069a78, tests/facade/natural_keys.zig)
- * closes the cell's other active statements and creates or reopens its own id as active.
- */
-class ModelStore {
-	readonly entities = new Set<string>()
-	readonly statements = new Map<string, {active: boolean; entity: string; property: string; value: string}>()
-	apply(zon: string): void {
-		for (const line of zon.split("\n")) {
-			const i = line.trim().replace(/,$/, "")
-			let m = /^\.\{ \.create_entity = "([0-9a-f]{32})" \}$/.exec(i)
-			if (m) {
-				this.entities.add(m[1] as string)
-				continue
-			}
-			m = /^\.\{ \.(add|put) = \.\{ \.id = "([0-9a-f]{32})", \.entity = "([0-9a-f]{32})", \.property = "([0-9a-f]{32})", \.value = (.*) \} \}$/.exec(i)
-			if (m) {
-				const [, tag, id, entity, property, value] = m as unknown as [string, string, string, string, string, string]
-				const held = this.statements.get(id)
-				if (held && (held.entity !== entity || held.property !== property || held.value !== value)) {
-					throw new Error(`${tag} of a held id with a different body`)
-				}
-				if (tag === "put") {
-					for (const s of this.statements.values()) if (s.entity === entity && s.property === property) s.active = false
-					this.statements.set(id, {active: true, entity, property, value})
-				} else this.statements.set(id, {active: held ? held.active : true, entity, property, value})
-				continue
-			}
-			m = /^\.\{ \.set_active = \.\{ \.statement = "([0-9a-f]{32})", \.active = (true|false) \} \}$/.exec(i)
-			if (m) {
-				const held = this.statements.get(m[1] as string)
-				if (held) held.active = m[2] === "true"
-				continue
-			}
-			if (i.startsWith(".{ .") && !i.startsWith(".{ .space =")) throw new Error(`unmodelled intent ${i}`)
-		}
-	}
-	/** The active values of a record's cell. */
-	cell(entity: string, property: string): string[] {
-		return [...this.statements.values()].filter((s) => s.active && s.entity === entity && s.property === property).map((s) => s.value)
-	}
-	snapshot(): string {
-		return JSON.stringify([[...this.entities].sort(), [...this.statements].sort(([a], [b]) => a.localeCompare(b))])
-	}
-}
-
-function fixture(opts: {foundFails?: string; foundFailsOnce?: string; applyFailures?: string[]; model?: ModelStore} = {}) {
-	let failOnce = opts.foundFailsOnce
-	const applyFailures = [...(opts.applyFailures ?? [])]
-	const store = new Store(tmp())
-	const systemSpaces = new SystemSpaces(store.dir)
-	const applied: string[] = []
-	const founds: string[] = []
-	const published: string[] = []
-	const deps: KeyedVotesDeps = {
-		db: {
-			apply: async (zon: string) => {
-				const fail = applyFailures.shift()
-				if (fail) return {rc: 1, out: "", err: fail}
-				applied.push(zon)
-				opts.model?.apply(zon)
-				return {rc: 0, out: "", err: ""}
-			},
-			waitReady: async () => [],
-			found: async (_s: string, nonce: string) => {
-				founds.push(nonce)
-				if (opts.foundFails) throw new Error(opts.foundFails)
-				if (failOnce) {
-					const e = failOnce
-					failOnce = undefined
-					throw new Error(e)
-				}
-				return VOTES_SPACE
-			},
-		},
-		sealer: async () => SEALER,
-		store,
-		metrics: createMetrics(),
-		beat: async () => {},
-		sleep: async () => {},
-		allowPut: true,
-		systemSpaces,
-		publishSystem: (t) => published.push(t),
-		offsets: new ProposalOffsets(votesOffsetsDir(store.dir)),
-	}
-	return {store, systemSpaces, applied, founds, published, deps}
-}
-
-const deadLetters = (store: Store): string[] => {
-	try {
-		return readFileSync(join(store.dir, "errors.jsonl"), "utf8").split("\n").filter(Boolean)
-	} catch {
-		return []
-	}
-}
 
 describe("user vote record key (K2)", () => {
 	it("is recordEntityId(userVote, [user, object, object type, space, kind]) over the raw gaia ids", () => {
@@ -272,7 +169,7 @@ describe("userVoteIntents", () => {
 describe("replace on change (put)", () => {
 	const run = async (votes: UserVote[]) => {
 		const model = new ModelStore()
-		const f = fixture({model})
+		const f = vfixture({model})
 		for (const [i, v] of votes.entries()) await handleVoteMessage(f.deps, 0, msg(voteCast(castOf(v)), i))
 		return {model, f}
 	}
@@ -315,7 +212,7 @@ describe("replace on change (put)", () => {
 		const stream = [vote({direction: 0}), vote({direction: 1, votedAtSeconds: 5n}), vote({user: USER2, direction: 2})]
 		const once = await run(stream)
 		const model = new ModelStore()
-		const f = fixture({model})
+		const f = vfixture({model})
 		for (const round of [stream, stream, stream.slice(-1)]) {
 			for (const [i, v] of round.entries()) await handleVoteMessage(f.deps, 0, msg(voteCast(castOf(v)), i))
 		}
@@ -371,7 +268,7 @@ describe("parseVoteCast (vote-indexer's rules)", () => {
 
 describe("handleVoteMessage", () => {
 	it("founds the votes Space once with the votes nonce and writes every vote there", async () => {
-		const f = fixture()
+		const f = vfixture()
 		expect(await handleVoteMessage(f.deps, 0, msg(voteCast(), 0))).toBe("applied")
 		expect(await handleVoteMessage(f.deps, 1, msg(voteCast({voter: USER2}), 1))).toBe("applied")
 		expect(f.founds).toEqual([systemSpaceNonce("votes")])
@@ -382,14 +279,14 @@ describe("handleVoteMessage", () => {
 	})
 
 	it("dead-letters what vote-indexer rejects, writing nothing", async () => {
-		const f = fixture()
+		const f = vfixture()
 		expect(await handleVoteMessage(f.deps, 0, msg(voteCast({kind: 3, direction: 1}), 7))).toBe("dead_letter")
 		expect(f.applied).toEqual([])
 		expect(deadLetters(f.store)).toHaveLength(1)
 	})
 
 	it("ignores an empty value, and decodes regardless of event-type as vote-indexer does", async () => {
-		const f = fixture()
+		const f = vfixture()
 		expect(await handleVoteMessage(f.deps, 0, {offset: "0", value: null})).toBe("ignored")
 		expect(await handleVoteMessage(f.deps, 0, msg(voteCast(), 1, "SOMETHING_ELSE"))).toBe("applied")
 		expect(await handleVoteMessage(f.deps, 0, msg(voteCast({voter: USER2}), 2, null))).toBe("applied")
@@ -398,7 +295,7 @@ describe("handleVoteMessage", () => {
 
 describe("stall, never skip", () => {
 	it("a ResourceExhausted founding throws (the consumer retries in place) and dead-letters nothing", async () => {
-		const f = fixture({foundFailsOnce: "error: ResourceExhausted (space cap)"})
+		const f = vfixture({foundFailsOnce: "error: ResourceExhausted (space cap)"})
 		await expect(handleVoteMessage(f.deps, 0, msg(voteCast(), 0))).rejects.toBeInstanceOf(SystemSpaceCapError)
 		expect(f.applied).toEqual([])
 		expect(deadLetters(f.store)).toEqual([])
@@ -406,21 +303,21 @@ describe("stall, never skip", () => {
 	})
 
 	it("a ResourceExhausted apply is retried until it lands, not dead-lettered", async () => {
-		const f = fixture({applyFailures: ["error: ResourceExhausted", "error: ResourceExhausted"]})
+		const f = vfixture({applyFailures: ["error: ResourceExhausted", "error: ResourceExhausted"]})
 		expect(await handleVoteMessage(f.deps, 0, msg(voteCast(), 0))).toBe("applied")
 		expect(f.applied).toHaveLength(1)
 		expect(deadLetters(f.store)).toEqual([])
 	})
 
 	it("the backfill aborts on the first cap error, writing nothing", async () => {
-		const f = fixture({foundFails: "error: ResourceExhausted (space cap)"})
+		const f = vfixture({foundFails: "error: ResourceExhausted (space cap)"})
 		const rows = [userVoteRowOf(vote())]
 		await expect(backfillUserVotes(f.deps, rows)).rejects.toBeInstanceOf(SystemSpaceCapError)
 		expect(f.applied).toEqual([])
 	})
 
 	it("refuses to send put while not allowed", async () => {
-		const f = fixture()
+		const f = vfixture()
 		await expect(handleVoteMessage({...f.deps, allowPut: false}, 0, msg(voteCast(), 0))).rejects.toThrow(/GEODB_RECORD_KEYS is off/)
 	})
 })
@@ -438,7 +335,7 @@ const userVoteRowOf = (v: UserVote): UserVoteRow => ({
 describe("backfillUserVotes", () => {
 	it("writes each row as its record, from an async page source", async () => {
 		const model = new ModelStore()
-		const f = fixture({model})
+		const f = vfixture({model})
 		async function* rows() {
 			yield userVoteRowOf(vote())
 			yield userVoteRowOf(vote({kind: 1, direction: 1}))
@@ -448,13 +345,13 @@ describe("backfillUserVotes", () => {
 	})
 
 	it("dead-letters a row no event could have written, and counts it", async () => {
-		const f = fixture()
+		const f = vfixture()
 		const bad = {...userVoteRowOf(vote()), vote_type: 5}
 		expect(await backfillUserVotes(f.deps, [bad, userVoteRowOf(vote())])).toEqual({rows: 2, applied: 1, deadLetter: 1})
 	})
 
 	it("stops when aborted", async () => {
-		const f = fixture()
+		const f = vfixture()
 		const abort = new AbortController()
 		abort.abort()
 		await expect(backfillUserVotes({...f.deps, signal: abort.signal}, [userVoteRowOf(vote())])).rejects.toThrow(/aborted|shutting down/)
