@@ -478,6 +478,28 @@ describe("entities with the light selection", () => {
 			expect(analyzeLightEntities(parse(withArgs(args)), null, {})).toEqual({ok: false, reason: "args"})
 	})
 
+	it("plans an orderBy as an uncompared order and refuses one it does not know", () => {
+		const base = `spaceId: "${SPACE_A}", typeId: "${typeId}", first: 5`
+		for (const order of ["CREATED_AT_DESC", "[CREATED_AT_DESC, ID_ASC]", "[RANKING_SCORE_DESC]", "UPDATED_AT_ASC"]) {
+			const a = analyzeLightEntities(parse(withArgs(`${base}, orderBy: ${order}`)), null, {})
+			expect(a.ok).toBe(true)
+			if (a.ok) expect(a.plan.uncompared).toContain("order_completeness")
+		}
+		const viaVariable = analyzeLightEntities(
+			parse(withArgs(`${base}, orderBy: $o`).replace("query", "query($o: [EntitiesOrderBy!])")),
+			null,
+			{o: ["CREATED_AT_ASC", "ID_ASC"]},
+		)
+		expect(viaVariable.ok).toBe(true)
+		const plain = analyzeLightEntities(parse(withArgs(base)), null, {})
+		expect(plain.ok && plain.plan.uncompared).not.toContain("order_completeness")
+		for (const order of ["BACKLINKS_COUNT_DESC", "[]", "[ID_ASC, ID_ASC, ID_ASC, ID_ASC, ID_ASC]"])
+			expect(analyzeLightEntities(parse(withArgs(`${base}, orderBy: ${order}`)), null, {})).toEqual({
+				ok: false,
+				reason: "args",
+			})
+	})
+
 	it("flags an entity outside every Space the spaceIds argument names", async () => {
 		const entities = list(1)
 		const s = setup(outputsFor(entities))
@@ -500,6 +522,19 @@ describe("entities with the light selection", () => {
 			{data: {entities}},
 		)
 		expect(results()).toEqual({match: 1})
+	})
+
+	it("compares the entities of an orderBy page one by one and leaves the order uncompared", async () => {
+		const entities = list(2)
+		const s = setup(outputsFor(entities))
+		await call(
+			s.points.get("entities") as never,
+			withArgs(`spaceId: "${SPACE_A}", first: 5, orderBy: [CREATED_AT_DESC, ID_ASC]`),
+			{},
+			{data: {entities}},
+		)
+		expect(results()).toEqual({match: 1})
+		expect(uncompared()).toMatchObject({order_completeness: 1, sampled_rows: 1})
 	})
 
 	it("compares a sample of the returned entities and checks the filter's promise on each", async () => {

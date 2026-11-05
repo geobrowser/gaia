@@ -437,6 +437,7 @@ function readFilter(filter: unknown, uncompared: Set<UncomparedReason>): Pick<Li
 
 const ENTITIES_ARGS = [
 	"filter",
+	"orderBy",
 	"first",
 	"offset",
 	"spaceId",
@@ -446,6 +447,22 @@ const ENTITIES_ARGS = [
 	"systemTypeId",
 	"systemTypeIds",
 ]
+
+/** The built-in sorts of the entities connection the frontends send, in either direction. */
+const ENTITIES_ORDER_BY = /^(CREATED_AT|UPDATED_AT|RANKING_SCORE|QUALITY_SCORE|ID)_(ASC|DESC)$/
+
+/**
+ * `orderBy: [CREATED_AT_DESC, ID_ASC]` (one enum or a list). The sort decides which entities a page holds and in
+ * what order, neither of which a card can settle, so a named ordering only adds `order_completeness`; each
+ * returned entity is still judged on its own card. Anything but those enum names is refused.
+ */
+function readOrderBy(value: unknown, uncompared: Set<UncomparedReason>): void {
+	if (value === undefined || value === null) return
+	const names = Array.isArray(value) ? value : [value]
+	if (names.length === 0 || names.length > 4) return refuse("args")
+	for (const name of names) if (typeof name !== "string" || !ENTITIES_ORDER_BY.test(name)) return refuse("args")
+	uncompared.add("order_completeness")
+}
 
 /** `{in: [<uuid> ..]}` and nothing else (the shape of the `spaceIds`/`typeIds` arguments); the ids, distinct. */
 function inList(value: unknown): string[] {
@@ -498,6 +515,7 @@ export function analyzeLightEntities(
 			if (args[arg] !== undefined && args[arg] !== null && !Number.isInteger(args[arg])) refuse("args")
 		const uncompared = new Set<UncomparedReason>()
 		const {claims, ids} = readFilter(args.filter, uncompared)
+		readOrderBy(args.orderBy, uncompared)
 		const spaceIds = readRootArgs(args, claims, uncompared)
 		const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
 			everySpace: spaceIds === null,
