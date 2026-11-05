@@ -105,8 +105,8 @@ metadata:
     environment: testnet
 spec:
   # GEO-3088: nightly, rebuild topic co-occurrence (for spreading interest to related topics),
-  # recompute every user's interests from scratch, and record how far the incremental state had
-  # drifted in personalization.interest_refit_runs (warned in the log when non-zero). 03:37 UTC is
+  # recompute every user's interests from scratch, and warn in the log how far the incremental
+  # state had drifted (when non-zero; no longer recorded in a table, migration 0117). 03:37 UTC is
   # clear of every hourly ranking job (:00, :17, :30, :41, :51).
   schedule: "37 3 * * *"
   failedJobsHistoryLimit: 3

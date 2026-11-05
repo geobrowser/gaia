@@ -7,7 +7,8 @@
 //!    (`personalization.stance_map_seeds()`);
 //! 2. fits the map and measures it (`ranking_indexer::stance_map::evaluate`): held-out AUC against
 //!    tendencies only, with and without the seeds, and half-split stability of the main axis;
-//! 3. records one row through `personalization.record_stance_map_run()`, which decides the gate.
+//! 3. gets the gate decision from `personalization.record_stance_map_run()` and logs it (the function
+//!    no longer stores a row; migration 0117).
 //!
 //! Nothing reads the map. Per-user positions exist only in this process's memory and are dropped
 //! when it exits: they are never written and never logged. Only aggregate metrics leave.

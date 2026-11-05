@@ -236,15 +236,6 @@ async fn a_new_vote_lands_on_the_next_sweep_and_the_refit_agrees() {
         "refit disagreed with the sweeps: {report:?}"
     );
     assert!(report.max_abs_diff < 1e-9, "{report:?}");
-    let recorded: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM personalization.interest_refit_runs WHERE ran_at = $1",
-    )
-    .bind(t1 + Duration::minutes(1))
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(recorded, 1, "the refit records its comparison");
-
     teardown(&pool, &f).await;
 }
 
