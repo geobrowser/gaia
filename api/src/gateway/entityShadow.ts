@@ -59,7 +59,7 @@ import {
 	statementsFromPostgres,
 	type ValueRow,
 } from "../geodb/card"
-import {GeoDbError} from "../geodb/client"
+import {GeoDbError, MAX_LINE_SPACES} from "../geodb/client"
 import {observeGeoDbRead} from "../geodb/metrics"
 import {askGeoDb, askGeoDbSpaces, type CardDeps, type CardLogger} from "../geodb/service"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
@@ -1064,7 +1064,7 @@ export type CardCheck =
 	| {result: "unsupported"; reason: UnsupportedReason}
 	| {result: "match" | "mismatch"; uncompared: UncomparedReason[]; detail: Record<string, unknown>}
 
-/** Most spaces one wide comparison reads; an entity in more is not compared (`many_spaces`). */
+/** Most spaces one wide comparison reads one by one; an entity in more is not compared (`many_spaces`). A multi-Space line is capped at MAX_LINE_SPACES instead. */
 export const MAX_READ_SPACES = 3
 
 /**
@@ -1103,8 +1103,10 @@ export async function readWide(
 	label: string,
 ): Promise<WideRead> {
 	if (spaces.length === 0) return {ok: false, result: "unsupported", reason: "no_space"}
-	if (spaces.length > MAX_READ_SPACES) return {ok: false, result: "unsupported", reason: "many_spaces"}
 	const oneLine = deps.multiSpace === true && spaces.length > 1 && deps.geoDb.readCardSpaces !== undefined
+	// One multi-Space line reads them all at the cost of one read; only the per-Space fallback is capped at 3.
+	if (spaces.length > (oneLine ? MAX_LINE_SPACES : MAX_READ_SPACES))
+		return {ok: false, result: "unsupported", reason: "many_spaces"}
 	if (deps.budget && !deps.budget.tryAcquire(oneLine ? 1 : spaces.length))
 		return {ok: false, result: "unsupported", reason: "throttled"}
 	const started = performance.now()
