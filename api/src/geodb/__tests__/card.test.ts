@@ -149,6 +149,14 @@ describe("diffCards derived properties", () => {
 		expect(diff.skipped).toBe(3)
 	})
 
+	it("skips ranking-indexer's Aggregated rankings relation, which no edit carries", () => {
+		const AGGREGATED = "67651da611a942469ff4039aafbe9e43"
+		const pg = statementsFromPostgres([], [{type_id: AGGREGATED, to_entity_id: ENTITY, to_space_id: null}])
+		const diff = diffCards(pg, [])
+		expect(isEmptyDiff(diff)).toBe(true)
+		expect(diff.skipped).toBe(1)
+	})
+
 	it("still reports a real statement missing from geo-db, and never samples the derived one", () => {
 		const pg = statementsFromPostgres([value({property_id: SCORE, integer: "83"}), value({text: "x"})], [])
 		const diff = diffCards(pg, [])

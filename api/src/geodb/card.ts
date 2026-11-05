@@ -237,7 +237,7 @@ export function backlinkRowsFromGeoDbOutput(
 
 /**
  * Properties other indexers write straight into Postgres and no edit carries, so the geo-db backfill
- * excludes them by design (vote Score, ranking rank position, vote ordinal and weighted). The comparison
+ * excludes them by design (vote Score, ranking rank position and Aggregated rankings, vote ordinal and weighted). The comparison
  * does not count them as replica gaps. Keep in step with DERIVED_PROPERTIES in geodb-feeder/src/pgAdapter.ts
  * (a test in the feeder pins the two ids); moving derived data into geo-db is Stage 4 work.
  */
@@ -245,6 +245,7 @@ const DERIVED_PROPERTY_IDS = [
 	"85a4668a-42fa-4f48-8969-c0a9de0c294b", // vote-indexer Score
 	"e1ffac9f-beb4-4654-8a50-00e1d6c662fb", // ranking-indexer rank position (value)
 	"890deffb-3843-49fa-8269-74000e3dcef6", // ranking-indexer rank position (relation type)
+	"67651da6-11a9-4246-9ff4-039aafbe9e43", // ranking-indexer Aggregated rankings (relation type)
 	"49ee1b89-1820-4e75-a1ae-38a2dcaad4a5", // vote ordinal
 	"103701dd-cabe-4a8e-835b-10345327b647", // vote weighted
 ]
