@@ -40,6 +40,7 @@ export const UNCOMPARED_REASONS = [
 	"relation_edge",
 	"created_at",
 	"relation_count",
+	"backlink_count",
 	"partial_values",
 	"filter_completeness",
 	/** An `orderBy` page: which entities come first, and where ties fall, is not checkable from cards. */

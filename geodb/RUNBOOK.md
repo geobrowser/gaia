@@ -928,3 +928,28 @@ size (50Gi / 5Gi) and class and `dataSource: {apiGroup: snapshot.storage.k8s.io,
 deleting anything, check the pair's age against Kafka: the feeder resumes at the saved offset, so it must still be
 inside the 7-day retention (compare the pair's `offsets.json` partition offsets with the topic's low watermark). A
 snapshot older than the last backfill restores without that backfill's writes; run it again (§2b).
+
+## 10. hermes's cursor key (derived collection 10 only)
+
+hermes mirrors its substreams `meta` cursor into geo-db (flag `GEODB_CURSOR_MIRROR`, off by default). It uses
+its own key, `geodb-cursor-key`, not the feeder's: the binding gives it `derived=10` and nothing else
+(`read=- write=- publish=- derived=10`), so a leak cannot touch the graph or any other collection. The key is
+minted inside the cluster by `geodb/k8s/v2/geodb-cursor-key-job.yaml`; the private half is never printed or
+copied out. Needs geo-db `d903c8e017` or later in the geodb image (`derived=`), and a geodb image built from a
+gaia ref that includes the supervisor's `GEODB_CURSOR_KEYID` support (an older supervisor ignores it).
+
+```bash
+# 1. mint (idempotent: never overwrites an existing Secret)
+GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb/k8s/v2/geodb.yaml | sort -u)
+sed -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" geodb/k8s/v2/geodb-cursor-key-job.yaml | $K apply -f -
+$K -n gaia wait --for=condition=complete job/geodb-cursor-key --timeout=120s
+$K -n gaia logs job/geodb-cursor-key          # prints the public key id
+# 2. register: restart serve so the supervisor adds the principal (brief reopen; reads shadow meanwhile)
+$K -n gaia rollout restart statefulset/geodb && $K -n gaia rollout status statefulset/geodb
+# 3. roll hermes so its init container and key mount pick the Secret up
+$K -n gaia rollout restart deploy/hermes-pipeline deploy/hermes-ipfs-cache
+# 4. only then set GEODB_CURSOR_MIRROR on in the two hermes manifests (a separate change)
+```
+
+Rotate: delete Secret `geodb-cursor-key` and Job `geodb-cursor-key`, rerun step 1, then steps 2 and 3.
+Revoke: delete the Secret and restart serve; the principal disappears from the binding.
