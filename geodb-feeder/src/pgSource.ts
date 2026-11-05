@@ -162,8 +162,11 @@ export async function* readUserVoteRows(db: ReadOnlyPg, pageSize = 5000): AsyncG
 			        space_id::text AS space_id, vote_kind::int AS vote_kind, vote_type::int AS vote_type,
 			        floor(extract(epoch FROM voted_at))::bigint::text AS voted_at_seconds
 			 FROM user_votes
-			 WHERE $1::boolean OR (user_id, object_id, object_type, space_id, vote_kind) > ($2::uuid, $3::uuid, $4::smallint, $5::uuid, $6::smallint)
-			 ORDER BY user_id, object_id, object_type, space_id, vote_kind
+			 WHERE $1::boolean OR (user_votes.user_id, user_votes.object_id, user_votes.object_type, user_votes.space_id, user_votes.vote_kind)
+			       > ($2::uuid, $3::uuid, $4::smallint, $5::uuid, $6::smallint)
+			 -- Qualified: a bare name here would bind to the ::text output alias, sorting by text while the keyset
+			 -- WHERE compares uuids; under a collation where the two orders differ, paging skips rows (pgSource.votes test).
+			 ORDER BY user_votes.user_id, user_votes.object_id, user_votes.object_type, user_votes.space_id, user_votes.vote_kind
 			 LIMIT $7`,
 			after === null
 				? [true, null, null, null, null, null, pageSize]

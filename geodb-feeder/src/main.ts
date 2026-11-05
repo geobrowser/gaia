@@ -19,6 +19,7 @@ import {startMembershipConsumer} from "./membershipConsumer.js"
 import {keyedCompareTarget, keyedMembershipEnabled, keyedOffsetsDir} from "./membershipKeyed.js"
 import {ProposalOffsets} from "./proposals.js"
 import {startProposalConsumer} from "./proposalsConsumer.js"
+import {startOptionalConsumer} from "./optionalConsumer.js"
 import {startVotesConsumer} from "./votesConsumer.js"
 import {votesKeyedEnabled, votesOffsetsDir} from "./votesKeyed.js"
 import {PendingSpaces} from "./spaceEntities.js"
@@ -199,8 +200,8 @@ async function main(config: Config): Promise<void> {
 	const keyedMembership = keyedMembershipEnabled(config)
 	if (keyedMembership) {
 		// Keyed records replace the journal-planned dual write: its own group and offsets, the governance Space.
-		try {
-			membership = await startMembershipConsumer({
+		membership = await startOptionalConsumer("membership_keyed", metrics.consumerStartFailed, () =>
+			startMembershipConsumer({
 				kafka,
 				config,
 				abort,
@@ -213,10 +214,8 @@ async function main(config: Config): Promise<void> {
 					publishSystem: (t: string) => systemPublisher.publish(t),
 					offsets: new ProposalOffsets(keyedOffsetsDir(config.dataDir)),
 				},
-			})
-		} catch (e) {
-			log("error", "keyed membership consumer failed to start (edits consumer unaffected)", errorFields(e))
-		}
+			}),
+		)
 	} else if (config.membership.dualWrite && state) {
 		try {
 			membership = await startMembershipConsumer({
@@ -269,8 +268,8 @@ async function main(config: Config): Promise<void> {
 	let votes: Awaited<ReturnType<typeof startVotesConsumer>> | null = null
 	if (config.votes.enabled && !config.recordKeys) log("warn", "GEODB_VOTES is set without GEODB_RECORD_KEYS; votes consumer not started")
 	if (votesKeyedEnabled(config)) {
-		try {
-			votes = await startVotesConsumer({
+		votes = await startOptionalConsumer("votes", metrics.consumerStartFailed, () =>
+			startVotesConsumer({
 				kafka,
 				config,
 				abort,
@@ -283,10 +282,8 @@ async function main(config: Config): Promise<void> {
 					publishSystem: (t: string) => systemPublisher.publish(t),
 					offsets: new ProposalOffsets(votesOffsetsDir(config.dataDir)),
 				},
-			})
-		} catch (e) {
-			log("error", "votes consumer failed to start (edits consumer unaffected)", errorFields(e))
-		}
+			}),
+		)
 	}
 
 	let spaceEntities: Awaited<ReturnType<typeof startSpaceEntityConsumer>> | null = null

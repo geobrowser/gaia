@@ -57,6 +57,19 @@ export type MembershipConfig = {
 	readerKeyPath: string
 }
 
+/**
+ * Every Kafka consumer group the feeder can run, whatever its flags. The backfill Jobs refuse while any has members:
+ * they share the feeder's state volume and system-space record. Add a new consumer's group here.
+ */
+export const feederGroupIds = (c: Config): string[] => [
+	c.kafka.groupId,
+	c.membership.groupId,
+	c.membership.keyedGroupId,
+	c.proposals.groupId,
+	c.spaceEntities.groupId,
+	c.votes.groupId,
+]
+
 export const flag = (v: string | undefined): boolean => v === "1" || v?.toLowerCase() === "true"
 
 function required(env: NodeJS.ProcessEnv, name: string): string {

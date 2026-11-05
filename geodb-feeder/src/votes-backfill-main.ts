@@ -17,7 +17,7 @@
  * - BACKFILL_SKIP_GROUP_CHECK=1 skips the check that the feeder's groups are empty. Only for a store no feeder will resume.
  */
 import kafkajs from "kafkajs"
-import {loadConfig} from "./config.js"
+import {feederGroupIds, loadConfig} from "./config.js"
 import {GeoDb, spawnRunner} from "./geodb.js"
 import {errorFields, log} from "./log.js"
 import {keyedBackfillGate} from "./membershipKeyed.js"
@@ -57,7 +57,7 @@ async function main(): Promise<void> {
 	const admin = kafka.admin()
 	await admin.connect()
 	if (env.BACKFILL_SKIP_GROUP_CHECK !== "1") {
-		const groups = [config.kafka.groupId, config.membership.groupId, config.membership.keyedGroupId, config.votes.groupId]
+		const groups = feederGroupIds(config)
 		for (const g of (await admin.describeGroups(groups)).groups) {
 			if (g.members.length > 0) throw new Error(`group ${g.groupId} has ${g.members.length} members: scale the feeder to 0 first`)
 		}

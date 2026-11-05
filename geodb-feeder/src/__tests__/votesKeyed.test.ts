@@ -2,7 +2,7 @@ import {mkdtempSync, readFileSync} from "node:fs"
 import {tmpdir} from "node:os"
 import {join} from "node:path"
 import {describe, expect, it} from "vitest"
-import {loadConfig} from "../config.js"
+import {feederGroupIds, loadConfig} from "../config.js"
 import {cid} from "../ids.js"
 import {keyedBackfillGate} from "../membershipKeyed.js"
 import {createMetrics} from "../metrics.js"
@@ -21,6 +21,7 @@ import {
 	userVoteFromRow,
 	userVoteIntents,
 	userVoteRecordId,
+	voteKindKey,
 	voteObjectRef,
 	votesKeyedEnabled,
 	votesOffsetsDir,
@@ -215,6 +216,24 @@ describe("user vote record key (K2)", () => {
 		expect(new Set([base, ...others]).size).toBe(others.length + 1)
 	})
 
+	it("keys a negative i16 kind by its u16 bit pattern, injectively, and stores the signed value", () => {
+		expect(voteKindKey(3)).toBe(3n)
+		expect(voteKindKey(-1)).toBe(65535n)
+		expect(voteKindKey(-32768)).toBe(32768n)
+		expect(() => voteKindKey(32768)).toThrow()
+		const neg = vote({kind: -1})
+		expect(userVoteRecordId(neg)).toBe(
+			recordEntityId(KIND, [idPart(USER), idPart(OBJECT), intPart(0), idPart(SPACE), intPart(65535)]),
+		)
+		const ids = [-32768, -2, -1, 0, 1, 3, 32767].map((kind) => userVoteRecordId(vote({kind})))
+		expect(new Set(ids).size).toBe(ids.length)
+		const record = userVoteRecordId(neg)
+		const intents = userVoteIntents(neg).join("\n")
+		expect(intents).toContain(
+			`.{ .add = .{ .id = "${recordStatementId(KIND, [idPart(record), idPart(COL.kind), intPart(65535)])}", .entity = "${record}", .property = "${COL.kind}", .value = .{ .number = -1 } } }`,
+		)
+	})
+
 	it("uses the kind's statement role for column ids, so no column id equals a record id", () => {
 		const record = userVoteRecordId(vote())
 		const ids = userVoteIntents(vote()).flatMap((i) => [...i.matchAll(/\.id = "([0-9a-f]{32})"/g)].map((m) => m[1]))
@@ -316,6 +335,11 @@ describe("replace on change (put)", () => {
 		expect(userVoteIntents(userVoteFromRow(row))).toEqual(
 			userVoteIntents(parseVoteCast(voteCast({direction: 1, kind: 2}))),
 		)
+		// A negative kind, as vote-indexer stores `kind as i16`: the row and the event agree.
+		expect(userVoteIntents(userVoteFromRow({...row, vote_kind: -1}))).toEqual(
+			userVoteIntents(parseVoteCast(voteCast({direction: 1, kind: 0xffff}))),
+		)
+		expect(() => userVoteFromRow({...row, vote_kind: 40000})).toThrow()
 	})
 })
 
@@ -328,6 +352,11 @@ describe("parseVoteCast (vote-indexer's rules)", () => {
 	it("keeps an unknown kind's raw value as its own key", () => {
 		expect(parseVoteCast(voteCast({kind: 9})).kind).toBe(9)
 	})
+	it("narrows the kind to i16 as vote-indexer does, keeping negatives", () => {
+		expect(parseVoteCast(voteCast({kind: -1})).kind).toBe(-1)
+		expect(parseVoteCast(voteCast({kind: 0xffff})).kind).toBe(-1)
+		expect(parseVoteCast(voteCast({kind: 0x8000})).kind).toBe(-32768)
+	})
 	it.each([
 		["missing meta", {createdAt: null}],
 		["an object type other than entity or relation", {objectType: "00000002"}],
@@ -335,7 +364,6 @@ describe("parseVoteCast (vote-indexer's rules)", () => {
 		["a missing space", {space: null}],
 		["an unknown direction", {direction: 3}],
 		["Interested + Down", {kind: 3, direction: 1}],
-		["a negative kind", {kind: -1}],
 	])("rejects %s", (_name, o) => {
 		expect(() => parseVoteCast(voteCast(o))).toThrow()
 	})
@@ -360,11 +388,11 @@ describe("handleVoteMessage", () => {
 		expect(deadLetters(f.store)).toHaveLength(1)
 	})
 
-	it("ignores an empty value and another event type", async () => {
+	it("ignores an empty value, and decodes regardless of event-type as vote-indexer does", async () => {
 		const f = fixture()
 		expect(await handleVoteMessage(f.deps, 0, {offset: "0", value: null})).toBe("ignored")
-		expect(await handleVoteMessage(f.deps, 0, msg(voteCast(), 1, "SOMETHING_ELSE"))).toBe("ignored")
-		expect(await handleVoteMessage(f.deps, 0, msg(voteCast(), 2, null))).toBe("applied")
+		expect(await handleVoteMessage(f.deps, 0, msg(voteCast(), 1, "SOMETHING_ELSE"))).toBe("applied")
+		expect(await handleVoteMessage(f.deps, 0, msg(voteCast({voter: USER2}), 2, null))).toBe("applied")
 	})
 })
 
@@ -456,5 +484,20 @@ describe("flag and gate", () => {
 
 	it("keeps its offsets apart from the membership consumer's", () => {
 		expect(votesOffsetsDir("/data")).toBe("/data/feeder/votes-keyed")
+	})
+
+	it("the backfill group check covers every consumer group the config defines", () => {
+		const c = loadConfig(base)
+		const all: string[] = []
+		const walk = (o: unknown) => {
+			if (!o || typeof o !== "object") return
+			for (const [k, v] of Object.entries(o)) {
+				if (/groupid$/i.test(k) && typeof v === "string") all.push(v)
+				else walk(v)
+			}
+		}
+		walk(c)
+		expect(all.length).toBeGreaterThanOrEqual(6)
+		expect(new Set(feederGroupIds(c))).toEqual(new Set(all))
 	})
 })

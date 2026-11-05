@@ -4,12 +4,23 @@
  *
  * Source: `<env>.curation.votes` (HermesVoteCast, hermes-schema/proto/voting.proto), the topic vote-indexer folds
  * into gaia's `user_votes`. One record per `user_votes` primary key, in the `votes` system Space (systemSpaces.ts):
- * - record entity: `recordEntityId(userVote, [id(user), id(object), int(object_type), id(space), int(kind)])`, the
- *   gaia ids as Postgres holds them (raw 16 bytes), so the record is a pure function of the row's key;
+ * - record entity: `recordEntityId(userVote, [id(user), id(object), int(object_type), id(space), int(u16(kind))])`,
+ *   the gaia ids as Postgres holds them (raw 16 bytes), so the record is a pure function of the row's key. The kind
+ *   is an i16 (vote-indexer's `vote.kind as i16`), keyed as its u16 bit pattern (`BigInt.asUintN(16, kind)`), which is
+ *   injective on i16 and equal to the kind itself for every kind >= 0;
  * - key columns (RECORD_COLUMNS.userVote): `add` + `set_active(true)` under
  *   `recordStatementId(userVote, [record, property, target])`; references to `cid("entity", ...)` for the voter and
  *   the Space, to the object's geo-db id (`cid("entity", id)`, or `cid("statement", id)` for a relation, which geo-db
- *   holds as a statement), numbers for object type and kind. K5: no target needs to exist in this Space.
+ *   holds as a statement), numbers for object type and kind (the kind column stores the signed i16; its statement id
+ *   uses the u16 key part). K5: no target needs to exist in this Space.
+ *
+ * Relation votes: `object_id` is whatever 16 bytes the voter's action put in topic[4..20] (hermes-pipeline
+ * voting.rs convert_vote; geogenesis encodeEntityVoteTopic). Neither the producer nor vote-indexer says whether, for
+ * object_type 1, that is the relation's own id or its reified entity id, and no client in geogenesis sends
+ * object_type 1 today (its one write caller, topics/interested.ts, passes 0). This writer assumes the relation's own
+ * id, which the edits path holds as `cid("statement", id)` (translate.ts). The record key does not depend on it (it
+ * uses the raw object id); only the object column's reference target does. UNCONFIRMED: settle it with the client
+ * that first sends relation votes before anything reads that column.
  * - mutable columns: `put` of `vote_type` (0 up, 1 down, 2 removed) and `voted_at` (instant), each under
  *   `recordStatementId(userVote, [record, property, int(value)])`. A put closes the cell's other active statements,
  *   so a changed vote replaces the old value, and including the value in the id makes A -> B -> A end on A and a
@@ -22,8 +33,13 @@
  *
  * Rejected exactly where vote-indexer rejects (dead-lettered, never written): undecodable payload, missing metadata,
  * an id that is not 16 bytes, an object type other than entity/relation, an unknown direction, Interested + Down.
- * An unknown kind keeps its raw value as its own key, as vote-indexer does. A negative raw kind has no u64 key part
- * and is dead-lettered (the producer has never sent one).
+ * An unknown kind keeps its raw value (narrowed to i16) as its own key, as vote-indexer does, negative ones included.
+ *
+ * The `event-type` header is not checked: vote-indexer decodes every message on the topic, and so does this writer.
+ *
+ * A permanently refused intent inside a vote is dead-lettered on its own and the rest of the vote's intents are
+ * written, so the record is left partial (applyIntents bisects). Replaying the same event is refused again; fix the
+ * cause, then rerun the backfill (RUNBOOK §2c-ter).
  */
 import {type ApplyDeps, applyIntents} from "./apply.js"
 import {parseFields} from "./hermes.js"
@@ -78,7 +94,6 @@ export function parseVoteCast(b: Uint8Array): UserVote {
 	const kindRaw = f.get(9) ?? 0n
 	if (typeof kindRaw !== "bigint") throw new Error("vote: invalid kind")
 	const kind = Number(BigInt.asIntN(16, BigInt.asIntN(32, kindRaw)))
-	if (kind < 0) throw new Error(`vote: negative kind ${kind} has no record key`)
 	const direction = Number(dirRaw) as VoteDirection
 	if (kind === VOTE_KIND_INTERESTED && direction === 1) throw new Error("vote: Interested has no Down")
 	return {
@@ -94,7 +109,13 @@ export function parseVoteCast(b: Uint8Array): UserVote {
 
 /** The record entity of one `user_votes` key. */
 export function userVoteRecordId(v: Pick<UserVote, "user" | "object" | "objectType" | "space" | "kind">): string {
-	return recordEntityId(KIND, [idPart(v.user), idPart(v.object), intPart(v.objectType), idPart(v.space), intPart(v.kind)])
+	return recordEntityId(KIND, [idPart(v.user), idPart(v.object), intPart(v.objectType), idPart(v.space), intPart(voteKindKey(v.kind))])
+}
+
+/** A vote kind (i16) as a key part: its u16 bit pattern, injective on i16 and the kind itself when >= 0. */
+export const voteKindKey = (kind: number): bigint => {
+	if (!Number.isInteger(kind) || kind < -32768 || kind > 32767) throw new Error(`vote: kind ${kind} is not an i16`)
+	return BigInt.asUintN(16, BigInt(kind))
 }
 
 /** The geo-db id the object column references: entities are entities, relations are statements in geo-db. */
@@ -119,14 +140,15 @@ export function userVoteIntents(v: UserVote): string[] {
 		[COL.object, voteObjectRef(v.object, v.objectType)],
 		[COL.space, cid("entity", v.space)],
 	]
-	const nums: [string, number][] = [
-		[COL.objectType, v.objectType],
-		[COL.kind, v.kind],
+	// [property, stored number, key part of the statement id]
+	const nums: [string, number, bigint][] = [
+		[COL.objectType, v.objectType, BigInt(v.objectType)],
+		[COL.kind, v.kind, voteKindKey(v.kind)],
 	]
 	return [
 		`.{ .create_entity = "${record}" }`,
 		...refs.flatMap(([p, t]) => keyColumn(refStatementId(record, p, t), record, p, `.{ .reference = "${t}" }`)),
-		...nums.flatMap(([p, n]) => keyColumn(valueStatementId(record, p, n), record, p, `.{ .number = ${n} }`)),
+		...nums.flatMap(([p, n, k]) => keyColumn(valueStatementId(record, p, k), record, p, `.{ .number = ${n} }`)),
 		putIntent({
 			id: valueStatementId(record, COL.direction, v.direction),
 			entity: record,
@@ -165,9 +187,7 @@ export async function handleVoteMessage(
 	message: {offset: string; value: Uint8Array | null; headers?: Record<string, unknown>},
 ): Promise<VoteOutcome> {
 	if (!message.value) return "ignored"
-	const header = message.headers?.["event-type"]
-	const eventType = header == null ? undefined : Buffer.from(header as Uint8Array | string).toString("utf8")
-	if (eventType !== undefined && eventType !== "VOTE_CAST") return "ignored"
+	// No event-type filter: vote-indexer decodes every message on the topic (see the header comment).
 	let v: UserVote
 	try {
 		v = parseVoteCast(message.value)
@@ -208,7 +228,7 @@ const compact = (id: string) => id.replaceAll("-", "").toLowerCase()
 export function userVoteFromRow(r: UserVoteRow): UserVote {
 	if (r.object_type !== 0 && r.object_type !== 1) throw new Error(`user_votes: object_type ${r.object_type}`)
 	if (r.vote_type !== 0 && r.vote_type !== 1 && r.vote_type !== 2) throw new Error(`user_votes: vote_type ${r.vote_type}`)
-	if (!Number.isInteger(r.vote_kind) || r.vote_kind < 0) throw new Error(`user_votes: vote_kind ${r.vote_kind}`)
+	if (!Number.isInteger(r.vote_kind) || r.vote_kind < -32768 || r.vote_kind > 32767) throw new Error(`user_votes: vote_kind ${r.vote_kind}`)
 	return {
 		user: compact(r.user_id),
 		object: compact(r.object_id),
