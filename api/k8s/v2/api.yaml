@@ -263,6 +263,9 @@ spec:
               value: "on"
             - name: GEODB_BACKLINK_READS
               value: "on"
+            # Shadow geogenesis's EntitiesBatch `entities` selection (gaia#1115). Needs that PR's api image.
+            - name: GEODB_ENTITIES_BATCH_SHADOW
+              value: "on"
             - name: NODE_EXTRA_CA_CERTS
               value: /ssl/ca.crt
             - name: DATABASE_URL
