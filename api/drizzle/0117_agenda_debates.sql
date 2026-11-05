@@ -15,11 +15,13 @@
 -- debate comes back up. That is the full listing boost. 0113 already gave every debate on a listed
 -- claim the full boost too, with no debate discount (debate_factor only discounts claims). What is new
 -- is that only the named debate moves. A debate both listed itself and on a listed claim takes the
--- newer of the two listings.
+-- newer of the two listings. An entity typed both Claim and Debate and named as a debate is ranked as
+-- the named debate it is: the full boost, with no claim discount (unless its own claim listing is
+-- newer).
 --
 -- WHAT IT DOES NOT DO. It is not a claim listing: the debate's claim, and the other debates on it,
--- get nothing from it, and it never counts toward a claim's lastListedOn, listedOnAgendaId or 0113's
--- "debates on a listed claim". It is not an agenda item either. currentDebateAgendas returns it as a
+-- get nothing from it, and it never counts toward another entity's lastListedOn, listedOnAgendaId or
+-- 0113's "debates on a listed claim". It is not an agenda item either. currentDebateAgendas returns it as a
 -- ranking lever, as it does agenda_claims and agenda_topics rows, and every Today's claims surface
 -- reads only block_item rows.
 --
@@ -147,9 +149,14 @@ $$;
 
 -- 0113's, plus a debate's own listing: per claim or debate, the newest arrived listing that counts for
 -- it: its own if it is a claim, its own or its Claims' if it is a debate. A claim never takes a debate
--- listing, so naming a debate lifts neither its claim nor the claim's other debates.
-CREATE OR REPLACE FUNCTION trending.entity_listings(entity_ids uuid[])
-RETURNS TABLE (entity_id uuid, last_listed_on date, agenda_id uuid)
+-- listing, so naming a debate lifts neither its claim nor the claim's other debates. own_claim_listing
+-- says the winner is the entity's own claim listing, the only one its claim discount applies to: an
+-- entity typed both Claim and Debate and named as a debate gets the full boost, as any named debate
+-- does. On a same-day tie a debate listing wins, for the same reason. A new column, so a DROP first.
+DROP FUNCTION IF EXISTS trending.entity_listings(uuid[]);
+--> statement-breakpoint
+CREATE FUNCTION trending.entity_listings(entity_ids uuid[])
+RETURNS TABLE (entity_id uuid, last_listed_on date, agenda_id uuid, own_claim_listing boolean)
 LANGUAGE sql STABLE AS $$
   WITH k AS (SELECT * FROM trending.claims_and_debates(entity_ids)),
   claim_of AS (
@@ -159,16 +166,76 @@ LANGUAGE sql STABLE AS $$
     FROM trending.debate_links('{}', ARRAY(SELECT k.entity_id FROM k WHERE k.is_debate)) dl
   ),
   listings AS (
-    SELECT co.entity_id, l.last_listed_on, l.agenda_id
+    SELECT co.entity_id, l.last_listed_on, l.agenda_id, co.claim_id = co.entity_id AS own_claim_listing
     FROM claim_of co
     JOIN trending.claim_listings(ARRAY(SELECT claim_id FROM claim_of)) l ON l.claim_id = co.claim_id
     UNION ALL
-    SELECT dl.entity_id, dl.last_listed_on, dl.agenda_id
+    SELECT dl.entity_id, dl.last_listed_on, dl.agenda_id, false
     FROM trending.newest_listings(ARRAY(SELECT k.entity_id FROM k WHERE k.is_debate), ARRAY['agenda_debates']) dl
   )
-  SELECT DISTINCT ON (x.entity_id) x.entity_id, x.last_listed_on, x.agenda_id
+  SELECT DISTINCT ON (x.entity_id) x.entity_id, x.last_listed_on, x.agenda_id, x.own_claim_listing
   FROM listings x
-  ORDER BY x.entity_id, x.last_listed_on DESC, x.agenda_id
+  ORDER BY x.entity_id, x.last_listed_on DESC, x.own_claim_listing, x.agenda_id
+$$;
+--> statement-breakpoint
+
+-- 0113's terms, with the claim discount counted only for claims whose own claim listing is the one
+-- that counts (see entity_listings); for the rest it is 0. Everything else is unchanged.
+CREATE OR REPLACE FUNCTION trending.entity_trending_terms(entity_ids uuid[])
+RETURNS TABLE (entity_id uuid, age_credit numeric, trending_score numeric, trending_source text,
+               listing_score numeric, last_listed_on date, agenda_id uuid, debates_in_window integer,
+               topic_score numeric, topic_id uuid, topic_listed_on date)
+LANGUAGE sql STABLE AS $$
+  WITH cfg AS (
+    SELECT c.*, trending.today() AS today FROM public.entity_ranking_config c WHERE c.id
+  ),
+  li AS (SELECT * FROM trending.entity_listings(entity_ids)),
+  tp AS (SELECT * FROM trending.entity_topic_listings(entity_ids)),
+  target AS (
+    SELECT k.entity_id, k.is_claim,
+           CASE WHEN e.created_at ~ '^[0-9]+$' THEN e.created_at::bigint END AS created_epoch
+    FROM trending.claims_and_debates(ARRAY(SELECT entity_id FROM li UNION SELECT entity_id FROM tp)) k
+    JOIN public.entities e ON e.id = k.entity_id
+  ),
+  -- Debates in the window on each claim whose own listing counts, for the claim's discount.
+  recent AS (
+    SELECT d.claim_id, count(DISTINCT d.debate_id)::integer AS debates
+    FROM trending.debate_links(ARRAY(SELECT t.entity_id FROM target t JOIN li USING (entity_id)
+                                     WHERE t.is_claim AND li.own_claim_listing), '{}') d
+    JOIN public.entities de ON de.id = d.debate_id
+    CROSS JOIN cfg
+    WHERE de.created_at ~ '^[0-9]+$'
+      AND de.created_at::bigint >= extract(epoch FROM now()) - cfg.trending_debate_window_days * 86400
+    GROUP BY d.claim_id
+  ),
+  inputs AS (
+    SELECT t.entity_id, li.last_listed_on, li.agenda_id, cfg.today - li.last_listed_on AS days,
+           CASE WHEN li.entity_id IS NOT NULL THEN
+             GREATEST(0, (extract(epoch FROM li.last_listed_on::timestamp AT TIME ZONE trending.time_zone())::numeric
+                          - COALESCE(t.created_epoch, 0)) / GREATEST(cfg.tau_seconds, 1)) END AS age_credit,
+           CASE WHEN t.is_claim AND li.entity_id IS NOT NULL THEN COALESCE(r.debates, 0) END AS debates,
+           tp.topic_id, tp.listed_on AS topic_listed_on, cfg.today - tp.listed_on AS topic_days
+    FROM target t
+    CROSS JOIN cfg
+    LEFT JOIN li ON li.entity_id = t.entity_id
+    LEFT JOIN tp ON tp.entity_id = t.entity_id
+    LEFT JOIN recent r ON r.claim_id = t.entity_id
+  ),
+  terms AS (
+    SELECT x.*,
+           CASE WHEN x.last_listed_on IS NULL OR x.days > cfg.trending_horizon_days THEN 0
+                ELSE cfg.trending_boost * power(cfg.trending_day_factor, x.days)
+                                        * power(cfg.trending_debate_factor, COALESCE(x.debates, 0)) END AS listing_score,
+           CASE WHEN x.topic_id IS NULL OR x.topic_days > cfg.trending_horizon_days THEN 0
+                ELSE cfg.trending_topic_boost * power(cfg.trending_day_factor, x.topic_days) END AS topic_score
+    FROM inputs x CROSS JOIN cfg
+  )
+  SELECT x.entity_id, COALESCE(x.age_credit, 0), GREATEST(x.listing_score, x.topic_score),
+         CASE WHEN x.listing_score > 0 AND x.listing_score >= x.topic_score THEN 'listing'
+              WHEN x.topic_score > 0 THEN 'topic' END,
+         x.listing_score, x.last_listed_on, x.agenda_id, x.debates,
+         x.topic_score, x.topic_id, x.topic_listed_on
+  FROM terms x
 $$;
 --> statement-breakpoint
 
@@ -282,8 +349,9 @@ $$;
 --> statement-breakpoint
 
 -- 0115's query. Changes: agenda_debates rows (from agenda_contents) carry the debate's lastListedOn,
--- its own listing or its claim's, and sort after agenda_claims. A claim row's lastListedOn reads
--- only claim rows.
+-- its own listing or its claim's, and sort after agenda_claims. Every claim or debate row's
+-- lastListedOn is now entity_listings' (Entity.lastListedOn), not only claim listings, so an entity
+-- typed both Claim and Debate reads the same on its block item and its Debates rows.
 CREATE OR REPLACE FUNCTION public.current_debate_agendas(space_ids uuid[] DEFAULT NULL, earlier_days integer DEFAULT 0)
 RETURNS TABLE (space_id uuid, agenda_id uuid, listed_on date, listed_at timestamptz, is_current boolean,
                source text, section_id uuid, section_name text, section_topic_id uuid,
@@ -371,14 +439,9 @@ LANGUAGE sql STABLE AS $$
     SELECT * FROM earlier_rows
   ),
   listed AS (
-    SELECT l.claim_id, l.last_listed_on
-    FROM trending.claim_listings(ARRAY(SELECT DISTINCT p.entity_id FROM picked p
-                                       WHERE p.source = ANY(trending.claim_sources()))) l
-  ),
-  debate_listed AS (
     SELECT l.entity_id, l.last_listed_on
     FROM trending.entity_listings(ARRAY(SELECT DISTINCT p.entity_id FROM picked p
-                                        WHERE p.source = 'agenda_debates')) l
+                                        WHERE p.source <> 'agenda_topics')) l
   )
   SELECT p.space_id, p.agenda_id, p.listed_on,
          p.listed_on::timestamp AT TIME ZONE trending.time_zone(),
@@ -395,25 +458,19 @@ LANGUAGE sql STABLE AS $$
          p.section_position, p.entity_id, p.item_position,
          -- The listings table trails a new agenda by up to an hour; the rows in hand are listings too,
          -- so an entity reads the same on every row of the response.
-         CASE WHEN p.source = ANY(trending.claim_sources())
+         CASE WHEN p.source <> 'agenda_topics'
               THEN GREATEST(l.last_listed_on,
-                            max(p.listed_on) FILTER (WHERE p.source = ANY(trending.claim_sources()))
-                              OVER (PARTITION BY p.entity_id))
-              WHEN p.source = 'agenda_debates'
-              THEN GREATEST(dl.last_listed_on,
-                            max(p.listed_on) FILTER (WHERE p.source = 'agenda_debates')
-                              OVER (PARTITION BY p.entity_id)) END
+                            max(p.listed_on) FILTER (WHERE p.source <> 'agenda_topics') OVER (PARTITION BY p.entity_id)) END
   FROM picked p
   JOIN space_order so ON so.space_id = p.space_id
-  LEFT JOIN listed l ON l.claim_id = p.entity_id
-  LEFT JOIN debate_listed dl ON dl.entity_id = p.entity_id
+  LEFT JOIN listed l ON l.entity_id = p.entity_id
   ORDER BY so.n, p.is_current DESC, p.listed_on DESC, p.recency,
            CASE p.source WHEN 'block_item' THEN 0 WHEN 'agenda_claims' THEN 1 WHEN 'agenda_debates' THEN 2 ELSE 3 END,
            p.section_position, p.item_position
 $$;
 --> statement-breakpoint
 COMMENT ON FUNCTION public.current_debate_agendas(uuid[], integer) IS
-  E'The current Debate agendas (GEO-3503), one row per item, in order. Pass spaces in the order to show them (member spaces first), or none for every space with an agenda this week. Per space: its freshest agenda dated in the last week whose Date has arrived (the newer on a tie), with source block_item rows as its contents (sections and claims in the order Geo shows them) and agenda_claims / agenda_debates / agenda_topics rows for the claims, debates and topics it names as ranking levers, which are not agenda items. With earlierDays (up to 31), also the block items of these spaces'' other agendas in that many past days (isCurrent false), once per claim per space at its newest listing there and none that is on its own space''s current agenda; a space''s rows do not depend on which others are asked. Positions number only the rows returned. listedAt is the agenda Date''s midnight in New York. lastListedOn is the claim''s newest claim listing in any space (for an agenda_debates row, the debate''s own or its claim''s, whichever is newer), kept hourly. Like every list, it returns 100 rows unless first asks for more (up to 1000).';
+  E'The current Debate agendas (GEO-3503), one row per item, in order. Pass spaces in the order to show them (member spaces first), or none for every space with an agenda this week. Per space: its freshest agenda dated in the last week whose Date has arrived (the newer on a tie), with source block_item rows as its contents (sections and claims in the order Geo shows them) and agenda_claims / agenda_debates / agenda_topics rows for the claims, debates and topics it names as ranking levers, which are not agenda items. With earlierDays (up to 31), also the block items of these spaces'' other agendas in that many past days (isCurrent false), once per claim per space at its newest listing there and none that is on its own space''s current agenda; a space''s rows do not depend on which others are asked. Positions number only the rows returned. listedAt is the agenda Date''s midnight in New York. lastListedOn is the entity''s Entity.lastListedOn: a claim''s newest claim listing in any space, and for a debate the newer of its own listing and its claim''s, kept hourly. Like every list, it returns 100 rows unless first asks for more (up to 1000).';
 --> statement-breakpoint
 
 DO $$

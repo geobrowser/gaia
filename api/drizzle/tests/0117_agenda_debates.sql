@@ -10,7 +10,8 @@
 --      debate ranks above every organic debate; the boost decays like a listing's.
 --   3. It is not a claim listing: the debate's claim and the claim's other debates get nothing, and
 --      neither carries lastListedOn; a claim listing's debates and discount are untouched.
---   4. A debate named and on a listed claim takes the newer listing.
+--   4. A debate named and on a listed claim takes the newer listing. An entity typed both Claim and
+--      Debate, named as a debate, gets the full boost (no claim discount) and one lastListedOn.
 --   5. currentDebateAgendas returns it as a lever after the claims, with its own lastListedOn, never
 --      as an agenda item.
 --   6. A vote's re-score keeps its terms; the hourly sweep picks up an added or removed Debates link
@@ -58,13 +59,16 @@ CREATE OR REPLACE FUNCTION pg_temp.tau() RETURNS numeric LANGUAGE sql AS $$
 --   DP      a debate named by AP, an agenda in the personal space SP.
 --   DF      a debate named only by tomorrow's agenda AFUT.
 --   ORG1-5  debates on the unlisted claim UNL, created 0..4 days ago: the organic debate feed.
+--   BC      typed both Claim and Debate, 30 days old: a block item on A3B (in S2, 3 days ago) and named
+--           on A0 today, with debates DB1 and DB2 (yesterday) linked to it.
+--   A0 names DN, DBOTH and BC at positions a0, a1, a2.
 -- ---------------------------------------------------------------------------
 CREATE TEMP TABLE ids AS
 SELECT k, ('b1170000-0000-4000-8000-' || lpad(to_hex(n), 12, '0'))::uuid AS id
-FROM unnest(ARRAY['CL','LC','LC5','UNL','NOTD',
-                  'DN','DSIB','D2','DLC','DW','DBOTH','DX','DP','DF',
+FROM unnest(ARRAY['CL','LC','LC5','UNL','NOTD','BC',
+                  'DN','DSIB','D2','DLC','DW','DBOTH','DX','DP','DF','DB1','DB2',
                   'ORG1','ORG2','ORG3','ORG4','ORG5',
-                  'A0','A2','A3','A5','AP','AFUT','S1','S2','SP']) WITH ORDINALITY AS u(k, n)
+                  'A0','A2','A3','A3B','A5','AP','AFUT','S1','S2','SP']) WITH ORDINALITY AS u(k, n)
 UNION ALL SELECT * FROM (VALUES
   ('DEBATE', 'fd51f935-2063-4617-be39-7b672b23364c'::uuid),
   ('CLAIM',  '96f859ef-a1ca-4b22-9372-c86ad58b694b'::uuid),
@@ -139,10 +143,12 @@ SELECT id, CASE WHEN k = 'SP' THEN 'Personal' ELSE 'DAO' END::"spaceTypes", 'add
 FROM ids WHERE k IN ('S1','S2','SP');
 
 SELECT pg_temp.ent(k, pg_temp.noon(40)), pg_temp.typed(k, 'CLAIM') FROM ids WHERE k IN ('CL','LC','LC5','UNL','NOTD');
+SELECT pg_temp.ent('BC', pg_temp.noon(30)), pg_temp.typed('BC', 'CLAIM'), pg_temp.typed('BC', 'DEBATE');
 
 SELECT pg_temp.agenda('A0', 'S1', 0, ARRAY['LC']);
 SELECT pg_temp.agenda('A2', 'S1', 2, ARRAY[]::text[]);
 SELECT pg_temp.agenda('A3', 'S1', 3, ARRAY[]::text[]);
+SELECT pg_temp.agenda('A3B', 'S2', 3, ARRAY['BC']);
 SELECT pg_temp.agenda('A5', 'S1', 5, ARRAY['LC5']);
 SELECT pg_temp.agenda('AP', 'SP', 0, ARRAY[]::text[]);
 SELECT pg_temp.agenda('AFUT', 'S1', -1, ARRAY[]::text[]);
@@ -151,11 +157,17 @@ SELECT pg_temp.debate('DN', 'CL', 30), pg_temp.debate('DSIB', 'CL', 30), pg_temp
 SELECT pg_temp.debate('DLC', 'LC', 10), pg_temp.debate('DW', 'LC', 2), pg_temp.debate('DBOTH', 'LC5', 20);
 SELECT pg_temp.debate('DX', 'UNL', 30), pg_temp.debate('DP', 'UNL', 30), pg_temp.debate('DF', 'UNL', 30);
 SELECT pg_temp.debate('ORG' || n, 'UNL', n - 1) FROM generate_series(1, 5) n;
+SELECT pg_temp.debate('DB1', 'BC', 1), pg_temp.debate('DB2', 'BC', 1);
 
 SELECT pg_temp.names('A0', 'DN', 'S1'), pg_temp.names('A0', 'DBOTH', 'S1'), pg_temp.names('A0', 'DX', 'S2'),
        pg_temp.names('A0', 'NOTD', 'S1');
 SELECT pg_temp.names('A2', 'D2', 'S1'), pg_temp.names('A3', 'DLC', 'S1');
 SELECT pg_temp.names('AP', 'DP', 'SP'), pg_temp.names('AFUT', 'DF', 'S1');
+SELECT pg_temp.names('A0', 'BC', 'S1');
+-- Positions on A0's Debates relations, so their order is fixed.
+UPDATE relations SET position = CASE to_entity_id WHEN pg_temp.i('DN') THEN 'a0' WHEN pg_temp.i('DBOTH') THEN 'a1'
+                                                  WHEN pg_temp.i('BC') THEN 'a2' END
+WHERE from_entity_id = pg_temp.i('A0') AND type_id = 'b96bf701-a399-430d-a072-f5e910cdeda9'::uuid;
 
 CREATE TEMP TABLE first_run AS SELECT trending.refresh_agenda_listings(false) AS n;
 -- The sweep scores only what agendas name; score the rest the way a vote would.
@@ -222,29 +234,36 @@ SELECT assert(pg_temp.trend('DBOTH') = pg_temp.b() AND pg_temp.listed_on('DBOTH'
               '4: named today, its claim listed 5 days ago: its own listing');
 SELECT assert(pg_temp.near(pg_temp.trend('LC5'), pg_temp.b() * pg_temp.f(5)) AND pg_temp.listed_on('LC5') = pg_temp.today() - 5,
               '4: and its claim keeps its own, older listing');
+SELECT assert(pg_temp.trend('BC') = pg_temp.b() AND pg_temp.src('BC') = 'listing' AND pg_temp.listed_on('BC') = pg_temp.today()
+              AND pg_temp.near(pg_temp.credit('BC'), (pg_temp.midnight(0) - pg_temp.noon(30)) / pg_temp.tau()),
+              '4: typed Claim and Debate and named today: the full boost, with no discount for its two debates');
+SELECT assert(pg_temp.near(pg_temp.trend('DB1'), pg_temp.b() * pg_temp.f(3)) AND pg_temp.listed_on('DB1') = pg_temp.today() - 3,
+              '4: its debates get only its 3-day-old claim listing, not its debate listing');
 
 -- ---------------------------------------------------------------------------
 -- 5. currentDebateAgendas.
 -- ---------------------------------------------------------------------------
 CREATE TEMP TABLE s1_rows AS
 SELECT row_number() OVER () AS n, c.* FROM public.current_debate_agendas(ARRAY[pg_temp.i('S1')]) c;
-SELECT assert((SELECT array_agg(source || ':' || (SELECT k FROM ids WHERE id = entity_id) ORDER BY n) FROM s1_rows)
-              = ARRAY['block_item:LC', 'agenda_debates:DBOTH', 'agenda_debates:DN']
-              OR (SELECT array_agg(source || ':' || (SELECT k FROM ids WHERE id = entity_id) ORDER BY n) FROM s1_rows)
-              = ARRAY['block_item:LC', 'agenda_debates:DN', 'agenda_debates:DBOTH'],
-              '5: the current agenda''s block items, then its debates as levers; nothing else');
+SELECT assert((SELECT array_agg(source || ':' || (SELECT k FROM ids WHERE id = entity_id) || ':' || item_position ORDER BY n)
+               FROM s1_rows)
+              = ARRAY['block_item:LC:1', 'agenda_debates:DN:1', 'agenda_debates:DBOTH:2', 'agenda_debates:BC:3'],
+              '5: the current agenda''s block items, then its debates as levers in their order; nothing else');
 SELECT assert(NOT EXISTS (SELECT 1 FROM s1_rows WHERE source = 'block_item' AND entity_id <> pg_temp.i('LC')),
               '5: a named debate is never an agenda item');
 SELECT assert((SELECT last_listed_on FROM s1_rows WHERE entity_id = pg_temp.i('DN')) = pg_temp.today()
               AND (SELECT last_listed_on FROM s1_rows WHERE entity_id = pg_temp.i('LC')) = pg_temp.today(),
               '5: debate and claim rows carry their own lastListedOn');
+SELECT assert((SELECT c.last_listed_on FROM public.current_debate_agendas(ARRAY[pg_temp.i('S2')]) c
+               WHERE c.entity_id = pg_temp.i('BC') AND c.source = 'block_item') = pg_temp.today(),
+              '5: an entity typed Claim and Debate, asked for alone in its block''s space, reads its Entity.lastListedOn');
 
 -- ---------------------------------------------------------------------------
 -- 6. Re-scores and the sweep.
 -- ---------------------------------------------------------------------------
--- First run, every row new. Claims: LC LC5 (2) and their debates DLC DW DBOTH (3); named debates DN
--- D2 DLC DBOTH DF (DLC and DBOTH already counted: 3 more). Not DX, NOTD or DP: no row.
-SELECT assert((SELECT n FROM first_run) = 8, '6: the first run re-scores listed claims, their debates and named debates');
+-- First run, every row new. Claims: LC LC5 BC (3) and their debates DLC DW DBOTH DB1 DB2 (5); named
+-- debates DN D2 DLC DBOTH DF BC (DLC DBOTH BC already counted: 3 more). Not DX, NOTD or DP: no row.
+SELECT assert((SELECT n FROM first_run) = 11, '6: the first run re-scores listed claims, their debates and named debates');
 SELECT pg_temp.votes('DN', 3);
 SELECT public.refresh_entity_ranking_scores(ARRAY[pg_temp.i('DN')]);
 SELECT assert(pg_temp.trend('DN') = pg_temp.b()
@@ -259,9 +278,9 @@ SELECT assert(pg_temp.trend('DN') = 0 AND pg_temp.credit('DN') = 0 AND pg_temp.s
 SELECT assert(pg_temp.trend('DSIB') = pg_temp.b() AND pg_temp.credit('DSIB') > 0, '6: a newly named one gets them');
 SELECT assert(pg_temp.trend('CL') = 0, '6: the claim is untouched');
 
--- Full pass. Listed claims LC LC5 and their debates DLC DW DBOTH (5); named debates DSIB D2 DF (3);
--- nothing else stores a term.
-SELECT assert(trending.refresh_agenda_listings(true) = 8, '6: the full pass re-scores every listed debate');
+-- Full pass. Listed claims LC LC5 BC and their debates DLC DW DBOTH DB1 DB2 (8); named debates DSIB D2
+-- DF (3); nothing else stores a term.
+SELECT assert(trending.refresh_agenda_listings(true) = 11, '6: the full pass re-scores every listed debate');
 SELECT assert(pg_temp.trend('DSIB') = pg_temp.b() AND pg_temp.near(pg_temp.trend('D2'), pg_temp.b() * pg_temp.f(2)),
               '6: and keeps their terms');
 
