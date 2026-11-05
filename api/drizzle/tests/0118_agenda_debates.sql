@@ -265,6 +265,14 @@ SELECT assert(trending.refresh_agenda_listings(true) = 8, '6: the full pass re-s
 SELECT assert(pg_temp.trend('DSIB') = pg_temp.b() AND pg_temp.near(pg_temp.trend('D2'), pg_temp.b() * pg_temp.f(2)),
               '6: and keeps their terms');
 
+-- D2 stops being a debate: A2 no longer names one, so the hourly run drops the row and clears D2.
+DELETE FROM relations WHERE from_entity_id = pg_temp.i('D2') AND to_entity_id = pg_temp.i('DEBATE')
+  AND type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid;
+SELECT assert(trending.refresh_agenda_listings(false) = 1, '6: an hourly run re-scores a named debate that lost its Debate type');
+SELECT assert(NOT EXISTS (SELECT 1 FROM trending.agenda_listings WHERE entity_id = pg_temp.i('D2'))
+              AND pg_temp.trend('D2') = 0 AND pg_temp.credit('D2') = 0,
+              '6: its listing goes and its terms are cleared, without waiting for the full pass');
+
 -- Cleanup for running by hand.
 UPDATE trending.refresh_state SET last_full_pass_on = NULL WHERE id;
 TRUNCATE entities, values, relations, votes_count, spaces, entity_ranking_scores, entity_type_ranking,

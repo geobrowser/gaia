@@ -28,8 +28,8 @@
 -- claim is not.
 --
 -- FRESHNESS, as 0113's: the hourly sweep re-scores debates whose agenda_debates rows changed, and the
--- daily full pass re-scores every listed debate. A debate that loses its Debate type keeps its terms
--- until the next full pass, which clears them as a stored term.
+-- daily full pass re-scores every listed debate. A debate that loses its Debate type drops out of
+-- what the agenda names, so its row goes and the next hourly run clears its terms.
 --
 -- WAREHOUSE. GEO-3556's export (0117, if merged) sends every source. Analytics' claim view keeps
 -- only block_item and agenda_claims, so the new rows are exported and stay out of claim reports.
@@ -38,6 +38,12 @@ ALTER TABLE "trending"."agenda_listings" DROP CONSTRAINT IF EXISTS "agenda_listi
 --> statement-breakpoint
 ALTER TABLE "trending"."agenda_listings" ADD CONSTRAINT "agenda_listings_source_check"
   CHECK ("source" IN ('block_item', 'agenda_claims', 'agenda_debates', 'agenda_topics'));
+--> statement-breakpoint
+
+-- The sources that are claim listings: what a claim's boost, age credit and lastListedOn read. Topic
+-- and debate listings are not.
+CREATE OR REPLACE FUNCTION trending.claim_sources()
+RETURNS text[] LANGUAGE sql IMMUTABLE AS $$ SELECT ARRAY['block_item', 'agenda_claims'] $$;
 --> statement-breakpoint
 
 -- 0115's contents, plus one row per Debates target typed Debate (source 'agenda_debates', numbered
@@ -118,28 +124,24 @@ LANGUAGE sql STABLE AS $$
 $$;
 --> statement-breakpoint
 
--- 0113's, with the claim sources named: a debate listing is not a claim listing, any more than a topic
--- listing is.
-CREATE OR REPLACE FUNCTION trending.claim_listings(claim_ids uuid[])
-RETURNS TABLE (claim_id uuid, last_listed_on date, agenda_id uuid, space_id uuid)
+-- Per entity in `entity_ids`, its newest arrived listing among `sources`, and on which agenda and space.
+CREATE OR REPLACE FUNCTION trending.newest_listings(entity_ids uuid[], sources text[])
+RETURNS TABLE (entity_id uuid, last_listed_on date, agenda_id uuid, space_id uuid)
 LANGUAGE sql STABLE AS $$
   SELECT DISTINCT ON (l.entity_id) l.entity_id, l.listed_on, l.agenda_id, l.space_id
   FROM trending.agenda_listings l
-  WHERE l.entity_id = ANY(claim_ids) AND l.source IN ('block_item', 'agenda_claims')
+  WHERE l.entity_id = ANY(entity_ids) AND l.source = ANY(sources)
     AND l.listed_on <= trending.today()
   ORDER BY l.entity_id, l.listed_on DESC, l.agenda_id
 $$;
 --> statement-breakpoint
 
--- Per debate, its newest arrived listing of its own (an agenda's Debates relation).
-CREATE OR REPLACE FUNCTION trending.debate_listings(debate_ids uuid[])
-RETURNS TABLE (debate_id uuid, last_listed_on date, agenda_id uuid, space_id uuid)
+-- 0113's, now only the claim sources: a debate listing is not a claim listing, any more than a topic
+-- listing is.
+CREATE OR REPLACE FUNCTION trending.claim_listings(claim_ids uuid[])
+RETURNS TABLE (claim_id uuid, last_listed_on date, agenda_id uuid, space_id uuid)
 LANGUAGE sql STABLE AS $$
-  SELECT DISTINCT ON (l.entity_id) l.entity_id, l.listed_on, l.agenda_id, l.space_id
-  FROM trending.agenda_listings l
-  WHERE l.entity_id = ANY(debate_ids) AND l.source = 'agenda_debates'
-    AND l.listed_on <= trending.today()
-  ORDER BY l.entity_id, l.listed_on DESC, l.agenda_id
+  SELECT * FROM trending.newest_listings(claim_ids, trending.claim_sources())
 $$;
 --> statement-breakpoint
 
@@ -161,8 +163,8 @@ LANGUAGE sql STABLE AS $$
     FROM claim_of co
     JOIN trending.claim_listings(ARRAY(SELECT claim_id FROM claim_of)) l ON l.claim_id = co.claim_id
     UNION ALL
-    SELECT dl.debate_id, dl.last_listed_on, dl.agenda_id
-    FROM trending.debate_listings(ARRAY(SELECT k.entity_id FROM k WHERE k.is_debate)) dl
+    SELECT dl.entity_id, dl.last_listed_on, dl.agenda_id
+    FROM trending.newest_listings(ARRAY(SELECT k.entity_id FROM k WHERE k.is_debate), ARRAY['agenda_debates']) dl
   )
   SELECT DISTINCT ON (x.entity_id) x.entity_id, x.last_listed_on, x.agenda_id
   FROM listings x
@@ -216,7 +218,7 @@ BEGIN
   -- Claims, debates and topics whose rows changed (added, removed or re-dated). A full pass adds every
   -- listed claim and debate, for the age credit, and topics inside the horizon: past it a topic lifts
   -- nothing.
-  SELECT coalesce(array_agg(DISTINCT x.entity_id) FILTER (WHERE x.source IN ('block_item', 'agenda_claims')
+  SELECT coalesce(array_agg(DISTINCT x.entity_id) FILTER (WHERE x.source = ANY(trending.claim_sources())
                                                             AND (x.changed OR full_pass)), '{}'),
          coalesce(array_agg(DISTINCT x.entity_id) FILTER (WHERE x.source = 'agenda_debates'
                                                             AND (x.changed OR full_pass)), '{}'),
@@ -236,7 +238,7 @@ BEGIN
       SELECT DISTINCT dl.claim_id
       FROM trending.debate_links(ARRAY(
         SELECT i.entity_id FROM incoming_agenda_listings i
-        WHERE i.source IN ('block_item', 'agenda_claims') AND i.listed_on BETWEEN today - horizon AND today), '{}') dl
+        WHERE i.source = ANY(trending.claim_sources()) AND i.listed_on BETWEEN today - horizon AND today), '{}') dl
       LEFT JOIN public.entity_ranking_scores s ON s.entity_id = dl.debate_id
       WHERE COALESCE(s.trending_score, 0) = 0);
   END IF;
@@ -371,7 +373,7 @@ LANGUAGE sql STABLE AS $$
   listed AS (
     SELECT l.claim_id, l.last_listed_on
     FROM trending.claim_listings(ARRAY(SELECT DISTINCT p.entity_id FROM picked p
-                                       WHERE p.source IN ('block_item', 'agenda_claims'))) l
+                                       WHERE p.source = ANY(trending.claim_sources()))) l
   ),
   debate_listed AS (
     SELECT l.entity_id, l.last_listed_on
@@ -393,9 +395,9 @@ LANGUAGE sql STABLE AS $$
          p.section_position, p.entity_id, p.item_position,
          -- The listings table trails a new agenda by up to an hour; the rows in hand are listings too,
          -- so an entity reads the same on every row of the response.
-         CASE WHEN p.source IN ('block_item', 'agenda_claims')
+         CASE WHEN p.source = ANY(trending.claim_sources())
               THEN GREATEST(l.last_listed_on,
-                            max(p.listed_on) FILTER (WHERE p.source IN ('block_item', 'agenda_claims'))
+                            max(p.listed_on) FILTER (WHERE p.source = ANY(trending.claim_sources()))
                               OVER (PARTITION BY p.entity_id))
               WHEN p.source = 'agenda_debates'
               THEN GREATEST(dl.last_listed_on,
