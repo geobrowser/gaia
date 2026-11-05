@@ -1,0 +1,215 @@
+{
+	"_vendored": "Vendored from geo-db 9d97069a7899bed380b5ca01607dcf2cd331f81f (origin/final), tests/vectors/record_key/record-key.json. Do not edit: re-vendor from geo-db and update VENDORED_SHA and VECTORS_DIGEST in recordKey.test.ts. Every key but this one is the upstream file unchanged.",
+	"contract": "geodb-record-key-vectors/v1",
+	"context": "geodb.v1.record.key",
+	"note": "Natural-key record ids (plan 10.12 K2; docs/api/05 §6): id = v4(BLAKE3 derive_key(context, preimage)[0..16]), v4 stamping byte 6 to 0x40|(b&0x0F) and byte 8 to 0x80|(b&0x3F). preimage = kind[16] || role (0x00 entity, 0x01 statement) || parts, each part 0x01 || id[16], or 0x02 || u32_le(len) || bytes, or 0x03 || u64_le. Ids are canonical lowercase UUID text; bytes are hex; an int is decimal text (it can exceed 2^53).",
+	"cases": [
+		{
+			"name": "edge-member",
+			"note": "an edge row (subject, role, target): an editor of a Space",
+			"kind": "102f4e6d-8cab-4ae9-8827-466584a3c2e1",
+			"role": "statement",
+			"parts": [
+				{
+					"id": "41607f9e-bddc-4b1a-b958-7796b5d4f312"
+				},
+				{
+					"id": "527190af-ceed-4c2b-8a69-88a7c6e50423"
+				},
+				{
+					"id": "6382a1c0-dffe-4d3c-9b7a-99b8d7f61534"
+				}
+			],
+			"preimage": "102f4e6d8cab4ae98827466584a3c2e1010141607f9ebddc4b1ab9587796b5d4f31201527190afceed4c2b8a6988a7c6e50423016382a1c0dffe4d3c9b7a99b8d7f61534",
+			"id": "b908dacc-06d3-47b3-b16e-70c46f6c4cdc"
+		},
+		{
+			"name": "record-entity",
+			"note": "a record row's entity: a proposal vote keyed (proposal, voter)",
+			"kind": "203f5e7d-9cbb-4af9-9837-567594b3d2f1",
+			"role": "entity",
+			"parts": [
+				{
+					"id": "7493b2d1-f00f-4e4d-ac8b-aac9e8072645"
+				},
+				{
+					"id": "85a4c3e2-0120-4f5e-bd9c-bbdaf9183756"
+				}
+			],
+			"preimage": "203f5e7d9cbb4af99837567594b3d2f100017493b2d1f00f4e4dac8baac9e80726450185a4c3e201204f5ebd9cbbdaf9183756",
+			"id": "71162d82-efd1-4c0b-8c5c-ddc49747834e"
+		},
+		{
+			"name": "record-statement-same-parts",
+			"note": "the role byte parts an entity from a statement of one kind and key",
+			"kind": "203f5e7d-9cbb-4af9-9837-567594b3d2f1",
+			"role": "statement",
+			"parts": [
+				{
+					"id": "7493b2d1-f00f-4e4d-ac8b-aac9e8072645"
+				},
+				{
+					"id": "85a4c3e2-0120-4f5e-bd9c-bbdaf9183756"
+				}
+			],
+			"preimage": "203f5e7d9cbb4af99837567594b3d2f101017493b2d1f00f4e4dac8baac9e80726450185a4c3e201204f5ebd9cbbdaf9183756",
+			"id": "60773ada-8f3b-4da2-a8b2-8e8d49b016f3"
+		},
+		{
+			"name": "key-reference",
+			"note": "a key reference (record, property, target), the record id the record-entity case's",
+			"kind": "203f5e7d-9cbb-4af9-9837-567594b3d2f1",
+			"role": "statement",
+			"parts": [
+				{
+					"id": "71162d82-efd1-4c0b-8c5c-ddc49747834e"
+				},
+				{
+					"id": "96b5d4f3-1231-406f-8ead-cceb0a294867"
+				},
+				{
+					"id": "85a4c3e2-0120-4f5e-bd9c-bbdaf9183756"
+				}
+			],
+			"preimage": "203f5e7d9cbb4af99837567594b3d2f1010171162d82efd14c0b8c5cddc49747834e0196b5d4f31231406f8eadcceb0a2948670185a4c3e201204f5ebd9cbbdaf9183756",
+			"id": "2f5007c3-d62b-4f32-afdc-17a09cff9d9e"
+		},
+		{
+			"name": "column-int",
+			"note": "a column value (record, property, value), the value an unsigned integer",
+			"kind": "203f5e7d-9cbb-4af9-9837-567594b3d2f1",
+			"role": "statement",
+			"parts": [
+				{
+					"id": "71162d82-efd1-4c0b-8c5c-ddc49747834e"
+				},
+				{
+					"id": "96b5d4f3-1231-406f-8ead-cceb0a294867"
+				},
+				{
+					"int": "1"
+				}
+			],
+			"preimage": "203f5e7d9cbb4af99837567594b3d2f1010171162d82efd14c0b8c5cddc49747834e0196b5d4f31231406f8eadcceb0a294867030100000000000000",
+			"id": "02602cef-510b-448c-8cb5-5d29e9b9ea3f"
+		},
+		{
+			"name": "column-int-max",
+			"note": "the integer part's largest value, little-endian",
+			"kind": "203f5e7d-9cbb-4af9-9837-567594b3d2f1",
+			"role": "statement",
+			"parts": [
+				{
+					"id": "71162d82-efd1-4c0b-8c5c-ddc49747834e"
+				},
+				{
+					"id": "96b5d4f3-1231-406f-8ead-cceb0a294867"
+				},
+				{
+					"int": "18446744073709551615"
+				}
+			],
+			"preimage": "203f5e7d9cbb4af99837567594b3d2f1010171162d82efd14c0b8c5cddc49747834e0196b5d4f31231406f8eadcceb0a29486703ffffffffffffffff",
+			"id": "244b91a7-00fd-4f50-840b-6efcd542b4a0"
+		},
+		{
+			"name": "text-key",
+			"note": "a text key as its canonical bytes: an address lowercase",
+			"kind": "304f6e8d-accb-4a09-a847-6685a4c3e201",
+			"role": "entity",
+			"parts": [
+				{
+					"bytes": "307835616564613536323135623136373839336538306234666536343562613664356261623736376465"
+				}
+			],
+			"preimage": "304f6e8daccb4a09a8476685a4c3e20100022a000000307835616564613536323135623136373839336538306234666536343562613664356261623736376465",
+			"id": "93e66abc-e86c-444e-9ccb-54fc679a86aa"
+		},
+		{
+			"name": "text-utf8",
+			"note": "a text part is its UTF-8 bytes, length-prefixed in bytes",
+			"kind": "304f6e8d-accb-4a09-a847-6685a4c3e201",
+			"role": "entity",
+			"parts": [
+				{
+					"bytes": "47c3b664656c"
+				}
+			],
+			"preimage": "304f6e8daccb4a09a8476685a4c3e20100020600000047c3b664656c",
+			"id": "41dd33f9-a0f5-4dc0-b795-d853202b0dd0"
+		},
+		{
+			"name": "empty-bytes",
+			"note": "an empty byte string is a part: its tag and a zero length",
+			"kind": "304f6e8d-accb-4a09-a847-6685a4c3e201",
+			"role": "entity",
+			"parts": [
+				{
+					"bytes": ""
+				}
+			],
+			"preimage": "304f6e8daccb4a09a8476685a4c3e201000200000000",
+			"id": "0daf19bb-2117-4304-8d21-781316557b6a"
+		},
+		{
+			"name": "singleton",
+			"note": "zero parts: the kind's one singleton record",
+			"kind": "304f6e8d-accb-4a09-a847-6685a4c3e201",
+			"role": "entity",
+			"parts": [],
+			"preimage": "304f6e8daccb4a09a8476685a4c3e20100",
+			"id": "d24e28e4-e61d-421a-ab65-51c3fb1142cd"
+		},
+		{
+			"name": "split-ab-c",
+			"note": "injective: (ab, c) and (a, bc) differ",
+			"kind": "304f6e8d-accb-4a09-a847-6685a4c3e201",
+			"role": "entity",
+			"parts": [
+				{
+					"bytes": "6162"
+				},
+				{
+					"bytes": "63"
+				}
+			],
+			"preimage": "304f6e8daccb4a09a8476685a4c3e2010002020000006162020100000063",
+			"id": "f2ca0765-56c9-4d12-a3ff-1b428a741118"
+		},
+		{
+			"name": "split-a-bc",
+			"note": "injective: (ab, c) and (a, bc) differ",
+			"kind": "304f6e8d-accb-4a09-a847-6685a4c3e201",
+			"role": "entity",
+			"parts": [
+				{
+					"bytes": "61"
+				},
+				{
+					"bytes": "6263"
+				}
+			],
+			"preimage": "304f6e8daccb4a09a8476685a4c3e2010002010000006102020000006263",
+			"id": "63a30abb-8d49-4500-aa72-478d1551aca9"
+		},
+		{
+			"name": "mixed",
+			"note": "every part kind in one key",
+			"kind": "304f6e8d-accb-4a09-a847-6685a4c3e201",
+			"role": "statement",
+			"parts": [
+				{
+					"id": "41607f9e-bddc-4b1a-b958-7796b5d4f312"
+				},
+				{
+					"bytes": "67656f"
+				},
+				{
+					"int": "0"
+				}
+			],
+			"preimage": "304f6e8daccb4a09a8476685a4c3e201010141607f9ebddc4b1ab9587796b5d4f312020300000067656f030000000000000000",
+			"id": "fca973b4-de02-4837-b9ee-9c29c5cabfbf"
+		}
+	]
+}

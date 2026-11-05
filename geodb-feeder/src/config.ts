@@ -27,6 +27,15 @@ export type Config = {
 	 * block time) into geo-db. Default off: it is one more `set` per touched entity per edit.
 	 */
 	entityTimes: boolean
+	/**
+	 * GEODB_RECORD_KEYS: write gaia's chain-indexed rows as natural-key records (geo-db plan 10.12) in the feeder's
+	 * system Spaces, and allow the `put` intent. Default off. Needs serve at geo-db 9d97069a78 or later (which knows
+	 * `put` and admits a retract of an unseen id); turn it on only after that serve is rolled. Today it moves the
+	 * membership consumer (with GEODB_MEMBERSHIP_DUAL_WRITE) and the membership shadow compare to keyed ids.
+	 */
+	recordKeys: boolean
+	/** Where the system Spaces' ConfigMap value is kept on the volume before it is published. */
+	systemSpaceMapPath: string
 }
 
 export type MembershipConfig = {
@@ -36,6 +45,8 @@ export type MembershipConfig = {
 	shadowCompare: boolean
 	topic: string
 	groupId: string
+	/** The keyed consumer's own group (GEODB_RECORD_KEYS), so it replays from the start beside the legacy group. */
+	keyedGroupId: string
 	compareIntervalMs: number
 	/** Key the comparison reads geo-db with. */
 	readerKeyPath: string
@@ -77,11 +88,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		lagPollMs: Number(env.LAG_POLL_MS ?? 15_000),
 		relationPositions: flag(env.GEODB_RELATION_POSITIONS),
 		entityTimes: flag(env.GEODB_ENTITY_TIMES),
+		recordKeys: flag(env.GEODB_RECORD_KEYS),
+		systemSpaceMapPath: env.GEODB_SYSTEM_SPACE_MAP_PATH ?? `${dataDir}/feeder/system-space-map.json`,
 		membership: {
 			dualWrite: flag(env.GEODB_MEMBERSHIP_DUAL_WRITE),
 			shadowCompare: flag(env.GEODB_MEMBERSHIP_SHADOW_COMPARE),
 			topic: env.KAFKA_MEMBERSHIP_TOPIC ?? `${environment}.space.membership`,
 			groupId: env.KAFKA_MEMBERSHIP_GROUP_ID ?? `geodb-feeder-membership-v1-${environment}`,
+			keyedGroupId: env.KAFKA_MEMBERSHIP_KEYED_GROUP_ID ?? `geodb-feeder-membership-keyed-v1-${environment}`,
 			compareIntervalMs: Number(env.GEODB_MEMBERSHIP_COMPARE_INTERVAL_MS ?? 300_000),
 			readerKeyPath: env.GEODB_READER_KEY_PATH ?? required(env, "GEODB_KEY_PATH"),
 		},

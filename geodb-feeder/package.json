@@ -16,6 +16,7 @@
 	"dependencies": {
 		"@bokuweb/zstd-wasm": "^0.0.27",
 		"@geoprotocol/grc-20": "^0.4.1",
+		"@noble/hashes": "^1.8.0",
 		"kafkajs": "^2.2.4",
 		"pg": "^8.23.1"
 	},

@@ -266,6 +266,39 @@ $K delete job geodb-membership-backfill
 The comparison checks the full id sets per Space and role; a mismatch logs the differing ids (5 per side, 10
 Spaces per run) and sets `geodb_feeder_membership_shadow_diff_ids{role,side}`.
 
+### 2c-bis. Keyed membership records (GEODB_RECORD_KEYS)
+
+`GEODB_RECORD_KEYS` (default off) moves membership from the journal-planned dual write to natural-key records
+(geo-db plan 10.12; `geodb-feeder/src/membershipKeyed.ts`). Every (Space, role, member) row becomes one edge
+statement under `recordStatementId(membership kind, [space entity, role property, member entity])` in the
+`governance` system Space; a grant is `create_entity` + `add` + `set_active(true)`, a revoke `set_active(false)`.
+The intents depend on the event alone, so there is no journal and a replay from offset zero converges. It also
+allows the `put` intent. Activation order, each step only after the one before it is live:
+
+1. geo-db serve and the geodb-client init container on 9d97069a78 or later (`put`, and a retract of an unseen id;
+   §1). A serve before that refuses `put` as an invalid wire payload.
+2. A feeder image that carries this path (it is inert while the flag is off).
+3. Optional: the backfill Job of §2c with `GEODB_RECORD_KEYS: "1"` added to its env, which writes the Postgres
+   snapshot as keyed grants (rerunnable; it never retracts). The consumer below replays the topic from the start
+   anyway; the backfill covers grants older than the topic's retention.
+4. `GEODB_RECORD_KEYS: "1"` beside `GEODB_MEMBERSHIP_DUAL_WRITE: "1"` in the feeder manifest. The keyed consumer
+   runs instead of the legacy one, on its own group (`geodb-feeder-membership-keyed-v1-<env>`, offsets in
+   `/data/feeder/membership-keyed`), and the shadow compare reads the keyed rows. The legacy rows stay in each
+   Space's own geo-db Space, untouched and no longer written.
+
+The first keyed write founds the `governance` Space (one Space against the cap of §2d; three at most, one per
+family: governance, votes, config). Its nonce is fixed by the family name
+(`recordEntityId(SYSTEM_SPACE_NONCE_KIND, ["gaia.system-space.governance"])`), its id is serve's
+`foundingSpaceId(sealer, nonce)`, and it is recorded in `/data/feeder/system-spaces.json` and published to the
+`geodb-space-map` ConfigMap under `system-spaces.json`, beside `space-map.json`:
+
+```bash
+$K get configmap geodb-space-map -o jsonpath='{.data.system-spaces\.json}'
+```
+
+Rollback: unset `GEODB_RECORD_KEYS`. The legacy consumer resumes from its own offsets; the keyed rows stay in
+the governance Space, unread.
+
 ### 2d. Raising the Space cap
 
 `spaces` in `geodb-serve-config` caps the Spaces the store can hold; at the cap, founding refuses and the

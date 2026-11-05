@@ -18,6 +18,28 @@ export type ApplyDeps = {
 	 * concurrent first applies would both send it.
 	 */
 	lock?: <T>(fn: () => Promise<T>) => Promise<T>
+	/**
+	 * Persists a Space record's `keyed` bit after its first apply. Defaults to `store.saveSpaces()`; a system Space
+	 * (systemSpaces.ts) is recorded apart from the gaia Space map and passes its own.
+	 */
+	saveSpace?: () => void
+	/**
+	 * `put` (IntentTag 0x0A, geo-db plan 10.12 K3) is sent only when this is true. A serve before geo-db 9d97069a78
+	 * refuses the tag as an invalid wire payload, which `classify` reads as permanent: every put would be
+	 * dead-lettered rather than retried. So the guard throws before sending instead, and only the
+	 * `GEODB_RECORD_KEYS` path, which is turned on after serve is rolled, sets it.
+	 */
+	allowPut?: boolean
+}
+
+/** True for a ZON intent whose tag is `put`. */
+export const isPutIntent = (intent: string): boolean => /^\.\{\s*\.put\s*=/.test(intent)
+
+/** Throws if `intents` holds a `put` and `deps` does not allow it. */
+export function assertPutAllowed(deps: Pick<ApplyDeps, "allowPut">, intents: readonly string[]): void {
+	if (deps.allowPut) return
+	const put = intents.find(isPutIntent)
+	if (put) throw new Error(`put intent built while GEODB_RECORD_KEYS is off; refusing to send it: ${put.slice(0, 120)}`)
 }
 
 /** A FIFO async mutex. */
@@ -51,6 +73,7 @@ export async function applyIntents(
 	from: number,
 	progress: (done: number) => void,
 ): Promise<{applied: number; deadLettered: number}> {
+	assertPutAllowed(deps, intents)
 	let applied = 0
 	let deadLettered = 0
 
@@ -94,7 +117,8 @@ async function tryApply(
 			const res = await deps.db.apply(zonDoc(space.geo, space.keyed ? null : space.nonce, slice))
 			if (res.rc === 0 && !space.keyed) {
 				space.keyed = true
-				deps.store.saveSpaces()
+				if (deps.saveSpace) deps.saveSpace()
+				else deps.store.saveSpaces()
 			}
 			return res
 		}
