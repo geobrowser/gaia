@@ -322,8 +322,13 @@ function planLightEntity(
 	}
 	// No lists: the derived fields (name, description, types) of the entity's own spaces are all that is judged.
 	if (lists.length === 0 && !(card.spaceIds && (card.name || card.description || card.types))) refuse("selection")
-	// Rows with no space and no `spaceIds` leave nothing to say which cards to read.
-	if (!card.spaceIds && !lists.some((list) => list.spaceKey)) refuse("no_space")
+	// Rows with no space and no `spaceIds` leave nothing to say which cards to read: where the caller allows it
+	// (no Space argument), the entity is read across every loaded Space and each row need only be held by one.
+	if (!card.spaceIds && !lists.some((list) => list.spaceKey)) {
+		if (!options.everySpace) refuse("no_space")
+		uncompared.add("partial_values")
+		return {card, lists, everySpace: true}
+	}
 	uncompared.add("partial_values")
 	return {card, lists, everySpace: false}
 }
@@ -601,8 +606,12 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 		const ids: string[] = []
 		const names: (string | null)[] = []
 		for (const node of nodes) {
-			const id = plan.card.types.idKey ? asRecord(node)?.[plan.card.types.idKey] : undefined
-			if (typeof id !== "string") return null
+			const id = plan.card.types.plain
+				? node
+				: plan.card.types.idKey
+					? asRecord(node)?.[plan.card.types.idKey]
+					: undefined
+			if (typeof id !== "string" || (plan.card.types.plain && !isValidUuid(id))) return null
 			ids.push(id)
 			const name = plan.card.types.nameKey ? asRecord(node)?.[plan.card.types.nameKey] : undefined
 			names.push(typeof name === "string" ? name : null)
