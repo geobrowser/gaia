@@ -21,6 +21,23 @@ export type CompareDeps = {
 	journalSpaces: () => string[]
 	metrics: Metrics
 	sleep?: (ms: number) => Promise<void>
+	/**
+	 * Where the rows live and under which ids. Default: the legacy dual write (each Space's own geo-db Space,
+	 * `statementId`). Under GEODB_RECORD_KEYS the keyed consumer writes every Space's rows to the `governance`
+	 * system Space under `keyedStatementId` (membershipKeyed.ts), and main.ts passes that target instead.
+	 */
+	target?: CompareTarget
+}
+
+export type CompareTarget = {
+	/** The geo-db Space holding `space`'s rows; nullish counts the Space as unmapped. */
+	geoSpace: (space: string, spaces: Record<string, SpaceRecord>) => string | null | undefined
+	statementId: (space: string, member: string, role: Role) => string
+}
+
+export const LEGACY_TARGET: CompareTarget = {
+	geoSpace: (space, spaces) => spaces[space]?.geo,
+	statementId,
 }
 
 /** `missing`: members Postgres has whose statement geo-db lacks. `extra`: statement ids geo-db has that no Postgres row maps to. Both capped at DIFF_CAP. */
@@ -44,6 +61,7 @@ export async function compareMembership(deps: CompareDeps): Promise<CompareSumma
 	const pg = await deps.pgMembers()
 	const all = new Set([...pg.keys(), ...deps.journalSpaces()])
 	const spaces = deps.spaces()
+	const target = deps.target ?? LEGACY_TARGET
 	const tally: Record<string, number> = {}
 	const bump = (role: Role, result: string) => {
 		deps.metrics.membershipShadowCompares.inc({role, result})
@@ -55,7 +73,7 @@ export async function compareMembership(deps: CompareDeps): Promise<CompareSumma
 	deps.reader.reset()
 	for (const space of [...all].sort()) {
 		const want = pg.get(space) ?? {member: [], editor: []}
-		const geo = spaces[space]?.geo
+		const geo = target.geoSpace(space, spaces)
 		if (!geo) {
 			summary.unmapped++
 			for (const role of ROLES) bump(role, "unmapped")
@@ -72,7 +90,7 @@ export async function compareMembership(deps: CompareDeps): Promise<CompareSumma
 		}
 		for (const role of ROLES) {
 			const got = new Set(rows.filter((r) => r.prop === ROLE_PROPERTY[role]).map((r) => r.statement))
-			const expected = new Map(want[role].map((m) => [statementId(space, m, role), m]))
+			const expected = new Map(want[role].map((m) => [target.statementId(space, m, role), m]))
 			const missing = [...expected].filter(([sid]) => !got.has(sid)).map(([, m]) => m)
 			const extra = [...got].filter((sid) => !expected.has(sid))
 			summary.compared++

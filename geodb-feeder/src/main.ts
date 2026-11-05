@@ -16,14 +16,21 @@ import {errorFields, log} from "./log.js"
 import {compareMembership} from "./membershipShadow.js"
 import {MembershipState} from "./membership.js"
 import {startMembershipConsumer} from "./membershipConsumer.js"
+import {keyedCompareTarget, keyedMembershipEnabled, keyedOffsetsDir} from "./membershipKeyed.js"
 import {ProposalOffsets} from "./proposals.js"
 import {startProposalConsumer} from "./proposalsConsumer.js"
+import {startOptionalConsumer} from "./optionalConsumer.js"
+import {startProposalVotesConsumer} from "./proposalVotesConsumer.js"
+import {proposalVotesKeyedEnabled, proposalVotesOffsetsDir} from "./proposalVotesKeyed.js"
+import {startVotesConsumer} from "./votesConsumer.js"
+import {votesKeyedEnabled, votesOffsetsDir} from "./votesKeyed.js"
 import {PendingSpaces} from "./spaceEntities.js"
 import {startSpaceEntityConsumer} from "./spaceEntitiesConsumer.js"
 import {createMetrics, observeFreshness} from "./metrics.js"
 import {PipeReader} from "./geodbPipe.js"
 import {ReadOnlyPg, pgConfig, readMembershipIds} from "./pgSource.js"
 import {SpaceMapPublisher, kubeConfigMapPut} from "./publish.js"
+import {SYSTEM_SPACE_MAP_KEY, SystemSpaces} from "./systemSpaces.js"
 import {startServer} from "./server.js"
 import {ensureSpace, readSealer, SpaceCapError} from "./spaces.js"
 import {Store, backfilledSpaces, renderSpaceMap} from "./state.js"
@@ -54,6 +61,16 @@ async function main(config: Config): Promise<void> {
 	const publisher = new SpaceMapPublisher(config.spaceMapPath, kubeConfigMapPut(config.spaceMapConfigMap), metrics)
 	publisher.start()
 	publisher.publish(renderSpaceMap(store.spaces, backfilledSpaces(store.dir)))
+	// System Spaces (record families, GEODB_RECORD_KEYS): founded on first write, published under their own key.
+	const systemSpaces = new SystemSpaces(`${config.dataDir}/feeder`)
+	const systemPublisher = new SpaceMapPublisher(
+		config.systemSpaceMapPath,
+		kubeConfigMapPut(config.spaceMapConfigMap),
+		metrics,
+		SYSTEM_SPACE_MAP_KEY,
+	)
+	systemPublisher.start()
+	if (Object.keys(systemSpaces.records).length > 0) systemPublisher.publish(systemSpaces.render())
 	log("info", "state loaded", {
 		spaces: Object.keys(store.spaces).length,
 		entities: store.entityCount,
@@ -181,7 +198,27 @@ async function main(config: Config): Promise<void> {
 	if (config.membership.dualWrite || config.membership.shadowCompare) {
 		state = new MembershipState(`${config.dataDir}/feeder/membership`)
 	}
-	if (config.membership.dualWrite && state) {
+	// The keyed consumer runs only with the dual write on; the shadow compare follows whichever writer actually runs.
+	const keyedMembership = keyedMembershipEnabled(config)
+	if (keyedMembership) {
+		// Keyed records replace the journal-planned dual write: its own group and offsets, the governance Space.
+		membership = await startOptionalConsumer("membership_keyed", metrics.consumerStartFailed, () =>
+			startMembershipConsumer({
+				kafka,
+				config,
+				abort,
+				keyed: {
+					...spaceDeps,
+					lock,
+					beat: async () => {},
+					allowPut: true,
+					systemSpaces,
+					publishSystem: (t: string) => systemPublisher.publish(t),
+					offsets: new ProposalOffsets(keyedOffsetsDir(config.dataDir)),
+				},
+			}),
+		)
+	} else if (config.membership.dualWrite && state) {
 		try {
 			membership = await startMembershipConsumer({
 				kafka,
@@ -205,8 +242,10 @@ async function main(config: Config): Promise<void> {
 					pgMembers: () => readMembershipIds(pg as ReadOnlyPg),
 					reader: reader as PipeReader,
 					spaces: () => store.spaces,
-					journalSpaces: () => membershipState.spaces(),
+					// Keyed rows carry no journal: a Space Postgres has no rows for is not compared.
+					journalSpaces: () => (keyedMembership ? [] : membershipState.spaces()),
 					metrics,
+					...(keyedMembership ? {target: keyedCompareTarget(systemSpaces)} : {}),
 				}).catch((e) => log("warn", "membership shadow comparison failed", errorFields(e)))
 			compareTimer = setInterval(() => void run(), config.membership.compareIntervalMs)
 		}
@@ -225,6 +264,51 @@ async function main(config: Config): Promise<void> {
 		} catch (e) {
 			log("error", "proposals consumer failed to start (edits consumer unaffected)", errorFields(e))
 		}
+	}
+
+	// Keyed user votes (votesKeyed.ts): GEODB_VOTES with GEODB_RECORD_KEYS, after the votes backfill.
+	let votes: Awaited<ReturnType<typeof startVotesConsumer>> | null = null
+	if (config.votes.enabled && !config.recordKeys) log("warn", "GEODB_VOTES is set without GEODB_RECORD_KEYS; votes consumer not started")
+	if (votesKeyedEnabled(config)) {
+		votes = await startOptionalConsumer("votes", metrics.consumerStartFailed, () =>
+			startVotesConsumer({
+				kafka,
+				config,
+				abort,
+				deps: {
+					...spaceDeps,
+					lock,
+					beat: async () => {},
+					allowPut: true,
+					systemSpaces,
+					publishSystem: (t: string) => systemPublisher.publish(t),
+					offsets: new ProposalOffsets(votesOffsetsDir(config.dataDir)),
+				},
+			}),
+		)
+	}
+
+	// Keyed proposal votes (proposalVotesKeyed.ts): GEODB_PROPOSAL_VOTES with GEODB_RECORD_KEYS, after their backfill.
+	let proposalVotes: Awaited<ReturnType<typeof startProposalVotesConsumer>> | null = null
+	if (config.proposalVotes.enabled && !config.recordKeys)
+		log("warn", "GEODB_PROPOSAL_VOTES is set without GEODB_RECORD_KEYS; proposal votes consumer not started")
+	if (proposalVotesKeyedEnabled(config)) {
+		proposalVotes = await startOptionalConsumer("proposal_votes", metrics.consumerStartFailed, () =>
+			startProposalVotesConsumer({
+				kafka,
+				config,
+				abort,
+				deps: {
+					...spaceDeps,
+					lock,
+					beat: async () => {},
+					allowPut: true,
+					systemSpaces,
+					publishSystem: (t: string) => systemPublisher.publish(t),
+					offsets: new ProposalOffsets(proposalVotesOffsetsDir(config.dataDir)),
+				},
+			}),
+		)
 	}
 
 	let spaceEntities: Awaited<ReturnType<typeof startSpaceEntityConsumer>> | null = null
@@ -257,6 +341,18 @@ async function main(config: Config): Promise<void> {
 		await p.poll()
 	}
 
+	if (votes) {
+		const v = votes
+		setInterval(() => void v.poll(), config.lagPollMs).unref()
+		await v.poll()
+	}
+
+	if (proposalVotes) {
+		const pv = proposalVotes
+		setInterval(() => void pv.poll(), config.lagPollMs).unref()
+		await pv.poll()
+	}
+
 	if (spaceEntities) {
 		const s = spaceEntities
 		setInterval(() => void s.poll(), config.lagPollMs).unref()
@@ -272,8 +368,11 @@ async function main(config: Config): Promise<void> {
 		await pg?.close()
 		await membership?.stop()
 		await proposals?.stop()
+		await votes?.stop()
+		await proposalVotes?.stop()
 		await spaceEntities?.stop()
 		publisher.stop()
+		systemPublisher.stop()
 		await consumer.disconnect().catch(() => {})
 		await admin.disconnect().catch(() => {})
 		server.close()

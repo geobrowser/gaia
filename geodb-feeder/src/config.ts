@@ -17,6 +17,10 @@ export type Config = {
 	membership: MembershipConfig
 	proposals: {enabled: boolean; topic: string; groupId: string}
 	spaceEntities: {enabled: boolean; topic: string; groupId: string}
+	/** GEODB_VOTES (with GEODB_RECORD_KEYS): keyed user votes from `curation.votes` (votesKeyed.ts). */
+	votes: {enabled: boolean; topic: string; groupId: string}
+	/** GEODB_PROPOSAL_VOTES (with GEODB_RECORD_KEYS): keyed proposal votes from `space.governance` (proposalVotesKeyed.ts). */
+	proposalVotes: {enabled: boolean; topic: string; groupId: string}
 	/**
 	 * GEODB_RELATION_POSITIONS: write a relation's position into geo-db (`.position` on its `add`). Default off: a
 	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it.
@@ -27,6 +31,18 @@ export type Config = {
 	 * block time) into geo-db. Default off: it is one more `set` per touched entity per edit.
 	 */
 	entityTimes: boolean
+	/**
+	 * GEODB_RECORD_KEYS: write gaia's chain-indexed rows as natural-key records (geo-db plan 10.12) in the feeder's
+	 * system Spaces, and allow the `put` intent. Default off. Needs serve at geo-db 9d97069a78 or later (which knows
+	 * `put` and admits a retract of an unseen id); turn it on only after that serve is rolled. Today it moves the
+	 * membership consumer (with GEODB_MEMBERSHIP_DUAL_WRITE) and the membership shadow compare to keyed ids.
+	 */
+	recordKeys: boolean
+	/**
+	 * The publisher's copy of the `system-spaces.json` ConfigMap value. Not the durable record: that is
+	 * `<DATA_DIR>/feeder/system-spaces.json` (systemSpaces.ts), which this is rendered from and can be rebuilt from.
+	 */
+	systemSpaceMapPath: string
 }
 
 export type MembershipConfig = {
@@ -36,10 +52,26 @@ export type MembershipConfig = {
 	shadowCompare: boolean
 	topic: string
 	groupId: string
+	/** The keyed consumer's own group (GEODB_RECORD_KEYS), so it replays from the start beside the legacy group. */
+	keyedGroupId: string
 	compareIntervalMs: number
 	/** Key the comparison reads geo-db with. */
 	readerKeyPath: string
 }
+
+/**
+ * Every Kafka consumer group the feeder can run, whatever its flags. The backfill Jobs refuse while any has members:
+ * they share the feeder's state volume and system-space record. Add a new consumer's group here.
+ */
+export const feederGroupIds = (c: Config): string[] => [
+	c.kafka.groupId,
+	c.membership.groupId,
+	c.membership.keyedGroupId,
+	c.proposals.groupId,
+	c.spaceEntities.groupId,
+	c.votes.groupId,
+	c.proposalVotes.groupId,
+]
 
 export const flag = (v: string | undefined): boolean => v === "1" || v?.toLowerCase() === "true"
 
@@ -77,11 +109,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		lagPollMs: Number(env.LAG_POLL_MS ?? 15_000),
 		relationPositions: flag(env.GEODB_RELATION_POSITIONS),
 		entityTimes: flag(env.GEODB_ENTITY_TIMES),
+		recordKeys: flag(env.GEODB_RECORD_KEYS),
+		systemSpaceMapPath: env.GEODB_SYSTEM_SPACE_MAP_PATH ?? `${dataDir}/feeder/system-spaces.published.json`,
 		membership: {
 			dualWrite: flag(env.GEODB_MEMBERSHIP_DUAL_WRITE),
 			shadowCompare: flag(env.GEODB_MEMBERSHIP_SHADOW_COMPARE),
 			topic: env.KAFKA_MEMBERSHIP_TOPIC ?? `${environment}.space.membership`,
 			groupId: env.KAFKA_MEMBERSHIP_GROUP_ID ?? `geodb-feeder-membership-v1-${environment}`,
+			keyedGroupId: env.KAFKA_MEMBERSHIP_KEYED_GROUP_ID ?? `geodb-feeder-membership-keyed-v1-${environment}`,
 			compareIntervalMs: Number(env.GEODB_MEMBERSHIP_COMPARE_INTERVAL_MS ?? 300_000),
 			readerKeyPath: env.GEODB_READER_KEY_PATH ?? required(env, "GEODB_KEY_PATH"),
 		},
@@ -90,6 +125,27 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			enabled: flag(env.GEODB_PROPOSAL_ENTITIES),
 			topic: env.KAFKA_PROPOSALS_TOPIC ?? `${environment}.space.governance`,
 			groupId: env.KAFKA_PROPOSALS_GROUP_ID ?? `geodb-feeder-proposals-v1-${environment}`,
+		},
+		votes: {
+			/**
+			 * GEODB_VOTES: consume `curation.votes` and write keyed user-vote records (votesKeyed.ts) into the `votes`
+			 * system Space. Takes effect only with GEODB_RECORD_KEYS (votesKeyedEnabled), and only after the votes
+			 * backfill (RUNBOOK §2c-ter). Default off.
+			 */
+			enabled: flag(env.GEODB_VOTES),
+			topic: env.KAFKA_VOTES_TOPIC ?? `${environment}.curation.votes`,
+			groupId: env.KAFKA_VOTES_GROUP_ID ?? `geodb-feeder-votes-keyed-v1-${environment}`,
+		},
+		proposalVotes: {
+			/**
+			 * GEODB_PROPOSAL_VOTES: consume the PROPOSAL_VOTED events of `space.governance` and write keyed
+			 * proposal-vote records (proposalVotesKeyed.ts) into the `votes` system Space. Takes effect only with
+			 * GEODB_RECORD_KEYS (proposalVotesKeyedEnabled), and only after the proposal-votes backfill (RUNBOOK
+			 * §2c-quater). Its own group: the proposals consumer's group on the same topic is untouched. Default off.
+			 */
+			enabled: flag(env.GEODB_PROPOSAL_VOTES),
+			topic: env.KAFKA_PROPOSAL_VOTES_TOPIC ?? `${environment}.space.governance`,
+			groupId: env.KAFKA_PROPOSAL_VOTES_GROUP_ID ?? `geodb-feeder-proposal-votes-keyed-v1-${environment}`,
 		},
 		spaceEntities: {
 			/** GEODB_SPACE_ENTITIES: consume `space.creations` and write Space system entities. Default off. */

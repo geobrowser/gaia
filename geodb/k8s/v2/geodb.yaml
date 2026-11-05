@@ -155,7 +155,7 @@ spec:
             defaultMode: 0440
       containers:
         - name: serve
-          image: registry.digitalocean.com/geo/geodb:6cf4360979
+          image: registry.digitalocean.com/geo/geodb:d82cfa3bc2
           imagePullPolicy: IfNotPresent
           # A panic's stack trace goes to stderr, and the kubelet keeps only the previous
           # container's log. This also copies the log's tail into the pod's
@@ -296,7 +296,7 @@ spec:
         # (the Service's ClusterIP, which the binding grammar needs as an address) pinned to serve's node id.
         # Exits 1 until serve has published its ids, so the pod retries rather than starting blind.
         - name: geodb-setup
-          image: registry.digitalocean.com/geo/geodb:6cf4360979
+          image: registry.digitalocean.com/geo/geodb:d82cfa3bc2
           imagePullPolicy: IfNotPresent
           command:
             - sh
@@ -372,11 +372,25 @@ spec:
             # and writes them into Spaces geo-db holds; one for a Space not founded yet waits until it is.
             - name: GEODB_SPACE_ENTITIES
               value: "1"
+            # Keyed user votes (curation.votes into the votes system Space). Off. Takes effect only with
+            # GEODB_RECORD_KEYS, and only after the votes backfill Job (geodb-votes-backfill-job.yaml) and the
+            # Kafka ACL for its topic and group: RUNBOOK §2c-ter.
+            - name: GEODB_VOTES
+              value: "0"
+            # Keyed proposal votes (PROPOSAL_VOTED on space.governance, into the votes system Space). Off. Takes
+            # effect only with GEODB_RECORD_KEYS, and only after the proposal-votes backfill Job
+            # (geodb-proposal-votes-backfill-job.yaml) and the Kafka ACL for its group: RUNBOOK §2c-quater.
+            - name: GEODB_PROPOSAL_VOTES
+              value: "0"
             # Relation positions (`.position` on a relation's add). Off until the geodb image carries a
             # geodb-client with ISS-587-318: an older client refuses the key, and every edit with a positioned
             # relation would fail. Turn on with the image bump that brings it.
             - name: GEODB_RELATION_POSITIONS
               value: "0"
+            # Entity createdAt / updatedAt (RUNBOOK §2e). On since 2026-11-05, after the times backfill Job
+            # stamped every existing entity (1579 Spaces, deadLettered 0). Flip only while the feeder is idle.
+            - name: GEODB_ENTITY_TIMES
+              value: "1"
             # Read only; used by the membership comparison, ignored while it is off.
             - name: DATABASE_URL
               valueFrom:

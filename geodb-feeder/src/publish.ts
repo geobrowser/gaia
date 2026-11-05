@@ -10,7 +10,8 @@ import type {Metrics} from "./metrics.js"
 import {writeFileDurable} from "./state.js"
 
 const SA = "/var/run/secrets/kubernetes.io/serviceaccount"
-const KEY = "space-map.json"
+/** The ConfigMap key the gaia Space map is published under; system Spaces use their own (systemSpaces.ts). */
+export const SPACE_MAP_KEY = "space-map.json"
 
 export type ConfigMapData = Record<string, string>
 
@@ -71,6 +72,7 @@ export class SpaceMapPublisher {
 		private readonly path: string,
 		private readonly put: ((data: ConfigMapData) => Promise<void>) | null,
 		private readonly metrics: Metrics,
+		private readonly key: string = SPACE_MAP_KEY,
 	) {}
 
 	/** Record the newest map: durable on the volume now, in the ConfigMap as soon as the API takes it. */
@@ -98,15 +100,15 @@ export class SpaceMapPublisher {
 	async flush(): Promise<void> {
 		if (!this.put || !this.dirty || this.inflight || this.latest === null) return
 		const text = this.latest
-		const data: ConfigMapData = {[KEY]: text}
+		const data: ConfigMapData = {[this.key]: text}
 		this.inflight = true
 		try {
 			await this.put(data)
 			if (this.latest === text) this.dirty = false
-			this.metrics.spaceMapPublish.inc({result: "ok"})
+			this.metrics.spaceMapPublish.inc({key: this.key, result: "ok"})
 		} catch (e) {
-			this.metrics.spaceMapPublish.inc({result: "error"})
-			log("warn", "space map publish failed, will retry", errorFields(e))
+			this.metrics.spaceMapPublish.inc({key: this.key, result: "error"})
+			log("warn", "space map publish failed, will retry", {key: this.key, ...errorFields(e)})
 		} finally {
 			this.inflight = false
 		}

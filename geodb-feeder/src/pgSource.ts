@@ -7,6 +7,8 @@
  */
 import pg from "pg"
 import type {PgRelationRow, PgValueRow} from "./pgAdapter.js"
+import type {ProposalVoteRow} from "./proposalVotesKeyed.js"
+import type {UserVoteRow} from "./votesKeyed.js"
 
 export type Queryable = {query<R>(text: string, params?: unknown[]): Promise<{rows: R[]}>}
 
@@ -147,6 +149,58 @@ export async function readMembershipIds(db: ReadOnlyPg): Promise<Map<string, Rec
 		out.set(key, rec)
 	}
 	return out
+}
+
+/**
+ * Every `user_votes` row, in primary-key order, a page at a time (keyset pagination on the primary key, so each page
+ * is an index range scan and no page is held open across geo-db writes). For the votes backfill.
+ */
+export async function* readUserVoteRows(db: ReadOnlyPg, pageSize = 5000): AsyncGenerator<UserVoteRow> {
+	let after: UserVoteRow | null = null
+	for (;;) {
+		const page: UserVoteRow[] = await db.read<UserVoteRow>(
+			`SELECT user_id::text AS user_id, object_id::text AS object_id, object_type::int AS object_type,
+			        space_id::text AS space_id, vote_kind::int AS vote_kind, vote_type::int AS vote_type,
+			        floor(extract(epoch FROM voted_at))::bigint::text AS voted_at_seconds
+			 FROM user_votes
+			 WHERE $1::boolean OR (user_votes.user_id, user_votes.object_id, user_votes.object_type, user_votes.space_id, user_votes.vote_kind)
+			       > ($2::uuid, $3::uuid, $4::smallint, $5::uuid, $6::smallint)
+			 -- Qualified: a bare name here would bind to the ::text output alias, sorting by text while the keyset
+			 -- WHERE compares uuids; under a collation where the two orders differ, paging skips rows (pgSource.votes test).
+			 ORDER BY user_votes.user_id, user_votes.object_id, user_votes.object_type, user_votes.space_id, user_votes.vote_kind
+			 LIMIT $7`,
+			after === null
+				? [true, null, null, null, null, null, pageSize]
+				: [false, after.user_id, after.object_id, after.object_type, after.space_id, after.vote_kind, pageSize],
+			300_000,
+		)
+		yield* page
+		if (page.length < pageSize) return
+		after = page[page.length - 1] as UserVoteRow
+	}
+}
+
+/** Every `proposal_votes` row, keyset-paged on its primary key (proposal_id, proposal_version, voter_id). */
+export async function* readProposalVoteRows(db: ReadOnlyPg, pageSize = 5000): AsyncGenerator<ProposalVoteRow> {
+	let after: ProposalVoteRow | null = null
+	for (;;) {
+		const page: ProposalVoteRow[] = await db.read<ProposalVoteRow>(
+			`SELECT proposal_id::text AS proposal_id, proposal_version::int AS proposal_version, voter_id::text AS voter_id,
+			        space_id::text AS space_id, vote::text AS vote, created_at::text AS created_at,
+			        created_at_block::text AS created_at_block
+			 FROM proposal_votes
+			 WHERE $1::boolean OR (proposal_votes.proposal_id, proposal_votes.proposal_version, proposal_votes.voter_id)
+			       > ($2::uuid, $3::int, $4::uuid)
+			 -- Qualified, as in readUserVoteRows: a bare name would bind to the ::text output alias.
+			 ORDER BY proposal_votes.proposal_id, proposal_votes.proposal_version, proposal_votes.voter_id
+			 LIMIT $5`,
+			after === null ? [true, null, null, null, pageSize] : [false, after.proposal_id, after.proposal_version, after.voter_id, pageSize],
+			300_000,
+		)
+		yield* page
+		if (page.length < pageSize) return
+		after = page[page.length - 1] as ProposalVoteRow
+	}
 }
 
 export type EntityTimesRow = {id: string; created_at: string | null; updated_at: string | null}
