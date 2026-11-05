@@ -7,9 +7,12 @@
 //! (`geodb_cursor_mirror_errors_total`) and swallowed, each call is bounded by a timeout, and after
 //! a failure the child is not respawned until a cool-down passes.
 //!
-//! Only the decimal `block_number` is mirrored. The derived class holds at most 64 value bytes
-//! (`value_max`), which a substreams cursor does not fit, and `block_number` is what the two
-//! cross-service readers use.
+//! The row is `cursors` (collection 10, geo-db 6a770ba752), keyed by the writer id. Its value is the
+//! bytes `<decimal block_number>:<opaque cursor>`, sent as `hex:` so the tab-separated line cannot be
+//! broken by the cursor's content. A value over [`VALUE_MAX`] (1024 bytes) is logged, counted
+//! (`geodb_cursor_mirror_skipped_total`) and skipped, never truncated. The 1024 limit is an estimate
+//! (four times a 256-byte longest cursor), so the cursor's byte length is recorded on every call as
+//! the gauge `geodb_cursor_bytes` and in the skip log.
 //!
 //! The mirror is OFF unless `GEODB_CURSOR_MIRROR` is `1` or `true`.
 
@@ -22,9 +25,11 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-/// Default derived collection: the next line after the registry's last (`proposal_vote_counts = 9`
-/// at geo-db 3a83b5a2dc). A put to an unregistered collection is refused until geo-db registers it.
+/// Default derived collection: `cursors = 10` (geo-db 6a770ba752).
 pub const DEFAULT_COLLECTION: u32 = 10;
+
+/// `cursor_value_max` of the `cursors` collection: the most bytes of one value.
+pub const VALUE_MAX: usize = 1024;
 
 #[derive(Debug, Error)]
 pub enum MirrorError {
@@ -42,6 +47,8 @@ pub enum MirrorError {
     BadFrame(String),
     #[error("refused: {0}")]
     Refused(String),
+    #[error("value of {0} bytes is over the {VALUE_MAX} byte bound")]
+    TooLong(usize),
     #[error("cooling down after a failure")]
     CoolingDown,
 }
@@ -129,9 +136,24 @@ impl CursorMirror {
         Config::from_env().map(Self::new)
     }
 
-    /// Mirrors `(id, block)`. Never fails the caller: an error is logged and counted.
-    pub async fn mirror(&self, id: &str, block: u64) {
-        if let Err(e) = self.try_mirror(id, block).await {
+    /// Mirrors `(id, cursor, block)`. Never fails the caller: an error is logged and counted.
+    pub async fn mirror(&self, id: &str, cursor: &str, block: u64) {
+        metrics::gauge!("geodb_cursor_bytes", "indexer" => id.to_string()).set(cursor.len() as f64);
+        if let Err(e) = self.try_mirror(id, cursor, block).await {
+            if let MirrorError::TooLong(n) = e {
+                metrics::counter!("geodb_cursor_mirror_skipped_total", "indexer" => id.to_string())
+                    .increment(1);
+                warn!(
+                    event = "geodb_cursor.value_too_long",
+                    indexer_id = id,
+                    block_number = block,
+                    cursor_bytes = cursor.len(),
+                    value_bytes = n,
+                    limit = VALUE_MAX,
+                    "cursor value over the geo-db bound; skipped, not truncated"
+                );
+                return;
+            }
             if !matches!(e, MirrorError::CoolingDown) {
                 warn!(
                     event = "geodb_cursor.mirror_failed",
@@ -150,10 +172,14 @@ impl CursorMirror {
     }
 
     /// The fallible form, for tests.
-    pub async fn try_mirror(&self, id: &str, block: u64) -> Result<(), MirrorError> {
+    pub async fn try_mirror(&self, id: &str, cursor: &str, block: u64) -> Result<(), MirrorError> {
         // The pipe's fields are tab-separated, so an id with a tab or newline cannot be sent.
         if id.is_empty() || id.contains(['\t', '\n']) {
             return Err(MirrorError::Refused(format!("bad key {id:?}")));
+        }
+        let value = format!("{block}:{cursor}");
+        if value.len() > VALUE_MAX {
+            return Err(MirrorError::TooLong(value.len()));
         }
         let mut st = self.state.lock().await;
         if st.pipe.is_none() {
@@ -181,7 +207,8 @@ impl CursorMirror {
             }
         }
         let pipe = st.pipe.as_mut().expect("set above");
-        let line = format!("put\t{}\t0\t0\t{}\t{}\n", self.cfg.collection, id, block);
+        let hex: String = value.bytes().map(|b| format!("{b:02x}")).collect();
+        let line = format!("put\t{}\t0\t0\t{}\thex:{}\n", self.cfg.collection, id, hex);
         let res = match tokio::time::timeout(self.cfg.timeout, request(pipe, &line)).await {
             Ok(r) => r,
             Err(_) => Err(MirrorError::Timeout(self.cfg.timeout)),
@@ -282,6 +309,10 @@ mod tests {
         )
     }
 
+    fn hex(s: &str) -> String {
+        s.bytes().map(|b| format!("{b:02x}")).collect()
+    }
+
     fn tmp(name: &str) -> std::path::PathBuf {
         let p = std::env::temp_dir().join(format!("geodb-cursor-{name}-{}", std::process::id()));
         let _ = std::fs::remove_file(&p);
@@ -292,12 +323,18 @@ mod tests {
     async fn sends_put_lines_over_one_held_child() {
         let log = tmp("ok");
         let m = fake(&ok_script(&log), Duration::ZERO);
-        m.try_mirror("hermes_pipeline", 100).await.unwrap();
-        m.try_mirror("hermes_ipfs_cache", 101).await.unwrap();
+        m.try_mirror("hermes_pipeline", "CUR1", 100).await.unwrap();
+        m.try_mirror("hermes_ipfs_cache", "CUR2", 101)
+            .await
+            .unwrap();
         let sent = std::fs::read_to_string(&log).unwrap();
         assert_eq!(
             sent,
-            "put\t10\t0\t0\thermes_pipeline\t100\nput\t10\t0\t0\thermes_ipfs_cache\t101\n"
+            format!(
+                "put\t10\t0\t0\thermes_pipeline\thex:{}\nput\t10\t0\t0\thermes_ipfs_cache\thex:{}\n",
+                hex("100:CUR1"),
+                hex("101:CUR2")
+            )
         );
         let _ = std::fs::remove_file(&log);
     }
@@ -313,17 +350,17 @@ mod tests {
             ok = ok_script(&log).replacen("echo ready; ", "", 1)
         );
         let m = fake(&script, Duration::from_millis(50));
-        let e = m.try_mirror("a", 1).await.unwrap_err();
+        let e = m.try_mirror("a", "c", 1).await.unwrap_err();
         assert!(matches!(e, MirrorError::Refused(_)), "{e}");
         assert!(matches!(
-            m.try_mirror("a", 2).await.unwrap_err(),
+            m.try_mirror("a", "c", 2).await.unwrap_err(),
             MirrorError::CoolingDown
         ));
         tokio::time::sleep(Duration::from_millis(80)).await;
-        m.try_mirror("a", 3).await.unwrap();
+        m.try_mirror("a", "c", 3).await.unwrap();
         assert_eq!(
             std::fs::read_to_string(&log).unwrap(),
-            "put\t10\t0\t0\ta\t3\n"
+            format!("put\t10\t0\t0\ta\thex:{}\n", hex("3:c"))
         );
         let _ = std::fs::remove_file(&log);
         let _ = std::fs::remove_file(&flag);
@@ -333,7 +370,7 @@ mod tests {
     async fn child_exit_mid_run_is_an_error_not_a_panic() {
         let m = fake("echo ready; read -r l; exit 0", Duration::ZERO);
         assert!(matches!(
-            m.try_mirror("a", 1).await.unwrap_err(),
+            m.try_mirror("a", "c", 1).await.unwrap_err(),
             MirrorError::Closed
         ));
     }
@@ -343,7 +380,7 @@ mod tests {
         let m = fake("echo ready; sleep 30", Duration::ZERO);
         let t = Instant::now();
         assert!(matches!(
-            m.try_mirror("a", 1).await.unwrap_err(),
+            m.try_mirror("a", "c", 1).await.unwrap_err(),
             MirrorError::Timeout(_)
         ));
         assert!(t.elapsed() < Duration::from_secs(5));
@@ -358,10 +395,10 @@ mod tests {
             timeout: Duration::from_secs(1),
             cooldown: Duration::ZERO,
         });
-        m.mirror("a", 1).await; // swallowed
+        m.mirror("a", "c", 1).await; // swallowed
         let m = fake("echo nope", Duration::ZERO);
         assert!(matches!(
-            m.try_mirror("a", 1).await.unwrap_err(),
+            m.try_mirror("a", "c", 1).await.unwrap_err(),
             MirrorError::NotReady(_)
         ));
     }
@@ -385,6 +422,30 @@ mod tests {
         assert_eq!(c.args.last().unwrap(), "pipe");
     }
 
+    #[tokio::test]
+    async fn a_cursor_with_a_tab_travels_as_hex_and_the_bound_is_exact() {
+        let log = tmp("bound");
+        let m = fake(&ok_script(&log), Duration::ZERO);
+        // 1024 bytes total: "7:" plus a 1022-byte cursor holding a tab and a newline.
+        let mut cursor = "x\ty\nz".to_string();
+        cursor.push_str(&"a".repeat(1022 - cursor.len()));
+        m.try_mirror("w", &cursor, 7).await.unwrap();
+        let sent = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            sent.lines().count(),
+            1,
+            "one line, tab and newline hex-escaped"
+        );
+        assert!(sent.starts_with("put\t10\t0\t0\tw\thex:372778"));
+        // One byte over: refused before any I/O, nothing sent, child never needed.
+        let over = format!("{cursor}b");
+        let e = m.try_mirror("w", &over, 7).await.unwrap_err();
+        assert!(matches!(e, MirrorError::TooLong(1025)), "{e}");
+        m.mirror("w", &over, 7).await; // logged, counted, swallowed
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), sent);
+        let _ = std::fs::remove_file(&log);
+    }
+
     #[test]
     fn tab_in_key_is_refused_before_any_io() {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -392,7 +453,7 @@ mod tests {
             .build()
             .unwrap();
         let m = fake("exit 1", Duration::ZERO);
-        let e = rt.block_on(m.try_mirror("a\tb", 1)).unwrap_err();
+        let e = rt.block_on(m.try_mirror("a\tb", "c", 1)).unwrap_err();
         assert!(matches!(e, MirrorError::Refused(_)));
     }
 }

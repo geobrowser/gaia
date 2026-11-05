@@ -341,7 +341,7 @@ impl Sink for IpfsCacheSink {
                             );
                         } else {
                             if let Some(m) = &geodb_mirror {
-                                m.mirror(INDEXER_ID, persist_block).await;
+                                m.mirror(INDEXER_ID, &persist_cursor, persist_block).await;
                             }
                             // Cursor durably persisted — update lag gauges.
                             hermes_instrumentation::metrics::set_latest_processed_block(

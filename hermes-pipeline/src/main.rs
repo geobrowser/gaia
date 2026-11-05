@@ -903,7 +903,7 @@ impl Sink for Pipeline {
         match self.cursor_store.persist(&cursor, block).await {
             Ok(()) => {
                 if let Some(m) = &self.geodb_mirror {
-                    m.mirror(cursor::INDEXER_ID, block).await;
+                    m.mirror(cursor::INDEXER_ID, &cursor, block).await;
                 }
                 // Cursor durably persisted — update lag gauges. We always
                 // update the block gauge (from the trait argument), but
