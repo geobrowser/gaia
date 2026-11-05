@@ -84,6 +84,12 @@ type LightList = {
 	nodesKey: string | null
 	rows: ListPlan
 	spaceKey: string | null
+	/**
+	 * An unfiltered relations list that selects `spaceId` and no edge (`allRelationsList { spaceId }`): geo-db can
+	 * say which Spaces hold the entity, not which relations each holds, so its rows are never compared
+	 * (`membership_only`).
+	 */
+	projection?: boolean
 }
 
 const noted = new Set<string>()
@@ -225,6 +231,7 @@ function planLightList(
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
+	options: {projections?: boolean} = {},
 ): LightList {
 	const name = field.name.value
 	const kind = name === "values" || name === "valuesList" ? "values" : "relations"
@@ -262,7 +269,29 @@ function planLightList(
 	if (kind === "values") {
 		if (!has("propertyId")) refuse("selection")
 		if (!VALUE_COLUMNS.every(has)) uncompared.add("partial_values")
-	} else if (!has("typeId") || !has("toEntityId")) refuse("selection")
+	} else if (!has("typeId") || !has("toEntityId")) {
+		const unfiltered = filter === undefined || filter === null
+		if (
+			!(
+				options.projections &&
+				unfiltered &&
+				!connection &&
+				rows.columns.spaceId &&
+				!has("typeId") &&
+				!has("toEntityId")
+			)
+		)
+			refuse("selection")
+		uncompared.add("membership_only")
+		return {
+			kind,
+			key: responseKeyOf(field),
+			nodesKey: null,
+			rows: {key: responseKeyOf(field), first, ...rows, nodesKey: null, hasNext: null},
+			spaceKey: rows.columns.spaceId ?? null,
+			projection: true,
+		}
+	}
 	return {
 		kind,
 		key: responseKeyOf(field),
@@ -277,11 +306,11 @@ function planLightEntity(
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
-	options: {everySpace?: boolean} = {},
+	options: {everySpace?: boolean; projections?: boolean} = {},
 ): {card: EntityCardPlan; lists: LightList[]; everySpace: boolean} {
 	const lists: LightList[] = []
 	const card = planEntitySelection(set, fragments, resolved, uncompared, (field) => {
-		lists.push(planLightList(field, fragments, resolved, uncompared))
+		lists.push(planLightList(field, fragments, resolved, uncompared, {projections: options.projections}))
 	})
 	// No lists and nothing to say where the entity lives: an `entity(id)` is read in every loaded Space, which
 	// settles whether it exists (`{ id }`) and its name, description and types from all its Spaces.
@@ -426,6 +455,7 @@ export function analyzeLightEntities(
 	document: DocumentNode,
 	operationName: string | null,
 	variables: Record<string, unknown>,
+	options: {entitiesBatch?: boolean} = {},
 ): LightAnalysis<LightEntitiesPlan> {
 	try {
 		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
@@ -441,6 +471,7 @@ export function analyzeLightEntities(
 		const spaceIds = readRootArgs(args, claims, uncompared)
 		const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
 			everySpace: spaceIds === null,
+			projections: options.entitiesBatch === true,
 		})
 		if (!card.idKey) return {ok: false, reason: "selection"}
 		uncompared.add("sampled_rows")
@@ -500,6 +531,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 	const relationSpaces: (string | null)[] = []
 	const nested: NonNullable<NonNullable<PostgresCard>["nested"]> = {}
 	for (const list of plan.lists) {
+		if (list.projection) continue
 		const holder = list.nodesKey ? asRecord(object[list.key]) : object
 		const nodes = list.nodesKey ? holder?.[list.nodesKey] : object[list.key]
 		if (!Array.isArray(nodes)) return null
