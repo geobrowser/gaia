@@ -19,6 +19,8 @@
 #   geodb-store-secret   secret.hex: 64 hex digits, the store secret (fixes Space ids; never rotate)
 #   geodb-writer-key     key: the feeder's Ed25519 seed; keyid: its key id
 #   geodb-reader-key     key: the api's read-only seed; keyid: its key id
+#   geodb-cursor-key     optional; made in-cluster by geodb-cursor-key-job.yaml (RUNBOOK §10): hermes's key,
+#                        derived collection 10 only
 #
 # The geodb image is pinned (deploy-v2 rewrites every :latest in a manifest to the gaia tag, which
 # would point serve at a tag the geodb repository does not have). Only the feeder image is :latest.
@@ -184,6 +186,13 @@ spec:
                 secretKeyRef:
                   name: geodb-reader-key
                   key: keyid
+            # Optional: hermes's cursor key (derived collection 10 only; RUNBOOK §10). Absent = no such principal.
+            - name: GEODB_CURSOR_KEYID
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-cursor-key
+                  key: keyid
+                  optional: true
             - name: GEODB_GRANT_TTL_S
               value: "300"
           volumeMounts:
