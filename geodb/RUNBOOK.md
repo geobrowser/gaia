@@ -354,8 +354,8 @@ The same holds for keyed membership (§2c-bis).
 Activation order, each step only after the one before it is live:
 
 1. geo-db serve and the init container on 9d97069a78 or later (`put`; §1), as for §2c-bis. The backfill Job's init
-   container takes `geodb.yaml`'s tag at apply time, so it is only as new as that pin: today's `03f0917654` predates
-   `put`, and the Job would dead-letter every row.
+   container takes `geodb.yaml`'s tag at apply time, so it is only as new as that pin: `d82cfa3bc2` (the pin now) carries
+   `put`; a pin older than `9d97069a78` would dead-letter every row.
 2. A feeder image that carries this path (inert while either flag is off).
 3. Kafka ACL (not yet checked; reading the user's ACLs means reading its credentials, so whoever holds them does it):
    the feeder's Kafka user needs consume on `<env>.curation.votes` and on the group
