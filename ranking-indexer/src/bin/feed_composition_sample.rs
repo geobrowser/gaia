@@ -54,6 +54,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::feed_composition_mirror::{self, Sample};
 
 /// One item as the app's feed endpoint returns it. Only the fields the histogram needs.
 #[derive(serde::Deserialize)]
@@ -354,6 +355,30 @@ async fn main() -> Result<(), IndexerError> {
                 failures += 1;
                 error!(error = %e, "failed to sample the rendered feed");
             }
+        }
+    }
+
+    // Copy the recent samples into geo-db's derived class (collection 25) when the mirror is on.
+    // Best-effort: a read or send problem is logged and never fails the run.
+    if let Some(mirror) = geodb_cursor::derived::DerivedMirror::from_env() {
+        let hours: i32 = env_or(
+            "FEED_COMPOSITION_MIRROR_HOURS",
+            feed_composition_mirror::RECENT_HOURS,
+        )
+        .unwrap_or(feed_composition_mirror::RECENT_HOURS);
+        match sqlx::query_as::<_, Sample>(feed_composition_mirror::SELECT_SQL)
+            .bind(hours)
+            .fetch_all(&pool)
+            .await
+        {
+            Ok(samples) => {
+                feed_composition_mirror::mirror(&mirror, &samples).await;
+                info!(
+                    samples = samples.len(),
+                    hours, "feed composition samples mirrored to geo-db"
+                );
+            }
+            Err(e) => warn!(error = %e, "feed composition mirror skipped: read failed"),
         }
     }
 
