@@ -411,18 +411,14 @@ function planLightList(
 		}
 	} else if (!has("typeId") || !has("toEntityId")) {
 		const unfiltered = filter === undefined || filter === null
-		if (
-			!(
-				options.projections &&
-				unfiltered &&
-				!connection &&
-				rows.columns.spaceId &&
-				!has("typeId") &&
-				!has("toEntityId")
-			)
-		)
+		// Rows that name nothing but their Type and target (`relationsList { type { name } toEntity { name } }`): the
+		// answer says neither which Space a row is in nor which statement it is, and the names come from any Space, so
+		// no row can be held to a statement. The list is counted uncompared; the rest of the entity is compared.
+		const namesOnly = !rows.columns.spaceId && (rows.names.type !== undefined || rows.names.toEntity !== undefined)
+		if (!(options.projections && unfiltered && !connection && !has("typeId") && !has("toEntityId")))
 			refuse("selection")
-		uncompared.add("membership_only")
+		if (!rows.columns.spaceId && !namesOnly) refuse("selection")
+		uncompared.add(namesOnly ? "relation_names" : "membership_only")
 		return {
 			kind,
 			key: responseKeyOf(field),
@@ -480,6 +476,8 @@ function planLightEntity(
 		projections?: boolean
 		relationsTypeFilter?: boolean
 		derivedFields?: boolean
+		/** `entity(id) { spaceIds }` alone is judged (every-Space read). */
+		spaceIdsOnly?: boolean
 	} = {},
 ): {card: EntityCardPlan; lists: LightList[]; everySpace: boolean} {
 	const lists: LightList[] = []
@@ -502,6 +500,22 @@ function planLightEntity(
 	// settles whether it exists (`{ id }`) and its name, description and types from all its Spaces.
 	if (options.everySpace && lists.length === 0 && !card.spaceIds) {
 		if (card.name || card.description || card.types) uncompared.add("partial_values")
+		return {card, lists, everySpace: true}
+	}
+	// `entity(id) { spaceIds }` and nothing else: the Spaces the entity lives in are all there is to judge. It is read
+	// in every loaded Space and the Spaces holding statements must be among the ones PostGraphile names.
+	if (
+		options.spaceIdsOnly &&
+		options.everySpace &&
+		lists.length === 0 &&
+		card.spaceIds &&
+		!card.name &&
+		!card.description &&
+		!card.types &&
+		!card.createdAt &&
+		!card.updatedAt
+	) {
+		uncompared.add("partial_values")
 		return {card, lists, everySpace: true}
 	}
 	// No lists: the derived fields (name, description, types) of the entity's own spaces are all that is judged.
@@ -546,6 +560,7 @@ export function analyzeLightEntity(
 		if (!root.selectionSet) return {ok: false, reason: "selection"}
 		const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
 			everySpace: true,
+			spaceIdsOnly: true,
 			relationsTypeFilter: options.relationsTypeFilter === true,
 		})
 		return {
@@ -933,12 +948,14 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 				: plan.card.types.idKey
 					? asRecord(node)?.[plan.card.types.idKey]
 					: undefined
-			if (typeof id !== "string" || (plan.card.types.plain && !isValidUuid(id))) return null
-			ids.push(id)
+			const namesOnly = !plan.card.types.plain && !plan.card.types.idKey
+			if (!namesOnly && (typeof id !== "string" || (plan.card.types.plain && !isValidUuid(id)))) return null
+			if (typeof id === "string") ids.push(id)
 			const name = plan.card.types.nameKey ? asRecord(node)?.[plan.card.types.nameKey] : undefined
+			if (namesOnly && typeof name !== "string") return null
 			names.push(typeof name === "string" ? name : null)
 		}
-		card.types = ids
+		if (plan.card.types.plain || plan.card.types.idKey) card.types = ids
 		if (plan.card.types.nameKey) card.typeNames = names
 	}
 	if (Object.keys(nested).length > 0) card.nested = nested
@@ -1086,7 +1103,18 @@ export async function checkLight(
 			}
 		}
 	}
-	const derived = compareDerived(plan.card, light.card, read.rows, read.scope)
+	// An every-Space read keys its Spaces by geo-db Space id, so the `spaceIds` PostGraphile named are mapped to those
+	// before they are held to the Spaces geo-db holds statements in (a Space geo-db has not loaded cannot be one).
+	let judged = light.card
+	if (options.everySpace && light.card.spaceIds) {
+		const mapped: string[] = []
+		for (const space of light.card.spaceIds) {
+			const geo = await deps.geoSpaceOf(space)
+			if (geo) mapped.push(geo)
+		}
+		judged = {...light.card, spaceIds: mapped}
+	}
+	const derived = compareDerived(plan.card, judged, read.rows, read.scope)
 	const wrong = Object.entries(derived.checks)
 		.filter(([, result]) => result === "mismatch")
 		.map(([field]) => field)

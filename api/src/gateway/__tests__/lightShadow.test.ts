@@ -986,6 +986,63 @@ describe("entity answers with no Space (every-Space reads)", () => {
 		expect(s.readCardSpaces.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: ALL, names: true})
 	})
 
+	describe("types { name } with no id", () => {
+		const namesOnly = (name: string): Captured => ({
+			request: {
+				query: "query T($id: UUID!) { entity(id: $id) { types { name } } }",
+				variables: {id: EVERY.entityTypes.request.variables.id},
+			},
+			response: {data: {entity: {types: [{name}]}}},
+		})
+
+		it("matches when geo-db's Type carries the same name", async () => {
+			const s = everySetup({[geoSpace(SPACE_A)]: typeRow(HEX, NEWS_STORY, "News story")})
+			await run(s, namesOnly("News story"))
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("leaves a different name inconclusive", async () => {
+			const s = everySetup({[geoSpace(SPACE_A)]: typeRow(HEX, NEWS_STORY, "Op-ed")})
+			await run(s, namesOnly("News story"))
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({cross_space: 1})
+		})
+
+		it("flags a Type geo-db holds where PostGraphile lists none", async () => {
+			const s = everySetup({[geoSpace(SPACE_A)]: typeRow(HEX, NEWS_STORY, "News story")})
+			await run(s, {...namesOnly("x"), response: {data: {entity: {types: []}}}})
+			expect(results()).toEqual({mismatch: 1})
+		})
+	})
+
+	describe("entity(id) { spaceIds } alone", () => {
+		const spaceIdsOnly = (ids: string[]): Captured => ({
+			request: {
+				query: "query ProfileSpaceIdForEntity($entityId: UUID!) { entity(id: $entityId) { spaceIds } }",
+				variables: {entityId: EVERY.entityTypes.request.variables.id},
+			},
+			response: {data: {entity: {spaceIds: ids}}},
+		})
+
+		it("plans as an every-Space read", () => {
+			const captured = spaceIdsOnly([SPACE_A])
+			const analysis = analyzeLightEntity(parse(captured.request.query), null, captured.request.variables)
+			expect(analysis.ok && analysis.plan.everySpace).toBe(true)
+		})
+
+		it("matches when every Space geo-db holds the entity in is one PostGraphile names", async () => {
+			const s = everySetup({[geoSpace(SPACE_A)]: typeRow(HEX, NEWS_STORY, "News story")})
+			await run(s, spaceIdsOnly([SPACE_A, SPACE_B]))
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("flags a Space geo-db holds the entity in that PostGraphile does not name", async () => {
+			const s = everySetup({[geoSpace(SPACE_A)]: typeRow(HEX, NEWS_STORY, "News story")})
+			await run(s, spaceIdsOnly([SPACE_B]))
+			expect(results()).toEqual({mismatch: 1})
+		})
+	})
+
 	describe("more loaded Spaces than one line can name (GEODB_EVERY_SPACE_CHUNKS)", () => {
 		const filler = Array.from({length: 1100}, (_, i) => geoSpace(`${(i + 1).toString(16).padStart(32, "0")}`))
 		const many = [...ALL, ...filler]
@@ -1746,6 +1803,24 @@ describe("selections refused as `selection` on the live mix (2026-11-06)", () =>
 			if (a.ok) {
 				expect(a.plan.card.types?.nameKey).toBe("name")
 				expect(a.plan.uncompared).toContain("types_alias")
+			}
+		})
+
+		it("plans a relations list of names only as uncompared, and refuses it without the batch flag", () => {
+			const q = `{ entities(filter: {id: {in: ["${id}"]}}) { id spaceIds types { name } relationsList(first: 80) { type { name } toEntity { name } } } }`
+			const a = analyzeLightEntities(parse(q), null, {}, options)
+			expect(a.ok).toBe(true)
+			if (a.ok) expect(a.plan.uncompared).toContain("relation_names")
+			expect(analyzeLightEntities(parse(q), null, {}, {...options, entitiesBatch: false}).ok).toBe(false)
+		})
+
+		it("plans `types { name }` with no id", () => {
+			const q = `{ entities(filter: {id: {in: ["${id}"]}}) { id spaceIds types { name } } }`
+			const a = analyzeLightEntities(parse(q), null, {}, options)
+			expect(a.ok).toBe(true)
+			if (a.ok) {
+				expect(a.plan.card.types?.idKey).toBeNull()
+				expect(a.plan.card.types?.nameKey).toBe("name")
 			}
 		})
 

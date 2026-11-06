@@ -630,7 +630,8 @@ export function planEntitySelection(
 				else if (inner.name.value === "name") nameKey ??= responseKeyOf(inner)
 				else if (inner.name.value !== "__typename") return refuse("selection")
 			}
-			if (!typeIdKey) return refuse("selection")
+			// `types { name }` with no id (the light selection only): the names are judged against geo-db's Types rows' names.
+			if (!typeIdKey && !(light && nameKey)) return refuse("selection")
 			types = {key, idKey: typeIdKey, nameKey}
 		} else if (light && options.derivedFields && DERIVED_FIELDS.includes(fieldName) && isPlainField(field)) {
 			uncompared.add("derived_fields")
@@ -1073,6 +1074,18 @@ export function compareDerived(
 		if (card.nested?.property) set("propertyNames", combine(against(card.nested.property, propNames)))
 		if (card.nested?.type) set("typeNames", combine(against(card.nested.type, propNames)))
 		if (card.nested?.toEntity) set("toEntityNames", combine(against(card.nested.toEntity, targetNames)))
+		if (card.types === undefined && card.typeNames !== undefined) {
+			// Names only: a name geo-db has for a Type is one PostGraphile names too, in any Space; geo-db holding a Type
+			// where PostGraphile lists none is wrong.
+			const geoNames = [...typeTargetNames.values()].filter((name): name is string => name !== null)
+			const held = new Set(card.typeNames.filter((name): name is string => name !== null))
+			if (typeTargetNames.size > 0 && card.typeNames.length === 0) checks.typesNames = "mismatch"
+			else if (geoNames.every((name) => held.has(name))) checks.typesNames = "ok"
+			else {
+				checks.typesNames = "inconclusive"
+				uncompared.add("cross_space")
+			}
+		}
 		if (card.types && card.typeNames) {
 			const refs = card.types.map((id, at) => ({id, name: card.typeNames?.[at] ?? null}))
 			set("typesNames", combine(against(refs, typeTargetNames)))
