@@ -1806,6 +1806,14 @@ describe("selections refused as `selection` on the live mix (2026-11-06)", () =>
 			}
 		})
 
+		it("plans a relations list of names only as uncompared, and refuses it without the batch flag", () => {
+			const q = `{ entities(filter: {id: {in: ["${id}"]}}) { id spaceIds types { name } relationsList(first: 80) { type { name } toEntity { name } } } }`
+			const a = analyzeLightEntities(parse(q), null, {}, options)
+			expect(a.ok).toBe(true)
+			if (a.ok) expect(a.plan.uncompared).toContain("relation_names")
+			expect(analyzeLightEntities(parse(q), null, {}, {...options, entitiesBatch: false}).ok).toBe(false)
+		})
+
 		it("plans `types { name }` with no id", () => {
 			const q = `{ entities(filter: {id: {in: ["${id}"]}}) { id spaceIds types { name } } }`
 			const a = analyzeLightEntities(parse(q), null, {}, options)

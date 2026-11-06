@@ -35,6 +35,7 @@ export const UNCOMPARED_REASONS = [
 	"nested_entity",
 	"property_info",
 	"membership_only",
+	"relation_names",
 	"truncated",
 	"root_relations",
 	"relation_edge",

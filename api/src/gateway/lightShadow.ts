@@ -411,18 +411,14 @@ function planLightList(
 		}
 	} else if (!has("typeId") || !has("toEntityId")) {
 		const unfiltered = filter === undefined || filter === null
-		if (
-			!(
-				options.projections &&
-				unfiltered &&
-				!connection &&
-				rows.columns.spaceId &&
-				!has("typeId") &&
-				!has("toEntityId")
-			)
-		)
+		// Rows that name nothing but their Type and target (`relationsList { type { name } toEntity { name } }`): the
+		// answer says neither which Space a row is in nor which statement it is, and the names come from any Space, so
+		// no row can be held to a statement. The list is counted uncompared; the rest of the entity is compared.
+		const namesOnly = !rows.columns.spaceId && (rows.names.type !== undefined || rows.names.toEntity !== undefined)
+		if (!(options.projections && unfiltered && !connection && !has("typeId") && !has("toEntityId")))
 			refuse("selection")
-		uncompared.add("membership_only")
+		if (!rows.columns.spaceId && !namesOnly) refuse("selection")
+		uncompared.add(namesOnly ? "relation_names" : "membership_only")
 		return {
 			kind,
 			key: responseKeyOf(field),
