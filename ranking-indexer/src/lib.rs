@@ -3,6 +3,7 @@
 //! space membership), and projects aggregated `RANK_POSITION` relations back
 //! into the public graph.
 
+pub mod agenda_listings_export;
 pub mod clickhouse;
 pub mod consumer;
 pub mod dedup;

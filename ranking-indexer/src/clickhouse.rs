@@ -1,6 +1,7 @@
-//! Reading the analytics ClickHouse over HTTPS, for the jobs that bring analytics data into gaia
-//! (`account_exclusions_sync`, `feed_signals_sync`). Each reads only views analytics publishes for
-//! it, as a ClickHouse user granted SELECT on those views alone.
+//! The analytics ClickHouse over HTTPS: read by the jobs that bring analytics data into gaia
+//! (`account_exclusions_sync`, `feed_signals_sync`), each as a ClickHouse user granted SELECT on the
+//! views analytics publishes for it alone; written by the one that sends gaia data to analytics
+//! (`agenda_listings_refresh`, GEO-3556), as a user granted INSERT on its own table alone.
 //!
 //! Credentials come from CLICKHOUSE_URL, CLICKHOUSE_USER and CLICKHOUSE_PASSWORD, mounted from the
 //! job's own Secret.
@@ -21,6 +22,46 @@ pub const KNOWN_HASH: &str =
 /// Runs `sql` and returns the response body. A non-2xx response is an error carrying the start of
 /// ClickHouse's message, never an empty result.
 pub async fn query(sql: &str, timeout: Duration) -> Result<String, IndexerError> {
+    send(&[], sql.to_string(), timeout).await
+}
+
+/// True when this job has ClickHouse credentials at all.
+pub fn configured() -> bool {
+    env::var("CLICKHOUSE_URL").is_ok_and(|url| !url.trim().is_empty())
+}
+
+/// Inserts `rows`, one JSON object each, into `table` (`database.table`). Strict: a field the table
+/// has no column for is refused, so a row that outgrew its warehouse migration fails the run instead
+/// of losing the field. Timestamps may come as Postgres renders them (ISO 8601 with an offset).
+pub async fn insert_json_each_row(
+    table: &str,
+    rows: &[String],
+    timeout: Duration,
+) -> Result<(), IndexerError> {
+    let query = format!("INSERT INTO {table} FORMAT JSONEachRow");
+    for batch in rows.chunks(INSERT_BATCH_ROWS) {
+        send(
+            &[
+                ("query", query.as_str()),
+                ("date_time_input_format", "best_effort"),
+                ("input_format_skip_unknown_fields", "0"),
+            ],
+            batch.join("\n"),
+            timeout,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Rows per INSERT. The tables written are small; this only bounds one request.
+const INSERT_BATCH_ROWS: usize = 20_000;
+
+async fn send(
+    params: &[(&str, &str)],
+    body: String,
+    timeout: Duration,
+) -> Result<String, IndexerError> {
     let url = env::var("CLICKHOUSE_URL")
         .map_err(|_| IndexerError::Config("CLICKHOUSE_URL not set (or pass --input)".into()))?;
     let user = env::var("CLICKHOUSE_USER")
@@ -32,9 +73,10 @@ pub async fn query(sql: &str, timeout: Duration) -> Result<String, IndexerError>
         .build()
         .map_err(|e| IndexerError::Config(format!("http client: {e}")))?
         .post(url.trim_end_matches('/').to_string() + "/")
+        .query(params)
         .header("X-ClickHouse-User", user)
         .header("X-ClickHouse-Key", password)
-        .body(sql.to_string())
+        .body(body)
         .send()
         .await
         .map_err(|e| IndexerError::Config(format!("ClickHouse request failed: {e}")))?;

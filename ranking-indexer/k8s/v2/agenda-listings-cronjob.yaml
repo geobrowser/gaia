@@ -16,6 +16,12 @@ spec:
   # the last 16 days (trending_horizon_days), and anything still storing a term. Needs the api
   # (migration) deployed first, or the run fails on the missing function.
   #
+  # GEO-3556: after the refresh commits, the same run sends the listings that changed to the
+  # analytics warehouse (analytics.gaia_agenda_listings, analytics migration 124; gaia migration
+  # 0119), as the ClickHouse user in the `agenda-listings-export` Secret, which can only INSERT
+  # there. The Secret is optional: without it the run refreshes and logs that nothing was sent. A
+  # refused send fails the run after the refresh has committed, and the retry sends it again.
+  #
   # Hourly at :05, clear of the rolling sweep (:00), the feed-composition canary (:17), the feed
   # signals sync (:27), topic suggestions (:41), the topic ranking (:51), the account weights (:53)
   # and the primer claims (:57).
@@ -86,6 +92,24 @@ spec:
                     secretKeyRef:
                       name: api-secrets
                       key: DATABASE_URL
+                - name: CLICKHOUSE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: agenda-listings-export
+                      key: CLICKHOUSE_URL
+                      optional: true
+                - name: CLICKHOUSE_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: agenda-listings-export
+                      key: CLICKHOUSE_USER
+                      optional: true
+                - name: CLICKHOUSE_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: agenda-listings-export
+                      key: CLICKHOUSE_PASSWORD
+                      optional: true
                 - name: RUST_LOG
                   value: "agenda_listings_refresh=info,ranking_indexer=info"
               resources:
