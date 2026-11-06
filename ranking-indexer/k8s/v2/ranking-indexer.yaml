@@ -171,7 +171,7 @@ spec:
             - name: KAFKA_GROUP_ID
               value: "ranking-indexer-testnet-v1"
             - name: RUST_LOG
-              value: "ranking_indexer=info"
+              value: "ranking_indexer=info,geodb_cursor=info"
             - name: METRICS_PORT
               value: "9464"
           resources:

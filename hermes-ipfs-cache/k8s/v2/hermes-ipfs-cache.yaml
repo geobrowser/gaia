@@ -203,7 +203,7 @@ spec:
                   name: hermes-ipfs-cache-secrets
                   key: IPFS_GATEWAY_URL
             - name: RUST_LOG
-              value: "hermes_ipfs_cache=info"
+              value: "hermes_ipfs_cache=info,geodb_cursor=info"
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:

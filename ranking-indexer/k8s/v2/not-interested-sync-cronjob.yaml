@@ -171,7 +171,7 @@ spec:
                 - name: GEODB_BINDING_PATH
                   value: /geodb/binding.txt
                 - name: RUST_LOG
-                  value: "not_interested_sync=info,ranking_indexer=info"
+                  value: "not_interested_sync=info,ranking_indexer=info,geodb_cursor=info"
               resources:
                 requests:
                   memory: "64Mi"

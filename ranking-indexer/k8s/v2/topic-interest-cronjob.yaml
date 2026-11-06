@@ -152,6 +152,9 @@ spec:
                   value: "1"
                 - name: GEODB_DERIVED_BATCH
                   value: "1"
+                # Also copy the sweep watermark (interest_sweep_state, collection 6; needs a binding that grants 6). Off.
+                - name: GEODB_STATE_MIRROR
+                  value: "0"
                 - name: GEODB_CLIENT_BIN
                   value: /geodb/geodb-client
                 - name: GEODB_KEY_PATH
@@ -159,7 +162,7 @@ spec:
                 - name: GEODB_BINDING_PATH
                   value: /geodb/binding.txt
                 - name: RUST_LOG
-                  value: "topic_interest=info,ranking_indexer=info"
+                  value: "topic_interest=info,ranking_indexer=info,geodb_cursor=info"
                 # Shadow of the Rust twin of the interest compute: read-only, counts only. Off.
                 - name: USER_INTEREST_RUST_SHADOW
                   value: "0"
@@ -334,7 +337,7 @@ spec:
                       name: api-secrets
                       key: DATABASE_URL
                 - name: RUST_LOG
-                  value: "topic_interest=info,ranking_indexer=info"
+                  value: "topic_interest=info,ranking_indexer=info,geodb_cursor=info"
               resources:
                 requests:
                   memory: "128Mi"
