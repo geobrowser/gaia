@@ -1413,6 +1413,25 @@ describe("entities answers with no Space (every-Space reads)", () => {
 			expect(results()).toEqual({match: 1, mismatch: 1})
 		})
 
+		it("compares a values list filtered by propertyId that selects no property, as held under one of them", async () => {
+			const NAME_ID = "a126ca53-0c8e-48d5-b888-82c734c38935"
+			const query = (props: string) =>
+				`query { entities(filter: {id: {in: ["${FIRST.id}"]}}, first: 1) { id values(filter: {propertyId: {in: [${props}]}}) { nodes { text } } } }`
+			const body = (text: string) => ({data: {entities: [{id: FIRST.id, values: {nodes: [{text}]}}]}})
+			const held = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, "Ada")}, {typeFilter: true})
+			await callQuery(held, query(`"${NAME_ID}"`), body("Ada"))
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({filter_completeness: 1})
+			// A text geo-db does not hold under any filtered Property is a mismatch.
+			const wrong = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, "Ada")}, {typeFilter: true})
+			await callQuery(wrong, query(`"${NAME_ID}"`), body("Grace"))
+			expect(results()).toEqual({match: 1, mismatch: 1})
+			// Switched off, the shape stays refused.
+			const off = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, "Ada")})
+			await callQuery(off, query(`"${NAME_ID}"`), body("Ada"))
+			expect(results()).toEqual({match: 1, mismatch: 1, unsupported_selection: 1})
+		})
+
 		it("reads every space for space-less lists under a root spaceId, and still flags an entity the root Space does not hold", async () => {
 			const query = `query { entities(spaceId: "${SPACE_B}", first: 1) { id relations(first: 10) { nodes { typeId toEntityId } } } }`
 			const target = "7ed45f2bc48b419e8e4664d5ff680b0d"
