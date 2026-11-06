@@ -19,6 +19,8 @@
 #   geodb-store-secret   secret.hex: 64 hex digits, the store secret (fixes Space ids; never rotate)
 #   geodb-writer-key     key: the feeder's Ed25519 seed; keyid: its key id
 #   geodb-reader-key     key: the api's read-only seed; keyid: its key id
+#   geodb-cursor-key     optional; made in-cluster by geodb-cursor-key-job.yaml (RUNBOOK §10): hermes's key,
+#                        derived collection 10 only
 #
 # The geodb image is pinned (deploy-v2 rewrites every :latest in a manifest to the gaia tag, which
 # would point serve at a tag the geodb repository does not have). Only the feeder image is :latest.
@@ -155,7 +157,7 @@ spec:
             defaultMode: 0440
       containers:
         - name: serve
-          image: registry.digitalocean.com/geo/geodb:b2dda49ab6
+          image: registry.digitalocean.com/geo/geodb:db33c7e6e1
           imagePullPolicy: IfNotPresent
           # A panic's stack trace goes to stderr, and the kubelet keeps only the previous
           # container's log. This also copies the log's tail into the pod's
@@ -184,6 +186,13 @@ spec:
                 secretKeyRef:
                   name: geodb-reader-key
                   key: keyid
+            # Optional: hermes's cursor key (derived collection 10 only; RUNBOOK §10). Absent = no such principal.
+            - name: GEODB_CURSOR_KEYID
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-cursor-key
+                  key: keyid
+                  optional: true
             - name: GEODB_GRANT_TTL_S
               value: "300"
           volumeMounts:
@@ -296,7 +305,7 @@ spec:
         # (the Service's ClusterIP, which the binding grammar needs as an address) pinned to serve's node id.
         # Exits 1 until serve has published its ids, so the pod retries rather than starting blind.
         - name: geodb-setup
-          image: registry.digitalocean.com/geo/geodb:b2dda49ab6
+          image: registry.digitalocean.com/geo/geodb:db33c7e6e1
           imagePullPolicy: IfNotPresent
           command:
             - sh
@@ -383,11 +392,12 @@ spec:
             # (geodb-votes-backfill-job.yaml) ran with the feeder at 0. Rollback: "0".
             - name: GEODB_VOTES
               value: "1"
-            # Keyed proposal votes (PROPOSAL_VOTED on space.governance, into the votes system Space). Off. Takes
-            # effect only with GEODB_RECORD_KEYS, and only after the proposal-votes backfill Job
-            # (geodb-proposal-votes-backfill-job.yaml) and the Kafka ACL for its group: RUNBOOK §2c-quater.
+            # Keyed proposal votes (PROPOSAL_VOTED on space.governance, into the votes system Space). Takes
+            # effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-quater. On since 2026-11-05, after the
+            # proposal-votes backfill Job (geodb-proposal-votes-backfill-job.yaml) ran with the feeder at 0
+            # (49518 rows, 0 dead letters). Rollback: "0".
             - name: GEODB_PROPOSAL_VOTES
-              value: "0"
+              value: "1"
             # Relation positions (`.position` on a relation's add). Off until the geodb image carries a
             # geodb-client with ISS-587-318: an older client refuses the key, and every edit with a positioned
             # relation would fail. Turn on with the image bump that brings it.

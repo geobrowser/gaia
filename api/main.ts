@@ -233,7 +233,11 @@ const graphqlHandler = createGateway({
 										multiSpace: geoDbCardConfig.multiSpaceReads === true,
 										backlinks: geoDbCardConfig.backlinkReads === true,
 										...(geoDbCardConfig.everySpaceReads === true
-											? {allGeoSpaces: sharedGeoDb.geoSpaceOf.all, everySpaceBudget}
+											? {
+													allGeoSpaces: sharedGeoDb.geoSpaceOf.all,
+													everySpaceBudget,
+													everySpaceChunks: geoDbCardConfig.everySpaceChunks === true,
+												}
 											: {}),
 									}),
 								] as const,
@@ -246,8 +250,15 @@ const graphqlHandler = createGateway({
 							budget: wideReadBudget,
 							multiSpace: geoDbCardConfig.multiSpaceReads === true,
 							entitiesBatch: geoDbCardConfig.entitiesBatch === true,
+							derivedFields: geoDbCardConfig.derivedFields === true,
+							orderPick: geoDbCardConfig.orderPick === true,
+							relationsTypeFilter: geoDbCardConfig.relationsTypeFilter === true,
 							...(geoDbCardConfig.everySpaceReads === true && geoDbCardConfig.everySpaceEntities === true
-								? {allGeoSpaces: sharedGeoDb.geoSpaceOf.all, everySpaceBudget}
+								? {
+										allGeoSpaces: sharedGeoDb.geoSpaceOf.all,
+										everySpaceBudget,
+										everySpaceChunks: geoDbCardConfig.everySpaceChunks === true,
+									}
 								: {}),
 						},
 						POINT_READ_FIELDS.filter((field) => gatewayShadowFields.has(field)),

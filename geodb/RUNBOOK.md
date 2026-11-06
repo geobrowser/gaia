@@ -354,7 +354,7 @@ The same holds for keyed membership (§2c-bis).
 Activation order, each step only after the one before it is live:
 
 1. geo-db serve and the init container on 9d97069a78 or later (`put`; §1), as for §2c-bis. The backfill Job's init
-   container takes `geodb.yaml`'s tag at apply time, so it is only as new as that pin: `b2dda49ab6` (the pin now) carries
+   container takes `geodb.yaml`'s tag at apply time, so it is only as new as that pin: `db33c7e6e1` (the pin now) carries
    `put`; a pin older than `9d97069a78` would dead-letter every row.
 2. A feeder image that carries this path (inert while either flag is off).
 3. Kafka ACL (not yet checked; reading the user's ACLs means reading its credentials, so whoever holds them does it):
@@ -428,6 +428,15 @@ as a bug in either side. The backfill cannot see it; the stream replays it only 
 (`proposal_versions` yes/no/abstain counts) are derived by the tally worker and are not written. Assumption: the
 event's `space_id` is the proposal's Space; a record is written with that one Space reference.
 
+Tally gate (shadow only, nothing reads it): a geo-db serve that carries the view sink (geo-db c8c04842af or later) and
+runs with `derived_rows_max` above 0 keeps one derived row per (proposal, version) in collection 9
+(`proposal_vote_counts`: key proposal id then big-endian version, value yes/no/abstain as three u64, group the owning
+Space), updated in the same frame as each vote the write path carries. The feeder writes the same records and needs no
+change. It counts only votes written after the sink is live, so run it after the §2c-quater backfill is rewritten or
+re-run on such a serve. Diff it against `proposal_versions` with `geodb-feeder/src/proposalTallyGate.ts <postgres.tsv>
+<scan.tsv>`; the inputs and the findings it classifies are in that file's header. It exits non-zero on a count
+difference or a version geo-db lacks; geo-db-only versions are reported, as for the votes.
+
 Gate before anything reads these records (a shadow read, a diff job, a cutover): diff `proposal_votes` against the
 keyed records, by row count and by a checksum over (proposal, version, voter, vote), and assert that every record has
 exactly one active space reference. Report geo-db-only keys and geo-db-newer values as findings, and make the shadow
@@ -460,6 +469,14 @@ Activation order, each step only after the one before it is live (steps 1 and 3 
 
 5. `GEODB_RECORD_KEYS: "1"` and `GEODB_PROPOSAL_VOTES: "1"` in the feeder manifest, then scale it back to 1.
 6. The gate above, before any reader depends on the records.
+
+   The gate is `geodb-feeder/src/votesGate.ts` (`bun src/votesGate.ts proposal|user <postgres.tsv> <dump dir>`;
+   `user` is the §2c-ter gate). Read only on both sides: `\copy` the Postgres rows from a read-only session, then dump
+   each record column from the votes Space with one GQL query per column (`MATCH (r)-[:`<kind's first key column>`]->(k)
+   RETURN r, r.`<column>``; ids in backticks; one column per query, a two-column dump of every record exceeds the
+   gRPC message limit). Take the Postgres read first and the geo-db dumps after it: both sides keep moving, and a vote
+   that lands between the two reads shows up as a geo-db-only record or a one-column difference that the next read
+   closes. Exit status is 1 for a Postgres-only key, a value difference or a record without exactly one reference.
 
 A failing message of any kind, a ResourceExhausted founding the votes Space included, is retried every 5 s without
 committing: the partition stalls and `GeoDbFeederProposalVotesStalled` fires after 30 min. Metrics:
@@ -911,3 +928,28 @@ size (50Gi / 5Gi) and class and `dataSource: {apiGroup: snapshot.storage.k8s.io,
 deleting anything, check the pair's age against Kafka: the feeder resumes at the saved offset, so it must still be
 inside the 7-day retention (compare the pair's `offsets.json` partition offsets with the topic's low watermark). A
 snapshot older than the last backfill restores without that backfill's writes; run it again (§2b).
+
+## 10. hermes's cursor key (derived collection 10 only)
+
+hermes mirrors its substreams `meta` cursor into geo-db (flag `GEODB_CURSOR_MIRROR`, off by default). It uses
+its own key, `geodb-cursor-key`, not the feeder's: the binding gives it `derived=10` and nothing else
+(`read=- write=- publish=- derived=10`), so a leak cannot touch the graph or any other collection. The key is
+minted inside the cluster by `geodb/k8s/v2/geodb-cursor-key-job.yaml`; the private half is never printed or
+copied out. Needs geo-db `d903c8e017` or later in the geodb image (`derived=`), and a geodb image built from a
+gaia ref that includes the supervisor's `GEODB_CURSOR_KEYID` support (an older supervisor ignores it).
+
+```bash
+# 1. mint (idempotent: never overwrites an existing Secret)
+GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb/k8s/v2/geodb.yaml | sort -u)
+sed -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" geodb/k8s/v2/geodb-cursor-key-job.yaml | $K apply -f -
+$K -n gaia wait --for=condition=complete job/geodb-cursor-key --timeout=120s
+$K -n gaia logs job/geodb-cursor-key          # prints the public key id
+# 2. register: restart serve so the supervisor adds the principal (brief reopen; reads shadow meanwhile)
+$K -n gaia rollout restart statefulset/geodb && $K -n gaia rollout status statefulset/geodb
+# 3. roll hermes so its init container and key mount pick the Secret up
+$K -n gaia rollout restart deploy/hermes-pipeline deploy/hermes-ipfs-cache
+# 4. only then set GEODB_CURSOR_MIRROR on in the two hermes manifests (a separate change)
+```
+
+Rotate: delete Secret `geodb-cursor-key` and Job `geodb-cursor-key`, rerun step 1, then steps 2 and 3.
+Revoke: delete the Secret and restart serve; the principal disappears from the binding.

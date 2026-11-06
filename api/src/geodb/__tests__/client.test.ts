@@ -3,7 +3,7 @@ import {mkdtempSync, readFileSync, writeFileSync} from "node:fs"
 import {tmpdir} from "node:os"
 import {join} from "node:path"
 import {describe, expect, it} from "vitest"
-import {cardDocument, createPipeGeoDbClient, createSpaceMap, GeoDbError} from "../client"
+import {cardDocument, createPipeGeoDbClient, createSpaceMap, entitiesPageDocument, GeoDbError} from "../client"
 import type {GeoDbCardConfig} from "../config"
 import {activateGeoDbMetrics, renderGeoDbCardMetrics} from "../metrics"
 
@@ -534,6 +534,55 @@ lines((line) => {
 				client.readBacklinks?.({geoSpaceIds: [...geoSpaceIds], entityId: ENTITY, limit}),
 			).rejects.toMatchObject({reason: "bad_request"})
 		expect(starts()).toBe(0)
+	})
+})
+
+describe("the ordered entities page", () => {
+	const TYPE = "44444444444444448444444444444444"
+	const FIELD = "74d9c34835444345969a3c9d70362ea5"
+	const OTHER = "33333333333343338333333333333333"
+	const E1 = "55555555555545558555555555555555"
+	const E2 = "66666666666646668666666666666666"
+	const request = {typeId: TYPE, field: FIELD, direction: "desc", pick: "least", first: 3} as const
+
+	it("asks for the order's pick and ties on the entities root, selecting the order's own property", () => {
+		expect(entitiesPageDocument(request)).toBe(
+			`.{ .version = 1, .select = .{ .p = .{ .field = "entities", .args = .{ .type = "${TYPE}", .first = 3, .order = .{ .field = "${FIELD}", .direction = .desc, .pick = .least, .ties = .entity } }, .select = .{ .k = .{ .field = "${FIELD}" } } } } }`,
+		)
+	})
+
+	it("reads the page's rows in order, whatever entities they name, across the Spaces of the line", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [spaces, doc] = line.split("\\t")
+	if (!doc.includes(".pick = .least") || !doc.includes(".ties = .entity")) return frame("-", "no pick")
+	const rows = spaces.split(",").flatMap((s, i) => [
+		["${FIELD}", "instant:" + (10 + i) + ".000000000", s + ":a", "${E1}", "1"].join("\\t"),
+		["${FIELD}", "instant:" + (20 + i) + ".000000000", s + ":b", "${E2}", "1"].join("\\t"),
+	])
+	frame("+", rows.join("\\n") + "\\n")
+})
+`)
+		const rows = await client.readEntitiesPage?.({geoSpaceIds: [SPACE, OTHER], ...request})
+		expect(rows?.map((r) => r.entity)).toEqual([E1, E2, E1, E2])
+		expect(rows?.[0]).toEqual({entity: E1, prop: FIELD, raw: "instant:10.000000000"})
+		client.close()
+	})
+
+	it("refuses a bad page request before it reaches the worker", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		for (const bad of [
+			{geoSpaceIds: [], ...request},
+			{geoSpaceIds: [SPACE, SPACE], ...request},
+			{geoSpaceIds: [SPACE], ...request, first: 0},
+			{geoSpaceIds: [SPACE], ...request, first: 101},
+			{geoSpaceIds: [SPACE], ...request, typeId: 'x" } }'},
+			{geoSpaceIds: [SPACE], ...request, field: "nope"},
+		])
+			await expect(client.readEntitiesPage?.(bad)).rejects.toMatchObject({reason: "bad_request"})
+		expect(starts()).toBe(0)
+		client.close()
 	})
 })
 

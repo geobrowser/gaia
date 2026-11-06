@@ -23,7 +23,7 @@
  * have returned is not checkable from a card (`filter_completeness`).
  */
 
-import type {DocumentNode, FieldNode, SelectionSetNode} from "graphql"
+import {type DocumentNode, type FieldNode, Kind, print, type SelectionSetNode, visit} from "graphql"
 
 import {
 	conformingId,
@@ -69,6 +69,7 @@ import {
 	VALUE_IGNORED,
 } from "./entityShadow"
 import {recordGatewayUnsupportedShape, type UncomparedReason, type UnsupportedReason} from "./metrics"
+import {checkOrderedPage} from "./orderPickShadow"
 
 /** Most returned entities one `entities` operation compares; the rest are `sampled_rows`. */
 export const MAX_SAMPLED_ENTITIES = 3
@@ -92,6 +93,11 @@ type LightList = {
 	 * (`membership_only`).
 	 */
 	projection?: boolean
+	/**
+	 * A relations list filtered by `typeId` (`is` or `in`) that selects no type: the filter's Types, one of which each
+	 * row has. Its rows are checked as "held under one of these Types" (`typeless`), not as exact statements.
+	 */
+	typeFilter?: string[]
 }
 
 const noted = new Set<string>()
@@ -138,6 +144,21 @@ export function shapeOfRoot(
 	}
 }
 
+const MAX_QUERY_LOGGED = 4000
+
+/**
+ * The operation's text with every literal value (strings, numbers, lists, objects) replaced by a placeholder, so
+ * the selection can be read off a log line and replayed offline without any value in it. Capped.
+ */
+export function redactedQuery(operation: DocumentNode["definitions"][number]): string {
+	const redacted = visit(operation, {
+		StringValue: () => ({kind: Kind.STRING, value: "_"}),
+		IntValue: (node) => (node.value.length <= 4 ? node : {kind: Kind.INT, value: "0"}),
+		ListValue: () => ({kind: Kind.LIST, values: []}),
+	})
+	return print(redacted).replace(/\s+/g, " ").slice(0, MAX_QUERY_LOGGED)
+}
+
 /**
  * Counts the argument shape of an operation that could not be shadowed (`gaia_api_gateway_shadow_unsupported_shape_total`)
  * and logs, once per process for each (field, reason, operation name), its root arguments and the top-level fields
@@ -155,7 +176,8 @@ export function noteUnsupported(
 	try {
 		const shape = shapeOfRoot(document, operationName, variables, field)
 		recordGatewayUnsupportedShape(field, reason, shape)
-		const key = `${field}\t${reason}\t${operationName ?? ""}`
+		// The shape is in the key so anonymous operations (no name) of different shapes are each logged once.
+		const key = `${field}\t${reason}\t${operationName ?? ""}\t${shape}`
 		if (noted.has(key) || noted.size >= MAX_NOTED) return
 		noted.add(key)
 		const operation = document.definitions.find(
@@ -176,7 +198,14 @@ export function noteUnsupported(
 				: [],
 		)
 		// warn: the api runs at warn, and this is capped at MAX_NOTED lines per process.
-		deps.log.warn("gateway shadow unsupported", {field, reason, operationName, shape, roots})
+		deps.log.warn("gateway shadow unsupported", {
+			field,
+			reason,
+			operationName,
+			shape,
+			roots,
+			query: redactedQuery(operation),
+		})
 	} catch {
 		// Observability only.
 	}
@@ -211,7 +240,18 @@ export type LightEntitiesPlan = LightPlan & {
 	 * sampled entity is read across every loaded Space, as an `entity` plan's `everySpace`.
 	 */
 	everySpace: boolean
+	/**
+	 * The page's order when it is a single key geo-db can place by (`orderBy: CREATED_AT_*` or `UPDATED_AT_*`, alone), else
+	 * null. `first` and `offset` are the root's, null when absent.
+	 */
+	order: EntitiesOrder | null
+	/** The filter and root arguments say nothing but the plan's `claims` (no clause or system-type argument was left out). */
+	exactFilter: boolean
+	first: number | null
+	offset: number | null
 }
+
+export type EntitiesOrder = {property: "createdAt" | "updatedAt"; direction: "asc" | "desc"}
 
 export type LightAnalysis<P> = {ok: true; plan: P} | {ok: false; reason: UnsupportedReason}
 
@@ -228,12 +268,25 @@ const relationSpec = () => ({
 })
 
 /** One list field of the light selection: its row columns, where they sit, and what it cannot settle. */
+/** The Types a relations list's filter allows (`typeId: {is}` or `{in}`), or null when it names none that way. */
+function typeFilterOf(filter: unknown): string[] | null {
+	const clause = asRecord(asRecord(filter)?.typeId)
+	if (!clause) return null
+	const ids = typeof clause.is === "string" ? [clause.is] : Array.isArray(clause.in) ? clause.in : null
+	if (!ids || ids.length === 0 || ids.length > MAX_TYPE_FILTER) return null
+	if (!ids.every((id) => typeof id === "string" && isValidUuid(id))) return null
+	return [...new Set((ids as string[]).map((id) => normalizeUuid(id)))]
+}
+
+/** Most Types a typeless relations list's filter may name; a wider one is not planned. */
+const MAX_TYPE_FILTER = 20
+
 function planLightList(
 	field: FieldNode,
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
-	options: {projections?: boolean} = {},
+	options: {projections?: boolean; relationsTypeFilter?: boolean} = {},
 ): LightList {
 	const name = field.name.value
 	const kind = name === "values" || name === "valuesList" ? "values" : "relations"
@@ -271,6 +324,17 @@ function planLightList(
 	if (kind === "values") {
 		if (!has("propertyId")) refuse("selection")
 		if (!VALUE_COLUMNS.every(has)) uncompared.add("partial_values")
+	} else if (!has("typeId") && has("toEntityId") && options.relationsTypeFilter && typeFilterOf(filter)) {
+		// The filter says which Types the rows hold; the answer does not say which one each does.
+		uncompared.add("filter_completeness")
+		return {
+			kind,
+			key: responseKeyOf(field),
+			nodesKey,
+			rows: {key: responseKeyOf(field), first, ...rows, nodesKey, hasNext: null},
+			spaceKey: rows.columns.spaceId ?? null,
+			typeFilter: typeFilterOf(filter) as string[],
+		}
 	} else if (!has("typeId") || !has("toEntityId")) {
 		const unfiltered = filter === undefined || filter === null
 		if (
@@ -308,12 +372,24 @@ function planLightEntity(
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
-	options: {everySpace?: boolean; projections?: boolean} = {},
+	options: {everySpace?: boolean; projections?: boolean; relationsTypeFilter?: boolean; derivedFields?: boolean} = {},
 ): {card: EntityCardPlan; lists: LightList[]; everySpace: boolean} {
 	const lists: LightList[] = []
-	const card = planEntitySelection(set, fragments, resolved, uncompared, (field) => {
-		lists.push(planLightList(field, fragments, resolved, uncompared, {projections: options.projections}))
-	})
+	const card = planEntitySelection(
+		set,
+		fragments,
+		resolved,
+		uncompared,
+		(field) => {
+			lists.push(
+				planLightList(field, fragments, resolved, uncompared, {
+					projections: options.projections,
+					relationsTypeFilter: options.relationsTypeFilter,
+				}),
+			)
+		},
+		{derivedFields: options.derivedFields},
+	)
 	// No lists and nothing to say where the entity lives: an `entity(id)` is read in every loaded Space, which
 	// settles whether it exists (`{ id }`) and its name, description and types from all its Spaces.
 	if (options.everySpace && lists.length === 0 && !card.spaceIds) {
@@ -322,8 +398,13 @@ function planLightEntity(
 	}
 	// No lists: the derived fields (name, description, types) of the entity's own spaces are all that is judged.
 	if (lists.length === 0 && !(card.spaceIds && (card.name || card.description || card.types))) refuse("selection")
-	// Rows with no space and no `spaceIds` leave nothing to say which cards to read.
-	if (!card.spaceIds && !lists.some((list) => list.spaceKey)) refuse("no_space")
+	// Rows with no space and no `spaceIds` leave nothing to say which cards to read: where the caller allows it
+	// (no Space argument), the entity is read across every loaded Space and each row need only be held by one.
+	if (!card.spaceIds && !lists.some((list) => list.spaceKey)) {
+		if (!options.everySpace) refuse("no_space")
+		uncompared.add("partial_values")
+		return {card, lists, everySpace: true}
+	}
 	uncompared.add("partial_values")
 	return {card, lists, everySpace: false}
 }
@@ -371,8 +452,13 @@ export function analyzeLightEntity(
 }
 
 /** The soundness claims of an `entities` filter, and the ids it lists. Anything else is only uncompared. */
-function readFilter(filter: unknown, uncompared: Set<UncomparedReason>): Pick<LightEntitiesPlan, "claims" | "ids"> {
+function readFilter(
+	filter: unknown,
+	uncompared: Set<UncomparedReason>,
+): Pick<LightEntitiesPlan, "claims" | "ids"> & {exact: boolean} {
 	const claims: FilterClaim[] = []
+	// Every clause was read into a claim or the id list, so the filter holds nothing the claims do not say.
+	let exact = true
 	let ids: string[] | null = null
 	const object = filter === undefined || filter === null ? {} : asRecord(filter)
 	if (!object) return refuse("filter")
@@ -401,14 +487,21 @@ function readFilter(filter: unknown, uncompared: Set<UncomparedReason>): Pick<Li
 				isValidUuid(to.is)
 			)
 				claims.push({kind: "edge", typeId: normalizeUuid(type.is), toEntityId: normalizeUuid(to.is)})
-			else uncompared.add("filter_completeness")
-		} else uncompared.add("filter_completeness")
+			else {
+				uncompared.add("filter_completeness")
+				exact = false
+			}
+		} else {
+			uncompared.add("filter_completeness")
+			exact = false
+		}
 	}
-	return {claims, ids}
+	return {claims, ids, exact}
 }
 
 const ENTITIES_ARGS = [
 	"filter",
+	"orderBy",
 	"first",
 	"offset",
 	"spaceId",
@@ -418,6 +511,28 @@ const ENTITIES_ARGS = [
 	"systemTypeId",
 	"systemTypeIds",
 ]
+
+/** The built-in sorts of the entities connection the frontends send, in either direction. */
+const ENTITIES_ORDER_BY = /^(CREATED_AT|UPDATED_AT|RANKING_SCORE|QUALITY_SCORE|ID)_(ASC|DESC)$/
+
+/**
+ * `orderBy: [CREATED_AT_DESC, ID_ASC]` (one enum or a list). The sort decides which entities a page holds and in
+ * what order, neither of which a card can settle, so a named ordering only adds `order_completeness`; each
+ * returned entity is still judged on its own card. Anything but those enum names is refused.
+ */
+function readOrderBy(value: unknown, uncompared: Set<UncomparedReason>): EntitiesOrder | null {
+	if (value === undefined || value === null) return null
+	const names = Array.isArray(value) ? value : [value]
+	if (names.length === 0 || names.length > 4) refuse("args")
+	for (const name of names) if (typeof name !== "string" || !ENTITIES_ORDER_BY.test(name)) refuse("args")
+	uncompared.add("order_completeness")
+	const only = names.length === 1 ? /^(CREATED_AT|UPDATED_AT)_(ASC|DESC)$/.exec(names[0] as string) : null
+	if (!only) return null
+	return {
+		property: only[1] === "CREATED_AT" ? "createdAt" : "updatedAt",
+		direction: only[2] === "ASC" ? "asc" : "desc",
+	}
+}
 
 /** `{in: [<uuid> ..]}` and nothing else (the shape of the `spaceIds`/`typeIds` arguments); the ids, distinct. */
 function inList(value: unknown): string[] {
@@ -457,7 +572,7 @@ export function analyzeLightEntities(
 	document: DocumentNode,
 	operationName: string | null,
 	variables: Record<string, unknown>,
-	options: {entitiesBatch?: boolean} = {},
+	options: {entitiesBatch?: boolean; relationsTypeFilter?: boolean; derivedFields?: boolean} = {},
 ): LightAnalysis<LightEntitiesPlan> {
 	try {
 		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
@@ -469,11 +584,14 @@ export function analyzeLightEntities(
 		for (const arg of ["first", "offset"])
 			if (args[arg] !== undefined && args[arg] !== null && !Number.isInteger(args[arg])) refuse("args")
 		const uncompared = new Set<UncomparedReason>()
-		const {claims, ids} = readFilter(args.filter, uncompared)
+		const {claims, ids, exact} = readFilter(args.filter, uncompared)
+		const order = readOrderBy(args.orderBy, uncompared)
 		const spaceIds = readRootArgs(args, claims, uncompared)
 		const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
 			everySpace: spaceIds === null,
 			projections: options.entitiesBatch === true,
+			relationsTypeFilter: options.relationsTypeFilter === true,
+			derivedFields: options.derivedFields === true,
 		})
 		if (!card.idKey) return {ok: false, reason: "selection"}
 		uncompared.add("sampled_rows")
@@ -488,6 +606,10 @@ export function analyzeLightEntities(
 				ids,
 				spaceIds,
 				everySpace,
+				order,
+				exactFilter: exact && args.systemTypeId == null && args.systemTypeIds == null,
+				first: typeof args.first === "number" ? args.first : null,
+				offset: typeof args.offset === "number" ? args.offset : null,
 				uncompared: [...uncompared],
 			},
 		}
@@ -508,6 +630,8 @@ type LightCard = {
 	relationSpaces: (string | null)[]
 	/** The row spaces of the membership-only relation projections (`allRelationsList { spaceId }`). */
 	projectionSpaces: (string | null)[]
+	/** Rows of a `typeId`-filtered relations list that selects no type: the Types the filter allowed, the target, the row space. */
+	typeless: {types: string[]; to: string; space: string | null}[]
 }
 
 const push = (
@@ -534,6 +658,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 	const valueSpaces: (string | null)[] = []
 	const relationSpaces: (string | null)[] = []
 	const projectionSpaces: (string | null)[] = []
+	const typeless: LightCard["typeless"] = []
 	const nested: NonNullable<NonNullable<PostgresCard>["nested"]> = {}
 	for (const list of plan.lists) {
 		if (list.projection) {
@@ -569,9 +694,19 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 						name: readName(node, list.rows.names.property) ?? null,
 					})
 			} else {
-				const typeId = read(node, list.rows, "typeId")
+				const typeId = list.typeFilter ? null : read(node, list.rows, "typeId")
 				const toEntityId = read(node, list.rows, "toEntityId")
-				if (typeof typeId !== "string" || typeof toEntityId !== "string") return null
+				if (typeof toEntityId !== "string") return null
+				if (list.typeFilter) {
+					typeless.push({types: list.typeFilter, to: toEntityId, space})
+					if (list.rows.names.toEntity)
+						push(nested, "toEntity", {
+							id: toEntityId,
+							name: readName(node, list.rows.names.toEntity) ?? null,
+						})
+					continue
+				}
+				if (typeof typeId !== "string") return null
 				relations.push({type_id: typeId, to_entity_id: toEntityId, to_space_id: null})
 				relationSpaces.push(space)
 				if (list.rows.names.type)
@@ -601,8 +736,12 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 		const ids: string[] = []
 		const names: (string | null)[] = []
 		for (const node of nodes) {
-			const id = plan.card.types.idKey ? asRecord(node)?.[plan.card.types.idKey] : undefined
-			if (typeof id !== "string") return null
+			const id = plan.card.types.plain
+				? node
+				: plan.card.types.idKey
+					? asRecord(node)?.[plan.card.types.idKey]
+					: undefined
+			if (typeof id !== "string" || (plan.card.types.plain && !isValidUuid(id))) return null
 			ids.push(id)
 			const name = plan.card.types.nameKey ? asRecord(node)?.[plan.card.types.nameKey] : undefined
 			names.push(typeof name === "string" ? name : null)
@@ -611,7 +750,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 		if (plan.card.types.nameKey) card.typeNames = names
 	}
 	if (Object.keys(nested).length > 0) card.nested = nested
-	return {card, valueSpaces, relationSpaces, projectionSpaces}
+	return {card, valueSpaces, relationSpaces, projectionSpaces, typeless}
 }
 
 /** The spaces to read: the entity's own, else the spaces its rows name. */
@@ -700,6 +839,16 @@ export async function checkLight(
 		skipped += diff.skipped
 		for (const s of diff.onlyPostgres) missing.push({space, prop: s.prop, norm: s.norm})
 	}
+	// A typeless row (filtered by `typeId`, no type selected) is held when its target sits under one of the filter's Types.
+	const untyped = light.typeless.filter((row) => {
+		const pool: GeoCardRow[] = row.space ? (read.bySpace.get(row.space) ?? []) : read.rows
+		const types = new Set(row.types.map((id) => conformingId("entity", id)))
+		// geo-db never holds Postgres-derived relations, so a filter of derived Types only is not judged.
+		if ([...types].every((id) => DERIVED_PROPERTIES.has(id))) return false
+		const to = conformingId("entity", row.to)
+		return !pool.some((held) => types.has(held.prop) && held.raw === to)
+	})
+	for (const row of untyped) missing.push({space: row.space, prop: row.types.join("|"), norm: row.to})
 	const derived = compareDerived(plan.card, light.card, read.rows, read.scope)
 	const wrong = Object.entries(derived.checks)
 		.filter(([, result]) => result === "mismatch")
@@ -801,6 +950,8 @@ export async function runLight(
 	const answer = data[plan.key]
 	const entities: {id: string; node: unknown}[] = []
 	let filterBreach: Record<string, unknown> | null = null
+	/** PostGraphile's page in the order it came, for the ordered-page read. */
+	const pageIds: string[] = []
 	if (plan.kind === "entity") {
 		if (answer === null) return plan.everySpace ? checkAbsent(deps, plan, label) : {result: "skip"}
 		entities.push({id: plan.entityId, node: answer})
@@ -813,6 +964,7 @@ export async function runLight(
 			if (typeof id !== "string" || !isValidUuid(id)) return {result: "skip"}
 			ids.push(normalizeUuid(id))
 		}
+		pageIds.push(...ids)
 		// An `id: {in}` filter is exact: PostGraphile may return only the ids it was asked for.
 		if (plan.ids) {
 			const asked = new Set(plan.ids)
@@ -824,6 +976,8 @@ export async function runLight(
 			entities.push({id: normalizeUuid(String(id)), node})
 		}
 	}
+	const page =
+		plan.kind === "entities" ? await checkOrderedPage(deps, plan, pageIds, label) : ({result: "skip"} as const)
 	const checks: {id: string; check: LightCheck}[] = []
 	for (const {id, node} of entities) {
 		const light = lightCardFromEntity(node, plan)
@@ -835,7 +989,7 @@ export async function runLight(
 		checks.push({id, check: await checkLight(deps, plan, light, id, label, options)})
 	}
 	const mismatched = checks.filter((c) => c.check.result === "mismatch")
-	if (mismatched.length > 0 || filterBreach) {
+	if (mismatched.length > 0 || filterBreach || page.result === "mismatch") {
 		return {
 			result: "mismatch",
 			uncompared: plan.uncompared,
@@ -843,6 +997,7 @@ export async function runLight(
 				entities: checks.length,
 				mismatches: mismatched.length,
 				filterBreach,
+				orderedPage: page.result === "mismatch" ? page.detail : undefined,
 				first: mismatched[0]?.check.result === "mismatch" ? mismatched[0].check.detail : undefined,
 			},
 		}
@@ -850,7 +1005,16 @@ export async function runLight(
 	const unsupported = checks.find((c) => c.check.result === "unsupported")?.check
 	if (unsupported?.result === "unsupported") return {result: "unsupported", reason: unsupported.reason}
 	if (checks.some((c) => c.check.result === "failed")) return {result: "failed"}
+	// A page that could not be read leaves the order uncompared as it was: the cards stand on their own.
 	const uncompared = new Set<UncomparedReason>(plan.uncompared)
+	if (page.result === "match") {
+		for (const r of page.uncompared) uncompared.add(r)
+		// The page's members and order were compared, so which entities the filter and the order select is no longer open.
+		if (page.pageCompared) {
+			uncompared.delete("order_completeness")
+			uncompared.delete("filter_completeness")
+		}
+	}
 	for (const {check} of checks) if (check.result === "match") for (const r of check.uncompared) uncompared.add(r)
 	return {result: "match", uncompared: [...uncompared], detail: {entities: checks.length}}
 }

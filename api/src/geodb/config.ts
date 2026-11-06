@@ -54,6 +54,31 @@ export type GeoDbCardConfig = {
 	 */
 	entitiesBatch?: boolean
 	/**
+	 * Let the light `entities` shadow accept the vote scores PostGraphile computes from Postgres (`upvotes`, `downvotes`,
+	 * `agrees`, `disagrees`, `commenters`, `commentScore`): geo-db holds none of them, so they are counted
+	 * `derived_fields` and never compared; the rest of the selection compares as usual. Off by default.
+	 * GEODB_DERIVED_FIELDS_SHADOW=on.
+	 */
+	derivedFields?: boolean
+	/**
+	 * Read an every-Space card in lines of at most MAX_LINE_SPACES Spaces when geo-db has loaded more than that, and
+	 * concatenate the rows. Without it such a read is refused `many_spaces`. GEODB_EVERY_SPACE_CHUNKS=on.
+	 */
+	everySpaceChunks?: boolean
+	/**
+	 * Let the light `entities` shadow read a single-key `orderBy: CREATED_AT_* | UPDATED_AT_*` page from geo-db (`.pick` and
+	 * `.ties = .entity` on the order) and compare it with PostGraphile's. Needs a serve whose store has geo-db d3967dffbf: an
+	 * older one refuses the members, so turn it on only after the serve pin passes that commit. Also needs
+	 * `multiSpaceReads`, `everySpaceReads` and `everySpaceEntities`. Off by default. GEODB_ORDER_PICK_SHADOW=on.
+	 */
+	orderPick?: boolean
+	/**
+	 * Let the light `entities` shadow compare a relations list that is filtered by `typeId` and does not select the type
+	 * (`relations(filter: {typeId: {in}}) { nodes { toEntity { id name } } }`): each row must be held under one of the
+	 * filter's Types. Off by default. GEODB_RELATIONS_TYPE_FILTER_SHADOW=on.
+	 */
+	relationsTypeFilter?: boolean
+	/**
 	 * Lifetime of the capability token a worker's handshake gets, in seconds: geo-db's `grant_ttl_s`
 	 * (GEODB_GRANT_TTL_S on the serve, 300 by default). A worker is replaced before its token expires, so no
 	 * read finds the token dead. Absent means the default.
@@ -86,7 +111,11 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		everySpaceReads: env.GEODB_EVERY_SPACE_READS?.trim().toLowerCase() === "on",
 		everySpaceEntities: env.GEODB_EVERY_SPACE_ENTITIES?.trim().toLowerCase() === "on",
 		backlinkReads: env.GEODB_BACKLINK_READS?.trim().toLowerCase() === "on",
+		everySpaceChunks: env.GEODB_EVERY_SPACE_CHUNKS?.trim().toLowerCase() === "on",
 		entitiesBatch: env.GEODB_ENTITIES_BATCH_SHADOW?.trim().toLowerCase() === "on",
+		derivedFields: env.GEODB_DERIVED_FIELDS_SHADOW?.trim().toLowerCase() === "on",
+		orderPick: env.GEODB_ORDER_PICK_SHADOW?.trim().toLowerCase() === "on",
+		relationsTypeFilter: env.GEODB_RELATIONS_TYPE_FILTER_SHADOW?.trim().toLowerCase() === "on",
 		poolSize: Number.isFinite(pool) && pool > 0 ? Math.min(pool, MAX_POOL_SIZE) : DEFAULT_POOL_SIZE,
 		grantTtlS: Number.isFinite(grantTtl) && grantTtl > 0 ? grantTtl : DEFAULT_GRANT_TTL_S,
 	}

@@ -113,4 +113,4 @@ jobs:
           docker push "$REGISTRY/geodb:$GEODB_TAG"
           echo "## geodb image" >> "$GITHUB_STEP_SUMMARY"
           echo "Tag: \`$GEODB_TAG\` (geo-db \`$GEODB_SHA\`)" >> "$GITHUB_STEP_SUMMARY"
-          echo "The manifests pin \`geodb:b2dda49ab6\`; a different tag needs geodb/k8s/v2/geodb.yaml and api/k8s/v2/api.yaml changed to match (the membership and votes backfill Jobs take geodb.yaml's tag at apply time)." >> "$GITHUB_STEP_SUMMARY"
+          echo "The manifests pin \`geodb:db33c7e6e1\`; a different tag needs geodb/k8s/v2/geodb.yaml and api/k8s/v2/api.yaml changed to match (the membership and votes backfill Jobs take geodb.yaml's tag at apply time)." >> "$GITHUB_STEP_SUMMARY"

@@ -59,7 +59,7 @@ import {
 	statementsFromPostgres,
 	type ValueRow,
 } from "../geodb/card"
-import {GeoDbError} from "../geodb/client"
+import {GeoDbError, MAX_LINE_SPACES} from "../geodb/client"
 import {observeGeoDbRead} from "../geodb/metrics"
 import {askGeoDb, askGeoDbSpaces, type CardDeps, type CardLogger} from "../geodb/service"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
@@ -88,6 +88,9 @@ const MAX_FRAGMENT_DEPTH = 8
 export const NAME_PROPERTY = conformingId("entity", "a126ca53-0c8e-48d5-b888-82c734c38935")
 export const DESCRIPTION_PROPERTY = conformingId("entity", "9b1f76ff-9711-404c-861e-59dc3fa7d037")
 export const TYPES_PROPERTY = conformingId("entity", "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1")
+
+/** Entity fields PostGraphile computes from Postgres votes and comments; geo-db holds none of them. */
+export const DERIVED_FIELDS = ["upvotes", "downvotes", "agrees", "disagrees", "commenters", "commentScore"]
 
 export const VALUE_COLUMNS = ["text", "integer", "float", "boolean", "datetime", "date", "decimal"] as const
 /** Columns of a value row the card mapping does not compare; selecting them is allowed. */
@@ -172,7 +175,7 @@ export type EntityCardPlan = {
 	/** Response keys of `updatedAt` and `createdAt` (unix seconds as text), when selected plain. Their `*Block` twins stay uncompared. */
 	updatedAt: string | null
 	createdAt: string | null
-	types: {key: string; idKey: string | null; nameKey: string | null} | null
+	types: {key: string; idKey: string | null; nameKey: string | null; plain?: boolean} | null
 	/** The unfiltered lists (every space): their response keys, and of the columns read. */
 	allValues: {key: string; first: number; spaceKey: string | null; propertyKey: string | null} | null
 	allRelations: {key: string; first: number; spaceKey: string | null} | null
@@ -275,7 +278,7 @@ const NO_LIST: ListPlan = {key: "", first: 0, columns: {}, nested: {}, names: {}
 
 /** A connection field whose selection is `totalCount` alone (and `__typename`). */
 export const isCountOnly = (field: FieldNode): boolean =>
-	(field.name.value === "relations" || field.name.value === "values") &&
+	(field.name.value === "relations" || field.name.value === "values" || field.name.value === "backlinks") &&
 	field.selectionSet !== undefined &&
 	field.selectionSet.selections.length > 0 &&
 	field.selectionSet.selections.every(
@@ -459,6 +462,7 @@ export function planEntitySelection(
 	uncompared: Set<UncomparedReason>,
 	/** Light mode (lightShadow.ts): every list field goes to this callback instead of the card lists. */
 	light?: (field: FieldNode) => void,
+	options: {derivedFields?: boolean} = {},
 ): EntityCardPlan {
 	let values: PlannedList | null = null
 	let relations: PlannedList | null = null
@@ -510,8 +514,9 @@ export function planEntitySelection(
 		} else if ((fieldName === "createdAt" || fieldName === "createdAtBlock") && isPlainField(field)) {
 			uncompared.add("created_at")
 		} else if (isCountOnly(field)) {
-			// `relations { totalCount }`: a count of rows geo-db cannot be asked for without the list.
-			uncompared.add("relation_count")
+			// `relations { totalCount }`: a count of rows geo-db cannot be asked for without the list. Likewise
+			// `backlinks { totalCount }` (the tiebreaker queries): the count is not compared, the rest of the card is.
+			uncompared.add(fieldName === "backlinks" ? "backlink_count" : "relation_count")
 		} else if (fieldName === "types" && !types && isUnfiltered(field, resolved) && field.selectionSet) {
 			let typeIdKey: string | null = null
 			let nameKey: string | null = null
@@ -523,6 +528,11 @@ export function planEntitySelection(
 			}
 			if (!typeIdKey) return refuse("selection")
 			types = {key, idKey: typeIdKey, nameKey}
+		} else if (light && options.derivedFields && DERIVED_FIELDS.includes(fieldName) && isPlainField(field)) {
+			uncompared.add("derived_fields")
+		} else if (light && fieldName === "typeIds" && !types && isPlainField(field)) {
+			// The light selection only: `typeIds` is the same Types statements as `types { id }`, as a list of ids.
+			types = {key, idKey: null, nameKey: null, plain: true}
 		} else if (fieldName === "valuesList" && filtered && !values) {
 			values = planList(field, fragments, resolved, valueSpec, uncompared, false)
 		} else if (fieldName === "valuesList" && !filtered && !allValues) {
@@ -1053,6 +1063,18 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	backlinks?: boolean
 	/** Accept the EntitiesBatch selection's membership-only `allRelationsList { spaceId }` in the light `entities` shadow (`GEODB_ENTITIES_BATCH_SHADOW`). */
 	entitiesBatch?: boolean
+	/** Accept the Postgres-computed vote scores (`upvotes` ..) in the light `entities` shadow, uncompared (`GEODB_DERIVED_FIELDS_SHADOW`). */
+	derivedFields?: boolean
+	/** Split an every-Space read over more than MAX_EVERY_SPACES loaded Spaces into several lines (`GEODB_EVERY_SPACE_CHUNKS`). */
+	everySpaceChunks?: boolean
+	/**
+	 * Read a single-key `CREATED_AT`/`UPDATED_AT` `orderBy` page of the light `entities` shadow from geo-db with the order's
+	 * `.pick` and `.ties` members and compare it (`GEODB_ORDER_PICK_SHADOW`). Needs a serve that reads those members, `multiSpace`
+	 * and `allGeoSpaces`; off by default because an older serve refuses the document.
+	 */
+	orderPick?: boolean
+	/** Accept a `typeId`-filtered relations list that does not select the type in the light `entities` shadow (`GEODB_RELATIONS_TYPE_FILTER_SHADOW`). */
+	relationsTypeFilter?: boolean
 }
 
 export type CardCheck =
@@ -1060,7 +1082,7 @@ export type CardCheck =
 	| {result: "unsupported"; reason: UnsupportedReason}
 	| {result: "match" | "mismatch"; uncompared: UncomparedReason[]; detail: Record<string, unknown>}
 
-/** Most spaces one wide comparison reads; an entity in more is not compared (`many_spaces`). */
+/** Most spaces one wide comparison reads one by one; an entity in more is not compared (`many_spaces`). A multi-Space line is capped at MAX_LINE_SPACES instead. */
 export const MAX_READ_SPACES = 3
 
 /**
@@ -1099,8 +1121,10 @@ export async function readWide(
 	label: string,
 ): Promise<WideRead> {
 	if (spaces.length === 0) return {ok: false, result: "unsupported", reason: "no_space"}
-	if (spaces.length > MAX_READ_SPACES) return {ok: false, result: "unsupported", reason: "many_spaces"}
 	const oneLine = deps.multiSpace === true && spaces.length > 1 && deps.geoDb.readCardSpaces !== undefined
+	// One multi-Space line reads them all at the cost of one read; only the per-Space fallback is capped at 3.
+	if (spaces.length > (oneLine ? MAX_LINE_SPACES : MAX_READ_SPACES))
+		return {ok: false, result: "unsupported", reason: "many_spaces"}
 	if (deps.budget && !deps.budget.tryAcquire(oneLine ? 1 : spaces.length))
 		return {ok: false, result: "unsupported", reason: "throttled"}
 	const started = performance.now()
@@ -1169,13 +1193,25 @@ export async function readEverySpace(deps: EntityShadowDeps, entityId: string, l
 		return {ok: false, result: "failed"}
 	}
 	if (spaces.length === 0) return {ok: false, result: "unsupported", reason: "no_space"}
-	if (spaces.length > MAX_EVERY_SPACES) return {ok: false, result: "unsupported", reason: "many_spaces"}
-	if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(1))
+	if (spaces.length > MAX_EVERY_SPACES && deps.everySpaceChunks !== true)
+		return {ok: false, result: "unsupported", reason: "many_spaces"}
+	const lines: string[][] = []
+	for (let at = 0; at < spaces.length; at += MAX_EVERY_SPACES) lines.push(spaces.slice(at, at + MAX_EVERY_SPACES))
+	if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(lines.length))
 		return {ok: false, result: "unsupported", reason: "throttled"}
 	const started = performance.now()
-	let rows: GeoCardRow[]
+	const rows: GeoCardRow[] = []
 	try {
-		rows = await readCardSpaces({geoSpaceIds: spaces, entityId: conformingId("entity", entityId), names: true})
+		for (const line of lines) {
+			const got = await readCardSpaces({
+				geoSpaceIds: line,
+				entityId: conformingId("entity", entityId),
+				names: true,
+			})
+			// A one-Space line prints bare statement ids, so its rows name no Space.
+			const only = line.length === 1 ? line[0] : undefined
+			for (const row of got) rows.push(only && row.space === undefined ? {...row, space: only} : row)
+		}
 		observeGeoDbRead((performance.now() - started) / 1000, "ok")
 	} catch (error) {
 		observeGeoDbRead((performance.now() - started) / 1000, "error")

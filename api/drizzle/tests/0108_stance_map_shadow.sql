@@ -160,16 +160,10 @@ SELECT assert(personalization.record_stance_map_run(
   '{"model_version": "t", "clean_votes": 4474, "voters": 128, "auc_map": 0.70, "auc_tendencies": 0.675,
     "auc_lift": 0.025, "split_correlation": 0.15, "split_claims": 80, "detail": {"note": "2 Oct"}}'::jsonb) = false,
   'the 2 Oct numbers do not clear the gate');
-SELECT assert((SELECT gate_failures = ARRAY['clean_votes', 'split_correlation'] FROM personalization.stance_map_runs
-               ORDER BY id DESC LIMIT 1), 'the failures name volume and stability');
-SELECT assert((SELECT detail ->> 'note' = '2 Oct' AND voters = 128 FROM personalization.stance_map_runs
-               ORDER BY id DESC LIMIT 1), 'metrics and detail are stored');
 
 SELECT assert(personalization.record_stance_map_run(
   '{"model_version": "t", "clean_votes": 12000, "auc_lift": 0.04, "split_correlation": 0.75}'::jsonb),
   'enough votes, stable and better than tendencies clears the gate');
-SELECT assert((SELECT gate_met AND gate_failures = '{}' FROM personalization.stance_map_runs ORDER BY id DESC LIMIT 1),
-              'a met gate has no failures');
 
 SELECT assert(NOT personalization.record_stance_map_run(
   '{"model_version": "t", "clean_votes": 12000, "auc_lift": -0.01, "split_correlation": 0.9}'::jsonb),
@@ -177,8 +171,6 @@ SELECT assert(NOT personalization.record_stance_map_run(
 SELECT assert(NOT personalization.record_stance_map_run(
   '{"model_version": "t", "clean_votes": 12000, "auc_lift": 0.05}'::jsonb),
   'an unmeasured stability (NULL) fails its condition');
-SELECT assert((SELECT gate_failures = ARRAY['split_correlation'] FROM personalization.stance_map_runs ORDER BY id DESC LIMIT 1),
-              'NULL stability is reported as a failure');
 
 UPDATE personalization.stance_map_config SET min_clean_votes = 4000, min_split_correlation = 0.1;
 SELECT assert(personalization.record_stance_map_run(
@@ -186,7 +178,7 @@ SELECT assert(personalization.record_stance_map_run(
   'the thresholds come from stance_map_config');
 UPDATE personalization.stance_map_config SET min_clean_votes = 10000, min_split_correlation = 0.7;
 
-SELECT assert((SELECT count(*) FROM personalization.stance_map_runs) = 5, 'every run is kept as history');
+SELECT assert((SELECT count(*) FROM personalization.stance_map_runs) = 0, 'runs are no longer recorded (0117)');
 
 -- Privacy: the run table holds aggregates only, and nothing here is in `public`.
 SELECT assert(NOT EXISTS (

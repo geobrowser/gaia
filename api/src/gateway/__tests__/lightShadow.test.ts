@@ -1,7 +1,7 @@
 import {readFileSync} from "node:fs"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
-import {conformingId, rowsFromGeoDbOutput, valueKey} from "../../geodb/card"
+import {CREATED_AT_PROPERTY, conformingId, rowsFromGeoDbOutput, UPDATED_AT_PROPERTY, valueKey} from "../../geodb/card"
 import {createEntityShadow, isEmptyFilter} from "../entityShadow"
 import {analyzeLightEntities, analyzeLightEntity} from "../lightShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
@@ -29,6 +29,7 @@ const HEX = ENTITY.id
 const SPACE_A = ENTITY.spaceIds[0] as string
 const SPACE_B = "5093b6ab1b48f1111dd31275b5413ddb"
 const SPACE_C = "41e851610e13a19441c4d980f2f2ce6b"
+const SPACE_B_UUID = "1b5c5f5c-2d5f-4f6a-9f0d-6d1c0c4f9a11"
 const SPACE_D = "0123456789ab4bcd8ef0123456789abc"
 const geoSpace = (s: string) => `${s.slice(0, 12)}4${s.slice(13, 16)}8${s.slice(17)}`
 const NAME = conformingId("entity", "a126ca53-0c8e-48d5-b888-82c734c38935")
@@ -242,6 +243,32 @@ describe("the light entity selection (news app)", () => {
 		expect(results()).toEqual({match: 1, mismatch: 1, unsupported_selection: 1})
 	})
 
+	it("compares an entity in more than three spaces in one line when multi-space reads are on", async () => {
+		const wide = clone(ENTITY)
+		const extra = [
+			"aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa",
+			"bbbbbbbbbbbb4bbb8bbbbbbbbbbbbbbb",
+			"cccccccccccc4ccc8ccccccccccccccc",
+		]
+		wide.spaceIds = [SPACE_A, SPACE_B, SPACE_C, ...extra]
+		const moved = wide.lightRels.nodes[0] as Rel
+		moved.spaceId = SPACE_B
+		const outputs = {
+			[geoSpace(SPACE_A)]: geoOutput(wide, {relSpace: (r) => r !== moved}),
+			[geoSpace(SPACE_B)]: geoOutput(wide, {relSpace: (r) => r === moved, values: false}),
+		}
+		const s = setup(outputs, undefined, true)
+		await call(s.entity as never, FIXTURE.request.query, {}, {data: {entity: wide}})
+		expect(results()).toEqual({match: 1})
+		expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
+		expect(s.readCardSpaces.mock.calls[0]?.[0].geoSpaceIds).toHaveLength(6)
+		// Deliberate mismatch: geo-db lacks the relation PostGraphile returned from B.
+		const lacking = setup({...outputs, [geoSpace(SPACE_B)]: ""}, undefined, true)
+		await call(lacking.entity as never, FIXTURE.request.query, {}, {data: {entity: wide}})
+		expect(results()).toEqual({match: 1, mismatch: 1})
+		expect(unsupported()).toEqual({})
+	})
+
 	it("sends nothing when one of the spaces is not loaded, even in one-line mode", async () => {
 		const unloaded = clone(ENTITY)
 		unloaded.spaceIds = [SPACE_A, SPACE_D]
@@ -277,10 +304,22 @@ describe("the light entity selection (news app)", () => {
 		expect(results()).toEqual({failed: 1})
 	})
 
-	it("needs the entity's spaces: without spaceIds or a row space it is no_space", () => {
+	it("reads every space when there is no spaceIds and no row space (the rows need only be held by one)", () => {
 		const analysis = analyzeLightEntity(
 			parse(
 				`{ entity(id: "073ff16b-e7fe-4591-a984-c325d629d92d") { id values(first: 5) { nodes { property { id } text } } } }`,
+			),
+			null,
+			{},
+		)
+		expect(analysis.ok).toBe(true)
+		if (analysis.ok) expect(analysis.plan.everySpace).toBe(true)
+	})
+
+	it("still needs the entity's spaces when the root names Spaces but the answer does not", () => {
+		const analysis = analyzeLightEntities(
+			parse(
+				`{ entities(spaceIds: {in: ["${SPACE_B_UUID}"]}, first: 5) { id values(first: 5) { nodes { property { id } text } } } }`,
 			),
 			null,
 			{},
@@ -354,7 +393,7 @@ describe("the card selection with no space filter", () => {
 			s.entity as never,
 			q.replace("createdAt createdAtBlock relations { totalCount }", ""),
 			{id: "a94cb341-0aea-4737-8dda-3b6489cbacef", spaceId: null},
-			{data: {entity: {id: HEX, name: null}}},
+			{data: {entity: {id: HEX, name: null, valuesList: [], relationsList: []}}},
 		)
 		expect(unsupported()).toEqual({no_space: 1})
 	})
@@ -439,6 +478,33 @@ describe("entities with the light selection", () => {
 			expect(analyzeLightEntities(parse(withArgs(args)), null, {})).toEqual({ok: false, reason: "args"})
 	})
 
+	it("plans an orderBy as an uncompared order and refuses one it does not know", () => {
+		const base = `spaceId: "${SPACE_A}", typeId: "${typeId}", first: 5`
+		for (const order of [
+			"CREATED_AT_DESC",
+			"[CREATED_AT_DESC, ID_ASC]",
+			"[RANKING_SCORE_DESC]",
+			"UPDATED_AT_ASC",
+		]) {
+			const a = analyzeLightEntities(parse(withArgs(`${base}, orderBy: ${order}`)), null, {})
+			expect(a.ok).toBe(true)
+			if (a.ok) expect(a.plan.uncompared).toContain("order_completeness")
+		}
+		const viaVariable = analyzeLightEntities(
+			parse(withArgs(`${base}, orderBy: $o`).replace("query", "query($o: [EntitiesOrderBy!])")),
+			null,
+			{o: ["CREATED_AT_ASC", "ID_ASC"]},
+		)
+		expect(viaVariable.ok).toBe(true)
+		const plain = analyzeLightEntities(parse(withArgs(base)), null, {})
+		expect(plain.ok && plain.plan.uncompared).not.toContain("order_completeness")
+		for (const order of ["BACKLINKS_COUNT_DESC", "[]", "[ID_ASC, ID_ASC, ID_ASC, ID_ASC, ID_ASC]"])
+			expect(analyzeLightEntities(parse(withArgs(`${base}, orderBy: ${order}`)), null, {})).toEqual({
+				ok: false,
+				reason: "args",
+			})
+	})
+
 	it("flags an entity outside every Space the spaceIds argument names", async () => {
 		const entities = list(1)
 		const s = setup(outputsFor(entities))
@@ -461,6 +527,205 @@ describe("entities with the light selection", () => {
 			{data: {entities}},
 		)
 		expect(results()).toEqual({match: 1})
+	})
+
+	it("compares the entities of an orderBy page one by one and leaves the order uncompared", async () => {
+		const entities = list(2)
+		const s = setup(outputsFor(entities))
+		await call(
+			s.points.get("entities") as never,
+			withArgs(`spaceId: "${SPACE_A}", first: 5, orderBy: [CREATED_AT_DESC, ID_ASC]`),
+			{},
+			{data: {entities}},
+		)
+		expect(results()).toEqual({match: 1})
+		expect(uncompared()).toMatchObject({order_completeness: 1, sampled_rows: 1})
+	})
+
+	describe("the ordered page read (GEODB_ORDER_PICK_SHADOW)", () => {
+		const PAGE_ALL = [geoSpace(SPACE_A), geoSpace(SPACE_B_UUID)]
+		const T = conformingId("entity", typeId)
+		const instant = (seconds: number) => `instant:${seconds}.000000000`
+		/** Geo rows of an entity page: one row of the order's property a (entity, seconds) pair, as geodb-client prints. */
+		const pageRows = (property: string, keys: [string, number][]) =>
+			keys.map(([id, seconds], at) => ({
+				entity: conformingId("entity", id),
+				prop: property,
+				raw: instant(seconds),
+				at,
+			}))
+		const pageSetup = (
+			entities: Entity[],
+			geoPage: {entity: string; prop: string; raw: string}[],
+			options: {flag?: boolean} = {},
+		) => {
+			const log = {info: vi.fn(), warn: vi.fn()}
+			const typed = entities.map((e) => `${TYPES}\t${T}\tt\t${e.id}\t-\t-\t1\n`).join("")
+			const outputs = {[geoSpace(SPACE_A)]: (outputsFor(entities)[geoSpace(SPACE_A)] ?? "") + typed}
+			const readEntitiesPage = vi.fn(async () => geoPage)
+			const deps = {
+				multiSpace: true,
+				orderPick: options.flag !== false,
+				geoDb: {readCard: askOf(outputs), readCardSpaces: askSpacesOf(outputs), readEntitiesPage},
+				geoSpaceOf: async (space: string) => geoSpace(space),
+				allGeoSpaces: async () => PAGE_ALL,
+				log,
+			}
+			return {log, readEntitiesPage, points: createPointReadShadows(deps)}
+		}
+		const query = (order: string, extra = `typeId: "${typeId}"`, first = 3) =>
+			withArgs(`${extra}, first: ${first}, orderBy: ${order}`)
+		const run = (s: ReturnType<typeof pageSetup>, entities: Entity[], q: string) =>
+			call(s.points.get("entities") as never, q, {}, {data: {entities}})
+		const created = (entities: Entity[], seconds: number[]) =>
+			pageRows(
+				CREATED_AT_PROPERTY,
+				entities.map((e, i) => [e.id, seconds[i] as number]),
+			)
+
+		it("plans a single CREATED_AT or UPDATED_AT key and nothing else", () => {
+			const plan = (order: string, extra?: string) => {
+				const a = analyzeLightEntities(parse(query(order, extra)), null, {})
+				return a.ok ? a.plan.order : "refused"
+			}
+			expect(plan("CREATED_AT_DESC")).toEqual({property: "createdAt", direction: "desc"})
+			expect(plan("[UPDATED_AT_ASC]")).toEqual({property: "updatedAt", direction: "asc"})
+			expect(plan("[CREATED_AT_DESC, ID_ASC]")).toBeNull()
+			expect(plan("RANKING_SCORE_DESC")).toBeNull()
+			expect(plan("ID_ASC")).toBeNull()
+		})
+
+		it("reads nothing with the switch off", async () => {
+			const entities = list(2)
+			const s = pageSetup(entities, created(entities, [30, 20, 10]), {flag: false})
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(s.readEntitiesPage).not.toHaveBeenCalled()
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({order_completeness: 1})
+		})
+
+		it("sends the pick and one row more than the page, and compares a strict order as a sequence", async () => {
+			const entities = list(3)
+			const keys = [
+				...created(entities, [30, 20, 10]),
+				...pageRows(CREATED_AT_PROPERTY, [[list(4)[3]?.id as string, 5]]),
+			]
+			const s = pageSetup(entities, keys)
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(s.readEntitiesPage).toHaveBeenCalledWith({
+				geoSpaceIds: PAGE_ALL,
+				typeId: T,
+				field: CREATED_AT_PROPERTY,
+				direction: "desc",
+				pick: "least",
+				first: 4,
+			})
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).not.toHaveProperty("order_completeness")
+			expect(uncompared()).not.toHaveProperty("filter_completeness")
+			expect(uncompared()).not.toHaveProperty("order_ties")
+		})
+
+		it("places an updatedAt page by its greatest value, ascending or not", async () => {
+			const entities = list(2)
+			const s = pageSetup(
+				entities,
+				pageRows(
+					UPDATED_AT_PROPERTY,
+					entities.map((e, i) => [e.id, 10 + i]),
+				),
+			)
+			await run(s, entities, query("UPDATED_AT_ASC", undefined, 2))
+			expect(s.readEntitiesPage).toHaveBeenCalledWith(
+				expect.objectContaining({field: UPDATED_AT_PROPERTY, direction: "asc", pick: "greatest", first: 3}),
+			)
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("flags a page whose order differs", async () => {
+			const entities = list(3)
+			const swapped = [entities[1], entities[0], entities[2]] as Entity[]
+			const s = pageSetup(entities, created(swapped, [30, 20, 10]))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(results()).toEqual({mismatch: 1})
+			expect(s.log.warn).toHaveBeenCalledWith(
+				expect.stringContaining("mismatch"),
+				expect.objectContaining({first: undefined}),
+			)
+		})
+
+		it("flags a page with an entity geo-db does not place there", async () => {
+			const entities = list(3)
+			const other = list(4)[3] as Entity
+			const s = pageSetup(entities, created([entities[0], entities[1], other] as Entity[], [30, 20, 10]))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("compares as a set when keys tie inside the page, and says so", async () => {
+			const entities = list(3)
+			const geoOrder = [entities[1], entities[0], entities[2]] as Entity[]
+			const s = pageSetup(entities, created(geoOrder, [30, 30, 10]).concat(created(list(4).slice(3), [5])))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({order_ties: 1})
+			expect(uncompared()).not.toHaveProperty("order_completeness")
+		})
+
+		it("still flags a different member of a page that ties inside", async () => {
+			const entities = list(3)
+			const other = list(4)[3] as Entity
+			const geoOrder = [entities[0], other, entities[2]] as Entity[]
+			const s = pageSetup(entities, created(geoOrder, [30, 30, 10]))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("compares nothing of the page when the cut splits a tie, and keeps the order uncompared", async () => {
+			const entities = list(3)
+			const next = list(4)[3] as Entity
+			const s = pageSetup(entities, created([...entities, next], [30, 20, 10, 10]))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({order_completeness: 1, filter_completeness: 1, order_ties: 1})
+		})
+
+		it("does not call a short page's missing next entity a tie", async () => {
+			const entities = list(2)
+			const s = pageSetup(entities, created(entities, [30, 20]))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).not.toHaveProperty("order_ties")
+		})
+
+		it("leaves other shapes uncompared and reads nothing: a Space scope, a second key, an offset, no first", async () => {
+			const entities = list(2)
+			for (const q of [
+				query("CREATED_AT_DESC", `typeId: "${typeId}", spaceId: "${SPACE_A}"`),
+				query("[CREATED_AT_DESC, ID_ASC]"),
+				withArgs(`typeId: "${typeId}", first: 3, offset: 3, orderBy: CREATED_AT_DESC`),
+				withArgs(`typeId: "${typeId}", orderBy: CREATED_AT_DESC`),
+				withArgs(`first: 3, orderBy: CREATED_AT_DESC`),
+			]) {
+				__resetGatewayMetricsForTests()
+				const s = pageSetup(entities, created(entities, [30, 20]))
+				await run(s, entities, q)
+				expect(s.readEntitiesPage).not.toHaveBeenCalled()
+				expect(uncompared()).toMatchObject({order_completeness: 1})
+			}
+		})
+
+		it("leaves the order uncompared when the page cannot be read", async () => {
+			const entities = list(2)
+			const s = pageSetup(entities, [])
+			s.readEntitiesPage.mockRejectedValueOnce(new Error("refused"))
+			await run(s, entities, query("CREATED_AT_DESC"))
+			expect(s.log.warn).toHaveBeenCalledWith(
+				expect.stringContaining("ordered page read failed"),
+				expect.anything(),
+			)
+			expect(uncompared()).toMatchObject({order_completeness: 1})
+		})
 	})
 
 	it("compares a sample of the returned entities and checks the filter's promise on each", async () => {
@@ -528,13 +793,19 @@ describe("entity answers with no Space (every-Space reads)", () => {
 
 	function everySetup(
 		outputs: Record<string, string>,
-		options: {flag?: boolean; budget?: ReturnType<typeof createReadBudget>} = {},
+		options: {
+			flag?: boolean
+			budget?: ReturnType<typeof createReadBudget>
+			spaces?: string[]
+			chunks?: boolean
+		} = {},
 	) {
 		const log = {info: vi.fn(), warn: vi.fn()}
 		const readCard = askOf(outputs)
 		const readCardSpaces = askSpacesOf(outputs)
-		const allGeoSpaces = vi.fn(async () => ALL)
+		const allGeoSpaces = vi.fn(async () => options.spaces ?? ALL)
 		const deps = {
+			everySpaceChunks: options.chunks,
 			multiSpace: true,
 			geoDb: {readCard, readCardSpaces},
 			geoSpaceOf: async (space: string) => geoSpace(space),
@@ -575,6 +846,28 @@ describe("entity answers with no Space (every-Space reads)", () => {
 		expect(s.readCard).not.toHaveBeenCalled()
 		expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
 		expect(s.readCardSpaces.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: ALL, names: true})
+	})
+
+	describe("more loaded Spaces than one line can name (GEODB_EVERY_SPACE_CHUNKS)", () => {
+		const filler = Array.from({length: 1100}, (_, i) => geoSpace(`${(i + 1).toString(16).padStart(32, "0")}`))
+		const many = [...ALL, ...filler]
+		const rows = () => ({[geoSpace(SPACE_C)]: geoOutput(ENTITY) + typeRow(HEX, NEWS_STORY, "News story")})
+
+		it("refuses the read as many_spaces while the flag is off", async () => {
+			const s = everySetup(rows(), {spaces: many})
+			await run(s, EVERY.entityTypes)
+			expect(unsupported()).toEqual({many_spaces: 1})
+			expect(s.readCardSpaces).not.toHaveBeenCalled()
+		})
+
+		it("reads them in lines of at most 1024 and compares the concatenated rows", async () => {
+			const s = everySetup(rows(), {spaces: many, chunks: true})
+			await run(s, EVERY.entityTypes)
+			expect(results()).toEqual({match: 1})
+			expect(s.readCardSpaces).toHaveBeenCalledTimes(2)
+			const sizes = s.readCardSpaces.mock.calls.map((c) => c[0].geoSpaceIds.length)
+			expect(sizes).toEqual([1024, many.length - 1024])
+		})
 	})
 
 	it("flags a type geo-db holds that PostGraphile does not list; a differing type name is inconclusive", async () => {
@@ -670,12 +963,19 @@ describe("entities answers with no Space (every-Space reads)", () => {
 
 	function namesSetup(
 		outputs: Record<string, string>,
-		options: {flag?: boolean; budget?: ReturnType<typeof createReadBudget>} = {},
+		options: {
+			flag?: boolean
+			budget?: ReturnType<typeof createReadBudget>
+			typeFilter?: boolean
+			derivedFields?: boolean
+		} = {},
 	) {
 		const log = {info: vi.fn(), warn: vi.fn()}
 		const readCard = askOf(outputs)
 		const readCardSpaces = askSpacesOf(outputs)
 		const deps = {
+			relationsTypeFilter: options.typeFilter === true,
+			derivedFields: options.derivedFields,
 			multiSpace: true,
 			geoDb: {readCard, readCardSpaces},
 			geoSpaceOf: async (space: string) => geoSpace(space),
@@ -741,6 +1041,59 @@ describe("entities answers with no Space (every-Space reads)", () => {
 		expect(results()).toEqual({mismatch: 1})
 	})
 
+	// A type-wide listing: `entities(filter: {typeIds}) { id relations(first, filter: {typeId: {in}}) { nodes { toEntity { id name } } } }`.
+	describe("a typeId-filtered relations list that selects no type", () => {
+		const typeId = "e550fe517e904b2c8fffdf13408f5634"
+		const edgeType = "0a1b2c3d4e5f4a6b8c7d8e9f0a1b2c3d"
+		const otherType = "1a1b2c3d4e5f4a6b8c7d8e9f0a1b2c3e"
+		const target = "99999999999949998999999999999999"
+		const query = `query { entities(first: 10, filter: {typeIds: {anyEqualTo: "${typeId}"}}) { id relations(first: 50, filter: {typeId: {in: ["${edgeType}", "${otherType}"]}}) { nodes { toEntity { id name } } } } }`
+		const body = (name: string) => ({
+			data: {entities: [{id: FIRST.id, relations: {nodes: [{toEntity: {id: target, name}}]}}]},
+		})
+		const typed = `${TYPES}\t${conformingId("entity", typeId)}\ts1\t${FIRST.id}\t-\t-\t1\n`
+		const edge = (type: string) =>
+			`${conformingId("entity", type)}\t${conformingId("entity", target)}\ts2\t${FIRST.id}\t-\tTarget\t1\n`
+		const callQuery = (s: ReturnType<typeof namesSetup>, text: string, payload: unknown) =>
+			call(s.points.get("entities") as never, text, {}, payload)
+
+		it("stays unsupported while the switch is off", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge(edgeType)})
+			await callQuery(s, query, body("Target"))
+			expect(results()).toEqual({unsupported_selection: 1})
+			expect(unsupported()).toEqual({selection: 1})
+		})
+
+		it("matches a target held under one of the filter's Types", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge(otherType)}, {typeFilter: true})
+			await callQuery(s, query, body("Target"))
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("flags a target geo-db holds under none of the filter's Types", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge(typeId)}, {typeFilter: true})
+			await callQuery(s, query, body("Target"))
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("flags a target geo-db does not hold at all", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed}, {typeFilter: true})
+			await callQuery(s, query, body("Target"))
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("still refuses a type filter it cannot read", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge(edgeType)}, {typeFilter: true})
+			await callQuery(s, query.replace(`in: ["${edgeType}", "${otherType}"]`, "in: []"), {data: {entities: []}})
+			await callQuery(
+				s,
+				query.replace(`typeId: {in: ["${edgeType}", "${otherType}"]}`, `spaceId: {is: "${SPACE_B}"}`),
+				body("Target"),
+			)
+			expect(results()).toEqual({unsupported_selection: 2})
+		})
+	})
+
 	it("stays no_space and reads nothing with the switch off", async () => {
 		const s = namesSetup({[geoSpace(SPACE_A)]: nameRow(FIRST.id, FIRST.name)}, {flag: false})
 		await run(s)
@@ -782,5 +1135,135 @@ describe("entities answers with no Space (every-Space reads)", () => {
 		await run(s, {data: {entities: []}})
 		expect(results()).toEqual({})
 		expect(s.readCardSpaces).not.toHaveBeenCalled()
+	})
+
+	// The typeahead: `entities(typeId, first, filter: {values: {some: {propertyId, text: {includesInsensitive}}}})`.
+	describe("the vote scores PostGraphile computes (GEODB_DERIVED_FIELDS_SHADOW)", () => {
+		const scores = "id name spaceIds upvotes downvotes agrees disagrees commenters commentScore"
+		const query = `query Q($ids: [UUID!]) { entities(filter: {id: {in: $ids}}) { ${scores} } }`
+		const row = {
+			id: FIRST.id,
+			name: FIRST.name,
+			spaceIds: [SPACE_A],
+			upvotes: 1,
+			downvotes: 0,
+			agrees: 0,
+			disagrees: 0,
+			commenters: 0,
+			commentScore: 0,
+		}
+		const ask = (derivedFields: boolean) => {
+			const s = namesSetup({[geoSpace(SPACE_A)]: nameRow(FIRST.id, FIRST.name)}, {derivedFields})
+			return call(s.points.get("entities") as never, query, {ids: [FIRST.id]}, {data: {entities: [row]}})
+		}
+
+		it("refuses the selection while the flag is off", async () => {
+			await ask(false)
+			expect(results()).toEqual({unsupported_selection: 1})
+		})
+
+		it("compares the rest of the selection and counts the scores uncompared when the flag is on", async () => {
+			await ask(true)
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({derived_fields: 1})
+		})
+
+		it("still flags a wrong name beside the scores", async () => {
+			const s = namesSetup({[geoSpace(SPACE_A)]: nameRow(FIRST.id, "Other")}, {derivedFields: true})
+			await call(
+				s.points.get("entities") as never,
+				query,
+				{ids: [FIRST.id]},
+				{data: {entities: [{...row, name: "Ada"}]}},
+			)
+			expect(results()).toEqual({mismatch: 1})
+		})
+	})
+
+	describe("the typeahead and the selections it shares with id lists", () => {
+		const typeId = "e550fe517e904b2c8fffdf13408f5634"
+		const typeahead = (selection: string) =>
+			`query { entities(typeId: "${typeId}", first: 10, filter: {values: {some: {propertyId: {is: "a126ca53-0c8e-48d5-b888-82c734c38935"}, text: {includesInsensitive: "ada"}}}}) { ${selection} } }`
+		const typed = `${TYPES}\t${conformingId("entity", typeId)}\ts1\t${FIRST.id}\t-\t-\t1\n`
+		const callQuery = (s: ReturnType<typeof namesSetup>, query: string, body: unknown) =>
+			call(s.points.get("entities") as never, query, {}, body)
+
+		it("compares the filter's type and the name, leaving which entities matched the text uncompared", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + nameRow(FIRST.id, "Ada")})
+			await callQuery(s, typeahead("id name"), {data: {entities: [{id: FIRST.id, name: "Ada"}]}})
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({filter_completeness: 1})
+		})
+
+		it("flags a returned entity that geo-db does not hold with the promised type", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, "Ada")})
+			await callQuery(s, typeahead("id name"), {data: {entities: [{id: FIRST.id, name: "Ada"}]}})
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("leaves a differing name inconclusive: the name may come from a Space geo-db did not load", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + nameRow(FIRST.id, "Bob")})
+			await callQuery(s, typeahead("id name"), {data: {entities: [{id: FIRST.id, name: "Ada"}]}})
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("compares typeIds as the entity's Types statements", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + nameRow(FIRST.id, "Ada")})
+			const query = typeahead("id name description typeIds spaceIds updatedAt")
+			const row = {
+				id: FIRST.id,
+				name: "Ada",
+				description: null,
+				typeIds: [typeId],
+				spaceIds: [SPACE_B],
+				updatedAt: "2026-01-01T00:00:00Z",
+			}
+			await callQuery(s, query, {data: {entities: [row]}})
+			expect(results()).toEqual({match: 1})
+			// A type PostGraphile lists that geo-db never held for the entity is a difference.
+			const lacking = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, "Ada")})
+			await callQuery(lacking, query, {data: {entities: [row]}})
+			expect(results()).toMatchObject({mismatch: 1})
+		})
+
+		it("compares typeIds on an id list", async () => {
+			const query = `query { entities(filter: {id: {in: ["${FIRST.id}"]}}, first: 1) { id typeIds } }`
+			const s = namesSetup({[geoSpace(SPACE_C)]: typed})
+			await callQuery(s, query, {data: {entities: [{id: FIRST.id, typeIds: [typeId]}]}})
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("refuses typeIds that are not ids, and a typeIds field with a selection", () => {
+			const plain = analyzeLightEntities(parse(typeahead("id name typeIds")), null, {})
+			expect(plain.ok).toBe(true)
+			expect(analyzeLightEntities(parse(typeahead("id name typeIds { id }")), null, {})).toEqual({
+				ok: false,
+				reason: "selection",
+			})
+		})
+
+		it("reads every space for lists that name no space, instead of counting no_space", async () => {
+			const query = `query { entities(filter: {id: {in: ["${FIRST.id}"]}}, first: 1) { id relations(first: 10) { nodes { typeId toEntityId } } } }`
+			const target = "7ed45f2bc48b419e8e4664d5ff680b0d"
+			const rel = `${conformingId("entity", typeId)}\t${conformingId("entity", target)}\ts5\t${FIRST.id}\t-\t-\t1\n`
+			const body = {data: {entities: [{id: FIRST.id, relations: {nodes: [{typeId, toEntityId: target}]}}]}}
+			const held = namesSetup({[geoSpace(SPACE_B)]: rel})
+			await callQuery(held, query, body)
+			expect(results()).toEqual({match: 1})
+			// A relation geo-db holds in no Space is still a mismatch.
+			const missing = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, FIRST.name)})
+			await callQuery(missing, query, body)
+			expect(results()).toEqual({match: 1, mismatch: 1})
+		})
+
+		it("keeps an entities answer unsupported when every-space reads are off (never a mismatch)", async () => {
+			const query = `query { entities(filter: {id: {in: ["${FIRST.id}"]}}, first: 1) { id relations(first: 10) { nodes { typeId toEntityId } } } }`
+			const s = namesSetup({}, {flag: false})
+			await callQuery(s, query, {
+				data: {entities: [{id: FIRST.id, relations: {nodes: [{typeId, toEntityId: typeId}]}}]},
+			})
+			expect(results()).toEqual({unsupported_selection: 1})
+			expect(unsupported()).toEqual({no_space: 1})
+		})
 	})
 })

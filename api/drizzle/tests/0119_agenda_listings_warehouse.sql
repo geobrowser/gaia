@@ -1,4 +1,4 @@
--- Assertions for 0117: Debate agenda listings for the analytics warehouse (GEO-3556).
+-- Assertions for 0119: Debate agenda listings for the analytics warehouse (GEO-3556).
 --
 -- Run per drizzle/tests/README.md; also runs in CI via rankingSqlSuites.test.ts.
 --

@@ -24,7 +24,60 @@ spec:
       volumes:
         - name: ssl-certs
           emptyDir: {}
+        # geodb-client for the substreams cursor mirror (geodb-cursor, GEODB_CURSOR_MIRROR). Dormant while
+        # the flag is "off": nothing below is read, and every reference is optional or fails soft, so an
+        # absent geodb never blocks a rollout. Same wiring as api/k8s/v2/api.yaml, but with the feeder's
+        # CURSOR key: a principal that may write derived collection 10 and nothing else (geodb-cursor-key-job.yaml).
+        - name: geodb-bin
+          emptyDir: {}
+        - name: geodb-space-map
+          configMap:
+            # Written by the geodb-feeder / serve. Not shipped in these manifests.
+            name: geodb-space-map
+            optional: true
+        - name: geodb-key
+          secret:
+            secretName: geodb-cursor-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: cursor.key
       initContainers:
+        - name: geodb-setup
+          # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to this service's tag.
+          image: registry.digitalocean.com/geo/geodb:db33c7e6e1
+          imagePullPolicy: IfNotPresent
+          # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
+          # binding and the mirror stays disabled even if the flag is turned on.
+          command:
+            - sh
+            - -c
+            - |
+              cp /usr/local/bin/geodb-client /geodb/geodb-client || exit 0
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -n "$node" ] && [ -n "$ip" ]; then
+                printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+              else
+                echo "geodb-setup: no node id or no geodb Service; cursor mirror stays off"
+              fi
+              exit 0
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
         - name: setup-certs
           image: registry.digitalocean.com/geo/hermes-ipfs-cache:latest
           imagePullPolicy: Always
@@ -64,7 +117,27 @@ spec:
             - name: ssl-certs
               mountPath: /ssl
               readOnly: true
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+            - name: geodb-key
+              mountPath: /etc/geodb/key
+              readOnly: true
           env:
+            # Mirror the substreams `meta` cursor into geo-db (geodb-cursor), best-effort, after the Postgres
+            # cursor write: each put is bounded by 2 s, a failure is logged and counted and never fails the
+            # block, then a cool-down. ON since serve registered the cursor key (RUNBOOK section 10); "0" turns it off.
+            - name: GEODB_CURSOR_MIRROR
+              value: "1"
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/key/cursor.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
             - name: PGSSLROOTCERT
               value: /ssl/ca.crt
             - name: DATABASE_URL

@@ -28,7 +28,9 @@ GRANT_TTL="${GEODB_GRANT_TTL_S:-300}"
 CONFIGMAP="${GEODB_CONFIGMAP:-geodb-space-map}"
 SA=/var/run/secrets/kubernetes.io/serviceaccount
 
-# The writer may publish (found) any Space; the reader reads and nothing else.
+# The writer may publish (found) any Space; the reader reads and nothing else. The optional cursor key
+# (hermes's meta-cursor mirror, Secret geodb-cursor-key) may write derived collection 10 and nothing
+# else: no read, no graph write, no publish. Needs geodb-serve at geo-db d903c8e017 or later (`derived=`).
 cat > "$RUN/binding.txt" <<BINDING
 version = 1
 listen = tcp:0.0.0.0:$PORT
@@ -36,6 +38,9 @@ principal = $GEODB_WRITER_KEYID read=* write=* publish=*
 principal = $GEODB_READER_KEYID read=* write=- publish=-
 grant_ttl_s = $GRANT_TTL
 BINDING
+if [ -n "${GEODB_CURSOR_KEYID:-}" ]; then
+	sed -i "/^grant_ttl_s/i principal = $GEODB_CURSOR_KEYID read=- write=- publish=- derived=10" "$RUN/binding.txt"
+fi
 
 # Patch the two ids into the ConfigMap (create it if absent). Succeeds quietly where there is no cluster.
 publish_ids() {

@@ -300,7 +300,7 @@ describe("entities shadow", () => {
 		await run(
 			shadows,
 			"entities",
-			ENTITIES.replace("first: 10", "first: 10, orderBy: ID_ASC"),
+			ENTITIES.replace("first: 10", "first: 10, orderBy: BACKLINKS_COUNT_DESC"),
 			body([cardOf(A, "Ada")]),
 			vars,
 		)

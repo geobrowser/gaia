@@ -1,4 +1,4 @@
-//! Sends Debate agenda listings to the analytics warehouse (GEO-3556, migration 0117), so "what
+//! Sends Debate agenda listings to the analytics warehouse (GEO-3556, migration 0119), so "what
 //! share of debates were on an agenda claim" is one warehouse query. Run by `agenda_listings_refresh`
 //! right after each refresh, so it reads the set the refresh just wrote.
 //!

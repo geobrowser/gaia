@@ -18,7 +18,7 @@ spec:
   #
   # GEO-3556: after the refresh commits, the same run sends the listings that changed to the
   # analytics warehouse (analytics.gaia_agenda_listings, analytics migration 124; gaia migration
-  # 0117), as the ClickHouse user in the `agenda-listings-export` Secret, which can only INSERT
+  # 0119), as the ClickHouse user in the `agenda-listings-export` Secret, which can only INSERT
   # there. The Secret is optional: without it the run refreshes and logs that nothing was sent. A
   # refused send fails the run after the refresh has committed, and the retry sends it again.
   #

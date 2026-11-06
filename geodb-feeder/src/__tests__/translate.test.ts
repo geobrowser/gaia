@@ -162,18 +162,53 @@ describe("translateOps", () => {
 		)
 		expect(intents).toEqual([
 			`.{ .create_entity = "${hex(1)}" }`,
+			`.{ .unset = .{ .entity = "${hex(1)}", .property = "${hex(2)}" } }`,
 			`.{ .set = .{ .entity = "${hex(1)}", .property = "${hex(2)}", .value = .{ .text = "hello" }, .language = "en" } }`,
+			`.{ .unset = .{ .entity = "${hex(1)}", .property = "${hex(3)}" } }`,
 			`.{ .set = .{ .entity = "${hex(1)}", .property = "${hex(3)}", .value = .{ .text = "huh" } } }`,
+			`.{ .unset = .{ .entity = "${hex(1)}", .property = "${hex(4)}" } }`,
 			`.{ .set = .{ .entity = "${hex(1)}", .property = "${hex(4)}", .value = .{ .text = "plain" } } }`,
 		])
-		expect(stats).toMatchObject({"text-language-kept": 1, "text-language-dropped": 1, "values-set": 3})
+		expect(stats).toMatchObject({"text-language-kept": 1, "text-language-dropped": 1, "values-set": 3, "text-cell-cleared": 3})
 	})
 
-	it("emits hex op ids, last-value-wins per language cell, and date precision", () => {
+	// geo-db's cell is (entity, property, language), gaia's (entity, property): a set in English left the name an
+	// earlier edit wrote untagged active beside it (entity 87c603fc, 2026-11-05: two names on one card).
+	it("clears every language of a text's property before setting it, and keeps one value per property", () => {
+		const english = "090adac0fca4822e8e719263e67620ec"
+		const {intents, stats} = translateOps(
+			[
+				{
+					type: "updateEntity",
+					id: id(1),
+					set: [
+						{property: id(2), value: {type: "text", value: "It's okay to forgive an affair", language: english}},
+						{property: id(3), value: {type: "text", value: "bonjour", language: languageIdOf("fr")}},
+						{property: id(3), value: {type: "text", value: "hello", language: english}},
+						{property: id(4), value: {type: "integer", value: 7}},
+					],
+					unset: [],
+				},
+			],
+			context().ctx,
+		)
+		expect(intents).toEqual([
+			`.{ .create_entity = "${hex(1)}" }`,
+			`.{ .unset = .{ .entity = "${hex(1)}", .property = "${hex(2)}" } }`,
+			`.{ .set = .{ .entity = "${hex(1)}", .property = "${hex(2)}", .value = .{ .text = "It's okay to forgive an affair" }, .language = "en" } }`,
+			`.{ .unset = .{ .entity = "${hex(1)}", .property = "${hex(3)}" } }`,
+			`.{ .set = .{ .entity = "${hex(1)}", .property = "${hex(3)}", .value = .{ .text = "hello" }, .language = "en" } }`,
+			`.{ .set = .{ .entity = "${hex(1)}", .property = "${hex(4)}", .value = .{ .number = 7 } } }`,
+		])
+		expect(stats).toMatchObject({"duplicate-value-superseded": 1, "text-cell-cleared": 2, "values-set": 3})
+	})
+
+	it("emits hex op ids, last-value-wins per property, and date precision", () => {
 		const {ctx} = context()
 		const {intents, touched, stats} = translateOps(ops, ctx)
 		expect(intents).toEqual([
 			`.{ .create_entity = "${hex(1)}" }`,
+			`.{ .unset = .{ .entity = "${hex(1)}", .property = "${hex(2)}" } }`,
 			`.{ .set = .{ .entity = "${hex(1)}", .property = "${hex(2)}", .value = .{ .text = "later" } } }`,
 			`.{ .set = .{ .entity = "${hex(1)}", .property = "${hex(3)}", .value = .{ .date = "2,2020,5,17" } } }`,
 			`.{ .set = .{ .entity = "${hex(1)}", .property = "${hex(4)}", .value = .{ .date = "0,1999,0,0" } } }`,

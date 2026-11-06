@@ -40,13 +40,20 @@ export const UNCOMPARED_REASONS = [
 	"relation_edge",
 	"created_at",
 	"relation_count",
+	"backlink_count",
 	"partial_values",
 	"filter_completeness",
+	/** An `orderBy` page: which entities come first, and where ties fall, is not checkable from cards. */
+	"order_completeness",
+	/** A single-key `orderBy` page was read from geo-db with `.pick`/`.ties`, but equal keys make the order (or the cut) geo-db's own: membership only, or nothing, was compared. */
+	"order_ties",
 	"sampled_rows",
 	/** PostGraphile has the entity's row but geo-db holds no statement about it in any loaded Space. */
 	"no_statements",
 	/** PostGraphile lists the entity in the asked-for Space only through derived properties, which geo-db never holds. */
 	"derived_only",
+	/** Vote scores PostGraphile computes from Postgres (`upvotes`, `commentScore` ..); geo-db holds none of them. */
+	"derived_fields",
 ] as const
 
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]

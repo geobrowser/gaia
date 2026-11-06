@@ -32,7 +32,14 @@
 import {type ChildProcess, spawn as nodeSpawn} from "node:child_process"
 import {readFile, stat} from "node:fs/promises"
 import type {Readable, Writable} from "node:stream"
-import {backlinkRowsFromGeoDbOutput, type GeoBacklinkRow, type GeoCardRow, rowsFromGeoDbOutput} from "./card"
+import {
+	backlinkRowsFromGeoDbOutput,
+	type GeoBacklinkRow,
+	type GeoCardRow,
+	type GeoPageRow,
+	pageRowsFromGeoDbOutput,
+	rowsFromGeoDbOutput,
+} from "./card"
 import type {GeoDbCardConfig} from "./config"
 import {observeReadStage, type ReadShape, recordWorkerEnd, recordWorkerStart, type WorkerEndReason} from "./metrics"
 
@@ -54,7 +61,29 @@ export type GeoDbCardClient = {
 	 * more. Absent on a client that cannot do it.
 	 */
 	readBacklinks?(args: {geoSpaceIds: string[]; entityId: string; limit: number}): Promise<GeoBacklinkRow[]>
+	/**
+	 * One page of the entities of a type ordered by a property (`entities` root, `.order` with `.pick` and `.ties = .entity`),
+	 * across the Spaces named: the rows of the order's property, the page's entities in order, `first` of them at most.
+	 * Needs a store that reads the order's `.pick`/`.ties` (geo-db d3967dffbf), which an older one refuses. Absent on a
+	 * client that cannot do it.
+	 */
+	readEntitiesPage?(args: EntitiesPageRequest): Promise<GeoPageRow[]>
 }
+
+export type EntitiesPageRequest = {
+	geoSpaceIds: string[]
+	typeId: string
+	/** The property the page is ordered by (32 hex digits). */
+	field: string
+	direction: "asc" | "desc"
+	/** The value an entity is placed by across Spaces: `least` (earliest) or `greatest` (latest). */
+	pick: "least" | "greatest"
+	/** Objects on the page, 1 to `MAX_PAGE`. */
+	first: number
+}
+
+/** Most objects one page read asks for. */
+export const MAX_PAGE = 100
 
 /** Most backlinks one read asks for: geo-db's `MAX_TOPK_LIMIT`. */
 export const MAX_BACKLINKS = 4096
@@ -77,6 +106,16 @@ export function cardDocument(entityId: string, options: {names?: boolean; backli
 	const names = options.names ? ", .names = true" : ""
 	const backlinks = options.backlinks ? `, .backlinks = ${options.backlinks}` : ""
 	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${entityId}"${names}${backlinks} } } } }`
+}
+
+/**
+ * The geoql document for a page of a type's entities ordered by `field`: the order's `.pick` places each entity by its
+ * least or greatest value across the Spaces, equal keys follow by entity identity (`.ties = .entity`), and the rows the
+ * page selects are the order property's own, so the caller reads each object's key. Ids are 32 hex digits.
+ */
+export function entitiesPageDocument(request: Omit<EntitiesPageRequest, "geoSpaceIds">): string {
+	const order = `.{ .field = "${request.field}", .direction = .${request.direction}, .pick = .${request.pick}, .ties = .entity }`
+	return `.{ .version = 1, .select = .{ .p = .{ .field = "entities", .args = .{ .type = "${request.typeId}", .first = ${request.first}, .order = ${order} }, .select = .{ .k = .{ .field = "${request.field}" } } } } }`
 }
 
 /**
@@ -217,6 +256,8 @@ type Request = {
 	spaces: boolean
 	/** A backlinks read: the answer is the rows referring to `entityId`, not its own. */
 	backlinks?: boolean
+	/** An ordered `entities` page: the answer is the page's rows, whatever entity they name. */
+	page?: boolean
 	resolve: (rows: GeoCardRow[]) => void
 	reject: (error: GeoDbError) => void
 	retried: boolean
@@ -401,9 +442,11 @@ export function createPipeGeoDbClient(
 			const answered = performance.now()
 			let outcome: GeoCardRow[] | GeoDbError
 			try {
-				outcome = request.backlinks
-					? backlinkRowsFromGeoDbOutput(payload, request.entityId, {spaces: request.spaces})
-					: rowsFromGeoDbOutput(payload, request.entityId, {names: request.names, spaces: request.spaces})
+				outcome = request.page
+					? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+					: request.backlinks
+						? backlinkRowsFromGeoDbOutput(payload, request.entityId, {spaces: request.spaces})
+						: rowsFromGeoDbOutput(payload, request.entityId, {names: request.names, spaces: request.spaces})
 			} catch (error) {
 				outcome = new GeoDbError("client_failed", String(error))
 			}
@@ -472,6 +515,7 @@ export function createPipeGeoDbClient(
 		names: boolean,
 		spaces: boolean,
 		backlinks = false,
+		page = false,
 	): Promise<GeoCardRow[]> {
 		if (now() < backoffUntil) {
 			return Promise.reject(new GeoDbError("client_failed", "geodb-client is not starting; backing off"))
@@ -483,6 +527,7 @@ export function createPipeGeoDbClient(
 				names,
 				spaces,
 				...(backlinks ? {backlinks} : {}),
+				...(page ? {page} : {}),
 				resolve,
 				reject,
 				retried: false,
@@ -577,6 +622,20 @@ export function createPipeGeoDbClient(
 			const spaces = geoSpaceIds.length > 1
 			const line = `${geoSpaceIds.join(",")}\t${cardDocument(entityId, {backlinks: limit})}\n`
 			return submit(line, entityId, false, spaces, true) as Promise<GeoBacklinkRow[]>
+		},
+		readEntitiesPage({geoSpaceIds, ...request}) {
+			if (geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
+				return Promise.reject(new GeoDbError("bad_request", "1 to 1024 space ids"))
+			if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
+				return Promise.reject(new GeoDbError("bad_request", "space ids must be distinct 32 hex digits"))
+			if (!HEX32.test(request.typeId) || !HEX32.test(request.field))
+				return Promise.reject(new GeoDbError("bad_request", "type and field ids must be 32 hex digits"))
+			if (!Number.isInteger(request.first) || request.first < 1 || request.first > MAX_PAGE)
+				return Promise.reject(new GeoDbError("bad_request", `a page asks for 1 to ${MAX_PAGE} entities`))
+			const line = `${geoSpaceIds.join(",")}\t${entitiesPageDocument(request)}\n`
+			return submit(line, NO_ENTITY, false, geoSpaceIds.length > 1, false, true) as unknown as Promise<
+				GeoPageRow[]
+			>
 		},
 		close() {
 			clearInterval(warmTimer)
