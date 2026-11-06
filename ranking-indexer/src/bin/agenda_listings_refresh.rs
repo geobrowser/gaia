@@ -19,8 +19,9 @@ use std::env;
 use std::time::Instant;
 
 use sqlx::postgres::PgPoolOptions;
-use tracing::info;
+use tracing::{info, warn};
 
+use ranking_indexer::agenda_listings_mirror::{self, Ident, Listing};
 use ranking_indexer::error::IndexerError;
 
 #[tokio::main]
@@ -36,6 +37,17 @@ async fn main() -> Result<(), IndexerError> {
         .max_connections(1)
         .connect(&database_url)
         .await?;
+
+    // Best-effort copy into geo-db's derived class (GEODB_DERIVED_MIRROR, default off). With it off
+    // `from_env` is None and nothing below reads the table a second time.
+    let mirror = geodb_cursor::derived::DerivedMirror::from_env();
+    let prior: Vec<Ident> = if mirror.is_some() {
+        sqlx::query_as(agenda_listings_mirror::PRIOR_SQL)
+            .fetch_all(&pool)
+            .await?
+    } else {
+        Vec::new()
+    };
 
     let started = Instant::now();
     // The app role's statement_timeout is 30s and a sweep over busy topics can pass it, so it gets
@@ -74,5 +86,22 @@ async fn main() -> Result<(), IndexerError> {
         elapsed_ms = started.elapsed().as_millis() as u64,
         "agenda listings refreshed"
     );
+    if let Some(mirror) = &mirror {
+        // Read after the refresh committed; a read error skips the mirror, never the job.
+        match sqlx::query_as::<_, Listing>(agenda_listings_mirror::SELECT_SQL)
+            .fetch_all(&pool)
+            .await
+        {
+            Ok(rows) => {
+                agenda_listings_mirror::mirror(mirror, &rows, &prior).await;
+                info!(
+                    rows = rows.len(),
+                    prior = prior.len(),
+                    "agenda listings mirrored to geo-db"
+                );
+            }
+            Err(e) => warn!(error = %e, "agenda listings mirror skipped: read failed"),
+        }
+    }
     Ok(())
 }
