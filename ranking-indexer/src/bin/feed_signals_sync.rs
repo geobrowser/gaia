@@ -27,10 +27,11 @@ use std::time::Instant;
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::feed_signals::{self, Cutoff};
+use ranking_indexer::feed_signals_mirror::{self, Bucket, Ident};
 
 #[derive(Debug, Default, PartialEq)]
 struct Options {
@@ -96,6 +97,22 @@ async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), I
     }
     let items = feed_signals::read_items(window.window_start, window.window_end).await?;
     let users = feed_signals::read_users(window.window_start, window.window_end).await?;
+    let mirror = if options.dry_run {
+        None
+    } else {
+        geodb_cursor::derived::DerivedMirror::from_env()
+    };
+    let prior: Vec<Ident> = if mirror.is_some() {
+        sqlx::query_as(feed_signals_mirror::PRIOR_SQL)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "feed signals mirror: prior read failed; no deletes this run");
+                Vec::new()
+            })
+    } else {
+        Vec::new()
+    };
     let r = feed_signals::apply(
         pool,
         &cutoff.generation,
@@ -123,6 +140,19 @@ async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), I
         elapsed_ms = started.elapsed().as_millis() as u64,
         "feed signals replaced"
     );
+    if let Some(mirror) = &mirror {
+        // Read after the replace committed; a read error skips the mirror, never the job.
+        match sqlx::query_as::<_, Bucket>(feed_signals_mirror::SELECT_SQL)
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => {
+                feed_signals_mirror::mirror(mirror, &rows, &prior).await;
+                info!(rows = rows.len(), "feed item signals mirrored to geo-db");
+            }
+            Err(e) => warn!(error = %e, "feed signals mirror skipped: read failed"),
+        }
+    }
     if options.dry_run {
         println!(
             "Dry run, rolled back: generation {} through {}, window from {}: {} item-hours, {} of {} per-user rows on a personal space ({} user-days written), {} item and {} per-user rows past retention, {} debates re-scored",
