@@ -1426,7 +1426,7 @@ export async function checkCard(
 	} else read = await readWide(deps, entityId, spaces, label)
 	if (!read.ok) return read.result === "failed" ? {result: "failed"} : {result: "unsupported", reason: read.reason}
 	const rows = read.rows
-	const diff = diffCards(statementsFromPostgres(postgres.values, postgres.relations), rows)
+	const diff = diffCards(statementsFromPostgres(postgres.values, postgres.relations), rows, {skipEmptyText: true})
 	const derived = compareDerived(plan, postgres, rows, read.scope)
 	const wrong = Object.entries(derived.checks)
 		.filter(([, result]) => result === "mismatch")

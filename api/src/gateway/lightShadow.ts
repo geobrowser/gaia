@@ -1046,7 +1046,7 @@ export async function checkLight(
 	let skipped = 0
 	for (const [space, rows] of groups) {
 		const pool: GeoCardRow[] = space ? (read.bySpace.get(space) ?? []) : read.rows
-		const diff = diffCards(statementsFromPostgres(rows.values, rows.relations), pool)
+		const diff = diffCards(statementsFromPostgres(rows.values, rows.relations), pool, {skipEmptyText: true})
 		skipped += diff.skipped
 		for (const s of diff.onlyPostgres) missing.push({space, prop: s.prop, norm: s.norm})
 	}
@@ -1073,7 +1073,7 @@ export async function checkLight(
 		const pool: GeoCardRow[] = row.space ? (read.bySpace.get(row.space) ?? []) : read.rows
 		const held = row.props.some((prop) => {
 			const one = {...row.row, property_id: prop}
-			return diffCards(statementsFromPostgres([one], []), pool).onlyPostgres.length === 0
+			return diffCards(statementsFromPostgres([one], []), pool, {skipEmptyText: true}).onlyPostgres.length === 0
 		})
 		if (!held) missing.push({space: row.space, prop: row.props.join("|"), norm: String(row.row.text ?? "")})
 	}
@@ -1091,7 +1091,9 @@ export async function checkLight(
 					const key = `${target}\t${JSON.stringify(row.values)}`
 					if (seenTargets.has(key)) continue
 					seenTargets.add(key)
-					const diff = diffCards(statementsFromPostgres(row.values, []), cards.get(target) ?? [])
+					const diff = diffCards(statementsFromPostgres(row.values, []), cards.get(target) ?? [], {
+						skipEmptyText: true,
+					})
 					skipped += diff.skipped
 					for (const s of diff.onlyPostgres) missing.push({space: null, prop: s.prop, norm: s.norm})
 				}
