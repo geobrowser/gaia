@@ -6,6 +6,10 @@
  * graph reader replaces: the `source.graph` loader is the only place rows come from, and swapping it for a geo-db read is what
  * turns this into the cutover check. Reads stay on Postgres; nothing here touches a request.
  *
+ * Also covers the feed and primer reads (`rankedFeedsShadow.ts`, twins in `rankedReads/feeds.ts` and `primer.ts`) on a bounded
+ * sample: entities_ranked_for_feed, entities_ranked_for_feed_by_type, entities_ranked_for_topics, primer_candidates and
+ * next_primer_claim.
+ *
  * Covered: `current_debate_agendas(NULL, 0)` and `(NULL, 7)` (which in turn exercise agenda_contents, entity_listings and the
  * helpers) and `topic_suggestions_for_spaces` for a sample of spaces.
  *
@@ -21,6 +25,17 @@
 import {sql} from "drizzle-orm"
 import type {Database} from "../forYou/queries"
 import {
+	FEED_READS,
+	type FeedRead,
+	type FeedsSample,
+	type FeedsShadowSource,
+	runFeedsShadow,
+	SAMPLE_CAP,
+} from "./rankedFeedsShadow"
+import type {FeedData} from "./rankedReads/feeds"
+import {DEBATE_TAG, SYSTEM_TYPE} from "./rankedReads/feeds"
+import type {PrimerData, PrimerRow} from "./rankedReads/primer"
+import {
 	BLOCKS,
 	CLAIMS,
 	COLLECTION_ITEM,
@@ -35,7 +50,12 @@ import {
 	TYPES,
 } from "./rankedReads/trending"
 
-export const READS = ["current_debate_agendas_0", "current_debate_agendas_7", "topic_suggestions_for_spaces"] as const
+export const READS = [
+	"current_debate_agendas_0",
+	"current_debate_agendas_7",
+	"topic_suggestions_for_spaces",
+	...FEED_READS,
+] as const
 export type Read = (typeof READS)[number]
 export const RESULTS = ["match", "mismatch", "failed"] as const
 export type Result = (typeof RESULTS)[number]
@@ -67,6 +87,8 @@ export type RankedReadsSource = {
 	sampleSpaces(limit: number): Promise<string[]>
 	pgCurrentDebateAgendas(earlier: number): Promise<PgDebateRow[]>
 	pgTopicSuggestions(spaces: string[]): Promise<EntityRow[]>
+	/** The feed and primer reads' rows and Postgres answers; absent when a source does not provide them. */
+	feeds?: FeedsShadowSource
 }
 
 const key = (r: object): string => JSON.stringify(Object.entries(r).sort(([a], [b]) => (a < b ? -1 : 1)))
@@ -160,6 +182,16 @@ export function createRankedReadsShadow(deps: {
 			} catch (error) {
 				fail("topic_suggestions_for_spaces", error)
 			}
+			if (source.feeds) {
+				try {
+					await runFeedsShadow(source.feeds, spaces, {
+						record: (read: FeedRead, ok) => record(read, ok),
+						fail: (read: FeedRead, error) => fail(read, error),
+					})
+				} catch (error) {
+					for (const read of FEED_READS) fail(read, error)
+				}
+			}
 		} finally {
 			running = false
 		}
@@ -228,6 +260,251 @@ const asVal = (r: Record<string, unknown>): Val => ({
 /** How far back the shadow reads agendas: the widest `earlier` window it asks for, with the current week. */
 const LOOKBACK_DAYS = 40
 
+const uuidArray = (xs: string[]) => sql`ARRAY[${idList(xs)}]::uuid[]`
+const num = (v: unknown) => Number(v)
+
+/** The feed and primer half of the Postgres source: bounded samples, scoped row loads and the SQL answers. */
+export function createPostgresFeedsSource(db: Database): FeedsShadowSource {
+	const guard = (xs: string[]) => (xs.length > 0 ? xs : ["00000000-0000-0000-0000-000000000000"])
+	const ids = (rows: Record<string, unknown>[], k = "id") => rows.map((r) => String(r[k]))
+	const min = (s: FeedsSample) => sql`${s.threshold}::numeric`
+	const entitySet = async (s: FeedsSample) => {
+		const t = min(s)
+		const rows = rowsOf(
+			await db.execute(sql`
+				SELECT entity_id::text AS id FROM public.entity_ranking_scores WHERE ranking_score >= ${t}
+				UNION SELECT entity_id::text FROM public.entity_type_ranking WHERE type_id IN (${idList(guard(s.types))}) AND ranking_score >= ${t}
+				UNION SELECT entity_id::text FROM public.entity_topic_ranking WHERE topic_id IN (${idList(guard(s.topics))}) AND ranking_score >= ${t}`),
+		)
+		return ids(rows)
+	}
+
+	return {
+		async sample(spaceSample) {
+			const t = rowsOf(
+				await db.execute(sql`
+					SELECT coalesce(
+						(SELECT ranking_score::text FROM public.entity_ranking_scores ORDER BY ranking_score DESC, entity_id DESC OFFSET 199 LIMIT 1),
+						(SELECT min(ranking_score)::text FROM public.entity_ranking_scores)) AS threshold`),
+			)[0]?.threshold
+			if (t === null || t === undefined) return null
+			const threshold = String(t)
+			const types = ids(
+				rowsOf(
+					await db.execute(
+						sql`SELECT type_id::text AS id FROM public.entity_type_ranking WHERE ranking_score >= ${threshold}::numeric GROUP BY type_id ORDER BY count(*) DESC, type_id LIMIT 3`,
+					),
+				),
+			)
+			const topics = ids(
+				rowsOf(
+					await db.execute(
+						sql`SELECT topic_id::text AS id FROM public.entity_topic_ranking WHERE ranking_score >= ${threshold}::numeric GROUP BY topic_id ORDER BY count(*) DESC, topic_id LIMIT 2`,
+					),
+				),
+			)
+			const user = rowsOf(
+				await db.execute(
+					sql`SELECT user_id::text AS id FROM public.user_votes WHERE vote_kind = 1 ORDER BY random() LIMIT 1`,
+				),
+			)[0]?.id
+			const now = rowsOf(await db.execute(sql`SELECT (extract(epoch FROM now()) * 1000)::bigint::text AS ms`))[0]
+				?.ms
+			return {
+				threshold,
+				types,
+				topics,
+				spaces: spaceSample,
+				userId: user === undefined ? null : String(user),
+				now: new Date(Number(now)),
+			}
+		},
+
+		async feedData(s): Promise<FeedData> {
+			const t = min(s)
+			const E = await entitySet(s)
+			const entities = await chunked(E, async (c) =>
+				rowsOf(
+					await db.execute(
+						sql`SELECT id::text AS id, created_at FROM public.entities WHERE id IN (${idList(c)})`,
+					),
+				).map((r) => ({
+					id: String(r.id),
+					created_at: String(r.created_at),
+				})),
+			)
+			const relations = await chunked(E, async (c) =>
+				rowsOf(
+					await db.execute(
+						sql`SELECT r.type_id::text AS type_id, r.from_entity_id::text AS from_entity_id, r.to_entity_id::text AS to_entity_id, r.space_id::text AS space_id FROM public.relations r WHERE r.from_entity_id IN (${idList(c)}) AND r.type_id IN (${TYPES}::uuid, ${SYSTEM_TYPE}::uuid, ${DEBATE_TAG}::uuid)`,
+					),
+				).map((r) => ({
+					type_id: String(r.type_id),
+					from_entity_id: String(r.from_entity_id),
+					to_entity_id: String(r.to_entity_id),
+					space_id: String(r.space_id),
+				})),
+			)
+			const names = await chunked(E, async (c) =>
+				rowsOf(
+					await db.execute(
+						sql`SELECT v.entity_id::text AS entity_id, v.space_id::text AS space_id, v."text" AS text FROM public."values" v WHERE v.entity_id IN (${idList(c)}) AND v.property_id = ${NAME}::uuid`,
+					),
+				).map((r) => ({
+					entity_id: String(r.entity_id),
+					space_id: String(r.space_id),
+					text: r.text === null ? null : String(r.text),
+				})),
+			)
+			const scores = await chunked(E, async (c) =>
+				rowsOf(
+					await db.execute(
+						sql`SELECT entity_id::text AS entity_id, ranking_score::float8 AS ranking_score FROM public.entity_ranking_scores WHERE entity_id IN (${idList(c)})`,
+					),
+				).map((r) => ({entity_id: String(r.entity_id), ranking_score: num(r.ranking_score)})),
+			)
+			const blocklist = await chunked(E, async (c) =>
+				rowsOf(
+					await db.execute(
+						sql`SELECT entity_id::text AS entity_id FROM public.entity_feed_blocklist WHERE entity_id IN (${idList(c)})`,
+					),
+				).map((r) => ({entity_id: String(r.entity_id)})),
+			)
+			const exclusions = rowsOf(
+				await db.execute(sql`SELECT type_id::text AS type_id FROM public.entity_type_exclusions`),
+			).map((r) => ({
+				type_id: String(r.type_id),
+			}))
+			const typeRanking = rowsOf(
+				await db.execute(
+					sql`SELECT type_id::text AS type_id, entity_id::text AS entity_id, ranking_score::float8 AS ranking_score FROM public.entity_type_ranking WHERE type_id IN (${idList(guard(s.types))}) AND ranking_score >= ${t}`,
+				),
+			).map((r) => ({
+				type_id: String(r.type_id),
+				entity_id: String(r.entity_id),
+				ranking_score: num(r.ranking_score),
+			}))
+			const topicRanking = rowsOf(
+				await db.execute(
+					sql`SELECT topic_id::text AS topic_id, type_id::text AS type_id, entity_id::text AS entity_id, ranking_score::float8 AS ranking_score, created_epoch::float8 AS created_epoch FROM public.entity_topic_ranking WHERE topic_id IN (${idList(guard(s.topics))}) AND ranking_score >= ${t}`,
+				),
+			).map((r) => ({
+				topic_id: String(r.topic_id),
+				type_id: String(r.type_id),
+				entity_id: String(r.entity_id),
+				ranking_score: num(r.ranking_score),
+				created_epoch: r.created_epoch === null ? null : num(r.created_epoch),
+			}))
+			return {entities, relations, names, scores, blocklist, exclusions, typeRanking, topicRanking}
+		},
+
+		async primerData(s): Promise<PrimerData> {
+			const stats = rowsOf(
+				await db.execute(
+					sql`SELECT claim_id::text AS claim_id, space_ids::text[] AS space_ids, topic_ids::text[] AS topic_ids, weighted_voters, score, contested, engagement, name_length FROM public.primer_claim_stats`,
+				),
+			).map((r) => ({
+				claim_id: String(r.claim_id),
+				space_ids: (r.space_ids as string[]).map(String),
+				topic_ids: (r.topic_ids as string[]).map(String),
+				weighted_voters: num(r.weighted_voters),
+				score: num(r.score),
+				contested: r.contested === true,
+				engagement: num(r.engagement),
+				name_length: num(r.name_length),
+			}))
+			const votes = rowsOf(
+				await db.execute(
+					sql`SELECT user_id::text AS user_id, object_id::text AS object_id, vote_kind FROM public.user_votes WHERE user_id = ${s.userId}::uuid AND vote_kind = 1`,
+				),
+			).map((r) => ({user_id: String(r.user_id), object_id: String(r.object_id), vote_kind: num(r.vote_kind)}))
+			const spaces = rowsOf(
+				await db.execute(sql`SELECT id::text AS id, topic_id::text AS topic_id FROM public.spaces`),
+			).map((r) => ({
+				id: String(r.id),
+				topic_id: r.topic_id === null ? null : String(r.topic_id),
+			}))
+			const anchorSets = rowsOf(
+				await db.execute(
+					sql`SELECT id, to_char(effective_from AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS effective_from FROM public.anchor_claim_sets`,
+				),
+			).map((r) => ({id: num(r.id), effective_from: String(r.effective_from)}))
+			const anchorMembers = rowsOf(
+				await db.execute(sql`SELECT set_id, claim_id::text AS claim_id FROM public.anchor_claim_members`),
+			).map((r) => ({
+				set_id: num(r.set_id),
+				claim_id: String(r.claim_id),
+			}))
+			const entities = await chunked(
+				stats.map((x) => x.claim_id),
+				async (c) =>
+					rowsOf(
+						await db.execute(
+							sql`SELECT id::text AS id, created_at FROM public.entities WHERE id IN (${idList(c)})`,
+						),
+					).map((r) => ({
+						id: String(r.id),
+						created_at: String(r.created_at),
+					})),
+			)
+			return {spaces, votes, stats, anchorSets, anchorMembers, entities}
+		},
+
+		async pgFeed(s) {
+			return ids(
+				rowsOf(
+					await db.execute(
+						sql`SELECT id::text AS id FROM public.entities_ranked_for_feed(${min(s)}, NULL, NULL, NULL, NULL)`,
+					),
+				),
+			)
+		},
+		async pgFeedByType(s) {
+			return ids(
+				rowsOf(
+					await db.execute(
+						sql`SELECT id::text AS id FROM public.entities_ranked_for_feed_by_type(${uuidArray(s.types)}, ${min(s)}, NULL, NULL, NULL, ${SAMPLE_CAP})`,
+					),
+				),
+			)
+		},
+		async pgTopics(s) {
+			return ids(
+				rowsOf(
+					await db.execute(
+						sql`SELECT id::text AS id FROM public.entities_ranked_for_topics(${uuidArray(s.topics)}, NULL, NULL, ${min(s)}, NULL, NULL, NULL, ${SAMPLE_CAP}, false, 'best', false)`,
+					),
+				),
+			)
+		},
+		async pgPrimer(s): Promise<PrimerRow[]> {
+			return rowsOf(
+				await db.execute(
+					sql`SELECT claim_id::text AS claim_id, rank, is_anchor, in_picked_space, pool, keeps_rules, value, novel_topic_share, reason FROM public.primer_candidates(${s.userId}::uuid, ${uuidArray(s.spaces.slice(0, 2))}, '{}'::uuid[], '{}'::uuid[])`,
+				),
+			).map((r) => ({
+				claim_id: String(r.claim_id),
+				rank: num(r.rank),
+				is_anchor: r.is_anchor === true,
+				in_picked_space: r.in_picked_space === true,
+				pool: String(r.pool) as PrimerRow["pool"],
+				keeps_rules: r.keeps_rules === true,
+				value: num(r.value),
+				novel_topic_share: num(r.novel_topic_share),
+				reason: String(r.reason),
+			}))
+		},
+		async pgNextPrimer(s) {
+			const r = rowsOf(
+				await db.execute(
+					sql`SELECT id::text AS id FROM public.next_primer_claim(${s.userId}::uuid, ${uuidArray(s.spaces.slice(0, 2))}, '{}'::uuid[], '{}'::uuid[])`,
+				),
+			)[0]
+			return r === undefined ? null : String(r.id)
+		},
+	}
+}
+
 export function createPostgresRankedReadsSource(db: Database): RankedReadsSource {
 	const relationsFrom = (ids: string[], types?: string[]) =>
 		chunked(ids, async (c) =>
@@ -249,6 +526,7 @@ export function createPostgresRankedReadsSource(db: Database): RankedReadsSource
 		)
 
 	return {
+		feeds: createPostgresFeedsSource(db),
 		async today() {
 			return String(rowsOf(await db.execute(sql`SELECT trending.today()::text AS today`))[0]?.today)
 		},
