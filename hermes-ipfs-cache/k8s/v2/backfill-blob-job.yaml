@@ -1,0 +1,124 @@
+# One-off Job: copy every existing ipfs_cache row into the blob store (plan 10.22 section 6, item 10).
+# Binary `backfill_blob` (hermes-ipfs-cache/src/bin/backfill_blob.rs). Read-only against Postgres; it only
+# writes objects under ipfs_cache/ in the bucket.
+#
+# NOT part of any deploy: deploy-v2.yml lists its manifests by name and this file is not among them.
+# Apply by hand, once a hermes-ipfs-cache image that contains the binary is built and the geodb-blob-key
+# Secret exists. MODE is `dry-run` (classify only, writes nothing) or `copy`; run dry-run first. The name
+# carries the mode so the two can coexist, and a failed run is deleted before it is run again.
+#
+#   sed -e "s|hermes-ipfs-cache:IMAGE_TAG|hermes-ipfs-cache:<tag>|" -e "s|MODE|dry-run|g" -e "s|ARGS|\"--dry-run\"|" \
+#     hermes-ipfs-cache/k8s/v2/backfill-blob-job.yaml | kubectl apply -f -
+#   sed -e "s|hermes-ipfs-cache:IMAGE_TAG|hermes-ipfs-cache:<tag>|" -e "s|MODE|copy|g" -e "s|ARGS||" \
+#     hermes-ipfs-cache/k8s/v2/backfill-blob-job.yaml | kubectl apply -f -
+#   kubectl -n gaia logs -f job/hermes-ipfs-cache-backfill-blob-copy
+#
+# Exit codes: 0 every row present and equal, 1 a row could not be read or verified (the log prints
+# resume_after=<uri>; rerun with "--after", "<uri>" added to args), 2 objects exist that differ from
+# Postgres and were left alone (add "--repair" to replace them; Postgres is the source). Output is counts
+# and the resume position only. Other args: "--limit", "N", "--batch", "N", "--concurrency", "N".
+#
+# Credentials for the bucket come only from the geodb-blob-key Secret via secretKeyRef; nobody reads it by
+# hand. Memory: each batch holds up to --batch rows of `data` (default 50); raise the limit if a batch of
+# large payloads is OOM-killed rather than running without one.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hermes-ipfs-cache-backfill-blob-MODE
+  namespace: gaia
+  labels:
+    app: hermes-ipfs-cache-backfill-blob
+    environment: testnet
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 43200
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: hermes-ipfs-cache-backfill-blob
+        environment: testnet
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      volumes:
+        - name: ssl-certs
+          emptyDir: {}
+      initContainers:
+        - name: setup-certs
+          image: registry.digitalocean.com/geo/hermes-ipfs-cache:IMAGE_TAG
+          command:
+            - sh
+            - -c
+            - |
+              echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+          env:
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: backfill-blob
+          image: registry.digitalocean.com/geo/hermes-ipfs-cache:IMAGE_TAG
+          command: ["backfill_blob"]
+          args: [ARGS]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
+          env:
+            - name: BLOB_BACKEND
+              value: s3
+            - name: BLOB_S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: endpoint
+            - name: BLOB_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: bucket
+            - name: BLOB_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: access_key
+            - name: BLOB_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: secret_key
+            - name: PGSSLROOTCERT
+              value: /ssl/ca.crt
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "2Gi"
+              cpu: "1"

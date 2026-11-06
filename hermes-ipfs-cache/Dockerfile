@@ -13,6 +13,7 @@ WORKDIR /app
 
 # Copy only required crates (no workspace Cargo.toml - build standalone)
 COPY hermes-ipfs-cache ./hermes-ipfs-cache
+COPY blob-store ./blob-store
 COPY geodb-cursor ./geodb-cursor
 COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-relay ./hermes-relay
@@ -41,6 +42,7 @@ COPY --from=builder /app/hermes-ipfs-cache/target/release/hermes-ipfs-cache /usr
 # the builder stage and the tool cannot be run in-cluster — same omission #826 hit
 # with ranking-indexer's rolling_sweep.
 COPY --from=builder /app/hermes-ipfs-cache/target/release/reconcile_errored /usr/local/bin/reconcile_errored
+COPY --from=builder /app/hermes-ipfs-cache/target/release/backfill_blob /usr/local/bin/backfill_blob
 COPY --from=builder /app/hermes-substream/hermes-substream-v0.1.0.spkg /hermes-substream/hermes-substream-v0.1.0.spkg
 
 WORKDIR /
