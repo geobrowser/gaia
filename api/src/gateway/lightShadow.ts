@@ -432,7 +432,11 @@ function planLightEntity(
 		return {card, lists, everySpace: true}
 	}
 	// No lists: the derived fields (name, description, types) of the entity's own spaces are all that is judged.
-	if (lists.length === 0 && !(card.spaceIds && (card.name || card.description || card.types))) refuse("selection")
+	// A root that names Spaces and asks for a creation or update time judges those derived times in them (the
+	// ordered page of `orderBy: CREATED_AT_DESC` is read separately).
+	const timed = options.rootSpaces === true && (card.createdAt || card.updatedAt)
+	if (lists.length === 0 && !(card.spaceIds && (card.name || card.description || card.types)) && !timed)
+		refuse("selection")
 	// Rows with no space and no `spaceIds` leave nothing to say which cards to read: where the caller allows it
 	// (no Space argument), the entity is read across every loaded Space and each row need only be held by one.
 	if (!card.spaceIds && !lists.some((list) => list.spaceKey)) {

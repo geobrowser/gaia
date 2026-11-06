@@ -336,6 +336,18 @@ describe("the light entity selection (news app)", () => {
 		).toEqual({ok: false, reason: "selection"})
 	})
 
+	it("plans `entities(spaceId, orderBy: CREATED_AT_DESC) { id createdAt }` (a newest-entity probe) and still refuses a bare id", () => {
+		const q = (sel: string) =>
+			parse(`{ entities(spaceId: "${SPACE_A}", first: 1, orderBy: CREATED_AT_DESC) { ${sel} } }`)
+		const a = analyzeLightEntities(q("id createdAt"), null, {})
+		expect(a.ok).toBe(true)
+		if (a.ok) {
+			expect(a.plan.everySpace).toBe(true)
+			expect(a.plan.uncompared).toContain("order_completeness")
+		}
+		expect(analyzeLightEntities(q("id"), null, {})).toEqual({ok: false, reason: "selection"})
+	})
+
 	it("refuses an unknown column or a list argument it cannot interpret", () => {
 		const q = (sel: string, args = "first: 5") =>
 			analyzeLightEntity(
