@@ -8,6 +8,7 @@ pub mod account_exclusions_mirror;
 pub mod account_vote_weight;
 pub mod account_weights_compute;
 pub mod account_weights_mirror;
+pub mod agenda_listings_compute;
 pub mod agenda_listings_mirror;
 pub mod anchor_select;
 pub mod clickhouse;
