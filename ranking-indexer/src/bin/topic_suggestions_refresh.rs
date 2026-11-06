@@ -47,7 +47,7 @@ async fn shadow(pool: &sqlx::PgPool) -> Result<(usize, usize), IndexerError> {
     .fetch_all(pool)
     .await?;
     let names: Vec<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
-        "SELECT entity_id, space_id, text FROM public.values \
+        "SELECT entity_id, space_id, text FROM public.\"values\" \
          WHERE property_id = $1 AND text IS NOT NULL",
     )
     .bind(compute::NAME_PROP)
