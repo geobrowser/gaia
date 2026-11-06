@@ -144,9 +144,9 @@ spec:
                   readOnly: true
               env:
                 # Copy account_exclusions into geo-db derived collection 12 after the replace commits (RUNBOOK
-                # section 2f-exclusions), best-effort. OFF: "0". Turning it on is a separate change.
+                # section 2f-exclusions), best-effort. ON.
                 - name: GEODB_DERIVED_MIRROR
-                  value: "0"
+                  value: "1"
                 - name: GEODB_DERIVED_BATCH
                   value: "1"
                 - name: GEODB_CLIENT_BIN

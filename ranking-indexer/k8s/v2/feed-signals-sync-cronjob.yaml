@@ -170,9 +170,9 @@ spec:
                       name: feed-signals-sync
                       key: CLICKHOUSE_PASSWORD
                 # Copy personalization.feed_item_signals_hourly into geo-db derived collection 22 after the replace commits (RUNBOOK
-                # section 2f-feed-signals), best-effort. OFF: "0". Turning it on is a separate change.
+                # section 2f-feed-signals), best-effort. ON.
                 - name: GEODB_DERIVED_MIRROR
-                  value: "0"
+                  value: "1"
                 - name: GEODB_DERIVED_BATCH
                   value: "1"
                 - name: GEODB_CLIENT_BIN
