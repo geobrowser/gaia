@@ -1,0 +1,36 @@
+# ConfigMap home for the two operator-edited ranking config tables (geo-db plan 10.22 section 6):
+#   feed-signal-config.json  <- personalization.feed_signal_config (migration 0109)
+#   stance-map-config.json   <- personalization.stance_map_config  (migration 0108)
+# Read by ranking-indexer/src/ranking_config.rs, which validates it with the same ranges as the tables' CHECKs and
+# refuses unknown keys. Intervals are whole seconds.
+#
+# The values below are the migrations' column DEFAULTS. They were NOT checked against the live rows (no live SQL was
+# run when this was written): before the flag is turned on, edit them to match the rows, or run with the flag on and
+# read the "differs from the table row" warning, which names the fields that disagree.
+#
+# NOT part of any deploy: deploy-v2.yml lists its manifests by name, and this file is not on the list. Nothing reads the
+# ConfigMap until FEED_SIGNAL_CONFIG_SOURCE / STANCE_MAP_CONFIG_SOURCE is set to "configmap" on the two CronJobs, which
+# mount it optionally, so an unapplied ConfigMap blocks nothing. Apply by hand: kubectl apply -f ranking-config-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ranking-config
+  namespace: gaia
+data:
+  feed-signal-config.json: |
+    {
+      "revise_days": 7,
+      "backfill_days": 30,
+      "user_retention_days": 30,
+      "item_retention_days": 90,
+      "run_retention_days": 90,
+      "max_run_age_secs": 10800,
+      "max_data_age_secs": 21600
+    }
+  stance-map-config.json: |
+    {
+      "min_clean_votes": 10000,
+      "min_split_correlation": 0.7,
+      "min_auc_lift": 0.0,
+      "stated_weight": 1.0
+    }

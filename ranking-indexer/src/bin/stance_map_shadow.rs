@@ -24,6 +24,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::ranking_config;
 use ranking_indexer::stance_map::{evaluate, Dataset, EvalConfig, Obs, Seed};
 
 /// Dense indices for one run. Dropped with the dataset.
@@ -110,6 +111,43 @@ async fn main() -> Result<(), IndexerError> {
             .bind(&metrics)
             .fetch_one(&pool)
             .await?;
+
+    // STANCE_MAP_CONFIG_SOURCE=configmap (default postgres): log whether the mounted thresholds match the
+    // table row the gate above was decided from. The gate itself still reads the table.
+    if ranking_config::Source::from_env("STANCE_MAP_CONFIG_SOURCE")
+        == ranking_config::Source::ConfigMap
+    {
+        let row: Result<(i32, f64, f64, f64), _> = sqlx::query_as(
+            "SELECT min_clean_votes, min_split_correlation, min_auc_lift, stated_weight \
+             FROM personalization.stance_map_config WHERE id",
+        )
+        .fetch_one(&pool)
+        .await;
+        match (
+            ranking_config::load_stance_map(&ranking_config::dir_from_env()),
+            row,
+        ) {
+            (Ok(file), Ok((votes, corr, lift, w))) => {
+                let row = ranking_indexer::stance_graph::GateConfig {
+                    min_clean_votes: i64::from(votes),
+                    min_split_correlation: corr,
+                    min_auc_lift: lift,
+                    stated_weight: w,
+                };
+                let diff = ranking_config::stance_map_diff(&file, &row);
+                if diff.is_empty() {
+                    info!("stance map config file agrees with the table row");
+                } else {
+                    tracing::warn!(
+                        ?diff,
+                        "stance map config file differs from the table row; the gate used the row"
+                    );
+                }
+            }
+            (Err(e), _) => tracing::warn!(error = %e, "stance map config file unusable"),
+            (_, Err(e)) => tracing::warn!(error = %e, "stance map config row unreadable"),
+        }
+    }
 
     // Aggregates only. Never log a user id or a position.
     info!(

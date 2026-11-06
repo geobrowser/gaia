@@ -47,6 +47,12 @@ spec:
           volumes:
             - name: ssl-certs
               emptyDir: {}
+            # Optional ConfigMap home for the config table (ranking-config-configmap.yaml). Unread unless
+            # FEED_SIGNAL_CONFIG_SOURCE is "configmap"; absent ConfigMap blocks nothing.
+            - name: ranking-config
+              configMap:
+                name: ranking-config
+                optional: true
             # geodb-client for the feed_item_signals_hourly mirror (GEODB_DERIVED_MIRROR, RUNBOOK section 2f-feed-signals / 22). Dormant while
             # the flag is "0": nothing below is read, and every reference is optional or fails soft, so an absent
             # geodb never blocks a rollout. Same wiring as hermes-pipeline.yaml, but with the SCORES key: a principal
@@ -137,6 +143,9 @@ spec:
                 - name: ssl-certs
                   mountPath: /ssl
                   readOnly: true
+                - name: ranking-config
+                  mountPath: /etc/ranking-config
+                  readOnly: true
                 - name: geodb-bin
                   mountPath: /geodb
                   readOnly: true
@@ -147,6 +156,8 @@ spec:
                   mountPath: /etc/geodb/key
                   readOnly: true
               env:
+                - name: FEED_SIGNAL_CONFIG_SOURCE
+                  value: postgres
                 - name: PGSSLROOTCERT
                   value: /ssl/ca.crt
                 - name: DATABASE_URL
