@@ -21,6 +21,7 @@ import {readGeoDbCardConfig} from "./src/geodb/config"
 import {createDerivedReader} from "./src/geodb/derived"
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
 import {createGeoDbRouter} from "./src/geodb/router"
+import {createScoresShadow, readScoresShadowConfig} from "./src/geodb/scoresShadow"
 import {createCliGeoDbSearchClient} from "./src/geodb/search"
 import {health} from "./src/health"
 import {createIpfsRouter} from "./src/ipfs"
@@ -251,6 +252,12 @@ const accountWeightsShadow = accountWeightsShadowConfig.enabled
 			log,
 		})
 	: null
+// GEODB_SCORES_SHADOW (off by default) samples global_scores/local_scores/space_scores rows from Postgres on a timer and compares
+// them with geo-db's derived collections 2/3/4 (gaia_api_scores_shadow_total). Background only; never touches a request.
+const scoresShadowConfig = readScoresShadowConfig(process.env)
+if (scoresShadowConfig.enabled) {
+	createScoresShadow({config: scoresShadowConfig, db, reader: createDerivedReader(geoDbCardConfig), log}).start()
+}
 const internalRoutes = mountInternalRoutes(
 	app,
 	db,
