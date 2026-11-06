@@ -30,6 +30,14 @@ const WEBHOOK_CACHE_TTL: Duration = Duration::from_secs(30);
 
 /// The geo-db work-class shadow of the outbox (plan 10.16), shared by every `Storage`. `None`
 /// unless `GEODB_OUTBOX_MIRROR` is on; started on first use, inside the runtime.
+/// The geo-db `cursors` mirror for poll cursors; `None` unless `GEODB_CURSOR_MIRROR` is on and configured.
+fn cursor_mirror() -> Option<&'static geodb_cursor::CursorMirror> {
+    static MIRROR: OnceLock<Option<geodb_cursor::CursorMirror>> = OnceLock::new();
+    MIRROR
+        .get_or_init(geodb_cursor::CursorMirror::from_env)
+        .as_ref()
+}
+
 fn outbox_mirror() -> Option<&'static OutboxMirror> {
     static MIRROR: OnceLock<Option<OutboxMirror>> = OnceLock::new();
     MIRROR.get_or_init(OutboxMirror::from_env).as_ref()
@@ -1116,6 +1124,14 @@ impl Storage {
         .bind(cursor_id)
         .execute(&self.pool)
         .await?;
+        // Best effort, after the Postgres write: it never fails the poller (geo-db plan 10.11 section 3.6).
+        if let Some(mirror) = cursor_mirror() {
+            let (cursor, block) =
+                crate::poll_cursor_mirror::mirror_parts(cursor_updated_at, cursor_id);
+            mirror
+                .mirror(&crate::poll_cursor_mirror::mirror_key(name), &cursor, block)
+                .await;
+        }
         Ok(())
     }
 

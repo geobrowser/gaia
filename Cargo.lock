@@ -3661,8 +3661,10 @@ name = "notification-indexer"
 version = "0.1.0"
 dependencies = [
  "axum 0.7.9",
+ "chrono",
  "dotenv",
  "futures 0.3.34",
+ "geodb-cursor",
  "geodb-outbox",
  "grc-20",
  "hermes-instrumentation",
