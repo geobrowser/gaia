@@ -222,6 +222,9 @@ async fn main() -> Result<(), IndexerError> {
     }
 
     feed_signals::check_wallet_hash(&pool).await?;
+    if ranking_indexer::wallet_hash::shadow_enabled() {
+        ranking_indexer::wallet_hash::shadow(&pool).await;
+    }
     let cutoff = match feed_signals::read_cutoff().await {
         Ok(c) => c,
         Err(e) => {

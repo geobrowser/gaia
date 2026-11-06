@@ -33,3 +33,4 @@ pub mod topic_cooccurrence_mirror;
 pub mod topic_interest;
 pub mod topic_suggestions_mirror;
 pub mod user_topic_signals_mirror;
+pub mod wallet_hash;
