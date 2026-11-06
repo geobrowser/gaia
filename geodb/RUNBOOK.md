@@ -1136,6 +1136,27 @@ is a delete. A geo-db error is logged, never fails a batch.
   both), roll topology-indexer once with the flag on, then set the flag `"1"` in `scoring-service/deployment/v2/topology-indexer.yaml`
   in its own PR. Rollback: flag `"0"`.
 
+### 2f-votes-count. votes_count (derived collection 26, GEODB_DERIVED_MIRROR)
+
+Shadow only, nothing reads the rows. The `vote-indexer` Deployment upserts absolute tallies into `votes_count` in each vote
+transaction. With `GEODB_DERIVED_MIRROR=1` (manifest default `"0"`) it copies the tallies of each committed batch into
+collection 26 (`scoring-service/vote-indexer/src/votes_count_mirror.rs`), and copies the whole table once at start
+(`mirror_votes_counts_snapshot`), which backfills older rows and repairs any dropped put. Group the object id as a big-endian
+u128, key the object id, Space id, object type and vote kind (34 bytes), score the net tally (`positive - negative`), value
+24 bytes little-endian: positive i64, negative i64, `updated_at` i64 microseconds (the wall clock at the mirror write for a
+batch, Postgres' own value for the snapshot). Rows are never deleted, because nothing deletes from `votes_count`. Other
+writers of the table (the SQL backfills in `api/scripts`) are not mirrored; the next start's snapshot picks their rows up.
+A geo-db error is logged, never fails a batch.
+
+- Size, measured 2026-11-06: 10,090 rows over 9,545 objects (5,873 curation, 3,702 stance, 146 veracity, 368 interested,
+  one relation row) against `derived_rows_max` 4,194,304, from 24,081 raw votes. The whole table fits.
+- Readers (Postgres, unchanged): `api/src/kg` ordering plugins and `notification-indexer/src/storage.rs`.
+- Uses the shared `geodb-scores-key`, now granting collections 25 and 26 (`geodb/supervisor.sh`).
+- **Enable order: roll serve to a build that registers collection 26 FIRST**, then the binding (the StatefulSet restart does
+  both), roll vote-indexer once with the flag on, then set the flag `"1"` in `scoring-service/deployment/v2/vote-indexer.yaml`
+  in its own PR. Rollback: flag `"0"`. Turning the flag on also starts the `entity_ranking_scores` mirror's refresh read-backs
+  if that mirror has merged, so check which mirrors the flag enables first.
+
 ### 2d. Raising the Space cap
 
 `spaces` in `geodb-serve-config` caps the Spaces the store can hold; at the cap, founding refuses and the

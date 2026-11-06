@@ -104,6 +104,7 @@ async fn async_main() -> Result<(), IndexerError> {
     // Initialize storage
     let storage = Storage::connect(&database_url).await?;
     info!("Connected to database");
+    storage.mirror_votes_counts_snapshot().await;
 
     // Initialize Kafka consumer
     let consumer = KafkaConsumer::new(&kafka_broker, &kafka_group_id)?;
@@ -447,6 +448,9 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
         storage.upsert_score_values(&score_values, &mut tx).await?;
 
         tx.commit().await?;
+
+        // Copy the committed tallies into geo-db (flag off by default); best-effort.
+        storage.mirror_votes_counts(&updated_vote_counts).await;
 
         // Recompute the Explore feed ranking score for entities whose curation votes
         // changed. Deliberately AFTER the commit and non-fatal: a stale score is
