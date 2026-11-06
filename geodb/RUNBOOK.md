@@ -763,7 +763,15 @@ Both need `geodb-client` in the image (the init-container pattern of hermes, `he
 `GEODB_KEY_PATH`, `GEODB_BINDING_PATH` and `GEODB_CLIENT_BIN`, and a serve opened with `derived_rows_max` above 0
 (144 B a row resident). The key's binding line must grant `derived=0,1,11`; the hermes key grants only collection 10, so
 this is a new key and binding (not minted). Not mirrored: `entity_ranking_scores` (48.9M rows, over the resident class),
-`global_scores`, `local_scores`, `space_scores` (written by the Python scoring cronjob), trending and agenda listings.
+trending and agenda listings.
+
+`global_scores` (2), `local_scores` (3) and `space_scores` (4), written by the Python scoring cronjob
+(`scoring-service/cronjob`), are mirrored behind `GEODB_DERIVED_MIRROR` in that cronjob (#1169, default `"0"`). It
+rewrites every row each run (upserts, no deletes), after its Postgres commit. It needs its own key whose binding
+grants `derived=2,3,4` (Secret `geodb-derived-key`, not minted). **Sizing warning:** count `local_scores` (one row per
+entity perspective) and add it to the other mirrored tables against `derived_rows_max` (2097152 now, 144 B a row
+resident) before the flag goes on; a full rewrite past the cap is refused. Raise `GEODB_DERIVED_BUDGET_MS` and set
+`GEODB_DERIVED_BATCH=1` for the full rewrite.
 
 The SQL function `refresh_entity_ranking_scores` writes the type and topic tables itself, so the vote-indexer reads the
 rows for the touched entity ids before and after the call and sends the difference (changed or new rows as puts, keys

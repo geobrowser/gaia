@@ -16,6 +16,7 @@ from src.memory_monitor import start_memory_monitor
 from src.scoring_data_emitter import ScoringDataEmitter
 from src.scoring_data_provider import ScoringDataProvider
 from src.scoring_data_provider.scoring_data_provider import ScoringData
+from src.geodb_derived import DerivedMirror
 from src.scoring_data_writer import ScoringDataWriter
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ class ScoringPipeline:
         # Initialize writer for postgres modes
         self._writer: ScoringDataWriter | None = None
         if output_mode in (OutputMode.POSTGRES, OutputMode.ALL):
-            self._writer = ScoringDataWriter(database_url)
+            self._writer = ScoringDataWriter(database_url, derived=DerivedMirror.from_env())
 
         # Initialize emitter for kafka modes
         self._emitter: ScoringDataEmitter | None = None
