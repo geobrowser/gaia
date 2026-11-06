@@ -26,6 +26,19 @@ export type FieldShadow = ((context: ShadowContext) => Promise<void>) & {
 	tolerates?: readonly string[]
 }
 
+/**
+ * Watches every delegated operation, whatever its fields' modes. `inspect` runs synchronously on the request (cheap: it may
+ * count) and says whether to hand over PostGraphile's answer; `observe` then gets a clone of it on a later tick.
+ */
+export type ResponseObserver = {
+	inspect: (classified: {
+		classification: Classification
+		params: GraphqlRequestParams | null
+		document: DocumentNode | null
+	}) => boolean
+	observe: (context: ShadowContext) => Promise<void>
+}
+
 /** PostGraphile responses larger than this are not shadowed, so a clone never holds a huge body. */
 export const MAX_SHADOW_RESPONSE_BYTES = 1_000_000
 
@@ -64,6 +77,8 @@ export type GatewayDeps<Ctx> = {
 	resolvers?: ReadonlyMap<string, FieldResolver>
 	/** Root fields with a shadow comparison, run when the field's mode is "shadow". */
 	shadows?: ReadonlyMap<string, FieldShadow>
+	/** Observers of delegated operations (see `ResponseObserver`); they never change or delay a response. */
+	observers?: readonly ResponseObserver[]
 	/** Sampling draw in [0, 1); injectable for tests. */
 	random?: () => number
 	onClassified?: (classification: Classification, route: Route) => void
@@ -163,6 +178,29 @@ function scheduleShadow<Ctx>(
 	}
 }
 
+function scheduleObservers<Ctx>(
+	deps: GatewayDeps<Ctx>,
+	classified: {classification: Classification; params: GraphqlRequestParams | null; document: DocumentNode | null},
+	response: Response,
+): void {
+	for (const observer of deps.observers ?? []) {
+		try {
+			const {params, document} = classified
+			if (!observer.inspect(classified) || !params || !document) continue
+			if (!response.ok || !(response.headers.get("content-type") ?? "").includes("json")) continue
+			if (Number(response.headers.get("content-length") ?? 0) > MAX_SHADOW_RESPONSE_BYTES) continue
+			const clone = response.clone()
+			setTimeout(() => {
+				observer
+					.observe({classification: classified.classification, params, document, response: clone})
+					.catch(() => {})
+			}, 0)
+		} catch {
+			// An observer must never fail a read.
+		}
+	}
+}
+
 export function createGateway<Ctx>(deps: GatewayDeps<Ctx>): Delegate<Ctx> {
 	const resolvers: ReadonlyMap<string, FieldResolver> = deps.resolvers ?? new Map()
 	if (deps.config.mode === "on")
@@ -197,6 +235,7 @@ export function createGateway<Ctx>(deps: GatewayDeps<Ctx>): Delegate<Ctx> {
 		}
 		const response = await deps.delegate(request, context)
 		scheduleShadow(deps, classified, response)
+		scheduleObservers(deps, classified, response)
 		return response
 	}
 }

@@ -20,6 +20,7 @@ import {createEntityResolver} from "./src/gateway/entityServe"
 import {createEntityShadow, ENTITY_FIELD} from "./src/gateway/entityShadow"
 import {createGateway, fieldModeOf} from "./src/gateway/gateway"
 import {createPointReadShadows, POINT_READ_FIELDS} from "./src/gateway/pointReadShadows"
+import {createRankTypedObserver, readRankTypedConfig} from "./src/gateway/rankTypedShadow"
 import {createReadBudget} from "./src/gateway/readBudget"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
 import {createSpacesShadow, SPACES_FIELD} from "./src/gateway/spacesShadow"
@@ -326,8 +327,21 @@ const everySpaceBudget = createReadBudget({
 	perSecond: budgetNumber(process.env.GATEWAY_SHADOW_EVERY_SPACE_PER_SECOND, 0.5, 10),
 	burst: budgetNumber(process.env.GATEWAY_SHADOW_EVERY_SPACE_BURST, 3, 50),
 })
+// GEODB_RANK_TYPED_SHADOW (off by default): `count` counts RANKING_SCORE_* ordered operations (gaia_api_ranking_score_orders_total),
+// `on` also compares sampled typed pages with geo-db's derived collection 0 (gaia_api_rank_typed_shadow_*). Never answers a request.
+const rankTypedConfig = readRankTypedConfig(process.env)
+const rankTypedObserver =
+	gatewayConfig.mode === "on" && rankTypedConfig.mode !== "off"
+		? createRankTypedObserver({
+				config: rankTypedConfig,
+				reader: createDerivedReader(geoDbCardConfig),
+				budget: createReadBudget({perSecond: rankTypedConfig.perSecond, burst: rankTypedConfig.burst}),
+				log,
+			})
+		: null
 const graphqlHandler = createGateway({
 	config: gatewayConfig,
+	observers: rankTypedObserver ? [rankTypedObserver] : undefined,
 	resolvers:
 		gatewayServeEntity && sharedGeoDb
 			? new Map([

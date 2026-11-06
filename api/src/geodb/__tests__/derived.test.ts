@@ -4,7 +4,7 @@ import {tmpdir} from "node:os"
 import {join} from "node:path"
 import {describe, expect, it} from "vitest"
 import {GeoDbError} from "../client"
-import {createDerivedReader, parseDerivedGet} from "../derived"
+import {createDerivedReader, parseDerivedGet, parseDerivedScan} from "../derived"
 
 const GROUP = "0".repeat(32)
 const KEY = "ab".repeat(16)
@@ -122,5 +122,40 @@ describe("createDerivedReader", () => {
 		await expect(reader.get(5, "aa")).rejects.toMatchObject({reason: "client_failed"})
 		await expect(reader.get(5, "aa")).rejects.toMatchObject({reason: "client_failed"})
 		reader.close()
+	})
+})
+
+describe("parseDerivedScan", () => {
+	it("reads rows and the more marker", () => {
+		expect(parseDerivedScan("2.5\t" + KEY + "\t\n1\t" + KEY + "\t00\nmore\n")).toEqual({
+			rows: [
+				{score: 2.5, keyHex: KEY, valueHex: ""},
+				{score: 1, keyHex: KEY, valueHex: "00"},
+			],
+			more: true,
+		})
+		expect(parseDerivedScan("")).toEqual({rows: [], more: false})
+	})
+	it("rejects a malformed row", () => {
+		expect(() => parseDerivedScan("nope\n")).toThrow(GeoDbError)
+		expect(() => parseDerivedScan("x\t" + KEY + "\t\n")).toThrow(GeoDbError)
+	})
+})
+
+describe("scan", () => {
+	it("sends one scan line and parses the page", async () => {
+		const {reader} = fake(
+			`frame("+", line.startsWith("scan\\t0\\t0x${GROUP}\\t3\\t1") ? "4\\t${KEY}\\t\\nmore\\n" : "bad")`,
+		)
+		expect(await reader.scan(0, GROUP, 3)).toEqual({rows: [{score: 4, keyHex: KEY, valueHex: ""}], more: true})
+		await reader.close()
+	})
+	it("refuses bad arguments without a read", async () => {
+		const {reader, starts} = fake(`frame("+", "")`)
+		await expect(reader.scan(0, "zz", 3)).rejects.toThrow(GeoDbError)
+		await expect(reader.scan(0, GROUP, 0)).rejects.toThrow(GeoDbError)
+		await expect(reader.scan(0, GROUP, 513)).rejects.toThrow(GeoDbError)
+		expect(starts()).toBe(0)
+		await reader.close()
 	})
 })
