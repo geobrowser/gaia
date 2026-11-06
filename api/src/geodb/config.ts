@@ -89,6 +89,11 @@ export type GeoDbCardConfig = {
 	 */
 	nestedTargetValues?: boolean
 	/**
+	 * Settle a nested property, Type or target name geo-db prints as none (the thing is named in a Space outside the read)
+	 * from its Name in every Space, one batch read. Off by default. GEODB_CROSS_SPACE_NAMES_SHADOW=on.
+	 */
+	crossSpaceNames?: boolean
+	/**
 	 * Lifetime of the capability token a worker's handshake gets, in seconds: geo-db's `grant_ttl_s`
 	 * (GEODB_GRANT_TTL_S on the serve, 300 by default). A worker is replaced before its token expires, so no
 	 * read finds the token dead. Absent means the default.
@@ -130,6 +135,7 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		orderPick: env.GEODB_ORDER_PICK_SHADOW?.trim().toLowerCase() === "on",
 		relationsTypeFilter: env.GEODB_RELATIONS_TYPE_FILTER_SHADOW?.trim().toLowerCase() === "on",
 		nestedTargetValues: env.GEODB_NESTED_TARGET_VALUES_SHADOW?.trim().toLowerCase() === "on",
+		crossSpaceNames: env.GEODB_CROSS_SPACE_NAMES_SHADOW?.trim().toLowerCase() === "on",
 		poolSize: Number.isFinite(pool) && pool > 0 ? Math.min(pool, MAX_POOL_SIZE) : DEFAULT_POOL_SIZE,
 		grantTtlS: Number.isFinite(grantTtl) && grantTtl > 0 ? grantTtl : DEFAULT_GRANT_TTL_S,
 	}

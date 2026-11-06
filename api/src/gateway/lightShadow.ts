@@ -44,7 +44,7 @@ import {
 	argsOf,
 	asRecord,
 	type CardCheck,
-	compareDerived,
+	compareDerivedWide,
 	ENTITY_FIELD,
 	ENTITY_TOLERATED_ROOTS,
 	type EntityCardPlan,
@@ -1318,7 +1318,7 @@ export async function checkLight(
 		}
 		judged = {...light.card, spaceIds: mapped}
 	}
-	const derived = compareDerived(plan.card, judged, read.rows, read.scope)
+	const derived = await compareDerivedWide(deps, plan.card, judged, read.rows, read.scope, label)
 	const wrong = Object.entries(derived.checks)
 		.filter(([, result]) => result === "mismatch")
 		.map(([field]) => field)
