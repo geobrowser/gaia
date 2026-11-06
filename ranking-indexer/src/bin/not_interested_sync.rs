@@ -30,6 +30,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::{info, warn};
 
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::external_interest_mirror::{self, Ident, Signal};
 use ranking_indexer::not_interested;
 
 #[derive(Debug, Default, PartialEq)]
@@ -114,6 +115,21 @@ async fn main() -> Result<(), IndexerError> {
         .max_connections(1)
         .connect(&database_url)
         .await?;
+    // Best-effort copy into geo-db's derived class: needs GEODB_DERIVED_MIRROR and, because the rows
+    // are private, GEODB_DERIVED_MIRROR_PRIVATE (both default off). A dry run never mirrors.
+    let mirror = if options.dry_run || !external_interest_mirror::private_enabled() {
+        None
+    } else {
+        geodb_cursor::derived::DerivedMirror::from_env()
+    };
+    let prior: Vec<Ident> = if mirror.is_some() {
+        sqlx::query_as(external_interest_mirror::PRIOR_SQL)
+            .bind(not_interested::KIND)
+            .fetch_all(&pool)
+            .await?
+    } else {
+        Vec::new()
+    };
     // Any error (including the SQL's refusal of a wholly unplaced snapshot) returns Err: the Job fails, and
     // nothing was written.
     let r = not_interested::apply(
@@ -139,6 +155,24 @@ async fn main() -> Result<(), IndexerError> {
         elapsed_ms = started.elapsed().as_millis() as u64,
         "Not interested synced"
     );
+    if let Some(mirror) = &mirror {
+        // Read after the replace committed; a read error skips the mirror, never the job.
+        match sqlx::query_as::<_, Signal>(external_interest_mirror::SELECT_SQL)
+            .bind(not_interested::KIND)
+            .fetch_all(&pool)
+            .await
+        {
+            Ok(rows) => {
+                external_interest_mirror::mirror(mirror, &rows, &prior).await;
+                info!(
+                    rows = rows.len(),
+                    prior = prior.len(),
+                    "external interest signals mirrored to geo-db"
+                );
+            }
+            Err(e) => warn!(error = %e, "external interest mirror skipped: read failed"),
+        }
+    }
     if options.dry_run {
         println!(
             "Dry run, rolled back: {} rows from geo-chat ({} unparseable), {} on a personal space; would insert {}, update {}, remove {}, and recompute {} users",

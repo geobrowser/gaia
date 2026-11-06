@@ -13,6 +13,7 @@ pub mod derived_mirror;
 pub mod detect;
 pub mod eligibility;
 pub mod error;
+pub mod external_interest_mirror;
 pub mod feed_composition_mirror;
 pub mod feed_signals;
 pub mod feed_signals_mirror;
