@@ -945,6 +945,17 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 | `GeoDbFeederRanksStalled` | `knowledge.edits` lag above 0 and nothing handled by the ranks consumer for 30m | the repeating error in the feeder log; an `exhausted` write to the votes Space (§2c-decies) |
 | `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`, `space_voting_settings`, `proposal_versions`, `proposal_status`, `ranks`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
 
+### serve's own metrics and the outbox mirror (geodb-serve-alerts.yaml)
+
+serve prints `GET /metrics` only on an HTTP listener. The supervisor opens one (`listen = http:0.0.0.0:9091 admits=anonymous`,
+no grant) when `GEODB_METRICS_PORT` is set; geodb.yaml sets it and exposes port `metrics` on Service `geodb`, which the
+hermes-metrics ServiceMonitor scrapes (job `geodb`). The supervisor is baked into the image, so the series appear only once a
+geodb image built from this `supervisor.sh` is pinned and serve is rolled (an older image ignores the variable and the target
+reads down). Series: `geodb_derived_rows`, `geodb_derived_rows_max`, `geodb_derived_collection_rows{collection}`,
+`geodb_derived_refused_cap_total`. The work class has no `/metrics` figure yet, so there is no work-rows alert. Alerts:
+`GeoDbDerivedRowsHigh` (rows above 80% of the cap), `GeoDbOutboxMirrorErrors` and `GeoDbOutboxMirrorDropped`
+(notification-indexer, port 9464, already scraped).
+
 ## 7. Operating notes
 
 - Crash recovery: the feeder resumes from its stored offset (`/data/feeder/offsets.json`), and an

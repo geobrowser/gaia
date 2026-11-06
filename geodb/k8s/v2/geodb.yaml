@@ -108,6 +108,11 @@ spec:
       port: 7447
       targetPort: geodb
       protocol: TCP
+    # serve's GET /metrics (HTTP listener, anonymous only), scraped by the hermes-metrics ServiceMonitor.
+    - name: metrics
+      port: 9091
+      targetPort: metrics
+      protocol: TCP
 ---
 apiVersion: v1
 kind: Service
@@ -181,11 +186,18 @@ spec:
             - name: geodb
               containerPort: 7447
               protocol: TCP
+            - name: metrics
+              containerPort: 9091
+              protocol: TCP
           env:
             - name: DATA_DIR
               value: /data
             - name: GEODB_CONFIG
               value: /etc/geodb/serve.cfg
+            # Opens the HTTP listener for GET /metrics. Needs a geodb image built with this supervisor.sh;
+            # an older image ignores it and the scrape target just reads down.
+            - name: GEODB_METRICS_PORT
+              value: "9091"
             - name: GEODB_PROFILE
               value: medium
             - name: GEODB_STORE_SECRET_FILE
