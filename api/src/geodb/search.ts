@@ -17,8 +17,13 @@ import type {GeoDbCardConfig} from "./config"
 const HEX32 = /^[0-9a-f]{32}$/
 const DEFAULT_TIMEOUT_MS = 3000
 const DEFAULT_MAX_CONCURRENT = 2
-/** geo-db's bound on the Spaces of one scope (`source.MAX_SOURCES`). */
-const MAX_SPACES = 1024
+/** geo-db's bound on the Spaces a search lists one by one (`source.MAX_SOURCES`). */
+export const MAX_LISTED_SPACES = 1024
+/**
+ * geo-db's bound on the Spaces an every-Space search reads (`source.MAX_EVERY_SPACES`, `--space '*'`): the
+ * Spaces the session holds at their heads, past the listed bound, ranked as one scope.
+ */
+export const MAX_EVERY_SPACE_SEARCH = 4096
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024
 
 export type GeoDbSearchMode = "typeahead" | "bm25"
@@ -27,8 +32,18 @@ export type GeoDbSearchClient = {
 	/**
 	 * Entity ids (geo-db's id space, 32 hex digits) best first, each once, across `geoSpaceIds`: one request, one
 	 * ranking (geo-db scores a several-Space search against the Spaces' summed statistics, docs/api/09 §1).
+	 *
+	 * `everySpace` asks for every Space geo-db holds (`--space '*'`) instead of listing them: the way past the
+	 * 1024 a list holds, for a caller whose `geoSpaceIds` is the whole Space map (the count is still checked
+	 * against geo-db's every-Space bound).
 	 */
-	searchLexical(args: {geoSpaceIds: string[]; text: string; mode: GeoDbSearchMode; limit: number}): Promise<string[]>
+	searchLexical(args: {
+		geoSpaceIds: string[]
+		text: string
+		mode: GeoDbSearchMode
+		limit: number
+		everySpace?: boolean
+	}): Promise<string[]>
 }
 
 /** Runs the client tool with these arguments after its global flags; resolves to its standard output. */
@@ -72,9 +87,10 @@ export function createCliGeoDbSearchClient(
 	const maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT
 	let inFlight = 0
 	return {
-		async searchLexical({geoSpaceIds, text, mode, limit}) {
-			if (geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_SPACES)
-				throw new GeoDbError("bad_request", `a search takes 1 to ${MAX_SPACES} spaces`)
+		async searchLexical({geoSpaceIds, text, mode, limit, everySpace}) {
+			const bound = everySpace ? MAX_EVERY_SPACE_SEARCH : MAX_LISTED_SPACES
+			if (geoSpaceIds.length === 0 || geoSpaceIds.length > bound)
+				throw new GeoDbError("bad_request", `a search takes 1 to ${bound} spaces`)
 			if (!geoSpaceIds.every((id) => HEX32.test(id)))
 				throw new GeoDbError("bad_request", "space id must be 32 hex digits")
 			// The tool reads any later argument that looks like a flag as a flag, so text cannot start with `-`.
@@ -87,7 +103,7 @@ export function createCliGeoDbSearchClient(
 					config,
 					[
 						"search",
-						...[...new Set(geoSpaceIds)].flatMap((id) => ["--space", id]),
+						...(everySpace ? ["--space", "*"] : [...new Set(geoSpaceIds)].flatMap((id) => ["--space", id])),
 						...["--mode", mode, "--limit", n, "--first", n, "--pages", "1", text],
 					],
 					timeoutMs,

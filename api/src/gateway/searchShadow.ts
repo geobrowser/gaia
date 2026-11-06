@@ -16,8 +16,9 @@
  *
  * What cannot be mapped is counted `unsupported_selection` with a reason (metrics.ts), never guessed:
  *   - no_space: the space map names no Space (nothing to search over).
- *   - many_spaces: the space map holds more than MAX_EVERY_SPACES Spaces; geo-db takes 1 to 1024 Spaces in one
- *     search, and rankings of separate searches cannot be merged exactly (each is scored against its own scope).
+ *   - many_spaces: the space map holds more than MAX_EVERY_SPACE_SEARCH Spaces; geo-db searches at most 4096 in
+ *     one request, and rankings of separate searches cannot be merged exactly (each is scored against its own
+ *     scope). Up to 1024 Spaces are listed one by one; past that the search asks for every Space (`--space '*'`).
  *   - filter: a connection `filter` changes PostGraphile's set; geo-db's search takes only a type filter.
  *   - args: anything beside query, spaceId and first (offset, cursors, similarityThreshold), or a query the
  *     lexical search cannot take (under two characters, over 250, starting with `-`).
@@ -34,9 +35,9 @@ import {type FieldNode, Kind, type SelectionSetNode, valueFromASTUntyped} from "
 
 import {conformingId} from "../geodb/card"
 import {GeoDbError} from "../geodb/client"
-import type {GeoDbSearchClient, GeoDbSearchMode} from "../geodb/search"
+import {type GeoDbSearchClient, type GeoDbSearchMode, MAX_EVERY_SPACE_SEARCH, MAX_LISTED_SPACES} from "../geodb/search"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
-import {asRecord, type EntityShadowDeps, MAX_EVERY_SPACES, parseOperation, Unsupported} from "./entityShadow"
+import {asRecord, type EntityShadowDeps, parseOperation, Unsupported} from "./entityShadow"
 import type {FieldShadow} from "./gateway"
 import {activateGatewayMetrics, recordGatewayShadow, recordGatewayUnsupported} from "./metrics"
 import {activateSearchMetrics, GEODB_LIMIT, recordSearchComparison} from "./searchMetrics"
@@ -194,7 +195,7 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 						recordGatewayUnsupported(field, "no_space")
 						return
 					}
-					if (geoSpaceIds.length > MAX_EVERY_SPACES) {
+					if (geoSpaceIds.length > MAX_EVERY_SPACE_SEARCH) {
 						recordGatewayShadow(field, "unsupported_selection")
 						recordGatewayUnsupported(field, "many_spaces")
 						return
@@ -210,6 +211,7 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 					text: plan.query,
 					mode: deps.mode ?? "typeahead",
 					limit: GEODB_LIMIT,
+					...(plan.spaceId === null && geoSpaceIds.length > MAX_LISTED_SPACES ? {everySpace: true} : {}),
 				})
 			} catch (error) {
 				recordGatewayShadow(field, "failed")

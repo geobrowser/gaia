@@ -215,8 +215,23 @@ describe("search shadow", () => {
 		expect(metric("gaia_api_gateway_shadow_unsupported_total")).toEqual({"field=search,reason=no_space": 1})
 	})
 
-	it("counts an unscoped search unsupported (many_spaces) over more than 1024 Spaces, and does not search", async () => {
-		const many = Array.from({length: 1025}, (_, i) => i.toString(16).padStart(32, "0"))
+	it("asks for every Space (not a list) when the space map holds more than 1024", async () => {
+		const many = Array.from({length: 1579}, (_, i) => i.toString(16).padStart(32, "0"))
+		const {shadows, searchLexical} = setup([], true, many)
+		await run(shadows, "search", SEARCH.replace("spaceId: $spaceId, ", ""), {data: {search: []}}, {q: "ada"})
+		expect(searchLexical).toHaveBeenCalledTimes(1)
+		expect(searchLexical).toHaveBeenCalledWith({
+			geoSpaceIds: many,
+			text: "ada",
+			mode: "typeahead",
+			limit: 20,
+			everySpace: true,
+		})
+		expect(metric("gaia_api_gateway_shadow_unsupported_total")).toEqual({})
+	})
+
+	it("counts an unscoped search unsupported (many_spaces) over more than 4096 Spaces, and does not search", async () => {
+		const many = Array.from({length: 4097}, (_, i) => i.toString(16).padStart(32, "0"))
 		const {shadows, searchLexical} = setup([], true, many)
 		await run(shadows, "search", SEARCH.replace("spaceId: $spaceId, ", ""), {data: {search: []}}, {q: "ada"})
 		expect(searchLexical).not.toHaveBeenCalled()
@@ -338,6 +353,27 @@ describe("geo-db search client", () => {
 		})
 		await expect(
 			client.searchLexical({geoSpaceIds: Array(1025).fill(GEO_SPACE), text: "x", mode: "bm25", limit: 1}),
+		).rejects.toMatchObject({reason: "bad_request"})
+	})
+
+	it("sends --space '*' for an every-Space search, bounded at 4096", async () => {
+		const run = vi.fn(async () => "")
+		const client = createCliGeoDbSearchClient(config, {run})
+		const many = Array(1579).fill(GEO_SPACE)
+		await client.searchLexical({geoSpaceIds: many, text: "ada", mode: "typeahead", limit: 20, everySpace: true})
+		expect(run).toHaveBeenCalledWith(
+			config,
+			["search", "--space", "*", "--mode", "typeahead", "--limit", "20", "--first", "20", "--pages", "1", "ada"],
+			3000,
+		)
+		await expect(
+			client.searchLexical({
+				geoSpaceIds: Array(4097).fill(GEO_SPACE),
+				text: "x",
+				mode: "bm25",
+				limit: 1,
+				everySpace: true,
+			}),
 		).rejects.toMatchObject({reason: "bad_request"})
 	})
 
