@@ -137,9 +137,9 @@ describe("analyzeBacklinks", () => {
 			[`query($id: UUID!) { entity(id: $id) { name backlinksList { fromEntity { id } } } }`, "selection"],
 			[`query($id: UUID!) { entity(id: $id) { backlinksList { fromEntity { name } } } }`, "selection"],
 			[`query($id: UUID!) { entity(id: $id) { backlinksList { id fromEntity { id } } } }`, "selection"],
-			[`query($id: UUID!) { entity(id: $id) { backlinksList(first: 5) { fromEntity { id } } } }`, "args"],
+			[`query($id: UUID!) { entity(id: $id) { backlinksList(orderBy: ID_ASC) { fromEntity { id } } } }`, "args"],
 			[
-				`query($id: UUID!) { entity(id: $id) { backlinksList(filter: {typeId: {is: $id}}) { fromEntity { id } } } }`,
+				`query($id: UUID!) { entity(id: $id) { backlinksList(filter: {fromEntityId: {is: $id}}) { fromEntity { id } } } }`,
 				"filter",
 			],
 			[
@@ -152,6 +152,34 @@ describe("analyzeBacklinks", () => {
 			],
 		]
 		for (const [query, reason] of refusals) expect(plan(query)).toEqual({ok: false, reason})
+	})
+})
+
+describe("the typed, paged backlinks page (EntityCommentReplyBacklinksPage)", () => {
+	const TYPED = `query($id: UUID!, $type: UUID!, $first: Int, $offset: Int) { entity(id: $id) { backlinksList(first: $first, offset: $offset, filter: {typeId: {is: $type}, fromEntity: {typeIds: {overlaps: []}}}) { fromEntity { id } } } }`
+	const TYPE = "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+	const OTHER_TYPE = conformingId("entity", "7ed45f2b-c48b-419e-8e46-64d5ff680b0d")
+	const vars = {id: ENTITY, type: TYPE, first: 20, offset: 0}
+
+	it("plans the page: relation types, an inexact filter (the referrer's own), paging", () => {
+		const a = analyzeBacklinks(parse(TYPED), null, vars)
+		expect(a.ok && a.plan).toMatchObject({types: [TYPE.replaceAll("-", "")], exact: false, first: 20, offset: 0})
+	})
+
+	const page = (ids: string[]) => ({
+		data: {entity: {backlinksList: ids.map((id) => ({fromEntity: {id}}))}},
+	})
+	it("holds the page's rows to geo-db's referrers of that relation type only", async () => {
+		const [a, b] = ROWS.map((r) => r.fromEntity?.id as string)
+		const refs = ref(a as string, RELATED, 0) + ref(b as string, OTHER_TYPE, 1)
+		const s = setup({[geoSpace(SPACE)]: refs})
+		await call(s.shadow as never, vars, page([a as string]), TYPED)
+		expect(results()).toEqual({match: 1})
+		expect(uncompared()).toMatchObject({filter_completeness: 1})
+		// A row geo-db holds only under another relation type is a mismatch.
+		const wrong = setup({[geoSpace(SPACE)]: refs})
+		await call(wrong.shadow as never, vars, page([b as string]), TYPED)
+		expect(results()).toEqual({match: 1, mismatch: 1})
 	})
 })
 
