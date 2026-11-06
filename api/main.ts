@@ -18,6 +18,7 @@ import {createReadBudget} from "./src/gateway/readBudget"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
 import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
+import {createDerivedReader} from "./src/geodb/derived"
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createCliGeoDbSearchClient} from "./src/geodb/search"
@@ -27,6 +28,7 @@ import {setGraphqlSearchClient} from "./src/kg/graphqlSearchOpenSearchPlugin"
 import {type GraphQLServerContext, getGraphqlPoolPressure, graphqlServer} from "./src/kg/postgraphile"
 import {createRateLimiter} from "./src/middleware/rateLimit"
 import {canonicalRequestLogging, isClientAbortError, requestId} from "./src/middleware/requestLogging"
+import {createAccountWeightsShadow, readAccountWeightsShadowConfig} from "./src/pairFit/accountWeightsShadow"
 import {createProfileRouter} from "./src/profile"
 import {createProposalsRouter} from "./src/proposals"
 import {createGovernanceShadow, readGovernanceShadowConfig} from "./src/proposals/governance/shadow"
@@ -239,6 +241,16 @@ const feedExperimentShadow = feedExperimentShadowConfig.enabled
 			log,
 		})
 	: null
+// GEODB_ACCOUNT_WEIGHTS_SHADOW (off by default) compares pair-fit candidates' account weight with geo-db's derived collection 5
+// (gaia_api_account_weights_shadow_total), sampled and throttled, in the background. Never changes a response.
+const accountWeightsShadowConfig = readAccountWeightsShadowConfig(process.env)
+const accountWeightsShadow = accountWeightsShadowConfig.enabled
+	? createAccountWeightsShadow({
+			config: accountWeightsShadowConfig,
+			reader: createDerivedReader(geoDbCardConfig),
+			log,
+		})
+	: null
 const internalRoutes = mountInternalRoutes(
 	app,
 	db,
@@ -246,6 +258,7 @@ const internalRoutes = mountInternalRoutes(
 	forYouConfigShadow,
 	entityRankingConfigShadow,
 	feedExperimentShadow,
+	accountWeightsShadow,
 )
 if (internalRoutes === "enabled") {
 	log.info("Internal routes enabled")

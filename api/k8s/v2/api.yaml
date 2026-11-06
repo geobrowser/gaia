@@ -304,6 +304,12 @@ spec:
             # (GEODB_FEED_EXPERIMENTS, GEODB_FEED_EXPERIMENT_MEMBERS) run first.
             - name: GEODB_FEED_EXPERIMENT_SHADOW
               value: "0"
+            # The same for pair-fit's account weights: a sample of each request's candidates (at most every
+            # GEODB_ACCOUNT_WEIGHTS_SHADOW_INTERVAL_MS, default 10 s; _SAMPLE candidates, default 5) against geo-db's
+            # derived collection 5 (gaia_api_account_weights_shadow_total), read over `geodb-client derived pipe`. OFF; never
+            # changes a response. Needs the ranking-indexer's GEODB_DERIVED_MIRROR run first (account-weights cronjob).
+            - name: GEODB_ACCOUNT_WEIGHTS_SHADOW
+              value: "0"
             - name: NODE_EXTRA_CA_CERTS
               value: /ssl/ca.crt
             - name: DATABASE_URL
