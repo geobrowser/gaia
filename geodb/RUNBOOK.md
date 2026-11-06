@@ -1104,11 +1104,18 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   geo-db keeps after Postgres dropped it (the mirror never deletes) is not seen; and a sample is not a full scan.
 - Key: the scoring CronJob now mounts the shared `geodb-scores-key` (was an unminted `geodb-derived-key`); `supervisor.sh`
   grants it `derived=0,1,2,3,4,5,11,12,13`. Collections 2-4 were already registered in geo-db (nothing to land there).
-- **Enable order:** restart serve so the binding takes effect (the key's writes to 2/3/4 are refused until then), size
-  `derived_rows_max` first (`local_scores` is one row per entity perspective; see the sizing warning in §2f; a full rewrite
-  past the cap is refused), run the CronJob once by hand with the flag on (`GEODB_DERIVED_BATCH=1`, a larger
-  `GEODB_DERIVED_BUDGET_MS`), then set the flag `"1"` in `scoring-service/deployment/v2/cronjob.yaml` in its own PR, then
-  the api flag. Rollback: set the flags `"0"`.
+- **Snapshot:** the CronJob's own mirror is bounded by a time budget and swallows short sends, so it is not a backfill.
+  `mirror_scores_snapshot` (vote-indexer image, `scoring-service/vote-indexer/src/bin/mirror_scores_snapshot.rs`) reads the
+  three tables whole in keyset pages of 256 rows, sends each as one batch request through `put_counted`, retries a short
+  page three times and exits non-zero if it still cannot be acknowledged. Order: `space_scores`, `global_scores`,
+  `local_scores`; `SCORES_SNAPSHOT_TABLES` narrows it. Row layout is the Python mirror's, so the nightly run and the
+  snapshot write the same cells. Run it as a Job from `scoring-service/deployment/v2/scores-snapshot-job.yaml` (applied by
+  hand; not in any deploy list). Counts on 2026-11-06 per plan 14: `global_scores` 1,821,435, `local_scores` 2,145,026,
+  `space_scores` 1,580 (3,968,041 together). Re-count before running; this file is not a source of live numbers.
+- **Enable order:** (1) the Stage B serve restart with `derived_rows_max` 12,582,912 (gaia#1267) and a binding that grants
+  `derived=2,3,4` (already in `geodb/supervisor.sh`), check `geodb_derived_rows` against `geodb_derived_rows_max`;
+  (2) run the snapshot Job; (3) set the flag `"1"` in `scoring-service/deployment/v2/cronjob.yaml` in its own PR (the nightly
+  run then repairs drift; it never deletes); (4) the api shadow flag `GEODB_SCORES_SHADOW`. Rollback: set the flags `"0"`.
 
 ### 2f-primer. claim_overlap_samples (derived collection 14, GEODB_DERIVED_MIRROR)
 

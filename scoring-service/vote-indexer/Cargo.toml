@@ -26,6 +26,12 @@ path = "src/bin/new_entity_sweep.rs"
 name = "mirror_ranking_snapshot"
 path = "src/bin/mirror_ranking_snapshot.rs"
 
+# One-shot copy of global_scores, local_scores and space_scores into derived collections 2, 3 and 4 —
+# see its module doc. RUNBOOK section 2f-scores (Stage B).
+[[bin]]
+name = "mirror_scores_snapshot"
+path = "src/bin/mirror_scores_snapshot.rs"
+
 [dependencies]
 hermes-schema = { path = "../../hermes-schema" }
 hermes-instrumentation = { path = "../../hermes-instrumentation" }
