@@ -315,6 +315,11 @@ spec:
             # response); the MAX_* limits stay at their defaults.
             - name: GEODB_PROFILE_SHADOW
               value: "on"
+            # A nested property, Type or relation-target name that geo-db prints as none because it is named in a Space
+            # outside the read is settled from its Name in every Space (one batch read of at most 64 ids, under the
+            # every-Space budget). A name no Space holds stays uncompared, never a mismatch. Shadow only (gaia#1257).
+            - name: GEODB_CROSS_SPACE_NAMES_SHADOW
+              value: "on"
             # The for_you_config record in geo-db's config Space read back after the For you route reads its
             # settings, counted against them (gaia_api_for_you_config_shadow_total). OFF; never changes a
             # response. Needs the geodb-feeder's for_you_config backfill (GEODB_FOR_YOU_CONFIG) run first.
