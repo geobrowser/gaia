@@ -47,6 +47,13 @@ export type BacklinksPlan = {
 	spaceKey: string | null
 	fromKey: string
 	fromIdKey: string
+	/** The relation types the filter allows (gaia ids), or null for any. */
+	types: string[] | null
+	/** The filter holds nothing but the Space and the types (`fromEntity` narrows by the referrer, which geo-db's rows cannot judge). */
+	exact: boolean
+	/** `first` and `offset`: a page cut by either is not a complete set. */
+	first: number
+	offset: number
 	uncompared: UncomparedReason[]
 }
 
@@ -58,28 +65,44 @@ const refuse = (reason: UnsupportedReason): never => {
 
 const plainKeys = (field: FieldNode) => !field.arguments?.length && !field.directives?.length
 
-/** `{spaceId: {is: <uuid> | null}}`, absent or null: the Space it names, or null for every Space. */
-function backlinksSpace(filter: unknown): string | null {
-	if (filter === undefined || filter === null) return null
+/**
+ * The Space (`spaceId: {is}`), relation types (`typeId: {is | in}`) and referrer condition (`fromEntity`, whatever it
+ * says: it only removes rows, so it leaves the filter inexact) a backlinks filter names. Any other key is refused.
+ */
+function backlinksFilter(filter: unknown): {spaceId: string | null; types: string[] | null; exact: boolean} {
+	const out = {spaceId: null as string | null, types: null as string[] | null, exact: true}
+	if (filter === undefined || filter === null) return out
 	const record = asRecord(filter)
 	if (!record) return refuse("filter")
-	const keys = Object.keys(record)
-	if (keys.length === 0) return null
-	if (keys.length !== 1 || keys[0] !== "spaceId") return refuse("filter")
-	const clause = record.spaceId
-	if (clause === undefined || clause === null) return null
-	const operators = asRecord(clause)
-	if (!operators) return refuse("filter")
-	const opKeys = Object.keys(operators)
-	if (opKeys.length === 0) return null
-	if (opKeys.length !== 1 || opKeys[0] !== "is") return refuse("filter")
-	const is = operators.is
-	return is === undefined || is === null ? null : uuidArg(is)
+	for (const [key, clause] of Object.entries(record)) {
+		if (clause === undefined || clause === null) continue
+		if (key === "fromEntity") {
+			if (!asRecord(clause)) return refuse("filter")
+			if (Object.keys(clause as object).length > 0) out.exact = false
+			continue
+		}
+		if (key !== "spaceId" && key !== "typeId") return refuse("filter")
+		const operators = asRecord(clause)
+		if (!operators) return refuse("filter")
+		const names = Object.keys(operators)
+		if (names.length === 0) continue
+		if (key === "spaceId") {
+			if (names.length !== 1 || names[0] !== "is") return refuse("filter")
+			out.spaceId = operators.is === undefined || operators.is === null ? null : uuidArg(operators.is)
+			continue
+		}
+		const only = names[0]
+		if (names.length !== 1 || (only !== "is" && only !== "in")) return refuse("filter")
+		const ids = only === "is" ? [operators.is] : operators.in
+		if (!Array.isArray(ids) || ids.length === 0 || ids.length > MAX_FILTER_IDS) return refuse("filter")
+		out.types = [...new Set(ids.map((id) => normalizeUuid(uuidArg(id))))]
+	}
+	return out
 }
 
 /**
  * Plans an `entity(id) { backlinksList(filter?) { spaceId? fromEntity { id ... } } }` operation, or says why it
- * is not one. Nothing else may sit beside `backlinksList`, and the list takes no paging or ordering arguments.
+ * is not one. Nothing else may sit beside `backlinksList`, and the list takes `first` and `offset` and no ordering.
  */
 export function analyzeBacklinks(
 	document: DocumentNode,
@@ -101,8 +124,11 @@ export function analyzeBacklinks(
 		const list = inner[0] as FieldNode
 		if (list.directives?.length) return refuse("directives")
 		const listArgs = argsOf(list, resolved)
-		if (Object.keys(listArgs).some((name) => name !== "filter")) return refuse("args")
-		const spaceId = backlinksSpace(listArgs.filter)
+		if (Object.keys(listArgs).some((name) => !["filter", "first", "offset"].includes(name))) return refuse("args")
+		for (const name of ["first", "offset"])
+			if (listArgs[name] !== undefined && listArgs[name] !== null && !Number.isInteger(listArgs[name]))
+				return refuse("args")
+		const {spaceId, types, exact} = backlinksFilter(listArgs.filter)
 
 		let spaceKey: string | null = null
 		let from: FieldNode | null = null
@@ -132,6 +158,10 @@ export function analyzeBacklinks(
 				spaceKey,
 				fromKey: responseKeyOf(from),
 				fromIdKey: responseKeyOf(idField),
+				types,
+				exact,
+				first: typeof listArgs.first === "number" ? listArgs.first : 0,
+				offset: typeof listArgs.offset === "number" ? listArgs.offset : 0,
 				uncompared,
 			},
 		}
@@ -281,8 +311,9 @@ export function extractBacklinks(body: unknown, plan: BacklinksPlan): PostgresBa
 			from: normalizeUuid(id),
 		})
 	}
-	// The list takes no `first`, so PostGraphile gives it the default page of a root-depth collection.
-	return {rows, dangling, truncated: list.length >= defaultLimitForDepth(0)}
+	// Without a `first`, PostGraphile gives the default page of a root-depth collection; a page cut by `offset` is not whole.
+	const cap = plan.first > 0 ? Math.min(plan.first, 1000) : defaultLimitForDepth(0)
+	return {rows, dangling, truncated: plan.offset > 0 || list.length >= cap}
 }
 
 /** Reads geo-db's backlinks of `entityId` (a gaia id) in `geoSpaceIds`. Throws GeoDbError. */
@@ -338,8 +369,8 @@ export async function runBacklinks(
 		{
 			entityId: plan.entityId,
 			spaces: plan.spaceId ? [plan.spaceId] : null,
-			types: null,
-			exactFilter: true,
+			types: plan.types,
+			exactFilter: plan.exact,
 			bySpace: plan.spaceId !== null || plan.spaceKey !== null,
 			byType: false,
 			postgres,
