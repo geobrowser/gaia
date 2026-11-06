@@ -8,6 +8,7 @@
 import pg from "pg"
 import type {PgRelationRow, PgValueRow} from "./pgAdapter.js"
 import type {ProposalActionRow} from "./proposalActionsKeyed.js"
+import type {EntityRankingConfigRow} from "./entityRankingConfigKeyed.js"
 import type {ForYouConfigRow} from "./forYouConfigKeyed.js"
 import type {SpaceVotingSettingsRow} from "./spaceVotingSettingsKeyed.js"
 import type {ProposalVersionRow} from "./proposalVersionsKeyed.js"
@@ -259,6 +260,46 @@ export async function* readForYouConfigRows(db: ReadOnlyPg): AsyncGenerator<ForY
 		`SELECT max_boost_days::text AS max_boost_days, interest_half_saturation::text AS interest_half_saturation,
 		        exploration_share::text AS exploration_share, max_topics::text AS max_topics
 		 FROM personalization.for_you_config`,
+		[],
+		60_000,
+	)
+}
+
+/** The one `entity_ranking_config` row (`WHERE id`), every tunable as text. `updated_at` is not mirrored. */
+export async function* readEntityRankingConfigRows(db: ReadOnlyPg): AsyncGenerator<EntityRankingConfigRow> {
+	yield* await db.read<EntityRankingConfigRow>(
+		`SELECT tau_seconds::text AS tau_seconds,
+		        wilson_z::text AS wilson_z,
+		        prior_positive::text AS prior_positive,
+		        prior_negative::text AS prior_negative,
+		        quality_floor::text AS quality_floor,
+		        intrinsic_cap::text AS intrinsic_cap,
+		        intrinsic_property_target::text AS intrinsic_property_target,
+		        intrinsic_relation_target::text AS intrinsic_relation_target,
+		        participation_weight::text AS participation_weight,
+		        participation_cap::text AS participation_cap,
+		        comment_weight::text AS comment_weight,
+		        comment_cap::text AS comment_cap,
+		        topic_interested_weight::text AS topic_interested_weight,
+		        topic_debate_weight::text AS topic_debate_weight,
+		        topic_cap::text AS topic_cap,
+		        watch_window_days::text AS watch_window_days,
+		        watch_prior_impressions::text AS watch_prior_impressions,
+		        watch_reference_seconds::text AS watch_reference_seconds,
+		        watch_ratio_weight::text AS watch_ratio_weight,
+		        watch_completed_weight::text AS watch_completed_weight,
+		        watch_plays_weight::text AS watch_plays_weight,
+		        watch_claim_votes_weight::text AS watch_claim_votes_weight,
+		        watch_cap::text AS watch_cap,
+		        watch_fresh_boost::text AS watch_fresh_boost,
+		        watch_fresh_impressions::text AS watch_fresh_impressions,
+		        trending_boost::text AS trending_boost,
+		        trending_topic_boost::text AS trending_topic_boost,
+		        trending_day_factor::text AS trending_day_factor,
+		        trending_debate_factor::text AS trending_debate_factor,
+		        trending_debate_window_days::text AS trending_debate_window_days,
+		        trending_horizon_days::text AS trending_horizon_days
+		 FROM public.entity_ranking_config WHERE id`,
 		[],
 		60_000,
 	)

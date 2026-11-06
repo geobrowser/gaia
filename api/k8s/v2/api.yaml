@@ -293,6 +293,11 @@ spec:
             # response. Needs the geodb-feeder's for_you_config backfill (GEODB_FOR_YOU_CONFIG) run first.
             - name: GEODB_FOR_YOU_CONFIG_SHADOW
               value: "0"
+            # The same for entity_ranking_config's tau_seconds, the one value the api serves from that table
+            # (gaia_api_entity_ranking_config_shadow_total). OFF; never changes a response. Needs the geodb-feeder's
+            # entity_ranking_config backfill (GEODB_ENTITY_RANKING_CONFIG) run first.
+            - name: GEODB_ENTITY_RANKING_CONFIG_SHADOW
+              value: "0"
             - name: NODE_EXTRA_CA_CERTS
               value: /ssl/ca.crt
             - name: DATABASE_URL

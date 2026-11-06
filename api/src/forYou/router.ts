@@ -34,6 +34,7 @@ import {pairFitHandler} from "../pairFit/router"
 import {log} from "../services/telemetry"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import type {ForYouConfigShadow} from "./configShadow"
+import type {EntityRankingConfigShadow} from "./entityRankingConfigShadow"
 import {type Database, type ForYouInputs, type ForYouPool, readForYouInputs} from "./queries"
 import {
 	FOR_YOU_CODE_VERSION,
@@ -286,7 +287,12 @@ export function buildResponse(body: Body, inputs: ForYouInputs) {
 	}
 }
 
-export function createInternalRouter(db: Database, token: string, configShadow?: ForYouConfigShadow | null) {
+export function createInternalRouter(
+	db: Database,
+	token: string,
+	configShadow?: ForYouConfigShadow | null,
+	rankingConfigShadow?: EntityRankingConfigShadow | null,
+) {
 	const router = new Hono()
 
 	router.use("*", async (c, next) => {
@@ -317,6 +323,8 @@ export function createInternalRouter(db: Database, token: string, configShadow?:
 			})
 			// GEODB_FOR_YOU_CONFIG_SHADOW: compares the served settings with geo-db's record in the background.
 			configShadow?.compare(inputs.settings.config)
+			// GEODB_ENTITY_RANKING_CONFIG_SHADOW: the same for the tau_seconds readSettings served from entity_ranking_config.
+			rankingConfigShadow?.compare(inputs.settings.tauSeconds)
 			const response = buildResponse(body, inputs)
 			log.info("for-you ranked", {
 				candidates: body.candidateIds.length,
@@ -351,11 +359,12 @@ export function mountInternalRoutes(
 	db: Database,
 	token: string | undefined | null,
 	configShadow?: ForYouConfigShadow | null,
+	rankingConfigShadow?: EntityRankingConfigShadow | null,
 ): "enabled" | "too_short" | "unset" {
 	const trimmed = token?.trim()
 	if (!trimmed) return "unset"
 	if (trimmed.length < MIN_INTERNAL_TOKEN_LENGTH) return "too_short"
 	app.use("/internal/*", canonicalRequestLogging())
-	app.route("/internal", createInternalRouter(db, trimmed, configShadow))
+	app.route("/internal", createInternalRouter(db, trimmed, configShadow, rankingConfigShadow))
 	return "enabled"
 }
