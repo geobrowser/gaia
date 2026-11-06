@@ -10,6 +10,7 @@ import type {PgRelationRow, PgValueRow} from "./pgAdapter.js"
 import type {ProposalActionRow} from "./proposalActionsKeyed.js"
 import type {SpaceVotingSettingsRow} from "./spaceVotingSettingsKeyed.js"
 import type {ProposalVersionRow} from "./proposalVersionsKeyed.js"
+import type {ProposalStatusRow} from "./proposalStatusKeyed.js"
 import type {ProposalVoteRow} from "./proposalVotesKeyed.js"
 import type {SubspaceRow} from "./subspacesKeyed.js"
 import type {UserVoteRow} from "./votesKeyed.js"
@@ -316,3 +317,25 @@ export const pgTimesSource = (db: ReadOnlyPg): TimesSource => ({
 	listEntities: pgBackfillSource(db).listEntities,
 	readTimes: (entities) => readEntityTimes(db, entities),
 })
+
+/**
+ * Every `proposals` row with `executed_at` or `unexecutable_at` set (the stored inputs of a proposal's status; the
+ * status itself is computed on read), keyset-paged on the primary key. Both come back as text.
+ */
+export async function* readProposalStatusRows(db: ReadOnlyPg, pageSize = 5000): AsyncGenerator<ProposalStatusRow> {
+	let after: string | null = null
+	for (;;) {
+		const page: ProposalStatusRow[] = await db.read<ProposalStatusRow>(
+			`SELECT id::text AS id, executed_at::text AS executed_at, unexecutable_at::text AS unexecutable_at
+			 FROM proposals
+			 WHERE (executed_at IS NOT NULL OR unexecutable_at IS NOT NULL) AND ($1::uuid IS NULL OR id > $1::uuid)
+			 ORDER BY id
+			 LIMIT $2`,
+			[after, pageSize],
+			300_000,
+		)
+		yield* page
+		if (page.length < pageSize) return
+		after = (page[page.length - 1] as ProposalStatusRow).id
+	}
+}

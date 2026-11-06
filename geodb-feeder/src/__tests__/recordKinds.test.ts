@@ -13,6 +13,7 @@ describe("record kinds", () => {
 			proposalAction: ["22335b74e17a4c9e867d4ac2a32c3a4a", "governance"],
 			proposalVersion: ["6863abef6664450eb135a182c6ff1715", "governance"],
 			spaceVotingSettings: ["7767f888a9a240b18275a7832363f4d9", "governance"],
+			proposalStatus: ["cf398f45b2c74002bb13e5416fbc7027", "governance"],
 			proposalVote: ["ca89a877762c4883a3640b5455a8f0e2", "votes"],
 			userVote: ["1623234736184c0d9a0b69e2ffbc124d", "votes"],
 		})
@@ -59,6 +60,11 @@ describe("record columns", () => {
 				grace: "198ba2f858844b668a6126d5bc8a069e",
 				updatedAt: "c23df2162f6b4b7b8bc41d740afc0f19",
 				updatedAtBlock: "8ba30f5e13da49699c351e1475c86f7b",
+			},
+			proposalStatus: {
+				proposal: "4f742a5f821a469c9c0be0b352ae5b67",
+				executedAt: "ed3855a3c41b4f749651bf049dabac0b",
+				unexecutableAt: "72179d56e3dc478d9c9ab2159e4b40ef",
 			},
 			proposalAction: {
 				proposal: "235abc0092a248d69e2dbb5c71fd0209",

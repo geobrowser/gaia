@@ -640,6 +640,57 @@ Activation order, each step only after the one before it is live:
 
 Rollback: unset `GEODB_PROPOSAL_VERSIONS`. The records stay in the Space, unread; nothing reads them yet.
 
+### 2c-novies. Keyed proposal status facts (GEODB_PROPOSAL_STATUS)
+
+Read this first: **gaia stores no proposal status, so this does not mirror one.** `proposals` has no status column. The
+api computes "proposed", "executable", "rejected" and the rest on every read (`api/src/proposals/status.ts`
+`computeProposalStatus`, and the SQL twins `sqlIsProposed`, `sqlIsExecutable`, `sqlIsRejected` in
+`api/src/proposals/queries.ts`) from the votes, the settings snapshot, `executed_at`, `unexecutable_at` and the current
+time. Most of those transitions have no event: a voting window closes, a grace period lapses. A status column in geo-db
+would be stale the moment it was written, so the transitions do not belong in the feeder.
+
+What the feeder can mirror are the two stored inputs, and `GEODB_PROPOSAL_STATUS` (default off; takes effect only with
+`GEODB_RECORD_KEYS`) does exactly that, as natural-key records in the `governance` system Space
+(`geodb-feeder/src/proposalStatusKeyed.ts`; the pinned `proposalStatus` kind), one per proposal, keyed by the proposal:
+
+- `executed_at`: event-written. `PROPOSAL_EXECUTED` on `<env>.space.governance` becomes
+  `UPDATE proposals SET executed_at = <block time>` in kg-indexer; the feeder consumes it on its own group,
+  `geodb-feeder-proposal-status-keyed-v1-<env>`, and `put`s it (a second event replaces the first, as the UPDATE does).
+  Every other event counts as `ignored`.
+- `unexecutable_at`: **no event.** It is set by an operator-run script,
+  `proposal-executor/src/backfill-unexecutable.ts` (dry run by default, an on-chain `latestProposalVersion == 0`
+  check). The consumer cannot carry it; only the backfill does, reading Postgres. A value set after the backfill reaches
+  geo-db only on a rerun (below), until that script publishes an event, a change in `proposal-executor`.
+
+Where the computed status belongs: a function over these records, the votes (`proposal_votes`, §2c-quater), the
+settings (`space_voting_settings`, §2c-septies) and `now`, evaluated at read time, or a derived store class
+refreshed on the clock (the GAP-9 materialized-view question). It is not a stored column, and it needs a reader,
+which does not exist yet. The gate below checks only the stored facts.
+
+Activation order, each step only after the one before it is live:
+
+1. geo-db serve and init container on 9d97069a78 or later (`put`); a feeder image that carries this path.
+2. Kafka ACL: consume on the group `geodb-feeder-proposal-status-keyed-v1-<env>` (the topic is already granted), and
+   describe on every feeder group for the backfill Job's empty-group check. Without them the consumer fails to start and
+   `geodb_feeder_consumer_start_failed{consumer="proposal_status"}` goes to 1.
+3. Required: the backfill Job (`geodb/k8s/v2/geodb-proposal-status-backfill-job.yaml`), feeder scaled to 0, applied as in
+   §2c-quater step 4. It reads `proposals` READ ONLY, only rows with `executed_at` or `unexecutable_at` set, and is
+   rerunnable. `space.governance` keeps 7 days, so almost every row comes from this snapshot.
+4. `GEODB_RECORD_KEYS: "1"` and `GEODB_PROPOSAL_STATUS: "1"` in the feeder manifest, then scale it back to 1.
+5. The gate, before any reader depends on the records: `bun src/proposalStatusGate.ts <postgres.tsv> <dump dir>`
+   (`geodb-feeder/src/proposalStatusGate.ts`; its header lists the `\copy` columns and the `ps-<name>.tsv` dumps). It
+   exits non-zero on a Postgres-only key or a value difference; geo-db-only keys are reported, not failed.
+
+Carrying a later `unexecutable_at`: after an operator runs the unexecutable script, rerun the Job. Once the consumer has
+offsets the Job refuses unless `BACKFILL_KEYED_RESET_CONSUMER` is `"1"` (which deletes the consumer's offsets, so it replays
+the retained 7 days from earliest on its next start: safe here, because a replayed PROPOSAL_EXECUTED carries the
+same value Postgres holds and writes the same ids).
+
+Drift in either direction is to be investigated, never read as a bug in either side: the UPDATE matches no row for a
+proposal Postgres does not hold yet, and kg-indexer drops a whole block on a permanent failure.
+
+Rollback: unset `GEODB_PROPOSAL_STATUS`. The records stay in the Space, unread; nothing reads them yet.
+
 ### 2d. Raising the Space cap
 
 `spaces` in `geodb-serve-config` caps the Spaces the store can hold; at the cap, founding refuses and the
@@ -795,7 +846,8 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 | `GeoDbFeederSubspacesStalled` | `space.trust.extensions` lag above 0 and nothing handled by the subspaces consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-sexies) |
 | `GeoDbFeederSpaceVotingSettingsStalled` | `space.governance` lag above 0 and nothing handled by the space-voting-settings consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-septies) |
 | `GeoDbFeederProposalVersionsStalled` | `space.governance` lag above 0 and nothing handled by the proposal-versions consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-octies) |
-| `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`, `space_voting_settings`, `proposal_versions`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
+| `GeoDbFeederProposalStatusStalled` | `space.governance` lag above 0 and nothing handled by the proposal-status consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-novies) |
+| `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`, `space_voting_settings`, `proposal_versions`, `proposal_status`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
 
 ## 7. Operating notes
 
