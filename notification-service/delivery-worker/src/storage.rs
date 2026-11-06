@@ -13,6 +13,7 @@ use crate::error::StorageError;
 pub struct PendingDelivery {
     pub delivery_id: Uuid,
     pub outbox_id: Uuid,
+    pub webhook_id: Uuid,
     pub webhook_url: String,
     pub webhook_secret: String,
     pub idempotency_key: String,
@@ -86,6 +87,7 @@ impl Storage {
             SELECT
                 c.id as delivery_id,
                 c.outbox_id,
+                c.webhook_id,
                 c.attempts,
                 w.url as webhook_url,
                 w.secret as webhook_secret,
@@ -105,6 +107,7 @@ impl Storage {
             deliveries.push(PendingDelivery {
                 delivery_id: row.get("delivery_id"),
                 outbox_id: row.get("outbox_id"),
+                webhook_id: row.get("webhook_id"),
                 webhook_url: row.get("webhook_url"),
                 webhook_secret: row.get("webhook_secret"),
                 idempotency_key: row.get("idempotency_key"),

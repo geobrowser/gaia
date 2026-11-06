@@ -1648,6 +1648,7 @@ version = "0.1.0"
 dependencies = [
  "axum 0.7.9",
  "dotenv",
+ "geodb-outbox",
  "hermes-instrumentation",
  "hex",
  "hmac",
