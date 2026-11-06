@@ -259,7 +259,7 @@ the running serve; with `GEODB_RECORD_KEYS` that serve must be 9d97069a78 or lat
 ```bash
 $K scale deployment/geodb-feeder --replicas=0
 $K wait --for=delete pod -l app=geodb-feeder --timeout=120s
-GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb/k8s/v2/geodb.yaml | sort -u)
+GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb/k8s/v2/geodb.yaml)
 sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" \
   geodb/k8s/v2/geodb-membership-backfill-job.yaml | $K apply -f -
 $K logs -f job/geodb-membership-backfill   # "membership backfill done", deadLetter 0
@@ -375,7 +375,7 @@ Activation order, each step only after the one before it is live:
 
    ```bash
    $K scale deploy/geodb-feeder --replicas=0
-   GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb/k8s/v2/geodb.yaml | sort -u)
+   GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb/k8s/v2/geodb.yaml)
    sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" \
      geodb/k8s/v2/geodb-votes-backfill-job.yaml | $K apply -f -
    $K logs -f job/geodb-votes-backfill
@@ -461,7 +461,7 @@ Activation order, each step only after the one before it is live (steps 1 and 3 
 
    ```bash
    $K scale deploy/geodb-feeder --replicas=0
-   GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb/k8s/v2/geodb.yaml | sort -u)
+   GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb/k8s/v2/geodb.yaml)
    sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" \
      geodb/k8s/v2/geodb-proposal-votes-backfill-job.yaml | $K apply -f -
    $K logs -f job/geodb-proposal-votes-backfill
@@ -1254,7 +1254,7 @@ gaia ref that includes the supervisor's `GEODB_CURSOR_KEYID` support (an older s
 
 ```bash
 # 1. mint (idempotent: never overwrites an existing Secret)
-GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb/k8s/v2/geodb.yaml | sort -u)
+GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb/k8s/v2/geodb.yaml)
 sed -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" geodb/k8s/v2/geodb-cursor-key-job.yaml | $K apply -f -
 $K -n gaia wait --for=condition=complete job/geodb-cursor-key --timeout=120s
 $K -n gaia logs job/geodb-cursor-key          # prints the public key id
@@ -1289,7 +1289,7 @@ class is off without it; size it to the outbox retention, then roll serve).
 
 ```bash
 # 1. mint (idempotent: never overwrites an existing Secret)
-GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb/k8s/v2/geodb.yaml | sort -u)
+GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb/k8s/v2/geodb.yaml)
 sed -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" geodb/k8s/v2/geodb-outbox-key-job.yaml | $K apply -f -
 $K -n gaia wait --for=condition=complete job/geodb-outbox-key --timeout=120s
 $K -n gaia logs job/geodb-outbox-key          # prints the public key id
@@ -1342,7 +1342,7 @@ these tables (144 B a row resident) before turning the flag on.
 
 ```bash
 # 1. mint (idempotent: never overwrites an existing Secret)
-GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb/k8s/v2/geodb.yaml | sort -u)
+GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb/k8s/v2/geodb.yaml)
 sed -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" geodb/k8s/v2/geodb-scores-key-job.yaml | $K apply -f -
 $K -n gaia wait --for=condition=complete job/geodb-scores-key --timeout=120s
 $K -n gaia logs job/geodb-scores-key          # prints the public key id only

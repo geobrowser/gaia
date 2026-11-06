@@ -6,7 +6,7 @@
 # so the key can write the derived `cursors` collection and nothing else. RUNBOOK §10 has the order.
 #
 # NOT in deploy-v2: applied by hand. Fill the image placeholder from geodb.yaml's pin:
-#   GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb.yaml | sort -u)
+#   GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb.yaml)
 #   sed -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" geodb-cursor-key-job.yaml | kubectl apply -f -
 #
 # Idempotent: if the Secret exists the Job exits 0 and changes nothing (it never overwrites a key). To rotate,
