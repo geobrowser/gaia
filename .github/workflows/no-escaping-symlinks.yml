@@ -1,0 +1,17 @@
+name: No escaping symlinks
+
+# A tracked symlink that points outside the repository is a worktree pointer committed by accident
+# (geodb-feeder/gaia-w-go-st -> ../../gaia-w-go-st reached main in #1232).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: sh scripts/check-no-escaping-symlinks.sh
