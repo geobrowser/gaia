@@ -406,6 +406,11 @@ spec:
             # (49518 rows, 0 dead letters). Rollback: "0".
             - name: GEODB_PROPOSAL_VOTES
               value: "1"
+            # Keyed proposal actions (PROPOSAL_CREATED / PROPOSAL_UPDATED on space.governance, into the governance
+            # system Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-quinquies. OFF until the
+            # proposal-actions backfill Job (geodb-proposal-actions-backfill-job.yaml) has run with the feeder at 0.
+            - name: GEODB_PROPOSAL_ACTIONS
+              value: "0"
             # Relation positions (`.position` on a relation's add). Off until the geodb image carries a
             # geodb-client with ISS-587-318: an older client refuses the key, and every edit with a positioned
             # relation would fail. Turn on with the image bump that brings it.

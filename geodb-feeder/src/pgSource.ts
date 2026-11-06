@@ -7,6 +7,7 @@
  */
 import pg from "pg"
 import type {PgRelationRow, PgValueRow} from "./pgAdapter.js"
+import type {ProposalActionRow} from "./proposalActionsKeyed.js"
 import type {ProposalVoteRow} from "./proposalVotesKeyed.js"
 import type {UserVoteRow} from "./votesKeyed.js"
 
@@ -200,6 +201,38 @@ export async function* readProposalVoteRows(db: ReadOnlyPg, pageSize = 5000): As
 		yield* page
 		if (page.length < pageSize) return
 		after = page[page.length - 1] as ProposalVoteRow
+	}
+}
+
+/**
+ * Every `proposal_actions` row, with the block of its version (`proposal_versions.version_created_at_block`), keyset-paged
+ * on the primary key (proposal_id, proposal_version, index). The version ordinal is not returned: the record is keyed by
+ * the block (proposalActionsKeyed.ts).
+ */
+export async function* readProposalActionRows(db: ReadOnlyPg, pageSize = 5000): AsyncGenerator<ProposalActionRow & {proposal_version: number}> {
+	let after: (ProposalActionRow & {proposal_version: number}) | null = null
+	for (;;) {
+		const page: (ProposalActionRow & {proposal_version: number})[] = await db.read<ProposalActionRow & {proposal_version: number}>(
+			`SELECT a.proposal_id::text AS proposal_id, a.proposal_version::int AS proposal_version, a."index"::int AS "index",
+			        v.version_created_at_block::text AS block, a.action_type::text AS action_type, a.target_id::text AS target_id,
+			        a.content_uri AS content_uri, encode(a.metadata, 'hex') AS metadata, encode(a.content_id, 'hex') AS content_id,
+			        a.quorum::text AS quorum, a.duration::text AS duration,
+			        a.partial_percentage_support_threshold::text AS partial_percentage_support_threshold,
+			        a.universal_percentage_support_threshold::text AS universal_percentage_support_threshold,
+			        a.flat_support_threshold::text AS flat_support_threshold,
+			        a.disable_fast_path_access_for_new_members AS disable_fast_path_access_for_new_members,
+			        a.execution_grace_period::text AS execution_grace_period
+			 FROM proposal_actions a
+			 JOIN proposal_versions v ON v.proposal_id = a.proposal_id AND v.proposal_version = a.proposal_version
+			 WHERE $1::boolean OR (a.proposal_id, a.proposal_version, a."index") > ($2::uuid, $3::int, $4::int)
+			 ORDER BY a.proposal_id, a.proposal_version, a."index"
+			 LIMIT $5`,
+			after === null ? [true, null, null, null, pageSize] : [false, after.proposal_id, after.proposal_version, after.index, pageSize],
+			300_000,
+		)
+		yield* page
+		if (page.length < pageSize) return
+		after = page[page.length - 1] as ProposalActionRow & {proposal_version: number}
 	}
 }
 
