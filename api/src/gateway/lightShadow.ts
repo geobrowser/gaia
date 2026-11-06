@@ -29,7 +29,9 @@ import {
 	conformingId,
 	DERIVED_PROPERTIES,
 	diffCards,
+	ENTITY_TIME_PROPERTIES,
 	type GeoCardRow,
+	MEMBERSHIP_PROPERTIES,
 	type RelationRow,
 	statementsFromPostgres,
 	type ValueRow,
@@ -120,6 +122,13 @@ type LightList = {
 	 * target when the batch read is on, else `nested_entity`.
 	 */
 	target?: {key: string; values: LightList}
+	/**
+	 * The list can be held to geo-db the other way too: it is `first`-bounded, has no `after`/`offset`/order, no filter or only a
+	 * `propertyId`/`typeId` one (`is` or `in`, nothing else), and selects the row's property (values) or type and target
+	 * (relations). When the answer holds fewer rows than `first` the list is whole, so every row geo-db holds in the Spaces
+	 * read that the list's filter allows must be in it (`reverseCheck`). `props` is that filter, null for none.
+	 */
+	reverse?: {props: string[] | null}
 }
 
 const noted = new Set<string>()
@@ -312,6 +321,21 @@ function typeFilterOf(filter: unknown, key: "typeId" | "propertyId" = "typeId"):
 	return [...new Set((ids as string[]).map((id) => normalizeUuid(id)))]
 }
 
+/**
+ * The filter of a list the reverse check can use: none (null props), or exactly `{<key>: {is}}` / `{<key>: {in}}`
+ * with up to MAX_TYPE_FILTER Types or Properties. Undefined for any other filter, which narrows the rows in ways the
+ * check cannot reproduce.
+ */
+function reverseFilterOf(filter: unknown, key: "typeId" | "propertyId"): {props: string[] | null} | undefined {
+	if (filter === undefined || filter === null) return {props: null}
+	const object = asRecord(filter)
+	if (!object || Object.keys(object).length !== 1 || !(key in object)) return undefined
+	const clause = asRecord(object[key])
+	if (!clause || Object.keys(clause).length !== 1) return undefined
+	const props = typeFilterOf(filter, key)
+	return props ? {props} : undefined
+}
+
 /** Most Types a typeless relations list's filter may name; a wider one is not planned. */
 const MAX_TYPE_FILTER = 20
 
@@ -431,6 +455,9 @@ function planLightList(
 		}
 	}
 	const target = kind === "relations" ? planTargetValues(field, fragments, resolved) : null
+	// An offset or an order would change which rows a bounded page holds; a bare `first` page is the entity's first rows.
+	const bare = args.offset === undefined || args.offset === null || args.offset === 0
+	const reverse = first > 0 && bare ? reverseFilterOf(filter, kind === "values" ? "propertyId" : "typeId") : undefined
 	return {
 		kind,
 		key: responseKeyOf(field),
@@ -438,6 +465,7 @@ function planLightList(
 		rows: {key: responseKeyOf(field), first, ...rows, nodesKey, hasNext: null},
 		spaceKey: rows.columns.spaceId ?? null,
 		...(target ? {target} : {}),
+		...(reverse ? {reverse} : {}),
 	}
 }
 
@@ -465,6 +493,12 @@ function planTargetValues(
 		throw error
 	}
 }
+
+/**
+ * Whether every list of the plan is held to geo-db both ways when it comes back whole (`LightList.reverse`). Such a plan
+ * leaves `partial_values` to the run: it is counted only when a list came back cut.
+ */
+const allReverse = (lists: LightList[]) => lists.length > 0 && lists.every((list) => list.reverse !== undefined)
 
 function planLightEntity(
 	set: SelectionSetNode,
@@ -530,10 +564,10 @@ function planLightEntity(
 	// (no Space argument), the entity is read across every loaded Space and each row need only be held by one.
 	if (!card.spaceIds && !lists.some((list) => list.spaceKey)) {
 		if (!options.everySpace && !options.rootSpaces) refuse("no_space")
-		uncompared.add("partial_values")
+		if (!allReverse(lists)) uncompared.add("partial_values")
 		return {card, lists, everySpace: true}
 	}
-	uncompared.add("partial_values")
+	if (!allReverse(lists)) uncompared.add("partial_values")
 	return {card, lists, everySpace: false}
 }
 
@@ -878,6 +912,8 @@ type LightCard = {
 	targetValues: {to: string; values: ValueRow[]}[]
 	/** Value rows of a `propertyId`-filtered list that selects no property: held under one of `props`. */
 	untypedValues: {props: string[]; row: ValueRow; space: string | null}[]
+	/** What each reverse-checkable list returned: its kind and filter, how many rows, its `first`, and the rows' properties (values) or (type, target) pairs (relations). */
+	reverse: {kind: "values" | "relations"; props: string[] | null; first: number; rows: string[]}[]
 }
 
 const push = (
@@ -934,6 +970,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 	const typeOnly: LightCard["typeOnly"] = []
 	const targetValues: LightCard["targetValues"] = []
 	const untypedValues: LightCard["untypedValues"] = []
+	const reverse: LightCard["reverse"] = []
 	const nested: NonNullable<NonNullable<PostgresCard>["nested"]> = {}
 	for (const list of plan.lists) {
 		if (list.projection) {
@@ -945,6 +982,14 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 		const holder = list.nodesKey ? asRecord(object[list.key]) : object
 		const nodes = list.nodesKey ? holder?.[list.nodesKey] : object[list.key]
 		if (!Array.isArray(nodes)) return null
+		const reverseRows: string[] = []
+		if (list.reverse)
+			reverse.push({
+				kind: list.kind,
+				props: list.reverse.props?.map((id) => conformingId("entity", id)) ?? null,
+				first: list.rows.first,
+				rows: reverseRows,
+			})
 		for (const raw of nodes) {
 			const node = asRecord(raw)
 			if (!node) return null
@@ -978,6 +1023,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 					date: orNull(read(node, list.rows, "date")),
 				})
 				valueSpaces.push(space)
+				reverseRows.push(conformingId("entity", propertyId))
 				if (list.rows.names.property)
 					push(nested, "property", {
 						id: propertyId,
@@ -1006,6 +1052,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 				if (own) targetValues.push({to: toEntityId, values: own})
 				relations.push({type_id: typeId, to_entity_id: toEntityId, to_space_id: null})
 				relationSpaces.push(space)
+				reverseRows.push(`${conformingId("entity", typeId)}\t${conformingId("entity", toEntityId)}`)
 				if (list.rows.names.type)
 					push(nested, "type", {id: typeId, name: readName(node, list.rows.names.type) ?? null})
 				if (list.rows.names.toEntity)
@@ -1049,7 +1096,17 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 		if (plan.card.types.nameKey) card.typeNames = names
 	}
 	if (Object.keys(nested).length > 0) card.nested = nested
-	return {card, valueSpaces, relationSpaces, projectionSpaces, typeless, typeOnly, targetValues, untypedValues}
+	return {
+		card,
+		valueSpaces,
+		relationSpaces,
+		projectionSpaces,
+		typeless,
+		typeOnly,
+		targetValues,
+		untypedValues,
+		reverse,
+	}
 }
 
 /** The spaces to read: the entity's own, else the spaces its rows name. */
@@ -1063,6 +1120,50 @@ function lightSpaces(light: LightCard, extra: string[] | null): string[] | null 
 }
 
 export type LightCheck = CardCheck
+
+/** A reference value as geo-db prints it: a bare compact id. Values never print that way (instants, dates and points carry a tag or a comma). */
+const REFERENCE_RAW = /^[0-9a-f]{32}$/
+
+/**
+ * The other direction of the containment: the rows geo-db holds, in the Spaces read, that a whole list of the answer
+ * lacks. A list is whole when it returned fewer rows than its `first`; a list that came back at `first` rows may have more
+ * and is `cut`. Values are held by property (a count of the rows of each: the list need not select the columns), relations by
+ * (type, target). A list's filter narrows the geo-db rows the same way; an unfiltered list covers the values (not
+ * reference-shaped rows) or the relations (reference-shaped rows). Derived, membership and time rows, and empty texts, are
+ * not geo-db rows PostGraphile lists.
+ */
+export function reverseCheck(
+	lists: LightCard["reverse"],
+	geo: GeoCardRow[],
+): {geoOnly: {prop: string; raw: string}[]; cut: boolean} {
+	const geoOnly: {prop: string; raw: string}[] = []
+	let cut = false
+	for (const list of lists) {
+		if (list.rows.length >= list.first) {
+			cut = true
+			continue
+		}
+		const filter = list.props ? new Set(list.props) : null
+		const pool = new Map<string, number>()
+		for (const row of list.rows) pool.set(row, (pool.get(row) ?? 0) + 1)
+		for (const row of geo) {
+			if (
+				DERIVED_PROPERTIES.has(row.prop) ||
+				MEMBERSHIP_PROPERTIES.has(row.prop) ||
+				ENTITY_TIME_PROPERTIES.has(row.prop)
+			)
+				continue
+			const reference = REFERENCE_RAW.test(row.raw)
+			if (filter ? !filter.has(row.prop) : (list.kind === "relations") !== reference) continue
+			if (list.kind === "values" && row.raw === "") continue
+			const key = list.kind === "values" ? row.prop : `${row.prop}\t${row.raw}`
+			const left = pool.get(key) ?? 0
+			if (left > 0) pool.set(key, left - 1)
+			else geoOnly.push({prop: row.prop, raw: list.kind === "values" ? "" : row.raw})
+		}
+	}
+	return {geoOnly, cut}
+}
 
 /**
  * Whether the answer shows the entity in `spaces` only through derived properties: at least one of its rows sits in
@@ -1242,12 +1343,16 @@ export async function checkLight(
 	// voter's Space) is not a membership geo-db can settle.
 	const derivedOnly = notHeld && onlyDerivedIn(light, options.spaceIds ?? [])
 	const outsideSpace = notHeld && !derivedOnly
-	const bad = missing.length > 0 || wrong.length > 0 || unmet.length > 0 || outsideSpace
+	// The lists that came back whole must hold every row geo-db has in the Spaces read.
+	const reverse = reverseCheck(light.reverse, read.rows)
+	const bad = missing.length > 0 || wrong.length > 0 || unmet.length > 0 || outsideSpace || reverse.geoOnly.length > 0
 	// PostGraphile keeps an entity's row whatever its statements (a topic, or every statement since removed), so an
 	// entity it has that geo-db holds nothing about in any loaded Space is not a difference geo-db can settle.
 	const uncompared = [...derived.uncompared]
 	if (derivedOnly) uncompared.push("derived_only")
 	if (options.everySpace && read.scope.populated.length === 0) uncompared.push("no_statements")
+	// A list that came back cut, or one the plan could not hold both ways, leaves the rows it did not return unchecked.
+	if (reverse.cut) uncompared.push("partial_values")
 	return {
 		result: bad ? "mismatch" : "match",
 		uncompared,
@@ -1257,6 +1362,8 @@ export async function checkLight(
 			holders: options.everySpace ? read.scope.populated.length : undefined,
 			missingInGeoDb: missing.length,
 			sampleMissing: missing.slice(0, 5),
+			geoOnlyRows: reverse.geoOnly.length,
+			sampleGeoOnly: reverse.geoOnly.slice(0, 5),
 			skipped,
 			derivedMismatches: wrong,
 			unmetFilter: unmet.slice(0, 3),

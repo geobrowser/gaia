@@ -27,6 +27,12 @@ type Rel = {spaceId: string; type: {id: string; name: string}; toEntity: {id: st
 
 const FIXTURE: Fixture = JSON.parse(readFileSync(new URL("./fixtures/entity-light-news.json", import.meta.url), "utf8"))
 const ENTITY = FIXTURE.response.data.entity
+// The captured `values` list trims long texts; geo-db holds the name and the description once, in full.
+for (const v of ENTITY.values.nodes) {
+	const property = conformingId("entity", v.property.id)
+	if (property === conformingId("entity", "a126ca53-0c8e-48d5-b888-82c734c38935")) v.text = ENTITY.name
+	if (property === conformingId("entity", "9b1f76ff-9711-404c-861e-59dc3fa7d037")) v.text = ENTITY.description
+}
 const HEX = ENTITY.id
 const SPACE_A = ENTITY.spaceIds[0] as string
 const SPACE_B = "5093b6ab1b48f1111dd31275b5413ddb"
@@ -46,8 +52,11 @@ function geoOutput(entity: Entity, options: {relSpace?: (rel: Rel) => boolean; v
 	const rows: string[] = []
 	let n = 0
 	if (options.values !== false) {
-		rows.push(`${NAME}\t${cell(entity.name)}\tsn\t${HEX}\t-\t-\t1`)
-		rows.push(`${DESCRIPTION}\t${cell(entity.description)}\tsd\t${HEX}\t-\t-\t1`)
+		// PostGraphile's `values` list holds the name and the description too; geo-db holds each once, so they are
+		// written here (from the entity's own text) only when the list does not carry them.
+		const listed = (p: string) => entity.values.nodes.some((n) => conformingId("entity", n.property.id) === p)
+		if (!listed(NAME)) rows.push(`${NAME}\t${cell(entity.name)}\tsn\t${HEX}\t-\t-\t1`)
+		if (!listed(DESCRIPTION)) rows.push(`${DESCRIPTION}\t${cell(entity.description)}\tsd\t${HEX}\t-\t-\t1`)
 	}
 	if (options.values !== false)
 		for (const v of entity.values.nodes) {
@@ -160,10 +169,38 @@ describe("the light entity selection (news app)", () => {
 		expect(s.log.warn).not.toHaveBeenCalled()
 	})
 
-	it("does not count rows only geo-db holds (the lists are filtered and cut)", async () => {
+	it("flags a row only geo-db holds when the list was not cut", async () => {
 		const extra = `${conformingId("entity", "7ed45f2b-c48b-419e-8e46-64d5ff680b0d")}\tabc\tsx\t${HEX}\t-\t-\t1\n`
+		const s = await runEntity(ENTITY, {[geoSpace(SPACE_A)]: geoOutput(ENTITY) + extra})
+		expect(results()).toEqual({mismatch: 1})
+		expect(s.log.warn).toHaveBeenCalledWith(
+			"gateway entity shadow mismatch (light)",
+			expect.objectContaining({first: expect.objectContaining({geoOnlyRows: 1})}),
+		)
+	})
+
+	it("flags a relation only geo-db holds in a Type the list names", async () => {
+		const type = (ENTITY.lightRels.nodes[0] as Rel).type.id
+		const extra = `${conformingId("entity", type)}\t${conformingId("entity", "7ed45f2b-c48b-419e-8e46-64d5ff680b0d")}\tsy\t${HEX}\t-\t-\t1\n`
+		await runEntity(ENTITY, {[geoSpace(SPACE_A)]: geoOutput(ENTITY) + extra})
+		expect(results()).toEqual({mismatch: 1})
+	})
+
+	it("does not count a relation of a Type the list's filter leaves out", async () => {
+		const extra = `${conformingId("entity", "7ed45f2b-c48b-419e-8e46-64d5ff680b0d")}\t${conformingId("entity", "7ed45f2b-c48b-419e-8e46-64d5ff680b0e")}\tsy\t${HEX}\t-\t-\t1\n`
 		await runEntity(ENTITY, {[geoSpace(SPACE_A)]: geoOutput(ENTITY) + extra})
 		expect(results()).toEqual({match: 1})
+	})
+
+	it("leaves a list that reached its cut uncompared instead of flagging rows beyond it", async () => {
+		const cut = clone(ENTITY)
+		cut.values.nodes = cut.values.nodes.slice(0, 2)
+		const extra = `${conformingId("entity", "7ed45f2b-c48b-419e-8e46-64d5ff680b0d")}\tabc\tsx\t${HEX}\t-\t-\t1\n`
+		const query = FIXTURE.request.query.replace("values(first: 50)", "values(first: 2)")
+		const s = setup({[geoSpace(SPACE_A)]: geoOutput(cut) + extra})
+		await call(s.entity as never, query, {}, {data: {entity: cut}})
+		expect(results()).toEqual({match: 1})
+		expect(uncompared()).toMatchObject({partial_values: 1})
 	})
 
 	it("flags a relation geo-db lacks", async () => {
