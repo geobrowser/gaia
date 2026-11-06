@@ -104,6 +104,12 @@ type LightList = {
 	 * which each row has. Its rows are checked as "held under one of these Properties" (`untypedValues`).
 	 */
 	propertyFilter?: string[]
+	/**
+	 * A relations list that selects each row's type and a `toEntity` object with no id (only fields the card cannot
+	 * settle, such as its `valuesList`): the rows carry no target to look up, so each is checked as "geo-db holds a
+	 * relation of this type", and the target's own fields are `nested_entity`.
+	 */
+	typeOnly?: boolean
 }
 
 const noted = new Set<string>()
@@ -287,6 +293,16 @@ function typeFilterOf(filter: unknown, key: "typeId" | "propertyId" = "typeId"):
 /** Most Types a typeless relations list's filter may name; a wider one is not planned. */
 const MAX_TYPE_FILTER = 20
 
+/** Whether the relation rows select a `toEntity` object (in the row, or in a connection's `nodes`). */
+function selectsTarget(field: FieldNode, fragments: Map<string, SelectionSetNode>): boolean {
+	const rowsOf = (set: SelectionSetNode | undefined): FieldNode[] => (set ? fieldsOf(set, fragments) : [])
+	const direct = rowsOf(field.selectionSet)
+	const nodes = direct.find((child) => child.name.value === "nodes")
+	return (nodes ? rowsOf(nodes.selectionSet) : direct).some(
+		(child) => child.name.value === "toEntity" && !!child.selectionSet,
+	)
+}
+
 function planLightList(
 	field: FieldNode,
 	fragments: Map<string, SelectionSetNode>,
@@ -362,6 +378,16 @@ function planLightList(
 			rows: {key: responseKeyOf(field), first, ...rows, nodesKey, hasNext: null},
 			spaceKey: rows.columns.spaceId ?? null,
 			typeFilter: typeFilterOf(filter) as string[],
+		}
+	} else if (has("typeId") && !has("toEntityId") && selectsTarget(field, fragments)) {
+		uncompared.add("nested_entity")
+		return {
+			kind,
+			key: responseKeyOf(field),
+			nodesKey,
+			rows: {key: responseKeyOf(field), first, ...rows, nodesKey, hasNext: null},
+			spaceKey: rows.columns.spaceId ?? null,
+			typeOnly: true,
 		}
 	} else if (!has("typeId") || !has("toEntityId")) {
 		const unfiltered = filter === undefined || filter === null
@@ -674,6 +700,8 @@ type LightCard = {
 	projectionSpaces: (string | null)[]
 	/** Rows of a `typeId`-filtered relations list that selects no type: the Types the filter allowed, the target, the row space. */
 	typeless: {types: string[]; to: string; space: string | null}[]
+	/** Rows of a relations list that selects a type and a target with no id: held when geo-db has a relation of the type. */
+	typeOnly: {type: string; space: string | null}[]
 	/** Value rows of a `propertyId`-filtered list that selects no property: held under one of `props`. */
 	untypedValues: {props: string[]; row: ValueRow; space: string | null}[]
 }
@@ -703,6 +731,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 	const relationSpaces: (string | null)[] = []
 	const projectionSpaces: (string | null)[] = []
 	const typeless: LightCard["typeless"] = []
+	const typeOnly: LightCard["typeOnly"] = []
 	const untypedValues: LightCard["untypedValues"] = []
 	const nested: NonNullable<NonNullable<PostgresCard>["nested"]> = {}
 	for (const list of plan.lists) {
@@ -755,6 +784,11 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 					})
 			} else {
 				const typeId = list.typeFilter ? null : read(node, list.rows, "typeId")
+				if (list.typeOnly) {
+					if (typeof typeId !== "string") return null
+					typeOnly.push({type: typeId, space})
+					continue
+				}
 				const toEntityId = read(node, list.rows, "toEntityId")
 				if (typeof toEntityId !== "string") return null
 				if (list.typeFilter) {
@@ -810,13 +844,15 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 		if (plan.card.types.nameKey) card.typeNames = names
 	}
 	if (Object.keys(nested).length > 0) card.nested = nested
-	return {card, valueSpaces, relationSpaces, projectionSpaces, typeless, untypedValues}
+	return {card, valueSpaces, relationSpaces, projectionSpaces, typeless, typeOnly, untypedValues}
 }
 
 /** The spaces to read: the entity's own, else the spaces its rows name. */
 function lightSpaces(light: LightCard, extra: string[] | null): string[] | null {
 	const spaces = new Set<string>(light.card.spaceIds ?? [])
-	if (!light.card.spaceIds) for (const s of [...light.valueSpaces, ...light.relationSpaces]) if (s) spaces.add(s)
+	if (!light.card.spaceIds)
+		for (const s of [...light.valueSpaces, ...light.relationSpaces, ...light.typeOnly.map((row) => row.space)])
+			if (s) spaces.add(s)
 	for (const s of extra ?? []) spaces.add(s)
 	return spaces.size > 0 ? [...spaces] : null
 }
@@ -909,6 +945,14 @@ export async function checkLight(
 		return !pool.some((held) => types.has(held.prop) && held.raw === to)
 	})
 	for (const row of untyped) missing.push({space: row.space, prop: row.types.join("|"), norm: row.to})
+	// A relation row whose target was not selected by id is held when geo-db has a relation of its type (derived
+	// relation types are never in geo-db, so they are not judged).
+	for (const row of light.typeOnly) {
+		const type = conformingId("entity", row.type)
+		if (DERIVED_PROPERTIES.has(type)) continue
+		const pool: GeoCardRow[] = row.space ? (read.bySpace.get(row.space) ?? []) : read.rows
+		if (!pool.some((held) => held.prop === type)) missing.push({space: row.space, prop: type, norm: ""})
+	}
 	// A value row filtered by `propertyId` with no property selected is held when geo-db has it under one of the filter's Properties.
 	for (const row of light.untypedValues) {
 		const pool: GeoCardRow[] = row.space ? (read.bySpace.get(row.space) ?? []) : read.rows
