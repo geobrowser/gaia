@@ -101,10 +101,9 @@ spec:
               readOnly: true
           env:
             # Copy scoring_topology_distances into geo-db derived collection 24 (RUNBOOK section 2f-topology), best-effort,
-            # after each batch commits and once at start. OFF: "0". Turning it on is a separate change, after the
-            # enable order in RUNBOOK section 2f-topology.
+            # after each batch commits and once at start. ON: "1" (the image carries the mirror from #1220).
             - name: GEODB_DERIVED_MIRROR
-              value: "0"
+              value: "1"
             - name: GEODB_CLIENT_BIN
               value: /geodb/geodb-client
             - name: GEODB_KEY_PATH
