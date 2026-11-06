@@ -22,14 +22,70 @@ use std::time::Instant;
 use sqlx::postgres::PgPoolOptions;
 use tracing::{info, warn};
 
+use ranking_indexer::anchor_select;
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::primer_claims_mirror::{
     self as family, AnchorMember, AnchorSet, ClaimStats, PriorClaim,
 };
 use ranking_indexer::primer_mirror::{self, OverlapSample};
+use uuid::Uuid;
 
 /// The ticket asks for 30-50 anchors; refresh_anchor_claims aims for 40 and keeps at least 30.
 const ANCHOR_MIN: i32 = 30;
+
+/// `ANCHOR_RUST_COMPUTE` (default off): after a new anchor set is chosen, choose it again in code
+/// from the stats table and log whether the same claims came out in the same order.
+fn anchor_rust_enabled() -> bool {
+    matches!(
+        env::var("ANCHOR_RUST_COMPUTE").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+async fn anchor_shadow(pool: &sqlx::PgPool, set_id: i32) -> Result<bool, IndexerError> {
+    let rows: Vec<(Uuid, Vec<Uuid>, f64, f64, f64, bool)> = sqlx::query_as(
+        "SELECT claim_id, topic_ids, weighted_voters, agree_share, score, contested \
+         FROM public.primer_claim_stats",
+    )
+    .fetch_all(pool)
+    .await?;
+    let stats: Vec<anchor_select::Candidate> = rows
+        .into_iter()
+        .map(
+            |(claim_id, topic_ids, weighted_voters, agree_share, score, contested)| {
+                anchor_select::Candidate {
+                    claim_id,
+                    topic_ids,
+                    weighted_voters,
+                    agree_share,
+                    score,
+                    contested,
+                }
+            },
+        )
+        .collect();
+    let sql: Vec<(Uuid, i32, f64, f64, f64)> = sqlx::query_as(
+        "SELECT claim_id, rank, score, weighted_voters, agree_share \
+         FROM public.anchor_claim_members WHERE set_id = $1 ORDER BY rank",
+    )
+    .bind(set_id)
+    .fetch_all(pool)
+    .await?;
+    let sql: Vec<anchor_select::Member> = sql
+        .into_iter()
+        .map(
+            |(claim_id, rank, score, weighted_voters, agree_share)| anchor_select::Member {
+                rank,
+                claim_id,
+                score,
+                weighted_voters,
+                agree_share,
+            },
+        )
+        .collect();
+    let rust = anchor_select::select(&stats, &anchor_select::Params::default())?;
+    Ok(anchor_select::same_members(&rust, &sql))
+}
 
 #[tokio::main]
 async fn main() -> Result<(), IndexerError> {
@@ -95,6 +151,15 @@ async fn main() -> Result<(), IndexerError> {
         "primer claim statistics refreshed"
     );
 
+    if let (Some(set_id), true) = (new_set, anchor_rust_enabled()) {
+        match anchor_shadow(&pool, set_id).await {
+            Ok(same) => info!(
+                set_id,
+                same, "anchor set rust compute checked against the SQL"
+            ),
+            Err(e) => warn!(error = %e, "anchor set rust compute skipped"),
+        }
+    }
     if let Some(set_id) = new_set {
         let size: i32 =
             sqlx::query_scalar("SELECT claim_count FROM public.anchor_claim_sets WHERE id = $1")
