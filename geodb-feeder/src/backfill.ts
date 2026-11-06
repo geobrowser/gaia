@@ -30,7 +30,7 @@ import {type EntityReader, readWithRetry} from "./geodbPipe.js"
 import {cid} from "./ids.js"
 import {log} from "./log.js"
 import type {Metrics} from "./metrics.js"
-import {DERIVED_PROPERTIES, compactId, entityOps, type Held, type PgRelationRow, type PgValueRow} from "./pgAdapter.js"
+import {DERIVED_PROPERTIES, compactId, entityOps, heldOf, type Held, type PgRelationRow, type PgValueRow} from "./pgAdapter.js"
 import type {BackfillSource} from "./pgSource.js"
 import {ensureSpace, SpaceCapError, type SpaceDeps} from "./spaces.js"
 import {Overlay, type SpaceRecord, type Store, writeFileDurable} from "./state.js"
@@ -242,7 +242,7 @@ export async function runBackfill(deps: BackfillDeps, opts: BackfillOptions): Pr
 				if (known || suspect) {
 					const geo = await readWithRetry(deps.reader, geoSpace.geo, e, sleep)
 					if (known || geo.length > 0) {
-						held = {props: new Set(geo.map((r) => r.prop)), statements: new Set(geo.map((r) => r.statement))}
+						held = heldOf(geo, rows.relations)
 						// Applied by the interrupted run but not journaled yet: known from here on.
 						if (!known) overlay.markEntity(e)
 					}
