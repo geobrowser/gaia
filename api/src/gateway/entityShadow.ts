@@ -94,7 +94,7 @@ export const DERIVED_FIELDS = ["upvotes", "downvotes", "agrees", "disagrees", "c
 
 export const VALUE_COLUMNS = ["text", "integer", "float", "boolean", "datetime", "date", "decimal"] as const
 /** Columns of a value row the card mapping does not compare; selecting them is allowed. */
-export const VALUE_IGNORED = ["spaceId", "language", "unit", "point", "time", "schedule"] as const
+export const VALUE_IGNORED = ["id", "spaceId", "language", "unit", "point", "time", "schedule", "datetimeUtc"] as const
 export const RELATION_IGNORED = [
 	"id",
 	"spaceId",
@@ -103,6 +103,9 @@ export const RELATION_IGNORED = [
 	"position",
 	"verified",
 	"toSpaceId",
+	"toVersionId",
+	"fromSpaceId",
+	"fromVersionId",
 ] as const
 
 /** A nested object in a row: which compared column its `id` carries, and what its other fields are worth. */
@@ -126,25 +129,24 @@ export const PROPERTY_OBJECT: ObjectSpec = {
 		__typename: null,
 	},
 }
+/** What a nested entity object (`toEntity`, `fromEntity`, `entity`) may select beyond its id and name: none of it is compared. */
+const NESTED_ENTITY_FIELDS: ObjectSpec["fields"] = {
+	description: "nested_entity",
+	types: "nested_entity",
+	valuesList: "nested_entity",
+	relationsList: "nested_entity",
+	values: "nested_entity",
+	relations: "nested_entity",
+	backlinks: "nested_entity",
+	backlinksList: "nested_entity",
+	spaceIds: "nested_entity",
+}
+
 export const RELATION_OBJECTS: Record<string, ObjectSpec> = {
 	type: {idColumn: "typeId", fields: {id: null, name: "name", __typename: null}},
-	toEntity: {
-		idColumn: "toEntityId",
-		fields: {
-			id: null,
-			name: "name",
-			description: "nested_entity",
-			types: "nested_entity",
-			valuesList: "nested_entity",
-			relationsList: "nested_entity",
-			values: "nested_entity",
-			relations: "nested_entity",
-			spaceIds: "nested_entity",
-			__typename: null,
-		},
-	},
-	fromEntity: {idColumn: null, fields: {id: null, name: "name", __typename: null}},
-	entity: {idColumn: null, fields: {id: null, name: "nested_names", __typename: null}},
+	toEntity: {idColumn: "toEntityId", fields: {id: null, name: "name", ...NESTED_ENTITY_FIELDS, __typename: null}},
+	fromEntity: {idColumn: null, fields: {id: null, name: "name", ...NESTED_ENTITY_FIELDS, __typename: null}},
+	entity: {idColumn: null, fields: {id: null, name: "nested_names", ...NESTED_ENTITY_FIELDS, __typename: null}},
 }
 
 export type ListPlan = {
@@ -452,6 +454,42 @@ export function parseOperation(
 }
 
 /**
+ * `backlinks(filter) { totalCount nodes { .. } }` or `backlinksList(first, filter) { .. }`: the relations that point at
+ * the entity. A card holds an entity's own relations only, so the rows are never compared (`backlink_rows`), but the
+ * selection is read the way a relations list's is, so an unknown column or argument is still refused.
+ */
+function planBacklinkRows(
+	field: FieldNode,
+	fragments: Map<string, SelectionSetNode>,
+	resolved: Record<string, unknown>,
+	uncompared: Set<UncomparedReason>,
+): void {
+	const args = argsOf(field, resolved)
+	for (const arg of Object.keys(args)) if (!["first", "filter", "offset"].includes(arg)) refuse("args")
+	if (args.filter !== undefined && args.filter !== null && !asRecord(args.filter)) refuse("filter")
+	const spec = {
+		columns: [] as string[],
+		objects: RELATION_OBJECTS,
+		ignored: [...RELATION_IGNORED, "typeId", "toEntityId"],
+	}
+	const rowsOf = (set: SelectionSetNode) => planColumns(set, fragments, spec, uncompared)
+	if (field.name.value === "backlinksList") rowsOf(field.selectionSet as SelectionSetNode)
+	else {
+		let nodes = false
+		for (const child of fieldsOf(field.selectionSet as SelectionSetNode, fragments)) {
+			const name = child.name.value
+			if (name === "__typename" || (name === "totalCount" && isPlainField(child))) continue
+			if (name === "pageInfo" && child.selectionSet && !child.arguments?.length) continue
+			if (name === "nodes" && child.selectionSet && !child.arguments?.length && !nodes) {
+				nodes = true
+				rowsOf(child.selectionSet)
+			} else refuse("selection")
+		}
+	}
+	uncompared.add("backlink_rows")
+}
+
+/**
  * Plans the selection of one entity: its derived fields and the two space-filtered lists a card can settle.
  * Throws `Unsupported` when the selection is anything else.
  */
@@ -475,6 +513,7 @@ export function planEntitySelection(
 	let types: EntityPlan["types"] = null
 	let allValues: EntityPlan["allValues"] = null
 	let allRelations: EntityPlan["allRelations"] = null
+	let backlinkRows = false
 	const seen = new Set<string>()
 	const valueSpec = {
 		columns: ["propertyId", ...VALUE_COLUMNS],
@@ -551,9 +590,14 @@ export function planEntitySelection(
 			const all = planAllList(field, fragments, resolved, ["spaceId"])
 			allRelations = {key: all.key, first: all.first, spaceKey: all.columns.spaceId ?? null}
 			uncompared.add("membership_only")
+		} else if (light && (fieldName === "backlinks" || fieldName === "backlinksList") && field.selectionSet) {
+			planBacklinkRows(field, fragments, resolved, uncompared)
+			backlinkRows = true
 		} else return refuse("selection")
 	}
 	if (light) {
+		// `entity(id) { backlinksList { .. } }` and nothing of the entity itself is the backlinks shadow's (it compares the rows).
+		if (backlinkRows && !idKey && !name && !description && !spaceIds && !types) return refuse("selection")
 		return {
 			idKey,
 			spaceId: null,

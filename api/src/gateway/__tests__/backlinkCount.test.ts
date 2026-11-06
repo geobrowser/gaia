@@ -16,8 +16,12 @@ describe("backlinks { totalCount } in an entities selection", () => {
 		if (plan.ok) expect(plan.plan.uncompared).toEqual(expect.arrayContaining(["backlink_count", "relation_count"]))
 	})
 
-	it("still refuses a backlinks selection that asks for rows", () => {
+	it("reads a backlinks selection that asks for rows, and compares none of them", () => {
 		const q = `query { entities(filter: {id: {in: ["${ID}"]}}) { id backlinks { nodes { id } } } }`
-		expect(analyzeLightEntities(parse(q), null, {})).toEqual({ok: false, reason: "selection"})
+		const a = analyzeLightEntities(parse(q), null, {})
+		expect(a.ok && a.plan.uncompared).toContain("backlink_rows")
+		// Rows only, with nothing of the entity to judge, stay with the backlinks shadow.
+		const rows = `query { entities(filter: {id: {in: ["${ID}"]}}) { backlinks { nodes { id } } } }`
+		expect(analyzeLightEntities(parse(rows), null, {})).toEqual({ok: false, reason: "selection"})
 	})
 })
