@@ -27,6 +27,62 @@ spec:
           restartPolicy: Never
           imagePullSecrets:
             - name: geo
+          volumes:
+            # geodb-client for the derived score mirror (GEODB_DERIVED_MIRROR, src/geodb_derived). Dormant
+            # while the flag is "0": nothing below is read, and every reference is optional or fails soft,
+            # so an absent geodb never blocks a run. Same wiring as hermes/k8s/v2/hermes-pipeline.yaml.
+            - name: geodb-bin
+              emptyDir: {}
+            - name: geodb-space-map
+              configMap:
+                # Written by the geodb-feeder / serve. Not shipped in these manifests.
+                name: geodb-space-map
+                optional: true
+            - name: geodb-key
+              secret:
+                # NOT minted by this change. The key's binding line must grant derived=2,3,4
+                # (global_scores, local_scores, space_scores) and nothing else.
+                secretName: geodb-derived-key
+                optional: true
+                defaultMode: 0440
+                items:
+                  - key: key
+                    path: derived.key
+          initContainers:
+            - name: geodb-setup
+              # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to this service's tag.
+              image: registry.digitalocean.com/geo/geodb:db33c7e6e1
+              imagePullPolicy: IfNotPresent
+              # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
+              # binding and the mirror stays disabled even if the flag is turned on.
+              command:
+                - sh
+                - -c
+                - |
+                  cp /usr/local/bin/geodb-client /geodb/geodb-client || exit 0
+                  node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+                  ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+                  if [ -n "$node" ] && [ -n "$ip" ]; then
+                    printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+                  else
+                    echo "geodb-setup: no node id or no geodb Service; derived mirror stays off"
+                  fi
+                  exit 0
+              volumeMounts:
+                - name: geodb-bin
+                  mountPath: /geodb
+                - name: geodb-space-map
+                  mountPath: /etc/geodb/space-map
+                  readOnly: true
+              resources:
+                requests:
+                  memory: "16Mi"
+                  cpu: "10m"
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
           containers:
             - name: scoring-service
               image: registry.digitalocean.com/geo/scoring-service:latest
@@ -69,6 +125,17 @@ spec:
                   value: "1000"
                 - name: NORMALIZATION_METHOD
                   value: "z_score_sigmoid"
+                # Mirror of global_scores/local_scores/space_scores into geo-db's derived class (collections
+                # 2/3/4). OFF ("0"). Postgres stays the source of truth; a geo-db failure is logged and
+                # counted, never fails the run. Needs a key whose binding grants derived=2,3,4.
+                - name: GEODB_DERIVED_MIRROR
+                  value: "0"
+                - name: GEODB_CLIENT_BIN
+                  value: /geodb/geodb-client
+                - name: GEODB_KEY_PATH
+                  value: /etc/geodb/key/derived.key
+                - name: GEODB_BINDING_PATH
+                  value: /geodb/binding.txt
                 - name: SENTRY_DSN
                   valueFrom:
                     secretKeyRef:
@@ -99,6 +166,12 @@ spec:
                       name: scoring-cronjob-secrets
                       key: SENTRY_RELEASE
                       optional: true
+              volumeMounts:
+                - name: geodb-bin
+                  mountPath: /geodb
+                - name: geodb-key
+                  mountPath: /etc/geodb/key
+                  readOnly: true
               resources:
                 requests:
                   memory: "2048Mi"

@@ -58,7 +58,7 @@ class TestMain:
             mock_load_dotenv.assert_called_once()
             mock_provider_class.assert_called_once_with("postgresql://test:test@localhost/test")
             mock_provider.fetch_all.assert_called_once()
-            mock_writer_class.assert_called_once_with("postgresql://test:test@localhost/test")
+            mock_writer_class.assert_called_once_with("postgresql://test:test@localhost/test", derived=None)
             mock_writer.write_all.assert_called_once()
 
     def test_main_exits_when_database_url_missing(self) -> None:
@@ -310,7 +310,7 @@ class TestScoringPipeline:
             )
             pipeline._write_scores()
 
-            mock_writer_class.assert_called_once_with("postgresql://test/db")
+            mock_writer_class.assert_called_once_with("postgresql://test/db", derived=None)
             mock_writer.write_all.assert_called_once_with(mock_entities, mock_spaces)
 
 
