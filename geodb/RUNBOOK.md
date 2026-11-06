@@ -1094,6 +1094,29 @@ A geo-db error is logged, never fails the Job. Small (agendas are one per Space 
   both), run the Job once by hand with the flag on, then set the flag `"1"` in `agenda-listings-cronjob.yaml` in its own PR.
   An older serve does not refuse a put to 20 (it only checks `collection < 64`) but does not count it. Rollback: flag `"0"`.
 
+### 2f-feed-signals. personalization.feed_item_signals_hourly (derived collection 22, GEODB_DERIVED_MIRROR)
+
+Shadow only, nothing reads the rows. The hourly `ranking-indexer-feed-signals-sync` CronJob
+(`ranking-indexer/src/bin/feed_signals_sync.rs`, migrations 0109 and 0112) replaces a window of hourly buckets and expires
+old ones in one transaction. With `GEODB_DERIVED_MIRROR=1` (manifest default `"0"`) it reads the identities before the run
+and the whole table after the commit, and copies it into collection 22 (`ranking-indexer/src/feed_signals_mirror.rs`).
+Dry runs and `unchanged` runs mirror nothing. Group the item id as a big-endian u128, score the UTC hour in epoch seconds
+(a scan of one item walks its newest hour first), key the item id, the hour as a big-endian i64 and a part byte (25 bytes).
+A bucket's counters are 72 bytes and a derived value holds 64, so each bucket is two rows: part 0 (48 bytes) holds twelve
+little-endian i32 in this order: impressions, impressions_top3, impressions_4_10, impressions_11_30, impressions_31_plus,
+opens, votes, plays, explore_plays, plays_with_duration, completed_plays, debate_claim_votes; part 1 (24 bytes) holds
+watch_ms i64, explore_watch_ms i64 and watch_fraction_sum f64. Every bucket is two puts; an identity the table held before
+and no longer has is a delete of both parts. A geo-db error is logged, never fails the Job.
+
+- Size, measured 2026-11-06: 22,425 rows over 4,170 items, about 345 rows a day, 90-day item retention, so about 31 thousand
+  buckets (62 thousand rows) at steady state against `derived_rows_max` 4,194,304. The whole table fits.
+- Readers (Postgres, unchanged): `readCandidates` and `readPooledCandidates` in the for-you api, and
+  `personalization.feed_item_signals` (migration 0109).
+- Uses the shared `geodb-scores-key`, now granting collections 21 and 22 (`geodb/supervisor.sh`).
+- **Enable order: roll serve to a build that registers collection 22 FIRST**, then the binding (the StatefulSet restart does
+  both), run the Job once by hand with the flag on, then set the flag `"1"` in `feed-signals-sync-cronjob.yaml` in its own PR.
+  Rollback: flag `"0"`.
+
 ### 2d. Raising the Space cap
 
 `spaces` in `geodb-serve-config` caps the Spaces the store can hold; at the cap, founding refuses and the

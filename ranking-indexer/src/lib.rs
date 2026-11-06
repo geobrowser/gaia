@@ -14,6 +14,7 @@ pub mod detect;
 pub mod eligibility;
 pub mod error;
 pub mod feed_signals;
+pub mod feed_signals_mirror;
 pub mod membership;
 pub mod metrics;
 pub mod models;
