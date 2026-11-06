@@ -63,7 +63,7 @@ import {GeoDbError, MAX_LINE_SPACES} from "../geodb/client"
 import {observeGeoDbRead} from "../geodb/metrics"
 import {askGeoDb, askGeoDbSpaces, type CardDeps, type CardLogger} from "../geodb/service"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
-import {analyzeBacklinks, runBacklinks} from "./backlinksShadow"
+import {analyzeBacklinks, type BacklinkRowsPlan, readBacklinkFilter, runBacklinks} from "./backlinksShadow"
 import type {FieldShadow} from "./gateway"
 import {analyzeLightEntity, type LightOutcome, noteUnsupported, runLight} from "./lightShadow"
 import {
@@ -183,6 +183,8 @@ export type EntityCardPlan = {
 	allRelations: {key: string; first: number; spaceKey: string | null} | null
 	values: ListPlan
 	relations: ListPlan
+	/** Light selections only: the `backlinks` / `backlinksList` fields whose rows geo-db settles (`backlink_rows` otherwise). */
+	backlinkRows?: BacklinkRowsPlan[]
 }
 
 export type EntityPlan = EntityCardPlan & {
@@ -455,15 +457,16 @@ export function parseOperation(
 
 /**
  * `backlinks(filter) { totalCount nodes { .. } }` or `backlinksList(first, filter) { .. }`: the relations that point at
- * the entity. A card holds an entity's own relations only, so the rows are never compared (`backlink_rows`), but the
- * selection is read the way a relations list's is, so an unknown column or argument is still refused.
+ * the entity. The selection is read the way a relations list's is, so an unknown column or argument is still refused.
+ * Rows that name their referrer (`fromEntityId` or `fromEntity { id }`) are planned for an exact comparison with
+ * geo-db's backlinks (`BacklinkRowsPlan`: Space, relation type and referrer); any other is counted `backlink_rows`.
  */
 function planBacklinkRows(
 	field: FieldNode,
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
-): void {
+): BacklinkRowsPlan | null {
 	const args = argsOf(field, resolved)
 	for (const arg of Object.keys(args)) if (!["first", "filter", "offset"].includes(arg)) refuse("args")
 	if (args.filter !== undefined && args.filter !== null && !asRecord(args.filter)) refuse("filter")
@@ -472,21 +475,56 @@ function planBacklinkRows(
 		objects: RELATION_OBJECTS,
 		ignored: [...RELATION_IGNORED, "typeId", "toEntityId"],
 	}
-	const rowsOf = (set: SelectionSetNode) => planColumns(set, fragments, spec, uncompared)
-	if (field.name.value === "backlinksList") rowsOf(field.selectionSet as SelectionSetNode)
+	const rowsOf = (set: SelectionSetNode) => {
+		planColumns(set, fragments, spec, uncompared)
+		return set
+	}
+	let rowSet: SelectionSetNode
+	let nodesKey: string | null = null
+	if (field.name.value === "backlinksList") rowSet = rowsOf(field.selectionSet as SelectionSetNode)
 	else {
-		let nodes = false
+		let nodes: SelectionSetNode | null = null
 		for (const child of fieldsOf(field.selectionSet as SelectionSetNode, fragments)) {
 			const name = child.name.value
 			if (name === "__typename" || (name === "totalCount" && isPlainField(child))) continue
 			if (name === "pageInfo" && child.selectionSet && !child.arguments?.length) continue
 			if (name === "nodes" && child.selectionSet && !child.arguments?.length && !nodes) {
-				nodes = true
-				rowsOf(child.selectionSet)
+				nodes = rowsOf(child.selectionSet)
+				nodesKey = responseKeyOf(child)
 			} else refuse("selection")
 		}
+		// `backlinks { totalCount }` alone has no rows to compare (its count is the caller's).
+		if (!nodes) {
+			uncompared.add("backlink_rows")
+			return null
+		}
+		rowSet = nodes
 	}
-	uncompared.add("backlink_rows")
+	// Where the row's Space, relation type and referrer sit.
+	let space: string[] | null = null
+	let type: string[] | null = null
+	let from: string[] | null = null
+	for (const column of fieldsOf(rowSet, fragments)) {
+		const name = column.name.value
+		const key = responseKeyOf(column)
+		if (name === "spaceId" && isPlainField(column)) space ??= [key]
+		else if (name === "typeId" && isPlainField(column)) type ??= [key]
+		else if (name === "fromEntityId" && isPlainField(column)) from ??= [key]
+		else if ((name === "type" || name === "fromEntity") && column.selectionSet && !column.arguments?.length) {
+			const id = fieldsOf(column.selectionSet, fragments).find((f) => f.name.value === "id" && isPlainField(f))
+			if (!id) continue
+			if (name === "type") type ??= [key, responseKeyOf(id)]
+			else from ??= [key, responseKeyOf(id)]
+		}
+	}
+	if (!from) {
+		uncompared.add("backlink_rows")
+		return null
+	}
+	const filter = readBacklinkFilter(args.filter)
+	const first = typeof args.first === "number" && Number.isInteger(args.first) && args.first > 0 ? args.first : 0
+	const offset = typeof args.offset === "number" && Number.isInteger(args.offset) && args.offset > 0 ? args.offset : 0
+	return {key: responseKeyOf(field), nodesKey, space, type, from, first, offset, filter}
 }
 
 /**
@@ -514,6 +552,7 @@ export function planEntitySelection(
 	let allValues: EntityPlan["allValues"] = null
 	let allRelations: EntityPlan["allRelations"] = null
 	let backlinkRows = false
+	const backlinkPlans: BacklinkRowsPlan[] = []
 	const seen = new Set<string>()
 	const valueSpec = {
 		columns: ["propertyId", ...VALUE_COLUMNS],
@@ -591,7 +630,8 @@ export function planEntitySelection(
 			allRelations = {key: all.key, first: all.first, spaceKey: all.columns.spaceId ?? null}
 			uncompared.add("membership_only")
 		} else if (light && (fieldName === "backlinks" || fieldName === "backlinksList") && field.selectionSet) {
-			planBacklinkRows(field, fragments, resolved, uncompared)
+			const planned = planBacklinkRows(field, fragments, resolved, uncompared)
+			if (planned) backlinkPlans.push(planned)
 			backlinkRows = true
 		} else return refuse("selection")
 	}
@@ -611,6 +651,7 @@ export function planEntitySelection(
 			allRelations: null,
 			values: NO_LIST,
 			relations: NO_LIST,
+			backlinkRows: backlinkPlans,
 		}
 	}
 	// A card does not say which rows are values and which relations, so it can settle both lists or neither.

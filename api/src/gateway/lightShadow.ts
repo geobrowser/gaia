@@ -35,6 +35,7 @@ import {
 	type ValueRow,
 } from "../geodb/card"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
+import {type BacklinkRowsPlan, compareBacklinks, extractBacklinkRows} from "./backlinksShadow"
 import {
 	argsOf,
 	asRecord,
@@ -937,6 +938,40 @@ async function checkAbsent(deps: EntityShadowDeps, plan: LightEntityPlan, label:
 	}
 }
 
+/**
+ * One `backlinks` / `backlinksList` field of an entity of the answer, held to geo-db's backlinks of that entity
+ * (Space, relation type and referrer, as the selection names them). `depth` is the list's collection depth, which
+ * sets PostGraphile's default page when the field has no `first`.
+ */
+async function checkBacklinkRows(
+	deps: EntityShadowDeps,
+	rows: BacklinkRowsPlan,
+	node: unknown,
+	entityId: string,
+	depth: number,
+	label: string,
+): Promise<LightOutcome> {
+	if (!deps.backlinks || !deps.geoDb.readBacklinks) return {result: "unsupported", reason: "selection"}
+	const entity = asRecord(node)
+	const postgres = entity ? extractBacklinkRows(entity, rows, depth) : null
+	if (!postgres) return {result: "skip"}
+	const {spaces, types, exact} = rows.filter
+	return compareBacklinks(
+		deps,
+		{
+			entityId,
+			spaces,
+			types,
+			exactFilter: exact,
+			bySpace: rows.space !== null || spaces?.length === 1,
+			byType: rows.type !== null,
+			postgres,
+			uncompared: [],
+		},
+		label,
+	)
+}
+
 /** Runs the comparison of a light plan over PostGraphile's parsed answer. Never throws. */
 export async function runLight(
 	deps: EntityShadowDeps,
@@ -979,6 +1014,7 @@ export async function runLight(
 	const page =
 		plan.kind === "entities" ? await checkOrderedPage(deps, plan, pageIds, label) : ({result: "skip"} as const)
 	const checks: {id: string; check: LightCheck}[] = []
+	const backlinkUncompared = new Set<UncomparedReason>()
 	for (const {id, node} of entities) {
 		const light = lightCardFromEntity(node, plan)
 		if (!light) return {result: "skip"}
@@ -987,6 +1023,13 @@ export async function runLight(
 				? {claims: plan.claims, spaceIds: plan.spaceIds, everySpace: plan.everySpace}
 				: {everySpace: plan.everySpace}
 		checks.push({id, check: await checkLight(deps, plan, light, id, label, options)})
+		for (const rows of plan.card.backlinkRows ?? []) {
+			const outcome = await checkBacklinkRows(deps, rows, node, id, plan.kind === "entity" ? 0 : 1, label)
+			if (outcome.result === "match") for (const r of outcome.uncompared) backlinkUncompared.add(r)
+			else if (outcome.result === "mismatch" || outcome.result === "failed") checks.push({id, check: outcome})
+			// A question geo-db cannot be asked (flag off, unloaded Space, no budget) leaves the rows uncompared.
+			else backlinkUncompared.add("backlink_rows")
+		}
 	}
 	const mismatched = checks.filter((c) => c.check.result === "mismatch")
 	if (mismatched.length > 0 || filterBreach || page.result === "mismatch") {
@@ -1016,5 +1059,6 @@ export async function runLight(
 		}
 	}
 	for (const {check} of checks) if (check.result === "match") for (const r of check.uncompared) uncompared.add(r)
+	for (const r of backlinkUncompared) uncompared.add(r)
 	return {result: "match", uncompared: [...uncompared], detail: {entities: checks.length}}
 }

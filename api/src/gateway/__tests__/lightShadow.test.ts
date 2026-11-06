@@ -1434,11 +1434,13 @@ describe("entities selections with nested entities and backlinks (live refusals,
 		}
 	})
 
-	it("plans backlink rows, never comparing them", () => {
+	it("plans backlink rows that name their referrer for comparison, the rest as uncompared", () => {
 		const a = analyze(wrap(`${relations} ${backlinks}`))
 		expect(a.ok).toBe(true)
 		if (a.ok) {
-			expect(a.plan.uncompared).toContain("backlink_rows")
+			// `toEntity: fromEntity { id }` names the referrer: compared (backlinkRows.test.ts), not counted.
+			expect(a.plan.card.backlinkRows).toHaveLength(1)
+			expect(a.plan.uncompared).not.toContain("backlink_rows")
 			// The rows are not lists of the card: only its own values and relations are compared.
 			expect(a.plan.lists).toHaveLength(2)
 		}
@@ -1447,7 +1449,11 @@ describe("entities selections with nested entities and backlinks (live refusals,
 				`backlinksList(first: 50, filter: {typeId: {is: "${TYPE}"}}) { fromEntity { id comments: backlinks { totalCount } } }`,
 			),
 		)
-		expect(list.ok && list.plan.uncompared).toContain("backlink_rows")
+		expect(list.ok && list.plan.card.backlinkRows).toHaveLength(1)
+		// Rows that do not name a referrer cannot be compared.
+		const bare = analyze(wrap("backlinksList(first: 50) { typeId spaceId }"))
+		expect(bare.ok && bare.plan.uncompared).toContain("backlink_rows")
+		expect(bare.ok && bare.plan.card.backlinkRows).toHaveLength(0)
 	})
 
 	it("still refuses what a backlink selection cannot say", () => {
