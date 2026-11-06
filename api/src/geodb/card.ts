@@ -299,8 +299,22 @@ export function entityTimesOf(rows: GeoCardRow[]): {createdAt: number | null; up
 	return {createdAt, updatedAt}
 }
 
+export type DiffOptions = {
+	/**
+	 * Forgive an empty text on either side: a Postgres "" geo-db lacks, a geo-db "" Postgres lacks (one both hold still
+	 * matches). For the reader-facing shadows, to whom an empty text is no text. A replication gap check leaves it off:
+	 * an empty value missing from geo-db is a gap.
+	 */
+	skipEmptyText?: boolean
+}
+
 /** Match Postgres statements against geo-db rows as multisets and return what is unmatched on each side. */
-export function diffCards(postgres: {statements: CardStatement[]; skipped: number}, geo: GeoCardRow[]): CardDiff {
+export function diffCards(
+	postgres: {statements: CardStatement[]; skipped: number},
+	geo: GeoCardRow[],
+	options: DiffOptions = {},
+): CardDiff {
+	const skipEmptyText = options.skipEmptyText === true
 	// Derived statements are skipped, not compared: the backfill never writes them.
 	const comparable = postgres.statements.filter((s) => !DERIVED_PROPERTIES.has(s.prop))
 	const derived = postgres.statements.length - comparable.length
@@ -322,12 +336,14 @@ export function diffCards(postgres: {statements: CardStatement[]; skipped: numbe
 			(r) => !r.used && r.prop === s.prop && (s.kind === "num" ? normNumber(r.raw) === s.norm : r.raw === s.norm),
 		)
 		if (hit) hit.used = true
-		else if (s.kind === "text" && s.norm === "") emptyText++
+		else if (skipEmptyText && s.kind === "text" && s.norm === "") emptyText++
 		else onlyPostgres.push(s)
 	}
 	// A Postgres row that could not be mapped may be a point the caller could not read (the gateway shadow), so a
 	// point-shaped geo-db row left over is not a gap while one was skipped.
-	const unmatched = pool.filter((r) => !r.used && !(postgres.skipped > 0 && POINT_SHAPED.test(r.raw)) && r.raw !== "")
+	const unmatched = pool.filter(
+		(r) => !r.used && !(postgres.skipped > 0 && POINT_SHAPED.test(r.raw)) && !(skipEmptyText && r.raw === ""),
+	)
 	return {
 		onlyPostgres,
 		onlyGeoDb: unmatched.map(({prop, raw}) => ({prop, raw})),

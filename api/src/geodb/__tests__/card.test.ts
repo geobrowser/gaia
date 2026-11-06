@@ -134,18 +134,24 @@ describe("diffCards", () => {
 		expect(diffCards(twice, [{prop: PROP, raw: "x"}]).onlyPostgres).toHaveLength(1)
 	})
 
-	it("skips a Postgres empty text geo-db lacks, and still matches one it holds", () => {
+	it("with skipEmptyText skips a Postgres empty text geo-db lacks, and still matches one it holds", () => {
 		const empty = statementsFromPostgres([value({text: ""})], [])
-		const lacking = diffCards(empty, [])
+		const lacking = diffCards(empty, [], {skipEmptyText: true})
 		expect(isEmptyDiff(lacking)).toBe(true)
 		expect(lacking.skipped).toBe(1)
+		expect(isEmptyDiff(diffCards(empty, [{prop: PROP, raw: ""}], {skipEmptyText: true}))).toBe(true)
+		// Strict (the default): the same missing "" is a gap, and a held one still matches.
+		expect(diffCards(empty, []).onlyPostgres).toEqual([{prop: PROP, kind: "text", norm: ""}])
 		expect(isEmptyDiff(diffCards(empty, [{prop: PROP, raw: ""}]))).toBe(true)
 		// Only an empty text is forgiven: a non-empty one geo-db lacks is still a gap.
 		expect(diffCards(statementsFromPostgres([value({text: "x"})], []), []).onlyPostgres).toHaveLength(1)
 	})
 
-	it("does not count a geo-db empty text Postgres lacks as extra", () => {
-		expect(isEmptyDiff(diffCards({statements: [], skipped: 0}, [{prop: PROP, raw: ""}]))).toBe(true)
+	it("with skipEmptyText does not count a geo-db empty text Postgres lacks as extra; strict does", () => {
+		expect(
+			isEmptyDiff(diffCards({statements: [], skipped: 0}, [{prop: PROP, raw: ""}], {skipEmptyText: true})),
+		).toBe(true)
+		expect(diffCards({statements: [], skipped: 0}, [{prop: PROP, raw: ""}]).onlyGeoDb).toHaveLength(1)
 	})
 })
 
