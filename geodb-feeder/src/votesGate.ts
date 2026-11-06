@@ -30,7 +30,7 @@ export type GateResult = {
 }
 
 /** key -> record, plus the canonical compared fields for the checksum. */
-type Side = Map<string, Record<string, string>>
+export type Side = Map<string, Record<string, string>>
 
 const sha = (lines: string[]) => createHash("sha256").update(lines.sort().join("\n")).digest("hex")
 
@@ -49,7 +49,7 @@ const instantSeconds = (v: string) => {
 	return m ? m[1] : v
 }
 
-function compare(family: string, pg: Side, geo: Side, keyFields: string[], mutable: string[], cols: Cols, refCols: string[]): GateResult {
+export function compare(family: string, pg: Side, geo: Side, keyFields: string[], mutable: string[], cols: Cols, refCols: string[]): GateResult {
 	const geoOnly: string[] = []
 	const pgOnly: string[] = []
 	const valueDiffs: GateResult["valueDiffs"] = []

@@ -46,6 +46,23 @@ describe("record columns", () => {
 				createdAt: "98603a29c209486b89a63ac207cf9e2f",
 				createdAtBlock: "35243b2b183648059546576e381806c1",
 			},
+			proposalAction: {
+				proposal: "235abc0092a248d69e2dbb5c71fd0209",
+				block: "a93c92d0a2f442e9852057064567e012",
+				index: "81b028b2bb7f4f9e85e5689a2f1826af",
+				actionType: "002e8db762e0401386b53478b329013e",
+				target: "afc49d0ddf9c4affaae9ff963338d7c4",
+				contentUri: "a267fc081a4c457abfda85b8fc024d92",
+				metadata: "5ee665ce733b46ffa8d6697c1b2cedcb",
+				contentId: "268e38bcf4d247138d7dbd154873391c",
+				quorum: "83b46fb278414103866bcba416f7c2d2",
+				duration: "bbf27d7c47634001b35d46ace45371ff",
+				partial: "c13d280d658247d0859a3c0ce0367da4",
+				universal: "603b264f392c4aa5be3d9819bc04b106",
+				flat: "d0d34304079149e78157e70d6b3722d4",
+				disableFastPath: "4a13aa7d7f55476fb307b2d19b14dfe7",
+				grace: "401c3bec5a414703a5b6b51ce8e18e13",
+			},
 		})
 	})
 	it("are distinct v4s, distinct from every kind", () => {

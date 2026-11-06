@@ -20,6 +20,8 @@ import {keyedCompareTarget, keyedMembershipEnabled, keyedOffsetsDir} from "./mem
 import {ProposalOffsets} from "./proposals.js"
 import {startProposalConsumer} from "./proposalsConsumer.js"
 import {startOptionalConsumer} from "./optionalConsumer.js"
+import {startProposalActionsConsumer} from "./proposalActionsConsumer.js"
+import {proposalActionsKeyedEnabled, proposalActionsOffsetsDir} from "./proposalActionsKeyed.js"
 import {startProposalVotesConsumer} from "./proposalVotesConsumer.js"
 import {proposalVotesKeyedEnabled, proposalVotesOffsetsDir} from "./proposalVotesKeyed.js"
 import {startVotesConsumer} from "./votesConsumer.js"
@@ -311,6 +313,29 @@ async function main(config: Config): Promise<void> {
 		)
 	}
 
+	// Keyed proposal actions (proposalActionsKeyed.ts): GEODB_PROPOSAL_ACTIONS with GEODB_RECORD_KEYS, after their backfill.
+	let proposalActions: Awaited<ReturnType<typeof startProposalActionsConsumer>> | null = null
+	if (config.proposalActions.enabled && !config.recordKeys)
+		log("warn", "GEODB_PROPOSAL_ACTIONS is set without GEODB_RECORD_KEYS; proposal actions consumer not started")
+	if (proposalActionsKeyedEnabled(config)) {
+		proposalActions = await startOptionalConsumer("proposal_actions", metrics.consumerStartFailed, () =>
+			startProposalActionsConsumer({
+				kafka,
+				config,
+				abort,
+				deps: {
+					...spaceDeps,
+					lock,
+					beat: async () => {},
+					allowPut: true,
+					systemSpaces,
+					publishSystem: (t: string) => systemPublisher.publish(t),
+					offsets: new ProposalOffsets(proposalActionsOffsetsDir(config.dataDir)),
+				},
+			}),
+		)
+	}
+
 	let spaceEntities: Awaited<ReturnType<typeof startSpaceEntityConsumer>> | null = null
 	if (config.spaceEntities.enabled) {
 		try {
@@ -353,6 +378,12 @@ async function main(config: Config): Promise<void> {
 		await pv.poll()
 	}
 
+	if (proposalActions) {
+		const pa = proposalActions
+		setInterval(() => void pa.poll(), config.lagPollMs).unref()
+		await pa.poll()
+	}
+
 	if (spaceEntities) {
 		const s = spaceEntities
 		setInterval(() => void s.poll(), config.lagPollMs).unref()
@@ -370,6 +401,7 @@ async function main(config: Config): Promise<void> {
 		await proposals?.stop()
 		await votes?.stop()
 		await proposalVotes?.stop()
+		await proposalActions?.stop()
 		await spaceEntities?.stop()
 		publisher.stop()
 		systemPublisher.stop()

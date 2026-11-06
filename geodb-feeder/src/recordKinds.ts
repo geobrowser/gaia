@@ -81,4 +81,36 @@ export const RECORD_COLUMNS = {
 		/** Mutable: number, `created_at_block`. */
 		createdAtBlock: "35243b2b183648059546576e381806c1",
 	},
+	proposalAction: {
+		/** Key: reference to the proposal's entity, `cid("entity", proposal_id)`. */
+		proposal: "235abc0092a248d69e2dbb5c71fd0209",
+		/** Key: number, the block of the event that wrote this action's version (`proposal_versions.version_created_at_block`). */
+		block: "a93c92d0a2f442e9852057064567e012",
+		/** Key: number, `index`, the action's position in its version's action list. */
+		index: "81b028b2bb7f4f9e85e5689a2f1826af",
+		/** Mutable: text, `action_type` (`AddMember` ... `Unknown`, exactly as Postgres's enum prints). */
+		actionType: "002e8db762e0401386b53478b329013e",
+		/** Mutable: reference to `cid("entity", target_id)`, when the action has a target. */
+		target: "afc49d0ddf9c4affaae9ff963338d7c4",
+		/** Mutable: text, `content_uri` (Publish). */
+		contentUri: "a267fc081a4c457abfda85b8fc024d92",
+		/** Mutable: text, `metadata` as lowercase hex (Publish, when non-empty). */
+		metadata: "5ee665ce733b46ffa8d6697c1b2cedcb",
+		/** Mutable: text, `content_id` as lowercase hex (Flag, Unflag). */
+		contentId: "268e38bcf4d247138d7dbd154873391c",
+		/** Mutable: number, `quorum` (UpdateVotingSettings). */
+		quorum: "83b46fb278414103866bcba416f7c2d2",
+		/** Mutable: number, `duration` (UpdateVotingSettings). */
+		duration: "bbf27d7c47634001b35d46ace45371ff",
+		/** Mutable: number, `partial_percentage_support_threshold` (UpdateVotingSettings; legacy `slow_threshold` equals it). */
+		partial: "c13d280d658247d0859a3c0ce0367da4",
+		/** Mutable: number, `universal_percentage_support_threshold` (UpdateVotingSettings). */
+		universal: "603b264f392c4aa5be3d9819bc04b106",
+		/** Mutable: number, `flat_support_threshold` (UpdateVotingSettings; legacy `fast_threshold` equals it). */
+		flat: "d0d34304079149e78157e70d6b3722d4",
+		/** Mutable: boolean, `disable_fast_path_access_for_new_members` (UpdateVotingSettings). */
+		disableFastPath: "4a13aa7d7f55476fb307b2d19b14dfe7",
+		/** Mutable: number, `execution_grace_period` (UpdateVotingSettings). */
+		grace: "401c3bec5a414703a5b6b51ce8e18e13",
+	},
 } as const satisfies Record<string, Record<string, string>>
