@@ -18,6 +18,7 @@ mod s3;
 mod sigv4;
 
 pub mod ipfs_object;
+pub mod json;
 
 pub use fs::FsBlobStore;
 pub use mirror::{Mirror, MirrorFlags, ShadowOutcome, digest};
