@@ -10,6 +10,7 @@ import {renderPaginationDefaultMetrics} from "./kg/paginationCapPlugin"
 import {getGraphqlPoolPressure, getGraphqlPoolStats} from "./kg/postgraphile"
 import {renderResponseByteMetrics} from "./kg/responseBudgetPlugin"
 import {renderSecuritySignalsPrometheus} from "./kg/securitySignalsPlugin"
+import {renderGovernanceMetrics} from "./proposals/governance/metrics"
 import {db, getPoolStats} from "./services/storage/storage"
 import {log} from "./services/telemetry"
 
@@ -140,6 +141,8 @@ function renderPrometheusMetrics(): string {
 		renderGeoDbCardMetrics(),
 		// GraphQL gateway shadow comparisons (entity) — see gateway/metrics.ts.
 		renderGatewayMetrics(),
+		// Proposal status from geo-db records against the served status (GEODB_GOVERNANCE_SHADOW) — see proposals/governance/metrics.ts.
+		renderGovernanceMetrics(),
 		// GraphQL root fields served from geo-db (mode on): served/fallback by field and reason — see gateway/serveMetrics.ts.
 		renderServeMetrics(),
 		// The reverse id map the served fields read: ids by result (miss = not served) and Postgres reads — see geodb/idMap.ts.

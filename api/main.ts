@@ -23,6 +23,8 @@ import {createRateLimiter} from "./src/middleware/rateLimit"
 import {canonicalRequestLogging, isClientAbortError, requestId} from "./src/middleware/requestLogging"
 import {createProfileRouter} from "./src/profile"
 import {createProposalsRouter} from "./src/proposals"
+import {createGovernanceShadow, readGovernanceShadowConfig} from "./src/proposals/governance/shadow"
+import {createSystemSpaceLookup} from "./src/proposals/governance/systemSpaces"
 import {createSearchRouter} from "./src/search"
 import {isPoolConnectTimeout} from "./src/services/dbFailures"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
@@ -181,7 +183,18 @@ app.route("/profile", createProfileRouter(db, runtime))
 log.info("Profile routes enabled")
 
 // Mount proposals router
-app.route("/proposals", createProposalsRouter(db, runtime))
+// GEODB_GOVERNANCE_SHADOW (off by default) also reads the keyed governance records from geo-db after serving a proposal
+// and counts whether the status they give equals the served one (gaia_api_governance_shadow_total). Never changes a response.
+const governanceShadowConfig = readGovernanceShadowConfig(process.env)
+const governanceShadow = governanceShadowConfig.enabled
+	? createGovernanceShadow({
+			config: governanceShadowConfig,
+			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+			log,
+		})
+	: null
+app.route("/proposals", createProposalsRouter(db, runtime, governanceShadow))
 log.info("Proposals routes enabled")
 
 // Private server-to-server routes (GEO-3140 For you, GEO-3224 pair fit). Mounted only when

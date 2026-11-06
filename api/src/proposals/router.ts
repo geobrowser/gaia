@@ -11,6 +11,7 @@ import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
+import type {GovernanceShadow} from "./governance/shadow"
 import {
 	getProposalWithVotes,
 	hasActiveEditorProposal,
@@ -360,7 +361,7 @@ function parseOrderDirection(
 /**
  * Create the proposals router.
  */
-export function createProposalsRouter(db: Database, runtime: AppRuntime) {
+export function createProposalsRouter(db: Database, runtime: AppRuntime, governanceShadow?: GovernanceShadow | null) {
 	const router = new Hono<AppEnv>()
 
 	// GET /proposals/:id/status - Single proposal status
@@ -436,6 +437,8 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 				}
 
 				const nowSeconds = getCurrentTimeSeconds()
+				// Flag-off shadow (GEODB_GOVERNANCE_SHADOW): compares in the background, never touches the response.
+				governanceShadow?.detail(proposal, nowSeconds)
 				return buildProposalResponse(proposal, nowSeconds, voterId)
 			}).pipe(
 				Effect.tapError((error) => {
@@ -630,6 +633,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 				})
 
 				const nowSeconds = getCurrentTimeSeconds()
+				governanceShadow?.list(proposals, nowSeconds)
 				const proposalResponses = proposals.map((p) => buildListItemResponse(p, nowSeconds))
 
 				return {
