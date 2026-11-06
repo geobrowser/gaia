@@ -105,7 +105,10 @@ export function createMetrics() {
 		proposalActionEvents: counter("geodb_feeder_proposal_action_events_total", "space.governance messages handled by the proposal-actions consumer, by outcome (applied, ignored, dead_letter). ignored = not PROPOSAL_CREATED or PROPOSAL_UPDATED, or no actions."),
 		proposalActionsLag: gauge("geodb_feeder_proposal_actions_consumer_lag", "space.governance messages between the topic head and the proposal-actions consumer's last applied offset, by partition."),
 		proposalActionsUp: gauge("geodb_feeder_proposal_actions_consumer_running", "1 while the space.governance proposal-actions consumer is running."),
-		consumerStartFailed: gauge("geodb_feeder_consumer_start_failed", "1 when an optional consumer failed to start at boot, by consumer (membership_keyed, votes, proposal_votes, proposal_actions); 0 once it started. No series while none is enabled."),
+		subspaceEvents: counter("geodb_feeder_subspace_events_total", "space.trust.extensions messages handled by the subspaces consumer, by outcome (applied, ignored, dead_letter). ignored = not TRUST_EXTENSION, or no recognised variant."),
+		subspacesLag: gauge("geodb_feeder_subspaces_consumer_lag", "space.trust.extensions messages between the topic head and the subspaces consumer's last applied offset, by partition."),
+		subspacesUp: gauge("geodb_feeder_subspaces_consumer_running", "1 while the space.trust.extensions subspaces consumer is running."),
+		consumerStartFailed: gauge("geodb_feeder_consumer_start_failed", "1 when an optional consumer failed to start at boot, by consumer (membership_keyed, votes, proposal_votes, proposal_actions, subspaces); 0 once it started. No series while none is enabled."),
 		apply: new Histogram("geodb_feeder_apply_seconds", "Wall time of one geodb-client apply."),
 		freshness: new Histogram("geodb_feeder_edit_freshness_seconds", "Kafka message timestamp to applied in geo-db, edits consumer. Includes backlog catch-up.", FRESHNESS_BUCKETS),
 		proposalFreshness: new Histogram("geodb_feeder_proposal_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.governance consumer.", FRESHNESS_BUCKETS),
@@ -113,6 +116,7 @@ export function createMetrics() {
 		membershipFreshness: new Histogram("geodb_feeder_membership_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.membership consumer.", FRESHNESS_BUCKETS),
 		voteFreshness: new Histogram("geodb_feeder_vote_freshness_seconds", "Kafka message timestamp to applied in geo-db, curation.votes consumer.", FRESHNESS_BUCKETS),
 		proposalActionFreshness: new Histogram("geodb_feeder_proposal_action_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.governance proposal-actions consumer.", FRESHNESS_BUCKETS),
+		subspaceFreshness: new Histogram("geodb_feeder_subspace_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.trust.extensions subspaces consumer.", FRESHNESS_BUCKETS),
 		proposalVoteFreshness: new Histogram("geodb_feeder_proposal_vote_freshness_seconds", "Kafka message timestamp to applied in geo-db, space.governance proposal-votes consumer.", FRESHNESS_BUCKETS),
 
 	}
