@@ -31,4 +31,37 @@ describe("unsupported log", () => {
 		expect(fields.query).toContain("entities(filter:")
 		expect(JSON.stringify(fields)).not.toContain(UUID)
 	})
+
+	it("shows the inner keys of a nested filter in the shape, with no values", () => {
+		const log = {warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn()}
+		noteUnsupported(
+			{log} as never,
+			"entities",
+			"selection",
+			parse(
+				`{ entities(first: 5, filter: {and: [{relations: {some: {typeId: {is: "${UUID}"}, toEntityId: {is: "${UUID}"}}}}], typeIds: {anyEqualTo: "${UUID}"}}) { id } }`,
+			),
+			null,
+		)
+		const [, fields] = log.warn.mock.calls[0] ?? []
+		expect(fields.shape).toBe(
+			"args=filter,first;filter=and([relations(some(toEntityId(is),typeId(is)))]),typeIds(anyEqualTo)",
+		)
+		expect(JSON.stringify(fields)).not.toContain(UUID)
+	})
+
+	it("gives later shapes the label `other` once the per-process shape budget is spent", () => {
+		const log = {warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn()}
+		for (let i = 0; i < 400; i++)
+			noteUnsupported(
+				{log} as never,
+				"entities",
+				"selection",
+				parse(`{ entities(first: 1, filter: {k${i}: {is: "x"}}) { id } }`),
+				null,
+			)
+		const shapes = log.warn.mock.calls.map(([, f]) => f.shape)
+		expect(shapes.length).toBeLessThanOrEqual(200)
+		expect(new Set(shapes).size).toBeGreaterThan(1)
+	})
 })

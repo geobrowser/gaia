@@ -113,11 +113,16 @@ type LightList = {
 }
 
 const noted = new Set<string>()
+/** Deep enough to show the keys inside `and([relations(some(typeId(is),toEntityId(is)))])`. */
+const MAX_SHAPE_DEPTH = 6
+/** Distinct shapes given their own metric label per process; later new ones count as `other`. */
+const MAX_SHAPES = 150
+const shapesSeen = new Set<string>()
 const MAX_NOTED = 200
 
 /** A value's shape: an object's keys (sorted), each with its own shape; a list's distinct element shapes. No values. */
 function describeShape(value: unknown, depth: number): string {
-	if (depth > 3) return "..."
+	if (depth > MAX_SHAPE_DEPTH) return "..."
 	if (Array.isArray(value)) {
 		const parts = [...new Set(value.map((v) => describeShape(v, depth + 1)).filter(Boolean))].sort()
 		return parts.length ? `[${parts.join("|")}]` : ""
@@ -150,7 +155,7 @@ export function shapeOfRoot(
 		const names = Object.keys(args).sort()
 		const filter = describeShape(args.filter, 0)
 		const shape = `args=${names.join(",")}${filter ? `;filter=${filter}` : ""}`
-		return shape.length > 200 ? "long" : shape
+		return shape.length > 300 ? "long" : shape
 	} catch {
 		return "unparsed"
 	}
@@ -186,7 +191,12 @@ export function noteUnsupported(
 	variables: Record<string, unknown> = {},
 ): void {
 	try {
-		const shape = shapeOfRoot(document, operationName, variables, field)
+		let shape = shapeOfRoot(document, operationName, variables, field)
+		// Bound the metric's label cardinality: a shape seen before is free, a new one needs room.
+		if (!shapesSeen.has(shape)) {
+			if (shapesSeen.size >= MAX_SHAPES) shape = "other"
+			else shapesSeen.add(shape)
+		}
 		recordGatewayUnsupportedShape(field, reason, shape)
 		// The shape is in the key so anonymous operations (no name) of different shapes are each logged once.
 		const key = `${field}\t${reason}\t${operationName ?? ""}\t${shape}`
@@ -530,39 +540,59 @@ function readFilter(
 	const object = filter === undefined || filter === null ? {} : asRecord(filter)
 	if (!object) return refuse("filter")
 	uncompared.add("filter_completeness")
-	for (const [key, clause] of Object.entries(object)) {
-		const c = asRecord(clause)
-		if (key === "typeIds" && c && typeof c.anyEqualTo === "string" && isValidUuid(c.anyEqualTo)) {
-			claims.push({kind: "type", typeIds: [normalizeUuid(c.anyEqualTo)]})
-		} else if (
-			key === "id" &&
-			c &&
-			Array.isArray(c.in) &&
-			c.in.every((id) => typeof id === "string" && isValidUuid(id))
-		) {
-			ids = (c.in as string[]).map((id) => normalizeUuid(id))
-		} else if (key === "relations" && c) {
-			const some = asRecord(c.some)
-			const type = asRecord(some?.typeId)
-			const to = asRecord(some?.toEntityId)
-			if (
-				some &&
-				Object.keys(some).length === 2 &&
-				typeof type?.is === "string" &&
-				isValidUuid(type.is) &&
-				typeof to?.is === "string" &&
-				isValidUuid(to.is)
-			)
-				claims.push({kind: "edge", typeId: normalizeUuid(type.is), toEntityId: normalizeUuid(to.is)})
-			else {
-				uncompared.add("filter_completeness")
-				exact = false
-			}
-		} else {
-			uncompared.add("filter_completeness")
-			exact = false
+	const intersect = (listed: string[]) => {
+		ids = ids ? ids.filter((id) => listed.includes(id)) : listed
+	}
+	const uuids = (list: unknown[] | null): string[] | null =>
+		list?.every((id) => typeof id === "string" && isValidUuid(id))
+			? (list as string[]).map((id) => normalizeUuid(id))
+			: null
+	// The clauses of one filter object. Its keys are ANDed, and so are the elements of an `and` list, so a clause read
+	// out of either holds for every returned row. (`or` and `not` are not descended into: they narrow nothing alone.)
+	const read = (node: Record<string, unknown>, depth: number) => {
+		for (const [key, clause] of Object.entries(node)) {
+			const c = asRecord(clause)
+			const single = c && Object.keys(c).length === 1 ? c : null
+			if (key === "and" && Array.isArray(clause) && depth < 4) {
+				for (const element of clause) {
+					const inner = asRecord(element)
+					if (inner) read(inner, depth + 1)
+					else exact = false
+				}
+			} else if (key === "typeIds" && single) {
+				const listed = uuids(
+					typeof single.anyEqualTo === "string"
+						? [single.anyEqualTo]
+						: Array.isArray(single.overlaps) && single.overlaps.length > 0
+							? single.overlaps
+							: null,
+				)
+				if (listed) claims.push({kind: "type", typeIds: [...new Set(listed)]})
+				else exact = false
+			} else if (key === "id" && single) {
+				const listed = uuids(
+					typeof single.is === "string" ? [single.is] : Array.isArray(single.in) ? single.in : null,
+				)
+				if (listed) intersect(listed)
+				else exact = false
+			} else if (key === "relations" && single) {
+				const some = asRecord(single.some)
+				const type = asRecord(some?.typeId)
+				const to = asRecord(some?.toEntityId)
+				if (
+					some &&
+					Object.keys(some).length === 2 &&
+					typeof type?.is === "string" &&
+					isValidUuid(type.is) &&
+					typeof to?.is === "string" &&
+					isValidUuid(to.is)
+				)
+					claims.push({kind: "edge", typeId: normalizeUuid(type.is), toEntityId: normalizeUuid(to.is)})
+				else exact = false
+			} else exact = false
 		}
 	}
+	read(object, 0)
 	return {claims, ids, exact}
 }
 

@@ -1690,3 +1690,73 @@ describe("selections refused as `selection` on the live mix (2026-11-06)", () =>
 		})
 	})
 })
+
+describe("entities filters read through `and`, `id: {is}` and `overlaps` (2026-11-06)", () => {
+	const A = "11111111-1111-4111-8111-111111111111"
+	const B = "22222222-2222-4222-8222-222222222222"
+	const C = "33333333-3333-4333-8333-333333333333"
+	const plan = (args: string) => {
+		const a = analyzeLightEntities(parse(`{ entities(${args}) { id name } }`), null, {})
+		if (!a.ok) throw new Error(`refused: ${a.reason}`)
+		return a.plan
+	}
+	const id = (u: string) => u.replaceAll("-", "")
+
+	it("reads a type claim and an edge claim out of an `and` list, and stays exact", () => {
+		const p = plan(
+			`first: 20, filter: {and: [{relations: {some: {typeId: {is: "${A}"}, toEntityId: {is: "${B}"}}}}], typeIds: {anyEqualTo: "${C}"}}`,
+		)
+		expect(p.claims).toEqual([
+			{kind: "edge", typeId: id(A), toEntityId: id(B)},
+			{kind: "type", typeIds: [id(C)]},
+		])
+		expect(p.exactFilter).toBe(true)
+	})
+
+	it("reads several edge claims, and `typeIds: {overlaps}` as a type claim", () => {
+		const p = plan(
+			`filter: {and: [{relations: {some: {typeId: {is: "${A}"}, toEntityId: {is: "${B}"}}}}, {typeIds: {overlaps: ["${B}", "${C}"]}}]}`,
+		)
+		expect(p.claims).toEqual([
+			{kind: "edge", typeId: id(A), toEntityId: id(B)},
+			{kind: "type", typeIds: [id(B), id(C)]},
+		])
+		expect(p.exactFilter).toBe(true)
+	})
+
+	it("leaves a clause it cannot read uncompared, without dropping the ones it can", () => {
+		const p = plan(
+			`filter: {and: [{typeIds: {anyEqualTo: "${C}"}}, {name: {includesInsensitive: "x"}}, {relations: {some: {typeId: {is: "${A}"}}}}]}`,
+		)
+		expect(p.claims).toEqual([{kind: "type", typeIds: [id(C)]}])
+		expect(p.exactFilter).toBe(false)
+		expect(p.uncompared).toContain("filter_completeness")
+	})
+
+	it("does not read claims out of `or` or `not`", () => {
+		const p = plan(`filter: {or: [{typeIds: {anyEqualTo: "${C}"}}], not: {typeIds: {anyEqualTo: "${B}"}}}`)
+		expect(p.claims).toEqual([])
+		expect(p.exactFilter).toBe(false)
+	})
+
+	it("reads `id: {is}` as an id list, intersected with `id: {in}` across `and`", () => {
+		expect(plan(`filter: {id: {is: "${A}"}}`).ids).toEqual([id(A)])
+		expect(plan(`filter: {and: [{id: {in: ["${A}", "${B}"]}}, {id: {is: "${B}"}}]}`).ids).toEqual([id(B)])
+	})
+
+	it("combines an `id: {is}` filter with `in` root arguments", () => {
+		const a = analyzeLightEntities(
+			parse(
+				`{ entities(first: 5, filter: {id: {is: "${A}"}}, spaceIds: {in: ["${B}"]}, typeIds: {in: ["${C}"]}) { id name spaceIds } }`,
+			),
+			null,
+			{},
+		)
+		expect(a.ok).toBe(true)
+		if (a.ok) {
+			expect(a.plan.ids).toEqual([id(A)])
+			expect(a.plan.spaceIds).toEqual([id(B)])
+			expect(a.plan.claims).toEqual([{kind: "type", typeIds: [id(C)]}])
+		}
+	})
+})
