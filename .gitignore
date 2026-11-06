@@ -6,3 +6,7 @@ node_modules
 # bv (beads viewer) local config and caches
 .bv/
 .worktrees
+
+# Git worktree directories and links (never commit them)
+/gaia-w-*
+**/gaia-w-*
