@@ -27,6 +27,38 @@ spec:
               containerPort: 9464
               protocol: TCP
           env:
+            # Object-store home for atlas_checkpoints (zero-Postgres, plan 10.22 section 6). Both flags are "0": nothing
+            # touches the bucket until one is flipped to "1". Credentials come only from the geodb-blob-key Secret.
+            - name: ATLAS_CHECKPOINT_BLOB_WRITE_THROUGH
+              value: "0"
+            - name: ATLAS_CHECKPOINT_BLOB_SHADOW_READ
+              value: "0"
+            - name: BLOB_BACKEND
+              value: s3
+            - name: BLOB_S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: endpoint
+                  optional: true
+            - name: BLOB_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: bucket
+                  optional: true
+            - name: BLOB_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: access_key
+                  optional: true
+            - name: BLOB_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: secret_key
+                  optional: true
             # Publishes hermes_latest_processed_block{,_timestamp} so monitoring can
             # see how far behind the chain atlas is. Without this atlas was invisible:
             # it wedged for two days on a dropped Pinax stream and no alert could fire.

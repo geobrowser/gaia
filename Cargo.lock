@@ -790,6 +790,7 @@ name = "atlas"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blob-store",
  "criterion",
  "dotenvy",
  "hermes-instrumentation",
@@ -805,6 +806,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
 ]

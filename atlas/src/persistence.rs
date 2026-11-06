@@ -849,6 +849,62 @@ impl CheckpointManager {
 #[derive(Debug, Clone)]
 pub struct PostgresCheckpointStore {
     pool: PgPool,
+    /// Flag-off object-store copy (`ATLAS_CHECKPOINT_BLOB_WRITE_THROUGH`,
+    /// `ATLAS_CHECKPOINT_BLOB_SHADOW_READ`); Postgres stays the source.
+    blob: Option<std::sync::Arc<blob_store::Mirror>>,
+}
+
+/// Object key for one indexer's checkpoint: one object per indexer id.
+fn checkpoint_key(indexer_id: &str) -> String {
+    blob_store::object_key("atlas_checkpoints", indexer_id)
+}
+
+/// Canonical bytes of a checkpoint (sorted keys), so the Postgres row, whose `jsonb` column
+/// reorders keys, and the object compare equal.
+fn checkpoint_bytes(checkpoint: &Checkpoint) -> Result<Vec<u8>, CheckpointError> {
+    let value = serde_json::to_value(checkpoint)
+        .map_err(|err| CheckpointError::Serialization(format!("encode checkpoint: {err}")))?;
+    Ok(blob_store::json::canonical_bytes(&value))
+}
+
+/// Write the checkpoint object after the Postgres write succeeded. The object is replaced
+/// atomically (one PUT / rename). A `None` baseline keeps the stored one, mirroring the
+/// `COALESCE` in the SQL upsert. Never fails the save.
+async fn mirror_save(mirror: &blob_store::Mirror, checkpoint: &Checkpoint) {
+    if !mirror.flags().write_through {
+        return;
+    }
+    let key = checkpoint_key(&checkpoint.indexer_id);
+    let mut to_write = checkpoint.clone();
+    if to_write.emission_baseline_blob.is_none() {
+        match mirror.store().get(&key).await {
+            Ok(Some(prev)) => {
+                if let Ok(prev) = serde_json::from_slice::<Checkpoint>(&prev) {
+                    to_write.emission_baseline_blob = prev.emission_baseline_blob;
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                warn!(error = %err, "atlas checkpoint blob: could not read previous object");
+            }
+        }
+    }
+    match checkpoint_bytes(&to_write) {
+        Ok(bytes) => mirror.write_through(&key, &bytes, false).await,
+        Err(err) => warn!(error = %err, "atlas checkpoint blob: encode failed"),
+    }
+}
+
+/// Compare the object with the checkpoint Postgres returned. Metrics only.
+async fn mirror_shadow(mirror: &blob_store::Mirror, checkpoint: &Checkpoint) {
+    if !mirror.flags().shadow_read {
+        return;
+    }
+    if let Ok(bytes) = checkpoint_bytes(checkpoint) {
+        mirror
+            .shadow_read(&checkpoint_key(&checkpoint.indexer_id), &bytes)
+            .await;
+    }
 }
 
 impl PostgresCheckpointStore {
@@ -889,7 +945,11 @@ impl PostgresCheckpointStore {
             })
             .connect_lazy(database_url)
             .map_err(|err| CheckpointError::Io(format!("create postgres pool: {err}")))?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            blob: blob_store::Mirror::from_env("atlas_checkpoints", "ATLAS_CHECKPOINT")
+                .map(std::sync::Arc::new),
+        })
     }
 
     pub async fn load(&self, indexer_id: &str) -> Result<Option<Checkpoint>, CheckpointError> {
@@ -968,7 +1028,7 @@ impl PostgresCheckpointStore {
             ))
         })?;
 
-        Ok(Some(Checkpoint {
+        let checkpoint = Checkpoint {
             schema_version,
             indexer_id: row.try_get("indexer_id").map_err(|err| {
                 CheckpointError::Serialization(format!("decode indexer_id: {err}"))
@@ -990,7 +1050,11 @@ impl PostgresCheckpointStore {
                 CheckpointError::Serialization(format!("decode root_space_id: {err}"))
             })?,
             emission_baseline_blob,
-        }))
+        };
+        if let Some(mirror) = &self.blob {
+            mirror_shadow(mirror, &checkpoint).await;
+        }
+        Ok(Some(checkpoint))
     }
 
     pub async fn save(&self, checkpoint: &Checkpoint) -> Result<usize, CheckpointError> {
@@ -1072,6 +1136,10 @@ impl PostgresCheckpointStore {
                 "invalid snapshot_size_bytes value: {snapshot_size_bytes_i32}"
             ))
         })?;
+
+        if let Some(mirror) = &self.blob {
+            mirror_save(mirror, checkpoint).await;
+        }
 
         Ok(snapshot_size_bytes)
     }
@@ -1570,6 +1638,107 @@ mod tests {
             allow_fresh_start_on_invalid_checkpoint: true,
             store: None,
         }
+    }
+
+    fn fs_mirror(dir: &std::path::Path, flags: blob_store::MirrorFlags) -> blob_store::Mirror {
+        blob_store::Mirror::new(
+            "atlas_checkpoints",
+            std::sync::Arc::new(blob_store::FsBlobStore::new(dir)),
+            flags,
+        )
+    }
+
+    const BLOB_ON: blob_store::MirrorFlags = blob_store::MirrorFlags {
+        write_through: true,
+        shadow_read: true,
+    };
+
+    #[tokio::test]
+    async fn blob_mirror_is_off_without_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = fs_mirror(dir.path(), blob_store::MirrorFlags::default());
+        mirror_save(&m, &checkpoint_for(1)).await;
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        mirror_shadow(&m, &checkpoint_for(1)).await;
+    }
+
+    #[tokio::test]
+    async fn blob_save_replaces_one_object_per_indexer() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = fs_mirror(dir.path(), BLOB_ON);
+        mirror_save(&m, &checkpoint_for(1)).await;
+        mirror_save(&m, &checkpoint_for(2)).await;
+        let key = checkpoint_key("idx-test");
+        let bytes = m.store().get(&key).await.unwrap().unwrap();
+        let stored: Checkpoint = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(stored.block_number, 2);
+        assert_eq!(stored.cursor, "cursor-2");
+        // Exactly one object (no temp files, no per-block objects).
+        let n = std::fs::read_dir(dir.path().join("atlas_checkpoints"))
+            .unwrap()
+            .count();
+        assert_eq!(n, 1);
+    }
+
+    #[tokio::test]
+    async fn blob_save_keeps_previous_baseline_when_new_one_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = fs_mirror(dir.path(), BLOB_ON);
+        let mut first = checkpoint_for(1);
+        first.emission_baseline_blob = Some(vec![9, 8, 7]);
+        mirror_save(&m, &first).await;
+        let mut second = checkpoint_for(2);
+        second.emission_baseline_blob = None;
+        mirror_save(&m, &second).await;
+        let bytes = m
+            .store()
+            .get(&checkpoint_key("idx-test"))
+            .await
+            .unwrap()
+            .unwrap();
+        let stored: Checkpoint = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(stored.block_number, 2);
+        assert_eq!(stored.emission_baseline_blob, Some(vec![9, 8, 7]));
+    }
+
+    #[tokio::test]
+    async fn blob_shadow_matches_after_write_through_and_flags_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = fs_mirror(dir.path(), BLOB_ON);
+        let cp = checkpoint_for(5);
+        let key = checkpoint_key("idx-test");
+        // Missing before any write.
+        assert_eq!(
+            m.shadow_read(&key, &checkpoint_bytes(&cp).unwrap()).await,
+            Some(blob_store::ShadowOutcome::Missing)
+        );
+        mirror_save(&m, &cp).await;
+        assert_eq!(
+            m.shadow_read(&key, &checkpoint_bytes(&cp).unwrap()).await,
+            Some(blob_store::ShadowOutcome::Match)
+        );
+        assert_eq!(
+            m.shadow_read(&key, &checkpoint_bytes(&checkpoint_for(6)).unwrap())
+                .await,
+            Some(blob_store::ShadowOutcome::Mismatch)
+        );
+    }
+
+    #[test]
+    fn checkpoint_bytes_ignore_jsonb_key_order() {
+        let mut a = checkpoint_for(3);
+        let mut b = a.clone();
+        a.graph_state_blob = serde_json::json!({"x": 1, "y": {"b": 2, "a": 3}});
+        b.graph_state_blob = serde_json::from_str(r#"{"y":{"a":3,"b":2},"x":1}"#).unwrap();
+        assert_eq!(checkpoint_bytes(&a).unwrap(), checkpoint_bytes(&b).unwrap());
+    }
+
+    #[test]
+    fn checkpoint_key_is_safe_for_odd_ids() {
+        assert_eq!(
+            checkpoint_key("atlas/prod 1"),
+            "atlas_checkpoints/atlas~2Fprod~201"
+        );
     }
 
     fn checkpoint_for(block_number: u64) -> Checkpoint {

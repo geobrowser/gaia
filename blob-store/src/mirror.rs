@@ -77,6 +77,15 @@ pub struct Mirror {
 /// Concurrent detached shadow reads allowed per process.
 const SHADOW_SLOTS: usize = 8;
 
+impl std::fmt::Debug for Mirror {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Mirror")
+            .field("table", &self.table)
+            .field("flags", &self.flags)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Mirror {
     pub fn new(table: &'static str, store: Arc<dyn BlobStore>, flags: MirrorFlags) -> Self {
         Self {
