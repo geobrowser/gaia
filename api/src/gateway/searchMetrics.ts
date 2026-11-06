@@ -34,6 +34,11 @@ export function activateSearchMetrics(field: string): void {
 	fields.add(field)
 }
 
+/** Why a search shadow's geo-db read failed: the GeoDbError reason (timeout, overloaded, client_failed, ...) or `error`. */
+export function recordSearchFailure(field: string, reason: string): void {
+	bump(`failure\t${field}\t${/^[a-z_]{1,32}$/.test(reason) ? reason : "error"}`)
+}
+
 export function recordTypeFilter(field: string, result: TypeFilterResult): void {
 	bump(`typefilter\t${field}\t${result}`)
 }
@@ -133,6 +138,15 @@ export function renderSearchMetrics(): string {
 		for (const r of TYPE_FILTER_RESULTS)
 			lines.push(
 				`gaia_api_gateway_shadow_search_type_filter_total{field="${f}",result="${r}"} ${get(`typefilter\t${f}\t${r}`)}`,
+			)
+	lines.push(
+		"# HELP gaia_api_gateway_shadow_search_failed_total Search shadows whose geo-db read failed, by root field and reason (the GeoDbError reason: timeout, overloaded, client_failed, unmapped_space, ...; error when not a GeoDbError).",
+		"# TYPE gaia_api_gateway_shadow_search_failed_total counter",
+	)
+	for (const f of fields)
+		for (const key of [...counts.keys()].filter((k) => k.startsWith(`failure\t${f}\t`)).sort())
+			lines.push(
+				`gaia_api_gateway_shadow_search_failed_total{field="${f}",reason="${key.split("\t")[2]}"} ${get(key)}`,
 			)
 	return `${lines.join("\n")}\n`
 }

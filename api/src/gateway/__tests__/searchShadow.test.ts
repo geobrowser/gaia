@@ -535,3 +535,134 @@ describe("word fallback", () => {
 		await expect(searchWithWordFallback({searchLexical}, args)).rejects.toThrow("slow")
 	})
 })
+
+describe("word leg owned by geo-db (wordLeg: engine)", () => {
+	// A model of geo-db's typeahead (plan 10.19): the whole query as a name prefix; then, for a query of two or more
+	// words that filled less than the page, a leg over its first four distinct words of 3+ code points as infixes,
+	// ranked by how many words a name holds, appended after the whole query's hits, cut at the page.
+	const NAMES: Record<string, string> = {
+		n01: "ada lovelace",
+		n02: "ada byron",
+		n03: "lovelace prize",
+		n04: "grace hopper",
+		n05: "hopper award",
+		n06: "grace ada hopper",
+		n07: "ab cd club",
+		n08: "cd rom",
+		n09: "alan turing",
+		n10: "turing machine",
+		n11: "machine learning",
+		n12: "learning grace",
+		n13: "ada",
+		n14: "ada ada",
+		n15: "lovelace ada byron",
+	}
+	const ENTRIES = Object.entries(NAMES)
+	const prefix = (q: string) => ENTRIES.filter(([, n]) => n.startsWith(q.toLowerCase())).map(([id]) => id)
+	const model = (wordLeg: boolean) => {
+		const searchLexical = vi.fn(async ({text, limit}: {text: string; limit: number}) => {
+			const whole = prefix(text)
+			const words = [
+				...new Set(
+					text
+						.toLowerCase()
+						.split(/\s+/)
+						.filter((w) => w.length >= 3 && !w.startsWith("-")),
+				),
+			].slice(0, 4)
+			if (!wordLeg || text.split(/\s+/).filter(Boolean).length < 2 || whole.length >= limit)
+				return whole.slice(0, limit)
+			const scored = ENTRIES.map(([id, n]) => [id, words.filter((w) => n.includes(w)).length] as const)
+				.filter(([id, c]) => c > 0 && !whole.includes(id))
+				.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+			return [...whole, ...scored.map(([id]) => id)].slice(0, limit)
+		})
+		return {searchLexical}
+	}
+	const base = {geoSpaceIds: [GEO_SPACE], mode: "typeahead" as const, limit: 5}
+	// Query shapes: one word, two, three, four, five words, short words, a short word beside a long one, no hit.
+	const CORPUS = [
+		"ada",
+		"ada lovelace",
+		"lovelace ada",
+		"grace ada hopper",
+		"ada grace hopper turing",
+		"ada grace hopper turing machine",
+		"ab cd",
+		"ab lovelace",
+		"zzzz",
+		"zzzz qqqq",
+		"turing ada",
+		"machine learning grace",
+		"ada ada",
+	]
+
+	it("makes one call, and the old path's answer always begins with it", async () => {
+		for (const text of CORPUS) {
+			const oldEngine = model(true)
+			const old = await searchWithWordFallback(oldEngine, {...base, text})
+			const one = model(true)
+			const next = await searchWithWordFallback(one, {...base, text}, "engine")
+			expect(one.searchLexical, text).toHaveBeenCalledTimes(1)
+			expect(old.slice(0, next.length), text).toEqual(next)
+		}
+	})
+
+	it("returns the same hits in the same order when the engine's own page is full, or the query is one word", async () => {
+		for (const text of ["ada", "ada ada", "zzzz", "ada lovelace", "lovelace ada", "grace ada hopper"]) {
+			const old = await searchWithWordFallback(model(true), {...base, text})
+			const next = await searchWithWordFallback(model(true), {...base, text}, "engine")
+			expect(next, text).toEqual(old)
+		}
+	})
+
+	it("matches the old path on a serve with the word leg for queries whose words are all 3+ code points", async () => {
+		for (const text of CORPUS.filter((t) => t.split(" ").every((w) => w.length >= 3))) {
+			const old = await searchWithWordFallback(model(true), {...base, text})
+			const next = await searchWithWordFallback(model(true), {...base, text}, "engine")
+			expect(next, text).toEqual(old)
+		}
+	})
+
+	it("differs only for a word under three code points, which the engine does not search alone", async () => {
+		const old = await searchWithWordFallback(model(true), {...base, text: "ab lovelace", limit: 20})
+		const next = await searchWithWordFallback(model(true), {...base, text: "ab lovelace", limit: 20}, "engine")
+		expect(old).not.toEqual(next)
+		expect(old.slice(0, next.length)).toEqual(next)
+		expect(old).toContain("n07")
+		expect(next).not.toContain("n07")
+	})
+
+	it("loses the per-word hits on a serve without the word leg, so the flag needs the newer serve", async () => {
+		const old = await searchWithWordFallback(model(false), {...base, text: "turing ada"})
+		const next = await searchWithWordFallback(model(false), {...base, text: "turing ada"}, "engine")
+		expect(next).toEqual([])
+		expect(old.length).toBeGreaterThan(0)
+	})
+
+	it("keeps the per-word spawns for bm25, which has no word leg", async () => {
+		const c = model(false)
+		const hits = await searchWithWordFallback(c, {...base, mode: "bm25", text: "turing ada"}, "engine")
+		expect(c.searchLexical).toHaveBeenCalledTimes(3)
+		expect(hits.length).toBeGreaterThan(0)
+	})
+
+	it("one spawn per shadowed search through the shadow, and a failure is counted by reason", async () => {
+		const log = {info: vi.fn(), warn: vi.fn()}
+		const searchLexical = vi.fn(async () => ["a"])
+		const shadows = createSearchShadows({
+			search: {searchLexical},
+			allGeoSpaces: async () => [GEO_SPACE],
+			geoSpaceOf: async () => GEO_SPACE,
+			log,
+			wordLeg: "engine",
+		})
+		await run(shadows, "search", SEARCH, {data: {search: [{id: ids(1)[0]}]}}, {q: "ada lovelace", spaceId: SPACE})
+		expect(searchLexical).toHaveBeenCalledTimes(1)
+		searchLexical.mockRejectedValueOnce(new GeoDbError("timeout", "slow"))
+		await run(shadows, "search", SEARCH, {data: {search: [{id: ids(1)[0]}]}}, {q: "ada lovelace", spaceId: SPACE})
+		expect(renderGatewayMetrics()).toContain(
+			'gaia_api_gateway_shadow_search_failed_total{field="search",reason="timeout"} 1',
+		)
+	})
+})

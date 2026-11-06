@@ -502,6 +502,11 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 							log,
 							search: createCliGeoDbSearchClient(geoDbCardConfig),
 							mode: process.env.GEODB_SEARCH_MODE === "bm25" ? "bm25" : "typeahead",
+							// GEODB_SEARCH_WORD_LEG=engine: one call, geo-db's own typeahead word leg widens it.
+							wordLeg:
+								process.env.GEODB_SEARCH_WORD_LEG?.trim().toLowerCase() === "engine"
+									? "engine"
+									: "client",
 							// On unless GEODB_SEARCH_TYPE_FILTER=off: geo-db's hits lose the types Postgres excludes.
 							excludeTypes: process.env.GEODB_SEARCH_TYPE_FILTER?.trim().toLowerCase() !== "off",
 							readCards: sharedGeoDb.geoDb.readCards?.bind(sharedGeoDb.geoDb),

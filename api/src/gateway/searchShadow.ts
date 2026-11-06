@@ -27,7 +27,9 @@
  *
  * geo-db's `typeahead` mode (name, alias and description-prefix grams, typo tolerant) is the closest match to
  * gaia's name-similarity search and is the default; `bm25` is available through `GEODB_SEARCH_MODE`.
- * A multi-word query that finds fewer hits than the window is also searched word by word (searchWithWordFallback).
+ * A multi-word query that finds fewer hits than the window is also searched word by word (searchWithWordFallback),
+ * unless `wordLeg: "engine"` (GEODB_SEARCH_WORD_LEG=engine): geo-db's typeahead then runs that word leg itself inside
+ * the one call (plan 10.19), so the shadow spawns one process, not up to five.
  * Other PostGraphile rules the comparison does not reproduce (the OpenSearch candidate ids, Claim and block
  * exclusions) are part of what is measured.
  */
@@ -47,6 +49,7 @@ import {
 	GEODB_LIMIT,
 	GEODB_OVERFETCH,
 	recordSearchComparison,
+	recordSearchFailure,
 	recordTypeFilter,
 } from "./searchMetrics"
 
@@ -67,6 +70,12 @@ export type SearchShadowDeps = Pick<EntityShadowDeps, "geoSpaceOf" | "log"> & {
 	allGeoSpaces: () => Promise<string[]>
 	search: GeoDbSearchClient
 	mode?: GeoDbSearchMode
+	/**
+	 * Who widens a multi-word query that finds too little. `client` (the default) searches each word with its own
+	 * spawn after the whole query. `engine` trusts geo-db's own typeahead word leg (a serve built from plan 10.19,
+	 * typeahead mode only; bm25 has no word leg, so it keeps the per-word spawns) and makes one call.
+	 */
+	wordLeg?: "client" | "engine"
 	/**
 	 * Apply Postgres's type exclusion (DEFAULT_EXCLUDED_TYPE_IDS and Claim) to geo-db's answer: ask for GEODB_OVERFETCH
 	 * hits, read their Type statements with `readCards`, drop the excluded, keep the first GEODB_LIMIT. Needs
@@ -223,8 +232,10 @@ export function queryTokens(text: string): string[] {
 export async function searchWithWordFallback(
 	search: GeoDbSearchClient,
 	args: Parameters<GeoDbSearchClient["searchLexical"]>[0],
+	wordLeg: "client" | "engine" = "client",
 ): Promise<string[]> {
 	const whole = await search.searchLexical(args)
+	if (wordLeg === "engine" && args.mode === "typeahead") return whole
 	const words = queryTokens(args.text)
 	if (whole.length >= args.limit || words.length < 2) return whole
 	const hits = new Set(whole)
@@ -286,15 +297,20 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 					geoSpaceIds = [geoSpaceId]
 				}
 				searched = geoSpaceIds
-				geodb = await searchWithWordFallback(deps.search, {
-					geoSpaceIds,
-					text: plan.query,
-					mode: deps.mode ?? "typeahead",
-					limit: typeFilter ? GEODB_OVERFETCH : GEODB_LIMIT,
-					...(plan.spaceId === null && geoSpaceIds.length > MAX_LISTED_SPACES ? {everySpace: true} : {}),
-				})
+				geodb = await searchWithWordFallback(
+					deps.search,
+					{
+						geoSpaceIds,
+						text: plan.query,
+						mode: deps.mode ?? "typeahead",
+						limit: typeFilter ? GEODB_OVERFETCH : GEODB_LIMIT,
+						...(plan.spaceId === null && geoSpaceIds.length > MAX_LISTED_SPACES ? {everySpace: true} : {}),
+					},
+					deps.wordLeg,
+				)
 			} catch (error) {
 				recordGatewayShadow(field, "failed")
+				recordSearchFailure(field, error instanceof GeoDbError ? error.reason : "error")
 				deps.log.warn(`${label} read failed`, {
 					spaceId: plan.spaceId,
 					reason: error instanceof GeoDbError ? error.reason : "error",
