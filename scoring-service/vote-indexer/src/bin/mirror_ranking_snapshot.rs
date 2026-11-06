@@ -78,11 +78,24 @@ async fn main() -> Result<(), IndexerError> {
     info!(page_size = PAGE_SIZE, "ranking snapshot: starting");
 
     let mut failed = false;
+    // GEODB_DERIVED_MIRROR_TABLES may leave a table out; then it is not even read.
+    let do_type = mirror.allows("entity_type_ranking");
+    let do_topic = mirror.allows("entity_topic_ranking");
+    if !do_type || !do_topic {
+        warn!(
+            do_type,
+            do_topic,
+            "ranking snapshot: GEODB_DERIVED_MIRROR_TABLES leaves a table out; skipping it"
+        );
+    }
 
     // entity_type_ranking -> collection 0
     let (mut pages, mut rows_sent) = (0u64, 0u64);
     let mut after = None;
     loop {
+        if !do_type {
+            break;
+        }
         let page = match type_page(&pool, after).await {
             Ok(p) => p,
             Err(e) => {
@@ -117,7 +130,7 @@ async fn main() -> Result<(), IndexerError> {
     // entity_topic_ranking -> collection 1
     let (mut pages, mut rows_sent) = (0u64, 0u64);
     let mut after = None;
-    while !failed {
+    while do_topic && !failed {
         let page = match topic_page(&pool, after).await {
             Ok(p) => p,
             Err(e) => {
