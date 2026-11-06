@@ -18,8 +18,11 @@
  * trails the list by up to an hour.
  */
 
+import {sql} from "drizzle-orm"
+import type {Database} from "../forYou/queries"
 import {GeoDbError} from "../geodb/client"
 import type {DerivedReader} from "../geodb/derived"
+import {readAccounts} from "./queries"
 
 export type AccountWeightsShadowConfig = {
 	enabled: boolean
@@ -28,6 +31,8 @@ export type AccountWeightsShadowConfig = {
 	sample: number
 	/** Also compare `excluded` against collection 12. Needs `enabled`. */
 	exclusions: boolean
+	/** How often the background sampler reads a few Postgres accounts itself, so the shadow has samples without pair-fit traffic. */
+	pollMs: number
 }
 
 const wholeNumber = (raw: string | undefined, fallback: number, max: number) => {
@@ -42,6 +47,7 @@ export function readAccountWeightsShadowConfig(env: Record<string, string | unde
 		maxInFlight: wholeNumber(env.GEODB_ACCOUNT_WEIGHTS_SHADOW_MAX_IN_FLIGHT, 1, 8),
 		intervalMs: wholeNumber(env.GEODB_ACCOUNT_WEIGHTS_SHADOW_INTERVAL_MS, 10_000, 3_600_000),
 		sample: wholeNumber(env.GEODB_ACCOUNT_WEIGHTS_SHADOW_SAMPLE, 5, 50),
+		pollMs: wholeNumber(env.GEODB_ACCOUNT_WEIGHTS_SHADOW_POLL_MS, 60_000, 3_600_000),
 		exclusions: ["1", "on", "true"].includes(env.GEODB_ACCOUNT_EXCLUSIONS_SHADOW?.trim().toLowerCase() ?? ""),
 	}
 }
@@ -201,6 +207,61 @@ export function createAccountWeightsShadow(deps: {
 				.finally(() => {
 					inFlight--
 				})
+		},
+	}
+}
+
+/** Up to `limit` account ids (32 hex) of `account_weights` from the primary-key position `pivot`, wrapping to the start when short. */
+export async function sampleAccountIds(db: Database, pivot: string, limit: number): Promise<string[]> {
+	const read = async (from: string | null, n: number): Promise<string[]> => {
+		const result = await db.execute(
+			from === null
+				? sql`SELECT user_id::text AS user_id FROM public.account_weights ORDER BY user_id LIMIT ${n}`
+				: sql`SELECT user_id::text AS user_id FROM public.account_weights WHERE user_id >= ${from}::uuid ORDER BY user_id LIMIT ${n}`,
+		)
+		const rows = ((result as {rows?: Record<string, unknown>[]}).rows ?? []) as Record<string, unknown>[]
+		return rows.map((r) => String(r.user_id))
+	}
+	const first = await read(pivot, limit)
+	if (first.length >= limit) return first
+	const seen = new Set(first)
+	return first.concat((await read(null, limit)).filter((id) => !seen.has(id)).slice(0, limit - first.length))
+}
+
+export type AccountWeightsSampler = {
+	/** One pass: sample accounts from Postgres, read what pair-fit would serve for them, hand them to the shadow. Never throws. */
+	runOnce(): Promise<void>
+	/** Start the periodic pass; returns the stop function. The timer does not keep the process alive. */
+	start(): () => void
+}
+
+/** Feeds the shadow from Postgres on a timer: pair-fit has no traffic of its own to sample (0 samples in 6 hours). */
+export function createAccountWeightsSampler(deps: {
+	config: AccountWeightsShadowConfig
+	db: Database
+	shadow: AccountWeightsShadow
+	log: {warn: (message: string, data?: Record<string, unknown>) => void}
+	random?: () => string
+}): AccountWeightsSampler {
+	const {config, db, shadow, log} = deps
+	const pivotOf = deps.random ?? (() => crypto.randomUUID())
+	async function runOnce(): Promise<void> {
+		try {
+			const ids = await sampleAccountIds(db, pivotOf(), config.sample)
+			if (ids.length === 0) return
+			const served = await readAccounts(db, ids)
+			shadow.compare(new Map([...served].map(([id, a]) => [id.replaceAll("-", ""), a])))
+		} catch (error) {
+			log.warn("account weights sampler failed", {error: String(error)})
+		}
+	}
+	return {
+		runOnce,
+		start() {
+			if (!config.enabled) return () => {}
+			const timer = setInterval(() => void runOnce(), config.pollMs)
+			timer.unref?.()
+			return () => clearInterval(timer)
 		},
 	}
 }
