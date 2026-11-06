@@ -1314,7 +1314,7 @@ The derived-score mirror (§2f) is wired but off: vote-indexer and ranking-index
 container, the `geodb-key` mount and `GEODB_DERIVED_MIRROR="0"`. Both services share one key, `geodb-scores-key`;
 the binding gives it `derived=0,1,11` and nothing else (`read=- write=- publish=- derived=0,1,11`). The key is minted
 inside the cluster by `geodb/k8s/v2/geodb-scores-key-job.yaml`, the same create-only pattern as §10; the private half
-never leaves the cluster. Needs geo-db `b05dfd2217` or later (init container image, and `derived=` with a list), and a
+never leaves the cluster. Needs geo-db `6b34f9feda` or later (init container image, and `derived=` with a list), and a
 geodb image (the serve StatefulSet) built from a gaia ref that includes the supervisor's `GEODB_SCORES_KEYID`
 support, since the supervisor ships in that image. Check that serve's `derived_rows_max` is above 0 and sized for
 these tables (144 B a row resident) before turning the flag on.
@@ -1345,4 +1345,4 @@ $K -n gaia rollout restart deploy/vote-indexer deploy/ranking-indexer
 
 Rollback: set the flag back to `"0"` (or delete the Secret and restart serve and the writers). The rows stay in the
 store, unread. Rotate: delete Secret and Job `geodb-scores-key`, rerun step 1, then steps 2 and 3. The init
-container's image tag moves with the geodb pin; keep it at or above `b05dfd2217`.
+container's image tag moves with the geodb pin; keep it at or above `6b34f9feda`.
