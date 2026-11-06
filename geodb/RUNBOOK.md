@@ -655,6 +655,33 @@ Enable, each step only after the one before it is live:
 
 Rollback: set both flags back to 0. The record stays in the Space, unread.
 
+### 2c-config-interest. Keyed interest_config and interest_signal_weights mirror (GEODB_INTEREST_CONFIG)
+
+`GEODB_INTEREST_CONFIG` (default off; takes effect only with `GEODB_RECORD_KEYS`) lets the `geodb-interest-config-backfill`
+Job write `personalization.interest_config` (the one tunables row: half-life, spread, co-occurrence limits, sweep lookback)
+and every `personalization.interest_signal_weights` row (one per signal kind: weight, decays, note) as natural-key records
+in the `config` system Space (`geodb-feeder/src/interestConfigKeyed.ts`; the pinned `interestConfig` and
+`interestSignalWeight` kinds). Third slice of the config tables (after §2c-config and §2c-config-ranking). A mirror, not a
+move: Postgres stays the source. Every reader is a plpgsql function (api/drizzle 0100, 0105, 0117) and no application code
+reads either table, so there is no api shadow; the gate is the check. Nothing writes the tables but migrations
+(0100 seeds; 0105, 0106, 0107 retune weights) and operator SQL, so there is no consumer: the Job is the only writer, and a
+rerun after an operator edit writes the new values (a changed value closes the old statement). `sweep_lookback` is an
+interval, mirrored as seconds. A note set to null, or a kind deleted from Postgres, is not cleared in geo-db; the gate
+reports it.
+
+Enable, each step only after the one before it is live:
+
+1. A feeder image that carries this path (the Job's image) and a geo-db serve at 9d97069a78 or later (`put`).
+2. Kafka: describe on every feeder group (the Job's empty-group check). No consume ACL is new.
+3. The backfill Job (`geodb/k8s/v2/geodb-interest-config-backfill-job.yaml`), feeder scaled to 0, applied as in
+   §2c-quater step 4. It reads two small tables READ ONLY and is rerunnable. The `config` system Space already exists once
+   §2c-config has run.
+4. The gate, once per table: `bun src/interestConfigGate.ts config <postgres.tsv> <dump dir>` and
+   `bun src/interestConfigGate.ts weights <postgres.tsv> <dump dir>` (its header lists the `\copy` and the `ic-<column>.tsv`
+   / `isw-<column>.tsv` dumps). Exits non-zero on a Postgres-only key or a value difference.
+
+Rollback: set the flag back to 0. The records stay in the Space, unread.
+
 ### 2c-octies. Keyed proposal versions (GEODB_PROPOSAL_VERSIONS)
 
 `GEODB_PROPOSAL_VERSIONS` (default off; takes effect only with `GEODB_RECORD_KEYS`) writes gaia's `proposal_versions`

@@ -22,6 +22,8 @@ describe("record kinds", () => {
 			userVote: ["1623234736184c0d9a0b69e2ffbc124d", "votes"],
 			forYouConfig: ["8a0e2bd56c834195b30db6a7eb966b50", "config"],
 			entityRankingConfig: ["ee4e36fde6334be9b6d45085b5f6fb34", "config"],
+			interestConfig: ["e7ca641275a840bebb7ac20424a5deae", "config"],
+			interestSignalWeight: ["1c35f5a4877f474a8d13835f8e05205d", "config"],
 		})
 		expect(SYSTEM_SPACE_NONCE_KIND).toBe("0b3f6634fbe84dbd8c0ecae3fce960b3")
 	})
@@ -37,6 +39,21 @@ describe("record kinds", () => {
 describe("record columns", () => {
 	it("are pinned: a changed column id moves every keyed row's statements", () => {
 		expect(RECORD_COLUMNS).toEqual({
+			interestConfig: {
+				id: "31036382e13b4e11a4dc59c58a43546a",
+				halfLifeDays: "1b50d435575f41aea81b5296b76eb480",
+				spreadFraction: "1e771b65e07e4923bfa7c5b63620b349",
+				spreadMaxNeighbours: "e47bea0f4de24e91bf4a2ebbbc7f2328",
+				cooccurrenceMinSupport: "67060210b0214d4e907b53797e961f6f",
+				cooccurrenceMaxTopicsPerEntity: "436f98f683fc4a38999b927ff08e49f0",
+				sweepLookbackSeconds: "a4d8ed7e83ae486dbbae6d9e47db199b",
+			},
+			interestSignalWeight: {
+				kind: "63afb05ca56449a882b5506c760a82b9",
+				weight: "456ecbe7140a4d3bb399a9d28f4e9783",
+				decays: "ac260e6563f740f59fcdb97a64599c64",
+				note: "525a71d896024df6ad030035680ad9ba",
+			},
 			entityRankingConfig: {
 				id: "8aadf80a0b2546aea407d12a065494d1",
 				tauSeconds: "5c83400bff444efca45f68eb07fa9b09",
