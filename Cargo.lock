@@ -6877,6 +6877,7 @@ version = "0.1.0"
 dependencies = [
  "dotenv",
  "futures 0.3.34",
+ "geodb-cursor",
  "hermes-instrumentation",
  "hermes-kafka",
  "hermes-schema",

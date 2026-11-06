@@ -100,6 +100,7 @@ async fn async_main() -> Result<(), IndexerError> {
     // Initialize storage
     let storage = Storage::connect(&database_url).await?;
     info!("Connected to database");
+    storage.mirror_snapshot().await;
 
     // Initialize Kafka consumer
     let consumer = KafkaConsumer::new(&kafka_broker, &kafka_group_id)?;
