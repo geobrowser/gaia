@@ -610,6 +610,10 @@ export function planEntitySelection(
 			uncompared.add("updated_at")
 		} else if ((fieldName === "createdAt" || fieldName === "createdAtBlock") && isPlainField(field)) {
 			uncompared.add("created_at")
+		} else if (light && fieldName === "spacesByTopicIdConnection" && field.selectionSet) {
+			// The Spaces that name this entity as their topic: a Space's page, members and settings are no part of an
+			// entity card, so the field is counted uncompared and the rest of the entity is still judged.
+			uncompared.add("topic_spaces")
 		} else if (isCountOnly(field)) {
 			// `relations { totalCount }`: a count of rows geo-db cannot be asked for without the list. Likewise
 			// `backlinks { totalCount }` (the tiebreaker queries): the count is not compared, the rest of the card is.
@@ -1423,6 +1427,10 @@ export async function checkCard(
 			})
 			return {result: "failed"}
 		}
+	} else if (spaces.length === 0) {
+		// The answer holds no row and no Space for the entity: nothing says where to look, so geo-db is asked across
+		// every Space it has loaded (it prunes by presence) and must hold nothing either.
+		read = await readEverySpace(deps, entityId, label)
 	} else read = await readWide(deps, entityId, spaces, label)
 	if (!read.ok) return read.result === "failed" ? {result: "failed"} : {result: "unsupported", reason: read.reason}
 	const rows = read.rows

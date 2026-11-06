@@ -433,7 +433,7 @@ describe("relations shadow", () => {
 		await run(shadows, "relations", query, {data: {relations: []}}, {id: A})
 		expect(totals("relations", "gaia_api_gateway_shadow_unsupported_total")).toEqual({filter: 1})
 		expect(renderGatewayMetrics()).toContain(
-			'gaia_api_gateway_shadow_unsupported_shape_total{field="relations",reason="filter",shape="args=filter;filter=entityId(startsWith)"} 1',
+			'gaia_api_gateway_shadow_unsupported_shape_total{field="relations",reason="filter",shape="args=filter;filter=entityId(startsWith);sel=fromEntityId,id,spaceId,toEntityId,typeId"} 1',
 		)
 	})
 
