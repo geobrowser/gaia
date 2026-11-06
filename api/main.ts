@@ -442,8 +442,15 @@ const graphqlHandler = createGateway({
 					...(gatewayShadowFields.has(SPACE_FIELD)
 						? [[SPACE_FIELD, createSpaceShadow({...sharedGeoDb, log})] as const]
 						: []),
-					// metas =shadow: the indexer-cursor root, counted unsupported (no geo-db home); reads nothing.
-					...(gatewayShadowFields.has(METAS_FIELD) ? [[METAS_FIELD, createMetasShadow({log})] as const] : []),
+					// metas =shadow: the indexer-cursor root, compared with derived collection 10 (`cursors`).
+					...(gatewayShadowFields.has(METAS_FIELD)
+						? [
+								[
+									METAS_FIELD,
+									createMetasShadow({log, reader: createDerivedReader(geoDbCardConfig)}),
+								] as const,
+							]
+						: []),
 					...createSearchShadows(
 						{
 							geoSpaceOf: sharedGeoDb.geoSpaceOf,
