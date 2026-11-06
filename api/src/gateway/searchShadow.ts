@@ -27,6 +27,7 @@
  *
  * geo-db's `typeahead` mode (name, alias and description-prefix grams, typo tolerant) is the closest match to
  * gaia's name-similarity search and is the default; `bm25` is available through `GEODB_SEARCH_MODE`.
+ * A multi-word query that finds fewer hits than the window is also searched word by word (searchWithWordFallback).
  * Other PostGraphile rules the comparison does not reproduce (the OpenSearch candidate ids, Claim and block
  * exclusions) are part of what is measured.
  */
@@ -58,6 +59,8 @@ const MAX_QUERY_LENGTH = 250
 const MIN_QUERY_LENGTH = 2
 const MAX_FRAGMENT_DEPTH = 8
 const SAMPLE = 5
+/** A query's words searched one by one when the whole query fills too little of the window. */
+export const MAX_QUERY_TOKENS = 4
 
 export type SearchShadowDeps = Pick<EntityShadowDeps, "geoSpaceOf" | "log"> & {
 	/** Every geo-db Space id (32 hex digits) in the space map, for a search without `spaceId`. */
@@ -198,6 +201,38 @@ export function extractRankedIds(body: unknown, plan: SearchPlan, idKey: string,
 	return [...new Set(ids)]
 }
 
+/** The words of a query that can be searched alone (two code points or more, not a flag), distinct, in order. */
+export function queryTokens(text: string): string[] {
+	const seen = new Set<string>()
+	for (const word of text.split(/[\s,;|]+/u)) {
+		if ([...word].length >= MIN_QUERY_LENGTH && !word.startsWith("-")) seen.add(word)
+		if (seen.size === MAX_QUERY_TOKENS) break
+	}
+	return [...seen]
+}
+
+/**
+ * geo-db's typeahead matches the WHOLE query as a prefix of a name (within two edits), so a two-word query whose
+ * words belong to different names, or to a name that merely begins with the first, finds nothing, where
+ * PostGraphile's search offers every name that matches some of the words. When the whole query returns fewer
+ * than `limit` hits and holds several words, each word is searched too and its hits are appended after the whole
+ * query's, once each, up to `limit`.
+ */
+export async function searchWithWordFallback(
+	search: GeoDbSearchClient,
+	args: Parameters<GeoDbSearchClient["searchLexical"]>[0],
+): Promise<string[]> {
+	const whole = await search.searchLexical(args)
+	const words = queryTokens(args.text)
+	if (whole.length >= args.limit || words.length < 2) return whole
+	const hits = new Set(whole)
+	for (const word of words) {
+		if (hits.size >= args.limit) break
+		for (const id of await search.searchLexical({...args, text: word})) hits.add(id)
+	}
+	return [...hits].slice(0, args.limit)
+}
+
 function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldShadow {
 	activateGatewayMetrics(field)
 	activateSearchMetrics(field)
@@ -249,7 +284,7 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 					geoSpaceIds = [geoSpaceId]
 				}
 				searched = geoSpaceIds
-				geodb = await deps.search.searchLexical({
+				geodb = await searchWithWordFallback(deps.search, {
 					geoSpaceIds,
 					text: plan.query,
 					mode: deps.mode ?? "typeahead",

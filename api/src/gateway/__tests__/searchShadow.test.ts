@@ -14,6 +14,8 @@ import {
 	createSearchShadows,
 	EXCLUDED_TYPES,
 	extractRankedIds,
+	queryTokens,
+	searchWithWordFallback,
 	withoutExcludedTypes,
 } from "../searchShadow"
 
@@ -480,5 +482,48 @@ describe("type exclusion", () => {
 		expect(none.searchLexical).toHaveBeenCalledWith(expect.objectContaining({limit: 20}))
 		expect(typeMetric()["field=search,result=unavailable"]).toBe(2)
 		expect(metric("gaia_api_gateway_shadow_search_total")).toEqual({"field=search,outcome=compared": 1})
+	})
+})
+
+describe("word fallback", () => {
+	const args = {geoSpaceIds: [GEO_SPACE], text: "ada lovelace", mode: "typeahead" as const, limit: 5}
+	const client = (answers: Record<string, string[]>) => {
+		const searchLexical = vi.fn(async ({text}: {text: string}) => answers[text] ?? [])
+		return {searchLexical}
+	}
+
+	it("splits a query into distinct searchable words", () => {
+		expect(queryTokens("Ada, a Lovelace -x Ada")).toEqual(["Ada", "Lovelace"])
+		expect(queryTokens("a b")).toEqual([])
+		expect(queryTokens("one two three four five")).toEqual(["one", "two", "three", "four"])
+	})
+
+	it("searches each word when the whole query finds too little, appending after the whole query's hits", async () => {
+		const c = client({"ada lovelace": ["e1"], ada: ["e2", "e1"], lovelace: ["e3"]})
+		expect(await searchWithWordFallback(c, args)).toEqual(["e1", "e2", "e3"])
+		expect(c.searchLexical).toHaveBeenCalledTimes(3)
+	})
+
+	it("stops at the limit and skips the words once the whole query fills it", async () => {
+		const full = client({"ada lovelace": ["a", "b", "c", "d", "e"]})
+		expect(await searchWithWordFallback(full, args)).toHaveLength(5)
+		expect(full.searchLexical).toHaveBeenCalledTimes(1)
+		const part = client({"ada lovelace": ["a"], ada: ["b", "c", "d", "e", "f"], lovelace: ["g"]})
+		expect(await searchWithWordFallback(part, args)).toEqual(["a", "b", "c", "d", "e"])
+		expect(part.searchLexical).toHaveBeenCalledTimes(2)
+	})
+
+	it("does not search a single word twice", async () => {
+		const c = client({ada: ["a"]})
+		expect(await searchWithWordFallback(c, {...args, text: "ada"})).toEqual(["a"])
+		expect(c.searchLexical).toHaveBeenCalledTimes(1)
+	})
+
+	it("lets a failed word search fail the read", async () => {
+		const searchLexical = vi.fn(async ({text}: {text: string}) => {
+			if (text === "lovelace") throw new GeoDbError("timeout", "slow")
+			return []
+		})
+		await expect(searchWithWordFallback({searchLexical}, args)).rejects.toThrow("slow")
 	})
 })
