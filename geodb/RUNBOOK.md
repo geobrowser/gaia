@@ -1123,8 +1123,16 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   each from collection 21. `gaia_api_ranking_scores_shadow_total{result}` (absent until the flag is on): match, mismatch,
   absent_ok (un-engaged, no overlay row), missing (engaged, no overlay row), stale (overlay row for an un-engaged or absent Postgres
   row), unsupported (a value that is not 62 bytes of version 1, the old 48-byte layout), failed. Logs counts only. Turn it on only
-  after the overlay writer has run once. **Not compared:** the default row of an un-engaged entity (geo-db builds it from the card
-  and config with `derived.entity_scores.get`; no wire op serves it yet). The overlay direction reads only the highest-scored page.
+  after the overlay writer has run once. The overlay direction reads only the highest-scored page.
+  **Un-engaged entities** (`_SHADOW_DEFAULT_SAMPLE`, default 20, at most 64 a pass): it also samples random
+  un-engaged Postgres rows beyond the top page, sends each one's card (property and relation counts, created time, largest
+  type weight) and the ranking config to geo-db's `DerivedScores` op (`geodb-client derived pipe`, `scoresn`) and compares
+  the four scores the feed reads (quality, intrinsic, type weight, ranking).
+  `gaia_api_ranking_scores_default_shadow_total{result}`: match, mismatch, engaged (geo-db holds an overlay row), no_card
+  (no `entities` row), failed (including a missing config row and a damaged overlay row, which geo-db refuses). A `mismatch` is
+  benign when the entity's card changed since its row was last refreshed, since the row is a snapshot; a persistent
+  mismatch over entities whose card has not changed is a defect in the default formula. Needs a geo-db with wire revision 11;
+  an older node makes every read `failed`. Set `_DEFAULT_SAMPLE` to `0` to turn this half off.
 
 ### 2f-primer. claim_overlap_samples (derived collection 14, GEODB_DERIVED_MIRROR)
 
