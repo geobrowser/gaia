@@ -281,6 +281,8 @@ export type LightEntitiesPlan = LightPlan & {
 	exactFilter: boolean
 	first: number | null
 	offset: number | null
+	/** `entitiesConnection`: the entities sit under the root's `nodes` field (its response key), not in the root's own list. */
+	nodesKey?: string | null
 }
 
 export type EntitiesOrder = {property: "createdAt" | "updatedAt"; direction: "asc" | "desc"}
@@ -716,27 +718,58 @@ function readRootArgs(
 	return spaces
 }
 
-/** `entities(filter, first, offset, spaceId, spaceIds, typeId, typeIds)` with the light selection, compared on a sample of what it returns. */
+/**
+ * `entities(filter, first, offset, spaceId, spaceIds, typeId, typeIds)` with the light selection, compared on a sample of
+ * what it returns. With `connection`, the root is `entitiesConnection` (the same arguments plus `after`): its entities are
+ * the `nodes` field, `totalCount` is uncompared (`total_count`) and `pageInfo` is not read. `edges` is not supported.
+ */
 export function analyzeLightEntities(
 	document: DocumentNode,
 	operationName: string | null,
 	variables: Record<string, unknown>,
-	options: {entitiesBatch?: boolean; relationsTypeFilter?: boolean; derivedFields?: boolean} = {},
+	options: {
+		entitiesBatch?: boolean
+		relationsTypeFilter?: boolean
+		derivedFields?: boolean
+		connection?: boolean
+	} = {},
 ): LightAnalysis<LightEntitiesPlan> {
 	try {
 		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
 		const root = roots[0]
-		if (roots.length !== 1 || !root || root.name.value !== "entities") return {ok: false, reason: "not_single_root"}
+		const rootName = options.connection ? "entitiesConnection" : "entities"
+		if (roots.length !== 1 || !root || root.name.value !== rootName) return {ok: false, reason: "not_single_root"}
 		if (!root.selectionSet) return {ok: false, reason: "selection"}
 		const args = argsOf(root, resolved)
-		for (const arg of Object.keys(args)) if (!ENTITIES_ARGS.includes(arg)) refuse("args")
+		for (const arg of Object.keys(args))
+			if (!ENTITIES_ARGS.includes(arg) && !(options.connection && arg === "after")) refuse("args")
+		const after = args.after
+		if (after !== undefined && after !== null && typeof after !== "string") refuse("args")
+		const uncompared = new Set<UncomparedReason>()
+		let entitySet = root.selectionSet
+		let nodesKey: string | null = null
+		if (options.connection) {
+			let nodes: FieldNode | null = null
+			for (const child of fieldsOf(root.selectionSet, fragments)) {
+				const name = child.name.value
+				if (name === "__typename") continue
+				if (name === "totalCount" && isPlainField(child)) uncompared.add("total_count")
+				else if (name === "pageInfo" && child.selectionSet && !child.arguments?.length) continue
+				else if (name === "nodes" && child.selectionSet && !child.arguments?.length && !nodes) nodes = child
+				else refuse("selection")
+			}
+			if (!nodes?.selectionSet) return {ok: false, reason: "selection"}
+			entitySet = nodes.selectionSet
+			nodesKey = responseKeyOf(nodes)
+		}
 		for (const arg of ["first", "offset"])
 			if (args[arg] !== undefined && args[arg] !== null && !Number.isInteger(args[arg])) refuse("args")
-		const uncompared = new Set<UncomparedReason>()
 		const {claims, ids, exact} = readFilter(args.filter, uncompared)
-		const order = readOrderBy(args.orderBy, uncompared)
+		// A page after a cursor starts where PostGraphile's cursor says, so its place in the order is not checked.
+		const readOrder = readOrderBy(args.orderBy, uncompared)
+		const order = after === undefined || after === null ? readOrder : null
 		const spaceIds = readRootArgs(args, claims, uncompared)
-		const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
+		const {card, lists, everySpace} = planLightEntity(entitySet, fragments, resolved, uncompared, {
 			everySpace: spaceIds === null,
 			rootSpaces: spaceIds !== null,
 			projections: options.entitiesBatch === true,
@@ -760,6 +793,7 @@ export function analyzeLightEntities(
 				exactFilter: exact && args.systemTypeId == null && args.systemTypeIds == null,
 				first: typeof args.first === "number" ? args.first : null,
 				offset: typeof args.offset === "number" ? args.offset : null,
+				...(nodesKey !== null ? {nodesKey} : {}),
 				uncompared: [...uncompared],
 			},
 		}
@@ -1257,7 +1291,8 @@ export async function runLight(
 	const root = asRecord(body)
 	const data = root && root.errors === undefined ? asRecord(root.data) : null
 	if (!data || !(plan.key in data)) return {result: "skip"}
-	const answer = data[plan.key]
+	const answer =
+		plan.kind === "entities" && plan.nodesKey ? asRecord(data[plan.key])?.[plan.nodesKey] : data[plan.key]
 	const entities: {id: string; node: unknown}[] = []
 	let filterBreach: Record<string, unknown> | null = null
 	/** PostGraphile's page in the order it came, for the ordered-page read. */

@@ -2,6 +2,7 @@ import {readFileSync} from "node:fs"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {CREATED_AT_PROPERTY, conformingId, rowsFromGeoDbOutput, UPDATED_AT_PROPERTY, valueKey} from "../../geodb/card"
+import {createEntitiesConnectionShadow} from "../entitiesConnectionShadow"
 import {createEntityShadow, isEmptyFilter} from "../entityShadow"
 import {analyzeLightEntities, analyzeLightEntity} from "../lightShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
@@ -110,7 +111,7 @@ function setup(outputs: Record<string, string>, budget?: ReturnType<typeof creat
 		log,
 		budget,
 	}
-	return {log, readCard, readCardSpaces, entity: createEntityShadow(deps), points: createPointReadShadows(deps)}
+	return {log, readCard, readCardSpaces, deps, entity: createEntityShadow(deps), points: createPointReadShadows(deps)}
 }
 
 const call = (shadow: (c: never) => Promise<void>, query: string, variables: Record<string, unknown>, body: unknown) =>
@@ -1898,5 +1899,110 @@ describe("entities filters read through `and`, `id: {is}` and `overlaps` (2026-1
 			expect(a.plan.spaceIds).toEqual([id(B)])
 			expect(a.plan.claims).toEqual([{kind: "type", typeIds: [id(C)]}])
 		}
+	})
+})
+
+describe("entitiesConnection with the light selection", () => {
+	const connection = (args: string, extra = "", wrap = (s: string) => `nodes ${s}`) => {
+		const q = FIXTURE.request.query
+		const open = q.indexOf('entity(id: "' + HEX + '")')
+		const bodyStart = q.indexOf("{", open)
+		const tail = q.slice(bodyStart)
+		const lastClose = tail.lastIndexOf("}")
+		const inner = tail.slice(0, lastClose) // the entity selection set, without the operation's closing brace
+		return `${q.slice(0, open)}entitiesConnection(${args}) { ${extra} ${wrap(inner)} }${tail.slice(lastClose)}`
+	}
+	const list = (n: number): Entity[] =>
+		Array.from({length: n}, (_, at) => {
+			const e = clone(ENTITY)
+			e.id = `${at.toString(16).padStart(2, "0")}${HEX.slice(2)}`
+			return e
+		})
+	const outputsFor = (entities: Entity[]) => ({
+		[geoSpace(SPACE_A)]: entities.map((e) => geoOutput(e).replaceAll(HEX, e.id)).join(""),
+	})
+	const args = `spaceId: "${SPACE_A}", first: 5`
+
+	it("plans nodes, reads totalCount as uncompared and skips pageInfo", () => {
+		const a = analyzeLightEntities(
+			parse(connection(args, "totalCount pageInfo { hasNextPage }")),
+			null,
+			{},
+			{connection: true},
+		)
+		expect(a.ok).toBe(true)
+		if (a.ok) {
+			expect(a.plan.nodesKey).toBe("nodes")
+			expect(a.plan.uncompared).toContain("total_count")
+		}
+	})
+
+	it("is not the plain entities root, and entities is not the connection root", () => {
+		const q = connection(args)
+		expect(analyzeLightEntities(parse(q), null, {})).toEqual({ok: false, reason: "not_single_root"})
+		const plain = FIXTURE.request.query.replace('entity(id: "' + HEX + '")', `entities(${args})`)
+		expect(analyzeLightEntities(parse(plain), null, {}, {connection: true}).ok).toBe(false)
+	})
+
+	it("refuses edges", () => {
+		const a = analyzeLightEntities(
+			parse(connection(args, "", (s) => `edges { node ${s} }`)),
+			null,
+			{},
+			{connection: true},
+		)
+		expect(a).toEqual({ok: false, reason: "selection"})
+	})
+
+	it("leaves a page after a cursor out of the order", () => {
+		const q = connection(`${args}, orderBy: CREATED_AT_DESC`)
+		const first = analyzeLightEntities(parse(q), null, {}, {connection: true})
+		const after = analyzeLightEntities(
+			parse(q.replace("first: 5", 'first: 5, after: "abc"')),
+			null,
+			{},
+			{connection: true},
+		)
+		expect(first.ok && after.ok).toBe(true)
+		if (first.ok && after.ok) {
+			expect(first.plan.order).not.toBeNull()
+			expect(after.plan.order).toBeNull()
+		}
+	})
+
+	it("compares the sampled nodes of a page against geo-db", async () => {
+		const entities = list(2)
+		const s = setup(outputsFor(entities))
+		const shadow = createEntitiesConnectionShadow({...s.deps, derivedFields: false})
+		await call(
+			shadow as never,
+			connection(args, "totalCount"),
+			{},
+			{data: {entitiesConnection: {totalCount: 2, nodes: entities}}},
+		)
+		expect(results()).toEqual({match: 1})
+		expect(uncompared()).toMatchObject({total_count: 1})
+	})
+
+	it("flags a node that differs from geo-db", async () => {
+		const entities = list(1)
+		const s = setup(outputsFor(entities))
+		const shadow = createEntitiesConnectionShadow(s.deps)
+		const wrong = clone(entities)
+		;(wrong[0] as Entity).name = "something else"
+		await call(shadow as never, connection(args), {}, {data: {entitiesConnection: {nodes: wrong}}})
+		expect(results()).toEqual({mismatch: 1})
+	})
+
+	it("counts an unsupported selection", async () => {
+		const s = setup({})
+		const shadow = createEntitiesConnectionShadow(s.deps)
+		await call(
+			shadow as never,
+			connection(args, "", (x) => `edges { node ${x} }`),
+			{},
+			{data: {}},
+		)
+		expect(results()).toEqual({unsupported_selection: 1})
 	})
 })
