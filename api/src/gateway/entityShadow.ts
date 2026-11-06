@@ -90,7 +90,25 @@ export const DESCRIPTION_PROPERTY = conformingId("entity", "9b1f76ff-9711-404c-8
 export const TYPES_PROPERTY = conformingId("entity", "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1")
 
 /** Entity fields PostGraphile computes from Postgres votes and comments; geo-db holds none of them. */
-export const DERIVED_FIELDS = ["upvotes", "downvotes", "agrees", "disagrees", "commenters", "commentScore"]
+export const DERIVED_FIELDS = [
+	"upvotes",
+	"downvotes",
+	"agrees",
+	"disagrees",
+	"commenters",
+	"commentScore",
+	// Ranking columns the feeder derives into Postgres; geo-db holds none of them.
+	"qualityScore",
+	"rankingScore",
+	"trendingScore",
+	"participationScore",
+	"intrinsicScore",
+	"lastListedOn",
+	"listedOnAgendaId",
+	"trendingTopicId",
+	"trendingSource",
+	"matchedTopicIds",
+]
 
 export const VALUE_COLUMNS = ["text", "integer", "float", "boolean", "datetime", "date", "decimal"] as const
 /** Columns of a value row the card mapping does not compare; selecting them is allowed. */
@@ -140,6 +158,7 @@ const NESTED_ENTITY_FIELDS: ObjectSpec["fields"] = {
 	backlinks: "nested_entity",
 	backlinksList: "nested_entity",
 	spaceIds: "nested_entity",
+	typeIds: "nested_entity",
 }
 
 export const RELATION_OBJECTS: Record<string, ObjectSpec> = {
@@ -595,7 +614,14 @@ export function planEntitySelection(
 			// `relations { totalCount }`: a count of rows geo-db cannot be asked for without the list. Likewise
 			// `backlinks { totalCount }` (the tiebreaker queries): the count is not compared, the rest of the card is.
 			uncompared.add(fieldName === "backlinks" ? "backlink_count" : "relation_count")
-		} else if (fieldName === "types" && !types && isUnfiltered(field, resolved) && field.selectionSet) {
+		} else if (
+			fieldName === "types" &&
+			(!types || types.plain) &&
+			isUnfiltered(field, resolved) &&
+			field.selectionSet
+		) {
+			// `typeIds` selected first: `types { id name }` is the same statements with names, so it takes over.
+			if (types?.plain) uncompared.add("types_alias")
 			let typeIdKey: string | null = null
 			let nameKey: string | null = null
 			for (const inner of fieldsOf(field.selectionSet, fragments)) {
@@ -608,9 +634,11 @@ export function planEntitySelection(
 			types = {key, idKey: typeIdKey, nameKey}
 		} else if (light && options.derivedFields && DERIVED_FIELDS.includes(fieldName) && isPlainField(field)) {
 			uncompared.add("derived_fields")
-		} else if (light && fieldName === "typeIds" && !types && isPlainField(field)) {
+		} else if (light && fieldName === "typeIds" && isPlainField(field)) {
 			// The light selection only: `typeIds` is the same Types statements as `types { id }`, as a list of ids.
-			types = {key, idKey: null, nameKey: null, plain: true}
+			// Beside `types { id name }` (either order) it is the same answer twice: the `types` list is compared.
+			if (types) uncompared.add("types_alias")
+			else types = {key, idKey: null, nameKey: null, plain: true}
 		} else if (fieldName === "valuesList" && filtered && !values) {
 			values = planList(field, fragments, resolved, valueSpec, uncompared, false)
 		} else if (fieldName === "valuesList" && !filtered && !allValues) {
@@ -1434,7 +1462,9 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 			const analysis = analyzeEntityOperation(document, classification.operationName, params.variables)
 			if (!analysis.ok) {
 				// The card shadow cannot settle it: try the light selection (every space, partial lists).
-				const light = analyzeLightEntity(document, classification.operationName, params.variables)
+				const light = analyzeLightEntity(document, classification.operationName, params.variables, {
+					relationsTypeFilter: deps.relationsTypeFilter === true,
+				})
 				if (light.ok) {
 					let lightBody: unknown
 					try {

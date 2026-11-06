@@ -1544,3 +1544,113 @@ describe("entities selections with nested entities and backlinks (live refusals,
 		expect(a.ok).toBe(true)
 	})
 })
+
+describe("selections refused as `selection` on the live mix (2026-11-06)", () => {
+	const id = "33333333-3333-4333-8333-333333333333"
+	const property = "44444444-4444-4444-8444-444444444444"
+	const space = "55555555-5555-4555-8555-555555555555"
+
+	describe("entity(id) { values(filter: {spaceId, propertyId}) { nodes { text } } }", () => {
+		const query = `query ($i: UUID!, $s: UUID!) { entity(id: $i) { values(filter: {spaceId: {is: $s}, propertyId: {is: "${property}"}}) { nodes { text } } } }`
+		const vars = {i: id, s: space}
+
+		it("is refused while the typed-list widening is off", () => {
+			expect(analyzeLightEntity(parse(query), null, vars)).toEqual({ok: false, reason: "selection"})
+		})
+
+		it("is planned every-Space with the property filter when the widening is on", () => {
+			const a = analyzeLightEntity(parse(query), null, vars, {relationsTypeFilter: true})
+			expect(a.ok).toBe(true)
+			if (a.ok) {
+				expect(a.plan.everySpace).toBe(true)
+				expect(a.plan.lists[0]?.propertyFilter).toEqual(["44444444444444448444444444444444"])
+			}
+		})
+	})
+
+	describe("the property-filtered values read, end to end", () => {
+		const query = `query ($i: UUID!, $s: UUID!) { entity(id: $i) { values(filter: {spaceId: {is: $s}, propertyId: {is: "${property}"}}) { nodes { text } } } }`
+		const propHex = conformingId("entity", property)
+		const held = (text: string) => `${propHex}\t${text}\ts1\t${HEX}\t-\t-\t1\n`
+		const shadow = (relationsTypeFilter: boolean, output: string) => {
+			const log = {info: vi.fn(), warn: vi.fn()}
+			const outputs = {[geoSpace(SPACE_A)]: output}
+			return createEntityShadow({
+				multiSpace: true,
+				relationsTypeFilter,
+				geoDb: {readCard: askOf(outputs), readCardSpaces: askSpacesOf(outputs)},
+				geoSpaceOf: async (s: string) => geoSpace(s),
+				allGeoSpaces: async () => [geoSpace(SPACE_A)],
+				log,
+			})
+		}
+		const ask = (relationsTypeFilter: boolean, output: string, text: string) =>
+			call(
+				shadow(relationsTypeFilter, output) as never,
+				query,
+				{i: HEX, s: space},
+				{data: {entity: {values: {nodes: [{text}]}}}},
+			)
+
+		it("stays unsupported while the switch is off", async () => {
+			await ask(false, held("Hello"), "Hello")
+			expect(results()).toEqual({unsupported_selection: 1})
+			expect(unsupported()).toEqual({selection: 1})
+		})
+
+		it("matches a value geo-db holds under the filter's property", async () => {
+			await ask(true, held("Hello"), "Hello")
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("flags a value geo-db does not hold", async () => {
+			await ask(true, held("Other"), "Hello")
+			expect(results()).toEqual({mismatch: 1})
+		})
+	})
+
+	describe("the EntitiesBatch selection with ranking scores, typeIds beside types, and toEntity { typeIds }", () => {
+		const query = `query ($ids: [UUID!]!) { entities(first: 50, filter: {id: {in: $ids}}) {
+			id name description spaceIds createdAt updatedAt typeIds
+			agrees disagrees upvotes downvotes commenters commentScore qualityScore rankingScore trendingScore
+			participationScore intrinsicScore lastListedOn listedOnAgendaId trendingTopicId trendingSource matchedTopicIds
+			types { id name }
+			values(first: 100) { pageInfo { hasNextPage } nodes { id propertyId property { name dataTypeName } spaceId language text boolean integer float decimal date datetime } }
+			relations(first: 150) { pageInfo { hasNextPage } nodes { id entityId typeId type { name } spaceId position toEntityId toEntity { name typeIds } } }
+		} }`
+		const options = {entitiesBatch: true, relationsTypeFilter: true, derivedFields: true}
+
+		it("is planned, with the scores and the repeated types counted uncompared", () => {
+			const a = analyzeLightEntities(parse(query), null, {ids: [id]}, options)
+			expect(a.ok).toBe(true)
+			if (a.ok) {
+				expect(a.plan.uncompared).toEqual(
+					expect.arrayContaining(["derived_fields", "types_alias", "nested_entity"]),
+				)
+				expect(a.plan.card.types?.plain).toBeFalsy()
+				expect(a.plan.card.types?.nameKey).toBe("name")
+			}
+		})
+
+		it("keeps the ranking scores refused while the derived-fields flag is off", () => {
+			expect(analyzeLightEntities(parse(query), null, {ids: [id]}, {...options, derivedFields: false}).ok).toBe(
+				false,
+			)
+		})
+
+		it("plans typeIds before types the same way", () => {
+			const q = `{ entities(filter: {id: {in: ["${id}"]}}) { id typeIds types { id name } } }`
+			const a = analyzeLightEntities(parse(q), null, {}, options)
+			expect(a.ok).toBe(true)
+			if (a.ok) {
+				expect(a.plan.card.types?.nameKey).toBe("name")
+				expect(a.plan.uncompared).toContain("types_alias")
+			}
+		})
+
+		it("still refuses an unknown scalar", () => {
+			const q = `{ entities(filter: {id: {in: ["${id}"]}}) { id notAColumn } }`
+			expect(analyzeLightEntities(parse(q), null, {}, options)).toEqual({ok: false, reason: "selection"})
+		})
+	})
+})

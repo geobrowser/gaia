@@ -453,6 +453,7 @@ export function analyzeLightEntity(
 	document: DocumentNode,
 	operationName: string | null,
 	variables: Record<string, unknown>,
+	options: {relationsTypeFilter?: boolean} = {},
 ): LightAnalysis<LightEntityPlan> {
 	try {
 		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
@@ -472,6 +473,7 @@ export function analyzeLightEntity(
 		if (!root.selectionSet) return {ok: false, reason: "selection"}
 		const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
 			everySpace: true,
+			relationsTypeFilter: options.relationsTypeFilter === true,
 		})
 		return {
 			ok: true,
