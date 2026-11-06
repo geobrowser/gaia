@@ -61,6 +61,11 @@ export type GeoDbCardConfig = {
 	 */
 	derivedFields?: boolean
 	/**
+	 * Read an every-Space card in lines of at most MAX_LINE_SPACES Spaces when geo-db has loaded more than that, and
+	 * concatenate the rows. Without it such a read is refused `many_spaces`. GEODB_EVERY_SPACE_CHUNKS=on.
+	 */
+	everySpaceChunks?: boolean
+	/**
 	 * Let the light `entities` shadow read a single-key `orderBy: CREATED_AT_* | UPDATED_AT_*` page from geo-db (`.pick` and
 	 * `.ties = .entity` on the order) and compare it with PostGraphile's. Needs a serve whose store has geo-db d3967dffbf: an
 	 * older one refuses the members, so turn it on only after the serve pin passes that commit. Also needs
@@ -106,6 +111,7 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		everySpaceReads: env.GEODB_EVERY_SPACE_READS?.trim().toLowerCase() === "on",
 		everySpaceEntities: env.GEODB_EVERY_SPACE_ENTITIES?.trim().toLowerCase() === "on",
 		backlinkReads: env.GEODB_BACKLINK_READS?.trim().toLowerCase() === "on",
+		everySpaceChunks: env.GEODB_EVERY_SPACE_CHUNKS?.trim().toLowerCase() === "on",
 		entitiesBatch: env.GEODB_ENTITIES_BATCH_SHADOW?.trim().toLowerCase() === "on",
 		derivedFields: env.GEODB_DERIVED_FIELDS_SHADOW?.trim().toLowerCase() === "on",
 		orderPick: env.GEODB_ORDER_PICK_SHADOW?.trim().toLowerCase() === "on",
