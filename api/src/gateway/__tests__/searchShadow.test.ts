@@ -203,7 +203,7 @@ describe("search shadow", () => {
 		expect(metric("gaia_api_gateway_shadow_total")).toEqual({})
 		expect(log.info).toHaveBeenCalledWith(
 			expect.stringContaining("compared"),
-			expect.objectContaining({spaceId: null, spaces: 2}),
+			expect.objectContaining({spaceId: null, spaces: 2, everySpace: false, mode: "typeahead", queryLength: 3}),
 		)
 	})
 
