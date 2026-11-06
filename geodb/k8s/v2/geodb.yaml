@@ -446,42 +446,42 @@ spec:
             # system Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-quinquies. OFF until the
             # proposal-actions backfill Job (geodb-proposal-actions-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_PROPOSAL_ACTIONS
-              value: "0"
+              value: "1"
             # Keyed subspaces and subspace topics (TRUST_EXTENSION on space.trust.extensions, into the governance
             # system Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-sexies. OFF until the
             # subspaces backfill Job (geodb-subspaces-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_SUBSPACES
-              value: "0"
+              value: "1"
             # Keyed space voting settings (VOTING_SETTINGS_UPDATED on space.governance, into the governance system
             # Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-septies. OFF until the space-voting-settings
             # backfill Job (geodb-space-voting-settings-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_SPACE_VOTING_SETTINGS
-              value: "0"
+              value: "1"
             # Keyed space topics (TOPIC_DECLARED / TOPIC_REMOVED on space.topics, into the governance system Space).
             # Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-undecies. OFF until the space-topics backfill Job
             # (geodb-space-topics-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_SPACE_TOPICS
-              value: "0"
+              value: "1"
             # Keyed space addresses (SPACE_ADDRESS_UPDATED and creates on space.creations, into the governance system
             # Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-duodecies. OFF until the space-addresses
             # backfill Job (geodb-space-addresses-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_SPACE_ADDRESSES
-              value: "0"
+              value: "1"
             # Keyed proposal versions (PROPOSAL_CREATED / PROPOSAL_UPDATED, one record per (proposal, block) with the
             # voting settings). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-octies. OFF until the
             # proposal-versions backfill Job (geodb-proposal-versions-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_PROPOSAL_VERSIONS
-              value: "0"
+              value: "1"
             # Keyed proposal status facts (executed_at from PROPOSAL_EXECUTED on space.governance, unexecutable_at from the
             # backfill only, into the governance system Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-novies.
             # OFF until the proposal-status backfill Job (geodb-proposal-status-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_PROPOSAL_STATUS
-              value: "0"
+              value: "1"
             # Keyed ranking blocks, rankings and items (ranking-indexer's ranks tables, from knowledge.edits, into the votes
             # system Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-decies.
             # OFF until the ranks backfill Job (geodb-ranks-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_RANKS
-              value: "0"
+              value: "1"
             # Relation positions (`.position` on a relation's add). Off until the geodb image carries a
             # geodb-client with ISS-587-318: an older client refuses the key, and every edit with a positioned
             # relation would fail. Turn on with the image bump that brings it.
