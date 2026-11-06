@@ -46,7 +46,7 @@ spec:
       initContainers:
         - name: geodb-setup
           # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to this service's tag.
-          image: registry.digitalocean.com/geo/geodb:db33c7e6e1
+          image: registry.digitalocean.com/geo/geodb:6b34f9feda
           imagePullPolicy: IfNotPresent
           # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
           # binding and the mirror stays disabled even if the flag is turned on.
