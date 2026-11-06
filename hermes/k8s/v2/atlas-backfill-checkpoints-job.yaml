@@ -14,7 +14,8 @@
 #
 # Exit codes: 0 every checkpoint present and equal, 1 one could not be read or verified, 2 objects exist that
 # differ from Postgres and were left alone (add "--repair" to args to replace them; Postgres is the source).
-# Output is counts only. Credentials for the bucket come only from the geodb-blob-key Secret via secretKeyRef.
+# Output is counts only. The Postgres connection is configured exactly as the atlas Deployment's (the same
+# DATABASE_URL, no extra CA mount). Credentials for the bucket come only from the geodb-blob-key Secret via secretKeyRef.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -40,31 +41,6 @@ spec:
         fsGroup: 1001
       imagePullSecrets:
         - name: geo
-      volumes:
-        - name: ssl-certs
-          emptyDir: {}
-      initContainers:
-        - name: setup-certs
-          image: registry.digitalocean.com/geo/atlas:IMAGE_TAG
-          command:
-            - sh
-            - -c
-            - |
-              echo "$DATABASE_SSL_CA" > /ssl/ca.crt
-          env:
-            - name: DATABASE_SSL_CA
-              valueFrom:
-                secretKeyRef:
-                  name: api-secrets
-                  key: DATABASE_SSL_CA
-          volumeMounts:
-            - name: ssl-certs
-              mountPath: /ssl
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
       containers:
         - name: backfill-checkpoints
           image: registry.digitalocean.com/geo/atlas:IMAGE_TAG
@@ -75,10 +51,6 @@ spec:
             capabilities:
               drop:
                 - ALL
-          volumeMounts:
-            - name: ssl-certs
-              mountPath: /ssl
-              readOnly: true
           env:
             - name: BLOB_BACKEND
               value: s3
@@ -102,8 +74,6 @@ spec:
                 secretKeyRef:
                   name: geodb-blob-key
                   key: secret_key
-            - name: PGSSLROOTCERT
-              value: /ssl/ca.crt
             - name: ATLAS_CHECKPOINT_DATABASE_URL
               valueFrom:
                 secretKeyRef:
