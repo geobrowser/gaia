@@ -283,6 +283,10 @@ spec:
             # (serve runs 6b34f9feda).
             - name: GEODB_ORDER_PICK_SHADOW
               value: "on"
+            # Relation targets' own valuesList vs geo-db cards of the targets, read in one batch (#1214); needs serve
+            # at or past geo-db 8df213cbac (serve runs 17be320ede). Shadow-only; set "off" if entity shadow failures pass ~5%.
+            - name: GEODB_NESTED_TARGET_VALUES_SHADOW
+              value: "on"
             # Per-pod token buckets for the gateway shadow's geo-db reads. 11-06: 75 of the entity shadow's 85 refusals were
             # `throttled` at the old 1 read/s (burst 5) and 0.5/s (burst 3) every-Space; serve sat at ~23m CPU. Raised 3x.
             # Worst case is 11 pods x 3 reads/s. Lower these to shed load.
