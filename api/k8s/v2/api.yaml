@@ -320,7 +320,7 @@ spec:
             # derived collection 5 (gaia_api_account_weights_shadow_total), read over `geodb-client derived pipe`. OFF; never
             # changes a response. Needs the ranking-indexer's GEODB_DERIVED_MIRROR run first (account-weights cronjob).
             - name: GEODB_ACCOUNT_WEIGHTS_SHADOW
-              value: "0"
+              value: "1"
             # Also compare each sampled candidate's `excluded` with geo-db's derived collection 12
             # (gaia_api_account_exclusions_shadow_total). Needs GEODB_ACCOUNT_WEIGHTS_SHADOW on, serve rolled to a build that
             # registers collection 12, and the account-exclusions-sync cronjob's GEODB_DERIVED_MIRROR run once. OFF.
