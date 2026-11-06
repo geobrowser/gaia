@@ -87,6 +87,9 @@ spec:
                       key: DATABASE_URL
                 - name: RUST_LOG
                   value: "topic_interest=info,ranking_indexer=info"
+                # Shadow of the Rust twin of the interest compute: read-only, counts only. Off.
+                - name: USER_INTEREST_RUST_SHADOW
+                  value: "0"
               resources:
                 requests:
                   memory: "64Mi"

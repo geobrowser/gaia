@@ -21,6 +21,8 @@ use tracing::{info, warn};
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::topic_cooccurrence_mirror::{self, Neighbour};
 use ranking_indexer::topic_interest::{self, Mode, SweepOutcome};
+use ranking_indexer::user_interest;
+use ranking_indexer::user_interest_shadow;
 use ranking_indexer::user_topic_signals_mirror::{self as signals_mirror, Ident, Signal};
 
 #[tokio::main]
@@ -60,6 +62,11 @@ async fn main() -> Result<(), IndexerError> {
                     )
                     .await;
                 }
+            }
+            // Flag-off shadow of the Rust twin (USER_INTEREST_RUST_SHADOW): read-only, counts only,
+            // never changes the outcome or the exit code.
+            if matches!(outcome, SweepOutcome::Ran(_)) && user_interest::shadow_enabled() {
+                user_interest_shadow::run_and_log(&pool).await;
             }
             match outcome {
                 SweepOutcome::Ran(r) => info!(
