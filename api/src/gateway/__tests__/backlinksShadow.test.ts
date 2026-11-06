@@ -270,6 +270,54 @@ describe("entity shadow, backlinks", () => {
 			expect(s.readBacklinks.mock.calls.map((c) => c[0].geoSpaceIds.length)).toEqual([1024, 1])
 		})
 
+		it("issues the lines together, and an answer that lands out of order merges as the serial read does", async () => {
+			const s = setup({[geoSpace(SPACE)]: fixtureRefs()}, {spaces: many, chunks: true})
+			const answer = s.readBacklinks.getMockImplementation() as (a: never) => Promise<unknown>
+			let inFlight = 0
+			let widest = 0
+			// The first line answers last: the merge must not depend on which line lands first.
+			s.readBacklinks.mockImplementation((async (a: {geoSpaceIds: string[]}) => {
+				inFlight += 1
+				widest = Math.max(widest, inFlight)
+				await new Promise((resolve) => setTimeout(resolve, a.geoSpaceIds.length > 1 ? 20 : 1))
+				inFlight -= 1
+				return answer(a as never)
+			}) as never)
+			await call(s.shadow as never, FIXTURE.request.variables)
+			expect(widest).toBe(2)
+			expect(results()).toEqual({match: 1})
+			expect(s.readBacklinks.mock.calls.map((c) => c[0].geoSpaceIds.length)).toEqual([1024, 1])
+		})
+
+		it("takes every line from the budget first: a read that cannot have them all is throttled, none issued", async () => {
+			const budget = createReadBudget({perSecond: 0, burst: 1})
+			const s = setup({[geoSpace(SPACE)]: fixtureRefs()}, {spaces: many, chunks: true, budget})
+			await call(s.shadow as never, FIXTURE.request.variables)
+			expect(unsupported()).toEqual({throttled: 1})
+			expect(s.readBacklinks).not.toHaveBeenCalled()
+			// Nothing was taken in part: the one token is still there for a one-line read.
+			expect(budget.tryAcquire(1)).toBe(true)
+		})
+
+		it("never has more lines in flight than the budget holds", async () => {
+			const budget = createReadBudget({perSecond: 0, burst: 4})
+			const s = setup({[geoSpace(SPACE)]: fixtureRefs()}, {spaces: many, chunks: true, budget})
+			let inFlight = 0
+			let widest = 0
+			const answer = s.readBacklinks.getMockImplementation() as (a: never) => Promise<unknown>
+			s.readBacklinks.mockImplementation((async (a: never) => {
+				inFlight += 1
+				widest = Math.max(widest, inFlight)
+				await new Promise((resolve) => setTimeout(resolve, 5))
+				inFlight -= 1
+				return answer(a)
+			}) as never)
+			for (let i = 0; i < 4; i++) await call(s.shadow as never, FIXTURE.request.variables)
+			// Two reads of two lines fit the four tokens; the other two are throttled.
+			expect(widest).toBeLessThanOrEqual(4)
+			expect(unsupported()).toEqual({throttled: 2})
+		})
+
 		it("flags a referrer geo-db holds in no line", async () => {
 			const s = setup({}, {spaces: many, chunks: true})
 			await call(s.shadow as never, FIXTURE.request.variables)
