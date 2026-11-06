@@ -7,6 +7,7 @@ import {
 	createEntityRankingConfigShadow,
 	readEntityRankingConfigShadowConfig,
 } from "./src/forYou/entityRankingConfigShadow"
+import {createFeedExperimentShadow, readFeedExperimentShadowConfig} from "./src/forYou/feedExperimentShadow"
 import {MIN_INTERNAL_TOKEN_LENGTH, mountInternalRoutes} from "./src/forYou/router"
 import {readGatewayConfig} from "./src/gateway/config"
 import {createEntityResolver} from "./src/gateway/entityServe"
@@ -227,12 +228,24 @@ const entityRankingConfigShadow = entityRankingConfigShadowConfig.enabled
 			log,
 		})
 	: null
+// GEODB_FEED_EXPERIMENT_SHADOW (off by default) compares the feed experiment the route served with geo-db's record of it
+// (gaia_api_feed_experiment_shadow_total). Never changes a response.
+const feedExperimentShadowConfig = readFeedExperimentShadowConfig(process.env)
+const feedExperimentShadow = feedExperimentShadowConfig.enabled
+	? createFeedExperimentShadow({
+			config: feedExperimentShadowConfig,
+			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+			log,
+		})
+	: null
 const internalRoutes = mountInternalRoutes(
 	app,
 	db,
 	process.env.GAIA_INTERNAL_TOKEN,
 	forYouConfigShadow,
 	entityRankingConfigShadow,
+	feedExperimentShadow,
 )
 if (internalRoutes === "enabled") {
 	log.info("Internal routes enabled")

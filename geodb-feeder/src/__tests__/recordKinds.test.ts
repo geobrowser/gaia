@@ -24,6 +24,7 @@ describe("record kinds", () => {
 			entityRankingConfig: ["ee4e36fde6334be9b6d45085b5f6fb34", "config"],
 			interestConfig: ["e7ca641275a840bebb7ac20424a5deae", "config"],
 			interestSignalWeight: ["1c35f5a4877f474a8d13835f8e05205d", "config"],
+			feedExperiment: ["285dde3545964ab28ee580344b816704", "config"],
 		})
 		expect(SYSTEM_SPACE_NONCE_KIND).toBe("0b3f6634fbe84dbd8c0ecae3fce960b3")
 	})
@@ -39,6 +40,15 @@ describe("record kinds", () => {
 describe("record columns", () => {
 	it("are pinned: a changed column id moves every keyed row's statements", () => {
 		expect(RECORD_COLUMNS).toEqual({
+			feedExperiment: {
+				id: "5302a53981a84da88c3949abe8165ec0",
+				active: "d6a38e2b1f804353bceced2d49641d75",
+				armA: "5823d865cf6c480181ce0d3979b1a5ad",
+				armB: "62f4056881f34fcbbb26174932352e70",
+				share: "20a413847f914c2ea382c24c69ffeaa9",
+				salt: "e3bc692a46a644179788ca4e9de3b6c5",
+				note: "d9c6d4fef1584dd093f5314694ee1957",
+			},
 			interestConfig: {
 				id: "31036382e13b4e11a4dc59c58a43546a",
 				halfLifeDays: "1b50d435575f41aea81b5296b76eb480",

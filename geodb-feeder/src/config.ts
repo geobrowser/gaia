@@ -33,6 +33,8 @@ export type Config = {
 	entityRankingConfig: {enabled: boolean}
 	/** GEODB_INTEREST_CONFIG (with GEODB_RECORD_KEYS): interest_config and interest_signal_weights as keyed records, by backfill only (interestConfigKeyed.ts). */
 	interestConfig: {enabled: boolean}
+	/** GEODB_FEED_EXPERIMENTS (with GEODB_RECORD_KEYS): feed_experiments as keyed records, by backfill only (feedExperimentsKeyed.ts). */
+	feedExperiments: {enabled: boolean}
 	/** GEODB_PROPOSAL_VERSIONS (with GEODB_RECORD_KEYS): keyed proposal versions from `space.governance` (proposalVersionsKeyed.ts). */
 	proposalVersions: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_PROPOSAL_STATUS (with GEODB_RECORD_KEYS): keyed executed_at / unexecutable_at facts from `space.governance` (proposalStatusKeyed.ts). */
@@ -209,6 +211,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		entityRankingConfig: {enabled: flag(env.GEODB_ENTITY_RANKING_CONFIG)},
 		/** GEODB_INTEREST_CONFIG: lets the interest-config backfill Job write the records. No consumer. Default off. */
 		interestConfig: {enabled: flag(env.GEODB_INTEREST_CONFIG)},
+		/** GEODB_FEED_EXPERIMENTS: lets the feed-experiments backfill Job write the records. No consumer. Default off. */
+		feedExperiments: {enabled: flag(env.GEODB_FEED_EXPERIMENTS)},
 		proposalVersions: {
 			/**
 			 * GEODB_PROPOSAL_VERSIONS: consume the PROPOSAL_CREATED and PROPOSAL_UPDATED events of `space.governance`

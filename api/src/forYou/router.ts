@@ -35,6 +35,7 @@ import {log} from "../services/telemetry"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import type {ForYouConfigShadow} from "./configShadow"
 import type {EntityRankingConfigShadow} from "./entityRankingConfigShadow"
+import type {FeedExperimentShadow} from "./feedExperimentShadow"
 import {type Database, type ForYouInputs, type ForYouPool, readForYouInputs} from "./queries"
 import {
 	FOR_YOU_CODE_VERSION,
@@ -292,6 +293,7 @@ export function createInternalRouter(
 	token: string,
 	configShadow?: ForYouConfigShadow | null,
 	rankingConfigShadow?: EntityRankingConfigShadow | null,
+	experimentShadow?: FeedExperimentShadow | null,
 ) {
 	const router = new Hono()
 
@@ -325,6 +327,8 @@ export function createInternalRouter(
 			configShadow?.compare(inputs.settings.config)
 			// GEODB_ENTITY_RANKING_CONFIG_SHADOW: the same for the tau_seconds readSettings served from entity_ranking_config.
 			rankingConfigShadow?.compare(inputs.settings.tauSeconds)
+			// GEODB_FEED_EXPERIMENT_SHADOW: the same for the experiment readExperiment served (none active = nothing to compare).
+			if (inputs.experiment) experimentShadow?.compare(inputs.experiment, toDashedUuid(body.userId))
 			const response = buildResponse(body, inputs)
 			log.info("for-you ranked", {
 				candidates: body.candidateIds.length,
@@ -360,11 +364,12 @@ export function mountInternalRoutes(
 	token: string | undefined | null,
 	configShadow?: ForYouConfigShadow | null,
 	rankingConfigShadow?: EntityRankingConfigShadow | null,
+	experimentShadow?: FeedExperimentShadow | null,
 ): "enabled" | "too_short" | "unset" {
 	const trimmed = token?.trim()
 	if (!trimmed) return "unset"
 	if (trimmed.length < MIN_INTERNAL_TOKEN_LENGTH) return "too_short"
 	app.use("/internal/*", canonicalRequestLogging())
-	app.route("/internal", createInternalRouter(db, trimmed, configShadow, rankingConfigShadow))
+	app.route("/internal", createInternalRouter(db, trimmed, configShadow, rankingConfigShadow, experimentShadow))
 	return "enabled"
 }

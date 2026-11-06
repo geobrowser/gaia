@@ -2,6 +2,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 import {renderForYouConfigMetrics} from "./forYou/configShadow"
 import {renderEntityRankingConfigMetrics} from "./forYou/entityRankingConfigShadow"
+import {renderFeedExperimentMetrics} from "./forYou/feedExperimentShadow"
 import {renderGatewayMetrics} from "./gateway/metrics"
 import {renderServeMetrics} from "./gateway/serveMetrics"
 import {renderIdMapMetrics} from "./geodb/idMap"
@@ -149,6 +150,8 @@ function renderPrometheusMetrics(): string {
 		renderForYouConfigMetrics(),
 		// entity_ranking_config tau_seconds from geo-db against the served one (GEODB_ENTITY_RANKING_CONFIG_SHADOW) — see forYou/entityRankingConfigShadow.ts.
 		renderEntityRankingConfigMetrics(),
+		// The feed experiment geo-db holds against the served one (GEODB_FEED_EXPERIMENT_SHADOW) — see forYou/feedExperimentShadow.ts.
+		renderFeedExperimentMetrics(),
 		// GraphQL root fields served from geo-db (mode on): served/fallback by field and reason — see gateway/serveMetrics.ts.
 		renderServeMetrics(),
 		// The reverse id map the served fields read: ids by result (miss = not served) and Postgres reads — see geodb/idMap.ts.
