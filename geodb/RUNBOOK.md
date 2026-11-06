@@ -1142,3 +1142,28 @@ $K -n gaia rollout restart deploy/notification-indexer
 
 Rotate: delete Secret `geodb-outbox-key` and Job `geodb-outbox-key`, rerun step 1, then steps 2 and 3.
 Revoke: delete the Secret and restart serve; the principal disappears from the binding.
+
+### Delivery-side shadow reader (delivery-worker)
+
+delivery-worker can read the mirrored units back and compare them with what Postgres delivered (plan
+10.16 section 10; flag `GEODB_OUTBOX_SHADOW_READ`, off by default). It uses the same key and the same
+`work=*` principal as the indexer, so there is no new secret, and `delivery-worker.yaml` carries the same
+geodb-setup init container, volumes and env. It is measurement only: it never delivers and never writes
+Postgres. When a delivery reaches a terminal state in Postgres (`delivered`, or `failed` for good) the loop
+`try_send`s its key and payload to a background task. That task claims units over a held
+`geodb-client work pipe` (`claim`, then `complete`), pairs each with the row for the same ledger key and
+webhook id, and counts `delivery_worker_shadow_total{result}`:
+
+- `match`: payloads agree (compared as JSON, since `jsonb` reorders keys).
+- `mismatch`: both exist, payloads differ.
+- `miss`: Postgres delivered a row geo-db never had, 10 minutes after the delivery
+  (`GEODB_SHADOW_MISS_GRACE_SECS`). Rows delivered before the mirror was switched on land here, so read the
+  series from the mirror's start; afterwards a `miss` is a dropped or skipped mirror unit.
+- `extra`: geo-db holds a unit Postgres never delivered, 3 days after the claim
+  (`GEODB_SHADOW_EXTRA_GRACE_SECS`; it must outlast the 2 day retry backoff cap).
+
+Also `delivery_worker_shadow_errors_total{op=claim|complete}`, `delivery_worker_shadow_dropped_total{reason}`
+and the gauges `delivery_worker_shadow_pending_{units,rows}`. Memory is bounded (20 000 of each). Needs a
+geodb image whose `geodb-client work pipe` knows `claim` and `complete` (geo-db `final` from "client: work
+pipe takes claim, complete, retry and fail"); bump the pinned tag in `delivery-worker.yaml` to it first.
+Turn it on after the indexer's mirror has been running, as a separate change.

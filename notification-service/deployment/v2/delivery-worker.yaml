@@ -32,6 +32,65 @@ spec:
         fsGroup: 1001
       imagePullSecrets:
         - name: geo
+      volumes:
+        # geodb-client for the outbox shadow reader (geodb-outbox, GEODB_OUTBOX_SHADOW_READ). Dormant
+        # while the flag is "off": nothing below is read and every reference is optional or fails
+        # soft, so an absent geodb never blocks a rollout. Same wiring and the same principal as
+        # notification-indexer.yaml (the OUTBOX key, `work=*`, geodb-outbox-key-job.yaml): no new secret.
+        - name: geodb-bin
+          emptyDir: {}
+        - name: geodb-space-map
+          configMap:
+            # Written by the geodb-feeder / serve. Not shipped in these manifests.
+            name: geodb-space-map
+            optional: true
+        - name: geodb-key
+          secret:
+            secretName: geodb-outbox-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: outbox.key
+      initContainers:
+        - name: geodb-setup
+          # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to this service's tag.
+          # The reader needs a geodb-client with the work pipe's claim and complete verbs (geo-db
+          # final from the commit "client: work pipe takes claim, complete, retry and fail"); bump
+          # this tag to an image built from there before the flag is turned on. An older client
+          # answers those verbs `want enter|note|...`, which the reader counts as a claim error.
+          image: registry.digitalocean.com/geo/geodb:27e919248f
+          imagePullPolicy: IfNotPresent
+          # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
+          # binding and the shadow stays disabled even if the flag is turned on.
+          command:
+            - sh
+            - -c
+            - |
+              cp /usr/local/bin/geodb-client /geodb/geodb-client || exit 0
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -n "$node" ] && [ -n "$ip" ]; then
+                printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+              else
+                echo "geodb-setup: no node id or no geodb Service; outbox shadow reader stays off"
+              fi
+              exit 0
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
       containers:
         - name: delivery-worker
           image: registry.digitalocean.com/geo/delivery-worker:latest
@@ -50,6 +109,19 @@ spec:
               value: "100"
             - name: BATCH_SIZE
               value: "50"
+            # Compare each terminal delivery with geo-db's mirrored unit and complete the unit
+            # (delivery_worker_shadow_total{result}). OFF: none of the GEODB_* values below is read.
+            # Measurement only: it never delivers and never writes Postgres. Turn on after the
+            # indexer's mirror (GEODB_OUTBOX_MIRROR) has run, RUNBOOK section 11; rows delivered
+            # before the mirror started count as `miss`.
+            - name: GEODB_OUTBOX_SHADOW_READ
+              value: "off"
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_OUTBOX_KEY_PATH
+              value: /etc/geodb/key/outbox.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
             # Logging
             - name: RUST_LOG
               value: "info,delivery_worker=debug"
@@ -81,6 +153,13 @@ spec:
               port: 8080
             periodSeconds: 10
             failureThreshold: 3
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: geodb-key
+              mountPath: /etc/geodb/key
+              readOnly: true
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false

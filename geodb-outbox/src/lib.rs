@@ -20,6 +20,11 @@
 //! are the delivery rows' `webhook_id` UUIDs (16 bytes each).
 //!
 //! The mirror is OFF unless `GEODB_OUTBOX_MIRROR` is `1` or `true`.
+//!
+//! The delivery side reads the same work class through [`reader::OutboxReader`], over the same
+//! pipe client, behind its own flag `GEODB_OUTBOX_SHADOW_READ` (also off by default).
+
+pub mod reader;
 
 use std::ffi::OsString;
 use std::time::{Duration, Instant};
@@ -97,6 +102,9 @@ pub enum MirrorError {
     CoolingDown,
 }
 
+/// The most an enter's answer (`entered` or `duplicate`) can be.
+const ENTER_ANSWER_MAX: usize = 4096;
+
 /// What an enter was answered.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Entered {
@@ -123,8 +131,19 @@ impl Config {
     }
 
     pub fn from_vars(get: impl Fn(&str) -> Option<String>) -> Option<Config> {
+        Self::from_vars_flag(get, "GEODB_OUTBOX_MIRROR")
+    }
+
+    /// As [`Config::from_env`], for the feature switched by `flag` (the mirror's is
+    /// `GEODB_OUTBOX_MIRROR`, the reader's `GEODB_OUTBOX_SHADOW_READ`). The client, key and
+    /// binding are shared.
+    pub fn from_env_flag(flag: &str) -> Option<Config> {
+        Self::from_vars_flag(|k| std::env::var(k).ok(), flag)
+    }
+
+    pub fn from_vars_flag(get: impl Fn(&str) -> Option<String>, flag: &str) -> Option<Config> {
         let on = matches!(
-            get("GEODB_OUTBOX_MIRROR").as_deref().map(str::trim),
+            get(flag).as_deref().map(str::trim),
             Some("1") | Some("true")
         );
         if !on {
@@ -134,7 +153,8 @@ impl Config {
         else {
             warn!(
                 event = "geodb_outbox.misconfigured",
-                "GEODB_OUTBOX_MIRROR is on but GEODB_OUTBOX_KEY_PATH or GEODB_BINDING_PATH is unset; mirror disabled"
+                flag,
+                "flag is on but GEODB_OUTBOX_KEY_PATH or GEODB_BINDING_PATH is unset; disabled"
             );
             return None;
         };
@@ -185,7 +205,7 @@ pub fn enter_line(unit: &Unit) -> Result<String, MirrorError> {
     ))
 }
 
-struct Pipe {
+pub(crate) struct Pipe {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
@@ -198,15 +218,38 @@ impl Drop for Pipe {
 }
 
 /// Owns the `work pipe` child (started on first use). Used from one task.
-struct Worker {
-    cfg: Config,
+pub(crate) struct Worker {
+    pub(crate) cfg: Config,
     pipe: Option<Pipe>,
     failed_at: Option<Instant>,
 }
 
 impl Worker {
+    pub(crate) fn new(cfg: Config) -> Self {
+        Worker {
+            cfg,
+            pipe: None,
+            failed_at: None,
+        }
+    }
+
     async fn enter(&mut self, unit: &Unit) -> Result<Entered, MirrorError> {
         let line = enter_line(unit)?;
+        let body = self.call(&line, ENTER_ANSWER_MAX).await?;
+        match body.trim_end() {
+            "entered" => Ok(Entered::New),
+            "duplicate" => Ok(Entered::Duplicate),
+            other => Err(MirrorError::BadFrame(other.to_string())),
+        }
+    }
+
+    /// One request line (ending in `\n`) and its `+` frame's body, at most `max_body` bytes.
+    /// Starts the child on first use; a failure drops it and cools down.
+    pub(crate) async fn call(
+        &mut self,
+        line: &str,
+        max_body: usize,
+    ) -> Result<String, MirrorError> {
         if self.pipe.is_none() {
             if self
                 .failed_at
@@ -233,18 +276,15 @@ impl Worker {
             }
         }
         let pipe = self.pipe.as_mut().expect("set above");
-        let res = match tokio::time::timeout(self.cfg.timeout, request(pipe, &line)).await {
+        let res = match tokio::time::timeout(self.cfg.timeout, request(pipe, line, max_body)).await
+        {
             Ok(r) => r,
             Err(_) => Err(MirrorError::Timeout(self.cfg.timeout)),
         };
         match res {
             Ok(body) => {
                 self.failed_at = None;
-                match body.trim_end() {
-                    "entered" => Ok(Entered::New),
-                    "duplicate" => Ok(Entered::Duplicate),
-                    other => Err(MirrorError::BadFrame(other.to_string())),
-                }
+                Ok(body)
             }
             Err(e) => {
                 // A refusal or error leaves the tool exiting; drop it (kill on drop) and respawn
@@ -283,7 +323,7 @@ async fn spawn(cfg: &Config) -> Result<Pipe, MirrorError> {
 }
 
 /// One request line, one frame: `+<n>\n<n bytes>` ok (the body returned), `-<n>\n<n bytes>` refused.
-async fn request(p: &mut Pipe, line: &str) -> Result<String, MirrorError> {
+async fn request(p: &mut Pipe, line: &str, max_body: usize) -> Result<String, MirrorError> {
     p.stdin.write_all(line.as_bytes()).await?;
     p.stdin.flush().await?;
     let mut head = String::new();
@@ -295,8 +335,8 @@ async fn request(p: &mut Pipe, line: &str) -> Result<String, MirrorError> {
     let n: usize = n
         .parse()
         .map_err(|_| MirrorError::BadFrame(head.to_string()))?;
-    // An enter's answer is `entered` or `duplicate`; cap what a broken child can make us allocate.
-    if n > 4096 {
+    // Cap what a broken child can make us allocate.
+    if n > max_body {
         return Err(MirrorError::BadFrame(head.to_string()));
     }
     let mut body = vec![0u8; n];
@@ -319,14 +359,7 @@ impl OutboxMirror {
     /// Starts the background task on the current tokio runtime. Panics outside one.
     pub fn new(cfg: Config) -> Self {
         let (tx, rx) = mpsc::channel(QUEUE_MAX);
-        tokio::spawn(run(
-            Worker {
-                cfg,
-                pipe: None,
-                failed_at: None,
-            },
-            rx,
-        ));
+        tokio::spawn(run(Worker::new(cfg), rx));
         Self { tx }
     }
 
@@ -402,16 +435,12 @@ mod tests {
     }
 
     fn worker(script: &str, cooldown: Duration) -> Worker {
-        Worker {
-            cfg: Config {
-                program: "sh".into(),
-                args: vec!["-c".into(), script.into()],
-                timeout: Duration::from_millis(1500),
-                cooldown,
-            },
-            pipe: None,
-            failed_at: None,
-        }
+        Worker::new(Config {
+            program: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            timeout: Duration::from_millis(1500),
+            cooldown,
+        })
     }
 
     fn tmp(name: &str) -> std::path::PathBuf {

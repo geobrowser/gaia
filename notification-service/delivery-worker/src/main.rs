@@ -15,6 +15,7 @@ use delivery_worker::deliver::{
 };
 use delivery_worker::error::WorkerError;
 use delivery_worker::metrics::{self, Outcome};
+use delivery_worker::shadow::{self, Shadow};
 use delivery_worker::storage::Storage;
 
 /// Outcome of a single delivery attempt, returned from spawned tasks.
@@ -151,6 +152,13 @@ async fn async_main() -> Result<(), WorkerError> {
         shutdown_tx.send(()).ok();
     });
 
+    // Off unless GEODB_OUTBOX_SHADOW_READ is on: compares each terminal delivery with geo-db's
+    // mirrored unit. Measurement only; it never delivers and never touches Postgres.
+    let shadow: Option<Shadow> = shadow::start();
+    if shadow.is_some() {
+        info!("geo-db outbox shadow reader on");
+    }
+
     let mut delivered_count: u64 = 0;
     let mut failed_count: u64 = 0;
 
@@ -257,9 +265,10 @@ async fn async_main() -> Result<(), WorkerError> {
 
                             let client = client.clone();
                             let storage = Arc::clone(&storage);
+                            let shadow = shadow.clone();
 
                             join_set.spawn(async move {
-                                process_delivery(&client, &storage, delivery, max_retries).await
+                                process_delivery(&client, &storage, delivery, max_retries, shadow.as_ref()).await
                             });
                         }
                     }
@@ -284,7 +293,7 @@ async fn async_main() -> Result<(), WorkerError> {
 /// Process a single delivery: serialize, POST, update DB status.
 #[instrument(
     name = "delivery_worker.process_delivery",
-    skip(client, storage, delivery, max_retries),
+    skip(client, storage, delivery, max_retries, shadow),
     fields(
         delivery_id = %delivery.delivery_id,
         webhook_url = %delivery.webhook_url,
@@ -294,6 +303,26 @@ async fn process_delivery(
     client: &reqwest::Client,
     storage: &Storage,
     delivery: delivery_worker::storage::PendingDelivery,
+    max_retries: i32,
+    shadow: Option<&Shadow>,
+) -> DeliveryOutcome {
+    let outcome = deliver_one(client, storage, &delivery, max_retries).await;
+    // A terminal row is what the shadow compares; a retry is not terminal. try_send only.
+    if let (Some(shadow), DeliveryOutcome::Delivered | DeliveryOutcome::Failed) = (shadow, &outcome)
+    {
+        shadow.observe(
+            &delivery.idempotency_key,
+            delivery.webhook_id,
+            &delivery.payload,
+        );
+    }
+    outcome
+}
+
+async fn deliver_one(
+    client: &reqwest::Client,
+    storage: &Storage,
+    delivery: &delivery_worker::storage::PendingDelivery,
     max_retries: i32,
 ) -> DeliveryOutcome {
     let payload_bytes = match serde_json::to_vec(&delivery.payload) {

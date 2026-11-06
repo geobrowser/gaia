@@ -14,6 +14,8 @@ WORKDIR /app
 
 # Copy only required crates (no workspace Cargo.toml - build standalone)
 COPY hermes-instrumentation ./hermes-instrumentation
+# geo-db outbox shadow reader (off unless GEODB_OUTBOX_SHADOW_READ=1) - path dep of delivery-worker.
+COPY geodb-outbox ./geodb-outbox
 COPY notification-service/delivery-worker ./notification-service/delivery-worker
 
 # Build from the crate directory (standalone, not as workspace member)
