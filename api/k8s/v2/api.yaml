@@ -266,6 +266,20 @@ spec:
             # Shadow geogenesis's EntitiesBatch `entities` selection (gaia#1115). Needs that PR's api image.
             - name: GEODB_ENTITIES_BATCH_SHADOW
               value: "on"
+            # Shadow-only widenings of what the `entities` shadow compares; none changes a response.
+            # Typed relations lists that select no type (#1150).
+            - name: GEODB_RELATIONS_TYPE_FILTER_SHADOW
+              value: "on"
+            # Accept the Postgres vote-score fields, counted `derived_fields`, uncompared (#1151).
+            - name: GEODB_DERIVED_FIELDS_SHADOW
+              value: "on"
+            # Every-Space reads over more loaded Spaces than one line holds, split and concatenated (#1152, #1154).
+            - name: GEODB_EVERY_SPACE_CHUNKS
+              value: "on"
+            # CREATED_AT/UPDATED_AT ordered pages via `.pick`/`.ties`; needs serve at or past geo-db d3967dffbf
+            # (serve runs 6b34f9feda).
+            - name: GEODB_ORDER_PICK_SHADOW
+              value: "on"
             # Proposal status computed from geo-db's keyed governance records after a proposal is served,
             # counted against the served status (gaia_api_governance_shadow_total). OFF; never changes a
             # response. Needs the geodb-feeder's proposal status records (GEODB_PROPOSAL_STATUS backfill) first.
