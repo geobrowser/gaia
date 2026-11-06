@@ -230,6 +230,55 @@ impl Storage {
         Ok(())
     }
 
+    /// Copies the tallies a committed vote batch wrote into geo-db's derived class, when the mirror
+    /// is on. Best-effort: nothing here fails the batch. See [`crate::votes_count_mirror`].
+    pub async fn mirror_votes_counts(&self, counts: &[VotesCountItem]) {
+        let Some(mirror) = self.derived.as_deref() else {
+            return;
+        };
+        let now_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as i64)
+            .unwrap_or(0);
+        let rows: Vec<crate::votes_count_mirror::Count> = counts
+            .iter()
+            .map(|c| crate::votes_count_mirror::Count {
+                object_id: c.object_id,
+                space_id: c.space_id,
+                object_type: i16::from(c.object_type),
+                vote_kind: i16::from(c.kind),
+                positive: c.positive,
+                negative: c.negative,
+                updated_us: now_us,
+            })
+            .collect();
+        crate::votes_count_mirror::mirror(mirror, &rows).await;
+    }
+
+    /// Copies the whole `votes_count` table once, so a put the mirror dropped is repaired and the
+    /// rows that predate it are backfilled. A read error skips the copy. Does nothing while the
+    /// flag is off.
+    pub async fn mirror_votes_counts_snapshot(&self) {
+        let Some(mirror) = self.derived.as_deref() else {
+            return;
+        };
+        match sqlx::query_as::<_, crate::votes_count_mirror::Count>(
+            crate::votes_count_mirror::SELECT_SQL,
+        )
+        .fetch_all(&self.pool)
+        .await
+        {
+            Ok(rows) => {
+                crate::votes_count_mirror::mirror(mirror, &rows).await;
+                tracing::info!(rows = rows.len(), "votes_count mirrored to geo-db");
+            }
+            Err(e) => {
+                tracing::warn!(event = "geodb_derived.readback_failed", error = ?e, "could not read votes_count for the geo-db mirror; skipped");
+                metrics::counter!("geodb_derived_mirror_errors_total", "table" => "votes_count_readback").increment(1);
+            }
+        }
+    }
+
     /// Recompute the Explore feed ranking score for entities whose curation or
     /// stance votes just changed.
     ///

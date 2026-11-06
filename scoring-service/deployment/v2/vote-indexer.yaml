@@ -30,7 +30,7 @@ spec:
         # geodb-client for the derived-score mirror (GEODB_DERIVED_MIRROR, RUNBOOK section 2f / 12). Dormant while
         # the flag is "0": nothing below is read, and every reference is optional or fails soft, so an absent
         # geodb never blocks a rollout. Same wiring as hermes-pipeline.yaml, but with the SCORES key: a principal
-        # that may write derived collections 0, 1 and 11 and nothing else (geodb-scores-key-job.yaml).
+        # that may write derived collections 0, 1, 2, 3, 4, 5, 11 to 26 and nothing else (geodb-scores-key-job.yaml).
         - name: geodb-bin
           emptyDir: {}
         - name: geodb-space-map
@@ -105,6 +105,9 @@ spec:
             # enable order in RUNBOOK section 12.
             - name: GEODB_DERIVED_MIRROR
               value: "0"
+            # The votes_count snapshot at start is thousands of rows (RUNBOOK section 2f-votes-count); send them batched.
+            - name: GEODB_DERIVED_BATCH
+              value: "1"
             - name: GEODB_CLIENT_BIN
               value: /geodb/geodb-client
             - name: GEODB_KEY_PATH
