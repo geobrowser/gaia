@@ -924,8 +924,8 @@ next refresh, so run `refresh_ranking_scores_for` over the entity set after turn
 Plan 14 §10. Stage A (`geodb.yaml`, #1182, live: `derived_rows_max = 4194304`, serve request 5Gi, limit 7Gi; 144 B a row, ~604 MB)
 holds the 2.86M rows counted on 11-06 (collections 0, 1, 8, 9, 10, 11). The full set with collections 2, 3 and 4 is 6.80M and does
 not fit it: that is Stage B (`derived_rows_max = 8388608`, serve 6Gi/8Gi, one more restart and its own node-headroom check; the node
-had 13.65 GiB allocatable and 11.1 GiB requested on 11-06, so Stage B's request does not fit without another node or moving a
-workload).
+had 13.65 GiB allocatable and 11.1 GiB requested on 11-06 with Stage A in; Stage B's +1 GiB request would make it about 12.2 GiB
+(89%), which fits but is tight, so re-check before rolling).
 
 Turn the mirrors on one at a time, one flag per PR, each after the serve roll that carries its binding, checking
 `geodb_derived_rows` against `geodb_derived_rows_max` between steps:
