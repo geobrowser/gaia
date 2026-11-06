@@ -890,8 +890,8 @@ reference, the topic in the statement id, so a new topic replaces the old one, a
 ends on A. `TOPIC_REMOVED` closes that topic's statement, so it clears the column only when the removed topic is the
 current one, as `clear_space_topic` does. An id that is not 16 bytes is dead-lettered.
 
-Not mirrored: `spaces.address` (`SPACE_ADDRESS_UPDATED` on `space.creations`), which has no keyed consumer yet. A topic
-event for a Space Postgres lacks is written anyway (kg-indexer's UPDATE would match no row).
+`spaces.address` is its own consumer (§2c-duodecies). A topic event for a Space Postgres lacks is written anyway
+(kg-indexer's UPDATE would match no row).
 
 Activation order, each step only after the one before it is live:
 
@@ -910,6 +910,42 @@ Activation order, each step only after the one before it is live:
 A rerun of the Job once the consumer has offsets refuses unless `BACKFILL_KEYED_RESET_CONSUMER` is `"1"`.
 
 Rollback: unset `GEODB_SPACE_TOPICS`. The records stay in the Space, unread; nothing reads them yet.
+
+### 2c-duodecies. Keyed space addresses (GEODB_SPACE_ADDRESSES)
+
+`GEODB_SPACE_ADDRESSES` (default off; takes effect only with `GEODB_RECORD_KEYS`) mirrors `spaces.address` as one
+natural-key record per Space in the `governance` system Space (`geodb-feeder/src/spaceAddressesKeyed.ts`; the pinned
+`spaceAddress` kind). The consumer is its own group on `<env>.space.creations`,
+`geodb-feeder-space-addresses-keyed-v1-<env>`, a NEW group (the Kafka ACL must allow it); kg-indexer's and the Space
+entities consumer's groups are untouched.
+
+How the fold maps: `SPACE_ADDRESS_UPDATED` is a `put` of `0x` plus the lowercase hex of the 20-byte address, as
+`update_space_address` writes it. A `HermesCreateSpace` (no `event-type` header) is a `put` of the EIP-55 checksummed
+address of its `eoa_space.owner` or `default_dao_space.address`, as `handle_create_space` inserts it. The address is in
+the statement id, so a new address replaces the old one, a replay is a no-op and A then B then A ends on A. A message
+that is malformed, has no payload or an address that is not 20 bytes is dead-lettered, as kg-indexer errors on it.
+
+Differences from Postgres, none of which the gate fails on except the first:
+- A create is `ON CONFLICT DO NOTHING` in Postgres; a keyed write cannot read, so a second create for the same Space
+  would overwrite an address an update set. kg-indexer emits one create per Space; the gate would show a mismatch.
+- An update for a Space Postgres never saw created is written anyway (Postgres updates no row). Reported by the gate as
+  geo-db-only.
+- Casing follows the path, as in Postgres: checksummed from a create, lowercase from an update.
+
+Activation order, each step only after the one before it is live:
+
+1. geo-db serve and init container on 9d97069a78 or later (`put`); a feeder image that carries this path.
+2. Kafka ACL: consume on the group `geodb-feeder-space-addresses-keyed-v1-<env>` and read on `<env>.space.creations`.
+   Without them the consumer fails to start and `geodb_feeder_consumer_start_failed{consumer="space_addresses"}` goes to 1.
+3. Required: the backfill Job (`geodb/k8s/v2/geodb-space-addresses-backfill-job.yaml`), feeder scaled to 0, applied as in
+   §2c-quater step 4. It reads `spaces WHERE address IS NOT NULL` READ ONLY and is rerunnable.
+4. `GEODB_RECORD_KEYS: "1"` and `GEODB_SPACE_ADDRESSES: "1"` in the feeder manifest, then scale it back to 1.
+5. The gate: `bun src/spaceAddressesGate.ts <postgres.tsv> <dump dir>` (`geodb-feeder/src/spaceAddressesGate.ts`; its header
+   lists the `\copy` columns and the `sa-space.tsv` and `sa-address.tsv` dumps).
+
+A rerun of the Job once the consumer has offsets refuses unless `BACKFILL_KEYED_RESET_CONSUMER` is `"1"`.
+
+Rollback: unset `GEODB_SPACE_ADDRESSES`. The records stay in the Space, unread; nothing reads them yet.
 
 ### 2f. Derived score tables (GEODB_DERIVED_MIRROR)
 
@@ -1390,6 +1426,7 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 | `GeoDbFeederSpaceVotingSettingsStalled` | `space.governance` lag above 0 and nothing handled by the space-voting-settings consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-septies) |
 | `GeoDbFeederProposalVersionsStalled` | `space.governance` lag above 0 and nothing handled by the proposal-versions consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-octies) |
 | `GeoDbFeederProposalStatusStalled` | `space.governance` lag above 0 and nothing handled by the proposal-status consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-novies) |
+| `GeoDbFeederSpaceAddressesStalled` | `space.creations` lag above 0 and nothing handled by the space-addresses consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-duodecies) |
 | `GeoDbFeederSpaceTopicsStalled` | `space.topics` lag above 0 and nothing handled by the space-topics consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-undecies) |
 | `GeoDbFeederRanksStalled` | `knowledge.edits` lag above 0 and nothing handled by the ranks consumer for 30m | the repeating error in the feeder log; an `exhausted` write to the votes Space (§2c-decies) |
 | `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`, `space_voting_settings`, `proposal_versions`, `proposal_status`, `ranks`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |

@@ -38,6 +38,8 @@ export const RECORD_KINDS = {
 	spaceVotingSettings: {id: "7767f888a9a240b18275a7832363f4d9", family: "governance", table: "space_voting_settings"},
 	/** `spaces.topic_id`: a record keyed (space); its one mutable column is the Space's current topic, written by `put`. */
 	spaceTopic: {id: "c74881c2d1d24ae5ad1e34d5c1c0535b", family: "governance", table: "spaces (topic_id)"},
+	/** `spaces.address`: a record keyed (space); its one mutable column is the Space's current address, written by `put`. */
+	spaceAddress: {id: "44433f0b01fd46a18317285f2236fc93", family: "governance", table: "spaces (address)"},
 	/** `proposals.executed_at` / `unexecutable_at`: a record keyed (proposal). The status itself is computed, not stored. */
 	proposalStatus: {id: "cf398f45b2c74002bb13e5416fbc7027", family: "governance", table: "proposals (executed_at, unexecutable_at)"},
 	/** `ranking_blocks`: a record keyed (block, space), its primary key. Mutable columns written by `put`. */
@@ -281,6 +283,12 @@ export const RECORD_COLUMNS = {
 		space: "0249560173894904a354428215129068",
 		/** Mutable: reference, `topic_id` (`cid("entity", topic_id)`); absent when the Space has no topic. */
 		topic: "02b0149f64744e4d9ba1574e36e066ad",
+	},
+	spaceAddress: {
+		/** Key: reference to the Space's entity, `cid("entity", space_id)`. */
+		space: "9c7f59c747a544fd844cbffdeb5bbc48",
+		/** Mutable: text, `spaces.address` as kg-indexer stores it (EIP-55 from a create, lowercase from an update). */
+		address: "a584f4100b8d47428afd4242371c44c8",
 	},
 	proposalAction: {
 		/** Key: reference to the proposal's entity, `cid("entity", proposal_id)`. */
