@@ -173,7 +173,17 @@ export function shapeOfRoot(
 		const args = argsOf(root, resolved)
 		const names = Object.keys(args).sort()
 		const filter = describeShape(args.filter, 0)
-		const shape = `args=${names.join(",")}${filter ? `;filter=${filter}` : ""}`
+		// The root's own fields (names only) say which selection was refused when the arguments are all alike.
+		const selects = [
+			...new Set(
+				(root.selectionSet?.selections ?? []).flatMap((s) => (s.kind === "Field" ? [s.name.value] : [])),
+			),
+		]
+			.sort()
+			.join(",")
+		const base = `args=${names.join(",")}${filter ? `;filter=${filter}` : ""}`
+		// The metric label holds 200 characters (SHAPE_PATTERN): the fields are dropped when they would not fit.
+		const shape = selects && base.length + selects.length + 5 <= 200 ? `${base};sel=${selects}` : base
 		return shape.length > 300 ? "long" : shape
 	} catch {
 		return "unparsed"
@@ -1207,7 +1217,8 @@ export async function checkLight(
 	options: {claims?: FilterClaim[]; spaceIds?: string[] | null; everySpace?: boolean} = {},
 ): Promise<LightCheck> {
 	const spaces = options.everySpace ? null : lightSpaces(light, options.spaceIds ?? null)
-	if (!spaces && !options.everySpace) return {result: "unsupported", reason: "no_space"}
+	// An answer with no row and no Space says nowhere to look: it is read across every Space, as an `entity(id)` is.
+	const every = options.everySpace === true || spaces === null
 	const read = spaces ? await readWide(deps, entityId, spaces, label) : await readEverySpace(deps, entityId, label)
 	if (!read.ok) return read.result === "failed" ? {result: "failed"} : {result: "unsupported", reason: read.reason}
 
@@ -1299,7 +1310,7 @@ export async function checkLight(
 	// An every-Space read keys its Spaces by geo-db Space id, so the `spaceIds` PostGraphile named are mapped to those
 	// before they are held to the Spaces geo-db holds statements in (a Space geo-db has not loaded cannot be one).
 	let judged = light.card
-	if (options.everySpace && light.card.spaceIds) {
+	if (every && light.card.spaceIds) {
 		const mapped: string[] = []
 		for (const space of light.card.spaceIds) {
 			const geo = await deps.geoSpaceOf(space)
@@ -1315,7 +1326,7 @@ export async function checkLight(
 	// An `entities` filter's promises, on this entity's own cards.
 	const unmet: FilterClaim[] = []
 	// Read across every Space and found in none: nothing is known about the entity, so its claims are not judged.
-	const unknown = options.everySpace === true && read.scope.populated.length === 0
+	const unknown = every && read.scope.populated.length === 0
 	for (const claim of unknown ? [] : (options.claims ?? [])) {
 		const wanted = new Set(
 			claim.kind === "type" ? [TYPES_PROPERTY] : claim.typeIds.map((id) => conformingId("entity", id)),
@@ -1328,7 +1339,7 @@ export async function checkLight(
 	// An every-Space read keys its rows by geo-db Space id; the root's Spaces are PostGraphile ids. A root Space geo-db
 	// has not loaded cannot be judged (the Space map answers null), so it is `unmapped_space`, not a mismatch.
 	let heldIn = options.spaceIds ?? []
-	if (options.everySpace && heldIn.length > 0) {
+	if (every && heldIn.length > 0) {
 		const mapped: string[] = []
 		for (const space of heldIn) {
 			const geo = await deps.geoSpaceOf(space)
@@ -1350,7 +1361,7 @@ export async function checkLight(
 	// entity it has that geo-db holds nothing about in any loaded Space is not a difference geo-db can settle.
 	const uncompared = [...derived.uncompared]
 	if (derivedOnly) uncompared.push("derived_only")
-	if (options.everySpace && read.scope.populated.length === 0) uncompared.push("no_statements")
+	if (every && read.scope.populated.length === 0) uncompared.push("no_statements")
 	// A list that came back cut, or one the plan could not hold both ways, leaves the rows it did not return unchecked.
 	if (reverse.cut) uncompared.push("partial_values")
 	return {
@@ -1359,7 +1370,7 @@ export async function checkLight(
 		detail: {
 			entityId,
 			spaces: read.scope.spaces.length,
-			holders: options.everySpace ? read.scope.populated.length : undefined,
+			holders: every ? read.scope.populated.length : undefined,
 			missingInGeoDb: missing.length,
 			sampleMissing: missing.slice(0, 5),
 			geoOnlyRows: reverse.geoOnly.length,

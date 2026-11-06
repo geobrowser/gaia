@@ -1081,6 +1081,54 @@ describe("entity answers with no Space (every-Space reads)", () => {
 		})
 	})
 
+	describe("an answer that names no Space and holds no row", () => {
+		const bare = (response: Captured["response"]): Captured => ({
+			request: {
+				query: `query P($id: UUID!, $spaceId: UUID) { entity(id: $id) { id name spaceIds valuesList(first: 1000, filter: {spaceId: {is: $spaceId}}) { propertyId text integer float boolean datetime date decimal } relationsList(first: 1000, filter: {spaceId: {is: $spaceId}}) { typeId toEntityId } } }`,
+				variables: {id: EVERY.entityTypes.request.variables.id, spaceId: null},
+			},
+			response,
+		})
+		const empty = {
+			data: {
+				entity: {
+					id: EVERY.entityTypes.request.variables.id,
+					name: null,
+					spaceIds: [],
+					valuesList: [],
+					relationsList: [],
+				},
+			},
+		}
+
+		it("is read across every Space and matches when geo-db holds nothing either", async () => {
+			const s = everySetup({})
+			await run(s, bare(empty))
+			expect(unsupported()).toEqual({})
+			expect(results()).toEqual({match: 1})
+			expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
+		})
+
+		it("flags a name geo-db holds where PostGraphile has none", async () => {
+			const s = everySetup({[geoSpace(SPACE_A)]: typeRow(HEX, NEWS_STORY, "News story")})
+			await run(s, bare(empty))
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("stays no_space while the every-Space flag is off", async () => {
+			const s = everySetup({}, {flag: false})
+			await run(s, bare(empty))
+			expect(unsupported()).toEqual({no_space: 1})
+		})
+	})
+
+	it("accepts spacesByTopicIdConnection in an entities selection, uncompared", () => {
+		const query = `{ entities(filter: {id: {in: ["${EVERY.entityTypes.request.variables.id}"]}}) { id name spacesByTopicIdConnection(first: 20) { totalCount nodes { id members { totalCount } } } } }`
+		const analysis = analyzeLightEntities(parse(query), null, {})
+		expect(analysis.ok).toBe(true)
+		expect(analysis.ok && analysis.plan.uncompared).toContain("topic_spaces")
+	})
+
 	describe("more loaded Spaces than one line can name (GEODB_EVERY_SPACE_CHUNKS)", () => {
 		const filler = Array.from({length: 1100}, (_, i) => geoSpace(`${(i + 1).toString(16).padStart(32, "0")}`))
 		const many = [...ALL, ...filler]

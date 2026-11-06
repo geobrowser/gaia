@@ -45,7 +45,7 @@ describe("unsupported log", () => {
 		)
 		const [, fields] = log.warn.mock.calls[0] ?? []
 		expect(fields.shape).toBe(
-			"args=filter,first;filter=and([relations(some(toEntityId(is),typeId(is)))]),typeIds(anyEqualTo)",
+			"args=filter,first;filter=and([relations(some(toEntityId(is),typeId(is)))]),typeIds(anyEqualTo);sel=id",
 		)
 		expect(JSON.stringify(fields)).not.toContain(UUID)
 	})

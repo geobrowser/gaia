@@ -67,6 +67,8 @@ export const UNCOMPARED_REASONS = [
 	"space_members",
 	/** `spaces`: a Space's own settings (`type`, `address`, `topicId`, voting settings), which no entity card holds. */
 	"space_settings",
+	/** `spacesByTopicIdConnection`: the Spaces whose topic is the entity, a Space read no entity card holds; the rest of the entity is compared. */
+	"topic_spaces",
 ] as const
 
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]
