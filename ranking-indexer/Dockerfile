@@ -16,6 +16,7 @@ WORKDIR /app
 COPY hermes-schema ./hermes-schema
 COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-kafka ./hermes-kafka
+COPY geodb-cursor ./geodb-cursor
 COPY indexer_utils ./indexer_utils
 COPY sdk ./sdk
 COPY ranking-indexer ./ranking-indexer
