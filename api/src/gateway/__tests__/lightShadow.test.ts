@@ -1263,6 +1263,42 @@ describe("entities answers with no Space (every-Space reads)", () => {
 		})
 	})
 
+	// The nested card read: `entities { spaceIds relationsList { typeId toEntity { valuesList } } }`, the target not selected by id.
+	describe("a relations list whose target is selected without its id", () => {
+		const typeId = "e550fe517e904b2c8fffdf13408f5634"
+		const edgeType = "0a1b2c3d4e5f4a6b8c7d8e9f0a1b2c3d"
+		const target = "99999999999949998999999999999999"
+		const query = `query { entities(first: 10, filter: {typeIds: {anyEqualTo: "${typeId}"}}) { id spaceIds relationsList(filter: {spaceId: {in: ["${SPACE_B}"]}}) { typeId toEntity { valuesList { propertyId text } } } } }`
+		const body = (type: string) => ({
+			data: {
+				entities: [
+					{
+						id: FIRST.id,
+						spaceIds: [SPACE_B],
+						relationsList: [{typeId: type, toEntity: {valuesList: [{propertyId: edgeType, text: "x"}]}}],
+					},
+				],
+			},
+		})
+		const typed = `${TYPES}\t${conformingId("entity", typeId)}\ts1\t${FIRST.id}\t-\t-\t1\n`
+		const edge = `${conformingId("entity", edgeType)}\t${conformingId("entity", target)}\ts2\t${FIRST.id}\t-\tTarget\t1\n`
+		const callQuery = (s: ReturnType<typeof namesSetup>, payload: unknown) =>
+			call(s.points.get("entities") as never, query, {}, payload)
+
+		it("matches when geo-db holds a relation of the row's type", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge})
+			await callQuery(s, body(edgeType))
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({nested_entity: 1})
+		})
+
+		it("flags a relation type geo-db does not hold", async () => {
+			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge})
+			await callQuery(s, body(typeId))
+			expect(results()).toEqual({mismatch: 1})
+		})
+	})
+
 	it("stays no_space and reads nothing with the switch off", async () => {
 		const s = namesSetup({[geoSpace(SPACE_A)]: nameRow(FIRST.id, FIRST.name)}, {flag: false})
 		await run(s)
