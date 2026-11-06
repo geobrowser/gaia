@@ -2,6 +2,7 @@ import {swaggerUI} from "@hono/swagger-ui"
 import {Hono} from "hono"
 import {cors} from "hono/cors"
 import {openAPISpecs} from "hono-openapi"
+import {createForYouConfigShadow, readForYouConfigShadowConfig} from "./src/forYou/configShadow"
 import {MIN_INTERNAL_TOKEN_LENGTH, mountInternalRoutes} from "./src/forYou/router"
 import {readGatewayConfig} from "./src/gateway/config"
 import {createEntityResolver} from "./src/gateway/entityServe"
@@ -200,7 +201,18 @@ log.info("Proposals routes enabled")
 // Private server-to-server routes (GEO-3140 For you, GEO-3224 pair fit). Mounted only when
 // GAIA_INTERNAL_TOKEN is set, so without it /internal/* does not exist (404). Every request must
 // carry the token; see src/forYou/router.ts. A short token is refused rather than mounted.
-const internalRoutes = mountInternalRoutes(app, db, process.env.GAIA_INTERNAL_TOKEN)
+// GEODB_FOR_YOU_CONFIG_SHADOW (off by default) also reads the keyed for_you_config record from geo-db after the For you
+// route reads its settings and counts whether it equals them (gaia_api_for_you_config_shadow_total). Never changes a response.
+const forYouConfigShadowConfig = readForYouConfigShadowConfig(process.env)
+const forYouConfigShadow = forYouConfigShadowConfig.enabled
+	? createForYouConfigShadow({
+			config: forYouConfigShadowConfig,
+			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+			log,
+		})
+	: null
+const internalRoutes = mountInternalRoutes(app, db, process.env.GAIA_INTERNAL_TOKEN, forYouConfigShadow)
 if (internalRoutes === "enabled") {
 	log.info("Internal routes enabled")
 } else if (internalRoutes === "too_short") {

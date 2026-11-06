@@ -8,6 +8,7 @@
 import pg from "pg"
 import type {PgRelationRow, PgValueRow} from "./pgAdapter.js"
 import type {ProposalActionRow} from "./proposalActionsKeyed.js"
+import type {ForYouConfigRow} from "./forYouConfigKeyed.js"
 import type {SpaceVotingSettingsRow} from "./spaceVotingSettingsKeyed.js"
 import type {ProposalVersionRow} from "./proposalVersionsKeyed.js"
 import type {ProposalStatusRow} from "./proposalStatusKeyed.js"
@@ -249,6 +250,17 @@ export async function readSubspaceRows(db: ReadOnlyPg): Promise<SubspaceRow[]> {
 		 SELECT space_id::text, topic_id::text, 'topic' FROM subspace_topics`,
 		[],
 		300_000,
+	)
+}
+
+/** The one `personalization.for_you_config` row. Numbers come back as text. */
+export async function* readForYouConfigRows(db: ReadOnlyPg): AsyncGenerator<ForYouConfigRow> {
+	yield* await db.read<ForYouConfigRow>(
+		`SELECT max_boost_days::text AS max_boost_days, interest_half_saturation::text AS interest_half_saturation,
+		        exploration_share::text AS exploration_share, max_topics::text AS max_topics
+		 FROM personalization.for_you_config`,
+		[],
+		60_000,
 	)
 }
 

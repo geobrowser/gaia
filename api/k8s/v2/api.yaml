@@ -288,6 +288,11 @@ spec:
             # response. Needs the geodb-feeder's proposal status records (GEODB_PROPOSAL_STATUS backfill) first.
             - name: GEODB_GOVERNANCE_SHADOW
               value: "0"
+            # The for_you_config record in geo-db's config Space read back after the For you route reads its
+            # settings, counted against them (gaia_api_for_you_config_shadow_total). OFF; never changes a
+            # response. Needs the geodb-feeder's for_you_config backfill (GEODB_FOR_YOU_CONFIG) run first.
+            - name: GEODB_FOR_YOU_CONFIG_SHADOW
+              value: "0"
             - name: NODE_EXTRA_CA_CERTS
               value: /ssl/ca.crt
             - name: DATABASE_URL

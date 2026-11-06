@@ -27,6 +27,8 @@ export type Config = {
 	subspaces: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_SPACE_VOTING_SETTINGS (with GEODB_RECORD_KEYS): keyed voting settings from `space.governance` (spaceVotingSettingsKeyed.ts). */
 	spaceVotingSettings: {enabled: boolean; topic: string; groupId: string}
+	/** GEODB_FOR_YOU_CONFIG (with GEODB_RECORD_KEYS): the for_you_config row as a keyed record, by backfill only (forYouConfigKeyed.ts). */
+	forYouConfig: {enabled: boolean}
 	/** GEODB_PROPOSAL_VERSIONS (with GEODB_RECORD_KEYS): keyed proposal versions from `space.governance` (proposalVersionsKeyed.ts). */
 	proposalVersions: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_PROPOSAL_STATUS (with GEODB_RECORD_KEYS): keyed executed_at / unexecutable_at facts from `space.governance` (proposalStatusKeyed.ts). */
@@ -197,6 +199,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			topic: env.KAFKA_SPACE_VOTING_SETTINGS_TOPIC ?? `${environment}.space.governance`,
 			groupId: env.KAFKA_SPACE_VOTING_SETTINGS_GROUP_ID ?? `geodb-feeder-space-voting-settings-keyed-v1-${environment}`,
 		},
+		/** GEODB_FOR_YOU_CONFIG: lets the for-you-config backfill Job write the record. No consumer. Default off. */
+		forYouConfig: {enabled: flag(env.GEODB_FOR_YOU_CONFIG)},
 		proposalVersions: {
 			/**
 			 * GEODB_PROPOSAL_VERSIONS: consume the PROPOSAL_CREATED and PROPOSAL_UPDATED events of `space.governance`

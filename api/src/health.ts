@@ -1,5 +1,6 @@
 import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
+import {renderForYouConfigMetrics} from "./forYou/configShadow"
 import {renderGatewayMetrics} from "./gateway/metrics"
 import {renderServeMetrics} from "./gateway/serveMetrics"
 import {renderIdMapMetrics} from "./geodb/idMap"
@@ -143,6 +144,8 @@ function renderPrometheusMetrics(): string {
 		renderGatewayMetrics(),
 		// Proposal status from geo-db records against the served status (GEODB_GOVERNANCE_SHADOW) — see proposals/governance/metrics.ts.
 		renderGovernanceMetrics(),
+		// For you config from geo-db against the served settings (GEODB_FOR_YOU_CONFIG_SHADOW) — see forYou/configShadow.ts.
+		renderForYouConfigMetrics(),
 		// GraphQL root fields served from geo-db (mode on): served/fallback by field and reason — see gateway/serveMetrics.ts.
 		renderServeMetrics(),
 		// The reverse id map the served fields read: ids by result (miss = not served) and Postgres reads — see geodb/idMap.ts.
