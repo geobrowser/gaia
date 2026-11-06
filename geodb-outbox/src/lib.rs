@@ -11,7 +11,9 @@
 //! Every failure is logged and counted, never raised: a full queue drops the unit
 //! (`geodb_outbox_mirror_dropped_total`), a payload over [`PAYLOAD_MAX`] is skipped
 //! (`geodb_outbox_mirror_skipped_total`), a pipe error drops the child and nothing respawns for
-//! the cool-down (`geodb_outbox_mirror_errors_total`). The mirror is a measurement, so a dropped
+//! the cool-down (`geodb_outbox_mirror_errors_total`). The exception is a pipe that was already
+//! open when the unit arrived: geo-db closes idle pipes, so that unit is replayed once over a
+//! fresh pipe (`geodb_outbox_mirror_reconnects_total`) rather than lost. The mirror is a measurement, so a dropped
 //! unit is a gap a later comparison finds, not a fault.
 //!
 //! The ledger key is the outbox row's `idempotency_key` decoded from hex (a SHA-256, 32 bytes).
@@ -235,11 +237,40 @@ impl Worker {
 
     async fn enter(&mut self, unit: &Unit) -> Result<Entered, MirrorError> {
         let line = enter_line(unit)?;
-        let body = self.call(&line, ENTER_ANSWER_MAX).await?;
+        // An enter is put-if-absent on the ledger key, so replaying it on a fresh pipe is safe.
+        let body = self.call_replaying(&line, ENTER_ANSWER_MAX).await?;
         match body.trim_end() {
             "entered" => Ok(Entered::New),
             "duplicate" => Ok(Entered::Duplicate),
             other => Err(MirrorError::BadFrame(other.to_string())),
+        }
+    }
+
+    /// As [`Worker::call`], for a request that is safe to send twice. geo-db closes a pipe that
+    /// sat idle past its idle bound (60 s) and ends it at grant expiry (`grant_ttl_s`), and the
+    /// held client does not ping while it waits on stdin, so a pipe that has been open a while
+    /// is often already dead when the next unit arrives. When a pipe opened by an earlier call
+    /// fails, the request is sent once more over a fresh pipe, ignoring the cool-down (the
+    /// failure was the old pipe's, not the server's). A pipe opened by this call that fails
+    /// is a real fault and is not retried.
+    pub(crate) async fn call_replaying(
+        &mut self,
+        line: &str,
+        max_body: usize,
+    ) -> Result<String, MirrorError> {
+        let reused = self.pipe.is_some();
+        match self.call(line, max_body).await {
+            Err(e) if reused && !matches!(e, MirrorError::CoolingDown) => {
+                metrics::counter!("geodb_outbox_mirror_reconnects_total").increment(1);
+                info!(
+                    event = "geodb_outbox.pipe_lost",
+                    error = %e,
+                    "held work pipe was dead; reopening and replaying the unit"
+                );
+                self.failed_at = None;
+                self.call(line, max_body).await
+            }
+            other => other,
         }
     }
 
@@ -546,6 +577,43 @@ mod tests {
 
     #[tokio::test]
     async fn a_refusal_drops_the_child_and_cools_down() {
+        let mut w = worker(
+            "echo ready; read -r l; printf '%s\\n' '-16' 'NotFoundOrRestri'",
+            Duration::from_secs(60),
+        );
+        assert!(matches!(
+            w.enter(&unit()).await,
+            Err(MirrorError::Refused(_))
+        ));
+        assert!(matches!(
+            w.enter(&unit()).await,
+            Err(MirrorError::CoolingDown)
+        ));
+    }
+
+    // The first child answers one enter, then dies; the second answers every enter.
+    fn dying_script(state: &std::path::Path) -> String {
+        format!(
+            "echo ready; if [ -e {s} ]; then while IFS= read -r l; do printf '+8\\nentered\\n'; done; \
+             else : > {s}; read -r l; printf '+8\\nentered\\n'; exit 0; fi",
+            s = state.display()
+        )
+    }
+
+    #[tokio::test]
+    async fn a_pipe_closed_between_units_loses_nothing() {
+        let state = tmp("dying");
+        let mut w = worker(&dying_script(&state), Duration::from_secs(60));
+        assert_eq!(w.enter(&unit()).await.unwrap(), Entered::New);
+        // The child has exited; the next unit hits the dead pipe, reopens and still lands, even
+        // though the cool-down is a minute.
+        assert_eq!(w.enter(&unit()).await.unwrap(), Entered::New);
+        assert_eq!(w.enter(&unit()).await.unwrap(), Entered::New);
+        let _ = std::fs::remove_file(&state);
+    }
+
+    #[tokio::test]
+    async fn a_fresh_pipe_that_fails_is_not_retried() {
         let mut w = worker(
             "echo ready; read -r l; printf '%s\\n' '-16' 'NotFoundOrRestri'",
             Duration::from_secs(60),
