@@ -22,11 +22,17 @@ use crate::models::voting::{
 /// Storage for vote-related database operations.
 pub struct Storage {
     pool: PgPool,
+    /// Best-effort copy of the ranking rows into geo-db; `None` unless `GEODB_DERIVED_MIRROR`
+    /// is on. See [`crate::derived_scores`].
+    derived: Option<std::sync::Arc<geodb_cursor::derived::DerivedMirror>>,
 }
 
 impl Storage {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            derived: geodb_cursor::derived::DerivedMirror::from_env().map(std::sync::Arc::new),
+        }
     }
 
     /// Connect to the database and create a new Storage instance.
@@ -271,13 +277,41 @@ impl Storage {
             return Ok(0);
         }
 
-        let scored: i32 =
-            sqlx::query_scalar("SELECT public.refresh_entity_ranking_scores($1::uuid[])")
-                .bind(&entity_ids)
-                .fetch_one(&self.pool)
-                .await?;
+        let scored = self.refresh_and_mirror(&entity_ids).await?;
 
         Ok(scored.max(0) as u64)
+    }
+
+    /// Runs `refresh_entity_ranking_scores` for `entity_ids`, then, when the geo-db derived mirror
+    /// is on, copies the type and topic ranking rows it wrote for those ids.
+    ///
+    /// Postgres is the source of truth and its result is what is returned. The mirror reads the
+    /// rows for these ids before and after the call (the function reconciles them in SQL, so
+    /// the read-back is the only way to see which keys left), and every failure on that side is
+    /// counted and logged, never returned.
+    async fn refresh_and_mirror(&self, entity_ids: &[Uuid]) -> Result<i32, StorageError> {
+        let Some(mirror) = self.derived.as_deref() else {
+            return Ok(self.refresh_scores_sql(entity_ids).await?);
+        };
+        let before = crate::derived_scores::read_rows(&self.pool, entity_ids).await;
+        let scored = self.refresh_scores_sql(entity_ids).await?;
+        let after = crate::derived_scores::read_rows(&self.pool, entity_ids).await;
+        match (before, after) {
+            (Ok(before), Ok(after)) => crate::derived_scores::mirror(mirror, before, after).await,
+            (b, a) => {
+                let e = b.err().or(a.err());
+                tracing::warn!(event = "geodb_derived.readback_failed", error = ?e, "could not read ranking rows for the geo-db mirror; skipped");
+                metrics::counter!("geodb_derived_mirror_errors_total", "table" => "ranking_readback").increment(1);
+            }
+        }
+        Ok(scored)
+    }
+
+    async fn refresh_scores_sql(&self, entity_ids: &[Uuid]) -> Result<i32, sqlx::Error> {
+        sqlx::query_scalar("SELECT public.refresh_entity_ranking_scores($1::uuid[])")
+            .bind(entity_ids)
+            .fetch_one(&self.pool)
+            .await
     }
 
     /// Every entity somebody has replied to.
@@ -388,11 +422,7 @@ impl Storage {
         let mut scored = 0u64;
 
         for batch in entity_ids.chunks(RANKING_REFRESH_BATCH_SIZE) {
-            let count: i32 =
-                sqlx::query_scalar("SELECT public.refresh_entity_ranking_scores($1::uuid[])")
-                    .bind(batch)
-                    .fetch_one(&self.pool)
-                    .await?;
+            let count = self.refresh_and_mirror(batch).await?;
             scored += count.max(0) as u64;
         }
 

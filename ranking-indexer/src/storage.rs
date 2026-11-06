@@ -41,6 +41,9 @@ fn resolve_window_bound(
 #[derive(Clone)]
 pub struct Storage {
     pool: PgPool,
+    /// Best-effort copy of `ranks.ranking_scores` into geo-db (collection 11); `None` unless
+    /// `GEODB_DERIVED_MIRROR` is on. See [`crate::derived_mirror`].
+    derived: Option<std::sync::Arc<geodb_cursor::derived::DerivedMirror>>,
 }
 
 impl Storage {
@@ -49,7 +52,10 @@ impl Storage {
             .max_connections(10)
             .connect(database_url)
             .await?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            derived: geodb_cursor::derived::DerivedMirror::from_env().map(std::sync::Arc::new),
+        })
     }
 
     pub fn pool(&self) -> &PgPool {
@@ -729,6 +735,19 @@ impl Storage {
         rows: &[ScoreRow],
     ) -> Result<(), IndexerError> {
         let mut tx = self.pool.begin().await?;
+        // Only when the mirror is on: the keys this block held, so the ones it no longer has can
+        // be deleted from geo-db. A failed read just skips the deletes; Postgres is unaffected.
+        let prior = if self.derived.is_some() {
+            sqlx::query_as::<_, (Uuid, Uuid)>(
+                "SELECT entity_id, space_id FROM ranks.ranking_scores WHERE block_id = $1",
+            )
+            .bind(block_id)
+            .fetch_all(&mut *tx)
+            .await
+            .ok()
+        } else {
+            None
+        };
         sqlx::query("DELETE FROM ranks.ranking_scores WHERE block_id = $1")
             .bind(block_id)
             .execute(&mut *tx)
@@ -747,6 +766,10 @@ impl Storage {
             .await?;
         }
         tx.commit().await?;
+        if let Some(mirror) = self.derived.as_deref() {
+            crate::derived_mirror::mirror_block(mirror, block_id, rows, prior.unwrap_or_default())
+                .await;
+        }
         Ok(())
     }
 

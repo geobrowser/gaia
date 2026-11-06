@@ -6,6 +6,7 @@
 pub mod clickhouse;
 pub mod consumer;
 pub mod dedup;
+pub mod derived_mirror;
 pub mod detect;
 pub mod eligibility;
 pub mod error;

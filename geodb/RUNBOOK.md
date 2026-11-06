@@ -697,6 +697,36 @@ proposal Postgres does not hold yet, and kg-indexer drops a whole block on a per
 
 Rollback: unset `GEODB_PROPOSAL_STATUS`. The records stay in the Space, unread; nothing reads them yet.
 
+### 2f. Derived score tables (GEODB_DERIVED_MIRROR)
+
+Shadow only, nothing reads these rows. With `GEODB_DERIVED_MIRROR=1` (default off) the score writers copy the rows they
+write into geo-db's derived class (last-write-wins, no history) after their Postgres write commits. Postgres stays the
+source of truth: a geo-db error is counted (`geodb_derived_mirror_errors_total{table}`) and logged, never returned, a
+call is bounded by `GEODB_DERIVED_BUDGET_MS` (default 5000; rows past it are counted in
+`geodb_derived_mirror_dropped_total` and left for the next write of the key), and after a failure the pipe is not
+respawned for 10 s.
+
+| writer | tables mirrored (collection) |
+| -- | -- |
+| `vote-indexer` (vote batches, `comment_sweep`, `new_entity_sweep`) | `entity_type_ranking` (0), `entity_topic_ranking` (1) |
+| `ranking-indexer` (`replace_ranking_scores`) | `ranks.ranking_scores` (11) |
+
+Both need `geodb-client` in the image (the init-container pattern of hermes, `hermes/k8s/v2/hermes-pipeline.yaml`),
+`GEODB_KEY_PATH`, `GEODB_BINDING_PATH` and `GEODB_CLIENT_BIN`, and a serve opened with `derived_rows_max` above 0
+(144 B a row resident). The key's binding line must grant `derived=0,1,11`; the hermes key grants only collection 10, so
+this is a new key and binding (not minted). Not mirrored: `entity_ranking_scores` (48.9M rows, over the resident class),
+`global_scores`, `local_scores`, `space_scores` (written by the Python scoring cronjob), trending and agenda listings.
+
+The SQL function `refresh_entity_ranking_scores` writes the type and topic tables itself, so the vote-indexer reads the
+rows for the touched entity ids before and after the call and sends the difference (changed or new rows as puts, keys
+that left as deletes). The pipe takes one row a line and fsyncs each, so this suits incremental writes; a backfill of
+the whole table needs a batch verb first.
+
+Type ranking gate: `geodb-feeder/src/typeRankingGate.ts <postgres.tsv> <scan.tsv>` diffs `entity_type_ranking` against
+`geodb-client derived scan 0 0x<type uuid hex> --first 512 --pages 100000` per type; the inputs and the classification
+are in that file's header. Rows for entities not refreshed since the flag went on show as Postgres-only until their
+next refresh, so run `refresh_ranking_scores_for` over the entity set after turning the flag on.
+
 ### 2d. Raising the Space cap
 
 `spaces` in `geodb-serve-config` caps the Spaces the store can hold; at the cap, founding refuses and the

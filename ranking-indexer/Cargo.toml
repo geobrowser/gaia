@@ -72,6 +72,7 @@ name = "agenda_listings_refresh"
 path = "src/bin/agenda_listings_refresh.rs"
 
 [dependencies]
+geodb-cursor = { path = "../geodb-cursor" }
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
 hermes-kafka = { path = "../hermes-kafka" }
