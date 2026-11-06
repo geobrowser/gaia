@@ -7,6 +7,7 @@ import {renderGatewayMetrics} from "./gateway/metrics"
 import {renderRankTypedMetrics} from "./gateway/rankTypedShadow"
 import {renderServeMetrics} from "./gateway/serveMetrics"
 import {renderIdMapMetrics} from "./geodb/idMap"
+import {renderKeyedRecordsShadowMetrics} from "./geodb/keyedRecordsShadow"
 import {renderGeoDbCardMetrics} from "./geodb/metrics"
 import {renderRankingScoresShadowMetrics} from "./geodb/rankingScoresShadow"
 import {renderScoresShadowMetrics} from "./geodb/scoresShadow"
@@ -163,6 +164,8 @@ function renderPrometheusMetrics(): string {
 		renderAccountWeightsMetrics(),
 		// Sampled score-table rows from geo-db collections 2/3/4 against Postgres (GEODB_SCORES_SHADOW) — see geodb/scoresShadow.ts.
 		renderScoresShadowMetrics(),
+		// Sampled user_votes / ranks rows against their keyed records (GEODB_KEYED_RECORDS_SHADOW) — see geodb/keyedRecordsShadow.ts.
+		renderKeyedRecordsShadowMetrics(),
 		// entity_ranking_scores against the collection-21 overlay (GEODB_RANKING_SCORES_SHADOW) — see geodb/rankingScoresShadow.ts.
 		renderRankingScoresShadowMetrics(),
 		renderRankTypedMetrics(),

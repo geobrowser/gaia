@@ -18,9 +18,10 @@ import {
 } from "./src/gateway/entitiesConnectionShadow"
 import {createEntityResolver} from "./src/gateway/entityServe"
 import {createEntityShadow, ENTITY_FIELD} from "./src/gateway/entityShadow"
-import {createGateway, fieldModeOf} from "./src/gateway/gateway"
+import {createGateway, fieldModeOf, type GatewayDeps} from "./src/gateway/gateway"
 import {createMetasShadow, METAS_FIELD} from "./src/gateway/metasShadow"
 import {createPointReadShadows, POINT_READ_FIELDS} from "./src/gateway/pointReadShadows"
+import {createGatewayProbe, readGatewayProbeConfig} from "./src/gateway/probe"
 import {createRankTypedObserver, readRankTypedConfig} from "./src/gateway/rankTypedShadow"
 import {createReadBudget} from "./src/gateway/readBudget"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
@@ -29,6 +30,7 @@ import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
 import {createDerivedReader} from "./src/geodb/derived"
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
+import {createKeyedRecordsShadow, readKeyedRecordsShadowConfig} from "./src/geodb/keyedRecordsShadow"
 import {createRankingScoresShadow, readRankingScoresShadowConfig} from "./src/geodb/rankingScoresShadow"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createScoresShadow, readScoresShadowConfig} from "./src/geodb/scoresShadow"
@@ -43,6 +45,7 @@ import {createAccountWeightsShadow, readAccountWeightsShadowConfig} from "./src/
 import {createProfileRouter} from "./src/profile"
 import {createProfileShadow, readProfileShadowConfig} from "./src/profile/shadow"
 import {createProposalsRouter} from "./src/proposals"
+import {createGovernanceSampler, readGovernanceSamplerConfig} from "./src/proposals/governance/sampler"
 import {createGovernanceShadow, readGovernanceShadowConfig} from "./src/proposals/governance/shadow"
 import {createSystemSpaceLookup} from "./src/proposals/governance/systemSpaces"
 import {createSearchRouter} from "./src/search"
@@ -232,6 +235,12 @@ const governanceShadow = governanceShadowConfig.enabled
 			log,
 		})
 	: null
+// GEODB_GOVERNANCE_SHADOW_SAMPLER (off by default) also feeds that shadow proposals sampled from Postgres on a timer, so it
+// compares without proposal traffic. Needs GEODB_GOVERNANCE_SHADOW on.
+const governanceSamplerConfig = readGovernanceSamplerConfig(process.env)
+if (governanceShadow && governanceSamplerConfig.enabled) {
+	createGovernanceSampler({config: governanceSamplerConfig, db, shadow: governanceShadow, log}).start()
+}
 app.route("/proposals", createProposalsRouter(db, runtime, governanceShadow))
 log.info("Proposals routes enabled")
 
@@ -298,6 +307,18 @@ if (rankingScoresShadowConfig.enabled) {
 		log,
 	}).start()
 }
+// GEODB_KEYED_RECORDS_SHADOW (off by default) samples user_votes / ranks.rankings / ranks.ranking_blocks rows from Postgres on a
+// timer and compares each with its keyed record in geo-db's votes Space (gaia_api_keyed_records_shadow_total). Background only.
+const keyedRecordsShadowConfig = readKeyedRecordsShadowConfig(process.env)
+if (keyedRecordsShadowConfig.enabled) {
+	createKeyedRecordsShadow({
+		config: keyedRecordsShadowConfig,
+		db,
+		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+		systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+		log,
+	}).start()
+}
 const internalRoutes = mountInternalRoutes(
 	app,
 	db,
@@ -354,7 +375,7 @@ const rankTypedObserver =
 				log,
 			})
 		: null
-const graphqlHandler = createGateway({
+const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 	config: gatewayConfig,
 	observers: rankTypedObserver ? [rankTypedObserver] : undefined,
 	resolvers:
@@ -483,7 +504,27 @@ const graphqlHandler = createGateway({
 	delegate: (request, context: GraphQLServerContext) => graphqlServer.fetch(request, context),
 	onClassified: (classification, route) =>
 		log.debug("GraphQL gateway routed operation", {...classification, route: route.kind, reason: route.reason}),
-})
+}
+const graphqlHandler = createGateway(gatewayDeps)
+// GATEWAY_PROBE (off by default) asks for `metas` and `relation(id:)` itself on a timer, through a second gateway built from
+// the same shadows with the sample rate forced to 1, so their gaia_api_gateway_shadow_total series fill without client traffic.
+// It never touches a request and never serves: no resolvers or observers, only the shadows.
+const gatewayProbeConfig = readGatewayProbeConfig(process.env)
+if (gatewayProbeConfig.enabled && gatewayConfig.mode === "on") {
+	const probeGateway = createGateway({
+		...gatewayDeps,
+		config: {...gatewayConfig, shadowSampleRate: 1},
+		resolvers: undefined,
+		observers: undefined,
+		random: () => 0,
+	})
+	createGatewayProbe({
+		config: gatewayProbeConfig,
+		db,
+		send: (request) => probeGateway(request, {requestId: "gateway-probe"}),
+		log,
+	}).start()
+}
 if (gatewayConfig.mode === "on")
 	log.info("GraphQL gateway enabled", {fields: Object.fromEntries(gatewayConfig.fieldModes)})
 

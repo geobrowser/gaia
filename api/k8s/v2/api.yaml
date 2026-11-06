@@ -312,6 +312,13 @@ spec:
             # response. Needs the geodb-feeder's proposal status records (GEODB_PROPOSAL_STATUS backfill) first.
             - name: GEODB_GOVERNANCE_SHADOW
               value: "0"
+            # Background samplers that feed the shadows above without waiting for traffic. All off until flipped.
+            - name: GEODB_GOVERNANCE_SHADOW_SAMPLER
+              value: "0"
+            - name: GEODB_KEYED_RECORDS_SHADOW
+              value: "0"
+            - name: GATEWAY_PROBE
+              value: "0"
             # Compares the served /profile response with geo-db's front page card in the background (never changes the
             # response); the MAX_* limits stay at their defaults.
             - name: GEODB_PROFILE_SHADOW
