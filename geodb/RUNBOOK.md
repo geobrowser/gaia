@@ -1307,3 +1307,42 @@ and the gauges `delivery_worker_shadow_pending_{units,rows}`. Memory is bounded 
 geodb image whose `geodb-client work pipe` knows `claim` and `complete` (geo-db `final` from "client: work
 pipe takes claim, complete, retry and fail"); bump the pinned tag in `delivery-worker.yaml` to it first.
 Turn it on after the indexer's mirror has been running, as a separate change.
+
+## 12. The score writers' key (derived collections 0, 1, 11): enabling GEODB_DERIVED_MIRROR
+
+The derived-score mirror (§2f) is wired but off: vote-indexer and ranking-indexer carry the `geodb-setup` init
+container, the `geodb-key` mount and `GEODB_DERIVED_MIRROR="0"`. Both services share one key, `geodb-scores-key`;
+the binding gives it `derived=0,1,11` and nothing else (`read=- write=- publish=- derived=0,1,11`). The key is minted
+inside the cluster by `geodb/k8s/v2/geodb-scores-key-job.yaml`, the same create-only pattern as §10; the private half
+never leaves the cluster. Needs geo-db `b05dfd2217` or later (init container image, and `derived=` with a list), and a
+geodb image (the serve StatefulSet) built from a gaia ref that includes the supervisor's `GEODB_SCORES_KEYID`
+support, since the supervisor ships in that image. Check that serve's `derived_rows_max` is above 0 and sized for
+these tables (144 B a row resident) before turning the flag on.
+
+```bash
+# 1. mint (idempotent: never overwrites an existing Secret)
+GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb/k8s/v2/geodb.yaml | sort -u)
+sed -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" geodb/k8s/v2/geodb-scores-key-job.yaml | $K apply -f -
+$K -n gaia wait --for=condition=complete job/geodb-scores-key --timeout=120s
+$K -n gaia logs job/geodb-scores-key          # prints the public key id only
+# 2. register: restart serve so the supervisor adds the principal (brief reopen; reads shadow meanwhile)
+$K -n gaia rollout restart statefulset/geodb && $K -n gaia rollout status statefulset/geodb
+# 3. roll the writers so the key mount is populated (the init container runs at pod start)
+$K -n gaia rollout restart deploy/vote-indexer deploy/ranking-indexer
+```
+
+4. Backfill first. The mirror copies only rows written after the flag is on (§2f), so rows that were not refreshed
+   since then are missing from geo-db until their next refresh. Run `refresh_ranking_scores_for` over the entity set
+   before or right after step 5 (not the table-wide backfill: the pipe takes one row a line and fsyncs each, so a
+   whole-table load needs a batch verb first). Then diff with the type ranking gate (§2f).
+5. Set `GEODB_DERIVED_MIRROR` to `"1"` in `scoring-service/deployment/v2/vote-indexer.yaml` and
+   `ranking-indexer/k8s/v2/ranking-indexer.yaml` in a separate PR, so the flag change can be reverted alone.
+6. Verify after the rollout: `geodb_derived_mirror_puts_total{table}` rises for `entity_type_ranking`,
+   `entity_topic_ranking` and `ranking_scores`, while `geodb_derived_mirror_errors_total` and
+   `geodb_derived_mirror_dropped_total` stay at 0. Postgres is unaffected either way (errors are counted, never
+   returned). A non-zero error count means stop and look: usually the key is not in the binding (step 2 not done) or
+   `derived_rows_max` is 0.
+
+Rollback: set the flag back to `"0"` (or delete the Secret and restart serve and the writers). The rows stay in the
+store, unread. Rotate: delete Secret and Job `geodb-scores-key`, rerun step 1, then steps 2 and 3. The init
+container's image tag moves with the geodb pin; keep it at or above `b05dfd2217`.

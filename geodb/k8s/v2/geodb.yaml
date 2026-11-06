@@ -23,6 +23,8 @@
 #                        derived collection 10 only
 #   geodb-outbox-key     optional; made in-cluster by geodb-outbox-key-job.yaml (RUNBOOK §11): the
 #                        notification-indexer's key, work class only
+#   geodb-scores-key     optional; made in-cluster by geodb-scores-key-job.yaml (RUNBOOK §12): vote-indexer's and
+#                        ranking-indexer's key, derived collections 0, 1 and 11 only
 #
 # The geodb image is pinned (deploy-v2 rewrites every :latest in a manifest to the gaia tag, which
 # would point serve at a tag the geodb repository does not have). Only the feeder image is :latest.
@@ -210,6 +212,13 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: geodb-outbox-key
+                  key: keyid
+                  optional: true
+            # Optional: the score writers' key (derived collections 0, 1, 11 only; RUNBOOK section 12). Absent = no such principal.
+            - name: GEODB_SCORES_KEYID
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-scores-key
                   key: keyid
                   optional: true
             - name: GEODB_GRANT_TTL_S
