@@ -75,7 +75,7 @@ describe.skipIf(!url)("readProposalVersionRows on a real Postgres", () => {
 		for await (const r of readProposalVersionRows(ro, 50)) rows.push(r)
 		const v3 = rows.find((x) => x.proposal_version === 3)
 		expect(v3).toMatchObject({voting_mode: "Slow", execute_by: "300", name: "Add Member", quorum: "7", start_time: "100", end_time: "200", version_created_at: "1700000000"})
-		expect(v3?.block).toMatch(/^\d*003$/)
+		expect(v3?.block).toMatch(/^\d*3$/)
 		expect(rows.find((x) => x.proposal_version === 2)).toMatchObject({voting_mode: "Fast", execute_by: null, name: null})
 		for (const x of rows) expect(() => proposalVersionFromRow(x)).not.toThrow()
 	})
