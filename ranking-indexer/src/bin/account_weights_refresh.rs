@@ -9,6 +9,8 @@
 //! The refresh is a single function call, so it is one transaction: readers keep the previous
 //! weights until the new ones commit.
 //!
+//! With `ACCOUNT_WEIGHTS_RUST_COMPUTE=1` the mirror sends rows scored in code
+//! (`account_weights_compute`), after checking them against the table the SQL wrote.
 //! With `GEODB_DERIVED_MIRROR=1` the table is then copied into geo-db collection 5 (RUNBOOK 2f-weights).
 //!
 //! Usage: `DATABASE_URL=... cargo run --bin account_weights_refresh`
@@ -19,9 +21,36 @@ use std::time::Instant;
 use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 
+use ranking_indexer::account_weights_compute::{self, Params, VoterAgg};
 use ranking_indexer::account_weights_mirror::{self, AccountWeight};
 use ranking_indexer::error::IndexerError;
 use uuid::Uuid;
+
+fn rust_compute_enabled() -> bool {
+    matches!(
+        env::var("ACCOUNT_WEIGHTS_RUST_COMPUTE").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+/// Scores the voters in code as of now, from the same inputs the SQL read.
+async fn rust_rows(pool: &sqlx::PgPool) -> Result<Vec<AccountWeight>, IndexerError> {
+    let voters: Vec<VoterAgg> = sqlx::query_as(account_weights_compute::AGG_SQL)
+        .fetch_all(pool)
+        .await?;
+    let excluded: std::collections::HashSet<Uuid> =
+        sqlx::query_scalar(account_weights_compute::EXCLUSIONS_SQL)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .collect();
+    account_weights_compute::compute(
+        &voters,
+        &excluded,
+        chrono::Utc::now().timestamp_micros(),
+        &Params::default(),
+    )
+}
 
 #[tokio::main]
 async fn main() -> Result<(), IndexerError> {
@@ -65,7 +94,35 @@ async fn main() -> Result<(), IndexerError> {
             .fetch_all(&pool)
             .await
         {
-            Ok(rows) => {
+            Ok(table) => {
+                // ACCOUNT_WEIGHTS_RUST_COMPUTE (default off): score in code from the votes and
+                // exclusions, mirror those rows, and log how many differ from the table the SQL
+                // just wrote. Any failure falls back to mirroring the table.
+                let rows = if rust_compute_enabled() {
+                    match rust_rows(&pool).await {
+                        Ok(rust) => {
+                            let mismatched =
+                                account_weights_compute::count_mismatches(&rust, &table);
+                            info!(
+                                rust = rust.len(),
+                                table = table.len(),
+                                mismatched,
+                                "account weights rust compute checked against the table"
+                            );
+                            if mismatched == 0 {
+                                rust
+                            } else {
+                                table
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "account weights rust compute skipped");
+                            table
+                        }
+                    }
+                } else {
+                    table
+                };
                 account_weights_mirror::mirror(mirror, &rows, &prior).await;
                 info!(
                     rows = rows.len(),
