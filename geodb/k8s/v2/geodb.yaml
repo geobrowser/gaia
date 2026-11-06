@@ -71,12 +71,20 @@ data:
   # open and close (256 -> 384 -> 512 -> 640 -> 768 -> 896 -> 1024): an open refuses with
   # ResourceExhausted when the last close kept more resident versions than the new cap
   # can load. Lowering it below a founded ordinal fails the open. See RUNBOOK §2d.
+  # derived_rows_max turns on the derived class (plan 10.14; hermes cursors in collection 10, vote
+  # cells and tallies): 262144 rows x 144 B, about 40 MB carved at open; 0 or absent = class off and
+  # every derived put refused InvalidConfig. work_rows_max turns on the work class (plan 10.16; the
+  # notification outbox shadow): 4,000,000 is plan 10.16's 30-day sizing, about 600 MB at the cap.
+  # Removing either key turns its class off again; the store keeps <root>/derived and <root>/work
+  # and an open without the key ignores them.
   serve.cfg: |
     version = 1
     server_rooms_carving = 67108864
     session_requests_in_flight = 8
     request_deadline_ms = 30000
     spaces = 2048
+    derived_rows_max = 262144
+    work_rows_max = 4000000
 ---
 apiVersion: v1
 kind: Service
