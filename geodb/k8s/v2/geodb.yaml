@@ -76,8 +76,9 @@ data:
   # ResourceExhausted when the last close kept more resident versions than the new cap
   # can load. Lowering it below a founded ordinal fails the open. See RUNBOOK §2d.
   # derived_rows_max turns on the derived class (plan 10.14; hermes cursors in collection 10, vote
-  # cells and tallies, ranking_scores in 11): 2,097,152 rows x 144 B, about 302 MB carved at open, sized
-  # for type plus topic ranking (1.73M rows, plan 14 §9); raising it on a live store is one restart (the
+  # cells and tallies, ranking_scores in 11): 4,194,304 rows x 144 B, about 604 MB carved at open. This is
+  # plan 10.14 §10 Stage A (collections 0, 1, 8, 9, 10, 11; 2.86M rows counted 11-06). Stage B (+2, 3, 4;
+  # 6.80M) needs 8,388,608 and serve 6Gi/8Gi. Raising it on a live store is one restart (the
   # log replays under the larger bound). 0 or absent = class off and
   # every derived put refused InvalidConfig. work_rows_max turns on the work class (plan 10.16; the
   # notification outbox shadow): 4,000,000 is plan 10.16's 30-day sizing, about 600 MB at the cap.
@@ -89,7 +90,7 @@ data:
     session_requests_in_flight = 8
     request_deadline_ms = 30000
     spaces = 2048
-    derived_rows_max = 2097152
+    derived_rows_max = 4194304
     work_rows_max = 4000000
 ---
 apiVersion: v1
@@ -259,12 +260,12 @@ spec:
             failureThreshold: 120
           resources:
             # The medium profile alone holds ~4 GiB resident (it sat at the old 4Gi limit with no data
-            # growth); 6Gi leaves room for the backfill.
+            # growth). Plan 10.14 §10 Stage A: 5Gi/7Gi covers the 604 MB derived carve plus the backfill.
             requests:
-              memory: "4Gi"
+              memory: "5Gi"
               cpu: "500m"
             limits:
-              memory: "6Gi"
+              memory: "7Gi"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
