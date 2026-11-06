@@ -20,6 +20,8 @@ COPY hermes-kafka ./hermes-kafka
 COPY sdk ./sdk
 # geo-db outbox shadow (off unless GEODB_OUTBOX_MIRROR=1) - path dep of notification-indexer.
 COPY geodb-outbox ./geodb-outbox
+# geo-db poll-cursor mirror (off unless GEODB_CURSOR_MIRROR=1) - path dep of notification-indexer.
+COPY geodb-cursor ./geodb-cursor
 COPY notification-service/notification-indexer ./notification-service/notification-indexer
 
 # Build from the crate directory (standalone, not as workspace member)
