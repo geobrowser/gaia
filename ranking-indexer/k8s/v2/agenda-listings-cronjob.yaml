@@ -145,6 +145,9 @@ spec:
                 # section 2f-agenda), best-effort. ON.
                 - name: GEODB_DERIVED_MIRROR
                   value: "1"
+                # Also copy last_full_pass_on (trending_refresh_state, collection 7; needs a binding that grants 7). Off.
+                - name: GEODB_STATE_MIRROR
+                  value: "0"
                 - name: GEODB_DERIVED_BATCH
                   value: "1"
                 - name: GEODB_CLIENT_BIN
@@ -161,7 +164,7 @@ spec:
                       name: api-secrets
                       key: DATABASE_URL
                 - name: RUST_LOG
-                  value: "agenda_listings_refresh=info,ranking_indexer=info"
+                  value: "agenda_listings_refresh=info,ranking_indexer=info,geodb_cursor=info"
               resources:
                 requests:
                   memory: "128Mi"

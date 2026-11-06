@@ -1088,6 +1088,23 @@ wiring (init container, scores key, binding) and set `GEODB_DERIVED_MIRROR=1` an
 Rollback: unset `_PRIVATE` first (stops the personal copies), then the shared flag. Rows already copied stay until a
 `derived_clear` of the collection (a clear can take a group, which is the per-user erasure path).
 
+### 2f-state-and-loud. Watermark collections 6 and 7, the collection 11 backfill, and loud mirror failures
+
+- **Collections 6 `interest_sweep_state` and 7 `trending_refresh_state`** are one-row watermarks written inside plpgsql
+  functions. `topic_interest sweep` reads the row back after each run and puts it (6, key `incremental`, value `last_run_at`
+  as i64 microseconds); `agenda_listings_refresh` does the same for `last_full_pass_on` (7, key `last_full_pass_on`, value
+  days since 1970-01-01 as i32). Both sit behind `GEODB_STATE_MIRROR` (manifests `"0"`), on top of `GEODB_DERIVED_MIRROR`.
+  The scores key's binding needs `derived=6,7` (`geodb/supervisor.sh`, applies when geodb-0 restarts); until then the puts
+  are refused and now logged at error level.
+- **Collection 11** is mirrored only when a block recomputes (`replace_ranking_scores`), so blocks that have not
+  recomputed since the flag went on have no rows. `ranking_scores_backfill` (not scheduled) puts the whole of
+  `ranks.ranking_scores`; run it once as a Job from the ranking-indexer image with the geodb-client wiring.
+- **A refused or short mirror write is never silent.** `geodb_cursor::derived` logs every call's acknowledged row count
+  (`geodb_derived.acknowledged`, info), logs a refusal or pipe failure at error level (`geodb_derived.mirror_failed`), and
+  logs and counts a call that got fewer rows acknowledged than asked (`geodb_derived.not_acknowledged`,
+  `geodb_derived_mirror_unacknowledged_total{table}`). None of them change a job's exit status. A mirror CronJob's
+  `RUST_LOG` must include `geodb_cursor=info`: the lines carry that crate's target, and `ranking_indexer=info` hides them.
+
 ### 2f-scores. global_scores / local_scores / space_scores (derived collections 2, 3, 4, GEODB_DERIVED_MIRROR)
 
 Shadow only, nothing reads the rows. The daily 03:00 UTC `scoring-service` CronJob (`scoring-service/cronjob`,

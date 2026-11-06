@@ -29,7 +29,7 @@
 
 use std::time::{Duration, Instant};
 
-use tracing::warn;
+use tracing::{error, info, warn};
 
 use crate::{Config, CursorMirror, MirrorError};
 
@@ -210,7 +210,36 @@ impl DerivedMirror {
         let sent = self.send(table, &lines).await;
         metrics::counter!("geodb_derived_mirror_puts_total", "table" => table.to_string())
             .increment(sent as u64);
+        self.report("put", table, rows.len(), sent);
         sent
+    }
+
+    /// Logs how many rows of a call geo-db acknowledged, and an error (never a failed exit) with a
+    /// counter (`geodb_derived_mirror_unacknowledged_total{table}`) when fewer than were asked.
+    /// A CronJob's Prometheus samples are gone with its pod, so the log line is what an operator
+    /// has; it is emitted whatever the run's `RUST_LOG` allows for the caller's own target.
+    fn report(&self, op: &str, table: &str, requested: usize, acknowledged: usize) {
+        if requested == 0 {
+            return;
+        }
+        if acknowledged < requested {
+            let short = (requested - acknowledged) as u64;
+            metrics::counter!("geodb_derived_mirror_unacknowledged_total", "table" => table.to_string())
+                .increment(short);
+            error!(
+                event = "geodb_derived.not_acknowledged",
+                op,
+                table,
+                requested,
+                acknowledged,
+                "geo-db did not acknowledge every row; Postgres is unaffected, geo-db is behind"
+            );
+        } else {
+            info!(
+                event = "geodb_derived.acknowledged",
+                op, table, requested, acknowledged, "geo-db acknowledged the rows"
+            );
+        }
     }
 
     /// Mirrors the removal of `keys` of `collection` (`table` labels the metrics).
@@ -228,6 +257,7 @@ impl DerivedMirror {
         let sent = self.send(table, &lines).await;
         metrics::counter!("geodb_derived_mirror_deletes_total", "table" => table.to_string())
             .increment(sent as u64);
+        self.report("delete", table, keys.len(), sent);
     }
 
     fn skipped(&self, table: &str, e: &MirrorError) {
@@ -261,7 +291,9 @@ impl DerivedMirror {
             };
             if let Err(e) = self.pipe.send_lines(reqs).await {
                 if !matches!(e, MirrorError::CoolingDown) {
-                    warn!(event = "geodb_derived.mirror_failed", table, error = %e, "geo-db derived mirror failed; Postgres is unaffected");
+                    // error level, and a message that names the cause: a refusal used to be a warn on
+                    // a target the CronJobs' RUST_LOG hid, so a run that wrote nothing looked clean.
+                    error!(event = "geodb_derived.mirror_failed", table, error = %e, "geo-db derived mirror failed; Postgres is unaffected");
                 }
                 metrics::counter!("geodb_derived_mirror_errors_total", "table" => table.to_string())
                     .increment(1);

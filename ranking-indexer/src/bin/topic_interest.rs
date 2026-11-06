@@ -64,6 +64,16 @@ async fn main() -> Result<(), IndexerError> {
                     .await;
                 }
             }
+            // The sweep watermark the sweep just moved (collection 6). Own flag, default off.
+            if matches!(outcome, SweepOutcome::Ran(_)) {
+                if let Some(state) = ranking_indexer::state_mirror::from_env() {
+                    let acked = ranking_indexer::state_mirror::mirror_sweep(&state, &pool).await;
+                    info!(
+                        acknowledged = acked,
+                        "interest sweep state mirrored to geo-db"
+                    );
+                }
+            }
             // Flag-off shadow of the Rust twin (USER_INTEREST_RUST_SHADOW): read-only, counts only,
             // never changes the outcome or the exit code.
             if matches!(outcome, SweepOutcome::Ran(_)) && user_interest::shadow_enabled() {

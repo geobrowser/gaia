@@ -156,7 +156,7 @@ spec:
                       name: api-secrets
                       key: DATABASE_URL
                 - name: RUST_LOG
-                  value: "topic_suggestions_refresh=info,ranking_indexer=info"
+                  value: "topic_suggestions_refresh=info,ranking_indexer=info,geodb_cursor=info"
               resources:
                 requests:
                   memory: "128Mi"

@@ -185,7 +185,7 @@ spec:
                 - name: GEODB_BINDING_PATH
                   value: /geodb/binding.txt
                 - name: RUST_LOG
-                  value: "feed_signals_sync=info,ranking_indexer=info"
+                  value: "feed_signals_sync=info,ranking_indexer=info,geodb_cursor=info"
               resources:
                 requests:
                   memory: "128Mi"
@@ -281,7 +281,7 @@ spec:
                       name: api-secrets
                       key: DATABASE_URL
                 - name: RUST_LOG
-                  value: "feed_signals_sync=info,ranking_indexer=info"
+                  value: "feed_signals_sync=info,ranking_indexer=info,geodb_cursor=info"
               resources:
                 requests:
                   memory: "32Mi"

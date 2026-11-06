@@ -206,14 +206,24 @@ async fn main() -> Result<(), IndexerError> {
         {
             Ok(rows) => {
                 agenda_listings_mirror::mirror(mirror, &rows, &prior).await;
+                // `rows` is what was read from Postgres and offered to geo-db; the acknowledged
+                // count is logged by `geodb_cursor::derived` (`geodb_derived.acknowledged`).
                 info!(
-                    rows = rows.len(),
+                    rows_offered = rows.len(),
                     prior = prior.len(),
-                    "agenda listings mirrored to geo-db"
+                    "agenda listings offered to geo-db"
                 );
             }
             Err(e) => warn!(error = %e, "agenda listings mirror skipped: read failed"),
         }
+    }
+    // The `last_full_pass_on` watermark the refresh just moved (collection 7). Own flag, default off.
+    if let Some(state) = ranking_indexer::state_mirror::from_env() {
+        let acked = ranking_indexer::state_mirror::mirror_refresh(&state, &pool).await;
+        info!(
+            acknowledged = acked,
+            "trending refresh state mirrored to geo-db"
+        );
     }
     if scores::shadow_enabled() {
         // After the commit, so it never holds the refresh's transaction. A read or compute problem

@@ -186,7 +186,7 @@ spec:
                 - name: FEED_COMPOSITION_FEED_URL
                   value: "https://www.geobrowser.io/api/explore/feed"
                 - name: RUST_LOG
-                  value: "feed_composition_sample=info,ranking_indexer=info"
+                  value: "feed_composition_sample=info,ranking_indexer=info,geodb_cursor=info"
               resources:
                 requests:
                   memory: "128Mi"

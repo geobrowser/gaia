@@ -181,7 +181,7 @@ spec:
                 - name: EXCLUSION_SYNC_MAX_EXCLUDED
                   value: "500"
                 - name: RUST_LOG
-                  value: "account_exclusions_sync=info,ranking_indexer=info"
+                  value: "account_exclusions_sync=info,ranking_indexer=info,geodb_cursor=info"
               resources:
                 requests:
                   memory: "128Mi"

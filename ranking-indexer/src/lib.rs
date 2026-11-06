@@ -38,6 +38,7 @@ pub mod scoring;
 pub mod sql_helpers;
 pub mod stance_graph;
 pub mod stance_map;
+pub mod state_mirror;
 pub mod storage;
 pub mod topic_cooccurrence_compute;
 pub mod topic_cooccurrence_mirror;
