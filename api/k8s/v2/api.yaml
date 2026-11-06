@@ -263,6 +263,10 @@ spec:
               value: "on"
             - name: GEODB_BACKLINK_READS
               value: "on"
+            # The search shadow drops the types Postgres excludes (default block/media types, Comment, Claim) from geo-db's
+            # hits before comparing, so the overlap is like for like. "off" compares unfiltered. Shadow only.
+            - name: GEODB_SEARCH_TYPE_FILTER
+              value: "on"
             # Shadow geogenesis's EntitiesBatch `entities` selection (gaia#1115). Needs that PR's api image.
             - name: GEODB_ENTITIES_BATCH_SHADOW
               value: "on"

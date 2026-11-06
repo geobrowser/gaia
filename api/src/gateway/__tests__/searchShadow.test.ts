@@ -5,10 +5,17 @@ import {GeoDbError} from "../../geodb/client"
 import {createCliGeoDbSearchClient, parseSearchOutput} from "../../geodb/search"
 import {normalizeUuid} from "../../utils/uuid"
 import {readGatewayConfig} from "../config"
+import {TYPES_PROPERTY} from "../entityShadow"
 import {createGateway} from "../gateway"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
 import {compareRanked, overlapBucket, resultCountBucket} from "../searchMetrics"
-import {analyzeSearchOperation, createSearchShadows, extractRankedIds} from "../searchShadow"
+import {
+	analyzeSearchOperation,
+	createSearchShadows,
+	EXCLUDED_TYPES,
+	extractRankedIds,
+	withoutExcludedTypes,
+} from "../searchShadow"
 
 const SPACE = "11111111-1111-4111-8111-111111111111"
 const GEO_SPACE = "22222222222242228222222222222222"
@@ -392,5 +399,86 @@ describe("geo-db search client", () => {
 		).rejects.toMatchObject({reason: "overloaded"})
 		releases[0]?.("")
 		expect(await first).toEqual([])
+	})
+})
+
+describe("type exclusion", () => {
+	const CLAIM = "96f859ef-a1ca-4b22-9372-c86ad58b694b"
+	const typeRow = (entity: string, type: string) => ({prop: TYPES_PROPERTY, raw: geo(type), entity})
+	const excludedType = [...EXCLUDED_TYPES][0] as string
+
+	it("holds Claim and the default excluded types in geo-db's id space", () => {
+		expect(EXCLUDED_TYPES.has(geo(CLAIM))).toBe(true)
+		expect(EXCLUDED_TYPES.size).toBeGreaterThanOrEqual(8)
+	})
+
+	it("drops entities with an excluded Type, keeps order and the limit, and keeps a card without a Type", async () => {
+		const hits = ids(6).map(geo)
+		const readCards = vi.fn(async () => [
+			typeRow(hits[0] as string, CLAIM),
+			typeRow(hits[1] as string, "44444444-4444-4444-8444-444444444444"),
+			{prop: TYPES_PROPERTY, raw: excludedType, entity: hits[3] as string},
+			{prop: "ffffffffffffffffffffffffffffffff", raw: excludedType, entity: hits[4] as string},
+		])
+		expect(await withoutExcludedTypes(readCards, [GEO_SPACE], hits, 3)).toEqual([hits[1], hits[2], hits[4]])
+	})
+
+	it("reads the Spaces in lines of at most 1024", async () => {
+		const spaces = Array.from({length: 1580}, (_, i) => i.toString(16).padStart(32, "0"))
+		const readCards = vi.fn(async (_: {geoSpaceIds: string[]; entityIds: string[]}) => [])
+		await withoutExcludedTypes(readCards, spaces, [geo(ids(1)[0] as string)], 20)
+		expect(readCards.mock.calls.map(([a]) => a.geoSpaceIds.length)).toEqual([1024, 556])
+	})
+
+	function setupFilter(
+		readCards: (() => Promise<never[] | {prop: string; raw: string; entity: string}[]>) | undefined,
+	) {
+		const log = {info: vi.fn(), warn: vi.fn()}
+		const searchLexical = vi.fn(async () => ids(12).map(geo))
+		const shadows = createSearchShadows({
+			search: {searchLexical},
+			allGeoSpaces: async () => [GEO_SPACE],
+			geoSpaceOf: async () => GEO_SPACE,
+			log,
+			excludeTypes: true,
+			...(readCards ? {readCards} : {}),
+		})
+		return {log, searchLexical, shadows}
+	}
+	const compare = (shadows: ReturnType<typeof setup>["shadows"]) =>
+		run(shadows, "search", SEARCH, {data: {search: ids(10).map((id) => ({id}))}})
+	const typeMetric = () => metric("gaia_api_gateway_shadow_search_type_filter_total")
+
+	it("asks for 60 hits, filters them, and compares the filtered list", async () => {
+		const readCards = vi.fn(async () => [typeRow(geo(ids(1)[0] as string), CLAIM)])
+		const {shadows, searchLexical, log} = setupFilter(readCards)
+		await compare(shadows)
+		expect(searchLexical).toHaveBeenCalledWith(expect.objectContaining({limit: 60}))
+		expect(typeMetric()["field=search,result=applied"]).toBe(1)
+		expect(log.info).toHaveBeenCalledWith(expect.stringContaining("compared"), expect.objectContaining({geodb: 11}))
+	})
+
+	it("counts a failed card read as its own result, not failed, and skips the comparison", async () => {
+		const {shadows, log} = setupFilter(async () => {
+			throw new GeoDbError("timeout", "slow")
+		})
+		await compare(shadows)
+		expect(typeMetric()["field=search,result=error"]).toBe(1)
+		expect(metric("gaia_api_gateway_shadow_total")).toEqual({})
+		expect(metric("gaia_api_gateway_shadow_search_total")).toEqual({})
+		expect(log.warn).toHaveBeenCalled()
+	})
+
+	it("counts a refused Space list as unavailable, and a missing reader as unavailable (compares unfiltered)", async () => {
+		const refused = setupFilter(async () => {
+			throw new GeoDbError("bad_request", "too many spaces")
+		})
+		await compare(refused.shadows)
+		expect(typeMetric()["field=search,result=unavailable"]).toBe(1)
+		const none = setupFilter(undefined)
+		await compare(none.shadows)
+		expect(none.searchLexical).toHaveBeenCalledWith(expect.objectContaining({limit: 20}))
+		expect(typeMetric()["field=search,result=unavailable"]).toBe(2)
+		expect(metric("gaia_api_gateway_shadow_search_total")).toEqual({"field=search,outcome=compared": 1})
 	})
 })
