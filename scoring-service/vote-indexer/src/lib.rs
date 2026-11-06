@@ -5,6 +5,7 @@
 
 pub mod consumer;
 pub mod derived_scores;
+pub mod entity_scores_mirror;
 pub mod error;
 pub mod handlers;
 pub mod metrics;
