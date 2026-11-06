@@ -358,7 +358,7 @@ spec:
             # (gaia_api_account_exclusions_shadow_total). Needs GEODB_ACCOUNT_WEIGHTS_SHADOW on, serve rolled to a build that
             # registers collection 12, and the account-exclusions-sync cronjob's GEODB_DERIVED_MIRROR run once. OFF.
             - name: GEODB_ACCOUNT_EXCLUSIONS_SHADOW
-              value: "0"
+              value: "1"
             # Samples global_scores / local_scores / space_scores rows from Postgres (_SAMPLE per table, default 20, every
             # GEODB_SCORES_SHADOW_INTERVAL_MS, default 60 s) against geo-db's derived collections 2/3/4
             # (gaia_api_scores_shadow_total{table,result}). ON; background only, never changes a response. The scores snapshot
