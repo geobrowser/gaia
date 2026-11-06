@@ -968,6 +968,30 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   `GEODB_DERIVED_BUDGET_MS`), then set the flag `"1"` in `scoring-service/deployment/v2/cronjob.yaml` in its own PR, then
   the api flag. Rollback: set the flags `"0"`.
 
+### 2f-primer. claim_overlap_samples (derived collection 14, GEODB_DERIVED_MIRROR)
+
+Shadow only, nothing reads the rows. The hourly `ranking-indexer-primer-claims` CronJob (`primer_claims_refresh`) is the only
+writer of `public.claim_overlap_samples` (one row a day, never deleted). With `GEODB_DERIVED_MIRROR=1` (manifest default `"0"`)
+it reads the whole table after its Postgres work and puts every row (`ranking-indexer/src/primer_mirror.rs`): group 0, key
+`sampled_at` as a big-endian i64 of microseconds (8 bytes), score `share` (0.0 when null), value 32 little-endian bytes
+(`min_votes`, `min_shared`, `users`, `anchor_set_id` or -1 as i32; `pairs`, `pairs_sharing` as i64). No deletes. Uses the shared
+`geodb-scores-key`, whose binding now grants `derived=...,12,13,14,15,16,17,18,19` (`geodb/supervisor.sh`). **Needs serve built with collection 14
+registered** (geo-db, after collection 13) and serve restarted for the binding; until then the key's writes are refused and logged.
+Rollback: set the flag `"0"`.
+
+Collections 15-19 (`ranking-indexer/src/primer_claims_mirror.rs`) are the rest of the family, written by the same job and flag.
+A key is unique in its collection, so each key carries what the group would hold. 15 `anchor_claim_sets`: group 0, key set id
+(i32 big-endian), score `effective_from` seconds, value 20 bytes (`effective_from`, `created_at` i64 us; `claim_count` i32; the
+`params` jsonb is dropped). 16 `anchor_claim_members`: group set id, key set id then claim id (20 bytes), score minus the rank,
+value 28 bytes (`score`, `weighted_voters`, `agree_share` f64; `rank` i32). 17 `primer_claim_stats`: group 0, key claim id,
+score the claim's score, value 57 bytes (`voters`, `name_length` i32; `weighted_voters`, `weighted_agree`, `agree_share`,
+`information`, `engagement` f64; `computed_at` i64 us; `contested` u8). 18 `primer_claim_topics` and 19 `primer_claim_spaces`:
+group the topic or Space id, key that id then the claim id (32 bytes), score the claim's score, empty value; they replace the
+`topic_ids` and `space_ids` arrays. Sets and members are only added, so they are put and never deleted. The stats table is
+rebuilt each run, so the job reads its membership before the refresh and deletes every claim, (topic, claim) and (Space, claim)
+key that left; if that prior read fails the stats mirror is skipped for the run (a delete list without it would be wrong).
+**Needs serve built with 14-19 registered** (one batched geo-db landing).
+
 ### 2f-weights. account_weights (derived collection 5, GEODB_DERIVED_MIRROR)
 
 Shadow only, nothing reads the rows. The hourly `ranking-indexer-account-weights` CronJob
