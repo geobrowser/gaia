@@ -241,3 +241,66 @@ describe("createMetasShadow", () => {
 		expect(d.readCard).not.toHaveBeenCalled()
 	})
 })
+
+describe("createMetasShadow with a derived reader", () => {
+	const q = `{ metas { nodes { id cursor blockNumber } } }`
+	const value = (text: string) => Buffer.from(text, "utf8")
+	const run = async (held: Record<string, string>, nodes: unknown[], query = q, fail = false) => {
+		const get = vi.fn(async (_c: number, keyHex: string) => {
+			if (fail) throw new Error("boom")
+			const text = held[Buffer.from(keyHex, "hex").toString("utf8")]
+			return text === undefined ? null : {group: "0".repeat(32), score: 0, value: value(text)}
+		})
+		const log = {info: vi.fn(), warn: vi.fn()}
+		await createMetasShadow({log, reader: {get, close: vi.fn()}})({
+			classification: {operationName: null, operationType: "query", rootFields: ["metas"]},
+			params: {query, operationName: null, variables: {}},
+			document: parse(query),
+			response: new Response(JSON.stringify({data: {metas: {nodes}}})),
+		})
+		return {get, log}
+	}
+	const row = (id: string, cursor: string, blockNumber: string) => ({id, cursor, blockNumber})
+	const result = (r: string) => metric("gaia_api_gateway_shadow_total", `field="metas",result="${r}"`)
+
+	it("matches a row held at the same block and cursor, reading collection 10 by the id's bytes", async () => {
+		const {get} = await run({w: "7:abc"}, [row("w", "abc", "7")])
+		expect(result("match")).toBe(1)
+		expect(get).toHaveBeenCalledWith(10, Buffer.from("w").toString("hex"))
+	})
+
+	it("counts a later block as a match checked for freshness only", async () => {
+		await run({w: "9:zzz"}, [row("w", "abc", "7")])
+		expect(result("match")).toBe(1)
+		expect(metric("gaia_api_gateway_shadow_uncompared_total", 'field="metas",reason="mirror_newer"')).toBe(1)
+	})
+
+	it("is a mismatch when the mirror is behind, or the cursor differs at the same block", async () => {
+		const behind = await run({w: "5:abc"}, [row("w", "abc", "7")])
+		expect(result("mismatch")).toBe(1)
+		expect(JSON.stringify(behind.log.warn.mock.calls)).not.toContain("abc")
+		await run({w: "7:other"}, [row("w", "abc", "7")])
+		expect(result("mismatch")).toBe(2)
+	})
+
+	it("counts an unmirrored row, a malformed value and a failed read apart", async () => {
+		await run({}, [row("w", "abc", "7")])
+		expect(metric("gaia_api_gateway_shadow_unsupported_total", 'field="metas",reason="not_mirrored"')).toBe(1)
+		await run({w: "nocolon"}, [row("w", "abc", "7")])
+		expect(metric("gaia_api_gateway_shadow_unsupported_total", 'field="metas",reason="bad_layout"')).toBe(1)
+		await run({w: "7:abc"}, [row("w", "abc", "7")], q, true)
+		expect(result("failed")).toBe(1)
+	})
+
+	it("needs the id selected, and marks a filtered page's membership uncompared", async () => {
+		await run({w: "7:abc"}, [{cursor: "abc"}], `{ metas { nodes { cursor } } }`)
+		expect(metric("gaia_api_gateway_shadow_unsupported_total", 'field="metas",reason="selection"')).toBe(1)
+		await run(
+			{w: "7:abc"},
+			[row("w", "abc", "7")],
+			`{ metas(condition: {id: "w"}) { nodes { id cursor blockNumber } } }`,
+		)
+		expect(result("match")).toBe(1)
+		expect(metric("gaia_api_gateway_shadow_uncompared_total", 'field="metas",reason="meta_filter"')).toBe(1)
+	})
+})

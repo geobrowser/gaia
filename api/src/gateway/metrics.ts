@@ -24,6 +24,10 @@ export const UNSUPPORTED_REASONS = [
 	"throttled",
 	/** `metas`: the indexer cursor rows (id, cursor, block number) live only in Postgres; geo-db holds no read of them. */
 	"no_geodb_home",
+	/** `metas`: geo-db's `cursors` collection holds no row for an indexer PostgreSQL has (the mirror is off, or has not written yet). */
+	"not_mirrored",
+	/** `metas`: a `cursors` value that is not `<block>:<cursor>`. */
+	"bad_layout",
 ] as const
 
 /**
@@ -73,6 +77,10 @@ export const UNCOMPARED_REASONS = [
 	"topic_spaces",
 	/** `entitiesConnection`: a `metas` indexer-cursor root asked beside it, which geo-db cannot answer. */
 	"metas_cursor",
+	/** `metas`: geo-db's cursor row is at a later block than the one PostgreSQL returned (read a moment later), so only freshness, not the cursor, was checked. */
+	"mirror_newer",
+	/** `metas`: a `filter` / `condition` / paging argument, so which indexers the page holds is PostGraphile's. */
+	"meta_filter",
 ] as const
 
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]
