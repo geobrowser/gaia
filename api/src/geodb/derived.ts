@@ -1,5 +1,5 @@
 /**
- * geo-db read client for the derived class (plan 10.14): `get` one row of a collection by key.
+ * geo-db read client for the derived class (plan 10.14): `get` one row of a collection by key, and `scan` one page of a group.
  *
  * One held `geodb-client derived pipe` process: it opens one authenticated connection, prints `ready`, then answers one
  * tab-separated request line at a time with a frame, `+<n>\n<n bytes>` or `-<n>\n<n bytes>` (a refusal). A get answers
@@ -23,11 +23,26 @@ export type DerivedRow = {
 	value: Buffer
 }
 
+/** One row of a `scan`: the score, the key and the value, as hex. */
+export type DerivedScanRow = {score: number; keyHex: string; valueHex: string}
+
+/** What a `scan` read: the rows in score order (descending, then key ascending) and whether the group held more. */
+export type DerivedScan = {rows: DerivedScanRow[]; more: boolean}
+
 export type DerivedReader = {
 	/** The row at `key` (hex) of `collection`, or null when the collection holds none. */
 	get(collection: number, keyHex: string): Promise<DerivedRow | null>
 	/** Stop the worker and reject what is queued. */
 	close(): void
+}
+
+/** A reader that can also scan; `createDerivedReader` returns one. Kept apart so a get-only fake still types as a `DerivedReader`. */
+export type DerivedScanReader = DerivedReader & {
+	/**
+	 * The first `first` rows (1 to 512) of `group` (hex, up to 32 digits) in `collection`, score descending. One page:
+	 * `more` says the group holds rows past them.
+	 */
+	scan(collection: number, groupHex: string, first: number): Promise<DerivedScan>
 }
 
 type ReaderConfig = Pick<GeoDbCardConfig, "clientBin" | "keyPath" | "bindingPath" | "timeoutMs">
@@ -37,6 +52,8 @@ const defaultSpawn: SpawnPipe = (config) =>
 		stdio: ["pipe", "pipe", "pipe"],
 	}) as unknown as PipeChild
 
+/** The most rows one scan page holds (geo-db `wire_derived.page_max`). */
+export const MAX_SCAN_ROWS = 512
 const FRAME = /^([+-])(\d{1,9})$/
 const STDERR_TAIL = 300
 const START_BACKOFF_MS = 1000
@@ -55,6 +72,31 @@ export function parseDerivedGet(body: string): DerivedRow | null {
 	return {group, score: n, value: Buffer.from(value, "hex")}
 }
 
+/** The rows a `scan` answer body names: one `<score>\t<key hex>\t<value hex>` a line, then `more` when the page was cut. */
+export function parseDerivedScan(body: string): DerivedScan {
+	const rows: DerivedScanRow[] = []
+	let more = false
+	for (const line of body.split("\n")) {
+		if (line === "") continue
+		if (line === "more") {
+			more = true
+			continue
+		}
+		const [score = "", keyHex = "", valueHex = "", ...rest] = line.split("\t")
+		const n = Number(score)
+		if (
+			rest.length > 0 ||
+			score === "" ||
+			!Number.isFinite(n) ||
+			!/^([0-9a-f]{2})+$/.test(keyHex) ||
+			!/^([0-9a-f]{2})*$/.test(valueHex)
+		)
+			throw new GeoDbError("client_failed", `derived scan row is malformed: ${line.slice(0, 80)}`)
+		rows.push({score: n, keyHex, valueHex})
+	}
+	return {rows, more}
+}
+
 type Pending = {
 	line: string
 	resolve: (body: string) => void
@@ -64,7 +106,7 @@ type Pending = {
 export function createDerivedReader(
 	config: ReaderConfig,
 	options: {spawn?: SpawnPipe; now?: () => number} = {},
-): DerivedReader {
+): DerivedScanReader {
 	const spawn = options.spawn ?? defaultSpawn
 	const now = options.now ?? Date.now
 	const queue: Pending[] = []
@@ -197,6 +239,23 @@ export function createDerivedReader(
 				queue.push({line: `get\t${collection}\thex:${keyHex}`, resolve, reject})
 				pump()
 			}).then(parseDerivedGet)
+		},
+		scan(collection, groupHex, first) {
+			if (
+				!Number.isInteger(collection) ||
+				collection < 0 ||
+				!/^[0-9a-f]{1,32}$/.test(groupHex) ||
+				!Number.isInteger(first) ||
+				first < 1 ||
+				first > MAX_SCAN_ROWS
+			)
+				return Promise.reject(
+					new GeoDbError("bad_request", "derived scan wants a collection, a hex group and 1 to 512 rows"),
+				)
+			return new Promise<string>((resolve, reject) => {
+				queue.push({line: `scan\t${collection}\t0x${groupHex}\t${first}\t1`, resolve, reject})
+				pump()
+			}).then(parseDerivedScan)
 		},
 		close() {
 			const error = new GeoDbError("client_failed", "derived reader closed")

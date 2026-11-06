@@ -4,6 +4,7 @@ import {renderForYouConfigMetrics} from "./forYou/configShadow"
 import {renderEntityRankingConfigMetrics} from "./forYou/entityRankingConfigShadow"
 import {renderFeedExperimentMetrics} from "./forYou/feedExperimentShadow"
 import {renderGatewayMetrics} from "./gateway/metrics"
+import {renderRankTypedMetrics} from "./gateway/rankTypedShadow"
 import {renderServeMetrics} from "./gateway/serveMetrics"
 import {renderIdMapMetrics} from "./geodb/idMap"
 import {renderGeoDbCardMetrics} from "./geodb/metrics"
@@ -161,6 +162,7 @@ function renderPrometheusMetrics(): string {
 		renderAccountWeightsMetrics(),
 		// Sampled score-table rows from geo-db collections 2/3/4 against Postgres (GEODB_SCORES_SHADOW) — see geodb/scoresShadow.ts.
 		renderScoresShadowMetrics(),
+		renderRankTypedMetrics(),
 		// GraphQL root fields served from geo-db (mode on): served/fallback by field and reason — see gateway/serveMetrics.ts.
 		renderServeMetrics(),
 		// The reverse id map the served fields read: ids by result (miss = not served) and Postgres reads — see geodb/idMap.ts.
