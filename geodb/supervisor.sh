@@ -25,10 +25,9 @@ CONFIG="${GEODB_CONFIG:-/etc/geodb/serve.cfg}"
 PROFILE="${GEODB_PROFILE:-medium}"
 PORT="${GEODB_PORT:-7447}"
 # Optional: an HTTP listener so Prometheus can read GET /metrics (geodb_derived_*, geodb_store_*,
-# geodb_requests_*). Unset = no listener. admits=anonymous grants no key, but the listener is NOT
-# metrics-only: an anonymous session still reaches every route (POST /query, GET /spaces, GET /head)
-# and reads the root Public Spaces. Keep it reachable only from Prometheus (NetworkPolicy
-# geodb-ingress in geodb.yaml) until serve has a metrics-only listen word.
+# geodb_requests_*, geodb_work_*). Unset = no listener. `routes=metrics,version` (geo-db 5fbf4ad5ee,
+# ISS-601-293) makes it answer only GET /metrics and GET /version: every other route is refused 404
+# before any session opens. NetworkPolicy geodb-ingress also keeps 9091 to the monitoring namespace.
 METRICS_PORT="${GEODB_METRICS_PORT:-}"
 GRANT_TTL="${GEODB_GRANT_TTL_S:-300}"
 CONFIGMAP="${GEODB_CONFIGMAP:-geodb-space-map}"
@@ -45,7 +44,7 @@ principal = $GEODB_READER_KEYID read=* write=- publish=-
 grant_ttl_s = $GRANT_TTL
 BINDING
 if [ -n "$METRICS_PORT" ]; then
-	sed -i "/^grant_ttl_s/i listen = http:0.0.0.0:$METRICS_PORT admits=anonymous" "$RUN/binding.txt"
+	sed -i "/^grant_ttl_s/i listen = http:0.0.0.0:$METRICS_PORT admits=anonymous routes=metrics,version" "$RUN/binding.txt"
 fi
 if [ -n "${GEODB_CURSOR_KEYID:-}" ]; then
 	sed -i "/^grant_ttl_s/i principal = $GEODB_CURSOR_KEYID read=- write=- publish=- derived=10" "$RUN/binding.txt"

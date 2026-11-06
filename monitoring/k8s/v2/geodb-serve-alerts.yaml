@@ -6,11 +6,8 @@
 #   GeoDbOutboxMirrorErrors   geodb_outbox_mirror_errors_total rose in the last 15m
 #   GeoDbOutboxMirrorDropped  geodb_outbox_mirror_dropped_total rose in the last 15m
 #
-# NOT here: a work-class rows alert (work rows above 80% of work_rows_max = 4000000). serve's /metrics
-# prints no work-class figure at all (src/server/http.zig writes geodb_derived_* only; the work class has
-# Database-level counts, `WorkCounts` on the wire, but no gauge), so there is no real series to alert on.
-# The fix is on the geo-db side: print the work counts and work_rows_max as geodb_work_* (the way
-# writeDerivedRows does), then add GeoDbWorkRowsHigh here with the same ratio expression.
+#   GeoDbWorkRowsHigh         geodb_work_rows above 80% of geodb_work_rows_max for 15m (serve >= geo-db
+#                             5fbf4ad5ee; printed only while the work class is on)
 #
 #   kubectl apply -f monitoring/k8s/v2/geodb-serve-alerts.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -40,6 +37,23 @@ spec:
               Writes past the cap are refused (geodb_derived_refused_cap_total) and the writer drops or
               retries them. See geodb_derived_collection_rows{collection} for which collection grew, then
               raise derived_rows_max in the geodb-serve-config ConfigMap (one serve restart; RUNBOOK 2d).
+
+        - alert: GeoDbWorkRowsHigh
+          # ledger + payload + noted + delivered + failed rows, the figure work_rows_max bounds.
+          expr: |
+            max(geodb_work_rows{namespace="gaia", job="geodb"})
+              / max(geodb_work_rows_max{namespace="gaia", job="geodb"}) > 0.8
+          for: 15m
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db's work class holds more than 80% of work_rows_max
+            description: >-
+              Units past the cap are refused, so the outbox mirror starts counting errors. Check
+              geodb_work_pending / geodb_work_delivered for a stalled consumer, then raise work_rows_max in
+              serve.cfg (one serve restart).
 
         - alert: GeoDbOutboxMirrorErrors
           # A counter is created at its first increment, so the first-ever error has no earlier sample for
