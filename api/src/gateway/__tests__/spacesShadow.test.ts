@@ -91,12 +91,25 @@ describe("runSpaces", () => {
 		expect(d.readCard).toHaveBeenCalledTimes(1)
 	})
 
-	it("mismatches when geo-db holds another name, and when it holds none", async () => {
-		expect(await runSpaces(deps({name: "Beta"}), plan(), answer([space(SPACE_A)]))).toMatchObject({
+	it("mismatches when PostgreSQL has no name and geo-db holds one", async () => {
+		expect(await runSpaces(deps({name: "Beta"}), plan(), answer([space(SPACE_A, null)]))).toMatchObject({
 			result: "mismatch",
+			detail: {nameMismatch: 1},
+		})
+	})
+
+	it("treats a served name this Space lacks as cross_space, not a mismatch (entities_name reads any Space)", async () => {
+		expect(await runSpaces(deps({name: "Beta"}), plan(), answer([space(SPACE_A)]))).toMatchObject({
+			result: "match",
+			uncompared: expect.arrayContaining(["cross_space"]),
+			detail: {nameMismatch: 0, nameInconclusive: 1},
 		})
 		expect(await runSpaces(deps({name: null}), plan(), answer([space(SPACE_A)]))).toMatchObject({
-			result: "mismatch",
+			result: "match",
+			uncompared: expect.arrayContaining(["cross_space"]),
+		})
+		expect(await runSpaces(deps({name: "Beta"}), plan(), answer([space(SPACE_A, "")]))).toMatchObject({
+			result: "match",
 		})
 	})
 
@@ -154,13 +167,13 @@ describe("createSpacesShadow", () => {
 		expect(metric("gaia_api_gateway_shadow_total", 'field="spaces",result="match"')).toBe(1)
 		expect(metric("gaia_api_gateway_shadow_uncompared_total", 'field="spaces",reason="space_members"')).toBe(1)
 
-		await run(deps({name: "Beta"}), QUERY, answer([space(SPACE_A)]))
+		await run(deps({name: "Beta"}), QUERY, answer([space(SPACE_A, null)]))
 		expect(metric("gaia_api_gateway_shadow_total", 'field="spaces",result="mismatch"')).toBe(1)
 	})
 
 	it("never logs an id or a name on a mismatch", async () => {
 		const d = deps({name: "Beta"})
-		await run(d, QUERY, answer([space(SPACE_A)]))
+		await run(d, QUERY, answer([space(SPACE_A, null)]))
 		const logged = JSON.stringify(d.log.warn.mock.calls)
 		expect(logged).not.toContain(SPACE_A)
 		expect(logged).not.toContain("Alpha")
@@ -214,7 +227,7 @@ describe("space(id)", () => {
 	it("counts a match and a mismatch under its own field", async () => {
 		await run(deps(), SQ, {data: {space: space(SPACE_A)}})
 		expect(metric("gaia_api_gateway_shadow_total", 'field="space",result="match"')).toBe(1)
-		await run(deps({name: "Beta"}), SQ, {data: {space: space(SPACE_A)}})
+		await run(deps({name: "Beta"}), SQ, {data: {space: space(SPACE_A, null)}})
 		expect(metric("gaia_api_gateway_shadow_total", 'field="space",result="mismatch"')).toBe(1)
 	})
 

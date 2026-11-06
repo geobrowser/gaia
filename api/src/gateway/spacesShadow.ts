@@ -142,6 +142,18 @@ const compact = (value: unknown): string | null =>
 /** Postgres serves an empty text as a name; geo-db holds no empty text, so both mean none. */
 const namesIn = (rows: GeoCardRow[]) => rows.filter((r) => r.prop === NAME && r.raw !== "").map((r) => r.raw)
 
+/**
+ * One served name against the names geo-db holds for the entity in this Space. `entities_name` takes an arbitrary
+ * Name value from *any* Space (no ORDER BY, no Space filter), so an entity that also lives in another Space can
+ * legitimately be served that Space's name: a served name this Space lacks is `cross_space` (not decidable here),
+ * not a mismatch. Only a name PostgreSQL has none for (null) while this Space holds one is a certain mismatch.
+ */
+export function judgeName(served: unknown, names: string[]): "ok" | "mismatch" | "cross_space" {
+	if (typeof served === "string" && served !== "") return names.includes(served) ? "ok" : "cross_space"
+	if (names.length === 0) return "ok"
+	return served === null || served === undefined ? "mismatch" : "cross_space"
+}
+
 export type SpacesShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {log: CardLogger}
 
 type Outcome =
@@ -162,6 +174,7 @@ export async function runSpaces(deps: SpacesShadowDeps, plan: SpacesPlan, body: 
 	let held = 0
 	let notHeld = 0
 	let nameMismatch = 0
+	let nameInconclusive = 0
 	let namesCompared = 0
 	try {
 		for (const space of spaces) {
@@ -194,9 +207,13 @@ export async function runSpaces(deps: SpacesShadowDeps, plan: SpacesPlan, body: 
 				}
 				const served = entity.name
 				const names = namesIn(rows)
-				const ok = typeof served === "string" && served !== "" ? names.includes(served) : names.length === 0
 				namesCompared++
-				if (!ok) nameMismatch++
+				const verdict = judgeName(served, names)
+				if (verdict === "mismatch") nameMismatch++
+				else if (verdict === "cross_space") {
+					nameInconclusive++
+					uncompared.add("cross_space")
+				}
 			}
 		}
 	} catch (error) {
@@ -210,7 +227,7 @@ export async function runSpaces(deps: SpacesShadowDeps, plan: SpacesPlan, body: 
 	return {
 		result: nameMismatch === 0 ? "match" : "mismatch",
 		uncompared: [...uncompared],
-		detail: {sampled: spaces.length, held, notHeld, namesCompared, nameMismatch},
+		detail: {sampled: spaces.length, held, notHeld, namesCompared, nameMismatch, nameInconclusive},
 	}
 }
 
