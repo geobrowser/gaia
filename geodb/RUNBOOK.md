@@ -902,6 +902,10 @@ Activation order, each step only after the one before it is live:
 3. Required: the backfill Job (`geodb/k8s/v2/geodb-space-topics-backfill-job.yaml`), feeder scaled to 0, applied as in
    §2c-quater step 4. It reads `spaces WHERE topic_id IS NOT NULL` READ ONLY and is rerunnable.
 4. `GEODB_RECORD_KEYS: "1"` and `GEODB_SPACE_TOPICS: "1"` in the feeder manifest, then scale it back to 1.
+5. The gate, before any reader depends on the records: `bun src/spaceTopicsGate.ts <postgres.tsv> <dump dir>`
+   (`geodb-feeder/src/spaceTopicsGate.ts`; its header lists the `\copy` columns and the `st-space.tsv` and
+   `st-topic.tsv` dumps). It exits non-zero on a Postgres-only key or a value difference; geo-db-only keys (a removed
+   topic's record, or a Space Postgres lacks) are reported, not failed.
 
 A rerun of the Job once the consumer has offsets refuses unless `BACKFILL_KEYED_RESET_CONSUMER` is `"1"`.
 
