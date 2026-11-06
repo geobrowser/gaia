@@ -213,7 +213,7 @@ describe("handleProposalVersionMessage", () => {
 		const v = message({actions: [addMember]})
 		expect(await handleProposalVersionMessage(f.deps, 0, msg(v, 0, "PROPOSAL_CREATED"))).toBe("applied")
 		expect(await handleProposalVersionMessage(f.deps, 0, msg(v, 1, "PROPOSAL_UPDATED"))).toBe("applied")
-		for (const t of ["PROPOSAL_VOTED", "PROPOSAL_EXECUTED", "PROPOSAL_SETTINGS_UPDATED", null]) expect(await handleProposalVersionMessage(f.deps, 0, msg(v, 2, t))).toBe("ignored")
+		for (const t of ["PROPOSAL_VOTED", "PROPOSAL_EXECUTED", null]) expect(await handleProposalVersionMessage(f.deps, 0, msg(v, 2, t))).toBe("ignored")
 		expect(await handleProposalVersionMessage(f.deps, 0, msg(null, 3))).toBe("ignored")
 	})
 	it("dead-letters what kg-indexer rejects, writing nothing", async () => {

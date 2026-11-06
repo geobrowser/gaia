@@ -3,7 +3,7 @@
  * behind GEODB_PROPOSAL_VERSIONS, which takes effect only with GEODB_RECORD_KEYS (proposalVersionsKeyedEnabled). With
  * either off nothing here runs. A flag of its own: the backfill must run before the consumer first starts.
  *
- * Source: `<env>.space.governance`, messages whose `event-type` header is `PROPOSAL_CREATED` or `PROPOSAL_UPDATED`
+ * Source: `<env>.space.governance`, messages whose `event-type` header is `PROPOSAL_CREATED` or `PROPOSAL_UPDATED` (and `PROPOSAL_SETTINGS_UPDATED`, below)
  * (HermesProposalCreated / HermesProposalUpdated, hermes-schema/proto/governance.proto), the events kg-indexer folds
  * into gaia's `proposal_versions` (handlers/governance.rs map_proposal_message; storage.rs
  * insert_proposal_version_initial and insert_new_proposal_version). It is the same message the proposal-actions
@@ -29,16 +29,16 @@
  * `abstain_count`: written by kg-indexer's tally worker from `proposal_votes`, not by the event; geo-db derives them from
  * the proposal-vote records (proposalVotesKeyed.ts, proposalTallyGate.ts).
  *
- * ESCALATION IS NOT CONSUMED. A fast-to-slow escalation (HermesProposalSettingsUpdated, `PROPOSAL_SETTINGS_UPDATED`)
- * rewrites voting_mode, the times, quorum, the thresholds and execute_by of the proposal's CURRENT version in place
- * (storage.rs update_proposal_settings). That event does not say which version it hits, and finding out is a read. So
- * these records hold each version's settings as its CREATE or UPDATE event set them. The backfill reads Postgres, which
- * holds the escalated values, so a replay of the event afterwards puts the original values back (the old statement is
- * closed, as for any `put`). The gate reports a version whose settings differ with Fast in geo-db and Slow in
- * Postgres as `escalated`, not as a failure. A record for the escalation is a follow-up.
+ * ESCALATION. A fast-to-slow escalation (`PROPOSAL_SETTINGS_UPDATED`) rewrites the settings of the proposal's CURRENT
+ * version in place in Postgres, an event that does not say which version. So these records hold each version's settings
+ * as its CREATE or UPDATE event set them, and the escalation is its own immutable record (proposalEscalationKeyed.ts,
+ * written by this consumer's `PROPOSAL_SETTINGS_UPDATED` branch). A reader resolves it onto the version at the greatest
+ * block at or before the escalation (resolveEscalations); the gate does the same before comparing. A backfill of
+ * Postgres writes escalated values into the version records, and a replayed escalation record overlays the same values.
+ * There is no escalation backfill: Postgres keeps no history of the event.
  *
  * Every event's intents are fixed by the event alone: no read before write, no journal, and a replay is a no-op.
- * Versions are immutable once written but for the escalation above (kg-indexer inserts with ON CONFLICT DO NOTHING).
+ * Versions are immutable once written (kg-indexer inserts with ON CONFLICT DO NOTHING).
  *
  * Accepted and rejected where kg-indexer's map_proposal_message accepts and rejects: an id that is not 16 bytes, or a
  * message with no `settings`, is dead-lettered. A voting mode that is not Fast reads as Slow, as kg-indexer maps it.
@@ -60,6 +60,7 @@ import {
 	type KeyedRecordDeps,
 	keyColumn,
 } from "./keyedRecord.js"
+import {applyProposalEscalation, PROPOSAL_SETTINGS_UPDATED, parseProposalEscalation} from "./proposalEscalationKeyed.js"
 import {headerText, i64, id16, lastFields, num} from "./proposalActionsKeyed.js"
 import {bytesPart, idPart, intPart, recordEntityId, recordStatementId} from "./recordKey.js"
 import {RECORD_COLUMNS, RECORD_KINDS} from "./recordKinds.js"
@@ -248,8 +249,17 @@ export async function handleProposalVersionMessage(
 	message: {offset: string; value: Uint8Array | null; headers?: Record<string, unknown>},
 ): Promise<KeyedOutcome> {
 	const type = headerText(message.headers?.["event-type"])
-	if (type !== PROPOSAL_CREATED && type !== PROPOSAL_UPDATED) return "ignored"
+	if (type !== PROPOSAL_CREATED && type !== PROPOSAL_UPDATED && type !== PROPOSAL_SETTINGS_UPDATED) return "ignored"
 	if (!message.value) return "ignored"
+	if (type === PROPOSAL_SETTINGS_UPDATED) {
+		let escalation: ReturnType<typeof parseProposalEscalation>
+		try {
+			escalation = parseProposalEscalation(message.value)
+		} catch (e) {
+			return deadLetterDecode(deps, "space.governance", partition, message.offset, e)
+		}
+		return applyProposalEscalation(deps, escalation, {partition, offset: message.offset})
+	}
 	let version: ProposalVersion
 	try {
 		version = parseProposalVersion(message.value)

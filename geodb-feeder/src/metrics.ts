@@ -111,7 +111,7 @@ export function createMetrics() {
 		subspaceEvents: counter("geodb_feeder_subspace_events_total", "space.trust.extensions messages handled by the subspaces consumer, by outcome (applied, ignored, dead_letter). ignored = not TRUST_EXTENSION, or no recognised variant."),
 		subspacesLag: gauge("geodb_feeder_subspaces_consumer_lag", "space.trust.extensions messages between the topic head and the subspaces consumer's last applied offset, by partition."),
 		subspacesUp: gauge("geodb_feeder_subspaces_consumer_running", "1 while the space.trust.extensions subspaces consumer is running."),
-		proposalVersionEvents: counter("geodb_feeder_proposal_version_events_total", "space.governance messages handled by the proposal-versions consumer, by outcome (applied, ignored, dead_letter). ignored = not PROPOSAL_CREATED or PROPOSAL_UPDATED."),
+		proposalVersionEvents: counter("geodb_feeder_proposal_version_events_total", "space.governance messages handled by the proposal-versions consumer, by outcome (applied, ignored, dead_letter). ignored = not PROPOSAL_CREATED, PROPOSAL_UPDATED or PROPOSAL_SETTINGS_UPDATED."),
 		proposalVersionsLag: gauge("geodb_feeder_proposal_versions_consumer_lag", "space.governance messages between the topic head and the proposal-versions consumer's last applied offset, by partition."),
 		proposalVersionsUp: gauge("geodb_feeder_proposal_versions_consumer_running", "1 while the space.governance proposal-versions consumer is running."),
 		proposalStatusEvents: counter("geodb_feeder_proposal_status_events_total", "space.governance messages handled by the proposal-status consumer, by outcome (applied, ignored, dead_letter). ignored = not PROPOSAL_EXECUTED."),
