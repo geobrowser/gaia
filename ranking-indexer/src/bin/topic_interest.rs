@@ -18,6 +18,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::{info, warn};
 
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::topic_cooccurrence_mirror::{self, Neighbour};
 use ranking_indexer::topic_interest::{self, Mode, SweepOutcome};
 
 #[tokio::main]
@@ -54,7 +55,35 @@ async fn main() -> Result<(), IndexerError> {
             }
         },
         Mode::Refit => {
+            // Best-effort copy of the co-occurrence table into geo-db's derived class
+            // (GEODB_DERIVED_MIRROR, default off). With it off `from_env` is None and the table is
+            // never read a second time. The sweep never writes the table, so only the refit mirrors.
+            let mirror = geodb_cursor::derived::DerivedMirror::from_env();
+            let prior: Vec<(uuid::Uuid, uuid::Uuid)> = if mirror.is_some() {
+                sqlx::query_as(topic_cooccurrence_mirror::PRIOR_SQL)
+                    .fetch_all(&pool)
+                    .await?
+            } else {
+                Vec::new()
+            };
             let r = topic_interest::refit(&pool, None).await?;
+            if let Some(mirror) = &mirror {
+                // Read after the refit committed; a read error skips the mirror, never the job.
+                match sqlx::query_as::<_, Neighbour>(topic_cooccurrence_mirror::SELECT_SQL)
+                    .fetch_all(&pool)
+                    .await
+                {
+                    Ok(rows) => {
+                        topic_cooccurrence_mirror::mirror(mirror, &rows, &prior).await;
+                        info!(
+                            rows = rows.len(),
+                            prior = prior.len(),
+                            "topic co-occurrence mirrored to geo-db"
+                        );
+                    }
+                    Err(e) => warn!(error = %e, "topic co-occurrence mirror skipped: read failed"),
+                }
+            }
             let elapsed_ms = started.elapsed().as_millis() as u64;
             if r.disagreeing_rows > 0 {
                 // Expected occasionally (a claim re-tagged after people voted on it, a deleted
