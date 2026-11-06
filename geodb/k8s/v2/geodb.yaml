@@ -176,7 +176,7 @@ spec:
             defaultMode: 0440
       containers:
         - name: serve
-          image: registry.digitalocean.com/geo/geodb:5fbf4ad5ee
+          image: registry.digitalocean.com/geo/geodb:b16bfb6400
           imagePullPolicy: IfNotPresent
           # A panic's stack trace goes to stderr, and the kubelet keeps only the previous
           # container's log. This also copies the log's tail into the pod's

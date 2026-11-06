@@ -274,10 +274,11 @@ spec:
             - name: GEODB_DERIVED_FIELDS_SHADOW
               value: "on"
             # Every-Space reads over more loaded Spaces than one line holds, split and concatenated (#1152, #1154).
-            # OFF since 2026-11-06: with it on, shadow reads over all 1579 Spaces timed out at 500 ms and dragged
-            # other shadow reads into timeouts (entity failed 7 -> 161 per 10 min). Shadow-only; "on" to retry.
+            # Was off 2026-11-06 (#1174): serial chunks over all 1579 Spaces passed 500 ms and starved other shadow
+            # reads. Back on with serve b16bfb6400 (ISS-602-731, ISS-604-259) and parallel chunks (#1177).
+            # Shadow-only; set "off" again if entity shadow failures pass ~5%.
             - name: GEODB_EVERY_SPACE_CHUNKS
-              value: "off"
+              value: "on"
             # CREATED_AT/UPDATED_AT ordered pages via `.pick`/`.ties`; needs serve at or past geo-db d3967dffbf
             # (serve runs 6b34f9feda).
             - name: GEODB_ORDER_PICK_SHADOW
