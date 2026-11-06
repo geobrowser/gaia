@@ -1081,7 +1081,7 @@ export async function checkLight(
 			} catch (error) {
 				const reason = error instanceof GeoDbError ? error.reason : "error"
 				if (reason === "unmapped_space") return {result: "unsupported", reason: "unmapped_space"}
-				deps.log.warn(`${label} target read failed`, {entityId, spaces, reason, message: String(error)})
+				deps.log.warn(`${label} target read failed`, {entityId, spaces, reason, error: String(error)})
 				return {result: "failed"}
 			}
 		}

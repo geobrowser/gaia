@@ -195,7 +195,7 @@ export async function shadowCompare(
 			entityId,
 			spaceId,
 			reason: error instanceof GeoDbError ? error.reason : "error",
-			message: String(error),
+			error: String(error),
 		})
 	}
 }
@@ -241,7 +241,7 @@ export async function resolveCard(
 				entityId,
 				spaceId,
 				reason,
-				message: String(error),
+				error: String(error),
 			})
 			const postgres = await postgresStatements(deps, entityId, spaceId)
 			return {

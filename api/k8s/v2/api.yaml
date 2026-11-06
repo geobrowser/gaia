@@ -279,6 +279,10 @@ spec:
             # Shadow-only; set "off" again if entity shadow failures pass ~5%.
             - name: GEODB_EVERY_SPACE_CHUNKS
               value: "on"
+            # An every-Space shadow read names 1579 Spaces; about 20 a hour passed the pool's 500 ms and counted as `failed`
+            # (2026-11-06 logs: every one a timeout). Shadow reads only; serving keeps GEODB_TIMEOUT_MS.
+            - name: GEODB_EVERY_SPACE_TIMEOUT_MS
+              value: "1500"
             # CREATED_AT/UPDATED_AT ordered pages via `.pick`/`.ties`; needs serve at or past geo-db d3967dffbf
             # (serve runs 6b34f9feda).
             - name: GEODB_ORDER_PICK_SHADOW

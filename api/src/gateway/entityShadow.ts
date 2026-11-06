@@ -1180,6 +1180,8 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	derivedFields?: boolean
 	/** Split an every-Space read over more than MAX_EVERY_SPACES loaded Spaces into several lines (`GEODB_EVERY_SPACE_CHUNKS`). */
 	everySpaceChunks?: boolean
+	/** Timeout in ms of an every-Space read, in place of the pool's (`GEODB_EVERY_SPACE_TIMEOUT_MS`). */
+	everySpaceTimeoutMs?: number
 	/**
 	 * Read a single-key `CREATED_AT`/`UPDATED_AT` `orderBy` page of the light `entities` shadow from geo-db with the order's
 	 * `.pick` and `.ties` members and compare it (`GEODB_ORDER_PICK_SHADOW`). Needs a serve that reads those members, `multiSpace`
@@ -1252,7 +1254,7 @@ export async function readWide(
 		} catch (error) {
 			const reason = error instanceof GeoDbError ? error.reason : "error"
 			if (reason === "unmapped_space") return {ok: false, result: "unsupported", reason: "unmapped_space"}
-			deps.log.warn(`${label} read failed`, {entityId, spaces, reason, message: String(error)})
+			deps.log.warn(`${label} read failed`, {entityId, spaces, reason, error: String(error)})
 			return {ok: false, result: "failed"}
 		}
 	}
@@ -1276,7 +1278,7 @@ export async function readWide(
 				entityId,
 				spaceId: answer.spaceId,
 				reason,
-				message: String(answer.error),
+				error: String(answer.error),
 			})
 			return {ok: false, result: "failed"}
 		}
@@ -1304,7 +1306,7 @@ export async function readEverySpace(deps: EntityShadowDeps, entityId: string, l
 	try {
 		spaces = await deps.allGeoSpaces()
 	} catch (error) {
-		deps.log.warn(`${label} space map unreadable`, {entityId, message: String(error)})
+		deps.log.warn(`${label} space map unreadable`, {entityId, error: String(error)})
 		return {ok: false, result: "failed"}
 	}
 	if (spaces.length === 0) return {ok: false, result: "unsupported", reason: "no_space"}
@@ -1326,6 +1328,7 @@ export async function readEverySpace(deps: EntityShadowDeps, entityId: string, l
 					geoSpaceIds: line,
 					entityId: conformingId("entity", entityId),
 					names: true,
+					...(deps.everySpaceTimeoutMs ? {timeoutMs: deps.everySpaceTimeoutMs} : {}),
 				}),
 			),
 		)
@@ -1342,7 +1345,7 @@ export async function readEverySpace(deps: EntityShadowDeps, entityId: string, l
 			entityId,
 			spaces: spaces.length,
 			reason,
-			message: String(error),
+			error: String(error),
 		})
 		return {ok: false, result: "failed"}
 	}
@@ -1403,7 +1406,7 @@ export async function checkCard(
 				entityId,
 				spaceId: plan.spaceId,
 				reason: error instanceof GeoDbError ? error.reason : "error",
-				message: String(error),
+				error: String(error),
 			})
 			return {result: "failed"}
 		}
@@ -1555,7 +1558,7 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 			// Whatever went wrong, the user's response is already gone; count it and move on.
 			try {
 				recordGatewayShadow(ENTITY_FIELD, "failed")
-				deps.log.warn("gateway entity shadow errored", {message: String(error)})
+				deps.log.warn("gateway entity shadow errored", {error: String(error)})
 			} catch {}
 		}
 	}

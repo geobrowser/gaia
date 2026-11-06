@@ -508,7 +508,7 @@ async function judge(deps: EntityShadowDeps, item: Item, label: string, reads: C
 				entityId: item.fromEntityId,
 				spaceId: item.spaceId,
 				reason: error instanceof GeoDbError ? error.reason : "error",
-				message: String(error),
+				error: String(error),
 			})
 			return {result: "failed", uncompared: []}
 		}
@@ -541,7 +541,7 @@ async function judge(deps: EntityShadowDeps, item: Item, label: string, reads: C
 			entityId: item.fromEntityId,
 			spaceId: item.spaceId,
 			reason: error instanceof GeoDbError ? error.reason : "error",
-			message: String(error),
+			error: String(error),
 		})
 		return {result: "failed", uncompared: []}
 	}
@@ -702,7 +702,7 @@ function createPointReadShadow(deps: EntityShadowDeps, field: (typeof POINT_READ
 			// The response is already gone; count it and move on.
 			try {
 				recordGatewayShadow(field, "failed")
-				deps.log.warn(`${label} errored`, {message: String(error)})
+				deps.log.warn(`${label} errored`, {error: String(error)})
 			} catch {}
 		}
 	}

@@ -328,6 +328,9 @@ const graphqlHandler = createGateway({
 													allGeoSpaces: sharedGeoDb.geoSpaceOf.all,
 													everySpaceBudget,
 													everySpaceChunks: geoDbCardConfig.everySpaceChunks === true,
+													...(geoDbCardConfig.everySpaceTimeoutMs
+														? {everySpaceTimeoutMs: geoDbCardConfig.everySpaceTimeoutMs}
+														: {}),
 												}
 											: {}),
 									}),
@@ -349,6 +352,9 @@ const graphqlHandler = createGateway({
 										allGeoSpaces: sharedGeoDb.geoSpaceOf.all,
 										everySpaceBudget,
 										everySpaceChunks: geoDbCardConfig.everySpaceChunks === true,
+										...(geoDbCardConfig.everySpaceTimeoutMs
+											? {everySpaceTimeoutMs: geoDbCardConfig.everySpaceTimeoutMs}
+											: {}),
 									}
 								: {}),
 						},

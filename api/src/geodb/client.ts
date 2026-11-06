@@ -57,7 +57,13 @@ export type GeoDbCardClient = {
 	 * Space, each carrying its `space`. A Space the node does not hold refuses the whole read, so the caller
 	 * names only Spaces it knows geo-db holds. Absent on a client that cannot do it.
 	 */
-	readCardSpaces?(args: {geoSpaceIds: string[]; entityId: string; names?: boolean}): Promise<GeoCardRow[]>
+	readCardSpaces?(args: {
+		geoSpaceIds: string[]
+		entityId: string
+		names?: boolean
+		/** This read's timeout in ms, in place of the pool's: a shadow read wider than the serving path's budget. */
+		timeoutMs?: number
+	}): Promise<GeoCardRow[]>
 	/**
 	 * The cards of several entities in the Spaces named (`.args.ids`, geo-db ISS-625-317): the rows of every card, each
 	 * carrying its `entity`, and its `space` on a multi-Space read. At most `MAX_CARD_IDS` entities go in one read;
@@ -287,6 +293,8 @@ type Request = {
 	/** When it was submitted, and when its line was written to a worker (null until then). */
 	submittedAt: number
 	sentAt: number | null
+	/** This request's own timeout in ms, when it is not the pool's. */
+	timeoutMs?: number
 }
 
 type Slot = {
@@ -528,7 +536,7 @@ export function createPipeGeoDbClient(
 		const queued = queue.indexOf(request)
 		if (queued >= 0) queue.splice(queued, 1)
 		const slot = request.slot
-		const failure = new GeoDbError("timeout", `geo-db read exceeded ${config.timeoutMs} ms`)
+		const failure = new GeoDbError("timeout", `geo-db read exceeded ${request.timeoutMs ?? config.timeoutMs} ms`)
 		if (slot && slot.request === request) reset(slot, failure, false, "timeout")
 		else settle(request, failure)
 	}
@@ -541,6 +549,7 @@ export function createPipeGeoDbClient(
 		backlinks = false,
 		page = false,
 		cards = false,
+		timeoutMs?: number,
 	): Promise<GeoCardRow[]> {
 		if (now() < backoffUntil) {
 			return Promise.reject(new GeoDbError("client_failed", "geodb-client is not starting; backing off"))
@@ -554,10 +563,11 @@ export function createPipeGeoDbClient(
 				...(backlinks ? {backlinks} : {}),
 				...(page ? {page} : {}),
 				...(cards ? {cards} : {}),
+				...(timeoutMs ? {timeoutMs} : {}),
 				resolve,
 				reject,
 				retried: false,
-				timer: setTimeout(() => onTimeout(request), config.timeoutMs),
+				timer: setTimeout(() => onTimeout(request), timeoutMs ?? config.timeoutMs),
 				slot: null,
 				submittedAt: performance.now(),
 				sentAt: null,
@@ -628,7 +638,7 @@ export function createPipeGeoDbClient(
 			}
 			return submit(`${geoSpaceId}\t${cardDocument(entityId, {names})}\n`, entityId, names, false)
 		},
-		readCardSpaces({geoSpaceIds, entityId, names = false}) {
+		readCardSpaces({geoSpaceIds, entityId, names = false, timeoutMs}) {
 			if (!HEX32.test(entityId) || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
 				return Promise.reject(new GeoDbError("bad_request", "one entity id and 1 to 1024 space ids"))
 			if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
@@ -636,7 +646,16 @@ export function createPipeGeoDbClient(
 			// One Space prints a bare statement id, several print `<space>:<statement>`: only a list of two or
 			// more is the multi-Space form.
 			const spaces = geoSpaceIds.length > 1
-			return submit(`${geoSpaceIds.join(",")}\t${cardDocument(entityId, {names})}\n`, entityId, names, spaces)
+			return submit(
+				`${geoSpaceIds.join(",")}\t${cardDocument(entityId, {names})}\n`,
+				entityId,
+				names,
+				spaces,
+				false,
+				false,
+				false,
+				timeoutMs,
+			)
 		},
 		async readCards({geoSpaceIds, entityIds, names = false}) {
 			if (entityIds.length === 0 || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)

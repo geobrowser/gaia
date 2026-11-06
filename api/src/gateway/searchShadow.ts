@@ -218,7 +218,7 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 				deps.log.warn(`${label} read failed`, {
 					spaceId: plan.spaceId,
 					reason: error instanceof GeoDbError ? error.reason : "error",
-					message: String(error),
+					error: String(error),
 				})
 				return
 			}
@@ -239,7 +239,7 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 		} catch (error) {
 			try {
 				recordGatewayShadow(field, "failed")
-				deps.log.warn(`${label} errored`, {message: String(error)})
+				deps.log.warn(`${label} errored`, {error: String(error)})
 			} catch {}
 		}
 	}
