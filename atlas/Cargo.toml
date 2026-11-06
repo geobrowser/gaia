@@ -7,6 +7,10 @@ edition = "2021"
 name = "atlas"
 path = "src/main.rs"
 
+[[bin]]
+name = "backfill_checkpoints"
+path = "src/bin/backfill_checkpoints.rs"
+
 [[bench]]
 name = "transitive"
 harness = false

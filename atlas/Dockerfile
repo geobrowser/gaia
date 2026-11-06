@@ -14,6 +14,7 @@ WORKDIR /app
 
 # Copy only required crates (no workspace Cargo.toml - build standalone)
 COPY atlas ./atlas
+COPY blob-store ./blob-store
 COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-kafka ./hermes-kafka
 COPY hermes-relay ./hermes-relay
@@ -37,6 +38,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/atlas/target/release/atlas /usr/local/bin/atlas
+COPY --from=builder /app/atlas/target/release/backfill_checkpoints /usr/local/bin/backfill_checkpoints
 COPY --from=builder /app/hermes-substream/hermes-substream-v0.1.0.spkg /hermes-substream/hermes-substream-v0.1.0.spkg
 
 ENV KAFKA_BROKER=kafka-broker-0.broker.kafka.svc.cluster.local:29092
