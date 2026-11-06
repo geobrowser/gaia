@@ -245,7 +245,7 @@ export function noteUnsupported(
 
 /** Soundness of an `entities` filter, for the forms geo-db can check on one entity's card. */
 /** `type`: the entity holds a Type statement for at least one of `typeIds`. */
-export type FilterClaim = {kind: "type"; typeIds: string[]} | {kind: "edge"; typeId: string; toEntityId: string}
+export type FilterClaim = {kind: "type"; typeIds: string[]} | {kind: "edge"; typeIds: string[]; toEntityIds: string[]}
 
 export type LightPlan = {
 	card: EntityCardPlan
@@ -633,15 +633,18 @@ function readFilter(
 				const some = asRecord(single.some)
 				const type = asRecord(some?.typeId)
 				const to = asRecord(some?.toEntityId)
-				if (
-					some &&
-					Object.keys(some).length === 2 &&
-					typeof type?.is === "string" &&
-					isValidUuid(type.is) &&
-					typeof to?.is === "string" &&
-					isValidUuid(to.is)
+				const types = uuids(
+					typeof type?.is === "string"
+						? [type.is]
+						: Array.isArray(type?.in) && type.in.length > 0
+							? type.in
+							: null,
 				)
-					claims.push({kind: "edge", typeId: normalizeUuid(type.is), toEntityId: normalizeUuid(to.is)})
+				const targets = uuids(
+					typeof to?.is === "string" ? [to.is] : Array.isArray(to?.in) && to.in.length > 0 ? to.in : null,
+				)
+				if (some && Object.keys(some).length === 2 && types && targets)
+					claims.push({kind: "edge", typeIds: [...new Set(types)], toEntityIds: [...new Set(targets)]})
 				else exact = false
 			} else exact = false
 		}
@@ -720,6 +723,7 @@ function readRootArgs(
 
 export const ORDERED_ROOT = "entitiesOrderedByProperty"
 const ORDERED_ARGS = [
+	"filter",
 	"propertyId",
 	"spaceIds",
 	"sortDirection",
@@ -814,9 +818,7 @@ export function analyzeLightEntities(
 		}
 		for (const arg of ["first", "offset"])
 			if (args[arg] !== undefined && args[arg] !== null && !Number.isInteger(args[arg])) refuse("args")
-		const {claims, ids, exact} = options.ordered
-			? {claims: [] as FilterClaim[], ids: null, exact: false}
-			: readFilter(args.filter, uncompared)
+		const {claims, ids, exact} = readFilter(args.filter, uncompared)
 		// A page after a cursor starts where PostGraphile's cursor says, so its place in the order is not checked.
 		const readOrder = readOrderBy(args.orderBy, uncompared)
 		const order = after === undefined || after === null ? readOrder : null
@@ -844,7 +846,7 @@ export function analyzeLightEntities(
 				spaceIds,
 				everySpace,
 				order,
-				exactFilter: exact && args.systemTypeId == null && args.systemTypeIds == null,
+				exactFilter: !options.ordered && exact && args.systemTypeId == null && args.systemTypeIds == null,
 				first: typeof args.first === "number" ? args.first : null,
 				offset: typeof args.offset === "number" ? args.offset : null,
 				...(nodesKey !== null ? {nodesKey} : {}),
@@ -1214,13 +1216,13 @@ export async function checkLight(
 	// Read across every Space and found in none: nothing is known about the entity, so its claims are not judged.
 	const unknown = options.everySpace === true && read.scope.populated.length === 0
 	for (const claim of unknown ? [] : (options.claims ?? [])) {
-		const wanted = claim.kind === "type" ? TYPES_PROPERTY : conformingId("entity", claim.typeId)
-		const targets = new Set(
-			claim.kind === "type"
-				? claim.typeIds.map((id) => conformingId("entity", id))
-				: [conformingId("entity", claim.toEntityId)],
+		const wanted = new Set(
+			claim.kind === "type" ? [TYPES_PROPERTY] : claim.typeIds.map((id) => conformingId("entity", id)),
 		)
-		if (!read.rows.some((row) => row.prop === wanted && targets.has(row.raw))) unmet.push(claim)
+		const targets = new Set(
+			(claim.kind === "type" ? claim.typeIds : claim.toEntityIds).map((id) => conformingId("entity", id)),
+		)
+		if (!read.rows.some((row) => wanted.has(row.prop) && targets.has(row.raw))) unmet.push(claim)
 	}
 	// An every-Space read keys its rows by geo-db Space id; the root's Spaces are PostGraphile ids. A root Space geo-db
 	// has not loaded cannot be judged (the Space map answers null), so it is `unmapped_space`, not a mismatch.

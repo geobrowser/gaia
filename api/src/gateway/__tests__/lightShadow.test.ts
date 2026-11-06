@@ -1848,7 +1848,7 @@ describe("entities filters read through `and`, `id: {is}` and `overlaps` (2026-1
 			`first: 20, filter: {and: [{relations: {some: {typeId: {is: "${A}"}, toEntityId: {is: "${B}"}}}}], typeIds: {anyEqualTo: "${C}"}}`,
 		)
 		expect(p.claims).toEqual([
-			{kind: "edge", typeId: id(A), toEntityId: id(B)},
+			{kind: "edge", typeIds: [id(A)], toEntityIds: [id(B)]},
 			{kind: "type", typeIds: [id(C)]},
 		])
 		expect(p.exactFilter).toBe(true)
@@ -1859,7 +1859,7 @@ describe("entities filters read through `and`, `id: {is}` and `overlaps` (2026-1
 			`filter: {and: [{relations: {some: {typeId: {is: "${A}"}, toEntityId: {is: "${B}"}}}}, {typeIds: {overlaps: ["${B}", "${C}"]}}]}`,
 		)
 		expect(p.claims).toEqual([
-			{kind: "edge", typeId: id(A), toEntityId: id(B)},
+			{kind: "edge", typeIds: [id(A)], toEntityIds: [id(B)]},
 			{kind: "type", typeIds: [id(B), id(C)]},
 		])
 		expect(p.exactFilter).toBe(true)
@@ -2035,6 +2035,27 @@ describe("entitiesOrderedByProperty with the light selection", () => {
 			expect(a.plan.claims.map((c) => c.kind)).toEqual(["type"])
 			expect(a.plan.spaceIds).toEqual([SPACE_A])
 		}
+	})
+
+	it("reads a relation filter naming a Type list and a target as an edge claim", () => {
+		const T1 = "6e3503fab974460ea3dbab8af9a41427"
+		const T2 = "e550fe517e904b2c8fffdf13408f5634"
+		const target = "16d5e35f207544de85ac5fd287b04f44"
+		const f = `filter: {and: [{relations: {some: {toEntityId: {is: "${target}"}, typeId: {in: ["${T1}", "${T2}"]}}}}]}`
+		const a = analyzeLightEntities(parse(ordered(`${base}, ${f}`)), null, {}, {ordered: true})
+		expect(a.ok).toBe(true)
+		if (a.ok) {
+			expect(a.plan.claims).toEqual([{kind: "edge", typeIds: [T1, T2], toEntityIds: [target]}])
+			expect(a.plan.uncompared).toEqual(expect.arrayContaining(["order_completeness", "filter_completeness"]))
+			expect(a.plan.exactFilter).toBe(false)
+		}
+	})
+
+	it("still refuses a filter it cannot read as a claim only by leaving it uncompared", () => {
+		const f = `filter: {name: {includes: "x"}}`
+		const a = analyzeLightEntities(parse(ordered(`${base}, ${f}`)), null, {}, {ordered: true})
+		expect(a.ok).toBe(true)
+		if (a.ok) expect(a.plan.claims).toEqual([])
 	})
 
 	it("refuses an unknown argument and a missing property", () => {
