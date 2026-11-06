@@ -215,6 +215,15 @@ describe("search shadow", () => {
 		expect(metric("gaia_api_gateway_shadow_unsupported_total")).toEqual({"field=search,reason=no_space": 1})
 	})
 
+	it("counts an unscoped search unsupported (many_spaces) over more than 1024 Spaces, and does not search", async () => {
+		const many = Array.from({length: 1025}, (_, i) => i.toString(16).padStart(32, "0"))
+		const {shadows, searchLexical} = setup([], true, many)
+		await run(shadows, "search", SEARCH.replace("spaceId: $spaceId, ", ""), {data: {search: []}}, {q: "ada"})
+		expect(searchLexical).not.toHaveBeenCalled()
+		expect(metric("gaia_api_gateway_shadow_total")).toEqual({"field=search,result=unsupported_selection": 1})
+		expect(metric("gaia_api_gateway_shadow_unsupported_total")).toEqual({"field=search,reason=many_spaces": 1})
+	})
+
 	it("counts failed when geo-db errors or the space is not loaded, and logs", async () => {
 		const down = setup(new GeoDbError("timeout", "slow"))
 		await run(down.shadows, "search", SEARCH, {data: {search: []}})
