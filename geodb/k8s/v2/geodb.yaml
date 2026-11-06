@@ -74,7 +74,9 @@ data:
   # ResourceExhausted when the last close kept more resident versions than the new cap
   # can load. Lowering it below a founded ordinal fails the open. See RUNBOOK §2d.
   # derived_rows_max turns on the derived class (plan 10.14; hermes cursors in collection 10, vote
-  # cells and tallies): 262144 rows x 144 B, about 40 MB carved at open; 0 or absent = class off and
+  # cells and tallies, ranking_scores in 11): 2,097,152 rows x 144 B, about 302 MB carved at open, sized
+  # for type plus topic ranking (1.73M rows, plan 14 §9); raising it on a live store is one restart (the
+  # log replays under the larger bound). 0 or absent = class off and
   # every derived put refused InvalidConfig. work_rows_max turns on the work class (plan 10.16; the
   # notification outbox shadow): 4,000,000 is plan 10.16's 30-day sizing, about 600 MB at the cap.
   # Removing either key turns its class off again; the store keeps <root>/derived and <root>/work
@@ -85,7 +87,7 @@ data:
     session_requests_in_flight = 8
     request_deadline_ms = 30000
     spaces = 2048
-    derived_rows_max = 262144
+    derived_rows_max = 2097152
     work_rows_max = 4000000
 ---
 apiVersion: v1
