@@ -5,7 +5,7 @@
 #
 # NOT in deploy-v2: it runs by hand, with Deployment geodb-feeder scaled to 0 (it mounts the feeder's RWO
 # state volume and refuses to start while any feeder consumer group has members):
-#   GEODB_TAG=$(sed -n 's|^ *image: registry.digitalocean.com/geo/geodb:\([0-9a-f]\{10\}\)$|\1|p' geodb.yaml | sort -u)
+#   GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb.yaml)
 #   [ "$(printf '%s\n' "$GEODB_TAG" | wc -l)" -eq 1 ] || echo "geodb.yaml pins more than one geodb tag"
 #   sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" geodb-ranks-backfill-job.yaml | kubectl apply -f -
 #
