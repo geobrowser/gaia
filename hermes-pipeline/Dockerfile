@@ -13,6 +13,7 @@ RUN apt-get update && \
 WORKDIR /app
 
 # Copy only required crates (no workspace Cargo.toml - build standalone)
+COPY blob-store ./blob-store
 COPY geodb-cursor ./geodb-cursor
 COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-kafka ./hermes-kafka

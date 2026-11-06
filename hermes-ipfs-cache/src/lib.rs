@@ -29,6 +29,7 @@
 //! sink.run(StreamSource::live(&endpoint, module, start, end)).await?;
 //! ```
 
+pub mod backfill;
 pub mod cache;
 
 use std::collections::BTreeMap;
