@@ -126,12 +126,12 @@ spec:
                 - name: NORMALIZATION_METHOD
                   value: "z_score_sigmoid"
                 # Mirror of global_scores/local_scores/space_scores into geo-db's derived class (collections
-                # 2/3/4). OFF ("0"). Postgres stays the source of truth; a geo-db failure is logged and
-                # counted, never fails the run. Uses geodb-scores-key (grants derived=2,3,4).
+                # 2/3/4). ON (Stage B, after the scores snapshot backfilled all three). Postgres stays the
+                # source of truth; a geo-db failure is logged and counted, never fails the run. Uses
+                # geodb-scores-key (grants derived=2,3,4).
                 - name: GEODB_DERIVED_MIRROR
-                  value: "0"
-                # Which tables the mirror writes, comma separated; unset mirrors all three.
-                # Stage A: "global_scores,space_scores" (local_scores waits for Stage B).
+                  value: "1"
+                # Which tables the mirror writes, comma separated; unset mirrors all three (Stage B).
                 - name: GEODB_CLIENT_BIN
                   value: /geodb/geodb-client
                 - name: GEODB_KEY_PATH
