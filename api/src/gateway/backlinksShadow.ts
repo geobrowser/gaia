@@ -421,7 +421,7 @@ export async function compareBacklinks(
 		try {
 			geoSpaces = await deps.allGeoSpaces()
 		} catch (error) {
-			deps.log.warn(`${label} space map unreadable`, {entityId, message: String(error)})
+			deps.log.warn(`${label} space map unreadable`, {entityId, error: String(error)})
 			return {result: "failed"}
 		}
 		if (geoSpaces.length === 0) return {result: "unsupported", reason: "no_space"}
@@ -475,7 +475,7 @@ export async function compareBacklinks(
 			entityId,
 			spaces: geoSpaces.length,
 			reason,
-			message: String(error),
+			error: String(error),
 		})
 		return {result: "failed"}
 	}

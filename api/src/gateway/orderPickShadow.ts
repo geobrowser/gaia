@@ -75,7 +75,7 @@ export async function checkOrderedPage(
 	try {
 		spaces = await deps.allGeoSpaces()
 	} catch (error) {
-		deps.log.warn(`${label} space map unreadable`, {message: String(error)})
+		deps.log.warn(`${label} space map unreadable`, {error: String(error)})
 		return {result: "failed"}
 	}
 	if (spaces.length === 0) return {result: "unsupported", reason: "no_space"}
@@ -120,7 +120,7 @@ export async function checkOrderedPage(
 		observeGeoDbRead((performance.now() - started) / 1000, "error")
 		deps.log.warn(`${label} ordered page read failed`, {
 			reason: error instanceof GeoDbError ? error.reason : "error",
-			message: String(error),
+			error: String(error),
 		})
 		return {result: "failed"}
 	}

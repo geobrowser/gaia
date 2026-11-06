@@ -283,6 +283,29 @@ lines((line) => {
 		client.close()
 	})
 
+	it("gives a read its own timeout in place of the pool's", async () => {
+		const script = `
+process.stdout.write("ready\\n")
+lines((line) => {
+	const entity = /id = "([0-9a-f]{32})"/.exec(line)[1]
+	setTimeout(() => frame("+", ["${PROP}", "slow", "${SPACE}:stmt", entity, "1"].join("\\t") + "\\n"), 900)
+})
+`
+		const slow = fakePipe(script, {timeoutMs: 400, poolSize: 1})
+		await expect(
+			slow.client.readCardSpaces?.({geoSpaceIds: [SPACE, OTHER_SPACE], entityId: ENTITY}),
+		).rejects.toMatchObject({reason: "timeout", message: expect.stringContaining("400 ms")})
+		slow.client.close()
+		const own = fakePipe(script, {timeoutMs: 400, poolSize: 1})
+		const rows = await own.client.readCardSpaces?.({
+			geoSpaceIds: [SPACE, OTHER_SPACE],
+			entityId: ENTITY,
+			timeoutMs: 3000,
+		})
+		expect(rows?.length).toBe(1)
+		own.client.close()
+	})
+
 	it("reports a refusal as client_failed and recovers on a fresh worker", async () => {
 		const {client, starts} = fakePipe(
 			`
