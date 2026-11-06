@@ -52,7 +52,7 @@ spec:
                 secretName: geodb-scores-key
                 optional: true
                 defaultMode: 0440
-          initContainers:
+                items:
                   - key: key
                     path: scores.key
           initContainers:
