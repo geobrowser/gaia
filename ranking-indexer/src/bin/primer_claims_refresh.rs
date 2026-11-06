@@ -23,6 +23,10 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::{info, warn};
 
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::primer_claims_mirror::{
+    self as family, AnchorMember, AnchorSet, ClaimStats, PriorClaim,
+};
+use ranking_indexer::primer_mirror::{self, OverlapSample};
 
 /// The ticket asks for 30-50 anchors; refresh_anchor_claims aims for 40 and keeps at least 30.
 const ANCHOR_MIN: i32 = 30;
@@ -44,6 +48,25 @@ async fn main() -> Result<(), IndexerError> {
         .max_connections(1)
         .connect(&database_url)
         .await?;
+
+    // Best-effort copy into geo-db's derived class (GEODB_DERIVED_MIRROR, default off). With it off
+    // `from_env` is None and nothing below reads a table a second time. A failed read of what the
+    // stats table held skips that mirror (a delete list built without it would be wrong), never the job.
+    let mirror = geodb_cursor::derived::DerivedMirror::from_env();
+    let prior: Option<Vec<PriorClaim>> = if mirror.is_some() {
+        match sqlx::query_as::<_, PriorClaim>(family::PRIOR_SQL)
+            .fetch_all(&pool)
+            .await
+        {
+            Ok(rows) => Some(rows),
+            Err(e) => {
+                warn!(error = %e, "primer stats mirror skipped: prior read failed");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let started = Instant::now();
     // Any failure returns Err, so the process exits non-zero and the Job is marked failed.
@@ -107,6 +130,63 @@ async fn main() -> Result<(), IndexerError> {
             users,
             share, "claim overlap sampled (pairs sharing at least 3 claims)"
         );
+    }
+
+    // Read after every commit above; a read error skips that mirror, never the job.
+    if let Some(mirror) = &mirror {
+        // Collection 14.
+        match sqlx::query_as::<_, OverlapSample>(primer_mirror::SELECT_SQL)
+            .fetch_all(&pool)
+            .await
+        {
+            Ok(rows) => {
+                primer_mirror::mirror(mirror, &rows).await;
+                info!(
+                    rows = rows.len(),
+                    "claim overlap samples mirrored to geo-db"
+                );
+            }
+            Err(e) => warn!(error = %e, "claim overlap mirror skipped: read failed"),
+        }
+        // Collections 15 and 16.
+        match (
+            sqlx::query_as::<_, AnchorSet>(family::SETS_SQL)
+                .fetch_all(&pool)
+                .await,
+            sqlx::query_as::<_, AnchorMember>(family::MEMBERS_SQL)
+                .fetch_all(&pool)
+                .await,
+        ) {
+            (Ok(sets), Ok(members)) => {
+                family::mirror_anchors(mirror, &sets, &members).await;
+                info!(
+                    sets = sets.len(),
+                    members = members.len(),
+                    "anchor claim sets mirrored to geo-db"
+                );
+            }
+            (a, b) => warn!(
+                error = %a.err().map(|e| e.to_string()).or(b.err().map(|e| e.to_string())).unwrap_or_default(),
+                "anchor claim mirror skipped: read failed"
+            ),
+        }
+        // Collections 17, 18 and 19.
+        if let Some(prior) = &prior {
+            match sqlx::query_as::<_, ClaimStats>(family::STATS_SQL)
+                .fetch_all(&pool)
+                .await
+            {
+                Ok(rows) => {
+                    family::mirror_stats(mirror, &rows, prior).await;
+                    info!(
+                        rows = rows.len(),
+                        prior = prior.len(),
+                        "primer claim stats mirrored to geo-db"
+                    );
+                }
+                Err(e) => warn!(error = %e, "primer stats mirror skipped: read failed"),
+            }
+        }
     }
     Ok(())
 }

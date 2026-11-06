@@ -18,6 +18,8 @@ pub mod membership;
 pub mod metrics;
 pub mod models;
 pub mod not_interested;
+pub mod primer_claims_mirror;
+pub mod primer_mirror;
 pub mod publish;
 pub mod recompute;
 pub mod scoring;
