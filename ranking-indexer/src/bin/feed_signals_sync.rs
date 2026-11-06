@@ -31,6 +31,7 @@ use tracing::{error, info, warn};
 
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::feed_signals::{self, Cutoff};
+use ranking_indexer::feed_signals_compute as compute;
 use ranking_indexer::feed_signals_mirror::{self, Bucket, Ident};
 use ranking_indexer::feed_user_seen_mirror::{self, Seen};
 
@@ -79,6 +80,56 @@ async fn check_freshness(pool: &PgPool) -> Result<(), IndexerError> {
         )));
     }
     Ok(())
+}
+
+/// Flag-off twin check (FEED_SIGNALS_RUST_COMPUTE): recomputes the window and the run's counts in
+/// Rust from what was read and compares them with what the SQL reported. Logs, never fails.
+async fn shadow(
+    pool: &PgPool,
+    data_through: chrono::DateTime<chrono::Utc>,
+    window: &feed_signals::Window,
+    items: &[feed_signals::ItemRow],
+    users: &[feed_signals::UserRow],
+    report: &feed_signals::ApplyReport,
+) {
+    let cfg: Result<(i32, i32, i32, i32), _> = sqlx::query_as(
+        "SELECT revise_days, backfill_days, user_retention_days, item_retention_days \
+         FROM personalization.feed_signal_config WHERE id",
+    )
+    .fetch_one(pool)
+    .await;
+    let spaces: Result<Vec<(String, String, String)>, _> =
+        sqlx::query_as("SELECT id::text, type, address FROM public.spaces WHERE type = 'Personal'")
+            .fetch_all(pool)
+            .await;
+    let (Ok((revise, backfill, uret, iret)), Ok(spaces)) = (cfg, spaces) else {
+        warn!("feed signals rust twin skipped: config or spaces read failed");
+        return;
+    };
+    let cfg = compute::Config {
+        revise_days: i64::from(revise),
+        backfill_days: i64::from(backfill),
+        user_retention_days: i64::from(uret),
+        item_retention_days: i64::from(iret),
+    };
+    let spaces: Vec<compute::Space> = spaces
+        .into_iter()
+        .map(|(id, kind, address)| compute::Space { id, kind, address })
+        .collect();
+    let diffs = compute::mismatches(
+        &cfg,
+        &spaces,
+        data_through.timestamp(),
+        window,
+        items,
+        users,
+        report,
+    );
+    if diffs.is_empty() {
+        info!("feed signals rust twin agrees with the SQL run");
+    } else {
+        warn!(mismatches = diffs.len(), detail = ?diffs, "feed signals rust twin differs from the SQL run");
+    }
 }
 
 async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), IndexerError> {
@@ -158,6 +209,9 @@ async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), I
         elapsed_ms = started.elapsed().as_millis() as u64,
         "feed signals replaced"
     );
+    if compute::shadow_enabled() {
+        shadow(pool, data_through, &window, &items, &users, &r).await;
+    }
     if let Some(mirror) = &mirror {
         // Read after the replace committed; a read error skips the mirror, never the job.
         match sqlx::query_as::<_, Bucket>(feed_signals_mirror::SELECT_SQL)
