@@ -179,6 +179,8 @@ const gatewayShadowFields = new Set(
 		ENTITIES_CONNECTION_FIELD,
 		ENTITIES_ORDERED_FIELD,
 		SPACES_FIELD,
+		SPACE_FIELD,
+		METAS_FIELD,
 		...POINT_READ_FIELDS,
 		...SEARCH_FIELDS,
 	].filter((field) => gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, field) === "shadow"),
