@@ -1,0 +1,78 @@
+# Alerts on geo-db serve's own figures and the notification-indexer's outbox mirror. Series come from
+# the hermes-metrics ServiceMonitor: serve's GET /metrics (Service geodb, port 9091, job "geodb") and
+# notification-indexer's /metrics on 9464 (job "notification-indexer"). Runbook: geodb/RUNBOOK.md.
+#
+#   GeoDbDerivedRowsHigh      geodb_derived_rows above 80% of geodb_derived_rows_max for 15m
+#   GeoDbOutboxMirrorErrors   geodb_outbox_mirror_errors_total rose in the last 15m
+#   GeoDbOutboxMirrorDropped  geodb_outbox_mirror_dropped_total rose in the last 15m
+#
+# NOT here: a work-class rows alert (work rows above 80% of work_rows_max = 4000000). serve's /metrics
+# prints no work-class figure at all (src/server/http.zig writes geodb_derived_* only; the work class has
+# Database-level counts, `WorkCounts` on the wire, but no gauge), so there is no real series to alert on.
+# The fix is on the geo-db side: print the work counts and work_rows_max as geodb_work_* (the way
+# writeDerivedRows does), then add GeoDbWorkRowsHigh here with the same ratio expression.
+#
+#   kubectl apply -f monitoring/k8s/v2/geodb-serve-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: geodb-serve
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: geodb.serve
+      rules:
+        - alert: GeoDbDerivedRowsHigh
+          # The cap is its own series, so this follows a raised derived_rows_max (2097152 today).
+          expr: |
+            max(geodb_derived_rows{namespace="gaia", job="geodb"})
+              / max(geodb_derived_rows_max{namespace="gaia", job="geodb"}) > 0.8
+          for: 15m
+          labels:
+            severity: warning
+            service: geodb
+            namespace: gaia
+          annotations:
+            summary: geo-db's derived class holds more than 80% of derived_rows_max
+            description: >-
+              Writes past the cap are refused (geodb_derived_refused_cap_total) and the writer drops or
+              retries them. See geodb_derived_collection_rows{collection} for which collection grew, then
+              raise derived_rows_max in the geodb-serve-config ConfigMap (one serve restart; RUNBOOK 2d).
+
+        - alert: GeoDbOutboxMirrorErrors
+          # A counter is created at its first increment, so the first-ever error has no earlier sample for
+          # increase() to subtract; the second clause catches a series that appeared in the window.
+          expr: |
+            sum(increase(geodb_outbox_mirror_errors_total{namespace="gaia", job="notification-indexer"}[15m])) > 0
+            or
+            sum(geodb_outbox_mirror_errors_total{namespace="gaia", job="notification-indexer"}
+                unless geodb_outbox_mirror_errors_total{namespace="gaia", job="notification-indexer"} offset 15m) > 0
+          labels:
+            severity: warning
+            service: notification-indexer
+            namespace: gaia
+          annotations:
+            summary: The notification-indexer's geo-db outbox mirror is failing
+            description: >-
+              The mirror's geodb-client pipe errored (serve unreachable, key refused, work class off). The
+              shadow loses rows meanwhile; Postgres delivery is unaffected. Read the indexer log for
+              geodb_outbox.mirror_failed and geodb_outbox.pipe_started (RUNBOOK section 11).
+
+        - alert: GeoDbOutboxMirrorDropped
+          expr: |
+            sum(increase(geodb_outbox_mirror_dropped_total{namespace="gaia", job="notification-indexer"}[15m])) > 0
+            or
+            sum(geodb_outbox_mirror_dropped_total{namespace="gaia", job="notification-indexer"}
+                unless geodb_outbox_mirror_dropped_total{namespace="gaia", job="notification-indexer"} offset 15m) > 0
+          labels:
+            severity: warning
+            service: notification-indexer
+            namespace: gaia
+          annotations:
+            summary: The notification-indexer's outbox mirror is dropping rows
+            description: >-
+              The bounded queue (4096) was full or its worker is gone, so enqueues were dropped from the
+              shadow (geodb_outbox_mirror_queue shows the depth). Postgres delivery is unaffected, but
+              the work class is now missing rows and a later shadow-read comparison will show them.

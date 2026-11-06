@@ -41,6 +41,9 @@ spec:
           # nothing). Port 9090 also serves /metrics; series are geodb_feeder_*. See
           # monitoring/k8s/v2/geodb-feeder-alerts.yaml and geodb/RUNBOOK.md.
           - geodb-feeder
+          # geodb (serve): GET /metrics on its HTTP listener, port 9091 named metrics on Service geodb
+          # (geodb_derived_*, geodb_store_*, geodb_requests_*). See monitoring/k8s/v2/geodb-serve-alerts.yaml.
+          - geodb
           # geodb-card-replay: in-cluster card traffic for the shadow compare (geodb_card_replay_*).
           - geodb-card-replay
   endpoints:
