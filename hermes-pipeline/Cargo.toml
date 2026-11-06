@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 geodb-cursor = { path = "../geodb-cursor" }
+blob-store = { path = "../blob-store" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
 hermes-kafka = { path = "../hermes-kafka" }
 hermes-relay = { path = "../hermes-relay" }

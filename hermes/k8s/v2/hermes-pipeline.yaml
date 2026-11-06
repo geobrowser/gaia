@@ -128,6 +128,37 @@ spec:
               mountPath: /etc/geodb/key
               readOnly: true
           env:
+            # Object-store home for the Postgres blob tables (zero-Postgres, plan 10.22 section 6). Every flag is
+            # "0": nothing reads or writes the bucket until one is flipped to "1". Credentials come only from the
+            # geodb-blob-key Secret (optional, so a pod starts without it while the flags are off).
+            - name: IPFS_CACHE_BLOB_SHADOW_READ
+              value: "0"
+            - name: BLOB_BACKEND
+              value: s3
+            - name: BLOB_S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: endpoint
+                  optional: true
+            - name: BLOB_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: bucket
+                  optional: true
+            - name: BLOB_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: access_key
+                  optional: true
+            - name: BLOB_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: secret_key
+                  optional: true
             # Mirror the substreams `meta` cursor into geo-db (geodb-cursor), best-effort, after the Postgres
             # cursor write: each put is bounded by 2 s, a failure is logged and counted and never fails the
             # block, then a cool-down. ON since serve registered the cursor key (RUNBOOK section 10); "0" turns it off.

@@ -287,6 +287,9 @@ impl CacheStorage for PostgresStorage {
 /// High-level cache interface wrapping a storage backend.
 pub struct Cache {
     storage: Box<dyn CacheStorage>,
+    /// Flag-off object-store write-through (`IPFS_CACHE_BLOB_WRITE_THROUGH=1`). The
+    /// shadow read lives with the reader, in hermes-pipeline.
+    blob: Option<blob_store::Mirror>,
 }
 
 impl Cache {
@@ -294,6 +297,7 @@ impl Cache {
     pub fn mock() -> Self {
         Cache {
             storage: Box::new(MockStorage::new()),
+            blob: None,
         }
     }
 
@@ -301,12 +305,37 @@ impl Cache {
     pub fn postgres(storage: PostgresStorage) -> Self {
         Cache {
             storage: Box::new(storage),
+            blob: blob_store::Mirror::from_env("ipfs_cache", "IPFS_CACHE"),
         }
+    }
+
+    /// Attach an object-store mirror (tests, or callers that build the store themselves).
+    pub fn with_blob_mirror(mut self, mirror: blob_store::Mirror) -> Self {
+        self.blob = Some(mirror);
+        self
     }
 
     /// Store an item in the cache. If the URI already exists, this is a no-op.
     pub async fn put(&self, item: &CacheItem) -> Result<(), CacheError> {
-        self.storage.insert(item).await
+        self.storage.insert(item).await?;
+        // After Postgres succeeded; never fails the put. First write wins, like
+        // `ON CONFLICT (uri) DO NOTHING`.
+        if let Some(blob) = &self.blob {
+            let row = blob_store::ipfs_object::Row {
+                block: item.block.clone(),
+                space: item.space_id.clone(),
+                is_errored: item.is_errored,
+                name: item.name.clone(),
+                data: item.data.clone(),
+            };
+            blob.write_through(
+                &blob_store::ipfs_object::key(&item.uri),
+                &blob_store::ipfs_object::encode(&row),
+                true,
+            )
+            .await;
+        }
+        Ok(())
     }
 
     /// Get an item from the cache by URI.
@@ -426,5 +455,52 @@ mod tests {
 
         let cursor = cache.load_cursor("test_indexer").await.unwrap();
         assert_eq!(cursor, Some("cursor_def".to_string()));
+    }
+
+    fn fs_mirror(dir: &std::path::Path, write_through: bool) -> blob_store::Mirror {
+        blob_store::Mirror::new(
+            "ipfs_cache",
+            std::sync::Arc::new(blob_store::FsBlobStore::new(dir)),
+            blob_store::MirrorFlags {
+                write_through,
+                shadow_read: false,
+            },
+        )
+    }
+
+    fn item(uri: &str, data: u8) -> CacheItem {
+        CacheItem {
+            uri: uri.to_string(),
+            data: Some(vec![data]),
+            block: "7".to_string(),
+            space_id: "0aaaaaaabbbbccccddddeeeeeeeeeeee".to_string(),
+            is_errored: false,
+            name: Some("n".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn blob_write_through_is_off_without_the_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::mock().with_blob_mirror(fs_mirror(dir.path(), false));
+        cache.put(&item("ipfs://QmA", 1)).await.unwrap();
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn blob_write_through_stores_first_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::mock().with_blob_mirror(fs_mirror(dir.path(), true));
+        cache.put(&item("ipfs://QmA", 1)).await.unwrap();
+        cache.put(&item("ipfs://QmA", 2)).await.unwrap();
+        let store = blob_store::FsBlobStore::new(dir.path());
+        let bytes = blob_store::BlobStore::get(&store, &blob_store::ipfs_object::key("ipfs://QmA"))
+            .await
+            .unwrap()
+            .unwrap();
+        let row = blob_store::ipfs_object::decode(&bytes).unwrap();
+        assert_eq!(row.data, Some(vec![1]));
+        assert_eq!(row.block, "7");
+        assert_eq!(row.name.as_deref(), Some("n"));
     }
 }
