@@ -22,6 +22,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::{info, warn};
 
 use ranking_indexer::agenda_listings_mirror::{self, Ident, Listing};
+use ranking_indexer::entity_ranking_score_compute as scores;
 use ranking_indexer::error::IndexerError;
 
 #[tokio::main]
@@ -103,5 +104,65 @@ async fn main() -> Result<(), IndexerError> {
             Err(e) => warn!(error = %e, "agenda listings mirror skipped: read failed"),
         }
     }
+    if scores::shadow_enabled() {
+        // After the commit, so it never holds the refresh's transaction. A read or compute problem
+        // is logged and skipped; the SQL scores stay the source.
+        shadow_scores(&pool).await;
+    }
     Ok(())
+}
+
+/// Recomputes the most recently written score rows from the inputs stored beside them and counts
+/// the disagreements. Never fails the Job.
+async fn shadow_scores(pool: &sqlx::PgPool) {
+    const SAMPLE: i64 = 5000;
+    let cfg =
+        match sqlx::query_as::<_, (f64, f64, f64, f64, f64, f64, i32, i32, f64, f64, f64, f64)>(
+            scores::CONFIG_SQL,
+        )
+        .fetch_one(pool)
+        .await
+        {
+            Ok(c) => scores::Config {
+                tau_seconds: c.0,
+                wilson_z: c.1,
+                prior_positive: c.2,
+                prior_negative: c.3,
+                quality_floor: c.4,
+                intrinsic_cap: c.5,
+                intrinsic_property_target: c.6,
+                intrinsic_relation_target: c.7,
+                participation_weight: c.8,
+                participation_cap: c.9,
+                comment_weight: c.10,
+                comment_cap: c.11,
+            },
+            Err(e) => {
+                warn!(error = %e, "entity ranking score shadow skipped: config read failed");
+                return;
+            }
+        };
+    match sqlx::query_as::<_, scores::Stored>(scores::STORED_SQL)
+        .bind(SAMPLE)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => {
+            let bad = scores::mismatches(&cfg, &rows);
+            if bad.is_empty() {
+                info!(
+                    checked = rows.len(),
+                    "entity ranking score shadow: all rows match"
+                );
+            } else {
+                warn!(
+                    checked = rows.len(),
+                    mismatched = bad.len(),
+                    first = %bad[0],
+                    "entity ranking score shadow: rows differ from the Rust compute"
+                );
+            }
+        }
+        Err(e) => warn!(error = %e, "entity ranking score shadow skipped: read failed"),
+    }
 }
