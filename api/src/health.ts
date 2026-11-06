@@ -13,6 +13,7 @@ import {renderPaginationDefaultMetrics} from "./kg/paginationCapPlugin"
 import {getGraphqlPoolPressure, getGraphqlPoolStats} from "./kg/postgraphile"
 import {renderResponseByteMetrics} from "./kg/responseBudgetPlugin"
 import {renderSecuritySignalsPrometheus} from "./kg/securitySignalsPlugin"
+import {renderAccountWeightsMetrics} from "./pairFit/accountWeightsShadow"
 import {renderGovernanceMetrics} from "./proposals/governance/metrics"
 import {db, getPoolStats} from "./services/storage/storage"
 import {log} from "./services/telemetry"
@@ -152,6 +153,8 @@ function renderPrometheusMetrics(): string {
 		renderEntityRankingConfigMetrics(),
 		// The feed experiment geo-db holds against the served one (GEODB_FEED_EXPERIMENT_SHADOW) — see forYou/feedExperimentShadow.ts.
 		renderFeedExperimentMetrics(),
+		// Pair-fit account weights from geo-db collection 5 against the served ones (GEODB_ACCOUNT_WEIGHTS_SHADOW) — see pairFit/accountWeightsShadow.ts.
+		renderAccountWeightsMetrics(),
 		// GraphQL root fields served from geo-db (mode on): served/fallback by field and reason — see gateway/serveMetrics.ts.
 		renderServeMetrics(),
 		// The reverse id map the served fields read: ids by result (miss = not served) and Postgres reads — see geodb/idMap.ts.

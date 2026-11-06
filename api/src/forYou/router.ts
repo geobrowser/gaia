@@ -30,6 +30,7 @@
 import {createHash, timingSafeEqual} from "node:crypto"
 import {Hono} from "hono"
 import {canonicalRequestLogging} from "../middleware/requestLogging"
+import type {AccountWeightsShadow} from "../pairFit/accountWeightsShadow"
 import {pairFitHandler} from "../pairFit/router"
 import {log} from "../services/telemetry"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
@@ -294,6 +295,7 @@ export function createInternalRouter(
 	configShadow?: ForYouConfigShadow | null,
 	rankingConfigShadow?: EntityRankingConfigShadow | null,
 	experimentShadow?: FeedExperimentShadow | null,
+	accountWeightsShadow?: AccountWeightsShadow | null,
 ) {
 	const router = new Hono()
 
@@ -348,7 +350,7 @@ export function createInternalRouter(
 	})
 
 	// GEO-3224: debate pair fit, on the same private router and behind the same token.
-	router.post("/pair-fit", pairFitHandler(db))
+	router.post("/pair-fit", pairFitHandler(db, accountWeightsShadow))
 
 	return router
 }
@@ -365,11 +367,15 @@ export function mountInternalRoutes(
 	configShadow?: ForYouConfigShadow | null,
 	rankingConfigShadow?: EntityRankingConfigShadow | null,
 	experimentShadow?: FeedExperimentShadow | null,
+	accountWeightsShadow?: AccountWeightsShadow | null,
 ): "enabled" | "too_short" | "unset" {
 	const trimmed = token?.trim()
 	if (!trimmed) return "unset"
 	if (trimmed.length < MIN_INTERNAL_TOKEN_LENGTH) return "too_short"
 	app.use("/internal/*", canonicalRequestLogging())
-	app.route("/internal", createInternalRouter(db, trimmed, configShadow, rankingConfigShadow, experimentShadow))
+	app.route(
+		"/internal",
+		createInternalRouter(db, trimmed, configShadow, rankingConfigShadow, experimentShadow, accountWeightsShadow),
+	)
 	return "enabled"
 }

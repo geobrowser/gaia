@@ -933,8 +933,18 @@ account the table held before the refresh and no longer has is a delete. A geo-d
 
 - Reader (Postgres, unchanged): `api/src/pairFit/queries.ts:101` (`readAccounts`, left join) and the plpgsql join at
   `api/drizzle/0101_account_weights.sql:179`. Writer: `0101_account_weights.sql:114` (upsert) and `:136` (delete),
-  called from `account_weights_refresh.rs`. No api shadow: the api has no derived read client yet, so a compare waits
-  for one.
+  called from `account_weights_refresh.rs`.
+- api shadow, `GEODB_ACCOUNT_WEIGHTS_SHADOW` (manifest `"0"`, `api/k8s/v2/api.yaml`): `/internal/pair-fit` hands the
+  `readAccounts` result to `api/src/pairFit/accountWeightsShadow.ts`, which at most every
+  `GEODB_ACCOUNT_WEIGHTS_SHADOW_INTERVAL_MS` (10 s) reads `GEODB_ACCOUNT_WEIGHTS_SHADOW_SAMPLE` (5) of the candidates from
+  collection 5 through `api/src/geodb/derived.ts` (one held `geodb-client derived pipe`, `get` only; the api's own key
+  and binding, since a derived get needs an authenticated non-anonymous session, not a grant) in the background. It
+  never changes, delays or fails a response. `gaia_api_account_weights_shadow_total{result}`: match, mismatch (a
+  different weight, or a geo-db row Postgres lacks), unsupported (`row_missing` = mirror not run or lagging,
+  `bad_layout`, `busy`), failed. `excluded` is not compared (account_exclusions is not mirrored). Enable only after the
+  mirror has run once; expect `row_missing` until then and mismatches only for accounts changed since the last hourly
+  refresh. Refusals end the pipe session (the reader starts a new one on the next read); a refusal on every read means
+  the api key's binding line cannot read the derived class, which is a binding change, not an api one.
 - Uses the shared `geodb-scores-key`; its binding now grants `derived=0,1,5,11` (`geodb/supervisor.sh`), which takes
   effect when the geodb StatefulSet restarts. Until then collection 5 writes are refused and only logged.
 - Enable order: restart serve (binding), check `derived_rows_max` has room (account_weights is one row per voting
