@@ -30,6 +30,8 @@ export const RECORD_KINDS = {
 	subspaceTopic: {id: "e90b36c75cbf4239a6add0ae26dd939a", family: "governance", table: "subspace_topics"},
 	/** `proposal_actions`: a record keyed (proposal, action index). */
 	proposalAction: {id: "22335b74e17a4c9e867d4ac2a32c3a4a", family: "governance", table: "proposal_actions"},
+	/** `proposal_versions`: a record keyed (proposal, version-stamp block). The ordinal is not a key part. */
+	proposalVersion: {id: "6863abef6664450eb135a182c6ff1715", family: "governance", table: "proposal_versions"},
 	/** `space_voting_settings`: a record keyed (space), mutable columns written by `put`. */
 	spaceVotingSettings: {id: "7767f888a9a240b18275a7832363f4d9", family: "governance", table: "space_voting_settings"},
 	/** `proposal_votes`: a record keyed (proposal, proposal version, voter), its primary key. */
@@ -146,5 +148,31 @@ export const RECORD_COLUMNS = {
 	subspaceTopic: {
 		/** Edge property for a `subspace_topics` row: Space entity -> topic entity. */
 		topic: "90ee068ad2d44a8b95cf939d2d1ceabb",
+	},
+	proposalVersion: {
+		/** Key: reference to the proposal's entity, `cid("entity", proposal_id)`. */
+		proposal: "c42be9e340d14566b2b9f084004c748b",
+		/** Key: number, `version_created_at_block`, the block of the event that wrote the version (its idempotency key in Postgres). */
+		block: "bccb84d7017849b0babfa7444789068f",
+		/** Mutable: text, `voting_mode` (`Fast` or `Slow`, as Postgres's enum prints). */
+		votingMode: "1ec5fb72263443668b4880d09670cb56",
+		/** Mutable: number, `start_time`. */
+		startTime: "5a806f60759e4dd08a39c771d7586f53",
+		/** Mutable: number, `end_time`. */
+		endTime: "72d87497d7ed49db81e31675a31c5da7",
+		/** Mutable: number, `quorum`. */
+		quorum: "54000906476b41b7a0ca655f043b1a8d",
+		/** Mutable: number, `partial_percentage_support_threshold` (legacy `threshold` equals it for Slow). */
+		partial: "e4e76529227940f08bd1ca1ab884fe31",
+		/** Mutable: number, `universal_percentage_support_threshold`. */
+		universal: "eecb13aaa70c44509070df7550436103",
+		/** Mutable: number, `flat_support_threshold` (legacy `threshold` equals it for Fast). */
+		flat: "2e641ff402734c6b80201641f3969fe2",
+		/** Mutable: number, `execute_by`, when the version has a deadline. */
+		executeBy: "ca75ecfb5ab24196998de1b3bb31eb6f",
+		/** Mutable: text, `name`, when the version has actions. */
+		name: "a76bbfa24cfa43708b89326ae5f72e18",
+		/** Mutable: number, `version_created_at` (unix seconds, 0 when the event has no metadata). */
+		createdAt: "6c74f4f248d249368e1002b4c393a59e",
 	},
 } as const satisfies Record<string, Record<string, string>>

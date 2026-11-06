@@ -87,27 +87,27 @@ export type ProposalAction = ProposalActionColumns & {
 	index: number
 }
 
-const hex = (b: Uint8Array) => Buffer.from(b).toString("hex")
-const asBytes = (v: bigint | Uint8Array | undefined, what: string): Uint8Array => {
+export const hex = (b: Uint8Array) => Buffer.from(b).toString("hex")
+export const asBytes = (v: bigint | Uint8Array | undefined, what: string): Uint8Array => {
 	if (v === undefined) return new Uint8Array(0)
 	if (!(v instanceof Uint8Array)) throw new Error(`proposal action: ${what} has an invalid wire type`)
 	return v
 }
-const id16 = (v: bigint | Uint8Array | undefined, what: string): string => {
+export const id16 = (v: bigint | Uint8Array | undefined, what: string): string => {
 	const b = asBytes(v, what)
 	if (b.length !== 16) throw new Error(`proposal action: ${what} is not 16 bytes`)
 	return hex(b)
 }
-const num = (v: bigint | Uint8Array | undefined, what: string): bigint => {
+export const num = (v: bigint | Uint8Array | undefined, what: string): bigint => {
 	if (v === undefined) return 0n
 	if (typeof v !== "bigint") throw new Error(`proposal action: ${what} has an invalid wire type`)
 	return v
 }
 /** `*x as i64`, the cast kg-indexer's `Some(*x as i64)` makes. */
-const i64 = (v: bigint) => BigInt.asIntN(64, v)
+export const i64 = (v: bigint) => BigInt.asIntN(64, v)
 
 /** The last value of each field number, as prost keeps it for a scalar or a oneof member. */
-function lastFields(b: Uint8Array): Map<number, bigint | Uint8Array> {
+export function lastFields(b: Uint8Array): Map<number, bigint | Uint8Array> {
 	const m = new Map<number, bigint | Uint8Array>()
 	for (const [n, v] of parseFields(b)) m.set(n, v)
 	return m
@@ -259,7 +259,7 @@ export async function applyProposalActions(
 	return applyKeyedRecord(deps, FAMILY, actions.flatMap(proposalActionIntents), {...meta, space: (actions[0] as ProposalAction).proposal})
 }
 
-const headerText = (h: unknown): string | undefined => {
+export const headerText = (h: unknown): string | undefined => {
 	const v = Array.isArray(h) ? h[0] : h
 	if (v === undefined || v === null) return undefined
 	return Buffer.isBuffer(v) || v instanceof Uint8Array ? Buffer.from(v).toString("utf8") : String(v)

@@ -9,6 +9,7 @@ import pg from "pg"
 import type {PgRelationRow, PgValueRow} from "./pgAdapter.js"
 import type {ProposalActionRow} from "./proposalActionsKeyed.js"
 import type {SpaceVotingSettingsRow} from "./spaceVotingSettingsKeyed.js"
+import type {ProposalVersionRow} from "./proposalVersionsKeyed.js"
 import type {ProposalVoteRow} from "./proposalVotesKeyed.js"
 import type {SubspaceRow} from "./subspacesKeyed.js"
 import type {UserVoteRow} from "./votesKeyed.js"
@@ -264,6 +265,35 @@ export async function* readSpaceVotingSettingsRows(db: ReadOnlyPg): AsyncGenerat
 		[],
 		300_000,
 	)
+}
+
+/**
+ * Every `proposal_versions` row, keyset-paged on the primary key (proposal_id, proposal_version). The ordinal is
+ * returned for the paging only: the record is keyed by the block (proposalVersionsKeyed.ts). `threshold` and the
+ * tally counts are not selected.
+ */
+export async function* readProposalVersionRows(db: ReadOnlyPg, pageSize = 5000): AsyncGenerator<ProposalVersionRow & {proposal_version: number}> {
+	let after: (ProposalVersionRow & {proposal_version: number}) | null = null
+	for (;;) {
+		const page: (ProposalVersionRow & {proposal_version: number})[] = await db.read<ProposalVersionRow & {proposal_version: number}>(
+			`SELECT v.proposal_id::text AS proposal_id, v.proposal_version::int AS proposal_version,
+			        v.version_created_at_block AS block, v.voting_mode::text AS voting_mode,
+			        v.start_time::text AS start_time, v.end_time::text AS end_time, v.quorum::text AS quorum,
+			        v.partial_percentage_support_threshold::text AS partial_percentage_support_threshold,
+			        v.universal_percentage_support_threshold::text AS universal_percentage_support_threshold,
+			        v.flat_support_threshold::text AS flat_support_threshold,
+			        v.execute_by::text AS execute_by, v.name AS name, v.version_created_at AS version_created_at
+			 FROM proposal_versions v
+			 WHERE $1::boolean OR (v.proposal_id, v.proposal_version) > ($2::uuid, $3::int)
+			 ORDER BY v.proposal_id, v.proposal_version
+			 LIMIT $4`,
+			after === null ? [true, null, null, pageSize] : [false, after.proposal_id, after.proposal_version, pageSize],
+			300_000,
+		)
+		yield* page
+		if (page.length < pageSize) return
+		after = page[page.length - 1] as ProposalVersionRow & {proposal_version: number}
+	}
 }
 
 export type EntityTimesRow = {id: string; created_at: string | null; updated_at: string | null}

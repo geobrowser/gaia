@@ -421,6 +421,11 @@ spec:
             # backfill Job (geodb-space-voting-settings-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_SPACE_VOTING_SETTINGS
               value: "0"
+            # Keyed proposal versions (PROPOSAL_CREATED / PROPOSAL_UPDATED, one record per (proposal, block) with the
+            # voting settings). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-octies. OFF until the
+            # proposal-versions backfill Job (geodb-proposal-versions-backfill-job.yaml) has run with the feeder at 0.
+            - name: GEODB_PROPOSAL_VERSIONS
+              value: "0"
             # Relation positions (`.position` on a relation's add). Off until the geodb image carries a
             # geodb-client with ISS-587-318: an older client refuses the key, and every edit with a positioned
             # relation would fail. Turn on with the image bump that brings it.
