@@ -32,6 +32,12 @@ path = "src/bin/mirror_ranking_snapshot.rs"
 name = "mirror_scores_snapshot"
 path = "src/bin/mirror_scores_snapshot.rs"
 
+# One-shot copy of the engaged rows of entity_ranking_scores into derived collection 21 — see its
+# module doc. RUNBOOK section 2f-scores.
+[[bin]]
+name = "mirror_entity_scores_snapshot"
+path = "src/bin/mirror_entity_scores_snapshot.rs"
+
 [dependencies]
 hermes-schema = { path = "../../hermes-schema" }
 hermes-instrumentation = { path = "../../hermes-instrumentation" }

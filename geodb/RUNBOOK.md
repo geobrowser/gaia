@@ -1141,6 +1141,17 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   mismatch over entities whose card has not changed is a defect in the default formula. Needs a geo-db with wire revision 11;
   an older node makes every read `failed`. Set `_DEFAULT_SAMPLE` to `0` to turn this half off.
 
+### 2f-vote-engaged-backfill. Collection 21 backfill (`mirror_entity_scores_snapshot`)
+
+The live collection 21 mirror puts only entities touched after it was enabled, so the roughly 9.5k rows already
+engaged in `public.entity_ranking_scores` are absent (the Prometheus row count of `entity_ranking_scores` stays 0
+until they are put). The vote-indexer image carries `mirror_entity_scores_snapshot`: keyset pages (2048) of only the
+engaged rows by entity id, each sent with an acknowledgement check, three tries per page, exit 1 on an
+unacknowledged page. Idempotent. Apply `scoring-service/deployment/v2/entity-scores-snapshot-job.yaml` by hand with
+the image tag substituted (the header of the file has the command), watch `kubectl -n gaia logs -f
+job/vote-indexer-entity-scores-snapshot` for `entity scores snapshot complete`, then check the collection 21 row
+count in Prometheus against the logged `rows_sent`. Delete the Job before a re-run.
+
 ### 2f-primer. claim_overlap_samples (derived collection 14, GEODB_DERIVED_MIRROR)
 
 Shadow only, nothing reads the rows. The hourly `ranking-indexer-primer-claims` CronJob (`primer_claims_refresh`) is the only

@@ -115,32 +115,69 @@ pub fn plan(touched: &[Uuid], rows: &[ScoreRow]) -> Plan {
     out
 }
 
+fn map_row(r: &sqlx::postgres::PgRow) -> ScoreRow {
+    ScoreRow {
+        entity_id: r.get("entity_id"),
+        ranking_score: r.get("ranking_score"),
+        positive: r.get("positive"),
+        negative: r.get("negative"),
+        stance_positive: r.get("stance_positive"),
+        stance_negative: r.get("stance_negative"),
+        commenter_count: r.get("commenter_count"),
+        participation_score: r.get("participation_score"),
+        comment_score: r.get("comment_score"),
+        topic_score: r.get("topic_score"),
+        watch_score: r.get("watch_score"),
+        age_credit: r.get("age_credit"),
+        trending_score: r.get("trending_score"),
+        trending_source: r.get("trending_source"),
+        trending_topic_id: r.get("trending_topic_id"),
+    }
+}
+
 /// Reads the rows for `entity_ids`.
 pub async fn read_rows(pool: &PgPool, entity_ids: &[Uuid]) -> Result<Vec<ScoreRow>, sqlx::Error> {
     let rows = sqlx::query(SELECT_SQL)
         .bind(entity_ids)
         .fetch_all(pool)
         .await?;
-    Ok(rows
-        .iter()
-        .map(|r| ScoreRow {
-            entity_id: r.get("entity_id"),
-            ranking_score: r.get("ranking_score"),
-            positive: r.get("positive"),
-            negative: r.get("negative"),
-            stance_positive: r.get("stance_positive"),
-            stance_negative: r.get("stance_negative"),
-            commenter_count: r.get("commenter_count"),
-            participation_score: r.get("participation_score"),
-            comment_score: r.get("comment_score"),
-            topic_score: r.get("topic_score"),
-            watch_score: r.get("watch_score"),
-            age_credit: r.get("age_credit"),
-            trending_score: r.get("trending_score"),
-            trending_source: r.get("trending_source"),
-            trending_topic_id: r.get("trending_topic_id"),
-        })
-        .collect())
+    Ok(rows.iter().map(map_row).collect())
+}
+
+/// The SQL for one keyset page of the engaged rows: the same columns as [`SELECT_SQL`], filtered
+/// by the negation of the un-engaged row of section 9.1 (the SQL twin of
+/// `Engagement::is_engaged`), ordered by entity id, after `$1`, at most `$2` rows.
+pub const ENGAGED_PAGE_SQL: &str = "SELECT entity_id, ranking_score::float8 AS ranking_score, \
+    positive, negative, stance_positive, stance_negative, commenter_count, \
+    participation_score::float8 AS participation_score, comment_score::float8 AS comment_score, \
+    topic_score::float8 AS topic_score, watch_score::float8 AS watch_score, \
+    age_credit::float8 AS age_credit, trending_score::float8 AS trending_score, \
+    trending_source, trending_topic_id \
+    FROM public.entity_ranking_scores WHERE entity_id > $1 AND (positive <> 0 OR negative <> 0 \
+    OR stance_positive <> 0 OR stance_negative <> 0 OR commenter_count <> 0 \
+    OR participation_score <> 0 OR comment_score <> 0 OR topic_score <> 0 OR watch_score <> 0 \
+    OR age_credit <> 0 OR trending_score <> 0 OR trending_source IS NOT NULL) \
+    ORDER BY entity_id LIMIT $2";
+
+/// One page of engaged rows with entity id after `after` (the nil id starts), in id order.
+pub async fn engaged_page(
+    pool: &PgPool,
+    after: Uuid,
+    limit: i64,
+) -> Result<Vec<ScoreRow>, sqlx::Error> {
+    let rows = sqlx::query(ENGAGED_PAGE_SQL)
+        .bind(after)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.iter().map(map_row).collect())
+}
+
+/// The puts for a page of engaged rows. A row the SQL filter let through but [`plan`] would delete
+/// (the two predicates disagreeing, e.g. a NaN) is dropped, never sent as a delete.
+pub fn engaged_puts(rows: &[ScoreRow]) -> Vec<DerivedRow> {
+    let ids: Vec<Uuid> = rows.iter().map(|r| r.entity_id).collect();
+    plan(&ids, rows).puts
 }
 
 /// Sends the plan for `touched`. Never fails.
@@ -212,6 +249,39 @@ mod tests {
         assert_eq!(&r.value[2..6], &7u32.to_le_bytes());
         assert_eq!(&r.value[22..30], &0.25f64.to_le_bytes());
         assert!(r.put_line().is_ok());
+    }
+
+    #[test]
+    fn engaged_puts_keeps_the_engaged_rows_and_never_deletes() {
+        let rows = [row(1, 5.0), quiet(2, 4.0), row(3, 6.0)];
+        let puts = engaged_puts(&rows);
+        assert_eq!(puts.len(), 2);
+        assert_eq!(puts[0].key, vec![1u8; 16]);
+        assert_eq!(puts[1].key, vec![3u8; 16]);
+    }
+
+    #[test]
+    fn the_page_sql_names_every_engagement_term() {
+        for col in [
+            "positive",
+            "negative",
+            "stance_positive",
+            "stance_negative",
+            "commenter_count",
+            "participation_score",
+            "comment_score",
+            "topic_score",
+            "watch_score",
+            "age_credit",
+            "trending_score",
+            "trending_source IS NOT NULL",
+        ] {
+            assert!(
+                ENGAGED_PAGE_SQL.contains(&format!("{col} <> 0")) || col.contains("IS NOT"),
+                "{col}"
+            );
+        }
+        assert!(ENGAGED_PAGE_SQL.contains("ORDER BY entity_id LIMIT"));
     }
 
     #[test]

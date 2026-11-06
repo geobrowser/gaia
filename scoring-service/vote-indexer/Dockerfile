@@ -42,6 +42,7 @@ COPY --from=builder /app/scoring-service/vote-indexer/target/release/vote-indexe
 COPY --from=builder /app/scoring-service/vote-indexer/target/release/comment_sweep /usr/local/bin/comment_sweep
 COPY --from=builder /app/scoring-service/vote-indexer/target/release/new_entity_sweep /usr/local/bin/new_entity_sweep
 COPY --from=builder /app/scoring-service/vote-indexer/target/release/mirror_ranking_snapshot /usr/local/bin/mirror_ranking_snapshot
+COPY --from=builder /app/scoring-service/vote-indexer/target/release/mirror_entity_scores_snapshot /usr/local/bin/mirror_entity_scores_snapshot
 COPY --from=builder /app/scoring-service/vote-indexer/target/release/mirror_scores_snapshot /usr/local/bin/mirror_scores_snapshot
 
 CMD ["vote-indexer"]
