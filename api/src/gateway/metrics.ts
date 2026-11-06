@@ -41,6 +41,8 @@ export const UNCOMPARED_REASONS = [
 	"created_at",
 	"relation_count",
 	"backlink_count",
+	/** `backlinks { nodes }` / `backlinksList` rows: the relations pointing at the entity, which a card does not hold. */
+	"backlink_rows",
 	"partial_values",
 	"filter_completeness",
 	/** An `orderBy` page: which entities come first, and where ties fall, is not checkable from cards. */

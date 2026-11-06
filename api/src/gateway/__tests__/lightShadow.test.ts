@@ -1398,3 +1398,73 @@ describe("entities answers with no Space (every-Space reads)", () => {
 		})
 	})
 })
+
+describe("entities selections with nested entities and backlinks (live refusals, 2026-11-06)", () => {
+	const SPACE = "11111111-1111-4111-8111-111111111111"
+	const TYPE = "22222222-2222-4222-8222-222222222222"
+	const vars = {spaceIds: [SPACE], typeIds: [TYPE], filter: {}, first: 10, offset: 0}
+	const analyze = (query: string, variables: Record<string, unknown> = vars) =>
+		analyzeLightEntities(parse(query), null, variables, {
+			entitiesBatch: true,
+			relationsTypeFilter: true,
+			derivedFields: true,
+		})
+	const VALUES =
+		"valuesList(filter: {spaceId: {in: $spaceIds}}) { propertyId text boolean float datetime point schedule }"
+	const wrap = (body: string) =>
+		`query entities($spaceIds: [UUID!]!, $typeIds: [UUID!]!, $first: Int, $filter: EntityFilter!, $offset: Int) {
+			entities(spaceIds: {in: $spaceIds} typeIds: {in: $typeIds} filter: $filter first: $first offset: $offset) {
+				id name spaceIds ${VALUES} ${body}
+			}
+		}`
+	const relations = `relations(filter: {spaceId: {in: $spaceIds}, typeId: {is: "${TYPE}"}}) {
+		nodes { id entity { ${VALUES} } toEntity { id name ${VALUES} backlinks(filter: {typeId: {is: "${TYPE}"}}) { totalCount } } typeId }
+	}`
+	const backlinks = `backlinks(filter: {spaceId: {in: $spaceIds}, typeId: {is: "${TYPE}"}}) {
+		totalCount
+		nodes { id entity { ${VALUES} } toEntity: fromEntity { id name ${VALUES} ${relations} } typeId }
+	}`
+
+	it("plans a relation row's own entity and a nested entity's lists and counts as uncompared", () => {
+		const a = analyze(wrap(relations))
+		expect(a.ok).toBe(true)
+		if (a.ok) {
+			expect(a.plan.uncompared).toEqual(expect.arrayContaining(["nested_entity", "sampled_rows"]))
+			expect(a.plan.lists.map((l) => l.kind)).toEqual(["values", "relations"])
+		}
+	})
+
+	it("plans backlink rows, never comparing them", () => {
+		const a = analyze(wrap(`${relations} ${backlinks}`))
+		expect(a.ok).toBe(true)
+		if (a.ok) {
+			expect(a.plan.uncompared).toContain("backlink_rows")
+			// The rows are not lists of the card: only its own values and relations are compared.
+			expect(a.plan.lists).toHaveLength(2)
+		}
+		const list = analyze(
+			wrap(
+				`backlinksList(first: 50, filter: {typeId: {is: "${TYPE}"}}) { fromEntity { id comments: backlinks { totalCount } } }`,
+			),
+		)
+		expect(list.ok && list.plan.uncompared).toContain("backlink_rows")
+	})
+
+	it("still refuses what a backlink selection cannot say", () => {
+		const bad = (inner: string) => analyze(wrap(`backlinks { nodes { ${inner} } }`))
+		expect(bad("mystery")).toEqual({ok: false, reason: "selection"})
+		expect(bad("fromEntity { mystery }")).toEqual({ok: false, reason: "selection"})
+		expect(analyze(wrap('backlinks(after: "x") { totalCount nodes { id } }'))).toEqual({ok: false, reason: "args"})
+		expect(analyze(wrap("backlinks { edges { cursor } }"))).toEqual({ok: false, reason: "selection"})
+	})
+
+	it("plans the generic by-id read's value and relation row ids and versions", () => {
+		const a = analyze(
+			`query ($ids: [UUID!]!) { entities(first: 25, filter: {id: {in: $ids}}) { id
+				values(first: 100) { totalCount nodes { id propertyId spaceId language text date datetime datetimeUtc integer float decimal boolean property { id name } } pageInfo { hasNextPage endCursor } }
+				relations(first: 200) { totalCount nodes { id entityId spaceId fromEntityId toEntityId typeId toSpaceId toVersionId fromSpaceId fromVersionId position } pageInfo { hasNextPage endCursor } } } }`,
+			{ids: ["33333333-3333-4333-8333-333333333333"]},
+		)
+		expect(a.ok).toBe(true)
+	})
+})
