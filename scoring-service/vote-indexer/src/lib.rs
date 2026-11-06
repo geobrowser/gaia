@@ -10,6 +10,7 @@ pub mod handlers;
 pub mod metrics;
 pub mod models;
 pub mod new_entity_sweep;
+pub mod ranking_snapshot;
 pub mod storage;
 pub mod votes_count_mirror;
 pub mod write_retry;

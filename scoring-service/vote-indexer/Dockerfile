@@ -41,5 +41,6 @@ COPY --from=builder /app/scoring-service/vote-indexer/target/release/vote-indexe
 # Same arrangement as ranking-indexer's three binaries.
 COPY --from=builder /app/scoring-service/vote-indexer/target/release/comment_sweep /usr/local/bin/comment_sweep
 COPY --from=builder /app/scoring-service/vote-indexer/target/release/new_entity_sweep /usr/local/bin/new_entity_sweep
+COPY --from=builder /app/scoring-service/vote-indexer/target/release/mirror_ranking_snapshot /usr/local/bin/mirror_ranking_snapshot
 
 CMD ["vote-indexer"]

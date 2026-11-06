@@ -145,6 +145,12 @@ impl DerivedMirror {
 
     /// Mirrors `rows` of `table` (a label for the metrics). Never fails the caller.
     pub async fn put(&self, table: &str, rows: &[DerivedRow]) {
+        self.put_counted(table, rows).await;
+    }
+
+    /// As [`put`](Self::put), and returns how many rows the node acknowledged. A one-shot backfill
+    /// uses it to tell a short send (dead pipe, cooldown, budget, an unencodable row) from a full one.
+    pub async fn put_counted(&self, table: &str, rows: &[DerivedRow]) -> usize {
         let mut lines = Vec::with_capacity(rows.len());
         for r in rows {
             match r.put_line() {
@@ -155,6 +161,7 @@ impl DerivedMirror {
         let sent = self.send(table, &lines).await;
         metrics::counter!("geodb_derived_mirror_puts_total", "table" => table.to_string())
             .increment(sent as u64);
+        sent
     }
 
     /// Mirrors the removal of `keys` of `collection` (`table` labels the metrics).
@@ -296,6 +303,21 @@ mod tests {
             Err(MirrorError::Refused(_))
         ));
         assert!(matches!(delete_line(0, &[]), Err(MirrorError::Refused(_))));
+    }
+
+    #[tokio::test]
+    async fn put_counted_reports_rows_acknowledged() {
+        let log = tmp("counted");
+        let m = fake(&ok_script(&log), Duration::from_secs(5));
+        assert_eq!(m.put_counted("t", &[row(1, 1.0), row(2, 2.0)]).await, 2);
+        // A row that cannot be encoded is skipped, so the count falls short of the input.
+        assert_eq!(
+            m.put_counted("t", &[row(3, 1.0), row(4, f64::NAN)]).await,
+            1
+        );
+        let dead = fake("exit 1", Duration::from_secs(5));
+        assert_eq!(dead.put_counted("t", &[row(5, 1.0)]).await, 0);
+        let _ = std::fs::remove_file(&log);
     }
 
     #[tokio::test]

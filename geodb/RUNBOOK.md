@@ -1953,12 +1953,22 @@ $K -n gaia rollout restart statefulset/geodb && $K -n gaia rollout status statef
 $K -n gaia rollout restart deploy/vote-indexer deploy/ranking-indexer
 ```
 
-4. Backfill first. The mirror copies only rows written after the flag is on (§2f), so rows that were not refreshed
-   since then are missing from geo-db until their next refresh. Run `refresh_ranking_scores_for` over the entity set
-   before or right after step 5. A table-wide load sends rows in batches of 256 with `GEODB_DERIVED_BATCH=1` (one
-   fsync a request, geo-db plan 10.14 V11; needs the geodb-client at or above `6b34f9feda`). Do not backfill the
-   type and topic rankings (1.73M rows) while `derived_rows_max` is below 2,097,152 (Stage A raised it to 4,194,304). Then diff with the type
-   ranking gate (§2f).
+4. Backfill first, with `mirror_ranking_snapshot`. The live mirror copies only rows whose score changes after the flag
+   is on (§2f; it diffs a before-read against an after-read), so running `refresh_ranking_scores_for` over the
+   entity set copies nothing for rows that did not move, and the rows that predate the flag never reach geo-db. The
+   `mirror_ranking_snapshot` binary (vote-indexer image, `scoring-service/vote-indexer/src/bin/mirror_ranking_snapshot.rs`)
+   instead reads `entity_type_ranking` (collection 0, about 1.84M rows) and `entity_topic_ranking` (collection 1, about
+   0.93M rows) whole, in keyset pages of 256 rows, and sends each page through the mirror's own put path as one
+   batch request (`GEODB_DERIVED_BATCH=1`, one fsync a request; needs the geodb-client at or above `6b34f9feda`).
+   Run it once as a Job from `scoring-service/deployment/v2/ranking-snapshot-job.yaml` (same key mount, `geodb-setup`
+   init container and `DATABASE_URL` as the vote-indexer pod; replace `IMAGE_TAG` with the vote-indexer image tag
+   that contains the binary; the file is not in any deploy manifest list, so it is only ever applied by hand).
+   Needs `derived_rows_max` at or above the two tables' total with headroom: it is 12,582,912 (gaia#1267), against
+   about 2.77M rows. It is idempotent, because a derived row is a last-write-wins keyed cell, so a failed or
+   repeated run is safe and a run that overlaps live writes converges on Postgres' current value. It logs counts
+   only (progress every 100 pages, then rows sent per collection), retries a short page up to three times, and exits
+   non-zero if a page still cannot be acknowledged; delete the Job and run it again. Run it before or right after
+   step 5. Then diff with the type ranking gate (§2f).
 5. Set `GEODB_DERIVED_MIRROR` to `"1"` in `scoring-service/deployment/v2/vote-indexer.yaml` and
    `ranking-indexer/k8s/v2/ranking-indexer.yaml` in a separate PR, so the flag change can be reverted alone.
 6. Verify after the rollout: `geodb_derived_mirror_puts_total{table}` rises for `entity_type_ranking`,
