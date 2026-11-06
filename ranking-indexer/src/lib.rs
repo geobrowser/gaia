@@ -27,6 +27,7 @@ pub mod primer_mirror;
 pub mod publish;
 pub mod recompute;
 pub mod scoring;
+pub mod sql_helpers;
 pub mod stance_graph;
 pub mod stance_map;
 pub mod storage;
