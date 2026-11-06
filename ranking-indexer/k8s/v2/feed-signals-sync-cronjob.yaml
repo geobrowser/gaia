@@ -173,6 +173,9 @@ spec:
                 # section 2f-feed-signals), best-effort. ON.
                 - name: GEODB_DERIVED_MIRROR
                   value: "1"
+                # Also copy feed_user_seen_daily (collection 29, restricted: RUNBOOK section 2f-private).
+                - name: GEODB_DERIVED_MIRROR_PRIVATE
+                  value: "1"
                 - name: GEODB_DERIVED_BATCH
                   value: "1"
                 - name: GEODB_CLIENT_BIN
