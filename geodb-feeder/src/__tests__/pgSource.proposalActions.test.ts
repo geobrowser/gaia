@@ -20,6 +20,8 @@ describe.skipIf(!url)("readProposalActionRows on a real Postgres", () => {
 		return u.toString()
 	}
 	const inserted: string[] = []
+	/** The version block inserted for each (proposal, version), to check every row's join against. */
+	const blocks = new Map<string, string>()
 	let admin: pg.Client
 	let ro: ReadOnlyPg
 
@@ -41,7 +43,8 @@ describe.skipIf(!url)("readProposalActionRows on a real Postgres", () => {
 		for (let p = 0; p < 10; p++) {
 			const proposal = randomUUID()
 			for (const version of [1, 2, 3]) {
-				await c.query("INSERT INTO proposal_versions VALUES ($1, $2, $3)", [proposal, version, String(1000 * p + version)])
+				blocks.set(`${proposal}|${version}`, String(1000 * p + version))
+				await c.query("INSERT INTO proposal_versions VALUES ($1, $2, $3)", [proposal, version, blocks.get(`${proposal}|${version}`)])
 				for (let i = 0; i < 4; i++) {
 					await c.query(
 						`INSERT INTO proposal_actions (proposal_id, proposal_version, "index", action_type, content_uri, metadata, quorum)
@@ -77,7 +80,9 @@ describe.skipIf(!url)("readProposalActionRows on a real Postgres", () => {
 		const pub = rows.find((x) => x.action_type === "Publish")
 		expect(pub?.metadata).toBe("01ff")
 		expect(pub?.content_uri).toBe("ipfs://x")
-		expect(rows.find((x) => x.proposal_version === 2)?.block).toMatch(/^\d*002$/)
+		// Read order is by random proposal id, so no row is "the first": every row must carry its own version's block.
+		expect(rows.length).toBe(blocks.size * 4)
+		for (const x of rows) expect(x.block).toBe(blocks.get(`${x.proposal_id}|${x.proposal_version}`))
 		expect(rows.find((x) => x.index === 3)?.quorum).toBe("7")
 		for (const x of rows) expect(() => proposalActionFromRow(x)).not.toThrow()
 	})
