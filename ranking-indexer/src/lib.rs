@@ -32,6 +32,7 @@ pub mod not_interested;
 pub mod primer_claims_mirror;
 pub mod primer_mirror;
 pub mod primer_stats;
+pub mod private_snapshot;
 pub mod publish;
 pub mod recompute;
 pub mod scoring;
