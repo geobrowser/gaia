@@ -219,6 +219,49 @@ sum(increase(gaia_api_geodb_card_shadow_total{result="only_postgres"}[1h])) / su
 (`BACKFILL_EXCLUDE_PROPERTIES`, default the list in `geodb-feeder/src/pgAdapter.ts`) are left out on
 purpose, so the replica holds only what the stream would give it.
 
+### 2b-ter. Held-repair (values the old backfill skipped)
+
+Before gaia#1244, the backfill's `held.props` marked a property held when geo-db had any card row on it, and a
+relation's type is a card row's property too. A value sharing its property with a relation type of the same entity in
+the same Space (a text `""` plus relations typed by that property) was skipped for good: about 1,562 Postgres value
+rows (257 empty texts, 96 properties) never reached geo-db. A Space backfill rerun is the wrong repair (its cursor skips
+finished batches, and it needs the feeder at 0 for hours). Job `geodb-held-repair`
+(`geodb/k8s/v2/geodb-held-repair-job.yaml`, same image, `node dist/backfill-main.js` with `BACKFILL_MODE=held-repair`)
+visits only the (Space, entity) pairs with that shape, reads geo-db for each, and writes only the values geo-db lacks,
+through the feeder's translate + apply path and journals (`geodb-feeder/src/heldRepair.ts`). It never overwrites a row,
+writes no relation, creates no entity (one geo-db lacks is left to the Space backfill) and founds no Space. Its cursor is
+`/data/feeder/held-repair/`, apart from the Space backfill's. Logs carry counts only, never ids or text.
+
+- `DRY_RUN=1`: reads Postgres and geo-db, logs counts, writes nothing (no geo-db, journal, cursor or space-map write) and
+  skips the Kafka check, so it needs no stopped feeder. Final line `held-repair done`: `candidatePairs`, `entitiesToRepair`,
+  `valuesToWrite` (the number a real run writes), `valuesAlreadyHeld`, `entitiesAbsent`, `spacesUnmapped`.
+- `DRY_RUN=0`: the same, and writes. Needs the feeder at 0 and the ordering precondition (as §2b). Knobs:
+  `BACKFILL_BATCH` (100), `BACKFILL_PAUSE_MS` (100), `BACKFILL_MAX_ENTITIES` (0: all; the batch cap, for a staged run).
+- Idempotent: a value written is a geo-db row, so a rerun (or one with the cursor deleted) finds the property held and
+  writes nothing: `valuesToWrite` 0.
+
+```bash
+TAG=<the feeder tag deployed now, built from a main that contains this mode>
+# dry run: the feeder may keep running. Expect valuesToWrite close to 1,562 less what geo-db already got.
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__DRY_RUN__|1|" \
+  geodb/k8s/v2/geodb-held-repair-job.yaml | $K apply -f -
+$K logs -f job/geodb-held-repair        # "held-repair plan", then "held-repair done"
+$K delete job geodb-held-repair
+# real run: silence GeoDbFeederDown/LagHigh, stop the feeder, wait for its group to empty (as §2b steps 0-1).
+$K scale deployment/geodb-feeder --replicas=0
+$K wait --for=delete pod -l app=geodb-feeder --timeout=120s
+# optional staged first run: add -e '/BACKFILL_MAX_ENTITIES/{n;s|"0"|"200"|;}' to the sed.
+sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|__DRY_RUN__|0|" \
+  geodb/k8s/v2/geodb-held-repair-job.yaml | $K apply -f -
+$K logs -f job/geodb-held-repair        # "ordering precondition" ok:true ... "held-repair done" valuesWritten, deadLettered 0
+$K delete job geodb-held-repair
+$K scale deployment/geodb-feeder --replicas=1
+$K rollout status deployment/geodb-feeder
+# verify: rerun with __DRY_RUN__ -> 1 (feeder may run): valuesToWrite 0.
+```
+
+If the Job fails, read why, delete it and apply it again: it resumes. Giving up is just scaling the feeder back to 1.
+
 ### 2b-bis. Proposal system entities
 
 The kg-indexer writes a system entity per proposal (type Proposal, five values, two System/Proposal type
