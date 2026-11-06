@@ -133,6 +133,20 @@ describe("diffCards", () => {
 		const twice = statementsFromPostgres([value({text: "x"}), value({text: "x"})], [])
 		expect(diffCards(twice, [{prop: PROP, raw: "x"}]).onlyPostgres).toHaveLength(1)
 	})
+
+	it("skips a Postgres empty text geo-db lacks, and still matches one it holds", () => {
+		const empty = statementsFromPostgres([value({text: ""})], [])
+		const lacking = diffCards(empty, [])
+		expect(isEmptyDiff(lacking)).toBe(true)
+		expect(lacking.skipped).toBe(1)
+		expect(isEmptyDiff(diffCards(empty, [{prop: PROP, raw: ""}]))).toBe(true)
+		// Only an empty text is forgiven: a non-empty one geo-db lacks is still a gap.
+		expect(diffCards(statementsFromPostgres([value({text: "x"})], []), []).onlyPostgres).toHaveLength(1)
+	})
+
+	it("does not count a geo-db empty text Postgres lacks as extra", () => {
+		expect(isEmptyDiff(diffCards({statements: [], skipped: 0}, [{prop: PROP, raw: ""}]))).toBe(true)
+	})
 })
 
 describe("diffCards derived properties", () => {
