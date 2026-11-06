@@ -32,6 +32,8 @@ export const RECORD_KINDS = {
 	proposalAction: {id: "22335b74e17a4c9e867d4ac2a32c3a4a", family: "governance", table: "proposal_actions"},
 	/** `proposal_versions`: a record keyed (proposal, version-stamp block). The ordinal is not a key part. */
 	proposalVersion: {id: "6863abef6664450eb135a182c6ff1715", family: "governance", table: "proposal_versions"},
+	/** A settings escalation of a proposal version (`PROPOSAL_SETTINGS_UPDATED`): a record keyed (proposal, event block). */
+	proposalEscalation: {id: "69352153d76946afa5d926c13c3613e9", family: "governance", table: "proposal_versions (settings escalation)"},
 	/** `space_voting_settings`: a record keyed (space), mutable columns written by `put`. */
 	spaceVotingSettings: {id: "7767f888a9a240b18275a7832363f4d9", family: "governance", table: "space_voting_settings"},
 	/** `proposals.executed_at` / `unexecutable_at`: a record keyed (proposal). The status itself is computed, not stored. */
@@ -148,6 +150,28 @@ export const RECORD_COLUMNS = {
 		executedAt: "ed3855a3c41b4f749651bf049dabac0b",
 		/** Mutable: instant, `unexecutable_at` (operator backfill; no event). */
 		unexecutableAt: "72179d56e3dc478d9c9ab2159e4b40ef",
+	},
+	proposalEscalation: {
+		/** Key: reference to the proposal's entity, `cid("entity", proposal_id)`. */
+		proposal: "49c19599b0694221841396f0db5f9995",
+		/** Key: number, the block of the PROPOSAL_SETTINGS_UPDATED event. */
+		block: "89cbe515c863439dbf2a7686c676c90a",
+		/** Mutable: text, `voting_mode` the escalation set (`Fast` or `Slow`). */
+		votingMode: "e3f7ba26068849658179f6d443b0a064",
+		/** Mutable: number, `start_time`. */
+		startTime: "0c2fcb7931a34133a8a4258ae111f20e",
+		/** Mutable: number, `end_time`. */
+		endTime: "31d689b4544b4fcd91af181db291a4d8",
+		/** Mutable: number, `quorum`. */
+		quorum: "43a88c623ad243cebadbff37b0e6d567",
+		/** Mutable: number, `partial_percentage_support_threshold`. */
+		partial: "4e2cf0e3c88d4b998b9a4932469f702e",
+		/** Mutable: number, `universal_percentage_support_threshold`. */
+		universal: "d4124abe7be548548d39f67383669975",
+		/** Mutable: number, `flat_support_threshold`. */
+		flat: "473d72f8ac84495284b3623afef491a0",
+		/** Mutable: number, `execute_by`, when the escalated settings have a deadline (absent: none, as the UPDATE writes NULL). */
+		executeBy: "7ef74c02759c4e658a3a73e18f8f0733",
 	},
 	subspace: {
 		/** Edge property for a `verified` subspace row: parent Space entity -> child Space entity. */

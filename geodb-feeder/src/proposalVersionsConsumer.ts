@@ -1,7 +1,7 @@
 /**
  * The keyed proposal-versions consumer, started by main.ts when proposalVersionsKeyedEnabled (GEODB_PROPOSAL_VERSIONS with
  * GEODB_RECORD_KEYS): its own group on `space.governance` (kg-indexer's group and the proposals consumer's are
- * untouched). It reads every message on the topic and writes only PROPOSAL_CREATED or PROPOSAL_UPDATED (the rest count as ignored). The
+ * untouched). It reads every message on the topic and writes only PROPOSAL_CREATED, PROPOSAL_UPDATED or PROPOSAL_SETTINGS_UPDATED (the rest count as ignored). The
  * loop is keyedConsumer.ts: a message that fails is retried in place, never skipped. A failure to start is logged and
  * counted (startOptionalConsumer, GeoDbFeederConsumerStartFailed); it never stops the edits consumer.
  */

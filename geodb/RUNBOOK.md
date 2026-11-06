@@ -485,7 +485,7 @@ committing: the partition stalls and `GeoDbFeederProposalVotesStalled` fires aft
 
 Not migrated, and why (the rest of the governance family is not clean as keyed records): `proposals` and
 `proposal_versions` (the version number is assigned by Postgres as `current_version + 1`, settings escalation updates
-a version row in place, tallies are derived, `unexecutable_at` is set only by an operator backfill, `executed_at`
+a version row in place (§2c-octies keeps it as a record), tallies are derived, `unexecutable_at` is set only by an operator backfill, `executed_at`
 comes from PROPOSAL_EXECUTED), and `proposal_actions` (keyed on the Postgres-assigned version). Proposal entities are
 already written by §2b-bis.
 
@@ -617,11 +617,16 @@ present execute_by (the event's 0 is "no deadline") and name (kg-indexer's `deri
 without actions). Not stored: the ordinal; `threshold` (legacy copy of flat for Fast, partial for Slow); `yes_count`,
 `no_count`, `abstain_count` (kg-indexer's tally worker writes them; geo-db derives them from the proposal-vote records).
 
-Known limit: a fast-to-slow escalation (`PROPOSAL_SETTINGS_UPDATED`) rewrites the current version's settings in place
-in Postgres, and that event does not say which version. It is not consumed, so the records hold each version's settings
-as its CREATE or UPDATE set them, while the backfill (a Postgres read) holds the escalated values; replaying an old event
-afterwards puts the originals back. The gate lists such a version as `escalated` (geo-db Fast, Postgres Slow, settings
-columns only) and does not fail it. A record for the escalation is a follow-up.
+Escalation: a fast-to-slow escalation (`PROPOSAL_SETTINGS_UPDATED`) rewrites the current version's settings in place in
+Postgres, and the event does not say which version. The same consumer writes it as its own immutable record keyed
+(proposal, block of the event), holding the eight settings the event set (execute_by absent when the event's is 0). The
+version it hit is resolved at READ time: the proposal's version with the greatest block at or before the escalation's block;
+the latest escalation of a version (greatest block, then record id) supplies all eight settings. An escalation with no
+version at or before its block is an orphan (kg-indexer did nothing). Because the record depends on the event alone, a
+replay is a no-op and converges, including after the backfill, which carries the escalated values in the version records.
+There is no escalation backfill (Postgres keeps no history of the event), so an escalation older than the topic's 7 days
+is represented only by the escalated values in the backfilled version. Two events in one block cannot be ordered: an
+escalation in the block that creates a version is taken to follow it, and two in one block resolve by record id.
 
 Activation order, each step only after the one before it is live:
 
@@ -634,9 +639,10 @@ Activation order, each step only after the one before it is live:
    `space.governance` keeps 7 days, so every older version comes from this snapshot.
 4. `GEODB_RECORD_KEYS: "1"` and `GEODB_PROPOSAL_VERSIONS: "1"` in the feeder manifest, then scale it back to 1.
 5. The gate, before any reader depends on the records: `bun src/proposalVersionsGate.ts <postgres.tsv> <dump dir>`
-   (`geodb-feeder/src/proposalVersionsGate.ts`; its header lists the `\copy` columns and the `pv-<name>.tsv` dumps).
+   (`geodb-feeder/src/proposalVersionsGate.ts`; its header lists the `\copy` columns and the `pv-<name>.tsv` and `pe-<name>.tsv`
+   dumps; the escalation dumps overlay the versions before the compare).
    It exits non-zero on a Postgres-only key, a value difference or an ordinal that is not the block's rank; geo-db-only
-   keys and `escalated` versions are reported, not failed.
+   keys and orphan escalations are reported, not failed.
 
 Rollback: unset `GEODB_PROPOSAL_VERSIONS`. The records stay in the Space, unread; nothing reads them yet.
 
