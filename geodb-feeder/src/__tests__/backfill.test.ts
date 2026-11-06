@@ -7,7 +7,7 @@ import {type EntityReader, type GeoDbRow, parseRows} from "../geodbPipe.js"
 import {cid} from "../ids.js"
 import {createMetrics} from "../metrics.js"
 import {type OffsetsAdmin, checkOrdering} from "../ordering.js"
-import {DERIVED_PROPERTIES, decimalValue, entityOps, grcValue, type PgRelationRow, type PgValueRow, pointValue} from "../pgAdapter.js"
+import {DERIVED_PROPERTIES, decimalValue, entityOps, grcValue, heldOf, type PgRelationRow, type PgValueRow, pointValue} from "../pgAdapter.js"
 import type {BackfillSource} from "../pgSource.js"
 import {Store, eachLine} from "../state.js"
 
@@ -87,6 +87,21 @@ describe("pgAdapter", () => {
 		expect(r.ops).toEqual([{type: "updateEntity", id: hex(1), set: [{property: PROP2.replaceAll("-", ""), value: {type: "integer", value: 3n}}]}])
 		const full = {props: new Set([cid("entity", PROP.replaceAll("-", "")), cid("entity", PROP2.replaceAll("-", ""))]), statements: held.statements}
 		expect(entityOps(ent(1), rows, rels, full, new Set()).ops).toEqual([])
+	})
+
+	it("a relation's type does not mark a value on the same property as held", () => {
+		const prop = PROP.replaceAll("-", "")
+		const both = [value(ent(1), RTYPE, {text: ""})]
+		const geoRel = [{prop: cid("entity", RTYPE.replaceAll("-", "")), statement: cid("statement", rel(1).replaceAll("-", ""))}]
+		const held = heldOf(geoRel, rels)
+		expect(held.props.size).toBe(0)
+		expect(held.statements.size).toBe(1)
+		expect(entityOps(ent(1), both, rels, held, new Set()).ops).toEqual([
+			{type: "updateEntity", id: hex(1), set: [{property: RTYPE.replaceAll("-", ""), value: {type: "text", value: "", language: null}}]},
+		])
+		// a row whose statement is no Postgres relation of the entity still marks its property held
+		const value1 = [{prop: cid("entity", prop), statement: cid("statement", "ab".repeat(16))}]
+		expect(heldOf(value1, rels).props.has(cid("entity", prop))).toBe(true)
 	})
 
 	it("excludes derived properties and relation types by default", () => {

@@ -67,6 +67,20 @@ export function grcValue(row: PgValueRow): GrcValue | null {
  */
 export type Held = {props: Set<string>; statements: Set<string>}
 
+/**
+ * What geo-db holds for an entity, from its card rows. A card row's property is a value's property or a relation's
+ * type, and a property can be both (a value `""` and relations of the same type on one entity): a relation row, known
+ * by its statement being one of this entity's Postgres relations, says nothing about the value, so it does not mark
+ * the property held. Left in, it made the backfill skip the value for good (a Postgres text "" with no geo-db row).
+ */
+export function heldOf(geo: {prop: string; statement: string}[], relations: PgRelationRow[]): Held {
+	const rel = new Set(relations.map((r) => cid("statement", compactId(r.id))))
+	return {
+		props: new Set(geo.filter((r) => !rel.has(r.statement)).map((r) => r.prop)),
+		statements: new Set(geo.map((r) => r.statement)),
+	}
+}
+
 export type EntityOps = {ops: GrcOp[]; values: number; relations: number; skipped: number; excluded: number}
 
 /**
