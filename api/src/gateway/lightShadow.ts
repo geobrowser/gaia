@@ -293,7 +293,15 @@ function planLightList(
 	const kind = name === "values" || name === "valuesList" ? "values" : "relations"
 	const connection = name === "values" || name === "relations"
 	const args = argsOf(field, resolved)
-	for (const arg of Object.keys(args)) if (!["first", "filter", "after", "offset"].includes(arg)) refuse("args")
+	for (const arg of Object.keys(args))
+		if (!["first", "filter", "after", "offset", "orderBy"].includes(arg)) refuse("args")
+	// An empty `orderBy: []` (what the frontend's list helpers send) asks for no order; a real order is not checked here.
+	if (
+		args.orderBy !== undefined &&
+		args.orderBy !== null &&
+		!(Array.isArray(args.orderBy) && args.orderBy.length === 0)
+	)
+		refuse("args")
 	if (args.after !== undefined && args.after !== null) refuse("args")
 	if (args.offset !== undefined && args.offset !== null && args.offset !== 0) refuse("args")
 	const filter = args.filter

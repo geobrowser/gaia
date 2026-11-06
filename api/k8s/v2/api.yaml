@@ -283,6 +283,17 @@ spec:
             # (serve runs 6b34f9feda).
             - name: GEODB_ORDER_PICK_SHADOW
               value: "on"
+            # Per-pod token buckets for the gateway shadow's geo-db reads. 11-06: 75 of the entity shadow's 85 refusals were
+            # `throttled` at the old 1 read/s (burst 5) and 0.5/s (burst 3) every-Space; serve sat at ~23m CPU. Raised 3x.
+            # Worst case is 11 pods x 3 reads/s. Lower these to shed load.
+            - name: GATEWAY_SHADOW_READS_PER_SECOND
+              value: "3"
+            - name: GATEWAY_SHADOW_READS_BURST
+              value: "15"
+            - name: GATEWAY_SHADOW_EVERY_SPACE_PER_SECOND
+              value: "1.5"
+            - name: GATEWAY_SHADOW_EVERY_SPACE_BURST
+              value: "6"
             # Proposal status computed from geo-db's keyed governance records after a proposal is served,
             # counted against the served status (gaia_api_governance_shadow_total). OFF; never changes a
             # response. Needs the geodb-feeder's proposal status records (GEODB_PROPOSAL_STATUS backfill) first.

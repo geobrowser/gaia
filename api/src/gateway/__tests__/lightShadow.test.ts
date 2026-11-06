@@ -342,6 +342,24 @@ describe("the light entity selection (news app)", () => {
 		expect(q("type { id } toEntity { id }", "first: 5, orderBy: ID_ASC")).toEqual({ok: false, reason: "args"})
 		expect(q("type { id }")).toEqual({ok: false, reason: "selection"})
 	})
+
+	it("plans the frontend's connection lists with an empty orderBy, and still refuses a real order", () => {
+		const query = (order: string) => `query ($ids: [UUID!]!, $space: UUID!) {
+			entities(first: 25, filter: {id: {in: $ids}}) {
+				id
+				values(first: 100, filter: {spaceId: {is: $space}}, ${order}) { totalCount nodes { id propertyId spaceId text property { id name } } pageInfo { hasNextPage endCursor } }
+				relations(first: 200, ${order}) { totalCount nodes { id spaceId typeId toEntityId } pageInfo { hasNextPage endCursor } }
+			}
+		}`
+		const vars = {ids: ["073ff16b-e7fe-4591-a984-c325d629d92d"], space: "5093b6ab-1b48-4f11-91dd-31275b5413dd"}
+		const options = {entitiesBatch: true, relationsTypeFilter: true, derivedFields: true}
+		expect(analyzeLightEntities(parse(query("orderBy: []")), null, vars, options).ok).toBe(true)
+		expect(analyzeLightEntities(parse(query("orderBy: null")), null, vars, options).ok).toBe(true)
+		expect(analyzeLightEntities(parse(query("orderBy: [ID_ASC]")), null, vars, options)).toEqual({
+			ok: false,
+			reason: "args",
+		})
+	})
 })
 
 describe("the card selection with no space filter", () => {
