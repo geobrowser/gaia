@@ -32,6 +32,7 @@ import {createRateLimiter} from "./src/middleware/rateLimit"
 import {canonicalRequestLogging, isClientAbortError, requestId} from "./src/middleware/requestLogging"
 import {createAccountWeightsShadow, readAccountWeightsShadowConfig} from "./src/pairFit/accountWeightsShadow"
 import {createProfileRouter} from "./src/profile"
+import {createProfileShadow, readProfileShadowConfig} from "./src/profile/shadow"
 import {createProposalsRouter} from "./src/proposals"
 import {createGovernanceShadow, readGovernanceShadowConfig} from "./src/proposals/governance/shadow"
 import {createSystemSpaceLookup} from "./src/proposals/governance/systemSpaces"
@@ -189,7 +190,18 @@ if (geoDbCardConfig.mode !== "off") {
 }
 
 // Mount profile router
-app.route("/profile", createProfileRouter(db, runtime))
+// GEODB_PROFILE_SHADOW (off by default) also reads the profile's front page entity card from geo-db after serving a profile
+// and counts whether its name and avatar url equal the served ones (gaia_api_profile_shadow_total). Never changes a response.
+const profileShadowConfig = readProfileShadowConfig(process.env)
+const profileShadow = profileShadowConfig.enabled
+	? createProfileShadow({
+			config: profileShadowConfig,
+			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+			geoSpaceOf: sharedGeoDb?.geoSpaceOf ?? createSpaceMap(geoDbCardConfig.spaceMapPath),
+			log,
+		})
+	: null
+app.route("/profile", createProfileRouter(db, runtime, profileShadow))
 log.info("Profile routes enabled")
 
 // Mount proposals router

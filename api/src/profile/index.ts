@@ -21,6 +21,7 @@ import {
 	getProfilesBySpaceIds,
 	type QueryError,
 } from "./queries"
+import type {ProfileShadow} from "./shadow"
 import type {Profile} from "./types"
 
 type AppEnv = {
@@ -85,9 +86,10 @@ function handleProfileError(c: Context, error: ProfileError) {
  *
  * @param db - Drizzle database instance
  * @param runtime - Effect runtime with telemetry and other services
+ * @param shadow - Optional geo-db shadow (GEODB_PROFILE_SHADOW); compares what was served, never changes a response
  * @returns Configured Hono router
  */
-export function createProfileRouter(db: Database, runtime: AppRuntime) {
+export function createProfileRouter(db: Database, runtime: AppRuntime, shadow?: ProfileShadow | null) {
 	const router = new Hono<AppEnv>()
 
 	/**
@@ -183,7 +185,10 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 
 			return Either.match(result, {
 				onLeft: (error) => handleProfileError(c, error),
-				onRight: (profile: Profile) => c.json(profile),
+				onRight: (profile: Profile) => {
+					shadow?.profiles("address", [profile])
+					return c.json(profile)
+				},
 			})
 		},
 	)
@@ -275,7 +280,10 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 
 			return Either.match(result, {
 				onLeft: (error) => handleProfileError(c, error),
-				onRight: (profile: Profile) => c.json(profile),
+				onRight: (profile: Profile) => {
+					shadow?.profiles("space", [profile])
+					return c.json(profile)
+				},
 			})
 		},
 	)
@@ -429,7 +437,10 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 
 			return Either.match(result, {
 				onLeft: (error) => handleProfileError(c, error),
-				onRight: (response) => c.json(response),
+				onRight: (response) => {
+					shadow?.profiles("batch", response.profiles)
+					return c.json(response)
+				},
 			})
 		},
 	)
