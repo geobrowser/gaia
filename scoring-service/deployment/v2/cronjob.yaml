@@ -129,9 +129,11 @@ spec:
                 # 2/3/4). OFF ("0"). Postgres stays the source of truth; a geo-db failure is logged and
                 # counted, never fails the run. Uses geodb-scores-key (grants derived=2,3,4).
                 - name: GEODB_DERIVED_MIRROR
-                  value: "0"
+                  value: "1"
                 # Which tables the mirror writes, comma separated; unset mirrors all three.
                 # Stage A: "global_scores,space_scores" (local_scores waits for Stage B).
+                - name: GEODB_DERIVED_MIRROR_TABLES
+                  value: "global_scores,space_scores"
                 - name: GEODB_CLIENT_BIN
                   value: /geodb/geodb-client
                 - name: GEODB_KEY_PATH
