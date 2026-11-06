@@ -1115,6 +1115,26 @@ and no longer has is a delete of both parts. A geo-db error is logged, never fai
 - Uses the shared `geodb-scores-key`, now granting collections 21 and 22 (`geodb/supervisor.sh`).
 - **Enable order: roll serve to a build that registers collection 22 FIRST**, then the binding (the StatefulSet restart does
   both), run the Job once by hand with the flag on, then set the flag `"1"` in `feed-signals-sync-cronjob.yaml` in its own PR.
+
+### 2f-cooccurrence. personalization.topic_cooccurrence (derived collection 23, GEODB_DERIVED_MIRROR)
+
+Shadow only, nothing reads the rows. The nightly `ranking-indexer-topic-interest-refit` CronJob
+(`ranking-indexer/src/bin/topic_interest.rs refit`, `personalization.refresh_topic_cooccurrence()` of migration 0100)
+deletes and re-inserts the whole table in one transaction. With `GEODB_DERIVED_MIRROR=1` (manifest default `"0"`) it reads the
+keys before the refit and the whole table after the commit, and copies it into collection 23
+(`ranking-indexer/src/topic_cooccurrence_mirror.rs`): group the topic id as a big-endian u128, key the topic id then the
+neighbour id (32 bytes), score the `similarity` (a scan of one topic walks its closest neighbour first), value 4 bytes (`support`
+i32, little-endian). Every row is a put; a (topic, neighbour) pair the table held before and no longer has is a delete. A geo-db
+error is logged, never fails the Job. The two-minute sweep CronJob never writes the table and carries no mirror env.
+
+- Size: at most `spread_max_neighbours` (default 10) rows per topic, so at most 10 times the topics. `entity_topic_ranking` has
+  424,701 rows, which bounds the topics, so the worst case is about 4.25M rows (about 612 MB resident at 144 B), and the realistic
+  figure is a fraction of that. Under the recommended `derived_rows_max` of 8,388,608 (plan 10.14 sizing).
+- Memory: the refit pod's limit is raised to 512Mi because the mirror holds the table and the prior keys in memory.
+- Reader (Postgres, unchanged): the `personalization` interest spreading join in migration 0100, for the For you candidates.
+- Uses the shared `geodb-scores-key`, now granting collection 23 as well (`geodb/supervisor.sh`).
+- **Enable order: roll serve to a build that registers collection 23 FIRST**, then the binding (the StatefulSet restart does
+  both), run the Job once by hand with the flag on, then set the flag `"1"` in `topic-interest-cronjob.yaml` in its own PR.
   Rollback: flag `"0"`.
 
 ### 2f-topology. scoring_topology_distances (derived collection 24, GEODB_DERIVED_MIRROR)
