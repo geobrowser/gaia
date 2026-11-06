@@ -1976,6 +1976,16 @@ $K -n gaia rollout restart deploy/vote-indexer deploy/ranking-indexer
    only (progress every 100 pages, then rows sent per collection), retries a short page up to three times, and exits
    non-zero if a page still cannot be acknowledged; delete the Job and run it again. Run it before or right after
    step 5. Then diff with the type ranking gate (§2f).
+   **Per-table list.** `GEODB_DERIVED_MIRROR` is one switch per service. The type and topic rankings (collections 0 and 1,
+   ~1.73M rows) are written by the vote-indexer; the `ranking_scores` rows (collection 11, tens of millions) by the
+   ranking-indexer, and mirroring them would pass `derived_rows_max`. `GEODB_DERIVED_MIRROR_TABLES` (comma separated
+   table labels, the `table` label of the `geodb_derived_mirror_*` metrics) narrows a service to those tables. For
+   the type and topic rankings only: `GEODB_DERIVED_MIRROR_TABLES=entity_type_ranking,entity_topic_ranking` on the
+   vote-indexer (and the backfill Job, which then skips a table it leaves out), and on the ranking-indexer either leave
+   `GEODB_DERIVED_MIRROR` at `"0"` or list a table it does not write so `ranking_scores` stays out. Unset, empty or only
+   commas keeps every table (today's behaviour); a list naming no table the service writes mirrors nothing; the list never
+   switches the mirror on. Rows a filtered table would have sent only raise `geodb_derived_mirror_filtered_total{table}`.
+   Note the vote-indexer also mirrors `votes_count` and others: a list there drops them, so name every table you want.
 5. Set `GEODB_DERIVED_MIRROR` to `"1"` in `scoring-service/deployment/v2/vote-indexer.yaml` and
    `ranking-indexer/k8s/v2/ranking-indexer.yaml` in a separate PR, so the flag change can be reverted alone.
 6. Verify after the rollout: `geodb_derived_mirror_puts_total{table}` rises for `entity_type_ranking`,

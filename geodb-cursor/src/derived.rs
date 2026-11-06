@@ -20,6 +20,12 @@
 //! Off unless `GEODB_DERIVED_MIRROR` is `1` or `true`; it needs `GEODB_KEY_PATH` and
 //! `GEODB_BINDING_PATH` like the cursor mirror, and the key's binding must grant `derived=` for the
 //! collections written.
+//!
+//! `GEODB_DERIVED_MIRROR_TABLES` (comma separated table labels, e.g.
+//! `entity_type_ranking,entity_topic_ranking`) narrows a service to those tables, because the flag
+//! is one switch per service and some services write a table far larger than the rest (the
+//! ranking-indexer's `ranking_scores`). Unset, empty or only commas keeps every table; a list that
+//! names no table the service writes mirrors nothing. It never turns the mirror on by itself.
 
 use std::time::{Duration, Instant};
 
@@ -90,6 +96,8 @@ pub struct DerivedMirror {
     pipe: CursorMirror,
     budget: Duration,
     batch: bool,
+    /// `None` mirrors every table; `Some` only the tables named (`GEODB_DERIVED_MIRROR_TABLES`).
+    tables: Option<std::collections::HashSet<String>>,
 }
 
 /// One batch request from `lines` of a single kind: `putn<tab><n>` (or `deleten`), then the rows.
@@ -115,7 +123,32 @@ impl DerivedMirror {
             pipe: CursorMirror::new(cfg),
             budget,
             batch: false,
+            tables: None,
         }
+    }
+
+    /// Restricts the mirror to the tables named (the `table` label every call carries). `None`, or
+    /// an empty list, mirrors all of them. A table off the list is neither sent nor counted as a
+    /// put, delete, error or drop: it only increments `geodb_derived_mirror_filtered_total{table}`.
+    pub fn with_tables(mut self, tables: Option<&[&str]>) -> Self {
+        self.tables = tables
+            .filter(|t| !t.is_empty())
+            .map(|t| t.iter().map(|n| n.to_string()).collect());
+        self
+    }
+
+    /// True when `table` is on the allow list, or there is none.
+    pub fn allows(&self, table: &str) -> bool {
+        self.tables.as_ref().is_none_or(|t| t.contains(table))
+    }
+
+    fn filtered(&self, table: &str) -> bool {
+        if self.allows(table) {
+            return false;
+        }
+        metrics::counter!("geodb_derived_mirror_filtered_total", "table" => table.to_string())
+            .increment(1);
+        true
     }
 
     /// Sends up to [`BATCH_MAX`] rows a request (`putn` / `deleten`) instead of one. Needs a
@@ -140,7 +173,20 @@ impl DerivedMirror {
             get("GEODB_DERIVED_BATCH").as_deref().map(str::trim),
             Some("1") | Some("true")
         );
-        Some(Self::new(cfg, Duration::from_millis(ms)).with_batch(batch))
+        // Comma separated table labels; unset, empty or only commas means every table. A value that
+        // names no table the writers use mirrors nothing (the flag above still gates everything).
+        let names: Vec<String> = get("GEODB_DERIVED_MIRROR_TABLES")
+            .unwrap_or_default()
+            .split(',')
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty())
+            .collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        Some(
+            Self::new(cfg, Duration::from_millis(ms))
+                .with_batch(batch)
+                .with_tables(Some(&refs)),
+        )
     }
 
     /// Mirrors `rows` of `table` (a label for the metrics). Never fails the caller.
@@ -151,6 +197,9 @@ impl DerivedMirror {
     /// As [`put`](Self::put), and returns how many rows the node acknowledged. A one-shot backfill
     /// uses it to tell a short send (dead pipe, cooldown, budget, an unencodable row) from a full one.
     pub async fn put_counted(&self, table: &str, rows: &[DerivedRow]) -> usize {
+        if self.filtered(table) {
+            return 0;
+        }
         let mut lines = Vec::with_capacity(rows.len());
         for r in rows {
             match r.put_line() {
@@ -166,6 +215,9 @@ impl DerivedMirror {
 
     /// Mirrors the removal of `keys` of `collection` (`table` labels the metrics).
     pub async fn delete(&self, table: &str, collection: u32, keys: &[Vec<u8>]) {
+        if self.filtered(table) {
+            return;
+        }
         let mut lines = Vec::with_capacity(keys.len());
         for k in keys {
             match delete_line(collection, k) {
@@ -419,5 +471,62 @@ mod tests {
         assert!(DerivedMirror::from_vars(on).is_some());
         let no_paths = |k: &str| (k == "GEODB_DERIVED_MIRROR").then(|| "1".to_string());
         assert!(DerivedMirror::from_vars(no_paths).is_none());
+    }
+
+    fn on_vars(tables: Option<&'static str>) -> impl Fn(&str) -> Option<String> {
+        move |k: &str| match k {
+            "GEODB_DERIVED_MIRROR" => Some("1".to_string()),
+            "GEODB_KEY_PATH" => Some("/k".into()),
+            "GEODB_BINDING_PATH" => Some("/b".into()),
+            "GEODB_DERIVED_MIRROR_TABLES" => tables.map(str::to_string),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn table_list_unset_or_blank_allows_every_table() {
+        for t in [None, Some(""), Some("  "), Some(" , ,")] {
+            let m = DerivedMirror::from_vars(on_vars(t)).unwrap();
+            assert!(m.allows("ranking_scores"), "{t:?}");
+            assert!(m.allows("entity_type_ranking"), "{t:?}");
+        }
+    }
+
+    #[test]
+    fn table_list_narrows_to_the_named_tables() {
+        let m =
+            DerivedMirror::from_vars(on_vars(Some("entity_type_ranking, entity_topic_ranking")))
+                .unwrap();
+        assert!(m.allows("entity_type_ranking"));
+        assert!(m.allows("entity_topic_ranking"));
+        assert!(!m.allows("ranking_scores"));
+        assert!(!m.allows("votes_count"));
+    }
+
+    #[test]
+    fn a_list_naming_nothing_known_mirrors_nothing_and_the_flag_still_gates() {
+        let m = DerivedMirror::from_vars(on_vars(Some("bogus"))).unwrap();
+        assert!(!m.allows("ranking_scores"));
+        // The list never turns the mirror on by itself.
+        let off = |k: &str| (k == "GEODB_DERIVED_MIRROR_TABLES").then(|| "ranking_scores".into());
+        assert!(DerivedMirror::from_vars(off).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_table_off_the_list_sends_nothing_and_counts_zero() {
+        let log = tmp("filtered");
+        let m = fake(&ok_script(&log), Duration::from_secs(5)).with_tables(Some(&["kept"]));
+        assert_eq!(m.put_counted("dropped", &[row(1, 1.0)]).await, 0);
+        m.put("dropped", &[row(2, 1.0)]).await;
+        m.delete("dropped", 0, &[vec![1; 32]]).await;
+        assert!(
+            !log.exists(),
+            "nothing may reach the pipe for a filtered table"
+        );
+        assert_eq!(m.put_counted("kept", &[row(3, 1.0)]).await, 1);
+        m.delete("kept", 0, &[vec![3; 32]]).await;
+        let sent = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(sent.lines().count(), 2);
+        let _ = std::fs::remove_file(&log);
     }
 }
