@@ -119,6 +119,42 @@ export async function askGeoDbSpaces(
 	return bySpace
 }
 
+/**
+ * The cards of several entities in the Spaces named, in one batch read: each entity's rows (its `names` too), whatever
+ * Space held them. An entity with no statements there has an empty list. Throws as `askGeoDbSpaces` does.
+ */
+export async function askGeoDbCards(
+	deps: Pick<CardDeps, "geoDb" | "geoSpaceOf">,
+	entityIds: string[],
+	spaceIds: string[],
+	options: {names?: boolean} = {},
+): Promise<Map<string, GeoCardRow[]>> {
+	const readCards = deps.geoDb.readCards?.bind(deps.geoDb)
+	if (!readCards) throw new GeoDbError("bad_request", "the geo-db client cannot read several cards at once")
+	const geoSpaceIds: string[] = []
+	for (const spaceId of spaceIds) {
+		const geoSpaceId = await deps.geoSpaceOf(spaceId)
+		if (!geoSpaceId) throw new GeoDbError("unmapped_space", `space ${spaceId} is not loaded in geo-db`)
+		geoSpaceIds.push(geoSpaceId)
+	}
+	const started = performance.now()
+	let rows: GeoCardRow[]
+	try {
+		rows = await readCards({geoSpaceIds, entityIds, names: options.names})
+		observeGeoDbRead((performance.now() - started) / 1000, "ok")
+	} catch (error) {
+		observeGeoDbRead((performance.now() - started) / 1000, "error")
+		throw error
+	}
+	const byEntity = new Map<string, GeoCardRow[]>(entityIds.map((id) => [id, []]))
+	for (const {entity, space: _space, ...rest} of rows) {
+		const held = entity ? byEntity.get(entity) : undefined
+		if (!held) throw new GeoDbError("client_failed", `geo-db answered a row of an unrequested entity: ${entity}`)
+		held.push(rest)
+	}
+	return byEntity
+}
+
 /** Compare the Postgres answer with geo-db's and log what differs. Never throws. */
 export async function shadowCompare(
 	deps: CardDeps,

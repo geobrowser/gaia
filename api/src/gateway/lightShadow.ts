@@ -34,6 +34,8 @@ import {
 	statementsFromPostgres,
 	type ValueRow,
 } from "../geodb/card"
+import {GeoDbError} from "../geodb/client"
+import {askGeoDbCards} from "../geodb/service"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import {type BacklinkRowsPlan, compareBacklinks, extractBacklinkRows} from "./backlinksShadow"
 import {
@@ -72,6 +74,8 @@ import {
 import {recordGatewayUnsupportedShape, type UncomparedReason, type UnsupportedReason} from "./metrics"
 import {checkOrderedPage} from "./orderPickShadow"
 
+/** Most distinct relation targets whose own values one entity's comparison reads (two batch reads). */
+const MAX_TARGET_CARDS = 64
 /** Most returned entities one `entities` operation compares; the rest are `sampled_rows`. */
 export const MAX_SAMPLED_ENTITIES = 3
 /** Most returned entities one every-Space `entities` operation compares: each reads the whole space map. */
@@ -110,6 +114,12 @@ type LightList = {
 	 * relation of this type", and the target's own fields are `nested_entity`.
 	 */
 	typeOnly?: boolean
+	/**
+	 * A relations list that selects each row's target by id and the target's own `valuesList`: where the target's values
+	 * sit in a row (the `toEntity` key, then the nested list) and their columns. Checked against geo-db's card of the
+	 * target when the batch read is on, else `nested_entity`.
+	 */
+	target?: {key: string; values: LightList}
 }
 
 const noted = new Set<string>()
@@ -422,12 +432,39 @@ function planLightList(
 			projection: true,
 		}
 	}
+	const target = kind === "relations" ? planTargetValues(field, fragments, resolved) : null
 	return {
 		kind,
 		key: responseKeyOf(field),
 		nodesKey,
 		rows: {key: responseKeyOf(field), first, ...rows, nodesKey, hasNext: null},
 		spaceKey: rows.columns.spaceId ?? null,
+		...(target ? {target} : {}),
+	}
+}
+
+/**
+ * The `valuesList` a relations list selects on each row's `toEntity` (in the row, or in a connection's `nodes`), planned
+ * as a values list of its own. Null when there is none or it cannot be planned: the target's fields then stay
+ * `nested_entity`.
+ */
+function planTargetValues(
+	field: FieldNode,
+	fragments: Map<string, SelectionSetNode>,
+	resolved: Record<string, unknown>,
+): LightList["target"] | null {
+	const rowsOf = (set: SelectionSetNode | undefined): FieldNode[] => (set ? fieldsOf(set, fragments) : [])
+	const direct = rowsOf(field.selectionSet)
+	const nodes = direct.find((child) => child.name.value === "nodes")
+	const toEntity = (nodes ? rowsOf(nodes.selectionSet) : direct).find((child) => child.name.value === "toEntity")
+	const values = rowsOf(toEntity?.selectionSet).find((child) => child.name.value === "valuesList")
+	if (!toEntity || !values) return null
+	try {
+		const list = planLightList(values, fragments, resolved, new Set())
+		return list.kind === "values" && !list.propertyFilter ? {key: responseKeyOf(toEntity), values: list} : null
+	} catch (error) {
+		if (error instanceof Unsupported) return null
+		throw error
 	}
 }
 
@@ -732,6 +769,8 @@ type LightCard = {
 	typeless: {types: string[]; to: string; space: string | null}[]
 	/** Rows of a relations list that selects a type and a target with no id: held when geo-db has a relation of the type. */
 	typeOnly: {type: string; space: string | null}[]
+	/** A relation target's own value rows, as the answer gave them: the target and the rows. */
+	targetValues: {to: string; values: ValueRow[]}[]
 	/** Value rows of a `propertyId`-filtered list that selects no property: held under one of `props`. */
 	untypedValues: {props: string[]; row: ValueRow; space: string | null}[]
 }
@@ -751,6 +790,32 @@ const spaceOf = (node: Record<string, unknown>, key: string | null): string | nu
 	return typeof v === "string" && isValidUuid(v) ? normalizeUuid(v) : null
 }
 
+/** A relation row's target's own value rows, or null when the answer does not show the list (then it is not compared). */
+function targetValuesOf(node: Record<string, unknown>, target: NonNullable<LightList["target"]>): ValueRow[] | null {
+	const held = asRecord(node[target.key])
+	const inner = target.values
+	const holder = inner.nodesKey ? asRecord(held?.[inner.key]) : held
+	const rows = inner.nodesKey ? holder?.[inner.nodesKey] : held?.[inner.key]
+	if (!Array.isArray(rows)) return null
+	const own: ValueRow[] = []
+	for (const row of rows) {
+		const value = asRecord(row)
+		const propertyId = value ? read(value, inner.rows, "propertyId") : null
+		if (!value || typeof propertyId !== "string") return null
+		own.push({
+			property_id: propertyId,
+			text: orNull(read(value, inner.rows, "text")),
+			integer: orNull(read(value, inner.rows, "integer")),
+			float: orNull(read(value, inner.rows, "float")),
+			decimal: orNull(read(value, inner.rows, "decimal")),
+			boolean: orNull(read(value, inner.rows, "boolean")),
+			datetime: orNull(read(value, inner.rows, "datetime")),
+			date: orNull(read(value, inner.rows, "date")),
+		})
+	}
+	return own
+}
+
 /** Null when the object is not a plain answer for the plan. */
 export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard | null {
 	const object = asRecord(entity)
@@ -762,6 +827,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 	const projectionSpaces: (string | null)[] = []
 	const typeless: LightCard["typeless"] = []
 	const typeOnly: LightCard["typeOnly"] = []
+	const targetValues: LightCard["targetValues"] = []
 	const untypedValues: LightCard["untypedValues"] = []
 	const nested: NonNullable<NonNullable<PostgresCard>["nested"]> = {}
 	for (const list of plan.lists) {
@@ -831,6 +897,8 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 					continue
 				}
 				if (typeof typeId !== "string") return null
+				const own = list.target ? targetValuesOf(node, list.target) : null
+				if (own) targetValues.push({to: toEntityId, values: own})
 				relations.push({type_id: typeId, to_entity_id: toEntityId, to_space_id: null})
 				relationSpaces.push(space)
 				if (list.rows.names.type)
@@ -874,7 +942,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 		if (plan.card.types.nameKey) card.typeNames = names
 	}
 	if (Object.keys(nested).length > 0) card.nested = nested
-	return {card, valueSpaces, relationSpaces, projectionSpaces, typeless, typeOnly, untypedValues}
+	return {card, valueSpaces, relationSpaces, projectionSpaces, typeless, typeOnly, targetValues, untypedValues}
 }
 
 /** The spaces to read: the entity's own, else the spaces its rows name. */
@@ -992,6 +1060,32 @@ export async function checkLight(
 		})
 		if (!held) missing.push({space: row.space, prop: row.props.join("|"), norm: String(row.row.text ?? "")})
 	}
+	// A relation target's own values, held in geo-db's card of the target: all the targets in one batch read.
+	let targetsCompared = false
+	if (deps.nestedTargetValues === true && spaces && light.targetValues.length > 0 && deps.geoDb.readCards) {
+		const targets = [...new Set(light.targetValues.map((row) => conformingId("entity", row.to)))]
+		if (targets.length <= MAX_TARGET_CARDS && (!deps.budget || deps.budget.tryAcquire(1))) {
+			try {
+				const cards = await askGeoDbCards(deps, targets, spaces, {})
+				targetsCompared = true
+				const seenTargets = new Set<string>()
+				for (const row of light.targetValues) {
+					const target = conformingId("entity", row.to)
+					const key = `${target}\t${JSON.stringify(row.values)}`
+					if (seenTargets.has(key)) continue
+					seenTargets.add(key)
+					const diff = diffCards(statementsFromPostgres(row.values, []), cards.get(target) ?? [])
+					skipped += diff.skipped
+					for (const s of diff.onlyPostgres) missing.push({space: null, prop: s.prop, norm: s.norm})
+				}
+			} catch (error) {
+				const reason = error instanceof GeoDbError ? error.reason : "error"
+				if (reason === "unmapped_space") return {result: "unsupported", reason: "unmapped_space"}
+				deps.log.warn(`${label} target read failed`, {entityId, spaces, reason, message: String(error)})
+				return {result: "failed"}
+			}
+		}
+	}
 	const derived = compareDerived(plan.card, light.card, read.rows, read.scope)
 	const wrong = Object.entries(derived.checks)
 		.filter(([, result]) => result === "mismatch")
@@ -1047,6 +1141,7 @@ export async function checkLight(
 			derivedMismatches: wrong,
 			unmetFilter: unmet.slice(0, 3),
 			notInSpace: outsideSpace,
+			targetsCompared,
 			geoDbMs: read.ms,
 		},
 	}

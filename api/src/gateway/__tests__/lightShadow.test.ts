@@ -1299,6 +1299,71 @@ describe("entities answers with no Space (every-Space reads)", () => {
 		})
 	})
 
+	// The target's own values: `relationsList { typeId toEntity { id valuesList } }`, read as one batch of the targets' cards.
+	describe("a relation target's own values", () => {
+		const typeId = "e550fe517e904b2c8fffdf13408f5634"
+		const edgeType = "0a1b2c3d4e5f4a6b8c7d8e9f0a1b2c3d"
+		const valueProp = "1a1b2c3d4e5f4a6b8c7d8e9f0a1b2c3e"
+		const target = "99999999999949998999999999999999"
+		const query = `query { entities(first: 10, filter: {typeIds: {anyEqualTo: "${typeId}"}}) { id spaceIds relationsList(filter: {spaceId: {in: ["${SPACE_B}"]}}) { typeId toEntity { id valuesList { propertyId text } } } } }`
+		const body = (text: string) => ({
+			data: {
+				entities: [
+					{
+						id: FIRST.id,
+						spaceIds: [SPACE_B],
+						relationsList: [
+							{
+								typeId: edgeType,
+								toEntity: {id: target, valuesList: [{propertyId: valueProp, text}]},
+							},
+						],
+					},
+				],
+			},
+		})
+		const typed = `${TYPES}\t${conformingId("entity", typeId)}\ts1\t${FIRST.id}\t-\t-\t1\n`
+		const edge = `${conformingId("entity", edgeType)}\t${conformingId("entity", target)}\ts2\t${FIRST.id}\t-\tTarget\t1\n`
+		const setup = (held: string | null, on = true) => {
+			const log = {info: vi.fn(), warn: vi.fn()}
+			const outputs = {[geoSpace(SPACE_B)]: typed + edge}
+			const readCards = vi.fn(async (args: {entityIds: string[]}) =>
+				held === null ? [] : [{prop: valueProp, raw: held, entity: args.entityIds[0] as string}],
+			)
+			const deps = {
+				nestedTargetValues: on,
+				multiSpace: true,
+				geoDb: {readCard: askOf(outputs), readCardSpaces: askSpacesOf(outputs), readCards},
+				geoSpaceOf: async (space: string) => geoSpace(space),
+				log,
+			}
+			return {readCards, points: createPointReadShadows(deps)}
+		}
+		const callQuery = (s: ReturnType<typeof setup>, payload: unknown) =>
+			call(s.points.get("entities") as never, query, {}, payload)
+
+		it("matches a target whose values geo-db holds, in one batch read", async () => {
+			const s = setup("x")
+			await callQuery(s, body("x"))
+			expect(results()).toEqual({match: 1})
+			expect(s.readCards).toHaveBeenCalledTimes(1)
+			expect(s.readCards.mock.calls[0]?.[0].entityIds).toEqual([conformingId("entity", target)])
+		})
+
+		it("flags a target value geo-db does not hold", async () => {
+			await callQuery(setup("y"), body("x"))
+			await callQuery(setup(null), body("x"))
+			expect(results()).toEqual({mismatch: 2})
+		})
+
+		it("reads no target card with the switch off", async () => {
+			const s = setup("y", false)
+			await callQuery(s, body("x"))
+			expect(results()).toEqual({match: 1})
+			expect(s.readCards).not.toHaveBeenCalled()
+		})
+	})
+
 	it("stays no_space and reads nothing with the switch off", async () => {
 		const s = namesSetup({[geoSpace(SPACE_A)]: nameRow(FIRST.id, FIRST.name)}, {flag: false})
 		await run(s)

@@ -489,6 +489,52 @@ lines((line) => {
 	})
 })
 
+describe("createPipeGeoDbClient, several cards a line", () => {
+	const OTHER_ENTITY = "55555555555545558555555555555555"
+
+	it("names the entities in `.args.ids` and keeps each row's entity", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [space, doc] = line.split("\\t")
+	const ids = [...doc.matchAll(/"([0-9a-f]{32})"/g)].map((m) => m[1])
+	frame("+", ids.map((id) => ["${PROP}", "v" + id.slice(0, 2), "stmt", id, "1"].join("\\t")).join("\\n") + "\\n")
+})
+`)
+		const rows = await client.readCards?.({geoSpaceIds: [SPACE], entityIds: [ENTITY, OTHER_ENTITY, ENTITY]})
+		expect(rows).toEqual([
+			{prop: PROP, raw: `v${ENTITY.slice(0, 2)}`, entity: ENTITY},
+			{prop: PROP, raw: `v${OTHER_ENTITY.slice(0, 2)}`, entity: OTHER_ENTITY},
+		])
+		client.close()
+	})
+
+	it("reads more than 32 entities as lines of at most 32", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const ids = [...line.split("\\t")[1].matchAll(/"([0-9a-f]{32})"/g)].map((m) => m[1])
+	frame("+", ids.length > 32 ? "" : ids.map((id) => ["${PROP}", "v", "stmt", id, "1"].join("\\t")).join("\\n") + "\\n")
+})
+`)
+		const entityIds = Array.from({length: 40}, (_, at) => `${String(at).padStart(2, "0")}${"6".repeat(30)}`)
+		const rows = await client.readCards?.({geoSpaceIds: [SPACE], entityIds})
+		expect(rows?.map((row) => row.entity).sort()).toEqual([...entityIds].sort())
+		client.close()
+	})
+
+	it("refuses a malformed request before the worker", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		for (const args of [
+			{geoSpaceIds: [SPACE], entityIds: []},
+			{geoSpaceIds: [], entityIds: [ENTITY]},
+			{geoSpaceIds: [SPACE], entityIds: ["nope"]},
+		])
+			await expect(client.readCards?.(args)).rejects.toMatchObject({reason: "bad_request"})
+		expect(starts()).toBe(0)
+	})
+})
+
 describe("createPipeGeoDbClient, backlinks", () => {
 	const OTHER = "33333333333343338333333333333333"
 	const FROM = "44444444444444448444444444444444"
