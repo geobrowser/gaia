@@ -21,8 +21,108 @@ use std::time::Instant;
 use sqlx::postgres::PgPoolOptions;
 use tracing::{info, warn};
 
+use ranking_indexer::agenda_listings_compute as compute;
 use ranking_indexer::agenda_listings_mirror::{self, Ident, Listing};
 use ranking_indexer::error::IndexerError;
+
+/// `AGENDA_LISTINGS_RUST_COMPUTE` (default off): after the refresh, compute the listings table again
+/// in code from the graph and log how many rows differ from what the SQL wrote. It covers the
+/// listings half only (not the re-scoring), never changes the run, and logs a failure and carries on.
+fn rust_compute_enabled() -> bool {
+    matches!(
+        env::var("AGENDA_LISTINGS_RUST_COMPUTE").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+type DateRow = (
+    uuid::Uuid,
+    uuid::Uuid,
+    Option<String>,
+    Option<String>,
+    Option<chrono::NaiveDate>,
+);
+
+async fn shadow(pool: &sqlx::PgPool) -> Result<(usize, usize), IndexerError> {
+    use std::collections::BTreeSet;
+    use uuid::Uuid;
+    const TYPES: &str = "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1";
+    const BLOCKS: &str = "beaba5cb-a677-41a8-b353-77030613fc70";
+    let rels: Vec<(Uuid, Uuid, Uuid, Uuid)> = sqlx::query_as(
+        "SELECT from_entity_id, to_entity_id, type_id, space_id FROM public.relations r \
+         WHERE (r.type_id = $1::uuid AND r.to_entity_id IN ( \
+                  '79e3757b-2630-492c-9d3b-d73a78d45893', '96f859ef-a1ca-4b22-9372-c86ad58b694b', \
+                  'fd51f935-2063-4617-be39-7b672b23364c')) \
+            OR r.type_id IN ($2::uuid, 'e614cce1-c4ce-4586-8304-fd1237119eb2', \
+                  'b96bf701-a399-430d-a072-f5e910cdeda9', '806d52bc-27e9-4c91-93c0-57978b093351') \
+            OR (r.type_id = 'a99f9ce1-2ffa-4dac-8c61-f6310d46064a' AND r.from_entity_id IN ( \
+                  SELECT b.to_entity_id FROM public.relations b WHERE b.type_id = $2::uuid))",
+    )
+    .bind(TYPES)
+    .bind(BLOCKS)
+    .fetch_all(pool)
+    .await?;
+    let spaces: Vec<(Uuid, String)> = sqlx::query_as("SELECT id, type::text FROM public.spaces")
+        .fetch_all(pool)
+        .await?;
+    let dates: Vec<DateRow> = sqlx::query_as(
+        "SELECT entity_id, space_id, datetime, date, \
+                    (datetime_utc AT TIME ZONE trending.time_zone())::date \
+             FROM public.\"values\" WHERE property_id = '52665f3e-fb7d-48d5-8b6b-abb21b0d36db'",
+    )
+    .fetch_all(pool)
+    .await?;
+    let table: Vec<(Uuid, Uuid, Uuid, chrono::NaiveDate, String)> = sqlx::query_as(
+        "SELECT agenda_id, space_id, entity_id, listed_on, source FROM trending.agenda_listings",
+    )
+    .fetch_all(pool)
+    .await?;
+    let got = compute::compute(
+        &rels
+            .into_iter()
+            .map(|(from, to, type_id, space)| compute::Relation {
+                from,
+                to,
+                type_id,
+                space,
+            })
+            .collect::<Vec<_>>(),
+        &spaces
+            .into_iter()
+            .map(|(id, t)| compute::Space {
+                id,
+                dao: t == "DAO",
+            })
+            .collect::<Vec<_>>(),
+        &dates
+            .into_iter()
+            .map(
+                |(entity, space, datetime, date, ny_day)| compute::DateValue {
+                    entity,
+                    space,
+                    datetime,
+                    date,
+                    ny_day,
+                },
+            )
+            .collect::<Vec<_>>(),
+    );
+    // Compare as text so an unknown source in the table shows as a mismatch instead of a panic.
+    let got: BTreeSet<_> = got
+        .into_iter()
+        .map(|l| {
+            (
+                l.agenda_id,
+                l.space_id,
+                l.entity_id,
+                l.listed_on,
+                l.source.to_string(),
+            )
+        })
+        .collect();
+    let want: BTreeSet<_> = table.into_iter().collect();
+    Ok((got.symmetric_difference(&want).count(), want.len()))
+}
 
 #[tokio::main]
 async fn main() -> Result<(), IndexerError> {
@@ -86,6 +186,17 @@ async fn main() -> Result<(), IndexerError> {
         elapsed_ms = started.elapsed().as_millis() as u64,
         "agenda listings refreshed"
     );
+    if rust_compute_enabled() {
+        match shadow(&pool).await {
+            Ok((0, n)) => info!(rows = n, "agenda listings rust compute matches the SQL"),
+            Ok((bad, n)) => warn!(
+                mismatched = bad,
+                rows = n,
+                "agenda listings rust compute differs from the SQL"
+            ),
+            Err(e) => warn!(error = %e, "agenda listings rust compute skipped"),
+        }
+    }
     if let Some(mirror) = &mirror {
         // Read after the refresh committed; a read error skips the mirror, never the job.
         match sqlx::query_as::<_, Listing>(agenda_listings_mirror::SELECT_SQL)
