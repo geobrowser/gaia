@@ -33,6 +33,7 @@ pub mod sql_helpers;
 pub mod stance_graph;
 pub mod stance_map;
 pub mod storage;
+pub mod topic_cooccurrence_compute;
 pub mod topic_cooccurrence_mirror;
 pub mod topic_interest;
 pub mod topic_suggestions_compute;

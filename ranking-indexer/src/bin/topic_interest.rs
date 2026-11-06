@@ -19,6 +19,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::{info, warn};
 
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::topic_cooccurrence_compute as cooc;
 use ranking_indexer::topic_cooccurrence_mirror::{self, Neighbour};
 use ranking_indexer::topic_interest::{self, Mode, SweepOutcome};
 use ranking_indexer::user_interest;
@@ -99,6 +100,17 @@ async fn main() -> Result<(), IndexerError> {
             if let (Some(m), Some(prior)) = (&signals, signals_prior) {
                 mirror_signals(&pool, m, &prior, signals_mirror::refit_since()).await;
             }
+            if cooc_rust_enabled() {
+                match cooc_shadow(&pool).await {
+                    Ok((0, n)) => info!(rows = n, "co-occurrence rust compute matches the SQL"),
+                    Ok((bad, n)) => warn!(
+                        mismatched = bad,
+                        rows = n,
+                        "co-occurrence rust compute differs from the SQL"
+                    ),
+                    Err(e) => warn!(error = %e, "co-occurrence rust compute skipped"),
+                }
+            }
             if let Some(mirror) = &mirror {
                 // Read after the refit committed; a read error skips the mirror, never the job.
                 match sqlx::query_as::<_, Neighbour>(topic_cooccurrence_mirror::SELECT_SQL)
@@ -143,6 +155,50 @@ async fn main() -> Result<(), IndexerError> {
         }
     }
     Ok(())
+}
+
+/// `TOPIC_COOCCURRENCE_RUST_COMPUTE` (default off): after the refit, compute the co-occurrence table
+/// again in code from `entity_topic_ranking` and log how many rows differ from what the SQL wrote.
+/// It never changes the run: a failure is logged and the job carries on.
+fn cooc_rust_enabled() -> bool {
+    matches!(
+        env::var("TOPIC_COOCCURRENCE_RUST_COMPUTE").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+async fn cooc_shadow(pool: &sqlx::PgPool) -> Result<(usize, usize), IndexerError> {
+    let (min_support, max_topics, max_neighbours): (i32, i32, i32) = sqlx::query_as(
+        "SELECT cooccurrence_min_support, cooccurrence_max_topics_per_entity, spread_max_neighbours \
+         FROM personalization.interest_config",
+    )
+    .fetch_one(pool)
+    .await?;
+    let tags: Vec<(uuid::Uuid, uuid::Uuid)> =
+        sqlx::query_as("SELECT DISTINCT topic_id, entity_id FROM public.entity_topic_ranking")
+            .fetch_all(pool)
+            .await?;
+    let want: Vec<Neighbour> = sqlx::query_as(topic_cooccurrence_mirror::SELECT_SQL)
+        .fetch_all(pool)
+        .await?;
+    let got = cooc::compute(
+        &tags,
+        cooc::Params {
+            min_support: min_support.into(),
+            max_topics_per_entity: max_topics.into(),
+            max_neighbours: max_neighbours.into(),
+        },
+    );
+    let want: Vec<cooc::Neighbour> = want
+        .into_iter()
+        .map(|n| cooc::Neighbour {
+            topic_id: n.topic_id,
+            neighbour_id: n.neighbour_id,
+            similarity: n.similarity,
+            support: n.support,
+        })
+        .collect();
+    Ok((cooc::count_mismatches(&got, &want), want.len()))
 }
 
 /// The identities `user_topic_signals` holds now, or `None` when there is no mirror or the read
