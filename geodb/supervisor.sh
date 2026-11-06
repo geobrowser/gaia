@@ -56,7 +56,7 @@ fi
 # The score writers' key (vote-indexer + ranking-indexer, Secret geodb-scores-key): derived collections 0-5, 11, 12 and 13
 # (entity_type_ranking, entity_topic_ranking, global/local/space_scores, account_weights, ranks.ranking_scores, account_exclusions, space_topic_suggestions) and nothing else (RUNBOOK section 12).
 if [ -n "${GEODB_SCORES_KEYID:-}" ]; then
-	sed -i "/^grant_ttl_s/i principal = $GEODB_SCORES_KEYID read=- write=- publish=- derived=0,1,2,3,4,5,11,12,13" "$RUN/binding.txt"
+	sed -i "/^grant_ttl_s/i principal = $GEODB_SCORES_KEYID read=- write=- publish=- derived=0,1,2,3,4,5,11,12,13,21" "$RUN/binding.txt"
 fi
 
 # Patch the two ids into the ConfigMap (create it if absent). Succeeds quietly where there is no cluster.
