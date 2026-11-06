@@ -1350,6 +1350,28 @@ geo-db error is logged, never fails the Job.
   applies both), run the Job once by hand with the flag on, then set the flag `"1"` in `feed-composition-cronjob.yaml` in
   its own change. Rollback: flag `"0"`.
 
+### 2f-ranking. entity_ranking_scores (derived collection 21, GEODB_DERIVED_MIRROR)
+
+Shadow only, nothing reads the rows. The writer is the SQL `refresh_entity_ranking_scores(uuid[])`, an upsert that never
+deletes. Its callers are the vote-indexer's vote path and its `new_entity_sweep` / `comment_sweep` binaries, plus the
+`api/scripts` backfills. With `GEODB_DERIVED_MIRROR=1` the vote-indexer reads the touched entities' rows right after the
+call and puts them (`scoring-service/vote-indexer/src/entity_scores_mirror.rs`, called from `refresh_and_mirror`): group 0,
+key the entity id (16 bytes), score `ranking_score` as the float8 the feed orders by, value 48 little-endian bytes
+(`quality_score`, `intrinsic_score`, `type_weight` f64; `positive`, `negative` i64; `updated_at` i64 microseconds). A read
+error is logged and counted (`geodb_derived_mirror_errors_total{table="entity_scores_readback"}`), never returned.
+
+- Readers (Postgres, unchanged): `api/src/kg/entityOrderByRankingScorePlugin.ts` (a per-entity lookup of `ranking_score` or
+  `quality_score`, ordering by the float8) and `entities_ranked_for_feed` (migration 0074 and later).
+- **Sizing, read before enabling.** The table is 48.9M rows. Mirrored whole it is about 7.0 GB resident, 20 times the
+  recommended `derived_rows_max` (plan 10.14 V4); a put past the cap is refused and logged. The mirror therefore sends only
+  the entities a vote batch or a sweep touches and the SQL backfills are not mirrored. Do not load the whole table until
+  `derived_rows_max` is sized for it or the top-N-per-group design of plan 10.14 is chosen.
+- The two sweep CronJobs (`new-entity-sweep-cronjob.yaml`, `comment-sweep-cronjob.yaml`) carry no mirror env today, so only
+  the vote-indexer Deployment mirrors until they are given the volumes and the flag.
+- Uses the shared `geodb-scores-key`; its binding grants `derived=...,13,21` (`geodb/supervisor.sh`). **Needs serve built
+  with collection 21 registered** and serve restarted for the binding; until then writes are refused and logged. Rollback:
+  set the flag `"0"`.
+
 ### 2d. Raising the Space cap
 
 `spaces` in `geodb-serve-config` caps the Spaces the store can hold; at the cap, founding refuses and the
