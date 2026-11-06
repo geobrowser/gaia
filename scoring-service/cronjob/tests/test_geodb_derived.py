@@ -165,6 +165,40 @@ class TestFlag:
         assert m.batch is True
 
 
+class TestTableSelection:
+    ENV = {"GEODB_DERIVED_MIRROR": "1", "GEODB_KEY_PATH": "/k", "GEODB_BINDING_PATH": "/b"}
+
+    def test_all_tables_by_default(self) -> None:
+        for extra in ({}, {"GEODB_DERIVED_MIRROR_TABLES": ""}, {"GEODB_DERIVED_MIRROR_TABLES": " , "}):
+            m = DerivedMirror.from_env({**self.ENV, **extra})
+            assert m is not None
+            assert all(m.enabled(t) for t in ("global_scores", "local_scores", "space_scores"))
+
+    def test_subset(self) -> None:
+        m = DerivedMirror.from_env({**self.ENV, "GEODB_DERIVED_MIRROR_TABLES": "global_scores, space_scores"})
+        assert m is not None
+        assert m.enabled("global_scores") and m.enabled("space_scores") and not m.enabled("local_scores")
+
+    def test_unknown_name_is_ignored_and_none_valid_disables(self, caplog) -> None:
+        with caplog.at_level(logging.WARNING):
+            m = DerivedMirror.from_env({**self.ENV, "GEODB_DERIVED_MIRROR_TABLES": "global_scores,bogus"})
+            assert m is not None and m.enabled("global_scores") and not m.enabled("bogus")
+            assert DerivedMirror.from_env({**self.ENV, "GEODB_DERIVED_MIRROR_TABLES": "bogus"}) is None
+        assert "unknown table" in caplog.text
+
+    def test_writer_skips_unselected_tables(self) -> None:
+        mirror = DerivedMirror(["x"], tables=("global_scores", "space_scores"))
+        calls: list[str] = []
+        mirror.put = lambda table, rows: calls.append(table)  # type: ignore[method-assign]
+        w = ScoringDataWriter("postgresql://x", derived=mirror)
+        s = Space(id=S1, created_at=datetime.now())
+        s.space_score = 2.0
+        with patch("src.scoring_data_writer.scoring_data_writer.psycopg.connect") as c:
+            c.return_value.__enter__.return_value = MagicMock()
+            w.write_all([entity(E1, 0.5, [persp(E1, S1, 0.7)])], [s])
+        assert calls == ["global_scores", "space_scores"]
+
+
 class TestSending:
     def test_rows_go_in_order_one_line_each(self, tmp_path) -> None:
         argv, log = _logging_child(tmp_path)

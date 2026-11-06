@@ -933,10 +933,11 @@ Turn the mirrors on one at a time, one flag per PR, each after the serve roll th
 2. account_exclusions (§2f-exclusions, collection 12): smaller still.
 3. the scores (§2f-scores, collections 2, 3, 4). Count first: `global_scores` and `space_scores` are small, **`local_scores` is
    about 3.9M rows (one per entity perspective) and does not fit Stage A with the 2.86M already held: it waits for Stage B.** The
-   scoring cronjob's `GEODB_DERIVED_MIRROR` has no per-table switch and a full rewrite past the cap is refused partway, so it
-   stays `"0"` until Stage B unless the counts show the total fits (existing rows + weights + exclusions + all three score
-   tables <= 4,194,304). If only the two small tables are wanted earlier, that needs a per-table switch in `geodb_derived`
-   first.
+   scoring cronjob's `GEODB_DERIVED_MIRROR` mirrors all three tables unless `GEODB_DERIVED_MIRROR_TABLES` narrows it, and a
+   full rewrite past the cap is refused partway, so keep the flag `"0"` until the counts show it fits. Under Stage A set
+   `GEODB_DERIVED_MIRROR_TABLES=global_scores,space_scores` (the two small tables) together with `GEODB_DERIVED_MIRROR=1`;
+   leave `local_scores` out until Stage B, then drop the variable (unset or empty means all three; a name that is not one
+   of the three is ignored with a warning, and a value with no valid name mirrors nothing).
 
 ### 2f-scores. global_scores / local_scores / space_scores (derived collections 2, 3, 4, GEODB_DERIVED_MIRROR)
 
