@@ -133,6 +133,36 @@ async fn main() -> Result<(), IndexerError> {
             Err(e) => tracing::warn!(error = %e, "account weights mirror skipped: read failed"),
         }
     }
+    // ACCOUNT_VOTE_WEIGHT_RUST_COMPUTE (default off): ask the SQL's account_vote_weight about every
+    // scored voter and one unknown voter, and compare with the table read in code.
+    if matches!(
+        env::var("ACCOUNT_VOTE_WEIGHT_RUST_COMPUTE").as_deref(),
+        Ok("1") | Ok("true")
+    ) {
+        let rows: Result<Vec<(String, f64)>, _> =
+            sqlx::query_as("SELECT user_id::text, weight FROM public.account_weights")
+                .fetch_all(&pool)
+                .await;
+        let asked: Result<Vec<(String, f64)>, _> = sqlx::query_as(
+            "SELECT v::text, public.account_vote_weight(v) FROM ( \
+               SELECT user_id AS v FROM public.account_weights \
+               UNION ALL SELECT '00000000-0000-0000-0000-000000000000'::uuid) q",
+        )
+        .fetch_all(&pool)
+        .await;
+        match (rows, asked) {
+            (Ok(rows), Ok(asked)) => {
+                let weights = rows.into_iter().collect();
+                let mismatched =
+                    ranking_indexer::account_vote_weight::count_mismatches(&weights, &asked);
+                info!(
+                    asked = asked.len(),
+                    mismatched, "account vote weight rust twin checked"
+                );
+            }
+            _ => tracing::warn!("account vote weight rust twin skipped: read failed"),
+        }
+    }
     info!(
         scored,
         excluded,
