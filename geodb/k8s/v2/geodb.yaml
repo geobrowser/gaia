@@ -76,9 +76,12 @@ data:
   # ResourceExhausted when the last close kept more resident versions than the new cap
   # can load. Lowering it below a founded ordinal fails the open. See RUNBOOK §2d.
   # derived_rows_max turns on the derived class (plan 10.14; hermes cursors in collection 10, vote
-  # cells and tallies, ranking_scores in 11): 4,194,304 rows x 144 B, about 604 MB carved at open. This is
-  # plan 10.14 §10 Stage A (collections 0, 1, 8, 9, 10, 11; 2.86M rows counted 11-06). Stage B (+2, 3, 4;
-  # 6.80M) needs 8,388,608 and serve 6Gi/8Gi. Raising it on a live store is one restart (the
+  # cells and tallies, ranking_scores in 11): 12,582,912 rows x 144 B, about 1.81 GB carved at open.
+  # Sized by plan 10.14 "Headroom rule": everything except entity_ranking_scores (Stage A 0, 1, 8, 9,
+  # 10, 11 plus Stage B 2, 3, 4 plus the small collections, 7.06M rows counted 11-06) must sit under
+  # 80% of the cap, so cap >= 8.82M. At the cap a whole frame of puts is refused, with no
+  # per-collection quota. Serve used 1.0Gi of its 7Gi limit at 4,194,304; the extra 1.2 GB carve
+  # fits inside the 5Gi request. Raising it on a live store is one restart (the
   # log replays under the larger bound). 0 or absent = class off and
   # every derived put refused InvalidConfig. work_rows_max turns on the work class (plan 10.16; the
   # notification outbox shadow): 4,000,000 is plan 10.16's 30-day sizing, about 600 MB at the cap.
@@ -90,7 +93,7 @@ data:
     session_requests_in_flight = 8
     request_deadline_ms = 30000
     spaces = 2048
-    derived_rows_max = 4194304
+    derived_rows_max = 12582912
     work_rows_max = 4000000
 ---
 apiVersion: v1
