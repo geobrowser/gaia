@@ -894,14 +894,14 @@ respawned for 10 s.
 
 Both need `geodb-client` in the image (the init-container pattern of hermes, `hermes/k8s/v2/hermes-pipeline.yaml`),
 `GEODB_KEY_PATH`, `GEODB_BINDING_PATH` and `GEODB_CLIENT_BIN`, and a serve opened with `derived_rows_max` above 0
-(144 B a row resident). The key's binding line must grant `derived=0,1,5,11,12`; the hermes key grants only collection 10, so
+(144 B a row resident). The key's binding line must grant `derived=0,1,2,3,4,5,11,12`; the hermes key grants only collection 10, so
 this is a new key and binding (not minted). Not mirrored: `entity_ranking_scores` (48.9M rows, over the resident class),
 trending and agenda listings.
 
 `global_scores` (2), `local_scores` (3) and `space_scores` (4), written by the Python scoring cronjob
 (`scoring-service/cronjob`), are mirrored behind `GEODB_DERIVED_MIRROR` in that cronjob (#1169, default `"0"`). It
-rewrites every row each run (upserts, no deletes), after its Postgres commit. It needs its own key whose binding
-grants `derived=2,3,4` (Secret `geodb-derived-key`, not minted). **Sizing warning:** count `local_scores` (one row per
+rewrites every row each run (upserts, no deletes), after its Postgres commit. It uses the shared `geodb-scores-key`
+(binding `derived=0,1,2,3,4,5,11,12`, see §2f-scores). **Sizing warning:** count `local_scores` (one row per
 entity perspective) and add it to the other mirrored tables against `derived_rows_max` (2097152 now, 144 B a row
 resident) before the flag goes on; a full rewrite past the cap is refused. Raise `GEODB_DERIVED_BUDGET_MS` and set
 `GEODB_DERIVED_BATCH=1` for the full rewrite.
@@ -918,6 +918,35 @@ Type ranking gate: `geodb-feeder/src/typeRankingGate.ts <postgres.tsv> <scan.tsv
 are in that file's header. Rows for entities not refreshed since the flag went on show as Postgres-only until their
 next refresh, so run `refresh_ranking_scores_for` over the entity set after turning the flag on.
 
+
+### 2f-scores. global_scores / local_scores / space_scores (derived collections 2, 3, 4, GEODB_DERIVED_MIRROR)
+
+Shadow only, nothing reads the rows. The daily 03:00 UTC `scoring-service` CronJob (`scoring-service/cronjob`,
+`scoring_data_writer.py`: `_write_global_scores` :89, `_write_local_scores` :112, `_write_space_scores` :146, all upserts
+with no deletes) is the only writer of the three tables. With `GEODB_DERIVED_MIRROR=1` (manifest default `"0"`) it rewrites
+every row into geo-db after its Postgres commit (`geodb_derived/__init__.py`, #1169): collection 2 group 0 key the 16-byte
+entity id; collection 3 group the space id (u128) key entity id then space id (32 bytes); collection 4 group 0 key the
+space id; score the table's `score`, no value. A geo-db error is logged, never fails the run.
+
+- Readers (Postgres, unchanged), all inside SQL: `api/src/kg/valueOrderByScorePlugin.ts:14` and `:27` (orderBy LOCAL_SCORE
+  and GLOBAL_SCORE subselects), the `entities_ordered_by_score` function (`api/drizzle/0056_entities_ordered_by_score.sql`
+  :37/:43/:52/:58, redefined in `0071_vote_kind.sql:121-142`; hidden from GraphQL by `hideProceduresPlugin.ts`), and
+  `geodb-feeder/src/replay.ts:64` (`local_scores` top entities per Space). search-indexer gets scores only through Kafka
+  (`<ENV>.curation.scores`), not these tables.
+- api shadow, `GEODB_SCORES_SHADOW` (manifest `"0"`): the api never serves a row of these tables, so there is no request
+  to compare. A background timer (`GEODB_SCORES_SHADOW_INTERVAL_MS`, default 60 s; `_SAMPLE` rows per table, default 20)
+  reads rows from Postgres at a random primary-key position (wrapping) and does a derived `get` for each
+  (`api/src/geodb/scoresShadow.ts`). `gaia_api_scores_shadow_total{table,result}` (absent until the flag is on): match,
+  mismatch (a different score), unsupported (geo-db has no row Postgres has, or the row has a value or another group),
+  failed. Expect `unsupported` until the mirror has run once. **Blind spot:** only rows Postgres has are sampled, so a row
+  geo-db keeps after Postgres dropped it (the mirror never deletes) is not seen; and a sample is not a full scan.
+- Key: the scoring CronJob now mounts the shared `geodb-scores-key` (was an unminted `geodb-derived-key`); `supervisor.sh`
+  grants it `derived=0,1,2,3,4,5,11,12`. Collections 2-4 were already registered in geo-db (nothing to land there).
+- **Enable order:** restart serve so the binding takes effect (the key's writes to 2/3/4 are refused until then), size
+  `derived_rows_max` first (`local_scores` is one row per entity perspective; see the sizing warning in §2f; a full rewrite
+  past the cap is refused), run the CronJob once by hand with the flag on (`GEODB_DERIVED_BATCH=1`, a larger
+  `GEODB_DERIVED_BUDGET_MS`), then set the flag `"1"` in `scoring-service/deployment/v2/cronjob.yaml` in its own PR, then
+  the api flag. Rollback: set the flags `"0"`.
 
 ### 2f-weights. account_weights (derived collection 5, GEODB_DERIVED_MIRROR)
 
@@ -945,7 +974,7 @@ account the table held before the refresh and no longer has is a delete. A geo-d
   mirror has run once; expect `row_missing` until then and mismatches only for accounts changed since the last hourly
   refresh. Refusals end the pipe session (the reader starts a new one on the next read); a refusal on every read means
   the api key's binding line cannot read the derived class, which is a binding change, not an api one.
-- Uses the shared `geodb-scores-key`; its binding now grants `derived=0,1,5,11,12` (`geodb/supervisor.sh`), which takes
+- Uses the shared `geodb-scores-key`; its binding now grants `derived=0,1,2,3,4,5,11,12` (`geodb/supervisor.sh`), which takes
   effect when the geodb StatefulSet restarts. Until then collection 5 and 12 writes are refused and only logged.
 - Enable order: restart serve (binding), check `derived_rows_max` has room (account_weights is one row per voting
   account, small; 144 B a row resident), run the Job once by hand with the flag on to backfill (the table is mirrored in
@@ -1567,7 +1596,7 @@ Turn it on after the indexer's mirror has been running, as a separate change.
 
 The derived-score mirror (§2f) is wired but off: vote-indexer and ranking-indexer carry the `geodb-setup` init
 container, the `geodb-key` mount and `GEODB_DERIVED_MIRROR="0"`. Both services share one key, `geodb-scores-key`;
-the binding gives it `derived=0,1,5,11,12` and nothing else (`read=- write=- publish=- derived=0,1,5,11,12`; 5 is the account-weights CronJob, §2f-weights; 12 is the account-exclusions-sync CronJob, §2f-exclusions). The key is minted
+the binding gives it `derived=0,1,2,3,4,5,11,12` and nothing else (`read=- write=- publish=- derived=0,1,2,3,4,5,11,12`; 2/3/4 are the scoring-service cronjob, §2f-scores; 5 is the account-weights CronJob, §2f-weights; 12 is the account-exclusions-sync CronJob, §2f-exclusions). The key is minted
 inside the cluster by `geodb/k8s/v2/geodb-scores-key-job.yaml`, the same create-only pattern as §10; the private half
 never leaves the cluster. Needs geo-db `6b34f9feda` or later (init container image, and `derived=` with a list), and a
 geodb image (the serve StatefulSet) built from a gaia ref that includes the supervisor's `GEODB_SCORES_KEYID`

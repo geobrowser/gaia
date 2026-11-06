@@ -7,6 +7,7 @@ import {renderGatewayMetrics} from "./gateway/metrics"
 import {renderServeMetrics} from "./gateway/serveMetrics"
 import {renderIdMapMetrics} from "./geodb/idMap"
 import {renderGeoDbCardMetrics} from "./geodb/metrics"
+import {renderScoresShadowMetrics} from "./geodb/scoresShadow"
 import {renderQueryCostHistogram} from "./kg/costLoggerPlugin"
 import {renderResponseSizeHistogram} from "./kg/instrumentationPlugin"
 import {renderPaginationDefaultMetrics} from "./kg/paginationCapPlugin"
@@ -155,6 +156,8 @@ function renderPrometheusMetrics(): string {
 		renderFeedExperimentMetrics(),
 		// Pair-fit account weights from geo-db collection 5 against the served ones (GEODB_ACCOUNT_WEIGHTS_SHADOW) — see pairFit/accountWeightsShadow.ts.
 		renderAccountWeightsMetrics(),
+		// Sampled score-table rows from geo-db collections 2/3/4 against Postgres (GEODB_SCORES_SHADOW) — see geodb/scoresShadow.ts.
+		renderScoresShadowMetrics(),
 		// GraphQL root fields served from geo-db (mode on): served/fallback by field and reason — see gateway/serveMetrics.ts.
 		renderServeMetrics(),
 		// The reverse id map the served fields read: ids by result (miss = not served) and Postgres reads — see geodb/idMap.ts.

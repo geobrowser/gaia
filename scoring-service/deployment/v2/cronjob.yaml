@@ -40,14 +40,14 @@ spec:
                 optional: true
             - name: geodb-key
               secret:
-                # NOT minted by this change. The key's binding line must grant derived=2,3,4
-                # (global_scores, local_scores, space_scores) and nothing else.
-                secretName: geodb-derived-key
+                # The shared scores key (geodb-scores-key-job.yaml); its binding grants derived=0,1,2,3,4,5,11,12,
+                # which includes 2,3,4 (global_scores, local_scores, space_scores).
+                secretName: geodb-scores-key
                 optional: true
                 defaultMode: 0440
                 items:
                   - key: key
-                    path: derived.key
+                    path: scores.key
           initContainers:
             - name: geodb-setup
               # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to this service's tag.
@@ -127,13 +127,13 @@ spec:
                   value: "z_score_sigmoid"
                 # Mirror of global_scores/local_scores/space_scores into geo-db's derived class (collections
                 # 2/3/4). OFF ("0"). Postgres stays the source of truth; a geo-db failure is logged and
-                # counted, never fails the run. Needs a key whose binding grants derived=2,3,4.
+                # counted, never fails the run. Uses geodb-scores-key (grants derived=2,3,4).
                 - name: GEODB_DERIVED_MIRROR
                   value: "0"
                 - name: GEODB_CLIENT_BIN
                   value: /geodb/geodb-client
                 - name: GEODB_KEY_PATH
-                  value: /etc/geodb/key/derived.key
+                  value: /etc/geodb/key/scores.key
                 - name: GEODB_BINDING_PATH
                   value: /geodb/binding.txt
                 - name: SENTRY_DSN
