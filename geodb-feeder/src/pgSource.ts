@@ -13,6 +13,7 @@ import type {InterestConfigRow, InterestSignalWeightRow} from "./interestConfigK
 import type {FeedExperimentMemberRow} from "./feedExperimentMembersKeyed.js"
 import type {FeedExperimentRow} from "./feedExperimentsKeyed.js"
 import type {ForYouConfigRow} from "./forYouConfigKeyed.js"
+import type {SpaceAddressRow} from "./spaceAddressesKeyed.js"
 import type {SpaceTopicRow} from "./spaceTopicsKeyed.js"
 import type {SpaceVotingSettingsRow} from "./spaceVotingSettingsKeyed.js"
 import type {ProposalVersionRow} from "./proposalVersionsKeyed.js"
@@ -407,6 +408,11 @@ export async function* readSpaceTopicRows(db: ReadOnlyPg): AsyncGenerator<SpaceT
 		[],
 		300_000,
 	)
+}
+
+/** Every `spaces` row's address, read in one query. */
+export async function* readSpaceAddressRows(db: ReadOnlyPg): AsyncGenerator<SpaceAddressRow> {
+	yield* await db.read<SpaceAddressRow>(`SELECT id::text AS space_id, address FROM spaces WHERE address IS NOT NULL ORDER BY id`, [], 300_000)
 }
 
 export type EntityTimesRow = {id: string; created_at: string | null; updated_at: string | null}

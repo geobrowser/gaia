@@ -17,7 +17,7 @@
  *   the current one; here the statement of a topic that is not current is already closed, so the same guard falls out
  *   with no read.
  *
- * Not mirrored: SPACE_ADDRESS_UPDATED (`spaces.address`, on `space.creations`) has no consumer yet. A topic event for a
+ * `spaces.address` is its own consumer (spaceAddressesKeyed.ts). A topic event for a
  * Space Postgres lacks is written anyway (kg-indexer's UPDATE would match no row); the gate reports such keys, not as a
  * failure. A space_id or topic_id that is not 16 bytes is dead-lettered, as kg-indexer's Uuid::from_slice errors.
  */

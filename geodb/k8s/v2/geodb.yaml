@@ -459,6 +459,11 @@ spec:
             # (geodb-space-topics-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_SPACE_TOPICS
               value: "0"
+            # Keyed space addresses (SPACE_ADDRESS_UPDATED and creates on space.creations, into the governance system
+            # Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-duodecies. OFF until the space-addresses
+            # backfill Job (geodb-space-addresses-backfill-job.yaml) has run with the feeder at 0.
+            - name: GEODB_SPACE_ADDRESSES
+              value: "0"
             # Keyed proposal versions (PROPOSAL_CREATED / PROPOSAL_UPDATED, one record per (proposal, block) with the
             # voting settings). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-octies. OFF until the
             # proposal-versions backfill Job (geodb-proposal-versions-backfill-job.yaml) has run with the feeder at 0.
