@@ -118,12 +118,11 @@ spec:
             - name: BATCH_SIZE
               value: "50"
             # Compare each terminal delivery with geo-db's mirrored unit and complete the unit
-            # (delivery_worker_shadow_total{result}). OFF: none of the GEODB_* values below is read.
-            # Measurement only: it never delivers and never writes Postgres. Turn on after the
-            # indexer's mirror (GEODB_OUTBOX_MIRROR) has run, RUNBOOK section 11; rows delivered
-            # before the mirror started count as `miss`.
+            # (delivery_worker_shadow_total{result}). ON: the indexer's mirror (GEODB_OUTBOX_MIRROR)
+            # has run, RUNBOOK section 11; rows delivered before the mirror started count as `miss`.
+            # Measurement only: it never delivers and never writes Postgres. To turn it off set "off".
             - name: GEODB_OUTBOX_SHADOW_READ
-              value: "off"
+              value: "1"
             - name: GEODB_CLIENT_BIN
               value: /geodb/geodb-client
             - name: GEODB_OUTBOX_KEY_PATH
