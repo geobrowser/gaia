@@ -34,6 +34,8 @@ export const RECORD_KINDS = {
 	proposalVersion: {id: "6863abef6664450eb135a182c6ff1715", family: "governance", table: "proposal_versions"},
 	/** `space_voting_settings`: a record keyed (space), mutable columns written by `put`. */
 	spaceVotingSettings: {id: "7767f888a9a240b18275a7832363f4d9", family: "governance", table: "space_voting_settings"},
+	/** `proposals.executed_at` / `unexecutable_at`: a record keyed (proposal). The status itself is computed, not stored. */
+	proposalStatus: {id: "cf398f45b2c74002bb13e5416fbc7027", family: "governance", table: "proposals (executed_at, unexecutable_at)"},
 	/** `proposal_votes`: a record keyed (proposal, proposal version, voter), its primary key. */
 	proposalVote: {id: "ca89a877762c4883a3640b5455a8f0e2", family: "votes", table: "proposal_votes"},
 	/** `user_votes`: a record keyed (user, object, object type, space, kind). */
@@ -138,6 +140,14 @@ export const RECORD_COLUMNS = {
 		disableFastPath: "4a13aa7d7f55476fb307b2d19b14dfe7",
 		/** Mutable: number, `execution_grace_period` (UpdateVotingSettings). */
 		grace: "401c3bec5a414703a5b6b51ce8e18e13",
+	},
+	proposalStatus: {
+		/** Key: reference to the proposal's entity, `cid("entity", proposal_id)`. */
+		proposal: "4f742a5f821a469c9c0be0b352ae5b67",
+		/** Mutable: instant, `executed_at` (PROPOSAL_EXECUTED block time, whole seconds). */
+		executedAt: "ed3855a3c41b4f749651bf049dabac0b",
+		/** Mutable: instant, `unexecutable_at` (operator backfill; no event). */
+		unexecutableAt: "72179d56e3dc478d9c9ab2159e4b40ef",
 	},
 	subspace: {
 		/** Edge property for a `verified` subspace row: parent Space entity -> child Space entity. */

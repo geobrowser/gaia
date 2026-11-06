@@ -29,6 +29,8 @@ export type Config = {
 	spaceVotingSettings: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_PROPOSAL_VERSIONS (with GEODB_RECORD_KEYS): keyed proposal versions from `space.governance` (proposalVersionsKeyed.ts). */
 	proposalVersions: {enabled: boolean; topic: string; groupId: string}
+	/** GEODB_PROPOSAL_STATUS (with GEODB_RECORD_KEYS): keyed executed_at / unexecutable_at facts from `space.governance` (proposalStatusKeyed.ts). */
+	proposalStatus: {enabled: boolean; topic: string; groupId: string}
 	/**
 	 * GEODB_RELATION_POSITIONS: write a relation's position into geo-db (`.position` on its `add`). Default off: a
 	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it.
@@ -83,6 +85,7 @@ export const feederGroupIds = (c: Config): string[] => [
 	c.subspaces.groupId,
 	c.spaceVotingSettings.groupId,
 	c.proposalVersions.groupId,
+	c.proposalStatus.groupId,
 ]
 
 export const flag = (v: string | undefined): boolean => v === "1" || v?.toLowerCase() === "true"
@@ -201,6 +204,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			enabled: flag(env.GEODB_PROPOSAL_VERSIONS),
 			topic: env.KAFKA_PROPOSAL_VERSIONS_TOPIC ?? `${environment}.space.governance`,
 			groupId: env.KAFKA_PROPOSAL_VERSIONS_GROUP_ID ?? `geodb-feeder-proposal-versions-keyed-v1-${environment}`,
+		},
+		proposalStatus: {
+			/**
+			 * GEODB_PROPOSAL_STATUS: consume the PROPOSAL_EXECUTED events of `space.governance` and write keyed
+			 * proposal-status records (proposalStatusKeyed.ts) into the `governance` system Space. Takes effect only with
+			 * GEODB_RECORD_KEYS (proposalStatusKeyedEnabled), and only after the backfill (RUNBOOK §2c-novies). Its own
+			 * group. Default off.
+			 */
+			enabled: flag(env.GEODB_PROPOSAL_STATUS),
+			topic: env.KAFKA_PROPOSAL_STATUS_TOPIC ?? `${environment}.space.governance`,
+			groupId: env.KAFKA_PROPOSAL_STATUS_GROUP_ID ?? `geodb-feeder-proposal-status-keyed-v1-${environment}`,
 		},
 		spaceEntities: {
 			/** GEODB_SPACE_ENTITIES: consume `space.creations` and write Space system entities. Default off. */
