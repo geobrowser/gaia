@@ -91,6 +91,8 @@ export async function withoutExcludedTypes(
 	hits: string[],
 	limit: number,
 ): Promise<string[]> {
+	// Nothing to read: readCards refuses an empty id list (bad_request), which would abort an empty answer's comparison.
+	if (hits.length === 0) return []
 	const spaceChunks: string[][] = []
 	for (let at = 0; at < geoSpaceIds.length; at += MAX_LINE_SPACES)
 		spaceChunks.push(geoSpaceIds.slice(at, at + MAX_LINE_SPACES))

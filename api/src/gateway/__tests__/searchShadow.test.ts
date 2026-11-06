@@ -425,6 +425,14 @@ describe("type exclusion", () => {
 		expect(await withoutExcludedTypes(readCards, [GEO_SPACE], hits, 3)).toEqual([hits[1], hits[2], hits[4]])
 	})
 
+	it("reads no cards for an empty answer (readCards refuses an empty id list)", async () => {
+		const readCards = vi.fn(async () => {
+			throw new GeoDbError("bad_request", "entity ids and 1 to 1024 space ids")
+		})
+		expect(await withoutExcludedTypes(readCards, [GEO_SPACE], [], 20)).toEqual([])
+		expect(readCards).not.toHaveBeenCalled()
+	})
+
 	it("reads the Spaces in lines of at most 1024", async () => {
 		const spaces = Array.from({length: 1580}, (_, i) => i.toString(16).padStart(32, "0"))
 		const readCards = vi.fn(async (_: {geoSpaceIds: string[]; entityIds: string[]}) => [])
