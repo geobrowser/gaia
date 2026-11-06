@@ -10,6 +10,7 @@ import {
 	type AccountWeightsShadowConfig,
 	compareAccountExclusion,
 	compareAccountWeight,
+	createAccountWeightsSampler,
 	createAccountWeightsShadow,
 	readAccountWeightsShadowConfig,
 	renderAccountWeightsMetrics,
@@ -25,6 +26,7 @@ const config: AccountWeightsShadowConfig = {
 	intervalMs: 1000,
 	sample: 5,
 	exclusions: false,
+	pollMs: 1000,
 }
 const log = {warn: vi.fn()}
 const settle = () => new Promise((r) => setTimeout(r, 5))
@@ -209,5 +211,53 @@ describe("account exclusions", () => {
 	it("reads the flag", () => {
 		expect(readAccountWeightsShadowConfig({}).exclusions).toBe(false)
 		expect(readAccountWeightsShadowConfig({GEODB_ACCOUNT_EXCLUSIONS_SHADOW: "1"}).exclusions).toBe(true)
+	})
+})
+
+describe("the sampler", () => {
+	const dashed = (hex: string) =>
+		`${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+	// Answers the id sample first, then the readAccounts join: the two statements the sampler issues.
+	const fakeDb = (ids: string[], accounts: {user_id: string; weight: string | null; excluded: boolean}[]) => {
+		let calls = 0
+		return {execute: vi.fn(async () => ({rows: ++calls === 1 ? ids.map((user_id) => ({user_id})) : accounts}))}
+	}
+
+	it("compares sampled Postgres accounts with no pair-fit request", async () => {
+		const reader = {get: vi.fn(async () => row(0.5)), scan: vi.fn()} as unknown as DerivedReader
+		const shadow = createAccountWeightsShadow({config, reader, log})
+		const db = fakeDb([dashed(U1)], [{user_id: dashed(U1), weight: "0.5", excluded: false}])
+		await createAccountWeightsSampler({
+			config: {...config, sample: 1},
+			db: db as never,
+			shadow,
+			log,
+			random: () => dashed(U2),
+		}).runOnce()
+		await settle()
+		expect(db.execute).toHaveBeenCalledTimes(2)
+		expect(reader.get).toHaveBeenCalledWith(ACCOUNT_WEIGHTS_COLLECTION, U1)
+		expect(count("match")).toBe(1)
+	})
+
+	it("swallows a Postgres failure and stays quiet when the table is empty", async () => {
+		const shadow = {compare: vi.fn()}
+		const down = {execute: vi.fn().mockRejectedValue(new Error("pg down"))}
+		await createAccountWeightsSampler({config, db: down as never, shadow, log}).runOnce()
+		expect(log.warn).toHaveBeenCalled()
+		await createAccountWeightsSampler({config, db: fakeDb([], []) as never, shadow, log}).runOnce()
+		expect(shadow.compare).not.toHaveBeenCalled()
+	})
+
+	it("is inert while the flag is off", () => {
+		const shadow = {compare: vi.fn()}
+		const stop = createAccountWeightsSampler({
+			config: {...config, enabled: false},
+			db: fakeDb([], []) as never,
+			shadow,
+			log,
+		}).start()
+		stop()
+		expect(shadow.compare).not.toHaveBeenCalled()
 	})
 })

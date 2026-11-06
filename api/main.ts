@@ -39,7 +39,11 @@ import {setGraphqlSearchClient} from "./src/kg/graphqlSearchOpenSearchPlugin"
 import {type GraphQLServerContext, getGraphqlPoolPressure, graphqlServer} from "./src/kg/postgraphile"
 import {createRateLimiter} from "./src/middleware/rateLimit"
 import {canonicalRequestLogging, isClientAbortError, requestId} from "./src/middleware/requestLogging"
-import {createAccountWeightsShadow, readAccountWeightsShadowConfig} from "./src/pairFit/accountWeightsShadow"
+import {
+	createAccountWeightsSampler,
+	createAccountWeightsShadow,
+	readAccountWeightsShadowConfig,
+} from "./src/pairFit/accountWeightsShadow"
 import {createProfileRouter} from "./src/profile"
 import {createProfileShadow, readProfileShadowConfig} from "./src/profile/shadow"
 import {createProposalsRouter} from "./src/proposals"
@@ -281,6 +285,11 @@ const accountWeightsShadow = accountWeightsShadowConfig.enabled
 			log,
 		})
 	: null
+// The same flag also starts a sampler that reads a few account_weights rows from Postgres every GEODB_ACCOUNT_WEIGHTS_SHADOW_POLL_MS
+// (60 s) and feeds them to the shadow, so it has samples even with no /pair-fit traffic.
+if (accountWeightsShadow) {
+	createAccountWeightsSampler({config: accountWeightsShadowConfig, db, shadow: accountWeightsShadow, log}).start()
+}
 // GEODB_SCORES_SHADOW (off by default) samples global_scores/local_scores/space_scores rows from Postgres on a timer and compares
 // them with geo-db's derived collections 2/3/4 (gaia_api_scores_shadow_total). Background only; never touches a request.
 const scoresShadowConfig = readScoresShadowConfig(process.env)
