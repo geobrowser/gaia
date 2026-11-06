@@ -54,8 +54,10 @@ export const UNCOMPARED_REASONS = [
 	"no_statements",
 	/** PostGraphile lists the entity in the asked-for Space only through derived properties, which geo-db never holds. */
 	"derived_only",
-	/** Vote scores PostGraphile computes from Postgres (`upvotes`, `commentScore` ..); geo-db holds none of them. */
+	/** Vote and ranking scores PostGraphile reads from Postgres (`upvotes`, `commentScore`, `rankingScore` ..); geo-db holds none of them. */
 	"derived_fields",
+	/** `typeIds` selected beside `types { id name }`: the same statements twice; only the `types` list is compared. */
+	"types_alias",
 ] as const
 
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]
