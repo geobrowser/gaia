@@ -20,6 +20,10 @@ counted, never truncated or coerced.
 
 Off unless ``GEODB_DERIVED_MIRROR`` is ``1`` or ``true``; it needs ``GEODB_KEY_PATH`` and
 ``GEODB_BINDING_PATH``, and the key's binding must grant ``derived=2,3,4``.
+
+``GEODB_DERIVED_MIRROR_TABLES`` (comma separated, e.g. ``global_scores,space_scores``) picks which tables are
+mirrored. Unset or empty mirrors all three, as before. A name that is not one of the three is ignored with a
+warning; if none is valid, nothing is mirrored (the cap is a reason to fail closed).
 """
 
 import logging
@@ -46,6 +50,8 @@ VALUE_MAX = 64
 CHUNK = 64
 # Rows in one batch request (wire.derived.batch_max).
 BATCH_MAX = 256
+
+TABLES = ("global_scores", "local_scores", "space_scores")
 
 DEFAULT_TIMEOUT = 2.0
 DEFAULT_COOLDOWN = 10.0
@@ -144,6 +150,17 @@ def space_rows(spaces: list[Space], on_skip: Callable[[Exception], None] | None 
     )
 
 
+def _parse_tables(raw: str) -> tuple[str, ...]:
+    """The tables named in ``raw``; every table when it is blank. Unknown names are warned about and dropped."""
+    names = [n.strip() for n in raw.split(",") if n.strip()]
+    if not names:
+        return TABLES
+    for n in names:
+        if n not in TABLES:
+            logger.warning("geodb_derived.misconfigured: unknown table %r in GEODB_DERIVED_MIRROR_TABLES; ignored", n)
+    return tuple(t for t in TABLES if t in names)
+
+
 class _Pipe:
     def __init__(self, proc: subprocess.Popen):
         self.proc = proc
@@ -159,12 +176,14 @@ class DerivedMirror:
         cooldown: float = DEFAULT_COOLDOWN,
         budget: float = DEFAULT_BUDGET_MS / 1000,
         batch: bool = False,
+        tables: Iterable[str] = TABLES,
     ):
         self.argv = argv
         self.timeout = timeout
         self.cooldown = cooldown
         self.budget = budget
         self.batch = batch
+        self.tables = frozenset(tables)
         # Counters, logged by the writer after each call: puts (rows answered ok), errors
         # (failed requests), skipped (rows that cannot be sent), dropped (rows not sent).
         self.stats = {"puts": 0, "errors": 0, "skipped": 0, "dropped": 0}
@@ -188,13 +207,24 @@ class DerivedMirror:
             ms = int(env.get("GEODB_DERIVED_BUDGET_MS", "").strip() or DEFAULT_BUDGET_MS)
         except ValueError:
             ms = DEFAULT_BUDGET_MS
+        tables = _parse_tables(env.get("GEODB_DERIVED_MIRROR_TABLES", ""))
+        if not tables:
+            logger.warning(
+                "geodb_derived.misconfigured: GEODB_DERIVED_MIRROR_TABLES names no known table; mirror disabled"
+            )
+            return None
         return cls(
             [env.get("GEODB_CLIENT_BIN") or "geodb-client", "--key", key, "--binding", binding, "derived", "pipe"],
             budget=ms / 1000,
             batch=env.get("GEODB_DERIVED_BATCH", "").strip() in ("1", "true"),
+            tables=tables,
         )
 
     # -- public ---------------------------------------------------------------------------
+
+    def enabled(self, table: str) -> bool:
+        """Whether ``table`` is one of the tables this mirror writes."""
+        return table in self.tables
 
     def skipped(self, error: Exception | str, table: str = "") -> None:
         """Counts a row that cannot be mirrored."""

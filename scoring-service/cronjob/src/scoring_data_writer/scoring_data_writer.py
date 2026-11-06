@@ -71,9 +71,13 @@ class ScoringDataWriter:
             t0 = time.monotonic()
             before = dict(mirror.stats)
             skip = lambda e: mirror.skipped(e)  # noqa: E731
-            mirror.put("global_scores", global_rows(entities, skip))
-            mirror.put("local_scores", local_rows(entities, skip))
-            mirror.put("space_scores", space_rows(spaces, skip))
+            # Per-table selection (GEODB_DERIVED_MIRROR_TABLES); all three by default.
+            if mirror.enabled("global_scores"):
+                mirror.put("global_scores", global_rows(entities, skip))
+            if mirror.enabled("local_scores"):
+                mirror.put("local_scores", local_rows(entities, skip))
+            if mirror.enabled("space_scores"):
+                mirror.put("space_scores", space_rows(spaces, skip))
             delta = {k: mirror.stats[k] - before[k] for k in before}
             logger.info(
                 "geodb_derived mirror finished in %.1fs: puts=%d errors=%d skipped=%d dropped=%d",
