@@ -50,6 +50,8 @@ export const RECORD_KINDS = {
 	userVote: {id: "1623234736184c0d9a0b69e2ffbc124d", family: "votes", table: "user_votes"},
 	/** `personalization.for_you_config`: one record (the table holds one row, `id` = true), mutable columns written by `put`. */
 	forYouConfig: {id: "8a0e2bd56c834195b30db6a7eb966b50", family: "config", table: "personalization.for_you_config"},
+	/** `entity_ranking_config`: one record (the table holds one row, `id` = true), mutable columns written by `put`. */
+	entityRankingConfig: {id: "ee4e36fde6334be9b6d45085b5f6fb34", family: "config", table: "entity_ranking_config"},
 } as const satisfies Record<string, RecordKind>
 
 /**
@@ -65,6 +67,42 @@ export const SYSTEM_SPACE_NONCE_KIND = "0b3f6634fbe84dbd8c0ecae3fce960b3"
  * `put` whose statement id includes the value, so a change closes the old value and a replay reopens the same id.
  */
 export const RECORD_COLUMNS = {
+	entityRankingConfig: {
+		/** Key: number, `id` (always 1: the table's one row, `id` = true). */
+		id: "8aadf80a0b2546aea407d12a065494d1",
+		/** Mutable, one per column of the same name in snake case; decimals except the five `*_target` / `*_days` integers. */
+		tauSeconds: "5c83400bff444efca45f68eb07fa9b09",
+		wilsonZ: "93a7b5019cd24ad99e52775c2241ee30",
+		priorPositive: "76bd3657e4a94ea38786d51b4691ae80",
+		priorNegative: "c4fd335a66204e149810f3e4e59d4381",
+		qualityFloor: "dce4bf0f708948fb957c8bee3b2eac36",
+		intrinsicCap: "f25971a4473f41ee9c07160abc6140f3",
+		intrinsicPropertyTarget: "1969b6e8917c404e9c3aaaa51aedd99c",
+		intrinsicRelationTarget: "98cff56a0dd84257afbf9443c3f808cb",
+		participationWeight: "09edbee5458342e59ff36e54de66c3d9",
+		participationCap: "b1944a17d2494980958f62485b2eb9bb",
+		commentWeight: "5ac7a5ff10b4482cacda2a4c1ef2174f",
+		commentCap: "3fd4bcd161cd40a8bc99eb9152e1a8be",
+		topicInterestedWeight: "b5b8aacbbc554b48b0fcc659e95e6c85",
+		topicDebateWeight: "307b57fd16a24d10877dd4a6d35a3409",
+		topicCap: "87fc6d661db148779ea51c82f0cd09e9",
+		watchWindowDays: "3c4a0b7b89504c9cb71bf52850478bb0",
+		watchPriorImpressions: "5f05107bae2547a79055c7efb8297393",
+		watchReferenceSeconds: "85744f77283c4019aefb2712facbd5ba",
+		watchRatioWeight: "9a9c804f5f2048ef92d7c64dc2f3cae8",
+		watchCompletedWeight: "a972ae8ed1524e6f909b5e2cdde6a3d3",
+		watchPlaysWeight: "c96fc5fa9de641dab4de3809684e8bfb",
+		watchClaimVotesWeight: "0f3f00fdfc5743c48b04cd5383526f63",
+		watchCap: "70f00871fd7a40d88a2584b183ce9d40",
+		watchFreshBoost: "548f6568cfa3408ca720715eabbd764e",
+		watchFreshImpressions: "c45f3ac937aa479fb706c3af8bd9f360",
+		trendingBoost: "026c5a72b15945c3b8c7b924eaf5c7c9",
+		trendingTopicBoost: "269df22be38e45feb2ac2603a60100d6",
+		trendingDayFactor: "3c05b3c405884a99a73004fdeb2d0c28",
+		trendingDebateFactor: "7c5c04ba24df4ec2893305a3b351653b",
+		trendingDebateWindowDays: "d39be3a05834407b86782dacdc025f79",
+		trendingHorizonDays: "10bc0fc4779c43a9ba4ee03475f8ea26",
+	},
 	forYouConfig: {
 		/** Key: number, `id` (always 1: the table's one row, `id` = true). */
 		id: "054f9998f5204c85a2eeadc923fc614c",

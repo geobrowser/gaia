@@ -3,6 +3,10 @@ import {Hono} from "hono"
 import {cors} from "hono/cors"
 import {openAPISpecs} from "hono-openapi"
 import {createForYouConfigShadow, readForYouConfigShadowConfig} from "./src/forYou/configShadow"
+import {
+	createEntityRankingConfigShadow,
+	readEntityRankingConfigShadowConfig,
+} from "./src/forYou/entityRankingConfigShadow"
 import {MIN_INTERNAL_TOKEN_LENGTH, mountInternalRoutes} from "./src/forYou/router"
 import {readGatewayConfig} from "./src/gateway/config"
 import {createEntityResolver} from "./src/gateway/entityServe"
@@ -212,7 +216,24 @@ const forYouConfigShadow = forYouConfigShadowConfig.enabled
 			log,
 		})
 	: null
-const internalRoutes = mountInternalRoutes(app, db, process.env.GAIA_INTERNAL_TOKEN, forYouConfigShadow)
+// GEODB_ENTITY_RANKING_CONFIG_SHADOW (off by default) does the same for the tau_seconds the route served from
+// entity_ranking_config (gaia_api_entity_ranking_config_shadow_total). Never changes a response.
+const entityRankingConfigShadowConfig = readEntityRankingConfigShadowConfig(process.env)
+const entityRankingConfigShadow = entityRankingConfigShadowConfig.enabled
+	? createEntityRankingConfigShadow({
+			config: entityRankingConfigShadowConfig,
+			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+			log,
+		})
+	: null
+const internalRoutes = mountInternalRoutes(
+	app,
+	db,
+	process.env.GAIA_INTERNAL_TOKEN,
+	forYouConfigShadow,
+	entityRankingConfigShadow,
+)
 if (internalRoutes === "enabled") {
 	log.info("Internal routes enabled")
 } else if (internalRoutes === "too_short") {

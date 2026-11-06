@@ -625,6 +625,36 @@ Enable, each step only after the one before it is live:
 
 Rollback: set both flags back to 0. The record stays in the Space, unread.
 
+### 2c-config-ranking. Keyed entity_ranking_config mirror (GEODB_ENTITY_RANKING_CONFIG)
+
+`GEODB_ENTITY_RANKING_CONFIG` (default off; takes effect only with `GEODB_RECORD_KEYS`) lets the
+`geodb-entity-ranking-config-backfill` Job write the one `entity_ranking_config` row (31 tunables: tau, Wilson, caps,
+participation, comment, topic, watch, trending) as a natural-key record in the `config` system Space
+(`geodb-feeder/src/entityRankingConfigKeyed.ts`; the pinned `entityRankingConfig` kind). Second slice of the config tables
+(after §2c-config). A mirror, not a move: Postgres stays the source. Every reader but one is a plpgsql function
+(`SELECT * INTO cfg FROM entity_ranking_config WHERE id`, migrations 0073 to 0118, plus the feed-composition samplers and
+`trending`/`watch` scorers), which cannot read geo-db, so those keep reading the table. The one TypeScript reader is
+`readSettings` (`api/src/forYou/queries.ts`), which reads `tau_seconds`. Nothing writes the table but migrations and
+operator SQL, so there is no consumer: the Job is the only writer, and a rerun after an operator edit writes the new
+values (a changed value closes the old statement). `updated_at` is not mirrored.
+
+The api compares it: `GEODB_ENTITY_RANKING_CONFIG_SHADOW` (api, default `0`) reads the record after a For you request and
+counts `gaia_api_entity_ranking_config_shadow_total{result=match|mismatch|unsupported|failed}` for `tau_seconds`, the only
+value the api sees. It never changes a response. The other 30 columns are checked by the gate, not live.
+
+Enable, each step only after the one before it is live:
+
+1. A feeder image that carries this path (the Job's image) and a geo-db serve at 9d97069a78 or later (`put`).
+2. Kafka: describe on every feeder group (the Job's empty-group check). No consume ACL is new.
+3. The backfill Job (`geodb/k8s/v2/geodb-entity-ranking-config-backfill-job.yaml`), feeder scaled to 0, applied as in
+   §2c-quater step 4. It reads one row READ ONLY and is rerunnable. The `config` system Space already exists once
+   §2c-config has run (no new Space against the serve's cap).
+4. The gate: `bun src/entityRankingConfigGate.ts <postgres.tsv> <dump dir>` (its header lists the `\copy` and the
+   `erc-<column>.tsv` dumps). Exits non-zero on a difference.
+5. `GEODB_ENTITY_RANKING_CONFIG_SHADOW: "1"` in `api/k8s/v2/api.yaml`; watch `mismatch`, `unsupported{system_space_missing}`.
+
+Rollback: set both flags back to 0. The record stays in the Space, unread.
+
 ### 2c-octies. Keyed proposal versions (GEODB_PROPOSAL_VERSIONS)
 
 `GEODB_PROPOSAL_VERSIONS` (default off; takes effect only with `GEODB_RECORD_KEYS`) writes gaia's `proposal_versions`
