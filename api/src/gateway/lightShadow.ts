@@ -99,6 +99,11 @@ type LightList = {
 	 * row has. Its rows are checked as "held under one of these Types" (`typeless`), not as exact statements.
 	 */
 	typeFilter?: string[]
+	/**
+	 * A values list filtered by `propertyId` (`is` or `in`) that selects no property: the filter's Properties, one of
+	 * which each row has. Its rows are checked as "held under one of these Properties" (`untypedValues`).
+	 */
+	propertyFilter?: string[]
 }
 
 const noted = new Set<string>()
@@ -270,8 +275,8 @@ const relationSpec = () => ({
 
 /** One list field of the light selection: its row columns, where they sit, and what it cannot settle. */
 /** The Types a relations list's filter allows (`typeId: {is}` or `{in}`), or null when it names none that way. */
-function typeFilterOf(filter: unknown): string[] | null {
-	const clause = asRecord(asRecord(filter)?.typeId)
+function typeFilterOf(filter: unknown, key: "typeId" | "propertyId" = "typeId"): string[] | null {
+	const clause = asRecord(asRecord(filter)?.[key])
 	if (!clause) return null
 	const ids = typeof clause.is === "string" ? [clause.is] : Array.isArray(clause.in) ? clause.in : null
 	if (!ids || ids.length === 0 || ids.length > MAX_TYPE_FILTER) return null
@@ -331,7 +336,21 @@ function planLightList(
 	}
 	const has = (column: string) => rows.columns[column] !== undefined || rows.nested[column] !== undefined
 	if (kind === "values") {
-		if (!has("propertyId")) refuse("selection")
+		if (!has("propertyId")) {
+			// The filter says which Properties the rows hold; the answer does not say which one each does.
+			const propertyFilter = options.relationsTypeFilter ? typeFilterOf(filter, "propertyId") : null
+			if (!propertyFilter) refuse("selection")
+			uncompared.add("filter_completeness")
+			uncompared.add("partial_values")
+			return {
+				kind,
+				key: responseKeyOf(field),
+				nodesKey,
+				rows: {key: responseKeyOf(field), first, ...rows, nodesKey, hasNext: null},
+				spaceKey: rows.columns.spaceId ?? null,
+				propertyFilter: propertyFilter as string[],
+			}
+		}
 		if (!VALUE_COLUMNS.every(has)) uncompared.add("partial_values")
 	} else if (!has("typeId") && has("toEntityId") && options.relationsTypeFilter && typeFilterOf(filter)) {
 		// The filter says which Types the rows hold; the answer does not say which one each does.
@@ -381,7 +400,14 @@ function planLightEntity(
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
-	options: {everySpace?: boolean; projections?: boolean; relationsTypeFilter?: boolean; derivedFields?: boolean} = {},
+	options: {
+		everySpace?: boolean
+		/** The root argument names Spaces, which do not scope the nested lists: space-less rows are read every-Space. */
+		rootSpaces?: boolean
+		projections?: boolean
+		relationsTypeFilter?: boolean
+		derivedFields?: boolean
+	} = {},
 ): {card: EntityCardPlan; lists: LightList[]; everySpace: boolean} {
 	const lists: LightList[] = []
 	const card = planEntitySelection(
@@ -406,11 +432,15 @@ function planLightEntity(
 		return {card, lists, everySpace: true}
 	}
 	// No lists: the derived fields (name, description, types) of the entity's own spaces are all that is judged.
-	if (lists.length === 0 && !(card.spaceIds && (card.name || card.description || card.types))) refuse("selection")
+	// A root that names Spaces and asks for a creation or update time judges those derived times in them (the
+	// ordered page of `orderBy: CREATED_AT_DESC` is read separately).
+	const timed = options.rootSpaces === true && (card.createdAt || card.updatedAt)
+	if (lists.length === 0 && !(card.spaceIds && (card.name || card.description || card.types)) && !timed)
+		refuse("selection")
 	// Rows with no space and no `spaceIds` leave nothing to say which cards to read: where the caller allows it
 	// (no Space argument), the entity is read across every loaded Space and each row need only be held by one.
 	if (!card.spaceIds && !lists.some((list) => list.spaceKey)) {
-		if (!options.everySpace) refuse("no_space")
+		if (!options.everySpace && !options.rootSpaces) refuse("no_space")
 		uncompared.add("partial_values")
 		return {card, lists, everySpace: true}
 	}
@@ -598,6 +628,7 @@ export function analyzeLightEntities(
 		const spaceIds = readRootArgs(args, claims, uncompared)
 		const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
 			everySpace: spaceIds === null,
+			rootSpaces: spaceIds !== null,
 			projections: options.entitiesBatch === true,
 			relationsTypeFilter: options.relationsTypeFilter === true,
 			derivedFields: options.derivedFields === true,
@@ -641,6 +672,8 @@ type LightCard = {
 	projectionSpaces: (string | null)[]
 	/** Rows of a `typeId`-filtered relations list that selects no type: the Types the filter allowed, the target, the row space. */
 	typeless: {types: string[]; to: string; space: string | null}[]
+	/** Value rows of a `propertyId`-filtered list that selects no property: held under one of `props`. */
+	untypedValues: {props: string[]; row: ValueRow; space: string | null}[]
 }
 
 const push = (
@@ -668,6 +701,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 	const relationSpaces: (string | null)[] = []
 	const projectionSpaces: (string | null)[] = []
 	const typeless: LightCard["typeless"] = []
+	const untypedValues: LightCard["untypedValues"] = []
 	const nested: NonNullable<NonNullable<PostgresCard>["nested"]> = {}
 	for (const list of plan.lists) {
 		if (list.projection) {
@@ -683,7 +717,22 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 			const node = asRecord(raw)
 			if (!node) return null
 			const space = spaceOf(node, list.spaceKey)
-			if (list.kind === "values") {
+			if (list.kind === "values" && list.propertyFilter) {
+				untypedValues.push({
+					props: list.propertyFilter,
+					row: {
+						property_id: "",
+						text: orNull(read(node, list.rows, "text")),
+						integer: orNull(read(node, list.rows, "integer")),
+						float: orNull(read(node, list.rows, "float")),
+						decimal: orNull(read(node, list.rows, "decimal")),
+						boolean: orNull(read(node, list.rows, "boolean")),
+						datetime: orNull(read(node, list.rows, "datetime")),
+						date: orNull(read(node, list.rows, "date")),
+					},
+					space,
+				})
+			} else if (list.kind === "values") {
 				const propertyId = read(node, list.rows, "propertyId")
 				if (typeof propertyId !== "string") return null
 				values.push({
@@ -759,7 +808,7 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 		if (plan.card.types.nameKey) card.typeNames = names
 	}
 	if (Object.keys(nested).length > 0) card.nested = nested
-	return {card, valueSpaces, relationSpaces, projectionSpaces, typeless}
+	return {card, valueSpaces, relationSpaces, projectionSpaces, typeless, untypedValues}
 }
 
 /** The spaces to read: the entity's own, else the spaces its rows name. */
@@ -858,6 +907,15 @@ export async function checkLight(
 		return !pool.some((held) => types.has(held.prop) && held.raw === to)
 	})
 	for (const row of untyped) missing.push({space: row.space, prop: row.types.join("|"), norm: row.to})
+	// A value row filtered by `propertyId` with no property selected is held when geo-db has it under one of the filter's Properties.
+	for (const row of light.untypedValues) {
+		const pool: GeoCardRow[] = row.space ? (read.bySpace.get(row.space) ?? []) : read.rows
+		const held = row.props.some((prop) => {
+			const one = {...row.row, property_id: prop}
+			return diffCards(statementsFromPostgres([one], []), pool).onlyPostgres.length === 0
+		})
+		if (!held) missing.push({space: row.space, prop: row.props.join("|"), norm: String(row.row.text ?? "")})
+	}
 	const derived = compareDerived(plan.card, light.card, read.rows, read.scope)
 	const wrong = Object.entries(derived.checks)
 		.filter(([, result]) => result === "mismatch")
@@ -876,9 +934,19 @@ export async function checkLight(
 		)
 		if (!read.rows.some((row) => row.prop === wanted && targets.has(row.raw))) unmet.push(claim)
 	}
-	const notHeld = options.spaceIds?.length
-		? !options.spaceIds.some((space) => (read.bySpace.get(space)?.length ?? 0) > 0)
-		: false
+	// An every-Space read keys its rows by geo-db Space id; the root's Spaces are PostGraphile ids. A root Space geo-db
+	// has not loaded cannot be judged (the Space map answers null), so it is `unmapped_space`, not a mismatch.
+	let heldIn = options.spaceIds ?? []
+	if (options.everySpace && heldIn.length > 0) {
+		const mapped: string[] = []
+		for (const space of heldIn) {
+			const geo = await deps.geoSpaceOf(space)
+			if (!geo) return {result: "unsupported", reason: "unmapped_space"}
+			mapped.push(geo)
+		}
+		heldIn = mapped
+	}
+	const notHeld = heldIn.length > 0 ? !heldIn.some((space) => (read.bySpace.get(space)?.length ?? 0) > 0) : false
 	// PostGraphile counts an entity as in a Space when it has any value or outgoing relation there, derived ones
 	// included; geo-db never holds those, so a Space the answer shows holding only derived rows (a vote Score in the
 	// voter's Space) is not a membership geo-db can settle.

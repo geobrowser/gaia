@@ -317,7 +317,7 @@ describe("the light entity selection (news app)", () => {
 		if (analysis.ok) expect(analysis.plan.everySpace).toBe(true)
 	})
 
-	it("still needs the entity's spaces when the root names Spaces but the answer does not", () => {
+	it("reads every Space when the root names Spaces but the nested rows name none (the root does not scope them)", () => {
 		const analysis = analyzeLightEntities(
 			parse(
 				`{ entities(spaceIds: {in: ["${SPACE_B_UUID}"]}, first: 5) { id values(first: 5) { nodes { property { id } text } } } }`,
@@ -325,7 +325,27 @@ describe("the light entity selection (news app)", () => {
 			null,
 			{},
 		)
-		expect(analysis).toEqual({ok: false, reason: "no_space"})
+		expect(analysis.ok).toBe(true)
+		if (analysis.ok) {
+			expect(analysis.plan.everySpace).toBe(true)
+			expect(analysis.plan.spaceIds).toEqual([SPACE_B_UUID.replaceAll("-", "")])
+		}
+		// With no lists and no spaceIds selected there is still nothing to judge.
+		expect(
+			analyzeLightEntities(parse(`{ entities(spaceIds: {in: ["${SPACE_B_UUID}"]}, first: 5) { id } }`), null, {}),
+		).toEqual({ok: false, reason: "selection"})
+	})
+
+	it("plans `entities(spaceId, orderBy: CREATED_AT_DESC) { id createdAt }` (a newest-entity probe) and still refuses a bare id", () => {
+		const q = (sel: string) =>
+			parse(`{ entities(spaceId: "${SPACE_A}", first: 1, orderBy: CREATED_AT_DESC) { ${sel} } }`)
+		const a = analyzeLightEntities(q("id createdAt"), null, {})
+		expect(a.ok).toBe(true)
+		if (a.ok) {
+			expect(a.plan.everySpace).toBe(true)
+			expect(a.plan.uncompared).toContain("order_completeness")
+		}
+		expect(analyzeLightEntities(q("id"), null, {})).toEqual({ok: false, reason: "selection"})
 	})
 
 	it("refuses an unknown column or a list argument it cannot interpret", () => {
@@ -1402,6 +1422,38 @@ describe("entities answers with no Space (every-Space reads)", () => {
 			// A relation geo-db holds in no Space is still a mismatch.
 			const missing = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, FIRST.name)})
 			await callQuery(missing, query, body)
+			expect(results()).toEqual({match: 1, mismatch: 1})
+		})
+
+		it("compares a values list filtered by propertyId that selects no property, as held under one of them", async () => {
+			const NAME_ID = "a126ca53-0c8e-48d5-b888-82c734c38935"
+			const query = (props: string) =>
+				`query { entities(filter: {id: {in: ["${FIRST.id}"]}}, first: 1) { id values(filter: {propertyId: {in: [${props}]}}) { nodes { text } } } }`
+			const body = (text: string) => ({data: {entities: [{id: FIRST.id, values: {nodes: [{text}]}}]}})
+			const held = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, "Ada")}, {typeFilter: true})
+			await callQuery(held, query(`"${NAME_ID}"`), body("Ada"))
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({filter_completeness: 1})
+			// A text geo-db does not hold under any filtered Property is a mismatch.
+			const wrong = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, "Ada")}, {typeFilter: true})
+			await callQuery(wrong, query(`"${NAME_ID}"`), body("Grace"))
+			expect(results()).toEqual({match: 1, mismatch: 1})
+			// Switched off, the shape stays refused.
+			const off = namesSetup({[geoSpace(SPACE_B)]: nameRow(FIRST.id, "Ada")})
+			await callQuery(off, query(`"${NAME_ID}"`), body("Ada"))
+			expect(results()).toEqual({match: 1, mismatch: 1, unsupported_selection: 1})
+		})
+
+		it("reads every space for space-less lists under a root spaceId, and still flags an entity the root Space does not hold", async () => {
+			const query = `query { entities(spaceId: "${SPACE_B}", first: 1) { id relations(first: 10) { nodes { typeId toEntityId } } } }`
+			const target = "7ed45f2bc48b419e8e4664d5ff680b0d"
+			const rel = `${conformingId("entity", typeId)}\t${conformingId("entity", target)}\ts5\t${FIRST.id}\t-\t-\t1\n`
+			const body = {data: {entities: [{id: FIRST.id, relations: {nodes: [{typeId, toEntityId: target}]}}]}}
+			// Held in the root Space (and so in every Space read): a match, not no_space.
+			await callQuery(namesSetup({[geoSpace(SPACE_B)]: rel}), query, body)
+			expect(results()).toEqual({match: 1})
+			// Held only in another Space: the root Space does not hold it, which is a mismatch the root claims.
+			await callQuery(namesSetup({[geoSpace(SPACE_A)]: rel}), query, body)
 			expect(results()).toEqual({match: 1, mismatch: 1})
 		})
 
