@@ -343,10 +343,10 @@ spec:
               value: "0"
             # The same for pair-fit's account weights: a sample of each request's candidates (at most every
             # GEODB_ACCOUNT_WEIGHTS_SHADOW_INTERVAL_MS, default 10 s; _SAMPLE candidates, default 5) against geo-db's
-            # derived collection 5 (gaia_api_account_weights_shadow_total), read over `geodb-client derived pipe`. OFF; never
-            # changes a response. Needs the ranking-indexer's GEODB_DERIVED_MIRROR run first (account-weights cronjob).
+            # derived collection 5 (gaia_api_account_weights_shadow_total), read over `geodb-client derived pipe`. ON; never
+            # changes a response. The account-weights cronjob's GEODB_DERIVED_MIRROR is on and has filled collection 5.
             - name: GEODB_ACCOUNT_WEIGHTS_SHADOW
-              value: "0"
+              value: "1"
             # Also compare each sampled candidate's `excluded` with geo-db's derived collection 12
             # (gaia_api_account_exclusions_shadow_total). Needs GEODB_ACCOUNT_WEIGHTS_SHADOW on, serve rolled to a build that
             # registers collection 12, and the account-exclusions-sync cronjob's GEODB_DERIVED_MIRROR run once. OFF.
@@ -354,10 +354,10 @@ spec:
               value: "0"
             # Samples global_scores / local_scores / space_scores rows from Postgres (_SAMPLE per table, default 20, every
             # GEODB_SCORES_SHADOW_INTERVAL_MS, default 60 s) against geo-db's derived collections 2/3/4
-            # (gaia_api_scores_shadow_total{table,result}). OFF; background only, never changes a response. Needs serve
-            # rolled to a binding granting the scores key derived=2,3,4 and the scoring cronjob's GEODB_DERIVED_MIRROR run once.
+            # (gaia_api_scores_shadow_total{table,result}). ON; background only, never changes a response. The scores snapshot
+            # Job backfilled 2/3/4 and the scoring cronjob's GEODB_DERIVED_MIRROR keeps them current; the reader key reads them.
             - name: GEODB_SCORES_SHADOW
-              value: "0"
+              value: "1"
             - name: NODE_EXTRA_CA_CERTS
               value: /ssl/ca.crt
             - name: DATABASE_URL
