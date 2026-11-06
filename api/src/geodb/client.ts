@@ -45,6 +45,9 @@ import {observeReadStage, type ReadShape, recordWorkerEnd, recordWorkerStart, ty
 
 const HEX32 = /^[0-9a-f]{32}$/
 
+/** Most entities one `.args.ids` card read names (geo-db's bound). */
+export const MAX_CARD_IDS = 32
+
 /** Rows of one entity's card as geo-db answered them, in geo-db's id space. */
 export type GeoDbCardClient = {
 	/** `names` also asks for the display names of each row's property and target (rows then carry them). */
@@ -55,6 +58,13 @@ export type GeoDbCardClient = {
 	 * names only Spaces it knows geo-db holds. Absent on a client that cannot do it.
 	 */
 	readCardSpaces?(args: {geoSpaceIds: string[]; entityId: string; names?: boolean}): Promise<GeoCardRow[]>
+	/**
+	 * The cards of several entities in the Spaces named (`.args.ids`, geo-db ISS-625-317): the rows of every card, each
+	 * carrying its `entity`, and its `space` on a multi-Space read. At most `MAX_CARD_IDS` entities go in one read;
+	 * more are read as several, in parallel. Needs a store from geo-db 8df213cbac or later, which an older one refuses.
+	 * Absent on a client that cannot do it.
+	 */
+	readCards?(args: {geoSpaceIds: string[]; entityIds: string[]; names?: boolean}): Promise<GeoCardRow[]>
 	/**
 	 * The entities referring to `entityId` (its card's backlinks, `.args.backlinks = limit`) in one or several
 	 * Spaces, one row a referring statement. At most `limit` rows come back, so `limit` rows means there may be
@@ -106,6 +116,13 @@ export function cardDocument(entityId: string, options: {names?: boolean; backli
 	const names = options.names ? ", .names = true" : ""
 	const backlinks = options.backlinks ? `, .backlinks = ${options.backlinks}` : ""
 	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${entityId}"${names}${backlinks} } } } }`
+}
+
+/** The geoql document for the cards of 1..32 entities (`.args.ids`). Ids are 32 hex digits, so nothing needs escaping. */
+export function cardsDocument(entityIds: string[], options: {names?: boolean} = {}): string {
+	const names = options.names ? ", .names = true" : ""
+	const ids = entityIds.map((id) => `"${id}"`).join(", ")
+	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .ids = .{ ${ids} }${names} } } } }`
 }
 
 /**
@@ -258,6 +275,8 @@ type Request = {
 	backlinks?: boolean
 	/** An ordered `entities` page: the answer is the page's rows, whatever entity they name. */
 	page?: boolean
+	/** A read of several entities' cards: the answer is every row, each keeping its entity. */
+	cards?: boolean
 	resolve: (rows: GeoCardRow[]) => void
 	reject: (error: GeoDbError) => void
 	retried: boolean
@@ -444,9 +463,14 @@ export function createPipeGeoDbClient(
 			try {
 				outcome = request.page
 					? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-					: request.backlinks
-						? backlinkRowsFromGeoDbOutput(payload, request.entityId, {spaces: request.spaces})
-						: rowsFromGeoDbOutput(payload, request.entityId, {names: request.names, spaces: request.spaces})
+					: request.cards
+						? rowsFromGeoDbOutput(payload, null, {names: request.names, spaces: request.spaces})
+						: request.backlinks
+							? backlinkRowsFromGeoDbOutput(payload, request.entityId, {spaces: request.spaces})
+							: rowsFromGeoDbOutput(payload, request.entityId, {
+									names: request.names,
+									spaces: request.spaces,
+								})
 			} catch (error) {
 				outcome = new GeoDbError("client_failed", String(error))
 			}
@@ -516,6 +540,7 @@ export function createPipeGeoDbClient(
 		spaces: boolean,
 		backlinks = false,
 		page = false,
+		cards = false,
 	): Promise<GeoCardRow[]> {
 		if (now() < backoffUntil) {
 			return Promise.reject(new GeoDbError("client_failed", "geodb-client is not starting; backing off"))
@@ -528,6 +553,7 @@ export function createPipeGeoDbClient(
 				spaces,
 				...(backlinks ? {backlinks} : {}),
 				...(page ? {page} : {}),
+				...(cards ? {cards} : {}),
 				resolve,
 				reject,
 				retried: false,
@@ -611,6 +637,33 @@ export function createPipeGeoDbClient(
 			// more is the multi-Space form.
 			const spaces = geoSpaceIds.length > 1
 			return submit(`${geoSpaceIds.join(",")}\t${cardDocument(entityId, {names})}\n`, entityId, names, spaces)
+		},
+		async readCards({geoSpaceIds, entityIds, names = false}) {
+			if (entityIds.length === 0 || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
+				throw new GeoDbError("bad_request", "entity ids and 1 to 1024 space ids")
+			if (!entityIds.every((id) => HEX32.test(id)) || !geoSpaceIds.every((id) => HEX32.test(id)))
+				throw new GeoDbError("bad_request", "ids must be 32 hex digits")
+			if (new Set(geoSpaceIds).size !== geoSpaceIds.length)
+				throw new GeoDbError("bad_request", "space ids must be distinct 32 hex digits")
+			const distinct = [...new Set(entityIds)]
+			const chunks: string[][] = []
+			for (let at = 0; at < distinct.length; at += MAX_CARD_IDS)
+				chunks.push(distinct.slice(at, at + MAX_CARD_IDS))
+			const spaces = geoSpaceIds.length > 1
+			const answers = await Promise.all(
+				chunks.map((chunk) =>
+					submit(
+						`${geoSpaceIds.join(",")}\t${cardsDocument(chunk, {names})}\n`,
+						NO_ENTITY,
+						names,
+						spaces,
+						false,
+						false,
+						true,
+					),
+				),
+			)
+			return answers.flat()
 		},
 		readBacklinks({geoSpaceIds, entityId, limit}) {
 			if (!HEX32.test(entityId) || geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)

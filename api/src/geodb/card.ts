@@ -161,6 +161,8 @@ export type GeoCardRow = {
 	targetName?: string | null
 	/** The geo-db Space holding the statement; present only on a multi-Space read (`spaces: true`). */
 	space?: string
+	/** The entity owning the row; present only on a batch read of several entities' cards (`readCards`). */
+	entity?: string
 }
 
 export type CardOutputOptions = {
@@ -184,15 +186,21 @@ const nameCell = (cell: string): string | null => (cell === "-" ? null : unescap
  * Without options the answer is `{prop, raw}` rows exactly as before. A row too short to hold the names
  * the options promise leaves both names absent, so a caller can tell "not answered" from "none".
  */
-export function rowsFromGeoDbOutput(output: string, entityId: string, options: CardOutputOptions = {}): GeoCardRow[] {
+export function rowsFromGeoDbOutput(
+	output: string,
+	entityId: string | null,
+	options: CardOutputOptions = {},
+): GeoCardRow[] {
 	const nameAt = 4 + (options.claims ? 2 : 0)
 	return output
 		.split("\n")
 		.filter((line) => line !== "")
 		.map((line) => line.split("\t"))
-		.filter((cells) => cells[3] === entityId)
+		.filter((cells) => (entityId === null ? /^[0-9a-f]{32}$/.test(cells[3] ?? "") : cells[3] === entityId))
 		.map((cells) => {
 			const row: GeoCardRow = {prop: cells[0] ?? "", raw: unescapeText(cells[1] ?? "")}
+			// A batch read (`entityId` null) keeps each row's owner, as the rows of several cards share one answer.
+			if (entityId === null) row.entity = cells[3] as string
 			if (options.spaces) {
 				const space = /^([0-9a-f]{32}):/.exec(cells[2] ?? "")?.[1]
 				if (!space) throw new Error(`a multi-space row has no space prefix: ${(cells[2] ?? "").slice(0, 40)}`)

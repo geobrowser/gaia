@@ -79,6 +79,11 @@ export type GeoDbCardConfig = {
 	 */
 	relationsTypeFilter?: boolean
 	/**
+	 * Compare the `valuesList` a relations list selects on each `toEntity` against geo-db's cards of those targets, read
+	 * together (`.args.ids`; needs a serve of geo-db 8df213cbac or later). Off by default. GEODB_NESTED_TARGET_VALUES_SHADOW=on.
+	 */
+	nestedTargetValues?: boolean
+	/**
 	 * Lifetime of the capability token a worker's handshake gets, in seconds: geo-db's `grant_ttl_s`
 	 * (GEODB_GRANT_TTL_S on the serve, 300 by default). A worker is replaced before its token expires, so no
 	 * read finds the token dead. Absent means the default.
@@ -116,6 +121,7 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		derivedFields: env.GEODB_DERIVED_FIELDS_SHADOW?.trim().toLowerCase() === "on",
 		orderPick: env.GEODB_ORDER_PICK_SHADOW?.trim().toLowerCase() === "on",
 		relationsTypeFilter: env.GEODB_RELATIONS_TYPE_FILTER_SHADOW?.trim().toLowerCase() === "on",
+		nestedTargetValues: env.GEODB_NESTED_TARGET_VALUES_SHADOW?.trim().toLowerCase() === "on",
 		poolSize: Number.isFinite(pool) && pool > 0 ? Math.min(pool, MAX_POOL_SIZE) : DEFAULT_POOL_SIZE,
 		grantTtlS: Number.isFinite(grantTtl) && grantTtl > 0 ? grantTtl : DEFAULT_GRANT_TTL_S,
 	}
