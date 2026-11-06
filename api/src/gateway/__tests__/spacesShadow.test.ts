@@ -1,8 +1,9 @@
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {conformingId} from "../../geodb/card"
+import {createMetasShadow} from "../metasShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
-import {analyzeSpaces, createSpacesShadow, runSpaces} from "../spacesShadow"
+import {analyzeSpaces, createSpaceShadow, createSpacesShadow, runSpaces} from "../spacesShadow"
 
 const NAME = conformingId("entity", "a126ca53-0c8e-48d5-b888-82c734c38935")
 const SPACE_A = "32d38f87126c47678444b55859859fbc"
@@ -184,5 +185,59 @@ describe("createSpacesShadow", () => {
 			document: parse(QUERY),
 			response: new Response("not json"),
 		})
+	})
+})
+
+describe("space(id)", () => {
+	const SQ = `query S($id: UUID!) { space(id: $id) { id type page { id name } } }`
+	const run = async (d: ReturnType<typeof deps>, query: string, body: unknown) => {
+		await createSpaceShadow(d)({
+			classification: {operationName: null, operationType: "query", rootFields: ["space"]},
+			params: {query, operationName: null, variables: {id: SPACE_A}},
+			document: parse(query),
+			response: new Response(JSON.stringify(body), {headers: {"content-type": "application/json"}}),
+		})
+	}
+
+	it("plans one Space with no page-completeness parts, and refuses other args or roots", () => {
+		const a = analyzeSpaces(parse(SQ), null, {id: SPACE_A}, "space")
+		expect(a.ok && a.plan.single).toBe(true)
+		expect(a.ok && a.plan.uncompared).toEqual(["space_settings"])
+		expect(analyzeSpaces(parse(`{ space(id: "x", first: 1) { id } }`), null, {}, "space")).toEqual({
+			ok: false,
+			reason: "args",
+		})
+		expect(analyzeSpaces(parse(`{ space { id } }`), null, {}, "space")).toEqual({ok: false, reason: "args"})
+		expect(analyzeSpaces(parse(SQ), null, {id: SPACE_A})).toEqual({ok: false, reason: "not_single_root"})
+	})
+
+	it("counts a match and a mismatch under its own field", async () => {
+		await run(deps(), SQ, {data: {space: space(SPACE_A)}})
+		expect(metric("gaia_api_gateway_shadow_total", 'field="space",result="match"')).toBe(1)
+		await run(deps({name: "Beta"}), SQ, {data: {space: space(SPACE_A)}})
+		expect(metric("gaia_api_gateway_shadow_total", 'field="space",result="mismatch"')).toBe(1)
+	})
+
+	it("is unsupported for a Space geo-db does not hold, and skips a null answer", async () => {
+		await run(deps({held: []}), SQ, {data: {space: space(SPACE_A)}})
+		expect(metric("gaia_api_gateway_shadow_unsupported_total", 'field="space",reason="unmapped_space"')).toBe(1)
+		await run(deps(), SQ, {data: {space: null}})
+		expect(metric("gaia_api_gateway_shadow_total", 'field="space",result="match"')).toBe(0)
+	})
+})
+
+describe("createMetasShadow", () => {
+	it("counts every operation unsupported (no_geodb_home) and reads nothing", async () => {
+		const q = `{ metas { nodes { id blockNumber } } }`
+		const d = deps()
+		await createMetasShadow(d)({
+			classification: {operationName: null, operationType: "query", rootFields: ["metas"]},
+			params: {query: q, operationName: null, variables: {}},
+			document: parse(q),
+			response: new Response("{}"),
+		})
+		expect(metric("gaia_api_gateway_shadow_total", 'field="metas",result="unsupported_selection"')).toBe(1)
+		expect(metric("gaia_api_gateway_shadow_unsupported_total", 'field="metas",reason="no_geodb_home"')).toBe(1)
+		expect(d.readCard).not.toHaveBeenCalled()
 	})
 })

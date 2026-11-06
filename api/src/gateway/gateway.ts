@@ -160,12 +160,15 @@ function scheduleShadow<Ctx>(
 		const shadows = deps.shadows
 		if (!shadows || !params || !document) return
 		if (classification.operationType !== "query" || classification.rootFields.length === 0) return
-		// The shadowed field is the first root field with a shadow; every other root field must be one it tolerates.
-		const field = classification.rootFields.find((name) => shadows.has(name))
+		// The shadowed field is the first root field in mode "shadow" with a shadow that tolerates every other root field.
+		const field = classification.rootFields.find((name) => {
+			const candidate = shadows.get(name)
+			if (!candidate || fieldModeOf(deps.config, name) !== "shadow") return false
+			const tolerated = candidate.tolerates ?? []
+			return classification.rootFields.every((other) => other === name || tolerated.includes(other))
+		})
 		const shadow = field === undefined ? undefined : shadows.get(field)
-		if (field === undefined || !shadow || fieldModeOf(deps.config, field) !== "shadow") return
-		const tolerated = shadow.tolerates ?? []
-		if (!classification.rootFields.every((name) => name === field || tolerated.includes(name))) return
+		if (field === undefined || !shadow) return
 		if (!((deps.random ?? Math.random)() < deps.config.shadowSampleRate)) return
 		if (!response.ok || !(response.headers.get("content-type") ?? "").includes("json")) return
 		if (Number(response.headers.get("content-length") ?? 0) > MAX_SHADOW_RESPONSE_BYTES) return

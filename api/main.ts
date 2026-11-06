@@ -19,11 +19,12 @@ import {
 import {createEntityResolver} from "./src/gateway/entityServe"
 import {createEntityShadow, ENTITY_FIELD} from "./src/gateway/entityShadow"
 import {createGateway, fieldModeOf} from "./src/gateway/gateway"
+import {createMetasShadow, METAS_FIELD} from "./src/gateway/metasShadow"
 import {createPointReadShadows, POINT_READ_FIELDS} from "./src/gateway/pointReadShadows"
 import {createRankTypedObserver, readRankTypedConfig} from "./src/gateway/rankTypedShadow"
 import {createReadBudget} from "./src/gateway/readBudget"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
-import {createSpacesShadow, SPACES_FIELD} from "./src/gateway/spacesShadow"
+import {createSpaceShadow, createSpacesShadow, SPACE_FIELD, SPACES_FIELD} from "./src/gateway/spacesShadow"
 import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
 import {createDerivedReader} from "./src/geodb/derived"
@@ -437,6 +438,12 @@ const graphqlHandler = createGateway({
 					...(gatewayShadowFields.has(SPACES_FIELD)
 						? [[SPACES_FIELD, createSpacesShadow({...sharedGeoDb, log})] as const]
 						: []),
+					// space =shadow: the single-Space root, the same comparison on one Space.
+					...(gatewayShadowFields.has(SPACE_FIELD)
+						? [[SPACE_FIELD, createSpaceShadow({...sharedGeoDb, log})] as const]
+						: []),
+					// metas =shadow: the indexer-cursor root, counted unsupported (no geo-db home); reads nothing.
+					...(gatewayShadowFields.has(METAS_FIELD) ? [[METAS_FIELD, createMetasShadow({log})] as const] : []),
 					...createSearchShadows(
 						{
 							geoSpaceOf: sharedGeoDb.geoSpaceOf,

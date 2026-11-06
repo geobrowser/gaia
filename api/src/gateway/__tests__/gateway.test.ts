@@ -268,3 +268,57 @@ describe("serving a field from geo-db", () => {
 		expect(renderServeMetrics()).toBe("")
 	})
 })
+
+describe("shadow choice among several shadowed roots", () => {
+	const post = (query: string) =>
+		new Request("http://x/graphql", {
+			method: "POST",
+			headers: {"content-type": "application/json"},
+			body: JSON.stringify({query}),
+		})
+	const delegate = async () =>
+		new Response(JSON.stringify({data: {}}), {headers: {"content-type": "application/json"}})
+	const make = (tolerant: boolean) => {
+		const metas = vi.fn(async () => {})
+		const connection = Object.assign(
+			vi.fn(async () => {}),
+			tolerant ? {tolerates: ["metas"] as const} : {},
+		)
+		const gateway = createGateway({
+			config: readGatewayConfig({
+				GRAPHQL_GATEWAY: "on",
+				GRAPHQL_GATEWAY_FIELDS: "metas=shadow,entitiesConnection=shadow",
+				GRAPHQL_GATEWAY_SHADOW_SAMPLE: "1",
+			}),
+			delegate,
+			shadows: new Map([
+				["metas", metas],
+				["entitiesConnection", connection],
+			]),
+			random: () => 0,
+		})
+		return {gateway, metas, connection}
+	}
+	const wait = () => new Promise((resolve) => setTimeout(resolve, 5))
+
+	it("gives `metas` beside `entitiesConnection` to the shadow that tolerates it", async () => {
+		const {gateway, metas, connection} = make(true)
+		await gateway(post("{ metas { nodes { id } } entitiesConnection { totalCount } }"), {})
+		await wait()
+		expect(connection).toHaveBeenCalledTimes(1)
+		expect(metas).not.toHaveBeenCalled()
+	})
+
+	it("runs `metas` alone, and an operation no shadow tolerates runs none", async () => {
+		const {gateway, metas, connection} = make(true)
+		await gateway(post("{ metas { nodes { id } } }"), {})
+		await wait()
+		expect(metas).toHaveBeenCalledTimes(1)
+		const intolerant = make(false)
+		await intolerant.gateway(post("{ metas { nodes { id } } entitiesConnection { totalCount } }"), {})
+		await wait()
+		expect(intolerant.metas).not.toHaveBeenCalled()
+		expect(intolerant.connection).not.toHaveBeenCalled()
+		expect(connection).toHaveBeenCalledTimes(0)
+	})
+})

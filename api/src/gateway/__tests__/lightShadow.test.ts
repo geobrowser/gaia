@@ -2081,6 +2081,15 @@ describe("entitiesConnection with the light selection", () => {
 		}
 	})
 
+	it("tolerates a `metas` sentinel beside the connection and counts it uncompared", () => {
+		const q = connection(args).replace("entitiesConnection(", "metas { nodes { id } } entitiesConnection(")
+		const a = analyzeLightEntities(parse(q), null, {}, {connection: true})
+		expect(a.ok).toBe(true)
+		if (a.ok) expect(a.plan.uncompared).toContain("metas_cursor")
+		// The plain `entities` root still refuses a second root.
+		expect(analyzeLightEntities(parse(q.replace("entitiesConnection", "entities")), null, {}).ok).toBe(false)
+	})
+
 	it("is not the plain entities root, and entities is not the connection root", () => {
 		const q = connection(args)
 		expect(analyzeLightEntities(parse(q), null, {})).toEqual({ok: false, reason: "not_single_root"})

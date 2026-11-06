@@ -817,6 +817,9 @@ function readOrderedArgs(
  * what it returns. With `connection`, the root is `entitiesConnection` (the same arguments plus `after`): its entities are
  * the `nodes` field, `totalCount` is uncompared (`total_count`) and `pageInfo` is not read. `edges` is not supported.
  */
+/** The indexer-cursor root (`metas`): no geo-db home (see metasShadow.ts). */
+const METAS_FIELD = "metas"
+
 export function analyzeLightEntities(
 	document: DocumentNode,
 	operationName: string | null,
@@ -831,7 +834,11 @@ export function analyzeLightEntities(
 	} = {},
 ): LightAnalysis<LightEntitiesPlan> {
 	try {
-		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
+		const parsed = parseOperation(document, operationName, variables)
+		const {fragments, variables: resolved} = parsed
+		// `metas` (the indexer cursor sentinel a page asks beside `entitiesConnection`) is Postgres-only: tolerated, uncompared.
+		const sentinel = options.connection === true && parsed.roots.some((r) => r.name.value === METAS_FIELD)
+		const roots = sentinel ? parsed.roots.filter((r) => r.name.value !== METAS_FIELD) : parsed.roots
 		const root = roots[0]
 		const rootName = options.ordered ? ORDERED_ROOT : options.connection ? "entitiesConnection" : "entities"
 		if (roots.length !== 1 || !root || root.name.value !== rootName) return {ok: false, reason: "not_single_root"}
@@ -844,6 +851,7 @@ export function analyzeLightEntities(
 		const after = args.after
 		if (after !== undefined && after !== null && typeof after !== "string") refuse("args")
 		const uncompared = new Set<UncomparedReason>()
+		if (sentinel) uncompared.add("metas_cursor")
 		let entitySet = root.selectionSet
 		let nodesKey: string | null = null
 		if (options.connection) {

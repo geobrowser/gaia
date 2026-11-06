@@ -22,6 +22,8 @@ export const UNSUPPORTED_REASONS = [
 	"many_spaces",
 	"unmapped_space",
 	"throttled",
+	/** `metas`: the indexer cursor rows (id, cursor, block number) live only in Postgres; geo-db holds no read of them. */
+	"no_geodb_home",
 ] as const
 
 /**
@@ -69,6 +71,8 @@ export const UNCOMPARED_REASONS = [
 	"space_settings",
 	/** `spacesByTopicIdConnection`: the Spaces whose topic is the entity, a Space read no entity card holds; the rest of the entity is compared. */
 	"topic_spaces",
+	/** `entitiesConnection`: a `metas` indexer-cursor root asked beside it, which geo-db cannot answer. */
+	"metas_cursor",
 ] as const
 
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]
