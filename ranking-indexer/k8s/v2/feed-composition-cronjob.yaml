@@ -137,9 +137,9 @@ spec:
                   readOnly: true
               env:
                 # Copy the recent feed composition samples into geo-db derived collection 25 after the run (RUNBOOK
-                # section 2f-composition), best-effort. OFF: "0". Turning it on is a separate change.
+                # section 2f-composition), best-effort. ON.
                 - name: GEODB_DERIVED_MIRROR
-                  value: "0"
+                  value: "1"
                 - name: GEODB_DERIVED_BATCH
                   value: "1"
                 - name: GEODB_CLIENT_BIN
