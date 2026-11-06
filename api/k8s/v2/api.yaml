@@ -239,8 +239,9 @@ spec:
             # (GRAPHQL_GATEWAY_SHADOW_SAMPLE, default 1%) is compared against geo-db.
             - name: GRAPHQL_GATEWAY
               value: "on"
+            # space = spaces' comparison on one Space; metas (indexer cursors) has no geo-db home and is only counted unsupported.
             - name: GRAPHQL_GATEWAY_FIELDS
-              value: "entity=shadow,entities=shadow,relation=shadow,relations=shadow,search=shadow,searchConnection=shadow,entitiesConnection=shadow,entitiesOrderedByProperty=shadow,spaces=shadow"
+              value: "entity=shadow,entities=shadow,relation=shadow,relations=shadow,search=shadow,searchConnection=shadow,entitiesConnection=shadow,entitiesOrderedByProperty=shadow,spaces=shadow,space=shadow,metas=shadow"
             - name: GEODB_CLIENT_BIN
               value: /geodb/geodb-client
             - name: GEODB_KEY_PATH
