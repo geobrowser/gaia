@@ -31,6 +31,8 @@ export type Config = {
 	proposalVersions: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_PROPOSAL_STATUS (with GEODB_RECORD_KEYS): keyed executed_at / unexecutable_at facts from `space.governance` (proposalStatusKeyed.ts). */
 	proposalStatus: {enabled: boolean; topic: string; groupId: string}
+	/** GEODB_RANKS (with GEODB_RECORD_KEYS): keyed ranking blocks, rankings and ranking items from `knowledge.edits` (ranksKeyed.ts). */
+	ranks: {enabled: boolean; topic: string; groupId: string}
 	/**
 	 * GEODB_RELATION_POSITIONS: write a relation's position into geo-db (`.position` on its `add`). Default off: a
 	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it.
@@ -86,6 +88,7 @@ export const feederGroupIds = (c: Config): string[] => [
 	c.spaceVotingSettings.groupId,
 	c.proposalVersions.groupId,
 	c.proposalStatus.groupId,
+	c.ranks.groupId,
 ]
 
 export const flag = (v: string | undefined): boolean => v === "1" || v?.toLowerCase() === "true"
@@ -215,6 +218,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			enabled: flag(env.GEODB_PROPOSAL_STATUS),
 			topic: env.KAFKA_PROPOSAL_STATUS_TOPIC ?? `${environment}.space.governance`,
 			groupId: env.KAFKA_PROPOSAL_STATUS_GROUP_ID ?? `geodb-feeder-proposal-status-keyed-v1-${environment}`,
+		},
+		ranks: {
+			/**
+			 * GEODB_RANKS: consume `knowledge.edits` on a group of its own and write the ranking-indexer's three tables
+			 * (ranks.ranking_blocks, rankings, ranking_items) as keyed records (ranksKeyed.ts) into the `votes` system
+			 * Space. Takes effect only with GEODB_RECORD_KEYS (ranksKeyedEnabled), and only after the backfill
+			 * (RUNBOOK §2c-decies). Default off.
+			 */
+			enabled: flag(env.GEODB_RANKS),
+			topic: env.KAFKA_RANKS_TOPIC ?? `${environment}.knowledge.edits`,
+			groupId: env.KAFKA_RANKS_GROUP_ID ?? `geodb-feeder-ranks-keyed-v1-${environment}`,
 		},
 		spaceEntities: {
 			/** GEODB_SPACE_ENTITIES: consume `space.creations` and write Space system entities. Default off. */

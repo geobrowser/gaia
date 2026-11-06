@@ -38,6 +38,12 @@ export const RECORD_KINDS = {
 	spaceVotingSettings: {id: "7767f888a9a240b18275a7832363f4d9", family: "governance", table: "space_voting_settings"},
 	/** `proposals.executed_at` / `unexecutable_at`: a record keyed (proposal). The status itself is computed, not stored. */
 	proposalStatus: {id: "cf398f45b2c74002bb13e5416fbc7027", family: "governance", table: "proposals (executed_at, unexecutable_at)"},
+	/** `ranking_blocks`: a record keyed (block, space), its primary key. Mutable columns written by `put`. */
+	rankingBlock: {id: "ce9b2464e65c450a975d3a427baaf4a2", family: "votes", table: "ranks.ranking_blocks"},
+	/** `rankings`: a record keyed (ranking, space), its primary key. */
+	ranking: {id: "ff8283aec584455a80198d6d80f0f4fc", family: "votes", table: "ranks.rankings"},
+	/** `ranking_items`: a record keyed (ranking, entity, space), its primary key. Replaced as a whole ranking by generation. */
+	rankingItem: {id: "f8ad2041f5a34f4580a1ba3ca426730f", family: "votes", table: "ranks.ranking_items"},
 	/** `proposal_votes`: a record keyed (proposal, proposal version, voter), its primary key. */
 	proposalVote: {id: "ca89a877762c4883a3640b5455a8f0e2", family: "votes", table: "proposal_votes"},
 	/** `user_votes`: a record keyed (user, object, object type, space, kind). */
@@ -57,6 +63,58 @@ export const SYSTEM_SPACE_NONCE_KIND = "0b3f6634fbe84dbd8c0ecae3fce960b3"
  * `put` whose statement id includes the value, so a change closes the old value and a replay reopens the same id.
  */
 export const RECORD_COLUMNS = {
+	rankingBlock: {
+		/** Key: reference to the block entity, `cid("entity", id)`. */
+		block: "30a0bcf61226497ea1a9fbdb05be369e",
+		/** Key: reference to the Space entity, `cid("entity", space_id)`. */
+		space: "723da53041a149e8bee03243676aec1a",
+		/** Mutable: text, `name`. */
+		name: "01c6cd80b4944f1eac79a2e069618dea",
+		/** Mutable: text, `filter`. */
+		filter: "34f4cb764c2d4c88a40ad7553254fcae",
+		/** Mutable: instant (microseconds), `start_date`. */
+		startDate: "a522112064024103937ca4a9a8347e0b",
+		/** Mutable: instant (microseconds), `end_date`. */
+		endDate: "a78b82b1e9384e409f367720aa0a9110",
+		/** Mutable: reference, `restriction_id` (cid entity). */
+		restriction: "02a37e407aed4aa09dd50080d8a86404",
+		/** Mutable: reference, `ranking_type` (the rolling type, cid entity). */
+		rankingType: "ff6fd916831643b2a87ea23f13254d11",
+		/** Mutable: number, `submission_frequency`. */
+		submissionFrequency: "ead65e7abfe64037aaef51050f4f2cc7",
+	},
+	ranking: {
+		/** Key: reference to the ranking entity. */
+		ranking: "5afd9abadca04814bb03eda81d951d22",
+		/** Key: reference to the Space entity. */
+		space: "c84de538157b4562be0352add400ee2f",
+		/** Mutable: reference, `block_id` (from a RANK_BLOCK link, or the backfill). */
+		block: "e702f42b27a94659a38f3ee7f8aef0b8",
+		/** Mutable: text, `rank_type`. */
+		rankType: "b943c785e30e4fa5a2f4c8886b4104de",
+		/** Mutable: instant (microseconds), `submitted_at`. */
+		submittedAt: "883ddfb02814461881f7ed2fdf0c6be5",
+		/** Mutable: number, `updated_at_block`. */
+		updatedAtBlock: "e2a7000398d848a7a5e541f63fd6c1a1",
+		/** Mutable: number, `update_index`. */
+		updateIndex: "529e8bb7b260483eb78cd68aa221a8a5",
+		/** Mutable: text, `author_address`; only the backfill carries it. */
+		author: "8acc92223b3643b39ceb4184c99d192a",
+	},
+	rankingItem: {
+		/** Key: reference to the ranking entity. */
+		ranking: "bc2d175676b04b5386b66ea4a3d6ffb3",
+		/** Key: reference to the ranked entity. */
+		entity: "3b05db08120843459c70cde796f14b68",
+		/** Key: reference to the item's Space entity (`to_space`). */
+		space: "565168847c344611964809b17abcf7a8",
+		/** Mutable: text, `position` (the fractional index). */
+		position: "d4ea2f12989646ce9aaec4f5aad414a2",
+		/** Mutable: decimal, `weight`. */
+		weight: "4ff16dd13cec48918186b04e30469eaf",
+		/** Mutable: number, the block number of the edit that wrote the item; 0 for the backfill. A ranking's items are those at its maximum generation. */
+		generation: "c37546c6d73b41f5aabb0fdd96fa16cb",
+	},
 	userVote: {
 		/** Key: reference to the voter's entity, `cid("entity", user_id)`. */
 		user: "4bd6d3068a204ff6a62bb084263045bc",

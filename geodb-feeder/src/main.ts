@@ -21,6 +21,8 @@ import {ProposalOffsets} from "./proposals.js"
 import {startProposalConsumer} from "./proposalsConsumer.js"
 import {startOptionalConsumer} from "./optionalConsumer.js"
 import {startProposalStatusConsumer} from "./proposalStatusConsumer.js"
+import {startRanksConsumer} from "./ranksConsumer.js"
+import {ranksKeyedEnabled, ranksOffsetsDir} from "./ranksKeyed.js"
 import {proposalStatusKeyedEnabled, proposalStatusOffsetsDir} from "./proposalStatusKeyed.js"
 import {startProposalVersionsConsumer} from "./proposalVersionsConsumer.js"
 import {proposalVersionsKeyedEnabled, proposalVersionsOffsetsDir} from "./proposalVersionsKeyed.js"
@@ -435,6 +437,29 @@ async function main(config: Config): Promise<void> {
 		)
 	}
 
+	// Keyed ranking blocks, rankings and items (ranksKeyed.ts): GEODB_RANKS with GEODB_RECORD_KEYS, after their backfill.
+	let ranks: Awaited<ReturnType<typeof startRanksConsumer>> | null = null
+	if (config.ranks.enabled && !config.recordKeys) log("warn", "GEODB_RANKS is set without GEODB_RECORD_KEYS; ranks consumer not started")
+	if (ranksKeyedEnabled(config)) {
+		ranks = await startOptionalConsumer("ranks", metrics.consumerStartFailed, () =>
+			startRanksConsumer({
+				kafka,
+				config,
+				abort,
+				deps: {
+					...spaceDeps,
+					lock,
+					beat: async () => {},
+					allowPut: true,
+					systemSpaces,
+					publishSystem: (t: string) => systemPublisher.publish(t),
+					offsets: new ProposalOffsets(ranksOffsetsDir(config.dataDir)),
+					decode,
+				},
+			}),
+		)
+	}
+
 	let spaceEntities: Awaited<ReturnType<typeof startSpaceEntityConsumer>> | null = null
 	if (config.spaceEntities.enabled) {
 		try {
@@ -501,6 +526,12 @@ async function main(config: Config): Promise<void> {
 		await ps.poll()
 	}
 
+	if (ranks) {
+		const rk = ranks
+		setInterval(() => void rk.poll(), config.lagPollMs).unref()
+		await rk.poll()
+	}
+
 	if (spaceVotingSettings) {
 		const sv = spaceVotingSettings
 		setInterval(() => void sv.poll(), config.lagPollMs).unref()
@@ -529,6 +560,7 @@ async function main(config: Config): Promise<void> {
 		await spaceVotingSettings?.stop()
 		await proposalVersions?.stop()
 		await proposalStatus?.stop()
+		await ranks?.stop()
 		await spaceEntities?.stop()
 		publisher.stop()
 		systemPublisher.stop()
