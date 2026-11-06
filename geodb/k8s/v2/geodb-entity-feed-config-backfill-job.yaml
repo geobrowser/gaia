@@ -1,5 +1,5 @@
-# geo-db entity-feed-config backfill: a one-shot Job that writes the gaia `personalization.entity_feed_config` rows from Postgres (read
-# only) into the `config` system Space as keyed records, through the feeder's entity-feed-config path. See
+# geo-db entity-feed-config backfill: a one-shot Job that writes the gaia `entity_type_weights`, `entity_type_exclusions` and
+# `entity_feed_blocklist` rows from Postgres (read only) into the `config` system Space as keyed records, through the feeder's entity-feed-config path. See
 # geodb/RUNBOOK.md §2c-config-entity-feed and geodb-feeder/src/entity-feed-config-backfill-main.ts. Run it before
 # GEODB_ENTITY_FEED_CONFIG is turned on in the feeder.
 #
