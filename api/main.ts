@@ -287,9 +287,21 @@ app.get("/", swaggerUI({url: "/openapi"}))
 // offered to its geo-db resolver first (see gateway/entityServe.ts); everything else is answered by PostGraphile; with entity=shadow (or entities, relation,
 // relations, search, searchConnection) a sample of those operations is also compared against geo-db in the background.
 // Wide reads (an entity read in every one of its spaces) share one budget of about one geo-db card read a second.
-const wideReadBudget = createReadBudget({perSecond: 1, burst: 5})
+// The rates are per api pod and tunable (GATEWAY_SHADOW_READS_PER_SECOND, _BURST; every-Space: GATEWAY_SHADOW_EVERY_SPACE_PER_SECOND,
+// _BURST): 11-06 the entity shadow's throttled refusals were 75 of its 85 unsupported_selection (88%).
+const budgetNumber = (raw: string | undefined, fallback: number, max: number) => {
+	const n = Number(raw)
+	return Number.isFinite(n) && n > 0 ? Math.min(n, max) : fallback
+}
+const wideReadBudget = createReadBudget({
+	perSecond: budgetNumber(process.env.GATEWAY_SHADOW_READS_PER_SECOND, 1, 20),
+	burst: budgetNumber(process.env.GATEWAY_SHADOW_READS_BURST, 5, 100),
+})
 // Every-Space reads (GEODB_EVERY_SPACE_READS) name the whole space map in one line: a budget of their own, smaller.
-const everySpaceBudget = createReadBudget({perSecond: 0.5, burst: 3})
+const everySpaceBudget = createReadBudget({
+	perSecond: budgetNumber(process.env.GATEWAY_SHADOW_EVERY_SPACE_PER_SECOND, 0.5, 10),
+	burst: budgetNumber(process.env.GATEWAY_SHADOW_EVERY_SPACE_BURST, 3, 50),
+})
 const graphqlHandler = createGateway({
 	config: gatewayConfig,
 	resolvers:
