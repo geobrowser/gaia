@@ -1269,6 +1269,48 @@ deleting anything, check the pair's age against Kafka: the feeder resumes at the
 inside the 7-day retention (compare the pair's `offsets.json` partition offsets with the topic's low watermark). A
 snapshot older than the last backfill restores without that backfill's writes; run it again (§2b).
 
+**The restored feeder must not reuse the live consumer groups.** kafkajs resumes a group from its committed offset and
+only falls back to `fromBeginning` when the group has no commit. The feeder resets a group to earliest only when
+`!store.hadOffsets` (`geodb-feeder/src/main.ts`, and the same check in each keyed consumer), and a restored state
+volume has `offsets.json`, so it never resets. The live group has committed past the snapshot, so a restored feeder
+that joins it starts at the group's commit and silently skips every message between the snapshot's `offsets.json`
+and that commit. The `offsets.json` skip (`offset <= lastDone`) is what makes a replay from earliest cheap and safe,
+so the fix is to make the group start from earliest. Either of these, before the feeder starts:
+
+1. **A fresh group id for every consumer (preferred).** Set a new, unique value on `KAFKA_GROUP_ID` and on every
+   other `KAFKA_*_GROUP_ID` the feeder reads (they are all in `geodb-feeder/src/config.ts`):
+   `KAFKA_MEMBERSHIP_GROUP_ID`, `KAFKA_MEMBERSHIP_KEYED_GROUP_ID`, `KAFKA_PROPOSALS_GROUP_ID`, `KAFKA_VOTES_GROUP_ID`,
+   `KAFKA_PROPOSAL_VOTES_GROUP_ID`, `KAFKA_PROPOSAL_ACTIONS_GROUP_ID`, `KAFKA_SUBSPACES_GROUP_ID`,
+   `KAFKA_SPACE_VOTING_SETTINGS_GROUP_ID`, `KAFKA_PROPOSAL_VERSIONS_GROUP_ID`, `KAFKA_PROPOSAL_STATUS_GROUP_ID`,
+   `KAFKA_RANKS_GROUP_ID`, `KAFKA_SPACE_CREATIONS_GROUP_ID`. A consumer you leave on its default name joins the old
+   group and skips the gap, so set all thirteen, even the ones whose flag is off today.
+
+   ```bash
+   S=restore-$(date -u +%Y%m%d)
+   $K set env deploy/geodb-feeder KAFKA_GROUP_ID=geodb-feeder-$S KAFKA_MEMBERSHIP_GROUP_ID=geodb-feeder-membership-$S \
+     KAFKA_MEMBERSHIP_KEYED_GROUP_ID=geodb-feeder-membership-keyed-$S KAFKA_PROPOSALS_GROUP_ID=geodb-feeder-proposals-$S \
+     KAFKA_VOTES_GROUP_ID=geodb-feeder-votes-$S KAFKA_PROPOSAL_VOTES_GROUP_ID=geodb-feeder-proposal-votes-$S \
+     KAFKA_PROPOSAL_ACTIONS_GROUP_ID=geodb-feeder-proposal-actions-$S KAFKA_SUBSPACES_GROUP_ID=geodb-feeder-subspaces-$S \
+     KAFKA_SPACE_VOTING_SETTINGS_GROUP_ID=geodb-feeder-space-voting-settings-$S \
+     KAFKA_PROPOSAL_VERSIONS_GROUP_ID=geodb-feeder-proposal-versions-$S KAFKA_PROPOSAL_STATUS_GROUP_ID=geodb-feeder-proposal-status-$S \
+     KAFKA_RANKS_GROUP_ID=geodb-feeder-ranks-$S KAFKA_SPACE_CREATIONS_GROUP_ID=geodb-feeder-space-creations-$S
+   ```
+
+   (`set env` on the Deployment rolls the pod; do it while the feeder is still at 0 replicas, or fold the variables
+   into the manifest.) The new groups start at the topic's low watermark and the feeder skips everything at or below
+   its saved `offsets.json`. Delete the old groups later (`kafka-consumer-groups --delete
+   --group <old>`, only once the old feeder is gone for good) and fold the new ids into the manifest so a later
+   restart does not fall back to the defaults.
+2. **Reset each existing group to the restored offsets** with `kafka-consumer-groups --bootstrap-server <broker>
+   --command-config <client.properties> --group <group> --topic <topic> --reset-offsets --from-file <plan.csv>
+   --execute` (the plan is `topic,partition,offset` where offset is `offsets.json` `done` + 1 for each partition),
+   or `--to-earliest` (safe: replayed messages are skipped by `offsets.json`). The group must have no active
+   members. Do this for every group above, each on its own topic, before starting the feeder.
+
+Check it took effect before trusting the restore: the feeder logs `state loaded` with `group:`, and
+`geodb_feeder_consumer_lag` (per partition) must fall toward 0 after start; a lag that is 0 within seconds of a snapshot
+that is hours old means the feeder joined a committed group and skipped the gap.
+
 ## 10. hermes's cursor key (derived collection 10 only)
 
 hermes mirrors its substreams `meta` cursor into geo-db (flag `GEODB_CURSOR_MIRROR`, off by default). It uses
