@@ -38,7 +38,7 @@ function createLightListShadow(
 ): FieldShadow {
 	activateGatewayMetrics(field)
 	const label = `gateway ${field} shadow`
-	return async ({params, document, classification, response}) => {
+	const shadow: FieldShadow = async ({params, document, classification, response}) => {
 		try {
 			const analysis = analyzeLightEntities(document, classification.operationName, params.variables, {
 				...mode,
@@ -69,4 +69,7 @@ function createLightListShadow(
 			} catch {}
 		}
 	}
+	// A `metas` cursor sentinel beside `entitiesConnection` is tolerated (counted `metas_cursor`).
+	if (mode.connection) shadow.tolerates = ["metas"]
+	return shadow
 }

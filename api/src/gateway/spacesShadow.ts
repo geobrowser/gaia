@@ -12,7 +12,8 @@
  * `order_completeness`), `members` / `editors` (`space_members`), the Space's own settings and any other nested part of
  * `page` / `topic` (`space_settings`, `nested_entity`).
  *
- * It only runs when GRAPHQL_GATEWAY_FIELDS names `spaces=shadow`; off by default. It never changes a response and
+ * `space(id)` is the same comparison on one Space (SPACE_FIELD). Each runs only when GRAPHQL_GATEWAY_FIELDS names
+ * `spaces=shadow` / `space=shadow`; off by default. It never changes a response and
  * logs counts only, never an id or a name.
  */
 
@@ -34,6 +35,8 @@ import {
 } from "./metrics"
 
 export const SPACES_FIELD = "spaces"
+/** The single-Space root `space(id)`: the same comparison on one Space (no page membership or order to leave uncompared). */
+export const SPACE_FIELD = "space"
 
 /** Most Spaces of one answer compared. */
 export const MAX_SAMPLED_SPACES = 3
@@ -46,8 +49,10 @@ const MEMBERS = new Set(["members", "editors", "membersList", "editorsList"])
 
 type EntityPart = {key: string; idKey: string}
 export type SpacesPlan = {
-	/** Response key of the root (an alias, else `spaces`). */
+	/** Response key of the root (an alias, else `spaces` / `space`). */
 	key: string
+	/** The root is `space(id)`: its answer is one object, not a list. */
+	single: boolean
 	/** Response key of `id`; a selection without it is unsupported. */
 	idKey: string
 	parts: {page?: EntityPart; topic?: EntityPart}
@@ -57,20 +62,24 @@ export type SpacesPlan = {
 export type SpacesAnalysis = {ok: true; plan: SpacesPlan} | {ok: false; reason: UnsupportedReason}
 
 const ROOT_ARGS = new Set(["filter", "first", "offset", "orderBy"])
+const SPACE_ROOT_ARGS = new Set(["id"])
 
 /** Plans the comparison of a `spaces` operation, or says why geo-db cannot be asked. Never throws. */
 export function analyzeSpaces(
 	document: Parameters<typeof parseOperation>[0],
 	operationName: string | null,
 	variables: Record<string, unknown>,
+	rootName: typeof SPACES_FIELD | typeof SPACE_FIELD = SPACES_FIELD,
 ): SpacesAnalysis {
+	const single = rootName === SPACE_FIELD
 	try {
 		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
 		const root = roots[0]
-		if (!root || roots.length !== 1 || root.name.value !== SPACES_FIELD)
-			return {ok: false, reason: "not_single_root"}
+		if (!root || roots.length !== 1 || root.name.value !== rootName) return {ok: false, reason: "not_single_root"}
 		const args = argsOf(root, resolved)
-		for (const name of Object.keys(args)) if (!ROOT_ARGS.has(name)) return {ok: false, reason: "args"}
+		const allowed = single ? SPACE_ROOT_ARGS : ROOT_ARGS
+		for (const name of Object.keys(args)) if (!allowed.has(name)) return {ok: false, reason: "args"}
+		if (single && typeof args.id !== "string") return {ok: false, reason: "args"}
 		if (root.directives?.length) return {ok: false, reason: "directives"}
 		const set = root.selectionSet
 		if (!set) return {ok: false, reason: "selection"}
@@ -78,9 +87,11 @@ export function analyzeSpaces(
 		const uncompared = new Set<UncomparedReason>()
 		// An id filter (`id: {in: [...]}`) is the whole membership of the page only if nothing else filters; any
 		// filter or paging leaves "which Spaces" to PostGraphile.
-		if (args.filter !== undefined && args.filter !== null) uncompared.add("filter_completeness")
-		if (args.first !== undefined || args.offset !== undefined) uncompared.add("filter_completeness")
-		if (args.orderBy !== undefined) uncompared.add("order_completeness")
+		if (!single) {
+			if (args.filter !== undefined && args.filter !== null) uncompared.add("filter_completeness")
+			if (args.first !== undefined || args.offset !== undefined) uncompared.add("filter_completeness")
+			if (args.orderBy !== undefined) uncompared.add("order_completeness")
+		}
 
 		let idKey: string | null = null
 		const parts: SpacesPlan["parts"] = {}
@@ -113,7 +124,7 @@ export function analyzeSpaces(
 			} else return {ok: false, reason: "selection"}
 		}
 		if (idKey === null) return {ok: false, reason: "selection"}
-		return {ok: true, plan: {key: responseKeyOf(root), idKey, parts, uncompared: [...uncompared]}}
+		return {ok: true, plan: {key: responseKeyOf(root), single, idKey, parts, uncompared: [...uncompared]}}
 	} catch (error) {
 		if (error instanceof Unsupported) return {ok: false, reason: error.reason}
 		return {ok: false, reason: "selection"}
@@ -142,7 +153,9 @@ type Outcome =
 /** Compares up to MAX_SAMPLED_SPACES Spaces of PostGraphile's answer with geo-db. Never throws. */
 export async function runSpaces(deps: SpacesShadowDeps, plan: SpacesPlan, body: unknown): Promise<Outcome> {
 	const data = (body as {data?: Record<string, unknown>} | null)?.data
-	const list = data?.[plan.key]
+	const answer = data?.[plan.key]
+	// `space(id)` answers one object (null for a Space PostGraphile does not hold: nothing to compare).
+	const list = plan.single ? (answer && typeof answer === "object" ? [answer] : []) : answer
 	if (!Array.isArray(list) || list.length === 0) return {result: "skip"}
 	const uncompared = new Set<UncomparedReason>(plan.uncompared)
 	const spaces = list.slice(0, MAX_SAMPLED_SPACES)
@@ -187,7 +200,8 @@ export async function runSpaces(deps: SpacesShadowDeps, plan: SpacesPlan, body: 
 			}
 		}
 	} catch (error) {
-		if (!(error instanceof GeoDbError)) deps.log.warn("gateway spaces shadow errored", {error: String(error)})
+		if (!(error instanceof GeoDbError))
+			deps.log.warn(`gateway ${plan.single ? SPACE_FIELD : SPACES_FIELD} shadow errored`, {error: String(error)})
 		return {result: "failed"}
 	}
 	if (notHeld > 0) uncompared.add("space_not_held")
@@ -200,23 +214,16 @@ export async function runSpaces(deps: SpacesShadowDeps, plan: SpacesPlan, body: 
 	}
 }
 
-/** The `spaces` shadow. Registers its metric series; never throws. */
-export function createSpacesShadow(deps: SpacesShadowDeps): FieldShadow {
-	activateGatewayMetrics(SPACES_FIELD)
+/** The shadow of one Space root. Registers its metric series; never throws. */
+function createSpaceRootShadow(field: typeof SPACES_FIELD | typeof SPACE_FIELD, deps: SpacesShadowDeps): FieldShadow {
+	activateGatewayMetrics(field)
 	return async ({params, document, classification, response}) => {
 		try {
-			const analysis = analyzeSpaces(document, classification.operationName, params.variables)
+			const analysis = analyzeSpaces(document, classification.operationName, params.variables, field)
 			if (!analysis.ok) {
-				recordGatewayShadow(SPACES_FIELD, "unsupported_selection")
-				recordGatewayUnsupported(SPACES_FIELD, analysis.reason)
-				noteUnsupported(
-					deps,
-					SPACES_FIELD,
-					analysis.reason,
-					document,
-					classification.operationName,
-					params.variables,
-				)
+				recordGatewayShadow(field, "unsupported_selection")
+				recordGatewayUnsupported(field, analysis.reason)
+				noteUnsupported(deps, field, analysis.reason, document, classification.operationName, params.variables)
 				return
 			}
 			let body: unknown
@@ -227,24 +234,30 @@ export function createSpacesShadow(deps: SpacesShadowDeps): FieldShadow {
 			}
 			const outcome = await runSpaces(deps, analysis.plan, body)
 			if (outcome.result === "skip") return
-			if (outcome.result === "failed") return void recordGatewayShadow(SPACES_FIELD, "failed")
+			if (outcome.result === "failed") return void recordGatewayShadow(field, "failed")
 			if (outcome.result === "unsupported") {
-				recordGatewayShadow(SPACES_FIELD, "unsupported_selection")
-				recordGatewayUnsupported(SPACES_FIELD, outcome.reason)
+				recordGatewayShadow(field, "unsupported_selection")
+				recordGatewayUnsupported(field, outcome.reason)
 				return
 			}
-			for (const reason of new Set(outcome.uncompared)) recordGatewayUncompared(SPACES_FIELD, reason)
-			recordGatewayShadow(SPACES_FIELD, outcome.result)
+			for (const reason of new Set(outcome.uncompared)) recordGatewayUncompared(field, reason)
+			recordGatewayShadow(field, outcome.result)
 			if (outcome.result === "mismatch")
-				deps.log.warn("gateway spaces shadow mismatch", {
+				deps.log.warn(`gateway ${field} shadow mismatch`, {
 					operationName: classification.operationName,
 					...outcome.detail,
 				})
 		} catch (error) {
 			try {
-				recordGatewayShadow(SPACES_FIELD, "failed")
-				deps.log.warn("gateway spaces shadow errored", {error: String(error)})
+				recordGatewayShadow(field, "failed")
+				deps.log.warn(`gateway ${field} shadow errored`, {error: String(error)})
 			} catch {}
 		}
 	}
 }
+
+/** The `spaces` shadow. Registers its metric series; never throws. */
+export const createSpacesShadow = (deps: SpacesShadowDeps): FieldShadow => createSpaceRootShadow(SPACES_FIELD, deps)
+
+/** The `space(id)` shadow: the same comparison on the one Space. Registers its metric series; never throws. */
+export const createSpaceShadow = (deps: SpacesShadowDeps): FieldShadow => createSpaceRootShadow(SPACE_FIELD, deps)
