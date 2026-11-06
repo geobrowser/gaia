@@ -31,6 +31,11 @@ import {readGeoDbCardConfig} from "./src/geodb/config"
 import {createDerivedReader} from "./src/geodb/derived"
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
 import {createKeyedRecordsShadow, readKeyedRecordsShadowConfig} from "./src/geodb/keyedRecordsShadow"
+import {
+	createPostgresRankedReadsSource,
+	createRankedReadsShadow,
+	readRankedReadsShadowConfig,
+} from "./src/geodb/rankedReadsShadow"
 import {createRankingScoresShadow, readRankingScoresShadowConfig} from "./src/geodb/rankingScoresShadow"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createScoresShadow, readScoresShadowConfig} from "./src/geodb/scoresShadow"
@@ -315,6 +320,12 @@ if (rankingScoresShadowConfig.enabled) {
 		reader: createDerivedReader(geoDbCardConfig),
 		log,
 	}).start()
+}
+// GEODB_RANKED_READS_SHADOW (off by default) runs the group B read twins (api/src/geodb/rankedReads) on Postgres rows and holds
+// them to the SQL functions (gaia_api_ranked_read_shadow_total). Background only; reads stay on Postgres.
+const rankedReadsShadowConfig = readRankedReadsShadowConfig(process.env)
+if (rankedReadsShadowConfig.enabled) {
+	createRankedReadsShadow({config: rankedReadsShadowConfig, source: createPostgresRankedReadsSource(db), log}).start()
 }
 // GEODB_KEYED_RECORDS_SHADOW (off by default) samples user_votes / ranks.rankings / ranks.ranking_blocks rows from Postgres on a
 // timer and compares each with its keyed record in geo-db's votes Space (gaia_api_keyed_records_shadow_total). Background only.

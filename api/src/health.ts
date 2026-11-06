@@ -9,6 +9,7 @@ import {renderServeMetrics} from "./gateway/serveMetrics"
 import {renderIdMapMetrics} from "./geodb/idMap"
 import {renderKeyedRecordsShadowMetrics} from "./geodb/keyedRecordsShadow"
 import {renderGeoDbCardMetrics} from "./geodb/metrics"
+import {renderRankedReadsShadowMetrics} from "./geodb/rankedReadsShadow"
 import {renderRankingScoresShadowMetrics} from "./geodb/rankingScoresShadow"
 import {renderScoresShadowMetrics} from "./geodb/scoresShadow"
 import {renderQueryCostHistogram} from "./kg/costLoggerPlugin"
@@ -168,6 +169,8 @@ function renderPrometheusMetrics(): string {
 		renderKeyedRecordsShadowMetrics(),
 		// entity_ranking_scores against the collection-21 overlay (GEODB_RANKING_SCORES_SHADOW) — see geodb/rankingScoresShadow.ts.
 		renderRankingScoresShadowMetrics(),
+		// The group B read twins against the SQL functions (GEODB_RANKED_READS_SHADOW) — see geodb/rankedReadsShadow.ts.
+		renderRankedReadsShadowMetrics(),
 		renderRankTypedMetrics(),
 		// GraphQL root fields served from geo-db (mode on): served/fallback by field and reason — see gateway/serveMetrics.ts.
 		renderServeMetrics(),
