@@ -14,12 +14,14 @@
 use std::env;
 use std::time::Instant;
 
+use geodb_cursor::derived::DerivedMirror;
 use sqlx::postgres::PgPoolOptions;
 use tracing::{info, warn};
 
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::topic_cooccurrence_mirror::{self, Neighbour};
 use ranking_indexer::topic_interest::{self, Mode, SweepOutcome};
+use ranking_indexer::user_topic_signals_mirror::{self as signals_mirror, Ident, Signal};
 
 #[tokio::main]
 async fn main() -> Result<(), IndexerError> {
@@ -42,18 +44,36 @@ async fn main() -> Result<(), IndexerError> {
     let started = Instant::now();
     // Any error returns Err, so the process exits non-zero and the Job is marked failed.
     match mode {
-        Mode::Sweep => match topic_interest::sweep(&pool, None).await? {
-            SweepOutcome::Ran(r) => info!(
-                dirty_users = r.dirty_users,
-                signal_rows = r.signal_rows,
-                since = %r.since,
-                elapsed_ms = started.elapsed().as_millis() as u64,
-                "topic interest swept"
-            ),
-            SweepOutcome::Skipped => {
-                info!("topic interest sweep skipped: the nightly refit is running")
+        Mode::Sweep => {
+            // Best-effort copy of the rows the sweep touched into geo-db's derived class (both
+            // GEODB_DERIVED_MIRROR and GEODB_DERIVED_MIRROR_PRIVATE, default off).
+            let mirror = signals_mirror::from_env_private();
+            let prior = read_idents(&pool, mirror.as_ref()).await;
+            let outcome = topic_interest::sweep(&pool, None).await?;
+            if matches!(outcome, SweepOutcome::Ran(_)) {
+                if let (Some(m), Some(prior)) = (&mirror, prior) {
+                    mirror_signals(
+                        &pool,
+                        m,
+                        &prior,
+                        signals_mirror::sweep_since(chrono::Utc::now()),
+                    )
+                    .await;
+                }
             }
-        },
+            match outcome {
+                SweepOutcome::Ran(r) => info!(
+                    dirty_users = r.dirty_users,
+                    signal_rows = r.signal_rows,
+                    since = %r.since,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    "topic interest swept"
+                ),
+                SweepOutcome::Skipped => {
+                    info!("topic interest sweep skipped: the nightly refit is running")
+                }
+            }
+        }
         Mode::Refit => {
             // Best-effort copy of the co-occurrence table into geo-db's derived class
             // (GEODB_DERIVED_MIRROR, default off). With it off `from_env` is None and the table is
@@ -66,7 +86,12 @@ async fn main() -> Result<(), IndexerError> {
             } else {
                 Vec::new()
             };
+            let signals = signals_mirror::from_env_private();
+            let signals_prior = read_idents(&pool, signals.as_ref()).await;
             let r = topic_interest::refit(&pool, None).await?;
+            if let (Some(m), Some(prior)) = (&signals, signals_prior) {
+                mirror_signals(&pool, m, &prior, signals_mirror::refit_since()).await;
+            }
             if let Some(mirror) = &mirror {
                 // Read after the refit committed; a read error skips the mirror, never the job.
                 match sqlx::query_as::<_, Neighbour>(topic_cooccurrence_mirror::SELECT_SQL)
@@ -111,4 +136,49 @@ async fn main() -> Result<(), IndexerError> {
         }
     }
     Ok(())
+}
+
+/// The identities `user_topic_signals` holds now, or `None` when there is no mirror or the read
+/// failed (the mirror is then skipped; it never stops the job).
+async fn read_idents(pool: &sqlx::PgPool, mirror: Option<&DerivedMirror>) -> Option<Vec<Ident>> {
+    mirror?;
+    match sqlx::query_as::<_, Ident>(signals_mirror::IDENT_SQL)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(rows) => Some(rows),
+        Err(e) => {
+            warn!(error = %e, "user topic signals mirror skipped: identity read failed");
+            None
+        }
+    }
+}
+
+/// Reads the rows computed at or after `since` and the identities after the run, and sends the plan.
+async fn mirror_signals(
+    pool: &sqlx::PgPool,
+    mirror: &DerivedMirror,
+    prior: &[Ident],
+    since: chrono::DateTime<chrono::Utc>,
+) {
+    let rows = sqlx::query_as::<_, Signal>(signals_mirror::SELECT_SQL)
+        .bind(since)
+        .fetch_all(pool)
+        .await;
+    let after = sqlx::query_as::<_, Ident>(signals_mirror::IDENT_SQL)
+        .fetch_all(pool)
+        .await;
+    match (rows, after) {
+        (Ok(rows), Ok(after)) => {
+            signals_mirror::mirror(mirror, &rows, prior, &after).await;
+            info!(
+                rows = rows.len(),
+                prior = prior.len(),
+                "user topic signals mirrored to geo-db"
+            );
+        }
+        (Err(e), _) | (_, Err(e)) => {
+            warn!(error = %e, "user topic signals mirror skipped: read failed")
+        }
+    }
 }

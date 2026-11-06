@@ -834,6 +834,13 @@
       "when": 1792434400000,
       "tag": "0118_agenda_debates",
       "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1792520800000,
+      "tag": "0119_user_topic_signals_computed_at_idx",
+      "breakpoints": true
     }
   ]
 }
