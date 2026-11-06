@@ -986,6 +986,35 @@ describe("entity answers with no Space (every-Space reads)", () => {
 		expect(s.readCardSpaces.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: ALL, names: true})
 	})
 
+	describe("types { name } with no id", () => {
+		const namesOnly = (name: string): Captured => ({
+			request: {
+				query: "query T($id: UUID!) { entity(id: $id) { types { name } } }",
+				variables: {id: EVERY.entityTypes.request.variables.id},
+			},
+			response: {data: {entity: {types: [{name}]}}},
+		})
+
+		it("matches when geo-db's Type carries the same name", async () => {
+			const s = everySetup({[geoSpace(SPACE_A)]: typeRow(HEX, NEWS_STORY, "News story")})
+			await run(s, namesOnly("News story"))
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("leaves a different name inconclusive", async () => {
+			const s = everySetup({[geoSpace(SPACE_A)]: typeRow(HEX, NEWS_STORY, "Op-ed")})
+			await run(s, namesOnly("News story"))
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({cross_space: 1})
+		})
+
+		it("flags a Type geo-db holds where PostGraphile lists none", async () => {
+			const s = everySetup({[geoSpace(SPACE_A)]: typeRow(HEX, NEWS_STORY, "News story")})
+			await run(s, {...namesOnly("x"), response: {data: {entity: {types: []}}}})
+			expect(results()).toEqual({mismatch: 1})
+		})
+	})
+
 	describe("entity(id) { spaceIds } alone", () => {
 		const spaceIdsOnly = (ids: string[]): Captured => ({
 			request: {
@@ -1774,6 +1803,16 @@ describe("selections refused as `selection` on the live mix (2026-11-06)", () =>
 			if (a.ok) {
 				expect(a.plan.card.types?.nameKey).toBe("name")
 				expect(a.plan.uncompared).toContain("types_alias")
+			}
+		})
+
+		it("plans `types { name }` with no id", () => {
+			const q = `{ entities(filter: {id: {in: ["${id}"]}}) { id spaceIds types { name } } }`
+			const a = analyzeLightEntities(parse(q), null, {}, options)
+			expect(a.ok).toBe(true)
+			if (a.ok) {
+				expect(a.plan.card.types?.idKey).toBeNull()
+				expect(a.plan.card.types?.nameKey).toBe("name")
 			}
 		})
 

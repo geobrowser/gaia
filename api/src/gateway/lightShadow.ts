@@ -952,12 +952,14 @@ export function lightCardFromEntity(entity: unknown, plan: LightPlan): LightCard
 				: plan.card.types.idKey
 					? asRecord(node)?.[plan.card.types.idKey]
 					: undefined
-			if (typeof id !== "string" || (plan.card.types.plain && !isValidUuid(id))) return null
-			ids.push(id)
+			const namesOnly = !plan.card.types.plain && !plan.card.types.idKey
+			if (!namesOnly && (typeof id !== "string" || (plan.card.types.plain && !isValidUuid(id)))) return null
+			if (typeof id === "string") ids.push(id)
 			const name = plan.card.types.nameKey ? asRecord(node)?.[plan.card.types.nameKey] : undefined
+			if (namesOnly && typeof name !== "string") return null
 			names.push(typeof name === "string" ? name : null)
 		}
-		card.types = ids
+		if (plan.card.types.plain || plan.card.types.idKey) card.types = ids
 		if (plan.card.types.nameKey) card.typeNames = names
 	}
 	if (Object.keys(nested).length > 0) card.nested = nested
