@@ -37,6 +37,8 @@ export type Config = {
 	feedExperiments: {enabled: boolean}
 	/** GEODB_FEED_EXPERIMENT_MEMBERS (with GEODB_RECORD_KEYS): feed_experiment_members as keyed records, by backfill only (feedExperimentMembersKeyed.ts). */
 	feedExperimentMembers: {enabled: boolean}
+	/** GEODB_ENTITY_FEED_CONFIG (with GEODB_RECORD_KEYS): entity_type_weights, entity_type_exclusions and entity_feed_blocklist as keyed records, by backfill only (entityFeedConfigKeyed.ts). */
+	entityFeedConfig: {enabled: boolean}
 	/** GEODB_PROPOSAL_VERSIONS (with GEODB_RECORD_KEYS): keyed proposal versions from `space.governance` (proposalVersionsKeyed.ts). */
 	proposalVersions: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_PROPOSAL_STATUS (with GEODB_RECORD_KEYS): keyed executed_at / unexecutable_at facts from `space.governance` (proposalStatusKeyed.ts). */
@@ -223,6 +225,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		feedExperiments: {enabled: flag(env.GEODB_FEED_EXPERIMENTS)},
 		/** GEODB_FEED_EXPERIMENT_MEMBERS: lets the feed-experiment-members backfill Job write the records. No consumer. Default off. */
 		feedExperimentMembers: {enabled: flag(env.GEODB_FEED_EXPERIMENT_MEMBERS)},
+		/** GEODB_ENTITY_FEED_CONFIG: lets the entity-feed-config backfill Job write the records. No consumer. Default off. */
+		entityFeedConfig: {enabled: flag(env.GEODB_ENTITY_FEED_CONFIG)},
 		proposalVersions: {
 			/**
 			 * GEODB_PROPOSAL_VERSIONS: consume the PROPOSAL_CREATED and PROPOSAL_UPDATED events of `space.governance`
