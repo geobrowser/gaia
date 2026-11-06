@@ -28,6 +28,9 @@ describe("record kinds", () => {
 			interestSignalWeight: ["1c35f5a4877f474a8d13835f8e05205d", "config"],
 			feedExperiment: ["285dde3545964ab28ee580344b816704", "config"],
 			feedExperimentMember: ["38b80c6e92bb4209838afdff3d7a0f01", "config"],
+			entityTypeWeight: ["96a0897a18d240db9ce98df56649e1a6", "config"],
+			entityTypeExclusion: ["b3d4c18e3754433c95d3e31f628dca75", "config"],
+			entityFeedBlock: ["1f351a8ff80c4a8c9c6c01b830d60a6f", "config"],
 		})
 		expect(SYSTEM_SPACE_NONCE_KIND).toBe("0b3f6634fbe84dbd8c0ecae3fce960b3")
 	})
@@ -43,6 +46,13 @@ describe("record kinds", () => {
 describe("record columns", () => {
 	it("are pinned: a changed column id moves every keyed row's statements", () => {
 		expect(RECORD_COLUMNS).toEqual({
+			entityTypeWeight: {
+				typeId: "f8e4916a4af94f3784aaa2c3e55c8b7a",
+				weight: "36b085283e13476e9ccb657f5dade50a",
+				note: "fed9b4ddefba4f238e36d89e765f3a3c",
+			},
+			entityTypeExclusion: {typeId: "83cd54ae27b34a8688c3b3bc54d7d59c", note: "9c9d13fbf7e04b26bc2e841f227f3a10"},
+			entityFeedBlock: {entityId: "e545438c24c54980a9aad2dedb9ff465", reason: "7c07f1706dbc44e3a654fd6e8c08f883"},
 			feedExperimentMember: {
 				experiment: "5478f85923d94274a98d6fbdb527e5f5",
 				user: "07d8f8c9c7884c039ae0ae4fc8f18f4c",

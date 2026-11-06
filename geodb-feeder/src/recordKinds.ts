@@ -64,6 +64,12 @@ export const RECORD_KINDS = {
 	feedExperiment: {id: "285dde3545964ab28ee580344b816704", family: "config", table: "personalization.feed_experiments"},
 	/** `personalization.feed_experiment_members`: a record keyed (experiment id, user), one mutable column written by `put`. */
 	feedExperimentMember: {id: "38b80c6e92bb4209838afdff3d7a0f01", family: "config", table: "personalization.feed_experiment_members"},
+	/** `entity_type_weights`: one record per `type_id` (uuid key), mutable `weight` and `note` written by `put`. */
+	entityTypeWeight: {id: "96a0897a18d240db9ce98df56649e1a6", family: "config", table: "entity_type_weights"},
+	/** `entity_type_exclusions`: one record per excluded `type_id` (uuid key); a presence record with an optional `note`. */
+	entityTypeExclusion: {id: "b3d4c18e3754433c95d3e31f628dca75", family: "config", table: "entity_type_exclusions"},
+	/** `entity_feed_blocklist`: one record per blocked `entity_id` (uuid key); a presence record with an optional `reason`. */
+	entityFeedBlock: {id: "1f351a8ff80c4a8c9c6c01b830d60a6f", family: "config", table: "entity_feed_blocklist"},
 } as const satisfies Record<string, RecordKind>
 
 /**
@@ -79,6 +85,26 @@ export const SYSTEM_SPACE_NONCE_KIND = "0b3f6634fbe84dbd8c0ecae3fce960b3"
  * `put` whose statement id includes the value, so a change closes the old value and a replay reopens the same id.
  */
 export const RECORD_COLUMNS = {
+	entityTypeWeight: {
+		/** Key: text, `type_id` (lowercase dashed uuid). */
+		typeId: "f8e4916a4af94f3784aaa2c3e55c8b7a",
+		/** Mutable: decimal, `weight`. */
+		weight: "36b085283e13476e9ccb657f5dade50a",
+		/** Mutable: text, `note`; absent when the note is null. */
+		note: "fed9b4ddefba4f238e36d89e765f3a3c",
+	},
+	entityTypeExclusion: {
+		/** Key: text, `type_id` (lowercase dashed uuid). */
+		typeId: "83cd54ae27b34a8688c3b3bc54d7d59c",
+		/** Mutable: text, `note`; absent when the note is null. */
+		note: "9c9d13fbf7e04b26bc2e841f227f3a10",
+	},
+	entityFeedBlock: {
+		/** Key: text, `entity_id` (lowercase dashed uuid). */
+		entityId: "e545438c24c54980a9aad2dedb9ff465",
+		/** Mutable: text, `reason`; absent when the reason is null. */
+		reason: "7c07f1706dbc44e3a654fd6e8c08f883",
+	},
 	feedExperimentMember: {
 		/** Key: text, `experiment_id`. */
 		experiment: "5478f85923d94274a98d6fbdb527e5f5",

@@ -775,6 +775,32 @@ Enable, each step only after the one before it is live (run §2c-config-experime
 
 Rollback: set the flags back to 0. The records stay in the Space, unread.
 
+### 2c-config-entity-feed. Keyed entity-feed config mirror and operator edit path (GEODB_ENTITY_FEED_CONFIG)
+
+`GEODB_ENTITY_FEED_CONFIG` (default off; takes effect only with `GEODB_RECORD_KEYS`) lets the
+`geodb-entity-feed-config-backfill` Job write every `entity_type_weights`, `entity_type_exclusions` and
+`entity_feed_blocklist` row as a natural-key record in the `config` system Space (`geodb-feeder/src/entityFeedConfigKeyed.ts`;
+the pinned `entityTypeWeight`, `entityTypeExclusion` and `entityFeedBlock` kinds, each keyed by its uuid). Plan 10.22
+section 6 sketched exclusions and the blocklist as edge rows; they are presence records here so one proven writer, gate and
+Job serve all three. A mirror, not a move: Postgres stays the source and its ranking and feed functions are unchanged.
+
+The operator edit path: operator SQL edits the Postgres row, then the Job is rerun (it is the only writer, there is no
+consumer, and a rerun writes the same ids; a changed weight closes the old value). A row deleted from Postgres, or a note
+or reason set to null, is not cleared in geo-db; the gate reports it. `updated_at` and `created_at` are not mirrored. The
+weight must satisfy the table's check (0.1 < weight <= 10), else the row is dead-lettered.
+
+Enable, each step only after the one before it is live:
+
+1. A feeder image that carries this path and a geo-db serve at 9d97069a78 or later (`put`).
+2. Kafka: describe on every feeder group (the Job's empty-group check).
+3. The backfill Job (`geodb/k8s/v2/geodb-entity-feed-config-backfill-job.yaml`), feeder scaled to 0, applied as in
+   §2c-quater step 4. It reads three small tables READ ONLY and is rerunnable.
+4. The gate, once per table: `bun src/entityFeedConfigGate.ts <weights|exclusions|blocklist> <postgres.tsv> <dump dir>`
+   (its header lists the `\copy` and the `etw-`, `etx-`, `efb-<column>.tsv` dumps). Exits non-zero on a Postgres-only key
+   or a value difference.
+
+Rollback: set the flags back to 0. The records stay in the Space, unread.
+
 ### 2c-octies. Keyed proposal versions (GEODB_PROPOSAL_VERSIONS)
 
 `GEODB_PROPOSAL_VERSIONS` (default off; takes effect only with `GEODB_RECORD_KEYS`) writes gaia's `proposal_versions`

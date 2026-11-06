@@ -10,6 +10,7 @@ import type {PgRelationRow, PgValueRow} from "./pgAdapter.js"
 import type {ProposalActionRow} from "./proposalActionsKeyed.js"
 import type {EntityRankingConfigRow} from "./entityRankingConfigKeyed.js"
 import type {InterestConfigRow, InterestSignalWeightRow} from "./interestConfigKeyed.js"
+import type {EntityFeedBlockRow, EntityTypeExclusionRow, EntityTypeWeightRow} from "./entityFeedConfigKeyed.js"
 import type {FeedExperimentMemberRow} from "./feedExperimentMembersKeyed.js"
 import type {FeedExperimentRow} from "./feedExperimentsKeyed.js"
 import type {ForYouConfigRow} from "./forYouConfigKeyed.js"
@@ -375,6 +376,33 @@ export async function* readFeedExperimentMemberRows(db: ReadOnlyPg): AsyncGenera
 	yield* await db.read<FeedExperimentMemberRow>(
 		`SELECT experiment_id, user_id::text AS user_id, interleaved
 		 FROM personalization.feed_experiment_members ORDER BY experiment_id, user_id`,
+		[],
+		120_000,
+	)
+}
+
+/** Every `entity_type_weights` row, `type_id` and `weight` as text. `updated_at` is not mirrored. */
+export async function* readEntityTypeWeightRows(db: ReadOnlyPg): AsyncGenerator<EntityTypeWeightRow> {
+	yield* await db.read<EntityTypeWeightRow>(
+		`SELECT type_id::text AS type_id, weight::text AS weight, note FROM entity_type_weights ORDER BY type_id`,
+		[],
+		60_000,
+	)
+}
+
+/** Every `entity_type_exclusions` row, `type_id` as text. `updated_at` is not mirrored. */
+export async function* readEntityTypeExclusionRows(db: ReadOnlyPg): AsyncGenerator<EntityTypeExclusionRow> {
+	yield* await db.read<EntityTypeExclusionRow>(
+		`SELECT type_id::text AS type_id, note FROM entity_type_exclusions ORDER BY type_id`,
+		[],
+		60_000,
+	)
+}
+
+/** Every `entity_feed_blocklist` row, `entity_id` as text. `created_at` is not mirrored. */
+export async function* readEntityFeedBlockRows(db: ReadOnlyPg): AsyncGenerator<EntityFeedBlockRow> {
+	yield* await db.read<EntityFeedBlockRow>(
+		`SELECT entity_id::text AS entity_id, reason FROM entity_feed_blocklist ORDER BY entity_id`,
 		[],
 		120_000,
 	)
