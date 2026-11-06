@@ -113,11 +113,16 @@ type LightList = {
 }
 
 const noted = new Set<string>()
+/** Deep enough to show the keys inside `and([relations(some(typeId(is),toEntityId(is)))])`. */
+const MAX_SHAPE_DEPTH = 6
+/** Distinct shapes given their own metric label per process; later new ones count as `other`. */
+const MAX_SHAPES = 150
+const shapesSeen = new Set<string>()
 const MAX_NOTED = 200
 
 /** A value's shape: an object's keys (sorted), each with its own shape; a list's distinct element shapes. No values. */
 function describeShape(value: unknown, depth: number): string {
-	if (depth > 3) return "..."
+	if (depth > MAX_SHAPE_DEPTH) return "..."
 	if (Array.isArray(value)) {
 		const parts = [...new Set(value.map((v) => describeShape(v, depth + 1)).filter(Boolean))].sort()
 		return parts.length ? `[${parts.join("|")}]` : ""
@@ -150,7 +155,7 @@ export function shapeOfRoot(
 		const names = Object.keys(args).sort()
 		const filter = describeShape(args.filter, 0)
 		const shape = `args=${names.join(",")}${filter ? `;filter=${filter}` : ""}`
-		return shape.length > 200 ? "long" : shape
+		return shape.length > 300 ? "long" : shape
 	} catch {
 		return "unparsed"
 	}
@@ -186,7 +191,12 @@ export function noteUnsupported(
 	variables: Record<string, unknown> = {},
 ): void {
 	try {
-		const shape = shapeOfRoot(document, operationName, variables, field)
+		let shape = shapeOfRoot(document, operationName, variables, field)
+		// Bound the metric's label cardinality: a shape seen before is free, a new one needs room.
+		if (!shapesSeen.has(shape)) {
+			if (shapesSeen.size >= MAX_SHAPES) shape = "other"
+			else shapesSeen.add(shape)
+		}
 		recordGatewayUnsupportedShape(field, reason, shape)
 		// The shape is in the key so anonymous operations (no name) of different shapes are each logged once.
 		const key = `${field}\t${reason}\t${operationName ?? ""}\t${shape}`
