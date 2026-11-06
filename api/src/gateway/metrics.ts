@@ -59,6 +59,8 @@ export const UNCOMPARED_REASONS = [
 	"derived_fields",
 	/** `typeIds` selected beside `types { id name }`: the same statements twice; only the `types` list is compared. */
 	"types_alias",
+	/** `entitiesConnection { totalCount }`: the size of the whole filtered set, which a sample of cards cannot settle. */
+	"total_count",
 ] as const
 
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]

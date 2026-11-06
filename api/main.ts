@@ -10,6 +10,7 @@ import {
 import {createFeedExperimentShadow, readFeedExperimentShadowConfig} from "./src/forYou/feedExperimentShadow"
 import {MIN_INTERNAL_TOKEN_LENGTH, mountInternalRoutes} from "./src/forYou/router"
 import {readGatewayConfig} from "./src/gateway/config"
+import {createEntitiesConnectionShadow, ENTITIES_CONNECTION_FIELD} from "./src/gateway/entitiesConnectionShadow"
 import {createEntityResolver} from "./src/gateway/entityServe"
 import {createEntityShadow, ENTITY_FIELD} from "./src/gateway/entityShadow"
 import {createGateway, fieldModeOf} from "./src/gateway/gateway"
@@ -164,7 +165,7 @@ log.info("Versioned v2 entity routes enabled")
 // Opt-in GraphQL gateway config; the gateway itself is built below, where /graphql is mounted.
 const gatewayConfig = readGatewayConfig(process.env)
 const gatewayShadowFields = new Set(
-	[ENTITY_FIELD, ...POINT_READ_FIELDS, ...SEARCH_FIELDS].filter(
+	[ENTITY_FIELD, ENTITIES_CONNECTION_FIELD, ...POINT_READ_FIELDS, ...SEARCH_FIELDS].filter(
 		(field) => gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, field) === "shadow",
 	),
 )
@@ -360,6 +361,35 @@ const graphqlHandler = createGateway({
 						},
 						POINT_READ_FIELDS.filter((field) => gatewayShadowFields.has(field)),
 					),
+					// entitiesConnection=shadow only; absent from GRAPHQL_GATEWAY_FIELDS (the default) it is not mounted.
+					...(gatewayShadowFields.has(ENTITIES_CONNECTION_FIELD)
+						? [
+								[
+									ENTITIES_CONNECTION_FIELD,
+									createEntitiesConnectionShadow({
+										...sharedGeoDb,
+										log,
+										budget: wideReadBudget,
+										multiSpace: geoDbCardConfig.multiSpaceReads === true,
+										entitiesBatch: geoDbCardConfig.entitiesBatch === true,
+										derivedFields: geoDbCardConfig.derivedFields === true,
+										orderPick: geoDbCardConfig.orderPick === true,
+										relationsTypeFilter: geoDbCardConfig.relationsTypeFilter === true,
+										...(geoDbCardConfig.everySpaceReads === true &&
+										geoDbCardConfig.everySpaceEntities === true
+											? {
+													allGeoSpaces: sharedGeoDb.geoSpaceOf.all,
+													everySpaceBudget,
+													everySpaceChunks: geoDbCardConfig.everySpaceChunks === true,
+													...(geoDbCardConfig.everySpaceTimeoutMs
+														? {everySpaceTimeoutMs: geoDbCardConfig.everySpaceTimeoutMs}
+														: {}),
+												}
+											: {}),
+									}),
+								] as const,
+							]
+						: []),
 					...createSearchShadows(
 						{
 							geoSpaceOf: sharedGeoDb.geoSpaceOf,
