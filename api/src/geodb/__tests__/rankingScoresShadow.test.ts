@@ -1,9 +1,10 @@
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import type {Database} from "../../forYou/queries"
 import {GeoDbError} from "../client"
-import type {DerivedReader, DerivedRow, DerivedScanReader} from "../derived"
+import type {DerivedReader, DerivedRow, DerivedScanReader, DerivedScoresReader, ScoreRow} from "../derived"
 import {
 	__resetRankingScoresShadowMetricsForTests,
+	compareDefault,
 	compareRow,
 	createRankingScoresShadow,
 	overlayCounts,
@@ -62,6 +63,10 @@ describe("config", () => {
 			GEODB_RANKING_SCORES_SHADOW_INTERVAL_MS: "x",
 		})
 		expect(c.sample).toBe(200)
+		expect(c.defaultSample).toBe(20)
+		expect(readRankingScoresShadowConfig({GEODB_RANKING_SCORES_SHADOW_DEFAULT_SAMPLE: "9999"}).defaultSample).toBe(
+			64,
+		)
 		expect(c.intervalMs).toBe(60_000)
 	})
 })
@@ -131,7 +136,7 @@ function fakeDb(byId: Record<string, Record<string, unknown>>, sample: string[])
 }
 
 describe("the shadow", () => {
-	const config = {enabled: true, intervalMs: 1000, sample: 5}
+	const config = {enabled: true, intervalMs: 1000, sample: 5, defaultSample: 0}
 	it("exports nothing until mounted, then every series at zero", () => {
 		expect(renderRankingScoresShadowMetrics()).toBe("")
 		const reader = {get: vi.fn(), close: vi.fn()} as unknown as DerivedReader
@@ -182,5 +187,146 @@ describe("the shadow", () => {
 		createRankingScoresShadow({config: {...config, enabled: false}, db: fakeDb({}, []), reader, log}).start()
 		expect(setI).not.toHaveBeenCalled()
 		setI.mockRestore()
+	})
+})
+
+const served = (over: Partial<ScoreRow> = {}): ScoreRow => ({
+	engaged: false,
+	trendingSource: 0,
+	counts: [0, 0, 0, 0, 0],
+	quality: 0.25,
+	intrinsic: 0.3,
+	participation: 0,
+	comment: 0,
+	typeWeight: 1.4,
+	watch: 0,
+	ageCredit: 0,
+	trending: 0,
+	ranking: 12.5,
+	topicHex: null,
+	...over,
+})
+const scoresOf = (over: Record<string, unknown> = {}) => ({
+	...idleRow,
+	quality_score: "0.25",
+	intrinsic_score: "0.3",
+	type_weight: "1.4",
+	ranking_score: "12.5",
+	...over,
+})
+
+describe("compareDefault", () => {
+	const pg = {quality: 0.25, intrinsic: 0.3, typeWeight: 1.4, ranking: 12.5}
+	it("matches four equal scores within tolerance and mismatches any one that differs", () => {
+		expect(compareDefault(pg, served())).toBe("match")
+		expect(compareDefault(pg, served({ranking: 12.5 + 1e-12}))).toBe("match")
+		for (const over of [{quality: 0.26}, {intrinsic: 0.31}, {typeWeight: 1}, {ranking: 12.6}])
+			expect(compareDefault(pg, served(over))).toBe("mismatch")
+	})
+	it("says engaged for an overlay row before comparing", () => {
+		expect(compareDefault(pg, served({engaged: true, ranking: 99}))).toBe("engaged")
+	})
+})
+
+describe("the default pass", () => {
+	const config = {enabled: true, intervalMs: 1000, sample: 5, defaultSample: 5}
+	const cfgRow = {
+		tau: "45000",
+		z: "1.96",
+		pp: "1",
+		pn: "1",
+		floor: "0.01",
+		cap: "0.5",
+		pt: "10",
+		rt: "5",
+		pw: "0",
+		pc: "10",
+		cw: "0",
+		cc: "30",
+	}
+	function db(unengaged: Record<string, unknown>[], cards: Record<string, unknown>[], cfg: unknown[] = [cfgRow]) {
+		return {
+			execute: vi.fn(async (q: {queryChunks?: unknown[]}) => {
+				const text = JSON.stringify(q.queryChunks ?? [])
+				if (text.includes("FROM entity_ranking_config")) return {rows: cfg}
+				if (text.includes("FROM entities e")) return {rows: cards}
+				if (text.includes("entity_id IN")) return {rows: unengaged}
+				return {rows: [A, B, C].map((entity_id) => ({entity_id}))}
+			}),
+		} as unknown as Database
+	}
+	const card = (id: string) => ({
+		id,
+		created_epoch: "1760000000",
+		property_count: "4",
+		relation_count: "2",
+		type_weight_max: "1.4",
+	})
+	const reader = (scores: DerivedScoresReader["scores"]) =>
+		({get: vi.fn(async () => null), scores, close: vi.fn()}) as unknown as DerivedReader & DerivedScoresReader
+
+	it("is skipped for a reader that cannot serve scores", async () => {
+		const plain = {get: vi.fn(async () => null), close: vi.fn()} as unknown as DerivedReader
+		await createRankingScoresShadow({config, db: db([], []), reader: plain, log}).runOnce()
+		expect(renderRankingScoresShadowMetrics()).toContain('default_shadow_total{result="match"} 0')
+	})
+	it("sends the un-engaged rows' cards and counts each served row, leaving engaged Postgres rows out", async () => {
+		const scores = vi.fn(async (_config: unknown, cards: {entityHex: string}[]) =>
+			cards.map((c) => (c.entityHex === hex(B) ? served({ranking: 1}) : served())),
+		)
+		const unengaged = [A, B].map((id) => ({entity_id: id, ...scoresOf()}))
+		// C is engaged in Postgres, so it is not sent.
+		unengaged.push({entity_id: C, ...scoresOf({positive: "3"})})
+		await createRankingScoresShadow({
+			config,
+			db: db(unengaged, [card(A), card(B)]),
+			reader: reader(scores as never),
+			log,
+		}).runOnce()
+		expect(scores).toHaveBeenCalledTimes(1)
+		const [sentConfig, sentCards] = scores.mock.calls[0] as unknown as [{tauSeconds: number}, {entityHex: string}[]]
+		expect(sentConfig.tauSeconds).toBe(45000)
+		expect(sentCards.map((c) => c.entityHex)).toEqual([hex(A), hex(B)])
+		const text = renderRankingScoresShadowMetrics()
+		expect(text).toContain('default_shadow_total{result="match"} 1')
+		expect(text).toContain('default_shadow_total{result="mismatch"} 1')
+	})
+	it("counts a row with no entities row, an overlay row and a failed read", async () => {
+		const scores = vi.fn(async () => [served({engaged: true})])
+		await createRankingScoresShadow({
+			config,
+			db: db(
+				[A, B].map((id) => ({entity_id: id, ...scoresOf()})),
+				[card(A)],
+			),
+			reader: reader(scores as never),
+			log,
+		}).runOnce()
+		let text = renderRankingScoresShadowMetrics()
+		expect(text).toContain('default_shadow_total{result="no_card"} 1')
+		expect(text).toContain('default_shadow_total{result="engaged"} 1')
+		__resetRankingScoresShadowMetricsForTests()
+		const refused = vi.fn().mockRejectedValue(new GeoDbError("client_failed", "refused"))
+		await createRankingScoresShadow({
+			config,
+			db: db([{entity_id: A, ...scoresOf()}], [card(A)]),
+			reader: reader(refused as never),
+			log,
+		}).runOnce()
+		text = renderRankingScoresShadowMetrics()
+		expect(text).toContain('default_shadow_total{result="failed"} 1')
+		// Counts only: no warning names an entity.
+		expect(JSON.stringify(log.warn.mock.calls)).not.toContain("aaaa")
+	})
+	it("counts a missing config row as failed and does not ask geo-db", async () => {
+		const scores = vi.fn()
+		await createRankingScoresShadow({
+			config,
+			db: db([{entity_id: A, ...scoresOf()}], [card(A)], []),
+			reader: reader(scores as never),
+			log,
+		}).runOnce()
+		expect(scores).not.toHaveBeenCalled()
+		expect(renderRankingScoresShadowMetrics()).toContain('default_shadow_total{result="failed"} 1')
 	})
 })

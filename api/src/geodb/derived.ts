@@ -8,7 +8,9 @@
  * worker (its connection may owe a reply) and rejects the request, and the next request starts a fresh worker. No retry: the
  * only caller is a background shadow, which counts a failure and moves on.
  *
- * Reuses the card client's config, `PipeChild` seam and `GeoDbError`. No wire change: DerivedGet (0x3B) is already served.
+ * Reuses the card client's config, `PipeChild` seam and `GeoDbError`. `get` and `scan` need no wire change (DerivedGet 0x3B and
+ * DerivedScan are served); `scores` needs geo-db at wire frame revision 11 (DerivedScores, 0x3F), which a node below it answers
+ * with a refusal.
  */
 
 import {spawn as nodeSpawn} from "node:child_process"
@@ -29,6 +31,58 @@ export type DerivedScanRow = {score: number; keyHex: string; valueHex: string}
 /** What a `scan` read: the rows in score order (descending, then key ascending) and whether the group held more. */
 export type DerivedScan = {rows: DerivedScanRow[]; more: boolean}
 
+/** The ranking config of `entity_ranking_config`, the twelve values geo-db's default row is a function of. */
+export type ScoreConfig = {
+	tauSeconds: number
+	wilsonZ: number
+	priorPositive: number
+	priorNegative: number
+	qualityFloor: number
+	intrinsicCap: number
+	intrinsicPropertyTarget: number
+	intrinsicRelationTarget: number
+	participationWeight: number
+	participationCap: number
+	commentWeight: number
+	commentCap: number
+}
+
+/** One entity and what its card contributes to its score. */
+export type ScoreCard = {
+	/** The entity, 32 hex digits. */
+	entityHex: string
+	/** Distinct properties the entity holds a value for. */
+	propertyCount: number
+	/** Outgoing relations that are not system relations. */
+	relationCount: number
+	/** `entities.created_at` in seconds, null when empty. */
+	createdEpoch: number | null
+	/** The heaviest `entity_type_weights.weight` among the entity's Types, null when none has a row. */
+	typeWeightMax: number | null
+}
+
+/** One entity's score row as geo-db serves it: the overlay row when engaged, else the default its card and config build. */
+export type ScoreRow = {
+	engaged: boolean
+	/** 0 none, 1 listing, 2 topic. */
+	trendingSource: number
+	/** Positive, negative, stance positive, stance negative, commenters. */
+	counts: [number, number, number, number, number]
+	quality: number
+	intrinsic: number
+	participation: number
+	comment: number
+	typeWeight: number
+	watch: number
+	ageCredit: number
+	trending: number
+	ranking: number
+	topicHex: string | null
+}
+
+/** The most cards one `scores` call holds (geo-db `wire_derived.scores_max`). */
+export const MAX_SCORE_CARDS = 64
+
 export type DerivedReader = {
 	/** The row at `key` (hex) of `collection`, or null when the collection holds none. */
 	get(collection: number, keyHex: string): Promise<DerivedRow | null>
@@ -43,6 +97,12 @@ export type DerivedScanReader = DerivedReader & {
 	 * `more` says the group holds rows past them.
 	 */
 	scan(collection: number, groupHex: string, first: number): Promise<DerivedScan>
+}
+
+/** A reader that can also serve computed score rows (geo-db wire frame revision 11). */
+export type DerivedScoresReader = DerivedReader & {
+	/** The score rows of 1 to 64 cards, in order: the overlay row where an entity holds one, else the default. */
+	scores(config: ScoreConfig, cards: ScoreCard[]): Promise<ScoreRow[]>
 }
 
 type ReaderConfig = Pick<GeoDbCardConfig, "clientBin" | "keyPath" | "bindingPath" | "timeoutMs">
@@ -97,6 +157,107 @@ export function parseDerivedScan(body: string): DerivedScan {
 	return {rows, more}
 }
 
+const FLOAT_FIELDS = 9
+const num = (text: string): number => (text === "" ? Number.NaN : Number(text))
+
+/** The rows a `scores` answer body names: one line a row, `<engaged 0|1>`, the trending source, five counts, nine scores and the
+ * topic hex or `-`, tab-separated. Throws on anything else, or on a row count other than `want`. */
+export function parseDerivedScores(body: string, want: number): ScoreRow[] {
+	const rows: ScoreRow[] = []
+	for (const line of body.split("\n")) {
+		if (line === "") continue
+		const f = line.split("\t")
+		const n = f.slice(0, 7).map(num)
+		const topic = f[7 + FLOAT_FIELDS]
+		if (
+			f.length !== 8 + FLOAT_FIELDS ||
+			!(f[0] === "0" || f[0] === "1") ||
+			!n.every(Number.isFinite) ||
+			!n.slice(1).every((v) => v >= 0) ||
+			(n[1] as number) > 2 ||
+			topic === undefined ||
+			!(topic === "-" || /^[0-9a-f]{32}$/.test(topic))
+		)
+			throw new GeoDbError("client_failed", `derived scores row is malformed: ${line.slice(0, 80)}`)
+		const rest = f.slice(7, 7 + FLOAT_FIELDS).map(num)
+		if (!rest.every(Number.isFinite))
+			throw new GeoDbError("client_failed", `derived scores row is malformed: ${line.slice(0, 80)}`)
+		const [quality, intrinsic, participation, comment, typeWeight, watch, ageCredit, trending, ranking] = rest as [
+			number,
+			number,
+			number,
+			number,
+			number,
+			number,
+			number,
+			number,
+			number,
+		]
+		rows.push({
+			engaged: f[0] === "1",
+			trendingSource: n[1] as number,
+			counts: [n[2], n[3], n[4], n[5], n[6]] as [number, number, number, number, number],
+			quality,
+			intrinsic,
+			participation,
+			comment,
+			typeWeight,
+			watch,
+			ageCredit,
+			trending,
+			ranking,
+			topicHex: topic === "-" ? null : topic,
+		})
+	}
+	if (rows.length !== want)
+		throw new GeoDbError("client_failed", `derived scores answered ${rows.length} rows for ${want} cards`)
+	return rows
+}
+
+const SCORE_ZERO = /^[0-9a-f]{32}$/
+const finite = (v: number) => Number.isFinite(v)
+/** The request lines of a scores call: the head, the config, one card a line. Throws `bad_request` on a malformed argument. */
+export function scoresLines(config: ScoreConfig, cards: ScoreCard[]): string {
+	const c = config
+	const values = [
+		c.tauSeconds,
+		c.wilsonZ,
+		c.priorPositive,
+		c.priorNegative,
+		c.qualityFloor,
+		c.intrinsicCap,
+		c.intrinsicPropertyTarget,
+		c.intrinsicRelationTarget,
+		c.participationWeight,
+		c.participationCap,
+		c.commentWeight,
+		c.commentCap,
+	]
+	const wholes = [c.intrinsicPropertyTarget, c.intrinsicRelationTarget]
+	if (
+		cards.length < 1 ||
+		cards.length > MAX_SCORE_CARDS ||
+		!values.every(finite) ||
+		!wholes.every(Number.isSafeInteger)
+	)
+		throw new GeoDbError("bad_request", "derived scores wants 1 to 64 cards and a finite config")
+	const lines = [`scoresn\t${cards.length}`, values.join("\t")]
+	for (const card of cards) {
+		const counts = [card.propertyCount, card.relationCount]
+		if (
+			!SCORE_ZERO.test(card.entityHex) ||
+			!counts.every((n) => Number.isInteger(n) && n >= 0 && n <= 0xffffffff) ||
+			(card.createdEpoch !== null && !Number.isSafeInteger(card.createdEpoch)) ||
+			(card.typeWeightMax !== null && !finite(card.typeWeightMax))
+		)
+			throw new GeoDbError("bad_request", "derived scores card is malformed")
+		lines.push(
+			`${card.entityHex}\t${card.propertyCount}\t${card.relationCount}\t${card.createdEpoch ?? "-"}\t${card.typeWeightMax ?? "-"}`,
+		)
+	}
+	return lines.join("\n")
+}
+
 type Pending = {
 	line: string
 	resolve: (body: string) => void
@@ -106,7 +267,7 @@ type Pending = {
 export function createDerivedReader(
 	config: ReaderConfig,
 	options: {spawn?: SpawnPipe; now?: () => number} = {},
-): DerivedScanReader {
+): DerivedScanReader & DerivedScoresReader {
 	const spawn = options.spawn ?? defaultSpawn
 	const now = options.now ?? Date.now
 	const queue: Pending[] = []
@@ -256,6 +417,18 @@ export function createDerivedReader(
 				queue.push({line: `scan\t${collection}\t0x${groupHex}\t${first}\t1`, resolve, reject})
 				pump()
 			}).then(parseDerivedScan)
+		},
+		scores(config, cards) {
+			let line: string
+			try {
+				line = scoresLines(config, cards)
+			} catch (error) {
+				return Promise.reject(error)
+			}
+			return new Promise<string>((resolve, reject) => {
+				queue.push({line, resolve, reject})
+				pump()
+			}).then((body) => parseDerivedScores(body, cards.length))
 		},
 		close() {
 			const error = new GeoDbError("client_failed", "derived reader closed")

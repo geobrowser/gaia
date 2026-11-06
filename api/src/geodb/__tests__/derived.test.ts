@@ -4,7 +4,15 @@ import {tmpdir} from "node:os"
 import {join} from "node:path"
 import {describe, expect, it} from "vitest"
 import {GeoDbError} from "../client"
-import {createDerivedReader, parseDerivedGet, parseDerivedScan} from "../derived"
+import {
+	createDerivedReader,
+	parseDerivedGet,
+	parseDerivedScan,
+	parseDerivedScores,
+	type ScoreCard,
+	type ScoreConfig,
+	scoresLines,
+} from "../derived"
 
 const GROUP = "0".repeat(32)
 const KEY = "ab".repeat(16)
@@ -155,6 +163,89 @@ describe("scan", () => {
 		await expect(reader.scan(0, "zz", 3)).rejects.toThrow(GeoDbError)
 		await expect(reader.scan(0, GROUP, 0)).rejects.toThrow(GeoDbError)
 		await expect(reader.scan(0, GROUP, 513)).rejects.toThrow(GeoDbError)
+		expect(starts()).toBe(0)
+		await reader.close()
+	})
+})
+
+const CONFIG: ScoreConfig = {
+	tauSeconds: 45000,
+	wilsonZ: 1.96,
+	priorPositive: 1,
+	priorNegative: 1,
+	qualityFloor: 0.01,
+	intrinsicCap: 0.5,
+	intrinsicPropertyTarget: 10,
+	intrinsicRelationTarget: 5,
+	participationWeight: 0,
+	participationCap: 10,
+	commentWeight: 0,
+	commentCap: 30,
+}
+const CARD: ScoreCard = {
+	entityHex: KEY,
+	propertyCount: 4,
+	relationCount: 2,
+	createdEpoch: 1_760_000_000,
+	typeWeightMax: 1.4,
+}
+const NONE: ScoreCard = {
+	entityHex: "cd".repeat(16),
+	propertyCount: 0,
+	relationCount: 0,
+	createdEpoch: null,
+	typeWeightMax: null,
+}
+const ROW = (engaged: number, first: number, ranking: string, topic = "-") =>
+	`${engaged}\t0\t${first}\t0\t0\t0\t0\t0.25\t0.5\t0\t0\t1.4\t0\t0\t0\t${ranking}\t${topic}`
+
+describe("scores", () => {
+	it("writes the head, the config and one card a line", () => {
+		expect(scoresLines(CONFIG, [CARD, NONE]).split("\n")).toEqual([
+			"scoresn\t2",
+			"45000\t1.96\t1\t1\t0.01\t0.5\t10\t5\t0\t10\t0\t30",
+			`${KEY}\t4\t2\t1760000000\t1.4`,
+			`${"cd".repeat(16)}\t0\t0\t-\t-`,
+		])
+	})
+	it("refuses a malformed card, an empty or oversized batch and a non-finite config", () => {
+		expect(() => scoresLines(CONFIG, [])).toThrow(GeoDbError)
+		expect(() => scoresLines(CONFIG, Array(65).fill(CARD))).toThrow(GeoDbError)
+		expect(() => scoresLines(CONFIG, [{...CARD, entityHex: "zz"}])).toThrow(GeoDbError)
+		expect(() => scoresLines(CONFIG, [{...CARD, propertyCount: -1}])).toThrow(GeoDbError)
+		expect(() => scoresLines({...CONFIG, tauSeconds: Number.NaN}, [CARD])).toThrow(GeoDbError)
+	})
+	it("parses a row a card, a negative ranking and a topic, and refuses a malformed or short answer", () => {
+		const topic = "ef".repeat(16)
+		const rows = parseDerivedScores(`${ROW(1, 6, "-3.5", topic)}\n${ROW(0, 0, "2.25")}\n`, 2)
+		expect(rows[0]).toMatchObject({engaged: true, counts: [6, 0, 0, 0, 0], ranking: -3.5, topicHex: topic})
+		expect(rows[1]).toMatchObject({
+			engaged: false,
+			quality: 0.25,
+			intrinsic: 0.5,
+			typeWeight: 1.4,
+			ranking: 2.25,
+			topicHex: null,
+		})
+		expect(() => parseDerivedScores(`${ROW(0, 0, "1")}\n`, 2)).toThrow(GeoDbError)
+		expect(() => parseDerivedScores(`${ROW(2, 0, "1")}\n`, 1)).toThrow(GeoDbError)
+		expect(() => parseDerivedScores("0\t0\n", 1)).toThrow(GeoDbError)
+		expect(() => parseDerivedScores(`${ROW(0, 0, "NaN")}\n`, 1)).toThrow(GeoDbError)
+	})
+	it("sends the lines of one request and reads one row a card", async () => {
+		const {reader} = fake(
+			String.raw`if (line.startsWith("scoresn\t")) { globalThis.left = Number(line.split("\t")[1]) + 1; globalThis.n = 1 }
+else if (globalThis.left) { globalThis.n++; if (--globalThis.left === 0) frame("+", ["a","b"].map((e, i) => ["0","0",globalThis.n,"0","0","0","0","0.25","0.5","0","0","1.4","0","0","0",i + 2,"-"].join("\t")).join("\n") + "\n") }`,
+		)
+		const rows = await reader.scores(CONFIG, [CARD, NONE])
+		// Four lines were sent: the head, the config and two cards.
+		expect(rows.map((r) => r.counts[0])).toEqual([4, 4])
+		expect(rows.map((r) => r.ranking)).toEqual([2, 3])
+		await reader.close()
+	})
+	it("refuses a bad request without starting a worker", async () => {
+		const {reader, starts} = fake(`frame("+", "")`)
+		await expect(reader.scores(CONFIG, [])).rejects.toThrow(GeoDbError)
 		expect(starts()).toBe(0)
 		await reader.close()
 	})
