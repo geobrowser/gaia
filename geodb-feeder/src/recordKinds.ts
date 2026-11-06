@@ -56,6 +56,8 @@ export const RECORD_KINDS = {
 	interestConfig: {id: "e7ca641275a840bebb7ac20424a5deae", family: "config", table: "personalization.interest_config"},
 	/** `personalization.interest_signal_weights`: one record per signal `kind` (text key), mutable columns written by `put`. */
 	interestSignalWeight: {id: "1c35f5a4877f474a8d13835f8e05205d", family: "config", table: "personalization.interest_signal_weights"},
+	/** `personalization.feed_experiments`: one record per experiment `id` (text key), mutable columns written by `put`. */
+	feedExperiment: {id: "285dde3545964ab28ee580344b816704", family: "config", table: "personalization.feed_experiments"},
 } as const satisfies Record<string, RecordKind>
 
 /**
@@ -71,6 +73,22 @@ export const SYSTEM_SPACE_NONCE_KIND = "0b3f6634fbe84dbd8c0ecae3fce960b3"
  * `put` whose statement id includes the value, so a change closes the old value and a replay reopens the same id.
  */
 export const RECORD_COLUMNS = {
+	feedExperiment: {
+		/** Key: text, `id`. */
+		id: "5302a53981a84da88c3949abe8165ec0",
+		/** Mutable: boolean, `active`. */
+		active: "d6a38e2b1f804353bceced2d49641d75",
+		/** Mutable: text, `arm_a` (`best` or `for-you`). */
+		armA: "5823d865cf6c480181ce0d3979b1a5ad",
+		/** Mutable: text, `arm_b`. */
+		armB: "62f4056881f34fcbbb26174932352e70",
+		/** Mutable: decimal, `share`. */
+		share: "20a413847f914c2ea382c24c69ffeaa9",
+		/** Mutable: text, `salt`. */
+		salt: "e3bc692a46a644179788ca4e9de3b6c5",
+		/** Mutable: text, `note`; absent when the note is null. */
+		note: "d9c6d4fef1584dd093f5314694ee1957",
+	},
 	interestConfig: {
 		/** Key: number, `id` (always 1: the table's one row, `id` = true). */
 		id: "31036382e13b4e11a4dc59c58a43546a",

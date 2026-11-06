@@ -33,6 +33,7 @@ const U64_MAX = (1n << 64n) - 1n
 
 export type RecordKeyPart = {id: string} | {bytes: Uint8Array} | {int: bigint}
 export const idPart = (id: string): RecordKeyPart => ({id})
+export const textPart = (text: string): RecordKeyPart => ({bytes: new TextEncoder().encode(text)})
 export const intPart = (n: bigint | number): RecordKeyPart => ({int: BigInt(n)})
 
 function idBytes(id: string): Uint8Array {

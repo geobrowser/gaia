@@ -10,6 +10,7 @@ import type {PgRelationRow, PgValueRow} from "./pgAdapter.js"
 import type {ProposalActionRow} from "./proposalActionsKeyed.js"
 import type {EntityRankingConfigRow} from "./entityRankingConfigKeyed.js"
 import type {InterestConfigRow, InterestSignalWeightRow} from "./interestConfigKeyed.js"
+import type {FeedExperimentRow} from "./feedExperimentsKeyed.js"
 import type {ForYouConfigRow} from "./forYouConfigKeyed.js"
 import type {SpaceVotingSettingsRow} from "./spaceVotingSettingsKeyed.js"
 import type {ProposalVersionRow} from "./proposalVersionsKeyed.js"
@@ -326,6 +327,16 @@ export async function* readInterestSignalWeightRows(db: ReadOnlyPg): AsyncGenera
 	yield* await db.read<InterestSignalWeightRow>(
 		`SELECT kind, weight::text AS weight, decays, note
 		 FROM personalization.interest_signal_weights ORDER BY kind`,
+		[],
+		60_000,
+	)
+}
+
+/** Every `personalization.feed_experiments` row (a handful), `share` as text. `created_at` is not mirrored. */
+export async function* readFeedExperimentRows(db: ReadOnlyPg): AsyncGenerator<FeedExperimentRow> {
+	yield* await db.read<FeedExperimentRow>(
+		`SELECT id, active, arm_a, arm_b, share::text AS share, salt, note
+		 FROM personalization.feed_experiments ORDER BY id`,
 		[],
 		60_000,
 	)

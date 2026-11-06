@@ -682,6 +682,32 @@ Enable, each step only after the one before it is live:
 
 Rollback: set the flag back to 0. The records stay in the Space, unread.
 
+### 2c-config-experiments. Keyed feed_experiments mirror (GEODB_FEED_EXPERIMENTS)
+
+`GEODB_FEED_EXPERIMENTS` (default off; takes effect only with `GEODB_RECORD_KEYS`) lets the `geodb-feed-experiments-backfill`
+Job write every `personalization.feed_experiments` row (id, active, arm_a, arm_b, share, salt, note) as a natural-key record
+in the `config` system Space (`geodb-feeder/src/feedExperimentsKeyed.ts`; the pinned `feedExperiment` kind, keyed by the
+experiment id). Fourth slice of the config tables (after §2c-config-interest). A mirror, not a move: Postgres stays the
+source. The reader is the plpgsql `personalization.feed_experiment_for_user` (api/drizzle 0102:184), called from
+`readExperiment` (api/src/forYou/queries.ts); the api has a flag-off shadow of it, `GEODB_FEED_EXPERIMENT_SHADOW`
+(`gaia_api_feed_experiment_shadow_total`), that checks the served experiment is active in geo-db with the same arms and, for a
+hash-assigned user, recomputes `interleaved` from the record's salt and share. `feed_experiment_members` and `created_at` are
+not mirrored (the shadow does not compare a member's value). Nothing writes the table but migrations and operator SQL, so
+there is no consumer: the Job is the only writer, and a rerun after an operator edit writes the new values. A note set to
+null, or an experiment deleted from Postgres, is not cleared in geo-db; the gate reports it.
+
+Enable, each step only after the one before it is live:
+
+1. A feeder image that carries this path (the Job's image) and a geo-db serve at 9d97069a78 or later (`put`).
+2. Kafka: describe on every feeder group (the Job's empty-group check). No consume ACL is new.
+3. The backfill Job (`geodb/k8s/v2/geodb-feed-experiments-backfill-job.yaml`), feeder scaled to 0, applied as in
+   §2c-quater step 4. It reads one small table READ ONLY and is rerunnable.
+4. The gate: `bun src/feedExperimentsGate.ts <postgres.tsv> <dump dir>` (its header lists the `\copy` and the
+   `fe-<column>.tsv` dumps). Exits non-zero on a Postgres-only key or a value difference.
+5. Only then set `GEODB_FEED_EXPERIMENT_SHADOW=1` on the api and watch the mismatch counter.
+
+Rollback: set the flags back to 0. The records stay in the Space, unread.
+
 ### 2c-octies. Keyed proposal versions (GEODB_PROPOSAL_VERSIONS)
 
 `GEODB_PROPOSAL_VERSIONS` (default off; takes effect only with `GEODB_RECORD_KEYS`) writes gaia's `proposal_versions`
