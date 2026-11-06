@@ -3,9 +3,12 @@ import {GeoDbError} from "../../geodb/client"
 import type {DerivedReader, DerivedRow} from "../../geodb/derived"
 import {
 	__resetAccountWeightsMetricsForTests,
+	ACCOUNT_EXCLUSIONS_COLLECTION,
+	ACCOUNT_EXCLUSIONS_VALUE_BYTES,
 	ACCOUNT_WEIGHTS_COLLECTION,
 	ACCOUNT_WEIGHTS_VALUE_BYTES,
 	type AccountWeightsShadowConfig,
+	compareAccountExclusion,
 	compareAccountWeight,
 	createAccountWeightsShadow,
 	readAccountWeightsShadowConfig,
@@ -16,7 +19,13 @@ const U1 = "11111111111141118111111111111111"
 const U2 = "22222222222242228222222222222222"
 const value = Buffer.alloc(ACCOUNT_WEIGHTS_VALUE_BYTES)
 const row = (score: number, v = value): DerivedRow => ({group: "0".repeat(32), score, value: v})
-const config: AccountWeightsShadowConfig = {enabled: true, maxInFlight: 2, intervalMs: 1000, sample: 5}
+const config: AccountWeightsShadowConfig = {
+	enabled: true,
+	maxInFlight: 2,
+	intervalMs: 1000,
+	sample: 5,
+	exclusions: false,
+}
 const log = {warn: vi.fn()}
 const settle = () => new Promise((r) => setTimeout(r, 5))
 const count = (result: string) =>
@@ -133,5 +142,72 @@ describe("createAccountWeightsShadow", () => {
 		release(null)
 		await settle()
 		expect(count("match")).toBe(1)
+	})
+})
+
+describe("account exclusions", () => {
+	const exConfig = {...config, exclusions: true}
+	const exCount = (result: string) =>
+		Number(
+			new RegExp(`gaia_api_account_exclusions_shadow_total\\{result="${result}"\\} (\\d+)`).exec(
+				renderAccountWeightsMetrics(),
+			)?.[1],
+		)
+	const held = (bytes = ACCOUNT_EXCLUSIONS_VALUE_BYTES) => ({
+		group: "0".repeat(32),
+		score: 0,
+		value: Buffer.alloc(bytes),
+	})
+
+	it("compares excluded with the presence of a collection 12 row", () => {
+		expect(compareAccountExclusion(true, held())).toBe("match")
+		expect(compareAccountExclusion(false, null)).toBe("match")
+		expect(compareAccountExclusion(false, held())).toBe("mismatch")
+		expect(compareAccountExclusion(true, null)).toBe("unsupported")
+		expect(compareAccountExclusion(true, held(4))).toBe("unsupported")
+	})
+
+	it("reads collection 12 only when the second flag is on", async () => {
+		const get = vi.fn(async () => null)
+		createAccountWeightsShadow({config, reader: {get, close: vi.fn()}, log}).compare(
+			new Map([[U1, {weight: 0.5, excluded: false}]]),
+		)
+		await settle()
+		expect(get).not.toHaveBeenCalledWith(ACCOUNT_EXCLUSIONS_COLLECTION, expect.anything())
+		expect(renderAccountWeightsMetrics()).not.toContain("account_exclusions_shadow")
+	})
+
+	it("counts each outcome beside the weights", async () => {
+		const get = vi.fn(async (c: number, key: string) =>
+			c === ACCOUNT_EXCLUSIONS_COLLECTION ? (key === U1 ? held() : null) : null,
+		)
+		const shadow = createAccountWeightsShadow({config: exConfig, reader: {get, close: vi.fn()}, log})
+		shadow.compare(
+			new Map([
+				[U1, {weight: 0, excluded: true}],
+				[U2, {weight: 0.4, excluded: false}],
+				["33333333333343338333333333333333", {weight: 0, excluded: true}],
+			]),
+		)
+		await settle()
+		expect(get).toHaveBeenCalledWith(ACCOUNT_EXCLUSIONS_COLLECTION, U1)
+		expect([exCount("match"), exCount("mismatch"), exCount("unsupported"), exCount("failed")]).toEqual([2, 0, 1, 0])
+	})
+
+	it("counts a failed collection 12 read", async () => {
+		const get = vi.fn(async (c: number) => {
+			if (c === ACCOUNT_EXCLUSIONS_COLLECTION) throw new GeoDbError("timeout", "slow")
+			return null
+		})
+		createAccountWeightsShadow({config: exConfig, reader: {get, close: vi.fn()}, log}).compare(
+			new Map([[U1, {weight: 0.5, excluded: false}]]),
+		)
+		await settle()
+		expect(exCount("failed")).toBe(1)
+	})
+
+	it("reads the flag", () => {
+		expect(readAccountWeightsShadowConfig({}).exclusions).toBe(false)
+		expect(readAccountWeightsShadowConfig({GEODB_ACCOUNT_EXCLUSIONS_SHADOW: "1"}).exclusions).toBe(true)
 	})
 })

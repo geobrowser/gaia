@@ -894,7 +894,7 @@ respawned for 10 s.
 
 Both need `geodb-client` in the image (the init-container pattern of hermes, `hermes/k8s/v2/hermes-pipeline.yaml`),
 `GEODB_KEY_PATH`, `GEODB_BINDING_PATH` and `GEODB_CLIENT_BIN`, and a serve opened with `derived_rows_max` above 0
-(144 B a row resident). The key's binding line must grant `derived=0,1,5,11`; the hermes key grants only collection 10, so
+(144 B a row resident). The key's binding line must grant `derived=0,1,5,11,12`; the hermes key grants only collection 10, so
 this is a new key and binding (not minted). Not mirrored: `entity_ranking_scores` (48.9M rows, over the resident class),
 trending and agenda listings.
 
@@ -941,15 +941,42 @@ account the table held before the refresh and no longer has is a delete. A geo-d
   and binding, since a derived get needs an authenticated non-anonymous session, not a grant) in the background. It
   never changes, delays or fails a response. `gaia_api_account_weights_shadow_total{result}`: match, mismatch (a
   different weight, or a geo-db row Postgres lacks), unsupported (`row_missing` = mirror not run or lagging,
-  `bad_layout`, `busy`), failed. `excluded` is not compared (account_exclusions is not mirrored). Enable only after the
+  `bad_layout`, `busy`), failed. `excluded` is compared by a second shadow, see §2f-exclusions. Enable only after the
   mirror has run once; expect `row_missing` until then and mismatches only for accounts changed since the last hourly
   refresh. Refusals end the pipe session (the reader starts a new one on the next read); a refusal on every read means
   the api key's binding line cannot read the derived class, which is a binding change, not an api one.
-- Uses the shared `geodb-scores-key`; its binding now grants `derived=0,1,5,11` (`geodb/supervisor.sh`), which takes
-  effect when the geodb StatefulSet restarts. Until then collection 5 writes are refused and only logged.
+- Uses the shared `geodb-scores-key`; its binding now grants `derived=0,1,5,11,12` (`geodb/supervisor.sh`), which takes
+  effect when the geodb StatefulSet restarts. Until then collection 5 and 12 writes are refused and only logged.
 - Enable order: restart serve (binding), check `derived_rows_max` has room (account_weights is one row per voting
   account, small; 144 B a row resident), run the Job once by hand with the flag on to backfill (the table is mirrored in
   full each run), then set the flag `"1"` in `account-weights-cronjob.yaml` in its own PR. Rollback: set it `"0"`.
+
+### 2f-exclusions. account_exclusions (derived collection 12, GEODB_DERIVED_MIRROR)
+
+Shadow only, nothing reads the rows. The daily `account-exclusions-sync` CronJob
+(`ranking-indexer/src/bin/account_exclusions_sync.rs`, `replace_account_exclusions()` of migration 0101) replaces the
+analytics-sourced rows of `public.account_exclusions`; rows with another source (`manual`) are inserted by hand. With
+`GEODB_DERIVED_MIRROR=1` (manifest default `"0"`) the sync reads the whole table after the replace commits and copies it
+into collection 12 (`ranking-indexer/src/account_exclusions_mirror.rs`): group 0, key the user id (16 bytes), score 0,
+value 9 bytes (source tag u8: 0 analytics, 1 manual, 2 other; `synced_at` i64 microseconds; the `reason` text is not
+mirrored). Every row is a put and an account the table held before the sync and no longer has is a delete. A manual row
+inserted between syncs reaches geo-db at the next sync. `--dry-run` writes and mirrors nothing. A geo-db error is logged,
+never fails the Job.
+
+- Readers (Postgres, unchanged): `api/src/pairFit/queries.ts:102` (`readAccounts`, left join) and the plpgsql join at
+  `api/drizzle/0101_account_weights.sql:93` (`refresh_account_weights`). Writers: `replace_account_exclusions`
+  (`0101_account_weights.sql:150`, called from `account_exclusions_sync.rs`) and hand-run `INSERT`s of manual rows.
+- api shadow, `GEODB_ACCOUNT_EXCLUSIONS_SHADOW` (manifest `"0"`): meaningful only with `GEODB_ACCOUNT_WEIGHTS_SHADOW=1`.
+  For each sampled account the weights shadow also reads collection 12 and compares `excluded` with whether the row
+  exists. `gaia_api_account_weights_shadow_total{result}` gains no new label values; the exclusion verdict is
+  `gaia_api_account_exclusions_shadow_total{result}` (match, mismatch, unsupported, failed). A mismatch right after a sync
+  is expected until the next hourly `refresh_account_weights` (the flag is the refresh's, the row is the sync's).
+- Uses the shared `geodb-scores-key`, now granting collection 12 (`geodb/supervisor.sh`).
+- **Enable order: roll serve to a build that registers collection 12 FIRST** (geo-db 12af13b5a7 or later), then the binding
+  (the StatefulSet restart does both), then run the sync once by hand with the flag on, then set the flag `"1"` in
+  `account-exclusions-sync-cronjob.yaml` in its own PR. An older serve does not refuse a put to 12 (it only checks
+  `collection < 64`): it holds and replays the rows but does not count them in `/metrics` or the figures, so a
+  write to an older serve is invisible, not harmful. Rollback: set the flag `"0"`.
 
 ### 2d. Raising the Space cap
 
@@ -1540,7 +1567,7 @@ Turn it on after the indexer's mirror has been running, as a separate change.
 
 The derived-score mirror (§2f) is wired but off: vote-indexer and ranking-indexer carry the `geodb-setup` init
 container, the `geodb-key` mount and `GEODB_DERIVED_MIRROR="0"`. Both services share one key, `geodb-scores-key`;
-the binding gives it `derived=0,1,5,11` and nothing else (`read=- write=- publish=- derived=0,1,5,11`; 5 is the account-weights CronJob, §2f-weights). The key is minted
+the binding gives it `derived=0,1,5,11,12` and nothing else (`read=- write=- publish=- derived=0,1,5,11,12`; 5 is the account-weights CronJob, §2f-weights; 12 is the account-exclusions-sync CronJob, §2f-exclusions). The key is minted
 inside the cluster by `geodb/k8s/v2/geodb-scores-key-job.yaml`, the same create-only pattern as §10; the private half
 never leaves the cluster. Needs geo-db `6b34f9feda` or later (init container image, and `derived=` with a list), and a
 geodb image (the serve StatefulSet) built from a gaia ref that includes the supervisor's `GEODB_SCORES_KEYID`

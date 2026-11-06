@@ -44,6 +44,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
+use ranking_indexer::account_exclusions_mirror::{self, AccountExclusion};
 use ranking_indexer::clickhouse::{self, KNOWN_ADDRESS, KNOWN_HASH};
 use ranking_indexer::error::IndexerError;
 
@@ -302,6 +303,17 @@ async fn main() -> Result<(), IndexerError> {
         return Ok(());
     }
 
+    // Best-effort copy into geo-db's derived class (GEODB_DERIVED_MIRROR, default off). With it off
+    // `from_env` is None and nothing below reads the table a second time.
+    let mirror = geodb_cursor::derived::DerivedMirror::from_env();
+    let prior: Vec<uuid::Uuid> = if mirror.is_some() {
+        sqlx::query_scalar("SELECT user_id FROM public.account_exclusions")
+            .fetch_all(&pool)
+            .await?
+    } else {
+        Vec::new()
+    };
+
     let rows = serde_json::Value::Array(
         placed
             .iter()
@@ -325,6 +337,23 @@ async fn main() -> Result<(), IndexerError> {
         );
     }
     info!(written, "account exclusions replaced");
+    if let Some(mirror) = &mirror {
+        // Read after the replace committed; a read error skips the mirror, never the job.
+        match sqlx::query_as::<_, AccountExclusion>(account_exclusions_mirror::SELECT_SQL)
+            .fetch_all(&pool)
+            .await
+        {
+            Ok(rows) => {
+                account_exclusions_mirror::mirror(mirror, &rows, &prior).await;
+                info!(
+                    rows = rows.len(),
+                    prior = prior.len(),
+                    "account exclusions mirrored to geo-db"
+                );
+            }
+            Err(e) => warn!(error = %e, "account exclusions mirror skipped: read failed"),
+        }
+    }
     Ok(())
 }
 

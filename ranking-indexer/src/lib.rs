@@ -3,6 +3,7 @@
 //! space membership), and projects aggregated `RANK_POSITION` relations back
 //! into the public graph.
 
+pub mod account_exclusions_mirror;
 pub mod account_weights_mirror;
 pub mod clickhouse;
 pub mod consumer;
