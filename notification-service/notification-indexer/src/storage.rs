@@ -73,6 +73,9 @@ pub struct Storage {
     /// Cached `app_webhooks` filters (per-instance, TTL-refreshed). Filtering is
     /// done in memory so the per-recipient fan-out never re-queries the table.
     webhook_cache: RwLock<Option<WebhookCache>>,
+    /// `Some` when `APP_WEBHOOKS_FILE` is set: filters come from the mounted
+    /// file (same TTL cache) instead of the `app_webhooks` table.
+    webhooks_file: Option<std::path::PathBuf>,
 }
 
 /// An expired proposal found by the rejection poller.
@@ -110,7 +113,14 @@ impl Storage {
         Self {
             pool,
             webhook_cache: RwLock::new(None),
+            webhooks_file: crate::webhooks_file::path_from_env(),
         }
+    }
+
+    /// Override the webhook source (used by tests).
+    pub fn with_webhooks_file(mut self, path: Option<std::path::PathBuf>) -> Self {
+        self.webhooks_file = path;
+        self
     }
 
     /// Ids of the webhooks that should receive an event with this token set +
@@ -137,17 +147,31 @@ impl Storage {
                 return Ok(cache.webhooks.clone());
             }
         }
-        let rows = sqlx::query("SELECT id, notification_types, space_ids FROM app_webhooks")
-            .fetch_all(&self.pool)
-            .await?;
-        let webhooks: Vec<WebhookFilter> = rows
-            .iter()
-            .map(|r| WebhookFilter {
-                id: r.get("id"),
-                notification_types: r.get("notification_types"),
-                space_ids: r.get("space_ids"),
-            })
-            .collect();
+        let webhooks: Vec<WebhookFilter> = if let Some(path) = &self.webhooks_file {
+            match crate::webhooks_file::read(path).await {
+                Ok(hooks) => hooks.iter().map(|h| h.filter()).collect(),
+                Err(e) => {
+                    // Keep serving the last good copy rather than dropping every
+                    // webhook on a transient mount hiccup.
+                    if let Some(cache) = self.webhook_cache.read().await.as_ref() {
+                        warn!(error = %e, "app webhooks reload failed; serving last good copy");
+                        return Ok(cache.webhooks.clone());
+                    }
+                    return Err(StorageError::WebhooksFile(e));
+                }
+            }
+        } else {
+            let rows = sqlx::query("SELECT id, notification_types, space_ids FROM app_webhooks")
+                .fetch_all(&self.pool)
+                .await?;
+            rows.iter()
+                .map(|r| WebhookFilter {
+                    id: r.get("id"),
+                    notification_types: r.get("notification_types"),
+                    space_ids: r.get("space_ids"),
+                })
+                .collect()
+        };
         *self.webhook_cache.write().await = Some(WebhookCache {
             webhooks: webhooks.clone(),
             fetched_at: Instant::now(),
@@ -313,17 +337,24 @@ impl Storage {
             // to WEBHOOK_CACHE_TTL. Join against app_webhooks so a webhook deleted
             // within that window is simply skipped rather than triggering a
             // webhook_id FK violation that would abort the whole transaction.
+            //
+            // File mode (APP_WEBHOOKS_FILE): the matched ids already come from the
+            // file, so there is nothing to re-check against the table. The
+            // webhook_id FK is kept for phase 1; export the file from the table so
+            // the ids are identical.
             if !matched_webhook_ids.is_empty() {
-                sqlx::query(
-                    r#"
-                    INSERT INTO notification_deliveries (outbox_id, webhook_id)
-                    SELECT $1, w.id FROM app_webhooks w WHERE w.id = ANY($2::uuid[])
-                    "#,
-                )
-                .bind(outbox_id)
-                .bind(&matched_webhook_ids)
-                .execute(&mut *tx)
-                .await?;
+                let sql = if self.webhooks_file.is_some() {
+                    "INSERT INTO notification_deliveries (outbox_id, webhook_id) \
+                     SELECT $1, x FROM unnest($2::uuid[]) AS x"
+                } else {
+                    "INSERT INTO notification_deliveries (outbox_id, webhook_id) \
+                     SELECT $1, w.id FROM app_webhooks w WHERE w.id = ANY($2::uuid[])"
+                };
+                sqlx::query(sql)
+                    .bind(outbox_id)
+                    .bind(&matched_webhook_ids)
+                    .execute(&mut *tx)
+                    .await?;
             }
 
             if mirror.is_some() {
@@ -359,6 +390,21 @@ impl Storage {
         skip(self)
     )]
     pub async fn log_unknown_webhook_filter_types(&self) {
+        if let Some(path) = &self.webhooks_file {
+            match crate::webhooks_file::read(path).await {
+                Ok(hooks) => {
+                    for (app_name, t) in crate::webhooks_file::unknown_filter_types(&hooks) {
+                        error!(
+                            app_name = %app_name,
+                            notification_type = %t,
+                            "unknown notification_type in webhook filter — it will never match any event"
+                        );
+                    }
+                }
+                Err(e) => warn!(error = %e, "could not validate webhook filter notification_types"),
+            }
+            return;
+        }
         let rows = sqlx::query(
             "SELECT app_name, unnest(notification_types) AS t
              FROM app_webhooks WHERE notification_types IS NOT NULL",
@@ -1114,6 +1160,49 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn file_mode_matches_from_file_without_touching_postgres() {
+        let a = Uuid::from_u128(0xA);
+        let dir = std::env::temp_dir().join(format!("aw-idx-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("webhooks.json");
+        std::fs::write(
+            &p,
+            format!(r#"[{{"id":"{a}","app_name":"x","url":"u","secret":"s","notification_types":["proposal_voted"],"space_ids":null}}]"#),
+        )
+        .unwrap();
+        // Lazy pool to an unreachable host: any query would fail the test.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://u:p@127.0.0.1:1/db")
+            .unwrap();
+        let st = Storage::new(pool).with_webhooks_file(Some(p));
+        let hit = st
+            .matching_webhook_ids(&["proposal_voted".to_string()], Uuid::nil())
+            .await
+            .unwrap();
+        assert_eq!(hit, vec![a]);
+        let miss = st
+            .matching_webhook_ids(&["proposal_created".to_string()], Uuid::nil())
+            .await
+            .unwrap();
+        assert!(miss.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn file_mode_missing_file_errors_and_unset_env_is_postgres() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://u:p@127.0.0.1:1/db")
+            .unwrap();
+        let st = Storage::new(pool).with_webhooks_file(Some("/nonexistent/webhooks.json".into()));
+        assert!(st.matching_webhook_ids(&[], Uuid::nil()).await.is_err());
+        std::env::remove_var(crate::webhooks_file::ENV_VAR);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://u:p@127.0.0.1:1/db")
+            .unwrap();
+        assert!(Storage::new(pool).webhooks_file.is_none());
+    }
     use super::*;
 
     fn filter(types: Option<&[&str]>, spaces: Option<&[Uuid]>) -> WebhookFilter {
