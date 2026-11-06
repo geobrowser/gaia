@@ -5,6 +5,7 @@ import {CREATED_AT_PROPERTY, conformingId, rowsFromGeoDbOutput, UPDATED_AT_PROPE
 import {createEntityShadow, isEmptyFilter} from "../entityShadow"
 import {analyzeLightEntities, analyzeLightEntity} from "../lightShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
+import {mergeIsExact, mergePages} from "../orderPickShadow"
 import {createPointReadShadows} from "../pointReadShadows"
 import {createReadBudget} from "../readBudget"
 
@@ -544,6 +545,11 @@ describe("entities with the light selection", () => {
 
 	describe("the ordered page read (GEODB_ORDER_PICK_SHADOW)", () => {
 		const PAGE_ALL = [geoSpace(SPACE_A), geoSpace(SPACE_B_UUID)]
+		/** More loaded Spaces than one line names: two lines of 1024 and 2. */
+		const PAGE_MANY = [
+			...PAGE_ALL,
+			...Array.from({length: 1024}, (_, i) => geoSpace((i + 1).toString(16).padStart(32, "0"))),
+		]
 		const T = conformingId("entity", typeId)
 		const instant = (seconds: number) => `instant:${seconds}.000000000`
 		/** Geo rows of an entity page: one row of the order's property a (entity, seconds) pair, as geodb-client prints. */
@@ -557,18 +563,20 @@ describe("entities with the light selection", () => {
 		const pageSetup = (
 			entities: Entity[],
 			geoPage: {entity: string; prop: string; raw: string}[],
-			options: {flag?: boolean} = {},
+			options: {flag?: boolean; chunks?: boolean; pages?: {entity: string; prop: string; raw: string}[][]} = {},
 		) => {
 			const log = {info: vi.fn(), warn: vi.fn()}
 			const typed = entities.map((e) => `${TYPES}\t${T}\tt\t${e.id}\t-\t-\t1\n`).join("")
 			const outputs = {[geoSpace(SPACE_A)]: (outputsFor(entities)[geoSpace(SPACE_A)] ?? "") + typed}
-			const readEntitiesPage = vi.fn(async () => geoPage)
+			let line = 0
+			const readEntitiesPage = vi.fn(async () => (options.pages ? (options.pages[line++] ?? []) : geoPage))
 			const deps = {
+				everySpaceChunks: options.chunks,
 				multiSpace: true,
 				orderPick: options.flag !== false,
 				geoDb: {readCard: askOf(outputs), readCardSpaces: askSpacesOf(outputs), readEntitiesPage},
 				geoSpaceOf: async (space: string) => geoSpace(space),
-				allGeoSpaces: async () => PAGE_ALL,
+				allGeoSpaces: async () => (options.pages ? PAGE_MANY : PAGE_ALL),
 				log,
 			}
 			return {log, readEntitiesPage, points: createPointReadShadows(deps)}
@@ -582,6 +590,98 @@ describe("entities with the light selection", () => {
 				CREATED_AT_PROPERTY,
 				entities.map((e, i) => [e.id, seconds[i] as number]),
 			)
+
+		describe("more loaded Spaces than one line can name (GEODB_EVERY_SPACE_CHUNKS)", () => {
+			// Two lines. Entity X is oldest in line 1 (created 100) but line 2 holds an older row of it (created 5).
+			const [X, Y, Z] = list(3)
+			const line1 = [...created([X, Y] as Entity[], [100, 50]), ...created([Z] as Entity[], [10])]
+			const line2 = created([X] as Entity[], [5])
+
+			it("leaves CREATED_AT_DESC uncompared (desc + least): a plain merge would be wrong", async () => {
+				// Merged by the lines' own tops X would be placed by 5 and fall to the bottom of a desc page; the
+				// reads cannot prove who is above it, so the page is left uncompared (`order_completeness`).
+				const s = pageSetup([X, Y] as Entity[], [], {chunks: true, pages: [line1, line2]})
+				await run(s, [X, Y] as Entity[], query("CREATED_AT_DESC", undefined, 2))
+				expect(s.readEntitiesPage).not.toHaveBeenCalled()
+				expect(uncompared()).toMatchObject({order_completeness: 1})
+			})
+
+			it("leaves the page uncompared with the flag off, even for an exact direction", async () => {
+				const s = pageSetup([Z, X] as Entity[], [], {pages: [line1, line2]})
+				await run(s, [Z, X] as Entity[], query("CREATED_AT_ASC", undefined, 2))
+				expect(s.readEntitiesPage).not.toHaveBeenCalled()
+				expect(uncompared()).toMatchObject({order_completeness: 1})
+			})
+
+			it("merges CREATED_AT_ASC (asc + least) by key: X is placed by its earliest row", async () => {
+				const s = pageSetup([X, Z] as Entity[], [], {chunks: true, pages: [line1, line2]})
+				await run(s, [X, Z] as Entity[], query("CREATED_AT_ASC", undefined, 2))
+				expect(results()).toEqual({match: 1})
+				expect(s.readEntitiesPage).toHaveBeenCalledTimes(2)
+			})
+
+			it("flags the merge when PostGraphile placed X by its later row", async () => {
+				const s = pageSetup([Z, X] as Entity[], [], {chunks: true, pages: [line1, line2]})
+				await run(s, [Z, X] as Entity[], query("CREATED_AT_ASC", undefined, 2))
+				expect(results()).toEqual({mismatch: 1})
+			})
+
+			it("the desc + least counterexample: merging each line's top-2 puts A and B on the page; the truth is C and D", () => {
+				// Key = least over the lines. A and B top line 1 (100, 90) but line 2 holds them at 1; C (80) is
+				// third in line 1 and D (50) tops line 2. The true desc top-2 by global key is C, D.
+				const nanos = (n: number) => BigInt(n)
+				const line1: [string, bigint | null][] = [
+					["A", nanos(100)],
+					["B", nanos(90)],
+				]
+				const line2: [string, bigint | null][] = [
+					["D", nanos(50)],
+					["E", nanos(40)],
+				]
+				const naive = mergePages([line1, line2], "desc", "least")
+					.slice(0, 2)
+					.map(([id]) => id)
+				expect(naive).toEqual(["A", "B"])
+				const truth = [
+					["A", 1],
+					["B", 1],
+					["C", 80],
+					["D", 50],
+					["E", 40],
+				] as [string, number][]
+				expect(
+					truth
+						.sort((a, b) => b[1] - a[1])
+						.slice(0, 2)
+						.map(([id]) => id),
+				).toEqual(["C", "D"])
+				expect(mergeIsExact("desc", "least")).toBe(false)
+			})
+
+			it("the asc + least merge is exact on the same data shape", () => {
+				const nanos = (n: number) => BigInt(n)
+				const line1: [string, bigint | null][] = [
+					["A", nanos(1)],
+					["B", nanos(2)],
+				]
+				const line2: [string, bigint | null][] = [
+					["B", nanos(0)],
+					["D", nanos(5)],
+				]
+				expect(
+					mergePages([line1, line2], "asc", "least")
+						.slice(0, 2)
+						.map(([id]) => id),
+				).toEqual(["B", "A"])
+			})
+
+			it("exposes which directions merge exactly", () => {
+				expect(mergeIsExact("asc", "least")).toBe(true)
+				expect(mergeIsExact("desc", "greatest")).toBe(true)
+				expect(mergeIsExact("desc", "least")).toBe(false)
+				expect(mergeIsExact("asc", "greatest")).toBe(false)
+			})
+		})
 
 		it("plans a single CREATED_AT or UPDATED_AT key and nothing else", () => {
 			const plan = (order: string, extra?: string) => {

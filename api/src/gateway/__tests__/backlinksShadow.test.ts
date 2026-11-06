@@ -51,7 +51,13 @@ beforeEach(() => __resetGatewayMetricsForTests())
  */
 function setup(
 	outputs: Record<string, string>,
-	options: {flag?: boolean; every?: boolean; budget?: ReturnType<typeof createReadBudget>} = {},
+	options: {
+		flag?: boolean
+		every?: boolean
+		budget?: ReturnType<typeof createReadBudget>
+		spaces?: string[]
+		chunks?: boolean
+	} = {},
 ) {
 	const log = {info: vi.fn(), warn: vi.fn()}
 	const readBacklinks = vi.fn(
@@ -76,9 +82,10 @@ function setup(
 		},
 	)
 	const geoDb = {readCard: vi.fn(async () => []), readBacklinks}
-	const allGeoSpaces = vi.fn(async () => [geoSpace(SPACE), geoSpace(OTHER)])
+	const allGeoSpaces = vi.fn(async () => options.spaces ?? [geoSpace(SPACE), geoSpace(OTHER)])
 	const shadow = createEntityShadow({
 		multiSpace: true,
+		everySpaceChunks: options.chunks,
 		backlinks: options.flag !== false,
 		geoDb,
 		geoSpaceOf: async (space: string) => (space === UNMAPPED ? null : geoSpace(space)),
@@ -243,5 +250,30 @@ describe("entity shadow, backlinks", () => {
 		await call(s.shadow as never, FIXTURE.request.variables)
 		expect(unsupported()).toEqual({selection: 1})
 		expect(s.readBacklinks).not.toHaveBeenCalled()
+	})
+
+	describe("more loaded Spaces than one line can name (GEODB_EVERY_SPACE_CHUNKS)", () => {
+		const filler = Array.from({length: 1024}, (_, i) => geoSpace((i + 1).toString(16).padStart(32, "0")))
+		const many = [...filler, geoSpace(SPACE)]
+
+		it("refuses while the flag is off", async () => {
+			const s = setup({[geoSpace(SPACE)]: fixtureRefs()}, {spaces: many})
+			await call(s.shadow as never, FIXTURE.request.variables)
+			expect(unsupported()).toEqual({many_spaces: 1})
+			expect(s.readBacklinks).not.toHaveBeenCalled()
+		})
+
+		it("reads line by line, names the Space of a lone last line, and matches", async () => {
+			const s = setup({[geoSpace(SPACE)]: fixtureRefs()}, {spaces: many, chunks: true})
+			await call(s.shadow as never, FIXTURE.request.variables)
+			expect(results()).toEqual({match: 1})
+			expect(s.readBacklinks.mock.calls.map((c) => c[0].geoSpaceIds.length)).toEqual([1024, 1])
+		})
+
+		it("flags a referrer geo-db holds in no line", async () => {
+			const s = setup({}, {spaces: many, chunks: true})
+			await call(s.shadow as never, FIXTURE.request.variables)
+			expect(results()).toEqual({mismatch: 1})
+		})
 	})
 })
