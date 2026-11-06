@@ -89,6 +89,31 @@ export type BackfillSource = {
 	readBatch(space: string, entities: string[]): Promise<{values: PgValueRow[]; relations: PgRelationRow[]}>
 }
 
+/**
+ * The held-repair's view of Postgres: the (space, entity) pairs where a value shares its property with the type of an
+ * outgoing relation of the same entity in the same Space (what the pre-#1244 backfill mistook for "held"), plus the
+ * same batch read the backfill uses. Space and entity ids come back as Postgres prints uuids.
+ */
+export type HeldRepairSource = Pick<BackfillSource, "readBatch"> & {
+	listCandidates(): Promise<{space: string; entity: string}[]>
+}
+
+export function pgHeldRepairSource(db: ReadOnlyPg): HeldRepairSource {
+	return {
+		readBatch: pgBackfillSource(db).readBatch,
+		async listCandidates() {
+			const rows = await db.read<{space: string; entity: string}>(
+				`SELECT DISTINCT v.space_id::text AS space, v.entity_id::text AS entity
+				 FROM "values" v
+				 JOIN relations r ON r.space_id = v.space_id AND r.from_entity_id = v.entity_id AND r.type_id = v.property_id`,
+				[],
+				900_000,
+			)
+			return rows
+		},
+	}
+}
+
 const dashed = (id: string) =>
 	id.includes("-") ? id : `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`
 
