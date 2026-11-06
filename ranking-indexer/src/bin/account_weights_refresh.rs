@@ -9,6 +9,8 @@
 //! The refresh is a single function call, so it is one transaction: readers keep the previous
 //! weights until the new ones commit.
 //!
+//! With `GEODB_DERIVED_MIRROR=1` the table is then copied into geo-db collection 5 (RUNBOOK 2f-weights).
+//!
 //! Usage: `DATABASE_URL=... cargo run --bin account_weights_refresh`
 
 use std::env;
@@ -17,7 +19,9 @@ use std::time::Instant;
 use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 
+use ranking_indexer::account_weights_mirror::{self, AccountWeight};
 use ranking_indexer::error::IndexerError;
+use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<(), IndexerError> {
@@ -33,6 +37,17 @@ async fn main() -> Result<(), IndexerError> {
         .connect(&database_url)
         .await?;
 
+    // Best-effort copy into geo-db's derived class (GEODB_DERIVED_MIRROR, default off). With it off
+    // `from_env` is None and nothing below touches the table a second time.
+    let mirror = geodb_cursor::derived::DerivedMirror::from_env();
+    let prior: Vec<Uuid> = if mirror.is_some() {
+        sqlx::query_scalar("SELECT user_id FROM public.account_weights")
+            .fetch_all(&pool)
+            .await?
+    } else {
+        Vec::new()
+    };
+
     let started = Instant::now();
     // A failure returns Err, so the process exits non-zero and the Job is marked failed.
     let scored: i32 = sqlx::query_scalar("SELECT public.refresh_account_weights()")
@@ -44,6 +59,23 @@ async fn main() -> Result<(), IndexerError> {
     )
     .fetch_one(&pool)
     .await?;
+    if let Some(mirror) = &mirror {
+        // Read after the refresh committed; a read error skips the mirror, never the job.
+        match sqlx::query_as::<_, AccountWeight>(account_weights_mirror::SELECT_SQL)
+            .fetch_all(&pool)
+            .await
+        {
+            Ok(rows) => {
+                account_weights_mirror::mirror(mirror, &rows, &prior).await;
+                info!(
+                    rows = rows.len(),
+                    prior = prior.len(),
+                    "account weights mirrored to geo-db"
+                );
+            }
+            Err(e) => tracing::warn!(error = %e, "account weights mirror skipped: read failed"),
+        }
+    }
     info!(
         scored,
         excluded,

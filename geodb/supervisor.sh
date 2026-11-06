@@ -53,10 +53,10 @@ fi
 if [ -n "${GEODB_OUTBOX_KEYID:-}" ]; then
 	sed -i "/^grant_ttl_s/i principal = $GEODB_OUTBOX_KEYID read=- write=- publish=- work=*" "$RUN/binding.txt"
 fi
-# The score writers' key (vote-indexer + ranking-indexer, Secret geodb-scores-key): derived collections 0, 1 and 11
-# (entity_type_ranking, entity_topic_ranking, ranks.ranking_scores) and nothing else (RUNBOOK section 12).
+# The score writers' key (vote-indexer + ranking-indexer, Secret geodb-scores-key): derived collections 0, 1, 5 and 11
+# (entity_type_ranking, entity_topic_ranking, account_weights, ranks.ranking_scores) and nothing else (RUNBOOK section 12).
 if [ -n "${GEODB_SCORES_KEYID:-}" ]; then
-	sed -i "/^grant_ttl_s/i principal = $GEODB_SCORES_KEYID read=- write=- publish=- derived=0,1,11" "$RUN/binding.txt"
+	sed -i "/^grant_ttl_s/i principal = $GEODB_SCORES_KEYID read=- write=- publish=- derived=0,1,5,11" "$RUN/binding.txt"
 fi
 
 # Patch the two ids into the ConfigMap (create it if absent). Succeeds quietly where there is no cluster.

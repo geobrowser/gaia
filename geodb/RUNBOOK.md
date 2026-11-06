@@ -894,7 +894,7 @@ respawned for 10 s.
 
 Both need `geodb-client` in the image (the init-container pattern of hermes, `hermes/k8s/v2/hermes-pipeline.yaml`),
 `GEODB_KEY_PATH`, `GEODB_BINDING_PATH` and `GEODB_CLIENT_BIN`, and a serve opened with `derived_rows_max` above 0
-(144 B a row resident). The key's binding line must grant `derived=0,1,11`; the hermes key grants only collection 10, so
+(144 B a row resident). The key's binding line must grant `derived=0,1,5,11`; the hermes key grants only collection 10, so
 this is a new key and binding (not minted). Not mirrored: `entity_ranking_scores` (48.9M rows, over the resident class),
 trending and agenda listings.
 
@@ -918,6 +918,28 @@ Type ranking gate: `geodb-feeder/src/typeRankingGate.ts <postgres.tsv> <scan.tsv
 are in that file's header. Rows for entities not refreshed since the flag went on show as Postgres-only until their
 next refresh, so run `refresh_ranking_scores_for` over the entity set after turning the flag on.
 
+
+### 2f-weights. account_weights (derived collection 5, GEODB_DERIVED_MIRROR)
+
+Shadow only, nothing reads the rows. The hourly `ranking-indexer-account-weights` CronJob
+(`ranking-indexer/src/bin/account_weights_refresh.rs`, `refresh_account_weights()` of migration 0101) is the only writer
+of `public.account_weights`. With `GEODB_DERIVED_MIRROR=1` (manifest default `"0"`) it reads the table after the refresh
+commits and copies the whole of it into collection 5 (`ranking-indexer/src/account_weights_mirror.rs`): group 0, key the
+user id (16 bytes), score the weight, value 28 little-endian bytes (`vote_count` i32, `stance_vote_count` i32,
+`first_vote_at` i64 microseconds or `i64::MIN`, `computed_at` i64 microseconds, reason codes u32: 1 excluded, 2
+new_account, 4 one_sided; the reasons' `detail` text is not mirrored). Every row is a put (last write wins) and an
+account the table held before the refresh and no longer has is a delete. A geo-db error is logged, never fails the Job
+(CronJob processes install no metrics recorder, so read the `geodb_derived` warn lines, not counters).
+
+- Reader (Postgres, unchanged): `api/src/pairFit/queries.ts:101` (`readAccounts`, left join) and the plpgsql join at
+  `api/drizzle/0101_account_weights.sql:179`. Writer: `0101_account_weights.sql:114` (upsert) and `:136` (delete),
+  called from `account_weights_refresh.rs`. No api shadow: the api has no derived read client yet, so a compare waits
+  for one.
+- Uses the shared `geodb-scores-key`; its binding now grants `derived=0,1,5,11` (`geodb/supervisor.sh`), which takes
+  effect when the geodb StatefulSet restarts. Until then collection 5 writes are refused and only logged.
+- Enable order: restart serve (binding), check `derived_rows_max` has room (account_weights is one row per voting
+  account, small; 144 B a row resident), run the Job once by hand with the flag on to backfill (the table is mirrored in
+  full each run), then set the flag `"1"` in `account-weights-cronjob.yaml` in its own PR. Rollback: set it `"0"`.
 
 ### 2d. Raising the Space cap
 
@@ -1508,7 +1530,7 @@ Turn it on after the indexer's mirror has been running, as a separate change.
 
 The derived-score mirror (§2f) is wired but off: vote-indexer and ranking-indexer carry the `geodb-setup` init
 container, the `geodb-key` mount and `GEODB_DERIVED_MIRROR="0"`. Both services share one key, `geodb-scores-key`;
-the binding gives it `derived=0,1,11` and nothing else (`read=- write=- publish=- derived=0,1,11`). The key is minted
+the binding gives it `derived=0,1,5,11` and nothing else (`read=- write=- publish=- derived=0,1,5,11`; 5 is the account-weights CronJob, §2f-weights). The key is minted
 inside the cluster by `geodb/k8s/v2/geodb-scores-key-job.yaml`, the same create-only pattern as §10; the private half
 never leaves the cluster. Needs geo-db `6b34f9feda` or later (init container image, and `derived=` with a list), and a
 geodb image (the serve StatefulSet) built from a gaia ref that includes the supervisor's `GEODB_SCORES_KEYID`
