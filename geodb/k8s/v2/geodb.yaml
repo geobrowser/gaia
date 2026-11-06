@@ -454,6 +454,11 @@ spec:
             # backfill Job (geodb-space-voting-settings-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_SPACE_VOTING_SETTINGS
               value: "0"
+            # Keyed space topics (TOPIC_DECLARED / TOPIC_REMOVED on space.topics, into the governance system Space).
+            # Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-undecies. OFF until the space-topics backfill Job
+            # (geodb-space-topics-backfill-job.yaml) has run with the feeder at 0.
+            - name: GEODB_SPACE_TOPICS
+              value: "0"
             # Keyed proposal versions (PROPOSAL_CREATED / PROPOSAL_UPDATED, one record per (proposal, block) with the
             # voting settings). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-octies. OFF until the
             # proposal-versions backfill Job (geodb-proposal-versions-backfill-job.yaml) has run with the feeder at 0.

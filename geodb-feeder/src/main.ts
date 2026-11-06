@@ -26,6 +26,8 @@ import {ranksKeyedEnabled, ranksOffsetsDir} from "./ranksKeyed.js"
 import {proposalStatusKeyedEnabled, proposalStatusOffsetsDir} from "./proposalStatusKeyed.js"
 import {startProposalVersionsConsumer} from "./proposalVersionsConsumer.js"
 import {proposalVersionsKeyedEnabled, proposalVersionsOffsetsDir} from "./proposalVersionsKeyed.js"
+import {startSpaceTopicsConsumer} from "./spaceTopicsConsumer.js"
+import {spaceTopicsKeyedEnabled, spaceTopicsOffsetsDir} from "./spaceTopicsKeyed.js"
 import {startSpaceVotingSettingsConsumer} from "./spaceVotingSettingsConsumer.js"
 import {spaceVotingSettingsKeyedEnabled, spaceVotingSettingsOffsetsDir} from "./spaceVotingSettingsKeyed.js"
 import {startProposalActionsConsumer} from "./proposalActionsConsumer.js"
@@ -391,6 +393,29 @@ async function main(config: Config): Promise<void> {
 		)
 	}
 
+	// Keyed space topics (spaceTopicsKeyed.ts): GEODB_SPACE_TOPICS with GEODB_RECORD_KEYS, after their backfill.
+	let spaceTopics: Awaited<ReturnType<typeof startSpaceTopicsConsumer>> | null = null
+	if (config.spaceTopics.enabled && !config.recordKeys)
+		log("warn", "GEODB_SPACE_TOPICS is set without GEODB_RECORD_KEYS; space topics consumer not started")
+	if (spaceTopicsKeyedEnabled(config)) {
+		spaceTopics = await startOptionalConsumer("space_topics", metrics.consumerStartFailed, () =>
+			startSpaceTopicsConsumer({
+				kafka,
+				config,
+				abort,
+				deps: {
+					...spaceDeps,
+					lock,
+					beat: async () => {},
+					allowPut: true,
+					systemSpaces,
+					publishSystem: (t: string) => systemPublisher.publish(t),
+					offsets: new ProposalOffsets(spaceTopicsOffsetsDir(config.dataDir)),
+				},
+			}),
+		)
+	}
+
 	// Keyed proposal versions (proposalVersionsKeyed.ts): GEODB_PROPOSAL_VERSIONS with GEODB_RECORD_KEYS, after their backfill.
 	let proposalVersions: Awaited<ReturnType<typeof startProposalVersionsConsumer>> | null = null
 	if (config.proposalVersions.enabled && !config.recordKeys)
@@ -538,6 +563,12 @@ async function main(config: Config): Promise<void> {
 		await sv.poll()
 	}
 
+	if (spaceTopics) {
+		const st = spaceTopics
+		setInterval(() => void st.poll(), config.lagPollMs).unref()
+		await st.poll()
+	}
+
 	if (spaceEntities) {
 		const s = spaceEntities
 		setInterval(() => void s.poll(), config.lagPollMs).unref()
@@ -558,6 +589,7 @@ async function main(config: Config): Promise<void> {
 		await proposalActions?.stop()
 		await subspaces?.stop()
 		await spaceVotingSettings?.stop()
+		await spaceTopics?.stop()
 		await proposalVersions?.stop()
 		await proposalStatus?.stop()
 		await ranks?.stop()

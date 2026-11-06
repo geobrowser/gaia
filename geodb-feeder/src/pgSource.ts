@@ -13,6 +13,7 @@ import type {InterestConfigRow, InterestSignalWeightRow} from "./interestConfigK
 import type {FeedExperimentMemberRow} from "./feedExperimentMembersKeyed.js"
 import type {FeedExperimentRow} from "./feedExperimentsKeyed.js"
 import type {ForYouConfigRow} from "./forYouConfigKeyed.js"
+import type {SpaceTopicRow} from "./spaceTopicsKeyed.js"
 import type {SpaceVotingSettingsRow} from "./spaceVotingSettingsKeyed.js"
 import type {ProposalVersionRow} from "./proposalVersionsKeyed.js"
 import type {ProposalStatusRow} from "./proposalStatusKeyed.js"
@@ -397,6 +398,15 @@ export async function* readProposalVersionRows(db: ReadOnlyPg, pageSize = 5000):
 		if (page.length < pageSize) return
 		after = page[page.length - 1] as ProposalVersionRow & {proposal_version: number}
 	}
+}
+
+/** Every Space that has a topic (`spaces.topic_id IS NOT NULL`), read in one query. */
+export async function* readSpaceTopicRows(db: ReadOnlyPg): AsyncGenerator<SpaceTopicRow> {
+	yield* await db.read<SpaceTopicRow>(
+		`SELECT id::text AS space_id, topic_id::text AS topic_id FROM spaces WHERE topic_id IS NOT NULL ORDER BY id`,
+		[],
+		300_000,
+	)
 }
 
 export type EntityTimesRow = {id: string; created_at: string | null; updated_at: string | null}

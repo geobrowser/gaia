@@ -878,6 +878,35 @@ same ids).
 
 Rollback: unset `GEODB_RANKS`. The records stay in the Space, unread; nothing reads them yet.
 
+### 2c-undecies. Keyed space topics (GEODB_SPACE_TOPICS)
+
+`GEODB_SPACE_TOPICS` (default off; takes effect only with `GEODB_RECORD_KEYS`) mirrors `spaces.topic_id`, the column
+kg-indexer sets from `<env>.space.topics`, as one natural-key record per Space in the `governance` system Space
+(`geodb-feeder/src/spaceTopicsKeyed.ts`; the pinned `spaceTopic` kind). The consumer is its own group on
+`<env>.space.topics`, `geodb-feeder-space-topics-keyed-v1-<env>`; kg-indexer's group is untouched.
+
+How the fold maps: `TOPIC_DECLARED` (or no `event-type` header, as kg-indexer reads it) is a `put` of the topic
+reference, the topic in the statement id, so a new topic replaces the old one, a replay is a no-op and A then B then A
+ends on A. `TOPIC_REMOVED` closes that topic's statement, so it clears the column only when the removed topic is the
+current one, as `clear_space_topic` does. An id that is not 16 bytes is dead-lettered.
+
+Not mirrored: `spaces.address` (`SPACE_ADDRESS_UPDATED` on `space.creations`), which has no keyed consumer yet. A topic
+event for a Space Postgres lacks is written anyway (kg-indexer's UPDATE would match no row).
+
+Activation order, each step only after the one before it is live:
+
+1. geo-db serve and init container on 9d97069a78 or later (`put`); a feeder image that carries this path.
+2. Kafka ACL: consume on the group `geodb-feeder-space-topics-keyed-v1-<env>` and read on `<env>.space.topics`, and
+   describe on every feeder group for the backfill Job's empty-group check. Without them the consumer fails to start and
+   `geodb_feeder_consumer_start_failed{consumer="space_topics"}` goes to 1.
+3. Required: the backfill Job (`geodb/k8s/v2/geodb-space-topics-backfill-job.yaml`), feeder scaled to 0, applied as in
+   §2c-quater step 4. It reads `spaces WHERE topic_id IS NOT NULL` READ ONLY and is rerunnable.
+4. `GEODB_RECORD_KEYS: "1"` and `GEODB_SPACE_TOPICS: "1"` in the feeder manifest, then scale it back to 1.
+
+A rerun of the Job once the consumer has offsets refuses unless `BACKFILL_KEYED_RESET_CONSUMER` is `"1"`.
+
+Rollback: unset `GEODB_SPACE_TOPICS`. The records stay in the Space, unread; nothing reads them yet.
+
 ### 2f. Derived score tables (GEODB_DERIVED_MIRROR)
 
 Shadow only, nothing reads these rows. With `GEODB_DERIVED_MIRROR=1` (default off) the score writers copy the rows they
@@ -1357,6 +1386,7 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 | `GeoDbFeederSpaceVotingSettingsStalled` | `space.governance` lag above 0 and nothing handled by the space-voting-settings consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-septies) |
 | `GeoDbFeederProposalVersionsStalled` | `space.governance` lag above 0 and nothing handled by the proposal-versions consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-octies) |
 | `GeoDbFeederProposalStatusStalled` | `space.governance` lag above 0 and nothing handled by the proposal-status consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-novies) |
+| `GeoDbFeederSpaceTopicsStalled` | `space.topics` lag above 0 and nothing handled by the space-topics consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-undecies) |
 | `GeoDbFeederRanksStalled` | `knowledge.edits` lag above 0 and nothing handled by the ranks consumer for 30m | the repeating error in the feeder log; an `exhausted` write to the votes Space (§2c-decies) |
 | `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`, `space_voting_settings`, `proposal_versions`, `proposal_status`, `ranks`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
 

@@ -43,6 +43,8 @@ export type Config = {
 	proposalStatus: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_RANKS (with GEODB_RECORD_KEYS): keyed ranking blocks, rankings and ranking items from `knowledge.edits` (ranksKeyed.ts). */
 	ranks: {enabled: boolean; topic: string; groupId: string}
+	/** GEODB_SPACE_TOPICS (with GEODB_RECORD_KEYS): keyed `spaces.topic_id` from `space.topics` (spaceTopicsKeyed.ts). */
+	spaceTopics: {enabled: boolean; topic: string; groupId: string}
 	/**
 	 * GEODB_RELATION_POSITIONS: write a relation's position into geo-db (`.position` on its `add`). Default off: a
 	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it.
@@ -96,6 +98,7 @@ export const feederGroupIds = (c: Config): string[] => [
 	c.proposalActions.groupId,
 	c.subspaces.groupId,
 	c.spaceVotingSettings.groupId,
+	c.spaceTopics.groupId,
 	c.proposalVersions.groupId,
 	c.proposalStatus.groupId,
 	c.ranks.groupId,
@@ -249,6 +252,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			enabled: flag(env.GEODB_RANKS),
 			topic: env.KAFKA_RANKS_TOPIC ?? `${environment}.knowledge.edits`,
 			groupId: env.KAFKA_RANKS_GROUP_ID ?? `geodb-feeder-ranks-keyed-v1-${environment}`,
+		},
+		spaceTopics: {
+			/**
+			 * GEODB_SPACE_TOPICS: consume the TOPIC_DECLARED and TOPIC_REMOVED events of `space.topics` and write each
+			 * Space's current topic (spaceTopicsKeyed.ts) into the `governance` system Space. Takes effect only with
+			 * GEODB_RECORD_KEYS (spaceTopicsKeyedEnabled), and only after the backfill (RUNBOOK §2c-undecies). Its own
+			 * group. Default off.
+			 */
+			enabled: flag(env.GEODB_SPACE_TOPICS),
+			topic: env.KAFKA_SPACE_TOPICS_TOPIC ?? `${environment}.space.topics`,
+			groupId: env.KAFKA_SPACE_TOPICS_GROUP_ID ?? `geodb-feeder-space-topics-keyed-v1-${environment}`,
 		},
 		spaceEntities: {
 			/** GEODB_SPACE_ENTITIES: consume `space.creations` and write Space system entities. Default off. */
