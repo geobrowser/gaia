@@ -326,21 +326,21 @@ spec:
             - name: GEODB_RANK_TYPED_SHADOW
               value: "count"
             # The for_you_config record in geo-db's config Space read back after the For you route reads its
-            # settings, counted against them (gaia_api_for_you_config_shadow_total). OFF; never changes a
+            # settings, counted against them (gaia_api_for_you_config_shadow_total). ON (backfills ran 2026-11-06); never changes a
             # response. Needs the geodb-feeder's for_you_config backfill (GEODB_FOR_YOU_CONFIG) run first.
             - name: GEODB_FOR_YOU_CONFIG_SHADOW
-              value: "0"
+              value: "1"
             # The same for entity_ranking_config's tau_seconds, the one value the api serves from that table
-            # (gaia_api_entity_ranking_config_shadow_total). OFF; never changes a response. Needs the geodb-feeder's
+            # (gaia_api_entity_ranking_config_shadow_total). ON (backfills ran 2026-11-06); never changes a response. Needs the geodb-feeder's
             # entity_ranking_config backfill (GEODB_ENTITY_RANKING_CONFIG) run first.
             - name: GEODB_ENTITY_RANKING_CONFIG_SHADOW
-              value: "0"
+              value: "1"
             # The same for the feed experiment the route served: active, arms and the hash assignment against geo-db's
-            # record (gaia_api_feed_experiment_shadow_total); a member's value is compared with the member record. OFF; never
+            # record (gaia_api_feed_experiment_shadow_total); a member's value is compared with the member record. ON (backfills ran 2026-11-06); never
             # changes a response. Needs the geodb-feeder's feed_experiments and feed_experiment_members backfills
             # (GEODB_FEED_EXPERIMENTS, GEODB_FEED_EXPERIMENT_MEMBERS) run first.
             - name: GEODB_FEED_EXPERIMENT_SHADOW
-              value: "0"
+              value: "1"
             # The same for pair-fit's account weights: a sample of each request's candidates (at most every
             # GEODB_ACCOUNT_WEIGHTS_SHADOW_INTERVAL_MS, default 10 s; _SAMPLE candidates, default 5) against geo-db's
             # derived collection 5 (gaia_api_account_weights_shadow_total), read over `geodb-client derived pipe`. ON; never
