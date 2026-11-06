@@ -2,7 +2,7 @@ import {readFileSync} from "node:fs"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {CREATED_AT_PROPERTY, conformingId, rowsFromGeoDbOutput, UPDATED_AT_PROPERTY, valueKey} from "../../geodb/card"
-import {createEntitiesConnectionShadow} from "../entitiesConnectionShadow"
+import {createEntitiesConnectionShadow, createEntitiesOrderedShadow} from "../entitiesConnectionShadow"
 import {createEntityShadow, isEmptyFilter} from "../entityShadow"
 import {analyzeLightEntities, analyzeLightEntity} from "../lightShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
@@ -2004,5 +2004,63 @@ describe("entitiesConnection with the light selection", () => {
 			{data: {}},
 		)
 		expect(results()).toEqual({unsupported_selection: 1})
+	})
+})
+
+describe("entitiesOrderedByProperty with the light selection", () => {
+	const PROPERTY = "00000000-9962-4962-9962-0000000000bb"
+	const ordered = (args: string) => {
+		const q = FIXTURE.request.query
+		return q.replace('entity(id: "' + HEX + '")', `entitiesOrderedByProperty(${args})`)
+	}
+	const list = (n: number): Entity[] =>
+		Array.from({length: n}, (_, at) => {
+			const e = clone(ENTITY)
+			e.id = `${at.toString(16).padStart(2, "0")}${HEX.slice(2)}`
+			return e
+		})
+	const outputsFor = (entities: Entity[]) => ({
+		[geoSpace(SPACE_A)]: entities.map((e) => geoOutput(e).replaceAll(HEX, e.id)).join(""),
+	})
+	const base = `propertyId: "${PROPERTY}", sortDirection: DESC, dataType: "integer", first: 5`
+
+	it("plans plain Space and Type lists, and leaves order and vote narrowing uncompared", () => {
+		const q = ordered(
+			`${base}, spaceIds: ["${SPACE_A}"], typeIds: ["e550fe517e904b2c8fffdf13408f5634"], votedBy: "${PROPERTY}", votedByKinds: [0]`,
+		)
+		const a = analyzeLightEntities(parse(q), null, {}, {ordered: true})
+		expect(a.ok).toBe(true)
+		if (a.ok) {
+			expect(a.plan.uncompared).toEqual(expect.arrayContaining(["order_completeness", "filter_completeness"]))
+			expect(a.plan.claims.map((c) => c.kind)).toEqual(["type"])
+			expect(a.plan.spaceIds).toEqual([SPACE_A])
+		}
+	})
+
+	it("refuses an unknown argument and a missing property", () => {
+		expect(analyzeLightEntities(parse(ordered(`${base}, bogus: 1`)), null, {}, {ordered: true})).toEqual({
+			ok: false,
+			reason: "args",
+		})
+		expect(analyzeLightEntities(parse(ordered("first: 5")), null, {}, {ordered: true})).toEqual({
+			ok: false,
+			reason: "args",
+		})
+	})
+
+	it("is only its own root", () => {
+		expect(analyzeLightEntities(parse(ordered(base)), null, {}).ok).toBe(false)
+	})
+
+	it("compares the returned entities and flags a differing one", async () => {
+		const entities = list(2)
+		const s = setup(outputsFor(entities))
+		const shadow = createEntitiesOrderedShadow(s.deps)
+		await call(shadow as never, ordered(base), {}, {data: {entitiesOrderedByProperty: entities}})
+		expect(results()).toEqual({match: 1})
+		const wrong = clone(entities)
+		;(wrong[0] as Entity).name = "something else"
+		await call(shadow as never, ordered(base), {}, {data: {entitiesOrderedByProperty: wrong}})
+		expect(results()).toEqual({match: 1, mismatch: 1})
 	})
 })

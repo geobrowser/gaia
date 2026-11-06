@@ -718,6 +718,52 @@ function readRootArgs(
 	return spaces
 }
 
+export const ORDERED_ROOT = "entitiesOrderedByProperty"
+const ORDERED_ARGS = [
+	"propertyId",
+	"spaceIds",
+	"sortDirection",
+	"dataType",
+	"typeIds",
+	"includeWithoutValue",
+	"votedBy",
+	"votedByKinds",
+	"votedByTypes",
+	"entityIds",
+	"first",
+	"offset",
+]
+
+/**
+ * `entitiesOrderedByProperty(propertyId, spaceIds, typeIds, ...)`: a database function ordering entities by a property's
+ * value, answering a plain list. Its order and its vote/entity-id narrowing are a ranking no card settles, so they are
+ * uncompared (`order_completeness`, `filter_completeness`); the Space and Type lists narrow like `entities`' own, as plain
+ * lists rather than `{in: ..}`. Every returned entity is still judged on its own card.
+ */
+function readOrderedArgs(
+	args: Record<string, unknown>,
+	claims: FilterClaim[],
+	uncompared: Set<UncomparedReason>,
+): string[] | null {
+	const given = (name: string) => args[name] !== undefined && args[name] !== null
+	if (typeof args.propertyId !== "string") refuse("args")
+	uuidArg(args.propertyId)
+	uncompared.add("order_completeness")
+	let spaces: string[] | null = null
+	if (given("spaceIds")) {
+		if (!Array.isArray(args.spaceIds)) return refuse("args")
+		if (args.spaceIds.length > 0) spaces = [...new Set(args.spaceIds.map((id) => uuidArg(id)))]
+	}
+	if (given("typeIds")) {
+		if (!Array.isArray(args.typeIds)) return refuse("args")
+		if (args.typeIds.length > 0)
+			claims.push({kind: "type", typeIds: [...new Set(args.typeIds.map((id) => uuidArg(id)))]})
+	}
+	for (const name of ["votedBy", "votedByKinds", "votedByTypes", "entityIds", "includeWithoutValue"])
+		if (given(name)) uncompared.add("filter_completeness")
+	return spaces
+}
+
 /**
  * `entities(filter, first, offset, spaceId, spaceIds, typeId, typeIds)` with the light selection, compared on a sample of
  * what it returns. With `connection`, the root is `entitiesConnection` (the same arguments plus `after`): its entities are
@@ -732,17 +778,21 @@ export function analyzeLightEntities(
 		relationsTypeFilter?: boolean
 		derivedFields?: boolean
 		connection?: boolean
+		/** The root is `entitiesOrderedByProperty` (a database function answering a plain list; see readOrderedArgs). */
+		ordered?: boolean
 	} = {},
 ): LightAnalysis<LightEntitiesPlan> {
 	try {
 		const {fragments, variables: resolved, roots} = parseOperation(document, operationName, variables)
 		const root = roots[0]
-		const rootName = options.connection ? "entitiesConnection" : "entities"
+		const rootName = options.ordered ? ORDERED_ROOT : options.connection ? "entitiesConnection" : "entities"
 		if (roots.length !== 1 || !root || root.name.value !== rootName) return {ok: false, reason: "not_single_root"}
 		if (!root.selectionSet) return {ok: false, reason: "selection"}
 		const args = argsOf(root, resolved)
 		for (const arg of Object.keys(args))
-			if (!ENTITIES_ARGS.includes(arg) && !(options.connection && arg === "after")) refuse("args")
+			if (options.ordered) {
+				if (!ORDERED_ARGS.includes(arg)) refuse("args")
+			} else if (!ENTITIES_ARGS.includes(arg) && !(options.connection && arg === "after")) refuse("args")
 		const after = args.after
 		if (after !== undefined && after !== null && typeof after !== "string") refuse("args")
 		const uncompared = new Set<UncomparedReason>()
@@ -764,11 +814,15 @@ export function analyzeLightEntities(
 		}
 		for (const arg of ["first", "offset"])
 			if (args[arg] !== undefined && args[arg] !== null && !Number.isInteger(args[arg])) refuse("args")
-		const {claims, ids, exact} = readFilter(args.filter, uncompared)
+		const {claims, ids, exact} = options.ordered
+			? {claims: [] as FilterClaim[], ids: null, exact: false}
+			: readFilter(args.filter, uncompared)
 		// A page after a cursor starts where PostGraphile's cursor says, so its place in the order is not checked.
 		const readOrder = readOrderBy(args.orderBy, uncompared)
 		const order = after === undefined || after === null ? readOrder : null
-		const spaceIds = readRootArgs(args, claims, uncompared)
+		const spaceIds = options.ordered
+			? readOrderedArgs(args, claims, uncompared)
+			: readRootArgs(args, claims, uncompared)
 		const {card, lists, everySpace} = planLightEntity(entitySet, fragments, resolved, uncompared, {
 			everySpace: spaceIds === null,
 			rootSpaces: spaceIds !== null,
