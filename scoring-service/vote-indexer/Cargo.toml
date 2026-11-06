@@ -20,6 +20,12 @@ path = "src/bin/comment_sweep.rs"
 name = "new_entity_sweep"
 path = "src/bin/new_entity_sweep.rs"
 
+# One-shot copy of the whole entity_type_ranking and entity_topic_ranking tables into geo-db's
+# derived collections 0 and 1 — see its module doc. RUNBOOK section 12 step 4.
+[[bin]]
+name = "mirror_ranking_snapshot"
+path = "src/bin/mirror_ranking_snapshot.rs"
+
 [dependencies]
 hermes-schema = { path = "../../hermes-schema" }
 hermes-instrumentation = { path = "../../hermes-instrumentation" }

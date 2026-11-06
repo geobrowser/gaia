@@ -129,6 +129,17 @@ fn table(collection: u32) -> &'static str {
     }
 }
 
+/// The geo-db row for one ranking row. Shared by the live mirror and the one-shot snapshot.
+pub fn derived_row(r: &RankRow) -> DerivedRow {
+    DerivedRow {
+        collection: r.collection,
+        group: u128::from_be_bytes(*r.group.as_bytes()),
+        score: r.score,
+        key: r.key.clone(),
+        value: Vec::new(),
+    }
+}
+
 /// Sends the diff of `before` and `after` to geo-db. Never fails.
 pub async fn mirror(mirror: &DerivedMirror, before: Vec<RankRow>, after: Vec<RankRow>) {
     let Plan { puts, deletes } = plan(before, after);
@@ -136,13 +147,7 @@ pub async fn mirror(mirror: &DerivedMirror, before: Vec<RankRow>, after: Vec<Ran
         let rows: Vec<DerivedRow> = puts
             .iter()
             .filter(|r| r.collection == coll)
-            .map(|r| DerivedRow {
-                collection: coll,
-                group: u128::from_be_bytes(*r.group.as_bytes()),
-                score: r.score,
-                key: r.key.clone(),
-                value: Vec::new(),
-            })
+            .map(derived_row)
             .collect();
         if !rows.is_empty() {
             mirror.put(table(coll), &rows).await;

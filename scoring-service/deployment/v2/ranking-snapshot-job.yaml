@@ -1,0 +1,139 @@
+# One-off Job: copy the whole entity_type_ranking and entity_topic_ranking tables into geo-db's derived
+# collections 0 and 1 (RUNBOOK section 12 step 4, binary `mirror_ranking_snapshot`).
+#
+# NOT part of any deploy: deploy-v2.yml lists its manifests by name and this file is not among them. It is
+# applied by hand, once, after the enable order in RUNBOOK section 12 steps 1 to 3 (the scores key exists, serve
+# has registered it, derived_rows_max is at least 4,194,304). Replace IMAGE_TAG with the vote-indexer image tag
+# that contains the binary (the tag of the merge of the PR that added this file or later):
+#
+#   sed -e "s|vote-indexer:IMAGE_TAG|vote-indexer:<tag>|" scoring-service/deployment/v2/ranking-snapshot-job.yaml | kubectl apply -f -
+#   kubectl -n gaia logs -f job/vote-indexer-ranking-snapshot
+#
+# Same pod wiring as vote-indexer.yaml (SCORES key mount, geodb-setup init container, DATABASE_URL from the same
+# secretKeyRef), without Kafka, Sentry or the metrics port. Idempotent: rows are last-write-wins keyed cells, so
+# a failed or repeated run is safe to delete and run again (a Job's name is unique, so delete it first).
+# Logs counts only.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vote-indexer-ranking-snapshot
+  namespace: gaia
+  labels:
+    app: vote-indexer-ranking-snapshot
+spec:
+  # The binary retries a short page itself and exits non-zero if it cannot finish; do not restart the
+  # whole pod on top of that. Re-run by hand.
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: vote-indexer-ranking-snapshot
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      volumes:
+        # geodb-client for the derived-score mirror (GEODB_DERIVED_MIRROR, RUNBOOK section 2f / 12). Dormant while
+        # the flag is "0": nothing below is read, and every reference is optional or fails soft, so an absent
+        # geodb never blocks a rollout. Same wiring as hermes-pipeline.yaml, but with the SCORES key: a principal
+        # that may write derived collections 0, 1, 2, 3, 4, 5, 11 to 26 and nothing else (geodb-scores-key-job.yaml).
+        - name: geodb-bin
+          emptyDir: {}
+        - name: geodb-space-map
+          configMap:
+            # Written by the geodb-feeder / serve. Not shipped in these manifests.
+            name: geodb-space-map
+            optional: true
+        - name: geodb-key
+          secret:
+            secretName: geodb-scores-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: scores.key
+      initContainers:
+        - name: geodb-setup
+          # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to this service's tag.
+          image: registry.digitalocean.com/geo/geodb:6b34f9feda
+          imagePullPolicy: IfNotPresent
+          # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
+          # binding and the mirror stays disabled even if the flag is turned on.
+          command:
+            - sh
+            - -c
+            - |
+              cp /usr/local/bin/geodb-client /geodb/geodb-client || exit 0
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -n "$node" ] && [ -n "$ip" ]; then
+                printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+              else
+                echo "geodb-setup: no node id or no geodb Service; derived mirror stays off"
+              fi
+              exit 0
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: ranking-snapshot
+          image: registry.digitalocean.com/geo/vote-indexer:IMAGE_TAG
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/mirror_ranking_snapshot"]
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+            - name: geodb-key
+              mountPath: /etc/geodb/key
+              readOnly: true
+          env:
+            # This Job's whole purpose, so on here regardless of the Deployment's flag. The binary exits
+            # non-zero if the mirror is not configured.
+            - name: GEODB_DERIVED_MIRROR
+              value: "1"
+            # 256 rows and one fsync a request (needs the geodb-client at 6b34f9feda or later, as the init
+            # container image below).
+            - name: GEODB_DERIVED_BATCH
+              value: "1"
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/key/scores.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: scoring-service-credentials
+                  key: DATABASE_URL
+            - name: RUST_LOG
+              value: "info"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
