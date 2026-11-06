@@ -902,7 +902,7 @@ trending and agenda listings.
 (`scoring-service/cronjob`), are mirrored behind `GEODB_DERIVED_MIRROR` in that cronjob (#1169, default `"0"`). It
 rewrites every row each run (upserts, no deletes), after its Postgres commit. It uses the shared `geodb-scores-key`
 (binding `derived=0,1,2,3,4,5,11,12`, see §2f-scores). **Sizing warning:** count `local_scores` (one row per
-entity perspective) and add it to the other mirrored tables against `derived_rows_max` (2097152 now, 144 B a row
+entity perspective) and add it to the other mirrored tables against `derived_rows_max` (4194304 since Stage A (#1182), was 2097152; 144 B a row
 resident) before the flag goes on; a full rewrite past the cap is refused. Raise `GEODB_DERIVED_BUDGET_MS` and set
 `GEODB_DERIVED_BATCH=1` for the full rewrite.
 
@@ -918,6 +918,25 @@ Type ranking gate: `geodb-feeder/src/typeRankingGate.ts <postgres.tsv> <scan.tsv
 are in that file's header. Rows for entities not refreshed since the flag went on show as Postgres-only until their
 next refresh, so run `refresh_ranking_scores_for` over the entity set after turning the flag on.
 
+
+### 2f-order. Enable order for the derived mirrors (Stage A is live)
+
+Plan 14 §10. Stage A (`geodb.yaml`, #1182, live: `derived_rows_max = 4194304`, serve request 5Gi, limit 7Gi; 144 B a row, ~604 MB)
+holds the 2.86M rows counted on 11-06 (collections 0, 1, 8, 9, 10, 11). The full set with collections 2, 3 and 4 is 6.80M and does
+not fit it: that is Stage B (`derived_rows_max = 8388608`, serve 6Gi/8Gi, one more restart and its own node-headroom check; the node
+had 13.65 GiB allocatable and 11.1 GiB requested on 11-06, so Stage B's request does not fit without another node or moving a
+workload).
+
+Turn the mirrors on one at a time, one flag per PR, each after the serve roll that carries its binding, checking
+`geodb_derived_rows` against `geodb_derived_rows_max` between steps:
+1. account_weights (§2f-weights, collection 5): one row per voting account, small.
+2. account_exclusions (§2f-exclusions, collection 12): smaller still.
+3. the scores (§2f-scores, collections 2, 3, 4). Count first: `global_scores` and `space_scores` are small, **`local_scores` is
+   about 3.9M rows (one per entity perspective) and does not fit Stage A with the 2.86M already held: it waits for Stage B.** The
+   scoring cronjob's `GEODB_DERIVED_MIRROR` has no per-table switch and a full rewrite past the cap is refused partway, so it
+   stays `"0"` until Stage B unless the counts show the total fits (existing rows + weights + exclusions + all three score
+   tables <= 4,194,304). If only the two small tables are wanted earlier, that needs a per-table switch in `geodb_derived`
+   first.
 
 ### 2f-scores. global_scores / local_scores / space_scores (derived collections 2, 3, 4, GEODB_DERIVED_MIRROR)
 
@@ -1619,7 +1638,7 @@ $K -n gaia rollout restart deploy/vote-indexer deploy/ranking-indexer
    since then are missing from geo-db until their next refresh. Run `refresh_ranking_scores_for` over the entity set
    before or right after step 5. A table-wide load sends rows in batches of 256 with `GEODB_DERIVED_BATCH=1` (one
    fsync a request, geo-db plan 10.14 V11; needs the geodb-client at or above `6b34f9feda`). Do not backfill the
-   type and topic rankings (1.73M rows) while `derived_rows_max` is below 2,097,152. Then diff with the type
+   type and topic rankings (1.73M rows) while `derived_rows_max` is below 2,097,152 (Stage A raised it to 4,194,304). Then diff with the type
    ranking gate (§2f).
 5. Set `GEODB_DERIVED_MIRROR` to `"1"` in `scoring-service/deployment/v2/vote-indexer.yaml` and
    `ranking-indexer/k8s/v2/ranking-indexer.yaml` in a separate PR, so the flag change can be reverted alone.
