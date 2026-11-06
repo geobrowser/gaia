@@ -321,6 +321,10 @@ spec:
             # every-Space budget). A name no Space holds stays uncompared, never a mismatch. Shadow only (gaia#1257).
             - name: GEODB_CROSS_SPACE_NAMES_SHADOW
               value: "on"
+            # Count every executed entities/entitiesConnection root field ordered by RANKING_SCORE_* or QUALITY_SCORE_*,
+            # labelled by how it is typed, narrowed and paged (gaia#1259). Counting only: no geo-db reads, no shadow.
+            - name: GEODB_RANK_TYPED_SHADOW
+              value: "count"
             # The for_you_config record in geo-db's config Space read back after the For you route reads its
             # settings, counted against them (gaia_api_for_you_config_shadow_total). OFF; never changes a
             # response. Needs the geodb-feeder's for_you_config backfill (GEODB_FOR_YOU_CONFIG) run first.
