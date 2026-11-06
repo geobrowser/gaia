@@ -6,14 +6,16 @@
  * the `config` system Space, one record per experiment id (GEODB_FEED_EXPERIMENTS backfill). When the flag is on, the
  * For you route reads the record of the experiment it served, in the background, and counts whether geo-db agrees:
  * the record is active, holds the same two arms and, for a user assigned by hash (not a member), recomputes the same
- * `interleaved` from the record's salt and share. `feed_experiment_members` is not mirrored, so a member's value is
- * not compared. `gaia_api_feed_experiment_shadow_total{result}`. It never changes, delays or fails a response:
+ * `interleaved` from the record's salt and share. For a member (`assignment === "member"`) it reads the
+ * `feed_experiment_members` record (keyed experiment, user) and compares its `interleaved` with the served one; a missing
+ * member record counts as unsupported (`member_record_missing`). It does not check that a hash-assigned user has no member
+ * record (an absent record cannot tell "not a member" from "not backfilled"). `gaia_api_feed_experiment_shadow_total{result}`. It never changes, delays or fails a response:
  * bounded by `maxInFlight`, throttled to one comparison per `intervalMs`, and every error is swallowed into a counter.
  */
 import {createHash} from "node:crypto"
 import type {GeoCardRow} from "../geodb/card"
 import {type GeoDbCardClient, GeoDbError} from "../geodb/client"
-import {recordEntityId, textPart} from "../proposals/governance/recordKey"
+import {idPart, recordEntityId, textPart} from "../proposals/governance/recordKey"
 import type {AnySystemSpaceLookup} from "../proposals/governance/systemSpaces"
 import type {FeedExperiment} from "./queries"
 
@@ -27,6 +29,28 @@ export const FEED_EXPERIMENT_COLUMNS = {
 	share: "20a413847f914c2ea382c24c69ffeaa9",
 	salt: "e3bc692a46a644179788ca4e9de3b6c5",
 } as const
+
+/** The member record's kind and column (geodb-feeder recordKinds.ts, feedExperimentMember). */
+export const FEED_EXPERIMENT_MEMBER_KIND = "38b80c6e92bb4209838afdff3d7a0f01"
+export const FEED_EXPERIMENT_MEMBER_COLUMNS = {
+	experiment: "5478f85923d94274a98d6fbdb527e5f5",
+	user: "07d8f8c9c7884c039ae0ae4fc8f18f4c",
+	interleaved: "b1e33f48965b4c90af9b45ce368019e8",
+} as const
+
+/** Keyed (experiment id, user uuid); the user part is the 16-byte uuid, dashed or not. */
+export const feedExperimentMemberRecordId = (experiment: string, userId: string): string =>
+	recordEntityId(FEED_EXPERIMENT_MEMBER_KIND, [textPart(experiment), idPart(userId)])
+
+/** A member's `interleaved` from its record's card, or null when the record does not exist. */
+export function decodeMemberInterleaved(rows: GeoCardRow[]): boolean | null {
+	if (rows.length === 0) return null
+	const values = new Set(rows.filter((r) => r.prop === FEED_EXPERIMENT_MEMBER_COLUMNS.interleaved).map((r) => r.raw))
+	if (values.size > 1) throw new AmbiguousExperimentError(`member interleaved holds ${values.size} values`)
+	const raw = [...values][0]
+	if (raw !== "true" && raw !== "false") throw new AmbiguousExperimentError(`member interleaved: ${raw}`)
+	return raw === "true"
+}
 
 export const feedExperimentRecordId = (id: string): string => recordEntityId(FEED_EXPERIMENT_KIND, [textPart(id)])
 
@@ -75,7 +99,13 @@ export function readFeedExperimentShadowConfig(env: Record<string, string | unde
 }
 
 export const RESULTS = ["match", "mismatch", "unsupported", "failed"] as const
-export const UNSUPPORTED_REASONS = ["system_space_missing", "record_missing", "ambiguous_record", "busy"] as const
+export const UNSUPPORTED_REASONS = [
+	"system_space_missing",
+	"record_missing",
+	"ambiguous_record",
+	"member_record_missing",
+	"busy",
+] as const
 export type Result = (typeof RESULTS)[number]
 export type UnsupportedReason = (typeof UNSUPPORTED_REASONS)[number]
 
@@ -150,6 +180,14 @@ export function createFeedExperimentShadow(deps: {
 			)
 			if (held === null) throw new Unsupported("record_missing")
 			const diffs = experimentDiffs(served, held, userId)
+			// A member's value comes from feed_experiment_members, which wins over the hash: compare it with the member record.
+			if (served.assignment === "member") {
+				const member = decodeMemberInterleaved(
+					await geoDb.readCard({geoSpaceId, entityId: feedExperimentMemberRecordId(served.id, userId)}),
+				)
+				if (member === null) throw new Unsupported("member_record_missing")
+				if (member !== served.interleaved) diffs.push("member_interleaved")
+			}
 			bump(results, diffs.length === 0 ? "match" : "mismatch")
 			if (diffs.length > 0 && logged < 20) {
 				logged++

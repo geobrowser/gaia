@@ -25,6 +25,7 @@ describe("record kinds", () => {
 			interestConfig: ["e7ca641275a840bebb7ac20424a5deae", "config"],
 			interestSignalWeight: ["1c35f5a4877f474a8d13835f8e05205d", "config"],
 			feedExperiment: ["285dde3545964ab28ee580344b816704", "config"],
+			feedExperimentMember: ["38b80c6e92bb4209838afdff3d7a0f01", "config"],
 		})
 		expect(SYSTEM_SPACE_NONCE_KIND).toBe("0b3f6634fbe84dbd8c0ecae3fce960b3")
 	})
@@ -40,6 +41,11 @@ describe("record kinds", () => {
 describe("record columns", () => {
 	it("are pinned: a changed column id moves every keyed row's statements", () => {
 		expect(RECORD_COLUMNS).toEqual({
+			feedExperimentMember: {
+				experiment: "5478f85923d94274a98d6fbdb527e5f5",
+				user: "07d8f8c9c7884c039ae0ae4fc8f18f4c",
+				interleaved: "b1e33f48965b4c90af9b45ce368019e8",
+			},
 			feedExperiment: {
 				id: "5302a53981a84da88c3949abe8165ec0",
 				active: "d6a38e2b1f804353bceced2d49641d75",
