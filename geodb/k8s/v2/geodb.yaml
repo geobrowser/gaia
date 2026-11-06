@@ -544,3 +544,34 @@ spec:
             capabilities:
               drop:
                 - ALL
+---
+# Who may reach serve. 7447 (the wire) stays open to every pod in every namespace, as it was before any
+# policy existed (api, the feeder, notification-indexer, delivery-worker, the setup and backfill Jobs, the
+# scoring CronJob all dial it by pod IP). 9091 is serve's HTTP listener, which serves GET /metrics but is NOT
+# metrics-only: an anonymous session reads the root Public Spaces, so only the monitoring namespace
+# (Prometheus) may reach it. Same shape as api-cache-ingress. Rollback:
+#   kubectl -n gaia delete networkpolicy geodb-ingress
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: geodb-ingress
+  namespace: gaia
+spec:
+  podSelector:
+    matchLabels:
+      app: geodb
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - port: 7447
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9091
+          protocol: TCP

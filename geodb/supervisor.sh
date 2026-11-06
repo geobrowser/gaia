@@ -25,8 +25,10 @@ CONFIG="${GEODB_CONFIG:-/etc/geodb/serve.cfg}"
 PROFILE="${GEODB_PROFILE:-medium}"
 PORT="${GEODB_PORT:-7447}"
 # Optional: an HTTP listener so Prometheus can read GET /metrics (geodb_derived_*, geodb_store_*,
-# geodb_requests_*). Unset = no listener. Anonymous only, so it carries no grant: /metrics opens no
-# session, and every other route refuses an anonymous one.
+# geodb_requests_*). Unset = no listener. admits=anonymous grants no key, but the listener is NOT
+# metrics-only: an anonymous session still reaches every route (POST /query, GET /spaces, GET /head)
+# and reads the root Public Spaces. Keep it reachable only from Prometheus (NetworkPolicy
+# geodb-ingress in geodb.yaml) until serve has a metrics-only listen word.
 METRICS_PORT="${GEODB_METRICS_PORT:-}"
 GRANT_TTL="${GEODB_GRANT_TTL_S:-300}"
 CONFIGMAP="${GEODB_CONFIGMAP:-geodb-space-map}"

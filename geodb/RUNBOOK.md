@@ -948,7 +948,8 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 ### serve's own metrics and the outbox mirror (geodb-serve-alerts.yaml)
 
 serve prints `GET /metrics` only on an HTTP listener. The supervisor opens one (`listen = http:0.0.0.0:9091 admits=anonymous`,
-no grant) when `GEODB_METRICS_PORT` is set; geodb.yaml sets it and exposes port `metrics` on Service `geodb`, which the
+no grant; not metrics-only, an anonymous session reads the root Public Spaces through POST /query, GET /spaces and GET /head,
+so NetworkPolicy `geodb-ingress` limits 9091 to the `monitoring` namespace) when `GEODB_METRICS_PORT` is set; geodb.yaml sets it and exposes port `metrics` on Service `geodb`, which the
 hermes-metrics ServiceMonitor scrapes (job `geodb`). The supervisor is baked into the image, so the series appear only once a
 geodb image built from this `supervisor.sh` is pinned and serve is rolled (an older image ignores the variable and the target
 reads down). Series: `geodb_derived_rows`, `geodb_derived_rows_max`, `geodb_derived_collection_rows{collection}`,
