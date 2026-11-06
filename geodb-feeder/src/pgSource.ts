@@ -9,6 +9,7 @@ import pg from "pg"
 import type {PgRelationRow, PgValueRow} from "./pgAdapter.js"
 import type {ProposalActionRow} from "./proposalActionsKeyed.js"
 import type {EntityRankingConfigRow} from "./entityRankingConfigKeyed.js"
+import type {InterestConfigRow, InterestSignalWeightRow} from "./interestConfigKeyed.js"
 import type {ForYouConfigRow} from "./forYouConfigKeyed.js"
 import type {SpaceVotingSettingsRow} from "./spaceVotingSettingsKeyed.js"
 import type {ProposalVersionRow} from "./proposalVersionsKeyed.js"
@@ -300,6 +301,31 @@ export async function* readEntityRankingConfigRows(db: ReadOnlyPg): AsyncGenerat
 		        trending_debate_window_days::text AS trending_debate_window_days,
 		        trending_horizon_days::text AS trending_horizon_days
 		 FROM public.entity_ranking_config WHERE id`,
+		[],
+		60_000,
+	)
+}
+
+/** The one `personalization.interest_config` row (`WHERE id`), every tunable as text; `sweep_lookback` in seconds. */
+export async function* readInterestConfigRows(db: ReadOnlyPg): AsyncGenerator<InterestConfigRow> {
+	yield* await db.read<InterestConfigRow>(
+		`SELECT half_life_days::text AS half_life_days,
+		        spread_fraction::text AS spread_fraction,
+		        spread_max_neighbours::text AS spread_max_neighbours,
+		        cooccurrence_min_support::text AS cooccurrence_min_support,
+		        cooccurrence_max_topics_per_entity::text AS cooccurrence_max_topics_per_entity,
+		        extract(epoch FROM sweep_lookback)::text AS sweep_lookback_seconds
+		 FROM personalization.interest_config WHERE id`,
+		[],
+		60_000,
+	)
+}
+
+/** Every `personalization.interest_signal_weights` row (a handful of kinds), `weight` as text. */
+export async function* readInterestSignalWeightRows(db: ReadOnlyPg): AsyncGenerator<InterestSignalWeightRow> {
+	yield* await db.read<InterestSignalWeightRow>(
+		`SELECT kind, weight::text AS weight, decays, note
+		 FROM personalization.interest_signal_weights ORDER BY kind`,
 		[],
 		60_000,
 	)

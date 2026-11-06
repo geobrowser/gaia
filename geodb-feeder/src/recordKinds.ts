@@ -52,6 +52,10 @@ export const RECORD_KINDS = {
 	forYouConfig: {id: "8a0e2bd56c834195b30db6a7eb966b50", family: "config", table: "personalization.for_you_config"},
 	/** `entity_ranking_config`: one record (the table holds one row, `id` = true), mutable columns written by `put`. */
 	entityRankingConfig: {id: "ee4e36fde6334be9b6d45085b5f6fb34", family: "config", table: "entity_ranking_config"},
+	/** `personalization.interest_config`: one record (the table holds one row, `id` = true), mutable columns written by `put`. */
+	interestConfig: {id: "e7ca641275a840bebb7ac20424a5deae", family: "config", table: "personalization.interest_config"},
+	/** `personalization.interest_signal_weights`: one record per signal `kind` (text key), mutable columns written by `put`. */
+	interestSignalWeight: {id: "1c35f5a4877f474a8d13835f8e05205d", family: "config", table: "personalization.interest_signal_weights"},
 } as const satisfies Record<string, RecordKind>
 
 /**
@@ -67,6 +71,27 @@ export const SYSTEM_SPACE_NONCE_KIND = "0b3f6634fbe84dbd8c0ecae3fce960b3"
  * `put` whose statement id includes the value, so a change closes the old value and a replay reopens the same id.
  */
 export const RECORD_COLUMNS = {
+	interestConfig: {
+		/** Key: number, `id` (always 1: the table's one row, `id` = true). */
+		id: "31036382e13b4e11a4dc59c58a43546a",
+		/** Mutable, one per column of the same name in snake case. Decimals except the three integers; `sweepLookbackSeconds` is `sweep_lookback` in seconds. */
+		halfLifeDays: "1b50d435575f41aea81b5296b76eb480",
+		spreadFraction: "1e771b65e07e4923bfa7c5b63620b349",
+		spreadMaxNeighbours: "e47bea0f4de24e91bf4a2ebbbc7f2328",
+		cooccurrenceMinSupport: "67060210b0214d4e907b53797e961f6f",
+		cooccurrenceMaxTopicsPerEntity: "436f98f683fc4a38999b927ff08e49f0",
+		sweepLookbackSeconds: "a4d8ed7e83ae486dbbae6d9e47db199b",
+	},
+	interestSignalWeight: {
+		/** Key: text, `kind`. */
+		kind: "63afb05ca56449a882b5506c760a82b9",
+		/** Mutable: decimal, `weight`. */
+		weight: "456ecbe7140a4d3bb399a9d28f4e9783",
+		/** Mutable: boolean, `decays`. */
+		decays: "ac260e6563f740f59fcdb97a64599c64",
+		/** Mutable: text, `note`; absent when the note is null. */
+		note: "525a71d896024df6ad030035680ad9ba",
+	},
 	entityRankingConfig: {
 		/** Key: number, `id` (always 1: the table's one row, `id` = true). */
 		id: "8aadf80a0b2546aea407d12a065494d1",
