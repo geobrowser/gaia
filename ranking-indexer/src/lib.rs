@@ -36,6 +36,7 @@ pub mod publish;
 pub mod recompute;
 pub mod scoring;
 pub mod sql_helpers;
+pub mod ranking_config;
 pub mod stance_graph;
 pub mod stance_map;
 pub mod storage;

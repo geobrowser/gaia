@@ -35,6 +35,12 @@ spec:
           volumes:
             - name: ssl-certs
               emptyDir: {}
+            # Optional ConfigMap home for the config table (ranking-config-configmap.yaml). Unread unless
+            # STANCE_MAP_CONFIG_SOURCE is "configmap"; absent ConfigMap blocks nothing.
+            - name: ranking-config
+              configMap:
+                name: ranking-config
+                optional: true
           initContainers:
             - name: setup-certs
               image: registry.digitalocean.com/geo/ranking-indexer:latest
@@ -72,7 +78,12 @@ spec:
                 - name: ssl-certs
                   mountPath: /ssl
                   readOnly: true
+                - name: ranking-config
+                  mountPath: /etc/ranking-config
+                  readOnly: true
               env:
+                - name: STANCE_MAP_CONFIG_SOURCE
+                  value: postgres
                 - name: PGSSLROOTCERT
                   value: /ssl/ca.crt
                 - name: DATABASE_URL

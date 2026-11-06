@@ -34,6 +34,7 @@ use ranking_indexer::feed_signals::{self, Cutoff};
 use ranking_indexer::feed_signals_compute as compute;
 use ranking_indexer::feed_signals_mirror::{self, Bucket, Ident};
 use ranking_indexer::feed_user_seen_mirror::{self, Seen};
+use ranking_indexer::ranking_config;
 
 #[derive(Debug, Default, PartialEq)]
 struct Options {
@@ -106,12 +107,32 @@ async fn shadow(
         warn!("feed signals rust twin skipped: config or spaces read failed");
         return;
     };
-    let cfg = compute::Config {
+    let mut cfg = compute::Config {
         revise_days: i64::from(revise),
         backfill_days: i64::from(backfill),
         user_retention_days: i64::from(uret),
         item_retention_days: i64::from(iret),
     };
+    // FEED_SIGNAL_CONFIG_SOURCE=configmap (default postgres): the twin takes the mounted file instead of the row, and
+    // logs which knobs differ. An unreadable or invalid file keeps the row.
+    if ranking_config::Source::from_env("FEED_SIGNAL_CONFIG_SOURCE")
+        == ranking_config::Source::ConfigMap
+    {
+        match ranking_config::load_feed_signal(&ranking_config::dir_from_env()) {
+            Ok(file) => {
+                let diff = ranking_config::feed_signal_diff(&file, (revise, backfill, uret, iret));
+                if diff.is_empty() {
+                    info!("feed signal config file agrees with the table row");
+                } else {
+                    warn!(?diff, "feed signal config file differs from the table row; the twin uses the file");
+                }
+                cfg = file.to_compute();
+            }
+            Err(e) => {
+                warn!(error = %e, "feed signal config file unusable; the twin uses the table row")
+            }
+        }
+    }
     let spaces: Vec<compute::Space> = spaces
         .into_iter()
         .map(|(id, kind, address)| compute::Space { id, kind, address })
