@@ -141,12 +141,12 @@ spec:
             # effect on a database that already has a floor.
             - name: REJECTION_BACKFILL_HOURS
               value: "10"
-            # Shadow every new outbox row into geo-db's work class (geodb-outbox). OFF: none of the
-            # GEODB_* values below is read. Postgres stays the source of truth and readers stay on it.
-            # Turn on only after the work key is minted, serve has `work_rows_max` set and has
-            # registered it (a serve roll), RUNBOOK section 11; then deploy this service with "1".
+            # Shadow every new outbox row into geo-db's work class (geodb-outbox). ON since 2026-11-06:
+            # the work key is minted (geodb-outbox-key) and serve registered it (RUNBOOK section 11).
+            # Postgres stays the source of truth and every reader stays on it; a geo-db failure is
+            # counted and swallowed, never fails the outbox insert. "off" turns it back off.
             - name: GEODB_OUTBOX_MIRROR
-              value: "off"
+              value: "1"
             - name: GEODB_CLIENT_BIN
               value: /geodb/geodb-client
             - name: GEODB_OUTBOX_KEY_PATH
