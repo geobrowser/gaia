@@ -416,6 +416,11 @@ spec:
             # subspaces backfill Job (geodb-subspaces-backfill-job.yaml) has run with the feeder at 0.
             - name: GEODB_SUBSPACES
               value: "0"
+            # Keyed space voting settings (VOTING_SETTINGS_UPDATED on space.governance, into the governance system
+            # Space). Takes effect only with GEODB_RECORD_KEYS: RUNBOOK §2c-septies. OFF until the space-voting-settings
+            # backfill Job (geodb-space-voting-settings-backfill-job.yaml) has run with the feeder at 0.
+            - name: GEODB_SPACE_VOTING_SETTINGS
+              value: "0"
             # Relation positions (`.position` on a relation's add). Off until the geodb image carries a
             # geodb-client with ISS-587-318: an older client refuses the key, and every edit with a positioned
             # relation would fail. Turn on with the image bump that brings it.

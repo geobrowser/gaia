@@ -8,6 +8,7 @@
 import pg from "pg"
 import type {PgRelationRow, PgValueRow} from "./pgAdapter.js"
 import type {ProposalActionRow} from "./proposalActionsKeyed.js"
+import type {SpaceVotingSettingsRow} from "./spaceVotingSettingsKeyed.js"
 import type {ProposalVoteRow} from "./proposalVotesKeyed.js"
 import type {SubspaceRow} from "./subspacesKeyed.js"
 import type {UserVoteRow} from "./votesKeyed.js"
@@ -243,6 +244,23 @@ export async function readSubspaceRows(db: ReadOnlyPg): Promise<SubspaceRow[]> {
 		`SELECT parent_space_id::text AS parent_space_id, child_space_id::text AS target_id, type::text AS type FROM subspaces
 		 UNION ALL
 		 SELECT space_id::text, topic_id::text, 'topic' FROM subspace_topics`,
+		[],
+		300_000,
+	)
+}
+
+/** Every `space_voting_settings` row (one per Space, a small table), read in one query. The bigints and `updated_at*` come back as text. */
+export async function* readSpaceVotingSettingsRows(db: ReadOnlyPg): AsyncGenerator<SpaceVotingSettingsRow> {
+	yield* await db.read<SpaceVotingSettingsRow>(
+		`SELECT space_id::text AS space_id,
+		        partial_percentage_support_threshold::text AS partial_percentage_support_threshold,
+		        universal_percentage_support_threshold::text AS universal_percentage_support_threshold,
+		        flat_support_threshold::text AS flat_support_threshold, quorum::text AS quorum, duration::text AS duration,
+		        disable_fast_path_access_for_new_members AS disable_fast_path_access_for_new_members,
+		        execution_grace_period::text AS execution_grace_period, updated_at::text AS updated_at,
+		        updated_at_block::text AS updated_at_block
+		 FROM space_voting_settings
+		 ORDER BY space_id`,
 		[],
 		300_000,
 	)

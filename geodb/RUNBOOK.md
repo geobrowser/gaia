@@ -565,6 +565,40 @@ Activation order, each step only after the one before it is live:
 
 Rollback: unset `GEODB_SUBSPACES`. The edges stay in the Space, unread; nothing reads them yet.
 
+### 2c-septies. Keyed space voting settings (GEODB_SPACE_VOTING_SETTINGS)
+
+`GEODB_SPACE_VOTING_SETTINGS` (default off; takes effect only with `GEODB_RECORD_KEYS`) writes gaia's
+`space_voting_settings` as natural-key records in the `governance` system Space
+(`geodb-feeder/src/spaceVotingSettingsKeyed.ts`; the pinned `spaceVotingSettings` kind). Its own flag, because its
+backfill must run before its consumer. The feeder consumes `<env>.space.governance` on its own group,
+`geodb-feeder-space-voting-settings-keyed-v1-<env>`, and handles `VOTING_SETTINGS_UPDATED`; every other event counts as
+`ignored`. kg-indexer's group is untouched and the api still reads Postgres.
+
+One record per Space, keyed by the Space (the table's primary key). The key column is a reference to the Space's entity;
+the eight settings columns, `updated_at` and `updated_at_block` are mutable and written by `put`, so a later event
+replaces the earlier one as `ON CONFLICT (space_id) DO UPDATE` does (last event per Space on its partition wins; a
+replay converges, and A, B, A ends on A). Values are the `as i64` casts kg-indexer makes.
+
+The feeder dead-letters a `space_id` that is not 16 bytes or a wrong wire type; missing metadata is written as time 0,
+block 0. As for §2c-quater, drift in either direction (kg-indexer drops a whole block on a permanent failure, and the
+table has an FK to `spaces`) is to be investigated, never read as a bug in either side.
+
+Activation order, each step only after the one before it is live:
+
+1. geo-db serve and init container on 9d97069a78 or later (`put`); a feeder image that carries this path.
+2. Kafka ACL: consume on the group `geodb-feeder-space-voting-settings-keyed-v1-<env>` (the topic is already granted),
+   and describe on every feeder group for the backfill Job's empty-group check. Without them the consumer fails to
+   start and `geodb_feeder_consumer_start_failed{consumer="space_voting_settings"}` goes to 1.
+3. Required: the backfill Job (`geodb/k8s/v2/geodb-space-voting-settings-backfill-job.yaml`), feeder scaled to 0,
+   applied as in §2c-quater step 4. It reads `space_voting_settings` READ ONLY (one row per Space) and is rerunnable.
+   `space.governance` keeps 7 days, and settings change rarely, so almost every row comes from this snapshot.
+4. `GEODB_RECORD_KEYS: "1"` and `GEODB_SPACE_VOTING_SETTINGS: "1"` in the feeder manifest, then scale it back to 1.
+5. The gate, before any reader depends on the records: `bun src/spaceVotingSettingsGate.ts <postgres.tsv> <dump dir>`
+   (`geodb-feeder/src/spaceVotingSettingsGate.ts`; its header lists the `\copy` columns and the `svs-<name>.tsv` dumps).
+   It exits non-zero on a Postgres-only key or a value difference; geo-db-only keys are reported, not failed.
+
+Rollback: unset `GEODB_SPACE_VOTING_SETTINGS`. The records stay in the Space, unread; nothing reads them yet.
+
 ### 2d. Raising the Space cap
 
 `spaces` in `geodb-serve-config` caps the Spaces the store can hold; at the cap, founding refuses and the
@@ -718,7 +752,8 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 | `GeoDbFeederProposalVotesStalled` | `space.governance` lag above 0 and nothing handled by the proposal-votes consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the votes Space (§2c-quater) |
 | `GeoDbFeederProposalActionsStalled` | `space.governance` lag above 0 and nothing handled by the proposal-actions consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-quinquies) |
 | `GeoDbFeederSubspacesStalled` | `space.trust.extensions` lag above 0 and nothing handled by the subspaces consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-sexies) |
-| `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
+| `GeoDbFeederSpaceVotingSettingsStalled` | `space.governance` lag above 0 and nothing handled by the space-voting-settings consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-septies) |
+| `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`, `space_voting_settings`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
 
 ## 7. Operating notes
 
