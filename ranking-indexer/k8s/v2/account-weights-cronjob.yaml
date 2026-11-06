@@ -139,7 +139,7 @@ spec:
                 # Copy account_weights into geo-db derived collection 5 after the refresh commits (RUNBOOK
                 # section 2f-weights), best-effort. OFF: "0". Turning it on is a separate change.
                 - name: GEODB_DERIVED_MIRROR
-                  value: "0"
+                  value: "1"
                 - name: GEODB_DERIVED_BATCH
                   value: "1"
                 - name: GEODB_CLIENT_BIN
