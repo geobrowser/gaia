@@ -1333,8 +1333,10 @@ $K -n gaia rollout restart deploy/vote-indexer deploy/ranking-indexer
 
 4. Backfill first. The mirror copies only rows written after the flag is on (§2f), so rows that were not refreshed
    since then are missing from geo-db until their next refresh. Run `refresh_ranking_scores_for` over the entity set
-   before or right after step 5 (not the table-wide backfill: the pipe takes one row a line and fsyncs each, so a
-   whole-table load needs a batch verb first). Then diff with the type ranking gate (§2f).
+   before or right after step 5. A table-wide load sends rows in batches of 256 with `GEODB_DERIVED_BATCH=1` (one
+   fsync a request, geo-db plan 10.14 V11; needs the geodb-client at or above `6b34f9feda`). Do not backfill the
+   type and topic rankings (1.73M rows) while `derived_rows_max` is below 2,097,152. Then diff with the type
+   ranking gate (§2f).
 5. Set `GEODB_DERIVED_MIRROR` to `"1"` in `scoring-service/deployment/v2/vote-indexer.yaml` and
    `ranking-indexer/k8s/v2/ranking-indexer.yaml` in a separate PR, so the flag change can be reverted alone.
 6. Verify after the rollout: `geodb_derived_mirror_puts_total{table}` rises for `entity_type_ranking`,
