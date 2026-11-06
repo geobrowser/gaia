@@ -1117,6 +1117,15 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   (2) run the snapshot Job; (3) set the flag `"1"` in `scoring-service/deployment/v2/cronjob.yaml` in its own PR (the nightly
   run then repairs drift; it never deletes); (4) the api shadow flag `GEODB_SCORES_SHADOW`. Rollback: set the flags `"0"`.
 
+- api shadow, `GEODB_RANKING_SCORES_SHADOW` (manifest `"0"`, `api/src/geodb/rankingScoresShadow.ts`): `entity_ranking_scores` against
+  the engaged-only overlay in derived collection 21 (plan 10.21 section 9). Every `GEODB_RANKING_SCORES_SHADOW_INTERVAL_MS` (60 s)
+  it reads the first `_SAMPLE` (20) overlay rows and looks each up in Postgres, and reads `_SAMPLE` random Postgres rows and `get`s
+  each from collection 21. `gaia_api_ranking_scores_shadow_total{result}` (absent until the flag is on): match, mismatch,
+  absent_ok (un-engaged, no overlay row), missing (engaged, no overlay row), stale (overlay row for an un-engaged or absent Postgres
+  row), unsupported (a value that is not 62 bytes of version 1, the old 48-byte layout), failed. Logs counts only. Turn it on only
+  after the overlay writer has run once. **Not compared:** the default row of an un-engaged entity (geo-db builds it from the card
+  and config with `derived.entity_scores.get`; no wire op serves it yet). The overlay direction reads only the highest-scored page.
+
 ### 2f-primer. claim_overlap_samples (derived collection 14, GEODB_DERIVED_MIRROR)
 
 Shadow only, nothing reads the rows. The hourly `ranking-indexer-primer-claims` CronJob (`primer_claims_refresh`) is the only

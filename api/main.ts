@@ -29,6 +29,7 @@ import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
 import {createDerivedReader} from "./src/geodb/derived"
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
+import {createRankingScoresShadow, readRankingScoresShadowConfig} from "./src/geodb/rankingScoresShadow"
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createScoresShadow, readScoresShadowConfig} from "./src/geodb/scoresShadow"
 import {createCliGeoDbSearchClient} from "./src/geodb/search"
@@ -285,6 +286,17 @@ const accountWeightsShadow = accountWeightsShadowConfig.enabled
 const scoresShadowConfig = readScoresShadowConfig(process.env)
 if (scoresShadowConfig.enabled) {
 	createScoresShadow({config: scoresShadowConfig, db, reader: createDerivedReader(geoDbCardConfig), log}).start()
+}
+// GEODB_RANKING_SCORES_SHADOW (off by default) samples entity_ranking_scores against geo-db's engaged-only overlay in derived
+// collection 21 (gaia_api_ranking_scores_shadow_total). Background only; never touches a request.
+const rankingScoresShadowConfig = readRankingScoresShadowConfig(process.env)
+if (rankingScoresShadowConfig.enabled) {
+	createRankingScoresShadow({
+		config: rankingScoresShadowConfig,
+		db,
+		reader: createDerivedReader(geoDbCardConfig),
+		log,
+	}).start()
 }
 const internalRoutes = mountInternalRoutes(
 	app,

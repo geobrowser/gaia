@@ -1,0 +1,272 @@
+/**
+ * The entity score overlay's shadow (GEODB_RANKING_SCORES_SHADOW, off by default; plan 10.21 section 9).
+ *
+ * `public.entity_ranking_scores` is read by the api only inside SQL (the RANKING_SCORE order-by, entities_in_best_order,
+ * for_you_candidates, the Entity computed columns), so no request has a served row to compare. geo-db holds an
+ * ENGAGED-ONLY overlay of it in derived collection 21 (62-byte value, scoring-service vote-indexer `entity_scores_mirror`):
+ * a row exists for an entity with a nonzero engagement term, and an absent key means the entity is un-engaged, whose row geo-db
+ * builds from the card and the ranking config (geo-db `derived.entity_scores.get`). This samples both directions, in the
+ * background, never touching a request:
+ *
+ *  - overlay -> Postgres: the first `sample` rows of collection 21 (score descending), each looked up by primary key;
+ *  - Postgres -> overlay: `sample` rows from a random primary-key position (wrapping), each read from collection 21. Almost all
+ *    are un-engaged (about 9.5k engaged of 48.9M), so this direction mostly proves "absent key for an un-engaged row".
+ *
+ * `gaia_api_ranking_scores_shadow_total{result}`:
+ *  - match: engaged on both sides, same score and the same five counts;
+ *  - mismatch: engaged on both sides but a different score or count;
+ *  - absent_ok: Postgres row un-engaged and no overlay row (the default's case);
+ *  - missing: Postgres row engaged and no overlay row (the mirror lags, or never ran);
+ *  - stale: an overlay row where Postgres has no row or an un-engaged one (the mirror's delete has not run);
+ *  - unsupported: an overlay row of another length or version (the 48-byte layout before the overlay writer);
+ *  - failed: a read failed.
+ *
+ * Not compared: the DEFAULT row's value (an un-engaged entity's score from its card and config). That is geo-db's Zig
+ * `entity_scores.getMany`, and no wire op serves it yet, so the api cannot ask geo-db for it; the fixture test pins Zig to the SQL.
+ * Blind spots: the overlay direction reads only the highest-scored page, and a sample is not a scan. Logs counts only, never an
+ * entity.
+ */
+
+import {sql} from "drizzle-orm"
+import type {Database} from "../forYou/queries"
+import {GeoDbError} from "./client"
+import type {DerivedReader, DerivedRow, DerivedScanReader} from "./derived"
+
+export const COLLECTION = 21
+export const OVERLAY_LEN = 62
+export const OVERLAY_VERSION = 1
+export const RESULTS = ["match", "mismatch", "absent_ok", "missing", "stale", "unsupported", "failed"] as const
+export type Result = (typeof RESULTS)[number]
+
+export type RankingScoresShadowConfig = {enabled: boolean; intervalMs: number; sample: number}
+
+const wholeNumber = (raw: string | undefined, fallback: number, max: number) => {
+	const n = Number(raw)
+	return Number.isInteger(n) && n >= 1 ? Math.min(n, max) : fallback
+}
+
+export function readRankingScoresShadowConfig(env: Record<string, string | undefined>): RankingScoresShadowConfig {
+	const flag = env.GEODB_RANKING_SCORES_SHADOW?.trim().toLowerCase()
+	return {
+		enabled: flag === "1" || flag === "on" || flag === "true",
+		intervalMs: wholeNumber(env.GEODB_RANKING_SCORES_SHADOW_INTERVAL_MS, 60_000, 86_400_000),
+		sample: wholeNumber(env.GEODB_RANKING_SCORES_SHADOW_SAMPLE, 20, 200),
+	}
+}
+
+/** Scores are f64 on both sides; Postgres's numeric text round trip may differ in the last digits. */
+const TOLERANCE = 1e-9
+
+/** The Postgres columns the overlay is the negation of (plan 10.21 section 9.1), as text. */
+export type PgRow = {
+	rankingScore: number
+	positive: number
+	negative: number
+	stancePositive: number
+	stanceNegative: number
+	commenterCount: number
+	/** True when any engagement term is nonzero: the overlay's predicate. */
+	engaged: boolean
+}
+
+const num = (v: unknown): number => (v === null || v === undefined ? 0 : Number(v))
+
+/** A Postgres row as the overlay sees it, or null when a column is not a number. */
+export function toPgRow(row: Record<string, unknown>): PgRow | null {
+	const rankingScore = Number(row.ranking_score)
+	if (!Number.isFinite(rankingScore)) return null
+	const counts: [number, number, number, number, number] = [
+		num(row.positive),
+		num(row.negative),
+		num(row.stance_positive),
+		num(row.stance_negative),
+		num(row.commenter_count),
+	]
+	const terms = [
+		row.participation_score,
+		row.comment_score,
+		row.topic_score,
+		row.watch_score,
+		row.age_credit,
+		row.trending_score,
+	].map(num)
+	if ([...counts, ...terms].some((n) => !Number.isFinite(n))) return null
+	return {
+		rankingScore,
+		positive: counts[0],
+		negative: counts[1],
+		stancePositive: counts[2],
+		stanceNegative: counts[3],
+		commenterCount: counts[4],
+		engaged: counts.some((n) => n !== 0) || terms.some((n) => n !== 0) || (row.trending_source ?? null) !== null,
+	}
+}
+
+/** The five counts of a 62-byte overlay value, or null for another length or version. */
+export function overlayCounts(value: Buffer): number[] | null {
+	if (value.length !== OVERLAY_LEN || value[0] !== OVERLAY_VERSION || (value[1] ?? 9) > 2) return null
+	return [2, 6, 10, 14, 18].map((at) => value.readUInt32LE(at))
+}
+
+/** What a Postgres row (null when it has none) and geo-db's overlay row (null when absent) say about each other. Pure. */
+export function compareRow(pg: PgRow | null, held: DerivedRow | null): Exclude<Result, "failed"> {
+	if (held === null) return pg !== null && pg.engaged ? "missing" : "absent_ok"
+	const counts = overlayCounts(held.value)
+	if (counts === null) return "unsupported"
+	if (pg === null || !pg.engaged) return "stale"
+	const sameScore = Math.abs(pg.rankingScore - held.score) <= TOLERANCE * Math.max(1, Math.abs(pg.rankingScore))
+	const want = [pg.positive, pg.negative, pg.stancePositive, pg.stanceNegative, pg.commenterCount]
+	return sameScore && want.every((n, i) => n === counts[i]) ? "match" : "mismatch"
+}
+
+const hex = (uuid: string) => uuid.replace(/-/g, "").toLowerCase()
+const isId = (v: unknown): v is string =>
+	typeof v === "string" && /^[0-9a-f]{8}-?([0-9a-f]{4}-?){3}[0-9a-f]{12}$/i.test(v)
+const uuidOfHex = (h: string) =>
+	`${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+
+let active = false
+const results = new Map<Result, number>()
+const bump = (r: Result): void => void results.set(r, (results.get(r) ?? 0) + 1)
+
+/** Empty until the shadow is mounted, so a flag-off deploy exports nothing; once active every series exists at zero. */
+export function renderRankingScoresShadowMetrics(): string {
+	if (!active) return ""
+	const lines = [
+		"# HELP gaia_api_ranking_scores_shadow_total Sampled entity_ranking_scores rows against geo-db's engaged-only overlay in derived collection 21, by result: match, mismatch, absent_ok (un-engaged and no overlay row), missing (engaged, no overlay row), stale (overlay row for an un-engaged or absent Postgres row), unsupported (another layout) or failed.",
+		"# TYPE gaia_api_ranking_scores_shadow_total counter",
+	]
+	for (const r of RESULTS) lines.push(`gaia_api_ranking_scores_shadow_total{result="${r}"} ${results.get(r) ?? 0}`)
+	return lines.join("\n")
+}
+
+export function __resetRankingScoresShadowMetricsForTests(): void {
+	active = false
+	results.clear()
+}
+
+const COLUMNS = sql.raw(
+	"ranking_score::text AS ranking_score, positive::text AS positive, negative::text AS negative, stance_positive::text AS stance_positive, stance_negative::text AS stance_negative, commenter_count::text AS commenter_count, participation_score::text AS participation_score, comment_score::text AS comment_score, topic_score::text AS topic_score, watch_score::text AS watch_score, age_credit::text AS age_credit, trending_score::text AS trending_score, trending_source",
+)
+
+function rowsOf(result: unknown): Record<string, unknown>[] {
+	return ((result as {rows?: Record<string, unknown>[]}).rows ?? []) as Record<string, unknown>[]
+}
+
+/** The Postgres row of an entity, or null when it has none. Throws on a database failure. */
+export async function readPgRow(db: Database, entityId: string): Promise<PgRow | null> {
+	const rows = rowsOf(
+		await db.execute(sql`SELECT ${COLUMNS} FROM entity_ranking_scores WHERE entity_id = ${entityId}::uuid LIMIT 1`),
+	)
+	const first = rows[0]
+	return first === undefined ? null : toPgRow(first)
+}
+
+/** Up to `limit` entity ids from the primary-key position `pivot`, wrapping to the start when short. */
+export async function sampleIds(db: Database, pivot: string, limit: number): Promise<string[]> {
+	const read = async (from: string | null, n: number) =>
+		rowsOf(
+			await db.execute(
+				from === null
+					? sql`SELECT entity_id::text AS entity_id FROM entity_ranking_scores ORDER BY entity_id LIMIT ${n}`
+					: sql`SELECT entity_id::text AS entity_id FROM entity_ranking_scores WHERE entity_id >= ${from}::uuid ORDER BY entity_id LIMIT ${n}`,
+			),
+		)
+			.map((r) => r.entity_id)
+			.filter(isId)
+			.map(hex)
+	const first = await read(pivot, limit)
+	if (first.length >= limit) return first
+	const seen = new Set(first)
+	return first.concat((await read(null, limit)).filter((k) => !seen.has(k)).slice(0, limit - first.length))
+}
+
+export type RankingScoresShadow = {
+	/** One sampling pass. Resolves when done; never throws. */
+	runOnce(): Promise<void>
+	/** Start the periodic pass; returns the stop function. The timer does not keep the process alive. */
+	start(): () => void
+}
+
+export function createRankingScoresShadow(deps: {
+	config: RankingScoresShadowConfig
+	db: Database
+	reader: DerivedReader & Partial<Pick<DerivedScanReader, "scan">>
+	log: {warn: (message: string, data?: Record<string, unknown>) => void}
+	random?: () => string
+}): RankingScoresShadow {
+	const {config, db, reader, log} = deps
+	const pivotOf = deps.random ?? (() => crypto.randomUUID())
+	active = true
+	let running = false
+	let logged = 0
+
+	const record = (outcome: Result) => {
+		bump(outcome)
+		// Counts only: never which entity.
+		if ((outcome === "mismatch" || outcome === "stale") && logged < 20) {
+			logged++
+			log.warn("ranking scores shadow disagreement", {result: outcome})
+		}
+	}
+	const fail = (error: unknown) => {
+		bump("failed")
+		if (!(error instanceof GeoDbError)) log.warn("ranking scores shadow failed", {error: String(error)})
+	}
+
+	async function viaOverlay(): Promise<void> {
+		if (!reader.scan) return
+		let page: Awaited<ReturnType<NonNullable<typeof reader.scan>>>
+		try {
+			page = await reader.scan(COLLECTION, "0", config.sample)
+		} catch (error) {
+			return fail(error)
+		}
+		for (const r of page.rows) {
+			try {
+				const held: DerivedRow = {group: "0".repeat(32), score: r.score, value: Buffer.from(r.valueHex, "hex")}
+				record(compareRow(await readPgRow(db, uuidOfHex(r.keyHex)), held))
+			} catch (error) {
+				fail(error)
+			}
+		}
+	}
+
+	async function viaPostgres(): Promise<void> {
+		let ids: string[]
+		try {
+			ids = await sampleIds(db, pivotOf(), config.sample)
+		} catch (error) {
+			return fail(error)
+		}
+		for (const id of ids) {
+			try {
+				const pg = await readPgRow(db, uuidOfHex(id))
+				record(compareRow(pg, await reader.get(COLLECTION, id)))
+			} catch (error) {
+				fail(error)
+			}
+		}
+	}
+
+	async function runOnce(): Promise<void> {
+		if (running) return
+		running = true
+		try {
+			await viaOverlay()
+			await viaPostgres()
+		} finally {
+			running = false
+		}
+	}
+
+	return {
+		runOnce,
+		start() {
+			if (!config.enabled) return () => {}
+			const timer = setInterval(() => void runOnce().catch(() => {}), config.intervalMs)
+			timer.unref?.()
+			return () => clearInterval(timer)
+		},
+	}
+}
