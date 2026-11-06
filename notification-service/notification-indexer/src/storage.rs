@@ -10,6 +10,9 @@ use sqlx::{PgPool, Row};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use geodb_outbox::{OutboxMirror, Unit};
+use std::sync::OnceLock;
+
 use crate::error::StorageError;
 use crate::ids;
 use crate::models::{event_notification_types, NotificationEvent, KNOWN_NOTIFICATION_TYPES};
@@ -24,6 +27,13 @@ pub const REJECTION_FLOOR_CURSOR: &str = "proposal_rejected_floor";
 /// filtering from memory and refresh lazily — a filter change takes effect within
 /// this window without a redeploy.
 const WEBHOOK_CACHE_TTL: Duration = Duration::from_secs(30);
+
+/// The geo-db work-class shadow of the outbox (plan 10.16), shared by every `Storage`. `None`
+/// unless `GEODB_OUTBOX_MIRROR` is on; started on first use, inside the runtime.
+fn outbox_mirror() -> Option<&'static OutboxMirror> {
+    static MIRROR: OnceLock<Option<OutboxMirror>> = OnceLock::new();
+    MIRROR.get_or_init(OutboxMirror::from_env).as_ref()
+}
 
 /// A registered webhook's delivery filters. `None`/empty on a dimension = "all".
 #[derive(Debug, Clone)]
@@ -248,6 +258,9 @@ impl Storage {
         // will be reprocessed. The ON CONFLICT DO NOTHING clause on the outbox
         // insert ensures safe reprocessing of already-committed recipients.
         let mut tx = self.pool.begin().await?;
+        // Rows newly inserted by this transaction, mirrored to geo-db only after it commits.
+        let mirror = outbox_mirror();
+        let mut shadow: Vec<Unit> = Vec::new();
 
         for user_id in users {
             // Raw key for debugging: e.g. "12345:0:proposal_created:user-uuid"
@@ -313,11 +326,26 @@ impl Storage {
                 .await?;
             }
 
+            if mirror.is_some() {
+                shadow.push(Unit {
+                    ledger_key_hex: db_key,
+                    event_type: event.event_type.as_str().to_string(),
+                    payload: serialized_payload.to_string(),
+                    webhooks: matched_webhook_ids.iter().map(|w| *w.as_bytes()).collect(),
+                });
+            }
             inserted_count += 1;
         }
 
         tx.commit().await?;
         crate::metrics::notifications_inserted(inserted_count);
+        // Fire-and-forget: `submit` only try_sends into a bounded queue, so it can neither fail
+        // nor slow the path above. Postgres stays the source of truth.
+        if let Some(mirror) = mirror {
+            for unit in shadow {
+                mirror.submit(unit);
+            }
+        }
 
         Ok(inserted_count)
     }

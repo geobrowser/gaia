@@ -1,0 +1,14 @@
+[package]
+name = "geodb-outbox"
+version = "0.1.0"
+edition = "2024"
+description = "Best-effort shadow of the notification outbox into geo-db's work class, over `geodb-client work pipe`"
+
+[dependencies]
+metrics = "0.24"
+thiserror = "2"
+tokio = { version = "1", features = ["process", "io-util", "time", "sync", "rt"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync"] }

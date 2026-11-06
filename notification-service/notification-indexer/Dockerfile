@@ -18,6 +18,8 @@ COPY hermes-instrumentation ./hermes-instrumentation
 COPY hermes-kafka ./hermes-kafka
 # Canonical knowledge-graph IDs (sdk crate) — path dep of notification-indexer.
 COPY sdk ./sdk
+# geo-db outbox shadow (off unless GEODB_OUTBOX_MIRROR=1) - path dep of notification-indexer.
+COPY geodb-outbox ./geodb-outbox
 COPY notification-service/notification-indexer ./notification-service/notification-indexer
 
 # Build from the crate directory (standalone, not as workspace member)

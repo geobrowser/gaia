@@ -32,6 +32,61 @@ spec:
         fsGroup: 1001
       imagePullSecrets:
         - name: geo
+      volumes:
+        # geodb-client for the outbox shadow (geodb-outbox, GEODB_OUTBOX_MIRROR). Dormant while the flag
+        # is "off": nothing below is read and every reference is optional or fails soft, so an absent
+        # geodb never blocks a rollout. Same wiring as hermes-pipeline.yaml, with the OUTBOX key: a
+        # principal that may write the work class and nothing else (geodb-outbox-key-job.yaml).
+        - name: geodb-bin
+          emptyDir: {}
+        - name: geodb-space-map
+          configMap:
+            # Written by the geodb-feeder / serve. Not shipped in these manifests.
+            name: geodb-space-map
+            optional: true
+        - name: geodb-key
+          secret:
+            secretName: geodb-outbox-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: outbox.key
+      initContainers:
+        - name: geodb-setup
+          # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to this service's tag.
+          image: registry.digitalocean.com/geo/geodb:27e919248f
+          imagePullPolicy: IfNotPresent
+          # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
+          # binding and the mirror stays disabled even if the flag is turned on.
+          command:
+            - sh
+            - -c
+            - |
+              cp /usr/local/bin/geodb-client /geodb/geodb-client || exit 0
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -n "$node" ] && [ -n "$ip" ]; then
+                printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+              else
+                echo "geodb-setup: no node id or no geodb Service; outbox mirror stays off"
+              fi
+              exit 0
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
       containers:
         - name: notification-indexer
           image: registry.digitalocean.com/geo/notification-indexer:latest
@@ -86,6 +141,18 @@ spec:
             # effect on a database that already has a floor.
             - name: REJECTION_BACKFILL_HOURS
               value: "10"
+            # Shadow every new outbox row into geo-db's work class (geodb-outbox). OFF: none of the
+            # GEODB_* values below is read. Postgres stays the source of truth and readers stay on it.
+            # Turn on only after the work key is minted, serve has `work_rows_max` set and has
+            # registered it (a serve roll), RUNBOOK section 11; then deploy this service with "1".
+            - name: GEODB_OUTBOX_MIRROR
+              value: "off"
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_OUTBOX_KEY_PATH
+              value: /etc/geodb/key/outbox.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
             # Logging
             - name: RUST_LOG
               value: "info,notification_indexer=debug"
@@ -117,6 +184,13 @@ spec:
               port: 8080
             periodSeconds: 10
             failureThreshold: 3
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: geodb-key
+              mountPath: /etc/geodb/key
+              readOnly: true
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
