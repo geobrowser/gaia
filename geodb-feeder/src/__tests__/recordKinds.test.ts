@@ -11,6 +11,7 @@ describe("record kinds", () => {
 			subspace: ["de1a992f8c2840c5bd185fdfa6aa28e9", "governance"],
 			subspaceTopic: ["e90b36c75cbf4239a6add0ae26dd939a", "governance"],
 			proposalAction: ["22335b74e17a4c9e867d4ac2a32c3a4a", "governance"],
+			proposalVersion: ["6863abef6664450eb135a182c6ff1715", "governance"],
 			spaceVotingSettings: ["7767f888a9a240b18275a7832363f4d9", "governance"],
 			proposalVote: ["ca89a877762c4883a3640b5455a8f0e2", "votes"],
 			userVote: ["1623234736184c0d9a0b69e2ffbc124d", "votes"],
@@ -78,6 +79,20 @@ describe("record columns", () => {
 			},
 			subspace: {verified: "2c527e632f3645cdbbc2c2a9806dfc05", related: "ba99f0b8bf4646ed9cdb404da918e5e1"},
 			subspaceTopic: {topic: "90ee068ad2d44a8b95cf939d2d1ceabb"},
+			proposalVersion: {
+				proposal: "c42be9e340d14566b2b9f084004c748b",
+				block: "bccb84d7017849b0babfa7444789068f",
+				votingMode: "1ec5fb72263443668b4880d09670cb56",
+				startTime: "5a806f60759e4dd08a39c771d7586f53",
+				endTime: "72d87497d7ed49db81e31675a31c5da7",
+				quorum: "54000906476b41b7a0ca655f043b1a8d",
+				partial: "e4e76529227940f08bd1ca1ab884fe31",
+				universal: "eecb13aaa70c44509070df7550436103",
+				flat: "2e641ff402734c6b80201641f3969fe2",
+				executeBy: "ca75ecfb5ab24196998de1b3bb31eb6f",
+				name: "a76bbfa24cfa43708b89326ae5f72e18",
+				createdAt: "6c74f4f248d249368e1002b4c393a59e",
+			},
 		})
 	})
 	it("are distinct v4s, distinct from every kind", () => {
