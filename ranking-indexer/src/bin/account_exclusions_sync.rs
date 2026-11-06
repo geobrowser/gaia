@@ -314,6 +314,16 @@ async fn main() -> Result<(), IndexerError> {
         Vec::new()
     };
 
+    // ACCOUNT_EXCLUSIONS_RUST_COMPUTE (default off): the table before, to replay the replace in code.
+    let shadow_before: Option<Vec<(String, String, String)>> = if shadow_enabled() {
+        sqlx::query_as("SELECT user_id::text, reason, source FROM public.account_exclusions")
+            .fetch_all(&pool)
+            .await
+            .map_err(|e| warn!(error = %e, "exclusions rust twin skipped: prior read failed"))
+            .ok()
+    } else {
+        None
+    };
     let rows = serde_json::Value::Array(
         placed
             .iter()
@@ -337,6 +347,9 @@ async fn main() -> Result<(), IndexerError> {
         );
     }
     info!(written, "account exclusions replaced");
+    if let Some(before) = shadow_before {
+        shadow(&pool, before, &placed, written).await;
+    }
     if let Some(mirror) = &mirror {
         // Read after the replace committed; a read error skips the mirror, never the job.
         match sqlx::query_as::<_, AccountExclusion>(account_exclusions_mirror::SELECT_SQL)
@@ -355,6 +368,68 @@ async fn main() -> Result<(), IndexerError> {
         }
     }
     Ok(())
+}
+
+fn shadow_enabled() -> bool {
+    matches!(
+        env::var("ACCOUNT_EXCLUSIONS_RUST_COMPUTE").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
+}
+
+/// Replays `replace_account_exclusions` in code on the table as it was, and compares the written
+/// count and the resulting table. Logs; never fails the run.
+async fn shadow(
+    pool: &PgPool,
+    before: Vec<(String, String, String)>,
+    placed: &BTreeMap<uuid::Uuid, String>,
+    written: i32,
+) {
+    use ranking_indexer::account_exclusions_compute as c;
+    let existing: Vec<c::Exclusion> = before
+        .into_iter()
+        .map(|(user_id, reason, source)| c::Exclusion {
+            user_id,
+            reason,
+            source,
+        })
+        .collect();
+    let rows: Vec<c::Row> = placed
+        .iter()
+        .map(|(id, reasons)| c::Row {
+            user_id: id.to_string(),
+            reason: Some(format!("analytics: {reasons}")),
+        })
+        .collect();
+    let after: Result<Vec<(String, String, String)>, _> =
+        sqlx::query_as("SELECT user_id::text, reason, source FROM public.account_exclusions")
+            .fetch_all(pool)
+            .await;
+    let Ok(after) = after else {
+        warn!("exclusions rust twin skipped: table read failed");
+        return;
+    };
+    let sql: std::collections::BTreeSet<c::Exclusion> = after
+        .into_iter()
+        .map(|(user_id, reason, source)| c::Exclusion {
+            user_id,
+            reason,
+            source,
+        })
+        .collect();
+    match c::replace(&existing, Some(&rows), SOURCE) {
+        Ok((w, table)) if w == i64::from(written) && table == sql => {
+            info!("exclusions rust twin agrees with the SQL replace")
+        }
+        Ok((w, table)) => warn!(
+            rust_written = w,
+            sql_written = written,
+            rust_rows = table.len(),
+            sql_rows = sql.len(),
+            "exclusions rust twin differs from the SQL replace"
+        ),
+        Err(r) => warn!(refusal = ?r, "exclusions rust twin refused where the SQL did not"),
+    }
 }
 
 #[cfg(test)]
