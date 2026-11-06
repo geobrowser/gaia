@@ -52,6 +52,14 @@ spec:
             items:
               - key: key
                 path: outbox.key
+        # app_webhooks out of Postgres (APP_WEBHOOKS_FILE). The Secret is optional: absent, the volume is
+        # empty and nothing reads it, so a rollout never depends on it. Create it with
+        # notification-service/scripts/export-app-webhooks.sh, then uncomment APP_WEBHOOKS_FILE below.
+        - name: app-webhooks
+          secret:
+            secretName: app-webhooks
+            optional: true
+            defaultMode: 0440
       initContainers:
         - name: geodb-setup
           # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to this service's tag.
@@ -122,6 +130,11 @@ spec:
               value: /etc/geodb/key/outbox.key
             - name: GEODB_BINDING_PATH
               value: /geodb/binding.txt
+            # Read app_webhooks from the mounted Secret instead of Postgres. Default OFF (the variable is
+            # unset, so every reader stays on the table). To turn on: create the `app-webhooks` Secret
+            # (scripts/export-app-webhooks.sh), then uncomment these two lines and redeploy.
+            # - name: APP_WEBHOOKS_FILE
+            #   value: /etc/app-webhooks/webhooks.json
             # Logging
             - name: RUST_LOG
               value: "info,delivery_worker=debug"
@@ -159,6 +172,9 @@ spec:
               readOnly: true
             - name: geodb-key
               mountPath: /etc/geodb/key
+              readOnly: true
+            - name: app-webhooks
+              mountPath: /etc/app-webhooks
               readOnly: true
           securityContext:
             readOnlyRootFilesystem: true

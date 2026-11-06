@@ -1602,6 +1602,8 @@ fn is_block_too_old(block_created_at: u64, min_age_secs: u64) -> bool {
 fn classify_storage(error: &StorageError) -> ErrorClass {
     match error {
         StorageError::Database(e) => classify_sqlx(e),
+        // A missing or unparsable webhooks file can be fixed (re-mount, re-export): retry.
+        StorageError::WebhooksFile(_) => ErrorClass::Transient,
     }
 }
 

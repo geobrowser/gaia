@@ -29,6 +29,9 @@ pub enum HandlerError {
 pub enum StorageError {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+
+    #[error("app webhooks file: {0}")]
+    WebhooksFile(String),
 }
 
 /// Top-level indexer error.

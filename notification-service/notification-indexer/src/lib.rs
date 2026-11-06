@@ -11,4 +11,5 @@ pub mod ids;
 pub mod metrics;
 pub mod models;
 pub mod storage;
+pub mod webhooks_file;
 pub mod write_retry;
