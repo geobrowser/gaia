@@ -343,10 +343,10 @@ spec:
               value: "0"
             # The same for pair-fit's account weights: a sample of each request's candidates (at most every
             # GEODB_ACCOUNT_WEIGHTS_SHADOW_INTERVAL_MS, default 10 s; _SAMPLE candidates, default 5) against geo-db's
-            # derived collection 5 (gaia_api_account_weights_shadow_total), read over `geodb-client derived pipe`. OFF; never
-            # changes a response. Needs the ranking-indexer's GEODB_DERIVED_MIRROR run first (account-weights cronjob).
+            # derived collection 5 (gaia_api_account_weights_shadow_total), read over `geodb-client derived pipe`. ON; never
+            # changes a response. The account-weights cronjob's GEODB_DERIVED_MIRROR is on and has filled collection 5.
             - name: GEODB_ACCOUNT_WEIGHTS_SHADOW
-              value: "0"
+              value: "1"
             # Also compare each sampled candidate's `excluded` with geo-db's derived collection 12
             # (gaia_api_account_exclusions_shadow_total). Needs GEODB_ACCOUNT_WEIGHTS_SHADOW on, serve rolled to a build that
             # registers collection 12, and the account-exclusions-sync cronjob's GEODB_DERIVED_MIRROR run once. OFF.
