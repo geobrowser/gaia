@@ -130,11 +130,11 @@ spec:
               value: /etc/geodb/key/outbox.key
             - name: GEODB_BINDING_PATH
               value: /geodb/binding.txt
-            # Read app_webhooks from the mounted Secret instead of Postgres. Default OFF (the variable is
-            # unset, so every reader stays on the table). To turn on: create the `app-webhooks` Secret
-            # (scripts/export-app-webhooks.sh), then uncomment these two lines and redeploy.
-            # - name: APP_WEBHOOKS_FILE
-            #   value: /etc/app-webhooks/webhooks.json
+            # Read app_webhooks from the mounted `app-webhooks` Secret instead of Postgres (ON since 2026-11-06).
+            # Re-run scripts/export-app-webhooks.sh after any webhook change. To go back to the table,
+            # comment these two lines out and redeploy.
+            - name: APP_WEBHOOKS_FILE
+              value: /etc/app-webhooks/webhooks.json
             # Logging
             - name: RUST_LOG
               value: "info,delivery_worker=debug"
