@@ -314,20 +314,24 @@ export function diffCards(postgres: {statements: CardStatement[]; skipped: numbe
 		)
 		.map((row) => ({...row, used: false}))
 	const onlyPostgres: CardStatement[] = []
+	// An empty text is no text to a reader, and geo-db has not been seen holding the one Postgres does (ISS: EntityPage
+	// b9501592, property 4d9cba1c): a Postgres "" geo-db lacks is skipped, one it holds still matches below.
+	let emptyText = 0
 	for (const s of comparable) {
 		const hit = pool.find(
 			(r) => !r.used && r.prop === s.prop && (s.kind === "num" ? normNumber(r.raw) === s.norm : r.raw === s.norm),
 		)
 		if (hit) hit.used = true
+		else if (s.kind === "text" && s.norm === "") emptyText++
 		else onlyPostgres.push(s)
 	}
 	// A Postgres row that could not be mapped may be a point the caller could not read (the gateway shadow), so a
 	// point-shaped geo-db row left over is not a gap while one was skipped.
-	const unmatched = pool.filter((r) => !r.used && !(postgres.skipped > 0 && POINT_SHAPED.test(r.raw)))
+	const unmatched = pool.filter((r) => !r.used && !(postgres.skipped > 0 && POINT_SHAPED.test(r.raw)) && r.raw !== "")
 	return {
 		onlyPostgres,
 		onlyGeoDb: unmatched.map(({prop, raw}) => ({prop, raw})),
-		skipped: postgres.skipped + derived,
+		skipped: postgres.skipped + derived + emptyText,
 	}
 }
 
