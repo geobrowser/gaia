@@ -970,6 +970,37 @@ describe("entity answers with no Space (every-Space reads)", () => {
 		})
 	})
 
+	describe("the lines of one every-Space read go out together", () => {
+		const filler = Array.from({length: 1100}, (_, i) => geoSpace(`${(i + 1).toString(16).padStart(32, "0")}`))
+		const many = [...ALL, ...filler]
+		const rows = () => ({[geoSpace(SPACE_C)]: geoOutput(ENTITY) + typeRow(HEX, NEWS_STORY, "News story")})
+
+		it("issues both lines before either answers, and matches when the first answers last", async () => {
+			const s = everySetup(rows(), {spaces: many, chunks: true})
+			const answer = s.readCardSpaces.getMockImplementation() as (a: never) => Promise<unknown>
+			let inFlight = 0
+			let widest = 0
+			s.readCardSpaces.mockImplementation((async (a: {geoSpaceIds: string[]}) => {
+				inFlight += 1
+				widest = Math.max(widest, inFlight)
+				await new Promise((resolve) => setTimeout(resolve, a.geoSpaceIds.length === 1024 ? 20 : 1))
+				inFlight -= 1
+				return answer(a as never)
+			}) as never)
+			await run(s, EVERY.entityTypes)
+			expect(widest).toBe(2)
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("is throttled whole when the budget cannot give both lines", async () => {
+			const budget = createReadBudget({perSecond: 0, burst: 1})
+			const s = everySetup(rows(), {spaces: many, chunks: true, budget})
+			await run(s, EVERY.entityTypes)
+			expect(unsupported()).toEqual({throttled: 1})
+			expect(s.readCardSpaces).not.toHaveBeenCalled()
+		})
+	})
+
 	it("flags a type geo-db holds that PostGraphile does not list; a differing type name is inconclusive", async () => {
 		const other = "0123456789ab4bcd8ef0123456789abd"
 		const extra = everySetup({

@@ -1202,16 +1202,23 @@ export async function readEverySpace(deps: EntityShadowDeps, entityId: string, l
 	const started = performance.now()
 	const rows: GeoCardRow[] = []
 	try {
-		for (const line of lines) {
-			const got = await readCardSpaces({
-				geoSpaceIds: line,
-				entityId: conformingId("entity", entityId),
-				names: true,
-			})
+		// The lines go out together: every one holds a token of `everySpaceBudget`, taken above, so the read's
+		// width is the budget's, and the whole read waits for its slowest line (each line's own timeout bounds it).
+		// `Promise.all` keeps the lines' order, so the rows concatenate as the serial walk's did.
+		const answers = await Promise.all(
+			lines.map((line) =>
+				readCardSpaces({
+					geoSpaceIds: line,
+					entityId: conformingId("entity", entityId),
+					names: true,
+				}),
+			),
+		)
+		lines.forEach((line, i) => {
 			// A one-Space line prints bare statement ids, so its rows name no Space.
 			const only = line.length === 1 ? line[0] : undefined
-			for (const row of got) rows.push(only && row.space === undefined ? {...row, space: only} : row)
-		}
+			for (const row of answers[i] ?? []) rows.push(only && row.space === undefined ? {...row, space: only} : row)
+		})
 		observeGeoDbRead((performance.now() - started) / 1000, "ok")
 	} catch (error) {
 		observeGeoDbRead((performance.now() - started) / 1000, "error")

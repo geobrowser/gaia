@@ -93,9 +93,9 @@ export async function checkOrderedPage(
 	const started = performance.now()
 	let entries: [string, bigint | null][]
 	try {
-		const perLine: [string, bigint | null][][] = []
-		for (const line of lines)
-			perLine.push(
+		// The lines go out together, each holding a token of `everySpaceBudget` (taken above); their order is kept.
+		const perLine: [string, bigint | null][][] = await Promise.all(
+			lines.map(async (line) =>
 				keysOf(
 					// One more than the page, so the entity just past the cut shows whether the cut splits a tie.
 					await readEntitiesPage({
@@ -109,7 +109,8 @@ export async function checkOrderedPage(
 					field,
 					pick,
 				),
-			)
+			),
+		)
 		entries =
 			perLine.length === 1
 				? (perLine[0] as [string, bigint | null][])

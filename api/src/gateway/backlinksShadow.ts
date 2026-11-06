@@ -251,18 +251,23 @@ export async function runBacklinks(
 	// Without the rows' Spaces, the sets are compared by referrer alone.
 	const bySpace = oneSpace !== null || plan.spaceKey !== null
 
-	let geoRows: GeoBacklinkRow[] = []
+	const geoRows: GeoBacklinkRow[] = []
 	let geoTruncated = false
 	try {
-		// More Spaces than one line names are read line by line; a backlink lives in one Space, so the union is exact.
-		for (let at = 0; at < geoSpaces.length; at += MAX_LINE_SPACES) {
-			const line = geoSpaces.slice(at, at + MAX_LINE_SPACES)
-			const got = await readBacklinks(deps, plan.entityId, line)
+		// More Spaces than one line names are read in lines, all at once (each holds a token of `everySpaceBudget`,
+		// taken above); a backlink lives in one Space, so the union is exact, and `Promise.all` keeps the lines'
+		// order.
+		const lines: string[][] = []
+		for (let at = 0; at < geoSpaces.length; at += MAX_LINE_SPACES)
+			lines.push(geoSpaces.slice(at, at + MAX_LINE_SPACES))
+		const answers = await Promise.all(lines.map((line) => readBacklinks(deps, plan.entityId, line)))
+		lines.forEach((line, i) => {
+			const got = answers[i] ?? []
 			if (got.length >= BACKLINKS_LIMIT) geoTruncated = true
 			// A one-Space line prints bare rows, so a lone last Space names itself.
 			const only = line.length === 1 && geoSpaces.length > 1 ? line[0] : undefined
 			for (const row of got) geoRows.push(only && row.space === undefined ? {...row, space: only} : row)
-		}
+		})
 	} catch (error) {
 		const reason = error instanceof GeoDbError ? error.reason : "error"
 		if (reason === "unmapped_space") return {result: "unsupported", reason: "unmapped_space"}
