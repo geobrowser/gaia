@@ -1177,6 +1177,30 @@ A geo-db error is logged, never fails a batch.
   in its own PR. Rollback: flag `"0"`. Turning the flag on also starts the `entity_ranking_scores` mirror's refresh read-backs
   if that mirror has merged, so check which mirrors the flag enables first.
 
+### 2f-composition. entity_feed_composition_samples (derived collection 25, GEODB_DERIVED_MIRROR)
+
+Shadow only, nothing reads the rows. The hourly `ranking-indexer-feed-composition` CronJob
+(`ranking-indexer/src/bin/feed_composition_sample.rs`, migrations 0091, 0092 and 0093) inserts one window sample per
+scope (the global feed and each space in `FEED_COMPOSITION_SPACE_IDS`) and one rendered sample. With
+`GEODB_DERIVED_MIRROR=1` (manifest default `"0"`) it then reads the samples of the last 6 hours and copies them into
+collection 25 (`ranking-indexer/src/feed_composition_mirror.rs`). Group the scope (the space id as a big-endian u128, 0
+for the global feed), score the sample time in epoch seconds (a scan walks the newest sample first), key 25 bytes (a
+source byte, 0 window or 1 rendered, the sample id as a big-endian i64, then a type id, all zero for the sample's own
+row). A sample is a scalar row of 44 bytes (window size i32, median and oldest age i64 with `i64::MIN` for null, the
+participation weight, cap and tau as f64, little-endian) plus one row per type of the composition (value the count as
+i32). `type_ids` is not stored; the composition carries the types. The table is append-only, so nothing is deleted; a
+geo-db error is logged, never fails the Job.
+
+- Size: about ten samples an hour and at most four rows each, no retention, so at most 40 rows an hour, about 350
+  thousand a year, against `derived_rows_max` 4,194,304 (8,388,608 planned). Check
+  `SELECT count(*) FROM entity_feed_composition_samples` times four before enabling.
+- Backfill: set `FEED_COMPOSITION_MIRROR_HOURS=0` on one manual run to send the whole history once, then unset it.
+- Reader (Postgres, unchanged): `feed_composition_drift` (migration 0093), logged by the same Job.
+- Uses the shared `geodb-scores-key`, now granting collection 25 as well (`geodb/supervisor.sh`).
+- **Enable order: roll serve to a build that registers collection 25 FIRST**, then the binding (the StatefulSet restart
+  applies both), run the Job once by hand with the flag on, then set the flag `"1"` in `feed-composition-cronjob.yaml` in
+  its own change. Rollback: flag `"0"`.
+
 ### 2d. Raising the Space cap
 
 `spaces` in `geodb-serve-config` caps the Spaces the store can hold; at the cap, founding refuses and the
