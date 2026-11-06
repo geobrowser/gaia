@@ -101,10 +101,9 @@ spec:
               readOnly: true
           env:
             # Copy the rows this service writes into geo-db's derived class (RUNBOOK section 2f), best-effort,
-            # after the Postgres write commits. OFF: "0". Turning it on is a separate change, after the
-            # enable order in RUNBOOK section 12.
+            # after the Postgres write commits. ON ("1", Stage A, RUNBOOK section 12); "0" is the rollback.
             - name: GEODB_DERIVED_MIRROR
-              value: "0"
+              value: "1"
             # The votes_count snapshot at start is thousands of rows (RUNBOOK section 2f-votes-count); send them batched.
             - name: GEODB_DERIVED_BATCH
               value: "1"
