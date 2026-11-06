@@ -28,6 +28,7 @@ use ranking_indexer::primer_claims_mirror::{
     self as family, AnchorMember, AnchorSet, ClaimStats, PriorClaim,
 };
 use ranking_indexer::primer_mirror::{self, OverlapSample};
+use ranking_indexer::primer_stats;
 use uuid::Uuid;
 
 /// The ticket asks for 30-50 anchors; refresh_anchor_claims aims for 40 and keeps at least 30.
@@ -38,6 +39,16 @@ const ANCHOR_MIN: i32 = 30;
 fn anchor_rust_enabled() -> bool {
     matches!(
         env::var("ANCHOR_RUST_COMPUTE").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+/// `PRIMER_STATS_RUST_COMPUTE` (default off): after the SQL rebuilt the statistics, compute them
+/// again in code from the same inputs (as of the table's own `computed_at`) and log how many rows
+/// differ. Votes or graph edits that land in the gap show as stray mismatches.
+fn primer_stats_rust_enabled() -> bool {
+    matches!(
+        env::var("PRIMER_STATS_RUST_COMPUTE").as_deref(),
         Ok("1") | Ok("true")
     )
 }
@@ -85,6 +96,75 @@ async fn anchor_shadow(pool: &sqlx::PgPool, set_id: i32) -> Result<bool, Indexer
         .collect();
     let rust = anchor_select::select(&stats, &anchor_select::Params::default())?;
     Ok(anchor_select::same_members(&rust, &sql))
+}
+
+const CLAIM_REL: &str = "r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid \
+    AND r.to_entity_id = '96f859ef-a1ca-4b22-9372-c86ad58b694b'::uuid";
+
+async fn stats_shadow(pool: &sqlx::PgPool) -> Result<(usize, usize, usize), IndexerError> {
+    let table: Vec<ClaimStats> = sqlx::query_as(family::STATS_SQL).fetch_all(pool).await?;
+    let Some(as_of_us) = table.first().map(|r| r.computed_us) else {
+        return Ok((0, 0, 0));
+    };
+    let claim_spaces: Vec<(Uuid, Uuid)> = sqlx::query_as(&format!(
+        "SELECT r.from_entity_id, r.space_id FROM public.relations r WHERE {CLAIM_REL}"
+    ))
+    .fetch_all(pool)
+    .await?;
+    let claim_topics: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT r.from_entity_id, r.to_entity_id FROM public.relations r \
+         WHERE r.type_id = '806d52bc-27e9-4c91-93c0-57978b093351'::uuid \
+           AND r.from_entity_id IN (SELECT DISTINCT r2.from_entity_id FROM public.relations r2 \
+             WHERE r2.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1'::uuid \
+               AND r2.to_entity_id = '96f859ef-a1ca-4b22-9372-c86ad58b694b'::uuid)",
+    )
+    .fetch_all(pool)
+    .await?;
+    let name_length: Vec<(Uuid, i32)> = sqlx::query_as(
+        "SELECT v.entity_id, max(length(btrim(v.text)))::int FROM public.values v \
+         WHERE v.property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935'::uuid GROUP BY v.entity_id",
+    )
+    .fetch_all(pool)
+    .await?;
+    let ineligible: Vec<Uuid> = sqlx::query_scalar(&format!(
+        "SELECT DISTINCT r.from_entity_id FROM public.relations r WHERE {CLAIM_REL} \
+           AND NOT public.entity_topic_ranking_eligible(r.from_entity_id)"
+    ))
+    .fetch_all(pool)
+    .await?;
+    let weights: Vec<(Uuid, f64)> =
+        sqlx::query_as("SELECT user_id, weight FROM public.account_weights")
+            .fetch_all(pool)
+            .await?;
+    let votes: Vec<(Uuid, Uuid, i16, i16, i64)> = sqlx::query_as(
+        "SELECT user_id, object_id, vote_kind, vote_type, \
+                (extract(epoch FROM voted_at)::numeric * 1000000)::bigint \
+         FROM public.user_votes",
+    )
+    .fetch_all(pool)
+    .await?;
+    let inp = primer_stats::Inputs {
+        claim_spaces,
+        claim_topics,
+        name_length: name_length.into_iter().collect(),
+        ineligible: ineligible.into_iter().collect(),
+        weights: weights.into_iter().collect(),
+        votes: votes
+            .into_iter()
+            .map(
+                |(user_id, object_id, vote_kind, vote_type, voted_us)| primer_stats::Vote {
+                    user_id,
+                    object_id,
+                    vote_kind,
+                    vote_type,
+                    voted_us,
+                },
+            )
+            .collect(),
+    };
+    let rust = primer_stats::compute(&inp, as_of_us, &primer_stats::Params::default())?;
+    let mismatched = primer_stats::count_mismatches(&rust, &table);
+    Ok((rust.len(), table.len(), mismatched))
 }
 
 #[tokio::main]
@@ -137,6 +217,15 @@ async fn main() -> Result<(), IndexerError> {
             .await?;
     tx.commit().await?;
 
+    if primer_stats_rust_enabled() {
+        match stats_shadow(&pool).await {
+            Ok((rust, table, mismatched)) => info!(
+                rust,
+                table, mismatched, "primer claim stats rust compute checked against the table"
+            ),
+            Err(e) => warn!(error = %e, "primer claim stats rust compute skipped"),
+        }
+    }
     let (contested, eligible): (i64, i64) = sqlx::query_as(
         "SELECT count(*) FILTER (WHERE contested), count(*) FILTER (WHERE weighted_voters >= 3) \
          FROM public.primer_claim_stats",
