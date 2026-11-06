@@ -23,3 +23,4 @@ pub mod scoring;
 pub mod stance_map;
 pub mod storage;
 pub mod topic_interest;
+pub mod topic_suggestions_mirror;

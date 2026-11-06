@@ -16,9 +16,10 @@ use std::env;
 use std::time::Instant;
 
 use sqlx::postgres::PgPoolOptions;
-use tracing::info;
+use tracing::{info, warn};
 
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::topic_suggestions_mirror::{self, Suggestion};
 
 #[tokio::main]
 async fn main() -> Result<(), IndexerError> {
@@ -34,6 +35,17 @@ async fn main() -> Result<(), IndexerError> {
         .connect(&database_url)
         .await?;
 
+    // Best-effort copy into geo-db's derived class (GEODB_DERIVED_MIRROR, default off). With it off
+    // `from_env` is None and nothing below reads the table a second time.
+    let mirror = geodb_cursor::derived::DerivedMirror::from_env();
+    let prior: Vec<(uuid::Uuid, uuid::Uuid)> = if mirror.is_some() {
+        sqlx::query_as(topic_suggestions_mirror::PRIOR_SQL)
+            .fetch_all(&pool)
+            .await?
+    } else {
+        Vec::new()
+    };
+
     let started = Instant::now();
     // A failure returns Err, so the process exits non-zero and the Job is marked failed.
     let rows: i32 = sqlx::query_scalar("SELECT public.refresh_space_topic_suggestions()")
@@ -44,5 +56,22 @@ async fn main() -> Result<(), IndexerError> {
         elapsed_ms = started.elapsed().as_millis() as u64,
         "topic suggestions refreshed"
     );
+    if let Some(mirror) = &mirror {
+        // Read after the refresh committed; a read error skips the mirror, never the job.
+        match sqlx::query_as::<_, Suggestion>(topic_suggestions_mirror::SELECT_SQL)
+            .fetch_all(&pool)
+            .await
+        {
+            Ok(rows) => {
+                topic_suggestions_mirror::mirror(mirror, &rows, &prior).await;
+                info!(
+                    rows = rows.len(),
+                    prior = prior.len(),
+                    "topic suggestions mirrored to geo-db"
+                );
+            }
+            Err(e) => warn!(error = %e, "topic suggestions mirror skipped: read failed"),
+        }
+    }
     Ok(())
 }
