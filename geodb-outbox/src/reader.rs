@@ -42,6 +42,16 @@ impl Claimed {
     }
 }
 
+/// Fill byte of a start marker's ledger prefix and webhook id. A real ledger key is a SHA-256, so
+/// sixteen of these bytes at the front are not a delivery key.
+pub const MARK: u8 = 0xFF;
+
+/// True for the key of a start marker entered by [`OutboxReader::enter_marker`] (this process's
+/// or a past one's).
+pub fn is_marker(key: &[u8; KEY_BYTES]) -> bool {
+    key[..16] == [MARK; 16] && key[32..] == [MARK; 16]
+}
+
 /// What an acknowledgement was answered.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Ack {
@@ -125,10 +135,37 @@ impl OutboxReader {
         Config::from_env_flag("GEODB_OUTBOX_SHADOW_READ").map(Self::new)
     }
 
-    /// Claims up to `limit` units under a lease of `lease_ms`.
+    /// Enters a start marker: a unit with a unique key (see [`is_marker`]) that sorts, in claim
+    /// order, after every unit entered before it. A reader that claims the marker knows every
+    /// unit it saw before it is older than this call. Returns the marker's key. An enter is
+    /// put-if-absent, so a replay is harmless.
+    pub async fn enter_marker(&mut self) -> Result<[u8; KEY_BYTES], MirrorError> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let mut key = [MARK; KEY_BYTES];
+        key[16..32].copy_from_slice(&nanos.to_be_bytes());
+        let unit = crate::Unit {
+            ledger_key_hex: hex(&key[..32]),
+            event_type: "comment".into(),
+            payload: "{}".into(),
+            webhooks: vec![[MARK; 16]],
+        };
+        self.worker.enter(&unit).await?;
+        Ok(key)
+    }
+
+    /// Claims up to `limit` units under a lease of `lease_ms`. A pipe that was already open and
+    /// died (geo-db ends a pipe at its grant TTL) is reopened and the claim replayed once, with
+    /// no cool-down. That is safe: a claim the dead pipe refused leased nothing, and one whose
+    /// answer was lost leaves its units leased until the lease lapses, so they come back later
+    /// (delayed, never counted twice: the matcher keeps one entry a key).
     pub async fn claim(&mut self, limit: u16, lease_ms: u64) -> Result<Vec<Claimed>, MirrorError> {
         let max = usize::from(CLAIM_MAX) * (ROW_MAX + 1);
-        let body = self.worker.call(&claim_line(limit, lease_ms), max).await?;
+        let body = self
+            .worker
+            .call_replaying(&claim_line(limit, lease_ms), max)
+            .await?;
         parse_claim(&body)
     }
 
@@ -136,7 +173,7 @@ impl OutboxReader {
     pub async fn complete(&mut self, c: &Claimed) -> Result<Ack, MirrorError> {
         let body = self
             .worker
-            .call(&complete_line(&c.key, c.epoch), 64)
+            .call_replaying(&complete_line(&c.key, c.epoch), 64)
             .await?;
         parse_ack(&body)
     }
@@ -162,6 +199,21 @@ mod tests {
             timeout: Duration::from_millis(1500),
             cooldown: Duration::ZERO,
         })
+    }
+
+    #[test]
+    fn a_marker_key_is_told_from_a_delivery_key() {
+        assert!(!is_marker(&key()));
+        let mut m = [MARK; KEY_BYTES];
+        m[16..32].copy_from_slice(&5u128.to_be_bytes());
+        assert!(is_marker(&m));
+    }
+
+    #[tokio::test]
+    async fn enter_marker_sends_one_valid_enter_and_returns_its_key() {
+        let mut r = reader("echo ready; read -r a; printf '+7\\nentered'");
+        let k = r.enter_marker().await.unwrap();
+        assert!(is_marker(&k));
     }
 
     #[test]
@@ -216,6 +268,32 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].epoch, 5);
         assert_eq!(r.complete(&got[0]).await.unwrap(), Ack::Ok);
+    }
+
+    #[tokio::test]
+    async fn a_reused_pipe_that_died_is_reopened_for_claim_and_complete_with_no_cooldown() {
+        // Each child answers one request and exits, as a pipe past its grant TTL does.
+        let mut r = OutboxReader::new(Config {
+            program: "sh".into(),
+            args: vec![
+                "-c".into(),
+                "echo ready; read -r a; case \"$a\" in claim*) printf '+0\\n';; \
+                 *) printf '+8\\nack: ok\\n';; esac"
+                    .into(),
+            ],
+            timeout: Duration::from_millis(1500),
+            cooldown: Duration::from_secs(3600),
+        });
+        assert!(r.claim(4, 1).await.unwrap().is_empty());
+        // The held pipe is dead now: the claim goes over a fresh one instead of failing.
+        assert!(r.claim(4, 1).await.unwrap().is_empty());
+        let c = Claimed {
+            key: key(),
+            attempts: 0,
+            epoch: 1,
+            payload: vec![],
+        };
+        assert_eq!(r.complete(&c).await.unwrap(), Ack::Ok);
     }
 
     #[tokio::test]

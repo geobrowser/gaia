@@ -7,6 +7,16 @@
 //! Postgres row delivered for the same (ledger key, webhook id), and completes the unit. It
 //! delivers nothing and writes nothing to Postgres.
 //!
+//! Start point. geo-db's work class holds every unit the indexer mirrored since the mirror began,
+//! oldest first, and most of them are for rows delivered before this process started: they can
+//! never pair, and held, they would fill [`HELD_MAX`] and stop the shadow. So the shadow first
+//! enters a marker unit ([`OutboxReader::enter_marker`]). Claims are oldest first, so every unit
+//! claimed before the marker is older than the start: it is completed without being counted
+//! (`delivery_worker_shadow_skipped_total{reason="pre_start"}`). From the marker on the shadow is
+//! live and the results below apply. While draining, rows are held but not aged into `miss`.
+//! A unit claimed before the start by an earlier run of the shadow whose lease lapsed re-enters
+//! the queue after the marker and counts as an ordinary unit.
+//!
 //! Results, counted on `delivery_worker_shadow_total{result}`:
 //! - `match`: the unit and the delivered row agree on the payload.
 //! - `mismatch`: both exist for the key but the payload differs (JSON-equal comparison, since
@@ -23,7 +33,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use geodb_outbox::reader::{Ack, Claimed, OutboxReader, KEY_BYTES};
+use geodb_outbox::reader::{is_marker, Ack, Claimed, OutboxReader, KEY_BYTES};
 use geodb_outbox::MirrorError;
 use hermes_instrumentation::{debug, warn};
 use tokio::sync::mpsc;
@@ -32,6 +42,8 @@ use uuid::Uuid;
 pub const RESULTS: &str = "delivery_worker_shadow_total";
 pub const ERRORS: &str = "delivery_worker_shadow_errors_total";
 pub const DROPPED: &str = "delivery_worker_shadow_dropped_total";
+pub const SKIPPED: &str = "delivery_worker_shadow_skipped_total";
+pub const LIVE: &str = "delivery_worker_shadow_live";
 pub const PENDING_UNITS: &str = "delivery_worker_shadow_pending_units";
 pub const PENDING_ROWS: &str = "delivery_worker_shadow_pending_rows";
 
@@ -214,6 +226,10 @@ pub trait Source {
         &mut self,
         unit: &Claimed,
     ) -> impl std::future::Future<Output = Result<Ack, MirrorError>> + Send;
+    /// Enters a start marker and returns its key.
+    fn enter_marker(
+        &mut self,
+    ) -> impl std::future::Future<Output = Result<Key, MirrorError>> + Send;
 }
 
 impl Source for OutboxReader {
@@ -223,7 +239,24 @@ impl Source for OutboxReader {
     async fn complete(&mut self, unit: &Claimed) -> Result<Ack, MirrorError> {
         OutboxReader::complete(self, unit).await
     }
+    async fn enter_marker(&mut self) -> Result<Key, MirrorError> {
+        OutboxReader::enter_marker(self).await
+    }
 }
+
+/// Where the shadow is in its start-up.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Gate {
+    /// The marker is not entered yet; nothing is claimed.
+    Entering,
+    /// The marker is entered; units claimed before it are the pre-start backlog.
+    Draining(Key),
+    /// The marker was claimed: every unit from here on is for a row delivered after the start.
+    Live,
+}
+
+/// Most claim calls one draining pass makes (each takes up to 16 units).
+pub const DRAIN_CLAIMS: u32 = 64;
 
 /// What one pass resolved and what failed.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -234,6 +267,8 @@ pub struct Tally {
     pub extras: u64,
     pub claim_errors: u64,
     pub complete_errors: u64,
+    /// Pre-start units (and markers) completed without counting.
+    pub skipped: u64,
 }
 
 impl Tally {
@@ -256,6 +291,9 @@ impl Tally {
             if n > 0 {
                 metrics::counter!(RESULTS, "result" => v.as_str()).increment(n);
             }
+        }
+        if self.skipped > 0 {
+            metrics::counter!(SKIPPED, "reason" => "pre_start").increment(self.skipped);
         }
         if self.claim_errors > 0 {
             metrics::counter!(ERRORS, "op" => "claim").increment(self.claim_errors);
@@ -280,11 +318,21 @@ async fn finish<S: Source>(src: &mut S, unit: &Claimed, v: Verdict, t: &mut Tall
     }
 }
 
+/// Completes a unit without counting it.
+async fn skip<S: Source>(src: &mut S, unit: &Claimed, t: &mut Tally) {
+    t.skipped += 1;
+    if let Err(e) = src.complete(unit).await {
+        t.complete_errors += 1;
+        debug!(error = %e, "shadow skip complete failed");
+    }
+}
+
 /// One pass: drain what the loop observed, claim a batch, age out the old, complete what
 /// resolved. Postgres is not touched.
 pub async fn pass<S: Source>(
     src: &mut S,
     m: &mut Matcher,
+    gate: &mut Gate,
     observed: Vec<Observation>,
     batch: u16,
     lease_ms: u64,
@@ -301,23 +349,59 @@ pub async fn pass<S: Source>(
             }
         }
     }
-    if m.units_held() < HELD_MAX {
-        match src.claim(batch, lease_ms).await {
-            Ok(units) => {
-                for u in units {
-                    if let Some(r) = m.claimed(u, now) {
-                        done.push(r);
-                    }
-                }
-            }
+    if *gate == Gate::Entering {
+        match src.enter_marker().await {
+            Ok(k) => *gate = Gate::Draining(k),
             Err(MirrorError::CoolingDown) => t.claim_errors += 1,
             Err(e) => {
                 t.claim_errors += 1;
-                warn!(error = %e, "geo-db shadow claim failed; Postgres delivery is unaffected");
+                warn!(error = %e, "geo-db shadow start marker failed; Postgres delivery is unaffected");
             }
         }
     }
-    let (misses, extras) = m.sweep(now);
+    let draining = matches!(gate, Gate::Draining(_));
+    if !matches!(gate, Gate::Entering) && m.units_held() < HELD_MAX {
+        let calls = if draining { DRAIN_CLAIMS } else { 1 };
+        for _ in 0..calls {
+            match src.claim(batch, lease_ms).await {
+                Ok(units) => {
+                    let full = units.len() >= usize::from(batch);
+                    for u in units {
+                        if let Gate::Draining(mk) = &*gate {
+                            if u.key == *mk {
+                                *gate = Gate::Live;
+                            }
+                            skip(src, &u, &mut t).await;
+                            continue;
+                        }
+                        if is_marker(&u.key) {
+                            skip(src, &u, &mut t).await;
+                        } else if let Some(r) = m.claimed(u, now) {
+                            done.push(r);
+                        }
+                    }
+                    if !full || matches!(gate, Gate::Live) || m.units_held() >= HELD_MAX {
+                        break;
+                    }
+                }
+                Err(MirrorError::CoolingDown) => {
+                    t.claim_errors += 1;
+                    break;
+                }
+                Err(e) => {
+                    t.claim_errors += 1;
+                    warn!(error = %e, "geo-db shadow claim failed; Postgres delivery is unaffected");
+                    break;
+                }
+            }
+        }
+    }
+    // While draining, rows wait for units that have not been reached: no aging into `miss`.
+    let (misses, extras) = if matches!(gate, Gate::Live) {
+        m.sweep(now)
+    } else {
+        (0, Vec::new())
+    };
     t.misses += misses;
     for (v, unit) in done {
         finish(src, &unit, v, &mut t).await;
@@ -371,6 +455,7 @@ pub fn spawn<S: Source + Send + 'static>(src: S, settings: Settings) -> Shadow {
 
 async fn run<S: Source>(mut src: S, s: Settings, mut rx: mpsc::Receiver<Observation>) {
     let mut m = Matcher::new(s.miss_grace, s.extra_grace);
+    let mut gate = Gate::Entering;
     let mut tick = tokio::time::interval(s.interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -382,6 +467,7 @@ async fn run<S: Source>(mut src: S, s: Settings, mut rx: mpsc::Receiver<Observat
         let t = pass(
             &mut src,
             &mut m,
+            &mut gate,
             observed,
             s.batch,
             s.lease.as_millis() as u64,
@@ -389,6 +475,7 @@ async fn run<S: Source>(mut src: S, s: Settings, mut rx: mpsc::Receiver<Observat
         )
         .await;
         t.emit();
+        metrics::gauge!(LIVE).set(if gate == Gate::Live { 1.0 } else { 0.0 });
         metrics::gauge!(PENDING_UNITS).set(m.units_held() as f64);
         metrics::gauge!(PENDING_ROWS).set(m.rows_held() as f64);
     }
@@ -408,6 +495,14 @@ pub fn register() {
         DROPPED,
         "Terminal deliveries the shadow did not keep: queue_full, rows_full or bad_key"
     );
+    metrics::describe_counter!(
+        SKIPPED,
+        "geo-db units older than the shadow's start (and start markers), completed without counting"
+    );
+    metrics::describe_gauge!(
+        LIVE,
+        "1 once the shadow has reached its start marker and compares fresh rows, 0 while draining"
+    );
     metrics::describe_gauge!(
         PENDING_UNITS,
         "geo-db units claimed and waiting for their Postgres delivery"
@@ -419,6 +514,7 @@ pub fn register() {
     for v in Verdict::ALL {
         metrics::counter!(RESULTS, "result" => v.as_str()).absolute(0);
     }
+    metrics::counter!(SKIPPED, "reason" => "pre_start").absolute(0);
     for op in ["claim", "complete"] {
         metrics::counter!(ERRORS, "op" => op).absolute(0);
     }
@@ -457,6 +553,8 @@ mod tests {
         claims: VecDeque<Result<Vec<Claimed>, MirrorError>>,
         completed: Vec<(Key, u64)>,
         claim_calls: u32,
+        marker: Option<Result<Key, MirrorError>>,
+        marker_calls: u32,
     }
 
     impl Source for Fake {
@@ -467,6 +565,25 @@ mod tests {
         async fn complete(&mut self, u: &Claimed) -> Result<Ack, MirrorError> {
             self.completed.push((u.key, u.epoch));
             Ok(Ack::Ok)
+        }
+        async fn enter_marker(&mut self) -> Result<Key, MirrorError> {
+            self.marker_calls += 1;
+            self.marker.take().unwrap_or(Ok(marker_key()))
+        }
+    }
+
+    fn marker_key() -> Key {
+        let mut k = [geodb_outbox::reader::MARK; KEY_BYTES];
+        k[16] = 1;
+        k
+    }
+
+    fn marker_unit() -> Claimed {
+        Claimed {
+            key: marker_key(),
+            attempts: 0,
+            epoch: 99,
+            payload: b"{}".to_vec(),
         }
     }
 
@@ -582,7 +699,7 @@ mod tests {
             obs(2, serde_json::json!({"a":9})),
             obs(3, serde_json::json!({})),
         ];
-        let t = pass(&mut src, &mut m, rows, 16, 1000, t0).await;
+        let t = pass(&mut src, &mut m, &mut Gate::Live, rows, 16, 1000, t0).await;
         assert_eq!((t.matches, t.mismatches, t.misses, t.extras), (1, 1, 0, 0));
         assert_eq!(src.completed.len(), 2);
 
@@ -591,6 +708,7 @@ mod tests {
         let t = pass(
             &mut src,
             &mut m,
+            &mut Gate::Live,
             vec![],
             16,
             1000,
@@ -601,6 +719,7 @@ mod tests {
         let t = pass(
             &mut src,
             &mut m,
+            &mut Gate::Live,
             vec![],
             16,
             1000,
@@ -616,7 +735,16 @@ mod tests {
         let mut m = matcher();
         let mut src = Fake::default();
         src.claims.push_back(Err(MirrorError::CoolingDown));
-        let t = pass(&mut src, &mut m, vec![], 16, 1000, Instant::now()).await;
+        let t = pass(
+            &mut src,
+            &mut m,
+            &mut Gate::Live,
+            vec![],
+            16,
+            1000,
+            Instant::now(),
+        )
+        .await;
         assert_eq!(
             t,
             Tally {
@@ -645,7 +773,7 @@ mod tests {
             );
         }
         let mut src = Fake::default();
-        pass(&mut src, &mut m, vec![], 16, 1000, now).await;
+        pass(&mut src, &mut m, &mut Gate::Live, vec![], 16, 1000, now).await;
         assert_eq!(src.claim_calls, 0);
     }
 
@@ -682,5 +810,120 @@ mod tests {
         assert_eq!(d.batch, 16);
         let o = Settings::from_vars(|k| (k == "GEODB_SHADOW_BATCH").then(|| "4".to_string()));
         assert_eq!(o.batch, 4);
+    }
+
+    #[tokio::test]
+    async fn a_start_marker_skips_the_backlog_and_a_fresh_row_then_matches() {
+        let t0 = Instant::now();
+        let mut m = matcher();
+        let mut gate = Gate::Entering;
+        let mut src = Fake::default();
+        // Two old units, the marker, then a fresh unit, in claim order.
+        src.claims.push_back(Ok(vec![
+            unit(1, "{\"old\":1}"),
+            unit(2, "{\"old\":2}"),
+            marker_unit(),
+            unit(3, "{\"a\":1}"),
+        ]));
+        // The fresh row was delivered (and observed) while the backlog drained.
+        let rows = vec![obs(3, serde_json::json!({"a":1}))];
+        let t = pass(&mut src, &mut m, &mut gate, rows, 16, 1000, t0).await;
+        assert_eq!(src.marker_calls, 1);
+        assert_eq!(gate, Gate::Live);
+        assert_eq!((t.skipped, t.matches, t.mismatches), (3, 1, 0));
+        // Old units and the marker were completed, and so was the match; nothing counted as miss.
+        let done: Vec<_> = src.completed.iter().map(|(k, _)| *k).collect();
+        assert!(done.contains(&key(1)) && done.contains(&key(2)) && done.contains(&marker_key()));
+        assert!(done.contains(&key(3)));
+        assert_eq!((t.misses, t.extras), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn draining_does_not_age_rows_into_miss_and_a_full_batch_claims_again() {
+        let t0 = Instant::now();
+        let mut m = matcher();
+        let mut gate = Gate::Draining(marker_key());
+        let mut src = Fake::default();
+        src.claims
+            .push_back(Ok((0..16u8).map(|n| unit(n + 10, "{}")).collect()));
+        src.claims.push_back(Ok(vec![unit(40, "{}")]));
+        let rows = vec![obs(200, serde_json::json!({}))];
+        // Far past the miss grace; the row still waits because the shadow is not live.
+        let t = pass(
+            &mut src,
+            &mut m,
+            &mut gate,
+            rows,
+            16,
+            1000,
+            t0 + Duration::from_secs(10_000),
+        )
+        .await;
+        assert_eq!((t.skipped, t.misses), (17, 0));
+        assert_eq!(src.claim_calls, 2);
+        assert_eq!(m.rows_held(), 1);
+        assert_eq!(gate, Gate::Draining(marker_key()));
+    }
+
+    #[tokio::test]
+    async fn nothing_is_claimed_until_the_marker_is_entered() {
+        let mut m = matcher();
+        let mut gate = Gate::Entering;
+        let mut src = Fake {
+            marker: Some(Err(MirrorError::CoolingDown)),
+            ..Fake::default()
+        };
+        let t = pass(
+            &mut src,
+            &mut m,
+            &mut gate,
+            vec![],
+            16,
+            1000,
+            Instant::now(),
+        )
+        .await;
+        assert_eq!(
+            (gate, src.claim_calls, t.claim_errors),
+            (Gate::Entering, 0, 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stale_marker_from_an_earlier_run_is_skipped_when_live() {
+        let mut m = matcher();
+        let mut src = Fake::default();
+        let mut stale = marker_unit();
+        stale.key[16] = 7;
+        src.claims.push_back(Ok(vec![stale, unit(1, "{}")]));
+        let t = pass(
+            &mut src,
+            &mut m,
+            &mut Gate::Live,
+            vec![],
+            16,
+            1000,
+            Instant::now(),
+        )
+        .await;
+        assert_eq!((t.skipped, m.units_held()), (1, 1));
+    }
+
+    #[test]
+    fn skipped_and_live_register_at_zero() {
+        use metrics_exporter_prometheus::PrometheusBuilder;
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            register();
+            Tally {
+                skipped: 5,
+                ..Tally::default()
+            }
+            .emit();
+        });
+        assert!(handle
+            .render()
+            .contains("delivery_worker_shadow_skipped_total{reason=\"pre_start\"} 5"));
     }
 }
