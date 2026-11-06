@@ -1008,6 +1008,36 @@ Turn the mirrors on one at a time, one flag per PR, each after the serve roll th
    leave `local_scores` out until Stage B, then drop the variable (unset or empty means all three; a name that is not one
    of the three is ignored with a warning, and a value with no valid name mirrors nothing).
 
+### 2f-private. Per-user collections 27, 28, 29 (RUNBOOK: enable order, all off today)
+
+Three collections hold one person's private data: 27 `external_interest_signals` (`not_interested_sync`), 28
+`user_topic_signals` (`topic_interest` sweep and refit) and 29 `feed_user_seen_daily` (`feed_signals_sync`). Until
+geo-db restricts who may read a derived collection (plan 14 V5/V12), any authenticated session can read any of them, so
+each mirror needs two switches: `GEODB_DERIVED_MIRROR` and `GEODB_DERIVED_MIRROR_PRIVATE` (`1` or `true`). The shared flag
+alone never copies a personal row. Sizes measured 2026-11-06: 0, 32,252 and 10,313 rows (about 6 MB resident together).
+Collection 27 is empty today; the others are the whole load.
+
+Order. Do each step, check it, then the next. Never swap steps 2 and 4.
+1. **Serve grant.** Roll geo-db serve on an image that has collections 27, 28 and 29 (geo-db final e71d8d4bbf or later),
+   and mint the feeder key's binding with `derived=...,27,28,29` added. Check `geodb_derived_rows_max` has room for the
+   extra ~43k rows (Stage A holds 4,194,304). Older serve builds do not refuse these writes (nothing on the wire consults
+   the registry), so the roll comes first only so the rows are served by the build that knows their layout.
+2. **READ-RESTRICT.** The engine's read restriction for per-user collections (W-GP's item; the grant is named
+   `derived_read=<collections>` in the current proposal, which W-GP may rename) is landed, rolled, and checked: a session
+   without the read grant gets a refusal on `derived_get` / `derived_scan` of 27, 28 and 29, and the readers' keys carry it.
+3. **MIRROR on.** Set `GEODB_DERIVED_MIRROR=1` (with `GEODB_KEY_PATH`, `GEODB_BINDING_PATH`, `GEODB_CLIENT_BIN`) on the
+   three cronjobs. With `_PRIVATE` still off this changes nothing for 27, 28 and 29. It starts the non-private mirrors.
+4. **`_PRIVATE` on.** Set `GEODB_DERIVED_MIRROR_PRIVATE=1` on `not_interested_sync`, `topic_interest` (sweep and refit) and
+   `feed_signals_sync`. The first run after it puts every row; collection 28 fills fully only after the nightly refit
+   (the sweep puts just the last 10 minutes), so run `topic_interest refit` once by hand if you cannot wait.
+5. **Check.** `geodb_derived_rows` rose by about the counts above; `geodb_derived_mirror_errors_total` for
+   `external_interest_signals`, `user_topic_signals` and `feed_user_seen_daily` stays 0. Compare a user's group scan with
+   Postgres for one id. Collection 29's retention prune and window replace are mirrored as deletes by the identity diff, so
+   after a run the row count in geo-db equals `count(*)` of the table.
+
+Rollback: unset `_PRIVATE` first (stops the personal copies), then the shared flag. Rows already copied stay until a
+`derived_clear` of the collection (a clear can take a group, which is the per-user erasure path).
+
 ### 2f-scores. global_scores / local_scores / space_scores (derived collections 2, 3, 4, GEODB_DERIVED_MIRROR)
 
 Shadow only, nothing reads the rows. The daily 03:00 UTC `scoring-service` CronJob (`scoring-service/cronjob`,

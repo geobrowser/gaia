@@ -32,6 +32,7 @@ use tracing::{error, info, warn};
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::feed_signals::{self, Cutoff};
 use ranking_indexer::feed_signals_mirror::{self, Bucket, Ident};
+use ranking_indexer::feed_user_seen_mirror::{self, Seen};
 
 #[derive(Debug, Default, PartialEq)]
 struct Options {
@@ -113,6 +114,23 @@ async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), I
     } else {
         Vec::new()
     };
+    // The per-user table is private to each person, so it has its own pair of switches.
+    let seen_mirror = if options.dry_run {
+        None
+    } else {
+        feed_user_seen_mirror::from_env_private()
+    };
+    let seen_prior: Vec<feed_user_seen_mirror::Ident> = if seen_mirror.is_some() {
+        sqlx::query_as(feed_user_seen_mirror::PRIOR_SQL)
+            .fetch_all(pool)
+            .await
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "feed user seen mirror: prior read failed; no deletes this run");
+                Vec::new()
+            })
+    } else {
+        Vec::new()
+    };
     let r = feed_signals::apply(
         pool,
         &cutoff.generation,
@@ -151,6 +169,19 @@ async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), I
                 info!(rows = rows.len(), "feed item signals mirrored to geo-db");
             }
             Err(e) => warn!(error = %e, "feed signals mirror skipped: read failed"),
+        }
+    }
+    if let Some(mirror) = &seen_mirror {
+        // Read after the replace and the retention prune committed; a read error skips the mirror.
+        match sqlx::query_as::<_, Seen>(feed_user_seen_mirror::SELECT_SQL)
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => {
+                feed_user_seen_mirror::mirror(mirror, &rows, &seen_prior).await;
+                info!(rows = rows.len(), "feed user seen mirrored to geo-db");
+            }
+            Err(e) => warn!(error = %e, "feed user seen mirror skipped: read failed"),
         }
     }
     if options.dry_run {
