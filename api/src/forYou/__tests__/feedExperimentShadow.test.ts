@@ -12,10 +12,14 @@ import {
 	FEED_EXPERIMENT_COLUMNS as COL,
 	createFeedExperimentShadow,
 	decodeExperiment,
+	decodeMemberInterleaved,
 	experimentDiffs,
 	FEED_EXPERIMENT_KIND,
+	FEED_EXPERIMENT_MEMBER_KIND,
+	feedExperimentMemberRecordId,
 	feedExperimentRecordId,
 	hashInterleaved,
+	FEED_EXPERIMENT_MEMBER_COLUMNS as MCOL,
 	readFeedExperimentShadowConfig,
 	renderFeedExperimentMetrics,
 } from "../feedExperimentShadow"
@@ -73,6 +77,21 @@ describe("pins", () => {
 		const block = text.slice(text.indexOf("\tfeedExperiment: {\n"))
 		for (const [name, id] of Object.entries(COL)) expect(block).toContain(`${name}: "${id}"`)
 	})
+	it("match the feeder's member kind and columns", () => {
+		const file = join(here, "../../../../geodb-feeder/src/recordKinds.ts")
+		if (!existsSync(file)) return
+		const text = readFileSync(file, "utf8")
+		expect(text).toContain(`feedExperimentMember: {id: "${FEED_EXPERIMENT_MEMBER_KIND}"`)
+		const block = text.slice(text.indexOf("\tfeedExperimentMember: {\n"))
+		for (const [name, id] of Object.entries(MCOL)) expect(block).toContain(`${name}: "${id}"`)
+	})
+	it("keys the member record by experiment and user, dashed or not", () => {
+		expect(feedExperimentMemberRecordId("exp-1", USER)).toBe(
+			feedExperimentMemberRecordId("exp-1", USER.replaceAll("-", "")),
+		)
+		expect(feedExperimentMemberRecordId("exp-1", USER)).not.toBe(feedExperimentMemberRecordId("exp-2", USER))
+		expect(feedExperimentMemberRecordId("exp-1", USER)).toMatch(/^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$/)
+	})
 	it("keys the record by the experiment id, as a version-4 uuid", () => {
 		expect(feedExperimentRecordId("exp-1")).toMatch(/^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$/)
 		expect(feedExperimentRecordId("exp-1")).not.toBe(feedExperimentRecordId("exp-2"))
@@ -99,6 +118,22 @@ describe("decodeExperiment", () => {
 		expect(() => decodeExperiment([...card(), {prop: COL.armA, raw: "for-you"}])).toThrow()
 		expect(() => decodeExperiment(card({active: "yes"}))).toThrow()
 		expect(() => decodeExperiment(card({share: "x"}))).toThrow()
+	})
+})
+
+describe("decodeMemberInterleaved", () => {
+	it("reads the flag, null for no record, and refuses a missing, double or malformed one", () => {
+		expect(decodeMemberInterleaved([{prop: MCOL.interleaved, raw: "true"}])).toBe(true)
+		expect(decodeMemberInterleaved([{prop: MCOL.interleaved, raw: "false"}])).toBe(false)
+		expect(decodeMemberInterleaved([])).toBeNull()
+		expect(() => decodeMemberInterleaved([{prop: MCOL.user, raw: "x"}])).toThrow()
+		expect(() =>
+			decodeMemberInterleaved([
+				{prop: MCOL.interleaved, raw: "true"},
+				{prop: MCOL.interleaved, raw: "false"},
+			]),
+		).toThrow()
+		expect(() => decodeMemberInterleaved([{prop: MCOL.interleaved, raw: "1"}])).toThrow()
 	})
 })
 
@@ -147,6 +182,40 @@ describe("shadow", () => {
 		expect(metric('result="unsupported"')).toBe("3")
 		for (const r of ["system_space_missing", "record_missing", "ambiguous_record"])
 			expect(metric(`reason="${r}"`)).toBe("1")
+	})
+	it("compares a member's value with the member record, not the hash", async () => {
+		const reads = (member: GeoCardRow[]) => {
+			const geoDb: GeoDbCardClient = {
+				readCard: vi.fn(async ({entityId}) =>
+					entityId === feedExperimentMemberRecordId("exp-1", USER) ? member : card(),
+				),
+			}
+			const shadow = createFeedExperimentShadow({
+				config: {enabled: true, maxInFlight: 2, intervalMs: 0},
+				geoDb,
+				systemSpaceOf: async () => "a".repeat(32),
+				log: {warn: vi.fn()},
+			})
+			return {shadow, geoDb}
+		}
+		// The served value disagrees with the hash on purpose: a member's value wins.
+		const memberServed = served({assignment: "member", interleaved: !interleaved})
+		const a = reads([{prop: MCOL.interleaved, raw: String(!interleaved)}])
+		a.shadow.compare(memberServed, USER)
+		await settle()
+		expect(metric('result="match"')).toBe("1")
+		expect(a.geoDb.readCard).toHaveBeenCalledTimes(2)
+		reads([{prop: MCOL.interleaved, raw: String(interleaved)}]).shadow.compare(memberServed, USER)
+		await settle()
+		expect(metric('result="mismatch"')).toBe("1")
+		reads([]).shadow.compare(memberServed, USER)
+		await settle()
+		expect(metric('reason="member_record_missing"')).toBe("1")
+		// A hash-assigned user reads only the experiment record.
+		const h = reads([])
+		h.shadow.compare(served(), USER)
+		await settle()
+		expect(h.geoDb.readCard).toHaveBeenCalledTimes(1)
 	})
 	it("counts a failed read without throwing", async () => {
 		make(async () => {

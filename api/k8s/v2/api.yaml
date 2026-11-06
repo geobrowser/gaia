@@ -299,8 +299,9 @@ spec:
             - name: GEODB_ENTITY_RANKING_CONFIG_SHADOW
               value: "0"
             # The same for the feed experiment the route served: active, arms and the hash assignment against geo-db's
-            # record (gaia_api_feed_experiment_shadow_total). OFF; never changes a response. Needs the geodb-feeder's
-            # feed_experiments backfill (GEODB_FEED_EXPERIMENTS) run first.
+            # record (gaia_api_feed_experiment_shadow_total); a member's value is compared with the member record. OFF; never
+            # changes a response. Needs the geodb-feeder's feed_experiments and feed_experiment_members backfills
+            # (GEODB_FEED_EXPERIMENTS, GEODB_FEED_EXPERIMENT_MEMBERS) run first.
             - name: GEODB_FEED_EXPERIMENT_SHADOW
               value: "0"
             - name: NODE_EXTRA_CA_CERTS

@@ -58,6 +58,8 @@ export const RECORD_KINDS = {
 	interestSignalWeight: {id: "1c35f5a4877f474a8d13835f8e05205d", family: "config", table: "personalization.interest_signal_weights"},
 	/** `personalization.feed_experiments`: one record per experiment `id` (text key), mutable columns written by `put`. */
 	feedExperiment: {id: "285dde3545964ab28ee580344b816704", family: "config", table: "personalization.feed_experiments"},
+	/** `personalization.feed_experiment_members`: a record keyed (experiment id, user), one mutable column written by `put`. */
+	feedExperimentMember: {id: "38b80c6e92bb4209838afdff3d7a0f01", family: "config", table: "personalization.feed_experiment_members"},
 } as const satisfies Record<string, RecordKind>
 
 /**
@@ -73,6 +75,14 @@ export const SYSTEM_SPACE_NONCE_KIND = "0b3f6634fbe84dbd8c0ecae3fce960b3"
  * `put` whose statement id includes the value, so a change closes the old value and a replay reopens the same id.
  */
 export const RECORD_COLUMNS = {
+	feedExperimentMember: {
+		/** Key: text, `experiment_id`. */
+		experiment: "5478f85923d94274a98d6fbdb527e5f5",
+		/** Key: text, `user_id` (lowercase dashed uuid). */
+		user: "07d8f8c9c7884c039ae0ae4fc8f18f4c",
+		/** Mutable: boolean, `interleaved`. */
+		interleaved: "b1e33f48965b4c90af9b45ce368019e8",
+	},
 	feedExperiment: {
 		/** Key: text, `id`. */
 		id: "5302a53981a84da88c3949abe8165ec0",

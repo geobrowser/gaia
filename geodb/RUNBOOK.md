@@ -691,8 +691,8 @@ experiment id). Fourth slice of the config tables (after §2c-config-interest). 
 source. The reader is the plpgsql `personalization.feed_experiment_for_user` (api/drizzle 0102:184), called from
 `readExperiment` (api/src/forYou/queries.ts); the api has a flag-off shadow of it, `GEODB_FEED_EXPERIMENT_SHADOW`
 (`gaia_api_feed_experiment_shadow_total`), that checks the served experiment is active in geo-db with the same arms and, for a
-hash-assigned user, recomputes `interleaved` from the record's salt and share. `feed_experiment_members` and `created_at` are
-not mirrored (the shadow does not compare a member's value). Nothing writes the table but migrations and operator SQL, so
+hash-assigned user, recomputes `interleaved` from the record's salt and share. `created_at` is not mirrored; membership is
+§2c-config-experiment-members. Nothing writes the table but migrations and operator SQL, so
 there is no consumer: the Job is the only writer, and a rerun after an operator edit writes the new values. A note set to
 null, or an experiment deleted from Postgres, is not cleared in geo-db; the gate reports it.
 
@@ -705,6 +705,30 @@ Enable, each step only after the one before it is live:
 4. The gate: `bun src/feedExperimentsGate.ts <postgres.tsv> <dump dir>` (its header lists the `\copy` and the
    `fe-<column>.tsv` dumps). Exits non-zero on a Postgres-only key or a value difference.
 5. Only then set `GEODB_FEED_EXPERIMENT_SHADOW=1` on the api and watch the mismatch counter.
+
+Rollback: set the flags back to 0. The records stay in the Space, unread.
+
+### 2c-config-experiment-members. Keyed feed_experiment_members mirror (GEODB_FEED_EXPERIMENT_MEMBERS)
+
+`GEODB_FEED_EXPERIMENT_MEMBERS` (default off; takes effect only with `GEODB_RECORD_KEYS`) lets the
+`geodb-feed-experiment-members-backfill` Job write every `personalization.feed_experiment_members` row (explicit
+membership, which wins over the hash) as a natural-key record in the `config` system Space
+(`geodb-feeder/src/feedExperimentMembersKeyed.ts`; the pinned `feedExperimentMember` kind, keyed by experiment id and
+user). Fifth slice of the config tables. A mirror, not a move: Postgres stays the source. The one reader is the plpgsql
+`personalization.feed_experiment_for_user` (api/drizzle/0102:184-193), called from `readExperiment`
+(api/src/forYou/queries.ts:236); the api's existing shadow, `GEODB_FEED_EXPERIMENT_SHADOW`, now also compares a member's
+served `interleaved` with the member record (a missing record counts as unsupported, `member_record_missing`). `added_at`
+is not mirrored. Nothing writes the table but migrations and operator SQL, so the Job is the only writer; rerun it after an
+edit. A membership deleted from Postgres is not cleared in geo-db; the gate reports it.
+
+Enable, each step only after the one before it is live (run §2c-config-experiments first, the shadow needs both):
+
+1. A feeder image that carries this path and a geo-db serve at 9d97069a78 or later (`put`).
+2. Kafka: describe on every feeder group (the Job's empty-group check).
+3. The backfill Job (`geodb/k8s/v2/geodb-feed-experiment-members-backfill-job.yaml`), feeder scaled to 0, applied as in
+   §2c-quater step 4. It reads one small table READ ONLY and is rerunnable.
+4. The gate: `bun src/feedExperimentMembersGate.ts <postgres.tsv> <dump dir>` (its header lists the `\copy` and the
+   `fem-<column>.tsv` dumps). Exits non-zero on a Postgres-only key or a value difference.
 
 Rollback: set the flags back to 0. The records stay in the Space, unread.
 
