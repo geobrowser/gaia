@@ -22,6 +22,7 @@ import {createGateway, fieldModeOf} from "./src/gateway/gateway"
 import {createPointReadShadows, POINT_READ_FIELDS} from "./src/gateway/pointReadShadows"
 import {createReadBudget} from "./src/gateway/readBudget"
 import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
+import {createSpacesShadow, SPACES_FIELD} from "./src/gateway/spacesShadow"
 import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
 import {createDerivedReader} from "./src/geodb/derived"
@@ -171,9 +172,14 @@ log.info("Versioned v2 entity routes enabled")
 // Opt-in GraphQL gateway config; the gateway itself is built below, where /graphql is mounted.
 const gatewayConfig = readGatewayConfig(process.env)
 const gatewayShadowFields = new Set(
-	[ENTITY_FIELD, ENTITIES_CONNECTION_FIELD, ENTITIES_ORDERED_FIELD, ...POINT_READ_FIELDS, ...SEARCH_FIELDS].filter(
-		(field) => gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, field) === "shadow",
-	),
+	[
+		ENTITY_FIELD,
+		ENTITIES_CONNECTION_FIELD,
+		ENTITIES_ORDERED_FIELD,
+		SPACES_FIELD,
+		...POINT_READ_FIELDS,
+		...SEARCH_FIELDS,
+	].filter((field) => gatewayConfig.mode === "on" && fieldModeOf(gatewayConfig, field) === "shadow"),
 )
 const gatewayShadowsAny = gatewayShadowFields.size > 0
 // Fields served from geo-db (mode "on"). Only `entity` has a resolver; it answers one exact shape and falls back to
@@ -413,6 +419,10 @@ const graphqlHandler = createGateway({
 									}),
 								] as const,
 						),
+					// spaces =shadow only: the Space list root, compared on held Spaces and their page / topic names.
+					...(gatewayShadowFields.has(SPACES_FIELD)
+						? [[SPACES_FIELD, createSpacesShadow({...sharedGeoDb, log})] as const]
+						: []),
 					...createSearchShadows(
 						{
 							geoSpaceOf: sharedGeoDb.geoSpaceOf,

@@ -61,6 +61,12 @@ export const UNCOMPARED_REASONS = [
 	"types_alias",
 	/** `entitiesConnection { totalCount }`: the size of the whole filtered set, which a sample of cards cannot settle. */
 	"total_count",
+	/** `spaces`: PostGraphile returned a Space geo-db does not hold (the feeder leaves unloaded Spaces out of its map), so there was nothing to compare it with. */
+	"space_not_held",
+	/** `spaces`: a Space's `members` / `editors` lists and counts, which geo-db holds no read for. */
+	"space_members",
+	/** `spaces`: a Space's own settings (`type`, `address`, `topicId`, voting settings), which no entity card holds. */
+	"space_settings",
 ] as const
 
 export type ShadowResult = (typeof SHADOW_RESULTS)[number]
