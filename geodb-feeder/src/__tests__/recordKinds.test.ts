@@ -20,6 +20,7 @@ describe("record kinds", () => {
 			rankingItem: ["f8ad2041f5a34f4580a1ba3ca426730f", "votes"],
 			proposalVote: ["ca89a877762c4883a3640b5455a8f0e2", "votes"],
 			userVote: ["1623234736184c0d9a0b69e2ffbc124d", "votes"],
+			forYouConfig: ["8a0e2bd56c834195b30db6a7eb966b50", "config"],
 		})
 		expect(SYSTEM_SPACE_NONCE_KIND).toBe("0b3f6634fbe84dbd8c0ecae3fce960b3")
 	})
@@ -35,6 +36,13 @@ describe("record kinds", () => {
 describe("record columns", () => {
 	it("are pinned: a changed column id moves every keyed row's statements", () => {
 		expect(RECORD_COLUMNS).toEqual({
+			forYouConfig: {
+				id: "054f9998f5204c85a2eeadc923fc614c",
+				maxBoostDays: "08242c8938ef411a900081d548a247b6",
+				interestHalfSaturation: "3aa038d4dd1c49778e4a11987a13d7d4",
+				explorationShare: "9113b88fdcb24875a95175268f80aa57",
+				maxTopics: "53d2c96a35d4404e98c144aa1593ec2b",
+			},
 			userVote: {
 				user: "4bd6d3068a204ff6a62bb084263045bc",
 				object: "46e83cb03e0c46a4a874d7deeb5889dd",

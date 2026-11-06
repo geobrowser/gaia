@@ -48,6 +48,8 @@ export const RECORD_KINDS = {
 	proposalVote: {id: "ca89a877762c4883a3640b5455a8f0e2", family: "votes", table: "proposal_votes"},
 	/** `user_votes`: a record keyed (user, object, object type, space, kind). */
 	userVote: {id: "1623234736184c0d9a0b69e2ffbc124d", family: "votes", table: "user_votes"},
+	/** `personalization.for_you_config`: one record (the table holds one row, `id` = true), mutable columns written by `put`. */
+	forYouConfig: {id: "8a0e2bd56c834195b30db6a7eb966b50", family: "config", table: "personalization.for_you_config"},
 } as const satisfies Record<string, RecordKind>
 
 /**
@@ -63,6 +65,18 @@ export const SYSTEM_SPACE_NONCE_KIND = "0b3f6634fbe84dbd8c0ecae3fce960b3"
  * `put` whose statement id includes the value, so a change closes the old value and a replay reopens the same id.
  */
 export const RECORD_COLUMNS = {
+	forYouConfig: {
+		/** Key: number, `id` (always 1: the table's one row, `id` = true). */
+		id: "054f9998f5204c85a2eeadc923fc614c",
+		/** Mutable: decimal, `max_boost_days`. */
+		maxBoostDays: "08242c8938ef411a900081d548a247b6",
+		/** Mutable: decimal, `interest_half_saturation`. */
+		interestHalfSaturation: "3aa038d4dd1c49778e4a11987a13d7d4",
+		/** Mutable: decimal, `exploration_share`. */
+		explorationShare: "9113b88fdcb24875a95175268f80aa57",
+		/** Mutable: number, `max_topics`. */
+		maxTopics: "53d2c96a35d4404e98c144aa1593ec2b",
+	},
 	rankingBlock: {
 		/** Key: reference to the block entity, `cid("entity", id)`. */
 		block: "30a0bcf61226497ea1a9fbdb05be369e",

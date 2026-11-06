@@ -33,6 +33,7 @@ import {canonicalRequestLogging} from "../middleware/requestLogging"
 import {pairFitHandler} from "../pairFit/router"
 import {log} from "../services/telemetry"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
+import type {ForYouConfigShadow} from "./configShadow"
 import {type Database, type ForYouInputs, type ForYouPool, readForYouInputs} from "./queries"
 import {
 	FOR_YOU_CODE_VERSION,
@@ -285,7 +286,7 @@ export function buildResponse(body: Body, inputs: ForYouInputs) {
 	}
 }
 
-export function createInternalRouter(db: Database, token: string) {
+export function createInternalRouter(db: Database, token: string, configShadow?: ForYouConfigShadow | null) {
 	const router = new Hono()
 
 	router.use("*", async (c, next) => {
@@ -314,6 +315,8 @@ export function createInternalRouter(db: Database, token: string) {
 				pool: body.pool,
 				seenSince: body.seen ? seenSince(body, body.seen) : null,
 			})
+			// GEODB_FOR_YOU_CONFIG_SHADOW: compares the served settings with geo-db's record in the background.
+			configShadow?.compare(inputs.settings.config)
 			const response = buildResponse(body, inputs)
 			log.info("for-you ranked", {
 				candidates: body.candidateIds.length,
@@ -347,11 +350,12 @@ export function mountInternalRoutes(
 	app: Hono<any>,
 	db: Database,
 	token: string | undefined | null,
+	configShadow?: ForYouConfigShadow | null,
 ): "enabled" | "too_short" | "unset" {
 	const trimmed = token?.trim()
 	if (!trimmed) return "unset"
 	if (trimmed.length < MIN_INTERNAL_TOKEN_LENGTH) return "too_short"
 	app.use("/internal/*", canonicalRequestLogging())
-	app.route("/internal", createInternalRouter(db, trimmed))
+	app.route("/internal", createInternalRouter(db, trimmed, configShadow))
 	return "enabled"
 }

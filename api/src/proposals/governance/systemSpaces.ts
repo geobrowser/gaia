@@ -7,7 +7,8 @@
 import {readFile, stat} from "node:fs/promises"
 import {dirname, join} from "node:path"
 
-import type {SystemSpaceLookup} from "./shadow"
+/** Looks up any family the feeder founded; assignable to the narrower lookups the shadows take. */
+export type AnySystemSpaceLookup = (family: "governance" | "votes" | "config") => Promise<string | null>
 
 const HEX32 = /^[0-9a-f]{32}$/
 const REFRESH_MS = 10_000
@@ -28,7 +29,7 @@ export function parseSystemSpaces(text: string): Map<string, string> {
 export function createSystemSpaceLookup(
 	spaceMapPath: string,
 	options: {refreshMs?: number; now?: () => number} = {},
-): SystemSpaceLookup {
+): AnySystemSpaceLookup {
 	const path = spaceMapPath ? join(dirname(spaceMapPath), "system-spaces.json") : ""
 	const refreshMs = options.refreshMs ?? REFRESH_MS
 	const now = options.now ?? Date.now
