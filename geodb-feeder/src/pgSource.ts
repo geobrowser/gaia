@@ -11,6 +11,7 @@ import type {ProposalActionRow} from "./proposalActionsKeyed.js"
 import type {SpaceVotingSettingsRow} from "./spaceVotingSettingsKeyed.js"
 import type {ProposalVersionRow} from "./proposalVersionsKeyed.js"
 import type {ProposalStatusRow} from "./proposalStatusKeyed.js"
+import type {RankingBlockRow, RankingItemRow, RankingRow} from "./ranksKeyed.js"
 import type {ProposalVoteRow} from "./proposalVotesKeyed.js"
 import type {SubspaceRow} from "./subspacesKeyed.js"
 import type {UserVoteRow} from "./votesKeyed.js"
@@ -339,3 +340,65 @@ export async function* readProposalStatusRows(db: ReadOnlyPg, pageSize = 5000): 
 		after = (page[page.length - 1] as ProposalStatusRow).id
 	}
 }
+
+/** The microseconds since the epoch of a timestamptz column, as text (null stays null). */
+const micros = (col: string) => `(extract(epoch from ${col})::numeric * 1000000)::bigint::text`
+
+/** Keyset paging over a table's all-uuid primary key; `keys` are the key columns in order, `select` aliases them by name. */
+async function* pageByKey<R extends Record<string, unknown>>(
+	db: ReadOnlyPg,
+	select: string,
+	table: string,
+	keys: string[],
+	pageSize: number,
+): AsyncGenerator<R> {
+	let after: string[] | null = null
+	const tuple = keys.map((k) => `t.${k}`).join(", ")
+	const cast = keys.map((_, i) => `$${i + 2}::uuid`).join(", ")
+	for (;;) {
+		const page: R[] = await db.read<R>(
+			`SELECT ${select} FROM ${table} t WHERE $1::boolean OR (${tuple}) > (${cast}) ORDER BY ${tuple} LIMIT $${keys.length + 2}`,
+			after === null ? [true, ...keys.map(() => null), pageSize] : [false, ...after, pageSize],
+			300_000,
+		)
+		yield* page
+		if (page.length < pageSize) return
+		const last = page[page.length - 1] as R
+		after = keys.map((k) => last[k] as string)
+	}
+}
+
+/** Every `ranks.ranking_blocks` row (keyset-paged on (id, space_id)), dates as microseconds. */
+export const readRankingBlockRows = (db: ReadOnlyPg, pageSize = 5000): AsyncGenerator<RankingBlockRow> =>
+	pageByKey<RankingBlockRow>(
+		db,
+		`t.id::text AS id, t.space_id::text AS space_id, t.name AS name, t.filter AS filter,
+		 ${micros("t.start_date")} AS start_date, ${micros("t.end_date")} AS end_date,
+		 t.restriction_id::text AS restriction_id, t.ranking_type::text AS ranking_type, t.submission_frequency AS submission_frequency`,
+		"ranks.ranking_blocks",
+		["id", "space_id"],
+		pageSize,
+	)
+
+/** Every `ranks.rankings` row (keyset-paged on (id, space_id)), `submitted_at` as microseconds. */
+export const readRankingRows = (db: ReadOnlyPg, pageSize = 5000): AsyncGenerator<RankingRow> =>
+	pageByKey<RankingRow>(
+		db,
+		`t.id::text AS id, t.space_id::text AS space_id, t.block_id::text AS block_id, t.author_address AS author_address,
+		 t.rank_type AS rank_type, ${micros("t.submitted_at")} AS submitted_at,
+		 t.updated_at_block::text AS updated_at_block, t.update_index::text AS update_index`,
+		"ranks.rankings",
+		["id", "space_id"],
+		pageSize,
+	)
+
+/** Every `ranks.ranking_items` row (keyset-paged on its primary key). */
+export const readRankingItemRows = (db: ReadOnlyPg, pageSize = 5000): AsyncGenerator<RankingItemRow> =>
+	pageByKey<RankingItemRow>(
+		db,
+		`t.ranking_id::text AS ranking_id, t.entity_id::text AS entity_id, t.space_id::text AS space_id,
+		 t.position AS position, t.weight AS weight`,
+		"ranks.ranking_items",
+		["ranking_id", "entity_id", "space_id"],
+		pageSize,
+	)

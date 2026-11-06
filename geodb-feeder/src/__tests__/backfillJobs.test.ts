@@ -19,7 +19,7 @@ describe("backfill Job geodb image", () => {
 		expect([...tags][0]).toMatch(/^[0-9a-f]{10}$/)
 	})
 
-	it.each(["geodb-votes-backfill-job.yaml", "geodb-proposal-votes-backfill-job.yaml", "geodb-membership-backfill-job.yaml"])(
+	it.each(["geodb-votes-backfill-job.yaml", "geodb-proposal-votes-backfill-job.yaml", "geodb-membership-backfill-job.yaml", "geodb-ranks-backfill-job.yaml"])(
 		"%s uses the GEODB_TAG placeholder, fills it from geodb.yaml, and warns about put",
 		(f) => {
 			const job = read(f)

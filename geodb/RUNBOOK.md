@@ -697,6 +697,54 @@ proposal Postgres does not hold yet, and kg-indexer drops a whole block on a per
 
 Rollback: unset `GEODB_PROPOSAL_STATUS`. The records stay in the Space, unread; nothing reads them yet.
 
+### 2c-decies. Keyed ranks (GEODB_RANKS)
+
+`GEODB_RANKS` (default off; takes effect only with `GEODB_RECORD_KEYS`) mirrors the three tables ranking-indexer folds
+out of `knowledge.edits` into the `ranks` schema (`ranking_blocks`, `rankings`, `ranking_items`; api migrations 0061 and
+0068) as natural-key records, one per primary key (`geodb-feeder/src/ranksKeyed.ts`; the pinned `rankingBlock`,
+`ranking` and `rankingItem` kinds). They live in the `votes` system Space, so no fourth system Space is founded. The
+consumer is its own group on `<env>.knowledge.edits`, `geodb-feeder-ranks-keyed-v1-<env>`; the edits consumer's group and
+ranking-indexer's are untouched, and the feeder's Kafka user already consumes the topic.
+
+How the fold maps (ranking-indexer's, replayed through `detectRanks`):
+
+- Blocks and rankings: each column is a mutable `put`, the value in the statement id, so a replay writes the same ids
+  and is a no-op, and A then B then A ends on A. A value an edit does not carry is never written and never cleared.
+- Items: a ranking edit replaces the ranking's items as a whole. geo-db has no read-before-write, so every item carries
+  a `generation` (the edit's block number; 0 for the backfill) and a reader takes, per ranking, only the items at the
+  ranking's maximum generation. Replaying the stream from the start converges on the same state; the stream supersedes
+  the backfill.
+- Not mirrored: `ranking_scores`, and the `RANK_POSITION` projection. `author_address` is carried by the backfill only.
+
+Differences from Postgres, to be known before reading the records:
+
+- Two edits in the same block for one ranking have the same generation, so their items are unioned (Postgres keeps the
+  later). A missing block number in the edit metadata gives generation 0.
+- A `RANK_BLOCK` link writes the ranking's `block` column even when the ranking is created in another edit.
+- A value absent from an edit is not cleared; Postgres overwrites it with NULL.
+- An item without `to_space` is skipped, as ranking-indexer skips it.
+
+Activation order, each step only after the one before it is live:
+
+1. geo-db serve and init container on 9d97069a78 or later (`put`); a feeder image that carries this path.
+2. Kafka ACL: consume on the group `geodb-feeder-ranks-keyed-v1-<env>` (the topic is already granted), and describe on
+   every feeder group for the backfill Job's empty-group check. Without them the consumer fails to start and
+   `geodb_feeder_consumer_start_failed{consumer="ranks"}` goes to 1.
+3. Required: the backfill Job (`geodb/k8s/v2/geodb-ranks-backfill-job.yaml`), feeder scaled to 0, applied as in
+   §2c-quater step 4. It reads the three tables READ ONLY and is rerunnable. `knowledge.edits` retains a bounded window,
+   so older rankings come only from this snapshot.
+4. `GEODB_RECORD_KEYS: "1"` and `GEODB_RANKS: "1"` in the feeder manifest, then scale it back to 1.
+5. The gate, once per table, before any reader depends on the records:
+   `bun src/ranksGate.ts <blocks|rankings|items> <postgres.tsv> <dump dir>` (`geodb-feeder/src/ranksGate.ts`; its header
+   lists the `\copy` columns and the `rb-`, `rk-` and `ri-` dumps). It exits non-zero on a Postgres-only key or a value
+   difference; geo-db-only keys (items of a superseded generation) are reported, not failed.
+
+A rerun of the Job once the consumer has offsets refuses unless `BACKFILL_KEYED_RESET_CONSUMER` is `"1"` (which deletes
+the consumer's offsets, so it replays the retained window from earliest on its next start; safe, the replay writes the
+same ids).
+
+Rollback: unset `GEODB_RANKS`. The records stay in the Space, unread; nothing reads them yet.
+
 ### 2f. Derived score tables (GEODB_DERIVED_MIRROR)
 
 Shadow only, nothing reads these rows. With `GEODB_DERIVED_MIRROR=1` (default off) the score writers copy the rows they
@@ -728,6 +776,7 @@ Type ranking gate: `geodb-feeder/src/typeRankingGate.ts <postgres.tsv> <scan.tsv
 `geodb-client derived scan 0 0x<type uuid hex> --first 512 --pages 100000` per type; the inputs and the classification
 are in that file's header. Rows for entities not refreshed since the flag went on show as Postgres-only until their
 next refresh, so run `refresh_ranking_scores_for` over the entity set after turning the flag on.
+
 
 ### 2d. Raising the Space cap
 
@@ -885,7 +934,8 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 | `GeoDbFeederSpaceVotingSettingsStalled` | `space.governance` lag above 0 and nothing handled by the space-voting-settings consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-septies) |
 | `GeoDbFeederProposalVersionsStalled` | `space.governance` lag above 0 and nothing handled by the proposal-versions consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-octies) |
 | `GeoDbFeederProposalStatusStalled` | `space.governance` lag above 0 and nothing handled by the proposal-status consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-novies) |
-| `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`, `space_voting_settings`, `proposal_versions`, `proposal_status`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
+| `GeoDbFeederRanksStalled` | `knowledge.edits` lag above 0 and nothing handled by the ranks consumer for 30m | the repeating error in the feeder log; an `exhausted` write to the votes Space (§2c-decies) |
+| `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`, `space_voting_settings`, `proposal_versions`, `proposal_status`, `ranks`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
 
 ## 7. Operating notes
 

@@ -8,6 +8,8 @@ export type HermesEdit = {
 	spaceId?: string
 	isCanonical: boolean
 	createdAt: number | null
+	/** blockchain_metadata.block_number (field 8, subfield 3), or null when absent. */
+	blockNumber: number | null
 }
 
 type Field = [number, bigint | Uint8Array]
@@ -52,7 +54,7 @@ export function parseFields(b: Uint8Array): Field[] {
 const hex = (v: Uint8Array) => Buffer.from(v).toString("hex")
 
 export function parseHermesEdit(b: Uint8Array): HermesEdit {
-	const e: HermesEdit = {authors: [], isCanonical: false, createdAt: null}
+	const e: HermesEdit = {authors: [], isCanonical: false, createdAt: null, blockNumber: null}
 	for (const [f, v] of parseFields(b)) {
 		if (v instanceof Uint8Array) {
 			if (f === 1) e.id = hex(v)
@@ -61,7 +63,10 @@ export function parseHermesEdit(b: Uint8Array): HermesEdit {
 			else if (f === 4) e.authors.push(hex(v))
 			else if (f === 6) e.spaceId = hex(v)
 			else if (f === 8) {
-				for (const [k, x] of parseFields(v)) if (k === 1 && typeof x === "bigint") e.createdAt = Number(x)
+				for (const [k, x] of parseFields(v)) {
+					if (k === 1 && typeof x === "bigint") e.createdAt = Number(x)
+					else if (k === 3 && typeof x === "bigint") e.blockNumber = Number(x)
+				}
 			}
 		} else if (f === 7) e.isCanonical = v === 1n
 	}

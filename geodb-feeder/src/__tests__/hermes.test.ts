@@ -37,6 +37,11 @@ describe("parseHermesEdit", () => {
 		expect(e.spaceId).toBe(Buffer.from(space).toString("hex"))
 		expect(e.isCanonical).toBe(true)
 		expect(e.createdAt).toBe(1_700_000_000)
+		expect(e.blockNumber).toBeNull()
+	})
+
+	it("reads the block number from the blockchain metadata (field 8, subfield 3)", () => {
+		expect(parseHermesEdit(Uint8Array.from([0x42, 0x04, 0x08, 0x05, 0x18, 0x07])).blockNumber).toBe(7)
 	})
 
 	it("rejects truncated input", () => {
