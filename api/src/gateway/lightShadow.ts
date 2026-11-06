@@ -381,7 +381,14 @@ function planLightEntity(
 	fragments: Map<string, SelectionSetNode>,
 	resolved: Record<string, unknown>,
 	uncompared: Set<UncomparedReason>,
-	options: {everySpace?: boolean; projections?: boolean; relationsTypeFilter?: boolean; derivedFields?: boolean} = {},
+	options: {
+		everySpace?: boolean
+		/** The root argument names Spaces, which do not scope the nested lists: space-less rows are read every-Space. */
+		rootSpaces?: boolean
+		projections?: boolean
+		relationsTypeFilter?: boolean
+		derivedFields?: boolean
+	} = {},
 ): {card: EntityCardPlan; lists: LightList[]; everySpace: boolean} {
 	const lists: LightList[] = []
 	const card = planEntitySelection(
@@ -410,7 +417,7 @@ function planLightEntity(
 	// Rows with no space and no `spaceIds` leave nothing to say which cards to read: where the caller allows it
 	// (no Space argument), the entity is read across every loaded Space and each row need only be held by one.
 	if (!card.spaceIds && !lists.some((list) => list.spaceKey)) {
-		if (!options.everySpace) refuse("no_space")
+		if (!options.everySpace && !options.rootSpaces) refuse("no_space")
 		uncompared.add("partial_values")
 		return {card, lists, everySpace: true}
 	}
@@ -598,6 +605,7 @@ export function analyzeLightEntities(
 		const spaceIds = readRootArgs(args, claims, uncompared)
 		const {card, lists, everySpace} = planLightEntity(root.selectionSet, fragments, resolved, uncompared, {
 			everySpace: spaceIds === null,
+			rootSpaces: spaceIds !== null,
 			projections: options.entitiesBatch === true,
 			relationsTypeFilter: options.relationsTypeFilter === true,
 			derivedFields: options.derivedFields === true,
@@ -876,9 +884,19 @@ export async function checkLight(
 		)
 		if (!read.rows.some((row) => row.prop === wanted && targets.has(row.raw))) unmet.push(claim)
 	}
-	const notHeld = options.spaceIds?.length
-		? !options.spaceIds.some((space) => (read.bySpace.get(space)?.length ?? 0) > 0)
-		: false
+	// An every-Space read keys its rows by geo-db Space id; the root's Spaces are PostGraphile ids. A root Space geo-db
+	// has not loaded cannot be judged (the Space map answers null), so it is `unmapped_space`, not a mismatch.
+	let heldIn = options.spaceIds ?? []
+	if (options.everySpace && heldIn.length > 0) {
+		const mapped: string[] = []
+		for (const space of heldIn) {
+			const geo = await deps.geoSpaceOf(space)
+			if (!geo) return {result: "unsupported", reason: "unmapped_space"}
+			mapped.push(geo)
+		}
+		heldIn = mapped
+	}
+	const notHeld = heldIn.length > 0 ? !heldIn.some((space) => (read.bySpace.get(space)?.length ?? 0) > 0) : false
 	// PostGraphile counts an entity as in a Space when it has any value or outgoing relation there, derived ones
 	// included; geo-db never holds those, so a Space the answer shows holding only derived rows (a vote Score in the
 	// voter's Space) is not a membership geo-db can settle.
