@@ -1,21 +1,58 @@
 //! Storage layer for topology distance data.
 
+use std::sync::Arc;
+
+use geodb_cursor::derived::DerivedMirror;
 use hermes_instrumentation::instrument;
 use sqlx::PgPool;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::consumer::{ChangeType, TopologyChange};
 use crate::error::StorageError;
+use crate::topology_mirror;
 
 /// Storage for topology distance database operations.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Storage {
     pool: PgPool,
+    /// Best-effort copy of the distances into geo-db; `None` unless `GEODB_DERIVED_MIRROR` is on.
+    derived: Option<Arc<DerivedMirror>>,
+}
+
+impl std::fmt::Debug for Storage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Storage")
+            .field("pool", &self.pool)
+            .field("derived_mirror", &self.derived.is_some())
+            .finish()
+    }
 }
 
 impl Storage {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            derived: DerivedMirror::from_env().map(Arc::new),
+        }
+    }
+
+    /// Copies the whole table into geo-db once, so a put the mirror dropped is repaired. A read
+    /// error skips the copy, never the indexer. Does nothing while the flag is off.
+    pub async fn mirror_snapshot(&self) {
+        let Some(mirror) = &self.derived else {
+            return;
+        };
+        match sqlx::query_as::<_, (Uuid, i32)>(topology_mirror::SELECT_SQL)
+            .fetch_all(&self.pool)
+            .await
+        {
+            Ok(rows) => {
+                topology_mirror::snapshot(mirror, &rows).await;
+                info!(rows = rows.len(), "topology distances mirrored to geo-db");
+            }
+            Err(e) => warn!(error = %e, "topology mirror snapshot skipped: read failed"),
+        }
     }
 
     /// Connect to the database and create a new Storage instance.
@@ -104,6 +141,16 @@ impl Storage {
         }
 
         tx.commit().await?;
+
+        // After the commit; the mirror is best-effort and never fails the batch.
+        if let Some(mirror) = &self.derived {
+            let upserts: Vec<(Uuid, i32)> = upsert_ids
+                .iter()
+                .copied()
+                .zip(upsert_distances.iter().copied())
+                .collect();
+            topology_mirror::mirror(mirror, &upserts, &delete_ids).await;
+        }
 
         Ok(())
     }

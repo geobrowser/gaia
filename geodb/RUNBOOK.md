@@ -1117,6 +1117,25 @@ and no longer has is a delete of both parts. A geo-db error is logged, never fai
   both), run the Job once by hand with the flag on, then set the flag `"1"` in `feed-signals-sync-cronjob.yaml` in its own PR.
   Rollback: flag `"0"`.
 
+### 2f-topology. scoring_topology_distances (derived collection 24, GEODB_DERIVED_MIRROR)
+
+Shadow only, nothing reads the rows. The `topology-indexer` Deployment (`scoring-service/topology-indexer`, migration 0049)
+consumes `CanonicalGraphDiff` events and upserts or deletes each Space's distance from the root Space. With
+`GEODB_DERIVED_MIRROR=1` (manifest default `"0"`) it copies each applied change set into collection 24 after the batch
+commits, and copies the whole table once at start (`mirror_snapshot`), which repairs any put the best-effort mirror dropped
+(`scoring-service/topology-indexer/src/topology_mirror.rs`). Group is 0 (the scoring service loads the whole map), key is the
+Space uuid (16 bytes), score is the distance as an f64, value is the distance as a little-endian i32. A Space that is removed
+is a delete. A geo-db error is logged, never fails a batch.
+
+- Size, measured 2026-11-06: 101 rows (distances 0 to 4) against `derived_rows_max` 4,194,304. The whole table fits.
+- Reader (Postgres, unchanged): `_fetch_scoring_topology_distances` in the scoring-service cronjob. DR-046 may later make
+  this an embedder-derived Space, in which case the mirror is retired.
+- Uses the shared `geodb-scores-key`, now granting collections 23 and 24 (`geodb/supervisor.sh`).
+- The topology-indexer image now builds with `geodb-cursor`; the Deployment gains the `geodb-setup` init container.
+- **Enable order: roll serve to a build that registers collection 24 FIRST**, then the binding (the StatefulSet restart does
+  both), roll topology-indexer once with the flag on, then set the flag `"1"` in `scoring-service/deployment/v2/topology-indexer.yaml`
+  in its own PR. Rollback: flag `"0"`.
+
 ### 2d. Raising the Space cap
 
 `spaces` in `geodb-serve-config` caps the Spaces the store can hold; at the cap, founding refuses and the
