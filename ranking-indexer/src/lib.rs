@@ -35,6 +35,7 @@ pub mod stance_map;
 pub mod storage;
 pub mod topic_cooccurrence_mirror;
 pub mod topic_interest;
+pub mod topic_suggestions_compute;
 pub mod topic_suggestions_mirror;
 pub mod user_interest;
 pub mod user_interest_shadow;
