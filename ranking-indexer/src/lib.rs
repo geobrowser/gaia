@@ -5,6 +5,7 @@
 
 pub mod account_exclusions_mirror;
 pub mod account_weights_mirror;
+pub mod agenda_listings_mirror;
 pub mod clickhouse;
 pub mod consumer;
 pub mod dedup;

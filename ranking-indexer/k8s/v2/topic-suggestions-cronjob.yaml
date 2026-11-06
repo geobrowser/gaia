@@ -39,7 +39,7 @@ spec:
             # geodb-client for the space_topic_suggestions mirror (GEODB_DERIVED_MIRROR, RUNBOOK section 2f-topics / 13). Dormant while
             # the flag is "0": nothing below is read, and every reference is optional or fails soft, so an absent
             # geodb never blocks a rollout. Same wiring as hermes-pipeline.yaml, but with the SCORES key: a principal
-            # that may write derived collections 0, 1, 2, 3, 4, 5, 11, 12 and 13 and nothing else (geodb-scores-key-job.yaml).
+            # that may write derived collections 0, 1, 2, 3, 4, 5, 11, 12, 13 and 20 and nothing else (geodb-scores-key-job.yaml).
             - name: geodb-bin
               emptyDir: {}
             - name: geodb-space-map

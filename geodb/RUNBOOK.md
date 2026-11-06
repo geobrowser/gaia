@@ -1048,6 +1048,28 @@ longer has is a delete. A geo-db error is logged, never fails the Job. About 5,2
   `collection < 64`): it holds and replays the rows but does not count them in `/metrics` or the figures. Rollback: set the
   flag `"0"`.
 
+### 2f-agenda. trending.agenda_listings (derived collection 20, GEODB_DERIVED_MIRROR)
+
+Shadow only, nothing reads the rows. The hourly `ranking-indexer-agenda-listings` CronJob
+(`ranking-indexer/src/bin/agenda_listings_refresh.rs`, `trending.refresh_agenda_listings()` of migrations 0113 and 0118)
+inserts and deletes listing rows in place. With `GEODB_DERIVED_MIRROR=1` (manifest default `"0"`) it reads the identities
+before the refresh and the whole table after the commit, and copies it into collection 20
+(`ranking-indexer/src/agenda_listings_mirror.rs`): group the listed entity's id as a big-endian u128, key the agenda id, the
+Space id and the entity id (48 bytes, the key maximum), score the `listed_on` day as days since 1970 (a scan of one entity
+walks its newest listing first), value 13 bytes (`listed_on` i32, a source mask u8, `written_at` i64 microseconds,
+little-endian). The Postgres primary key also holds `source`, which would not fit the key; the mirror folds an identity's
+sources into the mask (1 `block_item`, 2 `agenda_claims`, 4 `agenda_topics`, 8 `agenda_debates`). A claim listing is a
+mask with a bit other than 4. Every folded row is a put; an identity the table held before and no longer has is a delete.
+A geo-db error is logged, never fails the Job. Small (agendas are one per Space per day).
+
+- Readers (Postgres, unchanged): the plpgsql `trending.claim_listings` and `trending.current_debate_agendas`
+  (`api/drizzle/0113`, `0115`, `0118`). Not an api shadow candidate until they have an application equivalent
+  (the plpgsql-reader blocker of plan 10.11 section 3.4).
+- Uses the shared `geodb-scores-key`, now granting collection 20 (`geodb/supervisor.sh`).
+- **Enable order: roll serve to a build that registers collection 20 FIRST**, then the binding (the StatefulSet restart does
+  both), run the Job once by hand with the flag on, then set the flag `"1"` in `agenda-listings-cronjob.yaml` in its own PR.
+  An older serve does not refuse a put to 20 (it only checks `collection < 64`) but does not count it. Rollback: flag `"0"`.
+
 ### 2d. Raising the Space cap
 
 `spaces` in `geodb-serve-config` caps the Spaces the store can hold; at the cap, founding refuses and the
