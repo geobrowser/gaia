@@ -40,7 +40,7 @@ spec:
                 optional: true
             - name: geodb-key
               secret:
-                # The shared scores key (geodb-scores-key-job.yaml); its binding grants derived=0,1,2,3,4,5,11,12,13,20,
+                # The shared scores key (geodb-scores-key-job.yaml); its binding grants derived=0,1,2,3,4,5,11,12,13,14,15,16,17,18,19,20,
                 # which includes 2,3,4 (global_scores, local_scores, space_scores).
                 secretName: geodb-scores-key
                 optional: true

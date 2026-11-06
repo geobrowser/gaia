@@ -2,7 +2,7 @@
 # in the pod's memory-backed volume and written straight into Secret geodb-scores-key through the API; it
 # never reaches a terminal, a file on a laptop, or git. The Secret holds `key` (the seed) and `keyid`
 # (public); serve's supervisor reads `keyid` and registers
-#   principal = <keyid> read=- write=- publish=- derived=0,1,2,3,4,5,11,12,13,20
+#   principal = <keyid> read=- write=- publish=- derived=0,1,2,3,4,5,11,12,13,14,15,16,17,18,19,20
 # so the key can write the derived collections 0 (entity_type_ranking), 1 (entity_topic_ranking), 2/3/4 (global_scores,
 # local_scores, space_scores: the scoring-service cronjob), 5 (account_weights, the
 # ranking-indexer account-weights CronJob), 11 (ranks.ranking_scores) and 12 (account_exclusions, the
