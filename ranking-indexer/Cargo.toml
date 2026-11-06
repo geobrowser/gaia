@@ -71,6 +71,12 @@ path = "src/bin/feed_signals_sync.rs"
 name = "agenda_listings_refresh"
 path = "src/bin/agenda_listings_refresh.rs"
 
+# One-shot backfill and read-back compare of the per-user derived collections 27, 28 and 29
+# (RUNBOOK section 2f-private).
+[[bin]]
+name = "private_mirror_snapshot"
+path = "src/bin/private_mirror_snapshot.rs"
+
 [dependencies]
 geodb-cursor = { path = "../geodb-cursor" }
 hermes-schema = { path = "../hermes-schema" }

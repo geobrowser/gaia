@@ -51,5 +51,6 @@ COPY --from=builder /app/ranking-indexer/target/release/not_interested_sync /usr
 COPY --from=builder /app/ranking-indexer/target/release/stance_map_shadow /usr/local/bin/stance_map_shadow
 COPY --from=builder /app/ranking-indexer/target/release/feed_signals_sync /usr/local/bin/feed_signals_sync
 COPY --from=builder /app/ranking-indexer/target/release/agenda_listings_refresh /usr/local/bin/agenda_listings_refresh
+COPY --from=builder /app/ranking-indexer/target/release/private_mirror_snapshot /usr/local/bin/private_mirror_snapshot
 
 CMD ["ranking-indexer"]

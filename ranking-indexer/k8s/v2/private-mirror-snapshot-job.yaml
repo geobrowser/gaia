@@ -1,0 +1,172 @@
+# One-off Job, flag-off by construction: backfill (put every Postgres row) or compare (read each
+# user's group back from geo-db and count differences) for the per-user derived collections 27, 28
+# and 29 (`external_interest_signals`, `user_topic_signals`, `feed_user_seen_daily`). Binary
+# `private_mirror_snapshot`; why and how it judges are in ranking_indexer::private_snapshot.
+#
+# NOT part of any deploy: deploy-v2.yml lists its manifests by name and this file is not among them.
+# Apply by hand, after the three writers' `_PRIVATE` switch is on and the serve carries the restriction
+# (RUNBOOK section 2f-private), once a ranking-indexer image that contains the binary is built. MODE is
+# `backfill` or `compare`; run backfill first, then compare. The name carries the mode, so the two can
+# coexist and a failed run is deleted before it is run again.
+#
+#   sed -e "s|ranking-indexer:IMAGE_TAG|ranking-indexer:<tag>|" -e "s|MODE|backfill|g" \
+#     ranking-indexer/k8s/v2/private-mirror-snapshot-job.yaml | kubectl apply -f -
+#   kubectl -n gaia logs -f job/ranking-indexer-private-snapshot-backfill
+#
+# Exit codes: 0 done (compare: nothing differs), 1 could not finish or read, 2 (compare only) it read
+# everything and found rows that differ, are missing or are extra; the counts are in the log, never an id.
+# PRIVATE_SNAPSHOT_TABLES (comma separated table labels) narrows it. The reads hold the three tables in
+# memory (the limit below is a guess; the sizes of 27, 28 and 29 were not measured), so raise it if the
+# pod is OOM-killed rather than running the Job with no limit. Uses the scores key, which already holds
+# derived=27,28,29 for the writers and may read what it may write.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ranking-indexer-private-snapshot-MODE
+  namespace: gaia
+  labels:
+    app: ranking-indexer-private-snapshot
+    environment: testnet
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: ranking-indexer-private-snapshot
+        environment: testnet
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      volumes:
+        - name: ssl-certs
+          emptyDir: {}
+        - name: geodb-bin
+          emptyDir: {}
+        - name: geodb-space-map
+          configMap:
+            name: geodb-space-map
+            optional: true
+        - name: geodb-key
+          secret:
+            secretName: geodb-scores-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: scores.key
+      initContainers:
+        - name: geodb-setup
+          # Pinned, never :latest.
+          image: registry.digitalocean.com/geo/geodb:6b34f9feda
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              cp /usr/local/bin/geodb-client /geodb/geodb-client || exit 0
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -n "$node" ] && [ -n "$ip" ]; then
+                printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+              else
+                echo "geodb-setup: no node id or no geodb Service; derived mirror stays off"
+              fi
+              exit 0
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+        - name: setup-certs
+          image: registry.digitalocean.com/geo/ranking-indexer:IMAGE_TAG
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+          env:
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: private-snapshot
+          image: registry.digitalocean.com/geo/ranking-indexer:IMAGE_TAG
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/private_mirror_snapshot", "MODE"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+            - name: geodb-key
+              mountPath: /etc/geodb/key
+              readOnly: true
+          env:
+            - name: PGSSLROOTCERT
+              value: /ssl/ca.crt
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            # This Job's whole purpose, so on here regardless of the writers' flags. The binary exits
+            # non-zero if either is off or the wiring is missing.
+            - name: GEODB_DERIVED_MIRROR
+              value: "1"
+            - name: GEODB_DERIVED_MIRROR_PRIVATE
+              value: "1"
+            - name: GEODB_DERIVED_BATCH
+              value: "1"
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/key/scores.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
+            - name: RUST_LOG
+              value: "info"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
