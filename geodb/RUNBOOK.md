@@ -1221,7 +1221,6 @@ longer has is a delete. A geo-db error is logged, never fails the Job. About 5,2
   `collection < 64`): it holds and replays the rows but does not count them in `/metrics` or the figures. Rollback: set the
   flag `"0"`.
 
-<<<<<<< HEAD
 ### 2f-agenda. trending.agenda_listings (derived collection 20, GEODB_DERIVED_MIRROR)
 
 Shadow only, nothing reads the rows. The hourly `ranking-indexer-agenda-listings` CronJob
@@ -1350,7 +1349,7 @@ geo-db error is logged, never fails the Job.
 - **Enable order: roll serve to a build that registers collection 25 FIRST**, then the binding (the StatefulSet restart
   applies both), run the Job once by hand with the flag on, then set the flag `"1"` in `feed-composition-cronjob.yaml` in
   its own change. Rollback: flag `"0"`.
-=======
+
 ### 2f-ranking. entity_ranking_scores (derived collection 21, GEODB_DERIVED_MIRROR)
 
 Shadow only, nothing reads the rows. The writer is the SQL `refresh_entity_ranking_scores(uuid[])`, an upsert that never
@@ -1372,7 +1371,6 @@ error is logged and counted (`geodb_derived_mirror_errors_total{table="entity_sc
 - Uses the shared `geodb-scores-key`; its binding grants `derived=...,13,21` (`geodb/supervisor.sh`). **Needs serve built
   with collection 21 registered** and serve restarted for the binding; until then writes are refused and logged. Rollback:
   set the flag `"0"`.
->>>>>>> 2faa9fce (vote-indexer: mirror entity_ranking_scores into derived collection 21 behind the flag (flag off))
 
 ### 2d. Raising the Space cap
 

@@ -347,7 +347,7 @@ impl Storage {
         let after = crate::derived_scores::read_rows(&self.pool, entity_ids).await;
         // Collection 21 (`entity_ranking_scores`): the touched entities' rows, put as they are now.
         match crate::entity_scores_mirror::read_rows(&self.pool, entity_ids).await {
-            Ok(rows) => crate::entity_scores_mirror::mirror(mirror, &rows).await,
+            Ok(rows) => crate::entity_scores_mirror::mirror(mirror, entity_ids, &rows).await,
             Err(e) => {
                 tracing::warn!(event = "geodb_derived.readback_failed", error = ?e, "could not read entity_ranking_scores for the geo-db mirror; skipped");
                 metrics::counter!("geodb_derived_mirror_errors_total", "table" => "entity_scores_readback").increment(1);

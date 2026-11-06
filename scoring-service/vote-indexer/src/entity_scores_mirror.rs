@@ -1,48 +1,84 @@
-//! Mirrors `public.entity_ranking_scores` into geo-db's derived class (plan 10.14, collection 21).
+//! Mirrors the engaged rows of `public.entity_ranking_scores` into geo-db's derived class (plan
+//! 10.14, 10.21 section 9), collection 21.
 //!
-//! Collection 21 `entity_ranking_scores`: group 0, key the entity id (16 bytes), score the
-//! `ranking_score` as the double the feed orders by (`entityOrderByRankingScorePlugin` orders by
-//! `ranking_score::float8`), value 48 little-endian bytes: `quality_score`, `intrinsic_score`,
-//! `type_weight` (f64 each), `positive`, `negative` (i64 each), `updated_at` (i64 microseconds
-//! since the epoch). A point read serves "an entity's score or quality", a scan of group 0 serves
-//! the global order, and the value carries the quality for the threshold filter.
+//! Collection 21 `entity_ranking_scores` is an **engaged-only overlay**, not the table: group 0,
+//! key the entity id (16 bytes), score the stored `ranking_score` as the double the feed orders by,
+//! value the 62-byte [`crate::entity_scores_default::Overlay`] (vote, stance and commenter counts,
+//! watch, age-credit and trending terms, trending source and topic). A row exists only while some
+//! engagement term of the entity is nonzero; an absent key means the un-engaged entity, whose row
+//! a reader builds from the card and config ([`crate::entity_scores_default::default_row`]). The
+//! whole table is 48.9M rows (about 7 GB resident), the engaged part about 9.5k.
 //!
-//! `refresh_entity_ranking_scores` is an upsert that never deletes, so the mirror only puts: it
-//! reads the rows for the touched entity ids after the call and sends each (last write wins, so an
-//! unchanged row is harmless). Only the entities a vote batch or a sweep touches are sent. The
-//! `api/scripts` backfills are SQL and are not mirrored: the table is 48.9M rows and the derived
-//! class refuses a put past `derived_rows_max`, so loading all of it is a sizing decision (plan
-//! 10.14, V4), not something a sweep does by accident. It never fails the caller (see
+//! `refresh_entity_ranking_scores` is an upsert that never deletes, so after the call the mirror
+//! reads the rows of the touched entity ids and [`plan`] puts each engaged one and deletes the key
+//! of each touched id whose row is absent or no longer engaged (an entity that fell back to zero).
+//! Last write wins, so an unchanged row is harmless; a delete of an absent key is a no-op. The
+//! `api/scripts` backfills are SQL and are not mirrored. It never fails the caller (see
 //! `geodb_cursor::derived`).
 
 use geodb_cursor::derived::{DerivedMirror, DerivedRow};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+use crate::entity_scores_default::{Engagement, Overlay, TrendingSource, OVERLAY_LEN};
+
 /// `entity_ranking_scores` in geo-db's collection registry. The one place the number is written.
 pub const COLLECTION: u32 = 21;
 
 /// The value's length in bytes.
-pub const VALUE_LEN: usize = 48;
+pub const VALUE_LEN: usize = OVERLAY_LEN;
 
 /// The SQL that reads the rows for a list of entity ids, in the shape [`ScoreRow`] takes.
 pub const SELECT_SQL: &str = "SELECT entity_id, ranking_score::float8 AS ranking_score, \
-    quality_score::float8 AS quality_score, intrinsic_score::float8 AS intrinsic_score, \
-    type_weight::float8 AS type_weight, positive, negative, \
-    (extract(epoch FROM updated_at)::numeric * 1000000)::bigint AS updated_us \
+    positive, negative, stance_positive, stance_negative, commenter_count, \
+    participation_score::float8 AS participation_score, comment_score::float8 AS comment_score, \
+    topic_score::float8 AS topic_score, watch_score::float8 AS watch_score, \
+    age_credit::float8 AS age_credit, trending_score::float8 AS trending_score, \
+    trending_source, trending_topic_id \
     FROM public.entity_ranking_scores WHERE entity_id = ANY($1)";
 
 /// One row of `public.entity_ranking_scores`.
-#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ScoreRow {
     pub entity_id: Uuid,
     pub ranking_score: f64,
-    pub quality_score: f64,
-    pub intrinsic_score: f64,
-    pub type_weight: f64,
     pub positive: i64,
     pub negative: i64,
-    pub updated_us: i64,
+    pub stance_positive: i64,
+    pub stance_negative: i64,
+    pub commenter_count: i64,
+    pub participation_score: f64,
+    pub comment_score: f64,
+    pub topic_score: f64,
+    pub watch_score: f64,
+    pub age_credit: f64,
+    pub trending_score: f64,
+    pub trending_source: Option<String>,
+    pub trending_topic_id: Option<Uuid>,
+}
+
+impl ScoreRow {
+    fn engagement(&self) -> Engagement {
+        Engagement {
+            positive: self.positive,
+            negative: self.negative,
+            stance_positive: self.stance_positive,
+            stance_negative: self.stance_negative,
+            commenter_count: self.commenter_count,
+            participation_score: self.participation_score,
+            comment_score: self.comment_score,
+            topic_score: self.topic_score,
+            watch_score: self.watch_score,
+            age_credit: self.age_credit,
+            trending_score: self.trending_score,
+            trending_source: match self.trending_source.as_deref() {
+                Some("topic") => Some(TrendingSource::Topic),
+                Some(_) => Some(TrendingSource::Listing),
+                None => None,
+            },
+            trending_topic_id: self.trending_topic_id,
+        }
+    }
 }
 
 fn finite(x: f64) -> f64 {
@@ -53,28 +89,30 @@ fn finite(x: f64) -> f64 {
     }
 }
 
-fn value(r: &ScoreRow) -> Vec<u8> {
-    let mut v = Vec::with_capacity(VALUE_LEN);
-    v.extend_from_slice(&finite(r.quality_score).to_le_bytes());
-    v.extend_from_slice(&finite(r.intrinsic_score).to_le_bytes());
-    v.extend_from_slice(&finite(r.type_weight).to_le_bytes());
-    v.extend_from_slice(&r.positive.to_le_bytes());
-    v.extend_from_slice(&r.negative.to_le_bytes());
-    v.extend_from_slice(&r.updated_us.to_le_bytes());
-    v
+/// What to send for one batch: engaged rows to put, keys that left the overlay to delete.
+#[derive(Debug, Default, PartialEq)]
+pub struct Plan {
+    pub puts: Vec<DerivedRow>,
+    pub deletes: Vec<Vec<u8>>,
 }
 
-/// The rows to put for `rows`.
-pub fn plan(rows: &[ScoreRow]) -> Vec<DerivedRow> {
-    rows.iter()
-        .map(|r| DerivedRow {
-            collection: COLLECTION,
-            group: 0,
-            score: finite(r.ranking_score),
-            key: r.entity_id.as_bytes().to_vec(),
-            value: value(r),
-        })
-        .collect()
+/// The plan for `touched` entity ids given the rows Postgres now holds for them. An id with an
+/// engaged row is put; an id with no row or an un-engaged one is deleted.
+pub fn plan(touched: &[Uuid], rows: &[ScoreRow]) -> Plan {
+    let mut out = Plan::default();
+    for id in touched {
+        match rows.iter().find(|r| r.entity_id == *id) {
+            Some(r) if r.engagement().is_engaged() => out.puts.push(DerivedRow {
+                collection: COLLECTION,
+                group: 0,
+                score: finite(r.ranking_score),
+                key: id.as_bytes().to_vec(),
+                value: Overlay::from_row(r.ranking_score, &r.engagement()).encode(),
+            }),
+            _ => out.deletes.push(id.as_bytes().to_vec()),
+        }
+    }
+    out
 }
 
 /// Reads the rows for `entity_ids`.
@@ -88,21 +126,33 @@ pub async fn read_rows(pool: &PgPool, entity_ids: &[Uuid]) -> Result<Vec<ScoreRo
         .map(|r| ScoreRow {
             entity_id: r.get("entity_id"),
             ranking_score: r.get("ranking_score"),
-            quality_score: r.get("quality_score"),
-            intrinsic_score: r.get("intrinsic_score"),
-            type_weight: r.get("type_weight"),
             positive: r.get("positive"),
             negative: r.get("negative"),
-            updated_us: r.get("updated_us"),
+            stance_positive: r.get("stance_positive"),
+            stance_negative: r.get("stance_negative"),
+            commenter_count: r.get("commenter_count"),
+            participation_score: r.get("participation_score"),
+            comment_score: r.get("comment_score"),
+            topic_score: r.get("topic_score"),
+            watch_score: r.get("watch_score"),
+            age_credit: r.get("age_credit"),
+            trending_score: r.get("trending_score"),
+            trending_source: r.get("trending_source"),
+            trending_topic_id: r.get("trending_topic_id"),
         })
         .collect())
 }
 
-/// Sends the rows. Never fails.
-pub async fn mirror(mirror: &DerivedMirror, rows: &[ScoreRow]) {
-    let puts = plan(rows);
+/// Sends the plan for `touched`. Never fails.
+pub async fn mirror(mirror: &DerivedMirror, touched: &[Uuid], rows: &[ScoreRow]) {
+    let Plan { puts, deletes } = plan(touched, rows);
     if !puts.is_empty() {
         mirror.put("entity_ranking_scores", &puts).await;
+    }
+    if !deletes.is_empty() {
+        mirror
+            .delete("entity_ranking_scores", COLLECTION, &deletes)
+            .await;
     }
 }
 
@@ -114,40 +164,97 @@ mod tests {
         ScoreRow {
             entity_id: Uuid::from_bytes([n; 16]),
             ranking_score: ranking,
-            quality_score: 0.25,
-            intrinsic_score: 0.5,
-            type_weight: 1.5,
             positive: 7,
             negative: 2,
-            updated_us: 1_700_000_000_000_000,
+            stance_positive: 1,
+            stance_negative: 0,
+            commenter_count: 3,
+            participation_score: 4.5,
+            comment_score: 1.0,
+            topic_score: 0.0,
+            watch_score: 0.25,
+            age_credit: 0.0,
+            trending_score: 0.0,
+            trending_source: None,
+            trending_topic_id: None,
+        }
+    }
+
+    fn quiet(n: u8, ranking: f64) -> ScoreRow {
+        ScoreRow {
+            positive: 0,
+            negative: 0,
+            stance_positive: 0,
+            commenter_count: 0,
+            participation_score: 0.0,
+            comment_score: 0.0,
+            watch_score: 0.0,
+            ..row(n, ranking)
         }
     }
 
     #[test]
-    fn the_collection_is_21() {
+    fn the_collection_is_21_and_the_value_fits_the_derived_class() {
         assert_eq!(COLLECTION, 21);
+        const { assert!(VALUE_LEN <= geodb_cursor::derived::VALUE_MAX) };
     }
 
     #[test]
-    fn a_row_is_keyed_by_entity_scored_by_ranking_with_a_48_byte_value() {
-        let p = &plan(&[row(3, 17885.66401799888)])[0];
-        assert_eq!((p.collection, p.group), (21, 0));
-        assert_eq!(p.key, vec![3u8; 16]);
-        assert_eq!(p.score, 17885.66401799888);
-        assert_eq!(p.value.len(), VALUE_LEN);
-        assert_eq!(&p.value[0..8], &0.25f64.to_le_bytes());
-        assert_eq!(&p.value[8..16], &0.5f64.to_le_bytes());
-        assert_eq!(&p.value[16..24], &1.5f64.to_le_bytes());
-        assert_eq!(&p.value[24..32], &7i64.to_le_bytes());
-        assert_eq!(&p.value[32..40], &2i64.to_le_bytes());
-        assert_eq!(&p.value[40..48], &1_700_000_000_000_000i64.to_le_bytes());
-        assert!(p.put_line().is_ok());
+    fn an_engaged_row_is_put_keyed_by_entity_scored_by_ranking() {
+        let id = Uuid::from_bytes([3; 16]);
+        let p = plan(&[id], &[row(3, 17885.66401799888)]);
+        assert!(p.deletes.is_empty());
+        let r = &p.puts[0];
+        assert_eq!((r.collection, r.group), (21, 0));
+        assert_eq!(r.key, vec![3u8; 16]);
+        assert_eq!(r.score, 17885.66401799888);
+        assert_eq!(r.value.len(), 62);
+        assert_eq!(&r.value[2..6], &7u32.to_le_bytes());
+        assert_eq!(&r.value[22..30], &0.25f64.to_le_bytes());
+        assert!(r.put_line().is_ok());
+    }
+
+    #[test]
+    fn an_unengaged_row_and_a_missing_row_are_deleted() {
+        let (a, b, c) = (
+            Uuid::from_bytes([1; 16]),
+            Uuid::from_bytes([2; 16]),
+            Uuid::from_bytes([3; 16]),
+        );
+        let p = plan(&[a, b, c], &[row(1, 5.0), quiet(2, 4.0)]);
+        assert_eq!(p.puts.len(), 1);
+        assert_eq!(p.deletes, vec![vec![2u8; 16], vec![3u8; 16]]);
+    }
+
+    #[test]
+    fn a_topic_term_alone_is_engagement() {
+        let mut r = quiet(5, 9.0);
+        r.topic_score = 0.5;
+        assert_eq!(plan(&[r.entity_id], &[r]).puts.len(), 1);
+    }
+
+    #[test]
+    fn trending_source_maps_listing_and_topic() {
+        let mut r = quiet(5, 9.0);
+        r.trending_score = 1.0;
+        r.trending_source = Some("topic".into());
+        r.trending_topic_id = Some(Uuid::from_bytes([9; 16]));
+        let v = plan(&[r.entity_id], &[r.clone()]).puts[0].value.clone();
+        assert_eq!(v[1], 2);
+        assert_eq!(&v[46..62], &[9u8; 16]);
+        r.trending_source = Some("listing".into());
+        r.trending_topic_id = None;
+        let v = plan(&[r.entity_id], &[r]).puts[0].value.clone();
+        assert_eq!((v[1], &v[46..62]), (1, &[0u8; 16][..]));
     }
 
     #[test]
     fn a_non_finite_score_is_zero_and_nothing_sends_nothing() {
-        assert_eq!(plan(&[row(1, f64::NAN)])[0].score, 0.0);
-        assert!(plan(&[]).is_empty());
+        assert_eq!(
+            plan(&[Uuid::from_bytes([1; 16])], &[row(1, f64::NAN)]).puts[0].score,
+            0.0
+        );
+        assert_eq!(plan(&[], &[]), Plan::default());
     }
 
     #[tokio::test]
@@ -162,6 +269,7 @@ mod tests {
             },
             std::time::Duration::from_secs(1),
         );
-        mirror(&m, &[row(1, 1.0)]).await;
+        let id = Uuid::from_bytes([1; 16]);
+        mirror(&m, &[id, Uuid::from_bytes([2; 16])], &[row(1, 1.0)]).await;
     }
 }

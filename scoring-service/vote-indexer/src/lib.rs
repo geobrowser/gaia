@@ -5,6 +5,9 @@
 
 pub mod consumer;
 pub mod derived_scores;
+pub mod entity_scores_default;
+#[cfg(test)]
+mod entity_scores_fixture;
 pub mod entity_scores_mirror;
 pub mod error;
 pub mod handlers;
