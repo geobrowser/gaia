@@ -83,6 +83,28 @@ export const RECORD_COLUMNS = {
 		/** Mutable: number, `created_at_block`. */
 		createdAtBlock: "35243b2b183648059546576e381806c1",
 	},
+	spaceVotingSettings: {
+		/** Key: reference to the Space's entity, `cid("entity", space_id)`. */
+		space: "15ae9fc7333d4d72aeb372321e58db00",
+		/** Mutable: number, `partial_percentage_support_threshold`. */
+		partial: "a97262c9981f4663a20b4208cb2838d2",
+		/** Mutable: number, `universal_percentage_support_threshold`. */
+		universal: "4cf81d6cc92b4e0e91f2cb8139d736a2",
+		/** Mutable: number, `flat_support_threshold`. */
+		flat: "fcc01cfa9bee4781940a6be21fa67caa",
+		/** Mutable: number, `quorum`. */
+		quorum: "2cf27f7101af401d8e6de528d03b05d7",
+		/** Mutable: number, `duration` (seconds). */
+		duration: "4e371d0baf1d46d7a506491c192016ae",
+		/** Mutable: boolean, `disable_fast_path_access_for_new_members`. */
+		disableFastPath: "52570d2d1e95478ab9d31d811371a7dd",
+		/** Mutable: number, `execution_grace_period`. */
+		grace: "198ba2f858844b668a6126d5bc8a069e",
+		/** Mutable: instant, `updated_at` (the event's block time, whole seconds). */
+		updatedAt: "c23df2162f6b4b7b8bc41d740afc0f19",
+		/** Mutable: number, `updated_at_block`. */
+		updatedAtBlock: "8ba30f5e13da49699c351e1475c86f7b",
+	},
 	proposalAction: {
 		/** Key: reference to the proposal's entity, `cid("entity", proposal_id)`. */
 		proposal: "235abc0092a248d69e2dbb5c71fd0209",

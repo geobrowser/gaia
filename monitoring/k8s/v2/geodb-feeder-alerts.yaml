@@ -11,6 +11,7 @@
 #   GeoDbFeederProposalVotesStalled  space.governance messages waiting and none handled by the proposal-votes consumer for 30m
 #   GeoDbFeederProposalActionsStalled  same, for the proposal-actions consumer
 #   GeoDbFeederSubspacesStalled  space.trust.extensions messages waiting and none handled by the subspaces consumer for 30m
+#   GeoDbFeederSpaceVotingSettingsStalled  same, for the space-voting-settings consumer
 #
 #   kubectl apply -f monitoring/k8s/v2/geodb-feeder-alerts.yaml
 apiVersion: monitoring.coreos.com/v1
@@ -164,9 +165,27 @@ spec:
               family (geodb/RUNBOOK.md 2c-sexies). Read the feeder log for the repeating error; if founded is at the
               serve config's spaces, raise the cap (RUNBOOK 2d).
 
+        - alert: GeoDbFeederSpaceVotingSettingsStalled
+          # Same shape as ProposalActionsStalled: every space.governance message counts as handled (ignored ones too).
+          expr: |
+            sum(geodb_feeder_space_voting_settings_consumer_lag{namespace="gaia", job="geodb-feeder"}) > 0
+            unless sum(increase(geodb_feeder_space_voting_settings_events_total{namespace="gaia", job="geodb-feeder"}[30m])) > 0
+          for: 30m
+          labels:
+            severity: warning
+            service: geodb-feeder
+            namespace: gaia
+          annotations:
+            summary: The geo-db feeder's space-voting-settings consumer has handled nothing for 30m
+            description: >-
+              space.governance messages are waiting. The space-voting-settings consumer retries a failing message
+              forever: a ResourceExhausted founding the governance system Space holds the partition rather than
+              skipping the family (geodb/RUNBOOK.md 2c-septies). Read the feeder log for the repeating error; if
+              founded is at the serve config's spaces, raise the cap (RUNBOOK 2d).
+
         - alert: GeoDbFeederConsumerStartFailed
           # Only a labelled series can fire: the gauge has one only for an optional consumer that is enabled
-          # (membership_keyed with GEODB_RECORD_KEYS, votes with GEODB_VOTES, proposal_votes with GEODB_PROPOSAL_VOTES, proposal_actions with GEODB_PROPOSAL_ACTIONS, subspaces with GEODB_SUBSPACES),
+          # (membership_keyed with GEODB_RECORD_KEYS, votes with GEODB_VOTES, proposal_votes with GEODB_PROPOSAL_VOTES, proposal_actions with GEODB_PROPOSAL_ACTIONS, subspaces with GEODB_SUBSPACES, space_voting_settings with GEODB_SPACE_VOTING_SETTINGS),
           # so this is inert flag-off.
           expr: max by (consumer) (geodb_feeder_consumer_start_failed{namespace="gaia", job="geodb-feeder", consumer!=""}) > 0
           for: 10m

@@ -47,6 +47,18 @@ describe("record columns", () => {
 				createdAt: "98603a29c209486b89a63ac207cf9e2f",
 				createdAtBlock: "35243b2b183648059546576e381806c1",
 			},
+			spaceVotingSettings: {
+				space: "15ae9fc7333d4d72aeb372321e58db00",
+				partial: "a97262c9981f4663a20b4208cb2838d2",
+				universal: "4cf81d6cc92b4e0e91f2cb8139d736a2",
+				flat: "fcc01cfa9bee4781940a6be21fa67caa",
+				quorum: "2cf27f7101af401d8e6de528d03b05d7",
+				duration: "4e371d0baf1d46d7a506491c192016ae",
+				disableFastPath: "52570d2d1e95478ab9d31d811371a7dd",
+				grace: "198ba2f858844b668a6126d5bc8a069e",
+				updatedAt: "c23df2162f6b4b7b8bc41d740afc0f19",
+				updatedAtBlock: "8ba30f5e13da49699c351e1475c86f7b",
+			},
 			proposalAction: {
 				proposal: "235abc0092a248d69e2dbb5c71fd0209",
 				block: "a93c92d0a2f442e9852057064567e012",
