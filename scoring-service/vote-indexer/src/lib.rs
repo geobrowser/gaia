@@ -4,6 +4,7 @@
 //! and indexing them into PostgreSQL.
 
 pub mod consumer;
+pub mod derived_scores;
 pub mod error;
 pub mod handlers;
 pub mod metrics;

@@ -25,6 +25,8 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
+pub mod derived;
+
 /// Default derived collection: `cursors = 10` (geo-db 6a770ba752).
 pub const DEFAULT_COLLECTION: u32 = 10;
 
@@ -73,8 +75,13 @@ impl Config {
     }
 
     pub fn from_vars(get: impl Fn(&str) -> Option<String>) -> Option<Config> {
+        Self::from_vars_for("GEODB_CURSOR_MIRROR", get)
+    }
+
+    /// `from_vars` for the mirror whose on-switch is the variable `flag` (`1` or `true`).
+    pub fn from_vars_for(flag: &str, get: impl Fn(&str) -> Option<String>) -> Option<Config> {
         let on = matches!(
-            get("GEODB_CURSOR_MIRROR").as_deref().map(str::trim),
+            get(flag).as_deref().map(str::trim),
             Some("1") | Some("true")
         );
         if !on {
@@ -83,7 +90,8 @@ impl Config {
         let (Some(key), Some(binding)) = (get("GEODB_KEY_PATH"), get("GEODB_BINDING_PATH")) else {
             warn!(
                 event = "geodb_cursor.misconfigured",
-                "GEODB_CURSOR_MIRROR is on but GEODB_KEY_PATH or GEODB_BINDING_PATH is unset; mirror disabled"
+                flag,
+                "mirror is on but GEODB_KEY_PATH or GEODB_BINDING_PATH is unset; mirror disabled"
             );
             return None;
         };
@@ -181,9 +189,21 @@ impl CursorMirror {
         if value.len() > VALUE_MAX {
             return Err(MirrorError::TooLong(value.len()));
         }
+        let hex: String = value.bytes().map(|b| format!("{b:02x}")).collect();
+        let line = format!("put\t{}\t0\t0\t{}\thex:{}\n", self.cfg.collection, id, hex);
+        self.send_lines(std::slice::from_ref(&line)).await
+    }
+
+    /// Sends request lines in order over the held child, one frame answered per line, under one
+    /// hold of the pipe. The first failure drops the child (respawned after the cool-down) and
+    /// ends the batch; the lines after it are not sent. `Ok` when every line was answered `+`.
+    pub async fn send_lines(&self, lines: &[String]) -> Result<(), MirrorError> {
         let mut st = self.state.lock().await;
         if st.pipe.is_none() {
-            if st.failed_at.is_some_and(|t| t.elapsed() < self.cfg.cooldown) {
+            if st
+                .failed_at
+                .is_some_and(|t| t.elapsed() < self.cfg.cooldown)
+            {
                 return Err(MirrorError::CoolingDown);
             }
             match tokio::time::timeout(self.cfg.timeout, self.spawn()).await {
@@ -204,26 +224,22 @@ impl CursorMirror {
                 }
             }
         }
-        let pipe = st.pipe.as_mut().expect("set above");
-        let hex: String = value.bytes().map(|b| format!("{b:02x}")).collect();
-        let line = format!("put\t{}\t0\t0\t{}\thex:{}\n", self.cfg.collection, id, hex);
-        let res = match tokio::time::timeout(self.cfg.timeout, request(pipe, &line)).await {
-            Ok(r) => r,
-            Err(_) => Err(MirrorError::Timeout(self.cfg.timeout)),
-        };
-        match res {
-            Ok(()) => {
-                st.failed_at = None;
-                Ok(())
-            }
-            Err(e) => {
+        for line in lines {
+            let pipe = st.pipe.as_mut().expect("set above");
+            let res = match tokio::time::timeout(self.cfg.timeout, request(pipe, line)).await {
+                Ok(r) => r,
+                Err(_) => Err(MirrorError::Timeout(self.cfg.timeout)),
+            };
+            if let Err(e) = res {
                 // A refusal or error leaves the tool exiting; drop it (kill_on_drop) and respawn
                 // after the cool-down. A `want` frame for a malformed line would also land here.
                 st.pipe = None;
                 st.failed_at = Some(Instant::now());
-                Err(e)
+                return Err(e);
             }
         }
+        st.failed_at = None;
+        Ok(())
     }
 
     async fn spawn(&self) -> Result<Pipe, MirrorError> {
