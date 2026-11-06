@@ -984,6 +984,7 @@ export function compareDerived(
 	card: NonNullable<PostgresCard>,
 	geo: GeoRow[],
 	scope?: ReadScope,
+	names?: Map<string, string[]>,
 ): DerivedChecks {
 	const checks: DerivedChecks["checks"] = {}
 	const uncompared = new Set<UncomparedReason>()
@@ -1061,6 +1062,8 @@ export function compareDerived(
 				const id = conformingId("entity", ref.id)
 				// An id geo-db has no row for is a statement difference, which the card diff already reports.
 				if (!known.has(id)) return []
+				// geo-db names a thing only from the Spaces read; `names` holds its Name in every Space (`readNames`).
+				if (ref.name !== null && names?.get(id)?.includes(ref.name)) return ["ok"]
 				const name = known.get(id) ?? null
 				return [judge(ref.name, name === null ? [] : [name], false)]
 			})
@@ -1209,6 +1212,8 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	nestedTargetValues?: boolean
 	/** Accept a `typeId`-filtered relations list that does not select the type in the light `entities` shadow (`GEODB_RELATIONS_TYPE_FILTER_SHADOW`). */
 	relationsTypeFilter?: boolean
+	/** Settle a nested name geo-db prints as none (named in a Space outside the read) from its Name in every Space (`GEODB_CROSS_SPACE_NAMES_SHADOW`). */
+	crossSpaceNames?: boolean
 }
 
 export type CardCheck =
@@ -1391,6 +1396,83 @@ export async function readEverySpace(deps: EntityShadowDeps, entityId: string, l
 	}
 }
 
+/** Most entities whose names one wide comparison reads across every Space. */
+const MAX_NAME_IDS = 64
+
+/** The ids of the nested properties, Types and targets (and listed Types) PostGraphile named, in geo-db's id form. */
+export function nestedNameIds(card: Pick<NonNullable<PostgresCard>, "nested" | "types" | "typeNames">): string[] {
+	const ids = new Set<string>()
+	const add = (refs: NamedRef[] | undefined) => {
+		for (const ref of refs ?? []) if (ref.name !== null) ids.add(conformingId("entity", ref.id))
+	}
+	add(card.nested?.property)
+	add(card.nested?.type)
+	add(card.nested?.toEntity)
+	card.types?.forEach((id, at) => {
+		if (card.typeNames?.[at] != null) ids.add(conformingId("entity", id))
+	})
+	return [...ids]
+}
+
+/**
+ * The Name each of `ids` holds in every Space geo-db has loaded (one batch read over all of them), for the nested names
+ * geo-db prints as none because the thing is named in a Space outside the comparison's scope. Null when it cannot be
+ * read (no every-Space reads, too many Spaces or ids, an empty budget, a failed read): the names stay inconclusive.
+ * Never throws.
+ */
+export async function readNames(
+	deps: EntityShadowDeps,
+	ids: string[],
+	label: string,
+): Promise<Map<string, string[]> | null> {
+	const readCards = deps.geoDb.readCards?.bind(deps.geoDb)
+	if (!deps.allGeoSpaces || !readCards || ids.length === 0 || ids.length > MAX_NAME_IDS) return null
+	try {
+		const spaces = await deps.allGeoSpaces()
+		if (spaces.length === 0 || spaces.length > MAX_EVERY_SPACES) return null
+		if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(1)) return null
+		const started = performance.now()
+		let rows: GeoCardRow[]
+		try {
+			rows = await readCards({geoSpaceIds: spaces, entityIds: ids})
+			observeGeoDbRead((performance.now() - started) / 1000, "ok")
+		} catch (error) {
+			observeGeoDbRead((performance.now() - started) / 1000, "error")
+			throw error
+		}
+		const names = new Map<string, string[]>()
+		for (const row of rows) {
+			if (row.prop !== NAME_PROPERTY || !row.entity) continue
+			const held = names.get(row.entity) ?? []
+			held.push(row.raw)
+			names.set(row.entity, held)
+		}
+		return names
+	} catch (error) {
+		deps.log.warn(`${label} name read failed`, {ids: ids.length, error: String(error)})
+		return null
+	}
+}
+
+/**
+ * `compareDerived`, and when it leaves a name inconclusive for want of another Space (`cross_space`) and
+ * `crossSpaceNames` is on, once more with the names geo-db holds in every Space.
+ */
+export async function compareDerivedWide(
+	deps: EntityShadowDeps,
+	plan: Pick<EntityCardPlan, "spaceId" | "allValues">,
+	card: NonNullable<PostgresCard>,
+	geo: GeoRow[],
+	scope: ReadScope | undefined,
+	label: string,
+): Promise<DerivedChecks> {
+	const first = compareDerived(plan, card, geo, scope)
+	if (deps.crossSpaceNames !== true || !first.uncompared.includes("cross_space")) return first
+	const ids = nestedNameIds(card)
+	const names = await readNames(deps, ids, label)
+	return names ? compareDerived(plan, card, geo, scope, names) : first
+}
+
 /**
  * Asks geo-db for one entity's card (with names) and judges PostGraphile's card against it: the statement diff
  * plus the derived checks. When the plan has no space the entity's own spaces are all read and their cards are
@@ -1435,7 +1517,7 @@ export async function checkCard(
 	if (!read.ok) return read.result === "failed" ? {result: "failed"} : {result: "unsupported", reason: read.reason}
 	const rows = read.rows
 	const diff = diffCards(statementsFromPostgres(postgres.values, postgres.relations), rows, {skipEmptyText: true})
-	const derived = compareDerived(plan, postgres, rows, read.scope)
+	const derived = await compareDerivedWide(deps, plan, postgres, rows, read.scope, label)
 	const wrong = Object.entries(derived.checks)
 		.filter(([, result]) => result === "mismatch")
 		.map(([field]) => field)

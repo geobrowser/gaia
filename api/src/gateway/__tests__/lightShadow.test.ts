@@ -203,6 +203,65 @@ describe("the light entity selection (news app)", () => {
 		expect(uncompared()).toMatchObject({partial_values: 1})
 	})
 
+	describe("a nested name geo-db prints as none (the target is named in a Space outside the read)", () => {
+		// geo-db's card names a row's target only from the Spaces read: blank every target name in the output.
+		const unnamed = (text: string) =>
+			text
+				.split("\n")
+				.map((line) => {
+					const cells = line.split("\t")
+					return cells.length === 7 && cells[3] === HEX
+						? [...cells.slice(0, 5), "-", cells[6]].join("\t")
+						: line
+				})
+				.join("\n")
+		const withNames = (names: Map<string, string[]> | "refuse", flag: boolean) => {
+			const s = setup({[geoSpace(SPACE_A)]: unnamed(geoOutput(ENTITY))})
+			const readCards = vi.fn(async ({entityIds}: {entityIds: string[]}) => {
+				if (names === "refuse") throw new Error("down")
+				return entityIds.flatMap((entity) =>
+					(names.get(entity) ?? []).map((raw) => ({entity, prop: NAME, raw})),
+				)
+			})
+			const deps = {...s.deps, allGeoSpaces: async () => [geoSpace(SPACE_A)], crossSpaceNames: flag}
+			return {s, readCards, shadow: createEntityShadow({...deps, geoDb: {...s.deps.geoDb, readCards}} as never)}
+		}
+		const everyName = () => {
+			const names = new Map<string, string[]>()
+			for (const r of [...ENTITY.lightRels.nodes, ...ENTITY.heavyRels.nodes] as Rel[]) {
+				if (r.toEntity.name) names.set(conformingId("entity", r.toEntity.id), [r.toEntity.name])
+			}
+			return names
+		}
+		const run = (shadow: ReturnType<typeof withNames>["shadow"]) =>
+			call(shadow as never, FIXTURE.request.query, {}, {data: {entity: ENTITY}})
+
+		it("stays cross_space when the switch is off", async () => {
+			const w = withNames(everyName(), false)
+			await run(w.shadow)
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).toMatchObject({cross_space: 1})
+			expect(w.readCards).not.toHaveBeenCalled()
+		})
+
+		it("compares the name against its Name in every Space when the switch is on", async () => {
+			const w = withNames(everyName(), true)
+			await run(w.shadow)
+			expect(results()).toEqual({match: 1})
+			expect(uncompared().cross_space).toBeUndefined()
+			expect(w.readCards).toHaveBeenCalledTimes(1)
+		})
+
+		it("keeps it inconclusive when no Space holds that name, or the read fails", async () => {
+			for (const names of [new Map<string, string[]>(), "refuse" as const]) {
+				__resetGatewayMetricsForTests()
+				await run(withNames(names, true).shadow)
+				expect(results()).toEqual({match: 1})
+				expect(uncompared()).toMatchObject({cross_space: 1})
+			}
+		})
+	})
+
 	it("flags a relation geo-db lacks", async () => {
 		const missing = ENTITY.lightRels.nodes[0] as Rel
 		const s = await runEntity(ENTITY, {
