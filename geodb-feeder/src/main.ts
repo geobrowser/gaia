@@ -22,6 +22,8 @@ import {startProposalConsumer} from "./proposalsConsumer.js"
 import {startOptionalConsumer} from "./optionalConsumer.js"
 import {startProposalActionsConsumer} from "./proposalActionsConsumer.js"
 import {proposalActionsKeyedEnabled, proposalActionsOffsetsDir} from "./proposalActionsKeyed.js"
+import {startSubspacesConsumer} from "./subspacesConsumer.js"
+import {subspacesKeyedEnabled, subspacesOffsetsDir} from "./subspacesKeyed.js"
 import {startProposalVotesConsumer} from "./proposalVotesConsumer.js"
 import {proposalVotesKeyedEnabled, proposalVotesOffsetsDir} from "./proposalVotesKeyed.js"
 import {startVotesConsumer} from "./votesConsumer.js"
@@ -336,6 +338,28 @@ async function main(config: Config): Promise<void> {
 		)
 	}
 
+	// Keyed subspaces (subspacesKeyed.ts): GEODB_SUBSPACES with GEODB_RECORD_KEYS, after their backfill.
+	let subspaces: Awaited<ReturnType<typeof startSubspacesConsumer>> | null = null
+	if (config.subspaces.enabled && !config.recordKeys) log("warn", "GEODB_SUBSPACES is set without GEODB_RECORD_KEYS; subspaces consumer not started")
+	if (subspacesKeyedEnabled(config)) {
+		subspaces = await startOptionalConsumer("subspaces", metrics.consumerStartFailed, () =>
+			startSubspacesConsumer({
+				kafka,
+				config,
+				abort,
+				deps: {
+					...spaceDeps,
+					lock,
+					beat: async () => {},
+					allowPut: true,
+					systemSpaces,
+					publishSystem: (t: string) => systemPublisher.publish(t),
+					offsets: new ProposalOffsets(subspacesOffsetsDir(config.dataDir)),
+				},
+			}),
+		)
+	}
+
 	let spaceEntities: Awaited<ReturnType<typeof startSpaceEntityConsumer>> | null = null
 	if (config.spaceEntities.enabled) {
 		try {
@@ -384,6 +408,12 @@ async function main(config: Config): Promise<void> {
 		await pa.poll()
 	}
 
+	if (subspaces) {
+		const ss = subspaces
+		setInterval(() => void ss.poll(), config.lagPollMs).unref()
+		await ss.poll()
+	}
+
 	if (spaceEntities) {
 		const s = spaceEntities
 		setInterval(() => void s.poll(), config.lagPollMs).unref()
@@ -402,6 +432,7 @@ async function main(config: Config): Promise<void> {
 		await votes?.stop()
 		await proposalVotes?.stop()
 		await proposalActions?.stop()
+		await subspaces?.stop()
 		await spaceEntities?.stop()
 		publisher.stop()
 		systemPublisher.stop()

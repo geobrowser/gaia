@@ -528,6 +528,43 @@ Activation order, each step only after the one before it is live:
 
 Rollback: unset `GEODB_PROPOSAL_ACTIONS`. The records stay in the Space, unread; nothing reads them yet.
 
+### 2c-sexies. Keyed subspaces (GEODB_SUBSPACES)
+
+`GEODB_SUBSPACES` (default off; takes effect only with `GEODB_RECORD_KEYS`) writes gaia's `subspaces` and
+`subspace_topics` as edges in the `governance` system Space (`geodb-feeder/src/subspacesKeyed.ts`; kinds `subspace`
+and `subspaceTopic`). Its own flag, because its backfill must run before its consumer. The feeder consumes
+`<env>.space.trust.extensions` on its own group, `geodb-feeder-subspaces-keyed-v1-<env>`, and handles
+`event-type: TRUST_EXTENSION`; everything else counts as `ignored`. kg-indexer's group is untouched and the api and
+PostGraphile still read Postgres. One edge per Postgres primary key, as §2c-bis does for membership:
+
+- subject `cid("entity", parent Space)`, value a reference to `cid("entity", child Space)` (or the topic entity);
+- property by type: `verified` and `related` (the `type` is part of `subspaces`' primary key) and `topic` for
+  `subspace_topics`, pinned in `recordKinds.ts`;
+- an insert variant is `create_entity` + `add` + `set_active(true)`; a removal variant (kg-indexer deletes the row) is
+  `set_active(false)`. A reader takes the ACTIVE edges as the table's rows.
+
+The feeder dead-letters a source or target that is not 16 bytes and ignores a message with no recognised variant, as
+`handle_trust_extension` does. Drift in either direction (kg-indexer drops a whole block on a permanent failure, an
+FK violation among them) is to be investigated, never read as a bug in either side.
+
+Activation order, each step only after the one before it is live:
+
+1. geo-db serve and init container on 9d97069a78 or later; a feeder image that carries this path.
+2. Kafka ACL: consume on `<env>.space.trust.extensions` (not yet granted to the feeder) and on the group
+   `geodb-feeder-subspaces-keyed-v1-<env>`, and describe on every feeder group for the backfill Job's empty-group
+   check. Without them the consumer fails to start and `geodb_feeder_consumer_start_failed{consumer="subspaces"}`
+   goes to 1.
+3. Required: the backfill Job (`geodb/k8s/v2/geodb-subspaces-backfill-job.yaml`), feeder scaled to 0, applied as in
+   §2c-quater step 4. It reads both tables READ ONLY (small) and writes every row as an active edge (rerunnable). It
+   never retracts, so it refuses once the consumer has offsets, as §2c-ter step 4 explains
+   (`BACKFILL_KEYED_RESET_CONSUMER: "1"` to replay the retained topic over the snapshot).
+4. `GEODB_RECORD_KEYS: "1"` and `GEODB_SUBSPACES: "1"` in the feeder manifest, then scale it back to 1.
+5. The gate, before any reader depends on the edges: `bun src/subspacesGate.ts <postgres.tsv> <dump dir>`
+   (`geodb-feeder/src/subspacesGate.ts`; its header gives the `\copy` query and the `subspaces-<type>.tsv` dumps of
+   active edges). It exits non-zero on a Postgres-only row; geo-db-only edges are reported, not failed.
+
+Rollback: unset `GEODB_SUBSPACES`. The edges stay in the Space, unread; nothing reads them yet.
+
 ### 2d. Raising the Space cap
 
 `spaces` in `geodb-serve-config` caps the Spaces the store can hold; at the cap, founding refuses and the
@@ -680,7 +717,8 @@ StatefulSet, the Deployment `geodb-feeder`, the PVCs `data-geodb-0` and `geodb-f
 | `GeoDbFeederVotesStalled` | `curation.votes` lag above 0 and nothing applied for 30m | the repeating error in the feeder log; an `exhausted` founding of the votes Space (§2c-ter) |
 | `GeoDbFeederProposalVotesStalled` | `space.governance` lag above 0 and nothing handled by the proposal-votes consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the votes Space (§2c-quater) |
 | `GeoDbFeederProposalActionsStalled` | `space.governance` lag above 0 and nothing handled by the proposal-actions consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-quinquies) |
-| `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
+| `GeoDbFeederSubspacesStalled` | `space.trust.extensions` lag above 0 and nothing handled by the subspaces consumer for 30m | the repeating error in the feeder log; an `exhausted` founding of the governance Space (§2c-sexies) |
+| `GeoDbFeederConsumerStartFailed` | an enabled optional consumer (`membership_keyed`, `votes`, `proposal_votes`, `proposal_actions`, `subspaces`) threw at boot, for 10m | "consumer failed to start" in the feeder log; usually a missing Kafka ACL on its topic or group (§2c-ter step 3); fix, then restart the feeder |
 
 ## 7. Operating notes
 

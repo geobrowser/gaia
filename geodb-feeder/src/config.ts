@@ -23,6 +23,8 @@ export type Config = {
 	proposalVotes: {enabled: boolean; topic: string; groupId: string}
 	/** GEODB_PROPOSAL_ACTIONS (with GEODB_RECORD_KEYS): keyed proposal actions from `space.governance` (proposalActionsKeyed.ts). */
 	proposalActions: {enabled: boolean; topic: string; groupId: string}
+	/** GEODB_SUBSPACES (with GEODB_RECORD_KEYS): keyed subspaces and subspace topics from `space.trust.extensions` (subspacesKeyed.ts). */
+	subspaces: {enabled: boolean; topic: string; groupId: string}
 	/**
 	 * GEODB_RELATION_POSITIONS: write a relation's position into geo-db (`.position` on its `add`). Default off: a
 	 * geodb-client older than ISS-587-318 refuses the key, so turn it on only once the geodb image carries it.
@@ -74,6 +76,7 @@ export const feederGroupIds = (c: Config): string[] => [
 	c.votes.groupId,
 	c.proposalVotes.groupId,
 	c.proposalActions.groupId,
+	c.subspaces.groupId,
 ]
 
 export const flag = (v: string | undefined): boolean => v === "1" || v?.toLowerCase() === "true"
@@ -160,6 +163,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 			enabled: flag(env.GEODB_PROPOSAL_ACTIONS),
 			topic: env.KAFKA_PROPOSAL_ACTIONS_TOPIC ?? `${environment}.space.governance`,
 			groupId: env.KAFKA_PROPOSAL_ACTIONS_GROUP_ID ?? `geodb-feeder-proposal-actions-keyed-v1-${environment}`,
+		},
+		subspaces: {
+			/**
+			 * GEODB_SUBSPACES: consume `space.trust.extensions` and write keyed subspace and subspace-topic edges
+			 * (subspacesKeyed.ts) into the `governance` system Space. Takes effect only with GEODB_RECORD_KEYS
+			 * (subspacesKeyedEnabled), and only after the subspaces backfill (RUNBOOK §2c-sexies). Its own group. Default off.
+			 */
+			enabled: flag(env.GEODB_SUBSPACES),
+			topic: env.KAFKA_SUBSPACES_TOPIC ?? `${environment}.space.trust.extensions`,
+			groupId: env.KAFKA_SUBSPACES_GROUP_ID ?? `geodb-feeder-subspaces-keyed-v1-${environment}`,
 		},
 		spaceEntities: {
 			/** GEODB_SPACE_ENTITIES: consume `space.creations` and write Space system entities. Default off. */

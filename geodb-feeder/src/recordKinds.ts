@@ -26,6 +26,8 @@ export const RECORD_KINDS = {
 	membership: {id: "561407a0d813435fb6ed474be1a96209", family: "governance", table: "members, editors"},
 	/** `subspaces`: an edge (parent Space entity, subspace property, child Space entity). */
 	subspace: {id: "de1a992f8c2840c5bd185fdfa6aa28e9", family: "governance", table: "subspaces"},
+	/** `subspace_topics`: an edge (Space entity, topic property, topic entity). */
+	subspaceTopic: {id: "e90b36c75cbf4239a6add0ae26dd939a", family: "governance", table: "subspace_topics"},
 	/** `proposal_actions`: a record keyed (proposal, action index). */
 	proposalAction: {id: "22335b74e17a4c9e867d4ac2a32c3a4a", family: "governance", table: "proposal_actions"},
 	/** `space_voting_settings`: a record keyed (space), mutable columns written by `put`. */
@@ -112,5 +114,15 @@ export const RECORD_COLUMNS = {
 		disableFastPath: "4a13aa7d7f55476fb307b2d19b14dfe7",
 		/** Mutable: number, `execution_grace_period` (UpdateVotingSettings). */
 		grace: "401c3bec5a414703a5b6b51ce8e18e13",
+	},
+	subspace: {
+		/** Edge property for a `verified` subspace row: parent Space entity -> child Space entity. */
+		verified: "2c527e632f3645cdbbc2c2a9806dfc05",
+		/** Edge property for a `related` subspace row. */
+		related: "ba99f0b8bf4646ed9cdb404da918e5e1",
+	},
+	subspaceTopic: {
+		/** Edge property for a `subspace_topics` row: Space entity -> topic entity. */
+		topic: "90ee068ad2d44a8b95cf939d2d1ceabb",
 	},
 } as const satisfies Record<string, Record<string, string>>

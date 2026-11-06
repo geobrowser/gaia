@@ -9,6 +9,7 @@ import pg from "pg"
 import type {PgRelationRow, PgValueRow} from "./pgAdapter.js"
 import type {ProposalActionRow} from "./proposalActionsKeyed.js"
 import type {ProposalVoteRow} from "./proposalVotesKeyed.js"
+import type {SubspaceRow} from "./subspacesKeyed.js"
 import type {UserVoteRow} from "./votesKeyed.js"
 
 export type Queryable = {query<R>(text: string, params?: unknown[]): Promise<{rows: R[]}>}
@@ -234,6 +235,17 @@ export async function* readProposalActionRows(db: ReadOnlyPg, pageSize = 5000): 
 		if (page.length < pageSize) return
 		after = page[page.length - 1] as ProposalActionRow & {proposal_version: number}
 	}
+}
+
+/** Every `subspaces` row (type verified/related) and `subspace_topics` row (type topic), for the subspaces backfill. Small tables: one read. */
+export async function readSubspaceRows(db: ReadOnlyPg): Promise<SubspaceRow[]> {
+	return db.read<SubspaceRow>(
+		`SELECT parent_space_id::text AS parent_space_id, child_space_id::text AS target_id, type::text AS type FROM subspaces
+		 UNION ALL
+		 SELECT space_id::text, topic_id::text, 'topic' FROM subspace_topics`,
+		[],
+		300_000,
+	)
 }
 
 export type EntityTimesRow = {id: string; created_at: string | null; updated_at: string | null}

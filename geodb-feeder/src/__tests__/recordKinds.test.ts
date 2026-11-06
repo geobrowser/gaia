@@ -9,6 +9,7 @@ describe("record kinds", () => {
 		expect(Object.fromEntries(Object.entries(RECORD_KINDS).map(([k, v]) => [k, [v.id, v.family]]))).toEqual({
 			membership: ["561407a0d813435fb6ed474be1a96209", "governance"],
 			subspace: ["de1a992f8c2840c5bd185fdfa6aa28e9", "governance"],
+			subspaceTopic: ["e90b36c75cbf4239a6add0ae26dd939a", "governance"],
 			proposalAction: ["22335b74e17a4c9e867d4ac2a32c3a4a", "governance"],
 			spaceVotingSettings: ["7767f888a9a240b18275a7832363f4d9", "governance"],
 			proposalVote: ["ca89a877762c4883a3640b5455a8f0e2", "votes"],
@@ -63,6 +64,8 @@ describe("record columns", () => {
 				disableFastPath: "4a13aa7d7f55476fb307b2d19b14dfe7",
 				grace: "401c3bec5a414703a5b6b51ce8e18e13",
 			},
+			subspace: {verified: "2c527e632f3645cdbbc2c2a9806dfc05", related: "ba99f0b8bf4646ed9cdb404da918e5e1"},
+			subspaceTopic: {topic: "90ee068ad2d44a8b95cf939d2d1ceabb"},
 		})
 	})
 	it("are distinct v4s, distinct from every kind", () => {
