@@ -18,6 +18,9 @@
 pub const MESSAGES_PROCESSED: &str = "ranking_indexer_messages_processed_total";
 pub const MESSAGES_SKIPPED: &str = "ranking_indexer_messages_skipped_total";
 pub const TRANSIENT_RETRIES: &str = "ranking_indexer_transient_retries_total";
+pub const USER_INTEREST_SHADOW_ROWS: &str = "ranking_indexer_user_interest_shadow_rows_total";
+pub const USER_INTEREST_SHADOW_MISMATCHES: &str =
+    "ranking_indexer_user_interest_shadow_mismatches_total";
 
 /// Which subscribed topic a message came from, as a label value.
 #[derive(Debug, Clone, Copy)]
@@ -51,6 +54,16 @@ pub fn register() {
         TRANSIENT_RETRIES,
         "Retries after a transient database or Kafka error; exhausting them exits the process"
     );
+    metrics::describe_counter!(
+        USER_INTEREST_SHADOW_ROWS,
+        "Stored user topic signal rows the user-interest Rust shadow compared"
+    );
+    metrics::describe_counter!(
+        USER_INTEREST_SHADOW_MISMATCHES,
+        "Rows where the user-interest Rust twin disagreed with the SQL (shadow only, never written)"
+    );
+    metrics::counter!(USER_INTEREST_SHADOW_ROWS).absolute(0);
+    metrics::counter!(USER_INTEREST_SHADOW_MISMATCHES).absolute(0);
 
     for topic in [Topic::Edits, Topic::Membership] {
         metrics::counter!(MESSAGES_PROCESSED, "topic" => topic.as_str()).absolute(0);
@@ -69,6 +82,12 @@ pub fn message_skipped(topic: Topic) {
 
 pub fn transient_retry(topic: Topic) {
     metrics::counter!(TRANSIENT_RETRIES, "topic" => topic.as_str()).increment(1);
+}
+
+/// One user-interest shadow run: `rows` stored rows compared, `mismatches` of them differing.
+pub fn user_interest_shadow(rows: usize, mismatches: usize) {
+    metrics::counter!(USER_INTEREST_SHADOW_ROWS).increment(rows as u64);
+    metrics::counter!(USER_INTEREST_SHADOW_MISMATCHES).increment(mismatches as u64);
 }
 
 #[cfg(test)]
@@ -92,6 +111,19 @@ mod tests {
                 assert!(rendered.contains(&line), "missing `{line}` in:\n{rendered}");
             }
         }
+    }
+
+    #[test]
+    fn the_shadow_counters_start_at_zero_and_add_each_run() {
+        let rendered = render_with(|| {
+            register();
+            user_interest_shadow(10, 0);
+            user_interest_shadow(5, 2);
+        });
+        assert!(rendered.contains("ranking_indexer_user_interest_shadow_rows_total 15"));
+        assert!(rendered.contains("ranking_indexer_user_interest_shadow_mismatches_total 2"));
+        let zero = render_with(register);
+        assert!(zero.contains("ranking_indexer_user_interest_shadow_mismatches_total 0"));
     }
 
     #[test]

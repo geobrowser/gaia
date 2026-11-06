@@ -203,7 +203,9 @@ pub fn derive_events(g: &Graph, user_ids: &[Uuid]) -> Vec<Event> {
 
     // Comments: a Reply to authored in the user's own space, walked up to the thing the thread is
     // about. One root per (user, comment); one event per (user, root).
-    // DISTINCT ON (user, comment) keeps the deepest row; equal depth keeps the smaller target.
+    // DISTINCT ON (user, comment) keeps the deepest row. At equal depth the SQL orders by nothing
+    // else, so its pick is whatever row comes first; the twin takes the smaller target, which
+    // agrees only by chance. A comment with two equally deep roots is a known shadow mismatch.
     let mut best: BTreeMap<(Uuid, Uuid), (usize, Uuid)> = BTreeMap::new();
     for c in g
         .relations
