@@ -34,13 +34,20 @@
 import {type FieldNode, Kind, type SelectionSetNode, valueFromASTUntyped} from "graphql"
 
 import {conformingId} from "../geodb/card"
-import {GeoDbError} from "../geodb/client"
+import {type GeoDbCardClient, GeoDbError, MAX_LINE_SPACES} from "../geodb/client"
 import {type GeoDbSearchClient, type GeoDbSearchMode, MAX_EVERY_SPACE_SEARCH, MAX_LISTED_SPACES} from "../geodb/search"
+import {DEFAULT_EXCLUDED_TYPE_IDS} from "../search"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
-import {asRecord, type EntityShadowDeps, parseOperation, Unsupported} from "./entityShadow"
+import {asRecord, type EntityShadowDeps, parseOperation, TYPES_PROPERTY, Unsupported} from "./entityShadow"
 import type {FieldShadow} from "./gateway"
 import {activateGatewayMetrics, recordGatewayShadow, recordGatewayUnsupported} from "./metrics"
-import {activateSearchMetrics, GEODB_LIMIT, recordSearchComparison} from "./searchMetrics"
+import {
+	activateSearchMetrics,
+	GEODB_LIMIT,
+	GEODB_OVERFETCH,
+	recordSearchComparison,
+	recordTypeFilter,
+} from "./searchMetrics"
 
 export const SEARCH_FIELD = "search"
 export const SEARCH_CONNECTION_FIELD = "searchConnection"
@@ -57,6 +64,39 @@ export type SearchShadowDeps = Pick<EntityShadowDeps, "geoSpaceOf" | "log"> & {
 	allGeoSpaces: () => Promise<string[]>
 	search: GeoDbSearchClient
 	mode?: GeoDbSearchMode
+	/**
+	 * Apply Postgres's type exclusion (DEFAULT_EXCLUDED_TYPE_IDS and Claim) to geo-db's answer: ask for GEODB_OVERFETCH
+	 * hits, read their Type statements with `readCards`, drop the excluded, keep the first GEODB_LIMIT. Needs
+	 * `readCards`; without it the shadow compares unfiltered. A failed card read skips the comparison.
+	 */
+	excludeTypes?: boolean
+	readCards?: GeoDbCardClient["readCards"]
+}
+
+/** Type ids Postgres's search leaves out, in geo-db's id space. */
+export const EXCLUDED_TYPES: ReadonlySet<string> = new Set(
+	[...DEFAULT_EXCLUDED_TYPE_IDS, "96f859ef-a1ca-4b22-9372-c86ad58b694b"].map((id) => conformingId("entity", id)),
+)
+
+/**
+ * `hits` without the entities that hold an excluded Type, in order, and at most `limit`. Reads the hits' cards in
+ * batches of Spaces (a line holds MAX_LINE_SPACES). An entity whose card shows no Type is kept.
+ */
+export async function withoutExcludedTypes(
+	readCards: NonNullable<GeoDbCardClient["readCards"]>,
+	geoSpaceIds: string[],
+	hits: string[],
+	limit: number,
+): Promise<string[]> {
+	const spaceChunks: string[][] = []
+	for (let at = 0; at < geoSpaceIds.length; at += MAX_LINE_SPACES)
+		spaceChunks.push(geoSpaceIds.slice(at, at + MAX_LINE_SPACES))
+	const answers = await Promise.all(spaceChunks.map((chunk) => readCards({geoSpaceIds: chunk, entityIds: hits})))
+	const excluded = new Set<string>()
+	for (const row of answers.flat())
+		if (row.prop === TYPES_PROPERTY && row.entity !== undefined && EXCLUDED_TYPES.has(row.raw))
+			excluded.add(row.entity)
+	return hits.filter((id) => !excluded.has(id)).slice(0, limit)
 }
 
 export type SearchPlan = {
@@ -183,7 +223,9 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 				return
 			}
 			const started = performance.now()
+			const typeFilter = deps.excludeTypes === true && deps.readCards !== undefined
 			let geodb: string[]
+			let searched: string[] = []
 			let spaces = 1
 			try {
 				let geoSpaceIds: string[]
@@ -206,11 +248,12 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 						throw new GeoDbError("unmapped_space", `space ${plan.spaceId} is not loaded in geo-db`)
 					geoSpaceIds = [geoSpaceId]
 				}
+				searched = geoSpaceIds
 				geodb = await deps.search.searchLexical({
 					geoSpaceIds,
 					text: plan.query,
 					mode: deps.mode ?? "typeahead",
-					limit: GEODB_LIMIT,
+					limit: typeFilter ? GEODB_OVERFETCH : GEODB_LIMIT,
 					...(plan.spaceId === null && geoSpaceIds.length > MAX_LISTED_SPACES ? {everySpace: true} : {}),
 				})
 			} catch (error) {
@@ -222,6 +265,20 @@ function createSearchShadow(deps: SearchShadowDeps, field: SearchField): FieldSh
 				})
 				return
 			}
+			if (typeFilter && deps.readCards) {
+				try {
+					geodb = await withoutExcludedTypes(deps.readCards, searched, geodb, GEODB_LIMIT)
+					recordTypeFilter(field, "applied")
+				} catch (error) {
+					const unavailable = error instanceof GeoDbError && error.reason === "bad_request"
+					recordTypeFilter(field, unavailable ? "unavailable" : "error")
+					deps.log.warn(`${label} type filter read failed`, {
+						reason: error instanceof GeoDbError ? error.reason : "error",
+						message: String(error),
+					})
+					return
+				}
+			} else if (deps.excludeTypes === true) recordTypeFilter(field, "unavailable")
 			const verdict = recordSearchComparison(field, postgres, geodb)
 			deps.log.info(`${label} compared`, {
 				operationName: classification.operationName,

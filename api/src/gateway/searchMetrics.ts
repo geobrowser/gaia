@@ -15,6 +15,12 @@ export const TOP1_RESULTS = ["same", "different"] as const
 export const OVERLAP_K = 10
 export const GEODB_LIMIT = 20
 
+/** What the type exclusion did to a search: applied (hits read and filtered), unavailable (no card reader, or more Spaces than a line chunks), error (a card read failed). */
+export const TYPE_FILTER_RESULTS = ["applied", "unavailable", "error"] as const
+export type TypeFilterResult = (typeof TYPE_FILTER_RESULTS)[number]
+/** Hits geo-db is asked for when the type exclusion is on: enough that dropping excluded types still leaves GEODB_LIMIT. */
+export const GEODB_OVERFETCH = 60
+
 export type OverlapBucket = (typeof OVERLAP_BUCKETS)[number]
 export type ResultCountBucket = (typeof RESULT_COUNT_BUCKETS)[number]
 export type SearchOutcome = (typeof SEARCH_OUTCOMES)[number]
@@ -26,6 +32,10 @@ const bump = (key: string) => counts.set(key, (counts.get(key) ?? 0) + 1)
 
 export function activateSearchMetrics(field: string): void {
 	fields.add(field)
+}
+
+export function recordTypeFilter(field: string, result: TypeFilterResult): void {
+	bump(`typefilter\t${field}\t${result}`)
 }
 
 export const overlapBucket = (ratio: number): OverlapBucket =>
@@ -115,6 +125,15 @@ export function renderSearchMetrics(): string {
 				lines.push(
 					`gaia_api_gateway_shadow_search_results_total{field="${f}",source="${s}",bucket="${b}"} ${get(`results\t${f}\t${s}\t${b}`)}`,
 				)
+	lines.push(
+		"# HELP gaia_api_gateway_shadow_search_type_filter_total Search shadows' type exclusion (Postgres's default excluded types and Claim) by result: applied, unavailable (not attempted) or error (a card read failed; the comparison is skipped, not counted failed).",
+		"# TYPE gaia_api_gateway_shadow_search_type_filter_total counter",
+	)
+	for (const f of fields)
+		for (const r of TYPE_FILTER_RESULTS)
+			lines.push(
+				`gaia_api_gateway_shadow_search_type_filter_total{field="${f}",result="${r}"} ${get(`typefilter\t${f}\t${r}`)}`,
+			)
 	return `${lines.join("\n")}\n`
 }
 
