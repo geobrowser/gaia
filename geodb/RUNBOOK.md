@@ -1051,7 +1051,7 @@ Turn the mirrors on one at a time, one flag per PR, each after the serve roll th
    leave `local_scores` out until Stage B, then drop the variable (unset or empty means all three; a name that is not one
    of the three is ignored with a warning, and a value with no valid name mirrors nothing).
 
-### 2f-private. Per-user collections 27, 28, 29 (RUNBOOK: enable order, all off today)
+### 2f-private. Per-user collections 27, 28, 29 (mirror and private switch in the manifests; enable order below)
 
 Three collections hold one person's private data: 27 `external_interest_signals` (`not_interested_sync`), 28
 `user_topic_signals` (`topic_interest` sweep and refit) and 29 `feed_user_seen_daily` (`feed_signals_sync`). Until
@@ -1077,6 +1077,13 @@ Order. Do each step, check it, then the next. Never swap steps 2 and 4.
    `external_interest_signals`, `user_topic_signals` and `feed_user_seen_daily` stays 0. Compare a user's group scan with
    Postgres for one id. Collection 29's retention prune and window replace are mirrored as deletes by the identity diff, so
    after a run the row count in geo-db equals `count(*)` of the table.
+
+State in the manifests: steps 1 and 2 are done (serve a476ea1115 carries `derived_restricted = 27,28,29` and the scores
+key's `derived=` to 29, geo-db 9b871ed4e4). `not-interested-sync` and the `topic_interest` sweep gained the geodb-client
+wiring (init container, scores key, binding) and set `GEODB_DERIVED_MIRROR=1` and `GEODB_DERIVED_MIRROR_PRIVATE=1`; the
+`topic_interest` refit and `feed-signals-sync` already had the shared flag and gained `_PRIVATE=1`. Merging and the
+`deploy-v2` that applies these CronJobs is steps 3 and 4 in one move. If the restriction is not live, set the four
+`_PRIVATE` values back to `"0"` before applying: the shared flag alone copies no personal row.
 
 Rollback: unset `_PRIVATE` first (stops the personal copies), then the shared flag. Rows already copied stay until a
 `derived_clear` of the collection (a clear can take a group, which is the per-user erasure path).
