@@ -986,6 +986,34 @@ describe("entity answers with no Space (every-Space reads)", () => {
 		expect(s.readCardSpaces.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: ALL, names: true})
 	})
 
+	describe("entity(id) { spaceIds } alone", () => {
+		const spaceIdsOnly = (ids: string[]): Captured => ({
+			request: {
+				query: "query ProfileSpaceIdForEntity($entityId: UUID!) { entity(id: $entityId) { spaceIds } }",
+				variables: {entityId: EVERY.entityTypes.request.variables.id},
+			},
+			response: {data: {entity: {spaceIds: ids}}},
+		})
+
+		it("plans as an every-Space read", () => {
+			const captured = spaceIdsOnly([SPACE_A])
+			const analysis = analyzeLightEntity(parse(captured.request.query), null, captured.request.variables)
+			expect(analysis.ok && analysis.plan.everySpace).toBe(true)
+		})
+
+		it("matches when every Space geo-db holds the entity in is one PostGraphile names", async () => {
+			const s = everySetup({[geoSpace(SPACE_A)]: typeRow(HEX, NEWS_STORY, "News story")})
+			await run(s, spaceIdsOnly([SPACE_A, SPACE_B]))
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("flags a Space geo-db holds the entity in that PostGraphile does not name", async () => {
+			const s = everySetup({[geoSpace(SPACE_A)]: typeRow(HEX, NEWS_STORY, "News story")})
+			await run(s, spaceIdsOnly([SPACE_B]))
+			expect(results()).toEqual({mismatch: 1})
+		})
+	})
+
 	describe("more loaded Spaces than one line can name (GEODB_EVERY_SPACE_CHUNKS)", () => {
 		const filler = Array.from({length: 1100}, (_, i) => geoSpace(`${(i + 1).toString(16).padStart(32, "0")}`))
 		const many = [...ALL, ...filler]
