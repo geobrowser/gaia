@@ -26,6 +26,7 @@ pub mod models;
 pub mod not_interested;
 pub mod primer_claims_mirror;
 pub mod primer_mirror;
+pub mod primer_stats;
 pub mod publish;
 pub mod recompute;
 pub mod scoring;
