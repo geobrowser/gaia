@@ -7,8 +7,10 @@
  * never changes, delays or fails a response.
  *
  * What geo-db supplies: the proposal's status record (executed_at, unexecutable_at) and, on the detail surface, the
- * vote record of each voter Postgres lists for the current version. What Postgres still supplies (counted in
- * `gaia_api_governance_shadow_uncompared_total`): the settings snapshot, the editor count, and on the list surface
+ * vote record of each voter Postgres lists for the current version, and the settings snapshot, read from the
+ * proposal's latest proposalVersion record (highest block, found by backlinks). A geo Fast version against a Postgres
+ * Slow one is a fast-to-slow escalation geo-db does not carry yet; it counts unsupported{escalation_pending}, not a
+ * mismatch. What Postgres still supplies (counted in `gaia_api_governance_shadow_uncompared_total`): the editor count, and on the list surface
  * the vote counts (a list carries no voter ids, and the records are keyed by voter). Proposal actions and Space voting
  * settings are not status inputs and are not read: a proposal keeps the settings it was created under, and status
  * never looks at its actions.
@@ -24,10 +26,13 @@ import {
 	type Surface,
 	type UnsupportedReason,
 } from "./metrics"
+import {entityRef} from "./recordKey"
 import {
 	AmbiguousRecordError,
 	decodeProposalStatus,
+	decodeProposalVersion,
 	decodeProposalVote,
+	PROPOSAL_VERSION_COLUMNS,
 	proposalStatusRecordId,
 	proposalVoteRecordId,
 } from "./records"
@@ -44,6 +49,8 @@ export type GovernanceShadowConfig = {
 }
 
 const DEFAULTS = {listMax: 5, voterMax: 25, maxInFlight: 8}
+/** Most version records one proposal is read with; a proposal has one per settings-bearing event, a handful at most. */
+const VERSION_MAX = 64
 const wholeNumber = (raw: string | undefined, fallback: number, max: number) => {
 	const n = Number(raw)
 	return Number.isInteger(n) && n >= 1 ? Math.min(n, max) : fallback
@@ -95,10 +102,40 @@ export function createGovernanceShadow(deps: {
 		return geoDb.readCard({geoSpaceId, entityId})
 	}
 
-	const snapshotOf = (p: ProposalWithVotes | ProposalListItem): StatusSnapshot => p
+	/**
+	 * The proposal's settings from its latest version record (highest block). A Fast version against Postgres's Slow is
+	 * an escalation (PROPOSAL_SETTINGS_UPDATED rewrites the version in place in Postgres) geo-db does not carry yet.
+	 */
+	async function snapshotFromVersions(p: ProposalWithVotes | ProposalListItem): Promise<StatusSnapshot> {
+		const geoSpaceId = await systemSpaceOf("governance")
+		if (!geoSpaceId) throw new Unsupported("system_space_missing")
+		if (!geoDb.readBacklinks) throw new Unsupported("backlinks_unavailable")
+		const links = await geoDb.readBacklinks({
+			geoSpaceIds: [geoSpaceId],
+			entityId: entityRef(p.id),
+			limit: VERSION_MAX,
+		})
+		const from = [...new Set(links.filter((l) => l.prop === PROPOSAL_VERSION_COLUMNS.proposal).map((l) => l.from))]
+		if (from.length === 0) throw new Unsupported("version_missing")
+		if (links.length >= VERSION_MAX) throw new Unsupported("too_many_versions")
+		const versions = (
+			await Promise.all(
+				from.map(async (id) => decodeProposalVersion(await geoDb.readCard({geoSpaceId, entityId: id}))),
+			)
+		).filter((v): v is NonNullable<typeof v> => v !== null)
+		const latest = versions.reduce<(typeof versions)[number] | null>(
+			(best, v) => (best === null || v.block > best.block ? v : best),
+			null,
+		)
+		if (!latest) throw new Unsupported("version_missing")
+		if (latest.snapshot.votingMode === "Fast" && p.votingMode === "Slow")
+			throw new Unsupported("escalation_pending")
+		return {...latest.snapshot, totalEditors: p.totalEditors}
+	}
 
 	/** Status from geo-db for one proposal, plus which inputs it took from Postgres. */
 	async function fromGeoDb(surface: Surface, p: ProposalWithVotes | ProposalListItem, nowSeconds: bigint) {
+		const snapshot = await snapshotFromVersions(p)
 		const status = decodeProposalStatus(await readRecord("governance", proposalStatusRecordId(p.id)))
 		let tally = {yes: p.yesCount, no: p.noCount, abstain: p.abstainCount}
 		let voteMismatch = false
@@ -114,12 +151,11 @@ export function createGovernanceShadow(deps: {
 			voteMismatch = options.some((o, i) => o === null || o !== OPTION[p.votes[i]?.vote ?? ""])
 			tally = tallyVotes(options.filter((o): o is 1 | 2 | 3 => o !== null))
 		}
-		return {result: statusFromRecords(snapshotOf(p), {...status, ...tally}, nowSeconds), voteMismatch}
+		return {result: statusFromRecords(snapshot, {...status, ...tally}, nowSeconds), voteMismatch}
 	}
 
 	async function compare(surface: Surface, p: ProposalWithVotes | ProposalListItem, nowSeconds: bigint) {
 		const served: StatusComputationResult = computeProposalStatus(p, nowSeconds)
-		recordGovernanceUncompared(surface, "snapshot_from_postgres")
 		recordGovernanceUncompared(surface, "total_editors_from_postgres")
 		if (surface === "list") recordGovernanceUncompared(surface, "votes_from_postgres")
 		try {

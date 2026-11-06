@@ -6,8 +6,8 @@
  * `computeProposalStatus` stays the one definition. This builds its input from the three things geo-db holds today
  * (the status record's executed_at and unexecutable_at, and a tally of the proposal's vote records) and takes the
  * rest, the settings snapshot a proposal carries and its editor count, from `snapshot`. The snapshot is per proposal
- * version (quorum, thresholds, window and execute-by are copied into the version when it is created), so it comes
- * from the version records once those are mirrored; until then the caller supplies it from Postgres and says so.
+ * version (quorum, thresholds, window and execute-by are copied into the version when it is created), so the shadow
+ * reads it from the proposal's latest proposalVersion record (shadow.ts); only the editor count still comes from Postgres.
  * The Space's current `space_voting_settings` is NOT an input: a proposal keeps the settings it was created under.
  */
 import {computeProposalStatus} from "../status"

@@ -8,9 +8,25 @@
  */
 import type {GeoCardRow} from "../../geodb/card"
 import {idPart, intPart, recordEntityId} from "./recordKey"
+import type {StatusSnapshot} from "./status"
 
 export const PROPOSAL_STATUS_KIND = "cf398f45b2c74002bb13e5416fbc7027"
 export const PROPOSAL_VOTE_KIND = "ca89a877762c4883a3640b5455a8f0e2"
+
+export const PROPOSAL_VERSION_KIND = "6863abef6664450eb135a182c6ff1715"
+
+export const PROPOSAL_VERSION_COLUMNS = {
+	proposal: "c42be9e340d14566b2b9f084004c748b",
+	block: "bccb84d7017849b0babfa7444789068f",
+	votingMode: "1ec5fb72263443668b4880d09670cb56",
+	startTime: "5a806f60759e4dd08a39c771d7586f53",
+	endTime: "72d87497d7ed49db81e31675a31c5da7",
+	quorum: "54000906476b41b7a0ca655f043b1a8d",
+	partial: "e4e76529227940f08bd1ca1ab884fe31",
+	universal: "eecb13aaa70c44509070df7550436103",
+	flat: "2e641ff402734c6b80201641f3969fe2",
+	executeBy: "ca75ecfb5ab24196998de1b3bb31eb6f",
+} as const
 
 export const PROPOSAL_STATUS_COLUMNS = {
 	executedAt: "ed3855a3c41b4f749651bf049dabac0b",
@@ -73,4 +89,39 @@ export function decodeProposalVote(rows: GeoCardRow[]): 1 | 2 | 3 | null {
 	const n = wholeNumber(raw)
 	if (n !== 1n && n !== 2n && n !== 3n) throw new AmbiguousRecordError(`unknown vote option ${raw}`)
 	return Number(n) as 1 | 2 | 3
+}
+
+export type DecodedVersion = {block: bigint; snapshot: Omit<StatusSnapshot, "totalEditors">}
+
+/**
+ * A proposal version record's block (its key, and the order of versions) and the settings it carries. `threshold` is not
+ * stored: it is the legacy copy, `flat` for a Fast version and `partial` for a Slow one. Null `execute_by` is no column
+ * (the event's 0). A version missing a required column is ambiguous, not defaulted.
+ */
+export function decodeProposalVersion(rows: GeoCardRow[]): DecodedVersion | null {
+	if (rows.length === 0) return null
+	const need = (property: string): string => {
+		const v = single(rows, property)
+		if (v === null) throw new AmbiguousRecordError(`version column ${property} missing`)
+		return v
+	}
+	const mode = need(PROPOSAL_VERSION_COLUMNS.votingMode)
+	if (mode !== "Fast" && mode !== "Slow") throw new AmbiguousRecordError(`unknown voting mode ${mode}`)
+	const flat = wholeNumber(need(PROPOSAL_VERSION_COLUMNS.flat))
+	const partial = wholeNumber(need(PROPOSAL_VERSION_COLUMNS.partial))
+	const executeBy = single(rows, PROPOSAL_VERSION_COLUMNS.executeBy)
+	return {
+		block: wholeNumber(need(PROPOSAL_VERSION_COLUMNS.block)),
+		snapshot: {
+			votingMode: mode,
+			startTime: wholeNumber(need(PROPOSAL_VERSION_COLUMNS.startTime)),
+			endTime: wholeNumber(need(PROPOSAL_VERSION_COLUMNS.endTime)),
+			quorum: wholeNumber(need(PROPOSAL_VERSION_COLUMNS.quorum)),
+			threshold: mode === "Fast" ? flat : partial,
+			flatSupportThreshold: flat,
+			partialPercentageSupportThreshold: partial,
+			universalPercentageSupportThreshold: wholeNumber(need(PROPOSAL_VERSION_COLUMNS.universal)),
+			executeBy: executeBy === null ? null : wholeNumber(executeBy),
+		},
+	}
 }

@@ -4,12 +4,17 @@
  * exists at zero.
  */
 export const RESULTS = ["match", "mismatch", "unsupported", "failed"] as const
-export const UNSUPPORTED_REASONS = ["system_space_missing", "too_many_voters", "ambiguous_record", "busy"] as const
-export const UNCOMPARED_INPUTS = [
-	"snapshot_from_postgres",
-	"total_editors_from_postgres",
-	"votes_from_postgres",
+export const UNSUPPORTED_REASONS = [
+	"system_space_missing",
+	"too_many_voters",
+	"ambiguous_record",
+	"busy",
+	"escalation_pending",
+	"version_missing",
+	"too_many_versions",
+	"backlinks_unavailable",
 ] as const
+export const UNCOMPARED_INPUTS = ["total_editors_from_postgres", "votes_from_postgres"] as const
 export const SURFACES = ["detail", "list"] as const
 
 export type Result = (typeof RESULTS)[number]

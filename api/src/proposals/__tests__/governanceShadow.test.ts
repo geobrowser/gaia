@@ -7,12 +7,15 @@ import {beforeEach, describe, expect, it, vi} from "vitest"
 import type {GeoCardRow} from "../../geodb/card"
 import {type GeoDbCardClient, GeoDbError} from "../../geodb/client"
 import {__resetGovernanceMetricsForTests, renderGovernanceMetrics} from "../governance/metrics"
-import {recordEntityId} from "../governance/recordKey"
+import {entityRef, recordEntityId} from "../governance/recordKey"
 import {
 	decodeProposalStatus,
+	decodeProposalVersion,
 	decodeProposalVote,
 	PROPOSAL_STATUS_COLUMNS,
 	PROPOSAL_STATUS_KIND,
+	PROPOSAL_VERSION_COLUMNS,
+	PROPOSAL_VERSION_KIND,
 	PROPOSAL_VOTE_COLUMNS,
 	PROPOSAL_VOTE_KIND,
 	proposalStatusRecordId,
@@ -72,6 +75,8 @@ describe("record ids", () => {
 		expect(text).toContain(PROPOSAL_VOTE_KIND)
 		expect(text).toContain(PROPOSAL_VOTE_COLUMNS.vote)
 		// proposalStatus is pinned by the PROPOSAL-STATUS change; once the feeder carries it the ids must agree.
+		expect(text).toContain(PROPOSAL_VERSION_KIND)
+		for (const id of Object.values(PROPOSAL_VERSION_COLUMNS)) expect(text).toContain(id)
 		if (text.includes("proposalStatus:")) {
 			expect(text).toContain(PROPOSAL_STATUS_KIND)
 			expect(text).toContain(PROPOSAL_STATUS_COLUMNS.executedAt)
@@ -107,7 +112,41 @@ describe("record ids", () => {
 	})
 })
 
+const versionRows = (over: Partial<Record<keyof typeof PROPOSAL_VERSION_COLUMNS, string>> = {}): GeoCardRow[] => {
+	const v: Record<keyof typeof PROPOSAL_VERSION_COLUMNS, string | undefined> = {
+		proposal: entityRef(P),
+		block: "100",
+		votingMode: "Fast",
+		startTime: String(NOW - 3600n),
+		endTime: String(NOW + 3600n),
+		quorum: "1",
+		partial: "0",
+		universal: "0",
+		flat: "2",
+		executeBy: String(NOW + 86_400n),
+		...over,
+	}
+	return Object.entries(v)
+		.filter(([, raw]) => raw !== undefined)
+		.map(([k, raw]) => row(PROPOSAL_VERSION_COLUMNS[k as keyof typeof PROPOSAL_VERSION_COLUMNS], raw as string))
+}
+
 describe("decoders", () => {
+	it("decodes a version record, deriving threshold from the mode and no deadline from no column", () => {
+		const fast = decodeProposalVersion(versionRows())
+		expect(fast?.block).toBe(100n)
+		expect(fast?.snapshot.threshold).toBe(2n)
+		expect(fast?.snapshot.executeBy).toBe(NOW + 86_400n)
+		const slow = decodeProposalVersion(
+			versionRows({votingMode: "Slow", partial: "51", flat: "0", executeBy: undefined}),
+		)
+		expect(slow?.snapshot.threshold).toBe(51n)
+		expect(slow?.snapshot.executeBy).toBeNull()
+		expect(decodeProposalVersion([])).toBeNull()
+		expect(() => decodeProposalVersion(versionRows({quorum: undefined}))).toThrow()
+		expect(() => decodeProposalVersion(versionRows({votingMode: "Medium"}))).toThrow()
+	})
+
 	it("reads executed_at and unexecutable_at as whole seconds, absent as null", () => {
 		expect(decodeProposalStatus([])).toEqual({executedAt: null, unexecutableAt: null})
 		expect(
@@ -195,14 +234,22 @@ describe("shadow", () => {
 	const cfg = {enabled: true, listMax: 2, voterMax: 3, maxInFlight: 8}
 	const log = {warn: vi.fn()}
 
-	function client(records: Map<string, GeoCardRow[]>): GeoDbCardClient & {reads: string[]} {
+	const VER1 = "c1".repeat(16)
+	const VER2 = "c2".repeat(16)
+	/** A client whose proposals each have the given version records (default: one matching `proposal()`). */
+	function client(
+		records: Map<string, GeoCardRow[]>,
+		versions: Record<string, GeoCardRow[]> = {[VER1]: versionRows()},
+	): GeoDbCardClient & {reads: string[]} {
 		const reads: string[] = []
 		return {
 			reads,
 			readCard: async ({entityId}) => {
 				reads.push(entityId)
-				return records.get(entityId) ?? []
+				return versions[entityId] ?? records.get(entityId) ?? []
 			},
+			readBacklinks: async () =>
+				Object.keys(versions).map((from) => ({prop: PROPOSAL_VERSION_COLUMNS.proposal, raw: "", from})),
 		}
 	}
 	const spaces = async (family: "governance" | "votes") => (family === "governance" ? GOV : VOTES)
@@ -236,9 +283,10 @@ describe("shadow", () => {
 		expect(
 			metric(
 				text,
-				'gaia_api_governance_shadow_uncompared_total{surface="detail",input="snapshot_from_postgres"}',
+				'gaia_api_governance_shadow_uncompared_total{surface="detail",input="total_editors_from_postgres"}',
 			),
 		).toBe(1)
+		expect(text).not.toContain("snapshot_from_postgres")
 		expect(c.reads).toContain(proposalStatusRecordId(P))
 	})
 
@@ -252,6 +300,74 @@ describe("shadow", () => {
 			metric(renderGovernanceMetrics(), 'gaia_api_governance_shadow_total{surface="detail",result="mismatch"}'),
 		).toBe(1)
 		expect(log.warn).toHaveBeenCalledTimes(1)
+	})
+
+	const unsupportedCount = (reason: string) =>
+		metric(
+			renderGovernanceMetrics(),
+			`gaia_api_governance_shadow_unsupported_total{surface="detail",reason="${reason}"}`,
+		)
+
+	it("takes the snapshot from the version with the highest block, not the first listed", async () => {
+		const p = proposal()
+		// the older version would make the proposal Rejected-looking (quorum 99 unmet); the later one matches Postgres
+		const versions = {
+			[VER2]: versionRows({block: "200"}),
+			[VER1]: versionRows({block: "100", quorum: "99"}),
+		}
+		createGovernanceShadow({
+			config: cfg,
+			geoDb: client(votesOf(p, "1"), versions),
+			systemSpaceOf: spaces,
+			log,
+		}).detail(p, NOW)
+		await settle()
+		expect(
+			metric(renderGovernanceMetrics(), 'gaia_api_governance_shadow_total{surface="detail",result="match"}'),
+		).toBe(1)
+	})
+
+	it("counts a settings difference as a mismatch", async () => {
+		const p = proposal()
+		const versions = {[VER1]: versionRows({quorum: "99"})}
+		createGovernanceShadow({
+			config: cfg,
+			geoDb: client(votesOf(p, "1"), versions),
+			systemSpaceOf: spaces,
+			log,
+		}).detail(p, NOW)
+		await settle()
+		expect(
+			metric(renderGovernanceMetrics(), 'gaia_api_governance_shadow_total{surface="detail",result="mismatch"}'),
+		).toBe(1)
+	})
+
+	it("counts geo Fast against Postgres Slow as escalation_pending, not a mismatch", async () => {
+		const p = proposal({
+			votingMode: "Slow",
+			threshold: 51n,
+			partialPercentageSupportThreshold: 51n,
+			flatSupportThreshold: 0n,
+		})
+		createGovernanceShadow({config: cfg, geoDb: client(votesOf(p, "1")), systemSpaceOf: spaces, log}).detail(p, NOW)
+		await settle()
+		const text = renderGovernanceMetrics()
+		expect(metric(text, 'gaia_api_governance_shadow_total{surface="detail",result="mismatch"}')).toBe(0)
+		expect(metric(text, 'gaia_api_governance_shadow_total{surface="detail",result="unsupported"}')).toBe(1)
+		expect(unsupportedCount("escalation_pending")).toBe(1)
+	})
+
+	it("is unsupported with no version record, or a client that cannot read backlinks", async () => {
+		const p = proposal()
+		createGovernanceShadow({config: cfg, geoDb: client(votesOf(p, "1"), {}), systemSpaceOf: spaces, log}).detail(
+			p,
+			NOW,
+		)
+		const noBacklinks: GeoDbCardClient = {readCard: async () => []}
+		createGovernanceShadow({config: cfg, geoDb: noBacklinks, systemSpaceOf: spaces, log}).detail(p, NOW)
+		await settle()
+		expect(unsupportedCount("version_missing")).toBe(1)
+		expect(unsupportedCount("backlinks_unavailable")).toBe(1)
 	})
 
 	it("counts a mismatch when a voter's record is missing", async () => {
@@ -284,7 +400,7 @@ describe("shadow", () => {
 		expect(
 			metric(text, 'gaia_api_governance_shadow_unsupported_total{surface="detail",reason="too_many_voters"}'),
 		).toBe(1)
-		expect(c.reads).toEqual([proposalStatusRecordId(P)])
+		expect(c.reads).toEqual([VER1, proposalStatusRecordId(P)])
 	})
 
 	it("is unsupported when the system Space is not founded", async () => {
@@ -326,6 +442,9 @@ describe("shadow", () => {
 			readCard: async () => {
 				throw new GeoDbError("timeout", "slow")
 			},
+			readBacklinks: async () => {
+				throw new GeoDbError("timeout", "slow")
+			},
 		}
 		expect(() =>
 			createGovernanceShadow({config: cfg, geoDb, systemSpaceOf: spaces, log}).detail(proposal(), NOW),
@@ -345,7 +464,7 @@ describe("shadow", () => {
 		createGovernanceShadow({config: cfg, geoDb: c, systemSpaceOf: spaces, log}).list(items, NOW)
 		await settle()
 		const text = renderGovernanceMetrics()
-		expect(c.reads).toHaveLength(2)
+		expect(c.reads.filter((r) => r !== VER1)).toHaveLength(2)
 		expect(metric(text, 'gaia_api_governance_shadow_total{surface="list",result="match"}')).toBe(2)
 		expect(
 			metric(text, 'gaia_api_governance_shadow_uncompared_total{surface="list",input="votes_from_postgres"}'),

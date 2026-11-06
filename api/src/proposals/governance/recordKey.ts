@@ -6,7 +6,24 @@
  *
  *   id = v4(BLAKE3 derive_key("geodb.v1.record.key", kind[16] || role[1] || part_0 || ...)[0..16])
  */
+import {createHash} from "node:crypto"
 import {blake3} from "@noble/hashes/blake3"
+
+/**
+ * geo-db's entity id for a gaia entity (a copy of the feeder's `cid("entity", id)`, geodb-feeder/src/ids.ts): ids that
+ * are already v4 are kept, any other is remapped by a fixed hash. The id a record's reference column holds.
+ */
+export function entityRef(gaiaId: string): string {
+	const compact = gaiaId.replaceAll("-", "").toLowerCase()
+	if (/^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$/.test(compact)) return compact
+	const bytes = Buffer.from(
+		createHash("sha256").update(`geo:legacy-entity:v1\0${compact}`).digest("hex").slice(0, 32),
+		"hex",
+	)
+	bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40
+	bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80
+	return bytes.toString("hex")
+}
 
 export const RECORD_KEY_CONTEXT = "geodb.v1.record.key"
 const TAG_ID = 0x01
