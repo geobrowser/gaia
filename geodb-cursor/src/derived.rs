@@ -33,6 +33,8 @@ pub const KEY_MAX: usize = 48;
 pub const VALUE_MAX: usize = 64;
 /// Requests sent between two looks at the clock.
 const CHUNK: usize = 64;
+/// Rows in one batch request (`wire.derived.batch_max`).
+pub const BATCH_MAX: usize = 256;
 
 /// One row of a derived collection: `(collection, key) -> (group, score, value)`.
 #[derive(Clone, Debug, PartialEq)]
@@ -87,6 +89,24 @@ pub fn delete_line(collection: u32, key: &[u8]) -> Result<String, MirrorError> {
 pub struct DerivedMirror {
     pipe: CursorMirror,
     budget: Duration,
+    batch: bool,
+}
+
+/// One batch request from `lines` of a single kind: `putn<tab><n>` (or `deleten`), then the rows.
+/// The pipe answers it with one frame, and the node commits the rows as one frame (one fsync).
+/// A pipe child older than the batch verbs would answer the head `-` and each row separately, so
+/// this is only sent when `GEODB_DERIVED_BATCH` is on.
+pub fn batch_request(lines: &[String]) -> String {
+    let head = if lines[0].starts_with("put\t") {
+        "putn"
+    } else {
+        "deleten"
+    };
+    let mut out = format!("{head}\t{}\n", lines.len());
+    for l in lines {
+        out.push_str(l);
+    }
+    out
 }
 
 impl DerivedMirror {
@@ -94,7 +114,15 @@ impl DerivedMirror {
         Self {
             pipe: CursorMirror::new(cfg),
             budget,
+            batch: false,
         }
+    }
+
+    /// Sends up to [`BATCH_MAX`] rows a request (`putn` / `deleten`) instead of one. Needs a
+    /// `geodb-client` that has the batch verbs.
+    pub fn with_batch(mut self, on: bool) -> Self {
+        self.batch = on;
+        self
     }
 
     /// `Some` only when `GEODB_DERIVED_MIRROR` is on and configured. `GEODB_DERIVED_BUDGET_MS`
@@ -108,7 +136,11 @@ impl DerivedMirror {
         let ms = get("GEODB_DERIVED_BUDGET_MS")
             .and_then(|v| v.trim().parse().ok())
             .unwrap_or(5000);
-        Some(Self::new(cfg, Duration::from_millis(ms)))
+        let batch = matches!(
+            get("GEODB_DERIVED_BATCH").as_deref().map(str::trim),
+            Some("1") | Some("true")
+        );
+        Some(Self::new(cfg, Duration::from_millis(ms)).with_batch(batch))
     }
 
     /// Mirrors `rows` of `table` (a label for the metrics). Never fails the caller.
@@ -149,7 +181,8 @@ impl DerivedMirror {
     async fn send(&self, table: &str, lines: &[String]) -> usize {
         let start = Instant::now();
         let mut sent = 0;
-        for chunk in lines.chunks(CHUNK) {
+        let size = if self.batch { BATCH_MAX } else { CHUNK };
+        for chunk in lines.chunks(size) {
             if sent > 0 && start.elapsed() > self.budget {
                 let dropped = lines.len() - sent;
                 metrics::counter!("geodb_derived_mirror_dropped_total", "table" => table.to_string())
@@ -160,7 +193,14 @@ impl DerivedMirror {
                 );
                 break;
             }
-            if let Err(e) = self.pipe.send_lines(chunk).await {
+            let one;
+            let reqs: &[String] = if self.batch && chunk.len() > 1 {
+                one = [batch_request(chunk)];
+                &one
+            } else {
+                chunk
+            };
+            if let Err(e) = self.pipe.send_lines(reqs).await {
                 if !matches!(e, MirrorError::CoolingDown) {
                     warn!(event = "geodb_derived.mirror_failed", table, error = %e, "geo-db derived mirror failed; Postgres is unaffected");
                 }
@@ -272,6 +312,38 @@ mod tests {
         // Cooling down: the next call sends nothing and still returns.
         m.put("t", &[row(3, 3.0)]).await;
         assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
+        let _ = std::fs::remove_file(&log);
+    }
+
+    #[test]
+    fn a_batch_request_is_a_head_then_the_rows() {
+        let p = vec![
+            "put\t0\t1\t1.0\thex:aa\thex:\n".to_string(),
+            "put\t0\t1\t2.0\thex:bb\thex:\n".to_string(),
+        ];
+        assert_eq!(batch_request(&p), format!("putn\t2\n{}{}", p[0], p[1]));
+        let d = vec!["delete\t0\thex:aa\n".to_string()];
+        assert_eq!(batch_request(&d), "deleten\t1\ndelete\t0\thex:aa\n");
+    }
+
+    #[tokio::test]
+    async fn batching_sends_one_request_per_256_rows_and_counts_them_sent() {
+        let log = tmp("batch");
+        // One answer per request, however many lines it holds: it reads the head, then n rows.
+        let script = format!(
+            "echo ready; while IFS= read -r h; do n=${{h#*\t}}; printf '%s\\n' \"$h\" >> {0}; i=0; while [ $i -lt $n ]; do IFS= read -r r; i=$((i+1)); done; printf '+10\\napplied: 1'; done",
+            log.display()
+        );
+        let m = fake(&script, Duration::from_secs(5)).with_batch(true);
+        let more: Vec<_> = (0..(BATCH_MAX as u16 + 10))
+            .map(|i| DerivedRow {
+                key: i.to_be_bytes().to_vec(),
+                ..row(0, 1.0)
+            })
+            .collect();
+        m.put("t", &more).await;
+        let heads = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(heads, "putn\t256\nputn\t10\n");
         let _ = std::fs::remove_file(&log);
     }
 

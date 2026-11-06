@@ -719,8 +719,10 @@ this is a new key and binding (not minted). Not mirrored: `entity_ranking_scores
 
 The SQL function `refresh_entity_ranking_scores` writes the type and topic tables itself, so the vote-indexer reads the
 rows for the touched entity ids before and after the call and sends the difference (changed or new rows as puts, keys
-that left as deletes). The pipe takes one row a line and fsyncs each, so this suits incremental writes; a backfill of
-the whole table needs a batch verb first.
+that left as deletes). By default the pipe takes one row a line and fsyncs each, which suits incremental writes. For
+a backfill set `GEODB_DERIVED_BATCH=1`: rows go 256 a request (`putn` / `deleten`, geo-db 14 V11), one fsync per
+request. It needs a `geodb-client` that has those verbs (an older one answers the head with a refusal and desyncs the
+pipe), so bump the image before turning it on.
 
 Type ranking gate: `geodb-feeder/src/typeRankingGate.ts <postgres.tsv> <scan.tsv>` diffs `entity_type_ranking` against
 `geodb-client derived scan 0 0x<type uuid hex> --first 512 --pages 100000` per type; the inputs and the classification
