@@ -33,6 +33,9 @@ use grc_20::decode_edit;
 use ipfs::{IpfsClient, IpfsFetcher};
 use sqlx::postgres::PgPoolOptions;
 
+/// `(block, space, is_errored, name, data)` of one `ipfs_cache` row.
+type CacheRow = (String, String, bool, Option<String>, Option<Vec<u8>>);
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
@@ -107,6 +110,32 @@ async fn main() -> anyhow::Result<()> {
                         .bind(&uri)
                         .execute(&pool)
                         .await?;
+                        // Keep the flag-off object-store copy in step with the repaired row.
+                        if let Some(blob) = blob_store::Mirror::from_env("ipfs_cache", "IPFS_CACHE")
+                        {
+                            let row: Option<CacheRow> = sqlx::query_as(
+                                "SELECT block, space::text, is_errored, name, data \
+                                     FROM ipfs_cache WHERE uri = $1",
+                            )
+                            .bind(&uri)
+                            .fetch_optional(&pool)
+                            .await?;
+                            if let Some((block, space, is_errored, name, data)) = row {
+                                let obj = blob_store::ipfs_object::Row {
+                                    block,
+                                    space,
+                                    is_errored,
+                                    name,
+                                    data,
+                                };
+                                blob.write_through(
+                                    &blob_store::ipfs_object::key(&uri),
+                                    &blob_store::ipfs_object::encode(&obj),
+                                    false,
+                                )
+                                .await;
+                            }
+                        }
                     }
                 }
                 Err(decode_error) => {

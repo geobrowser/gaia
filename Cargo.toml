@@ -16,6 +16,7 @@ members = [
     "hermes-relay",
     "hermes-pipeline",
     "hermes-ipfs-cache",
+    "blob-store",
     "hermes-instrumentation",
     "geodb-cursor",
     "geodb-outbox",

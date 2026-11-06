@@ -29,6 +29,9 @@ fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
 /// Consumers (e.g., kg-indexer) must decode using the grc-20 crate.
 pub struct PostgresCache {
     pool: sqlx::Pool<Postgres>,
+    /// Flag-off shadow read against the object-store copy
+    /// (`IPFS_CACHE_BLOB_SHADOW_READ=1`); never changes what `get` returns.
+    blob: Option<std::sync::Arc<blob_store::Mirror>>,
 }
 
 impl PostgresCache {
@@ -45,7 +48,12 @@ impl PostgresCache {
             .await
             .map_err(|e| CacheError::Database(e.to_string()))?;
 
-        Ok(PostgresCache { pool })
+        Ok(PostgresCache {
+            pool,
+            blob: blob_store::Mirror::from_env("ipfs_cache", "IPFS_CACHE")
+                .filter(|m| m.flags().shadow_read)
+                .map(std::sync::Arc::new),
+        })
     }
 }
 
@@ -98,18 +106,30 @@ impl IpfsCache for PostgresCache {
     }
 
     async fn get(&self, ipfs_hash: &str, _space_id: &[u8]) -> Result<CachedEdit, CacheError> {
-        let row =
-            sqlx::query("SELECT data, space, is_errored, name FROM ipfs_cache WHERE uri = $1")
-                .bind(ipfs_hash)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| CacheError::Database(e.to_string()))?;
+        let row = sqlx::query(
+            "SELECT data, space, is_errored, name, block FROM ipfs_cache WHERE uri = $1",
+        )
+        .bind(ipfs_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| CacheError::Database(e.to_string()))?;
 
         match row {
             Some(row) => {
                 let is_errored: bool = row.get("is_errored");
                 let db_space_id: sqlx::types::Uuid = row.get("space");
                 let space_id_bytes = db_space_id.as_bytes().to_vec();
+
+                if let Some(blob) = &self.blob {
+                    let expected = blob_store::ipfs_object::encode(&blob_store::ipfs_object::Row {
+                        block: row.get("block"),
+                        space: db_space_id.simple().to_string(),
+                        is_errored,
+                        name: row.get("name"),
+                        data: row.get("data"),
+                    });
+                    blob.shadow_read_detached(blob_store::ipfs_object::key(ipfs_hash), expected);
+                }
 
                 if is_errored {
                     return Ok(CachedEdit::errored(ipfs_hash.to_string(), space_id_bytes));
