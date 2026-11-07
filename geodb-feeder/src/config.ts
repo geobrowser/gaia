@@ -60,6 +60,12 @@ export type Config = {
 	 */
 	entityTimes: boolean
 	/**
+	 * GEODB_LEGACY_ID_MAP: write the legacy id map statement (legacyMap.ts, geo-db ISS-629-174) beside every entity the
+	 * feeder keys from a non-v4 id. Default off. It sends a Bytes value (`.{ .bytes = "<hex>" }`), which a geodb-client
+	 * that predates the Bytes edit form refuses (the whole edit with it); turn it on only once the client image has it.
+	 */
+	legacyIdMap: boolean
+	/**
 	 * GEODB_RECORD_KEYS: write gaia's chain-indexed rows as natural-key records (geo-db plan 10.12) in the feeder's
 	 * system Spaces, and allow the `put` intent. Default off. Needs serve at geo-db 9d97069a78 or later (which knows
 	 * `put` and admits a retract of an unseen id); turn it on only after that serve is rolled. Today it moves the
@@ -145,6 +151,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 		lagPollMs: Number(env.LAG_POLL_MS ?? 15_000),
 		relationPositions: flag(env.GEODB_RELATION_POSITIONS),
 		entityTimes: flag(env.GEODB_ENTITY_TIMES),
+		legacyIdMap: flag(env.GEODB_LEGACY_ID_MAP),
 		recordKeys: flag(env.GEODB_RECORD_KEYS),
 		systemSpaceMapPath: env.GEODB_SYSTEM_SPACE_MAP_PATH ?? `${dataDir}/feeder/system-spaces.published.json`,
 		membership: {
