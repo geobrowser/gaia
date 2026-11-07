@@ -59,7 +59,7 @@ import {
 	statementsFromPostgres,
 	type ValueRow,
 } from "../geodb/card"
-import {GeoDbError, MAX_LINE_SPACES} from "../geodb/client"
+import {GeoDbError, isHoldersUnknownArgument, MAX_LINE_SPACES} from "../geodb/client"
 import {observeGeoDbRead} from "../geodb/metrics"
 import {askGeoDb, askGeoDbSpaces, type CardDeps, type CardLogger} from "../geodb/service"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
@@ -1338,9 +1338,10 @@ export function createHoldersGate(options: {cooldownMs?: number; now?: () => num
 /**
  * The Spaces of `lines` that hold `entityId`, from `.args.holders` (one read a line, all at once), ascending within a
  * line. Null when the lookup cannot answer and the card should be read across every Space as before: no gate or client
- * support, the gate cooling down after a refusal, or the store refusing the argument (which starts the cooldown; a
- * refusal ends the worker's session, so it is not retried every read). A timeout or an overloaded pool is not a
- * refusal: it throws, as the card read it replaces would.
+ * support, the gate cooling down after a refusal, or a serve that predates the argument refusing it (the exact
+ * refusal `isHoldersUnknownArgument` names; it starts the cooldown, and a refusal ends the worker's session, so it
+ * is not retried every read). Every other failure (a dead pipe, a timeout, an overloaded pool, a malformed row,
+ * another refusal) throws, as the card read it replaces would, and the caller counts it as failed.
  */
 async function readHolderSpaces(deps: EntityShadowDeps, entityId: string, lines: string[][], label: string) {
 	const readHolders = deps.geoDb.readHolders?.bind(deps.geoDb)
@@ -1358,10 +1359,11 @@ async function readHolderSpaces(deps: EntityShadowDeps, entityId: string, lines:
 			),
 		)
 	} catch (error) {
-		const reason = error instanceof GeoDbError ? error.reason : "error"
-		if (reason === "timeout" || reason === "overloaded") throw error
-		if (reason === "client_failed") gate.refused()
-		deps.log.warn(`${label} holders lookup refused; reading every Space`, {entityId, reason, error: String(error)})
+		// Only the old serve's refusal of the argument means "read without it". A dead pipe, a timeout, an overload,
+		// a malformed row or any other refusal is a failed read, and the caller counts it so.
+		if (!isHoldersUnknownArgument(error)) throw error
+		gate.refused()
+		deps.log.warn(`${label} serve does not know holders; reading every Space`, {entityId, error: String(error)})
 		return null
 	}
 	const asked = new Set(lines.flat())

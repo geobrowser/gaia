@@ -125,6 +125,21 @@ export class GeoDbError extends Error {
 	}
 }
 
+/**
+ * What a serve that predates `.args.holders` prints for it, captured from a build at the commit then live:
+ * the refusal frame's payload is `refused: DefiniteRefusal MalformedRequest span <from>..<to>`, the span the
+ * argument's place in the document. A pipe worker that died, a timeout, a malformed row and any other refusal
+ * print something else, so none of them reads as "this serve does not know the argument".
+ */
+export const HOLDERS_UNKNOWN_ARGUMENT = /^refused: DefiniteRefusal MalformedRequest span \d+\.\.\d+$/
+
+/** Whether `error` is the old serve's refusal of `.args.holders`, the one reason to read without it. */
+export function isHoldersUnknownArgument(error: unknown): boolean {
+	return (
+		error instanceof GeoDbError && error.reason === "client_failed" && HOLDERS_UNKNOWN_ARGUMENT.test(error.message)
+	)
+}
+
 /** The geoql document for one entity's card. Ids are 32 hex digits, so nothing needs escaping. */
 export function cardDocument(entityId: string, options: {names?: boolean; backlinks?: number} = {}): string {
 	const names = options.names ? ", .names = true" : ""

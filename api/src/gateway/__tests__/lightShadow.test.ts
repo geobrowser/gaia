@@ -1264,7 +1264,7 @@ describe("entity answers with no Space (every-Space reads)", () => {
 
 		it("falls back to the card across every Space when the store refuses the argument, then stays off", async () => {
 			const holders = holdersOf(async () => {
-				throw new GeoDbError("client_failed", "MalformedRequest: unknown argument holders")
+				throw new GeoDbError("client_failed", "refused: DefiniteRefusal MalformedRequest span 110..118")
 			})
 			const s = everySetup(rows(), {holders})
 			await run(s, EVERY.entityTypes)
@@ -1273,6 +1273,25 @@ describe("entity answers with no Space (every-Space reads)", () => {
 			expect(holders.readHolders).toHaveBeenCalledTimes(1)
 			expect(s.readCardSpaces).toHaveBeenCalledTimes(2)
 			expect(s.readCardSpaces.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: ALL})
+		})
+
+		it("counts any other failed holders read as failed, with no fallback and no cooldown", async () => {
+			for (const failure of [
+				new GeoDbError("client_failed", "TransportClosed"),
+				new GeoDbError("client_failed", "refused: DefiniteRefusal NotFoundOrRestricted VersionNotFound"),
+				new GeoDbError("client_failed", "geodb-client pipe exited (code 1)"),
+				new GeoDbError("overloaded", "geo-db pool full"),
+				new Error("boom"),
+			]) {
+				const holders = holdersOf(async () => {
+					throw failure
+				})
+				const s = everySetup(rows(), {holders})
+				await run(s, EVERY.entityTypes)
+				expect(s.readCardSpaces).not.toHaveBeenCalled()
+				expect(holders.gate.allowed()).toBe(true)
+			}
+			expect(results()).toEqual({failed: 5})
 		})
 
 		it("tries the lookup again once the cooldown has passed", () => {
