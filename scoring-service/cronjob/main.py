@@ -17,6 +17,7 @@ from src.scoring_data_emitter import ScoringDataEmitter
 from src.scoring_data_provider import ScoringDataProvider
 from src.scoring_data_provider.scoring_data_provider import ScoringData
 from src.geodb_derived import DerivedMirror
+from src.geodb_reads import compare_geodb_reads, enabled as geodb_reads_enabled
 from src.scoring_data_writer import ScoringDataWriter
 
 logger = logging.getLogger(__name__)
@@ -142,6 +143,11 @@ class ScoringPipeline:
         if scoring_data is None:
             raise RuntimeError("Scoring data not initialized")
         self.scoring_data = scoring_data
+
+        # Off unless GEODB_SCORING_READS is on. Reads the same members, editors and votes from geo-db and counts how
+        # they differ; the result is never used for scoring, and a failure is logged, never raised.
+        if geodb_reads_enabled():
+            compare_geodb_reads(self.database_url, scoring_data)
 
         logger.info(
             "Fetched %d entities, %d spaces, %d users, %d votes",
