@@ -2,6 +2,7 @@ import {readFileSync} from "node:fs"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {CREATED_AT_PROPERTY, conformingId, rowsFromGeoDbOutput, UPDATED_AT_PROPERTY, valueKey} from "../../geodb/card"
+import {GeoDbError} from "../../geodb/client"
 import {createEntitiesConnectionShadow, createEntitiesOrderedShadow} from "../entitiesConnectionShadow"
 import {createEntityShadow, isEmptyFilter} from "../entityShadow"
 import {analyzeLightEntities, analyzeLightEntity} from "../lightShadow"
@@ -676,6 +677,108 @@ describe("entities with the light selection", () => {
 		)
 		expect(results()).toEqual({match: 1})
 		expect(uncompared()).toMatchObject({order_completeness: 1, sampled_rows: 1})
+	})
+
+	describe("the type scan page read (GEODB_TYPE_SCAN_SHADOW)", () => {
+		const T = conformingId("entity", typeId)
+		const scanSetup = (
+			entities: Entity[],
+			scan: (args: {geoSpaceIds: string[]; typeIds: string[]; first: number}) => Promise<string[]>,
+			options: {flag?: boolean} = {},
+		) => {
+			const log = {info: vi.fn(), warn: vi.fn()}
+			const typed = entities.map((e) => `${TYPES}\t${T}\tt\t${e.id}\t-\t-\t1\n`).join("")
+			const outputs = {[geoSpace(SPACE_A)]: (outputsFor(entities)[geoSpace(SPACE_A)] ?? "") + typed}
+			const readTypeScan = vi.fn(scan)
+			const deps = {
+				typeScan: options.flag !== false,
+				multiSpace: true,
+				geoDb: {readCard: askOf(outputs), readCardSpaces: askSpacesOf(outputs), readTypeScan},
+				geoSpaceOf: async (space: string) => geoSpace(space),
+				log,
+			}
+			return {log, readTypeScan, points: createPointReadShadows(deps)}
+		}
+		const q = (extra = "", first = 2, offset = 1) =>
+			withArgs(`spaceId: "${SPACE_A}", typeId: "${typeId}", first: ${first}, offset: ${offset}${extra}`)
+		const run = (s: ReturnType<typeof scanSetup>, window: Entity[], query: string) =>
+			call(s.points.get("entities") as never, query, {}, {data: {entities: window}})
+		const all = list(6)
+		const ids = all.map((e) => conformingId("entity", e.id))
+
+		it("asks first = offset + first and drops the first offset ids before comparing the sequence", async () => {
+			const s = scanSetup(all.slice(0, 4), async () => ids)
+			await run(s, all.slice(1, 3), q())
+			expect(s.readTypeScan).toHaveBeenCalledWith({geoSpaceIds: [geoSpace(SPACE_A)], typeIds: [T], first: 3})
+			expect(results()).toEqual({match: 1})
+			expect(uncompared()).not.toHaveProperty("filter_completeness")
+		})
+
+		it("flags a window whose order differs from primary-key order", async () => {
+			const s = scanSetup(all.slice(0, 4), async () => ids)
+			await run(s, [all[2], all[1]] as Entity[], q())
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("flags a window the offset moved: the page held the wrong rows", async () => {
+			const s = scanSetup(all.slice(0, 4), async () => ids)
+			await run(s, all.slice(0, 2), q())
+			expect(results()).toEqual({mismatch: 1})
+		})
+
+		it("reads the scan once for a page with no offset, asking exactly first", async () => {
+			const s = scanSetup(all.slice(0, 4), async () => ids)
+			await run(s, all.slice(0, 2), q("", 2, 0).replace(", offset: 0", ""))
+			expect(s.readTypeScan).toHaveBeenCalledWith(expect.objectContaining({first: 2}))
+			expect(results()).toEqual({match: 1})
+		})
+
+		it("does not ask for a window past 4096: counted type_scan_window", async () => {
+			const s = scanSetup(all.slice(0, 4), async () => ids)
+			await run(s, all.slice(0, 2), q("", 100, 4000))
+			expect(s.readTypeScan).not.toHaveBeenCalled()
+			expect(results()).toEqual({unsupported_selection: 1})
+			expect(unsupported()).toEqual({type_scan_window: 1})
+		})
+
+		it("asks the whole 4096 when the window ends on it", async () => {
+			const s = scanSetup(all.slice(0, 4), async () => ids)
+			await run(s, all.slice(0, 2), q("", 96, 4000))
+			expect(s.readTypeScan).toHaveBeenCalledWith(expect.objectContaining({first: 4096}))
+		})
+
+		it("counts a serve that refuses the argument as unsupported, and the request is untouched", async () => {
+			const s = scanSetup(all.slice(0, 4), async () => {
+				throw new GeoDbError("client_failed", "refused: Request MalformedRequest at .args.types")
+			})
+			await expect(run(s, all.slice(1, 3), q())).resolves.toBeUndefined()
+			expect(results()).toEqual({unsupported_selection: 1})
+			expect(unsupported()).toEqual({type_scan_refused: 1})
+			expect(s.log.warn).not.toHaveBeenCalledWith(
+				expect.stringContaining("type scan read failed"),
+				expect.anything(),
+			)
+		})
+
+		it("counts any other failed read as failed", async () => {
+			const s = scanSetup(all.slice(0, 4), async () => {
+				throw new GeoDbError("timeout", "slow")
+			})
+			await run(s, all.slice(1, 3), q())
+			expect(results()).toEqual({failed: 1})
+		})
+
+		it("reads nothing with the flag off, or with an orderBy, or with no Space argument", async () => {
+			const off = scanSetup(all.slice(0, 4), async () => ids, {flag: false})
+			await run(off, all.slice(1, 3), q())
+			expect(off.readTypeScan).not.toHaveBeenCalled()
+			const ordered = scanSetup(all.slice(0, 4), async () => ids)
+			await run(ordered, all.slice(1, 3), q(", orderBy: ID_ASC"))
+			const unscoped = scanSetup(all.slice(0, 4), async () => ids)
+			await run(unscoped, all.slice(1, 3), withArgs(`typeId: "${typeId}", first: 2, offset: 1`))
+			expect(ordered.readTypeScan).not.toHaveBeenCalled()
+			expect(unscoped.readTypeScan).not.toHaveBeenCalled()
+		})
 	})
 
 	describe("the ordered page read (GEODB_ORDER_PICK_SHADOW)", () => {

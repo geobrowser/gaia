@@ -374,6 +374,22 @@ export function pageRowsFromGeoDbOutput(output: string): GeoPageRow[] {
 }
 
 /**
+ * geodb-client output for a type scan (`.args.types`): one identity column, so a line is the entity's 32 hex digits and
+ * the row's trailing `1`. A line without a 32-digit first cell is refused.
+ */
+export function typeScanIdsFromGeoDbOutput(output: string): string[] {
+	return output
+		.split("\n")
+		.filter((line) => line !== "" && !line.startsWith("# plan"))
+		.map((line) => {
+			const entity = line.split("\t")[0] ?? ""
+			if (!/^[0-9a-f]{32}$/.test(entity))
+				throw new Error(`a type scan row has no entity cell: ${line.slice(0, 60)}`)
+			return entity
+		})
+}
+
+/**
  * An instant row's value as nanoseconds since the epoch (`instant:<seconds>.<nanos>`), or null for any other text.
  */
 export function instantNanos(raw: string): bigint | null {

@@ -440,6 +440,7 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 							entitiesBatch: geoDbCardConfig.entitiesBatch === true,
 							derivedFields: geoDbCardConfig.derivedFields === true,
 							orderPick: geoDbCardConfig.orderPick === true,
+							typeScan: geoDbCardConfig.typeScan === true,
 							relationsTypeFilter: geoDbCardConfig.relationsTypeFilter === true,
 							...(geoDbCardConfig.everySpaceReads === true && geoDbCardConfig.everySpaceEntities === true
 								? {

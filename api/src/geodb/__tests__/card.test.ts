@@ -9,6 +9,7 @@ import {
 	pointNorm,
 	rowsFromGeoDbOutput,
 	statementsFromPostgres,
+	typeScanIdsFromGeoDbOutput,
 	type ValueRow,
 } from "../card"
 import {parseMode, readGeoDbCardConfig} from "../config"
@@ -248,5 +249,19 @@ describe("config", () => {
 		expect(readGeoDbCardConfig({GEODB_POOL_SIZE: "0"}).poolSize).toBe(4)
 		expect(readGeoDbCardConfig({GEODB_POOL_SIZE: "8"}).poolSize).toBe(8)
 		expect(readGeoDbCardConfig({GEODB_POOL_SIZE: "9999"}).poolSize).toBe(64)
+	})
+})
+
+describe("the type scan flag and reader", () => {
+	it("defaults the flag off and turns it on only for 'on'", () => {
+		expect(readGeoDbCardConfig({}).typeScan).toBe(false)
+		expect(readGeoDbCardConfig({GEODB_TYPE_SCAN_SHADOW: "on"}).typeScan).toBe(true)
+		expect(readGeoDbCardConfig({GEODB_TYPE_SCAN_SHADOW: "off"}).typeScan).toBe(false)
+	})
+
+	it("reads one id per row and rejects anything else", () => {
+		const a = "55555555555545558555555555555555"
+		expect(typeScanIdsFromGeoDbOutput(`# plan\n${a}\t1\n\n`)).toEqual([a])
+		expect(() => typeScanIdsFromGeoDbOutput("nope\t1\n")).toThrow()
 	})
 })
