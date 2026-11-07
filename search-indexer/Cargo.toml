@@ -21,7 +21,7 @@ grc-20 = "0.4.1"
 rdkafka = { version = "0.38.0", features = ["cmake-build", "zstd", "ssl"] }
 
 # Async runtime
-tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
+tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "process", "io-util"] }
 tokio-stream = { version = "0.1.17", features = ["sync"] }
 futures = "0.3.31"
 async-trait = "0.1.88"
@@ -37,6 +37,7 @@ hex = "0.4"
 
 # Error handling
 thiserror = "2.0.17"
+sha2 = "0.10"
 
 # Database (Postgres lookup for score indexing)
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "uuid", "tls-rustls"] }
