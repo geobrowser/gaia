@@ -2104,3 +2104,21 @@ $K -n gaia rollout restart deploy/vote-indexer deploy/ranking-indexer
 Rollback: set the flag back to `"0"` (or delete the Secret and restart serve and the writers). The rows stay in the
 store, unread. Rotate: delete Secret and Job `geodb-scores-key`, rerun step 1, then steps 2 and 3. The init
 container's image tag moves with the geodb pin; keep it at or above `6b34f9feda`.
+
+### Proposal queries shadow (GEODB_GOVERNANCE_QUERIES_SHADOW)
+
+Default off (`0` in `api/k8s/v2/api.yaml`). A sibling of the status shadow (`GEODB_GOVERNANCE_SHADOW`): after the api serves a
+proposal detail, a proposal list or an active-proposal check from Postgres, it reads the keyed governance records from geo-db
+in the background and counts whether they agree. It never changes, delays or fails a response and logs counts only.
+Metrics (`gaia_api_governance_queries_shadow_*`, empty until the flag is on): `_total{query,result}`,
+`_unsupported_total{query,reason}`, `_uncompared_total{query,input}`.
+
+Covered, from geo-db records: the actions of a proposal's current version (type, target, content uri and id, in order) on
+detail and list; the vote count of the current version on detail; the actionTypes / excludeActionTypes filter on list;
+and `hasActiveMemberProposal` / `hasActiveEditorProposal`, one-sidedly (a Postgres `true` with no not-executed AddMember /
+AddEditor proposal aimed at the target in geo-db is a mismatch; the reverse is counted unsupported, since a rejected, expired
+or other-space proposal also has such an action).
+
+Not covered, each named in `_uncompared_total`: which proposals a Space has and their order and cursor (no Space index in
+the records), the list's status filter (the status shadow covers status) and vote counts (records are keyed by voter),
+UpdateVotingSettings fields of an action, and the active checks' Space scope and vote tallies.

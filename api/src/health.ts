@@ -22,6 +22,7 @@ import {renderSecuritySignalsPrometheus} from "./kg/securitySignalsPlugin"
 import {renderAccountWeightsMetrics} from "./pairFit/accountWeightsShadow"
 import {renderProfileShadowMetrics} from "./profile/shadow"
 import {renderGovernanceMetrics} from "./proposals/governance/metrics"
+import {renderQueriesMetrics} from "./proposals/governance/queriesMetrics"
 import {db, getPoolStats} from "./services/storage/storage"
 import {log} from "./services/telemetry"
 
@@ -154,6 +155,8 @@ function renderPrometheusMetrics(): string {
 		renderGatewayMetrics(),
 		// Proposal status from geo-db records against the served status (GEODB_GOVERNANCE_SHADOW) — see proposals/governance/metrics.ts.
 		renderGovernanceMetrics(),
+		// Proposal list, detail and active-check twins (GEODB_GOVERNANCE_QUERIES_SHADOW) — see proposals/governance/queriesShadow.ts.
+		renderQueriesMetrics(),
 		// Profile name and avatar from geo-db against the served profile (GEODB_PROFILE_SHADOW) — see profile/shadow.ts.
 		renderProfileShadowMetrics(),
 		// For you config from geo-db against the served settings (GEODB_FOR_YOU_CONFIG_SHADOW) — see forYou/configShadow.ts.
