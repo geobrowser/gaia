@@ -75,6 +75,7 @@ import {
 } from "./entityShadow"
 import {recordGatewayUnsupportedShape, type UncomparedReason, type UnsupportedReason} from "./metrics"
 import {checkOrderedPage} from "./orderPickShadow"
+import {checkTypeScan} from "./typeScanShadow"
 
 /** Most distinct relation targets whose own values one entity's comparison reads (two batch reads). */
 const MAX_TARGET_CARDS = 64
@@ -296,6 +297,8 @@ export type LightEntitiesPlan = LightPlan & {
 	 * null. `first` and `offset` are the root's, null when absent.
 	 */
 	order: EntitiesOrder | null
+	/** The root named an `orderBy` (any), so the page's order is not primary-key order. */
+	ordered: boolean
 	/** The filter and root arguments say nothing but the plan's `claims` (no clause or system-type argument was left out). */
 	exactFilter: boolean
 	first: number | null
@@ -898,6 +901,7 @@ export function analyzeLightEntities(
 				spaceIds,
 				everySpace,
 				order,
+				ordered: options.ordered === true || (args.orderBy !== undefined && args.orderBy !== null),
 				exactFilter: !options.ordered && exact && args.systemTypeId == null && args.systemTypeIds == null,
 				first: typeof args.first === "number" ? args.first : null,
 				offset: typeof args.offset === "number" ? args.offset : null,
@@ -1507,6 +1511,8 @@ export async function runLight(
 	}
 	const page =
 		plan.kind === "entities" ? await checkOrderedPage(deps, plan, pageIds, label) : ({result: "skip"} as const)
+	const scan =
+		plan.kind === "entities" ? await checkTypeScan(deps, plan, pageIds, label) : ({result: "skip"} as const)
 	const checks: {id: string; check: LightCheck}[] = []
 	const backlinkUncompared = new Set<UncomparedReason>()
 	for (const {id, node} of entities) {
@@ -1526,7 +1532,7 @@ export async function runLight(
 		}
 	}
 	const mismatched = checks.filter((c) => c.check.result === "mismatch")
-	if (mismatched.length > 0 || filterBreach || page.result === "mismatch") {
+	if (mismatched.length > 0 || filterBreach || page.result === "mismatch" || scan.result === "mismatch") {
 		return {
 			result: "mismatch",
 			uncompared: plan.uncompared,
@@ -1535,13 +1541,16 @@ export async function runLight(
 				mismatches: mismatched.length,
 				filterBreach,
 				orderedPage: page.result === "mismatch" ? page.detail : undefined,
+				typeScan: scan.result === "mismatch" ? scan.detail : undefined,
 				first: mismatched[0]?.check.result === "mismatch" ? mismatched[0].check.detail : undefined,
 			},
 		}
 	}
 	const unsupported = checks.find((c) => c.check.result === "unsupported")?.check
 	if (unsupported?.result === "unsupported") return {result: "unsupported", reason: unsupported.reason}
-	if (checks.some((c) => c.check.result === "failed")) return {result: "failed"}
+	// A type scan the serve refused (or that is past the window bound) is counted, and the cards' own checks stand.
+	if (scan.result === "unsupported") return {result: "unsupported", reason: scan.reason}
+	if (scan.result === "failed" || checks.some((c) => c.check.result === "failed")) return {result: "failed"}
 	// A page that could not be read leaves the order uncompared as it was: the cards stand on their own.
 	const uncompared = new Set<UncomparedReason>(plan.uncompared)
 	if (page.result === "match") {
@@ -1552,6 +1561,8 @@ export async function runLight(
 			uncompared.delete("filter_completeness")
 		}
 	}
+	// The scan compared the page's members and their order, so which entities the filter selects is no longer open.
+	if (scan.result === "match") uncompared.delete("filter_completeness")
 	for (const {check} of checks) if (check.result === "match") for (const r of check.uncompared) uncompared.add(r)
 	for (const r of backlinkUncompared) uncompared.add(r)
 	return {result: "match", uncompared: [...uncompared], detail: {entities: checks.length}}

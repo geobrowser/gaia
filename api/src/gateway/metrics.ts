@@ -22,6 +22,10 @@ export const UNSUPPORTED_REASONS = [
 	"many_spaces",
 	"unmapped_space",
 	"throttled",
+	/** An unordered `entities` type scan whose window (`offset + first`) is past the 4096 geo-db's one-row cut allows. */
+	"type_scan_window",
+	/** An unordered `entities` type scan the serve refused (`.args.types` is geo-db c2f9d09cfa or later): the serve has not rolled yet. */
+	"type_scan_refused",
 	/** `metas`: the indexer cursor rows (id, cursor, block number) live only in Postgres; geo-db holds no read of them. */
 	"no_geodb_home",
 	/** `metas`: geo-db's `cursors` collection holds no row for an indexer PostgreSQL has (the mirror is off, or has not written yet). */
