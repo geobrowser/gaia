@@ -10,6 +10,7 @@ pub mod entity_scores_default;
 mod entity_scores_fixture;
 pub mod entity_scores_mirror;
 pub mod error;
+pub mod geodb_reads_shadow;
 pub mod handlers;
 pub mod metrics;
 pub mod models;

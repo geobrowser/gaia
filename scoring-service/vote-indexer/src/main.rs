@@ -417,6 +417,9 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
             })
             .collect();
 
+        let shadow_before = storage
+            .has_reads_shadow()
+            .then(|| stored_vote_counts.clone());
         let stored_vote_counts_map: HashMap<VoteCountCriteria, _> = stored_vote_counts
             .into_iter()
             .map(|v| ((v.object_id, v.space_id, v.object_type, v.kind), v))
@@ -448,6 +451,15 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
         storage.upsert_score_values(&score_values, &mut tx).await?;
 
         tx.commit().await?;
+
+        // Compare the batch's reads with geo-db (flag off by default); background, counts only.
+        if let Some(before) = shadow_before {
+            storage.shadow_votes_counts(
+                vote_count_criteria.clone(),
+                before,
+                updated_vote_counts.clone(),
+            );
+        }
 
         // Copy the committed tallies into geo-db (flag off by default); best-effort.
         storage.mirror_votes_counts(&updated_vote_counts).await;
