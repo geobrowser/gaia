@@ -52,6 +52,17 @@ spec:
             items:
               - key: key
                 path: outbox.key
+        # Read-only key for the chain-table twin (NOTIFICATION_INDEXER_GEODB_TWIN), the same shared
+        # reader seed the api and search-indexer use. Optional: absent, the volume is empty and, with the
+        # flag at "0", nothing reads it.
+        - name: geodb-reader-key
+          secret:
+            secretName: geodb-reader-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: reader.key
         # app_webhooks out of Postgres (APP_WEBHOOKS_FILE). The Secret is optional: absent, the volume is
         # empty and nothing reads it, so a rollout never depends on it. Create it with
         # notification-service/scripts/export-app-webhooks.sh, then uncomment APP_WEBHOOKS_FILE below.
@@ -161,6 +172,16 @@ spec:
               value: /etc/geodb/key/outbox.key
             - name: GEODB_BINDING_PATH
               value: /geodb/binding.txt
+            # geo-db twin of the chain-table reads (members, editors, proposals, votes, expiry scan): after a
+            # Postgres read answers, the same question is put to geo-db and counted
+            # (notification_indexer_geodb_twin_total). Postgres stays the source. "0" = off; set "1" to turn
+            # it on once the reader key, space map and system-spaces.json are in place.
+            - name: NOTIFICATION_INDEXER_GEODB_TWIN
+              value: "0"
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/reader/reader.key
+            - name: GEODB_SPACE_MAP_PATH
+              value: /etc/geodb/space-map/space-map.json
             # Read app_webhooks from the mounted `app-webhooks` Secret instead of Postgres (ON since 2026-11-06).
             # Re-run scripts/export-app-webhooks.sh after any webhook change. To go back to the table,
             # comment these two lines out and redeploy.
@@ -203,6 +224,13 @@ spec:
               readOnly: true
             - name: geodb-key
               mountPath: /etc/geodb/key
+              readOnly: true
+            - name: geodb-reader-key
+              mountPath: /etc/geodb/reader
+              readOnly: true
+            # space-map.json and system-spaces.json, written by the geodb-feeder.
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
               readOnly: true
             - name: app-webhooks
               mountPath: /etc/app-webhooks
