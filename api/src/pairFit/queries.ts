@@ -122,3 +122,26 @@ export async function readNames(db: Database, entityIds: string[]): Promise<Map<
 	for (const row of rowsOf(result)) names.set(String(row.entity_id), String(row.name).trim())
 	return names
 }
+
+/**
+ * The ids the `votedBy` argument of `entities` restricts to (kg/entityVotedByFilterPlugin.ts, the argument form's IN subquery)
+ * for one user, narrowed the same way: empty `kinds` / `types` mean any. Only claim votes (`object_type` 0) are kept, which is
+ * what the plugin's semi-join against `entities.id` leaves, since a relation vote's object is not an entity. Read by the
+ * user-votes twin shadow (userVotesShadow.ts) to hold geo-db's answer to the SQL's.
+ */
+export async function readVotedByIds(
+	db: Database,
+	userId: string,
+	selection: {kinds?: number[]; types?: number[]},
+): Promise<string[]> {
+	const kinds = selection.kinds ?? []
+	const types = selection.types ?? []
+	const result = await db.execute(sql`
+		SELECT DISTINCT uv.object_id AS object_id
+		FROM public.user_votes uv
+		WHERE uv.user_id = ${userId}::uuid AND uv.object_type = 0
+		  AND (cardinality(${`{${kinds.join(",")}}`}::smallint[]) = 0 OR uv.vote_kind = ANY(${`{${kinds.join(",")}}`}::smallint[]))
+		  AND (cardinality(${`{${types.join(",")}}`}::smallint[]) = 0 OR uv.vote_type = ANY(${`{${types.join(",")}}`}::smallint[]))
+	`)
+	return rowsOf(result).map((r) => String(r.object_id))
+}

@@ -9,6 +9,7 @@ import {Hono} from "hono"
 import {Pool} from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
 import {INTERNAL_TOKEN_HEADER, mountInternalRoutes} from "../../forYou/router"
+import {readVotedByIds} from "../queries"
 
 const TOKEN = "t".repeat(40)
 const NAME = "a126ca53-0c8e-48d5-b888-82c734c38935"
@@ -189,5 +190,15 @@ describe.skipIf(!process.env.DATABASE_URL)("/internal/pair-fit", () => {
 		expect(
 			(await post({userId: USER, candidateIds: Array.from({length: 301}, (_, i) => u(i + 0x100))})).status,
 		).toBe(400)
+	})
+
+	// The Postgres side of the user-votes twin shadow: the votedBy argument's ids (kg/entityVotedByFilterPlugin.ts).
+	it("reads the votedBy ids the way the filter narrows them", async () => {
+		const db = drizzle(pool)
+		// USER holds an Agree on the AI claim and a removed (type 2) stance on the Energy claim.
+		expect((await readVotedByIds(db, USER, {kinds: [1, 2], types: [0, 1]})).sort()).toEqual([C_AI])
+		expect((await readVotedByIds(db, USER, {})).sort()).toEqual([C_AI, C_ENERGY].sort())
+		expect(await readVotedByIds(db, USER, {kinds: [0]})).toEqual([])
+		expect(await readVotedByIds(db, STRANGER, {})).toEqual([])
 	})
 })

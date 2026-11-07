@@ -20,6 +20,7 @@ import {getGraphqlPoolPressure, getGraphqlPoolStats} from "./kg/postgraphile"
 import {renderResponseByteMetrics} from "./kg/responseBudgetPlugin"
 import {renderSecuritySignalsPrometheus} from "./kg/securitySignalsPlugin"
 import {renderAccountWeightsMetrics} from "./pairFit/accountWeightsShadow"
+import {renderUserVotesTwinMetrics} from "./pairFit/userVotesShadow"
 import {renderProfileShadowMetrics} from "./profile/shadow"
 import {renderGovernanceMetrics} from "./proposals/governance/metrics"
 import {db, getPoolStats} from "./services/storage/storage"
@@ -164,6 +165,8 @@ function renderPrometheusMetrics(): string {
 		renderFeedExperimentMetrics(),
 		// Pair-fit account weights from geo-db collection 5 against the served ones (GEODB_ACCOUNT_WEIGHTS_SHADOW) — see pairFit/accountWeightsShadow.ts.
 		renderAccountWeightsMetrics(),
+		// geo-db twins of the user_votes reads (pair-fit shared claims, the votedBy argument) against Postgres (GEODB_USER_VOTES_TWIN) — see pairFit/userVotesShadow.ts.
+		renderUserVotesTwinMetrics(),
 		// Sampled score-table rows from geo-db collections 2/3/4 against Postgres (GEODB_SCORES_SHADOW) — see geodb/scoresShadow.ts.
 		renderScoresShadowMetrics(),
 		// Sampled user_votes / ranks rows against their keyed records (GEODB_KEYED_RECORDS_SHADOW) — see geodb/keyedRecordsShadow.ts.
