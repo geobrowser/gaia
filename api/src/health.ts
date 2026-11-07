@@ -7,6 +7,7 @@ import {renderGatewayMetrics} from "./gateway/metrics"
 import {renderRankTypedMetrics} from "./gateway/rankTypedShadow"
 import {renderServeMetrics} from "./gateway/serveMetrics"
 import {renderIdMapMetrics} from "./geodb/idMap"
+import {renderIdMapTwinMetrics} from "./geodb/idMapTwin"
 import {renderKeyedRecordsShadowMetrics} from "./geodb/keyedRecordsShadow"
 import {renderGeoDbCardMetrics} from "./geodb/metrics"
 import {renderRankedReadsShadowMetrics} from "./geodb/rankedReadsShadow"
@@ -176,6 +177,8 @@ function renderPrometheusMetrics(): string {
 		renderServeMetrics(),
 		// The reverse id map the served fields read: ids by result (miss = not served) and Postgres reads — see geodb/idMap.ts.
 		renderIdMapMetrics(),
+		// The same map checked against geo-db's legacy-id read (GEODB_ID_MAP_TWIN) — see geodb/idMapTwin.ts.
+		renderIdMapTwinMetrics(),
 	].join("\n")
 }
 

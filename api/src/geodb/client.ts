@@ -91,6 +91,15 @@ export type GeoDbCardClient = {
 	 * which an older one refuses (`client_failed`, `MalformedRequest`). Absent on a client that cannot do it.
 	 */
 	readTypeScan?(args: TypeScanRequest): Promise<string[]>
+	/**
+	 * The keyed ids geo-db holds 1 to `MAX_CARD_IDS` original (gaia) ids under (`.args.by_legacy`, geo-db ISS-629-174), read
+	 * across every Space (`*` line): one row a keyed id, its entity cell the keyed id. A v4 original answers as itself, an
+	 * unmapped one gives no row, and an original two Spaces map gives two. Rows are not tied to the id asked: the client prints
+	 * the original (a `Bytes` value) as `<bytes>`, so the caller matches rows to ids by the keyed ids it expects. Needs a store
+	 * from geo-db bac1c75004 or later and a client that speaks the `*` line, which an older one refuses (`client_failed`).
+	 * Absent on a client that cannot do it.
+	 */
+	readLegacyIds?(args: {originalIds: string[]; timeoutMs?: number}): Promise<GeoCardRow[]>
 }
 
 export type TypeScanRequest = {
@@ -150,6 +159,12 @@ export function cardsDocument(entityIds: string[], options: {names?: boolean} = 
 	const names = options.names ? ", .names = true" : ""
 	const ids = entityIds.map((id) => `"${id}"`).join(", ")
 	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .ids = .{ ${ids} }${names} } } } }`
+}
+
+/** The geoql document for the legacy-id lookup of 1..32 original ids (`.args.by_legacy`). Ids are 32 hex digits, so nothing needs escaping. */
+export function legacyDocument(originalIds: string[]): string {
+	const ids = originalIds.map((id) => `"${id}"`).join(", ")
+	return `.{ .version = 1, .select = .{ .l = .{ .field = "entity", .args = .{ .by_legacy = .{ ${ids} } } } } }`
 }
 
 /**
@@ -310,6 +325,8 @@ type Request = {
 	page?: boolean
 	/** A read of several entities' cards: the answer is every row, each keeping its entity. */
 	cards?: boolean
+	/** A legacy-id read: rows like a batch of cards, but a statement cell may be none whatever the Space scope. */
+	legacy?: boolean
 	/** A type scan: the answer is entity ids, one a line. */
 	ids?: boolean
 	resolve: (rows: GeoCardRow[]) => void
@@ -503,7 +520,10 @@ export function createPipeGeoDbClient(
 					: request.page
 						? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
 						: request.cards
-							? rowsFromGeoDbOutput(payload, null, {names: request.names, spaces: request.spaces})
+							? rowsFromGeoDbOutput(payload, null, {
+									names: request.names,
+									spaces: request.spaces && !request.legacy,
+								})
 							: request.backlinks
 								? backlinkRowsFromGeoDbOutput(payload, request.entityId, {spaces: request.spaces})
 								: rowsFromGeoDbOutput(payload, request.entityId, {
@@ -554,7 +574,8 @@ export function createPipeGeoDbClient(
 
 	function assign(slot: Slot, request: Request) {
 		slot.request = request
-		if (!request.keepWarm) {
+		// An every-Space line (`*`) names no Space the keep-warm read could repeat.
+		if (!request.keepWarm && !request.line.startsWith("*\t")) {
 			slot.lastSpace = request.line.slice(0, request.line.indexOf("\t")).split(",")[0] ?? null
 			lastSpace = slot.lastSpace
 		}
@@ -582,6 +603,7 @@ export function createPipeGeoDbClient(
 		cards = false,
 		timeoutMs?: number,
 		ids = false,
+		legacy = false,
 	): Promise<GeoCardRow[]> {
 		if (now() < backoffUntil) {
 			return Promise.reject(new GeoDbError("client_failed", "geodb-client is not starting; backing off"))
@@ -596,6 +618,7 @@ export function createPipeGeoDbClient(
 				...(page ? {page} : {}),
 				...(cards ? {cards} : {}),
 				...(ids ? {ids} : {}),
+				...(legacy ? {legacy} : {}),
 				...(timeoutMs ? {timeoutMs} : {}),
 				resolve,
 				reject,
@@ -772,6 +795,20 @@ export function createPipeGeoDbClient(
 				undefined,
 				true,
 			) as unknown as Promise<string[]>
+		},
+		readLegacyIds({originalIds, timeoutMs}) {
+			if (
+				originalIds.length === 0 ||
+				originalIds.length > MAX_CARD_IDS ||
+				!originalIds.every((id) => HEX32.test(id)) ||
+				new Set(originalIds).size !== originalIds.length
+			)
+				return Promise.reject(
+					new GeoDbError("bad_request", `1 to ${MAX_CARD_IDS} distinct original ids of 32 hex digits`),
+				)
+			// Sorted, as the engine takes the list; `*` reads every Space, so each row's statement cell carries its Space.
+			const line = `*\t${legacyDocument([...originalIds].sort())}\n`
+			return submit(line, NO_ENTITY, false, true, false, false, true, timeoutMs, false, true)
 		},
 		close() {
 			clearInterval(warmTimer)

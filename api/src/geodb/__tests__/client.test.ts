@@ -722,6 +722,39 @@ lines(() => frame("-", "refused: Request MalformedRequest"))
 	})
 })
 
+describe("readLegacyIds", () => {
+	const A = "990a4147a92855e88e630e542faf1c72"
+	const B = "01a1a8c0000070008000000000000001"
+	const KEYED = "aa000000000040008000000000000001"
+
+	it("sends one every-Space by_legacy line, sorted, and reads each row's keyed id", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [scope, doc] = line.split("\\t")
+	const ok = scope === "*" && doc.includes('.by_legacy = .{ "${B}", "${A}" }')
+	frame(ok ? "+" : "-", ok ? "${PROP}\\t<bytes>\\t${SPACE}:${ENTITY}\\t${KEYED}\\t1\\n-\\t<bytes>\\t-\\t${A}\\t1\\n" : "bad line " + line)
+})
+`)
+		const rows = await client.readLegacyIds?.({originalIds: [A, B]})
+		expect(rows?.map((r) => r.entity)).toEqual([KEYED, A])
+		client.close()
+	})
+
+	it("refuses a bad id list before it reaches the worker", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		for (const bad of [
+			[],
+			[A, A],
+			['x" } }'],
+			Array.from({length: 33}, (_, i) => i.toString(16).padStart(32, "0")),
+		])
+			await expect(client.readLegacyIds?.({originalIds: bad})).rejects.toMatchObject({reason: "bad_request"})
+		expect(starts()).toBe(0)
+		client.close()
+	})
+})
+
 describe("createSpaceMap", () => {
 	it("is empty without a path", async () => {
 		expect(await createSpaceMap("")(SPACE)).toBeNull()
