@@ -1663,6 +1663,31 @@ describe("entities answers with no Space (every-Space reads)", () => {
 			expect(results()).toEqual({match: 1})
 		})
 
+		// The row names its Space (PostGraphile's id) but the list's selection leaves the entity's Spaces unknown, so the
+		// card is read across every Space and keyed by geo-db's Space ids: the row's Space is looked up by its geo-db id.
+		describe("a row that names its Space, read across every Space", () => {
+			const spaced = `query { entities(first: 10, filter: {typeIds: {anyEqualTo: "${typeId}"}}) { id relations(first: 50, filter: {typeId: {in: ["${edgeType}", "${otherType}"]}}) { nodes { spaceId toEntity { id name } } } } }`
+			const spacedBody = (space: string) => ({
+				data: {
+					entities: [
+						{id: FIRST.id, relations: {nodes: [{spaceId: space, toEntity: {id: target, name: "Target"}}]}},
+					],
+				},
+			})
+
+			it("matches a target held in the row's own Space", async () => {
+				const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge(otherType)}, {typeFilter: true})
+				await callQuery(s, spaced, spacedBody(SPACE_B))
+				expect(results()).toEqual({match: 1})
+			})
+
+			it("flags a target geo-db holds only in another Space than the row's", async () => {
+				const s = namesSetup({[geoSpace(SPACE_C)]: typed + edge(otherType)}, {typeFilter: true})
+				await callQuery(s, spaced, spacedBody(SPACE_B))
+				expect(results()).toEqual({mismatch: 1})
+			})
+		})
+
 		it("flags a target geo-db holds under none of the filter's Types", async () => {
 			const s = namesSetup({[geoSpace(SPACE_B)]: typed + edge(typeId)}, {typeFilter: true})
 			await callQuery(s, query, body("Target"))

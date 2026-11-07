@@ -1234,6 +1234,26 @@ export async function checkLight(
 	const read = spaces ? await readWide(deps, entityId, spaces, label) : await readEverySpace(deps, entityId, label)
 	if (!read.ok) return read.result === "failed" ? {result: "failed"} : {result: "unsupported", reason: read.reason}
 
+	// An every-Space read keys its rows by geo-db Space id, a read of named Spaces by the ids it was given. A row's own
+	// Space is PostGraphile's id, so under an every-Space read it is mapped before it picks the Space's rows (the two
+	// ids differ for every Space founded under a legacy id); a Space geo-db has not loaded cannot be judged.
+	const rowSpaces = new Set<string>()
+	for (const s of [...light.valueSpaces, ...light.relationSpaces]) if (s) rowSpaces.add(s)
+	for (const row of [...light.typeless, ...light.typeOnly, ...light.untypedValues])
+		if (row.space) rowSpaces.add(row.space)
+	const geoSpaceFor = new Map<string, string>()
+	for (const space of rowSpaces) {
+		if (!every) {
+			geoSpaceFor.set(space, space)
+			continue
+		}
+		const geo = await deps.geoSpaceOf(space)
+		if (!geo) return {result: "unsupported", reason: "unmapped_space"}
+		geoSpaceFor.set(space, geo)
+	}
+	const rowsIn = (space: string | null): GeoCardRow[] =>
+		space ? (read.bySpace.get(geoSpaceFor.get(space) ?? space) ?? []) : read.rows
+
 	// Containment, in the row's own space when it names one, else against every space read.
 	const missing: {space: string | null; prop: string; norm: string}[] = []
 	const groups = new Map<string | null, {values: ValueRow[]; relations: RelationRow[]}>()
@@ -1259,14 +1279,14 @@ export async function checkLight(
 	})
 	let skipped = 0
 	for (const [space, rows] of groups) {
-		const pool: GeoCardRow[] = space ? (read.bySpace.get(space) ?? []) : read.rows
+		const pool = rowsIn(space)
 		const diff = diffCards(statementsFromPostgres(rows.values, rows.relations), pool, {skipEmptyText: true})
 		skipped += diff.skipped
 		for (const s of diff.onlyPostgres) missing.push({space, prop: s.prop, norm: s.norm})
 	}
 	// A typeless row (filtered by `typeId`, no type selected) is held when its target sits under one of the filter's Types.
 	const untyped = light.typeless.filter((row) => {
-		const pool: GeoCardRow[] = row.space ? (read.bySpace.get(row.space) ?? []) : read.rows
+		const pool = rowsIn(row.space)
 		const types = new Set(row.types.map((id) => conformingId("entity", id)))
 		// geo-db never holds Postgres-derived relations, so a filter of derived Types only is not judged.
 		if ([...types].every((id) => DERIVED_PROPERTIES.has(id))) return false
@@ -1279,12 +1299,12 @@ export async function checkLight(
 	for (const row of light.typeOnly) {
 		const type = conformingId("entity", row.type)
 		if (DERIVED_PROPERTIES.has(type)) continue
-		const pool: GeoCardRow[] = row.space ? (read.bySpace.get(row.space) ?? []) : read.rows
+		const pool = rowsIn(row.space)
 		if (!pool.some((held) => held.prop === type)) missing.push({space: row.space, prop: type, norm: ""})
 	}
 	// A value row filtered by `propertyId` with no property selected is held when geo-db has it under one of the filter's Properties.
 	for (const row of light.untypedValues) {
-		const pool: GeoCardRow[] = row.space ? (read.bySpace.get(row.space) ?? []) : read.rows
+		const pool = rowsIn(row.space)
 		const held = row.props.some((prop) => {
 			const one = {...row.row, property_id: prop}
 			return diffCards(statementsFromPostgres([one], []), pool, {skipEmptyText: true}).onlyPostgres.length === 0
