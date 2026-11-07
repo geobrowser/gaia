@@ -25,7 +25,7 @@ id cannot be told from a real one by looking at it. The ids Postgres lists (the 
 nothing maps back is read as it is, so it shows as a row Postgres does not hold, counted in ``mismatch``. ``unmapped`` counts
 only values that are not an id at all.
 
-Needs ``GEODB_KEY_PATH``, ``GEODB_BINDING_PATH`` and ``GEODB_SYSTEM_SPACES_PATH`` (the feeder's ``system-spaces.json``,
+Needs ``GEODB_KEY_PATH`` (or ``GEODB_READ_KEY_PATH``, which wins when set), ``GEODB_BINDING_PATH`` and ``GEODB_SYSTEM_SPACES_PATH`` (the feeder's ``system-spaces.json``,
 ``{"<family>": {"geo": "<32 hex>"}}``), and the key's binding must allow card reads in both system Spaces.
 """
 
@@ -161,9 +161,10 @@ class PipeReader:
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "PipeReader | None":
         env = os.environ if environ is None else environ
-        key, binding = env.get("GEODB_KEY_PATH"), env.get("GEODB_BINDING_PATH")
+        # GEODB_READ_KEY_PATH lets the reads use a read-only key while GEODB_KEY_PATH stays the derived mirror's writer key.
+        key, binding = env.get("GEODB_READ_KEY_PATH") or env.get("GEODB_KEY_PATH"), env.get("GEODB_BINDING_PATH")
         if not key or not binding:
-            logger.warning("geodb_reads.misconfigured: GEODB_KEY_PATH or GEODB_BINDING_PATH is unset")
+            logger.warning("geodb_reads.misconfigured: GEODB_READ_KEY_PATH/GEODB_KEY_PATH or GEODB_BINDING_PATH is unset")
             return None
         argv = [env.get("GEODB_CLIENT_BIN") or "geodb-client", "--key", key, "--binding", binding, "pipe"]
         return cls(argv)
