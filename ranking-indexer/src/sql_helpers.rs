@@ -82,7 +82,7 @@ fn nth_weekday(year: i32, month: u32, weekday: Weekday, n: i64) -> NaiveDate {
 /// The US rule in force since 2007: daylight time runs from 02:00 standard on the second Sunday of March (07:00
 /// UTC) to 02:00 daylight on the first Sunday of November (06:00 UTC). Valid for 2007 onward, which is every
 /// agenda there is; an earlier instant gets the same rule, not the old one.
-fn new_york_offset_secs(at: DateTime<Utc>) -> i64 {
+pub fn new_york_offset_secs(at: DateTime<Utc>) -> i64 {
     let y = at.year();
     let starts = Utc.from_utc_datetime(
         &nth_weekday(y, 3, Weekday::Sun, 2)

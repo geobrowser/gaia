@@ -10,6 +10,7 @@ pub mod account_weights_compute;
 pub mod account_weights_mirror;
 pub mod agenda_listings_compute;
 pub mod agenda_listings_mirror;
+pub mod agenda_rescore_compute;
 pub mod anchor_select;
 pub mod clickhouse;
 pub mod consumer;
