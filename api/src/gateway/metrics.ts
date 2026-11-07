@@ -26,6 +26,8 @@ export const UNSUPPORTED_REASONS = [
 	"type_scan_window",
 	/** An unordered `entities` type scan the serve refused (`.args.types` is geo-db c2f9d09cfa or later): the serve has not rolled yet. */
 	"type_scan_refused",
+	/** An unordered `entities` type scan page that was cut at `first` (or has an offset) and holds a legacy (non-v4) id: Postgres pages by the raw id, geo-db by the conforming one, so which rows the window holds is not comparable. */
+	"type_scan_legacy_ids",
 	/** `metas`: the indexer cursor rows (id, cursor, block number) live only in Postgres; geo-db holds no read of them. */
 	"no_geodb_home",
 	/** `metas`: geo-db's `cursors` collection holds no row for an indexer PostgreSQL has (the mirror is off, or has not written yet). */
@@ -58,6 +60,8 @@ export const UNCOMPARED_REASONS = [
 	"filter_completeness",
 	/** An `orderBy` page: which entities come first, and where ties fall, is not checkable from cards. */
 	"order_completeness",
+	/** An unordered `entities` type scan page holding a legacy (non-v4) id: the whole page's members matched, but their order was not compared (Postgres orders by the raw id, geo-db by the conforming one). */
+	"legacy_id_order",
 	/** A single-key `orderBy` page was read from geo-db with `.pick`/`.ties`, but equal keys make the order (or the cut) geo-db's own: membership only, or nothing, was compared. */
 	"order_ties",
 	"sampled_rows",
