@@ -94,6 +94,14 @@ export type GeoDbCardConfig = {
 	 */
 	crossSpaceNames?: boolean
 	/**
+	 * Settle an every-Space card read (an answer that names no Space) by asking geo-db which Spaces hold the entity
+	 * (`.args.holders = true`) and reading the card in those alone, in place of the card across every loaded Space.
+	 * Needs a serve whose store has geo-db 48739dfef5, so turn it on only after the serve pin passes that commit; a store
+	 * that refuses the argument is detected and read the old way for a while. Also needs `everySpaceReads`. Off by
+	 * default. GEODB_HOLDERS_LOOKUP=on.
+	 */
+	holdersLookup?: boolean
+	/**
 	 * Lifetime of the capability token a worker's handshake gets, in seconds: geo-db's `grant_ttl_s`
 	 * (GEODB_GRANT_TTL_S on the serve, 300 by default). A worker is replaced before its token expires, so no
 	 * read finds the token dead. Absent means the default.
@@ -136,6 +144,7 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		relationsTypeFilter: env.GEODB_RELATIONS_TYPE_FILTER_SHADOW?.trim().toLowerCase() === "on",
 		nestedTargetValues: env.GEODB_NESTED_TARGET_VALUES_SHADOW?.trim().toLowerCase() === "on",
 		crossSpaceNames: env.GEODB_CROSS_SPACE_NAMES_SHADOW?.trim().toLowerCase() === "on",
+		holdersLookup: env.GEODB_HOLDERS_LOOKUP?.trim().toLowerCase() === "on",
 		poolSize: Number.isFinite(pool) && pool > 0 ? Math.min(pool, MAX_POOL_SIZE) : DEFAULT_POOL_SIZE,
 		grantTtlS: Number.isFinite(grantTtl) && grantTtl > 0 ? grantTtl : DEFAULT_GRANT_TTL_S,
 	}

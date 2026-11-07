@@ -1203,6 +1203,12 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	/** Timeout in ms of an every-Space read, in place of the pool's (`GEODB_EVERY_SPACE_TIMEOUT_MS`). */
 	everySpaceTimeoutMs?: number
 	/**
+	 * Settle an every-Space read by asking geo-db which Spaces hold the entity (`.args.holders`) and reading the card in
+	 * those alone (`GEODB_HOLDERS_LOOKUP`). Absent: the card is read across every Space as before. A store that refuses
+	 * the argument is read the old way until the gate's cooldown passes.
+	 */
+	holders?: HoldersGate
+	/**
 	 * Read a single-key `CREATED_AT`/`UPDATED_AT` `orderBy` page of the light `entities` shadow from geo-db with the order's
 	 * `.pick` and `.ties` members and compare it (`GEODB_ORDER_PICK_SHADOW`). Needs a serve that reads those members, `multiSpace`
 	 * and `allGeoSpaces`; off by default because an older serve refuses the document.
@@ -1311,6 +1317,63 @@ export async function readWide(
 	return {ok: true, rows, bySpace, scope: {spaces, populated}, ms: Math.round(performance.now() - started)}
 }
 
+/** How long a refused holders read keeps the lookup off, so a store that predates the argument is not asked every read. */
+const HOLDERS_COOLDOWN_MS = 5 * 60_000
+
+/** Whether the holders lookup may be tried, and a note that the store refused it. */
+export type HoldersGate = {allowed(): boolean; refused(): void}
+
+export function createHoldersGate(options: {cooldownMs?: number; now?: () => number} = {}): HoldersGate {
+	const cooldownMs = options.cooldownMs ?? HOLDERS_COOLDOWN_MS
+	const now = options.now ?? Date.now
+	let offUntil = 0
+	return {
+		allowed: () => now() >= offUntil,
+		refused: () => {
+			offUntil = now() + cooldownMs
+		},
+	}
+}
+
+/**
+ * The Spaces of `lines` that hold `entityId`, from `.args.holders` (one read a line, all at once), ascending within a
+ * line. Null when the lookup cannot answer and the card should be read across every Space as before: no gate or client
+ * support, the gate cooling down after a refusal, or the store refusing the argument (which starts the cooldown; a
+ * refusal ends the worker's session, so it is not retried every read). A timeout or an overloaded pool is not a
+ * refusal: it throws, as the card read it replaces would.
+ */
+async function readHolderSpaces(deps: EntityShadowDeps, entityId: string, lines: string[][], label: string) {
+	const readHolders = deps.geoDb.readHolders?.bind(deps.geoDb)
+	const gate = deps.holders
+	if (!gate || !readHolders || !gate.allowed()) return null
+	let answers: string[][]
+	try {
+		answers = await Promise.all(
+			lines.map((line) =>
+				readHolders({
+					geoSpaceIds: line,
+					entityId: conformingId("entity", entityId),
+					...(deps.everySpaceTimeoutMs ? {timeoutMs: deps.everySpaceTimeoutMs} : {}),
+				}),
+			),
+		)
+	} catch (error) {
+		const reason = error instanceof GeoDbError ? error.reason : "error"
+		if (reason === "timeout" || reason === "overloaded") throw error
+		if (reason === "client_failed") gate.refused()
+		deps.log.warn(`${label} holders lookup refused; reading every Space`, {entityId, reason, error: String(error)})
+		return null
+	}
+	const asked = new Set(lines.flat())
+	const holders = answers.flat()
+	if (holders.some((space) => !asked.has(space))) {
+		gate.refused()
+		deps.log.warn(`${label} holders lookup answered an unrequested space; reading every Space`, {entityId})
+		return null
+	}
+	return holders
+}
+
 /** Most Spaces one every-Space read names: geo-db's `MAX_SOURCES`, past which it refuses the request. */
 export const MAX_EVERY_SPACES = 1024
 
@@ -1334,13 +1397,33 @@ export async function readEverySpace(deps: EntityShadowDeps, entityId: string, l
 	if (spaces.length === 0) return {ok: false, result: "unsupported", reason: "no_space"}
 	if (spaces.length > MAX_EVERY_SPACES && deps.everySpaceChunks !== true)
 		return {ok: false, result: "unsupported", reason: "many_spaces"}
-	const lines: string[][] = []
-	for (let at = 0; at < spaces.length; at += MAX_EVERY_SPACES) lines.push(spaces.slice(at, at + MAX_EVERY_SPACES))
+	const chunked = (all: string[]): string[][] => {
+		const out: string[][] = []
+		for (let at = 0; at < all.length; at += MAX_EVERY_SPACES) out.push(all.slice(at, at + MAX_EVERY_SPACES))
+		return out
+	}
+	let lines = chunked(spaces)
 	if (deps.everySpaceBudget && !deps.everySpaceBudget.tryAcquire(lines.length))
 		return {ok: false, result: "unsupported", reason: "throttled"}
 	const started = performance.now()
 	const rows: GeoCardRow[] = []
 	try {
+		// With the holders lookup, the card is read only in the Spaces that hold the entity (at most as many lines as
+		// the full read, so the budget taken above covers both reads).
+		const holders = await readHolderSpaces(deps, entityId, lines, label)
+		if (holders) {
+			if (holders.length === 0) {
+				observeGeoDbRead((performance.now() - started) / 1000, "ok")
+				return {
+					ok: true,
+					rows: [],
+					bySpace: new Map(),
+					scope: {spaces, populated: []},
+					ms: Math.round(performance.now() - started),
+				}
+			}
+			lines = chunked(holders)
+		}
 		// The lines go out together: every one holds a token of `everySpaceBudget`, taken above, so the read's
 		// width is the budget's, and the whole read waits for its slowest line (each line's own timeout bounds it).
 		// `Promise.all` keeps the lines' order, so the rows concatenate as the serial walk's did.
@@ -1376,7 +1459,7 @@ export async function readEverySpace(deps: EntityShadowDeps, entityId: string, l
 	const plain: GeoRow[] = []
 	for (const row of rows) {
 		const {space: printed, ...rest} = row
-		// A one-Space line prints bare statement ids, so its rows name no Space.
+		// A one-Space line prints bare statement ids, so its rows name no Space (the line's own Space is set above).
 		const space = printed ?? (spaces.length === 1 ? spaces[0] : undefined)
 		if (!space || !asked.has(space)) {
 			deps.log.warn(`${label} every-space read answered an unrequested space`, {entityId, space})

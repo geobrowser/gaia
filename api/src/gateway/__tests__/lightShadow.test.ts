@@ -2,8 +2,9 @@ import {readFileSync} from "node:fs"
 import {parse} from "graphql"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {CREATED_AT_PROPERTY, conformingId, rowsFromGeoDbOutput, UPDATED_AT_PROPERTY, valueKey} from "../../geodb/card"
+import {GeoDbError, holdersDocument} from "../../geodb/client"
 import {createEntitiesConnectionShadow, createEntitiesOrderedShadow} from "../entitiesConnectionShadow"
-import {createEntityShadow, isEmptyFilter} from "../entityShadow"
+import {createEntityShadow, createHoldersGate, type HoldersGate, isEmptyFilter} from "../entityShadow"
 import {analyzeLightEntities, analyzeLightEntity} from "../lightShadow"
 import {__resetGatewayMetricsForTests, renderGatewayMetrics} from "../metrics"
 import {mergeIsExact, mergePages} from "../orderPickShadow"
@@ -1033,6 +1034,7 @@ describe("entity answers with no Space (every-Space reads)", () => {
 			budget?: ReturnType<typeof createReadBudget>
 			spaces?: string[]
 			chunks?: boolean
+			holders?: {gate: HoldersGate; readHolders: ReturnType<typeof vi.fn>}
 		} = {},
 	) {
 		const log = {info: vi.fn(), warn: vi.fn()}
@@ -1042,9 +1044,10 @@ describe("entity answers with no Space (every-Space reads)", () => {
 		const deps = {
 			everySpaceChunks: options.chunks,
 			multiSpace: true,
-			geoDb: {readCard, readCardSpaces},
+			geoDb: {readCard, readCardSpaces, ...(options.holders ? {readHolders: options.holders.readHolders} : {})},
 			geoSpaceOf: async (space: string) => geoSpace(space),
 			log,
+			...(options.holders ? {holders: options.holders.gate} : {}),
 			...(options.flag === false ? {} : {allGeoSpaces, everySpaceBudget: options.budget}),
 		}
 		return {log, readCard, readCardSpaces, allGeoSpaces, entity: createEntityShadow(deps)}
@@ -1207,6 +1210,104 @@ describe("entity answers with no Space (every-Space reads)", () => {
 			expect(s.readCardSpaces).toHaveBeenCalledTimes(2)
 			const sizes = s.readCardSpaces.mock.calls.map((c) => c[0].geoSpaceIds.length)
 			expect(sizes).toEqual([1024, many.length - 1024])
+		})
+	})
+
+	describe("the holders lookup (GEODB_HOLDERS_LOOKUP)", () => {
+		const rows = () => ({[geoSpace(SPACE_C)]: geoOutput(ENTITY) + typeRow(HEX, NEWS_STORY, "News story")})
+		const holdersOf = (answer: (args: {geoSpaceIds: string[]; entityId: string}) => Promise<string[]>) => ({
+			gate: createHoldersGate(),
+			readHolders: vi.fn(answer),
+		})
+
+		it("builds the holders document: the entity's id and `.holders = true`", () => {
+			expect(holdersDocument(HEX)).toBe(
+				`.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${HEX}", .holders = true } } } }`,
+			)
+		})
+
+		it("reads the card only in the Spaces that hold the entity", async () => {
+			const holders = holdersOf(async () => [geoSpace(SPACE_C)])
+			const s = everySetup(rows(), {holders})
+			await run(s, EVERY.entityTypes)
+			expect(results()).toEqual({match: 1})
+			expect(holders.readHolders).toHaveBeenCalledTimes(1)
+			expect(holders.readHolders.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: ALL})
+			expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
+			expect(s.readCardSpaces.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: [geoSpace(SPACE_C)], names: true})
+		})
+
+		it("reads no card where no Space holds the entity", async () => {
+			const holders = holdersOf(async () => [])
+			const s = everySetup({}, {holders})
+			await run(s, EVERY.entityExists)
+			expect(holders.readHolders).toHaveBeenCalledTimes(1)
+			expect(s.readCardSpaces).not.toHaveBeenCalled()
+			expect(s.readCard).not.toHaveBeenCalled()
+			expect(s.log.warn).not.toHaveBeenCalled()
+		})
+
+		it("batches the holders in lines of at most 1024 Spaces", async () => {
+			const filler = Array.from({length: 1100}, (_, i) => geoSpace(`${(i + 1).toString(16).padStart(32, "0")}`))
+			const many = [...ALL, ...filler]
+			const holders = holdersOf(async ({geoSpaceIds}) => geoSpaceIds.filter((g) => g === geoSpace(SPACE_C)))
+			const s = everySetup(rows(), {spaces: many, chunks: true, holders})
+			await run(s, EVERY.entityTypes)
+			expect(results()).toEqual({match: 1})
+			expect(holders.readHolders.mock.calls.map((c) => c[0].geoSpaceIds.length)).toEqual([
+				1024,
+				many.length - 1024,
+			])
+			expect(s.readCardSpaces).toHaveBeenCalledTimes(1)
+			expect(s.readCardSpaces.mock.calls[0]?.[0].geoSpaceIds).toEqual([geoSpace(SPACE_C)])
+		})
+
+		it("falls back to the card across every Space when the store refuses the argument, then stays off", async () => {
+			const holders = holdersOf(async () => {
+				throw new GeoDbError("client_failed", "MalformedRequest: unknown argument holders")
+			})
+			const s = everySetup(rows(), {holders})
+			await run(s, EVERY.entityTypes)
+			await run(s, EVERY.entityTypes)
+			expect(results()).toEqual({match: 2})
+			expect(holders.readHolders).toHaveBeenCalledTimes(1)
+			expect(s.readCardSpaces).toHaveBeenCalledTimes(2)
+			expect(s.readCardSpaces.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: ALL})
+		})
+
+		it("tries the lookup again once the cooldown has passed", () => {
+			let now = 0
+			const gate = createHoldersGate({cooldownMs: 1000, now: () => now})
+			expect(gate.allowed()).toBe(true)
+			gate.refused()
+			expect(gate.allowed()).toBe(false)
+			now = 1000
+			expect(gate.allowed()).toBe(true)
+		})
+
+		it("falls back when the store answers a Space the line did not name", async () => {
+			const holders = holdersOf(async () => [geoSpace(SPACE_D)])
+			const s = everySetup(rows(), {holders})
+			await run(s, EVERY.entityTypes)
+			expect(results()).toEqual({match: 1})
+			expect(s.readCardSpaces.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: ALL})
+		})
+
+		it("counts a timed-out holders read as failed, not a refusal to read around", async () => {
+			const holders = holdersOf(async () => {
+				throw new GeoDbError("timeout", "geo-db read exceeded 500 ms")
+			})
+			const s = everySetup(rows(), {holders})
+			await run(s, EVERY.entityTypes)
+			expect(results()).toEqual({failed: 1})
+			expect(s.readCardSpaces).not.toHaveBeenCalled()
+			expect(holders.gate.allowed()).toBe(true)
+		})
+
+		it("reads the card across every Space with the flag off (no gate)", async () => {
+			const s = everySetup(rows())
+			await run(s, EVERY.entityTypes)
+			expect(s.readCardSpaces.mock.calls[0]?.[0]).toMatchObject({geoSpaceIds: ALL})
 		})
 	})
 
