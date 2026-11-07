@@ -19,12 +19,65 @@ spec:
           securityContext:
             runAsNonRoot: true
             runAsUser: 1001
+            # Lets uid 1001 read the 0440 geodb reader key below (the api does the same).
+            fsGroup: 1001
           imagePullSecrets:
             - name: geo
           volumes:
             - name: ssl-certs
               emptyDir: {}
+            # geo-db twin (PROPOSAL_EXECUTOR_GEODB_TWIN), same pattern as the api. Every reference is
+            # optional or fails soft, so an absent geodb never blocks a run.
+            - name: geodb-bin
+              emptyDir: {}
+            - name: geodb-space-map
+              configMap:
+                # Written by the geodb-feeder: space-map.json, node-id and system-spaces.json (the twin reads
+                # system-spaces.json from the same directory as the space map). Not shipped here.
+                name: geodb-space-map
+                optional: true
+            - name: geodb-key
+              secret:
+                secretName: geodb-reader-key
+                optional: true
+                defaultMode: 0440
+                items:
+                  - key: key
+                    path: reader.key
           initContainers:
+            # Pinned, never :latest: deploy-v2 rewrites every :latest to the service tag. Copies geodb-client and
+            # writes the binding, exactly as the api's init container does. Always exits 0.
+            - name: geodb-setup
+              image: registry.digitalocean.com/geo/geodb:6b34f9feda
+              imagePullPolicy: IfNotPresent
+              command:
+                - sh
+                - -c
+                - |
+                  cp /usr/local/bin/geodb-client /geodb/geodb-client || exit 0
+                  node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+                  ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+                  if [ -n "$node" ] && [ -n "$ip" ]; then
+                    printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+                  else
+                    echo "geodb-setup: no node id or no geodb Service; the geo-db twin stays idle"
+                  fi
+                  exit 0
+              volumeMounts:
+                - name: geodb-bin
+                  mountPath: /geodb
+                - name: geodb-space-map
+                  mountPath: /etc/geodb/space-map
+                  readOnly: true
+              resources:
+                requests:
+                  memory: "16Mi"
+                  cpu: "10m"
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
             - name: setup-certs
               image: registry.digitalocean.com/geo/proposal-executor:latest
               command: ["sh", "-c", "echo \"$DATABASE_SSL_CA\" > /ssl/ca.crt"]
@@ -169,12 +222,33 @@ spec:
                       name: proposal-executor-credentials
                       key: SENTRY_DSN
                       optional: true
+                # geo-db twin of detection: compares SQL's detected set with geo-db's and logs
+                # geodb_twin_summary / geodb_twin_mismatch. Never changes what is executed.
+                - name: PROPOSAL_EXECUTOR_GEODB_TWIN
+                  value: "true"
+                - name: GEODB_CLIENT_BIN
+                  value: /geodb/geodb-client
+                - name: GEODB_KEY_PATH
+                  value: /etc/geodb/key/reader.key
+                - name: GEODB_BINDING_PATH
+                  value: /geodb/binding.txt
+                - name: GEODB_SPACE_MAP_PATH
+                  value: /etc/geodb/space-map/space-map.json
                 # Trust DigitalOcean's CA cert for database SSL
                 - name: NODE_EXTRA_CA_CERTS
                   value: "/ssl/ca.crt"
               volumeMounts:
                 - name: ssl-certs
                   mountPath: /ssl
+                  readOnly: true
+                - name: geodb-bin
+                  mountPath: /geodb
+                  readOnly: true
+                - name: geodb-space-map
+                  mountPath: /etc/geodb/space-map
+                  readOnly: true
+                - name: geodb-key
+                  mountPath: /etc/geodb/key
                   readOnly: true
               securityContext:
                 allowPrivilegeEscalation: false
