@@ -23,6 +23,7 @@ use sqlx::postgres::PgPoolOptions;
 use tracing::{info, warn};
 
 use ranking_indexer::anchor_select;
+use ranking_indexer::claim_overlap;
 use ranking_indexer::error::IndexerError;
 use ranking_indexer::primer_claims_mirror::{
     self as family, AnchorMember, AnchorSet, ClaimStats, PriorClaim,
@@ -51,6 +52,84 @@ fn primer_stats_rust_enabled() -> bool {
         env::var("PRIMER_STATS_RUST_COMPUTE").as_deref(),
         Ok("1") | Ok("true")
     )
+}
+
+/// `CLAIM_OVERLAP_RUST_COMPUTE` (default off): after the SQL recorded the day's overlap sample,
+/// compute it again in code from the same tables as of the sample's own `sampled_at` and log whether
+/// every field and the anchor set id agree. Weights or votes that change in the gap show as a mismatch.
+fn overlap_rust_enabled() -> bool {
+    matches!(
+        env::var("CLAIM_OVERLAP_RUST_COMPUTE").as_deref(),
+        Ok("1") | Ok("true")
+    )
+}
+
+type SampleRow = (i64, i32, i32, i32, i64, i64, Option<f64>, Option<i32>);
+
+async fn overlap_shadow(pool: &sqlx::PgPool) -> Result<Option<bool>, IndexerError> {
+    let sample: Option<SampleRow> = sqlx::query_as(
+        "SELECT (extract(epoch FROM sampled_at)::numeric * 1000000)::bigint, min_votes, min_shared, \
+                users, pairs, pairs_sharing, share, anchor_set_id \
+         FROM public.claim_overlap_samples ORDER BY sampled_at DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    let Some((as_of, min_votes, min_shared, users, pairs, sharing, share, set_id)) = sample else {
+        return Ok(None);
+    };
+    let claims: Vec<Uuid> = sqlx::query_scalar(&format!(
+        "SELECT DISTINCT r.from_entity_id FROM public.relations r WHERE {CLAIM_REL}"
+    ))
+    .fetch_all(pool)
+    .await?;
+    let weights: Vec<(Uuid, f64)> =
+        sqlx::query_as("SELECT user_id, weight FROM public.account_weights")
+            .fetch_all(pool)
+            .await?;
+    let votes: Vec<(Uuid, Uuid, i16, i16, i64)> = sqlx::query_as(
+        "SELECT user_id, object_id, vote_kind, vote_type, \
+                (extract(epoch FROM voted_at)::numeric * 1000000)::bigint \
+         FROM public.user_votes WHERE vote_kind = 1 AND vote_type IN (0, 1)",
+    )
+    .fetch_all(pool)
+    .await?;
+    let sets: Vec<(i32, i64)> = sqlx::query_as(
+        "SELECT id, (extract(epoch FROM effective_from)::numeric * 1000000)::bigint \
+         FROM public.anchor_claim_sets",
+    )
+    .fetch_all(pool)
+    .await?;
+    let votes: Vec<primer_stats::Vote> = votes
+        .into_iter()
+        .map(
+            |(user_id, object_id, vote_kind, vote_type, voted_us)| primer_stats::Vote {
+                user_id,
+                object_id,
+                vote_kind,
+                vote_type,
+                voted_us,
+            },
+        )
+        .collect();
+    let got = claim_overlap::overlap(
+        &claims.into_iter().collect(),
+        &weights.into_iter().collect(),
+        &votes,
+        as_of,
+        min_votes,
+        min_shared,
+    );
+    let sets: Vec<claim_overlap::AnchorSet> = sets
+        .into_iter()
+        .map(|(id, effective_us)| claim_overlap::AnchorSet { id, effective_us })
+        .collect();
+    Ok(Some(
+        got.users == users
+            && got.pairs == pairs
+            && got.pairs_sharing == sharing
+            && got.share.map(f64::to_bits) == share.map(f64::to_bits)
+            && claim_overlap::anchor_claim_set_at(&sets, as_of) == set_id,
+    ))
 }
 
 async fn anchor_shadow(pool: &sqlx::PgPool, set_id: i32) -> Result<bool, IndexerError> {
@@ -284,6 +363,12 @@ async fn main() -> Result<(), IndexerError> {
             users,
             share, "claim overlap sampled (pairs sharing at least 3 claims)"
         );
+        if overlap_rust_enabled() {
+            match overlap_shadow(&pool).await {
+                Ok(same) => info!(?same, "claim overlap rust compute checked against the SQL"),
+                Err(e) => warn!(error = %e, "claim overlap rust compute skipped"),
+            }
+        }
     }
 
     // Read after every commit above; a read error skips that mirror, never the job.

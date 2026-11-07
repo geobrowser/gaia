@@ -12,6 +12,7 @@ pub mod agenda_listings_compute;
 pub mod agenda_listings_mirror;
 pub mod agenda_rescore_compute;
 pub mod anchor_select;
+pub mod claim_overlap;
 pub mod clickhouse;
 pub mod consumer;
 pub mod dedup;
