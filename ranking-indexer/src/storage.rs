@@ -44,6 +44,9 @@ pub struct Storage {
     /// Best-effort copy of `ranks.ranking_scores` into geo-db (collection 11); `None` unless
     /// `GEODB_DERIVED_MIRROR` is on. See [`crate::derived_mirror`].
     derived: Option<std::sync::Arc<geodb_cursor::derived::DerivedMirror>>,
+    /// Flag-off shadow of the `ranks.ranking_scores` read against geo-db; see
+    /// [`crate::ranks_reads_shadow`].
+    reads_shadow: Option<std::sync::Arc<crate::ranks_reads_shadow::RanksReadsShadow>>,
 }
 
 impl Storage {
@@ -55,6 +58,7 @@ impl Storage {
         Ok(Self {
             pool,
             derived: geodb_cursor::derived::DerivedMirror::from_env().map(std::sync::Arc::new),
+            reads_shadow: crate::ranks_reads_shadow::RanksReadsShadow::from_env(),
         })
     }
 
@@ -769,6 +773,10 @@ impl Storage {
         if let Some(mirror) = self.derived.as_deref() {
             crate::derived_mirror::mirror_block(mirror, block_id, rows, prior.unwrap_or_default())
                 .await;
+        }
+        if let Some(shadow) = self.reads_shadow.clone() {
+            let (rows, block) = (rows.to_vec(), block_id);
+            tokio::spawn(async move { shadow.observe_block(block, &rows).await });
         }
         Ok(())
     }
