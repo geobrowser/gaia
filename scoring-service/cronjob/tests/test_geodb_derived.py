@@ -313,6 +313,7 @@ class TestWriterIntegration:
     def test_rows_are_mirrored_after_postgres_commit(self) -> None:
         order: list[str] = []
         mirror = MagicMock()
+        mirror.stats = {"puts": 0, "errors": 0, "skipped": 0, "dropped": 0}
         mirror.skipped = MagicMock()
         mirror.put.side_effect = lambda table, rows: order.append(table)
         w = self._writer(mirror)
@@ -323,7 +324,8 @@ class TestWriterIntegration:
             c.return_value.__enter__.return_value = conn
             conn.transaction.return_value.__exit__.side_effect = lambda *a: order.append("commit")
             w.write_all([entity(E1, 0.5, [persp(E1, S1, 0.7)])], [s])
-        assert order == ["commit", "global_scores", "local_scores", "space_scores"]
+        # The savepoints around the state writes also exit as "commit"; the outer one is the last before the puts, and the final state write adds one after them.
+        assert order[-5:-1] == ["commit", "global_scores", "local_scores", "space_scores"]
 
     def test_geodb_failure_does_not_fail_the_write(self) -> None:
         mirror = MagicMock()
@@ -339,3 +341,105 @@ class TestWriterIntegration:
             with pytest.raises(RuntimeError):
                 w.write_all([entity(E1, 0.5)], [])
         mirror.put.assert_not_called()
+
+
+class _StatMirror:
+    """A mirror double with real counters; ``put`` records the rows and can fake a drop."""
+
+    def __init__(self, drop: str | None = None) -> None:
+        self.stats = {"puts": 0, "errors": 0, "skipped": 0, "dropped": 0}
+        self.sent: dict[str, list[DerivedRow]] = {}
+        self.drop = drop
+
+    def enabled(self, table: str) -> bool:
+        return True
+
+    def skipped(self, error, table: str = "") -> None:
+        self.stats["skipped"] += 1
+
+    def put(self, table: str, rows) -> None:
+        rows = list(rows)
+        self.sent[table] = rows
+        if table == self.drop:
+            self.stats["dropped"] += len(rows)
+        else:
+            self.stats["puts"] += len(rows)
+
+
+E3 = "44444444-4444-4444-8444-444444444444"
+S2 = "55555555-5555-4555-8555-555555555555"
+
+
+class TestChangedOnlyMirror:
+    def _data(self):
+        ents = [
+            entity(E1, 0.5, [persp(E1, S1, 0.7), persp(E1, S2, 0.8)]),
+            entity(E2, 0.6, [persp(E2, S1, 0.9)]),
+            entity(E3, 0.1),
+        ]
+        sp = Space(id=S1, created_at=datetime.now())
+        sp.space_score = 2.0
+        return ents, [sp]
+
+    def _write(self, mirror, synced, changed):
+        w = ScoringDataWriter("postgresql://x", derived=mirror)
+        ents, sp = self._data()
+        marks: list[tuple[list[str], bool]] = []
+        with (
+            patch("src.scoring_data_writer.scoring_data_writer.psycopg.connect") as c,
+            patch.object(ScoringDataWriter, "_synced_tables", return_value=set(synced)),
+            patch.object(ScoringDataWriter, "_changed_keys", side_effect=lambda conn, t, e: changed[t]),
+            patch.object(ScoringDataWriter, "_set_synced", side_effect=lambda conn, t, v: marks.append((list(t), v))),
+        ):
+            c.return_value.__enter__.return_value = MagicMock()
+            w.write_all(ents, sp)
+        return marks
+
+    def test_unsynced_tables_are_sent_whole(self) -> None:
+        m = _StatMirror()
+        marks = self._write(m, set(), {})
+        assert len(m.sent["global_scores"]) == 3
+        assert len(m.sent["local_scores"]) == 3
+        assert len(m.sent["space_scores"]) == 1
+        # Marked unsynced inside the write, synced after a clean mirror.
+        assert marks == [(["global_scores", "local_scores", "space_scores"], False),
+                         (["global_scores", "local_scores", "space_scores"], True)]
+
+    def test_synced_tables_send_only_changed_keys(self) -> None:
+        m = _StatMirror()
+        changed = {"global_scores": {E2}, "local_scores": {(E1, S2)}}
+        self._write(m, {"global_scores", "local_scores"}, changed)
+        assert [r.key for r in m.sent["global_scores"]] == [uuid.UUID(E2).bytes]
+        assert [r.key for r in m.sent["local_scores"]] == [uuid.UUID(E1).bytes + uuid.UUID(S2).bytes]
+        assert len(m.sent["space_scores"]) == 1  # small table: always whole
+
+    def test_nothing_changed_sends_nothing(self) -> None:
+        m = _StatMirror()
+        self._write(m, {"global_scores", "local_scores"}, {"global_scores": set(), "local_scores": set()})
+        assert m.sent["global_scores"] == [] and m.sent["local_scores"] == []
+
+    def test_a_dropped_table_stays_unsynced(self) -> None:
+        m = _StatMirror(drop="local_scores")
+        marks = self._write(m, set(), {})
+        assert marks[-1] == (["global_scores", "space_scores"], True)
+
+    def test_unsynced_state_is_not_marked_when_mirror_is_off(self) -> None:
+        marks = self._write(MagicMock(**{"enabled.return_value": False, "stats": {"puts": 0, "errors": 0, "skipped": 0, "dropped": 0}}), set(), {})
+        assert all(t == [] for t, _ in marks)
+
+
+class TestLazySend:
+    def test_budget_drop_counts_the_unsent_rest_of_a_generator(self, tmp_path) -> None:
+        argv, log = _logging_child(tmp_path)
+        m = DerivedMirror(argv, budget=0.0)
+        rows = (DerivedRow(COLLECTION_GLOBAL, 0, 1.0, uuid.UUID(int=i + 1).bytes) for i in range(500))
+        m.put("global_scores", rows)
+        # One chunk goes (the budget is only looked at after the first), the other 436 are dropped.
+        assert m.stats["puts"] == 64
+        assert m.stats["dropped"] == 436
+        m.close()
+
+    def test_local_rows_only_filters_perspectives(self) -> None:
+        e = entity(E1, 0.5, [persp(E1, S1, 0.7), persp(E1, S2, 0.8)])
+        rows = local_rows([e], only={(E1, S2)})
+        assert [r.key for r in rows] == [uuid.UUID(E1).bytes + uuid.UUID(S2).bytes]

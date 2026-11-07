@@ -132,6 +132,14 @@ spec:
                 - name: GEODB_DERIVED_MIRROR
                   value: "1"
                 # Which tables the mirror writes, comma separated; unset mirrors all three (Stage B).
+                # Rows go 256 a request (putn, one fsync each) instead of one fsync per row, and each
+                # table has 20 minutes, not 5 seconds. The first run after the state table exists (and
+                # any run after a drop) rewrites a table whole, 1.8M rows each; later runs send only the
+                # rows whose score changed. The geodb image below carries the batch verbs.
+                - name: GEODB_DERIVED_BATCH
+                  value: "1"
+                - name: GEODB_DERIVED_BUDGET_MS
+                  value: "1200000"
                 - name: GEODB_CLIENT_BIN
                   value: /geodb/geodb-client
                 - name: GEODB_KEY_PATH
