@@ -177,7 +177,7 @@ spec:
             # (notification_indexer_geodb_twin_total). Postgres stays the source. "0" = off; set "1" to turn
             # it on once the reader key, space map and system-spaces.json are in place.
             - name: NOTIFICATION_INDEXER_GEODB_TWIN
-              value: "0"
+              value: "1"
             - name: GEODB_KEY_PATH
               value: /etc/geodb/reader/reader.key
             - name: GEODB_SPACE_MAP_PATH
