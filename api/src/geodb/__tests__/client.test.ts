@@ -11,6 +11,8 @@ import {
 	GeoDbError,
 	holdersDocument,
 	isHoldersUnknownArgument,
+	MAX_TYPE_SCAN,
+	typeScanDocument,
 } from "../client"
 import type {GeoDbCardConfig} from "../config"
 import {activateGeoDbMetrics, renderGeoDbCardMetrics} from "../metrics"
@@ -739,6 +741,98 @@ lines((line) => {
 			{geoSpaceIds: [SPACE], ...request, field: "nope"},
 		])
 			await expect(client.readEntitiesPage?.(bad)).rejects.toMatchObject({reason: "bad_request"})
+		expect(starts()).toBe(0)
+		client.close()
+	})
+})
+
+describe("the type scan", () => {
+	const A = "44444444444444448444444444444444"
+	const B = "77777777777747778777777777777777"
+	const E1 = "55555555555545558555555555555555"
+	const E2 = "66666666666646668666666666666666"
+
+	it("names the types and the page's first on the entities root, with no order or selection", () => {
+		expect(typeScanDocument({typeIds: [A, B], first: 7})).toBe(
+			`.{ .version = 1, .select = .{ .t = .{ .field = "entities", .args = .{ .types = .{ "${A}", "${B}" }, .first = 7 } } } }`,
+		)
+	})
+
+	it("reads the entity ids a line each, in the order the store printed them", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [spaces, doc] = line.split("\\t")
+	if (!doc.includes(".types = .{ \\"${A}\\", \\"${B}\\" }") || !doc.includes(".first = 5")) return frame("-", "bad document")
+	frame("+", "${E1}\\t1\\n${E2}\\t1\\n")
+})
+`)
+		await expect(client.readTypeScan?.({geoSpaceIds: [SPACE], typeIds: [A, B], first: 5})).resolves.toEqual([
+			E1,
+			E2,
+		])
+		client.close()
+	})
+
+	it("surfaces a store that predates the argument as client_failed carrying its refusal", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines(() => frame("-", "refused: Request MalformedRequest"))
+`)
+		await expect(client.readTypeScan?.({geoSpaceIds: [SPACE], typeIds: [A], first: 5})).rejects.toMatchObject({
+			reason: "client_failed",
+			message: expect.stringContaining("MalformedRequest"),
+		})
+		client.close()
+	})
+
+	it("refuses a bad scan request before it reaches the worker, and asks at most 4096", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		const ok = {geoSpaceIds: [SPACE], typeIds: [A], first: 5}
+		for (const bad of [
+			{...ok, geoSpaceIds: []},
+			{...ok, geoSpaceIds: [SPACE, SPACE]},
+			{...ok, typeIds: []},
+			{...ok, typeIds: [A, A]},
+			{...ok, typeIds: Array.from({length: 33}, (_, i) => i.toString(16).padStart(32, "0"))},
+			{...ok, typeIds: ['x" } }']},
+			{...ok, first: 0},
+			{...ok, first: MAX_TYPE_SCAN + 1},
+		])
+			await expect(client.readTypeScan?.(bad)).rejects.toMatchObject({reason: "bad_request"})
+		expect(starts()).toBe(0)
+		client.close()
+	})
+})
+
+describe("readLegacyIds", () => {
+	const A = "990a4147a92855e88e630e542faf1c72"
+	const B = "01a1a8c0000070008000000000000001"
+	const KEYED = "aa000000000040008000000000000001"
+
+	it("sends one every-Space by_legacy line, sorted, and reads each row's keyed id", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [scope, doc] = line.split("\\t")
+	const ok = scope === "*" && doc.includes('.by_legacy = .{ "${B}", "${A}" }')
+	frame(ok ? "+" : "-", ok ? "${PROP}\\t<bytes>\\t${SPACE}:${ENTITY}\\t${KEYED}\\t1\\n-\\t<bytes>\\t-\\t${A}\\t1\\n" : "bad line " + line)
+})
+`)
+		const rows = await client.readLegacyIds?.({originalIds: [A, B]})
+		expect(rows?.map((r) => r.entity)).toEqual([KEYED, A])
+		client.close()
+	})
+
+	it("refuses a bad id list before it reaches the worker", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		for (const bad of [
+			[],
+			[A, A],
+			['x" } }'],
+			Array.from({length: 33}, (_, i) => i.toString(16).padStart(32, "0")),
+		])
+			await expect(client.readLegacyIds?.({originalIds: bad})).rejects.toMatchObject({reason: "bad_request"})
 		expect(starts()).toBe(0)
 		client.close()
 	})

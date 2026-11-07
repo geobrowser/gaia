@@ -40,6 +40,7 @@ import {
 	holderSpacesFromGeoDbOutput,
 	pageRowsFromGeoDbOutput,
 	rowsFromGeoDbOutput,
+	typeScanIdsFromGeoDbOutput,
 } from "./card"
 import type {GeoDbCardConfig} from "./config"
 import {observeReadStage, type ReadShape, recordWorkerEnd, recordWorkerStart, type WorkerEndReason} from "./metrics"
@@ -92,7 +93,36 @@ export type GeoDbCardClient = {
 	 * client that cannot do it.
 	 */
 	readEntitiesPage?(args: EntitiesPageRequest): Promise<GeoPageRow[]>
+	/**
+	 * The distinct entities typed by any of `typeIds` (`entities` root, `.args.types`, geo-db ISS-577-185) across the Spaces
+	 * named: their ids, each once, in entity-id order, `first` of them at most. Needs a store from geo-db c2f9d09cfa or later,
+	 * which an older one refuses (`client_failed`, `MalformedRequest`). Absent on a client that cannot do it.
+	 */
+	readTypeScan?(args: TypeScanRequest): Promise<string[]>
+	/**
+	 * The keyed ids geo-db holds 1 to `MAX_CARD_IDS` original (gaia) ids under (`.args.by_legacy`, geo-db ISS-629-174), read
+	 * across every Space (`*` line): one row a keyed id, its entity cell the keyed id. A v4 original answers as itself, an
+	 * unmapped one gives no row, and an original two Spaces map gives two. Rows are not tied to the id asked: the client prints
+	 * the original (a `Bytes` value) as `<bytes>`, so the caller matches rows to ids by the keyed ids it expects. Needs a store
+	 * from geo-db bac1c75004 or later and a client that speaks the `*` line, which an older one refuses (`client_failed`).
+	 * Absent on a client that cannot do it.
+	 */
+	readLegacyIds?(args: {originalIds: string[]; timeoutMs?: number}): Promise<GeoCardRow[]>
 }
+
+export type TypeScanRequest = {
+	geoSpaceIds: string[]
+	/** 1 to `MAX_TYPE_SCAN_TYPES` distinct types (32 hex digits). */
+	typeIds: string[]
+	/** Entities asked for, 1 to `MAX_TYPE_SCAN`. */
+	first: number
+}
+
+/** Most entities one type scan asks for: geo-db's `MAX_TOPK_LIMIT`. */
+export const MAX_TYPE_SCAN = 4096
+
+/** Most types one type scan names: geo-db's `MAX_UNION_CHILDREN`. */
+export const MAX_TYPE_SCAN_TYPES = 32
 
 export type EntitiesPageRequest = {
 	geoSpaceIds: string[]
@@ -159,6 +189,12 @@ export function cardsDocument(entityIds: string[], options: {names?: boolean} = 
 	return `.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .ids = .{ ${ids} }${names} } } } }`
 }
 
+/** The geoql document for the legacy-id lookup of 1..32 original ids (`.args.by_legacy`). Ids are 32 hex digits, so nothing needs escaping. */
+export function legacyDocument(originalIds: string[]): string {
+	const ids = originalIds.map((id) => `"${id}"`).join(", ")
+	return `.{ .version = 1, .select = .{ .l = .{ .field = "entity", .args = .{ .by_legacy = .{ ${ids} } } } } }`
+}
+
 /**
  * The geoql document for a page of a type's entities ordered by `field`: the order's `.pick` places each entity by its
  * least or greatest value across the Spaces, equal keys follow by entity identity (`.ties = .entity`), and the rows the
@@ -167,6 +203,12 @@ export function cardsDocument(entityIds: string[], options: {names?: boolean} = 
 export function entitiesPageDocument(request: Omit<EntitiesPageRequest, "geoSpaceIds">): string {
 	const order = `.{ .field = "${request.field}", .direction = .${request.direction}, .pick = .${request.pick}, .ties = .entity }`
 	return `.{ .version = 1, .select = .{ .p = .{ .field = "entities", .args = .{ .type = "${request.typeId}", .first = ${request.first}, .order = ${order} }, .select = .{ .k = .{ .field = "${request.field}" } } } } }`
+}
+
+/** The geoql document for a type scan (`.args.types`). Ids are 32 hex digits, so nothing needs escaping. */
+export function typeScanDocument(request: Omit<TypeScanRequest, "geoSpaceIds">): string {
+	const types = request.typeIds.map((id) => `"${id}"`).join(", ")
+	return `.{ .version = 1, .select = .{ .t = .{ .field = "entities", .args = .{ .types = .{ ${types} }, .first = ${request.first} } } } }`
 }
 
 /**
@@ -311,6 +353,10 @@ type Request = {
 	page?: boolean
 	/** A read of several entities' cards: the answer is every row, each keeping its entity. */
 	cards?: boolean
+	/** A legacy-id read: rows like a batch of cards, but a statement cell may be none whatever the Space scope. */
+	legacy?: boolean
+	/** A type scan: the answer is entity ids, one a line. */
+	ids?: boolean
 	/** A holders read: the answer is the Spaces holding `entityId`, each as a row whose `raw` is the Space. */
 	holders?: boolean
 	resolve: (rows: GeoCardRow[]) => void
@@ -499,18 +545,23 @@ export function createPipeGeoDbClient(
 			const answered = performance.now()
 			let outcome: GeoCardRow[] | GeoDbError
 			try {
-				outcome = request.page
-					? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
-					: request.holders
-						? holderSpacesFromGeoDbOutput(payload, request.entityId).map((raw) => ({prop: "", raw}))
-						: request.cards
-							? rowsFromGeoDbOutput(payload, null, {names: request.names, spaces: request.spaces})
-							: request.backlinks
-								? backlinkRowsFromGeoDbOutput(payload, request.entityId, {spaces: request.spaces})
-								: rowsFromGeoDbOutput(payload, request.entityId, {
+				outcome = request.ids
+					? (typeScanIdsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+					: request.page
+						? (pageRowsFromGeoDbOutput(payload) as unknown as GeoCardRow[])
+						: request.holders
+							? holderSpacesFromGeoDbOutput(payload, request.entityId).map((raw) => ({prop: "", raw}))
+							: request.cards
+								? rowsFromGeoDbOutput(payload, null, {
 										names: request.names,
-										spaces: request.spaces,
+										spaces: request.spaces && !request.legacy,
 									})
+								: request.backlinks
+									? backlinkRowsFromGeoDbOutput(payload, request.entityId, {spaces: request.spaces})
+									: rowsFromGeoDbOutput(payload, request.entityId, {
+											names: request.names,
+											spaces: request.spaces,
+										})
 			} catch (error) {
 				outcome = new GeoDbError("client_failed", String(error))
 			}
@@ -555,7 +606,8 @@ export function createPipeGeoDbClient(
 
 	function assign(slot: Slot, request: Request) {
 		slot.request = request
-		if (!request.keepWarm) {
+		// An every-Space line (`*`) names no Space the keep-warm read could repeat.
+		if (!request.keepWarm && !request.line.startsWith("*\t")) {
 			slot.lastSpace = request.line.slice(0, request.line.indexOf("\t")).split(",")[0] ?? null
 			lastSpace = slot.lastSpace
 		}
@@ -582,6 +634,8 @@ export function createPipeGeoDbClient(
 		page = false,
 		cards = false,
 		timeoutMs?: number,
+		ids = false,
+		legacy = false,
 		holders = false,
 	): Promise<GeoCardRow[]> {
 		if (now() < backoffUntil) {
@@ -596,6 +650,8 @@ export function createPipeGeoDbClient(
 				...(backlinks ? {backlinks} : {}),
 				...(page ? {page} : {}),
 				...(cards ? {cards} : {}),
+				...(ids ? {ids} : {}),
+				...(legacy ? {legacy} : {}),
 				...(holders ? {holders} : {}),
 				...(timeoutMs ? {timeoutMs} : {}),
 				resolve,
@@ -732,6 +788,8 @@ export function createPipeGeoDbClient(
 				false,
 				false,
 				timeoutMs,
+				false,
+				false,
 				true,
 			)
 			return rows.map((row) => row.raw)
@@ -760,6 +818,51 @@ export function createPipeGeoDbClient(
 			return submit(line, NO_ENTITY, false, geoSpaceIds.length > 1, false, true) as unknown as Promise<
 				GeoPageRow[]
 			>
+		},
+		readTypeScan({geoSpaceIds, ...request}) {
+			if (geoSpaceIds.length === 0 || geoSpaceIds.length > MAX_LINE_SPACES)
+				return Promise.reject(new GeoDbError("bad_request", "1 to 1024 space ids"))
+			if (!geoSpaceIds.every((id) => HEX32.test(id)) || new Set(geoSpaceIds).size !== geoSpaceIds.length)
+				return Promise.reject(new GeoDbError("bad_request", "space ids must be distinct 32 hex digits"))
+			if (
+				request.typeIds.length === 0 ||
+				request.typeIds.length > MAX_TYPE_SCAN_TYPES ||
+				!request.typeIds.every((id) => HEX32.test(id)) ||
+				new Set(request.typeIds).size !== request.typeIds.length
+			)
+				return Promise.reject(
+					new GeoDbError("bad_request", `1 to ${MAX_TYPE_SCAN_TYPES} distinct type ids of 32 hex digits`),
+				)
+			if (!Number.isInteger(request.first) || request.first < 1 || request.first > MAX_TYPE_SCAN)
+				return Promise.reject(
+					new GeoDbError("bad_request", `a type scan asks for 1 to ${MAX_TYPE_SCAN} entities`),
+				)
+			const line = `${geoSpaceIds.join(",")}\t${typeScanDocument(request)}\n`
+			return submit(
+				line,
+				NO_ENTITY,
+				false,
+				geoSpaceIds.length > 1,
+				false,
+				false,
+				false,
+				undefined,
+				true,
+			) as unknown as Promise<string[]>
+		},
+		readLegacyIds({originalIds, timeoutMs}) {
+			if (
+				originalIds.length === 0 ||
+				originalIds.length > MAX_CARD_IDS ||
+				!originalIds.every((id) => HEX32.test(id)) ||
+				new Set(originalIds).size !== originalIds.length
+			)
+				return Promise.reject(
+					new GeoDbError("bad_request", `1 to ${MAX_CARD_IDS} distinct original ids of 32 hex digits`),
+				)
+			// Sorted, as the engine takes the list; `*` reads every Space, so each row's statement cell carries its Space.
+			const line = `*\t${legacyDocument([...originalIds].sort())}\n`
+			return submit(line, NO_ENTITY, false, true, false, false, true, timeoutMs, false, true)
 		},
 		close() {
 			clearInterval(warmTimer)

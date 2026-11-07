@@ -78,6 +78,13 @@ export type GeoDbCardConfig = {
 	 */
 	orderPick?: boolean
 	/**
+	 * Let the light `entities` shadow read an unordered `entities(spaceId(s), typeId | typeIds, first, offset)` page from geo-db
+	 * as a type scan (`.args = .{ .types = .{..}, .first = offset + first }`, at most 4096) and compare the window's ids, in
+	 * primary-key order, with PostGraphile's. Needs a serve whose store has geo-db c2f9d09cfa: an older one refuses the
+	 * argument (counted `type_scan_refused`, never a failed request). Off by default. GEODB_TYPE_SCAN_SHADOW=on.
+	 */
+	typeScan?: boolean
+	/**
 	 * Let the light `entities` shadow compare a relations list that is filtered by `typeId` and does not select the type
 	 * (`relations(filter: {typeId: {in}}) { nodes { toEntity { id name } } }`): each row must be held under one of the
 	 * filter's Types. Off by default. GEODB_RELATIONS_TYPE_FILTER_SHADOW=on.
@@ -141,6 +148,7 @@ export function readGeoDbCardConfig(env: Record<string, string | undefined>): Ge
 		entitiesBatch: env.GEODB_ENTITIES_BATCH_SHADOW?.trim().toLowerCase() === "on",
 		derivedFields: env.GEODB_DERIVED_FIELDS_SHADOW?.trim().toLowerCase() === "on",
 		orderPick: env.GEODB_ORDER_PICK_SHADOW?.trim().toLowerCase() === "on",
+		typeScan: env.GEODB_TYPE_SCAN_SHADOW?.trim().toLowerCase() === "on",
 		relationsTypeFilter: env.GEODB_RELATIONS_TYPE_FILTER_SHADOW?.trim().toLowerCase() === "on",
 		nestedTargetValues: env.GEODB_NESTED_TARGET_VALUES_SHADOW?.trim().toLowerCase() === "on",
 		crossSpaceNames: env.GEODB_CROSS_SPACE_NAMES_SHADOW?.trim().toLowerCase() === "on",

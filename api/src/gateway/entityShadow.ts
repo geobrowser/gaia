@@ -1214,6 +1214,12 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	 * and `allGeoSpaces`; off by default because an older serve refuses the document.
 	 */
 	orderPick?: boolean
+	/**
+	 * Read an unordered `entities(spaceId(s), typeId | typeIds, first, offset)` page of the light `entities` shadow from geo-db as a
+	 * type scan (`.args.types`, `first = offset + first`) and compare the window's ids in primary-key order (`GEODB_TYPE_SCAN_SHADOW`).
+	 * Needs a serve from geo-db c2f9d09cfa; an older one refuses the argument, counted `type_scan_refused`.
+	 */
+	typeScan?: boolean
 	/** Compare a relation target's own `valuesList` against geo-db's cards of the targets, read in one batch (`GEODB_NESTED_TARGET_VALUES_SHADOW`). */
 	nestedTargetValues?: boolean
 	/** Accept a `typeId`-filtered relations list that does not select the type in the light `entities` shadow (`GEODB_RELATIONS_TYPE_FILTER_SHADOW`). */

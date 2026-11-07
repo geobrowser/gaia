@@ -14,6 +14,7 @@
 	"dependencies": {
 		"@effect/opentelemetry": "^0.53.0",
 		"@effect/platform": "^0.94.5",
+		"@noble/hashes": "^1.8.0",
 		"@opentelemetry/api": "^1.9.0",
 		"@opentelemetry/resources": "^2.0.1",
 		"@opentelemetry/sdk-logs": "^0.212.0",

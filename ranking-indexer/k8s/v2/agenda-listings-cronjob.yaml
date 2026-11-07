@@ -147,7 +147,7 @@ spec:
                   value: "1"
                 # Also copy last_full_pass_on (trending_refresh_state, collection 7; needs a binding that grants 7). Off.
                 - name: GEODB_STATE_MIRROR
-                  value: "0"
+                  value: "1"
                 - name: GEODB_DERIVED_BATCH
                   value: "1"
                 - name: GEODB_CLIENT_BIN

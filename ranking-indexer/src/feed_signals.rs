@@ -222,9 +222,17 @@ pub async fn apply(
     .await?;
     // The watch term reads the rows just replaced, so it moves with them, and a dry run rolls
     // both back.
+    let watch_shadow = if crate::debate_watch_compute::shadow_enabled() {
+        crate::debate_watch_compute::before(&mut tx).await
+    } else {
+        None
+    };
     report.debates_rescored = sqlx::query_scalar("SELECT public.refresh_debate_watch_scores()")
         .fetch_one(&mut *tx)
         .await?;
+    if let Some(snap) = watch_shadow {
+        crate::debate_watch_compute::after(&mut tx, snap, report.debates_rescored).await;
+    }
     if dry_run {
         tx.rollback().await?;
     } else {

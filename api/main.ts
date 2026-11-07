@@ -30,6 +30,7 @@ import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
 import {createDerivedReader} from "./src/geodb/derived"
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
+import {readIdMapTwinConfig, withIdMapTwin} from "./src/geodb/idMapTwin"
 import {createKeyedRecordsShadow, readKeyedRecordsShadowConfig} from "./src/geodb/keyedRecordsShadow"
 import {
 	createPostgresRankedReadsSource,
@@ -403,7 +404,18 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 	resolvers:
 		gatewayServeEntity && sharedGeoDb
 			? new Map([
-					[ENTITY_FIELD, createEntityResolver({...sharedGeoDb, gaiaIdsOf: createGaiaIdMap(idMapQuery(db))})],
+					[
+						ENTITY_FIELD,
+						createEntityResolver({
+							...sharedGeoDb,
+							// GEODB_ID_MAP_TWIN (off by default) also asks geo-db's legacy-id read about each Postgres answer, in the background.
+							gaiaIdsOf: withIdMapTwin(createGaiaIdMap(idMapQuery(db)), {
+								client: sharedGeoDb.geoDb,
+								config: readIdMapTwinConfig(process.env),
+								log,
+							}),
+						}),
+					],
 				])
 			: undefined,
 	shadows:
@@ -445,6 +457,7 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 							entitiesBatch: geoDbCardConfig.entitiesBatch === true,
 							derivedFields: geoDbCardConfig.derivedFields === true,
 							orderPick: geoDbCardConfig.orderPick === true,
+							typeScan: geoDbCardConfig.typeScan === true,
 							relationsTypeFilter: geoDbCardConfig.relationsTypeFilter === true,
 							...(geoDbCardConfig.everySpaceReads === true && geoDbCardConfig.everySpaceEntities === true
 								? {

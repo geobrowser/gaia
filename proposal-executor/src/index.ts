@@ -35,6 +35,7 @@ import {
 	type Proposal,
 } from "./detect.js"
 import {createSmartWallet, executeProposal, type SmartWallet, uuidToBytes16, verifyExecutorSetup} from "./execute.js"
+import {runGeoDbTwin} from "./geodb-twin/twin.js"
 import {
 	castMembershipVote,
 	isEligibleToVote,
@@ -696,6 +697,10 @@ const main = Effect.gen(function* () {
 				ageCutoffTimestamp: nowSeconds - MAX_PROPOSAL_AGE,
 			}),
 		)
+
+		// geo-db twin of detection (PROPOSAL_EXECUTOR_GEODB_TWIN, off by default). Shadow only: it reads `proposals`, returns
+		// nothing, and cannot fail or outlast its own time budget, so execution below is unchanged by it.
+		yield* runGeoDbTwin(process.env, Redacted.value(config.databaseUrl), proposals, nowSeconds)
 
 		if (proposals.length === 0) {
 			return {succeeded: 0, failed: 0, skipped: 0, total: 0, spaces: 0}

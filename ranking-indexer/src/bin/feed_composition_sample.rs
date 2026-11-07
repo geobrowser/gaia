@@ -46,6 +46,7 @@
 //!
 //! Usage: `DATABASE_URL=... FEED_COMPOSITION_TYPE_IDS=<uuid,uuid> cargo run -p ranking-indexer --bin feed_composition_sample`
 
+use std::collections::BTreeMap;
 use std::env;
 
 use sqlx::postgres::PgPoolOptions;
@@ -54,6 +55,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use ranking_indexer::error::IndexerError;
+use ranking_indexer::feed_composition;
 use ranking_indexer::feed_composition_mirror::{self, Sample};
 
 /// One item as the app's feed endpoint returns it. Only the fields the histogram needs.
@@ -186,7 +188,8 @@ async fn report_drift(
     // share_delta is NUMERIC; cast in the query rather than enabling sqlx's `bigdecimal`
     // feature for one log field. The precision lost is far below the alert threshold.
     let drift = sqlx::query(
-        "SELECT type_id, previous_count, current_count, share_delta::float8 AS share_delta \
+        "SELECT type_id, previous_count, current_count, share_delta::float8 AS share_delta, \
+                (share_delta * 10000)::bigint AS delta_bp \
          FROM public.feed_composition_drift($1, $2)",
     )
     .bind(space)
@@ -199,6 +202,21 @@ async fn report_drift(
         // The first sample for this scope and source, or its only one.
         info!(sample_id, space = ?space, source, "no previous sample to compare against");
         return Ok(());
+    }
+
+    if env::var("FEED_COMPOSITION_RUST_DRIFT").is_ok_and(|v| v == "1" || v == "true") {
+        let sql: Vec<(Uuid, i32, i32, i64)> = drift
+            .iter()
+            .filter_map(|r| {
+                Some((
+                    r.try_get("type_id").ok()?,
+                    r.try_get("previous_count").ok()?,
+                    r.try_get("current_count").ok()?,
+                    r.try_get("delta_bp").ok()?,
+                ))
+            })
+            .collect();
+        drift_shadow(pool, sample_id, space, source, &sql).await;
     }
 
     for row in drift {
@@ -230,6 +248,67 @@ async fn report_drift(
     }
 
     Ok(())
+}
+
+/// Flag-off shadow (`FEED_COMPOSITION_RUST_DRIFT`): recomputes the drift in Rust from the last two
+/// stored samples and logs whether it equals what the SQL function returned. Never fails the run.
+async fn drift_shadow(
+    pool: &sqlx::PgPool,
+    sample_id: i64,
+    space: Option<Uuid>,
+    source: &str,
+    sql: &[(Uuid, i32, i32, i64)],
+) {
+    let rows: Result<Vec<String>, _> = sqlx::query_scalar(
+        "SELECT composition::text FROM public.entity_feed_composition_samples \
+          WHERE space_id IS NOT DISTINCT FROM $1 AND source = $2 \
+          ORDER BY sampled_at DESC, id DESC LIMIT 2",
+    )
+    .bind(space)
+    .bind(source)
+    .fetch_all(pool)
+    .await;
+    let parse = |t: &str| -> Option<BTreeMap<Uuid, i32>> {
+        let m: BTreeMap<String, i32> = serde_json::from_str(t).ok()?;
+        m.into_iter()
+            .map(|(k, v)| Some((k.parse().ok()?, v)))
+            .collect()
+    };
+    let parsed = rows.ok().and_then(|r| {
+        let cur = parse(r.first()?)?;
+        let prev = r.get(1).and_then(|t| parse(t));
+        Some((cur, prev))
+    });
+    let Some((cur, prev)) = parsed else {
+        warn!(
+            sample_id,
+            source, "feed composition drift shadow: could not read samples"
+        );
+        return;
+    };
+    let mut rust: Vec<(Uuid, i32, i32, i64)> = feed_composition::drift(prev.as_ref(), &cur)
+        .into_iter()
+        .map(|d| (d.type_id, d.previous_count, d.current_count, d.share_delta))
+        .collect();
+    let mut sql = sql.to_vec();
+    rust.sort();
+    sql.sort();
+    if rust == sql {
+        info!(
+            sample_id,
+            source,
+            rows = sql.len(),
+            "feed composition drift shadow: match"
+        );
+    } else {
+        warn!(
+            sample_id,
+            source,
+            sql_rows = sql.len(),
+            rust_rows = rust.len(),
+            "feed composition drift shadow: MISMATCH"
+        );
+    }
 }
 
 /// Samples one scope of the ranked WINDOW and logs its drift. `space` is None for the global feed.
