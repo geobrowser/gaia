@@ -55,6 +55,58 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000
         fsGroup: 1000
+      initContainers:
+        # geo-db shadow (SEARCH_INDEXER_GEODB_SHADOW). Same pattern as the api: copy geodb-client out of
+        # the pinned geodb image and write a binding from the geodb-feeder's node-id. Always exits 0, so
+        # an absent geodb never blocks a pod start; with no binding the shadow reads as unusable and the
+        # SQL lookups run untouched. Pinned, never :latest: deploy-v2 rewrites every :latest to the service tag.
+        - name: geodb-setup
+          image: registry.digitalocean.com/geo/geodb:6b34f9feda
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              cp /usr/local/bin/geodb-client /geodb/geodb-client || exit 0
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -n "$node" ] && [ -n "$ip" ]; then
+                printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+              else
+                echo "geodb-setup: no node id or no geodb Service; the geo-db shadow stays idle"
+              fi
+              exit 0
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: geodb-bin
+          emptyDir: {}
+        - name: geodb-space-map
+          configMap:
+            # Written by the geodb-feeder (space-map.json, node-id, system-spaces.json). Not shipped here.
+            name: geodb-space-map
+            optional: true
+        - name: geodb-key
+          secret:
+            secretName: geodb-reader-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: reader.key
       containers:
         - name: search-indexer
           image: registry.digitalocean.com/geo/search-indexer:latest
@@ -126,6 +178,18 @@ spec:
               # Set with kubectl for debugging: "info,search_indexer=debug,search_indexer_repository=debug"
             - name: METRICS_PORT
               value: "9464"
+            # geo-db shadow: after a SQL lookup succeeds, a small sample is re-read from geo-db and compared
+            # (search_indexer_geodb_shadow_*). Never changes what is indexed; SQL stays the source.
+            - name: SEARCH_INDEXER_GEODB_SHADOW
+              value: "1"
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/key/reader.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
+            - name: GEODB_SPACE_MAP_PATH
+              value: /etc/geodb/space-map/space-map.json
             # Sentry telemetry and monitoring
             - name: SENTRY_DSN
               valueFrom:
@@ -166,6 +230,15 @@ spec:
           volumeMounts:
             - name: topology-data
               mountPath: /data
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+            - name: geodb-key
+              mountPath: /etc/geodb/key
+              readOnly: true
           # Liveness probe - checks if the process is alive and can respond to HTTP requests
           # Used by Kubernetes to restart the container if it becomes unresponsive
           livenessProbe:
