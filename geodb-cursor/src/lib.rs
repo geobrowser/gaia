@@ -26,9 +26,13 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 pub mod derived;
+pub mod derived_read;
 
 /// Default derived collection: `cursors = 10` (geo-db 6a770ba752).
 pub const DEFAULT_COLLECTION: u32 = 10;
+
+/// Most bytes of a write's answer frame (`applied: <n>`).
+const WRITE_FRAME_MAX: usize = 4096;
 
 /// `cursor_value_max` of the `cursors` collection: the most bytes of one value.
 pub const VALUE_MAX: usize = 1024;
@@ -198,6 +202,18 @@ impl CursorMirror {
     /// hold of the pipe. The first failure drops the child (respawned after the cool-down) and
     /// ends the batch; the lines after it are not sent. `Ok` when every line was answered `+`.
     pub async fn send_lines(&self, lines: &[String]) -> Result<(), MirrorError> {
+        self.exchange(lines, WRITE_FRAME_MAX).await.map(|_| ())
+    }
+
+    /// As [`send_lines`](Self::send_lines), and returns the body of each `+` frame, in order. A
+    /// frame larger than `frame_max` bytes is a broken child. This is the read path of the
+    /// derived `get` and `scan` verbs (see [`derived_read::DerivedReader`]).
+    pub async fn exchange(
+        &self,
+        lines: &[String],
+        frame_max: usize,
+    ) -> Result<Vec<String>, MirrorError> {
+        let mut bodies = Vec::with_capacity(lines.len());
         let mut st = self.state.lock().await;
         if st.pipe.is_none() {
             if st
@@ -226,20 +242,25 @@ impl CursorMirror {
         }
         for line in lines {
             let pipe = st.pipe.as_mut().expect("set above");
-            let res = match tokio::time::timeout(self.cfg.timeout, request(pipe, line)).await {
+            let res = match tokio::time::timeout(self.cfg.timeout, request(pipe, line, frame_max))
+                .await
+            {
                 Ok(r) => r,
                 Err(_) => Err(MirrorError::Timeout(self.cfg.timeout)),
             };
-            if let Err(e) = res {
-                // A refusal or error leaves the tool exiting; drop it (kill_on_drop) and respawn
-                // after the cool-down. A `want` frame for a malformed line would also land here.
-                st.pipe = None;
-                st.failed_at = Some(Instant::now());
-                return Err(e);
+            match res {
+                Ok(body) => bodies.push(body),
+                Err(e) => {
+                    // A refusal or error leaves the tool exiting; drop it (kill_on_drop) and respawn
+                    // after the cool-down. A `want` frame for a malformed line would also land here.
+                    st.pipe = None;
+                    st.failed_at = Some(Instant::now());
+                    return Err(e);
+                }
             }
         }
         st.failed_at = None;
-        Ok(())
+        Ok(bodies)
     }
 
     async fn spawn(&self) -> Result<Pipe, MirrorError> {
@@ -269,7 +290,7 @@ impl CursorMirror {
 }
 
 /// One request line, one frame: `+<n>\n<n bytes>` ok, `-<n>\n<n bytes>` refused.
-async fn request(p: &mut Pipe, line: &str) -> Result<(), MirrorError> {
+async fn request(p: &mut Pipe, line: &str, frame_max: usize) -> Result<String, MirrorError> {
     p.stdin.write_all(line.as_bytes()).await?;
     p.stdin.flush().await?;
     let mut head = String::new();
@@ -281,15 +302,15 @@ async fn request(p: &mut Pipe, line: &str) -> Result<(), MirrorError> {
     let n: usize = n
         .parse()
         .map_err(|_| MirrorError::BadFrame(head.to_string()))?;
-    // A put's answer is `applied: <n>`; cap what a broken child can make us allocate.
-    if n > 4096 {
+    // Cap what a broken child can make us allocate.
+    if n > frame_max {
         return Err(MirrorError::BadFrame(head.to_string()));
     }
     let mut body = vec![0u8; n];
     p.stdout.read_exact(&mut body).await?;
     let body = String::from_utf8_lossy(&body).into_owned();
     match sign {
-        "+" => Ok(()),
+        "+" => Ok(body),
         "-" => Err(MirrorError::Refused(body)),
         _ => Err(MirrorError::BadFrame(head.to_string())),
     }

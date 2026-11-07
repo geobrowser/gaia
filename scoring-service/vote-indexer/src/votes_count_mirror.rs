@@ -41,11 +41,16 @@ pub struct Count {
 
 /// A row's geo-db key: the object id, the Space id, the object type, then the vote kind.
 pub fn key(c: &Count) -> Vec<u8> {
+    key_of(c.object_id, c.space_id, c.object_type, c.vote_kind)
+}
+
+/// The same key from its parts, for a reader that holds no [`Count`].
+pub fn key_of(object_id: Uuid, space_id: Uuid, object_type: i16, vote_kind: i16) -> Vec<u8> {
     let mut k = Vec::with_capacity(34);
-    k.extend_from_slice(c.object_id.as_bytes());
-    k.extend_from_slice(c.space_id.as_bytes());
-    k.push(c.object_type as u8);
-    k.push(c.vote_kind as u8);
+    k.extend_from_slice(object_id.as_bytes());
+    k.extend_from_slice(space_id.as_bytes());
+    k.push(object_type as u8);
+    k.push(vote_kind as u8);
     k
 }
 

@@ -25,6 +25,8 @@ pub struct Storage {
     /// Best-effort copy of the ranking rows into geo-db; `None` unless `GEODB_DERIVED_MIRROR`
     /// is on. See [`crate::derived_scores`].
     derived: Option<std::sync::Arc<geodb_cursor::derived::DerivedMirror>>,
+    /// Flag-off shadow of the reads against geo-db; see [`crate::geodb_reads_shadow`].
+    reads_shadow: Option<std::sync::Arc<crate::geodb_reads_shadow::ReadsShadow>>,
 }
 
 impl Storage {
@@ -32,6 +34,7 @@ impl Storage {
         Self {
             pool,
             derived: geodb_cursor::derived::DerivedMirror::from_env().map(std::sync::Arc::new),
+            reads_shadow: crate::geodb_reads_shadow::ReadsShadow::from_env(),
         }
     }
 
@@ -228,6 +231,26 @@ impl Storage {
             .await?;
 
         Ok(())
+    }
+
+    pub fn has_reads_shadow(&self) -> bool {
+        self.reads_shadow.is_some()
+    }
+
+    /// Compares the batch's `votes_count` read with geo-db, when the shadow is on. Runs in the
+    /// background and never fails or delays the batch. `before` is what Postgres answered the
+    /// batch's read with, `after` what the batch wrote.
+    pub fn shadow_votes_counts(
+        &self,
+        criteria: Vec<crate::models::VoteCountCriteria>,
+        before: Vec<VotesCountItem>,
+        after: Vec<VotesCountItem>,
+    ) {
+        if let Some(shadow) = self.reads_shadow.clone() {
+            tokio::spawn(
+                async move { shadow.observe_votes_count(&criteria, &before, &after).await },
+            );
+        }
     }
 
     /// Copies the tallies a committed vote batch wrote into geo-db's derived class, when the mirror
@@ -457,6 +480,11 @@ impl Storage {
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
+
+        if let Some(shadow) = self.reads_shadow.clone() {
+            let ids: Vec<Uuid> = rows.iter().map(|(_, id)| *id).collect();
+            tokio::spawn(async move { shadow.observe_unscored(&ids).await });
+        }
 
         Ok(rows)
     }
