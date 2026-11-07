@@ -258,6 +258,10 @@ spec:
             # Space, budgeted 0.5/s, burst 3 (gaia#1104).
             - name: GEODB_EVERY_SPACE_READS
               value: "on"
+            # The every-Space lookup first asks geo-db which Spaces hold the entity (`.args.holders`, geo-db 48739dfef5
+            # or later) and reads the card only there (gaia#1322). A serve that refuses it is read around for 5 minutes.
+            - name: GEODB_HOLDERS_LOOKUP
+              value: "on"
             # Shadow EntityNames-shaped `entities` lists with one sampled every-Space read (gaia#1110), and
             # EntityBacklinksPage against geo-db's card backlinks (gaia#1109). Both ride the budgets above.
             - name: GEODB_EVERY_SPACE_ENTITIES
