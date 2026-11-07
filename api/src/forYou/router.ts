@@ -32,6 +32,7 @@ import {Hono} from "hono"
 import {canonicalRequestLogging} from "../middleware/requestLogging"
 import type {AccountWeightsShadow} from "../pairFit/accountWeightsShadow"
 import {pairFitHandler} from "../pairFit/router"
+import type {UserVotesShadow} from "../pairFit/userVotesShadow"
 import {log} from "../services/telemetry"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import type {ForYouConfigShadow} from "./configShadow"
@@ -296,6 +297,7 @@ export function createInternalRouter(
 	rankingConfigShadow?: EntityRankingConfigShadow | null,
 	experimentShadow?: FeedExperimentShadow | null,
 	accountWeightsShadow?: AccountWeightsShadow | null,
+	userVotesShadow?: UserVotesShadow | null,
 ) {
 	const router = new Hono()
 
@@ -350,7 +352,7 @@ export function createInternalRouter(
 	})
 
 	// GEO-3224: debate pair fit, on the same private router and behind the same token.
-	router.post("/pair-fit", pairFitHandler(db, accountWeightsShadow))
+	router.post("/pair-fit", pairFitHandler(db, accountWeightsShadow, userVotesShadow))
 
 	return router
 }
@@ -368,6 +370,7 @@ export function mountInternalRoutes(
 	rankingConfigShadow?: EntityRankingConfigShadow | null,
 	experimentShadow?: FeedExperimentShadow | null,
 	accountWeightsShadow?: AccountWeightsShadow | null,
+	userVotesShadow?: UserVotesShadow | null,
 ): "enabled" | "too_short" | "unset" {
 	const trimmed = token?.trim()
 	if (!trimmed) return "unset"
@@ -375,7 +378,15 @@ export function mountInternalRoutes(
 	app.use("/internal/*", canonicalRequestLogging())
 	app.route(
 		"/internal",
-		createInternalRouter(db, trimmed, configShadow, rankingConfigShadow, experimentShadow, accountWeightsShadow),
+		createInternalRouter(
+			db,
+			trimmed,
+			configShadow,
+			rankingConfigShadow,
+			experimentShadow,
+			accountWeightsShadow,
+			userVotesShadow,
+		),
 	)
 	return "enabled"
 }

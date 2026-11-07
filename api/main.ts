@@ -52,6 +52,7 @@ import {
 	createAccountWeightsShadow,
 	readAccountWeightsShadowConfig,
 } from "./src/pairFit/accountWeightsShadow"
+import {createUserVotesShadow, readUserVotesShadowConfig} from "./src/pairFit/userVotesShadow"
 import {createProfileRouter} from "./src/profile"
 import {createProfileShadow, readProfileShadowConfig} from "./src/profile/shadow"
 import {createProposalsRouter} from "./src/proposals"
@@ -317,6 +318,19 @@ const accountWeightsShadow = accountWeightsShadowConfig.enabled
 if (accountWeightsShadow) {
 	createAccountWeightsSampler({config: accountWeightsShadowConfig, db, shadow: accountWeightsShadow, log}).start()
 }
+// GEODB_USER_VOTES_TWIN (off by default) reads the pair-fit user's and a sample of candidates' votes from geo-db's votes Space after the
+// shared-claims read and counts whether they agree with Postgres, plus the votedBy argument's ids (gaia_api_user_votes_twin_total).
+// Background, throttled; never changes a response.
+const userVotesShadowConfig = readUserVotesShadowConfig(process.env)
+const userVotesShadow = userVotesShadowConfig.enabled
+	? createUserVotesShadow({
+			config: userVotesShadowConfig,
+			db,
+			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+			log,
+		})
+	: null
 // GEODB_SCORES_SHADOW (off by default) samples global_scores/local_scores/space_scores rows from Postgres on a timer and compares
 // them with geo-db's derived collections 2/3/4 (gaia_api_scores_shadow_total). Background only; never touches a request.
 const scoresShadowConfig = readScoresShadowConfig(process.env)
@@ -360,6 +374,7 @@ const internalRoutes = mountInternalRoutes(
 	entityRankingConfigShadow,
 	feedExperimentShadow,
 	accountWeightsShadow,
+	userVotesShadow,
 )
 if (internalRoutes === "enabled") {
 	log.info("Internal routes enabled")

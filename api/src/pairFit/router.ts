@@ -21,6 +21,7 @@ import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import type {AccountWeightsShadow} from "./accountWeightsShadow"
 import {type Database, readAccounts, readNames, readOwnWeights, readSharedClaims} from "./queries"
 import {PAIR_FIT_CODE_VERSION, type PairFitCandidate, type PairFitResult, scorePairs} from "./score"
+import type {UserVotesShadow} from "./userVotesShadow"
 
 /** The admin roster is in the tens today; room to grow without letting a caller ask for thousands. */
 export const MAX_PAIR_FIT_CANDIDATES = 300
@@ -57,6 +58,7 @@ export async function computePairFit(
 	db: Database,
 	body: Body,
 	accountWeightsShadow?: AccountWeightsShadow | null,
+	userVotesShadow?: UserVotesShadow | null,
 ): Promise<PairFitResult> {
 	if (body.candidateIds.length === 0) return {items: [], excluded: []}
 	const dashedUser = toDashedUuid(body.userId)
@@ -68,6 +70,8 @@ export async function computePairFit(
 	])
 	// GEODB_ACCOUNT_WEIGHTS_SHADOW: compared in the background; the response never waits on it.
 	accountWeightsShadow?.compare(accounts)
+	// GEODB_USER_VOTES_TWIN: the shared claims just read, held to geo-db's votes records in the background.
+	userVotesShadow?.compare(body.userId, body.candidateIds, shared)
 	const candidates: PairFitCandidate[] = body.candidateIds.map((userId) => ({
 		userId,
 		weights: (weights.get(userId) ?? []).map((w) => ({...w, topicId: dashless(w.topicId)})),
@@ -98,7 +102,11 @@ export async function computePairFit(
 	return scorePairs({user, candidates, names})
 }
 
-export function pairFitHandler(db: Database, accountWeightsShadow?: AccountWeightsShadow | null) {
+export function pairFitHandler(
+	db: Database,
+	accountWeightsShadow?: AccountWeightsShadow | null,
+	userVotesShadow?: UserVotesShadow | null,
+) {
 	return async (c: Context) => {
 		let raw: unknown
 		try {
@@ -111,7 +119,7 @@ export function pairFitHandler(db: Database, accountWeightsShadow?: AccountWeigh
 
 		const started = performance.now()
 		try {
-			const result = await computePairFit(db, body, accountWeightsShadow)
+			const result = await computePairFit(db, body, accountWeightsShadow, userVotesShadow)
 			// Counts only: never who, and never anyone's side.
 			log.info("pair-fit scored", {
 				candidates: body.candidateIds.length,
