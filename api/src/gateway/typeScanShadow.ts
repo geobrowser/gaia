@@ -12,8 +12,11 @@
  * - a serve that predates the argument refuses the document (`MalformedRequest`): counted `type_scan_refused`, never a
  *   failed request. A read that fails any other way is `failed`.
  *
- * Limits that stay: geo-db orders by the id it holds, which is the gaia id only for a conforming UUIDv4 (any other legacy id
- * is remapped, see `conformingId`), so a page holding such ids can mismatch on order alone.
+ * Legacy ids: geo-db orders by the id it holds, which is the gaia id only for a conforming UUIDv4 (any other legacy id is
+ * remapped, see `conformingId`), so a page holding such ids sorts differently with no row missing (live 11-07: 91 = 91 ids,
+ * diverging at index 35). Such a page that is the whole set is compared as a set (`legacy_id_order` uncompared); one cut at
+ * `first` or after an offset is `type_scan_legacy_ids`. A cut page of v4 ids only is still compared as a sequence, and can
+ * still differ when legacy ids of the type crowd the scan window; that stays an open limit until the legacy id map is read.
  */
 
 import {conformingId} from "../geodb/card"
@@ -68,6 +71,12 @@ export async function checkTypeScan(
 	const shape = typeScanShape(plan)
 	const readTypeScan = deps.geoDb.readTypeScan?.bind(deps.geoDb)
 	if (!shape || deps.typeScan !== true || !readTypeScan || pgIds.length === 0) return {result: "skip"}
+	// Postgres pages by the raw id and geo-db by the conforming one: the same string for a v4 id and unrelated for any other
+	// legacy id. A page holding one is in Postgres' order, which geo-db cannot reproduce (that needs the legacy id map, GAP-10),
+	// so its order is not compared; its members are, when the page is the whole set (fewer than `first`, no offset).
+	const legacy = pgIds.some((id) => conformingId("entity", id) !== id.replaceAll("-", "").toLowerCase())
+	const whole = shape.offset === 0 && pgIds.length < shape.first
+	if (legacy && !whole) return {result: "unsupported", reason: "type_scan_legacy_ids"}
 	const ask = typeScanAsk(shape)
 	if (ask > MAX_TYPE_SCAN) return {result: "unsupported", reason: "type_scan_window"}
 	if (shape.typeIds.length > MAX_TYPE_SCAN_TYPES) return {result: "unsupported", reason: "args"}
@@ -100,10 +109,17 @@ export async function checkTypeScan(
 	}
 	const geoIds = typeScanWindow(scanned, shape)
 	const wanted = pgIds.map((id) => conformingId("entity", id))
-	const same = wanted.length === geoIds.length && wanted.every((id, i) => id === geoIds[i])
+	const sameSequence = wanted.length === geoIds.length && wanted.every((id, i) => id === geoIds[i])
+	const sortedGeo = [...geoIds].sort()
+	const same =
+		sameSequence ||
+		(legacy &&
+			geoIds.length < ask &&
+			wanted.length === geoIds.length &&
+			[...wanted].sort().every((id, i) => id === sortedGeo[i]))
 	return {
 		result: same ? "match" : "mismatch",
-		uncompared: [],
+		uncompared: legacy && same ? ["legacy_id_order"] : [],
 		detail: {
 			typeScan: "sequence",
 			first: shape.first,
