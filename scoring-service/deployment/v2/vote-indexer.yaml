@@ -114,10 +114,10 @@ spec:
             - name: GEODB_BINDING_PATH
               value: /geodb/binding.txt
             # Compare the votes_count and entity-scores reads with geo-db collections 26 and 21 (counts only, sampled).
-            # Postgres stays the source. "0" = off. The shadow reads with the scores key above (derived=...,21,26),
-            # which grants those collections; no reader key is needed. "1" turns it on.
+            # Postgres stays the source. ON; never changes a write or a read result; counts only. The shadow reads
+            # with the scores key above (derived=...,21,26), which grants those collections; no reader key is needed.
             - name: VOTE_INDEXER_GEODB_READS_SHADOW
-              value: "0"
+              value: "1"
             # Database configuration
             - name: DATABASE_URL
               valueFrom:
