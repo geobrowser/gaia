@@ -15,6 +15,7 @@ pub mod anchor_select;
 pub mod claim_overlap;
 pub mod clickhouse;
 pub mod consumer;
+pub mod debate_watch_compute;
 pub mod dedup;
 pub mod derived_mirror;
 pub mod detect;
