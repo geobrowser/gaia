@@ -1166,6 +1166,13 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   `derived=2,3,4` (already in `geodb/supervisor.sh`), check `geodb_derived_rows` against `geodb_derived_rows_max`;
   (2) run the snapshot Job; (3) set the flag `"1"` in `scoring-service/deployment/v2/cronjob.yaml` in its own PR (the nightly
   run then repairs drift; it never deletes); (4) the api shadow flag `GEODB_SCORES_SHADOW`. Rollback: set the flags `"0"`.
+- **Nightly mirror volume:** `GEODB_DERIVED_BATCH=1` (256 rows a request, one fsync each) and `GEODB_DERIVED_BUDGET_MS=1200000`
+  (per table) are set in the manifest. The unbatched 5 s budget put about 1,000 rows a table a night (about 200 a second) and
+  dropped the other 3.6M, so geo-db never caught up. The writer now keeps `public.score_mirror_state` (migration 0120, one row per
+  table): `synced` is set false in the Postgres commit and true only after a mirror with no drop and no error. A synced table
+  sends only the keys whose score is new or different from what Postgres held before the upsert (diffed in SQL against a temp
+  table, numeric equality); an unsynced or missing row sends the whole table. Log lines: `Diffed <table> ... N changed` and
+  `geodb_derived table=<t> mode=changed|full puts=N`. Without the table the cronjob still runs and sends everything.
 
 - api shadow, `GEODB_RANKING_SCORES_SHADOW` (manifest `"0"`, `api/src/geodb/rankingScoresShadow.ts`): `entity_ranking_scores` against
   the engaged-only overlay in derived collection 21 (plan 10.21 section 9). Every `GEODB_RANKING_SCORES_SHADOW_INTERVAL_MS` (60 s)

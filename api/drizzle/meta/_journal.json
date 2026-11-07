@@ -841,6 +841,13 @@
       "when": 1792520800000,
       "tag": "0119_user_topic_signals_computed_at_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 120,
+      "version": "7",
+      "when": 1792607200000,
+      "tag": "0120_score_mirror_state",
+      "breakpoints": true
     }
   ]
 }

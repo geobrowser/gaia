@@ -7,7 +7,10 @@ transaction, then hands the rows to :class:`DerivedMirror`; nothing in here rais
 caller. Every error is logged and counted, each request is bounded by ``timeout`` (the child is
 killed when it overruns), a call is bounded by ``budget`` (the rows past it are counted as
 dropped, not queued), and after a failure the child is not respawned until ``cooldown`` passes.
-Rows are last-write-wins, so a dropped row is repaired by the next nightly run.
+Rows are last-write-wins. The writer sends only the rows whose score changed since the last run
+that mirrored every row it tried (``score_mirror_state``); after any drop or error the next run
+rewrites the whole table, so the mirror converges instead of relying on a full rewrite fitting in
+one budget.
 
 Collections (geo-db ``src/storage/derived/collection.zig``) and key layouts (plan 10.14 V10):
 
@@ -33,6 +36,7 @@ import subprocess
 import threading
 import time
 import uuid
+from itertools import islice
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 
@@ -93,6 +97,14 @@ def batch_request(lines: list[str]) -> str:
     return f"{head}\t{len(lines)}\n" + "".join(lines)
 
 
+def norm_id(value) -> str:
+    """A uuid as lowercase dashed text, whether it arrives as text or a uuid; other text is kept as is."""
+    try:
+        return str(uuid.UUID(str(value)))
+    except ValueError:
+        return str(value)
+
+
 def _uuid_bytes(value: str) -> bytes:
     return uuid.UUID(str(value)).bytes
 
@@ -125,9 +137,21 @@ def global_rows(entities: list[Entity], on_skip: Callable[[Exception], None] | N
     )
 
 
-def local_rows(entities: list[Entity], on_skip: Callable[[Exception], None] | None = None) -> list[DerivedRow]:
-    """``local_scores`` (collection 3) rows for every perspective of ``entities``."""
-    perspectives = (p for e in entities for p in e.perspectives)
+def local_rows(
+    entities: list[Entity],
+    on_skip: Callable[[Exception], None] | None = None,
+    only: set | None = None,
+) -> list[DerivedRow]:
+    """``local_scores`` (collection 3) rows for every perspective of ``entities``.
+
+    With ``only`` (a set of ``(norm_id(entity), norm_id(space))``) just those perspectives.
+    """
+    perspectives = (
+        p
+        for e in entities
+        for p in e.perspectives
+        if only is None or (norm_id(p.entity_id), norm_id(p.space_id)) in only
+    )
 
     def build(p) -> DerivedRow:
         space = _uuid_bytes(p.space_id)
@@ -231,33 +255,37 @@ class DerivedMirror:
         self.stats["skipped"] += 1
         logger.warning("geodb_derived.row_skipped table=%s error=%s", table, error)
 
-    def put(self, table: str, rows: list[DerivedRow]) -> None:
-        """Mirrors ``rows`` of ``table`` (a label for the logs). Never raises."""
+    def put(self, table: str, rows: Iterable[DerivedRow]) -> None:
+        """Mirrors ``rows`` of ``table`` (a label for the logs). Never raises.
+
+        ``rows`` is consumed lazily, so a generator over millions of rows is not held in memory.
+        """
         try:
-            lines = []
-            for r in rows:
-                try:
-                    lines.append(r.put_line())
-                except ValueError as e:
-                    self.skipped(e, table)
-            self.stats["puts"] += self._send(table, lines)
+            self.stats["puts"] += self._send(table, self._lines(table, rows))
         except Exception:  # noqa: BLE001 - nothing here may fail the writer
             self.stats["errors"] += 1
             logger.exception("geodb_derived.mirror_failed table=%s; Postgres is unaffected", table)
+
+    def _lines(self, table: str, rows: Iterable[DerivedRow]) -> Iterable[str]:
+        for r in rows:
+            try:
+                yield r.put_line()
+            except ValueError as e:
+                self.skipped(e, table)
 
     def close(self) -> None:
         self._drop()
 
     # -- internals ------------------------------------------------------------------------
 
-    def _send(self, table: str, lines: list[str]) -> int:
+    def _send(self, table: str, lines: Iterable[str]) -> int:
         start = time.monotonic()
         sent = 0
         size = BATCH_MAX if self.batch else CHUNK
-        for i in range(0, len(lines), size):
-            chunk = lines[i : i + size]
+        it = iter(lines)
+        while chunk := list(islice(it, size)):
             if sent > 0 and time.monotonic() - start > self.budget:
-                dropped = len(lines) - sent
+                dropped = len(chunk) + sum(1 for _ in it)
                 self.stats["dropped"] += dropped
                 logger.warning(
                     "geodb_derived.budget_spent table=%s dropped=%d; the rest is left for the next run",
@@ -270,12 +298,12 @@ class DerivedMirror:
                 self._request_all(reqs)
             except _CoolingDown:
                 self.stats["errors"] += 1
-                self.stats["dropped"] += len(lines) - sent
+                self.stats["dropped"] += len(chunk) + sum(1 for _ in it)
                 break
             except Exception as e:  # noqa: BLE001
                 logger.warning("geodb_derived.mirror_failed table=%s error=%s; Postgres is unaffected", table, e)
                 self.stats["errors"] += 1
-                self.stats["dropped"] += len(lines) - sent
+                self.stats["dropped"] += len(chunk) + sum(1 for _ in it)
                 break
             sent += len(chunk)
         return sent
