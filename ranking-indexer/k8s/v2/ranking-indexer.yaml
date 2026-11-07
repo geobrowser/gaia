@@ -136,6 +136,11 @@ spec:
               value: /etc/geodb/key/scores.key
             - name: GEODB_BINDING_PATH
               value: /geodb/binding.txt
+            # Compare each recomputed block's stored rows with geo-db collection 11 (counts only). Postgres stays the
+            # source. "0" = off. The shadow reads with the scores key above (derived=...,11), which grants that
+            # collection; no reader key is needed. "1" turns it on.
+            - name: RANKING_INDEXER_GEODB_READS_SHADOW
+              value: "0"
             - name: PGSSLROOTCERT
               value: /ssl/ca.crt
             - name: DATABASE_URL

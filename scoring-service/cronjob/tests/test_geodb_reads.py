@@ -19,6 +19,7 @@ from src.geodb_reads import (
     VOTE_VOTED_AT,
     GeoDbReadError,
     GeoDbScoringDataProvider,
+    PipeReader,
     Row,
     compact,
     compare_geodb_reads,
@@ -339,3 +340,10 @@ class TestFlagAndParsing:
             raise AssertionError("should refuse")
         except GeoDbReadError:
             pass
+
+
+def test_pipe_reader_prefers_the_read_key_over_the_mirror_key():
+    env = {"GEODB_KEY_PATH": "/w", "GEODB_READ_KEY_PATH": "/r", "GEODB_BINDING_PATH": "/b", "GEODB_CLIENT_BIN": "c"}
+    assert PipeReader.from_env(env)._argv == ["c", "--key", "/r", "--binding", "/b", "pipe"]
+    del env["GEODB_READ_KEY_PATH"]
+    assert PipeReader.from_env(env)._argv == ["c", "--key", "/w", "--binding", "/b", "pipe"]

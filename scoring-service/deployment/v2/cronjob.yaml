@@ -48,6 +48,18 @@ spec:
                 items:
                   - key: key
                     path: scores.key
+            # Read-only key for the geo-db twin of the members, editors and votes reads (GEODB_SCORING_READS), the
+            # same shared reader seed the api and notification-indexer use. The scores key above cannot do this:
+            # its binding is read=- (derived collections only), and the twin reads cards in two system Spaces.
+            # Optional: absent, the volume is empty and, with the flag at "0", nothing reads it.
+            - name: geodb-reader-key
+              secret:
+                secretName: geodb-reader-key
+                optional: true
+                defaultMode: 0440
+                items:
+                  - key: key
+                    path: reader.key
           initContainers:
             - name: geodb-setup
               # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to this service's tag.
@@ -146,6 +158,16 @@ spec:
                   value: /etc/geodb/key/scores.key
                 - name: GEODB_BINDING_PATH
                   value: /geodb/binding.txt
+                # geo-db twin of the members, editors and user_votes reads: after Postgres answers, the same rows
+                # are read from geo-db and compared, counts only (src/geodb_reads). Postgres stays the source. "0" =
+                # off; set "1" once the reader key, space map and system-spaces.json are in place. The twin reads
+                # with the READER key (GEODB_READ_KEY_PATH); GEODB_KEY_PATH stays the mirror's scores key.
+                - name: GEODB_SCORING_READS
+                  value: "0"
+                - name: GEODB_READ_KEY_PATH
+                  value: /etc/geodb/reader/reader.key
+                - name: GEODB_SYSTEM_SPACES_PATH
+                  value: /etc/geodb/space-map/system-spaces.json
                 - name: SENTRY_DSN
                   valueFrom:
                     secretKeyRef:
@@ -181,6 +203,13 @@ spec:
                   mountPath: /geodb
                 - name: geodb-key
                   mountPath: /etc/geodb/key
+                  readOnly: true
+                - name: geodb-reader-key
+                  mountPath: /etc/geodb/reader
+                  readOnly: true
+                # space-map.json and system-spaces.json, written by the geodb-feeder.
+                - name: geodb-space-map
+                  mountPath: /etc/geodb/space-map
                   readOnly: true
               resources:
                 requests:
