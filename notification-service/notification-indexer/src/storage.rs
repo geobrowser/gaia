@@ -84,6 +84,10 @@ pub struct Storage {
     /// `Some` when `APP_WEBHOOKS_FILE` is set: filters come from the mounted
     /// file (same TTL cache) instead of the `app_webhooks` table.
     webhooks_file: Option<std::path::PathBuf>,
+    /// `Some` only with `NOTIFICATION_INDEXER_GEODB_TWIN=1`: after a chain-table read answers from
+    /// Postgres, the same question is asked of geo-db off to the side and the two are compared and
+    /// counted. Never changes an answer.
+    twin: Option<std::sync::Arc<crate::geodb_twin::GeoDbTwin>>,
 }
 
 /// An expired proposal found by the rejection poller.
@@ -122,7 +126,14 @@ impl Storage {
             pool,
             webhook_cache: RwLock::new(None),
             webhooks_file: crate::webhooks_file::path_from_env(),
+            twin: crate::geodb_twin::GeoDbTwin::from_env(),
         }
+    }
+
+    /// Override the geo-db twin (used by tests).
+    pub fn with_twin(mut self, twin: Option<std::sync::Arc<crate::geodb_twin::GeoDbTwin>>) -> Self {
+        self.twin = twin;
+        self
     }
 
     /// Override the webhook source (used by tests).
@@ -230,7 +241,11 @@ impl Storage {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.iter().map(|r| r.get("member_space_id")).collect())
+        let editors: Vec<Uuid> = rows.iter().map(|r| r.get("member_space_id")).collect();
+        if let Some(twin) = &self.twin {
+            twin.observe_editors(space_id, &editors);
+        }
+        Ok(editors)
     }
 
     /// Insert per-user notifications into the outbox and fan out deliveries.
@@ -537,6 +552,13 @@ impl Storage {
                 .bind(proposal_id)
                 .fetch_optional(&self.pool)
                 .await?;
+        if let Some(twin) = &self.twin {
+            twin.observe_proposal_exists(
+                crate::geodb_twin::PROPOSER,
+                proposal_id,
+                result.is_some(),
+            );
+        }
         Ok(result)
     }
 
@@ -559,7 +581,11 @@ impl Storage {
                 .bind(proposal_id)
                 .fetch_all(&self.pool)
                 .await?;
-        Ok(rows.iter().map(|r| r.get("voter_id")).collect())
+        let voters: Vec<Uuid> = rows.iter().map(|r| r.get("voter_id")).collect();
+        if let Some(twin) = &self.twin {
+            twin.observe_voters(proposal_id, &voters);
+        }
+        Ok(voters)
     }
 
     /// Resolve a proposal's proposer (`proposed_by`) and owning `space_id`.
@@ -581,6 +607,13 @@ impl Storage {
             .bind(proposal_id)
             .fetch_optional(&self.pool)
             .await?;
+        if let Some(twin) = &self.twin {
+            twin.observe_proposal_exists(
+                crate::geodb_twin::PROPOSER_AND_SPACE,
+                proposal_id,
+                row.is_some(),
+            );
+        }
         Ok(row.map(|r| (r.get("proposed_by"), r.get("space_id"))))
     }
 
@@ -608,6 +641,9 @@ impl Storage {
         .bind(user_space_id)
         .fetch_one(&self.pool)
         .await?;
+        if let Some(twin) = &self.twin {
+            twin.observe_member_or_editor(space_id, user_space_id, exists);
+        }
         Ok(exists)
     }
 
@@ -808,6 +844,10 @@ impl Storage {
             });
         }
 
+        if let Some(twin) = &self.twin {
+            let seen: Vec<(Uuid, i64)> = expired.iter().map(|e| (e.id, e.end_time)).collect();
+            twin.observe_expired_proposals(min_end_time, &seen);
+        }
         Ok(expired)
     }
 
