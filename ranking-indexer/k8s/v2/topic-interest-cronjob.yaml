@@ -154,7 +154,7 @@ spec:
                   value: "1"
                 # Also copy the sweep watermark (interest_sweep_state, collection 6; needs a binding that grants 6). Off.
                 - name: GEODB_STATE_MIRROR
-                  value: "0"
+                  value: "1"
                 - name: GEODB_CLIENT_BIN
                   value: /geodb/geodb-client
                 - name: GEODB_KEY_PATH
