@@ -511,7 +511,15 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 							geoSpaceOf: sharedGeoDb.geoSpaceOf,
 							allGeoSpaces: sharedGeoDb.geoSpaceOf.all,
 							log,
-							search: createCliGeoDbSearchClient(geoDbCardConfig),
+							search: createCliGeoDbSearchClient(geoDbCardConfig, {
+								// Unset keeps the defaults (3000 ms, 2 at once). A novel multi-word query is cold on geo-db and can take 2-5 s.
+								...(Number(process.env.GEODB_SEARCH_TIMEOUT_MS) > 0
+									? {timeoutMs: Math.floor(Number(process.env.GEODB_SEARCH_TIMEOUT_MS))}
+									: {}),
+								...(Number(process.env.GEODB_SEARCH_MAX_CONCURRENT) > 0
+									? {maxConcurrent: Math.floor(Number(process.env.GEODB_SEARCH_MAX_CONCURRENT))}
+									: {}),
+							}),
 							mode: process.env.GEODB_SEARCH_MODE === "bm25" ? "bm25" : "typeahead",
 							// GEODB_SEARCH_WORD_LEG=engine: one call, geo-db's own typeahead word leg widens it.
 							wordLeg:
