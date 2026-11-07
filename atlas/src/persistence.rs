@@ -907,6 +907,62 @@ async fn mirror_shadow(mirror: &blob_store::Mirror, checkpoint: &Checkpoint) {
     }
 }
 
+/// What happened to one checkpoint in `backfill_checkpoint`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckpointBackfill {
+    /// Object was absent and is now written and reads back equal.
+    Written,
+    /// Object was absent; dry run, nothing written.
+    WouldWrite,
+    /// Object already equal.
+    Unchanged,
+    /// Object differed and was replaced (repair) and reads back equal.
+    Repaired,
+    /// Object differs and was left alone (no repair), or dry run.
+    Differs,
+    /// A blob-store read failed, or a written object did not read back equal.
+    Failed,
+}
+
+/// Copy one Postgres checkpoint into the blob store (the `atlas_checkpoints` backfill tool).
+/// `mirror` must have both flags on. The object is the same canonical bytes the flag-off
+/// write-through produces, so a later shadow read of an unchanged checkpoint matches. A
+/// differing object is kept unless `repair`, because a live write-through may have stored a
+/// newer checkpoint than the one the tool read.
+pub async fn backfill_checkpoint(
+    mirror: &blob_store::Mirror,
+    checkpoint: &Checkpoint,
+    repair: bool,
+    dry_run: bool,
+) -> CheckpointBackfill {
+    use blob_store::ShadowOutcome;
+    let Ok(bytes) = checkpoint_bytes(checkpoint) else {
+        return CheckpointBackfill::Failed;
+    };
+    let key = checkpoint_key(&checkpoint.indexer_id);
+    let replace = match mirror.shadow_read(&key, &bytes).await {
+        Some(ShadowOutcome::Match) => return CheckpointBackfill::Unchanged,
+        Some(ShadowOutcome::Missing) => false,
+        Some(ShadowOutcome::Mismatch) => {
+            if !repair || dry_run {
+                return CheckpointBackfill::Differs;
+            }
+            true
+        }
+        _ => return CheckpointBackfill::Failed,
+    };
+    if dry_run {
+        return CheckpointBackfill::WouldWrite;
+    }
+    mirror.write_through(&key, &bytes, false).await;
+    // write_through swallows errors by design, so read back to know it landed.
+    match mirror.shadow_read(&key, &bytes).await {
+        Some(ShadowOutcome::Match) if replace => CheckpointBackfill::Repaired,
+        Some(ShadowOutcome::Match) => CheckpointBackfill::Written,
+        _ => CheckpointBackfill::Failed,
+    }
+}
+
 impl PostgresCheckpointStore {
     pub fn new(
         database_url: &str,
@@ -950,6 +1006,14 @@ impl PostgresCheckpointStore {
             blob: blob_store::Mirror::from_env("atlas_checkpoints", "ATLAS_CHECKPOINT")
                 .map(std::sync::Arc::new),
         })
+    }
+
+    /// Every indexer id with a checkpoint row, for the backfill tool.
+    pub async fn indexer_ids(&self) -> Result<Vec<String>, CheckpointError> {
+        sqlx::query_scalar("SELECT indexer_id FROM atlas_checkpoints ORDER BY indexer_id")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|err| CheckpointError::Io(format!("list checkpoints: {err}")))
     }
 
     pub async fn load(&self, indexer_id: &str) -> Result<Option<Checkpoint>, CheckpointError> {
@@ -2106,5 +2170,92 @@ mod tests {
         };
         let err = cp.emission_baseline().unwrap_err();
         assert!(matches!(err, CheckpointError::Serialization(_)));
+    }
+}
+
+#[cfg(test)]
+mod backfill_tests {
+    use super::*;
+    use blob_store::{FsBlobStore, Mirror, MirrorFlags};
+    use std::sync::Arc;
+
+    fn mirror(dir: &std::path::Path) -> Mirror {
+        Mirror::new(
+            "atlas_checkpoints",
+            Arc::new(FsBlobStore::new(dir)),
+            MirrorFlags {
+                write_through: true,
+                shadow_read: true,
+            },
+        )
+    }
+
+    fn cp(block: u64) -> Checkpoint {
+        Checkpoint {
+            schema_version: 1,
+            indexer_id: "atlas/test 1".to_string(),
+            cursor: format!("cursor-{block}"),
+            block_number: block,
+            graph_state_blob: serde_json::json!({"b": 1, "a": {"y": 2, "x": 3}}),
+            graph_state_version: 1,
+            runtime_compatibility_marker: "m".to_string(),
+            root_space_id: "root".to_string(),
+            emission_baseline_blob: Some(vec![1, 2, 3]),
+        }
+    }
+
+    #[tokio::test]
+    async fn backfill_writes_then_is_idempotent_and_matches_write_through() {
+        let d = tempfile::tempdir().unwrap();
+        let m = mirror(d.path());
+        assert_eq!(
+            backfill_checkpoint(&m, &cp(5), false, false).await,
+            CheckpointBackfill::Written
+        );
+        assert_eq!(
+            backfill_checkpoint(&m, &cp(5), false, false).await,
+            CheckpointBackfill::Unchanged
+        );
+        // The object is exactly what the live write-through would have stored.
+        let live = tempfile::tempdir().unwrap();
+        let lm = mirror(live.path());
+        mirror_save(&lm, &cp(5)).await;
+        let key = checkpoint_key("atlas/test 1");
+        assert_eq!(
+            m.store().get(&key).await.unwrap(),
+            lm.store().get(&key).await.unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_dry_run_and_differing_object() {
+        let d = tempfile::tempdir().unwrap();
+        let m = mirror(d.path());
+        assert_eq!(
+            backfill_checkpoint(&m, &cp(5), false, true).await,
+            CheckpointBackfill::WouldWrite
+        );
+        assert!(!m
+            .store()
+            .exists(&checkpoint_key("atlas/test 1"))
+            .await
+            .unwrap());
+        backfill_checkpoint(&m, &cp(5), false, false).await;
+        assert_eq!(
+            backfill_checkpoint(&m, &cp(6), false, false).await,
+            CheckpointBackfill::Differs
+        );
+        assert_eq!(
+            backfill_checkpoint(&m, &cp(6), true, true).await,
+            CheckpointBackfill::Differs
+        );
+        assert_eq!(
+            backfill_checkpoint(&m, &cp(6), true, false).await,
+            CheckpointBackfill::Repaired
+        );
+        assert_eq!(
+            backfill_checkpoint(&m, &cp(6), false, false).await,
+            CheckpointBackfill::Unchanged
+        );
     }
 }

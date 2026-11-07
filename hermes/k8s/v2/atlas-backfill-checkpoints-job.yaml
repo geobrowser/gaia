@@ -1,0 +1,88 @@
+# One-off Job: copy the atlas_checkpoints rows into the blob store, one object per indexer id (plan 10.22
+# section 6, item 10). Binary `backfill_checkpoints` (atlas/src/bin/backfill_checkpoints.rs). Read-only against
+# Postgres; it only writes atlas_checkpoints/ objects in the bucket.
+#
+# NOT part of any deploy: deploy-v2.yml lists its manifests by name and this file is not among them.
+# Apply by hand, once an atlas image that contains the binary is built and the geodb-blob-key Secret exists,
+# and BEFORE ATLAS_CHECKPOINT_BLOB_WRITE_THROUGH is turned on. MODE is `dry-run` (classify only) or `copy`.
+#
+#   sed -e "s|atlas:IMAGE_TAG|atlas:<tag>|" -e "s|MODE|dry-run|g" -e "s|ARGS|\"--dry-run\"|" \
+#     hermes/k8s/v2/atlas-backfill-checkpoints-job.yaml | kubectl apply -f -
+#   sed -e "s|atlas:IMAGE_TAG|atlas:<tag>|" -e "s|MODE|copy|g" -e "s|ARGS||" \
+#     hermes/k8s/v2/atlas-backfill-checkpoints-job.yaml | kubectl apply -f -
+#   kubectl -n gaia logs -f job/atlas-backfill-checkpoints-copy
+#
+# Exit codes: 0 every checkpoint present and equal, 1 one could not be read or verified, 2 objects exist that
+# differ from Postgres and were left alone (add "--repair" to args to replace them; Postgres is the source).
+# Output is counts only. The Postgres connection is configured exactly as the atlas Deployment's (the same
+# DATABASE_URL, no extra CA mount). Credentials for the bucket come only from the geodb-blob-key Secret via secretKeyRef.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: atlas-backfill-checkpoints-MODE
+  namespace: gaia
+  labels:
+    app: atlas-backfill-checkpoints
+    environment: testnet
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: atlas-backfill-checkpoints
+        environment: testnet
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      containers:
+        - name: backfill-checkpoints
+          image: registry.digitalocean.com/geo/atlas:IMAGE_TAG
+          command: ["backfill_checkpoints"]
+          args: [ARGS]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: BLOB_BACKEND
+              value: s3
+            - name: BLOB_S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: endpoint
+            - name: BLOB_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: bucket
+            - name: BLOB_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: access_key
+            - name: BLOB_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: geodb-blob-key
+                  key: secret_key
+            - name: ATLAS_CHECKPOINT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
