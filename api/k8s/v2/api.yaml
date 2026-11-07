@@ -330,9 +330,9 @@ spec:
             - name: GEODB_GOVERNANCE_SHADOW_SAMPLER
               value: "0"
             # Twins the proposal list, detail (actions, votes) and active-check reads from the same records
-            # (gaia_api_governance_queries_shadow_total). OFF; never changes a response; counts only.
+            # (gaia_api_governance_queries_shadow_total). ON; never changes a response; counts only.
             - name: GEODB_GOVERNANCE_QUERIES_SHADOW
-              value: "0"
+              value: "1"
             - name: GEODB_KEYED_RECORDS_SHADOW
               value: "0"
             - name: GATEWAY_PROBE
