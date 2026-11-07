@@ -11,6 +11,7 @@ import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
+import type {QueriesShadow} from "./governance/queriesShadow"
 import type {GovernanceShadow} from "./governance/shadow"
 import {
 	getProposalWithVotes,
@@ -361,7 +362,12 @@ function parseOrderDirection(
 /**
  * Create the proposals router.
  */
-export function createProposalsRouter(db: Database, runtime: AppRuntime, governanceShadow?: GovernanceShadow | null) {
+export function createProposalsRouter(
+	db: Database,
+	runtime: AppRuntime,
+	governanceShadow?: GovernanceShadow | null,
+	queriesShadow?: QueriesShadow | null,
+) {
 	const router = new Hono<AppEnv>()
 
 	// GET /proposals/:id/status - Single proposal status
@@ -439,6 +445,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime, governa
 				const nowSeconds = getCurrentTimeSeconds()
 				// Flag-off shadow (GEODB_GOVERNANCE_SHADOW): compares in the background, never touches the response.
 				governanceShadow?.detail(proposal, nowSeconds)
+				queriesShadow?.detail(proposal)
 				return buildProposalResponse(proposal, nowSeconds, voterId)
 			}).pipe(
 				Effect.tapError((error) => {
@@ -634,6 +641,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime, governa
 
 				const nowSeconds = getCurrentTimeSeconds()
 				governanceShadow?.list(proposals, nowSeconds)
+				queriesShadow?.list(proposals, {actionTypes, excludeActionTypes})
 				const proposalResponses = proposals.map((p) => buildListItemResponse(p, nowSeconds))
 
 				return {
@@ -684,7 +692,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime, governa
 	)
 
 	// Active proposal check endpoints — shared handler with per-route config
-	registerActiveProposalRoute(router, db, runtime, {
+	registerActiveProposalRoute(router, db, runtime, queriesShadow ?? null, {
 		path: "/space/:spaceId/members/:memberSpaceId/active",
 		targetParam: "memberSpaceId",
 		targetLabel: "Member space ID",
@@ -693,9 +701,10 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime, governa
 			"Returns whether the specified member space has an active (PROPOSED or EXECUTABLE) ADD_MEMBER proposal in the given space.",
 		queryFn: hasActiveMemberProposal,
 		operationName: "HasActiveMemberProposal",
+		shadowKind: "member",
 	})
 
-	registerActiveProposalRoute(router, db, runtime, {
+	registerActiveProposalRoute(router, db, runtime, queriesShadow ?? null, {
 		path: "/space/:spaceId/editors/:editorSpaceId/active",
 		targetParam: "editorSpaceId",
 		targetLabel: "Editor space ID",
@@ -704,6 +713,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime, governa
 			"Returns whether the specified member space has an active (PROPOSED or EXECUTABLE) ADD_EDITOR proposal in the given space.",
 		queryFn: hasActiveEditorProposal,
 		operationName: "HasActiveEditorProposal",
+		shadowKind: "editor",
 	})
 
 	return router
@@ -728,6 +738,8 @@ interface ActiveProposalRouteConfig {
 	queryFn: (db: Database, spaceId: string, targetId: string) => Effect.Effect<boolean, QueryError>
 	/** Operation name for logs and spans, e.g. "HasActiveMemberProposal" */
 	operationName: string
+	/** Which active check this is, for the flag-off queries shadow. */
+	shadowKind: "member" | "editor"
 }
 
 /**
@@ -739,6 +751,7 @@ function registerActiveProposalRoute(
 	router: Hono<AppEnv>,
 	db: Database,
 	runtime: AppRuntime,
+	queriesShadow: QueriesShadow | null,
 	config: ActiveProposalRouteConfig,
 ) {
 	router.get(
@@ -797,6 +810,7 @@ function registerActiveProposalRoute(
 				}
 
 				const active = yield* config.queryFn(db, spaceId, targetId)
+				queriesShadow?.active(config.shadowKind, targetId, active)
 				return {active}
 			}).pipe(
 				Effect.tapError((error) => {

@@ -28,6 +28,24 @@ export const PROPOSAL_VERSION_COLUMNS = {
 	executeBy: "ca75ecfb5ab24196998de1b3bb31eb6f",
 } as const
 
+export const PROPOSAL_ACTION_KIND = "22335b74e17a4c9e867d4ac2a32c3a4a"
+
+export const PROPOSAL_ACTION_COLUMNS = {
+	proposal: "235abc0092a248d69e2dbb5c71fd0209",
+	block: "a93c92d0a2f442e9852057064567e012",
+	index: "81b028b2bb7f4f9e85e5689a2f1826af",
+	actionType: "002e8db762e0401386b53478b329013e",
+	target: "afc49d0ddf9c4affaae9ff963338d7c4",
+	contentUri: "a267fc081a4c457abfda85b8fc024d92",
+	contentId: "268e38bcf4d247138d7dbd154873391c",
+} as const
+
+/** Key columns of a vote record, which the queries shadow reads to count a proposal's votes by version. */
+export const PROPOSAL_VOTE_KEY_COLUMNS = {
+	proposal: "c020ebd69bbb4bec8c83db30765aa91b",
+	version: "da1d8b5c47ee499797e729ae90938086",
+} as const
+
 export const PROPOSAL_STATUS_COLUMNS = {
 	executedAt: "ed3855a3c41b4f749651bf049dabac0b",
 	unexecutableAt: "72179d56e3dc478d9c9ab2159e4b40ef",
@@ -124,4 +142,43 @@ export function decodeProposalVersion(rows: GeoCardRow[]): DecodedVersion | null
 			executeBy: executeBy === null ? null : wholeNumber(executeBy),
 		},
 	}
+}
+
+export type DecodedAction = {
+	/** The proposal's geo-db entity ref (the key column), not its gaia id. */
+	proposal: string
+	block: bigint
+	index: bigint
+	actionType: string
+	target: string | null
+	contentUri: string | null
+	contentId: string | null
+}
+
+/** A proposal action record, or null when the card is empty. A record missing a key or its type is ambiguous. */
+export function decodeProposalAction(rows: GeoCardRow[]): DecodedAction | null {
+	if (rows.length === 0) return null
+	const need = (property: string): string => {
+		const v = single(rows, property)
+		if (v === null) throw new AmbiguousRecordError(`action column ${property} missing`)
+		return v
+	}
+	return {
+		proposal: need(PROPOSAL_ACTION_COLUMNS.proposal),
+		block: wholeNumber(need(PROPOSAL_ACTION_COLUMNS.block)),
+		index: wholeNumber(need(PROPOSAL_ACTION_COLUMNS.index)),
+		actionType: need(PROPOSAL_ACTION_COLUMNS.actionType),
+		target: single(rows, PROPOSAL_ACTION_COLUMNS.target),
+		contentUri: single(rows, PROPOSAL_ACTION_COLUMNS.contentUri),
+		contentId: single(rows, PROPOSAL_ACTION_COLUMNS.contentId),
+	}
+}
+
+/** A vote record's proposal version and option, or null when the card is empty. */
+export function decodeVoteRecord(rows: GeoCardRow[]): {version: bigint; option: 1 | 2 | 3} | null {
+	const option = decodeProposalVote(rows)
+	if (option === null) return null
+	const version = single(rows, PROPOSAL_VOTE_KEY_COLUMNS.version)
+	if (version === null) throw new AmbiguousRecordError("vote version missing")
+	return {version: wholeNumber(version), option}
 }

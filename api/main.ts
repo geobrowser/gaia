@@ -55,6 +55,7 @@ import {
 import {createProfileRouter} from "./src/profile"
 import {createProfileShadow, readProfileShadowConfig} from "./src/profile/shadow"
 import {createProposalsRouter} from "./src/proposals"
+import {createGovernanceQueriesShadow, readQueriesShadowConfig} from "./src/proposals/governance/queriesShadow"
 import {createGovernanceSampler, readGovernanceSamplerConfig} from "./src/proposals/governance/sampler"
 import {createGovernanceShadow, readGovernanceShadowConfig} from "./src/proposals/governance/shadow"
 import {createSystemSpaceLookup} from "./src/proposals/governance/systemSpaces"
@@ -251,7 +252,18 @@ const governanceSamplerConfig = readGovernanceSamplerConfig(process.env)
 if (governanceShadow && governanceSamplerConfig.enabled) {
 	createGovernanceSampler({config: governanceSamplerConfig, db, shadow: governanceShadow, log}).start()
 }
-app.route("/proposals", createProposalsRouter(db, runtime, governanceShadow))
+// GEODB_GOVERNANCE_QUERIES_SHADOW (off by default) twins the proposal list, detail (actions, votes) and active-check reads
+// from the same records and counts them (gaia_api_governance_queries_shadow_total). Never changes a response.
+const queriesShadowConfig = readQueriesShadowConfig(process.env)
+const queriesShadow = queriesShadowConfig.enabled
+	? createGovernanceQueriesShadow({
+			config: queriesShadowConfig,
+			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+			log,
+		})
+	: null
+app.route("/proposals", createProposalsRouter(db, runtime, governanceShadow, queriesShadow))
 log.info("Proposals routes enabled")
 
 // Private server-to-server routes (GEO-3140 For you, GEO-3224 pair fit). Mounted only when
