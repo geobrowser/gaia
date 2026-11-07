@@ -39,6 +39,7 @@ pub mod primer_stats;
 pub mod private_snapshot;
 pub mod publish;
 pub mod ranking_config;
+pub mod ranks_reads_shadow;
 pub mod recompute;
 pub mod scoring;
 pub mod sql_helpers;
