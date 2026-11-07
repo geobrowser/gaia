@@ -335,6 +335,24 @@ The executor's copy is intentionally stricter (60s clock-skew buffer). If the th
 
 Run `bun test` in `proposal-executor/` to verify cross-validation passes.
 
+### geo-db Twin of Detection (shadow, off by default)
+
+`src/geodb-twin/` recomputes the "ready to execute" set from geo-db records (status, version and vote records, and a Space's editor edges) and compares it with the SQL set each tick. It is a shadow: SQL stays the source, the twin returns nothing execution reads, every failure is logged and dropped, and it has a time budget.
+
+It is a fourth copy of the decision tree. A change to the formulas in `detect.ts` must land in `src/geodb-twin/evaluate.ts` too; `tests/geodb-twin.test.ts` checks the twin against a reference of the SQL formulas over a grid.
+
+| Env | Default | Meaning |
+|---|---|---|
+| `PROPOSAL_EXECUTOR_GEODB_TWIN` | unset (off) | `true` turns it on. Anything else is off. |
+| `GEODB_CLIENT_BIN`, `GEODB_KEY_PATH`, `GEODB_BINDING_PATH`, `GEODB_SPACE_MAP_PATH` | none | Required with the flag; without them the twin logs `geodb_twin_skipped` and does nothing. `system-spaces.json` is read from the directory of the space map. |
+| `PROPOSAL_EXECUTOR_GEODB_TWIN_TIMEOUT_MS` | 2000 | Per geo-db read; a timeout kills the worker and ends the twin's run. |
+| `PROPOSAL_EXECUTOR_GEODB_TWIN_BUDGET_MS` | 20000 | The whole twin. |
+| `PROPOSAL_EXECUTOR_GEODB_TWIN_CANDIDATE_MAX` | 100 | Candidates taken from Postgres (the SQL ready set is added). |
+
+The image does not yet carry the `geodb-client` binary, key, binding or space map, so the flag cannot be turned on until the manifest does.
+
+Logs (counted by a log-based metric; the executor has no scrape endpoint): `geodb_twin_summary` (counts for the tick, and the run totals as Prometheus-named counters in `totals`), and one `geodb_twin_mismatch` per disagreement with `kind` (`extra_in_geodb`: geo-db says ready, SQL does not; `missing_in_geodb`: the reverse) and `why`. `unsupported` is a proposal the records cannot decide (escalation pending, no version record, an unloaded Space, too many votes), not a mismatch.
+
 ### Proposals With Reverting Actions (`ActionReverted`)
 
 Some proposals pass all governance checks (quorum met, threshold met, voting ended) but contain **embedded actions that revert** when executed. For example, a proposal to `addMember` where the member was already added by another proposal, or `removeEditor` when the editor already left.

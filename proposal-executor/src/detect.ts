@@ -60,7 +60,7 @@ export interface MembershipRequest {
  * Seconds added to end_time to guard against clock skew between the CronJob pod
  * and on-chain block.timestamp. Hardcoded — not configurable.
  */
-const CLOCK_SKEW_BUFFER = 60
+export const CLOCK_SKEW_BUFFER = 60
 
 /**
  * Maximum proposal age in seconds. Proposals older than this are ignored.
