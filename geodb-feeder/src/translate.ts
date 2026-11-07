@@ -4,6 +4,7 @@
  */
 import {blockInstant, CREATED_AT_PROPERTY, timeIntent, UPDATED_AT_PROPERTY} from "./entityTimes.js"
 import {cid, hexId} from "./ids.js"
+import {legacyMapIntent} from "./legacyMap.js"
 import {languageTag} from "./languages.js"
 
 export type GrcValue = {type: string; language?: string | Uint8Array | null; [k: string]: unknown}
@@ -40,6 +41,11 @@ export type TranslateOptions = {
 	 * time, which writes none and is counted. Undefined is the feature off.
 	 */
 	blockSeconds?: number | null
+	/**
+	 * Write the legacy id map statement (legacyMap.ts) beside the `create_entity` of every entity keyed from a non-v4
+	 * id. Off, nothing is written or counted.
+	 */
+	legacyMap?: boolean
 }
 
 /** A position geo-db accepts (01 §5): 1 to 64 bytes of printable ASCII. gaia's fractional indexes are. */
@@ -149,11 +155,21 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 	// Entities whose own statements this edit changed, in first-touch order, and those among them new to the Space.
 	const changed = new Set<string>()
 	const fresh = new Set<string>()
-	const ensure = (e: string) => {
+	// The map statement of a newly created entity keyed from `original` (GEODB_LEGACY_ID_MAP).
+	const mapLegacy = (e: string, original: string | Uint8Array | undefined) => {
+		if (!opts.legacyMap || original == null) return
+		const r = legacyMapIntent(e, hexId(original))
+		if ("intent" in r) {
+			intents.push(r.intent)
+			bump("legacy-map-written")
+		} else if (r.skip === "malformed") bump("legacy-map-skipped-malformed")
+	}
+	const ensure = (e: string, original?: string | Uint8Array) => {
 		if (ctx.knownEntity(e)) return false
 		ctx.markEntity(e)
 		fresh.add(e)
 		intents.push(`.{ .create_entity = "${e}" }`)
+		mapLegacy(e, original)
 		return true
 	}
 	const setValues = (e: string, values: GrcPropertyValue[]) => {
@@ -198,6 +214,7 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 					ctx.markEntity(e)
 					fresh.add(e)
 					intents.push(`.{ .create_entity = "${e}" }`)
+					mapLegacy(e, op.id)
 				}
 				setValues(e, op.values ?? [])
 				changed.add(e)
@@ -207,7 +224,7 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 			}
 			case "updateEntity": {
 				const e = cid("entity", op.id as string | Uint8Array)
-				if (ensure(e)) bump("entity-predates-window")
+				if (ensure(e, op.id)) bump("entity-predates-window")
 				setValues(e, op.set ?? [])
 				for (const u of op.unset ?? []) {
 					const prop = typeof u === "string" || u instanceof Uint8Array ? u : u.property
@@ -227,7 +244,7 @@ export function translateOps(ops: GrcOp[], ctx: TranslateContext, opts: Translat
 				const from = cid("entity", op.from as string | Uint8Array)
 				const to = cid("entity", op.to as string | Uint8Array)
 				const sid = cid("statement", op.id as string | Uint8Array)
-				ensure(from)
+				ensure(from, op.from)
 				if (ctx.knownStmt(sid)) {
 					bump("create-of-known-relation")
 					break

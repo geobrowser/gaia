@@ -5,7 +5,7 @@ import {Overlay} from "./state.js"
 import {type GrcOp, translateOps} from "./translate.js"
 
 export type Decode = (payload: Uint8Array) => Promise<{ops: GrcOp[]}>
-export type HandleDeps = ApplyDeps & SpaceDeps & {decode: Decode; chunk: number; positions?: boolean; entityTimes?: boolean}
+export type HandleDeps = ApplyDeps & SpaceDeps & {decode: Decode; chunk: number; positions?: boolean; entityTimes?: boolean; legacyMap?: boolean}
 export type Outcome = "applied" | "empty" | "dead_letter"
 
 /**
@@ -50,6 +50,7 @@ export async function handleMessage(
 	const overlay = new Overlay(deps.store, spaceId)
 	const {intents, stats} = translateOps(ops, overlay, {
 		positions: deps.positions,
+		legacyMap: deps.legacyMap,
 		blockSeconds: deps.entityTimes ? blockSeconds : undefined,
 	})
 	const from = Math.min(deps.store.progress(partition, offset), intents.length)

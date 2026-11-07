@@ -1,0 +1,16 @@
+{
+	"_provenance": "Computed from geo-db origin/final bac1c75004 (ISS-629-174), src/format/crypto/sys_ids.zig: legacyStatementId(keyed, original) and legacyEntityId(original), run through zig test with the geo-db source unchanged except that format/crypto/blake3.zig called the zblake3 package's streaming hasher directly instead of the linked primitives unit (same BLAKE3, no build system). The two `upstream` cases are copied from geo-db tests/format/crypto/sys_ids.zig (legacy_vectors), where keyed is legacyEntityId(original). The `gaia` cases use keyed = the feeder's conformingId('entity', original).",
+	"atoms": {
+		"sys.legacy.Entity": "76f0f36ed115499b820496a7b807b867",
+		"sys.legacy.Id": "735016d93bbc4127b128a98e725c0762"
+	},
+	"cases": [
+		{"source": "upstream", "original": "0123456789abcdef0123456789abcdef", "keyed": "e8316ccd50f14a82929edb25378e52c1", "statement": "8851e205cdff486bb819b121526aacfb"},
+		{"source": "upstream", "original": "00000000000000000000000000000001", "keyed": "14c84896f6854f00a34e6bca0cf0f916", "statement": "fee824b004764e7eb32e206dbfb5f06b"},
+		{"source": "gaia", "original": "0123456789abcdef0123456789abcdef", "keyed": "a7f79f68ecd64763867f42bfc4387c95", "statement": "8d01169123404f6486a4d969ba49c828"},
+		{"source": "gaia", "original": "00000000000000000000000000000001", "keyed": "df8ff4dd46e8473f8ca68a78442c9f2b", "statement": "88710883e1af42c1ab486d8100468aaa"},
+		{"source": "gaia", "original": "ffffffffffffffffffffffffffffffff", "keyed": "d4f3d63bac7242308c2b906b54a98da2", "statement": "8350d213995b47e199ce5d07ef97941d"},
+		{"source": "gaia", "original": "deadbeefdeadbeefdeadbeefdeadbeef", "keyed": "357b7a056f624044a10f97b7e983dce9", "statement": "f7019edcd2ec4c678c37b9197d97a60a"},
+		{"source": "gaia", "original": "00112233445566778899aabbccddeeff", "keyed": "9537199f029940a6a8811d444b23ae8e", "statement": "24fc6a0f80da4da38ed7b87d79bf37a0"}
+	]
+}
