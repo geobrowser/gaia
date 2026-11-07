@@ -14,10 +14,12 @@
 use hermes_instrumentation::{error, info};
 use sqlx::{PgPool, Row};
 use std::env;
+use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
 use crate::errors::IngestError;
+use crate::geodb_shadow::GeoDbShadow;
 
 /// Maximum number of IDs per Postgres lookup batch.
 const MAX_BATCH_SIZE: usize = 1000;
@@ -30,14 +32,26 @@ const DEFAULT_MAX_CONNECTIONS: u32 = 5;
 /// Queries the `values` and `relations` tables (written by kg-indexer) to resolve
 /// doc IDs for direct bulk updates. Results are used to construct OpenSearch doc IDs
 /// (`{entity_id}_{space_id}`).
+///
+/// With `SEARCH_INDEXER_GEODB_SHADOW` on, a sample of some lookups is also asked of geo-db and the
+/// answers compared (see [`crate::geodb_shadow`]). Postgres still answers every lookup.
 pub struct EntitySpaceLookup {
     pool: PgPool,
+    shadow: Option<Arc<GeoDbShadow>>,
 }
 
 impl EntitySpaceLookup {
-    /// Create a new lookup from an existing pool.
+    /// Create a new lookup from an existing pool, with no geo-db shadow.
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self { pool, shadow: None }
+    }
+
+    /// Create a new lookup whose answers are also compared with geo-db.
+    pub fn with_shadow(pool: PgPool, shadow: Arc<GeoDbShadow>) -> Self {
+        Self {
+            pool,
+            shadow: Some(shadow),
+        }
     }
 
     /// Get a reference to the underlying Postgres pool.
@@ -78,7 +92,10 @@ impl EntitySpaceLookup {
                     max_connections = max_connections,
                     "Connected to Postgres for score lookups"
                 );
-                Some(Self { pool })
+                Some(Self {
+                    pool,
+                    shadow: GeoDbShadow::from_env(),
+                })
             }
             Err(e) => {
                 error!(
@@ -137,12 +154,19 @@ impl EntitySpaceLookup {
             }
         }
 
+        if let Some(shadow) = &self.shadow {
+            shadow.observe_spaces_for_entities(entity_ids, &all_results);
+        }
         Ok(all_results)
     }
 
     /// Given a batch of space_ids, return all (entity_id, space_id) pairs.
     ///
     /// Batches larger than 1000 are chunked automatically.
+    ///
+    /// Postgres only: no geo-db shadow. geo-db has no read for "every entity with a statement in
+    /// this Space"; `entities .args.types` lists a Space's entities only by type, and this lookup
+    /// is untyped. Twinning it waits on an untyped, cursor-paged Space-entities scan.
     pub async fn entities_for_spaces(
         &self,
         space_ids: &[Uuid],
@@ -246,6 +270,9 @@ impl EntitySpaceLookup {
             }
         }
 
+        if let Some(shadow) = &self.shadow {
+            shadow.observe_docs_for_relations(relation_ids, &all_results);
+        }
         Ok(all_results)
     }
 
@@ -255,6 +282,10 @@ impl EntitySpaceLookup {
     /// writes `edit_versions` in that transaction, so every edit at or below this block is
     /// reflected in `values` and `relations`. A backward scan of the
     /// `(block_number, sequence)` unique index, so it costs one index probe.
+    ///
+    /// Postgres only: no geo-db shadow. geo-db's per-Space version reads count its own version
+    /// sequence, not chain blocks, and nothing records which chain block the feeder has applied;
+    /// twinning this waits on a version-log read that carries the block (GAP5-VERSION-LOG).
     pub async fn kg_applied_block(&self) -> Result<Option<u64>, IngestError> {
         let block: Option<i64> = sqlx::query_scalar(KG_APPLIED_BLOCK_SQL)
             .fetch_one(&self.pool)
@@ -292,6 +323,9 @@ impl EntitySpaceLookup {
                     IngestError::parse(format!("Postgres lookup failed for empty docs: {}", e))
                 })?;
             empty.extend(rows);
+        }
+        if let Some(shadow) = &self.shadow {
+            shadow.observe_empty_in_space(pairs, &empty);
         }
         Ok(empty)
     }

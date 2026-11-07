@@ -455,6 +455,10 @@ impl RelationMap {
     ///
     /// Maps each relation to `from_entity_id`, the entity whose document holds it.
     /// `relations.entity_id` is the relation's own reified entity, which has no document.
+    ///
+    /// Postgres only: no geo-db shadow. This pages every relation in id order with an `id > cursor`
+    /// predicate, and geo-db has no read that walks relation statements by id with a resumable
+    /// cursor; twinning it waits on that read (RELATION-PAGE-CURSOR).
     pub async fn rebuild_from_postgres(
         &self,
         pool: &sqlx::PgPool,

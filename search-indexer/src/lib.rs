@@ -25,6 +25,7 @@
 pub mod config;
 pub mod consumer;
 pub mod errors;
+pub mod geodb_shadow;
 pub mod http;
 pub mod loader;
 pub mod lookup;
