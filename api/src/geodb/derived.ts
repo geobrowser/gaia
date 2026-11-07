@@ -10,7 +10,8 @@
  *
  * Reuses the card client's config, `PipeChild` seam and `GeoDbError`. `get` and `scan` need no wire change (DerivedGet 0x3B and
  * DerivedScan are served); `scores` needs geo-db at wire frame revision 11 (DerivedScores, 0x3F), which a node below it answers
- * with a refusal.
+ * with a refusal. `typeCounts` needs wire frame revision 13 (DerivedScan's count mode) on BOTH the serve and the geodb-client
+ * binary: a client built before it has no `counts` pipe line and a serve before it refuses the mode, either way as a `-` frame.
  */
 
 import {spawn as nodeSpawn} from "node:child_process"
@@ -80,8 +81,27 @@ export type ScoreRow = {
 	topicHex: string | null
 }
 
+/** What a count-mode scan read: the rows of the group walked, and the rows per requested type, in request order. */
+export type TypeCounts = {walked: number; counts: number[]}
+
+/** The most distinct types, and blocked entities, one count-mode scan holds (geo-db `wire_derived.types_max`, `blocked_max`). */
+export const MAX_COUNT_TYPES = 64
+export const MAX_COUNT_BLOCKED = 256
+
 /** The most cards one `scores` call holds (geo-db `wire_derived.scores_max`). */
 export const MAX_SCORE_CARDS = 64
+
+/**
+ * The count mode of a scan (geo-db wire frame revision 13, collection 1 only): for each type, how many rows of the group carry it,
+ * not counting the blocked entities. Kept apart like the other readers.
+ */
+export type DerivedCountsReader = DerivedReader & {
+	/**
+	 * `types` (hex, 1 to 64, distinct) counted over the rows of `group` (hex) in `collection`, skipping rows whose entity is in
+	 * `blocked` (hex, at most 256). One walk of the group on the serve, no rows on the wire.
+	 */
+	typeCounts(collection: number, groupHex: string, types: string[], blocked: string[]): Promise<TypeCounts>
+}
 
 export type DerivedReader = {
 	/** The row at `key` (hex) of `collection`, or null when the collection holds none. */
@@ -155,6 +175,43 @@ export function parseDerivedScan(body: string): DerivedScan {
 		rows.push({score: n, keyHex, valueHex})
 	}
 	return {rows, more}
+}
+
+/** The tallies a `counts` answer body names: `<type hex>\t<count>` a type in the order asked, then `walked: <n>`. */
+export function parseDerivedCounts(body: string, types: string[]): TypeCounts {
+	const lines = body.split("\n").filter((l) => l !== "")
+	const last = lines.pop() ?? ""
+	const walked = /^walked: (\d{1,10})$/.exec(last)
+	if (!walked || lines.length !== types.length)
+		throw new GeoDbError("client_failed", `derived counts answer is malformed: ${body.slice(0, 80)}`)
+	const counts = lines.map((line, i) => {
+		const [type = "", count = "", ...rest] = line.split("\t")
+		if (rest.length > 0 || type !== types[i] || !/^\d{1,10}$/.test(count))
+			throw new GeoDbError("client_failed", `derived counts row is malformed: ${line.slice(0, 80)}`)
+		return Number(count)
+	})
+	return {walked: Number(walked[1]), counts}
+}
+
+const HEX32 = /^[0-9a-f]{32}$/
+/** The request line of a counts call. Throws `bad_request` on a malformed argument. */
+export function countsLine(collection: number, groupHex: string, types: string[], blocked: string[]): string {
+	if (
+		!Number.isInteger(collection) ||
+		collection < 0 ||
+		!HEX32.test(groupHex) ||
+		types.length < 1 ||
+		types.length > MAX_COUNT_TYPES ||
+		new Set(types).size !== types.length ||
+		blocked.length > MAX_COUNT_BLOCKED ||
+		![...types, ...blocked].every((h) => HEX32.test(h))
+	)
+		throw new GeoDbError(
+			"bad_request",
+			"derived counts wants a group, 1 to 64 distinct types and at most 256 blocked",
+		)
+	// The group is parsed with base 0, so it needs its 0x; the lists are plain hex, `-` for none.
+	return `counts\t${collection}\t0x${groupHex}\t${types.join(",")}\t${blocked.length === 0 ? "-" : blocked.join(",")}`
 }
 
 const FLOAT_FIELDS = 9
@@ -267,7 +324,7 @@ type Pending = {
 export function createDerivedReader(
 	config: ReaderConfig,
 	options: {spawn?: SpawnPipe; now?: () => number} = {},
-): DerivedScanReader & DerivedScoresReader {
+): DerivedScanReader & DerivedScoresReader & DerivedCountsReader {
 	const spawn = options.spawn ?? defaultSpawn
 	const now = options.now ?? Date.now
 	const queue: Pending[] = []
@@ -429,6 +486,18 @@ export function createDerivedReader(
 				queue.push({line, resolve, reject})
 				pump()
 			}).then((body) => parseDerivedScores(body, cards.length))
+		},
+		typeCounts(collection, groupHex, types, blocked) {
+			let line: string
+			try {
+				line = countsLine(collection, groupHex, types, blocked)
+			} catch (error) {
+				return Promise.reject(error)
+			}
+			return new Promise<string>((resolve, reject) => {
+				queue.push({line, resolve, reject})
+				pump()
+			}).then((body) => parseDerivedCounts(body, types))
 		},
 		close() {
 			const error = new GeoDbError("client_failed", "derived reader closed")

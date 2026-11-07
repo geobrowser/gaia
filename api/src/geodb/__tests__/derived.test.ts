@@ -5,7 +5,9 @@ import {join} from "node:path"
 import {describe, expect, it} from "vitest"
 import {GeoDbError} from "../client"
 import {
+	countsLine,
 	createDerivedReader,
+	parseDerivedCounts,
 	parseDerivedGet,
 	parseDerivedScan,
 	parseDerivedScores,
@@ -248,5 +250,63 @@ else if (globalThis.left) { globalThis.n++; if (--globalThis.left === 0) frame("
 		await expect(reader.scores(CONFIG, [])).rejects.toThrow(GeoDbError)
 		expect(starts()).toBe(0)
 		await reader.close()
+	})
+})
+
+describe("counts", () => {
+	const T1 = "11".repeat(16)
+	const T2 = "22".repeat(16)
+	const B1 = "33".repeat(16)
+
+	it("writes the line with the group's 0x and a dash for no blocked", () => {
+		expect(countsLine(1, GROUP, [T1, T2], [B1])).toBe(`counts\t1\t0x${GROUP}\t${T1},${T2}\t${B1}`)
+		expect(countsLine(1, GROUP, [T1], [])).toBe(`counts\t1\t0x${GROUP}\t${T1}\t-`)
+	})
+
+	it("refuses an empty, repeated, oversized or malformed request", () => {
+		const bad = (...args: Parameters<typeof countsLine>) => expect(() => countsLine(...args)).toThrow(GeoDbError)
+		bad(1, GROUP, [], [])
+		bad(1, GROUP, [T1, T1], [])
+		bad(
+			1,
+			GROUP,
+			Array.from({length: 65}, (_, i) => i.toString(16).padStart(32, "0")),
+			[],
+		)
+		bad(
+			1,
+			GROUP,
+			[T1],
+			Array.from({length: 257}, (_, i) => i.toString(16).padStart(32, "0")),
+		)
+		bad(1, "xyz", [T1], [])
+		bad(-1, GROUP, [T1], [])
+		bad(1, GROUP, ["AB".repeat(16)], [])
+	})
+
+	it("parses the tallies in the order asked, with the walked rows", () => {
+		expect(parseDerivedCounts(`${T1}\t5\n${T2}\t0\nwalked: 9\n`, [T1, T2])).toEqual({walked: 9, counts: [5, 0]})
+	})
+
+	it("refuses a short, reordered or malformed answer", () => {
+		expect(() => parseDerivedCounts(`${T1}\t5\nwalked: 9\n`, [T1, T2])).toThrow(GeoDbError)
+		expect(() => parseDerivedCounts(`${T2}\t5\nwalked: 9\n`, [T1])).toThrow(GeoDbError)
+		expect(() => parseDerivedCounts(`${T1}\tx\nwalked: 9\n`, [T1])).toThrow(GeoDbError)
+		expect(() => parseDerivedCounts(`${T1}\t5\n`, [T1])).toThrow(GeoDbError)
+	})
+
+	it("sends one counts line and reads the answer", async () => {
+		const {reader} = fake(
+			String.raw`const f = line.split("\t"); frame("+", f[3].split(",").map((t, i) => t + "\t" + (i + 1)).join("\n") + "\nwalked: 7\n")`,
+		)
+		expect(await reader.typeCounts(1, GROUP, [T1, T2], [])).toEqual({walked: 7, counts: [1, 2]})
+		await expect(reader.typeCounts(1, GROUP, [], [])).rejects.toThrow(GeoDbError)
+	})
+
+	it("rejects a refusal, then recovers", async () => {
+		const {reader} = fake(
+			String.raw`if (line.startsWith("counts")) frame("-", "refused: InvalidWirePayload"); else frame("+", "")`,
+		)
+		await expect(reader.typeCounts(1, GROUP, [T1], [])).rejects.toThrow(GeoDbError)
 	})
 })
