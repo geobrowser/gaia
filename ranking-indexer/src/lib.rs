@@ -22,6 +22,7 @@ pub mod eligibility;
 pub mod entity_ranking_score_compute;
 pub mod error;
 pub mod external_interest_mirror;
+pub mod feed_composition;
 pub mod feed_composition_mirror;
 pub mod feed_signals;
 pub mod feed_signals_compute;
