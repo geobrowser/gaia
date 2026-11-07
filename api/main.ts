@@ -17,7 +17,7 @@ import {
 	ENTITIES_ORDERED_FIELD,
 } from "./src/gateway/entitiesConnectionShadow"
 import {createEntityResolver} from "./src/gateway/entityServe"
-import {createEntityShadow, ENTITY_FIELD} from "./src/gateway/entityShadow"
+import {createEntityShadow, createHoldersGate, ENTITY_FIELD} from "./src/gateway/entityShadow"
 import {createGateway, fieldModeOf, type GatewayDeps} from "./src/gateway/gateway"
 import {createMetasShadow, METAS_FIELD} from "./src/gateway/metasShadow"
 import {createPointReadShadows, POINT_READ_FIELDS} from "./src/gateway/pointReadShadows"
@@ -379,6 +379,8 @@ const wideReadBudget = createReadBudget({
 	perSecond: budgetNumber(process.env.GATEWAY_SHADOW_READS_PER_SECOND, 1, 20),
 	burst: budgetNumber(process.env.GATEWAY_SHADOW_READS_BURST, 5, 100),
 })
+// One gate for the holders lookup (GEODB_HOLDERS_LOOKUP): a store that refuses it is read the old way for a while.
+const holdersGate = createHoldersGate()
 // Every-Space reads (GEODB_EVERY_SPACE_READS) name the whole space map in one line: a budget of their own, smaller.
 const everySpaceBudget = createReadBudget({
 	perSecond: budgetNumber(process.env.GATEWAY_SHADOW_EVERY_SPACE_PER_SECOND, 0.5, 10),
@@ -433,6 +435,9 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 											? {
 													allGeoSpaces: sharedGeoDb.geoSpaceOf.all,
 													everySpaceBudget,
+													...(geoDbCardConfig.holdersLookup === true
+														? {holders: holdersGate}
+														: {}),
 													everySpaceChunks: geoDbCardConfig.everySpaceChunks === true,
 													...(geoDbCardConfig.everySpaceTimeoutMs
 														? {everySpaceTimeoutMs: geoDbCardConfig.everySpaceTimeoutMs}
@@ -458,6 +463,7 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 								? {
 										allGeoSpaces: sharedGeoDb.geoSpaceOf.all,
 										everySpaceBudget,
+										...(geoDbCardConfig.holdersLookup === true ? {holders: holdersGate} : {}),
 										everySpaceChunks: geoDbCardConfig.everySpaceChunks === true,
 										...(geoDbCardConfig.everySpaceTimeoutMs
 											? {everySpaceTimeoutMs: geoDbCardConfig.everySpaceTimeoutMs}
@@ -493,6 +499,9 @@ const gatewayDeps: GatewayDeps<GraphQLServerContext> = {
 											? {
 													allGeoSpaces: sharedGeoDb.geoSpaceOf.all,
 													everySpaceBudget,
+													...(geoDbCardConfig.holdersLookup === true
+														? {holders: holdersGate}
+														: {}),
 													everySpaceChunks: geoDbCardConfig.everySpaceChunks === true,
 													...(geoDbCardConfig.everySpaceTimeoutMs
 														? {everySpaceTimeoutMs: geoDbCardConfig.everySpaceTimeoutMs}

@@ -9,6 +9,8 @@ import {
 	createSpaceMap,
 	entitiesPageDocument,
 	GeoDbError,
+	holdersDocument,
+	isHoldersUnknownArgument,
 	MAX_TYPE_SCAN,
 	typeScanDocument,
 } from "../client"
@@ -563,6 +565,87 @@ lines((line) => {
 		])
 			await expect(client.readCards?.(args)).rejects.toMatchObject({reason: "bad_request"})
 		expect(starts()).toBe(0)
+	})
+})
+
+describe("createPipeGeoDbClient, the Spaces holding an entity", () => {
+	it("sends `.args.holders = true` over the Spaces named and returns the Spaces printed", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines((line) => {
+	const [spaces, doc] = line.split("\\t")
+	if (!doc.includes(".holders = true")) return frame("-", "MalformedRequest")
+	frame("+", spaces.split(",").slice(1).map((s) => ["-", s, "-", "${ENTITY}", "1"].join("\\t")).join("\\n") + "\\n")
+})
+`)
+		const holders = await client.readHolders?.({geoSpaceIds: [SPACE, OTHER_SPACE, ENTITY], entityId: ENTITY})
+		expect(holders).toEqual([OTHER_SPACE, ENTITY])
+		client.close()
+	})
+
+	it("answers an empty list for an entity no Space holds", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines(() => frame("+", ""))
+`)
+		expect(await client.readHolders?.({geoSpaceIds: [SPACE], entityId: ENTITY})).toEqual([])
+		client.close()
+	})
+
+	it("rejects with client_failed when the store refuses the argument", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines(() => frame("-", "refused: DefiniteRefusal MalformedRequest span 110..118"))
+`)
+		const refused = await client.readHolders?.({geoSpaceIds: [SPACE], entityId: ENTITY}).catch((e: unknown) => e)
+		expect(refused).toMatchObject({reason: "client_failed"})
+		expect(isHoldersUnknownArgument(refused)).toBe(true)
+		client.close()
+	})
+
+	it("rejects a row that is not a Space of the entity", async () => {
+		const {client} = fakePipe(`
+process.stdout.write("ready\\n")
+lines(() => frame("+", ["-", "not-a-space", "-", "${ENTITY}", "1"].join("\\t") + "\\n"))
+`)
+		await expect(client.readHolders?.({geoSpaceIds: [SPACE], entityId: ENTITY})).rejects.toMatchObject({
+			reason: "client_failed",
+		})
+		client.close()
+	})
+
+	it("reads only the old serve's refusal of the argument as an unknown argument", () => {
+		const gone = (reason: "client_failed" | "timeout", message: string) => new GeoDbError(reason, message)
+		expect(
+			isHoldersUnknownArgument(gone("client_failed", "refused: DefiniteRefusal MalformedRequest span 110..118")),
+		).toBe(true)
+		for (const other of [
+			gone("client_failed", "refused: DefiniteRefusal MalformedRequest"),
+			gone("client_failed", "refused: DefiniteRefusal NotFoundOrRestricted VersionNotFound"),
+			gone("client_failed", "TransportClosed"),
+			gone("client_failed", "geodb-client pipe exited (code 1)"),
+			gone("timeout", "refused: DefiniteRefusal MalformedRequest span 110..118"),
+			new Error("refused: DefiniteRefusal MalformedRequest span 110..118"),
+		])
+			expect(isHoldersUnknownArgument(other)).toBe(false)
+	})
+
+	it("refuses a malformed request before the worker", async () => {
+		const {client, starts} = fakePipe(`process.stdout.write("ready\\n")`)
+		for (const args of [
+			{geoSpaceIds: [], entityId: ENTITY},
+			{geoSpaceIds: [SPACE, SPACE], entityId: ENTITY},
+			{geoSpaceIds: [SPACE], entityId: "nope"},
+			{geoSpaceIds: Array.from({length: 1025}, (_, at) => String(at).padStart(32, "7")), entityId: ENTITY},
+		])
+			await expect(client.readHolders?.(args)).rejects.toMatchObject({reason: "bad_request"})
+		expect(starts()).toBe(0)
+	})
+
+	it("builds the document", () => {
+		expect(holdersDocument(ENTITY)).toBe(
+			`.{ .version = 1, .select = .{ .c = .{ .field = "entity", .args = .{ .id = "${ENTITY}", .holders = true } } } }`,
+		)
 	})
 })
 

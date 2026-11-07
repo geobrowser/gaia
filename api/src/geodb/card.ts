@@ -214,6 +214,24 @@ export function rowsFromGeoDbOutput(
 		})
 }
 
+/**
+ * geodb-client output for a card read with `.args.holders = true`: one row a Space holding the entity, in the card's
+ * columns (the property and statement `none`, the value a reference to the Space, the entity the one asked). Returns the
+ * Spaces in the order printed. A row that names another entity or no Space is refused, never skipped, so a store that
+ * answered something else (not a holders list) is never read as one.
+ */
+export function holderSpacesFromGeoDbOutput(output: string, entityId: string): string[] {
+	return output
+		.split("\n")
+		.filter((line) => line !== "")
+		.map((line) => {
+			const cells = line.split("\t")
+			if (cells[3] !== entityId || !/^[0-9a-f]{32}$/.test(cells[1] ?? ""))
+				throw new Error(`a holders row is not a Space of the entity: ${line.slice(0, 60)}`)
+			return cells[1] as string
+		})
+}
+
 /** A statement referring to an entity, from its card's backlinks: `from` holds `prop` with the entity as value. */
 export type GeoBacklinkRow = GeoCardRow & {from: string}
 
