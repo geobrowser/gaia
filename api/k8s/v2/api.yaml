@@ -274,6 +274,10 @@ spec:
               value: "engine"
             - name: GEODB_SEARCH_TIMEOUT_MS
               value: "6000"
+            # Shadow a light `entities` page (one Space, one type, no orderBy) with geo-db's `.args.types` scan and compare the ids
+            # in order (gaia#1324). Needs serve at c2f9d09cfa or later. Shadow only.
+            - name: GEODB_TYPE_SCAN_SHADOW
+              value: "on"
             # Shadow geogenesis's EntitiesBatch `entities` selection (gaia#1115). Needs that PR's api image.
             - name: GEODB_ENTITIES_BATCH_SHADOW
               value: "on"
