@@ -69,6 +69,30 @@ Recipient resolution is intentionally a **superset** and **best-effort**: a fail
 | `VOTE_COLD_START_LOOKBACK_SECS` | `86400` | On the first poll (no persisted cursor), only consider entities whose votes changed within this trailing window — avoids a deploy-time backfill that would notify every already-over-threshold entity. Default 1 day. |
 | `HEARTBEAT_INTERVAL_SECS` | `60` | How often to log heartbeat stats (seconds) |
 
+### geo-db twin (optional, off by default)
+
+Shadow of the Postgres chain-table reads against geo-db's governance and membership records. Postgres stays the source of every answer; the twin runs off to the side, one comparison at a time, and only counts. Series: `notification_indexer_geodb_twin_total{read,result,why}` (`result` is `match`, `mismatch`, `unsupported` or `failed`) and `notification_indexer_geodb_twin_skipped_total{read,reason}` (`busy`, `space_map_unreadable`). Mismatch lines log counts only, never ids.
+
+| Variable | Default | Description |
+|---|---|---|
+| `NOTIFICATION_INDEXER_GEODB_TWIN` | off | `1` or `true` turns the twin on. Anything else leaves it off. |
+| `GEODB_KEY_PATH` | *(required when on)* | geo-db key file |
+| `GEODB_BINDING_PATH` | *(required when on)* | geo-db binding file |
+| `GEODB_SPACE_MAP_PATH` | *(required when on)* | gaia Space to geo-db Space map; `system-spaces.json` is read from beside it |
+| `GEODB_CLIENT_BIN` | `geodb-client` | the pipe client binary (must be on the image) |
+| `NOTIFICATION_INDEXER_GEODB_TWIN_TIMEOUT_MS` | `5000` | bound on one geo-db read |
+
+A misconfigured flag logs a warning and the indexer runs without the twin.
+
+Twinned: `find_editors_for_space` (`editors`), `is_member_or_editor` (`member_or_editor`), `find_voters_for_proposal` (`voters`), proposal existence for `find_proposer_for_proposal` and `find_proposal_proposer_and_space` (`proposer`, `proposer_and_space`), and the rows `find_expired_proposals` returned (`expired_proposals`).
+
+Not twinned, and why:
+- the proposer and the owning Space of a proposal: no record carries them, so only existence is compared;
+- the reverse of the expiry scan (expired in geo-db, absent from Postgres): geo-db cannot list proposals; the anti-join against the outbox is a table geo-db mirrors elsewhere;
+- proposals with a settings escalation: counted `unsupported` (`escalation_pending`), the escalated end time is not compared;
+- `lookup_vote_tallies`, `lookup_proposal_name`, `lookup_latest_block`: derived or not carried by a record;
+- the relation, thread, name and `votes_count` reads: not chain-table reads.
+
 ### Telemetry (all optional)
 
 | Variable | Description |

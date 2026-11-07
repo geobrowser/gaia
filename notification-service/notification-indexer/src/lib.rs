@@ -6,6 +6,7 @@
 pub mod consumer;
 pub mod consumer_lag;
 pub mod error;
+pub mod geodb_twin;
 pub mod health;
 pub mod ids;
 pub mod metrics;
