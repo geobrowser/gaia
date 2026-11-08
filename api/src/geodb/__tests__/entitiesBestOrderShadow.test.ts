@@ -152,6 +152,31 @@ describe("runOnce", () => {
 		expect(count("global_score", "failed")).toBe(1)
 		expect(count("local_score", "failed")).toBe(1)
 	})
+	it("counts a Postgres statement timeout as reference_timeout, not failed", async () => {
+		const timeout = Object.assign(new Error("canceling statement due to statement timeout"), {code: "57014"})
+		const inner = fakeDb(agreeing)
+		const db = {
+			execute: vi.fn(async (q: {queryChunks?: unknown[]}) => {
+				if (JSON.stringify(q.queryChunks ?? []).includes("entities_in_best_order")) throw timeout
+				return inner.execute(q as never)
+			}),
+		} as unknown as Database
+		await createBestOrderShadow({config, db, reader: reader(), log}).runOnce()
+		expect(count("best_order", "reference_timeout")).toBe(1)
+		expect(count("best_order", "failed")).toBe(0)
+		expect(count("global_score", "match")).toBe(1)
+	})
+	it("counts any other Postgres error as reference_failed, and a wrapped driver error by its cause", async () => {
+		const db = {
+			execute: vi.fn(async () => {
+				throw new Error("wrapped", {cause: Object.assign(new Error("connection refused"), {code: "08006"})})
+			}),
+		} as unknown as Database
+		await createBestOrderShadow({config, db, reader: reader(), log}).runOnce()
+		expect(count("best_order", "reference_failed")).toBe(1)
+		expect(count("global_score", "reference_failed")).toBe(1)
+		expect(count("best_order", "failed") + count("global_score", "failed")).toBe(0)
+	})
 	it("skips best_order on a node that cannot serve scores", async () => {
 		await createBestOrderShadow({config, db: fakeDb(agreeing), reader: reader({scores: undefined}), log}).runOnce()
 		expect(count("best_order", "match") + count("best_order", "failed") + count("best_order", "mismatch")).toBe(0)

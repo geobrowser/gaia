@@ -11,7 +11,9 @@
  *  - match: the same value (numbers within 1e-9 relative, text and dashed uuids exactly, NULL on both sides);
  *  - mismatch: a different value. A score row is a snapshot of the entity's last refresh and nothing re-scores on a card edit,
  *    so an un-engaged entity whose card moved is a benign mismatch: read the rate, not one count;
- *  - failed: a read failed, or the node is below frame revision 11 and refused the request.
+ *  - failed: a geo-db read failed, or the node is below frame revision 11 and refused the request;
+ *  - reference_timeout / reference_failed: the Postgres reference query failed (statement timeout, SQLSTATE 57014, or any other
+ *    error), which says nothing about geo-db.
  *
  * Not shadowed: `last_listed_on`, `listed_on_agenda_id` and `trending_topic_listed_on`. They are live reads over the trending
  * listings, whose twin (`rankedReads/trending.ts`) is already held to the SQL by GEODB_RANKED_READS_SHADOW; geo-db has no
@@ -25,8 +27,9 @@ import {GeoDbError} from "./client"
 import type {DerivedScoresReader, ScoreCard, ScoreRow} from "./derived"
 import {type ColumnValue, SCORE_COLUMNS, type ScoreColumn, sameColumn, scoreColumns} from "./rankedReads/entityColumns"
 import {readCards, readScoreConfig, sampleIds} from "./rankingScoresShadow"
+import {failureResult, viaReference} from "./referenceSide"
 
-export const RESULTS = ["match", "mismatch", "failed"] as const
+export const RESULTS = ["match", "mismatch", "failed", "reference_timeout", "reference_failed"] as const
 export type Result = (typeof RESULTS)[number]
 
 export type EntityColumnsShadowConfig = {enabled: boolean; intervalMs: number; sample: number}
@@ -72,7 +75,7 @@ const bump = (column: ScoreColumn, r: Result): void => {
 export function renderEntityColumnsShadowMetrics(): string {
 	if (!active) return ""
 	const lines = [
-		"# HELP gaia_api_entity_columns_shadow_total Sampled Entity computed columns (the entities_* SQL functions over entity_ranking_scores) against the row geo-db serves (DerivedScores), by column and result: match, mismatch (a stale Postgres snapshot is benign) or failed.",
+		"# HELP gaia_api_entity_columns_shadow_total Sampled Entity computed columns (the entities_* SQL functions over entity_ranking_scores) against the row geo-db serves (DerivedScores), by column and result: match, mismatch (a stale Postgres snapshot is benign), failed (geo-db) or reference_timeout / reference_failed (the Postgres side).",
 		"# TYPE gaia_api_entity_columns_shadow_total counter",
 	]
 	for (const c of SCORE_COLUMNS)
@@ -136,7 +139,8 @@ export function createEntityColumnsShadow(deps: {
 	let logged = 0
 
 	const failAll = (error: unknown) => {
-		for (const c of SCORE_COLUMNS) bump(c, "failed")
+		const result = failureResult(error)
+		for (const c of SCORE_COLUMNS) bump(c, result)
 		if (!(error instanceof GeoDbError)) log.warn("entity columns shadow failed", {error: String(error)})
 	}
 
@@ -144,13 +148,13 @@ export function createEntityColumnsShadow(deps: {
 		if (running || !reader.scores) return
 		running = true
 		try {
-			const ids = await sampleIds(db, pivotOf(), config.sample)
+			const ids = await viaReference(sampleIds(db, pivotOf(), config.sample))
 			if (ids.length === 0) return
 			const uuids = ids.map(uuidOfHex)
 			const [pg, cards, scoreConfig] = await Promise.all([
-				readPgColumns(db, uuids),
-				readCards(db, uuids),
-				readScoreConfig(db),
+				viaReference(readPgColumns(db, uuids)),
+				viaReference(readCards(db, uuids)),
+				viaReference(readScoreConfig(db)),
 			])
 			if (scoreConfig === null) throw new Error("entity_ranking_config has no usable row")
 			const wanted = ids.filter((id) => pg.has(id) && cards.has(id))

@@ -1168,7 +1168,8 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   at most 64): `best_order` (sampled scored ids through the real function, against the twin ordering them by the ranking scores
   geo-db serves, `DerivedScores`), `global_score` (the function's own query, `LIMIT _SAMPLE`, against a scan of collection 2) and
   `local_score` (one random space, against collection 3). `gaia_api_entities_best_order_shadow_total{read,result}` (absent until
-  the flag is on): match, mismatch, failed. The two score reads run the function's inner query rather than the function, because
+  the flag is on): match, mismatch, failed (geo-db side only), reference_timeout (the Postgres reference query hit its statement
+  timeout, SQLSTATE 57014) and reference_failed (any other Postgres error). The two score reads run the function's inner query rather than the function, because
   a plpgsql `RETURN QUERY` materialises the whole table (1.8M and 2.1M rows) before any limit. Best-order mismatches are partly
   benign: the SQL reads the stored `entity_ranking_scores` snapshot and geo-db serves the current formula. Not covered: ASC
   (geo-db cannot scan upward), `raw` ordering (no geo-db reader for `votes_count`), unscored entities, duplicates and unknown ids,
@@ -1220,7 +1221,8 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   `entity_ranking_scores`. Every `_INTERVAL_MS` (60 s) it samples `_SAMPLE` (20, at most 64) entities that have a score row, calls
   the real SQL functions on them, reads the same entities from geo-db's `DerivedScores` (overlay row if engaged, else the default
   from the card and config) and compares column by column: `gaia_api_entity_columns_shadow_total{column,result}` (absent until the
-  flag is on): match, mismatch, failed. A mismatch is benign when the Postgres row is a stale snapshot of a changed card; read
+  flag is on): match, mismatch, failed (geo-db side only), reference_timeout (Postgres statement timeout, SQLSTATE 57014) and
+  reference_failed (any other Postgres error). A mismatch is benign when the Postgres row is a stale snapshot of a changed card; read
   the rate. The three listing columns (`last_listed_on`, `listed_on_agenda_id`, `trending_topic_listed_on`) are live reads over
   the trending listings: their twin is `rankedReads/trending.ts`, held to the SQL by `GEODB_RANKED_READS_SHADOW`, and geo-db has
   no Postgres-free source for the rows yet, so this shadow does not cover them. An entity with no score row is not sampled (SQL
