@@ -408,7 +408,7 @@ spec:
             # (default 20, max 64, every _INTERVAL_MS, default 60 s) and holds them to the score rows geo-db serves
             # (DerivedScores): gaia_api_entity_columns_shadow_total{column,result}. Background only; reads stay on Postgres.
             - name: GEODB_ENTITY_COLUMNS_SHADOW
-              value: "0"
+              value: "1"
             # Sample entity_type_weights / entity_type_exclusions / entity_feed_blocklist rows from Postgres (_SAMPLE per table,
             # default 20, every _INTERVAL_MS, default 60 s) and hold each to its record in geo-db's config Space
             # (gaia_api_entity_feed_config_shadow_total{table,result}). One flag per table, all off; background only. Needs the
