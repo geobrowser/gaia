@@ -13,7 +13,8 @@
  *
  * Needs the serve AND the geodb-client binary at the frame revision of the form asked (13, 14, 15). A serve below it answers
  * `InvalidWirePayload` (and an older client a malformed line): that is a `fallback`, not a failure and never a mismatch, and the
- * form is not asked again for `FORM_BACKOFF_MS`, because a refusal kills the held pipe worker. The live serve is revision 13 today,
+ * form is not asked again for `FORM_BACKOFF_MS`, because a refusal kills the held pipe worker (an older tool's only: a tool that
+ * answers `revision` has the reader hold a form back before sending it, and a node's refusal leaves its pipe open, so neither backs off). The live serve is revision 13 today,
  * so with this flag on the graph and several-topic forms only probe. A refusal kills the held pipe worker, which restarts on the next read.
  *
  * `gaia_api_type_counts_shadow_total{result}`:
@@ -37,7 +38,7 @@
 import {sql} from "drizzle-orm"
 import type {Database} from "../forYou/queries"
 import {GeoDbError} from "./client"
-import {countsRefusal, type DerivedCountsReader} from "./derived"
+import {countsRefusal, type DerivedCountsReader, FormGatedError, refusalNeedsBackoff} from "./derived"
 import {CLAIM_TYPE, DEBATE_WALK_TYPE} from "./rankedReads/feeds"
 import {
 	isFallback,
@@ -331,11 +332,16 @@ export function createTypeCountsShadow(deps: {
 			try {
 				served = await read(plan, blocked)
 			} catch (error) {
+				// The worker negotiated a revision below the form and sent nothing: no back-off, the next worker asks again.
+				if (error instanceof FormGatedError) return fell("serve_revision")
 				const refusal = countsRefusal(error)
 				if (refusal === "exhausted") return fell("resource_exhausted")
 				if (refusal === "revision" && plan.form >= REVISION_TOPICS) {
-					if (plan.form >= REVISION_GRAPH) refusedUntil.graph = clock() + FORM_BACKOFF_MS
-					else refusedUntil.topics = clock() + FORM_BACKOFF_MS
+					// Only an older tool's refusal (no `code=` token) killed its worker and says nothing of the serve.
+					if (refusalNeedsBackoff(error)) {
+						if (plan.form >= REVISION_GRAPH) refusedUntil.graph = clock() + FORM_BACKOFF_MS
+						else refusedUntil.topics = clock() + FORM_BACKOFF_MS
+					}
 					return fell("serve_revision")
 				}
 				return failed(reasonOf(error), error)
