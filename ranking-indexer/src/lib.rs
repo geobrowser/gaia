@@ -52,6 +52,7 @@ pub mod topic_cooccurrence_compute;
 pub mod topic_cooccurrence_mirror;
 pub mod topic_interest;
 pub mod topic_ranking_compute;
+pub mod topic_ranking_mirror;
 pub mod topic_suggestions_compute;
 pub mod topic_suggestions_mirror;
 pub mod user_interest;

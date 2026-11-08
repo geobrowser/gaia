@@ -206,6 +206,9 @@ describe("createTypeCountsShadow", () => {
 		expect(count("failed")).toBe(0)
 		expect(calls).toBe(3)
 		expect(renderTypeCountsShadowMetrics()).toContain('retries_total{result="answered"} 1')
+		// The retry answered, so failed_total is silent; the first-try counter still names the reason.
+		expect(renderTypeCountsShadowMetrics()).toContain('first_try_failed_total{reason="timeout"} 1')
+		expect(renderTypeCountsShadowMetrics()).toContain('first_try_failed_total{reason="client_failed"} 0')
 	})
 
 	it("does not retry a refusal or a bad request, and splits failures by reason", async () => {
