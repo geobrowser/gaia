@@ -390,7 +390,7 @@ spec:
             # GEODB_ENTITIES_BEST_ORDER_SHADOW_INTERVAL_MS, default 60 s): gaia_api_entities_best_order_shadow_total{read,result}.
             # OFF; background only, reads stay on Postgres.
             - name: GEODB_ENTITIES_BEST_ORDER_SHADOW
-              value: "0"
+              value: "1"
             # Samples global_scores / local_scores / space_scores rows from Postgres (_SAMPLE per table, default 20, every
             # GEODB_SCORES_SHADOW_INTERVAL_MS, default 60 s) against geo-db's derived collections 2/3/4
             # (gaia_api_scores_shadow_total{table,result}). ON; background only, never changes a response. The scores snapshot
