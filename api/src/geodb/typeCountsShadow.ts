@@ -18,18 +18,34 @@
  *  - not_served: the call is outside count mode (the blocklist is longer than 256);
  *  - failed: a read failed, or the node is below frame revision 13.
  *
- * Counts only: no topic, type or entity is logged or labelled.
+ * `gaia_api_type_counts_shadow_failed_total{reason}` splits `failed` by the GeoDbError reason (or `postgres` / `other`), so a failure
+ * is told apart without a log line. A geo-db read that times out or loses its worker is tried once more (the pipe restarts on the next
+ * read) before it counts as failed: `gaia_api_type_counts_shadow_retries_total{result}` says how often that second try answered.
+ *
+ * Counts only: no topic, type or entity is logged or labelled. A disagreement log names each differing type by a fixed label (`claim`,
+ * `debate`, `other`, `absent`) with the Postgres and geo-db counts, never by id.
  */
 
 import {sql} from "drizzle-orm"
 import type {Database} from "../forYou/queries"
 import {GeoDbError} from "./client"
 import type {DerivedCountsReader} from "./derived"
-import {CLAIM_TYPE} from "./rankedReads/feeds"
+import {CLAIM_TYPE, DEBATE_WALK_TYPE} from "./rankedReads/feeds"
 import {planTypeCounts, type TypeCountsCall, typeCountsFrom} from "./rankedReads/typeCounts"
 
 export const RESULTS = ["match", "mismatch", "not_served", "failed"] as const
 export type Result = (typeof RESULTS)[number]
+
+export const FAIL_REASONS = [
+	"timeout",
+	"client_failed",
+	"bad_request",
+	"overloaded",
+	"unmapped_space",
+	"postgres",
+	"other",
+] as const
+export type FailReason = (typeof FAIL_REASONS)[number]
 
 /** Derived collection 1: the topic feed (`entity_topic_ranking`), keyed by topic. */
 export const COLLECTION = 1
@@ -68,6 +84,8 @@ export type TypeCountsSource = {
 let active = false
 const results = new Map<Result, number>()
 const bump = (r: Result): void => void results.set(r, (results.get(r) ?? 0) + 1)
+const failReasons = new Map<FailReason, number>()
+const retries = {answered: 0, failed: 0}
 
 /** Empty until the shadow is mounted, so a flag-off deploy exports nothing; once active every series exists at zero. */
 export function renderTypeCountsShadowMetrics(): string {
@@ -77,16 +95,73 @@ export function renderTypeCountsShadowMetrics(): string {
 		"# TYPE gaia_api_type_counts_shadow_total counter",
 	]
 	for (const r of RESULTS) lines.push(`gaia_api_type_counts_shadow_total{result="${r}"} ${results.get(r) ?? 0}`)
+	lines.push(
+		"# HELP gaia_api_type_counts_shadow_failed_total Failed type-counts shadow calls by reason: a GeoDbError reason, postgres (the SQL side threw) or other.",
+		"# TYPE gaia_api_type_counts_shadow_failed_total counter",
+	)
+	for (const r of FAIL_REASONS)
+		lines.push(`gaia_api_type_counts_shadow_failed_total{reason="${r}"} ${failReasons.get(r) ?? 0}`)
+	lines.push(
+		"# HELP gaia_api_type_counts_shadow_retries_total The one retry of a geo-db read that timed out or lost its worker, by whether the second try answered.",
+		"# TYPE gaia_api_type_counts_shadow_retries_total counter",
+		`gaia_api_type_counts_shadow_retries_total{result="answered"} ${retries.answered}`,
+		`gaia_api_type_counts_shadow_retries_total{result="failed"} ${retries.failed}`,
+	)
 	return lines.join("\n")
 }
 
 export function __resetTypeCountsShadowMetricsForTests(): void {
 	active = false
 	results.clear()
+	failReasons.clear()
+	retries.answered = 0
+	retries.failed = 0
 }
 
 const sameCounts = (a: Map<string, number>, b: Map<string, number>) =>
 	a.size === b.size && [...a].every(([type, n]) => b.get(type) === n)
+
+/** A fixed label for a type, so a log line says which kind differs without naming an entity. */
+function typeLabel(type: string, held: Set<string>): string {
+	if (type === CLAIM_TYPE) return "claim"
+	if (type === DEBATE_WALK_TYPE) return "debate"
+	if (type === ABSENT_TYPE) return "absent"
+	return held.has(type) ? "other" : "unknown"
+}
+
+export type TypeDiff = {type: string; postgres: number; geodb: number}
+
+/** Every requested type whose two counts differ, by label (types sharing a label are summed); zero is a count like any other. */
+export function diffTypeCounts(pg: Map<string, number>, geo: Map<string, number>, held: Set<string>): TypeDiff[] {
+	const out = new Map<string, TypeDiff>()
+	for (const type of new Set([...pg.keys(), ...geo.keys()])) {
+		const a = pg.get(type) ?? 0
+		const b = geo.get(type) ?? 0
+		if (a === b) continue
+		const label = typeLabel(type, held)
+		const seen = out.get(label) ?? {type: label, postgres: 0, geodb: 0}
+		seen.postgres += a
+		seen.geodb += b
+		out.set(label, seen)
+	}
+	return [...out.values()]
+}
+
+/** At most `max` events in any `windowMs`: a log line that cannot flood. */
+function limiter(max: number, windowMs: number, now: () => number): () => boolean {
+	const at: number[] = []
+	return () => {
+		const t = now()
+		while (at.length > 0 && t - (at[0] as number) >= windowMs) at.shift()
+		if (at.length >= max) return false
+		at.push(t)
+		return true
+	}
+}
+
+const reasonOf = (error: unknown): FailReason => (error instanceof GeoDbError ? error.reason : "other")
+
+const RETRYABLE = new Set<string>(["timeout", "client_failed"])
 
 export type TypeCountsShadow = {
 	/** One sampling pass. Resolves when done; never throws. */
@@ -100,38 +175,110 @@ export function createTypeCountsShadow(deps: {
 	source: TypeCountsSource
 	reader: DerivedCountsReader
 	log: {warn: (message: string, data?: Record<string, unknown>) => void}
+	now?: () => number
 }): TypeCountsShadow {
 	const {config, source, reader, log} = deps
 	active = true
 	let running = false
-	let logged = 0
+	const mayLogDisagreement = limiter(10, 600_000, deps.now ?? Date.now)
+	const mayLogFailure = limiter(5, 600_000, deps.now ?? Date.now)
+	let suppressed = 0
+	const clock = deps.now ?? Date.now
+	/** Geo-db reads made so far in this pass, when the last one ended, and the gap before the latest read: where a failure falls. */
+	let position = 0
+	let lastReadEnd: number | null = null
+	let idleBefore: number | null = null
 
-	async function check(call: TypeCountsCall, blocked: string[]): Promise<void> {
+	const failed = (reason: FailReason, error: unknown): void => {
+		bump("failed")
+		failReasons.set(reason, (failReasons.get(reason) ?? 0) + 1)
+		if (!mayLogFailure()) {
+			suppressed++
+			return
+		}
+		// A GeoDbError message is the client's own words (a refusal, a malformed row, a worker's stderr tail), not a request.
+		log.warn("type counts shadow failed", {
+			reason,
+			message: (error instanceof Error ? error.message : String(error)).slice(0, 200),
+			suppressed,
+			position,
+			idleMs: idleBefore,
+		})
+		suppressed = 0
+	}
+
+	/** One geo-db read; a timeout or lost worker is tried once more, as the pipe restarts on the next read. */
+	async function read(plan: NonNullable<ReturnType<typeof planTypeCounts>>, blocked: string[]) {
 		try {
-			const plan = planTypeCounts(call, blocked.length)
-			if (plan === null) return bump("not_served")
-			const pg = await source.pgCounts(call)
-			const served = await reader.typeCounts(
+			return await readOnce(plan, blocked)
+		} finally {
+			lastReadEnd = clock()
+		}
+	}
+
+	async function readOnce(plan: NonNullable<ReturnType<typeof planTypeCounts>>, blocked: string[]) {
+		const ask = () =>
+			reader.typeCounts(
 				COLLECTION,
 				plan.group,
 				plan.walked,
 				blocked.map((id) => id.replace(/-/g, "").toLowerCase()),
 			)
-			if (sameCounts(pg, typeCountsFrom(plan, served.counts))) return bump("match")
+		position++
+		idleBefore = lastReadEnd === null ? null : clock() - lastReadEnd
+		try {
+			return await ask()
+		} catch (error) {
+			if (!(error instanceof GeoDbError) || !RETRYABLE.has(error.reason)) throw error
+			try {
+				const second = await ask()
+				retries.answered++
+				return second
+			} catch (again) {
+				retries.failed++
+				throw again
+			}
+		}
+	}
+
+	async function check(call: TypeCountsCall, blocked: string[], held: Set<string>): Promise<void> {
+		let pg: Map<string, number>
+		try {
+			const plan = planTypeCounts(call, blocked.length)
+			if (plan === null) return bump("not_served")
+			try {
+				pg = await source.pgCounts(call)
+			} catch (error) {
+				return failed("postgres", error)
+			}
+			let served: Awaited<ReturnType<typeof read>>
+			try {
+				served = await read(plan, blocked)
+			} catch (error) {
+				return failed(reasonOf(error), error)
+			}
+			const geo = typeCountsFrom(plan, served.counts)
+			if (sameCounts(pg, geo)) return bump("match")
 			bump("mismatch")
-			if (logged < 20) {
-				logged++
-				log.warn("type counts shadow disagreement", {matchAll: call.matchAll, debate: call.debateTaggedClaims})
+			if (mayLogDisagreement()) {
+				const diffs = diffTypeCounts(pg, geo, held)
+				log.warn("type counts shadow disagreement", {
+					matchAll: call.matchAll,
+					debate: call.debateTaggedClaims,
+					types: pg.size,
+					walked: served.walked,
+					diffs,
+				})
 			}
 		} catch (error) {
-			bump("failed")
-			if (!(error instanceof GeoDbError)) log.warn("type counts shadow failed", {error: String(error)})
+			failed(reasonOf(error), error)
 		}
 	}
 
 	async function runOnce(): Promise<void> {
 		if (running) return
 		running = true
+		position = 0
 		try {
 			let topics: string[]
 			let blocked: string[]
@@ -139,8 +286,7 @@ export function createTypeCountsShadow(deps: {
 				topics = await source.sampleTopics(config.topics)
 				blocked = await source.blocklist()
 			} catch (error) {
-				bump("failed")
-				log.warn("type counts shadow failed", {error: String(error)})
+				failed("postgres", error)
 				return
 			}
 			for (const topic of topics) {
@@ -148,13 +294,21 @@ export function createTypeCountsShadow(deps: {
 				try {
 					held = await source.typesOf(topic)
 				} catch (error) {
-					bump("failed")
-					log.warn("type counts shadow failed", {error: String(error)})
+					failed("postgres", error)
 					continue
 				}
 				const types = [...new Set([...held, CLAIM_TYPE, ABSENT_TYPE])]
-				await check({topics: [topic], types, spaces: null, matchAll: true, debateTaggedClaims: false}, blocked)
-				await check({topics: [topic], types, spaces: null, matchAll: false, debateTaggedClaims: true}, blocked)
+				const heldSet = new Set(held)
+				await check(
+					{topics: [topic], types, spaces: null, matchAll: true, debateTaggedClaims: false},
+					blocked,
+					heldSet,
+				)
+				await check(
+					{topics: [topic], types, spaces: null, matchAll: false, debateTaggedClaims: true},
+					blocked,
+					heldSet,
+				)
 			}
 		} finally {
 			running = false
