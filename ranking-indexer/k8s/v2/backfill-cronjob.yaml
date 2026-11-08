@@ -14,7 +14,7 @@ spec:
   #
   # Modeled on k8s/staging/backfill-cronjob.yaml; v2 conventions applied
   # (namespace gaia, `geo` pull secret, non-root pod securityContext) to
-  # match k8s/v2/ranking-indexer.yaml. Needs only DATABASE_URL — no Kafka.
+  # match k8s/v2/ranking-indexer.yaml. Needs DATABASE_URL, no Kafka; the geo-db mirror wiring below is dormant while GEODB_DERIVED_MIRROR is "0".
   schedule: "0 * * * *"
   failedJobsHistoryLimit: 3
   concurrencyPolicy: Forbid
@@ -36,6 +36,25 @@ spec:
           volumes:
             - name: ssl-certs
               emptyDir: {}
+            # geodb-client for the ranking_scores mirror (GEODB_DERIVED_MIRROR, collection 11). Dormant while the
+            # flag is "0": nothing below is read, and every reference is optional or fails soft, so an absent geodb
+            # never blocks a run. Same wiring as ranking-indexer.yaml: the SCORES key, a principal that may write
+            # derived collection 11 among others (geodb-scores-key-job.yaml).
+            - name: geodb-bin
+              emptyDir: {}
+            - name: geodb-space-map
+              configMap:
+                # Written by the geodb-feeder / serve. Not shipped in these manifests.
+                name: geodb-space-map
+                optional: true
+            - name: geodb-key
+              secret:
+                secretName: geodb-scores-key
+                optional: true
+                defaultMode: 0440
+                items:
+                  - key: key
+                    path: scores.key
           initContainers:
             - name: setup-certs
               image: registry.digitalocean.com/geo/ranking-indexer:latest
@@ -59,6 +78,39 @@ spec:
                 capabilities:
                   drop:
                     - ALL
+            - name: geodb-setup
+              # Pinned, never :latest. Always exits 0: with no node id or no Service it writes no binding and the
+              # mirror stays off.
+              image: registry.digitalocean.com/geo/geodb:6b34f9feda
+              imagePullPolicy: IfNotPresent
+              command:
+                - sh
+                - -c
+                - |
+                  cp /usr/local/bin/geodb-client /geodb/geodb-client || exit 0
+                  node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+                  ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+                  if [ -n "$node" ] && [ -n "$ip" ]; then
+                    printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+                  else
+                    echo "geodb-setup: no node id or no geodb Service; derived mirror stays off"
+                  fi
+                  exit 0
+              volumeMounts:
+                - name: geodb-bin
+                  mountPath: /geodb
+                - name: geodb-space-map
+                  mountPath: /etc/geodb/space-map
+                  readOnly: true
+              resources:
+                requests:
+                  memory: "16Mi"
+                  cpu: "10m"
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
           containers:
             - name: ranking-indexer-backfill
               image: registry.digitalocean.com/geo/ranking-indexer:latest
@@ -73,6 +125,15 @@ spec:
                 - name: ssl-certs
                   mountPath: /ssl
                   readOnly: true
+                - name: geodb-bin
+                  mountPath: /geodb
+                  readOnly: true
+                - name: geodb-space-map
+                  mountPath: /etc/geodb/space-map
+                  readOnly: true
+                - name: geodb-key
+                  mountPath: /etc/geodb/key
+                  readOnly: true
               env:
                 - name: PGSSLROOTCERT
                   value: /ssl/ca.crt
@@ -81,6 +142,18 @@ spec:
                     secretKeyRef:
                       name: api-secrets
                       key: DATABASE_URL
+                # Copy the rows a recomputed block writes into geo-db derived collection 11, best-effort, after the
+                # Postgres write commits. OFF: the lead flips it to "1" once the one-time full fill has run.
+                - name: GEODB_DERIVED_MIRROR
+                  value: "0"
+                - name: GEODB_DERIVED_BATCH
+                  value: "1"
+                - name: GEODB_CLIENT_BIN
+                  value: /geodb/geodb-client
+                - name: GEODB_KEY_PATH
+                  value: /etc/geodb/key/scores.key
+                - name: GEODB_BINDING_PATH
+                  value: /geodb/binding.txt
                 - name: RUST_LOG
                   value: "backfill_blocks=info,ranking_indexer=info"
               resources:
