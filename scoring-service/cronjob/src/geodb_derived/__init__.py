@@ -24,6 +24,15 @@ counted, never truncated or coerced.
 Off unless ``GEODB_DERIVED_MIRROR`` is ``1`` or ``true``; it needs ``GEODB_KEY_PATH`` and
 ``GEODB_BINDING_PATH``, and the key's binding must grant ``derived=2,3,4``.
 
+Session lifetime. Each child holds one geo-db session whose capability grant the serve mints for
+``grant_ttl_s`` (300 s on the testnet serve, ``geodb/supervisor.sh``); a request past it is refused
+``CapabilityTokenExpired``. A full ``local_scores`` rewrite takes longer than that, so the mirror
+(1) restarts the child, a fresh handshake and grant, once its session is older than
+``GEODB_DERIVED_SESSION_REFRESH_S`` (default 240) and (2) on a lost pipe or an expired token
+re-handshakes and resends the same chunk, up to ``GEODB_DERIVED_RETRIES`` times (default 3) a chunk
+and ``MAX_RECONNECTS`` a call. Puts are last-write-wins, so a resend is safe. Any other refusal still
+ends the table.
+
 ``GEODB_DERIVED_MIRROR_TABLES`` (comma separated, e.g. ``global_scores,space_scores``) picks which tables are
 mirrored. Unset or empty mirrors all three, as before. A name that is not one of the three is ignored with a
 warning; if none is valid, nothing is mirrored (the cap is a reason to fail closed).
@@ -60,6 +69,12 @@ TABLES = ("global_scores", "local_scores", "space_scores")
 DEFAULT_TIMEOUT = 2.0
 DEFAULT_COOLDOWN = 10.0
 DEFAULT_BUDGET_MS = 5000
+# The serve's grant lives 300 s (GEODB_GRANT_TTL_S); a session is replaced well before that.
+DEFAULT_SESSION_REFRESH_S = 240.0
+# Re-handshakes a chunk may take before its table is given up, and the most one call may make.
+DEFAULT_RETRIES = 3
+MAX_RECONNECTS = 20
+DEFAULT_RETRY_DELAY = 1.0
 
 
 @dataclass(frozen=True)
@@ -201,8 +216,14 @@ class DerivedMirror:
         budget: float = DEFAULT_BUDGET_MS / 1000,
         batch: bool = False,
         tables: Iterable[str] = TABLES,
+        session_refresh: float = DEFAULT_SESSION_REFRESH_S,
+        retries: int = DEFAULT_RETRIES,
+        retry_delay: float = DEFAULT_RETRY_DELAY,
     ):
         self.argv = argv
+        self.session_refresh = session_refresh
+        self.retries = retries
+        self.retry_delay = retry_delay
         self.timeout = timeout
         self.cooldown = cooldown
         self.budget = budget
@@ -210,8 +231,9 @@ class DerivedMirror:
         self.tables = frozenset(tables)
         # Counters, logged by the writer after each call: puts (rows answered ok), errors
         # (failed requests), skipped (rows that cannot be sent), dropped (rows not sent).
-        self.stats = {"puts": 0, "errors": 0, "skipped": 0, "dropped": 0}
+        self.stats = {"puts": 0, "errors": 0, "skipped": 0, "dropped": 0, "reconnects": 0}
         self._proc: subprocess.Popen | None = None
+        self._opened_at: float = 0.0
         self._failed_at: float | None = None
 
     @classmethod
@@ -237,11 +259,15 @@ class DerivedMirror:
                 "geodb_derived.misconfigured: GEODB_DERIVED_MIRROR_TABLES names no known table; mirror disabled"
             )
             return None
+        refresh = _env_number(env, "GEODB_DERIVED_SESSION_REFRESH_S", DEFAULT_SESSION_REFRESH_S, float)
+        retries = max(0, _env_number(env, "GEODB_DERIVED_RETRIES", DEFAULT_RETRIES, int))
         return cls(
             [env.get("GEODB_CLIENT_BIN") or "geodb-client", "--key", key, "--binding", binding, "derived", "pipe"],
             budget=ms / 1000,
             batch=env.get("GEODB_DERIVED_BATCH", "").strip() in ("1", "true"),
             tables=tables,
+            session_refresh=refresh,
+            retries=retries,
         )
 
     # -- public ---------------------------------------------------------------------------
@@ -282,6 +308,7 @@ class DerivedMirror:
         start = time.monotonic()
         sent = 0
         size = BATCH_MAX if self.batch else CHUNK
+        reconnects = 0
         it = iter(lines)
         while chunk := list(islice(it, size)):
             if sent > 0 and time.monotonic() - start > self.budget:
@@ -295,7 +322,7 @@ class DerivedMirror:
                 break
             reqs = [batch_request(chunk)] if self.batch and len(chunk) > 1 else chunk
             try:
-                self._request_all(reqs)
+                reconnects = self._request_chunk(table, reqs, reconnects)
             except _CoolingDown:
                 self.stats["errors"] += 1
                 self.stats["dropped"] += len(chunk) + sum(1 for _ in it)
@@ -308,9 +335,47 @@ class DerivedMirror:
             sent += len(chunk)
         return sent
 
-    def _request_all(self, reqs: list[str]) -> None:
-        """Sends requests in order over the held child; the first failure drops it."""
-        proc = self._ensure()
+    def _request_chunk(self, table: str, reqs: list[str], reconnects: int) -> int:
+        """Sends one chunk, re-handshaking and resending it when the session is lost or expired.
+
+        Returns the call's reconnect count. Raises the last error once ``retries`` resends of this
+        chunk, or ``MAX_RECONNECTS`` in the call, are spent, or at once for an error that a new
+        session cannot cure.
+        """
+        self._refresh_if_aging(table)
+        attempt = 0
+        while True:
+            try:
+                self._request_all(reqs, fresh=attempt > 0)
+                return reconnects
+            except _CoolingDown:
+                raise
+            except Exception as e:  # noqa: BLE001
+                if attempt >= self.retries or reconnects >= MAX_RECONNECTS or not _retryable(e):
+                    raise
+                attempt += 1
+                reconnects += 1
+                self.stats["reconnects"] += 1
+                logger.warning(
+                    "geodb_derived.reconnect table=%s attempt=%d error=%s; new session, same chunk",
+                    table,
+                    attempt,
+                    e,
+                )
+                time.sleep(self.retry_delay * 2 ** (attempt - 1))
+
+    def _refresh_if_aging(self, table: str) -> None:
+        """Replaces a session older than ``session_refresh`` before its grant can expire."""
+        if self._proc is not None and time.monotonic() - self._opened_at > self.session_refresh:
+            logger.info("geodb_derived.session_refresh table=%s; the session is older than %.0fs", table, self.session_refresh)
+            self._drop()
+
+    def _request_all(self, reqs: list[str], fresh: bool = False) -> None:
+        """Sends requests in order over the held child; the first failure drops it.
+
+        ``fresh`` ignores the cooldown: the caller is resending after a failure it means to cure.
+        """
+        proc = self._ensure(ignore_cooldown=fresh)
         for req in reqs:
             timer = threading.Timer(self.timeout, proc.kill)
             timer.start()
@@ -324,10 +389,10 @@ class DerivedMirror:
                 timer.cancel()
         self._failed_at = None
 
-    def _ensure(self) -> subprocess.Popen:
+    def _ensure(self, ignore_cooldown: bool = False) -> subprocess.Popen:
         if self._proc is not None:
             return self._proc
-        if self._failed_at is not None and time.monotonic() - self._failed_at < self.cooldown:
+        if not ignore_cooldown and self._failed_at is not None and time.monotonic() - self._failed_at < self.cooldown:
             raise _CoolingDown()
         try:
             proc = subprocess.Popen(
@@ -351,6 +416,7 @@ class DerivedMirror:
             self._failed_at = time.monotonic()
             raise RuntimeError(f"pipe not ready: {first!r}")
         self._proc = proc
+        self._opened_at = time.monotonic()
         return proc
 
     @staticmethod
@@ -387,3 +453,22 @@ class DerivedMirror:
 
 class _CoolingDown(Exception):
     pass
+
+
+def _retryable(error: Exception) -> bool:
+    """Whether a new session can cure ``error``: a lost pipe, an unready child, or an expired grant.
+
+    Any other refusal (``refused: DefiniteRefusal ...``) is the serve's answer to the request itself
+    and would be the same on a new session.
+    """
+    text = str(error)
+    if text.startswith("refused:"):
+        return "CapabilityTokenExpired" in text
+    return True
+
+
+def _env_number(env: Mapping[str, str], name: str, default, kind):
+    try:
+        return kind(env.get(name, "").strip() or default)
+    except ValueError:
+        return default
