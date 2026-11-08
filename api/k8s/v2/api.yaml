@@ -396,11 +396,11 @@ spec:
             - name: GEODB_RANKING_SCORES_SHADOW
               value: "0"
             # Holds topic_feed_type_counts to geo-db's DerivedScan count mode (collection 1; _TOPICS topics, default 5, every
-            # GEODB_TYPE_COUNTS_SHADOW_INTERVAL_MS, default 300 s): gaia_api_type_counts_shadow_total{result}. OFF until the geodb
-            # serve AND the geodb-client in this image are at wire frame revision 13 (serve first: it accepts older clients, an
-            # older serve refuses a newer client's every read); background only.
+            # GEODB_TYPE_COUNTS_SHADOW_INTERVAL_MS, default 300 s): gaia_api_type_counts_shadow_total{result}. ON: needs the geodb serve AND the
+            # geodb-client in this image at wire frame revision 13 or later (serve first: it accepts older clients, an older
+            # serve refuses a newer client's every read); both are at 93be. Background only.
             - name: GEODB_TYPE_COUNTS_SHADOW
-              value: "0"
+              value: "1"
             # Calls the entities_* computed-column SQL functions (14 over entity_ranking_scores) on _SAMPLE sampled entities
             # (default 20, max 64, every _INTERVAL_MS, default 60 s) and holds them to the score rows geo-db serves
             # (DerivedScores): gaia_api_entity_columns_shadow_total{column,result}. Background only; reads stay on Postgres.
