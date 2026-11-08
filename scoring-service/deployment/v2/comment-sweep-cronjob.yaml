@@ -110,12 +110,13 @@ spec:
                   mountPath: /etc/geodb/key
                   readOnly: true
               env:
-                # Copy the type and topic ranking rows this job writes into geo-db derived collections 0 and 1, best-effort, after the
-                # Postgres write commits. Only those two tables: the votes_count and entity-scores mirrors stay with vote-indexer.
+                # Copy the type, topic and entity ranking-score rows this job writes into geo-db derived collections 0, 1 and 21,
+                # best-effort, after the Postgres write commits. votes_count stays with vote-indexer; the entity-scores rows this sweep
+                # re-scores have no other mirror, so they are copied here.
                 - name: GEODB_DERIVED_MIRROR
                   value: "1"
                 - name: GEODB_DERIVED_MIRROR_TABLES
-                  value: "entity_type_ranking,entity_topic_ranking"
+                  value: "entity_type_ranking,entity_topic_ranking,entity_ranking_scores"
                 - name: GEODB_DERIVED_BATCH
                   value: "1"
                 - name: GEODB_CLIENT_BIN
