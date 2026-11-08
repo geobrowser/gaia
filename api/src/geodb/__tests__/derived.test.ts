@@ -20,7 +20,7 @@ const GROUP = "0".repeat(32)
 const KEY = "ab".repeat(16)
 
 /** A fake `geodb-client derived pipe`: a node script printing `ready`, then answering each line with a frame. */
-function fake(body: string, timeoutMs = 2000) {
+function fake(body: string, timeoutMs = 2000, now?: () => number) {
 	const dir = mkdtempSync(join(tmpdir(), "geodb-derived-"))
 	const script = join(dir, "fake.mjs")
 	writeFileSync(
@@ -47,6 +47,7 @@ process.stdin.on("data", (chunk) => {
 	const reader = createDerivedReader(
 		{clientBin: process.execPath, keyPath: "k", bindingPath: "b", timeoutMs},
 		{
+			now,
 			spawn: () => {
 				starts++
 				return nodeSpawn(process.execPath, [script], {stdio: ["pipe", "pipe", "pipe"]}) as never
@@ -308,5 +309,45 @@ describe("counts", () => {
 			String.raw`if (line.startsWith("counts")) frame("-", "refused: InvalidWirePayload"); else frame("+", "")`,
 		)
 		await expect(reader.typeCounts(1, GROUP, [T1], [])).rejects.toThrow(GeoDbError)
+	})
+})
+
+describe("a worker the serve has closed while idle", () => {
+	const ANSWER = 'frame("+", "none")'
+	const KEYHEX = "ab".repeat(16)
+
+	it("is replaced before the read, not after it fails", async () => {
+		let t = 1_000_000
+		const {reader, starts} = fake(ANSWER, 2000, () => t)
+		await reader.get(1, KEYHEX)
+		expect(starts()).toBe(1)
+		t += 30_000
+		await reader.get(1, KEYHEX)
+		expect(starts()).toBe(1)
+		t += 46_000
+		await reader.get(1, KEYHEX)
+		expect(starts()).toBe(2)
+		reader.close()
+	})
+
+	it("is replaced once it nears the end of its grant, even when never idle long", async () => {
+		let t = 1_000_000
+		const {reader, starts} = fake(ANSWER, 2000, () => t)
+		for (let i = 0; i < 9; i++) {
+			await reader.get(1, KEYHEX)
+			t += 30_000
+		}
+		expect(starts()).toBe(2)
+		reader.close()
+	})
+
+	it("answers the first read after a long idle even when the old worker already exited", async () => {
+		let t = 1_000_000
+		const {reader, starts} = fake(ANSWER, 2000, () => t)
+		await reader.get(1, KEYHEX)
+		t += 300_000
+		expect(await reader.get(1, KEYHEX)).toBeNull()
+		expect(starts()).toBe(2)
+		reader.close()
 	})
 })

@@ -6,7 +6,10 @@
  * `<group hex>\t<score>\t<value hex>` or `none`. Needs only an authenticated session (the writer grant is for put and
  * delete), so no new key is needed. Requests run one at a time in order; a timeout, a refusal or a process exit kills the
  * worker (its connection may owe a reply) and rejects the request, and the next request starts a fresh worker. No retry: the
- * only caller is a background shadow, which counts a failure and moves on.
+ * only callers are background shadows, which count a failure and move on (the type-counts shadow retries once).
+ *
+ * A worker dies on its own while idle (see `IDLE_RECYCLE_MS`), so a read that finds the worker idle too long, or too old for its
+ * grant, retires it and starts a fresh one first, rather than writing to a dead connection and failing.
  *
  * Reuses the card client's config, `PipeChild` seam and `GeoDbError`. `get` and `scan` need no wire change (DerivedGet 0x3B and
  * DerivedScan are served); `scores` needs geo-db at wire frame revision 11 (DerivedScores, 0x3F), which a node below it answers
@@ -137,6 +140,14 @@ export const MAX_SCAN_ROWS = 512
 const FRAME = /^([+-])(\d{1,9})$/
 const STDERR_TAIL = 300
 const START_BACKOFF_MS = 1000
+/**
+ * The serve closes a connection idle for 60 s (`idle_bound_ms`, geo-db `tools/serve.zig`) and mints each session's grant for
+ * `grant_ttl_s` (300 s, `geodb/supervisor.sh`); `derived pipe` never pings. A worker that sat idle past either would fail the
+ * next read (`TransportClosed`, `CapabilityTokenExpired`), so before sending, a worker idle this long, or this old, is replaced
+ * with a fresh one. The same margins as the Rust pipes (`geodb-cursor` `SESSION_REFRESH`), under the two limits.
+ */
+const IDLE_RECYCLE_MS = 45_000
+const SESSION_RECYCLE_MS = 240_000
 
 /** The row a `get` answer body names: `none`, or `<group hex>\t<score>\t<value hex>`. Throws on anything else. */
 export function parseDerivedGet(body: string): DerivedRow | null {
@@ -335,6 +346,23 @@ export function createDerivedReader(
 	let timer: ReturnType<typeof setTimeout> | null = null
 	let stderr = ""
 	let backoffUntil = 0
+	/** When the worker became ready, and when it last did anything (ready or answered): what its connection's life is judged by. */
+	let readyAt = 0
+	let activeAt = 0
+
+	/** Retire a worker that sat idle too long, or has lived near its grant's end, without failing anything: it owes no reply. */
+	function retireStale() {
+		if (!child || !ready || current) return
+		const t = now()
+		if (t - activeAt < IDLE_RECYCLE_MS && t - readyAt < SESSION_RECYCLE_MS) return
+		const old = child
+		child = null
+		ready = false
+		buffer = Buffer.alloc(0)
+		try {
+			old.kill("SIGKILL")
+		} catch {}
+	}
 
 	/** Kill the worker and reject the request it owed. `started` false (it never became ready) also rejects the queue. */
 	function stop(error: GeoDbError, started: boolean) {
@@ -382,6 +410,7 @@ export function createDerivedReader(
 
 	function pump() {
 		if (queue.length === 0) return
+		retireStale()
 		if (!child) {
 			if (now() < backoffUntil) {
 				const error = new GeoDbError(
@@ -414,6 +443,7 @@ export function createDerivedReader(
 				return
 			}
 			ready = true
+			readyAt = activeAt = now()
 			buffer = buffer.subarray(end + 1)
 			send()
 		}
@@ -440,6 +470,7 @@ export function createDerivedReader(
 				return
 			}
 			current = null
+			activeAt = now()
 			if (timer) clearTimeout(timer)
 			timer = null
 			answered.resolve(body)
