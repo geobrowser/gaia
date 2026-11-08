@@ -575,3 +575,26 @@ fn pinned_columns_match_the_feeders_record_kinds_when_it_is_in_the_checkout() {
         );
     }
 }
+
+#[tokio::test]
+async fn editors_granted_by_the_keyed_writer_live_in_the_governance_space() {
+    let (s, a, b) = (u(1), u(2), u(3));
+    let own = ent(&s);
+    // a is on the own card (legacy write), b only in the governance Space (keyed write).
+    let fake = Fake::default()
+        .card(GEO_SPACE, &own, row(EDITOR_PROPERTY, &ent(&a), &own))
+        .card(GOV, &own, row(EDITOR_PROPERTY, &ent(&b), &own));
+    let sp = spaces(&s);
+    assert_eq!(
+        compare_editors(&fake, &sp, &s, &[a, b]).await,
+        vec![Verdict::Match]
+    );
+    assert_eq!(
+        compare_editors(&fake, &sp, &s, &[a]).await,
+        vec![Verdict::Mismatch("extra_in_geodb")]
+    );
+    assert_eq!(
+        compare_member_or_editor(&fake, &sp, &s, &b, true).await,
+        vec![Verdict::Match]
+    );
+}
