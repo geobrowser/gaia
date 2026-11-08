@@ -29,6 +29,7 @@ spec:
           expr: |
             max by (consumergroup, topic) (
               kafka_consumergroup_lag{consumergroup!~".*search-indexer-group-scores-.*|geo-chat-gateway-.*"}
+              unless on(consumergroup, topic, partition) (kafka_consumergroup_current_offset < 0)
             ) > 1000
           for: 2m
           labels:
@@ -47,6 +48,7 @@ spec:
           expr: |
             max by (consumergroup, topic) (
               kafka_consumergroup_lag{consumergroup=~".*search-indexer-group-scores-.*"}
+              unless on(consumergroup, topic, partition) (kafka_consumergroup_current_offset < 0)
             ) > 1000
           for: 2h
           labels:
@@ -61,6 +63,7 @@ spec:
           expr: |
             max by (consumergroup, topic) (
               kafka_consumergroup_lag{consumergroup!~"geo-chat-gateway-.*"}
+              unless on(consumergroup, topic, partition) (kafka_consumergroup_current_offset < 0)
             ) > 10000
           for: 5m
           labels:
@@ -85,6 +88,8 @@ spec:
               kafka_consumergroup_lag{consumergroup!~"geo-chat-gateway-.*"} > 10
               and on(consumergroup, topic, partition)
               (changes(kafka_consumergroup_current_offset[1m]) == 0)
+              unless on(consumergroup, topic, partition)
+              (kafka_consumergroup_current_offset < 0)
             )
           for: 5m
           labels:
@@ -97,10 +102,14 @@ spec:
               {{ $labels.partition }} in 5 minutes, but {{ $value }} messages
               are unprocessed.
 
-        # Lag -1 is kafka_exporter's sentinel for "this group has NO committed
-        # offset on this partition" (v1.8.0: `if offsetFetchResponseBlock.Offset
-        # == -1 { lag = -1 }`). It is not a lag value, so every rule above,
-        # which compares lag against a positive threshold, can never fire on it.
+        # A negative committed offset means "this group has NO committed offset
+        # on this partition". kafka_exporter v1.8.0 special-cases only -1
+        # (`if offsetFetchResponseBlock.Offset == -1 { lag = -1 }`), so a group
+        # reported at -2 gets lag = head + 2, which is not a lag at all.
+        # geodb-feeder-space-topics-keyed-v1-testnet sat at offset -2 on an
+        # EMPTY topic (oldest == head) and fired KafkaConsumerStuck with
+        # "1074 unprocessed" for a day. So every lag rule above drops
+        # partitions whose committed offset is negative, and this rule owns them.
         #
         # Usually it is harmless. testnet.topology.canonical has two partitions,
         # but atlas keys every message by the canonical root space id, so all of
@@ -117,7 +126,7 @@ spec:
         - alert: KafkaConsumerPartitionNeverCommitted
           expr: |
             (
-              kafka_consumergroup_lag{consumergroup!~"geo-chat-gateway-.*"} == -1
+              kafka_consumergroup_current_offset{consumergroup!~"geo-chat-gateway-.*"} < 0
               and on(topic, partition)
               (kafka_topic_partition_current_offset > kafka_topic_partition_oldest_offset)
             )

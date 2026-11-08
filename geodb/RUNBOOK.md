@@ -799,6 +799,15 @@ Enable, each step only after the one before it is live:
    (its header lists the `\copy` and the `etw-`, `etx-`, `efb-<column>.tsv` dumps). Exits non-zero on a Postgres-only key
    or a value difference.
 
+5. The api reader twins (api/src/geodb/entityFeedConfigShadow.ts), one flag per table, all `0` in `api/k8s/v2/api.yaml`:
+   `GEODB_ENTITY_TYPE_WEIGHTS_SHADOW`, `GEODB_ENTITY_TYPE_EXCLUSIONS_SHADOW`, `GEODB_ENTITY_FEED_BLOCKLIST_SHADOW`
+   (`_SAMPLE`, default 20, and `GEODB_ENTITY_FEED_CONFIG_SHADOW_INTERVAL_MS`, default 60 s, are shared). Each samples rows of
+   its table from Postgres and reads the record back from the `config` Space:
+   `gaia_api_entity_feed_config_shadow_total{table,result=match|mismatch|missing|unsupported|failed}`. `missing` means the
+   backfill Job was not run (or the row is newer); `unsupported` means the `config` Space is not in the system-space map. The
+   twins serve nothing: the plpgsql functions and `rankedReadsShadow` still read Postgres. Blind spot: a record geo-db keeps
+   after Postgres dropped the row is not sampled (the gate reports it).
+
 Rollback: set the flags back to 0. The records stay in the Space, unread.
 
 ### 2c-octies. Keyed proposal versions (GEODB_PROPOSAL_VERSIONS)
@@ -1119,12 +1128,13 @@ Rollback: unset `_PRIVATE` first (stops the personal copies), then the shared fl
 - **Collections 6 `interest_sweep_state` and 7 `trending_refresh_state`** are one-row watermarks written inside plpgsql
   functions. `topic_interest sweep` reads the row back after each run and puts it (6, key `incremental`, value `last_run_at`
   as i64 microseconds); `agenda_listings_refresh` does the same for `last_full_pass_on` (7, key `last_full_pass_on`, value
-  days since 1970-01-01 as i32). Both sit behind `GEODB_STATE_MIRROR` (manifests `"0"`), on top of `GEODB_DERIVED_MIRROR`.
+  days since 1970-01-01 as i32). Both sit behind `GEODB_STATE_MIRROR` (manifests `"1"` since #1325), on top of `GEODB_DERIVED_MIRROR`.
   The scores key's binding needs `derived=6,7` (`geodb/supervisor.sh`, applies when geodb-0 restarts); until then the puts
   are refused and now logged at error level.
 - **Collection 11** is mirrored only when a block recomputes (`replace_ranking_scores`), so blocks that have not
   recomputed since the flag went on have no rows. `ranking_scores_backfill` (not scheduled) puts the whole of
-  `ranks.ranking_scores`; run it once as a Job from the ranking-indexer image with the geodb-client wiring.
+  `ranks.ranking_scores`; run it once with `ranking-indexer/k8s/v2/ranking-scores-backfill-job.yaml` (by hand, not part
+  of any deploy; the header has the apply and log commands). It exits non-zero when a page is not fully acknowledged.
 - **A refused or short mirror write is never silent.** `geodb_cursor::derived` logs every call's acknowledged row count
   (`geodb_derived.acknowledged`, info), logs a refusal or pipe failure at error level (`geodb_derived.mirror_failed`), and
   logs and counts a call that got fewer rows acknowledged than asked (`geodb_derived.not_acknowledged`,
@@ -1152,6 +1162,18 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   mismatch (a different score), unsupported (geo-db has no row Postgres has, or the row has a value or another group),
   failed. Expect `unsupported` until the mirror has run once. **Blind spot:** only rows Postgres has are sampled, so a row
   geo-db keeps after Postgres dropped it (the mirror never deletes) is not seen; and a sample is not a full scan.
+- api shadow, `GEODB_ENTITIES_BEST_ORDER_SHADOW` (manifest `"0"`, `api/src/geodb/entitiesBestOrderShadow.ts`, twin in
+  `api/src/geodb/rankedReads/bestOrder.ts`): the ordered reads `entities_in_best_order` and `entities_ordered_by_score` return a
+  page, so what is compared is the id ORDER, ties included. Every `_INTERVAL_MS` (60 s) it builds three pages (`_SAMPLE` ids, 20,
+  at most 64): `best_order` (sampled scored ids through the real function, against the twin ordering them by the ranking scores
+  geo-db serves, `DerivedScores`), `global_score` (the function's own query, `LIMIT _SAMPLE`, against a scan of collection 2) and
+  `local_score` (one random space, against collection 3). `gaia_api_entities_best_order_shadow_total{read,result}` (absent until
+  the flag is on): match, mismatch, failed. The two score reads run the function's inner query rather than the function, because
+  a plpgsql `RETURN QUERY` materialises the whole table (1.8M and 2.1M rows) before any limit. Best-order mismatches are partly
+  benign: the SQL reads the stored `entity_ranking_scores` snapshot and geo-db serves the current formula. Not covered: ASC
+  (geo-db cannot scan upward), `raw` ordering (no geo-db reader for `votes_count`), unscored entities, duplicates and unknown ids,
+  and the 1000-id cap (these are pinned by `__tests__/bestOrder.golden.test.ts` only, from `api/scripts/bestorder/gen_golden.py`).
+  Needs wire revision 11 for `best_order`.
 - Key: the scoring CronJob now mounts the shared `geodb-scores-key` (was an unminted `geodb-derived-key`); `supervisor.sh`
   grants it `derived=0,1,2,3,4,5,11,12,13`. Collections 2-4 were already registered in geo-db (nothing to land there).
 - **Snapshot:** the CronJob's own mirror is bounded by a time budget and swallows short sends, so it is not a backfill.
@@ -1190,6 +1212,20 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   benign when the entity's card changed since its row was last refreshed, since the row is a snapshot; a persistent
   mismatch over entities whose card has not changed is a defect in the default formula. Needs a geo-db with wire revision 11;
   an older node makes every read `failed`. Set `_DEFAULT_SAMPLE` to `0` to turn this half off.
+
+- api shadow, `GEODB_ENTITY_COLUMNS_SHADOW` (manifest `"0"`, `api/src/geodb/entityComputedColumnsShadow.ts`, twin in
+  `api/src/geodb/rankedReads/entityColumns.ts`): the GraphQL `Entity` computed columns. Fourteen of the 17 `entities_*` SQL
+  functions (agrees, comment_score, commenters, disagrees, downvotes, intrinsic_score, participation_score, quality_score,
+  ranking_score, trending_age_credit, trending_score, trending_source, trending_topic_id, upvotes) each read one row of
+  `entity_ranking_scores`. Every `_INTERVAL_MS` (60 s) it samples `_SAMPLE` (20, at most 64) entities that have a score row, calls
+  the real SQL functions on them, reads the same entities from geo-db's `DerivedScores` (overlay row if engaged, else the default
+  from the card and config) and compares column by column: `gaia_api_entity_columns_shadow_total{column,result}` (absent until the
+  flag is on): match, mismatch, failed. A mismatch is benign when the Postgres row is a stale snapshot of a changed card; read
+  the rate. The three listing columns (`last_listed_on`, `listed_on_agenda_id`, `trending_topic_listed_on`) are live reads over
+  the trending listings: their twin is `rankedReads/trending.ts`, held to the SQL by `GEODB_RANKED_READS_SHADOW`, and geo-db has
+  no Postgres-free source for the rows yet, so this shadow does not cover them. An entity with no score row is not sampled (SQL
+  gives NULL, geo-db serves a default). The pure mapping is pinned to real plpgsql output by
+  `api/scripts/entitycols/gen_golden.py` and `__tests__/entityColumns.golden.test.ts`. Needs wire revision 11.
 
 ### 2f-vote-engaged-backfill. Collection 21 backfill (`mirror_entity_scores_snapshot`)
 
@@ -1350,6 +1386,20 @@ and no longer has is a delete of both parts. A geo-db error is logged, never fai
 - **Enable order: roll serve to a build that registers collection 22 FIRST**, then the binding (the StatefulSet restart does
   both), run the Job once by hand with the flag on, then set the flag `"1"` in `feed-signals-sync-cronjob.yaml` in its own PR.
 
+
+### 2f-feed-signal-runs. personalization.feed_signal_runs (cursors collection 10, GEODB_FEED_RUNS_MIRROR)
+
+The run log is written inside plpgsql (`replace_feed_signals`, `record_feed_signal_run`), and its readers want a watermark, not
+the log: `feed_signal_window` and the request path `readSeen` want the newest succeeded `data_through`, `feed_signal_freshness`
+wants the newest `finished_at` of a succeeded or unchanged run. So the feed-signals sync reads back the newest row of each
+status after every run (success, unchanged and failed; not a dry run) and puts three keys into collection 10 with the cursor
+mirror (`ranking-indexer/src/feed_signal_runs_mirror.rs`): `feed_signal_run:succeeded`, `feed_signal_run:unchanged`,
+`feed_signal_run:failed`. The value is the `cursors` shape `<block>:<cursor>`: block is `finished_at` in microseconds since the
+epoch, cursor is `<data_through as RFC 3339 with microseconds and Z, or "-">/<generation>`. The error text is not mirrored.
+No collection is registered for it, so no geo-db change is needed. The flag is `GEODB_FEED_RUNS_MIRROR` (manifest `"0"`). The
+scores key does not grant collection 10, so the CronJob also mounts the `geodb-cursor-key` Secret (optional) and the mirror
+reads it from `GEODB_FEED_RUNS_KEY_PATH`; it shares the binding and client with the derived mirror. A geo-db error is
+logged, never fails the Job.
 ### 2f-cooccurrence. personalization.topic_cooccurrence (derived collection 23, GEODB_DERIVED_MIRROR)
 
 Shadow only, nothing reads the rows. The nightly `ranking-indexer-topic-interest-refit` CronJob

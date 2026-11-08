@@ -32,6 +32,9 @@ pub struct PostgresCache {
     /// Flag-off shadow read against the object-store copy
     /// (`IPFS_CACHE_BLOB_SHADOW_READ=1`); never changes what `get` returns.
     blob: Option<std::sync::Arc<blob_store::Mirror>>,
+    /// Flag-off shadow of the warmer cursor read against geo-db (`GEODB_META_BLOCK_SHADOW=1`);
+    /// never changes what `warmer_block` returns.
+    meta_shadow: Option<geodb_cursor::meta_read::MetaBlockShadow>,
 }
 
 impl PostgresCache {
@@ -53,6 +56,7 @@ impl PostgresCache {
             blob: blob_store::Mirror::from_env("ipfs_cache", "IPFS_CACHE")
                 .filter(|m| m.flags().shadow_read)
                 .map(std::sync::Arc::new),
+            meta_shadow: geodb_cursor::meta_read::MetaBlockShadow::from_env(),
         })
     }
 }
@@ -83,6 +87,13 @@ impl IpfsCache for PostgresCache {
             .bind(IPFS_CACHE_INDEXER_ID)
             .fetch_optional(&self.pool)
             .await;
+        // Counted against geo-db's copy of the same cursor; the answer below stays Postgres's.
+        if let (Some(shadow), Ok(found)) = (&self.meta_shadow, &row) {
+            let pg = found.as_deref().and_then(parse_block_number);
+            shadow
+                .observe("hermes_pipeline_warmer_block", IPFS_CACHE_INDEXER_ID, pg)
+                .await;
+        }
         match row {
             Ok(Some(text)) => {
                 let parsed = parse_block_number(&text);

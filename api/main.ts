@@ -29,6 +29,13 @@ import {createSpaceShadow, createSpacesShadow, SPACE_FIELD, SPACES_FIELD} from "
 import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
 import {createDerivedReader} from "./src/geodb/derived"
+import {createBestOrderShadow, readBestOrderShadowConfig} from "./src/geodb/entitiesBestOrderShadow"
+import {createEntityColumnsShadow, readEntityColumnsShadowConfig} from "./src/geodb/entityComputedColumnsShadow"
+import {
+	createEntityFeedConfigReaders,
+	createEntityFeedConfigShadow,
+	readEntityFeedConfigShadowConfig,
+} from "./src/geodb/entityFeedConfigShadow"
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
 import {readIdMapTwinConfig, withIdMapTwin} from "./src/geodb/idMapTwin"
 import {createKeyedRecordsShadow, readKeyedRecordsShadowConfig} from "./src/geodb/keyedRecordsShadow"
@@ -364,11 +371,33 @@ if (typeCountsShadowConfig.enabled) {
 		log,
 	}).start()
 }
+// GEODB_ENTITY_COLUMNS_SHADOW (off by default) calls the entities_* computed-column SQL functions on sampled entities and holds
+// them to the score rows geo-db serves (gaia_api_entity_columns_shadow_total). Background only; reads stay on Postgres.
+const entityColumnsShadowConfig = readEntityColumnsShadowConfig(process.env)
+if (entityColumnsShadowConfig.enabled) {
+	createEntityColumnsShadow({
+		config: entityColumnsShadowConfig,
+		db,
+		reader: createDerivedReader(geoDbCardConfig),
+		log,
+	}).start()
+}
 // GEODB_RANKED_READS_SHADOW (off by default) runs the group B read twins (api/src/geodb/rankedReads) on Postgres rows and holds
 // them to the SQL functions (gaia_api_ranked_read_shadow_total). Background only; reads stay on Postgres.
 const rankedReadsShadowConfig = readRankedReadsShadowConfig(process.env)
 if (rankedReadsShadowConfig.enabled) {
 	createRankedReadsShadow({config: rankedReadsShadowConfig, source: createPostgresRankedReadsSource(db), log}).start()
+}
+// GEODB_ENTITIES_BEST_ORDER_SHADOW (off by default) builds pages of entities_in_best_order / entities_ordered_by_score from geo-db's
+// derived collections 2, 3 and 21 and compares the id ORDER with Postgres (gaia_api_entities_best_order_shadow_total). Background only.
+const bestOrderShadowConfig = readBestOrderShadowConfig(process.env)
+if (bestOrderShadowConfig.enabled) {
+	createBestOrderShadow({
+		config: bestOrderShadowConfig,
+		db,
+		reader: createDerivedReader(geoDbCardConfig),
+		log,
+	}).start()
 }
 // GEODB_KEYED_RECORDS_SHADOW (off by default) samples user_votes / ranks.rankings / ranks.ranking_blocks rows from Postgres on a
 // timer and compares each with its keyed record in geo-db's votes Space (gaia_api_keyed_records_shadow_total). Background only.
@@ -379,6 +408,21 @@ if (keyedRecordsShadowConfig.enabled) {
 		db,
 		geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 		systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+		log,
+	}).start()
+}
+// GEODB_ENTITY_TYPE_WEIGHTS_SHADOW / _EXCLUSIONS_SHADOW / GEODB_ENTITY_FEED_BLOCKLIST_SHADOW (each off by default) sample that table's
+// rows from Postgres on a timer and compare each with its record in geo-db's config Space (gaia_api_entity_feed_config_shadow_total).
+// Background only; reads stay on Postgres.
+const entityFeedConfigShadowConfig = readEntityFeedConfigShadowConfig(process.env)
+if (Object.values(entityFeedConfigShadowConfig.enabled).some(Boolean)) {
+	createEntityFeedConfigShadow({
+		config: entityFeedConfigShadowConfig,
+		db,
+		readers: createEntityFeedConfigReaders({
+			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+		}),
 		log,
 	}).start()
 }

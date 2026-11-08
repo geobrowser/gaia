@@ -99,6 +99,26 @@ mod tests {
     }
 
     #[test]
+    fn the_pipe_line_is_the_registered_layout_exactly() {
+        // geo-db `Collection.ranking_scores`: group the block id, key block + entity + Space (48
+        // bytes), score the aggregate, value the position as four little-endian bytes.
+        let (puts, _) = plan(u(1), &[row(2, 3, 9.5, 7)], &[]);
+        let line = puts[0].put_line().unwrap();
+        let group = u128::from_be_bytes([1; 16]);
+        let key = format!("{}{}{}", "01".repeat(16), "02".repeat(16), "03".repeat(16));
+        assert_eq!(
+            line,
+            format!("put\t11\t{group}\t9.5\thex:{key}\thex:07000000\n")
+        );
+    }
+
+    #[test]
+    fn a_negative_position_is_stored_as_zero_not_wrapped() {
+        let (puts, _) = plan(u(1), &[row(2, 3, 0.0, -4)], &[]);
+        assert_eq!(puts[0].value, 0u32.to_le_bytes());
+    }
+
+    #[test]
     fn keys_the_block_no_longer_has_are_deleted_and_kept_ones_are_not() {
         let rows = [row(2, 3, 1.0, 1)];
         let prior = [(u(2), u(3)), (u(4), u(3)), (u(2), u(5))];
