@@ -1,7 +1,7 @@
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {GeoDbError} from "../client"
 import type {DerivedCountsReader} from "../derived"
-import {countsLine, countsRefusal} from "../derived"
+import {countsLine, countsRefusal, FormGatedError, refusalNeedsBackoff} from "../derived"
 import {CLAIM_TYPE, DEBATE_TAG, DEBATE_WALK_TYPE} from "../rankedReads/feeds"
 import {
 	isFallback,
@@ -526,6 +526,49 @@ describe("createTypeCountsShadow", () => {
 			expect(graphCalls).toBe(2)
 		})
 
+		it("does not back off a coded revision refusal (the pipe survives it) and asks again next pass", async () => {
+			let graphCalls = 0
+			const shadow = createTypeCountsShadow({
+				...base,
+				now: () => 0,
+				source: withSpace(),
+				geoSpaceOf,
+				reader: reader(async (_c, _g, walked, _b, form) => {
+					if (!form?.graph) return answer(walked)
+					graphCalls++
+					throw new GeoDbError(
+						"client_failed",
+						"derived read refused: code=InvalidWirePayload refused: DefiniteRefusal X",
+					)
+				}),
+			})
+			await shadow.runOnce()
+			expect(graphCalls).toBe(2)
+			expect(count("fallback")).toBe(2)
+			expect(count("failed")).toBe(0)
+			expect(renderTypeCountsShadowMetrics()).toContain('fallback_total{reason="serve_revision"} 2')
+			expect(renderTypeCountsShadowMetrics()).toContain('fallback_total{reason="backoff"} 0')
+		})
+
+		it("falls back, without a back-off, on a form the reader gated before sending", async () => {
+			let graphCalls = 0
+			const shadow = createTypeCountsShadow({
+				...base,
+				now: () => 0,
+				source: withSpace(),
+				geoSpaceOf,
+				reader: reader(async (_c, _g, walked, _b, form) => {
+					if (!form?.graph) return answer(walked)
+					graphCalls++
+					throw new FormGatedError(14, 15)
+				}),
+			})
+			await shadow.runOnce()
+			expect(graphCalls).toBe(2)
+			expect(count("failed")).toBe(0)
+			expect(renderTypeCountsShadowMetrics()).toContain('fallback_total{reason="serve_revision"} 2')
+		})
+
 		it("treats a revision 13 serve's refusal of several topics as a fallback that also holds the graph form back", async () => {
 			let wide = 0
 			const shadow = createTypeCountsShadow({
@@ -734,5 +777,25 @@ describe("countsRefusal", () => {
 		expect(countsRefusal(new GeoDbError("timeout", "derived read took longer than 500 ms"))).toBeNull()
 		expect(countsRefusal(new GeoDbError("client_failed", "geodb-client derived pipe exited (1)"))).toBeNull()
 		expect(countsRefusal(new Error("InvalidWirePayload"))).toBeNull()
+	})
+
+	it("reads the code= token first and maps it", () => {
+		expect(countsRefusal(refused("code=ResourceExhausted refused: DefiniteRefusal ResourceExhausted"))).toBe(
+			"exhausted",
+		)
+		expect(countsRefusal(refused("code=InvalidWirePayload refused: DefiniteRefusal InvalidWirePayload"))).toBe(
+			"revision",
+		)
+		expect(countsRefusal(refused("code=UnknownOpcode refused: DefiniteRefusal UnknownOpcode"))).toBe("revision")
+		// The text after the token is never matched: a token that names neither is not a revision refusal, whatever it says.
+		expect(countsRefusal(refused("code=MalformedLine want counts<tab> InvalidWirePayload"))).toBeNull()
+		expect(countsRefusal(refused("code=NotFoundOrRestricted refused: ResourceExhausted"))).toBeNull()
+		expect(countsRefusal(new FormGatedError(14, 15))).toBe("revision")
+	})
+
+	it("asks for a back-off only on a refusal with no token", () => {
+		expect(refusalNeedsBackoff(refused("InvalidWirePayload"))).toBe(true)
+		expect(refusalNeedsBackoff(refused("code=InvalidWirePayload refused: x"))).toBe(false)
+		expect(refusalNeedsBackoff(new FormGatedError(14, 15))).toBe(false)
 	})
 })

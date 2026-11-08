@@ -6,11 +6,16 @@ import {describe, expect, it} from "vitest"
 import {GeoDbError} from "../client"
 import {
 	countsLine,
+	countsRefusal,
 	createDerivedReader,
+	FormGatedError,
 	parseDerivedCounts,
 	parseDerivedGet,
 	parseDerivedScan,
 	parseDerivedScores,
+	parseNegotiated,
+	refusalNeedsBackoff,
+	refusalToken,
 	type ScoreCard,
 	type ScoreConfig,
 	scoresLines,
@@ -237,7 +242,8 @@ describe("scores", () => {
 	})
 	it("sends the lines of one request and reads one row a card", async () => {
 		const {reader} = fake(
-			String.raw`if (line.startsWith("scoresn\t")) { globalThis.left = Number(line.split("\t")[1]) + 1; globalThis.n = 1 }
+			String.raw`if (line === "revision") frame("-", "want")
+else if (line.startsWith("scoresn\t")) { globalThis.left = Number(line.split("\t")[1]) + 1; globalThis.n = 1 }
 else if (globalThis.left) { globalThis.n++; if (--globalThis.left === 0) frame("+", ["a","b"].map((e, i) => ["0","0",globalThis.n,"0","0","0","0","0.25","0.5","0","0","1.4","0","0","0",i + 2,"-"].join("\t")).join("\n") + "\n") }`,
 		)
 		const rows = await reader.scores(CONFIG, [CARD, NONE])
@@ -298,7 +304,7 @@ describe("counts", () => {
 
 	it("sends one counts line and reads the answer", async () => {
 		const {reader} = fake(
-			String.raw`const f = line.split("\t"); frame("+", f[3].split(",").map((t, i) => t + "\t" + (i + 1)).join("\n") + "\nwalked: 7\n")`,
+			String.raw`if (line === "revision") return frame("-", "want"); const f = line.split("\t"); frame("+", f[3].split(",").map((t, i) => t + "\t" + (i + 1)).join("\n") + "\nwalked: 7\n")`,
 		)
 		expect(await reader.typeCounts(1, GROUP, [T1, T2], [])).toEqual({walked: 7, counts: [1, 2]})
 		await expect(reader.typeCounts(1, GROUP, [], [])).rejects.toThrow(GeoDbError)
@@ -349,5 +355,163 @@ describe("a worker the serve has closed while idle", () => {
 		expect(await reader.get(1, KEYHEX)).toBeNull()
 		expect(starts()).toBe(2)
 		reader.close()
+	})
+})
+
+describe("the revision handshake and refusals that keep the pipe", () => {
+	const T1 = "a1".repeat(16)
+	const T2 = "b2".repeat(16)
+	const OTHER = "c3".repeat(16)
+	const GRAPH = {spaces: ["d4".repeat(16)], nameProperty: "e5".repeat(16), tagged: null}
+	/** A new tool: answers `revision` with `negotiated`, a counts line with tallies, anything else per `rest`. */
+	const newTool = (negotiated: number, rest = `frame("+", "none")`) => String.raw`
+		if (line === "revision") frame("+", "negotiated ${negotiated}\tbuild 15")
+		else if (line.startsWith("counts")) frame("+", line.split("\t")[3].split(",").map((t, i) => t + "\t" + (i + 1)).join("\n") + "\nwalked: 3\n")
+		else { ${rest} }`
+
+	it("sends the line `revision` first, then the request", async () => {
+		const {reader} = fake(`
+			globalThis.n = (globalThis.n ?? 0) + 1
+			if (line === "revision") frame("+", "negotiated 15\tbuild 15")
+			else frame("+", "${GROUP}\t" + n + "\t00")`)
+		// The probe takes the first line (n=1); the get is the second.
+		expect((await reader.get(1, "aa"))?.score).toBe(2)
+		expect((await reader.get(1, "aa"))?.score).toBe(3)
+		reader.close()
+	})
+
+	it("gates a form the negotiated revision is below, without sending it", async () => {
+		const {reader} = fake(newTool(13))
+		// Revision 13: the plain count goes; several topics (14) and a graph block (15) do not.
+		await expect(reader.typeCounts(1, GROUP, [T1], [])).resolves.toEqual({walked: 3, counts: [1]})
+		await expect(reader.typeCounts(1, GROUP, [T1], [], {others: [OTHER]})).rejects.toBeInstanceOf(FormGatedError)
+		await expect(reader.typeCounts(1, GROUP, [T1], [], {graph: GRAPH})).rejects.toBeInstanceOf(FormGatedError)
+		const gated = await reader.typeCounts(1, GROUP, [T1], [], {graph: GRAPH}).catch((e) => e)
+		expect(countsRefusal(gated)).toBe("revision")
+		expect(refusalNeedsBackoff(gated)).toBe(false)
+		reader.close()
+	})
+
+	it("sends each form once the revision reaches it (14 for topics, 15 for a graph, 13 for the count)", async () => {
+		const at14 = fake(newTool(14))
+		await expect(
+			at14.reader.typeCounts(1, GROUP, [T1, T2], [], {others: [OTHER], matchAll: true}),
+		).resolves.toMatchObject({
+			counts: [1, 2],
+		})
+		await expect(at14.reader.typeCounts(1, GROUP, [T1], [], {graph: GRAPH})).rejects.toBeInstanceOf(FormGatedError)
+		at14.reader.close()
+		const at15 = fake(newTool(15))
+		await expect(at15.reader.typeCounts(1, GROUP, [T1], [], {graph: GRAPH})).resolves.toMatchObject({counts: [1]})
+		at15.reader.close()
+		const at12 = fake(newTool(12))
+		await expect(at12.reader.typeCounts(1, GROUP, [T1], [])).rejects.toBeInstanceOf(FormGatedError)
+		at12.reader.close()
+	})
+
+	it("treats a `-` answer to revision as an old tool: keeps the child, gates nothing, sends the form", async () => {
+		const {reader, starts} = fake(`
+			if (line === "revision") frame("-", "want put|delete|clear|get|scan|counts<TAB>...")
+			else if (line.startsWith("counts")) frame("+", "${T1}\t4\\nwalked: 9\\n")
+			else frame("+", "none")`)
+		await expect(reader.typeCounts(1, GROUP, [T1], [], {graph: GRAPH})).resolves.toEqual({walked: 9, counts: [4]})
+		await expect(reader.get(1, "aa")).resolves.toBeNull()
+		expect(starts()).toBe(1)
+		reader.close()
+	})
+
+	it("treats an unparsable `+` answer to revision as an old tool too", async () => {
+		const {reader} = fake(`
+			if (line === "revision") frame("+", "nonsense")
+			else if (line.startsWith("counts")) frame("+", "${T1}\t4\\nwalked: 9\\n")`)
+		await expect(reader.typeCounts(1, GROUP, [T1], [], {graph: GRAPH})).resolves.toMatchObject({counts: [4]})
+		reader.close()
+	})
+
+	it("keeps the child through a node refusal, rejecting only that request", async () => {
+		const {reader, starts} = fake(`
+			if (line === "revision") frame("+", "negotiated 15\tbuild 15")
+			else if (line.includes("hex:ee")) frame("-", "code=ResourceExhausted refused: DefiniteRefusal ResourceExhausted")
+			else frame("+", "none")`)
+		const refused = await reader.get(1, "ee").catch((e) => e)
+		expect(refused).toBeInstanceOf(GeoDbError)
+		expect(countsRefusal(refused)).toBe("exhausted")
+		expect(refusalToken(refused)).toBe("ResourceExhausted")
+		await expect(reader.get(1, "aa")).resolves.toBeNull()
+		expect(starts()).toBe(1)
+		reader.close()
+	})
+
+	it("keeps the child through InvalidWirePayload and UnknownOpcode, and answers queued requests after the refusal", async () => {
+		const {reader, starts} = fake(`
+			if (line === "revision") frame("+", "negotiated 15\tbuild 15")
+			else if (line.includes("hex:e1")) frame("-", "code=InvalidWirePayload refused: DefiniteRefusal InvalidWirePayload")
+			else if (line.includes("hex:e2")) frame("-", "code=UnknownOpcode refused: DefiniteRefusal UnknownOpcode")
+			else frame("+", "none")`)
+		const out = await Promise.allSettled([reader.get(1, "e1"), reader.get(1, "e2"), reader.get(1, "aa")])
+		expect(out.map((o) => o.status)).toEqual(["rejected", "rejected", "fulfilled"])
+		expect(starts()).toBe(1)
+		reader.close()
+	})
+
+	it("keeps the child through a MalformedLine", async () => {
+		const {reader, starts} = fake(`
+			if (line === "revision") frame("+", "negotiated 15\tbuild 15")
+			else if (line.includes("hex:ee")) frame("-", "code=MalformedLine want put|delete|clear|get|scan|counts<TAB>...")
+			else frame("+", "none")`)
+		await expect(reader.get(1, "ee")).rejects.toMatchObject({reason: "client_failed"})
+		await expect(reader.get(1, "aa")).resolves.toBeNull()
+		expect(starts()).toBe(1)
+		reader.close()
+	})
+
+	it("kills the child on a non-refusal token (a protocol violation) and starts a fresh one", async () => {
+		const {reader, starts} = fake(`
+			if (line === "revision") frame("+", "negotiated 15\tbuild 15")
+			else if (line.includes("hex:ee")) { frame("-", "code=ProtocolViolation error: ProtocolViolation"); process.exit(1) }
+			else frame("+", "none")`)
+		await expect(reader.get(1, "ee")).rejects.toMatchObject({reason: "client_failed"})
+		await expect(reader.get(1, "aa")).resolves.toBeNull()
+		expect(starts()).toBe(2)
+		reader.close()
+	})
+
+	it("kills the child on an untokened refusal (a pre-2eab tool, whose refusal ends it)", async () => {
+		const {reader, starts} = fake(`
+			if (line === "revision") frame("-", "want ...")
+			else if (line.includes("hex:ee")) frame("-", "refused: DefiniteRefusal ResourceExhausted")
+			else frame("+", "none")`)
+		const refused = await reader.get(1, "ee").catch((e) => e)
+		expect(countsRefusal(refused)).toBe("exhausted")
+		expect(refusalNeedsBackoff(refused)).toBe(true)
+		await expect(reader.get(1, "aa")).resolves.toBeNull()
+		expect(starts()).toBe(2)
+		reader.close()
+	})
+
+	it("asks revision again on the replacement worker", async () => {
+		let t = 1_000_000
+		const {reader, starts} = fake(newTool(13), 2000, () => t)
+		await expect(reader.typeCounts(1, GROUP, [T1], [], {graph: GRAPH})).rejects.toBeInstanceOf(FormGatedError)
+		t += 50_000
+		// A replaced worker learns the revision afresh, so a serve that rolled forward is seen without a restart of the api.
+		await expect(reader.typeCounts(1, GROUP, [T1], [], {graph: GRAPH})).rejects.toBeInstanceOf(FormGatedError)
+		expect(starts()).toBe(2)
+		reader.close()
+	})
+})
+
+describe("parseNegotiated and refusalToken", () => {
+	it("reads the revision of a negotiated answer and nothing else", () => {
+		expect(parseNegotiated("negotiated 15\tbuild 17")).toBe(15)
+		expect(parseNegotiated("negotiated 15\tbuild 17\n")).toBe(15)
+		expect(parseNegotiated("want put|delete")).toBeNull()
+		expect(parseNegotiated("negotiated x\tbuild 1")).toBeNull()
+	})
+	it("reads the token of a refused error and null without one", () => {
+		const e = (m: string) => new GeoDbError("client_failed", `derived read refused: ${m}`)
+		expect(refusalToken(e("code=ResourceExhausted refused: x"))).toBe("ResourceExhausted")
+		expect(refusalToken(e("refused: x"))).toBeNull()
+		expect(refusalToken(new Error("code=X "))).toBeNull()
 	})
 })

@@ -11,6 +11,12 @@
  * A worker dies on its own while idle (see `IDLE_RECYCLE_MS`), so a read that finds the worker idle too long, or too old for its
  * grant, retires it and starts a fresh one first, rather than writing to a dead connection and failing.
  *
+ * Since geo-db 2eab4e170c every `-` body starts `code=<Token> ` (a stable token, then the old text), a node's refusal leaves the pipe
+ * open, and the line `revision` answers `+<n>\nnegotiated <N>\tbuild <M>` without contacting the serve. So the worker asks `revision`
+ * once after `ready`, keeps the child through a node refusal or a malformed line (it kills it for any other `-` frame or an exit),
+ * and does not send a count form the negotiated revision is below. An older tool answers `revision` with a `-` frame (`want ...`):
+ * then nothing is known, a form is sent as before, and the refusal is read from its prose (the callers back that form off).
+ *
  * Reuses the card client's config, `PipeChild` seam and `GeoDbError`. `get` and `scan` need no wire change (DerivedGet 0x3B and
  * DerivedScan are served); `scores` needs geo-db at wire frame revision 11 (DerivedScores, 0x3F), which a node below it answers
  * with a refusal. `typeCounts` needs wire frame revision 13 (DerivedScan's count mode) on BOTH the serve and the geodb-client
@@ -86,6 +92,11 @@ export type ScoreRow = {
 
 /** What a count-mode scan read: the rows of the group walked, and the rows per requested type, in request order. */
 export type TypeCounts = {walked: number; counts: number[]}
+
+/** The wire frame revisions that add each count form (geo-db `format.wire.derived`). */
+export const REVISION_COUNT = 13
+export const REVISION_COUNT_TOPICS = 14
+export const REVISION_COUNT_GRAPH = 15
 
 /** The most distinct types, and blocked entities, one count-mode scan holds (geo-db `wire_derived.types_max`, `blocked_max`). */
 export const MAX_COUNT_TYPES = 64
@@ -286,15 +297,57 @@ export function countsLine(
 	return `counts\t${collection}\t${group}\t${types.join(",")}\t${blockedArg}${graphArg}`
 }
 
+/** The `code=<Token> ` a `-` body starts with (geo-db 2eab4e170c and later), or null for an older tool's body. */
+const CODE_PREFIX = /^code=(\w+) /
+const REFUSED_CODE = /derived read refused: code=(\w+) /
+
+/** The refusal token in a `derived read refused: ...` error message, or null when the tool is older than the token. */
+export function refusalToken(error: unknown): string | null {
+	if (!(error instanceof GeoDbError) || error.reason !== "client_failed") return null
+	return REFUSED_CODE.exec(error.message)?.[1] ?? null
+}
+
+/**
+ * A form the negotiated revision is below, rejected before anything was sent. It reads as a `revision` refusal
+ * (`countsRefusal`), and needs no back-off: nothing was asked, and the revision is learnt again with each worker.
+ */
+export class FormGatedError extends GeoDbError {
+	constructor(
+		readonly negotiated: number,
+		readonly needs: number,
+	) {
+		super(
+			"client_failed",
+			`derived read refused: code=InvalidWirePayload not sent: the serve negotiated revision ${negotiated}, the form needs ${needs}`,
+		)
+	}
+}
+
+/**
+ * Whether a revision refusal should keep its form quiet for a while: only an older tool's (no `code=` token), whose refusal
+ * killed the worker and which cannot say what the serve speaks. A tool that negotiates answers the revision, so the form is
+ * gated before it is sent and a refusal that still comes is the node's, with the pipe left open.
+ */
+export function refusalNeedsBackoff(error: unknown): boolean {
+	return !(error instanceof FormGatedError) && refusalToken(error) === null
+}
+
 /**
  * What a refusal of a count says about the serve: `exhausted` (`ResourceExhausted`, the graph's read budget or an allocation: the
- * call is too big, not the serve too old), `revision` (`InvalidWirePayload`, or a client line it does not know: the serve or the
- * geodb-client binary is below the form's frame revision), or null (anything else). A refusal reaches here as a `client_failed`
- * whose message carries the node's own words.
+ * call is too big, not the serve too old), `revision` (`InvalidWirePayload` or `UnknownOpcode`: the serve is below the form's frame
+ * revision), or null (anything else). A refusal reaches here as a `client_failed` whose message carries the tool's `-` body. The
+ * token is read first; a body without one is an older tool's, and its prose is matched as before (which also reads a client line it
+ * does not know, `want ...`, as `revision`).
  */
 export function countsRefusal(error: unknown): "exhausted" | "revision" | null {
 	if (!(error instanceof GeoDbError) || error.reason !== "client_failed") return null
 	if (!/derived read refused/.test(error.message)) return null
+	const code = refusalToken(error)
+	if (code !== null) {
+		if (code === "ResourceExhausted") return "exhausted"
+		if (code === "InvalidWirePayload" || code === "UnknownOpcode") return "revision"
+		return null
+	}
 	if (/resource[ _]?exhausted/i.test(error.message)) return "exhausted"
 	if (
 		/invalid[ _]?wire[ _]?payload|unknown[ _]?opcode|InvalidTypes|MissingTypes|MalformedLine|want /i.test(
@@ -303,6 +356,19 @@ export function countsRefusal(error: unknown): "exhausted" | "revision" | null {
 	)
 		return "revision"
 	return null
+}
+
+/** Whether a `-` body leaves the pipe open: a malformed line, or a node's refusal (`refused: ...`). Anything else is untrusted. */
+function keepsPipe(body: string): boolean {
+	const head = CODE_PREFIX.exec(body)
+	if (!head) return false
+	return head[1] === "MalformedLine" || body.slice(head[0].length).startsWith("refused:")
+}
+
+/** The revision an answer to the line `revision` names: `negotiated <N>\tbuild <M>`, else null (an old tool, or a stranger). */
+export function parseNegotiated(body: string): number | null {
+	const m = /^negotiated (\d{1,6})\tbuild (\d{1,6})\n?$/.exec(body)
+	return m ? Number(m[1]) : null
 }
 
 const FLOAT_FIELDS = 9
@@ -408,6 +474,8 @@ export function scoresLines(config: ScoreConfig, cards: ScoreCard[]): string {
 
 type Pending = {
 	line: string
+	/** The frame revision the line's form needs: it is not sent to a serve that negotiated less. */
+	needs?: number
 	resolve: (body: string) => void
 	reject: (error: GeoDbError) => void
 }
@@ -429,6 +497,8 @@ export function createDerivedReader(
 	/** When the worker became ready, and when it last did anything (ready or answered): what its connection's life is judged by. */
 	let readyAt = 0
 	let activeAt = 0
+	/** The revision this worker's connection negotiated: undefined until `revision` is answered, null for a tool older than the line. */
+	let negotiated: number | null | undefined
 
 	/** Retire a worker that sat idle too long, or has lived near its grant's end, without failing anything: it owes no reply. */
 	function retireStale() {
@@ -438,6 +508,7 @@ export function createDerivedReader(
 		const old = child
 		child = null
 		ready = false
+		negotiated = undefined
 		buffer = Buffer.alloc(0)
 		try {
 			old.kill("SIGKILL")
@@ -449,6 +520,7 @@ export function createDerivedReader(
 		const dead = child
 		child = null
 		ready = false
+		negotiated = undefined
 		buffer = Buffer.alloc(0)
 		if (timer) clearTimeout(timer)
 		timer = null
@@ -480,12 +552,31 @@ export function createDerivedReader(
 	}
 
 	function send() {
-		if (!child || !ready || current || queue.length === 0) return
-		current = queue.shift() as Pending
-		child.stdin.write(`${current.line}\n`)
-		timer = setTimeout(() => {
-			stop(new GeoDbError("timeout", `derived read took longer than ${config.timeoutMs} ms`), true)
-		}, config.timeoutMs)
+		while (child && ready && !current && queue.length > 0) {
+			const next = queue.shift() as Pending
+			if (next.needs !== undefined && typeof negotiated === "number" && negotiated < next.needs) {
+				next.reject(new FormGatedError(negotiated, next.needs))
+				continue
+			}
+			current = next
+			child.stdin.write(`${next.line}\n`)
+			timer = setTimeout(() => {
+				stop(new GeoDbError("timeout", `derived read took longer than ${config.timeoutMs} ms`), true)
+			}, config.timeoutMs)
+		}
+	}
+
+	/** The first request of a worker: what revision the serve speaks it. Its answer sets `negotiated`; it never fails a caller. */
+	function probe(): Pending {
+		return {
+			line: "revision",
+			resolve: (body) => {
+				negotiated = parseNegotiated(body)
+			},
+			reject: () => {
+				negotiated = null
+			},
+		}
 	}
 
 	function pump() {
@@ -524,7 +615,9 @@ export function createDerivedReader(
 			}
 			ready = true
 			readyAt = activeAt = now()
+			negotiated = undefined
 			buffer = buffer.subarray(end + 1)
+			queue.unshift(probe())
 			send()
 		}
 		for (;;) {
@@ -545,9 +638,24 @@ export function createDerivedReader(
 				return
 			}
 			if (head[1] === "-") {
-				// A refusal ends the session on the server's side; do not reuse it.
-				stop(new GeoDbError("client_failed", `derived read refused: ${body.slice(0, 200)}`), true)
-				return
+				const refused = new GeoDbError("client_failed", `derived read refused: ${body.slice(0, 200)}`)
+				if (answered.line === "revision") {
+					// A tool older than the line calls it malformed and goes on: nothing is known of the serve.
+					negotiated = null
+				} else if (!keepsPipe(body)) {
+					// Anything but a node's refusal or a malformed line (a lost connection, a protocol violation, an
+					// older tool's untokened body, which ends its session) leaves a connection not to be trusted.
+					stop(refused, true)
+					return
+				}
+				// A node's refusal ends that request's stream and leaves the connection authenticated: keep the child.
+				current = null
+				activeAt = now()
+				if (timer) clearTimeout(timer)
+				timer = null
+				if (answered.line !== "revision") answered.reject(refused)
+				send()
+				continue
 			}
 			current = null
 			activeAt = now()
@@ -605,8 +713,13 @@ export function createDerivedReader(
 			} catch (error) {
 				return Promise.reject(error)
 			}
+			const needs = form?.graph
+				? REVISION_COUNT_GRAPH
+				: form?.matchAll || (form?.others?.length ?? 0) > 0
+					? REVISION_COUNT_TOPICS
+					: REVISION_COUNT
 			return new Promise<string>((resolve, reject) => {
-				queue.push({line, resolve, reject})
+				queue.push({line, needs, resolve, reject})
 				pump()
 			}).then((body) => parseDerivedCounts(body, types))
 		},
