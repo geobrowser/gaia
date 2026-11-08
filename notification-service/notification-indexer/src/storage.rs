@@ -38,6 +38,14 @@ fn cursor_mirror() -> Option<&'static geodb_cursor::CursorMirror> {
         .as_ref()
 }
 
+/// The flag-off shadow read of the poll cursors; `None` unless `NOTIFICATION_INDEXER_GEODB_POLL_CURSOR_SHADOW` is on.
+fn poll_cursor_shadow() -> Option<&'static crate::poll_cursor_shadow::PollCursorShadow> {
+    static SHADOW: OnceLock<Option<crate::poll_cursor_shadow::PollCursorShadow>> = OnceLock::new();
+    SHADOW
+        .get_or_init(crate::poll_cursor_shadow::PollCursorShadow::from_env)
+        .as_ref()
+}
+
 fn outbox_mirror() -> Option<&'static OutboxMirror> {
     static MIRROR: OnceLock<Option<OutboxMirror>> = OnceLock::new();
     MIRROR.get_or_init(OutboxMirror::from_env).as_ref()
@@ -1138,7 +1146,12 @@ impl Storage {
         .bind(name)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(|r| (r.get("cursor_updated_at"), r.get("cursor_id"))))
+        let cursor = row.map(|r| (r.get("cursor_updated_at"), r.get("cursor_id")));
+        // Counts agreement with geo-db's copy; Postgres stays the answer (plan 10.22 section 8.3).
+        if let Some(shadow) = poll_cursor_shadow() {
+            shadow.observe(name, cursor).await;
+        }
+        Ok(cursor)
     }
 
     /// Persist a named poll cursor (high-water `(updated_at, id)`).

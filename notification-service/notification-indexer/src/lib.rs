@@ -12,6 +12,7 @@ pub mod ids;
 pub mod metrics;
 pub mod models;
 pub mod poll_cursor_mirror;
+pub mod poll_cursor_shadow;
 pub mod storage;
 pub mod webhooks_file;
 pub mod write_retry;
