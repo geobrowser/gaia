@@ -13,6 +13,7 @@ import pytest
 from src.algorithm.models import Entity, Perspective, Space
 from src.geodb_derived import (
     BATCH_MAX,
+    CHUNK,
     COLLECTION_GLOBAL,
     COLLECTION_LOCAL,
     COLLECTION_SPACE,
@@ -256,7 +257,7 @@ class TestSending:
 
     def test_a_hung_child_is_bounded_by_the_timeout(self, tmp_path) -> None:
         argv = _script(tmp_path, 'import time\nprint("ready", flush=True)\ntime.sleep(60)\n')
-        m = DerivedMirror(argv, timeout=0.5)
+        m = DerivedMirror(argv, timeout=0.5, retries=0)
         import time
 
         t0 = time.monotonic()
@@ -267,7 +268,7 @@ class TestSending:
 
     def test_a_child_that_never_says_ready_is_bounded(self, tmp_path) -> None:
         argv = _script(tmp_path, "import time\ntime.sleep(60)\n")
-        m = DerivedMirror(argv, timeout=0.5)
+        m = DerivedMirror(argv, timeout=0.5, retries=0)
         import time
 
         t0 = time.monotonic()
@@ -443,3 +444,129 @@ class TestLazySend:
         e = entity(E1, 0.5, [persp(E1, S1, 0.7), persp(E1, S2, 0.8)])
         rows = local_rows([e], only={(E1, S2)})
         assert [r.key for r in rows] == [uuid.UUID(E1).bytes + uuid.UUID(S2).bytes]
+
+
+class TestSessionExpiry:
+    """The serve's grant lives 300 s: a long table outlives one session (first #1336 nightly)."""
+
+    @staticmethod
+    def _child(tmp_path, die_after: int, how: str):
+        """A fake pipe child. The first ``die_after`` launches fail on their 3rd request (``how``:
+        ``expire`` answers CapabilityTokenExpired, ``close`` exits); later launches are healthy."""
+        launches = tmp_path / "launches.txt"
+        log = tmp_path / "log.txt"
+        body = f"""
+import os, sys
+launches = {str(launches)!r}
+open(launches, "a").write("x")
+mine = len(open(launches).read())
+print("ready", flush=True)
+n = 0
+for l in sys.stdin:
+    n += 1
+    if mine <= {die_after} and n == 3:
+        if {how!r} == "close":
+            sys.exit(0)
+        msg = "refused: DefiniteRefusal CapabilityTokenExpired"
+        sys.stdout.write("-%d\\n%s" % (len(msg), msg))
+        sys.stdout.flush()
+        continue
+    open({str(log)!r}, "a").write(l)
+    sys.stdout.write("+0\\n")
+    sys.stdout.flush()
+"""
+        return _script(tmp_path, body), launches, log
+
+    @staticmethod
+    def _rows(n: int):
+        return [DerivedRow(3, 0, 1.0, i.to_bytes(3, "big"), b"") for i in range(n)]
+
+    @pytest.mark.parametrize("how", ["expire", "close"])
+    def test_a_lost_session_is_replaced_and_the_same_table_resumes(self, tmp_path, how) -> None:
+        argv, launches, log = self._child(tmp_path, die_after=1, how=how)
+        m = DerivedMirror(argv, timeout=5, retry_delay=0)
+        m.put("local_scores", self._rows(CHUNK * 4))  # 256 plain puts, 4 chunks of 64
+        # Every row arrived. The failed chunk is resent whole, so the rows its first session had
+        # already answered arrive twice (puts are last-write-wins); none is lost.
+        lines = log.read_text().splitlines()
+        assert len(set(lines)) == CHUNK * 4
+        assert len(lines) == CHUNK * 4 + 2
+        assert m.stats["errors"] == 0
+        assert m.stats["dropped"] == 0
+        assert m.stats["puts"] == CHUNK * 4
+        assert m.stats["reconnects"] == 1
+        assert len(launches.read_text()) == 2
+        m.close()
+
+    def test_every_row_is_delivered_after_an_expiry(self, tmp_path) -> None:
+        argv, _, log = self._child(tmp_path, die_after=1, how="expire")
+        m = DerivedMirror(argv, timeout=5, retry_delay=0)
+        rows = self._rows(10)
+        m.put("local_scores", rows)
+        got = {l.split("\t")[4] for l in log.read_text().splitlines()}
+        assert got == {"hex:" + r.key.hex() for r in rows}
+        m.close()
+
+    def test_retries_are_bounded(self, tmp_path, caplog) -> None:
+        argv, launches, log = self._child(tmp_path, die_after=99, how="expire")
+        m = DerivedMirror(argv, timeout=5, retries=2, retry_delay=0)
+        with caplog.at_level(logging.WARNING):
+            m.put("local_scores", self._rows(CHUNK * 4))
+        assert m.stats["errors"] == 1
+        assert m.stats["reconnects"] == 2
+        assert len(launches.read_text()) == 3  # the first session and two resends
+        assert m.stats["puts"] == 0  # puts count whole chunks; the first never completed
+        assert m.stats["dropped"] == CHUNK * 4  # the failed chunk onward
+        assert "mirror_failed" in caplog.text
+        m.close()
+
+    def test_other_refusals_are_not_retried(self, tmp_path) -> None:
+        argv = _script(
+            tmp_path,
+            'import sys\nprint("ready", flush=True)\nsys.stdin.readline()\n'
+            'sys.stdout.write("-26\\nrefused: DefiniteRefusal X")\nsys.stdout.flush()\n',
+        )
+        m = DerivedMirror(argv, timeout=5, retry_delay=0)
+        m.put("t", self._rows(3))
+        assert m.stats["errors"] == 1
+        assert m.stats["reconnects"] == 0
+
+    def test_a_session_past_its_age_is_replaced_before_it_can_expire(self, tmp_path) -> None:
+        argv, launches, log = self._child(tmp_path, die_after=0, how="expire")
+        m = DerivedMirror(argv, timeout=5, session_refresh=0.0, retry_delay=0)
+        m.put("local_scores", self._rows(CHUNK * 3))
+        assert len(launches.read_text()) == 3  # one session a chunk
+        assert m.stats["reconnects"] == 0  # a refresh is not a failure
+        assert m.stats["errors"] == 0
+        assert m.stats["puts"] == CHUNK * 3
+        m.close()
+
+    def test_a_fresh_session_is_kept_while_young(self, tmp_path) -> None:
+        argv, launches, _ = self._child(tmp_path, die_after=0, how="expire")
+        m = DerivedMirror(argv, timeout=5, session_refresh=3600.0)
+        m.put("local_scores", self._rows(CHUNK * 3))
+        assert len(launches.read_text()) == 1
+        m.close()
+
+    def test_a_resend_ignores_the_cooldown(self, tmp_path) -> None:
+        argv, launches, _ = self._child(tmp_path, die_after=1, how="close")
+        m = DerivedMirror(argv, timeout=5, cooldown=3600, retry_delay=0)
+        m.put("t", self._rows(CHUNK * 2))
+        assert m.stats["errors"] == 0
+        assert m.stats["puts"] == CHUNK * 2
+        m.close()
+
+    def test_env_sets_refresh_and_retries(self, tmp_path) -> None:
+        env = {
+            "GEODB_DERIVED_MIRROR": "1",
+            "GEODB_KEY_PATH": "/k",
+            "GEODB_BINDING_PATH": "/b",
+            "GEODB_DERIVED_SESSION_REFRESH_S": "120",
+            "GEODB_DERIVED_RETRIES": "5",
+        }
+        m = DerivedMirror.from_env(env)
+        assert (m.session_refresh, m.retries) == (120.0, 5)
+        env["GEODB_DERIVED_RETRIES"] = "junk"
+        del env["GEODB_DERIVED_SESSION_REFRESH_S"]
+        m = DerivedMirror.from_env(env)
+        assert (m.session_refresh, m.retries) == (240.0, 3)
