@@ -6,6 +6,7 @@ import {renderFeedExperimentMetrics} from "./forYou/feedExperimentShadow"
 import {renderGatewayMetrics} from "./gateway/metrics"
 import {renderRankTypedMetrics} from "./gateway/rankTypedShadow"
 import {renderServeMetrics} from "./gateway/serveMetrics"
+import {renderConfigRevisionShadowMetrics} from "./geodb/configRevisionShadow"
 import {renderBestOrderShadowMetrics} from "./geodb/entitiesBestOrderShadow"
 import {renderEntityColumnsShadowMetrics} from "./geodb/entityComputedColumnsShadow"
 import {renderEntityFeedConfigShadowMetrics} from "./geodb/entityFeedConfigShadow"
@@ -182,6 +183,8 @@ function renderPrometheusMetrics(): string {
 		renderKeyedRecordsShadowMetrics(),
 		// The three entity-feed config tables against their config Space records (GEODB_ENTITY_*_SHADOW) — see geodb/entityFeedConfigShadow.ts.
 		renderEntityFeedConfigShadowMetrics(),
+		// The derived For you config digest against Postgres' feed_config_revision (GEODB_CONFIG_REVISION_SHADOW) — see geodb/configRevisionShadow.ts.
+		renderConfigRevisionShadowMetrics(),
 		// entity_ranking_scores against the collection-21 overlay (GEODB_RANKING_SCORES_SHADOW) — see geodb/rankingScoresShadow.ts.
 		renderRankingScoresShadowMetrics(),
 		// The Entity computed columns against the served score rows (GEODB_ENTITY_COLUMNS_SHADOW).
