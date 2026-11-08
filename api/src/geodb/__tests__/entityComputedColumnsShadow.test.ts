@@ -162,6 +162,32 @@ describe("runOnce", () => {
 		expect(total("failed")).toBe(1)
 		expect(total("failed", "upvotes")).toBe(1)
 	})
+	it("counts a Postgres statement timeout on every column as reference_timeout, not failed", async () => {
+		const row = served()
+		const inner = fakeDb(pgText(row))
+		const db = {
+			execute: vi.fn(async (q: unknown) => {
+				if (JSON.stringify(q).includes("entities_"))
+					throw Object.assign(new Error("canceling statement due to statement timeout"), {code: "57014"})
+				return inner.execute(q as never)
+			}),
+		} as unknown as Database
+		const scores = vi.fn(async () => [row])
+		await createEntityColumnsShadow({config, db, reader: {scores}, log, random: () => A}).runOnce()
+		expect(total("reference_timeout")).toBe(1)
+		expect(total("reference_timeout", "upvotes")).toBe(1)
+		expect(total("failed")).toBe(0)
+	})
+	it("counts any other Postgres error as reference_failed", async () => {
+		const db = {
+			execute: vi.fn(async () => {
+				throw Object.assign(new Error("connection terminated"), {code: "57P01"})
+			}),
+		} as unknown as Database
+		await createEntityColumnsShadow({config, db, reader: {scores: vi.fn()}, log, random: () => A}).runOnce()
+		expect(total("reference_failed")).toBe(1)
+		expect(total("failed")).toBe(0)
+	})
 	it("does nothing when the reader cannot serve scores", async () => {
 		const shadow = createEntityColumnsShadow({config, db: fakeDb({}), reader: {}, log, random: () => A})
 		await shadow.runOnce()
