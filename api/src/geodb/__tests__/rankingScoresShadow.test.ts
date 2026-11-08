@@ -7,6 +7,7 @@ import {
 	compareDefault,
 	compareRow,
 	createRankingScoresShadow,
+	mismatchReason,
 	overlayCounts,
 	readRankingScoresShadowConfig,
 	renderRankingScoresShadowMetrics,
@@ -106,6 +107,21 @@ describe("compareRow", () => {
 	it("mismatches a different score or count", () => {
 		expect(compareRow(pg, held(50.6, overlay([3, 1, 0, 0, 2])))).toBe("mismatch")
 		expect(compareRow(pg, held(50.5, overlay([3, 1, 0, 0, 3])))).toBe("mismatch")
+	})
+	it("names the fields that differ and buckets the score gap, with no ids", () => {
+		const withTrending = (counts: number[], trending: number) => {
+			const v = overlay(counts)
+			v.writeDoubleLE(trending, 38)
+			return v
+		}
+		expect(mismatchReason(pg, held(50.6, overlay([3, 1, 0, 0, 2])))).toEqual({fields: "score", delta: "lt_1"})
+		expect(mismatchReason(pg, held(50.5, overlay([3, 1, 0, 0, 3])))).toEqual({fields: "commenter", delta: "none"})
+		expect(mismatchReason(pg, held(80.5, withTrending([3, 1, 0, 0, 2], 8)))).toEqual({
+			fields: "score+trending",
+			delta: "lt_100",
+		})
+		expect(mismatchReason(pg, held(50.5, overlay([9, 9, 9, 9, 9])))).toEqual({fields: "many", delta: "none"})
+		expect(mismatchReason(pg, held(50.5, overlay([3, 1, 0, 0, 2], 1, 48)))).toBeNull()
 	})
 	it("says absent_ok for an un-engaged row with no overlay and missing for an engaged one", () => {
 		expect(compareRow(idle, null)).toBe("absent_ok")
