@@ -193,12 +193,6 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: DATABASE_URL_DIRECT
-            # The For you config revision twin: a digest over the For you / interest / entity-ranking config records in geo-db's
-            # config Space, compared with Postgres' feed_config_revision by whether each moved since the last pass (_INTERVAL_MS,
-            # default 30 s): gaia_api_config_revision_shadow_total{result}. OFF; background only, the version string stays on
-            # Postgres. Needs the geodb-feeder's for_you_config, interest_config and entity_ranking_config backfills run first.
-            - name: GEODB_CONFIG_REVISION_SHADOW
-              value: "0"
             - name: NODE_EXTRA_CA_CERTS
               value: /ssl/ca.crt
           volumeMounts:
@@ -424,6 +418,12 @@ spec:
             - name: GEODB_ENTITY_TYPE_EXCLUSIONS_SHADOW
               value: "0"
             - name: GEODB_ENTITY_FEED_BLOCKLIST_SHADOW
+              value: "0"
+            # The For you config revision twin: a digest over the For you / interest / entity-ranking config records in geo-db's
+            # config Space, compared with Postgres' feed_config_revision by whether each moved since the last pass (_INTERVAL_MS,
+            # default 30 s): gaia_api_config_revision_shadow_total{result}. OFF; background only, the version string stays on
+            # Postgres. Needs the geodb-feeder's for_you_config, interest_config and entity_ranking_config backfills run first.
+            - name: GEODB_CONFIG_REVISION_SHADOW
               value: "0"
             - name: NODE_EXTRA_CA_CERTS
               value: /ssl/ca.crt
