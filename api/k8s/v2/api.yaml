@@ -393,10 +393,11 @@ spec:
               value: "1"
             # Samples entity_ranking_scores against geo-db's engaged-only overlay in derived collection 21 (the first
             # _SAMPLE overlay rows into Postgres, and _SAMPLE random Postgres rows into the overlay; default 20 every
-            # GEODB_RANKING_SCORES_SHADOW_INTERVAL_MS, default 60 s): gaia_api_ranking_scores_shadow_total{result}. OFF until
-            # the overlay writer (GEODB_DERIVED_MIRROR of the scoring service) has run once; background only.
+            # GEODB_RANKING_SCORES_SHADOW_INTERVAL_MS, default 60 s): gaia_api_ranking_scores_shadow_total{result}. ON; background
+            # only. The vote-indexer's GEODB_DERIVED_MIRROR writes the overlay; until its engaged-row backfill Job runs, rows
+            # not touched since the writer went live count as `missing`.
             - name: GEODB_RANKING_SCORES_SHADOW
-              value: "0"
+              value: "1"
             # Holds topic_feed_type_counts to geo-db's DerivedScan count mode (collection 1; _TOPICS topics, default 5, every
             # GEODB_TYPE_COUNTS_SHADOW_INTERVAL_MS, default 300 s): gaia_api_type_counts_shadow_total{result}. ON: needs the geodb serve AND the
             # geodb-client in this image at wire frame revision 13 or later (serve first: it accepts older clients, an older
