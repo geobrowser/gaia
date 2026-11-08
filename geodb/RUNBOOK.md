@@ -1153,6 +1153,18 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   mismatch (a different score), unsupported (geo-db has no row Postgres has, or the row has a value or another group),
   failed. Expect `unsupported` until the mirror has run once. **Blind spot:** only rows Postgres has are sampled, so a row
   geo-db keeps after Postgres dropped it (the mirror never deletes) is not seen; and a sample is not a full scan.
+- api shadow, `GEODB_ENTITIES_BEST_ORDER_SHADOW` (manifest `"0"`, `api/src/geodb/entitiesBestOrderShadow.ts`, twin in
+  `api/src/geodb/rankedReads/bestOrder.ts`): the ordered reads `entities_in_best_order` and `entities_ordered_by_score` return a
+  page, so what is compared is the id ORDER, ties included. Every `_INTERVAL_MS` (60 s) it builds three pages (`_SAMPLE` ids, 20,
+  at most 64): `best_order` (sampled scored ids through the real function, against the twin ordering them by the ranking scores
+  geo-db serves, `DerivedScores`), `global_score` (the function's own query, `LIMIT _SAMPLE`, against a scan of collection 2) and
+  `local_score` (one random space, against collection 3). `gaia_api_entities_best_order_shadow_total{read,result}` (absent until
+  the flag is on): match, mismatch, failed. The two score reads run the function's inner query rather than the function, because
+  a plpgsql `RETURN QUERY` materialises the whole table (1.8M and 2.1M rows) before any limit. Best-order mismatches are partly
+  benign: the SQL reads the stored `entity_ranking_scores` snapshot and geo-db serves the current formula. Not covered: ASC
+  (geo-db cannot scan upward), `raw` ordering (no geo-db reader for `votes_count`), unscored entities, duplicates and unknown ids,
+  and the 1000-id cap (these are pinned by `__tests__/bestOrder.golden.test.ts` only, from `api/scripts/bestorder/gen_golden.py`).
+  Needs wire revision 11 for `best_order`.
 - Key: the scoring CronJob now mounts the shared `geodb-scores-key` (was an unminted `geodb-derived-key`); `supervisor.sh`
   grants it `derived=0,1,2,3,4,5,11,12,13`. Collections 2-4 were already registered in geo-db (nothing to land there).
 - **Snapshot:** the CronJob's own mirror is bounded by a time budget and swallows short sends, so it is not a backfill.

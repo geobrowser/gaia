@@ -377,6 +377,12 @@ spec:
             # registers collection 12, and the account-exclusions-sync cronjob's GEODB_DERIVED_MIRROR run once. OFF.
             - name: GEODB_ACCOUNT_EXCLUSIONS_SHADOW
               value: "1"
+            # Builds pages of entities_in_best_order and entities_ordered_by_score (global, local; DESC) from geo-db's derived
+            # collections 2, 3 and 21 and compares the id ORDER with Postgres (_SAMPLE ids a page, default 20, max 64, every
+            # GEODB_ENTITIES_BEST_ORDER_SHADOW_INTERVAL_MS, default 60 s): gaia_api_entities_best_order_shadow_total{read,result}.
+            # OFF; background only, reads stay on Postgres.
+            - name: GEODB_ENTITIES_BEST_ORDER_SHADOW
+              value: "0"
             # Samples global_scores / local_scores / space_scores rows from Postgres (_SAMPLE per table, default 20, every
             # GEODB_SCORES_SHADOW_INTERVAL_MS, default 60 s) against geo-db's derived collections 2/3/4
             # (gaia_api_scores_shadow_total{table,result}). ON; background only, never changes a response. The scores snapshot

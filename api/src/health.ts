@@ -6,6 +6,7 @@ import {renderFeedExperimentMetrics} from "./forYou/feedExperimentShadow"
 import {renderGatewayMetrics} from "./gateway/metrics"
 import {renderRankTypedMetrics} from "./gateway/rankTypedShadow"
 import {renderServeMetrics} from "./gateway/serveMetrics"
+import {renderBestOrderShadowMetrics} from "./geodb/entitiesBestOrderShadow"
 import {renderEntityColumnsShadowMetrics} from "./geodb/entityComputedColumnsShadow"
 import {renderIdMapMetrics} from "./geodb/idMap"
 import {renderIdMapTwinMetrics} from "./geodb/idMapTwin"
@@ -173,6 +174,8 @@ function renderPrometheusMetrics(): string {
 		renderUserVotesTwinMetrics(),
 		// Sampled score-table rows from geo-db collections 2/3/4 against Postgres (GEODB_SCORES_SHADOW) — see geodb/scoresShadow.ts.
 		renderScoresShadowMetrics(),
+		// Ordered entity pages against geo-db's collections 2/3/21 (GEODB_ENTITIES_BEST_ORDER_SHADOW) — see geodb/entitiesBestOrderShadow.ts.
+		renderBestOrderShadowMetrics(),
 		// Sampled user_votes / ranks rows against their keyed records (GEODB_KEYED_RECORDS_SHADOW) — see geodb/keyedRecordsShadow.ts.
 		renderKeyedRecordsShadowMetrics(),
 		// entity_ranking_scores against the collection-21 overlay (GEODB_RANKING_SCORES_SHADOW) — see geodb/rankingScoresShadow.ts.
