@@ -25,6 +25,7 @@ pub mod error;
 pub mod external_interest_mirror;
 pub mod feed_composition;
 pub mod feed_composition_mirror;
+pub mod feed_signal_runs_mirror;
 pub mod feed_signals;
 pub mod feed_signals_compute;
 pub mod feed_signals_mirror;

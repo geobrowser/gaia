@@ -72,6 +72,16 @@ spec:
                 items:
                   - key: key
                     path: scores.key
+            # The CURSOR key (derived=10 only) for the run-log mirror (GEODB_FEED_RUNS_MIRROR): the scores key does not
+            # grant collection 10. Optional, so an absent Secret blocks nothing.
+            - name: geodb-cursor-key
+              secret:
+                secretName: geodb-cursor-key
+                optional: true
+                defaultMode: 0440
+                items:
+                  - key: key
+                    path: cursor.key
           initContainers:
             - name: setup-certs
               image: registry.digitalocean.com/geo/ranking-indexer:latest
@@ -155,6 +165,9 @@ spec:
                 - name: geodb-key
                   mountPath: /etc/geodb/key
                   readOnly: true
+                - name: geodb-cursor-key
+                  mountPath: /etc/geodb/cursor-key
+                  readOnly: true
               env:
                 - name: FEED_SIGNAL_CONFIG_SOURCE
                   value: postgres
@@ -195,6 +208,12 @@ spec:
                   value: /etc/geodb/key/scores.key
                 - name: GEODB_BINDING_PATH
                   value: /geodb/binding.txt
+                # Copy the newest feed_signal_runs row of each status (succeeded, unchanged, failed) into geo-db's cursors
+                # collection 10 after each run, best-effort (RUNBOOK section 2f-feed-signal-runs). OFF. Needs the cursor key above.
+                - name: GEODB_FEED_RUNS_MIRROR
+                  value: "0"
+                - name: GEODB_FEED_RUNS_KEY_PATH
+                  value: /etc/geodb/cursor-key/cursor.key
                 - name: RUST_LOG
                   value: "feed_signals_sync=info,ranking_indexer=info,geodb_cursor=info"
               resources:

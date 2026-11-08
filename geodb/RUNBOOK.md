@@ -1350,6 +1350,20 @@ and no longer has is a delete of both parts. A geo-db error is logged, never fai
 - **Enable order: roll serve to a build that registers collection 22 FIRST**, then the binding (the StatefulSet restart does
   both), run the Job once by hand with the flag on, then set the flag `"1"` in `feed-signals-sync-cronjob.yaml` in its own PR.
 
+
+### 2f-feed-signal-runs. personalization.feed_signal_runs (cursors collection 10, GEODB_FEED_RUNS_MIRROR)
+
+The run log is written inside plpgsql (`replace_feed_signals`, `record_feed_signal_run`), and its readers want a watermark, not
+the log: `feed_signal_window` and the request path `readSeen` want the newest succeeded `data_through`, `feed_signal_freshness`
+wants the newest `finished_at` of a succeeded or unchanged run. So the feed-signals sync reads back the newest row of each
+status after every run (success, unchanged and failed; not a dry run) and puts three keys into collection 10 with the cursor
+mirror (`ranking-indexer/src/feed_signal_runs_mirror.rs`): `feed_signal_run:succeeded`, `feed_signal_run:unchanged`,
+`feed_signal_run:failed`. The value is the `cursors` shape `<block>:<cursor>`: block is `finished_at` in microseconds since the
+epoch, cursor is `<data_through as RFC 3339 with microseconds and Z, or "-">/<generation>`. The error text is not mirrored.
+No collection is registered for it, so no geo-db change is needed. The flag is `GEODB_FEED_RUNS_MIRROR` (manifest `"0"`). The
+scores key does not grant collection 10, so the CronJob also mounts the `geodb-cursor-key` Secret (optional) and the mirror
+reads it from `GEODB_FEED_RUNS_KEY_PATH`; it shares the binding and client with the derived mirror. A geo-db error is
+logged, never fails the Job.
 ### 2f-cooccurrence. personalization.topic_cooccurrence (derived collection 23, GEODB_DERIVED_MIRROR)
 
 Shadow only, nothing reads the rows. The nightly `ranking-indexer-topic-interest-refit` CronJob
