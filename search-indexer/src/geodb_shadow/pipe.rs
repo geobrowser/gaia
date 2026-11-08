@@ -30,7 +30,14 @@ pub struct PipeConfig {
     pub cooldown: Duration,
 }
 
+/// The serve mints each session's grant for `grant_ttl_s` (300 s, `geodb/supervisor.sh`) and closes
+/// a pipe idle past 60 s. A held child is replaced once it is this old, before its grant lapses.
+pub const SESSION_REFRESH: Duration = Duration::from_secs(240);
+
 struct Pipe {
+    opened_at: Instant,
+    /// Whether this child has answered a request: only then can a failure be its session ending.
+    answered: bool,
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
@@ -50,15 +57,35 @@ struct State {
 
 pub struct PipeReader {
     cfg: PipeConfig,
+    session_refresh: Duration,
     state: Mutex<State>,
+}
+
+/// Whether a new session can cure `e`: the held pipe was closed, or the serve ended its session
+/// for an idle bound or an expired grant. Any other refusal answers the request itself.
+fn session_lost(e: &ShadowError) -> bool {
+    match e {
+        ShadowError::Closed | ShadowError::Io(_) => true,
+        ShadowError::Refused(m) => {
+            m.contains("CapabilityTokenExpired") || m.contains("TransportClosed")
+        }
+        _ => false,
+    }
 }
 
 impl PipeReader {
     pub fn new(cfg: PipeConfig) -> Self {
         Self {
             cfg,
+            session_refresh: SESSION_REFRESH,
             state: Mutex::new(State::default()),
         }
+    }
+
+    /// Replaces the held child once it is older than `d` (default [`SESSION_REFRESH`]).
+    pub fn with_session_refresh(mut self, d: Duration) -> Self {
+        self.session_refresh = d;
+        self
     }
 
     async fn spawn(&self) -> Result<Pipe, ShadowError> {
@@ -80,6 +107,8 @@ impl PipeReader {
             return Err(ShadowError::NotReady(first));
         }
         Ok(Pipe {
+            opened_at: Instant::now(),
+            answered: false,
             child,
             stdin,
             stdout,
@@ -120,40 +149,64 @@ impl GeoDbReader for PipeReader {
         }
         let line = format!("{}\t{}\n", spaces.join(","), doc);
         let mut st = self.state.lock().await;
-        if st.pipe.is_none() {
-            if st
-                .failed_at
-                .is_some_and(|t| t.elapsed() < self.cfg.cooldown)
-            {
-                return Err(ShadowError::CoolingDown);
+        // A session near the end of its grant is replaced before the request, not refused by it.
+        if st
+            .pipe
+            .as_ref()
+            .is_some_and(|p| p.opened_at.elapsed() > self.session_refresh)
+        {
+            st.pipe = None;
+        }
+        let mut replayed = false;
+        loop {
+            if st.pipe.is_none() {
+                // The spawn that replays a request a lost session refused skips the cool-down:
+                // that failure was the old session's, not the server's.
+                if !replayed
+                    && st
+                        .failed_at
+                        .is_some_and(|t| t.elapsed() < self.cfg.cooldown)
+                {
+                    return Err(ShadowError::CoolingDown);
+                }
+                match tokio::time::timeout(self.cfg.timeout, self.spawn()).await {
+                    Ok(Ok(p)) => st.pipe = Some(p),
+                    Ok(Err(e)) => {
+                        st.failed_at = Some(Instant::now());
+                        return Err(e);
+                    }
+                    Err(_) => {
+                        st.failed_at = Some(Instant::now());
+                        return Err(ShadowError::Timeout(self.cfg.timeout));
+                    }
+                }
             }
-            match tokio::time::timeout(self.cfg.timeout, self.spawn()).await {
-                Ok(Ok(p)) => st.pipe = Some(p),
-                Ok(Err(e)) => {
+            let pipe = st.pipe.as_mut().expect("set above");
+            let res = match tokio::time::timeout(self.cfg.timeout, request(pipe, &line)).await {
+                Ok(r) => r,
+                Err(_) => Err(ShadowError::Timeout(self.cfg.timeout)),
+            };
+            match res {
+                Ok(body) => {
+                    if let Some(p) = st.pipe.as_mut() {
+                        p.answered = true;
+                    }
+                    st.failed_at = None;
+                    return Ok(body);
+                }
+                Err(e) => {
+                    // A timed-out child still owes a reply, and a refusal ends the tool: drop it.
+                    // A held child that had answered before and was then ended by the serve is
+                    // replaced and the (read-only) request sent once more.
+                    let reused = st.pipe.as_ref().is_some_and(|p| p.answered);
+                    st.pipe = None;
+                    if reused && !replayed && session_lost(&e) {
+                        replayed = true;
+                        continue;
+                    }
                     st.failed_at = Some(Instant::now());
                     return Err(e);
                 }
-                Err(_) => {
-                    st.failed_at = Some(Instant::now());
-                    return Err(ShadowError::Timeout(self.cfg.timeout));
-                }
-            }
-        }
-        let pipe = st.pipe.as_mut().expect("set above");
-        let res = match tokio::time::timeout(self.cfg.timeout, request(pipe, &line)).await {
-            Ok(r) => r,
-            Err(_) => Err(ShadowError::Timeout(self.cfg.timeout)),
-        };
-        match res {
-            Ok(body) => {
-                st.failed_at = None;
-                Ok(body)
-            }
-            Err(e) => {
-                // A timed-out child still owes a reply, and a refusal ends the tool: drop it.
-                st.pipe = None;
-                st.failed_at = Some(Instant::now());
-                Err(e)
             }
         }
     }
@@ -250,5 +303,72 @@ mod tests {
             r.query(&[], "d").await.unwrap_err(),
             ShadowError::BadRequest
         ));
+    }
+
+    // The first child answers one request, then refuses the next with `refusal` and exits; every
+    // later child is healthy. Each start and request is appended to the log.
+    fn expiring(log: &std::path::Path, flag: &std::path::Path, refusal: &str) -> String {
+        format!(
+            "echo spawn >> {log}; echo ready; n=0; first=0; [ -e {f} ] || {{ first=1; : > {f}; }}; \
+             while IFS= read -r l; do echo req >> {log}; \
+             if [ $first = 1 ] && [ $n -ge 1 ]; then printf -- '-{len}\\n{refusal}'; exit 1; fi; \
+             n=$((n+1)); printf '+2\\nok'; done",
+            log = log.display(),
+            f = flag.display(),
+            len = refusal.len(),
+        )
+    }
+
+    #[tokio::test]
+    async fn an_expired_grant_on_a_held_pipe_is_replayed_on_a_new_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let (log, flag) = (dir.path().join("log"), dir.path().join("flag"));
+        let script = expiring(&log, &flag, "DefiniteRefusal CapabilityTokenExpired");
+        let r = fake(&script, Duration::from_secs(60));
+        assert_eq!(r.query(&spaces(), "d").await.unwrap(), "ok");
+        assert_eq!(r.query(&spaces(), "d").await.unwrap(), "ok");
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "spawn\nreq\nreq\nspawn\nreq\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refusal_that_is_not_the_session_ending_is_not_replayed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (log, flag) = (dir.path().join("log"), dir.path().join("flag"));
+        let script = expiring(&log, &flag, "DefiniteRefusal NotPermitted");
+        let r = fake(&script, Duration::from_secs(60));
+        assert_eq!(r.query(&spaces(), "d").await.unwrap(), "ok");
+        assert!(matches!(
+            r.query(&spaces(), "d").await.unwrap_err(),
+            ShadowError::Refused(_)
+        ));
+        assert!(matches!(
+            r.query(&spaces(), "d").await.unwrap_err(),
+            ShadowError::CoolingDown
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_session_older_than_the_refresh_is_replaced_before_it_can_expire() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("log");
+        let script = format!(
+            "echo spawn >> {}; echo ready; while IFS= read -r l; do printf '+2\\nok'; done",
+            log.display()
+        );
+        let r = fake(&script, Duration::ZERO).with_session_refresh(Duration::from_millis(50));
+        r.query(&spaces(), "d").await.unwrap();
+        r.query(&spaces(), "d").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        r.query(&spaces(), "d").await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&log)
+                .unwrap()
+                .matches("spawn")
+                .count(),
+            2
+        );
     }
 }

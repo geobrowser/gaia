@@ -5,7 +5,9 @@
 //! `geodb-client derived pipe` child (geo-db `docs/api/10-embedded-and-wire.md`, the `derived pipe`
 //! row). Nothing here can fail the block path: every error is logged, counted
 //! (`geodb_cursor_mirror_errors_total`) and swallowed, each call is bounded by a timeout, and after
-//! a failure the child is not respawned until a cool-down passes.
+//! a failure the child is not respawned until a cool-down passes. The serve ends a session at its
+//! grant TTL (300 s) or after 60 s idle, so a held child is replaced at [`SESSION_REFRESH`] and a
+//! request that a held child's end-of-session refused is replayed once on a new one.
 //!
 //! The row is `cursors` (collection 10, geo-db 6a770ba752), keyed by the writer id. Its value is the
 //! bytes `<decimal block_number>:<opaque cursor>`, sent as `hex:` so the tab-separated line cannot be
@@ -117,7 +119,14 @@ impl Config {
     }
 }
 
+/// The serve mints each session's grant for `grant_ttl_s` (300 s, `geodb/supervisor.sh`) and closes
+/// a pipe idle past 60 s; a held child is replaced once it is this old, before the grant lapses.
+pub const SESSION_REFRESH: Duration = Duration::from_secs(240);
+
 struct Pipe {
+    opened_at: Instant,
+    /// Whether this child has answered a request: only then can a failure be the session ending.
+    answered: bool,
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
@@ -132,15 +141,35 @@ struct State {
 /// Holds the `derived pipe` child. Cheap to build; the child starts on first use.
 pub struct CursorMirror {
     cfg: Config,
+    session_refresh: Duration,
     state: Mutex<State>,
+}
+
+/// Whether a new session can cure `e`: the pipe was closed, or the serve ended it for an idle
+/// bound or an expired grant. Any other refusal is the serve's answer to the request itself.
+fn session_lost(e: &MirrorError) -> bool {
+    match e {
+        MirrorError::Closed | MirrorError::Io(_) => true,
+        MirrorError::Refused(m) => {
+            m.contains("CapabilityTokenExpired") || m.contains("TransportClosed")
+        }
+        _ => false,
+    }
 }
 
 impl CursorMirror {
     pub fn new(cfg: Config) -> Self {
         Self {
             cfg,
+            session_refresh: SESSION_REFRESH,
             state: Mutex::new(State::default()),
         }
+    }
+
+    /// Replaces the held child once it is older than `d` (default [`SESSION_REFRESH`]).
+    pub fn with_session_refresh(mut self, d: Duration) -> Self {
+        self.session_refresh = d;
+        self
     }
 
     /// `Some` only when `GEODB_CURSOR_MIRROR` is on and configured.
@@ -215,45 +244,84 @@ impl CursorMirror {
     ) -> Result<Vec<String>, MirrorError> {
         let mut bodies = Vec::with_capacity(lines.len());
         let mut st = self.state.lock().await;
-        if st.pipe.is_none() {
-            if st
-                .failed_at
-                .is_some_and(|t| t.elapsed() < self.cfg.cooldown)
-            {
-                return Err(MirrorError::CoolingDown);
-            }
-            match tokio::time::timeout(self.cfg.timeout, self.spawn()).await {
-                Ok(Ok(p)) => {
-                    info!(
-                        event = "geodb_cursor.pipe_started",
-                        "geodb-client derived pipe ready"
-                    );
-                    st.pipe = Some(p);
-                }
-                Ok(Err(e)) => {
-                    st.failed_at = Some(Instant::now());
-                    return Err(e);
-                }
-                Err(_) => {
-                    st.failed_at = Some(Instant::now());
-                    return Err(MirrorError::Timeout(self.cfg.timeout));
-                }
-            }
+        // A session near the end of its grant is replaced before the request, not refused by it.
+        if st
+            .pipe
+            .as_ref()
+            .is_some_and(|p| p.opened_at.elapsed() > self.session_refresh)
+        {
+            info!(
+                event = "geodb_cursor.session_refresh",
+                "geodb-client session is near its grant expiry; replacing it"
+            );
+            st.pipe = None;
         }
-        for line in lines {
+        let mut replayed = false;
+        let mut i = 0;
+        while i < lines.len() {
+            if st.pipe.is_none() {
+                // After a failure the next spawn waits out the cool-down, except the one that
+                // replays a line a lost session refused: that failure was the old session's.
+                if !replayed
+                    && st
+                        .failed_at
+                        .is_some_and(|t| t.elapsed() < self.cfg.cooldown)
+                {
+                    return Err(MirrorError::CoolingDown);
+                }
+                match tokio::time::timeout(self.cfg.timeout, self.spawn()).await {
+                    Ok(Ok(p)) => {
+                        info!(
+                            event = "geodb_cursor.pipe_started",
+                            "geodb-client derived pipe ready"
+                        );
+                        st.pipe = Some(p);
+                    }
+                    Ok(Err(e)) => {
+                        st.failed_at = Some(Instant::now());
+                        return Err(e);
+                    }
+                    Err(_) => {
+                        st.failed_at = Some(Instant::now());
+                        return Err(MirrorError::Timeout(self.cfg.timeout));
+                    }
+                }
+            }
             let pipe = st.pipe.as_mut().expect("set above");
-            let res = match tokio::time::timeout(self.cfg.timeout, request(pipe, line, frame_max))
-                .await
-            {
-                Ok(r) => r,
-                Err(_) => Err(MirrorError::Timeout(self.cfg.timeout)),
-            };
+            let res =
+                match tokio::time::timeout(self.cfg.timeout, request(pipe, &lines[i], frame_max))
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(_) => Err(MirrorError::Timeout(self.cfg.timeout)),
+                };
             match res {
-                Ok(body) => bodies.push(body),
+                Ok(body) => {
+                    if let Some(p) = st.pipe.as_mut() {
+                        p.answered = true;
+                    }
+                    bodies.push(body);
+                    i += 1;
+                    replayed = false;
+                }
                 Err(e) => {
-                    // A refusal or error leaves the tool exiting; drop it (kill_on_drop) and respawn
-                    // after the cool-down. A `want` frame for a malformed line would also land here.
+                    // A refusal or error leaves the tool exiting; drop it (kill_on_drop). A pipe
+                    // that had answered before and was then ended by the serve (idle bound or
+                    // expired grant) costs nothing: the same line goes once more over a new
+                    // session, which is safe because puts are last-write-wins and gets, scans
+                    // and deletes repeat harmlessly. Anything else cools down.
+                    let reused = st.pipe.as_ref().is_some_and(|p| p.answered);
                     st.pipe = None;
+                    if reused && !replayed && session_lost(&e) {
+                        metrics::counter!("geodb_cursor_session_replays_total").increment(1);
+                        info!(
+                            event = "geodb_cursor.session_replay",
+                            error = %e,
+                            "held pipe was ended by the serve; replaying the request on a new session"
+                        );
+                        replayed = true;
+                        continue;
+                    }
                     st.failed_at = Some(Instant::now());
                     return Err(e);
                 }
@@ -282,6 +350,8 @@ impl CursorMirror {
             return Err(MirrorError::NotReady(first));
         }
         Ok(Pipe {
+            opened_at: Instant::now(),
+            answered: false,
             child,
             stdin,
             stdout,
@@ -397,6 +467,103 @@ mod tests {
             std::fs::read_to_string(&log).unwrap(),
             format!("put\t10\t0\t0\ta\thex:{}\n", hex("3:c"))
         );
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_file(&flag);
+    }
+
+    // The first child answers `answer` requests, then refuses the next with `refusal` and exits;
+    // every later child is healthy. Each start and each request line is appended to $LOG.
+    fn expiring_script(
+        log: &std::path::Path,
+        flag: &std::path::Path,
+        answer: u32,
+        refusal: &str,
+    ) -> String {
+        format!(
+            "echo spawn >> {log}; echo ready; n=0; first=0; [ -e {f} ] || {{ first=1; : > {f}; }}; \
+             while IFS= read -r l; do printf '%s\\n' \"$l\" >> {log}; \
+             if [ $first = 1 ] && [ $n -ge {answer} ]; then printf -- '-{len}\\n{refusal}'; exit 1; fi; \
+             n=$((n+1)); printf '+10\\napplied: 1'; done",
+            log = log.display(),
+            f = flag.display(),
+            len = refusal.len(),
+        )
+    }
+
+    #[tokio::test]
+    async fn an_expired_grant_on_a_held_pipe_replays_the_request_on_a_new_session() {
+        let (log, flag) = (tmp("expired"), tmp("expired-flag"));
+        let script = expiring_script(&log, &flag, 1, "DefiniteRefusal CapabilityTokenExpired");
+        let m = fake(&script, Duration::from_secs(60));
+        m.try_mirror("a", "c", 1).await.unwrap();
+        // Past the grant: refused once, replayed on a new session, despite the long cool-down.
+        m.try_mirror("a", "c", 2).await.unwrap();
+        m.try_mirror("a", "c", 3).await.unwrap();
+        let sent = std::fs::read_to_string(&log).unwrap();
+        let put = |b: u32| format!("put\t10\t0\t0\ta\thex:{}", hex(&format!("{b}:c")));
+        assert_eq!(
+            sent,
+            format!(
+                "spawn\n{}\n{}\nspawn\n{}\n{}\n",
+                put(1),
+                put(2),
+                put(2),
+                put(3)
+            )
+        );
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_file(&flag);
+    }
+
+    #[tokio::test]
+    async fn a_lost_session_in_the_middle_of_a_batch_resumes_at_the_refused_line() {
+        let (log, flag) = (tmp("resume"), tmp("resume-flag"));
+        let script = expiring_script(&log, &flag, 1, "error: TransportClosed");
+        let m = fake(&script, Duration::from_secs(60));
+        m.try_mirror("w", "c", 0).await.unwrap(); // the held pipe has answered once
+        let lines: Vec<String> = ["x", "y", "z"]
+            .iter()
+            .map(|k| format!("put\t10\t0\t0\t{k}\thex:00\n"))
+            .collect();
+        let bodies = m.exchange(&lines, WRITE_FRAME_MAX).await.unwrap();
+        assert_eq!(bodies.len(), 3);
+        let sent = std::fs::read_to_string(&log).unwrap();
+        // x was refused by the old session and sent again; y and z were sent once.
+        assert_eq!(sent.matches("\tx\t").count(), 2);
+        assert_eq!(sent.matches("\ty\t").count(), 1);
+        assert_eq!(sent.matches("\tz\t").count(), 1);
+        let _ = std::fs::remove_file(&log);
+        let _ = std::fs::remove_file(&flag);
+    }
+
+    #[tokio::test]
+    async fn a_session_older_than_the_refresh_is_replaced_before_it_can_expire() {
+        let log = tmp("refresh");
+        let script = format!("echo spawn >> {}; {}", log.display(), ok_script(&log));
+        let m = fake(&script, Duration::ZERO).with_session_refresh(Duration::from_millis(50));
+        m.try_mirror("a", "c", 1).await.unwrap();
+        m.try_mirror("a", "c", 2).await.unwrap(); // young: same child
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        m.try_mirror("a", "c", 3).await.unwrap(); // old: new child
+        let sent = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(sent.matches("spawn").count(), 2, "{sent}");
+        let _ = std::fs::remove_file(&log);
+    }
+
+    #[tokio::test]
+    async fn a_refusal_that_is_not_the_session_ending_is_not_replayed() {
+        let (log, flag) = (tmp("norep"), tmp("norep-flag"));
+        let script = expiring_script(&log, &flag, 1, "DefiniteRefusal NotPermitted");
+        let m = fake(&script, Duration::from_secs(60));
+        m.try_mirror("a", "c", 1).await.unwrap();
+        assert!(matches!(
+            m.try_mirror("a", "c", 2).await.unwrap_err(),
+            MirrorError::Refused(_)
+        ));
+        assert!(matches!(
+            m.try_mirror("a", "c", 3).await.unwrap_err(),
+            MirrorError::CoolingDown
+        ));
         let _ = std::fs::remove_file(&log);
         let _ = std::fs::remove_file(&flag);
     }
