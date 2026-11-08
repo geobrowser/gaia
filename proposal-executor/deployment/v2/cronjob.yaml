@@ -48,7 +48,7 @@ spec:
             # Pinned, never :latest: deploy-v2 rewrites every :latest to the service tag. Copies geodb-client and
             # writes the binding, exactly as the api's init container does. Always exits 0.
             - name: geodb-setup
-              image: registry.digitalocean.com/geo/geodb:6b34f9feda
+              image: registry.digitalocean.com/geo/geodb:93be2804b7
               imagePullPolicy: IfNotPresent
               command:
                 - sh
