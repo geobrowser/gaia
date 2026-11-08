@@ -333,8 +333,10 @@ spec:
             # (gaia_api_governance_queries_shadow_total). ON; never changes a response; counts only.
             - name: GEODB_GOVERNANCE_QUERIES_SHADOW
               value: "1"
+            # Background sampler for user_votes, ranks.rankings and ranks.ranking_blocks against the feeder's keyed
+            # records (gaia_api_keyed_records_shadow_total). ON; 20 rows per table every 60 s; never touches a request.
             - name: GEODB_KEYED_RECORDS_SHADOW
-              value: "0"
+              value: "1"
             - name: GATEWAY_PROBE
               value: "0"
             # Compares the served /profile response with geo-db's front page card in the background (never changes the
