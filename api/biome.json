@@ -37,6 +37,6 @@
 	},
 
 	"files": {
-		"includes": ["./**/*", "!drizzle/**"]
+		"includes": ["./**/*", "!drizzle/**", "!**/__tests__/fixtures/golden*.json"]
 	}
 }

@@ -1191,6 +1191,20 @@ space id; score the table's `score`, no value. A geo-db error is logged, never f
   mismatch over entities whose card has not changed is a defect in the default formula. Needs a geo-db with wire revision 11;
   an older node makes every read `failed`. Set `_DEFAULT_SAMPLE` to `0` to turn this half off.
 
+- api shadow, `GEODB_ENTITY_COLUMNS_SHADOW` (manifest `"0"`, `api/src/geodb/entityComputedColumnsShadow.ts`, twin in
+  `api/src/geodb/rankedReads/entityColumns.ts`): the GraphQL `Entity` computed columns. Fourteen of the 17 `entities_*` SQL
+  functions (agrees, comment_score, commenters, disagrees, downvotes, intrinsic_score, participation_score, quality_score,
+  ranking_score, trending_age_credit, trending_score, trending_source, trending_topic_id, upvotes) each read one row of
+  `entity_ranking_scores`. Every `_INTERVAL_MS` (60 s) it samples `_SAMPLE` (20, at most 64) entities that have a score row, calls
+  the real SQL functions on them, reads the same entities from geo-db's `DerivedScores` (overlay row if engaged, else the default
+  from the card and config) and compares column by column: `gaia_api_entity_columns_shadow_total{column,result}` (absent until the
+  flag is on): match, mismatch, failed. A mismatch is benign when the Postgres row is a stale snapshot of a changed card; read
+  the rate. The three listing columns (`last_listed_on`, `listed_on_agenda_id`, `trending_topic_listed_on`) are live reads over
+  the trending listings: their twin is `rankedReads/trending.ts`, held to the SQL by `GEODB_RANKED_READS_SHADOW`, and geo-db has
+  no Postgres-free source for the rows yet, so this shadow does not cover them. An entity with no score row is not sampled (SQL
+  gives NULL, geo-db serves a default). The pure mapping is pinned to real plpgsql output by
+  `api/scripts/entitycols/gen_golden.py` and `__tests__/entityColumns.golden.test.ts`. Needs wire revision 11.
+
 ### 2f-vote-engaged-backfill. Collection 21 backfill (`mirror_entity_scores_snapshot`)
 
 The live collection 21 mirror puts only entities touched after it was enabled, so the roughly 9.5k rows already
