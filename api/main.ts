@@ -29,6 +29,7 @@ import {createSpaceShadow, createSpacesShadow, SPACE_FIELD, SPACES_FIELD} from "
 import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
 import {createDerivedReader} from "./src/geodb/derived"
+import {createBestOrderShadow, readBestOrderShadowConfig} from "./src/geodb/entitiesBestOrderShadow"
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
 import {readIdMapTwinConfig, withIdMapTwin} from "./src/geodb/idMapTwin"
 import {createKeyedRecordsShadow, readKeyedRecordsShadowConfig} from "./src/geodb/keyedRecordsShadow"
@@ -353,6 +354,17 @@ if (rankingScoresShadowConfig.enabled) {
 const rankedReadsShadowConfig = readRankedReadsShadowConfig(process.env)
 if (rankedReadsShadowConfig.enabled) {
 	createRankedReadsShadow({config: rankedReadsShadowConfig, source: createPostgresRankedReadsSource(db), log}).start()
+}
+// GEODB_ENTITIES_BEST_ORDER_SHADOW (off by default) builds pages of entities_in_best_order / entities_ordered_by_score from geo-db's
+// derived collections 2, 3 and 21 and compares the id ORDER with Postgres (gaia_api_entities_best_order_shadow_total). Background only.
+const bestOrderShadowConfig = readBestOrderShadowConfig(process.env)
+if (bestOrderShadowConfig.enabled) {
+	createBestOrderShadow({
+		config: bestOrderShadowConfig,
+		db,
+		reader: createDerivedReader(geoDbCardConfig),
+		log,
+	}).start()
 }
 // GEODB_KEYED_RECORDS_SHADOW (off by default) samples user_votes / ranks.rankings / ranks.ranking_blocks rows from Postgres on a
 // timer and compares each with its keyed record in geo-db's votes Space (gaia_api_keyed_records_shadow_total). Background only.
