@@ -14,6 +14,7 @@ import {
 const TOPIC = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 const OTHER = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 const NEWS = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+const ABSENT = "00000000-0000-4000-8000-000000000001"
 const hex = (u: string) => u.replace(/-/g, "")
 const call = (over: Partial<TypeCountsCall> = {}): TypeCountsCall => ({
 	topics: [TOPIC],
@@ -181,5 +182,120 @@ describe("createTypeCountsShadow", () => {
 		})
 		await shadow.runOnce()
 		expect(count("failed")).toBe(2)
+	})
+
+	it("retries a timeout once, and counts a second answer as a match", async () => {
+		let calls = 0
+		const shadow = createTypeCountsShadow({
+			config: {enabled: true, intervalMs: 1, topics: 1},
+			source: source(),
+			reader: reader(async (_c, _g, walked) => {
+				calls++
+				if (calls === 1) throw new GeoDbError("timeout", "derived read took longer than 500 ms")
+				return {
+					walked: 6,
+					counts: walked.map((w) =>
+						w === hex(NEWS) ? 2 : w === hex(CLAIM_TYPE) || w === hex(DEBATE_WALK_TYPE) ? 4 : 0,
+					),
+				}
+			}),
+			log,
+		})
+		await shadow.runOnce()
+		expect(count("match")).toBe(2)
+		expect(count("failed")).toBe(0)
+		expect(calls).toBe(3)
+		expect(renderTypeCountsShadowMetrics()).toContain('retries_total{result="answered"} 1')
+	})
+
+	it("does not retry a refusal or a bad request, and splits failures by reason", async () => {
+		let calls = 0
+		const shadow = createTypeCountsShadow({
+			config: {enabled: true, intervalMs: 1, topics: 1},
+			source: source(),
+			reader: reader(async () => {
+				calls++
+				throw new GeoDbError("bad_request", "derived counts wants a group")
+			}),
+			log,
+		})
+		await shadow.runOnce()
+		expect(calls).toBe(2)
+		expect(count("failed")).toBe(2)
+		expect(renderTypeCountsShadowMetrics()).toContain('failed_total{reason="bad_request"} 2')
+	})
+
+	it("counts a timeout that repeats as failed, retried once each, and logs its reason", async () => {
+		let calls = 0
+		const shadow = createTypeCountsShadow({
+			config: {enabled: true, intervalMs: 1, topics: 1},
+			source: source(),
+			reader: reader(async () => {
+				calls++
+				throw new GeoDbError("timeout", "derived read took longer than 500 ms")
+			}),
+			log,
+		})
+		await shadow.runOnce()
+		expect(calls).toBe(4)
+		expect(renderTypeCountsShadowMetrics()).toContain('failed_total{reason="timeout"} 2')
+		expect(renderTypeCountsShadowMetrics()).toContain('retries_total{result="failed"} 2')
+		expect(log.warn).toHaveBeenCalledWith(
+			"type counts shadow failed",
+			expect.objectContaining({reason: "timeout", position: 2}),
+		)
+	})
+
+	it("rate-limits the failure log and reports what it held back", async () => {
+		let t = 0
+		const shadow = createTypeCountsShadow({
+			config: {enabled: true, intervalMs: 1, topics: 8},
+			source: source({sampleTopics: async () => Array.from({length: 8}, () => TOPIC)}),
+			reader: reader(async () => {
+				throw new GeoDbError("client_failed", "refused")
+			}),
+			log,
+			now: () => t,
+		})
+		await shadow.runOnce()
+		expect(count("failed")).toBe(16)
+		expect(log.warn).toHaveBeenCalledTimes(5)
+		t = 700_000
+		await shadow.runOnce()
+		expect(log.warn).toHaveBeenCalledTimes(10)
+		expect(log.warn.mock.calls[5]?.[1]).toMatchObject({suppressed: 11})
+	})
+
+	it("logs per-type counts by fixed label, never an id", async () => {
+		const shadow = createTypeCountsShadow({
+			config: {enabled: true, intervalMs: 1, topics: 1},
+			source: source(),
+			// geo-db sees News 3 (Postgres 2), Claim 4 (equal), Debate walk 5 (Postgres 4 under the swap).
+			reader: reader(async (_c, _g, walked) => ({
+				walked: 9,
+				counts: walked.map((w) =>
+					w === hex(NEWS) ? 3 : w === hex(DEBATE_WALK_TYPE) ? 5 : w === hex(CLAIM_TYPE) ? 4 : 0,
+				),
+			})),
+			log,
+		})
+		await shadow.runOnce()
+		const calls = log.warn.mock.calls.filter((c) => c[0] === "type counts shadow disagreement")
+		expect(calls).toHaveLength(2)
+		expect(calls[0]?.[1]).toMatchObject({
+			matchAll: true,
+			debate: false,
+			diffs: [{type: "other", postgres: 2, geodb: 3}],
+		})
+		expect(calls[1]?.[1]).toMatchObject({
+			matchAll: false,
+			debate: true,
+			diffs: [
+				{type: "other", postgres: 2, geodb: 3},
+				{type: "claim", postgres: 4, geodb: 5},
+			],
+		})
+		const text = JSON.stringify(log.warn.mock.calls)
+		for (const id of [TOPIC, NEWS, CLAIM_TYPE, DEBATE_WALK_TYPE, ABSENT]) expect(text).not.toContain(id)
 	})
 })
