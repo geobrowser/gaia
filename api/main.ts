@@ -30,6 +30,7 @@ import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
 import {createDerivedReader} from "./src/geodb/derived"
 import {createBestOrderShadow, readBestOrderShadowConfig} from "./src/geodb/entitiesBestOrderShadow"
+import {createEntityColumnsShadow, readEntityColumnsShadowConfig} from "./src/geodb/entityComputedColumnsShadow"
 import {createGaiaIdMap, idMapQuery} from "./src/geodb/idMap"
 import {readIdMapTwinConfig, withIdMapTwin} from "./src/geodb/idMapTwin"
 import {createKeyedRecordsShadow, readKeyedRecordsShadowConfig} from "./src/geodb/keyedRecordsShadow"
@@ -344,6 +345,17 @@ const rankingScoresShadowConfig = readRankingScoresShadowConfig(process.env)
 if (rankingScoresShadowConfig.enabled) {
 	createRankingScoresShadow({
 		config: rankingScoresShadowConfig,
+		db,
+		reader: createDerivedReader(geoDbCardConfig),
+		log,
+	}).start()
+}
+// GEODB_ENTITY_COLUMNS_SHADOW (off by default) calls the entities_* computed-column SQL functions on sampled entities and holds
+// them to the score rows geo-db serves (gaia_api_entity_columns_shadow_total). Background only; reads stay on Postgres.
+const entityColumnsShadowConfig = readEntityColumnsShadowConfig(process.env)
+if (entityColumnsShadowConfig.enabled) {
+	createEntityColumnsShadow({
+		config: entityColumnsShadowConfig,
 		db,
 		reader: createDerivedReader(geoDbCardConfig),
 		log,

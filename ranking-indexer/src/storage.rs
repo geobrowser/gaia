@@ -47,6 +47,8 @@ pub struct Storage {
     /// Flag-off shadow of the `ranks.ranking_scores` read against geo-db; see
     /// [`crate::ranks_reads_shadow`].
     reads_shadow: Option<std::sync::Arc<crate::ranks_reads_shadow::RanksReadsShadow>>,
+    /// Flag-off shadow of the `meta` cursor read against geo-db (`GEODB_META_BLOCK_SHADOW=1`).
+    meta_shadow: Option<std::sync::Arc<geodb_cursor::meta_read::MetaBlockShadow>>,
 }
 
 impl Storage {
@@ -59,6 +61,8 @@ impl Storage {
             pool,
             derived: geodb_cursor::derived::DerivedMirror::from_env().map(std::sync::Arc::new),
             reads_shadow: crate::ranks_reads_shadow::RanksReadsShadow::from_env(),
+            meta_shadow: geodb_cursor::meta_read::MetaBlockShadow::from_env()
+                .map(std::sync::Arc::new),
         })
     }
 
@@ -575,7 +579,18 @@ impl Storage {
             sqlx::query_as("SELECT block_number FROM meta WHERE id = 'hermes_pipeline'")
                 .fetch_optional(&self.pool)
                 .await?;
-        let number = row.and_then(|(s,)| s.parse::<i64>().ok()).unwrap_or(0);
+        let number = row.and_then(|(s,)| s.parse::<i64>().ok());
+        // Counted against geo-db's copy of the same cursor; the answer below stays Postgres's.
+        if let Some(shadow) = &self.meta_shadow {
+            shadow
+                .observe(
+                    "ranking_indexer_chain_meta",
+                    "hermes_pipeline",
+                    number.and_then(|n| u64::try_from(n).ok()),
+                )
+                .await;
+        }
+        let number = number.unwrap_or(0);
         Ok(BlockMeta {
             number,
             timestamp: Utc::now().timestamp(),

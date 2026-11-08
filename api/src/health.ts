@@ -7,6 +7,7 @@ import {renderGatewayMetrics} from "./gateway/metrics"
 import {renderRankTypedMetrics} from "./gateway/rankTypedShadow"
 import {renderServeMetrics} from "./gateway/serveMetrics"
 import {renderBestOrderShadowMetrics} from "./geodb/entitiesBestOrderShadow"
+import {renderEntityColumnsShadowMetrics} from "./geodb/entityComputedColumnsShadow"
 import {renderIdMapMetrics} from "./geodb/idMap"
 import {renderIdMapTwinMetrics} from "./geodb/idMapTwin"
 import {renderKeyedRecordsShadowMetrics} from "./geodb/keyedRecordsShadow"
@@ -179,6 +180,8 @@ function renderPrometheusMetrics(): string {
 		renderKeyedRecordsShadowMetrics(),
 		// entity_ranking_scores against the collection-21 overlay (GEODB_RANKING_SCORES_SHADOW) — see geodb/rankingScoresShadow.ts.
 		renderRankingScoresShadowMetrics(),
+		// The Entity computed columns against the served score rows (GEODB_ENTITY_COLUMNS_SHADOW).
+		renderEntityColumnsShadowMetrics(),
 		// The group B read twins against the SQL functions (GEODB_RANKED_READS_SHADOW) — see geodb/rankedReadsShadow.ts.
 		renderRankedReadsShadowMetrics(),
 		renderRankTypedMetrics(),

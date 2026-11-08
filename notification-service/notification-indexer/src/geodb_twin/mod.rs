@@ -13,8 +13,8 @@
 //! the map does not hold is skipped as `unsupported`, never reported as a gap.
 //!
 //! Twinned, each over records the feeder writes today:
-//! - `editors` (`find_editors_for_space`): the editor edges on the Space's own entity card in the
-//!   Space's own geo-db Space.
+//! - `editors` (`find_editors_for_space`): the editor edges on the Space's own entity card, in the
+//!   Space's own geo-db Space and in the `governance` system Space (where the keyed writer puts them).
 //! - `member_or_editor` (`is_member_or_editor`): the same card, editor and member edges.
 //! - `voters` (`find_voters_for_proposal`): the proposal's vote records in the `votes` system Space,
 //!   found by backlinks to the proposal entity, each read for its voter.
@@ -393,6 +393,30 @@ fn own_space<'a>(spaces: &'a Spaces, space: &Uuid) -> Result<&'a str, Verdict> {
         .ok_or(Verdict::Unsupported("space_not_loaded"))
 }
 
+/// The Space's membership edges, wherever the feeder put them: the Space's own geo-db Space (the
+/// legacy dual write) and the `governance` system Space (the natural-key writer, which the feeder
+/// uses whenever `GEODB_RECORD_KEYS` is on). The twin used to read only the first, so every grant
+/// made by the keyed writer showed up as `missing_in_geodb`. Either read failing is `Failed`.
+async fn read_membership_card(
+    reader: &dyn GeoDbReader,
+    spaces: &Spaces,
+    space: &Uuid,
+) -> Result<Vec<CardRow>, Verdict> {
+    let own = own_space(spaces, space)?;
+    let entity = entity_ref(space);
+    let mut card = read_card(reader, own, &entity)
+        .await
+        .map_err(|_| Verdict::Failed)?;
+    if let Some(gov) = spaces.system("governance") {
+        card.extend(
+            read_card(reader, gov, &entity)
+                .await
+                .map_err(|_| Verdict::Failed)?,
+        );
+    }
+    Ok(card)
+}
+
 /// Twin of `find_editors_for_space`: the editor edges on the Space's own entity card, as a set of
 /// member entities, against the editors Postgres returned.
 pub async fn compare_editors(
@@ -401,14 +425,10 @@ pub async fn compare_editors(
     space: &Uuid,
     sql_editors: &[Uuid],
 ) -> Vec<Verdict> {
-    let geo = match own_space(spaces, space) {
-        Ok(g) => g,
-        Err(v) => return vec![v],
-    };
     let expected: BTreeSet<String> = sql_editors.iter().map(entity_ref).collect();
-    match read_card(reader, geo, &entity_ref(space)).await {
+    match read_membership_card(reader, spaces, space).await {
         Ok(card) => vec![set_verdict(&expected, &refs(&card, EDITOR_PROPERTY))],
-        Err(_) => vec![Verdict::Failed],
+        Err(v) => vec![v],
     }
 }
 
@@ -421,11 +441,7 @@ pub async fn compare_member_or_editor(
     user: &Uuid,
     sql_answer: bool,
 ) -> Vec<Verdict> {
-    let geo = match own_space(spaces, space) {
-        Ok(g) => g,
-        Err(v) => return vec![v],
-    };
-    match read_card(reader, geo, &entity_ref(space)).await {
+    match read_membership_card(reader, spaces, space).await {
         Ok(card) => {
             let user = entity_ref(user);
             let held = refs(&card, EDITOR_PROPERTY).contains(&user)
@@ -436,7 +452,7 @@ pub async fn compare_member_or_editor(
                 _ => Verdict::Match,
             }]
         }
-        Err(_) => vec![Verdict::Failed],
+        Err(v) => vec![v],
     }
 }
 
