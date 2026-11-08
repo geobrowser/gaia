@@ -1119,12 +1119,13 @@ Rollback: unset `_PRIVATE` first (stops the personal copies), then the shared fl
 - **Collections 6 `interest_sweep_state` and 7 `trending_refresh_state`** are one-row watermarks written inside plpgsql
   functions. `topic_interest sweep` reads the row back after each run and puts it (6, key `incremental`, value `last_run_at`
   as i64 microseconds); `agenda_listings_refresh` does the same for `last_full_pass_on` (7, key `last_full_pass_on`, value
-  days since 1970-01-01 as i32). Both sit behind `GEODB_STATE_MIRROR` (manifests `"0"`), on top of `GEODB_DERIVED_MIRROR`.
+  days since 1970-01-01 as i32). Both sit behind `GEODB_STATE_MIRROR` (manifests `"1"` since #1325), on top of `GEODB_DERIVED_MIRROR`.
   The scores key's binding needs `derived=6,7` (`geodb/supervisor.sh`, applies when geodb-0 restarts); until then the puts
   are refused and now logged at error level.
 - **Collection 11** is mirrored only when a block recomputes (`replace_ranking_scores`), so blocks that have not
   recomputed since the flag went on have no rows. `ranking_scores_backfill` (not scheduled) puts the whole of
-  `ranks.ranking_scores`; run it once as a Job from the ranking-indexer image with the geodb-client wiring.
+  `ranks.ranking_scores`; run it once with `ranking-indexer/k8s/v2/ranking-scores-backfill-job.yaml` (by hand, not part
+  of any deploy; the header has the apply and log commands). It exits non-zero when a page is not fully acknowledged.
 - **A refused or short mirror write is never silent.** `geodb_cursor::derived` logs every call's acknowledged row count
   (`geodb_derived.acknowledged`, info), logs a refusal or pipe failure at error level (`geodb_derived.mirror_failed`), and
   logs and counts a call that got fewer rows acknowledged than asked (`geodb_derived.not_acknowledged`,

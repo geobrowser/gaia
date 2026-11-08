@@ -1,0 +1,166 @@
+# One-off Job, flag-off by construction: put every row of `ranks.ranking_scores` into geo-db derived
+# collection 11 (`ranking_scores`). The live mirror only writes a block when the block recomputes
+# (`replace_ranking_scores`), so a block that has not recomputed since the mirror went on has no rows.
+# Binary `ranking_scores_backfill`: reads the table in key order, 2,048 rows a page, builds each row with
+# the same `ranking_indexer::derived_mirror::plan` the live mirror uses, and retries a short page three
+# times. Idempotent (last write wins), so re-run it freely. Logs counts only.
+#
+# NOT part of any deploy: deploy-v2.yml lists its manifests by name and this file is not among them.
+# Apply by hand, once a ranking-indexer image that contains the binary is built, and delete a failed run
+# before running it again (the name is fixed):
+#
+#   sed -e "s|ranking-indexer:IMAGE_TAG|ranking-indexer:<tag>|" \
+#     ranking-indexer/k8s/v2/ranking-scores-backfill-job.yaml | kubectl apply -f -
+#   kubectl -n gaia logs -f job/ranking-indexer-ranking-scores-backfill
+#
+# Exit codes: 0 done, non-zero when a page was not fully acknowledged after its retries or the wiring is
+# off, so the Job reads failed rather than partial. Uses the scores key, which holds derived=11.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ranking-indexer-ranking-scores-backfill
+  namespace: gaia
+  labels:
+    app: ranking-indexer-ranking-scores-backfill
+    environment: testnet
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: ranking-indexer-ranking-scores-backfill
+        environment: testnet
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      volumes:
+        - name: ssl-certs
+          emptyDir: {}
+        - name: geodb-bin
+          emptyDir: {}
+        - name: geodb-space-map
+          configMap:
+            name: geodb-space-map
+            optional: true
+        - name: geodb-key
+          secret:
+            secretName: geodb-scores-key
+            optional: true
+            defaultMode: 0440
+            items:
+              - key: key
+                path: scores.key
+      initContainers:
+        - name: geodb-setup
+          # Pinned, never :latest.
+          image: registry.digitalocean.com/geo/geodb:6b34f9feda
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              cp /usr/local/bin/geodb-client /geodb/geodb-client || exit 0
+              node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+              ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+              if [ -n "$node" ] && [ -n "$ip" ]; then
+                printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+              else
+                echo "geodb-setup: no node id or no geodb Service; derived mirror stays off"
+              fi
+              exit 0
+          volumeMounts:
+            - name: geodb-bin
+              mountPath: /geodb
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+        - name: setup-certs
+          image: registry.digitalocean.com/geo/ranking-indexer:IMAGE_TAG
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+          env:
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: ranking-scores-backfill
+          image: registry.digitalocean.com/geo/ranking-indexer:IMAGE_TAG
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/ranking_scores_backfill"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
+            - name: geodb-bin
+              mountPath: /geodb
+              readOnly: true
+            - name: geodb-space-map
+              mountPath: /etc/geodb/space-map
+              readOnly: true
+            - name: geodb-key
+              mountPath: /etc/geodb/key
+              readOnly: true
+          env:
+            - name: PGSSLROOTCERT
+              value: /ssl/ca.crt
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            # This Job's whole purpose, so on here regardless of the writer's flag. The binary exits
+            # non-zero if it is off or the wiring is missing.
+            - name: GEODB_DERIVED_MIRROR
+              value: "1"
+            - name: GEODB_DERIVED_BATCH
+              value: "1"
+            - name: GEODB_CLIENT_BIN
+              value: /geodb/geodb-client
+            - name: GEODB_KEY_PATH
+              value: /etc/geodb/key/scores.key
+            - name: GEODB_BINDING_PATH
+              value: /geodb/binding.txt
+            - name: RUST_LOG
+              value: "info"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"

@@ -177,6 +177,38 @@ mod tests {
     }
 
     #[test]
+    fn the_pipe_line_is_the_registered_layout_exactly() {
+        // geo-db `Collection.external_interest_signals`: group the user, key user + object + kind
+        // byte (33 bytes), score `occurred_at` in seconds, value two little-endian i64 microseconds.
+        let (puts, _) = plan(&[sig(1, 2, "not_interested", 90_000_000)], &[]);
+        let key = format!("{}{}05", "01".repeat(16), "02".repeat(16));
+        let value = "804a5d0500000000c095a90500000000";
+        assert_eq!(
+            puts[0].put_line().unwrap(),
+            format!(
+                "put\t27\t{}\t90.0\thex:{key}\thex:{value}\n",
+                u(1).as_u128()
+            )
+        );
+    }
+
+    #[test]
+    fn every_kind_has_the_byte_geo_db_registers() {
+        let kinds = [
+            "vote",
+            "comment",
+            "debate",
+            "follow",
+            "interested",
+            "not_interested",
+        ];
+        for (i, k) in kinds.iter().enumerate() {
+            assert_eq!(kind_tag(k), Some(i as u8), "{k}");
+        }
+        assert_eq!(kind_tag("other"), None);
+    }
+
+    #[test]
     fn two_users_are_two_groups() {
         let (puts, _) = plan(
             &[
