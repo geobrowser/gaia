@@ -339,6 +339,12 @@ async fn main() -> Result<(), IndexerError> {
         Vec::new()
     };
 
+    // The ids already carrying a trending term, for the collection 21 mirror (needs the table in GEODB_DERIVED_MIRROR_TABLES).
+    let scores_before = match &mirror {
+        Some(m) => ranking_indexer::entity_scores_mirror::prior(m, &pool).await,
+        None => None,
+    };
+
     // Read before the refresh changes them, only with the flag on.
     let rescore_state = if rescore_compute_enabled() {
         match rescore_before(&pool).await {
@@ -432,6 +438,12 @@ async fn main() -> Result<(), IndexerError> {
             }
             Err(e) => warn!(error = %e, "agenda listings mirror skipped: read failed"),
         }
+    }
+    // The re-scored rows into collection 21, after the commit; a read error skips the mirror, never the job.
+    if let (Some(mirror), Some(before)) = (&mirror, &scores_before) {
+        let (puts, deletes) =
+            ranking_indexer::entity_scores_mirror::mirror(mirror, &pool, before).await;
+        info!(puts, deletes, "entity scores offered to geo-db");
     }
     // The `last_full_pass_on` watermark the refresh just moved (collection 7). Own flag, default off.
     if let Some(state) = ranking_indexer::state_mirror::from_env() {
