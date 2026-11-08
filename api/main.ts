@@ -28,6 +28,11 @@ import {createSearchShadows, SEARCH_FIELDS} from "./src/gateway/searchShadow"
 import {createSpaceShadow, createSpacesShadow, SPACE_FIELD, SPACES_FIELD} from "./src/gateway/spacesShadow"
 import {createPipeGeoDbClient, createSpaceMap} from "./src/geodb/client"
 import {readGeoDbCardConfig} from "./src/geodb/config"
+import {
+	createConfigRevisionReader,
+	createConfigRevisionShadow,
+	readConfigRevisionShadowConfig,
+} from "./src/geodb/configRevisionShadow"
 import {createDerivedReader} from "./src/geodb/derived"
 import {createBestOrderShadow, readBestOrderShadowConfig} from "./src/geodb/entitiesBestOrderShadow"
 import {createEntityColumnsShadow, readEntityColumnsShadowConfig} from "./src/geodb/entityComputedColumnsShadow"
@@ -425,6 +430,20 @@ if (Object.values(entityFeedConfigShadowConfig.enabled).some(Boolean)) {
 		config: entityFeedConfigShadowConfig,
 		db,
 		readers: createEntityFeedConfigReaders({
+			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
+			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
+		}),
+		log,
+	}).start()
+}
+// GEODB_CONFIG_REVISION_SHADOW (off by default) derives a digest of the For you config records in geo-db's config Space and counts
+// whether it moves exactly when Postgres' feed_config_revision does (gaia_api_config_revision_shadow_total). Background only.
+const configRevisionShadowConfig = readConfigRevisionShadowConfig(process.env)
+if (configRevisionShadowConfig.enabled) {
+	createConfigRevisionShadow({
+		config: configRevisionShadowConfig,
+		db,
+		reader: createConfigRevisionReader({
 			geoDb: sharedGeoDb?.geoDb ?? createPipeGeoDbClient(geoDbCardConfig),
 			systemSpaceOf: createSystemSpaceLookup(geoDbCardConfig.spaceMapPath),
 		}),
