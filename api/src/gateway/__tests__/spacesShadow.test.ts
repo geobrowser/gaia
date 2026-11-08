@@ -231,6 +231,32 @@ describe("space(id)", () => {
 		expect(metric("gaia_api_gateway_shadow_total", 'field="space",result="mismatch"')).toBe(1)
 	})
 
+	it("plans a selection without id from the argument, and counts subspaceTopics uncompared", () => {
+		const q = (selection: string) => `query S($id: UUID!) { space(id: $id) { ${selection} } }`
+		for (const selection of [
+			"type",
+			"topicId",
+			"membersList { memberSpaceId }",
+			"subspaceTopics { nodes { id } }",
+		]) {
+			const a = analyzeSpaces(parse(q(selection)), null, {id: SPACE_A}, "space")
+			expect(a.ok && a.plan.idKey).toBeNull()
+			expect(a.ok && a.plan.spaceId).toBe(SPACE_A)
+		}
+		const sub = analyzeSpaces(parse(q("subspaceTopics { nodes { id } }")), null, {id: SPACE_A}, "space")
+		expect(sub.ok && sub.plan.uncompared).toContain("space_subspace_topics")
+		// A `spaces` list names no Space in its arguments, so it still needs the id in the answer.
+		expect(analyze(`{ spaces { type } }`)).toEqual({ok: false, reason: "selection"})
+	})
+
+	it("compares a Space asked without its id selected", async () => {
+		const q = `query S($id: UUID!) { space(id: $id) { type page { id name } } }`
+		await run(deps(), q, {data: {space: {type: "PERSONAL", page: {id: PAGE_A, name: "Alpha"}}}})
+		expect(metric("gaia_api_gateway_shadow_total", 'field="space",result="match"')).toBe(1)
+		await run(deps({held: []}), q, {data: {space: {type: "PERSONAL", page: {id: PAGE_A, name: "Alpha"}}}})
+		expect(metric("gaia_api_gateway_shadow_unsupported_total", 'field="space",reason="unmapped_space"')).toBe(1)
+	})
+
 	it("is unsupported for a Space geo-db does not hold, and skips a null answer", async () => {
 		await run(deps({held: []}), SQ, {data: {space: space(SPACE_A)}})
 		expect(metric("gaia_api_gateway_shadow_unsupported_total", 'field="space",reason="unmapped_space"')).toBe(1)

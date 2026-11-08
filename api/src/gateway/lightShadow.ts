@@ -75,6 +75,7 @@ import {
 } from "./entityShadow"
 import {recordGatewayUnsupportedShape, type UncomparedReason, type UnsupportedReason} from "./metrics"
 import {checkOrderedPage} from "./orderPickShadow"
+import {checkPropertyOrder} from "./propertyOrderShadow"
 import {checkTypeScan} from "./typeScanShadow"
 
 /** Most distinct relation targets whose own values one entity's comparison reads (two batch reads). */
@@ -305,6 +306,25 @@ export type LightEntitiesPlan = LightPlan & {
 	offset: number | null
 	/** `entitiesConnection`: the entities sit under the root's `nodes` field (its response key), not in the root's own list. */
 	nodesKey?: string | null
+	/** `entitiesConnection { edges { node { .. } } }`: the entities sit under the root's `edges` list, in each edge's `node` (their response keys). */
+	edges?: {edgesKey: string; nodeKey: string}
+	/** `entitiesOrderedByProperty` whose order geo-db can place (see PropertyOrder); null otherwise. */
+	propertyOrder?: PropertyOrder | null
+}
+
+/**
+ * What decides the order of an `entitiesOrderedByProperty` page, as the SQL function `entities_ordered_by_property` reads it:
+ * an entity's key is its least (`asc`) or greatest (`desc`) value of the property among its rows in the Spaces (and, with
+ * `typeIds`, among the rows of a Space where it has one of those Types); entities are ordered by key, equal keys by
+ * entity id ascending. Present only when `spaceIds` and `dataType` are given and `includeWithoutValue` is not (the
+ * function's value-less branch orders nulls its own way).
+ */
+export type PropertyOrder = {
+	propertyId: string
+	dataType: string
+	direction: "asc" | "desc"
+	spaceIds: string[]
+	typeIds: string[] | null
 }
 
 export type EntitiesOrder = {property: "createdAt" | "updatedAt"; direction: "asc" | "desc"}
@@ -795,33 +815,58 @@ function readOrderedArgs(
 	args: Record<string, unknown>,
 	claims: FilterClaim[],
 	uncompared: Set<UncomparedReason>,
-): string[] | null {
+): {spaces: string[] | null; order: PropertyOrder | null} {
 	const given = (name: string) => args[name] !== undefined && args[name] !== null
 	if (typeof args.propertyId !== "string") refuse("args")
-	uuidArg(args.propertyId)
+	const propertyId = uuidArg(args.propertyId)
 	uncompared.add("order_completeness")
+	// A list argument may be written as one value (GraphQL list coercion): `spaceIds: "<uuid>"` is `["<uuid>"]`.
+	const listOf = (value: unknown): unknown[] =>
+		Array.isArray(value) ? value : typeof value === "string" ? [value] : refuse("args")
 	let spaces: string[] | null = null
 	if (given("spaceIds")) {
-		if (!Array.isArray(args.spaceIds)) return refuse("args")
-		if (args.spaceIds.length > 0) spaces = [...new Set(args.spaceIds.map((id) => uuidArg(id)))]
+		const listed = listOf(args.spaceIds)
+		if (listed.length > 0) spaces = [...new Set(listed.map((id) => uuidArg(id)))]
 	}
+	let types: string[] | null = null
 	if (given("typeIds")) {
-		if (!Array.isArray(args.typeIds)) return refuse("args")
-		if (args.typeIds.length > 0)
-			claims.push({kind: "type", typeIds: [...new Set(args.typeIds.map((id) => uuidArg(id)))]})
+		const listed = listOf(args.typeIds)
+		if (listed.length > 0) {
+			types = [...new Set(listed.map((id) => uuidArg(id)))]
+			claims.push({kind: "type", typeIds: types})
+		}
 	}
-	for (const name of ["votedBy", "votedByKinds", "votedByTypes", "entityIds", "includeWithoutValue"])
+	let direction: "asc" | "desc" = "asc"
+	if (given("sortDirection")) {
+		if (args.sortDirection !== "ASC" && args.sortDirection !== "DESC") refuse("args")
+		direction = args.sortDirection === "DESC" ? "desc" : "asc"
+	}
+	if (given("dataType") && typeof args.dataType !== "string") refuse("args")
+	for (const name of ["votedBy", "votedByKinds", "votedByTypes", "entityIds"])
 		if (given(name)) uncompared.add("filter_completeness")
-	return spaces
+	const withoutValue = args.includeWithoutValue === true
+	if (given("includeWithoutValue")) uncompared.add("filter_completeness")
+	const dataType = typeof args.dataType === "string" ? args.dataType.toLowerCase() : null
+	const order =
+		spaces && dataType && !withoutValue ? {propertyId, dataType, direction, spaceIds: spaces, typeIds: types} : null
+	return {spaces, order}
 }
 
 /**
  * `entities(filter, first, offset, spaceId, spaceIds, typeId, typeIds)` with the light selection, compared on a sample of
  * what it returns. With `connection`, the root is `entitiesConnection` (the same arguments plus `after`): its entities are
- * the `nodes` field, `totalCount` is uncompared (`total_count`) and `pageInfo` is not read. `edges` is not supported.
+ * the `nodes` field, `totalCount` is uncompared (`total_count`) and `pageInfo` is not read. The entities may also sit under
+ * `edges { node { .. } }`. A connection asking only `totalCount` is `unsupported_selection{count_only}`.
  */
 /** The indexer-cursor root (`metas`): no geo-db home (see metasShadow.ts). */
 const METAS_FIELD = "metas"
+
+/** A connection root whose selection is `totalCount` (and `__typename`) alone. */
+function isCountOnly(root: FieldNode, fragments: Map<string, SelectionSetNode>): boolean {
+	if (!root.selectionSet) return false
+	const fields = fieldsOf(root.selectionSet, fragments).filter((f) => f.name.value !== "__typename")
+	return fields.length > 0 && fields.every((f) => f.name.value === "totalCount" && isPlainField(f))
+}
 
 export function analyzeLightEntities(
 	document: DocumentNode,
@@ -844,6 +889,13 @@ export function analyzeLightEntities(
 		const roots = sentinel ? parsed.roots.filter((r) => r.name.value !== METAS_FIELD) : parsed.roots
 		const root = roots[0]
 		const rootName = options.ordered ? ORDERED_ROOT : options.connection ? "entitiesConnection" : "entities"
+		// Several `entitiesConnection` roots that each ask only `totalCount` (the topic page's counters): counts, no cards.
+		if (
+			options.connection &&
+			roots.length > 1 &&
+			roots.every((r) => r.name.value === rootName && isCountOnly(r, fragments))
+		)
+			return {ok: false, reason: "count_only"}
 		if (roots.length !== 1 || !root || root.name.value !== rootName) return {ok: false, reason: "not_single_root"}
 		if (!root.selectionSet) return {ok: false, reason: "selection"}
 		const args = argsOf(root, resolved)
@@ -857,19 +909,39 @@ export function analyzeLightEntities(
 		if (sentinel) uncompared.add("metas_cursor")
 		let entitySet = root.selectionSet
 		let nodesKey: string | null = null
+		let edges: {edgesKey: string; nodeKey: string} | undefined
 		if (options.connection) {
 			let nodes: FieldNode | null = null
+			let edgeField: FieldNode | null = null
+			let edgeNode: FieldNode | null = null
 			for (const child of fieldsOf(root.selectionSet, fragments)) {
 				const name = child.name.value
 				if (name === "__typename") continue
 				if (name === "totalCount" && isPlainField(child)) uncompared.add("total_count")
 				else if (name === "pageInfo" && child.selectionSet && !child.arguments?.length) continue
-				else if (name === "nodes" && child.selectionSet && !child.arguments?.length && !nodes) nodes = child
-				else refuse("selection")
+				else if (name === "nodes" && child.selectionSet && !child.arguments?.length && !nodes && !edgeField)
+					nodes = child
+				else if (name === "edges" && child.selectionSet && !child.arguments?.length && !nodes && !edgeField) {
+					// `edges { node { .. } cursor }`: the node is the entity; the cursor is PostGraphile's own.
+					edgeField = child
+					for (const inner of fieldsOf(child.selectionSet, fragments)) {
+						const innerName = inner.name.value
+						if (innerName === "__typename" || (innerName === "cursor" && isPlainField(inner))) continue
+						if (innerName === "node" && inner.selectionSet && !inner.arguments?.length && !edgeNode)
+							edgeNode = inner
+						else refuse("selection")
+					}
+				} else refuse("selection")
 			}
-			if (!nodes?.selectionSet) return {ok: false, reason: "selection"}
-			entitySet = nodes.selectionSet
-			nodesKey = responseKeyOf(nodes)
+			// Nothing but `totalCount` (the topic page's counters, often several aliased roots): no card to judge.
+			if (!nodes && !edgeField && uncompared.has("total_count")) return {ok: false, reason: "count_only"}
+			if (edgeField && edgeNode?.selectionSet) {
+				entitySet = edgeNode.selectionSet
+				edges = {edgesKey: responseKeyOf(edgeField), nodeKey: responseKeyOf(edgeNode)}
+			} else if (nodes?.selectionSet) {
+				entitySet = nodes.selectionSet
+				nodesKey = responseKeyOf(nodes)
+			} else return {ok: false, reason: "selection"}
 		}
 		for (const arg of ["first", "offset"])
 			if (args[arg] !== undefined && args[arg] !== null && !Number.isInteger(args[arg])) refuse("args")
@@ -877,9 +949,13 @@ export function analyzeLightEntities(
 		// A page after a cursor starts where PostGraphile's cursor says, so its place in the order is not checked.
 		const readOrder = readOrderBy(args.orderBy, uncompared)
 		const order = after === undefined || after === null ? readOrder : null
-		const spaceIds = options.ordered
-			? readOrderedArgs(args, claims, uncompared)
-			: readRootArgs(args, claims, uncompared)
+		let propertyOrder: PropertyOrder | null = null
+		let spaceIds: string[] | null
+		if (options.ordered) {
+			const read = readOrderedArgs(args, claims, uncompared)
+			spaceIds = read.spaces
+			propertyOrder = read.order
+		} else spaceIds = readRootArgs(args, claims, uncompared)
 		const {card, lists, everySpace} = planLightEntity(entitySet, fragments, resolved, uncompared, {
 			everySpace: spaceIds === null,
 			rootSpaces: spaceIds !== null,
@@ -906,6 +982,8 @@ export function analyzeLightEntities(
 				first: typeof args.first === "number" ? args.first : null,
 				offset: typeof args.offset === "number" ? args.offset : null,
 				...(nodesKey !== null ? {nodesKey} : {}),
+				...(edges ? {edges} : {}),
+				...(options.ordered ? {propertyOrder} : {}),
 				uncompared: [...uncompared],
 			},
 		}
@@ -1499,8 +1577,14 @@ export async function runLight(
 	const root = asRecord(body)
 	const data = root && root.errors === undefined ? asRecord(root.data) : null
 	if (!data || !(plan.key in data)) return {result: "skip"}
-	const answer =
+	let answer: unknown =
 		plan.kind === "entities" && plan.nodesKey ? asRecord(data[plan.key])?.[plan.nodesKey] : data[plan.key]
+	if (plan.kind === "entities" && plan.edges) {
+		const held = asRecord(data[plan.key])?.[plan.edges.edgesKey]
+		answer = Array.isArray(held)
+			? held.map((edge) => asRecord(edge)?.[(plan.edges as {nodeKey: string}).nodeKey])
+			: null
+	}
 	const entities: {id: string; node: unknown}[] = []
 	let filterBreach: Record<string, unknown> | null = null
 	/** PostGraphile's page in the order it came, for the ordered-page read. */
@@ -1533,6 +1617,10 @@ export async function runLight(
 		plan.kind === "entities" ? await checkOrderedPage(deps, plan, pageIds, label) : ({result: "skip"} as const)
 	const scan =
 		plan.kind === "entities" ? await checkTypeScan(deps, plan, pageIds, label) : ({result: "skip"} as const)
+	const propertyOrder =
+		plan.kind === "entities" && plan.propertyOrder
+			? await checkPropertyOrder(deps, plan.propertyOrder, pageIds, label)
+			: ({result: "skip"} as const)
 	const checks: {id: string; check: LightCheck}[] = []
 	const backlinkUncompared = new Set<UncomparedReason>()
 	for (const {id, node} of entities) {
@@ -1552,7 +1640,13 @@ export async function runLight(
 		}
 	}
 	const mismatched = checks.filter((c) => c.check.result === "mismatch")
-	if (mismatched.length > 0 || filterBreach || page.result === "mismatch" || scan.result === "mismatch") {
+	if (
+		mismatched.length > 0 ||
+		filterBreach ||
+		page.result === "mismatch" ||
+		scan.result === "mismatch" ||
+		propertyOrder.result === "mismatch"
+	) {
 		return {
 			result: "mismatch",
 			uncompared: plan.uncompared,
@@ -1562,6 +1656,7 @@ export async function runLight(
 				filterBreach,
 				orderedPage: page.result === "mismatch" ? page.detail : undefined,
 				typeScan: scan.result === "mismatch" ? scan.detail : undefined,
+				propertyOrder: propertyOrder.result === "mismatch" ? propertyOrder.detail : undefined,
 				first: mismatched[0]?.check.result === "mismatch" ? mismatched[0].check.detail : undefined,
 			},
 		}
@@ -1570,7 +1665,12 @@ export async function runLight(
 	if (unsupported?.result === "unsupported") return {result: "unsupported", reason: unsupported.reason}
 	// A type scan the serve refused (or that is past the window bound) is counted, and the cards' own checks stand.
 	if (scan.result === "unsupported") return {result: "unsupported", reason: scan.reason}
-	if (scan.result === "failed" || checks.some((c) => c.check.result === "failed")) return {result: "failed"}
+	if (
+		scan.result === "failed" ||
+		propertyOrder.result === "failed" ||
+		checks.some((c) => c.check.result === "failed")
+	)
+		return {result: "failed"}
 	// A page that could not be read leaves the order uncompared as it was: the cards stand on their own.
 	const uncompared = new Set<UncomparedReason>(plan.uncompared)
 	if (page.result === "match") {
@@ -1580,6 +1680,11 @@ export async function runLight(
 			uncompared.delete("order_completeness")
 			uncompared.delete("filter_completeness")
 		}
+	}
+	// The property order was held to geo-db's own values: an order every neighbouring pair of which was placed is checked.
+	if (propertyOrder.result === "match") {
+		if (propertyOrder.complete) uncompared.delete("order_completeness")
+		else uncompared.add("order_partial")
 	}
 	// The scan compared the page's members and their order, so which entities the filter selects is no longer open.
 	if (scan.result === "match") uncompared.delete("filter_completeness")

@@ -34,6 +34,8 @@ export const UNSUPPORTED_REASONS = [
 	"not_mirrored",
 	/** `metas`: a `cursors` value that is not `<block>:<cursor>`. */
 	"bad_layout",
+	/** `entitiesConnection` asking nothing but `totalCount` (alone or as several aliased roots): geo-db holds no count of a filtered set, and no card is returned to judge. */
+	"count_only",
 ] as const
 
 /**
@@ -79,6 +81,10 @@ export const UNCOMPARED_REASONS = [
 	"space_not_held",
 	/** `spaces`: a Space's `members` / `editors` lists and counts, which geo-db holds no read for. */
 	"space_members",
+	/** `space` / `spaces`: a Space's `subspaceTopics` list, a Space-to-Space link no entity card holds. */
+	"space_subspace_topics",
+	/** `entitiesOrderedByProperty`: part of the page's order was not checked: adjacent entities whose sort keys geo-db could not place (text under the database's collation, a value geo-db lacks, several text values). */
+	"order_partial",
 	/** `spaces`: a Space's own settings (`type`, `address`, `topicId`, voting settings), which no entity card holds. */
 	"space_settings",
 	/** `spacesByTopicIdConnection`: the Spaces whose topic is the entity, a Space read no entity card holds; the rest of the entity is compared. */
