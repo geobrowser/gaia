@@ -15,7 +15,7 @@ spec:
   # cadence is how long a new entity can be missing from Best, and nothing else: a schedule
   # edit, not a code change.
   #
-  # No Kafka: this needs DATABASE_URL and nothing else. Same secret and pod conventions as
+  # No Kafka: this needs DATABASE_URL (plus the geo-db mirror wiring below). Same secret and pod conventions as
   # comment-sweep-cronjob.yaml alongside it.
   schedule: "30 * * * *"
   failedJobsHistoryLimit: 3
@@ -33,6 +33,60 @@ spec:
             fsGroup: 1001
           imagePullSecrets:
             - name: geo
+          volumes:
+            # geodb-client for the entity_type_ranking / entity_topic_ranking mirror into derived collections 0 and 1 (GEODB_DERIVED_MIRROR,
+            # RUNBOOK section 2f / 12). Same wiring as vote-indexer.yaml: the SCORES key, which may write derived collections 0 to 5 and 11 to 26.
+            # Every reference is optional or fails soft, so an absent geodb never blocks a run.
+            - name: geodb-bin
+              emptyDir: {}
+            - name: geodb-space-map
+              configMap:
+                # Written by the geodb-feeder / serve. Not shipped in these manifests.
+                name: geodb-space-map
+                optional: true
+            - name: geodb-key
+              secret:
+                secretName: geodb-scores-key
+                optional: true
+                defaultMode: 0440
+                items:
+                  - key: key
+                    path: scores.key
+          initContainers:
+            - name: geodb-setup
+              # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to this service's tag.
+              image: registry.digitalocean.com/geo/geodb:93be2804b7
+              imagePullPolicy: IfNotPresent
+              # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
+              # binding and the mirror stays disabled even if the flag is turned on.
+              command:
+                - sh
+                - -c
+                - |
+                  cp /usr/local/bin/geodb-client /geodb/geodb-client || exit 0
+                  node=$(cat /etc/geodb/space-map/node-id 2>/dev/null) || node=
+                  ip=$(getent hosts geodb.gaia.svc.cluster.local | cut -d' ' -f1)
+                  if [ -n "$node" ] && [ -n "$ip" ]; then
+                    printf 'version = 1\nlisten = tcp:%s:7447\nnode = %s\n' "$ip" "$node" > /geodb/binding.txt
+                  else
+                    echo "geodb-setup: no node id or no geodb Service; derived mirror stays off"
+                  fi
+                  exit 0
+              volumeMounts:
+                - name: geodb-bin
+                  mountPath: /geodb
+                - name: geodb-space-map
+                  mountPath: /etc/geodb/space-map
+                  readOnly: true
+              resources:
+                requests:
+                  memory: "16Mi"
+                  cpu: "10m"
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop:
+                    - ALL
           containers:
             - name: vote-indexer-new-entity-sweep
               image: registry.digitalocean.com/geo/vote-indexer:latest
@@ -44,7 +98,32 @@ spec:
                 capabilities:
                   drop:
                     - ALL
+              volumeMounts:
+                - name: geodb-bin
+                  mountPath: /geodb
+                  readOnly: true
+                - name: geodb-space-map
+                  mountPath: /etc/geodb/space-map
+                  readOnly: true
+                - name: geodb-key
+                  mountPath: /etc/geodb/key
+                  readOnly: true
               env:
+                # Copy the type, topic and entity ranking-score rows this job writes into geo-db derived collections 0, 1 and 21,
+                # best-effort, after the Postgres write commits. votes_count stays with vote-indexer; the entity-scores rows this sweep
+                # re-scores have no other mirror, so they are copied here.
+                - name: GEODB_DERIVED_MIRROR
+                  value: "1"
+                - name: GEODB_DERIVED_MIRROR_TABLES
+                  value: "entity_type_ranking,entity_topic_ranking,entity_ranking_scores"
+                - name: GEODB_DERIVED_BATCH
+                  value: "1"
+                - name: GEODB_CLIENT_BIN
+                  value: /geodb/geodb-client
+                - name: GEODB_KEY_PATH
+                  value: /etc/geodb/key/scores.key
+                - name: GEODB_BINDING_PATH
+                  value: /geodb/binding.txt
                 - name: DATABASE_URL
                   valueFrom:
                     secretKeyRef:
