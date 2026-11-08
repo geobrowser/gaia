@@ -21,6 +21,8 @@
  * `gaia_api_type_counts_shadow_failed_total{reason}` splits `failed` by the GeoDbError reason (or `postgres` / `other`), so a failure
  * is told apart without a log line. A geo-db read that times out or loses its worker is tried once more (the pipe restarts on the next
  * read) before it counts as failed: `gaia_api_type_counts_shadow_retries_total{result}` says how often that second try answered.
+ * `gaia_api_type_counts_shadow_first_try_failed_total{reason}` counts why the FIRST try failed even when the retry answered, so an
+ * idle-pipe failure is told apart from a slow read.
  *
  * Counts only: no topic, type or entity is logged or labelled. A disagreement log names each differing type by a fixed label (`claim`,
  * `debate`, `other`, `absent`) with the Postgres and geo-db counts, never by id.
@@ -86,6 +88,7 @@ const results = new Map<Result, number>()
 const bump = (r: Result): void => void results.set(r, (results.get(r) ?? 0) + 1)
 const failReasons = new Map<FailReason, number>()
 const retries = {answered: 0, failed: 0}
+const firstTryFailures = new Map<FailReason, number>()
 
 /** Empty until the shadow is mounted, so a flag-off deploy exports nothing; once active every series exists at zero. */
 export function renderTypeCountsShadowMetrics(): string {
@@ -107,6 +110,15 @@ export function renderTypeCountsShadowMetrics(): string {
 		`gaia_api_type_counts_shadow_retries_total{result="answered"} ${retries.answered}`,
 		`gaia_api_type_counts_shadow_retries_total{result="failed"} ${retries.failed}`,
 	)
+	lines.push(
+		"# HELP gaia_api_type_counts_shadow_first_try_failed_total Why the FIRST try of a geo-db read failed, whether or not the retry then answered (failed_total only sees the last try).",
+		"# TYPE gaia_api_type_counts_shadow_first_try_failed_total counter",
+	)
+	for (const r of FAIL_REASONS)
+		if (r !== "postgres")
+			lines.push(
+				`gaia_api_type_counts_shadow_first_try_failed_total{reason="${r}"} ${firstTryFailures.get(r) ?? 0}`,
+			)
 	return lines.join("\n")
 }
 
@@ -116,6 +128,7 @@ export function __resetTypeCountsShadowMetricsForTests(): void {
 	failReasons.clear()
 	retries.answered = 0
 	retries.failed = 0
+	firstTryFailures.clear()
 }
 
 const sameCounts = (a: Map<string, number>, b: Map<string, number>) =>
@@ -229,6 +242,8 @@ export function createTypeCountsShadow(deps: {
 		try {
 			return await ask()
 		} catch (error) {
+			const why = reasonOf(error)
+			firstTryFailures.set(why, (firstTryFailures.get(why) ?? 0) + 1)
 			if (!(error instanceof GeoDbError) || !RETRYABLE.has(error.reason)) throw error
 			try {
 				const second = await ask()

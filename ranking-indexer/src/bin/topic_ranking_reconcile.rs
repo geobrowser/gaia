@@ -25,6 +25,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::time::Instant;
 
+use futures::TryStreamExt;
+use geodb_cursor::derived::DerivedMirror;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Acquire, PgConnection};
 use tracing::{info, warn};
@@ -34,6 +36,7 @@ use ranking_indexer::error::IndexerError;
 use ranking_indexer::topic_ranking_compute::{
     created_epoch, FeedKey, FeedRow, Graph, Rel, TopicConfig, Value, Vote,
 };
+use ranking_indexer::topic_ranking_mirror::{self, Diff};
 
 const TYPES: &str = "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1";
 const TOPICS: &str = "806d52bc-27e9-4c91-93c0-57978b093351";
@@ -294,6 +297,19 @@ async fn reconcile_shadow(
     Ok((plan.changed(), differ))
 }
 
+/// Streams the table into `visit`, one row at a time, so the whole table is never held twice.
+async fn stream_table(
+    conn: &mut PgConnection,
+    mut visit: impl FnMut(Uuid, Uuid, Uuid, f64),
+) -> Result<(), IndexerError> {
+    let mut rows = sqlx::query_as::<_, (Uuid, Uuid, Uuid, f64)>(topic_ranking_mirror::SELECT_SQL)
+        .fetch(&mut *conn);
+    while let Some((t, k, e, s)) = rows.try_next().await? {
+        visit(t, k, e, s);
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), IndexerError> {
     dotenv::dotenv().ok();
@@ -318,6 +334,19 @@ async fn main() -> Result<(), IndexerError> {
         .execute(&mut *tx)
         .await?;
     let shadow = rust_compute_enabled();
+    // The two SQL calls below write `entity_topic_ranking` without telling geo-db. When the derived
+    // mirror is on (GEODB_DERIVED_MIRROR, default off), note the table first and diff it after.
+    let mirror = DerivedMirror::from_env().filter(|m| m.allows(topic_ranking_mirror::TABLE));
+    let mut diff = None;
+    if mirror.is_some() {
+        let mut d = Diff::default();
+        match stream_table(&mut tx, |t, k, e, s| d.before(t, k, e, s)).await {
+            Ok(()) => diff = Some(d),
+            Err(e) => {
+                warn!(error = %e, "topic ranking geo-db mirror skipped: before-state read failed")
+            }
+        }
+    }
     let topic_debates: i32 = sqlx::query_scalar("SELECT public.refresh_topic_debate_scores()")
         .fetch_one(&mut *tx)
         .await?;
@@ -372,7 +401,27 @@ async fn main() -> Result<(), IndexerError> {
         }
         let _ = sp.rollback().await;
     }
+    // The after state is read in the transaction, so a failed read here cannot be mistaken for a
+    // delete of every row; it is sent only once the commit has gone through.
+    let planned = match diff {
+        Some(mut d) => match stream_table(&mut tx, |t, k, e, s| d.after(t, k, e, s)).await {
+            Ok(()) => Some(d.finish()),
+            Err(e) => {
+                warn!(error = %e, "topic ranking geo-db mirror skipped: after-state read failed");
+                None
+            }
+        },
+        None => None,
+    };
     tx.commit().await?;
+    if let (Some(m), Some((puts, deletes))) = (&mirror, planned) {
+        info!(
+            puts = puts.len(),
+            deletes = deletes.len(),
+            "topic ranking geo-db mirror"
+        );
+        topic_ranking_mirror::mirror(m, &puts, &deletes).await;
+    }
     info!(
         topic_debates,
         changed,
