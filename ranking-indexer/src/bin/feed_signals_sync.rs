@@ -153,6 +153,15 @@ async fn shadow(
     }
 }
 
+/// Copies the newest run of each status into geo-db (`GEODB_FEED_RUNS_MIRROR`, off by default).
+/// Read back after the run committed; never fails the job.
+async fn mirror_runs(pool: &PgPool) {
+    if let Some(m) = ranking_indexer::feed_signal_runs_mirror::from_env() {
+        let n = ranking_indexer::feed_signal_runs_mirror::mirror_latest(&m, pool).await;
+        info!(rows = n, "feed signal runs mirrored to geo-db");
+    }
+}
+
 async fn sync(pool: &PgPool, options: &Options, cutoff: &Cutoff) -> Result<(), IndexerError> {
     let started = Instant::now();
     let data_through = cutoff.data_through()?;
@@ -305,6 +314,7 @@ async fn main() -> Result<(), IndexerError> {
         Err(e) => {
             if !options.dry_run {
                 let _ = feed_signals::record(&pool, "failed", None, Some(&e.to_string())).await;
+                mirror_runs(&pool).await;
             }
             return Err(e);
         }
@@ -315,8 +325,12 @@ async fn main() -> Result<(), IndexerError> {
             // Best effort: the run log is how a failure shows up next to the successes.
             let _ =
                 feed_signals::record(&pool, "failed", Some(&cutoff), Some(&e.to_string())).await;
+            mirror_runs(&pool).await;
         }
         return Err(e);
+    }
+    if !options.dry_run {
+        mirror_runs(&pool).await;
     }
     Ok(())
 }
