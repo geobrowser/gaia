@@ -19,7 +19,7 @@
 //! [`Overlay::encode`] is pinned to it by a byte test. Key the entity id (16 bytes), group 0, score `ranking_score`.
 //! Never fails the job (see `geodb_cursor::derived`).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use geodb_cursor::derived::{DerivedMirror, DerivedRow};
 use sqlx::PgPool;
@@ -135,9 +135,10 @@ pub struct Plan {
 pub fn plan(touched: &HashSet<Uuid>, rows: &[ScoreRow]) -> Plan {
     let mut ids: Vec<Uuid> = touched.iter().copied().collect();
     ids.sort();
+    let by_id: HashMap<Uuid, &ScoreRow> = rows.iter().map(|r| (r.entity_id, r)).collect();
     let mut out = Plan::default();
     for id in ids {
-        match rows.iter().find(|r| r.entity_id == id) {
+        match by_id.get(&id) {
             Some(r) if r.is_engaged() => out.puts.push(DerivedRow {
                 collection: COLLECTION,
                 group: 0,
