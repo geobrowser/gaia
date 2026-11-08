@@ -2344,14 +2344,39 @@ describe("entitiesConnection with the light selection", () => {
 		expect(analyzeLightEntities(parse(plain), null, {}, {connection: true}).ok).toBe(false)
 	})
 
-	it("refuses edges", () => {
+	it("plans edges { node cursor } as the nodes of the page", () => {
 		const a = analyzeLightEntities(
-			parse(connection(args, "", (s) => `edges { node ${s} }`)),
+			parse(connection(args, "", (s) => `edges { cursor node ${s} }`)),
 			null,
 			{},
 			{connection: true},
 		)
-		expect(a).toEqual({ok: false, reason: "selection"})
+		expect(a.ok).toBe(true)
+		if (a.ok) expect(a.plan.edges).toEqual({edgesKey: "edges", nodeKey: "node"})
+	})
+
+	it("counts a count-only selection, single or several roots, with its own reason", () => {
+		const one = analyzeLightEntities(parse(connection(args, "totalCount", () => "")), null, {}, {connection: true})
+		expect(one).toEqual({ok: false, reason: "count_only"})
+		const q = connection(args, "totalCount", () => "")
+		const two = q.replace(/entitiesConnection\([^)]*\) \{[^}]*\}/, (m) => `a: ${m} b: ${m}`)
+		expect(analyzeLightEntities(parse(two), null, {}, {connection: true})).toEqual({
+			ok: false,
+			reason: "count_only",
+		})
+	})
+
+	it("compares the nodes of an edges page against geo-db", async () => {
+		const entities = list(2)
+		const s = setup(outputsFor(entities))
+		const shadow = createEntitiesConnectionShadow({...s.deps, derivedFields: false})
+		await call(
+			shadow as never,
+			connection(args, "", (x) => `edges { node ${x} cursor }`),
+			{},
+			{data: {entitiesConnection: {edges: entities.map((node) => ({node, cursor: "c"}))}}},
+		)
+		expect(results()).toEqual({match: 1})
 	})
 
 	it("leaves a page after a cursor out of the order", () => {
@@ -2394,12 +2419,12 @@ describe("entitiesConnection with the light selection", () => {
 		expect(results()).toEqual({mismatch: 1})
 	})
 
-	it("counts an unsupported selection", async () => {
+	it("counts a count-only selection as unsupported", async () => {
 		const s = setup({})
 		const shadow = createEntitiesConnectionShadow(s.deps)
 		await call(
 			shadow as never,
-			connection(args, "", (x) => `edges { node ${x} }`),
+			connection(args, "totalCount", () => ""),
 			{},
 			{data: {}},
 		)
@@ -2471,6 +2496,45 @@ describe("entitiesOrderedByProperty with the light selection", () => {
 
 	it("is only its own root", () => {
 		expect(analyzeLightEntities(parse(ordered(base)), null, {}).ok).toBe(false)
+	})
+
+	it("plans the order for a Space-scoped page, accepting a single uuid string for spaceIds", () => {
+		const a = analyzeLightEntities(parse(ordered(`${base}, spaceIds: "${SPACE_A}"`)), null, {}, {ordered: true})
+		expect(a.ok).toBe(true)
+		if (a.ok) {
+			expect(a.plan.propertyOrder).toMatchObject({dataType: "integer", direction: "desc", spaceIds: [SPACE_A]})
+		}
+		const none = analyzeLightEntities(
+			parse(ordered(`${base}, spaceIds: ["${SPACE_A}"], includeWithoutValue: true`)),
+			null,
+			{},
+			{ordered: true},
+		)
+		expect(none.ok && none.plan.propertyOrder).toBeFalsy()
+		expect(none.ok && none.plan.uncompared).toContain("order_completeness")
+	})
+
+	it("holds the page order to geo-db's values and counts a wrong order a mismatch", async () => {
+		const entities = list(2)
+		const s = setup(outputsFor(entities))
+		const valueRow = (e: Entity, raw: string) => ({
+			prop: conformingId("entity", PROPERTY),
+			raw,
+			entity: conformingId("entity", e.id),
+		})
+		const readCards = vi.fn(async () => [
+			valueRow(entities[0] as Entity, "1"),
+			valueRow(entities[1] as Entity, "5"),
+		])
+		const shadow = createEntitiesOrderedShadow({...s.deps, geoDb: {...s.deps.geoDb, readCards}} as never)
+		const query = ordered(`${base}, spaceIds: ["${SPACE_A}"]`)
+		// DESC: the 5 must come first, so [1, 5] is out of order.
+		await call(shadow as never, query, {}, {data: {entitiesOrderedByProperty: entities}})
+		expect(results()).toEqual({mismatch: 1})
+		await call(shadow as never, query, {}, {data: {entitiesOrderedByProperty: [...entities].reverse()}})
+		expect(results()).toEqual({match: 1, mismatch: 1})
+		// Only the mismatching run reports the plan's uncompared parts; the matching run judged the order.
+		expect(uncompared().order_completeness).toBe(1)
 	})
 
 	it("compares the returned entities and flags a differing one", async () => {

@@ -12,7 +12,9 @@
  * `order_completeness`), `members` / `editors` (`space_members`), the Space's own settings and any other nested part of
  * `page` / `topic` (`space_settings`, `nested_entity`).
  *
- * `space(id)` is the same comparison on one Space (SPACE_FIELD). Each runs only when GRAPHQL_GATEWAY_FIELDS names
+ * `space(id)` is the same comparison on one Space (SPACE_FIELD). It names its Space in the argument, so a selection
+ * that omits `id` (`space(id) { type }`, `{ topicId }`, `{ membersList .. }`, `{ subspaceTopics .. }`) is still compared:
+ * geo-db is asked whether it holds that Space. `subspaceTopics` is counted `space_subspace_topics`. Each runs only when GRAPHQL_GATEWAY_FIELDS names
  * `spaces=shadow` / `space=shadow`; off by default. It never changes a response and
  * logs counts only, never an id or a name.
  */
@@ -46,6 +48,8 @@ const NAME = conformingId("entity", SystemIds.NAME_PROPERTY)
 /** Fields of a Space that no entity card holds: counted `space_settings`. */
 const SETTINGS = new Set(["type", "address", "topicId", "spaceVotingSetting"])
 const MEMBERS = new Set(["members", "editors", "membersList", "editorsList"])
+/** Space-to-Space links (`subspaceTopics`): a Space read no entity card holds. */
+const SUBSPACES = new Set(["subspaceTopics"])
 
 type EntityPart = {key: string; idKey: string}
 export type SpacesPlan = {
@@ -53,8 +57,10 @@ export type SpacesPlan = {
 	key: string
 	/** The root is `space(id)`: its answer is one object, not a list. */
 	single: boolean
-	/** Response key of `id`; a selection without it is unsupported. */
-	idKey: string
+	/** Response key of `id`; null on a `space(id)` that does not select it (then `spaceId`, the argument, names the Space). */
+	idKey: string | null
+	/** `space(id:)`: the Space asked for, compact hex. Names the Space when the selection omits `id`. */
+	spaceId: string | null
 	parts: {page?: EntityPart; topic?: EntityPart}
 	uncompared: UncomparedReason[]
 }
@@ -104,6 +110,7 @@ export function analyzeSpaces(
 				idKey = responseKeyOf(field)
 			} else if (SETTINGS.has(name)) uncompared.add("space_settings")
 			else if (MEMBERS.has(name)) uncompared.add("space_members")
+			else if (SUBSPACES.has(name)) uncompared.add("space_subspace_topics")
 			else if (name === "page" || name === "topic") {
 				if (field.arguments?.length || !field.selectionSet) return {ok: false, reason: "args"}
 				let nameSelected = false
@@ -123,8 +130,14 @@ export function analyzeSpaces(
 				else uncompared.add("nested_entity")
 			} else return {ok: false, reason: "selection"}
 		}
-		if (idKey === null) return {ok: false, reason: "selection"}
-		return {ok: true, plan: {key: responseKeyOf(root), single, idKey, parts, uncompared: [...uncompared]}}
+		// `space(id:)` names its Space in the argument, so a selection of settings or lists alone (`space(id) { type }`)
+		// still asks whether geo-db holds that Space. A `spaces` list names none, so it needs `id` in the answer.
+		const spaceId = single ? compact(args.id) : null
+		if (idKey === null && !(single && spaceId)) return {ok: false, reason: "selection"}
+		return {
+			ok: true,
+			plan: {key: responseKeyOf(root), single, idKey, spaceId, parts, uncompared: [...uncompared]},
+		}
 	} catch (error) {
 		if (error instanceof Unsupported) return {ok: false, reason: error.reason}
 		return {ok: false, reason: "selection"}
@@ -179,7 +192,7 @@ export async function runSpaces(deps: SpacesShadowDeps, plan: SpacesPlan, body: 
 	try {
 		for (const space of spaces) {
 			const record = space as Record<string, unknown> | null
-			const spaceId = compact(record?.[plan.idKey])
+			const spaceId = plan.idKey === null ? plan.spaceId : compact(record?.[plan.idKey])
 			if (!spaceId) return {result: "failed"}
 			if (!(await deps.geoSpaceOf(spaceId))) {
 				notHeld++
