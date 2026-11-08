@@ -93,6 +93,10 @@ export type PgRow = {
 	stancePositive: number
 	stanceNegative: number
 	commenterCount: number
+	/** The watch, age-credit and trending terms: the three the overlay value carries beside the counts. */
+	watchScore: number
+	ageCredit: number
+	trendingScore: number
 	/** True when any engagement term is nonzero: the overlay's predicate. */
 	engaged: boolean
 }
@@ -126,6 +130,9 @@ export function toPgRow(row: Record<string, unknown>): PgRow | null {
 		stancePositive: counts[2],
 		stanceNegative: counts[3],
 		commenterCount: counts[4],
+		watchScore: terms[3] as number,
+		ageCredit: terms[4] as number,
+		trendingScore: terms[5] as number,
 		engaged: counts.some((n) => n !== 0) || terms.some((n) => n !== 0) || (row.trending_source ?? null) !== null,
 	}
 }
@@ -145,6 +152,57 @@ export function compareRow(pg: PgRow | null, held: DerivedRow | null): Exclude<R
 	const sameScore = Math.abs(pg.rankingScore - held.score) <= TOLERANCE * Math.max(1, Math.abs(pg.rankingScore))
 	const want = [pg.positive, pg.negative, pg.stancePositive, pg.stanceNegative, pg.commenterCount]
 	return sameScore && want.every((n, i) => n === counts[i]) ? "match" : "mismatch"
+}
+
+export const MISMATCH_DELTAS = ["none", "lt_0.01", "lt_1", "lt_100", "ge_100"] as const
+export type MismatchDelta = (typeof MISMATCH_DELTAS)[number]
+
+const FIELD_NAMES = [
+	"score",
+	"positive",
+	"negative",
+	"stance_positive",
+	"stance_negative",
+	"commenter",
+	"watch",
+	"age_credit",
+	"trending",
+] as const
+
+/**
+ * Why a `mismatch` row mismatches: which fields differ (joined with `+`, or `many` past three) and the size of the score gap in
+ * buckets. It reads the three terms the overlay value carries beside the counts (watch, age credit, trending), which `compareRow`
+ * does not hold, so a row can show a differing term here yet still count as `match`; only rows `compareRow` calls `mismatch`
+ * are labelled. Returns null for another layout. No ids. Pure.
+ */
+export function mismatchReason(pg: PgRow, held: DerivedRow): {fields: string; delta: MismatchDelta} | null {
+	const counts = overlayCounts(held.value)
+	if (counts === null) return null
+	const v = held.value
+	const same = (a: number, b: number) => Math.abs(a - b) <= TOLERANCE * Math.max(1, Math.abs(a))
+	const diff = [
+		!same(pg.rankingScore, held.score),
+		pg.positive !== counts[0],
+		pg.negative !== counts[1],
+		pg.stancePositive !== counts[2],
+		pg.stanceNegative !== counts[3],
+		pg.commenterCount !== counts[4],
+		!same(pg.watchScore, v.readDoubleLE(22)),
+		!same(pg.ageCredit, v.readDoubleLE(30)),
+		!same(pg.trendingScore, v.readDoubleLE(38)),
+	]
+	const names = FIELD_NAMES.filter((_, i) => diff[i])
+	const gap = Math.abs(pg.rankingScore - held.score)
+	const delta: MismatchDelta = !diff[0]
+		? "none"
+		: gap < 0.01
+			? "lt_0.01"
+			: gap < 1
+				? "lt_1"
+				: gap < 100
+					? "lt_100"
+					: "ge_100"
+	return {fields: names.length === 0 ? "none" : names.length > 3 ? "many" : names.join("+"), delta}
 }
 
 /** The four scores a default row is held to, from a Postgres row, as text. */
@@ -171,6 +229,7 @@ const uuidOfHex = (h: string) =>
 let active = false
 const results = new Map<Result, number>()
 const bump = (r: Result): void => void results.set(r, (results.get(r) ?? 0) + 1)
+const mismatchReasons = new Map<string, number>()
 const defaults = new Map<DefaultResult, number>()
 const bumpDefault = (r: DefaultResult): void => void defaults.set(r, (defaults.get(r) ?? 0) + 1)
 
@@ -183,6 +242,12 @@ export function renderRankingScoresShadowMetrics(): string {
 	]
 	for (const r of RESULTS) lines.push(`gaia_api_ranking_scores_shadow_total{result="${r}"} ${results.get(r) ?? 0}`)
 	lines.push(
+		"# HELP gaia_api_ranking_scores_shadow_mismatch_total Rows counted mismatch, by the fields that differ (score, positive, negative, stance_positive, stance_negative, commenter, watch, age_credit, trending; joined with +, many past three) and the score gap bucket. Counts, not distinct rows: the overlay direction re-reads the top page every pass.",
+		"# TYPE gaia_api_ranking_scores_shadow_mismatch_total counter",
+	)
+	for (const [key, n] of [...mismatchReasons].sort())
+		lines.push(`gaia_api_ranking_scores_shadow_mismatch_total{${key}} ${n}`)
+	lines.push(
 		"# HELP gaia_api_ranking_scores_default_shadow_total Sampled un-engaged entity_ranking_scores rows against the default row geo-db builds from the entity's card and the ranking config (DerivedScores), by result: match, mismatch (a score differs; a stale Postgres snapshot is benign), engaged (geo-db holds an overlay row), no_card (no entities row) or failed.",
 		"# TYPE gaia_api_ranking_scores_default_shadow_total counter",
 	)
@@ -194,6 +259,7 @@ export function renderRankingScoresShadowMetrics(): string {
 export function __resetRankingScoresShadowMetricsForTests(): void {
 	active = false
 	results.clear()
+	mismatchReasons.clear()
 	defaults.clear()
 }
 
@@ -345,8 +411,15 @@ export function createRankingScoresShadow(deps: {
 	let running = false
 	let logged = 0
 
-	const record = (outcome: Result) => {
+	const record = (outcome: Result, pg?: PgRow | null, held?: DerivedRow) => {
 		bump(outcome)
+		if (outcome === "mismatch" && pg && held) {
+			const why = mismatchReason(pg, held)
+			if (why) {
+				const key = `fields="${why.fields}",delta="${why.delta}"`
+				mismatchReasons.set(key, (mismatchReasons.get(key) ?? 0) + 1)
+			}
+		}
 		// Counts only: never which entity.
 		if ((outcome === "mismatch" || outcome === "stale") && logged < 20) {
 			logged++
@@ -369,7 +442,8 @@ export function createRankingScoresShadow(deps: {
 		for (const r of page.rows) {
 			try {
 				const held: DerivedRow = {group: "0".repeat(32), score: r.score, value: Buffer.from(r.valueHex, "hex")}
-				record(compareRow(await readPgRow(db, uuidOfHex(r.keyHex)), held))
+				const pg = await readPgRow(db, uuidOfHex(r.keyHex))
+				record(compareRow(pg, held), pg, held)
 			} catch (error) {
 				fail(error)
 			}
@@ -386,7 +460,8 @@ export function createRankingScoresShadow(deps: {
 		for (const id of ids) {
 			try {
 				const pg = await readPgRow(db, uuidOfHex(id))
-				record(compareRow(pg, await reader.get(COLLECTION, id)))
+				const row = await reader.get(COLLECTION, id)
+				record(compareRow(pg, row), pg, row ?? undefined)
 			} catch (error) {
 				fail(error)
 			}
