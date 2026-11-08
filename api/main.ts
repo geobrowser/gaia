@@ -361,13 +361,18 @@ if (rankingScoresShadowConfig.enabled) {
 	}).start()
 }
 // GEODB_TYPE_COUNTS_SHADOW (off by default) holds topic_feed_type_counts to geo-db's DerivedScan count mode
-// (gaia_api_type_counts_shadow_total). Needs serve and geodb-client at wire frame revision 13. Background only.
+// (gaia_api_type_counts_shadow_total). One topic needs serve and geodb-client at wire frame revision 13; several topics 14; the Space
+// filter (graph block, with GEODB_SPACE_MAP_PATH for the Space ids) 15. A serve below a form's revision is a fallback, not a failure.
+// Background only.
 const typeCountsShadowConfig = readTypeCountsShadowConfig(process.env)
 if (typeCountsShadowConfig.enabled) {
 	createTypeCountsShadow({
 		config: typeCountsShadowConfig,
 		source: createPostgresTypeCountsSource(db),
 		reader: createDerivedReader(geoDbCardConfig),
+		geoSpaceOf: geoDbCardConfig.spaceMapPath
+			? (sharedGeoDb?.geoSpaceOf ?? createSpaceMap(geoDbCardConfig.spaceMapPath))
+			: undefined,
 		log,
 	}).start()
 }

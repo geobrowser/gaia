@@ -101,10 +101,41 @@ export const MAX_SCORE_CARDS = 64
 export type DerivedCountsReader = DerivedReader & {
 	/**
 	 * `types` (hex, 1 to 64, distinct) counted over the rows of `group` (hex) in `collection`, skipping rows whose entity is in
-	 * `blocked` (hex, at most 256). One walk of the group on the serve, no rows on the wire.
+	 * `blocked` (hex, at most 256). One walk of the group on the serve, no rows on the wire. `form` widens it: other topics
+	 * (revision 14, with `matchAll` for the entities every topic holds) and a graph block, the Space filter (revision 15). Without
+	 * `form` the request is revision 13's.
 	 */
-	typeCounts(collection: number, groupHex: string, types: string[], blocked: string[]): Promise<TypeCounts>
+	typeCounts(
+		collection: number,
+		groupHex: string,
+		types: string[],
+		blocked: string[],
+		form?: CountsForm,
+	): Promise<TypeCounts>
 }
+
+/** The Name and Tags tests of a count's Space filter, every id 32 hex digits (geo-db `format.wire.derived.GraphFilter`). */
+export type CountsGraph = {
+	/** 1 to 64 distinct Spaces. */
+	spaces: string[]
+	nameProperty: string
+	/** The Tags rule: a row of type `kind` also needs a `relation` reference to `kind` in a listed Space. */
+	tagged: {kind: string; relation: string} | null
+}
+
+/** What a count asks beyond one topic's plain walk. */
+export type CountsForm = {
+	/** The other topics (hex, distinct, none equal to the group), at most 15. */
+	others?: string[]
+	/** The entities every topic holds, not the pooled union. Needs `others`. */
+	matchAll?: boolean
+	graph?: CountsGraph | null
+}
+
+/** The most Spaces a count's graph block names (geo-db `wire_derived.spaces_max`). */
+export const MAX_COUNT_SPACES = 64
+/** The most topics a count names, the group and the others (geo-db `wire_derived.topics_max`). */
+export const MAX_COUNT_TOPICS = 16
 
 export type DerivedReader = {
 	/** The row at `key` (hex) of `collection`, or null when the collection holds none. */
@@ -206,7 +237,16 @@ export function parseDerivedCounts(body: string, types: string[]): TypeCounts {
 
 const HEX32 = /^[0-9a-f]{32}$/
 /** The request line of a counts call. Throws `bad_request` on a malformed argument. */
-export function countsLine(collection: number, groupHex: string, types: string[], blocked: string[]): string {
+export function countsLine(
+	collection: number,
+	groupHex: string,
+	types: string[],
+	blocked: string[],
+	form: CountsForm = {},
+): string {
+	const others = form.others ?? []
+	const graph = form.graph ?? null
+	const topics = [groupHex, ...others]
 	if (
 		!Number.isInteger(collection) ||
 		collection < 0 ||
@@ -215,14 +255,54 @@ export function countsLine(collection: number, groupHex: string, types: string[]
 		types.length > MAX_COUNT_TYPES ||
 		new Set(types).size !== types.length ||
 		blocked.length > MAX_COUNT_BLOCKED ||
-		![...types, ...blocked].every((h) => HEX32.test(h))
+		![...types, ...blocked, ...others].every((h) => HEX32.test(h)) ||
+		topics.length > MAX_COUNT_TOPICS ||
+		new Set(topics).size !== topics.length ||
+		(form.matchAll === true && others.length === 0)
 	)
 		throw new GeoDbError(
 			"bad_request",
-			"derived counts wants a group, 1 to 64 distinct types and at most 256 blocked",
+			"derived counts wants a group, 1 to 64 distinct types, at most 256 blocked and at most 16 distinct topics",
 		)
-	// The group is parsed with base 0, so it needs its 0x; the lists are plain hex, `-` for none.
-	return `counts\t${collection}\t0x${groupHex}\t${types.join(",")}\t${blocked.length === 0 ? "-" : blocked.join(",")}`
+	let graphArg = ""
+	if (graph !== null) {
+		const tagged = graph.tagged
+		if (
+			graph.spaces.length < 1 ||
+			graph.spaces.length > MAX_COUNT_SPACES ||
+			new Set(graph.spaces).size !== graph.spaces.length ||
+			![...graph.spaces, graph.nameProperty, ...(tagged ? [tagged.kind, tagged.relation] : [])].every((h) =>
+				HEX32.test(h),
+			)
+		)
+			throw new GeoDbError("bad_request", "derived counts wants 1 to 64 distinct Spaces in its graph block")
+		// `<name>/<spaces>[/<kind>/<relation>]`, the client's fourth list.
+		graphArg = `\t${graph.nameProperty}/${graph.spaces.join(",")}${tagged ? `/${tagged.kind}/${tagged.relation}` : ""}`
+	}
+	// Every topic is parsed with base 0, so each needs its 0x; the lists are plain hex, `-` for none. The graph block rides after
+	// the blocked list, so a graph without a blocklist still names `-` for it.
+	const group = `${form.matchAll ? "all:" : ""}${topics.map((t) => `0x${t}`).join(",")}`
+	const blockedArg = blocked.length === 0 ? "-" : blocked.join(",")
+	return `counts\t${collection}\t${group}\t${types.join(",")}\t${blockedArg}${graphArg}`
+}
+
+/**
+ * What a refusal of a count says about the serve: `exhausted` (`ResourceExhausted`, the graph's read budget or an allocation: the
+ * call is too big, not the serve too old), `revision` (`InvalidWirePayload`, or a client line it does not know: the serve or the
+ * geodb-client binary is below the form's frame revision), or null (anything else). A refusal reaches here as a `client_failed`
+ * whose message carries the node's own words.
+ */
+export function countsRefusal(error: unknown): "exhausted" | "revision" | null {
+	if (!(error instanceof GeoDbError) || error.reason !== "client_failed") return null
+	if (!/derived read refused/.test(error.message)) return null
+	if (/resource[ _]?exhausted/i.test(error.message)) return "exhausted"
+	if (
+		/invalid[ _]?wire[ _]?payload|unknown[ _]?opcode|InvalidTypes|MissingTypes|MalformedLine|want /i.test(
+			error.message,
+		)
+	)
+		return "revision"
+	return null
 }
 
 const FLOAT_FIELDS = 9
@@ -518,10 +598,10 @@ export function createDerivedReader(
 				pump()
 			}).then((body) => parseDerivedScores(body, cards.length))
 		},
-		typeCounts(collection, groupHex, types, blocked) {
+		typeCounts(collection, groupHex, types, blocked, form) {
 			let line: string
 			try {
-				line = countsLine(collection, groupHex, types, blocked)
+				line = countsLine(collection, groupHex, types, blocked, form)
 			} catch (error) {
 				return Promise.reject(error)
 			}
