@@ -21,6 +21,7 @@ pub mod derived_mirror;
 pub mod detect;
 pub mod eligibility;
 pub mod entity_ranking_score_compute;
+pub mod entity_scores_mirror;
 pub mod error;
 pub mod external_interest_mirror;
 pub mod feed_composition;
