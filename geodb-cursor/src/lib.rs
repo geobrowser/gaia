@@ -29,6 +29,7 @@ use tracing::{info, warn};
 
 pub mod derived;
 pub mod derived_read;
+pub mod meta_read;
 
 /// Default derived collection: `cursors = 10` (geo-db 6a770ba752).
 pub const DEFAULT_COLLECTION: u32 = 10;
