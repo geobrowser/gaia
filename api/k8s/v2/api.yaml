@@ -400,6 +400,16 @@ spec:
             # (DerivedScores): gaia_api_entity_columns_shadow_total{column,result}. Background only; reads stay on Postgres.
             - name: GEODB_ENTITY_COLUMNS_SHADOW
               value: "0"
+            # Sample entity_type_weights / entity_type_exclusions / entity_feed_blocklist rows from Postgres (_SAMPLE per table,
+            # default 20, every _INTERVAL_MS, default 60 s) and hold each to its record in geo-db's config Space
+            # (gaia_api_entity_feed_config_shadow_total{table,result}). One flag per table, all off; background only. Needs the
+            # geodb-feeder's entity-feed-config backfill Job run first (missing = not backfilled).
+            - name: GEODB_ENTITY_TYPE_WEIGHTS_SHADOW
+              value: "0"
+            - name: GEODB_ENTITY_TYPE_EXCLUSIONS_SHADOW
+              value: "0"
+            - name: GEODB_ENTITY_FEED_BLOCKLIST_SHADOW
+              value: "0"
             - name: NODE_EXTRA_CA_CERTS
               value: /ssl/ca.crt
             - name: DATABASE_URL

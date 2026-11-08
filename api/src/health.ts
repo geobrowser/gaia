@@ -8,6 +8,7 @@ import {renderRankTypedMetrics} from "./gateway/rankTypedShadow"
 import {renderServeMetrics} from "./gateway/serveMetrics"
 import {renderBestOrderShadowMetrics} from "./geodb/entitiesBestOrderShadow"
 import {renderEntityColumnsShadowMetrics} from "./geodb/entityComputedColumnsShadow"
+import {renderEntityFeedConfigShadowMetrics} from "./geodb/entityFeedConfigShadow"
 import {renderIdMapMetrics} from "./geodb/idMap"
 import {renderIdMapTwinMetrics} from "./geodb/idMapTwin"
 import {renderKeyedRecordsShadowMetrics} from "./geodb/keyedRecordsShadow"
@@ -178,6 +179,8 @@ function renderPrometheusMetrics(): string {
 		renderBestOrderShadowMetrics(),
 		// Sampled user_votes / ranks rows against their keyed records (GEODB_KEYED_RECORDS_SHADOW) — see geodb/keyedRecordsShadow.ts.
 		renderKeyedRecordsShadowMetrics(),
+		// The three entity-feed config tables against their config Space records (GEODB_ENTITY_*_SHADOW) — see geodb/entityFeedConfigShadow.ts.
+		renderEntityFeedConfigShadowMetrics(),
 		// entity_ranking_scores against the collection-21 overlay (GEODB_RANKING_SCORES_SHADOW) — see geodb/rankingScoresShadow.ts.
 		renderRankingScoresShadowMetrics(),
 		// The Entity computed columns against the served score rows (GEODB_ENTITY_COLUMNS_SHADOW).

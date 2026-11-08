@@ -799,6 +799,15 @@ Enable, each step only after the one before it is live:
    (its header lists the `\copy` and the `etw-`, `etx-`, `efb-<column>.tsv` dumps). Exits non-zero on a Postgres-only key
    or a value difference.
 
+5. The api reader twins (api/src/geodb/entityFeedConfigShadow.ts), one flag per table, all `0` in `api/k8s/v2/api.yaml`:
+   `GEODB_ENTITY_TYPE_WEIGHTS_SHADOW`, `GEODB_ENTITY_TYPE_EXCLUSIONS_SHADOW`, `GEODB_ENTITY_FEED_BLOCKLIST_SHADOW`
+   (`_SAMPLE`, default 20, and `GEODB_ENTITY_FEED_CONFIG_SHADOW_INTERVAL_MS`, default 60 s, are shared). Each samples rows of
+   its table from Postgres and reads the record back from the `config` Space:
+   `gaia_api_entity_feed_config_shadow_total{table,result=match|mismatch|missing|unsupported|failed}`. `missing` means the
+   backfill Job was not run (or the row is newer); `unsupported` means the `config` Space is not in the system-space map. The
+   twins serve nothing: the plpgsql functions and `rankedReadsShadow` still read Postgres. Blind spot: a record geo-db keeps
+   after Postgres dropped the row is not sampled (the gate reports it).
+
 Rollback: set the flags back to 0. The records stay in the Space, unread.
 
 ### 2c-octies. Keyed proposal versions (GEODB_PROPOSAL_VERSIONS)
