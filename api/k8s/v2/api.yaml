@@ -322,10 +322,10 @@ spec:
             - name: GATEWAY_SHADOW_EVERY_SPACE_BURST
               value: "6"
             # Proposal status computed from geo-db's keyed governance records after a proposal is served,
-            # counted against the served status (gaia_api_governance_shadow_total). OFF; never changes a
-            # response. Needs the geodb-feeder's proposal status records (GEODB_PROPOSAL_STATUS backfill) first.
+            # counted against the served status (gaia_api_governance_shadow_total). ON; never changes a
+            # response. The geodb-feeder writes the proposal status records (GEODB_PROPOSAL_STATUS=1).
             - name: GEODB_GOVERNANCE_SHADOW
-              value: "0"
+              value: "1"
             # Background samplers that feed the shadows above without waiting for traffic. All off until flipped.
             - name: GEODB_GOVERNANCE_SHADOW_SAMPLER
               value: "0"
