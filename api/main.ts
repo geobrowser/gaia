@@ -48,6 +48,11 @@ import {createRankingScoresShadow, readRankingScoresShadowConfig} from "./src/ge
 import {createGeoDbRouter} from "./src/geodb/router"
 import {createScoresShadow, readScoresShadowConfig} from "./src/geodb/scoresShadow"
 import {createCliGeoDbSearchClient} from "./src/geodb/search"
+import {
+	createPostgresTypeCountsSource,
+	createTypeCountsShadow,
+	readTypeCountsShadowConfig,
+} from "./src/geodb/typeCountsShadow"
 import {health} from "./src/health"
 import {createIpfsRouter} from "./src/ipfs"
 import {setGraphqlSearchClient} from "./src/kg/graphqlSearchOpenSearchPlugin"
@@ -351,6 +356,17 @@ if (rankingScoresShadowConfig.enabled) {
 	createRankingScoresShadow({
 		config: rankingScoresShadowConfig,
 		db,
+		reader: createDerivedReader(geoDbCardConfig),
+		log,
+	}).start()
+}
+// GEODB_TYPE_COUNTS_SHADOW (off by default) holds topic_feed_type_counts to geo-db's DerivedScan count mode
+// (gaia_api_type_counts_shadow_total). Needs serve and geodb-client at wire frame revision 13. Background only.
+const typeCountsShadowConfig = readTypeCountsShadowConfig(process.env)
+if (typeCountsShadowConfig.enabled) {
+	createTypeCountsShadow({
+		config: typeCountsShadowConfig,
+		source: createPostgresTypeCountsSource(db),
 		reader: createDerivedReader(geoDbCardConfig),
 		log,
 	}).start()
