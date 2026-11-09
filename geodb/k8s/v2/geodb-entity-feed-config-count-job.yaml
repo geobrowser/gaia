@@ -1,0 +1,66 @@
+# Dry run of the geo-db entity-feed-config backfill: counts the rows of `entity_type_weights`, `entity_type_exclusions` and
+# `entity_feed_blocklist` in gaia Postgres and prints them, writing nothing. The same Job code as
+# geodb-entity-feed-config-backfill-job.yaml with DRY_RUN=1, which needs only DATABASE_URL and DATABASE_SSL_CA: no state volume,
+# no Kafka, no geodb-client, so it runs with the feeder up. Every statement runs in a READ ONLY transaction with a 60 s
+# statement timeout (SET LOCAL, not a startup option: the pooler rejects those). Prints counts only.
+#
+# NOT part of any deploy; apply by hand and delete it afterwards. FEEDER_TAG is a geodb-feeder image built from a commit that
+# contains this file's PR (an older image has no DRY_RUN and would try the real backfill; it refuses without its Kafka env):
+#
+#   FEEDER_TAG=<tag>
+#   sed -e "s|geodb-feeder:IMAGE_TAG|geodb-feeder:$FEEDER_TAG|" geodb/k8s/v2/geodb-entity-feed-config-count-job.yaml | kubectl apply -f -
+#   kubectl -n gaia logs -f job/geodb-entity-feed-config-count      # "backfill dry run: nothing written" with the counts
+#   kubectl -n gaia delete job geodb-entity-feed-config-count
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: geodb-entity-feed-config-count
+  namespace: gaia
+  labels:
+    app: geodb-entity-feed-config-count
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: geodb-entity-feed-config-count
+    spec:
+      enableServiceLinks: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+      imagePullSecrets:
+        - name: geo
+      containers:
+        - name: count
+          image: registry.digitalocean.com/geo/geodb-feeder:IMAGE_TAG
+          imagePullPolicy: IfNotPresent
+          command: ["node", "dist/entity-feed-config-backfill-main.js"]
+          env:
+            - name: DRY_RUN
+              value: "1"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "512Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL

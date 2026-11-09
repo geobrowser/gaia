@@ -4,10 +4,16 @@
 # GEODB_ENTITY_FEED_CONFIG is turned on in the feeder.
 #
 # NOT in deploy-v2: it runs by hand, with Deployment geodb-feeder scaled to 0 (it mounts the feeder's RWO
-# state volume and refuses to start while any feeder consumer group has members):
+# state volume and refuses to start while any feeder consumer group has members). Count the rows first, with the feeder
+# still up, using geodb-entity-feed-config-count-job.yaml (same image, Postgres only):
 #   GEODB_TAG=$(awk '/^ *- name: serve$/{s=1} s && /image: registry.digitalocean.com\/geo\/geodb:/{sub(/.*geodb:/,""); print; exit}' geodb.yaml)
 #   [ "$(printf '%s\n' "$GEODB_TAG" | wc -l)" -eq 1 ] || echo "geodb.yaml pins more than one geodb tag"
-#   sed -e "s|geodb-feeder:latest|geodb-feeder:$TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" geodb-entity-feed-config-backfill-job.yaml | kubectl apply -f -
+#   FEEDER_TAG=<a geodb-feeder image tag built from a commit that contains this file's PR>
+#   sed -e "s|geodb-feeder:latest|geodb-feeder:$FEEDER_TAG|" -e "s|geodb:GEODB_TAG|geodb:$GEODB_TAG|" geodb-entity-feed-config-backfill-job.yaml | kubectl apply -f -
+#
+# Paced: BACKFILL_MAX_ROWS_PER_S (20 here) caps the write rate. The three tables are operator-edited and small, so the run is
+# seconds; the cap only keeps a rerun from adding load to geodb-0. activeDeadlineSeconds is 1 h: a deadline kill is a rerun,
+# not damage. DRY_RUN=1 on this Job (set the env by hand) only counts rows and writes nothing.
 #
 # The init container's geodb image is the GEODB_TAG placeholder, filled from geodb.yaml at apply time, so the Job's
 # geodb-client always matches the serve that geodb.yaml runs (an unfilled placeholder fails to pull; nothing runs).
@@ -27,6 +33,7 @@ metadata:
 spec:
   # A failure stops here and is read from the logs; a rerun is a deliberate, fresh apply.
   backoffLimit: 0
+  activeDeadlineSeconds: 3600
   ttlSecondsAfterFinished: 604800
   template:
     metadata:
@@ -110,6 +117,11 @@ spec:
               value: "1"
             - name: GEODB_ENTITY_FEED_CONFIG
               value: "1"
+            # Idempotent writes (same ids every run); 20 rows a second is far under what serve takes.
+            - name: BACKFILL_MAX_ROWS_PER_S
+              value: "20"
+            - name: DRY_RUN
+              value: "0"
             - name: ENVIRONMENT
               value: testnet
             - name: KAFKA_GROUP_ID
