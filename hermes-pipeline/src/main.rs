@@ -1055,6 +1055,7 @@ async fn async_main() -> anyhow::Result<()> {
     // metrics module; override with METRICS_PORT for local runs.
     let metrics_port: Option<u16> = env::var("METRICS_PORT").ok().and_then(|s| s.parse().ok());
     hermes_instrumentation::metrics::install("hermes-pipeline", metrics_port)?;
+    cursor::register_metrics();
 
     // Determine if we're using mock data
     let use_mock = env::var("USE_MOCK")

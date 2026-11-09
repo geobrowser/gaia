@@ -2583,6 +2583,8 @@ dependencies = [
  "hermes-schema",
  "hermes-substream",
  "hex",
+ "metrics",
+ "metrics-exporter-prometheus",
  "opentelemetry 0.31.0",
  "opentelemetry_sdk 0.31.0",
  "prost 0.13.5",
