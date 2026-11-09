@@ -7,7 +7,12 @@ import type {KeyedOffsets} from "./membershipKeyed.js"
 import type {SystemFamily} from "./recordKinds.js"
 import {ensureSystemSpace, type SystemSpaceDeps} from "./systemSpaces.js"
 
-export type KeyedRecordDeps = ApplyDeps & SystemSpaceDeps & {offsets: KeyedOffsets}
+export type KeyedRecordDeps = ApplyDeps &
+	SystemSpaceDeps & {
+		offsets: KeyedOffsets
+		/** Backfill pacing: awaited after every row, so a Job can cap its write rate (keyedBackfillJob.ts, BACKFILL_MAX_ROWS_PER_S). */
+		pace?: () => Promise<void>
+	}
 
 export type KeyedOutcome = "applied" | "ignored" | "dead_letter"
 
@@ -70,6 +75,7 @@ export async function backfillKeyedRows<R, E>(
 		if (o === "dead_letter") out.deadLetter++
 		else out.applied++
 		progress(out.rows)
+		await deps.pace?.()
 		if (deps.signal?.aborted) throw new Error(`${opts.topic} backfill aborted`)
 	}
 	return out

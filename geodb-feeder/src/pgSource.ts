@@ -408,6 +408,16 @@ export async function* readEntityFeedBlockRows(db: ReadOnlyPg): AsyncGenerator<E
 	)
 }
 
+/** Row counts of the three entity-feed config tables, for the Job's DRY_RUN. Three exact counts, each its own READ ONLY transaction. */
+export async function countEntityFeedConfigRows(db: ReadOnlyPg): Promise<Record<string, number>> {
+	const out: Record<string, number> = {}
+	for (const table of ["entity_type_weights", "entity_type_exclusions", "entity_feed_blocklist"]) {
+		const [r] = await db.read<{n: string}>(`SELECT count(*)::text AS n FROM ${table}`, [], 60_000)
+		out[table] = Number(r?.n ?? 0)
+	}
+	return out
+}
+
 /** Every `space_voting_settings` row (one per Space, a small table), read in one query. The bigints and `updated_at*` come back as text. */
 export async function* readSpaceVotingSettingsRows(db: ReadOnlyPg): AsyncGenerator<SpaceVotingSettingsRow> {
 	yield* await db.read<SpaceVotingSettingsRow>(
