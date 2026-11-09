@@ -44,6 +44,7 @@ import {
 	argsOf,
 	asRecord,
 	type CardCheck,
+	compareDerived,
 	compareDerivedWide,
 	ENTITY_FIELD,
 	ENTITY_TOLERATED_ROOTS,
@@ -72,6 +73,7 @@ import {
 	uuidArg,
 	VALUE_COLUMNS,
 	VALUE_IGNORED,
+	widenCrossSpace,
 } from "./entityShadow"
 import {recordGatewayUnsupportedShape, type UncomparedReason, type UnsupportedReason} from "./metrics"
 import {checkOrderedPage} from "./orderPickShadow"
@@ -1518,7 +1520,24 @@ export async function checkLight(
 		}
 		judged = {...light.card, spaceIds: mapped}
 	}
-	const derived = await compareDerivedWide(deps, plan.card, judged, read.rows, read.scope, label)
+	// A comparison of named Spaces that left `cross_space` is judged again against the card read across every Space the
+	// entity lives in (`GEODB_CROSS_SPACE_HOLDERS_SHADOW`); an every-Space read already covers them. The containment
+	// check above stays on the Spaces asked for.
+	let derivedRows = read.rows
+	let derivedScope = read.scope
+	if (
+		deps.crossSpaceHolders === true &&
+		!every &&
+		compareDerived(plan.card, judged, read.rows, read.scope).uncompared.includes("cross_space")
+	) {
+		const wide = await widenCrossSpace(deps, judged, entityId, label)
+		if (wide) {
+			judged = wide.card
+			derivedRows = wide.rows
+			derivedScope = wide.scope
+		}
+	}
+	const derived = await compareDerivedWide(deps, plan.card, judged, derivedRows, derivedScope, label)
 	const wrong = Object.entries(derived.checks)
 		.filter(([, result]) => result === "mismatch")
 		.map(([field]) => field)
