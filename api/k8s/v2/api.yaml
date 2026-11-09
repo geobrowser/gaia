@@ -441,10 +441,10 @@ spec:
               value: "0"
             # The For you config revision twin: a digest over the For you / interest / entity-ranking config records in geo-db's
             # config Space, compared with Postgres' feed_config_revision by whether each moved since the last pass (_INTERVAL_MS,
-            # default 30 s): gaia_api_config_revision_shadow_total{result}. OFF; background only, the version string stays on
+            # default 30 s): gaia_api_config_revision_shadow_total{result}. ON (backfills ran 2026-11-06); background only, the version string stays on
             # Postgres. Needs the geodb-feeder's for_you_config, interest_config and entity_ranking_config backfills run first.
             - name: GEODB_CONFIG_REVISION_SHADOW
-              value: "0"
+              value: "1"
             # The feed signal runs watermark twin: geo-db's mirrored newest succeeded feed_signal_runs row (cursors collection 10,
             # GEODB_FEED_RUNS_MIRROR in the feed-signals-sync CronJob) against Postgres' max(data_through) over the succeeded runs
             # (_INTERVAL_MS, default 5 min): gaia_api_feed_runs_shadow_total{result}. OFF; `absent` until the mirror is on.
