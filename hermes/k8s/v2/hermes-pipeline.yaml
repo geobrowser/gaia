@@ -47,7 +47,7 @@ spec:
       initContainers:
         - name: geodb-setup
           # Pinned, never :latest: deploy-v2 rewrites every :latest in this file to this service's tag.
-          image: registry.digitalocean.com/geo/geodb:93be2804b7
+          image: registry.digitalocean.com/geo/geodb:6b34f9feda
           imagePullPolicy: IfNotPresent
           # Always exits 0. With no node id yet (geodb never started) or no Service, it writes no
           # binding and the mirror stays disabled even if the flag is turned on.
@@ -170,6 +170,12 @@ spec:
               value: /etc/geodb/key/cursor.key
             - name: GEODB_BINDING_PATH
               value: /geodb/binding.txt
+            # Shadow read of the IPFS warmer's meta block (hermes_ipfs_cache) from geo-db's cursors collection
+            # (10), counted in geodb_meta_block_shadow_total. Postgres stays the source. Reads with the cursor
+            # key above (GEODB_KEY_PATH, derived=10); collection 10 is not restricted, so any authenticated key
+            # may read it. "0" = off; flipping it to "1" is a separate decision.
+            - name: GEODB_META_BLOCK_SHADOW
+              value: "0"
             - name: PGSSLROOTCERT
               value: /ssl/ca.crt
             - name: DATABASE_URL

@@ -161,6 +161,12 @@ spec:
                   value: /etc/geodb/key/scores.key
                 - name: GEODB_BINDING_PATH
                   value: /geodb/binding.txt
+                # Shadow read of hermes_pipeline's meta block (current_chain_meta) from geo-db's cursors collection
+                # (10), counted in geodb_meta_block_shadow_total. Postgres stays the source. Reads with the scores
+                # key above (GEODB_KEY_PATH); collection 10 is not restricted, so any authenticated key may read it.
+                # "0" = off; flipping it to "1" is a separate decision.
+                - name: GEODB_META_BLOCK_SHADOW
+                  value: "0"
                 - name: RUST_LOG
                   value: "rolling_sweep=info,ranking_indexer=info"
               resources:
