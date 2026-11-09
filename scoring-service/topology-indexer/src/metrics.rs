@@ -20,7 +20,25 @@ pub const DIFFS_APPLIED: &str = "topology_indexer_diffs_applied_total";
 pub const DIFFS_DROPPED: &str = "topology_indexer_diffs_dropped_total";
 pub const MESSAGES_UNPARSEABLE: &str = "topology_indexer_messages_unparseable_total";
 pub const WRITE_RETRIES: &str = "topology_indexer_write_retries_total";
+pub const PG_WRITES_SKIPPED: &str = "topology_indexer_pg_writes_skipped_total";
 pub const HALTED: &str = "topology_indexer_halted";
+
+/// A Postgres write site skipped because `TOPOLOGY_INDEXER_PG_WRITES` is off.
+#[derive(Debug, Clone, Copy)]
+pub enum PgWriteSite {
+    /// The distance upsert and delete of one diff, in one transaction.
+    ApplyChanges,
+}
+
+impl PgWriteSite {
+    const ALL: [PgWriteSite; 1] = [PgWriteSite::ApplyChanges];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            PgWriteSite::ApplyChanges => "apply_changes",
+        }
+    }
+}
 
 /// Describe every counter and register it at zero.
 pub fn register() {
@@ -48,11 +66,23 @@ pub fn register() {
         "Kafka messages that failed to decode and were committed past"
     );
 
+    metrics::describe_counter!(
+        PG_WRITES_SKIPPED,
+        "Postgres write calls skipped because TOPOLOGY_INDEXER_PG_WRITES is off, by site. While \
+         off, diffs_applied still counts the skipped diffs (their offsets commit)"
+    );
+    for site in PgWriteSite::ALL {
+        metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).absolute(0);
+    }
     metrics::counter!(DIFFS_APPLIED).absolute(0);
     metrics::counter!(DIFFS_DROPPED).absolute(0);
     metrics::counter!(MESSAGES_UNPARSEABLE).absolute(0);
     metrics::counter!(WRITE_RETRIES).absolute(0);
     metrics::gauge!(HALTED).set(0.0);
+}
+
+pub fn pg_write_skipped(site: PgWriteSite) {
+    metrics::counter!(PG_WRITES_SKIPPED, "site" => site.as_str()).increment(1);
 }
 
 pub fn diffs_applied(count: u64) {
@@ -96,6 +126,7 @@ mod tests {
             "topology_indexer_messages_unparseable_total 0",
             "topology_indexer_write_retries_total 0",
             "topology_indexer_halted 0",
+            "topology_indexer_pg_writes_skipped_total{site=\"apply_changes\"} 0",
         ] {
             assert!(rendered.contains(line), "missing `{line}` in:\n{rendered}");
         }
