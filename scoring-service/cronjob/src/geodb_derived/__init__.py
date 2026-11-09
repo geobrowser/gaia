@@ -10,7 +10,9 @@ dropped, not queued), and after a failure the child is not respawned until ``coo
 Rows are last-write-wins. The writer sends only the rows whose score changed since the last run
 that mirrored every row it tried (``score_mirror_state``); after any drop or error the next run
 rewrites the whole table, so the mirror converges instead of relying on a full rewrite fitting in
-one budget.
+one budget. A run the budget cuts off is resumable: rows go out in key order and the writer records the
+key of the last request answered ok (``score_mirror_state.resume_after``), so the next run sends the
+rows past it (plus any earlier row whose score changed) and never starts over; see the writer.
 
 Collections (geo-db ``src/storage/derived/collection.zig``) and key layouts (plan 10.14 V10):
 
@@ -134,6 +136,14 @@ def _uuid_bytes(value: str) -> bytes:
     return uuid.UUID(str(value)).bytes
 
 
+def key_bytes(value) -> bytes:
+    """Sort key of an id: its 16 bytes, or empty for one that is not a UUID (such a row is skipped anyway)."""
+    try:
+        return _uuid_bytes(value)
+    except (ValueError, TypeError, AttributeError):
+        return b""
+
+
 def _rows(
     items: Iterable,
     build: Callable[..., DerivedRow],
@@ -166,16 +176,21 @@ def local_rows(
     entities: list[Entity],
     on_skip: Callable[[Exception], None] | None = None,
     only: set | None = None,
+    after: bytes | None = None,
 ) -> list[DerivedRow]:
     """``local_scores`` (collection 3) rows for every perspective of ``entities``.
 
-    With ``only`` (a set of ``(norm_id(entity), norm_id(space))``) just those perspectives.
+    With ``only`` (a set of ``(norm_id(entity), norm_id(space))``) just those perspectives. With
+    ``after`` as well (a row key), also every perspective whose key sorts past it. Within an entity
+    the perspectives go in key order, so with ``entities`` in id order the rows are in key order.
     """
     perspectives = (
         p
         for e in entities
-        for p in e.perspectives
-        if only is None or (norm_id(p.entity_id), norm_id(p.space_id)) in only
+        for p in sorted(e.perspectives, key=lambda p: key_bytes(p.entity_id) + key_bytes(p.space_id))
+        if only is None
+        or (norm_id(p.entity_id), norm_id(p.space_id)) in only
+        or (after is not None and key_bytes(p.entity_id) + key_bytes(p.space_id) > after)
     )
 
     def build(p) -> DerivedRow:
@@ -311,21 +326,29 @@ class DerivedMirror:
         self.stats["skipped"] += 1
         logger.warning("geodb_derived.row_skipped table=%s error=%s", table, error)
 
-    def put(self, table: str, rows: Iterable[DerivedRow]) -> None:
+    def put(
+        self,
+        table: str,
+        rows: Iterable[DerivedRow],
+        progress: Callable[[bytes], None] | None = None,
+    ) -> None:
         """Mirrors ``rows`` of ``table`` (a label for the logs). Never raises.
 
         ``rows`` is consumed lazily, so a generator over millions of rows is not held in memory.
+        ``progress`` is called with the key of the last row of each request the geo-db answered ok
+        (never for a failed or dropped one), so a caller sending rows in key order can record how far
+        the table got. An error in it is logged and ignored.
         """
         try:
-            self.stats["puts"] += self._send(table, self._lines(table, rows))
+            self.stats["puts"] += self._send(table, self._lines(table, rows), progress)
         except Exception:  # noqa: BLE001 - nothing here may fail the writer
             self.stats["errors"] += 1
             logger.exception("geodb_derived.mirror_failed table=%s; Postgres is unaffected", table)
 
-    def _lines(self, table: str, rows: Iterable[DerivedRow]) -> Iterable[str]:
+    def _lines(self, table: str, rows: Iterable[DerivedRow]) -> Iterable[tuple[str, bytes]]:
         for r in rows:
             try:
-                yield r.put_line()
+                yield r.put_line(), r.key
             except ValueError as e:
                 self.skipped(e, table)
 
@@ -334,7 +357,12 @@ class DerivedMirror:
 
     # -- internals ------------------------------------------------------------------------
 
-    def _send(self, table: str, lines: Iterable[str]) -> int:
+    def _send(
+        self,
+        table: str,
+        lines: Iterable[tuple[str, bytes]],
+        progress: Callable[[bytes], None] | None = None,
+    ) -> int:
         start = time.monotonic()
         sent = 0
         size = self.table_batch_rows.get(table, self.batch_rows) if self.batch else CHUNK
@@ -342,7 +370,8 @@ class DerivedMirror:
         reconnects = 0
         paused = 0.0  # seconds spent waiting for the pace; not counted against the budget
         it = iter(lines)
-        while chunk := list(islice(it, size)):
+        while pairs := list(islice(it, size)):
+            chunk = [line for line, _ in pairs]
             if sent > 0 and time.monotonic() - start - paused > self.budget:
                 dropped = len(chunk) + sum(1 for _ in it)
                 self.stats["dropped"] += dropped
@@ -366,6 +395,11 @@ class DerivedMirror:
                 self.stats["dropped"] += len(chunk) + sum(1 for _ in it)
                 break
             sent += len(chunk)
+            if progress is not None:
+                try:
+                    progress(pairs[-1][1])
+                except Exception:  # noqa: BLE001
+                    logger.warning("geodb_derived.progress_failed table=%s", table, exc_info=True)
             if rate:
                 wait = len(chunk) / rate - (time.monotonic() - chunk_start)
                 if wait > 0:
