@@ -25,7 +25,8 @@ metadata:
     environment: testnet
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 7200
+  # 6 h: a paced run is slow (rows / rate). Idempotent, so a deadline kill is a re-run, not damage.
+  activeDeadlineSeconds: 21600
   ttlSecondsAfterFinished: 86400
   template:
     metadata:
@@ -149,6 +150,14 @@ spec:
               value: "1"
             - name: GEODB_DERIVED_BATCH
               value: "1"
+            # Paced: a bulk derived write at full speed starved serve reads (read p90 10 ms -> 900 ms,
+            # geodb-0 0.05 -> 1.2 cores). At most 200 rows a second, 64 rows (one fsynced frame) a
+            # request. Needs an image that contains the pacing knobs (this file's PR or later).
+            # Raise or lower per run: runtime = rows / rate.
+            - name: GEODB_DERIVED_MAX_ROWS_PER_S
+              value: "200"
+            - name: GEODB_DERIVED_BATCH_ROWS
+              value: "64"
             - name: GEODB_CLIENT_BIN
               value: /geodb/geodb-client
             - name: GEODB_KEY_PATH
