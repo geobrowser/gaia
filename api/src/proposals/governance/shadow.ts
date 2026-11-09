@@ -18,6 +18,7 @@
 import {type GeoDbCardClient, GeoDbError} from "../../geodb/client"
 import {computeProposalStatus} from "../status"
 import type {ProposalListItem, ProposalWithVotes, StatusComputationResult} from "../types"
+import {resolveEscalations} from "./escalation"
 import {
 	activateGovernanceMetrics,
 	recordGovernanceShadow,
@@ -29,9 +30,11 @@ import {
 import {entityRef} from "./recordKey"
 import {
 	AmbiguousRecordError,
+	decodeProposalEscalation,
 	decodeProposalStatus,
 	decodeProposalVersion,
 	decodeProposalVote,
+	PROPOSAL_ESCALATION_COLUMNS,
 	PROPOSAL_VERSION_COLUMNS,
 	proposalStatusRecordId,
 	proposalVoteRecordId,
@@ -46,6 +49,8 @@ export type GovernanceShadowConfig = {
 	voterMax: number
 	/** Most comparisons running at once; a new one past it is dropped (counted `busy`). */
 	maxInFlight: number
+	/** Resolve proposal settings escalations onto the latest version (GEODB_GOVERNANCE_SHADOW_ESCALATIONS); off = a geo Fast against a Postgres Slow counts `escalation_pending`. */
+	escalations: boolean
 }
 
 const DEFAULTS = {listMax: 5, voterMax: 25, maxInFlight: 8}
@@ -63,6 +68,7 @@ export function readGovernanceShadowConfig(env: Record<string, string | undefine
 		listMax: wholeNumber(env.GEODB_GOVERNANCE_SHADOW_LIST_MAX, DEFAULTS.listMax, 100),
 		voterMax: wholeNumber(env.GEODB_GOVERNANCE_SHADOW_VOTER_MAX, DEFAULTS.voterMax, 200),
 		maxInFlight: wholeNumber(env.GEODB_GOVERNANCE_SHADOW_MAX_IN_FLIGHT, DEFAULTS.maxInFlight, 64),
+		escalations: ["1", "on", "true"].includes(env.GEODB_GOVERNANCE_SHADOW_ESCALATIONS?.trim().toLowerCase() ?? ""),
 	}
 }
 
@@ -115,7 +121,8 @@ export function createGovernanceShadow(deps: {
 			entityId: entityRef(p.id),
 			limit: VERSION_MAX,
 		})
-		const from = [...new Set(links.filter((l) => l.prop === PROPOSAL_VERSION_COLUMNS.proposal).map((l) => l.from))]
+		const idsOf = (prop: string) => [...new Set(links.filter((l) => l.prop === prop).map((l) => l.from))]
+		const from = idsOf(PROPOSAL_VERSION_COLUMNS.proposal)
 		if (from.length === 0) throw new Unsupported("version_missing")
 		if (links.length >= VERSION_MAX) throw new Unsupported("too_many_versions")
 		const versions = (
@@ -128,9 +135,23 @@ export function createGovernanceShadow(deps: {
 			null,
 		)
 		if (!latest) throw new Unsupported("version_missing")
-		if (latest.snapshot.votingMode === "Fast" && p.votingMode === "Slow")
-			throw new Unsupported("escalation_pending")
-		return {...latest.snapshot, totalEditors: p.totalEditors}
+		let settings = latest.snapshot
+		if (config.escalations) {
+			// The feeder's read-time rule: each escalation hits the version with the greatest block at or before its own,
+			// and the latest one of a version supplies all eight settings.
+			const escalations = (
+				await Promise.all(
+					idsOf(PROPOSAL_ESCALATION_COLUMNS.proposal).map(async (id) => {
+						const e = decodeProposalEscalation(await geoDb.readCard({geoSpaceId, entityId: id}))
+						return e === null ? null : {...e, id}
+					}),
+				)
+			).filter((e): e is NonNullable<typeof e> => e !== null)
+			const escalated = resolveEscalations(versions, escalations).applied.get(latest)
+			if (escalated) settings = escalated.snapshot
+		}
+		if (settings.votingMode === "Fast" && p.votingMode === "Slow") throw new Unsupported("escalation_pending")
+		return {...settings, totalEditors: p.totalEditors}
 	}
 
 	/** Status from geo-db for one proposal, plus which inputs it took from Postgres. */
