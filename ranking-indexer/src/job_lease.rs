@@ -35,6 +35,9 @@ pub const KEY_USER_TOPIC_INTEREST: &str = "personalization-user-topic-interest";
 /// `feed_signals_sync`, including its dry-run Job.
 pub const KEY_FEED_SIGNALS: &str = "personalization-feed-signals";
 
+/// `agenda_listings_refresh` (the hourly refresh and its `trending.refresh_state` marker).
+pub const KEY_AGENDA_LISTINGS: &str = "trending-agenda-listings";
+
 const DEFAULT_TTL_SECS: i64 = 120;
 
 /// `GEODB_JOB_LEASE` (default off).

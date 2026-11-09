@@ -24,6 +24,7 @@ rules:
     resourceNames:
       - personalization-user-topic-interest
       - personalization-feed-signals
+      - trending-agenda-listings
     verbs: ["get", "update", "patch"]
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]

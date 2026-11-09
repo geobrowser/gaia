@@ -322,7 +322,21 @@ async fn main() -> Result<(), IndexerError> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+    // Job lease (GEODB_JOB_LEASE, default off): one refresh at a time; exit 0 if another holds it.
+    if matches!(
+        ranking_indexer::job_lease::guard(ranking_indexer::job_lease::KEY_AGENDA_LISTINGS, 0)
+            .await?,
+        ranking_indexer::job_lease::Guard::Busy
+    ) {
+        info!("job lease held by another run; exiting without writing");
+        return Ok(());
+    }
+    let result = run().await;
+    ranking_indexer::job_lease::finish().await;
+    result
+}
 
+async fn run() -> Result<(), IndexerError> {
     let database_url = env::var("DATABASE_URL")
         .map_err(|_| IndexerError::Config("DATABASE_URL not set".into()))?;
     let pool = PgPoolOptions::new()
@@ -389,6 +403,8 @@ async fn main() -> Result<(), IndexerError> {
             )
             .fetch_one(&mut *tx)
             .await?;
+        // Fence (GEODB_JOB_LEASE): refuse to commit unless this run still holds the job lease.
+        ranking_indexer::job_lease::fence().await?;
         tx.commit().await?;
         Ok::<_, IndexerError>((scored, listings, claims, topics, boosted, topic_boosted))
     })
