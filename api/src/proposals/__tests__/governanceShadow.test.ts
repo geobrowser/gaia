@@ -12,6 +12,7 @@ import {
 	decodeProposalStatus,
 	decodeProposalVersion,
 	decodeProposalVote,
+	PROPOSAL_ESCALATION_COLUMNS,
 	PROPOSAL_STATUS_COLUMNS,
 	PROPOSAL_STATUS_KIND,
 	PROPOSAL_VERSION_COLUMNS,
@@ -231,7 +232,7 @@ describe("shadow", () => {
 	const GOV = "d".repeat(32)
 	const VOTES = "e".repeat(32)
 	const settle = () => new Promise((r) => setTimeout(r, 0))
-	const cfg = {enabled: true, listMax: 2, voterMax: 3, maxInFlight: 8}
+	const cfg = {enabled: true, listMax: 2, voterMax: 3, maxInFlight: 8, escalations: false}
 	const log = {warn: vi.fn()}
 
 	const VER1 = "c1".repeat(16)
@@ -355,6 +356,106 @@ describe("shadow", () => {
 		expect(metric(text, 'gaia_api_governance_shadow_total{surface="detail",result="mismatch"}')).toBe(0)
 		expect(metric(text, 'gaia_api_governance_shadow_total{surface="detail",result="unsupported"}')).toBe(1)
 		expect(unsupportedCount("escalation_pending")).toBe(1)
+	})
+
+	describe("escalations", () => {
+		const ESC = "e5".repeat(16)
+		const ESC_LATE = "e6".repeat(16)
+		const slowP = () =>
+			proposal({
+				votingMode: "Slow",
+				threshold: 51n,
+				flatSupportThreshold: 0n,
+				partialPercentageSupportThreshold: 51n,
+				universalPercentageSupportThreshold: 0n,
+				quorum: 1n,
+			})
+		const escRows = (block: string, over: Record<string, string | undefined> = {}): GeoCardRow[] => {
+			const v: Record<string, string | undefined> = {
+				proposal: entityRef(P),
+				block,
+				votingMode: "Slow",
+				startTime: String(NOW - 3600n),
+				endTime: String(NOW + 3600n),
+				quorum: "1",
+				partial: "51",
+				universal: "0",
+				flat: "0",
+				executeBy: String(NOW + 86_400n),
+				...over,
+			}
+			return Object.entries(v)
+				.filter(([, raw]) => raw !== undefined)
+				.map(([k, raw]) =>
+					row(PROPOSAL_ESCALATION_COLUMNS[k as keyof typeof PROPOSAL_ESCALATION_COLUMNS], raw as string),
+				)
+		}
+		const withEsc = (escs: Record<string, GeoCardRow[]>): GeoDbCardClient => ({
+			readCard: async ({entityId}) => escs[entityId] ?? (entityId === VER1 ? versionRows() : []),
+			readBacklinks: async () => [
+				{prop: PROPOSAL_VERSION_COLUMNS.proposal, raw: "", from: VER1},
+				...Object.keys(escs).map((from) => ({prop: PROPOSAL_ESCALATION_COLUMNS.proposal, raw: "", from})),
+			],
+		})
+		const on = {...cfg, escalations: true}
+		const results = () => renderGovernanceMetrics()
+		const matchLine = 'gaia_api_governance_shadow_total{surface="detail",result="match"}'
+
+		it("matches a fast-to-slow proposal when the escalation record is applied", async () => {
+			const p = slowP()
+			const c = withEsc({[ESC]: escRows("150")})
+			const readCard = c.readCard
+			c.readCard = async (a) =>
+				a.entityId === ESC ? escRows("150") : (votesOf(p, "1").get(a.entityId) ?? readCard(a))
+			createGovernanceShadow({config: on, geoDb: c, systemSpaceOf: spaces, log}).detail(p, NOW)
+			await settle()
+			expect(metric(results(), matchLine)).toBe(1)
+			expect(unsupportedCount("escalation_pending")).toBe(0)
+		})
+
+		it("ignores an orphan escalation (before every version) and the latest of two wins", async () => {
+			const p = slowP()
+			const c = withEsc({
+				[ESC]: escRows("50", {votingMode: "Fast", partial: "0", flat: "2"}),
+				[ESC_LATE]: escRows("150"),
+			})
+			const readCard = c.readCard
+			c.readCard = async (a) => votesOf(p, "1").get(a.entityId) ?? readCard(a)
+			createGovernanceShadow({config: on, geoDb: c, systemSpaceOf: spaces, log}).detail(p, NOW)
+			await settle()
+			expect(metric(results(), matchLine)).toBe(1)
+		})
+
+		it("keeps escalation_pending when the flag is off, whatever records exist", async () => {
+			const p = slowP()
+			createGovernanceShadow({
+				config: cfg,
+				geoDb: withEsc({[ESC]: escRows("150")}),
+				systemSpaceOf: spaces,
+				log,
+			}).detail(p, NOW)
+			await settle()
+			expect(unsupportedCount("escalation_pending")).toBe(1)
+		})
+
+		it("still reports escalation_pending when the flag is on but no escalation record exists", async () => {
+			createGovernanceShadow({config: on, geoDb: withEsc({}), systemSpaceOf: spaces, log}).detail(slowP(), NOW)
+			await settle()
+			expect(unsupportedCount("escalation_pending")).toBe(1)
+		})
+
+		it("reads GEODB_GOVERNANCE_SHADOW_ESCALATIONS, off by default", () => {
+			expect(readGovernanceShadowConfig({GEODB_GOVERNANCE_SHADOW: "1"}).escalations).toBe(false)
+			expect(readGovernanceShadowConfig({GEODB_GOVERNANCE_SHADOW_ESCALATIONS: "1"}).escalations).toBe(true)
+		})
+
+		it("pins the copied escalation ids to the feeder's recordKinds", () => {
+			const file = join(here, "../../../../geodb-feeder/src/recordKinds.ts")
+			if (!existsSync(file)) return
+			const text = readFileSync(file, "utf8")
+			for (const id of Object.values(PROPOSAL_ESCALATION_COLUMNS)) expect(text).toContain(id)
+			expect(text).toContain("69352153d76946afa5d926c13c3613e9")
+		})
 	})
 
 	it("is unsupported with no version record, or a client that cannot read backlinks", async () => {
