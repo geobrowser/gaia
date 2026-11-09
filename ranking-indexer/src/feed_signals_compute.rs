@@ -211,6 +211,95 @@ pub fn replace(
     })
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The two invariants `replace_feed_signals` leans on Postgres for (migration 0112:75 and on; plan 10.21 section 10 row 2).
+//
+// 1. ONE RUN AT A TIME. The SQL takes `pg_advisory_xact_lock('personalization.feed_signals')`. The CronJob's
+//    `concurrencyPolicy: Forbid` does not cover the manual `--dry-run` Job, which does the whole replacement and rolls
+//    it back: it reads the same tables and must not interleave with a real run. Once the replacement is frames to geo-db
+//    there is no lock that spans calls (each frame is atomic under `derived_lock`, nothing holds across frames), so the
+//    writer owes the exclusion itself: [`Lease`]. Every run takes it, a dry run included, and a run that cannot take it
+//    does nothing.
+//
+// 2. THE EMPTY-WINDOW GUARD IS ATOMIC WITH THE REPLACEMENT. `replace` refuses an empty item list when the table holds
+//    rows in the window (`Refusal::NoItems`), unless `--allow-empty`. That count and the delete that follows must see one
+//    state: a guard that passed on a count another run has since changed would erase a non-empty window. The SQL gets this
+//    from the lock and one transaction; here the read carries a version and [`Store::commit`] refuses the write if the
+//    version moved (`Contention::Stale`), so the guard's count is the count it replaces.
+//
+// Both are models of what the port must do, stated and tested here so the geo-db writer has something to match.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// Who holds the single-run lease. A dry run is a holder like any other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Holder {
+    CronJob,
+    DryRun,
+}
+
+/// Why a run did not write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Contention {
+    /// Another run holds the lease; this run does nothing.
+    Held(Holder),
+    /// The state moved between the read the guard judged and the write.
+    Stale,
+}
+
+/// The one-run-at-a-time lease. Not time-based: a holder that dies is the lock service's concern (a Lease object with
+/// a TTL, in the port); this fixes only that there is one and who may take it.
+#[derive(Debug, Default)]
+pub struct Lease {
+    held: Option<Holder>,
+}
+
+impl Lease {
+    pub fn acquire(&mut self, who: Holder) -> Result<(), Contention> {
+        match self.held {
+            Some(other) => Err(Contention::Held(other)),
+            None => {
+                self.held = Some(who);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn release(&mut self) {
+        self.held = None;
+    }
+}
+
+/// The tables as the writer sees them: a state and a version that moves on every committed write.
+#[derive(Debug, Default)]
+pub struct Store {
+    pub state: State,
+    version: u64,
+}
+
+impl Store {
+    /// The state a run judges its guard on, and the version that guard must still hold at commit.
+    pub fn read(&self) -> (State, u64) {
+        (self.state.clone(), self.version)
+    }
+
+    /// Writes `outcome` only if nothing was committed since `read_at`. A dry run passes `dry_run` and writes nothing.
+    pub fn commit(
+        &mut self,
+        read_at: u64,
+        outcome: Outcome,
+        dry_run: bool,
+    ) -> Result<(), Contention> {
+        if self.version != read_at {
+            return Err(Contention::Stale);
+        }
+        if !dry_run {
+            self.state = outcome.state;
+            self.version += 1;
+        }
+        Ok(())
+    }
+}
+
 /// True when FEED_SIGNALS_RUST_COMPUTE is `1`, `true` or `yes`. Off by default.
 pub fn shadow_enabled() -> bool {
     matches!(
@@ -576,5 +665,119 @@ mod tests {
             mismatches(&cfg, &spaces, dt_s, &sql_window, &items, &users, &bad),
             vec!["user_rows: rust 1, sql 2".to_string()]
         );
+    }
+
+    mod exclusion {
+        use super::*;
+
+        fn cfg() -> Config {
+            Config {
+                revise_days: 2,
+                backfill_days: 30,
+                user_retention_days: 30,
+                item_retention_days: 30,
+            }
+        }
+
+        const DAY0: i64 = 20_000 * DAY;
+
+        fn held_state() -> State {
+            let mut s = State::default();
+            s.items.insert(("a".into(), DAY0 + 3600));
+            s
+        }
+
+        fn item(hour: i64) -> Item {
+            Item {
+                item_id: Some("a".into()),
+                hour,
+            }
+        }
+
+        fn run(state: &State, items: &[Item], allow: bool) -> Result<Outcome, Refusal> {
+            replace(
+                &cfg(),
+                state,
+                DAY0,
+                DAY0 + 2 * DAY,
+                items,
+                &[],
+                &[],
+                allow,
+                DAY0 + 2 * DAY,
+            )
+        }
+
+        #[test]
+        fn a_second_run_cannot_take_the_lease_and_a_dry_run_is_a_run() {
+            let mut lease = Lease::default();
+            lease.acquire(Holder::CronJob).unwrap();
+            assert_eq!(
+                lease.acquire(Holder::DryRun),
+                Err(Contention::Held(Holder::CronJob))
+            );
+            assert_eq!(
+                lease.acquire(Holder::CronJob),
+                Err(Contention::Held(Holder::CronJob))
+            );
+            lease.release();
+            lease.acquire(Holder::DryRun).unwrap();
+            assert_eq!(
+                lease.acquire(Holder::CronJob),
+                Err(Contention::Held(Holder::DryRun))
+            );
+        }
+
+        #[test]
+        fn an_empty_item_list_never_erases_a_held_window_without_allow_empty() {
+            assert_eq!(
+                run(&held_state(), &[], false).unwrap_err(),
+                Refusal::NoItems
+            );
+            // Nothing held in the window: an empty list is fine.
+            assert!(run(&State::default(), &[], false).is_ok());
+            // The explicit override erases it.
+            assert!(run(&held_state(), &[], true)
+                .unwrap()
+                .state
+                .items
+                .is_empty());
+        }
+
+        #[test]
+        fn a_guard_judged_on_a_state_that_moved_cannot_write() {
+            let mut store = Store {
+                state: held_state(),
+                ..Store::default()
+            };
+            // Run A reads a window that holds a row and replaces it with one row: allowed.
+            let (a_state, a_at) = store.read();
+            let a = run(&a_state, &[item(DAY0 + 7200)], false).unwrap();
+            // Run B read the same version and judged an empty list against the same held row: refused up front.
+            let (b_state, b_at) = store.read();
+            assert_eq!(run(&b_state, &[], false).unwrap_err(), Refusal::NoItems);
+            // A commits. A later run that read BEFORE A, with allow_empty off and an empty window it judged on the old
+            // count, would now delete rows it never counted; its commit is refused instead.
+            store.commit(a_at, a, false).unwrap();
+            let stale = run(&State::default(), &[], false).unwrap();
+            assert_eq!(store.commit(b_at, stale, false), Err(Contention::Stale));
+            assert_eq!(store.state.items.len(), 1, "the committed window is intact");
+        }
+
+        #[test]
+        fn a_dry_run_commits_nothing_and_does_not_move_the_version() {
+            let mut store = Store {
+                state: held_state(),
+                ..Store::default()
+            };
+            let (s, at) = store.read();
+            let out = run(&s, &[item(DAY0 + 7200)], false).unwrap();
+            store.commit(at, out, true).unwrap();
+            assert_eq!(store.state, held_state());
+            // The same read can still commit for real: the dry run did not move the version.
+            let out = run(&s, &[item(DAY0 + 7200)], false).unwrap();
+            store.commit(at, out, false).unwrap();
+            assert!(store.state.items.contains(&("a".to_string(), DAY0 + 7200)));
+        }
     }
 }
