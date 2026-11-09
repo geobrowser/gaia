@@ -74,6 +74,15 @@ import {
 	type UncomparedReason,
 	type UnsupportedReason,
 } from "./metrics"
+import {
+	checkNestedEntities,
+	collectNestedEntities,
+	type NestedCollector,
+	type NestedEntities,
+	type NestedEntityPlans,
+	type NestedObjectName,
+	planNestedEntity,
+} from "./nestedEntity"
 import type {ReadBudget} from "./readBudget"
 
 export const ENTITY_FIELD = "entity"
@@ -148,7 +157,7 @@ export const PROPERTY_OBJECT: ObjectSpec = {
 	},
 }
 /** What a nested entity object (`toEntity`, `fromEntity`, `entity`) may select beyond its id and name: none of it is compared. */
-const NESTED_ENTITY_FIELDS: ObjectSpec["fields"] = {
+export const NESTED_ENTITY_FIELDS: ObjectSpec["fields"] = {
 	description: "nested_entity",
 	types: "nested_entity",
 	valuesList: "nested_entity",
@@ -181,6 +190,8 @@ export type ListPlan = {
 	/** For a connection: the response key of its `nodes`, and of `pageInfo` and its `hasNextPage`. */
 	nodesKey: string | null
 	hasNext: {pageInfo: string; field: string} | null
+	/** The nested entity objects of the rows (`GEODB_NESTED_ENTITY_SHADOW`); absent when the rows select none. */
+	nestedEntities?: NestedEntityPlans
 }
 
 /** What a card comparison needs of an entity selection: where its answers sit in an entity object. */
@@ -272,7 +283,7 @@ export function isEmptyFilter(value: unknown): boolean {
 }
 
 /** A field with no arguments, or only a `filter` that filters nothing (`isEmptyFilter`). */
-function isUnfiltered(field: FieldNode, resolved: Record<string, unknown>): boolean {
+export function isUnfilteredField(field: FieldNode, resolved: Record<string, unknown>): boolean {
 	const args = argsOf(field, resolved)
 	return Object.entries(args).every(([name, value]) => name === "filter" && isEmptyFilter(value))
 }
@@ -281,7 +292,7 @@ function isUnfiltered(field: FieldNode, resolved: Record<string, unknown>): bool
  * `{spaceId: {is: <uuid>}}` and nothing else. A null `is` (or no filter) is every space: PostGraphile's
  * connection filter allows null input, so the list is unfiltered.
  */
-function spaceFromFilter(filter: unknown): string | null {
+export function spaceFromFilter(filter: unknown): string | null {
 	if (filter === undefined || filter === null) return null
 	if (typeof filter !== "object" || Array.isArray(filter)) return refuse("args")
 	const keys = Object.keys(filter)
@@ -312,11 +323,14 @@ export const isCountOnly = (field: FieldNode): boolean =>
 /** The columns (and nested `{id}` objects) of a list's rows, with fragments inlined. */
 export type PlannedColumns = {columns: Record<string, string>; nested: Record<string, string>; names: ListPlan["names"]}
 
+const NESTED_OBJECT_NAMES = ["toEntity", "fromEntity", "entity"]
+
 export function planColumns(
 	set: SelectionSetNode,
 	fragments: Map<string, SelectionSetNode>,
 	spec: {columns: readonly string[]; objects: Record<string, ObjectSpec>; ignored: readonly string[]},
 	uncompared: Set<UncomparedReason>,
+	nestedOut?: NestedCollector,
 ): PlannedColumns {
 	const columns: Record<string, string> = {}
 	const nested: Record<string, string> = {}
@@ -333,6 +347,11 @@ export function planColumns(
 			// A nested object may carry its id (compared, when it is a compared column) and fields the card
 			// cannot settle (counted as uncompared). Its own arguments and sub-objects are not interpreted.
 			if (!child.selectionSet || child.arguments?.length) throw new Unsupported("selection")
+			if (nestedOut && NESTED_OBJECT_NAMES.includes(name)) {
+				const planned = planNestedEntity(name as NestedObjectName, child, fragments, nestedOut.variables)
+				nestedOut.plans.push(planned.plan)
+				if (planned.residual) nestedOut.residual = true
+			}
 			for (const inner of fieldsOf(child.selectionSet, fragments)) {
 				if (!(inner.name.value in object.fields)) refuse("selection")
 				const reason = object.fields[inner.name.value]
@@ -377,14 +396,23 @@ function planList(
 	const spaceId = spaceFromFilter(args.filter)
 	if (!field.selectionSet) refuse("selection")
 	const listKey = responseKeyOf(field)
+	const collector: NestedCollector = {plans: [], residual: false, variables}
+	const withNested = (list: ListPlan): ListPlan =>
+		collector.plans.length > 0
+			? {...list, nestedEntities: {plans: collector.plans, residual: collector.residual}}
+			: list
 	if (!connection) {
 		const {columns, nested, names} = planColumns(
 			field.selectionSet as SelectionSetNode,
 			fragments,
 			spec,
 			uncompared,
+			collector,
 		)
-		return {list: {key: listKey, first, columns, nested, names, nodesKey: null, hasNext: null}, spaceId}
+		return {
+			list: withNested({key: listKey, first, columns, nested, names, nodesKey: null, hasNext: null}),
+			spaceId,
+		}
 	}
 	let nodesKey: string | null = null
 	let hasNext: ListPlan["hasNext"] = null
@@ -395,7 +423,7 @@ function planList(
 		if (child.arguments?.length || !child.selectionSet) throw new Unsupported("selection")
 		if (name === "nodes" && !nodesKey) {
 			nodesKey = responseKeyOf(child)
-			rows = planColumns(child.selectionSet, fragments, spec, uncompared)
+			rows = planColumns(child.selectionSet, fragments, spec, uncompared, collector)
 		} else if (name === "pageInfo" && !hasNext) {
 			for (const inner of fieldsOf(child.selectionSet, fragments)) {
 				if (!["hasNextPage", "endCursor", "__typename"].includes(inner.name.value) || !isPlainField(inner))
@@ -407,7 +435,15 @@ function planList(
 	}
 	if (!nodesKey || !rows) return refuse("selection")
 	return {
-		list: {key: listKey, first, columns: rows.columns, nested: rows.nested, names: rows.names, nodesKey, hasNext},
+		list: withNested({
+			key: listKey,
+			first,
+			columns: rows.columns,
+			nested: rows.nested,
+			names: rows.names,
+			nodesKey,
+			hasNext,
+		}),
 		spaceId,
 	}
 }
@@ -621,7 +657,7 @@ export function planEntitySelection(
 		} else if (
 			fieldName === "types" &&
 			(!types || types.plain) &&
-			isUnfiltered(field, resolved) &&
+			isUnfilteredField(field, resolved) &&
 			field.selectionSet
 		) {
 			// `typeIds` selected first: `types { id name }` is the same statements with names, so it takes over.
@@ -787,6 +823,8 @@ export type PostgresCard = {
 	/** The unfiltered lists' rows, `null` when the list is absent, `truncated` when it filled its page. */
 	allValues?: {rows: {spaceId: string | null; propertyId: string | null}[]; truncated: boolean}
 	allRelations?: {rows: {spaceId: string | null}[]; truncated: boolean}
+	/** The nested entity objects of the relation rows, when the plan selected any (`GEODB_NESTED_ENTITY_SHADOW`). */
+	nestedEntities?: NestedEntities
 } | null
 
 /** PostGraphile's `updatedAt` / `createdAt`: unix seconds as text (an ISO instant is read too), else null. */
@@ -872,12 +910,15 @@ export function cardFromEntity(entity: unknown, plan: EntityCardPlan): PostgresC
 		nested.property?.push({id: propertyId, name: readName(node, plan.values.names.property) ?? null})
 	}
 	const relations: RelationRow[] = []
+	const nestedEntities: NestedEntities = {items: [], incomplete: false}
 	for (const raw of relationList.nodes) {
 		const node = asRecord(raw)
 		if (!node) return null
 		const typeId = read(node, plan.relations, "typeId")
 		const toEntityId = read(node, plan.relations, "toEntityId")
 		if (typeof typeId !== "string" || typeof toEntityId !== "string") return null
+		if (plan.relations.nestedEntities)
+			collectNestedEntities(node, toEntityId, plan.relations.nestedEntities, nestedEntities)
 		relations.push({type_id: typeId, to_entity_id: toEntityId, to_space_id: null})
 		nested.type?.push({id: typeId, name: readName(node, plan.relations.names.type) ?? null})
 		nested.toEntity?.push({id: toEntityId, name: readName(node, plan.relations.names.toEntity) ?? null})
@@ -919,6 +960,7 @@ export function cardFromEntity(entity: unknown, plan: EntityCardPlan): PostgresC
 		if (plan.types.nameKey) card.typeNames = typeNames
 	}
 	if (Object.keys(nested).length > 0) card.nested = nested
+	if (plan.relations.nestedEntities) card.nestedEntities = nestedEntities
 	if (plan.allValues) {
 		const nodes = entityObject[plan.allValues.key]
 		if (!Array.isArray(nodes)) return null
@@ -1228,6 +1270,8 @@ export type EntityShadowDeps = Pick<CardDeps, "geoDb" | "geoSpaceOf"> & {
 	relationsTypeFilter?: boolean
 	/** Settle a nested name geo-db prints as none (named in a Space outside the read) from its Name in every Space (`GEODB_CROSS_SPACE_NAMES_SHADOW`). */
 	crossSpaceNames?: boolean
+	/** Compare the fields of a relation row's nested entity (`description`, `types`, `spaceIds`, lists) against one batched card read (`GEODB_NESTED_ENTITY_SHADOW`). */
+	nestedEntity?: boolean
 }
 
 export type CardCheck =
@@ -1742,13 +1786,28 @@ export function createEntityShadow(deps: EntityShadowDeps): FieldShadow {
 				recordGatewayUnsupported(ENTITY_FIELD, check.reason)
 				return
 			}
-			for (const reason of new Set([...plan.uncompared, ...check.uncompared]))
-				recordGatewayUncompared(ENTITY_FIELD, reason)
-			recordGatewayShadow(ENTITY_FIELD, check.result)
-			if (check.result === "mismatch")
+			let result = check.result
+			let detail = check.detail
+			const reasons = new Set([...plan.uncompared, ...check.uncompared])
+			if (deps.nestedEntity === true && postgres.nestedEntities && reasons.has("nested_entity")) {
+				const nested = await checkNestedEntities(deps, postgres.nestedEntities, "gateway entity shadow")
+				if (nested.read) {
+					for (const reason of nested.uncompared) reasons.add(reason)
+					// A selection left unplanned (backlinks, odd arguments) keeps it: only a fully judged one settles.
+					if (nested.settled) reasons.delete("nested_entity")
+					const wrong = Object.keys(nested.mismatches)
+					if (wrong.length > 0) {
+						result = "mismatch"
+						detail = {...detail, nestedMismatches: nested.mismatches}
+					}
+				}
+			}
+			for (const reason of reasons) recordGatewayUncompared(ENTITY_FIELD, reason)
+			recordGatewayShadow(ENTITY_FIELD, result)
+			if (result === "mismatch")
 				deps.log.warn("gateway entity shadow mismatch", {
 					operationName: classification.operationName,
-					...check.detail,
+					...detail,
 				})
 		} catch (error) {
 			// Whatever went wrong, the user's response is already gone; count it and move on.
