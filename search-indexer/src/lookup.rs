@@ -236,7 +236,10 @@ impl EntitySpaceLookup {
             return Ok(Vec::new());
         }
 
-        let mut all_results = Vec::new();
+        let mut all_results: Vec<(Uuid, Uuid, Uuid)> = Vec::new();
+        // The rows that came from the live `relations` table: the only ones geo-db's statement read
+        // can answer, so the only ones the shadow compares.
+        let mut live_results: Vec<(Uuid, Uuid, Uuid)> = Vec::new();
 
         for chunk in relation_ids.chunks(MAX_BATCH_SIZE) {
             let start = std::time::Instant::now();
@@ -266,12 +269,20 @@ impl EntitySpaceLookup {
                 let relation_id: Uuid = row.get("relation_id");
                 let entity_id: Uuid = row.get("from_entity_id");
                 let space_id: Uuid = row.get("space_id");
-                all_results.push((relation_id, entity_id, space_id));
+                let live: bool = row.get("live");
+                let doc = (relation_id, entity_id, space_id);
+                // The same document can come from both tables; answer it once.
+                if !all_results.contains(&doc) {
+                    all_results.push(doc);
+                }
+                if live && !live_results.contains(&doc) {
+                    live_results.push(doc);
+                }
             }
         }
 
         if let Some(shadow) = &self.shadow {
-            shadow.observe_docs_for_relations(relation_ids, &all_results);
+            shadow.observe_docs_for_relations(relation_ids, &live_results);
         }
         Ok(all_results)
     }
@@ -334,10 +345,10 @@ impl EntitySpaceLookup {
 /// `relation_id → (from_entity_id, space_id)`, live or already deleted. See
 /// [`EntitySpaceLookup::docs_for_relations`].
 const DOCS_FOR_RELATIONS_SQL: &str = r#"
-    SELECT id AS relation_id, from_entity_id, space_id
+    SELECT id AS relation_id, from_entity_id, space_id, true AS live
     FROM public.relations WHERE id = ANY($1)
     UNION
-    SELECT relation_id, from_entity_id, space_id
+    SELECT relation_id, from_entity_id, space_id, false AS live
     FROM public.relation_versions WHERE relation_id = ANY($1)
 "#;
 
