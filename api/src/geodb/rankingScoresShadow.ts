@@ -19,7 +19,9 @@
  *  - missing: Postgres row engaged and no overlay row (the mirror lags, or never ran);
  *  - stale: an overlay row where Postgres has no row or an un-engaged one (the mirror's delete has not run);
  *  - unsupported: an overlay row of another length or version (the 48-byte layout before the overlay writer);
- *  - failed: a read failed.
+ *  - failed: a geo-db read failed;
+ *  - reference_timeout / reference_failed: the Postgres side failed (statement timeout, or any other error), which says nothing
+ *    about geo-db (referenceSide.ts). A geo-db failure is counted but not logged (it is a GeoDbError); the Postgres ones are logged.
  *
  * The DEFAULT row's value (an un-engaged entity's score from its card and config) is compared by a third pass, when the reader
  * can serve it (geo-db wire frame revision 11, DerivedScores): `sampleIds` un-engaged rows from a random position, their cards
@@ -31,7 +33,8 @@
  *    (nothing re-scores on a card edit) is a benign mismatch: read the rate, not one count;
  *  - engaged: geo-db served an overlay row for an entity Postgres holds un-engaged (the same disagreement `stale` counts);
  *  - no_card: the sampled row has no entities row, so there is no card to build a default from;
- *  - failed: a read failed, or the node is below frame revision 11 and refused the request.
+ *  - failed: a geo-db read failed, or the node is below frame revision 11 and refused the request;
+ *  - reference_timeout / reference_failed: the Postgres side failed (statement timeout, or any other error).
  *
  * Blind spots: the overlay direction reads only the highest-scored page, and a sample is not a scan. Logs counts only, never an
  * entity.
@@ -49,14 +52,33 @@ import type {
 	ScoreConfig,
 	ScoreRow,
 } from "./derived"
+import {failureResult, ReferenceSideError, viaReference} from "./referenceSide"
 
 export const COLLECTION = 21
 export const OVERLAY_LEN = 62
 export const OVERLAY_VERSION = 1
-export const RESULTS = ["match", "mismatch", "absent_ok", "missing", "stale", "unsupported", "failed"] as const
+export const RESULTS = [
+	"match",
+	"mismatch",
+	"absent_ok",
+	"missing",
+	"stale",
+	"unsupported",
+	"failed",
+	"reference_timeout",
+	"reference_failed",
+] as const
 export type Result = (typeof RESULTS)[number]
 
-export const DEFAULT_RESULTS = ["match", "mismatch", "engaged", "no_card", "failed"] as const
+export const DEFAULT_RESULTS = [
+	"match",
+	"mismatch",
+	"engaged",
+	"no_card",
+	"failed",
+	"reference_timeout",
+	"reference_failed",
+] as const
 export type DefaultResult = (typeof DEFAULT_RESULTS)[number]
 
 export type RankingScoresShadowConfig = {
@@ -144,7 +166,10 @@ export function overlayCounts(value: Buffer): number[] | null {
 }
 
 /** What a Postgres row (null when it has none) and geo-db's overlay row (null when absent) say about each other. Pure. */
-export function compareRow(pg: PgRow | null, held: DerivedRow | null): Exclude<Result, "failed"> {
+export function compareRow(
+	pg: PgRow | null,
+	held: DerivedRow | null,
+): Exclude<Result, "failed" | "reference_timeout" | "reference_failed"> {
 	if (held === null) return pg !== null && pg.engaged ? "missing" : "absent_ok"
 	const counts = overlayCounts(held.value)
 	if (counts === null) return "unsupported"
@@ -427,7 +452,7 @@ export function createRankingScoresShadow(deps: {
 		}
 	}
 	const fail = (error: unknown) => {
-		bump("failed")
+		bump(failureResult(error))
 		if (!(error instanceof GeoDbError)) log.warn("ranking scores shadow failed", {error: String(error)})
 	}
 
@@ -442,7 +467,7 @@ export function createRankingScoresShadow(deps: {
 		for (const r of page.rows) {
 			try {
 				const held: DerivedRow = {group: "0".repeat(32), score: r.score, value: Buffer.from(r.valueHex, "hex")}
-				const pg = await readPgRow(db, uuidOfHex(r.keyHex))
+				const pg = await viaReference(readPgRow(db, uuidOfHex(r.keyHex)))
 				record(compareRow(pg, held), pg, held)
 			} catch (error) {
 				fail(error)
@@ -453,13 +478,13 @@ export function createRankingScoresShadow(deps: {
 	async function viaPostgres(): Promise<void> {
 		let ids: string[]
 		try {
-			ids = await sampleIds(db, pivotOf(), config.sample)
+			ids = await viaReference(sampleIds(db, pivotOf(), config.sample))
 		} catch (error) {
 			return fail(error)
 		}
 		for (const id of ids) {
 			try {
-				const pg = await readPgRow(db, uuidOfHex(id))
+				const pg = await viaReference(readPgRow(db, uuidOfHex(id)))
 				const row = await reader.get(COLLECTION, id)
 				record(compareRow(pg, row), pg, row ?? undefined)
 			} catch (error) {
@@ -472,13 +497,17 @@ export function createRankingScoresShadow(deps: {
 	async function viaDefault(): Promise<void> {
 		if (!reader.scores) return
 		try {
-			const sampled = await sampleIds(db, pivotOf(), config.defaultSample)
+			const sampled = await viaReference(sampleIds(db, pivotOf(), config.defaultSample))
 			const pg =
-				sampled.length === 0 ? new Map<string, PgScores>() : await readUnengagedRows(db, sampled.map(uuidOfHex))
+				sampled.length === 0
+					? new Map<string, PgScores>()
+					: await viaReference(readUnengagedRows(db, sampled.map(uuidOfHex)))
 			const wanted = [...pg.keys()]
 			if (wanted.length === 0) return
-			const [cards, scoreConfig] = await Promise.all([readCards(db, wanted.map(uuidOfHex)), readScoreConfig(db)])
-			if (scoreConfig === null) throw new Error("entity_ranking_config has no usable row")
+			const [cards, scoreConfig] = await viaReference(
+				Promise.all([readCards(db, wanted.map(uuidOfHex)), readScoreConfig(db)]),
+			)
+			if (scoreConfig === null) throw new ReferenceSideError(new Error("entity_ranking_config has no usable row"))
 			const withCard = wanted.filter((id) => cards.has(id))
 			for (let i = 0; i < wanted.length - withCard.length; i++) bumpDefault("no_card")
 			if (withCard.length === 0) return
@@ -493,7 +522,7 @@ export function createRankingScoresShadow(deps: {
 				bumpDefault(compareDefault(expected, row))
 			})
 		} catch (error) {
-			bumpDefault("failed")
+			bumpDefault(failureResult(error))
 			if (!(error instanceof GeoDbError)) log.warn("ranking scores default shadow failed", {error: String(error)})
 		}
 	}
