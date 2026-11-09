@@ -296,6 +296,10 @@ spec:
             # in order (gaia#1324). Needs serve at c2f9d09cfa or later. Shadow only.
             - name: GEODB_TYPE_SCAN_SHADOW
               value: "on"
+            # Compare a totalCount-only entitiesConnection against geo-db's entities count form (gaia#1410). A serve without the
+            # count form refuses it as unsupported_selection{count_refused}, never a failed request. Shadow only.
+            - name: GEODB_COUNT_ONLY_SHADOW
+              value: "on"
             # Shadow geogenesis's EntitiesBatch `entities` selection (gaia#1115). Needs that PR's api image.
             - name: GEODB_ENTITIES_BATCH_SHADOW
               value: "on"
