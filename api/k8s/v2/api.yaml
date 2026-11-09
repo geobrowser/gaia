@@ -309,6 +309,11 @@ spec:
             # counts unsupported_selection, never a failed request.
             - name: GEODB_PROPERTY_INFO_SHADOW
               value: "on"
+            # Compare an unfiltered `allRelationsList { spaceId }` against geo-db's reference statements of the entity in the
+            # Spaces that hold it: no Space may hold more than PostgreSQL lists. One more read an entity (`.args.relations`),
+            # under the every-Space budget. Shadow only; never changes a response.
+            - name: GEODB_RELATIONS_MEMBERSHIP_SHADOW
+              value: "on"
             # Shadow geogenesis's EntitiesBatch `entities` selection (gaia#1115). Needs that PR's api image.
             - name: GEODB_ENTITIES_BATCH_SHADOW
               value: "on"
