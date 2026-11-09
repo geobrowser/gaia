@@ -444,9 +444,9 @@ spec:
             # Sample entity_type_weights / entity_type_exclusions / entity_feed_blocklist rows from Postgres (_SAMPLE per table,
             # default 20, every _INTERVAL_MS, default 60 s) and hold each to its record in geo-db's config Space
             # (gaia_api_entity_feed_config_shadow_total{table,result}). One flag per table, all off; background only. Needs the
-            # geodb-feeder's entity-feed-config backfill Job run first (missing = not backfilled).
+            # geodb-feeder's entity-feed-config backfill Job run first (missing = not backfilled). The backfill ran 2026-11-09; weights is ON first, the other two follow one at a time.
             - name: GEODB_ENTITY_TYPE_WEIGHTS_SHADOW
-              value: "0"
+              value: "1"
             - name: GEODB_ENTITY_TYPE_EXCLUSIONS_SHADOW
               value: "0"
             - name: GEODB_ENTITY_FEED_BLOCKLIST_SHADOW
