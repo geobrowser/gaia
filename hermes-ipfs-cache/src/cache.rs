@@ -189,6 +189,32 @@ use sqlx::{Postgres, postgres::PgPoolOptions};
 /// PostgreSQL storage backend for the IPFS cache.
 pub struct PostgresStorage {
     connection: sqlx::Pool<Postgres>,
+    /// `IPFS_CACHE_PG_WRITES`, default on. Off: `insert` and `persist_cursor` issue no
+    /// statement and count the skip (cutover switch, plan 10.22). Reads are unaffected.
+    pg_writes: bool,
+}
+
+/// Counter of Postgres writes skipped because `IPFS_CACHE_PG_WRITES` is off.
+pub const PG_WRITES_SKIPPED: &str = "hermes_ipfs_cache_pg_writes_skipped_total";
+
+/// Parse `IPFS_CACHE_PG_WRITES`. Unset, empty or anything but an explicit off value means on,
+/// so a typo never silently stops the cache from persisting.
+pub fn pg_writes_enabled_from(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "false" | "off" | "no")
+    )
+}
+
+/// Register the skipped-writes counters at zero so they are scrapeable before the first skip.
+pub fn register_metrics() {
+    metrics::describe_counter!(
+        PG_WRITES_SKIPPED,
+        "Postgres writes skipped because IPFS_CACHE_PG_WRITES is off"
+    );
+    for site in ["cache_insert", "cursor_persist"] {
+        metrics::counter!(PG_WRITES_SKIPPED, "site" => site).absolute(0);
+    }
 }
 
 fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
@@ -211,13 +237,36 @@ impl PostgresStorage {
             .connect(database_url)
             .await?;
 
-        Ok(PostgresStorage { connection })
+        Ok(Self::from_pool(connection))
+    }
+
+    /// Wrap an existing pool; the switch comes from `IPFS_CACHE_PG_WRITES`.
+    pub fn from_pool(connection: sqlx::Pool<Postgres>) -> Self {
+        Self {
+            connection,
+            pg_writes: pg_writes_enabled_from(env::var("IPFS_CACHE_PG_WRITES").ok().as_deref()),
+        }
+    }
+
+    /// Override the Postgres-writes switch (the env var sets the default).
+    pub fn with_pg_writes(mut self, on: bool) -> Self {
+        self.pg_writes = on;
+        self
+    }
+
+    /// Whether `insert` and `persist_cursor` write to Postgres.
+    pub fn pg_writes_enabled(&self) -> bool {
+        self.pg_writes
     }
 }
 
 #[async_trait::async_trait]
 impl CacheStorage for PostgresStorage {
     async fn insert(&self, item: &CacheItem) -> Result<(), CacheError> {
+        if !self.pg_writes {
+            metrics::counter!(PG_WRITES_SKIPPED, "site" => "cache_insert").increment(1);
+            return Ok(());
+        }
         sqlx::query(
             "INSERT INTO ipfs_cache (uri, data, block, space, is_errored, name) \
              VALUES ($1, $2, $3, $4::uuid, $5, $6) \
@@ -266,6 +315,10 @@ impl CacheStorage for PostgresStorage {
     }
 
     async fn persist_cursor(&self, id: &str, cursor: &str, block: u64) -> Result<(), CacheError> {
+        if !self.pg_writes {
+            metrics::counter!(PG_WRITES_SKIPPED, "site" => "cursor_persist").increment(1);
+            return Ok(());
+        }
         sqlx::query(
             "INSERT INTO meta (id, cursor, block_number) VALUES ($1, $2, $3) \
              ON CONFLICT (id) DO UPDATE SET cursor = $2, block_number = $3",
@@ -303,9 +356,16 @@ impl Cache {
 
     /// Create a cache with PostgreSQL storage.
     pub fn postgres(storage: PostgresStorage) -> Self {
+        let blob = blob_store::Mirror::from_env("ipfs_cache", "IPFS_CACHE");
+        if !storage.pg_writes_enabled() && blob.is_none() {
+            tracing::warn!(
+                "IPFS_CACHE_PG_WRITES is off and no object-store mirror is configured: \
+                 fetched edits are not being stored anywhere"
+            );
+        }
         Cache {
             storage: Box::new(storage),
-            blob: blob_store::Mirror::from_env("ipfs_cache", "IPFS_CACHE"),
+            blob,
         }
     }
 
@@ -318,7 +378,8 @@ impl Cache {
     /// Store an item in the cache. If the URI already exists, this is a no-op.
     pub async fn put(&self, item: &CacheItem) -> Result<(), CacheError> {
         self.storage.insert(item).await?;
-        // After Postgres succeeded; never fails the put. First write wins, like
+        // After Postgres succeeded (or was skipped by IPFS_CACHE_PG_WRITES=off, when this is
+        // the only copy); never fails the put. First write wins, like
         // `ON CONFLICT (uri) DO NOTHING`.
         if let Some(blob) = &self.blob {
             let row = blob_store::ipfs_object::Row {
@@ -362,6 +423,7 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use blob_store::BlobStore;
 
     #[tokio::test]
     async fn test_mock_cache_put_and_get() {
@@ -502,5 +564,104 @@ mod tests {
         assert_eq!(row.data, Some(vec![1]));
         assert_eq!(row.block, "7");
         assert_eq!(row.name.as_deref(), Some("n"));
+    }
+
+    #[test]
+    fn pg_writes_flag_defaults_on() {
+        assert!(pg_writes_enabled_from(None));
+        assert!(pg_writes_enabled_from(Some("")));
+        assert!(pg_writes_enabled_from(Some("garbage")));
+        assert!(pg_writes_enabled_from(Some("1")));
+        for off in ["0", "false", "OFF", " no "] {
+            assert!(!pg_writes_enabled_from(Some(off)), "{off}");
+        }
+    }
+
+    /// No database: a lazy pool points at a local listener that counts TCP accepts. A
+    /// statement needs a connection, so zero accepts means zero statements.
+    #[test]
+    fn pg_writes_off_issues_no_statements_counts_skips_and_still_writes_blob() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        let dir = tempfile::tempdir().unwrap();
+        let blobs = Arc::new(blob_store::FsBlobStore::new(dir.path()));
+        metrics::with_local_recorder(&recorder, || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let port = listener.local_addr().unwrap().port();
+                    let accepted = Arc::new(AtomicUsize::new(0));
+                    let seen = accepted.clone();
+                    tokio::spawn(async move {
+                        while let Ok((sock, _)) = listener.accept().await {
+                            seen.fetch_add(1, Ordering::SeqCst);
+                            drop(sock);
+                        }
+                    });
+                    let mk = |on: bool| {
+                        let pool = PgPoolOptions::new()
+                            .acquire_timeout(Duration::from_secs(2))
+                            .connect_lazy(&format!("postgres://u:p@127.0.0.1:{port}/db"))
+                            .unwrap();
+                        PostgresStorage::from_pool(pool).with_pg_writes(on)
+                    };
+                    let item = CacheItem {
+                        uri: "ipfs://QmOff".to_string(),
+                        data: Some(vec![1, 2, 3]),
+                        block: "7".to_string(),
+                        space_id: "0AAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE".to_string(),
+                        is_errored: false,
+                        name: Some("n".to_string()),
+                    };
+
+                    // Flag off: put and persist_cursor succeed with no connection at all.
+                    let mirror = blob_store::Mirror::new(
+                        "ipfs_cache",
+                        blobs.clone(),
+                        blob_store::MirrorFlags {
+                            write_through: true,
+                            shadow_read: false,
+                        },
+                    );
+                    let cache = Cache {
+                        storage: Box::new(mk(false)),
+                        blob: None,
+                    }
+                    .with_blob_mirror(mirror);
+                    cache.put(&item).await.unwrap();
+                    cache.persist_cursor("c", "cur", 1).await.unwrap();
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    assert_eq!(
+                        accepted.load(Ordering::SeqCst),
+                        0,
+                        "a statement reached Postgres"
+                    );
+
+                    // The object-store write-through still ran: it is the new home.
+                    let key = blob_store::ipfs_object::key(&item.uri);
+                    let stored = blobs.get(&key).await.unwrap().expect("blob written");
+                    let row = blob_store::ipfs_object::decode(&stored).unwrap();
+                    assert_eq!(row.data, Some(vec![1, 2, 3]));
+
+                    // Control: with the flag on the same calls do try to connect, and fail.
+                    let on = mk(true);
+                    assert!(on.insert(&item).await.is_err());
+                    assert!(on.persist_cursor("c", "cur", 1).await.is_err());
+                    assert!(
+                        accepted.load(Ordering::SeqCst) > 0,
+                        "control saw no connection"
+                    );
+                });
+        });
+        let rendered = handle.render();
+        for site in ["cache_insert", "cursor_persist"] {
+            let line = format!("hermes_ipfs_cache_pg_writes_skipped_total{{site=\"{site}\"}} 1");
+            assert!(rendered.contains(&line), "missing `{line}` in:\n{rendered}");
+        }
     }
 }

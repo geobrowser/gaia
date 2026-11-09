@@ -158,6 +158,7 @@ async fn async_main() -> anyhow::Result<()> {
     // metrics module; override with METRICS_PORT for local runs.
     let metrics_port: Option<u16> = env::var("METRICS_PORT").ok().and_then(|s| s.parse().ok());
     hermes_instrumentation::metrics::install("hermes-ipfs-cache", metrics_port)?;
+    hermes_ipfs_cache::cache::register_metrics();
 
     // Determine mode: mock (default for backwards compat during dev) or live
     let use_mock = env::var("USE_MOCK")
